@@ -79,7 +79,7 @@ from voiney_lab.intent_fences import (
 # The recorded-value check the tool loop already applies to a model's
 # observation argument: numbers and identifiers must match on token
 # boundaries (A-17 is not A-170).
-from voiney_lab.tools import _observation_matches_transcript
+from voiney_lab.tools import _observation_matches_transcript, record_value_keeping_negation
 
 CHANGE_STATE = "change_state"
 RECORD_LOG = "record_log"
@@ -637,6 +637,12 @@ def validate_tool_proposal(
             return refuse("workflow_paused")
         if not _observation_matches_transcript(proposal.value, utterance):
             return refuse("value_not_in_utterance")
+        # Lane TS, decision 4: a value that leaves out a negated clause
+        # ("침전물" of "침전물 안 보임 남겨 줘") is recorded as everything said.
+        kept = record_value_keeping_negation(str(proposal.value), facts.utterance)
+        if kept != proposal.value:
+            proposal = replace(proposal, value=kept)
+            refuse = lambda code: _refuse(code, proposal)  # noqa: E731
         if rule.runs_as == "record_observation":
             # While the observation question is open the front rules own
             # the turn (F5) and the fence above refuses any proposal, so

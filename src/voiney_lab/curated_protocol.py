@@ -6887,6 +6887,12 @@ _SOURCE_NEGATION = re.compile(
     r"cannot|can't)\b",
     re.IGNORECASE,
 )
+#: Said before a source safety warning read in place of its Korean (lane TS,
+#: human decision 2 of 2026-10-08): the voice reads a warning's Korean only
+#: when it passes every check (``protocol_translation.statement_issue``).
+SAFETY_SOURCE_READ_LEAD = (
+    "이 안전 주의는 번역 확인이 안 돼서 원문을 읽어 드릴게요. 화면의 원문을 꼭 확인해 주세요."
+)
 #: Lane FX, human decision 1 of 2026-10-07: the 없이 of "관계없이" and
 #: "상관없이" ("regardless") is not a negation, so a reading that drops the
 #: source's "not" behind one is refused ("Do not vortex the tube, regardless
@@ -10862,6 +10868,24 @@ class CuratedProtocolSession:
         value = lookup(step_id, fact_id)
         return value if isinstance(value, str) and value.strip() else None
 
+    def _checked_warning_reading(self, step_id: str, fact: CuratedProtocolFact) -> str | None:
+        """The Korean a warning may be read in, or None to read its source.
+
+        Lane TS, decision 2: reviewed or machine, a warning's Korean is read
+        only when it passes every check of a reading
+        (``protocol_translation.statement_issue``). A source already in
+        Korean is read as it is.
+        """
+
+        from voiney_lab.protocol_translation import is_korean, statement_issue  # imports this module
+
+        if is_korean(fact.text):
+            return fact.text
+        korean = self._localized_fact(step_id, fact.fact_id)
+        if korean is None or statement_issue(fact.text, korean) is not None:
+            return None
+        return korean
+
     def _step_learning_presentation(
         self,
         *,
@@ -10892,9 +10916,8 @@ class CuratedProtocolSession:
                 if fact is not None
             )
         )
-        localized_warnings = tuple(
-            self._localized_fact(step.step_id, fact.fact_id) or fact.text
-            for fact in warning_facts
+        checked_warnings = tuple(
+            self._checked_warning_reading(step.step_id, fact) for fact in warning_facts
         )
 
         def concise(value: str, limit: int = 220) -> str:
@@ -10909,6 +10932,12 @@ class CuratedProtocolSession:
             ),
             "",
         )
+        def spoken_warning(index: int) -> str:
+            reading = checked_warnings[index]
+            if reading is not None:
+                return concise(reading)
+            return f"{SAFETY_SOURCE_READ_LEAD} {concise(warning_facts[index].text)}"
+
         if language == "ko":
             # The step's purpose is the section the source puts it in, named
             # as the source names it -- never a sentence written for one PDF.
@@ -10919,8 +10948,9 @@ class CuratedProtocolSession:
 
             if warning_only:
                 speech = (
-                    f"이 단계의 핵심 주의사항은 {concise(localized_warnings[0])}"
-                    if localized_warnings
+                    (f"이 단계의 핵심 주의사항은 {spoken_warning(0)}"
+                     if checked_warnings[0] is not None else spoken_warning(0))
+                    if warning_facts
                     else "현재 PDF에는 이 단계의 별도 주의사항이 명시되어 있지 않습니다. 추가 안전 판단은 담당자에게 확인해 주세요."
                 )
             else:
@@ -10933,8 +10963,12 @@ class CuratedProtocolSession:
                     speech += f" 원문이 제시한 확인 결과는 {concise(localized_expected)}"
                 else:
                     speech += " 원문에는 별도의 과학적 작용 기전은 명시되어 있지 않습니다."
-                if localized_warnings:
-                    speech += f" 주의할 점은 {concise(localized_warnings[0])}"
+                if warning_facts:
+                    speech += (
+                        f" 주의할 점은 {spoken_warning(0)}"
+                        if checked_warnings[0] is not None
+                        else f" {spoken_warning(0)}"
+                    )
         else:
             purpose = (
                 f"perform the source section '{concise(section_title, 100)}'"

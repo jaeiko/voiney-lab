@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 
@@ -333,6 +333,11 @@ def outside_pdf_violations(
     for dimension, pattern in _FORBIDDEN_ANSWER_CONTENT:
         if pattern.search(body):
             violations.append(f"answer_states_{dimension}")
+    if "answer_states_safety" not in violations and any(
+            permissive_hazard_topics(sentence) for sentence in _SENTENCE_END.split(body)):
+        # Lane TS, decision 3: a permission about a hazard ("맨눈으로 봐도
+        # 되는 장비예요") is safety content too.
+        violations.append("answer_states_safety")
     if display_label_violations(body):
         violations.append("answer_has_display_label")
     return tuple(violations)
@@ -443,8 +448,141 @@ def safety_instruction_topics(sentence: str) -> tuple[str, ...]:
     return tuple(name for name, said, _ground in SAFETY_INSTRUCTION_TOPICS if said.search(sentence))
 
 
+# --- Permissive safety sentences with no source (lane TS, decision 3) ------------
+
+#: A sentence that permits rather than instructs: "~없이 해도 돼요", "~안 해도
+#: 돼요", "~해도 괜찮아요", "맨손으로", "맨눈으로", "필요 없어요", "독성이 없어요",
+#: and their English kin ("without gloves", "not necessary", "it's fine to",
+#: "with the naked eye", "non-toxic"). "맨손으로 만지지 마세요" forbids, so a
+#: 맨손·맨눈 followed by a prohibition in the same sentence permits nothing.
+_PERMISSIVE = re.compile(
+    r"[가-힣]도\s*(?:돼|되|됩|된다|괜찮|무방|상관\s*없|문제\s*(?:없|안\s*(?:돼|되|됩)))"
+    r"|맨\s*(?:손|눈|살)\s*으?로(?![^.!?\n]*(?:마세요|마십시오|말아|말고|않|금지|안\s*(?:돼|되|됩)))"
+    r"|없이\s+(?:\S+\s+){0,2}?\S*\s*수\s*있"
+    r"|필요\s*(?:없|하지\s*않|는\s*없|치\s*않)"
+    r"|(?:독성|위험|유해성?)\s*(?:이|가|은|는|도)?\s*(?:없|적|낮)|무해|무독|해롭지\s*않|위험하지\s*않"
+    r"|안전(?:해요|합니다|하다|해서)"
+    r"|\bwithout\s+(?:\w+\s+){0,2}?(?:gloves?|goggles?|(?:fume\s+)?hoods?|protection|ppe|masks?|ventilation)\b"
+    r"|\bno\s+need\s+(?:for|to)\b|\b(?:not|n['’]t)\s+(?:required|necessary|needed)\b"
+    r"|\bunnecessary\b|\boptional\b"
+    r"|\b(?:it['’]s|it\s+is|is|are)\s+(?:fine|ok(?:ay)?|safe|harmless)\b|\bsafe\s+to\b"
+    r"|\bbare\s+hands?\b|\bnaked\s+eyes?\b|\bnon[-\s]?(?:toxic|hazardous)\b|\bharmless\b"
+    r"|\b(?:do|does)\s+not\s+need\b|\b(?:don|doesn)['’]t\s+need\b|\bneed\s+not\b"
+    r"|\bcan\s+(?:skip|omit)\b|\bon\s+the\s+open\s+bench\b"
+    r"|\b(?:you\s+)?(?:can|may)\s+(?:\w+\s+){0,3}?without\b",
+    re.I,
+)
+#: What turns a permission into a question about one: "다뤄도 되는지에 대한
+#: 정보가 없어요", "봐도 안전한지는 확인할 수 없어요", "whether it is safe to".
+#: Measured on the lane TS live run (2026-10-08): four such sentences were
+#: taken out before this, each saying only that the source does not tell.
+_ASKS_WHETHER_KO = re.compile(r"(?:는지|은지|한지|ㄴ지|지는|지를|지에|여부|냐|나요|는가|니까|까요)")
+_ASKS_WHETHER_EN = re.compile(r"\b(?:whether|if)\b[^.!?]{0,40}$", re.I)
+
+
+def _permits(sentence: str) -> bool:
+    """Whether a sentence permits something, not merely asks whether it may be done."""
+
+    for match in _PERMISSIVE.finditer(sentence):
+        rest = sentence[match.end():]
+        word = re.match(r"\S*(?:\s+\S+)?", rest)
+        if word is not None and _ASKS_WHETHER_KO.search(word.group()):
+            continue
+        if match.group().startswith("맨") and re.search(r"[가-힣]지는|는지|한지|은지|여부", rest):
+            continue
+        if _ASKS_WHETHER_EN.search(sentence[:match.start()]):
+            continue
+        return True
+    return False
+
+
+def _either(korean: str, english: str) -> re.Pattern[str]:
+    """Korean words anywhere, English ones edged by letters ("gloves를")."""
+
+    return re.compile(rf"{korean}|(?<![a-z])(?:{english})(?![a-z])", re.I)
+
+
+_PROTECTIVE = _either(
+    r"장갑|글러브|보안경|고글|안면\s*보호|보호\s*안경|실험복|가운|보호구|보호\s*장비|마스크|"
+    r"맨\s*손|맨\s*눈|맨\s*살",
+    r"gloves?|goggles?|eye\s+protection|face\s+shields?|safety\s+glasses|lab\s+coats?|ppe|"
+    r"protective|protection|bare\s+hands?|naked\s+eyes?|masks?",
+)
+_VENTILATION = _either(r"환기|후드|통풍", r"fume\s*hoods?|hoods?|ventilat\w*")
+_EXPOSURE = _either(
+    r"흡입|들이마|들이쉬|냄새를?\s*맡|증기|피부에?\s*(?:닿|묻)|눈에\s*(?:들어|튀)",
+    r"inhal\w*|breath\w*|vapou?rs?|fumes?|skin\s+contact|on\s+(?:the|your)\s+skin",
+)
+_UV_RADIATION = _either(
+    r"자외선|방사선|방사성|트랜스\s*일루미네이터|레이저",
+    r"uv|ultraviolet|transillumin\w*|radiation|radioactiv\w*|lasers?",
+)
+_BIOHAZARD = _either(
+    r"생물\s*(?:학적\s*)?(?:위해|안전)|병원(?:체|균|성)|감염",
+    r"biohazard\w*|biosafety|pathogen\w*|infectious|bsl[-\s]?\d",
+)
+_SHARPS = _either(
+    r"날카|바늘|주사기|메스|칼날|면도날|깨진\s*유리",
+    r"sharps?|needles?|syringes?|scalpels?|razors?|blades?|broken\s+glass",
+)
+_CHEMICAL_KO = (
+    r"시약|화학|독성|유해|부식|인화|발암|산성|염기성|강산|강염기|용매|휘발|페놀|클로로포름|"
+    r"아크릴아마이드|포름알데히드|에티디움"
+)
+_CHEMICAL_EN = (
+    r"chemicals?|reagents?|toxic|hazardous|corrosive|flammable|carcinogen\w*|acids?|solvents?|"
+    r"volatile|phenol|chloroform|acrylamide|formaldehyde|ethidium|mercaptoethanol|trizol"
+)
+_CHEMICAL = _either(_CHEMICAL_KO, _CHEMICAL_EN)
+_HANDLING = _either(
+    r"만지|만져|다루|다뤄|취급|손으로|손에|묻|접촉|마시|마셔|맛|붓|부어|따르|따라|흘",
+    r"touch\w*|handl\w*|contact|pour\w*|spill\w*|pipett\w*\s+by\s+mouth",
+)
+
+
+def _names(pattern: re.Pattern[str]) -> Callable[[str], bool]:
+    return lambda text: pattern.search(text) is not None
+
+
+#: The hazard topics of decision 3: each with what names it in an answer and
+#: what names it in a grounding sentence. Handling a chemical is named by a
+#: chemical and a word of handling together ("시약은 실온에 둬도 돼요"
+#: handles nothing); a permission about it is grounded by a permissive
+#: sentence naming a chemical, a buffer or a solution.
+PERMISSIVE_HAZARD_TOPICS: tuple[tuple[str, Callable[[str], bool], re.Pattern[str]], ...] = (
+    ("protective_equipment", _names(_PROTECTIVE), _PROTECTIVE),
+    ("ventilation", _names(_VENTILATION), _VENTILATION),
+    ("exposure", _names(_EXPOSURE), _EXPOSURE),
+    ("uv_radiation", _names(_UV_RADIATION), _UV_RADIATION),
+    ("biohazard", _names(_BIOHAZARD), _BIOHAZARD),
+    ("sharps", _names(_SHARPS), _SHARPS),
+    ("chemical_handling",
+     lambda text: _CHEMICAL.search(text) is not None and _HANDLING.search(text) is not None,
+     _either(_CHEMICAL_KO + r"|버퍼|용액", _CHEMICAL_EN + r"|buffers?|solutions?")),
+)
+
+
+def permissive_hazard_topics(sentence: str) -> tuple[str, ...]:
+    """The hazard topics a sentence permits something about; empty when it permits nothing."""
+
+    if not _permits(sentence):
+        return ()
+    return tuple(name for name, said, _ground in PERMISSIVE_HAZARD_TOPICS if said(sentence))
+
+
+def _permitted_topics(grounding: str) -> set[str]:
+    """The topics a sentence of the grounding itself permits something about."""
+
+    permitted: set[str] = set()
+    for sentence in _SENTENCE_END.split(grounding):
+        if _permits(sentence):
+            permitted.update(
+                name for name, _said, ground in PERMISSIVE_HAZARD_TOPICS if ground.search(sentence))
+    return permitted
+
+
 def ungrounded_safety_instructions(text: str, grounding: str) -> tuple[str, ...]:
-    """The sentences of ``text`` that give a safety instruction with no source.
+    """The sentences of ``text`` that give a safety instruction or permission with no source.
 
     Lane RT, decision 7. A sentence counts when its form is an instruction
     and it names a safety topic (what to follow, wear, ventilate, evacuate,
@@ -453,18 +591,31 @@ def ungrounded_safety_instructions(text: str, grounding: str) -> tuple[str, ...]
     its reviewed readings, and the approved safety documents; otherwise it
     is returned, to be taken out. Read per topic, over the whole of the
     grounding: an instruction the source gives for another step still stands.
+
+    Lane TS, decision 3: a sentence that permits something about a hazard
+    topic (``permissive_hazard_topics``: "장갑 없이 만져도 돼요", "UV를 맨눈으로
+    봐도 돼요") counts too. Naming the topic is no ground for it -- "wear
+    gloves" permits nothing -- so it stands only when, for every topic it
+    names, a sentence of ``grounding`` itself permits something about that
+    topic ("Gloves are not required", "보안경은 필요하지 않습니다").
     """
 
+    grounded = {
+        name for name, _said, ground in SAFETY_INSTRUCTION_TOPICS if ground.search(grounding)
+    }
+    permitted: set[str] | None = None
     flagged: list[str] = []
     for sentence in _SENTENCE_END.split(text):
         topics = safety_instruction_topics(sentence)
-        if not topics:
-            continue
-        grounded = {
-            name for name, _said, ground in SAFETY_INSTRUCTION_TOPICS if ground.search(grounding)
-        }
-        if not set(topics) <= grounded:
+        if topics and not set(topics) <= grounded:
             flagged.append(sentence.strip())
+            continue
+        permits = permissive_hazard_topics(sentence)
+        if permits:
+            if permitted is None:
+                permitted = _permitted_topics(grounding)
+            if not set(permits) <= permitted:
+                flagged.append(sentence.strip())
     return tuple(flagged)
 
 
