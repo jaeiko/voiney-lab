@@ -2124,3 +2124,170 @@ def save_protocol_analysis(
         draft.readiness,
         draft.capability_policy_id,
     )
+
+
+# --- Step timers from the analysis (lane PT, human decision 1, 2026-10-08) --
+
+
+def _step_source_texts(step: domain.ProtocolSourceStep) -> tuple[str, ...]:
+    """The step's own source: its instruction and its sub-actions', with excerpts."""
+
+    texts: list[str] = []
+    for owner in (step, *step.sub_actions):
+        texts.append(owner.instruction_source_text)
+        texts.append(owner.evidence.source_excerpt)
+        if owner.evidence.continued_excerpt:
+            texts.append(owner.evidence.continued_excerpt)
+    return tuple(text for text in texts if text)
+
+
+def _action_durations(
+    action: domain.ProtocolSubAction,
+) -> tuple[tuple[str, domain.SourceEvidence, int | None], ...]:
+    """(excerpt, evidence, the analysis's seconds) of each duration an action carries."""
+
+    found: list[tuple[str, domain.SourceEvidence, int | None]] = []
+    if action.estimated_duration is not None:
+        found.append((
+            action.estimated_duration.source_text,
+            action.estimated_duration.evidence or action.evidence,
+            action.estimated_duration.parsed_seconds,
+        ))
+    timer = action.process_timer
+    if timer is not None and timer.duration is not None and all(
+        timer.duration.source_text != text for text, _, _ in found
+    ):
+        found.append((
+            timer.duration.source_text,
+            timer.duration.evidence or timer.evidence,
+            None,
+        ))
+    return tuple(found)
+
+
+def verify_step_timers(
+    protocol: domain.ExperimentProtocol,
+    extraction: ProtocolPdfExtraction,
+) -> domain.StepTimerTable:
+    """The timers of an analysed protocol the server can stand behind.
+
+    Each duration the analysis attached to a step's sub-action is kept only
+    when all of these hold, and is otherwise listed with its reason:
+
+    * its excerpt lies within that step's own source text (the step's and its
+      sub-actions' instructions and evidence excerpts);
+    * the excerpt is printed on a page between the step's anchor page and the
+      next step's, found there as the analysis's own claim check finds text;
+    * the server reads a number and a unit in the excerpt itself
+      (``domain.read_source_durations``), not qualified as a bound, an
+      interval or a time since something else, and with no unnumbered time
+      ("overnight", "until ...") beside it;
+    * where the analysis also wrote seconds, they are one of the values read.
+
+    A step the analysis marked as having an ambiguous time keeps no timer.
+    Times printed in a step's text that the analysis did not extract are
+    listed, never made into timers. Before-start times are listed too.
+    """
+
+    steps = tuple(
+        step for section in protocol.sections for step in section.steps
+    )
+    verified: list[domain.VerifiedStepTimer] = []
+    refused: list[domain.RefusedStepTime] = []
+    ambiguous_steps = {
+        construct.step_id: construct
+        for construct in protocol.constructs
+        if isinstance(construct, domain.SourceAmbiguity)
+        and not construct.resolved
+        and construct.step_id is not None
+        and (
+            (reading := domain.read_source_durations(construct.source_text)).durations
+            or reading.refused
+        )
+    }
+    for position, step in enumerate(steps):
+        anchor = step.evidence.source_page_number
+        last = (
+            steps[position + 1].evidence.source_page_number
+            if position + 1 < len(steps)
+            else extraction.page_count
+        )
+        page = extraction.pages[anchor - 1]
+        step_text = "\n".join(_step_source_texts(step))
+        extracted: list[str] = []
+
+        def refuse(action_id, excerpt, literal, reason, page_number=None):
+            refused.append(domain.RefusedStepTime(
+                step.step_id, step.source_label, action_id, excerpt, literal,
+                reason, page_number,
+            ))
+
+        step_verified: list[domain.VerifiedStepTimer] = []
+        for action in step.sub_actions:
+            for excerpt, evidence, parsed in _action_durations(action):
+                extracted.append(excerpt)
+                page_number = evidence.source_page_number
+                reading = domain.read_source_durations(excerpt)
+                if not _claim_occurs_in_text(
+                    excerpt, step_text, ocr_derived=page.ocr_derived
+                ):
+                    refuse(action.action_id, excerpt, excerpt, "not_in_step_text", page_number)
+                    continue
+                if not anchor <= page_number <= last:
+                    refuse(action.action_id, excerpt, excerpt, "page_outside_step", page_number)
+                    continue
+                if not _claim_occurs_on_evidence_page(excerpt, evidence, extraction):
+                    refuse(action.action_id, excerpt, excerpt, "not_on_page", page_number)
+                    continue
+                for item in reading.refused:
+                    refuse(action.action_id, excerpt, item.literal, item.reason, page_number)
+                if not reading.durations and not reading.refused:
+                    refuse(action.action_id, excerpt, excerpt, "no_duration", page_number)
+                mismatch = parsed is not None and all(
+                    parsed not in duration.seconds for duration in reading.durations
+                )
+                for duration in reading.durations:
+                    if mismatch:
+                        refuse(action.action_id, excerpt, duration.literal,
+                               "analysis_value_mismatch", page_number)
+                        continue
+                    step_verified.append(domain.VerifiedStepTimer(
+                        step.step_id, step.source_label, action.action_id,
+                        excerpt, duration.literal, duration.seconds, page_number,
+                    ))
+        if step.step_id in ambiguous_steps:
+            construct = ambiguous_steps[step.step_id]
+            for timer in step_verified:
+                refuse(timer.action_id, timer.excerpt, timer.literal,
+                       "step_time_ambiguity", timer.page_number)
+            refuse(construct.action_id, construct.source_text, construct.source_text,
+                   "step_time_ambiguity", construct.evidence.source_page_number)
+            step_verified = []
+        verified.extend(step_verified)
+        # What the step's text prints and the analysis did not extract is
+        # shown, so a missing timer is visible on the start screen.
+        seen = {item.literal for item in refused if item.step_id == step.step_id}
+        seen.update(timer.literal for timer in step_verified)
+        for owner in (step, *step.sub_actions):
+            reading = domain.read_source_durations(owner.instruction_source_text)
+            for literal, reason in (
+                *((d.literal, "not_extracted") for d in reading.durations),
+                *((r.literal, r.reason) for r in reading.refused),
+            ):
+                if literal in seen or any(literal in text for text in extracted):
+                    continue
+                seen.add(literal)
+                refuse(
+                    getattr(owner, "action_id", None),
+                    owner.instruction_source_text, literal, reason,
+                    owner.evidence.source_page_number,
+                )
+    for prerequisite in protocol.before_start:
+        if prerequisite.estimated_duration is None:
+            continue
+        refused.append(domain.RefusedStepTime(
+            None, None, None, prerequisite.source_text,
+            prerequisite.estimated_duration.source_text, "before_start",
+            prerequisite.evidence.source_page_number,
+        ))
+    return domain.StepTimerTable(tuple(verified), tuple(refused))

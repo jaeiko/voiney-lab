@@ -29,6 +29,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisModel,
     analyze_protocol_extraction,
     prepare_protocol_analysis_request,
+    verify_step_timers,
 )
 from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
@@ -2740,6 +2741,7 @@ class ProtocolCatalog:
             analysis.page_coverage,
             source_revision=entry.revision_id,
         )
+        timers = self._step_timer_table(revision, extraction, draft.protocol)
         return CuratedProtocolFixture(
             draft=draft,
             status=status,
@@ -2751,7 +2753,32 @@ class ProtocolCatalog:
             source_pdf_sha256=revision.pdf_checksum,
             source_filename=revision.original_filename,
             unread_pages=unread or None,
+            # The timers this analysis's own source supports (lane PT,
+            # decision 1): the same step_id -> seconds shape the in-gel
+            # sidecar loads into, plus the steps whose timer is a choice.
+            timer_manifest=timers.manifest(),
+            timer_choices=timers.choices() or None,
+            timer_table=timers,
         )
+
+    def _step_timer_table(
+        self,
+        revision: ProtocolRevisionRecord,
+        extraction: ProtocolPdfExtraction,
+        protocol: domain.ExperimentProtocol,
+    ) -> domain.StepTimerTable:
+        """Every time the analysis attached to a step, verified or refused.
+
+        Checked against the text the analysis itself was checked against --
+        the accepted OCR for a page that had none -- so a scanned page's time
+        is found where its claims were found.
+        """
+
+        try:
+            source = self._extraction_for_analysis(revision, extraction)
+        except ProtocolOcrReviewError:
+            source = extraction
+        return verify_step_timers(protocol, source)
 
     def resolve_asset(
         self,
