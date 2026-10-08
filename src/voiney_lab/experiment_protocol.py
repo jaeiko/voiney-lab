@@ -2202,3 +2202,295 @@ def assess_readiness(
         label=GUIDANCE_READY_LABEL,
         reasons=(),
     )
+
+
+# --- Source durations (lane PT, human decisions 1-2 of 2026-10-08) ---------
+#
+# A timer for an uploaded protocol is a duration the source prints: the
+# number and its unit, read here from the analysis's excerpt and nowhere
+# else. Nothing is inferred -- "overnight", "until clear", "at least 2 h" and
+# "after 16 h" make no timer, and the excerpt is read back instead. The
+# server checks every value it keeps against the step's own source
+# (experiment_protocol_analysis.verify_step_timers), the same level of trust
+# the in-gel sidecar manifest gets from its loader.
+
+_DURATION_UNIT_SECONDS: dict[str, int] = {
+    "hours": 3600, "hour": 3600, "hrs": 3600, "hr": 3600, "h": 3600, "시간": 3600,
+    "minutes": 60, "minute": 60, "mins": 60, "min": 60, "분": 60,
+    "seconds": 1, "second": 1, "secs": 1, "sec": 1, "s": 1, "초": 1,
+}
+#: Single-letter units only in lower case ("3 h", "30 s"): "S7" in "(S1-S7)"
+#: is a tube label, not seven seconds.
+_UNIT_WORD = (
+    r"(?:hours?|hrs?|minutes?|mins?|min|seconds?|secs?|sec|시간|분(?!\s*의)|초)"
+    r"(?![A-Za-z])"
+)
+_UNIT = rf"(?:{_UNIT_WORD}|(?-i:[hs])(?![A-Za-z]))"
+_NUMBER = r"\d+(?:\.\d+)?"
+#: "5 min", "5min", and "5-min" -- the hyphen only before a unit word.
+_PAIR = rf"{_NUMBER}(?:\s*{_UNIT}|-{_UNIT_WORD})"
+_COMPOUND = rf"{_PAIR}(?:\s*{_PAIR})*"
+_CLOCK = r"(?<![\d:])\d{1,2}:\d{2}:\d{2}(?![\d:])"
+_ALTERNATIVE = r"\s*(?:[-–—~～]|to|or|또는|혹은)\s*"
+_SOURCE_DURATION = re.compile(
+    rf"(?<![A-Za-z\d.])(?:"
+    rf"(?P<between>between\s+(?P<b1>{_NUMBER})\s+and\s+(?P<b2>{_NUMBER})\s*(?P<bu>{_UNIT}))"
+    rf"|(?P<pair>(?P<p1>{_COMPOUND}){_ALTERNATIVE}(?P<p2>{_COMPOUND}))"
+    rf"|(?P<bare>(?P<n1>{_NUMBER}){_ALTERNATIVE}(?P<n2>{_NUMBER})\s*(?P<nu>{_UNIT}))"
+    rf"|(?P<single>{_COMPOUND})"
+    rf"|(?P<clock>{_CLOCK})"
+    rf")",
+    re.I,
+)
+_PAIR_PARTS = re.compile(rf"({_NUMBER})(?:\s*|-)({_UNIT})", re.I)
+#: A number glued to a letter before it ("S1", "pH7") is not a time.
+#: A bound, not a length: "at least 30 min", "up to 2 h", "30분 이상".
+_OPEN_BOUND_BEFORE = re.compile(
+    r"(?:at\s+least|no\s+(?:less|more)\s+than|not\s+(?:less|more)\s+than|"
+    r"more\s+than|less\s+than|longer\s+than|shorter\s+than|up\s+to|within|"
+    r"over|under|minimum(?:\s+of)?|maximum(?:\s+of)?|max\.?|[≥≤<>]|최소|최대)"
+    r"\s*[~≈]?\s*$",
+    re.I,
+)
+_OPEN_BOUND_AFTER = re.compile(
+    r"^\s*(?:or\s+(?:more|longer|less|shorter)|and\s+(?:more|longer)|\+|"
+    r"이상|이하|이내|미만|초과|넘게|까지)",
+    re.I,
+)
+#: A repeat interval: "every 10 min", "10분마다".
+_INTERVAL_BEFORE = re.compile(r"(?:every|each|per|매)\s*$", re.I)
+_INTERVAL_AFTER = re.compile(r"^\s*(?:마다|간격|intervals?)", re.I)
+#: A point relative to something else: "After 2 hours, remove ...", "30분 후",
+#: "30 min before use".
+_ELAPSED_BEFORE = re.compile(r"(?:after|post)\s*[~≈]?\s*$", re.I)
+_ELAPSED_AFTER = re.compile(
+    r"^\s*(?:후|뒤|지나|경과|전에|전부터|later|after\b|before\b|prior\b|ahead\b)", re.I
+)
+#: A time the source states without a number.
+_UNNUMBERED_TIME = re.compile(
+    r"(?<![A-Za-z])(?:overnight|o/n|until|till|several\s+(?:hours|minutes|days)|"
+    r"a\s+few\s+(?:hours|minutes|seconds)|briefly|brief)(?![A-Za-z])|"
+    r"밤새|하룻밤|오버나이트|될\s*때까지|할\s*때까지",
+    re.I,
+)
+
+SOURCE_DURATION_REFUSAL_KO: dict[str, str] = {
+    "no_number": "숫자로 적힌 시간이 없어요(overnight, until … 같은 표현).",
+    "with_unnumbered_alternative": "숫자 없는 시간 표현(overnight, until …)이 함께 적혀 있어 길이를 정할 수 없어요.",
+    "open_bound": "정해진 길이가 아니라 최소·최대·이내 같은 한계로 적혀 있어요.",
+    "interval": "반복 간격(매 …마다)으로 적혀 있어요.",
+    "elapsed_reference": "다른 작업의 앞뒤 시점(after …, before …, … 후)을 가리켜요.",
+    "not_whole_seconds": "초 단위로 떨어지지 않는 값이에요.",
+    "unclear_range": "앞 값이 뒤 값보다 커서 범위로 읽을 수 없어요.",
+    "no_duration": "시간 숫자와 단위를 찾지 못했어요.",
+    "not_in_step_text": "발췌가 그 단계의 원문 근거 안에 없어요.",
+    "page_outside_step": "발췌가 그 단계의 쪽 범위 밖에 있어요.",
+    "not_on_page": "발췌가 원문 쪽에서 확인되지 않아요.",
+    "analysis_value_mismatch": "분석이 적은 초가 원문 값과 달라요.",
+    "step_time_ambiguity": "분석이 이 단계의 시간을 모호하다고 표시했어요.",
+    "before_start": "단계가 아닌 시작 전 준비에 적힌 시간이에요.",
+}
+
+
+@dataclass(frozen=True)
+class SourceDuration:
+    """A duration the source prints, exactly as printed.
+
+    ``seconds`` holds one value, or -- for a range ("12–16 h") or printed
+    alternatives ("15 or 30 min") -- each value in the order printed. Only
+    printed values are ever here: a range's middle is not one.
+    """
+
+    literal: str
+    seconds: tuple[int, ...]
+
+    @property
+    def is_choice(self) -> bool:
+        return len(self.seconds) > 1
+
+
+@dataclass(frozen=True)
+class RefusedSourceDuration:
+    """A time expression that makes no timer, and why (a key of SOURCE_DURATION_REFUSAL_KO)."""
+
+    literal: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SourceDurationReading:
+    durations: tuple[SourceDuration, ...]
+    refused: tuple[RefusedSourceDuration, ...]
+
+
+def _compound_seconds(text: str) -> float:
+    total = 0.0
+    for number, unit in _PAIR_PARTS.findall(text):
+        total += float(number) * _DURATION_UNIT_SECONDS[unit.lower()]
+    return total
+
+
+def _clock_seconds(text: str) -> int:
+    hours, minutes, seconds = (int(part) for part in text.split(":"))
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _match_seconds(match: re.Match[str]) -> tuple[float, ...]:
+    if match.group("between"):
+        unit = _DURATION_UNIT_SECONDS[match.group("bu").lower()]
+        return (float(match.group("b1")) * unit, float(match.group("b2")) * unit)
+    if match.group("pair"):
+        return (
+            _compound_seconds(match.group("p1")),
+            _compound_seconds(match.group("p2")),
+        )
+    if match.group("bare"):
+        unit = _DURATION_UNIT_SECONDS[match.group("nu").lower()]
+        return (float(match.group("n1")) * unit, float(match.group("n2")) * unit)
+    if match.group("clock"):
+        return (float(_clock_seconds(match.group("clock"))),)
+    return (_compound_seconds(match.group("single")),)
+
+
+def read_source_durations(text: str) -> SourceDurationReading:
+    """Every duration ``text`` prints, each kept or refused with its reason.
+
+    Pure reading of printed characters; no model output is consulted. An
+    expression qualified as a bound, an interval or a time since something
+    else is refused, and so is every number in a text that also states a time
+    without one ("1 h or overnight"): which one applies is not the server's
+    to choose.
+    """
+
+    durations: list[SourceDuration] = []
+    refused: list[RefusedSourceDuration] = []
+    unnumbered = [m.group(0) for m in _UNNUMBERED_TIME.finditer(text)]
+    for match in _SOURCE_DURATION.finditer(text):
+        literal = match.group(0).strip()
+        before = text[max(0, match.start() - 24):match.start()]
+        after = text[match.end():match.end() + 16]
+        reason: str | None = None
+        if unnumbered:
+            reason = "with_unnumbered_alternative"
+        elif _OPEN_BOUND_BEFORE.search(before) or _OPEN_BOUND_AFTER.search(after):
+            reason = "open_bound"
+        elif _INTERVAL_BEFORE.search(before) or _INTERVAL_AFTER.search(after):
+            reason = "interval"
+        elif _ELAPSED_BEFORE.search(before) or _ELAPSED_AFTER.search(after):
+            reason = "elapsed_reference"
+        values = _match_seconds(match)
+        if reason is None and any(
+            value <= 0 or value != int(value) for value in values
+        ):
+            reason = "not_whole_seconds"
+        if (
+            reason is None
+            and len(values) == 2
+            and values[0] >= values[1]
+            and not re.search(r"\bor\b|또는|혹은", literal, re.I)
+        ):
+            # "3000 - 5 min" is a speed beside a time, not a range.
+            reason = "unclear_range"
+        if reason is not None:
+            refused.append(RefusedSourceDuration(literal, reason))
+            continue
+        seconds = tuple(dict.fromkeys(int(value) for value in values))
+        durations.append(SourceDuration(literal, seconds))
+    if unnumbered and not durations and not refused:
+        refused.extend(
+            RefusedSourceDuration(word, "no_number")
+            for word in dict.fromkeys(unnumbered)
+        )
+    return SourceDurationReading(tuple(durations), tuple(refused))
+
+
+def states_unnumbered_time(text: str) -> bool:
+    """Whether ``text`` states a time without a number: "overnight", "O/N", "until"."""
+
+    return _UNNUMBERED_TIME.search(text) is not None
+
+
+@dataclass(frozen=True)
+class VerifiedStepTimer:
+    """One duration of a step that passed the server's source check."""
+
+    step_id: str
+    source_label: str
+    action_id: str | None
+    excerpt: str
+    literal: str
+    seconds: tuple[int, ...]
+    page_number: int
+    #: "analysis_duration": a duration the analysis attached to the step;
+    #: "step_text": read by the server in the step's own instruction text.
+    source: str = "analysis_duration"
+
+
+@dataclass(frozen=True)
+class RefusedStepTime:
+    """A time expression that makes no timer, with the excerpt to read instead."""
+
+    step_id: str | None
+    source_label: str | None
+    action_id: str | None
+    excerpt: str
+    literal: str
+    reason: str
+    page_number: int | None = None
+
+    @property
+    def reason_ko(self) -> str:
+        return SOURCE_DURATION_REFUSAL_KO[self.reason]
+
+
+@dataclass(frozen=True)
+class TimerChoice:
+    """One value a step's timer may be set to, as the source prints it."""
+
+    seconds: int
+    literal: str
+    excerpt: str
+
+
+@dataclass(frozen=True)
+class StepTimerTable:
+    """The verified timers and refused time expressions of one analysis.
+
+    ``manifest`` is the shape the in-gel sidecar manifest loads into --
+    step_id to seconds -- for a step whose verified durations come to one
+    value. A step with a range, printed alternatives or two different
+    durations has ``choices`` instead: the values in step order, each one
+    printed, for the experimenter to pick from when the timer is started.
+    """
+
+    verified: tuple[VerifiedStepTimer, ...] = ()
+    refused: tuple[RefusedStepTime, ...] = ()
+
+    def _values(self) -> dict[str, list[TimerChoice]]:
+        by_step: dict[str, list[TimerChoice]] = {}
+        for timer in self.verified:
+            options = by_step.setdefault(timer.step_id, [])
+            for seconds in timer.seconds:
+                if all(option.seconds != seconds for option in options):
+                    options.append(TimerChoice(seconds, timer.literal, timer.excerpt))
+        return by_step
+
+    def manifest(self) -> dict[str, int]:
+        return {
+            step_id: options[0].seconds
+            for step_id, options in self._values().items()
+            if len(options) == 1
+        }
+
+    def choices(self) -> dict[str, tuple[TimerChoice, ...]]:
+        return {
+            step_id: tuple(options)
+            for step_id, options in self._values().items()
+            if len(options) > 1
+        }
+
+    def for_step(self, step_id: str) -> tuple[VerifiedStepTimer, ...]:
+        return tuple(timer for timer in self.verified if timer.step_id == step_id)
+
+    def refused_for_step(self, step_id: str) -> tuple[RefusedStepTime, ...]:
+        return tuple(item for item in self.refused if item.step_id == step_id)

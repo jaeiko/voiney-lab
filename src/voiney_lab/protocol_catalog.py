@@ -29,6 +29,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisModel,
     analyze_protocol_extraction,
     prepare_protocol_analysis_request,
+    verify_step_timers,
 )
 from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
@@ -468,6 +469,59 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
     "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
 }
+
+
+def _duration_ko(seconds: int) -> str:
+    """"12시간", "1시간 30분", "15분", "30초": a timer value said in Korean."""
+
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = [
+        f"{value}{unit}"
+        for value, unit in ((hours, "시간"), (minutes, "분"), (secs, "초"))
+        if value
+    ]
+    return " ".join(parts) or "0초"
+
+
+def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, object]]]:
+    """The start screen's timer list (lane PT, decision 4).
+
+    ``verified``: each step's timer values with the source excerpt they were
+    read from; a step with more than one value is a choice the experimenter
+    makes when starting the timer. ``refused``: each time the server did not
+    make a timer from, with the reason in Korean.
+    """
+
+    choices = table.choices()
+    return {
+        "verified": [
+            {
+                "step_id": timer.step_id,
+                "step_label": timer.source_label,
+                "source_literal": timer.literal,
+                "source_excerpt": timer.excerpt,
+                "source_page_number": timer.page_number,
+                "seconds": list(timer.seconds),
+                "value_ko": " 또는 ".join(_duration_ko(s) for s in timer.seconds),
+                "choice": timer.step_id in choices,
+                "source": timer.source,
+            }
+            for timer in table.verified
+        ],
+        "refused": [
+            {
+                "step_id": item.step_id,
+                "step_label": item.source_label,
+                "source_literal": item.literal,
+                "source_excerpt": item.excerpt,
+                "source_page_number": item.page_number,
+                "reason": item.reason,
+                "reason_ko": item.reason_ko,
+            }
+            for item in table.refused
+        ],
+    }
 
 
 def _safety_notice_sources(protocol: Any) -> list[dict[str, object]]:
@@ -1793,6 +1847,7 @@ class ProtocolCatalog:
             "execution_blockers": [],
             "execution_notices": [],
             "safety_notice_sources": [],
+            "timers": {"verified": [], "refused": []},
         }
         ocr_projection = base["ocr"]
         base["pipeline"] = self._pipeline(
@@ -1847,6 +1902,15 @@ class ProtocolCatalog:
                 # server adds the Korean beside each (it holds the
                 # translation store); the words here are the document's.
                 "safety_notice_sources": _safety_notice_sources(protocol),
+                # Step timers for the start screen (lane PT, decision 4):
+                # each verified value with its source excerpt, and each time
+                # the server could not verify, with the reason.
+                "timers": _review_timers(
+                    self._step_timer_table(
+                        revision, extraction,
+                        protocol_with_display_step_labels(protocol),
+                    )
+                ),
             }
         )
         return base
@@ -2740,6 +2804,7 @@ class ProtocolCatalog:
             analysis.page_coverage,
             source_revision=entry.revision_id,
         )
+        timers = self._step_timer_table(revision, extraction, draft.protocol)
         return CuratedProtocolFixture(
             draft=draft,
             status=status,
@@ -2751,7 +2816,32 @@ class ProtocolCatalog:
             source_pdf_sha256=revision.pdf_checksum,
             source_filename=revision.original_filename,
             unread_pages=unread or None,
+            # The timers this analysis's own source supports (lane PT,
+            # decision 1): the same step_id -> seconds shape the in-gel
+            # sidecar loads into, plus the steps whose timer is a choice.
+            timer_manifest=timers.manifest(),
+            timer_choices=timers.choices() or None,
+            timer_table=timers,
         )
+
+    def _step_timer_table(
+        self,
+        revision: ProtocolRevisionRecord,
+        extraction: ProtocolPdfExtraction,
+        protocol: domain.ExperimentProtocol,
+    ) -> domain.StepTimerTable:
+        """Every time the analysis attached to a step, verified or refused.
+
+        Checked against the text the analysis itself was checked against --
+        the accepted OCR for a page that had none -- so a scanned page's time
+        is found where its claims were found.
+        """
+
+        try:
+            source = self._extraction_for_analysis(revision, extraction)
+        except ProtocolOcrReviewError:
+            source = extraction
+        return verify_step_timers(protocol, source)
 
     def resolve_asset(
         self,
