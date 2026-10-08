@@ -264,32 +264,6 @@ class StopTests(MigrateEnvCase):
         self.assert_stops_without_writing(f"XAI_API_KEY={SECRET}\nthis is not a setting\n", "2번째 줄")
 
 
-class SecretReferenceTests(MigrateEnvCase):
-    def test_referenced_secrets_stay_with_the_provider_keys(self):
-        self.given(
-            f"{OLD_PREFIX}SECRET_REFERENCES={{\"secret://t/eln\":\"ELN_TOKEN\"}}\n"
-            f"ELN_TOKEN={SECRET}\n"
-        )
-        code, output = self.run_tool("--write")
-        self.assertEqual(code, 0, output)
-        keys = self.path.read_text(encoding="utf-8").split("## ── 공급자 키 ──\n")[1]
-        self.assertIn(f"ELN_TOKEN={SECRET}\n", keys.split("## ── ")[0])
-        self.assertIn('VOINEY_LAB_SECRET_REFERENCES={"secret://t/eln":"ELN_TOKEN"}\n', keys)
-
-    def test_a_reference_to_an_old_name_stops(self):
-        old_token = OLD_PREFIX + "ELN_TOKEN"
-        original = self.given(
-            f"VOINEY_LAB_SECRET_REFERENCES={{\"secret://t/eln\":\"{old_token}\"}}\n"
-            f"{old_token}={SECRET}\n"
-        )
-        code, output = self.run_tool("--write")
-        self.assertEqual(code, 2, output)
-        self.assertIn(old_token, output)
-        self.assertEqual(self.path.read_bytes(), original)
-        self.assertEqual(self.backups(), [])
-        self.assertEqual(self.run_tool("--check")[0], 1)
-
-
 class ExampleFileTests(unittest.TestCase):
     def test_env_example_is_in_the_tools_layout(self):
         text = (ROOT / ".env.example").read_text(encoding="utf-8")

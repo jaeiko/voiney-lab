@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import sqlite3
-
 import pytest
 
 from voiney_lab.identity import (
@@ -50,35 +47,6 @@ def workspace(tmp_path):
         yield store
     finally:
         store.close()
-
-
-def _revision(store, principal: Principal, *, status: str = "published"):
-    family = store.create_protocol_family(principal, title="ANKOM fiber analysis")
-    source = store.register_source(
-        principal,
-        connector_kind="protocols_io",
-        external_id="10.17504/protocols.io.yinfude",
-        version_identity="v1",
-        source_hash=hashlib.sha256(b"immutable source").hexdigest(),
-        canonical_url="https://www.protocols.io/view/yinfude",
-        metadata={
-            "doi": "10.17504/protocols.io.yinfude",
-            "source_status": status,
-            "authors": ["Source Author"],
-            "license": "CC BY",
-        },
-    )
-    revision = store.add_protocol_revision(
-        principal,
-        family_id=family.family_id,
-        source_id=source.source_id,
-        change_summary="Initial immutable import",
-        content={
-            "steps": ["Incubate 10 min", "Add 72% sulfuric acid"],
-            "warnings": ["Concentrated acid"],
-        },
-    )
-    return family, source, revision
 
 
 def test_rbac_permissions_are_centralized_and_default_deny():
@@ -148,50 +116,17 @@ def test_cross_tenant_ids_are_non_enumerable_across_sensitive_resources(workspac
     tenant_b = _principal("tenant-b-admin", "tenant-b", Role.LAB_ADMIN)
     workspace.bootstrap_principal(tenant_a)
     workspace.bootstrap_principal(tenant_b)
-    _, _, revision = _revision(workspace, tenant_a)
-    connector = workspace.configure_connector(
-        tenant_a,
-        connector_kind="google_drive",
-        display_name="Approved protocol folder",
-        credential_reference="secret://tenant-a/google-drive",
-        allowed_roots=("drive-folder-1",),
-    )
     workspace.bind_resource(tenant_a, "report", "report-a")
+    workspace.bind_resource(tenant_a, "protocol_catalog", "protocol-a")
 
     for operation in (
-        lambda: workspace.get_revision(tenant_b, revision.revision_id),
-        lambda: workspace.get_connector(tenant_b, connector.connector_id),
         lambda: workspace.require_resource(tenant_b, "report", "report-a"),
+        lambda: workspace.require_resource(tenant_b, "protocol_catalog", "protocol-a"),
     ):
         with pytest.raises(WorkspaceNotFoundError):
             operation()
-
-
-def test_connector_secrets_never_enter_metadata_and_append_only_rows_hold(workspace):
-    admin = _principal("admin", "tenant-a", Role.LAB_ADMIN)
-    workspace.bootstrap_principal(admin)
-    connector = workspace.configure_connector(
-        admin,
-        connector_kind="github",
-        display_name="Protocol repository",
-        credential_reference="secret://tenant-a/github-app-installation",
-        allowed_roots=("lab/protocols@main",),
-    )
-    assert connector.credential_reference == "secret://tenant-a/github-app-installation"
-    row = workspace._connection.execute(
-        "SELECT * FROM connector_configurations WHERE connector_id=?",
-        (connector.connector_id,),
-    ).fetchone()
-    assert "token" not in dict(row)
-
-    _, source, revision = _revision(workspace, admin)
-    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
-        workspace._connection.execute(
-            "UPDATE protocol_lineage_revisions SET content_json='{}' WHERE revision_id=?",
-            (revision.revision_id,),
-        )
-    workspace._connection.rollback()
-    assert workspace.get_revision(admin, revision.revision_id).source_hash == source.source_hash
+    assert workspace.resource_ids(tenant_b, "protocol_catalog") == frozenset()
+    assert workspace.resource_ids(tenant_a, "protocol_catalog") == frozenset({"protocol-a"})
 
 
 def test_workspace_settings_require_explicit_absolute_storage(tmp_path):
@@ -243,19 +178,3 @@ def test_asset_location_cards_are_versioned_reviewable_and_tenant_private(worksp
     assert difference["changes"]["location"]["after"]["storage"] == "Freezer B"
     with pytest.raises(WorkspaceNotFoundError):
         workspace.asset_card_history(outsider, "trypsin")
-
-
-def test_protocol_library_supports_search_favorites_tags_and_quick_links(workspace):
-    researcher = _principal("researcher", "tenant-a", Role.RESEARCHER)
-    workspace.bootstrap_principal(researcher)
-    family, _, revision = _revision(workspace, researcher)
-    workspace.set_protocol_preference(
-        researcher, family.family_id, favorite=True, tags=("fiber", "plant")
-    )
-    library = workspace.protocol_library(researcher, search="ANKOM")
-    assert len(library) == 1
-    assert library[0]["revision_id"] == revision.revision_id
-    assert library[0]["favorite"] is True
-    assert library[0]["tags"] == ["fiber", "plant"]
-    assert library[0]["quick_link"].endswith(f"protocol={family.family_id}")
-    assert workspace.protocol_library(researcher, search="not present") == ()

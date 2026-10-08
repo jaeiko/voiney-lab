@@ -78,8 +78,6 @@ SETTINGS: tuple[Setting, ...] = (
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
     Setting("VOINEY_LAB_MOSS_PROJECT_ID", KEYS, _NONE, "Moss 프로젝트 ID"),
     Setting("VOINEY_LAB_MOSS_PROJECT_KEY", KEYS, _NONE, "Moss 프로젝트 키"),
-    Setting("VOINEY_LAB_SECRET_REFERENCES", KEYS, "{}",
-            "커넥터 secret:// 참조 → 비밀을 담은 환경 변수 이름 (JSON)"),
     # --- OCR ------------------------------------------------------------------
     Setting("VOINEY_LAB_OCR_PROVIDERS", OCR, _NONE,
             "쓸 OCR 엔진: clova, google (쉼표로)"),

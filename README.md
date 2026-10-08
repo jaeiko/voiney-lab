@@ -1548,20 +1548,6 @@ allowlist in `VOINEY_LAB_DEV_AUTH_PROFILES`. If omitted, one local
 lab-admin profile is created. Do not enable development identities in operational
 scope.
 
-### Connector secrets
-
-Connector records contain opaque `secret://` references, never credential values.
-The application resolves them through a server-owned environment mapping:
-
-```dotenv
-VOINEY_LAB_SECRET_REFERENCES={"secret://tenant-a/protocols-io":"PROTOCOLS_IO_TOKEN","secret://tenant-a/drive":"DRIVE_ACCESS_TOKEN","secret://tenant-a/github":"GITHUB_INSTALLATION_TOKEN","secret://tenant-a/github-webhook":"GITHUB_WEBHOOK_SECRET","secret://tenant-a/elabftw":"ELABFTW_API_KEY"}
-```
-
-Set the referenced environment variables only in the process secret manager.
-Connector `allowed_roots` constrain Drive folders/shared drives, GitHub
-repository/ref/path, or an eLabFTW HTTPS origin. Live OAuth/App provisioning is an
-operator responsibility; local tests use fakes.
-
 ## API surface
 
 The browser consumes these main groups:

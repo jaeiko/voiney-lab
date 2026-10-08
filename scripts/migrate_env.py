@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 import os
 import re
 import sys
@@ -46,7 +45,7 @@ from pathlib import Path
 
 from dotenv.parser import parse_stream
 
-from voiney_lab.setting_names import AREAS, BY_NAME, EXTERNAL_NAMES, KEYS
+from voiney_lab.setting_names import AREAS, BY_NAME, EXTERNAL_NAMES
 from voiney_lab.setting_renames import NEW_PREFIX, renamed
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +57,6 @@ HEADER = (
     "## '## ' 로 시작하는 줄은 도구가 쓰는 주석이라, 다시 정리할 때 새로 쓴다.\n"
     "## 이름 표: src/voiney_lab/setting_names.py\n"
 )
-SECRET_REFERENCES = "VOINEY_LAB_SECRET_REFERENCES"
 
 
 class MigrationError(Exception):
@@ -78,7 +76,6 @@ class Entry:
 class Parsed:
     entries: list[Entry]
     loose_comments: list[str]
-    secret_reference_names: frozenset[str]
 
 
 def _leading_blank(text: str) -> tuple[int, str]:
@@ -95,7 +92,6 @@ def parse(text: str) -> Parsed:
     entries: list[Entry] = []
     loose: list[str] = []
     pending: list[str] = []
-    secret_value: str | None = None
     for binding in parse_stream(io.StringIO(text)):
         blank_lines, body = _leading_blank(binding.original.string)
         line_number = binding.original.line + blank_lines
@@ -112,47 +108,29 @@ def parse(text: str) -> Parsed:
                 pending.append(line)
             continue
         new_name = renamed(binding.key) or binding.key
-        if new_name == SECRET_REFERENCES:
-            secret_value = binding.value
         entries.append(Entry(
             binding.key, new_name, body if body.endswith("\n") else body + "\n",
             line_number, pending,
         ))
         pending = []
     loose.extend(pending)
-    return Parsed(entries, loose, _secret_reference_names(secret_value))
+    return Parsed(entries, loose)
 
 
-def _secret_reference_names(value: str | None) -> frozenset[str]:
-    """The variable names VOINEY_LAB_SECRET_REFERENCES points at, if it parses."""
-
-    try:
-        mapping = json.loads(value) if value else {}
-    except json.JSONDecodeError:
-        return frozenset()
-    if not isinstance(mapping, dict):
-        return frozenset()
-    return frozenset(item for item in mapping.values() if isinstance(item, str))
-
-
-def area_of(name: str, secret_reference_names: frozenset[str]) -> str | None:
+def area_of(name: str) -> str | None:
     """The area a name is written under, or None when the code does not read it."""
 
     if name in BY_NAME:
         return BY_NAME[name].area
-    if name in secret_reference_names:
-        return KEYS
     area, _ = EXTERNAL_NAMES.get(name, (None, ""))
     return area
 
 
-def meaning_of(name: str, secret_reference_names: frozenset[str]) -> str | None:
+def meaning_of(name: str) -> str | None:
     """The short comment written above a setting, if there is one to write."""
 
     if name in BY_NAME:
         return BY_NAME[name].meaning
-    if name in secret_reference_names:
-        return f"{SECRET_REFERENCES} 가 가리키는 비밀"
     if name in EXTERNAL_NAMES:
         return EXTERNAL_NAMES[name][1]
     if name.startswith(NEW_PREFIX):
@@ -165,12 +143,6 @@ def duplicates(entries: Sequence[Entry]) -> dict[str, list[Entry]]:
     for entry in entries:
         grouped.setdefault(entry.new_name, []).append(entry)
     return {name: group for name, group in grouped.items() if len(group) > 1}
-
-
-def old_secret_references(parsed: Parsed) -> list[str]:
-    """Referenced names the rename would move: the reference would break."""
-
-    return sorted(name for name in parsed.secret_reference_names if renamed(name))
 
 
 def renamed_text(entry: Entry) -> str:
@@ -188,9 +160,7 @@ def renamed_text(entry: Entry) -> str:
 def render(parsed: Parsed) -> str:
     areas: dict[str | None, list[Entry]] = {}
     for entry in parsed.entries:
-        areas.setdefault(
-            area_of(entry.new_name, parsed.secret_reference_names), []
-        ).append(entry)
+        areas.setdefault(area_of(entry.new_name), []).append(entry)
     out = [HEADER]
     for title, key in [(area, area) for area in AREAS] + [(UNREAD_TITLE, None)]:
         group = sorted(areas.get(key, []), key=lambda entry: entry.new_name)
@@ -199,7 +169,7 @@ def render(parsed: Parsed) -> str:
         out.append(f"\n{GENERATED}── {title} ──\n")
         for entry in group:
             out.extend(entry.comments)
-            meaning = meaning_of(entry.new_name, parsed.secret_reference_names)
+            meaning = meaning_of(entry.new_name)
             if meaning:
                 out.append(f"{GENERATED}{meaning}\n")
             out.append(renamed_text(entry))
@@ -216,15 +186,10 @@ def report(parsed: Parsed, stream) -> int:
     moving = [entry for entry in entries if entry.name != entry.new_name]
     staying = [
         entry for entry in entries
-        if entry.name == entry.new_name
-        and area_of(entry.new_name, parsed.secret_reference_names) is not None
+        if entry.name == entry.new_name and area_of(entry.new_name) is not None
     ]
-    unread = [
-        entry for entry in entries
-        if area_of(entry.new_name, parsed.secret_reference_names) is None
-    ]
+    unread = [entry for entry in entries if area_of(entry.new_name) is None]
     repeated = duplicates(entries)
-    broken_references = old_secret_references(parsed)
 
     def section(title: str, lines: list[str]) -> None:
         print(f"{title} ({len(lines)}개)", file=stream)
@@ -243,9 +208,7 @@ def report(parsed: Parsed, stream) -> int:
         f"{name}: " + ", ".join(f"{entry.name} ({entry.line}번째 줄)" for entry in group)
         for name, group in sorted(repeated.items())
     ])
-    if broken_references:
-        section(f"{SECRET_REFERENCES} 가 가리키는 옛 이름", broken_references)
-    return 1 if moving or repeated or broken_references else 0
+    return 1 if moving or repeated else 0
 
 
 def _write_private(path: Path, data: bytes) -> None:
@@ -268,13 +231,6 @@ def write(path: Path, parsed: Parsed, original: bytes, now: datetime) -> Path:
         raise MigrationError(
             "중복 이름이 있어 쓰지 않았습니다: " + ", ".join(sorted(repeated))
             + ". 하나만 남기고 다시 실행하세요."
-        )
-    broken = old_secret_references(parsed)
-    if broken:
-        raise MigrationError(
-            f"{SECRET_REFERENCES} 가 옛 이름 {len(broken)}개를 가리킵니다: "
-            + ", ".join(broken)
-            + ". 값은 바꾸지 않으므로 그 값을 직접 고친 뒤 다시 실행하세요."
         )
     rendered = render(parsed).encode("utf-8")
     backup = path.with_name(f"{path.name}.bak-{now:%Y%m%d-%H%M%S}")

@@ -243,8 +243,7 @@ writes the settings back grouped by area (공급자 키, OCR, 모델, 기능 켜
 code does not read are kept, at the bottom under "코드가 읽지 않는 설정". It
 stops before writing anything when a name appears twice -- including an old
 and a new name for one setting, or both old names of a collapsed pair -- when a
-line is not `.env` syntax, or when `VOINEY_LAB_SECRET_REFERENCES` points at a
-name the rename would move (its value is never changed, so fix it by hand).
+line is not `.env` syntax.
 
 Old names set anywhere else -- a shell profile, a deploy or helper script, a
 service unit, a CI secret -- have to be renamed by hand; the refusal names
