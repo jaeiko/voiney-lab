@@ -419,6 +419,58 @@ class TheServedPathTests(_Catalog):
             self.assertIn("12시간과 16시간 중 몇 시간으로 맞출까요?", sent)
 
 
+class TheTimeQuestionTests(_Catalog):
+    """Decision 3: source time questions, and elapsed/left from the running timer."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.store_analysis()
+        self.fixture = self.catalog.load_executable_fixture(self.protocol_id)
+        self.turns = Turns()
+
+    def test_how_long_is_answered_from_the_verified_source_time(self) -> None:
+        session = self.turns.open(0, fixture=self.fixture)
+        for utterance in ("몇 분 반응시켜?", "이 단계 몇 분이야?", "몇 분 동안 해?"):
+            with self.subTest(utterance=utterance):
+                plan = self.turns.say(utterance)
+                self.assertEqual(plan.intent_kind, "step_duration_question")
+                # "이 단계" is said like "2단계": lane R6's wrapper (decision 7)
+                # names the step it answers for, around the same answer.
+                self.assertIn(
+                    "1단계 원문에는 ‘15 min’(15분)로 적혀 있어요. "
+                    "타이머를 시작하려면 '타이머 시작해줘'라고 말씀해 주세요.",
+                    plan.speech_text,
+                )
+                self.assertFalse(plan.state_changed)
+                self.assertIn(session.last_front_rule, {"step_time", "step_homophone"})
+        self.assertEqual(session.timer_status()["state"], "not_started")
+
+    def test_a_range_and_a_time_without_a_number_are_said_as_the_source_says_them(self) -> None:
+        self.turns.open(2, fixture=self.fixture)
+        plan = self.turns.say("몇 시간 배양해?")
+        self.assertIn("‘12-16 h’(12시간에서 16시간 사이)", plan.speech_text)
+        self.turns.open(1, fixture=self.fixture)
+        plan = self.turns.say("이 단계 몇 시간이야?")
+        self.assertIn("‘2. Incubate the tube overnight at 4 C.’", plan.speech_text)
+        self.assertIn("타이머는 만들지 않았어요", plan.speech_text)
+
+    def test_elapsed_and_left_come_from_the_running_timer(self) -> None:
+        session = self.turns.open(0, fixture=self.fixture)
+        self.turns.say("타이머 시작해줘")
+        session._timer_started_at -= 125
+        plan = self.turns.say("몇 분 지났어?")
+        self.assertEqual(plan.intent_kind, "step_timer_elapsed")
+        self.assertIn("약 2분 5초 지났어요", plan.speech_text)
+        self.assertIn("남은 시간은 약 12분 55초", plan.speech_text)
+        plan = self.turns.say("얼마나 남았어?")
+        self.assertIn("12분 55초", plan.speech_text)
+
+    def test_elapsed_without_a_running_timer_says_so(self) -> None:
+        self.turns.open(1, fixture=self.fixture)
+        plan = self.turns.say("몇 분 지났어?")
+        self.assertIn("지금 돌고 있는 단계 타이머는 없어요", plan.speech_text)
+
+
 class TheInGelSidecarIsUnchangedTests(unittest.TestCase):
     def test_the_sidecar_fixture_has_no_analysis_timer_table(self) -> None:
         from tests.lane_cb_support import headspace_fixture

@@ -2761,6 +2761,11 @@ FRONT_RULES: dict[str, str] = {
                          "question open (D9), and the reply to a note or "
                          "problem the server is waiting on",
     "timer_remaining": "F6 the step timer's time left, from the server clock",
+    "step_time": "the current step's source time asked ('몇 분 반응시켜?', '이 단계 몇 "
+                 "분이야?'), answered from the values the server verified against "
+                 "the source, or the source's words read back where it states no "
+                 "fixed length; and '몇 분 지났어?', the running timer's time gone "
+                 "(lane PT, decision 3)",
     "coreference_clarify": "F7 '그거' and other references asked back (D3)",
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
@@ -2931,6 +2936,30 @@ def _duration_words_long(seconds: int, language: str) -> str:
     return " ".join(parts) or ("0초" if language == "ko" else "0 s")
 
 
+#: "몇 분 반응시켜?", "이 단계 몇 분이야?", "시간 얼마나 걸려?": the step's
+#: source time is asked (lane PT, decision 3). A timer's time left or time
+#: gone is not this (남았/지났), and neither is a timer command.
+_STEP_DURATION_QUESTION = re.compile(
+    r"몇\s*(?:분|초|시간)\s*(?:동안|간|정도|이나|이상)?\s*(?:을|를)?\s*"
+    r"(?:반응|배양|인큐베이션|인큐베이트|원심|돌려|돌리|둬|두|놔|놓|기다|해|하|걸려|걸리|"
+    r"담가|담그|흔들|섞|가열|끓|식혀|식히|말려|말리|건조|처리|유지|재워|재우|볶|굳|방치|넣어)"
+    r"|몇\s*(?:분|초|시간)\s*(?:이야|이에요|인가요|이지|이죠|짜리|야|이었지|이더라|이었더라|이라고)"
+    r"|(?:반응|배양|인큐베이션|원심|처리|대기|방치)\s*(?:시간|은|는)?\s*(?:은|는|이)?\s*"
+    r"(?:얼마나|몇\s*(?:분|초|시간))"
+    r"|(?:시간\s*(?:이|은)?\s*)?얼마나\s*(?:오래\s*)?(?:걸려|걸리|해야|둬야|두어야|놔야|반응|배양)"
+    r"|how\s+long\s+(?:do|should|does|is|to|for|must)\b"
+    r"|how\s+many\s+(?:minutes|hours|seconds)",
+    re.I,
+)
+_STEP_DURATION_NOT = re.compile(r"남았|지났|타이머|timer|left|remaining|elapsed|passed", re.I)
+#: "몇 분 지났어?", "얼마나 지났어?": the running timer's time gone
+#: (lane PT, decision 3), from the server clock.
+_TIMER_ELAPSED_QUESTION = re.compile(
+    r"(?:몇\s*(?:분|초|시간)|얼마나|시간\s*(?:이|은)?\s*(?:얼마나|몇\s*(?:분|초|시간)))\s*"
+    r"(?:이나|나)?\s*(?:더\s*)?지났(?:지|어|어요|나|나요|니|습니까|는지|을까)?$"
+    r"|^how\s+(?:much\s+time|long)\s+(?:has\s+)?(?:it\s+)?(?:passed|elapsed|been)\??$",
+    re.I,
+)
 _CHOICE_ORDINALS: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"(?:첫\s*(?:번째|째)?|처음|앞(?:에\s*(?:것|거))?|1\s*번)"), 0),
     (re.compile(r"(?:두\s*번째|둘째|2\s*번|뒤(?:에\s*(?:것|거))?|나중)"), 1),
@@ -11266,6 +11295,37 @@ class CuratedProtocolSession:
             and self._discourse_context.workflow_revision == self._revision
             else None
         )
+        time_key = _utterance_key(transcript)
+        if self.active and _TIMER_ELAPSED_QUESTION.search(time_key):
+            # "몇 분 지났어?" (lane PT, decision 3): the running timer's time
+            # gone, from the server clock; nothing changes.
+            return CuratedControlIntent(
+                intent_kind="step_timer_elapsed",
+                action=CuratedProtocolAction.TIMER_STATUS,
+                language=language,
+                normalized_transcript=time_key,
+            )
+        if (
+            self.active
+            and self.analysis_timers
+            and step is not None
+            and _STEP_DURATION_QUESTION.search(time_key)
+            and not _STEP_DURATION_NOT.search(time_key)
+            and all(
+                (named.group(1) or named.group(2)) == step.source_label
+                for named in re.finditer(r"(\d+)\s*단계|step\s*(\d+)", time_key, re.I)
+            )
+        ):
+            # "몇 분 반응시켜?", "이 단계 몇 분이야?" (lane PT, decision 3):
+            # the current step's verified source time, or its words read
+            # back. Only for timers read from an analysis; the in-gel
+            # development fixture keeps its sidecar and its routing as were.
+            return CuratedControlIntent(
+                intent_kind="step_duration_question",
+                action=CuratedProtocolAction.TIMER_STATUS,
+                language=language,
+                normalized_transcript=time_key,
+            )
         if (
             not self.active
             and self._experiment_started_at is None
@@ -12727,6 +12787,8 @@ class CuratedProtocolSession:
             # model asked back instead ("어떤 시약을 엎질렀는지 알려주세요")
             # and nothing was recorded (lane R7's live check, 2 of 9).
             return "anomaly_report"
+        if intent.intent_kind in {"step_duration_question", "step_timer_elapsed"}:
+            return "step_time"
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
@@ -14843,6 +14905,29 @@ class CuratedProtocolSession:
                         primary=response,
                     ),
                 )
+        elif command is CuratedProtocolAction.TIMER_STATUS and intent.intent_kind in {
+            "step_duration_question", "step_timer_elapsed",
+        }:
+            # Lane PT, decision 3: the step's source time, or the running
+            # timer's time gone. Read-only either way.
+            step = steps[self.current_index]
+            response = (
+                self._source_time_answer(language)
+                if intent.intent_kind == "step_duration_question"
+                else self._elapsed_answer(language)
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.TIMER_STATUS,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+            )
         elif command is CuratedProtocolAction.TIMER_STATUS:
             timer_info = self.timer_status()
             step = steps[self.current_index]
@@ -17812,6 +17897,39 @@ class CuratedProtocolSession:
             if ko else
             f"The source for Step {step.source_label} states no time."
         )
+
+    def _elapsed_answer(self, language: str) -> str:
+        """"몇 분 지났어?": the running timer's time gone and left (lane PT, decision 3)."""
+
+        step = self.fixture.steps[self.current_index]
+        timer = self.timer_status()
+        ko = language == "ko"
+        state = timer.get("state")
+        if state == "running":
+            gone = _duration_words_long(int(timer.get("elapsed_seconds", 0)), language)
+            left = _duration_words_long(int(timer.get("remaining_seconds", 0)), language)
+            label = timer.get("step_label") or step.source_label
+            return (
+                f"{label}단계 타이머를 시작한 지 약 {gone} 지났어요. 남은 시간은 약 {left}이에요."
+                if ko else
+                f"About {gone} has passed on the Step {label} timer; about {left} left."
+            )
+        if state == "expired":
+            total = _duration_words_long(int(timer.get("duration_seconds", 0)), language)
+            return (
+                f"{step.source_label}단계 타이머 {total}이 다 지났어요. 다음 작업으로 진행할 수 있습니다."
+                if ko else
+                f"The Step {step.source_label} timer of {total} has run out."
+            )
+        experiment = self.experiment_timer_status()
+        if experiment.get("state") == "running":
+            gone = _duration_words_long(int(experiment.get("elapsed_seconds", 0)), language)
+            return (
+                f"지금 돌고 있는 단계 타이머는 없어요. 실험을 시작한 지는 약 {gone} 지났어요."
+                if ko else
+                f"No step timer is running. The experiment started about {gone} ago."
+            )
+        return "지금 돌고 있는 타이머가 없어요." if ko else "No timer is running."
 
     def _ask_anomaly_record(
         self,
