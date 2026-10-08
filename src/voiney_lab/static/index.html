@@ -51,7 +51,7 @@
       <div class="brand-mark" aria-hidden="true">VW</div>
       <div>Voiney Lab<small>Lab Copilot · 지능형 실험 보조</small></div>
     </div>
-    <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 승인자료 기반</div>
+    <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
   </header>
 
   <main id="researcher-workspace" class="shell">
@@ -197,7 +197,7 @@
               <div class="workflow-detail-row"><b>출처</b><span id="procedure-source">—</span></div>
               <div class="workflow-detail-row"><b>타이머</b><span id="procedure-timer">—</span></div>
               <div class="workflow-detail-row" id="observation-container"><b>관찰</b><span id="procedure-observation">—</span></div>
-              <div class="workflow-detail-row" id="handoff-container" hidden><b>관리자 인계</b><span id="procedure-handoff">—</span></div>
+              <div class="workflow-detail-row" id="handoff-container" hidden><b>진행 제한</b><span id="procedure-handoff">—</span></div>
               <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
             </div>
             <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
@@ -347,7 +347,7 @@ const webReferenceHistory=[];
 const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers=new Map(),toolEvents=new Map(),visualEvents=new Map(),researchEvents=new Map(),brainEvents=new Map(),greetingEvents=new Set(),audioRecoveryTurns=new Set();
 const UI={
  IDLE:["준비됨 · 세션 시작을 한 번 눌러주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
- THINKING:["승인자료와 보고 작업을 확인하는 중…",true,false],SPEAKING:["Voiney Lab이 답변하고 있습니다…",true,false],ERROR:["세션이 중단됐습니다 · 다시 시작해주세요.",false,true],
+ THINKING:["원문과 안전 자료를 확인하는 중…",true,false],SPEAKING:["Voiney Lab이 답변하고 있습니다…",true,false],ERROR:["세션이 중단됐습니다 · 다시 시작해주세요.",false,true],
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
 const VOICE_STATE_LABELS=Object.freeze({IDLE:"준비",CONNECTING:"연결 중",LISTENING:"듣는 중",THINKING:"요청 이해 중",SPEAKING:"안내 중",ERROR:"확인 필요",INTERRUPTING:"안내 중단 중",RECONNECTING:"다시 연결 중"});
@@ -920,9 +920,9 @@ function renderCuratedProtocolState(message){
  curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
- $("procedure-meta").textContent=value.development_only?"개발용 초안(승인 전)":"승인본";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id],["readiness_status",value.readiness_status],["development_only",String(value.development_only)]]);
+ $("procedure-meta").textContent=value.development_only?"개발용 큐레이션 분석(원문 PDF 기준)":"분석 통과한 프로토콜";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id],["readiness_status",value.readiness_status],["development_only",String(value.development_only)]]);
  updatePauseState(value.workflow_status==="paused");
- const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"승인됨"}`:previewValid?(value.workflow_status==="ready"?"구성됨 · 시작 전":"선택됨 · 대기"):"선택됨 · 대기";
+ const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"분석 통과"}`:previewValid?(value.workflow_status==="ready"?"구성됨 · 시작 전":"선택됨 · 대기"):"선택됨 · 대기";
  $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
  // Lane U2 decision 5: the step is named once, in Korean ("4단계 · 전체 25단계");
  // the English "Step N" line beside it is gone.
