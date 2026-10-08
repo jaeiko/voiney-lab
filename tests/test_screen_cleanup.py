@@ -176,14 +176,13 @@ class DryLabWorkflowLoadingTests(unittest.TestCase):
 const calls=[];
 globalThis.fetch=async url=>{url=String(url);calls.push(url);
  if(url==="/api/protocols")return json({protocols:[]});
- if(url==="/api/workspace/session")return json({workspaces:["researcher","reviewer"]});
+ if(url==="/api/workspace/session")return json({workspaces:["researcher"]});
  if(url==="/api/workspace/connectors")return json({connectors:[]});
  if(url.startsWith("/api/workspace/protocol-library"))return json({protocols:[]});
  if(url==="/api/workspace/experiments")return json({experiments:[]});
  if(url.startsWith("/api/workspace/experiments/exp-1/timeline"))return json({timeline:[],session:{session_id:"exp-1",version:1,status:"in_progress",protocol_id:"p-1",current_step_label:"1"}});
  if(url.startsWith("/api/workspace/dry-lab/links"))return json({links:[]});
  if(url==="/api/workspace/dry-lab/workflows")return json({workflows:[{workflow_revision_id:"wf-1",engine:"snakemake",repository:"lab/flows",commit_sha:"a".repeat(40),source_path:"Snakefile",approval_state:"approved"}]});
- if(url==="/api/workspace/reviewer/inbox")return json({items:[]});
  throw new Error(`unexpected ${url}`);};
 const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
 const workflowCalls=()=>calls.filter(url=>url==="/api/workspace/dry-lab/workflows").length;
@@ -197,8 +196,6 @@ const picker=node("experiment-workflow-revision");
 assert(picker.children.some(option=>option.value==="wf-1"),"approved workflow missing from the researcher picker");
 await loadExperimentTimeline("exp-1");
 assert(workflowCalls()===1,"the researcher picker refetched on every timeline refresh");
-activateWorkspace("reviewer");await settle();
-assert(workflowCalls()===2,"opening the reviewer workspace no longer loads its workflow list");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 

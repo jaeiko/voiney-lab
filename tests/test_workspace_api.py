@@ -194,9 +194,11 @@ def _create_local_pdf_revision(tmp_path, *, catalog_protocol_id="protocol-local-
 
 def test_workspace_session_routes_and_server_allowlisted_dev_identity(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
+    # Lane DI (2026-10-08): the bench is the one workspace, whatever the
+    # profile's roles say; the reviewer and admin screens are gone.
     reviewer = asyncio.run(_request("GET", "/api/workspace/session", profile="reviewer-a"))
     assert reviewer.status_code == 200
-    assert reviewer.json()["workspaces"] == ["researcher", "reviewer"]
+    assert reviewer.json()["workspaces"] == ["researcher"]
     invented = asyncio.run(
         _request("GET", "/api/workspace/session", profile="invented-admin")
     )
@@ -204,15 +206,12 @@ def test_workspace_session_routes_and_server_allowlisted_dev_identity(monkeypatc
     assert invented.json() == {"detail": "authentication_required"}
     admin = asyncio.run(_request("GET", "/api/workspace/session", profile="admin-a"))
     assert admin.status_code == 200
-    security = asyncio.run(
-        _request("GET", "/api/workspace/admin/security", profile="admin-a")
-    )
-    access = next(
-        item for item in security.json()["activity"]
-        if item["action"] == "workspace.accessed"
-    )
-    assert access["actor_display_name"] == "Admin A"
-    assert access["outcome"] == "success"
+    assert admin.json()["workspaces"] == ["researcher"]
+    for route in ("/api/workspace/admin/security", "/api/workspace/admin/memberships",
+                  "/api/workspace/admin/analytics", "/api/workspace/reviewer/inbox",
+                  "/api/workspace/protocol-adaptations"):
+        gone = asyncio.run(_request("GET", route, profile="admin-a"))
+        assert gone.status_code == 404, route
 
 
 def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned(
@@ -286,7 +285,7 @@ def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned
     assert forbidden_completion.status_code == 400
 
 
-def test_experiment_timeline_api_records_manual_observation_evidence_and_review(
+def test_experiment_timeline_api_records_manual_observation_and_evidence(
     monkeypatch, tmp_path
 ):
     _configure(monkeypatch, tmp_path)
@@ -377,21 +376,6 @@ def test_experiment_timeline_api_records_manual_observation_evidence_and_review(
     )
     assert unsupported.status_code == 415
 
-    reviewed = asyncio.run(
-        _request(
-            "POST",
-            f"/api/workspace/reviewer/experiments/{experiment['session_id']}/actions",
-            profile="reviewer-a",
-            json_body={
-                "idempotency_key": "review-action-1",
-                "action": "acknowledged",
-                "comment": "Reviewed as an observation only; SOP unchanged.",
-            },
-        )
-    )
-    assert reviewed.status_code == 201, reviewed.text
-    assert reviewed.json()["recorded"] is True
-
     timeline = asyncio.run(
         _request(
             "GET",
@@ -426,9 +410,6 @@ def test_experiment_timeline_api_records_manual_observation_evidence_and_review(
         if item["event_type"] == "evidence_attached"
     )
     assert "storage_reference" not in evidence_event["evidence"]
-    assert any(
-        item["event_type"] == "reviewer_action" for item in body["timeline"]
-    )
 
     hidden = asyncio.run(
         _request(
@@ -830,22 +811,7 @@ def test_admin_connector_setup_requires_scoped_credential_check_before_enable(
     assert selected["operational_status"] == "enabled"
     assert selected["last_failure_code"] is None
     assert "credential_reference" not in selected
-
-    security = asyncio.run(
-        _request("GET", "/api/workspace/admin/security", profile="admin-a")
-    )
-    assert security.status_code == 200, security.text
-    assert security.json()["connections"] == {
-        "total": 1,
-        "enabled": 1,
-        "needs_test": 0,
-        "failed": 0,
-    }
-    actions = [item["action"] for item in security.json()["activity"]]
-    assert "connector.created" in actions
-    assert "connector.configuration_tested" in actions
-    assert "connector.enabled" in actions
-    assert "secret://" not in json.dumps(security.json())
+    assert "secret://" not in json.dumps(listed.json())
 
     denied = asyncio.run(
         _request(
@@ -905,70 +871,19 @@ def test_connector_configuration_failure_is_visible_and_keeps_connector_disabled
         )
     )
     assert enabled.status_code == 409
-    security = asyncio.run(
-        _request("GET", "/api/workspace/admin/security", profile="admin-a")
-    ).json()
-    assert security["connections"]["failed"] == 1
-    failure = next(
-        item for item in security["activity"] if item["outcome"] == "failure"
-    )
-    assert failure["reason_code"] == "credential_unavailable"
-
-
-def test_admin_membership_retention_and_cross_tenant_report_idor(monkeypatch, tmp_path):
-    _configure(monkeypatch, tmp_path)
-    membership = asyncio.run(
-        _request(
-            "PUT",
-            "/api/workspace/admin/memberships/principal-pilot-user",
-            profile="admin-a",
-            json_body={
-                "subject": "oidc:pilot-user",
-                "display_name": "Pilot User",
-                "role": "researcher",
-                "active": True,
-            },
-        )
-    )
-    assert membership.status_code == 200, membership.text
     listed = asyncio.run(
-        _request("GET", "/api/workspace/admin/memberships", profile="admin-a")
+        _request("GET", "/api/workspace/connectors", profile="admin-a")
+    ).json()
+    failed = next(
+        item for item in listed["connectors"]
+        if item["connector_id"] == created["connector_id"]
     )
-    assert any(
-        item["principal_id"] == "principal-pilot-user"
-        for item in listed.json()["memberships"]
-    )
-    pilot = next(
-        item for item in listed.json()["memberships"]
-        if item["principal_id"] == "principal-pilot-user"
-    )
-    assert "protocol.execute" in pilot["permissions"]
-    assert "membership.manage" not in pilot["permissions"]
-    denied = asyncio.run(
-        _request("GET", "/api/workspace/admin/memberships", profile="reviewer-a")
-    )
-    assert denied.status_code == 403
+    assert failed["last_failure_code"] == "credential_unavailable"
+    assert failed["enabled"] is False
 
-    retention = asyncio.run(
-        _request(
-            "PUT",
-            "/api/workspace/admin/retention",
-            profile="admin-a",
-            json_body={"analytics_retention_days": 30},
-        )
-    )
-    assert retention.status_code == 200
-    assert retention.json()["analytics_retention_days"] == 30
-    security = asyncio.run(
-        _request("GET", "/api/workspace/admin/security", profile="admin-a")
-    )
-    assert security.status_code == 200
-    assert security.json()["retention"]["analytics_retention_days"] == 30
-    assert {item["action"] for item in security.json()["activity"]} >= {
-        "membership.updated",
-        "retention.updated",
-    }
 
+def test_cross_tenant_report_idor(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
     report_path = tmp_path / "reports.sqlite"
     report = ExperimentReportStore(report_path).open_report(
         session_id="session-tenant-a",

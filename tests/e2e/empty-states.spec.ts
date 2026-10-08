@@ -37,47 +37,4 @@ test.describe('Responsive layout', () => {
     expect(horizontalOverflow).toBeLessThanOrEqual(1);
     await context.close();
   });
-
-  test('reviewer workspace columns collapse to a single column on tablet width', async ({ browser }) => {
-    const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
-    const page = await context.newPage();
-    await page.goto('/');
-    await page.locator('#workspace-reviewer').waitFor({ state: 'visible', timeout: 20_000 });
-    await page.locator('#workspace-reviewer').click();
-    const columns = page.locator('#reviewer-workspace .workspace-columns');
-    const gridTemplateColumns = await columns.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
-    // A single-column layout reports exactly one track width.
-    expect(gridTemplateColumns.trim().split(/\s+/).length).toBe(1);
-    await context.close();
-  });
-});
-
-test.describe('Role navigation health', () => {
-  test('switches through every role without console errors or HTTP 5xx responses', async ({ page }) => {
-    const consoleErrors: string[] = [];
-    const serverErrors: string[] = [];
-    page.on('console', message => {
-      if (message.type() === 'error') consoleErrors.push(message.text());
-    });
-    page.on('response', response => {
-      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
-    });
-
-    await page.goto('/');
-    await page.locator('#workspace-reviewer').waitFor({ state: 'visible', timeout: 20_000 });
-    await page.locator('#workspace-reviewer').click();
-    await expect(page.locator('#reviewer-workspace')).toBeVisible();
-    await page.locator('#workspace-admin').click();
-    await expect(page.locator('#admin-workspace')).toBeVisible();
-    await page.locator('#workspace-researcher').click();
-    await expect(page.locator('#researcher-workspace')).toBeVisible();
-    await page.waitForTimeout(250);
-
-    const horizontalOverflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    );
-    expect(horizontalOverflow).toBeLessThanOrEqual(1);
-    expect(consoleErrors).toEqual([]);
-    expect(serverErrors).toEqual([]);
-  });
 });

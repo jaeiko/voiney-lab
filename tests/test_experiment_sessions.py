@@ -570,13 +570,11 @@ def test_researchers_cannot_enumerate_other_users_or_tenants(tmp_path):
         store.close()
 
 
-def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_path):
+def test_observations_and_evidence_form_a_separate_timeline(tmp_path):
     researcher = _principal("researcher", "tenant-a")
-    reviewer = _principal("reviewer", "tenant-a", Role.REVIEWER)
     store = _store(tmp_path)
     try:
         store.bootstrap_principal(researcher)
-        store.bootstrap_principal(reviewer)
         session = store.start_experiment(
             researcher,
             session_id="experiment-timeline-1",
@@ -634,13 +632,6 @@ def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_p
             storage_reference="evidence/tenant/session/a.jpg",
         )
         assert evidence["interpretation_status"] == "not_interpreted"
-        store.record_experiment_review_action(
-            reviewer,
-            session["session_id"],
-            event_key="review-1",
-            action="acknowledged",
-            comment="Observation reviewed; no SOP change was made.",
-        )
 
         timeline = store.experiment_timeline(researcher, session["session_id"])
         assert timeline["observation_count"] == 1
@@ -673,7 +664,6 @@ def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_p
             "protocol_started",
             "observation_recorded",
             "evidence_attached",
-            "reviewer_action",
         ]
         observed = next(
             item for item in timeline["timeline"]

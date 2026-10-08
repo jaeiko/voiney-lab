@@ -62,8 +62,9 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
     await expect(summary).toContainText('실행을 막는 사유 1건');
     await expect(summary).toContainText('시작 전 알림 1건');
     await expect(page.locator('#protocol-start')).toBeHidden();
-    // Nothing here is folded: the statements are visible without a click.
-    await expect(summary.locator('details')).toHaveCount(0);
+    // Nothing here is folded: the statements are visible without a click. The
+    // only <details> are the developer code folds (lane U), which hold codes, not words.
+    await expect(summary.locator('details:not(.dev-code-details)')).toHaveCount(0);
   });
 
   test('the body shows readable names, never hash or identifier shapes', async ({ page }) => {

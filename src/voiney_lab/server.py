@@ -213,7 +213,6 @@ from voiney_lab.identity import (
     Permission,
     Principal,
     Role,
-    permissions_for_roles,
     require_permission,
 )
 from voiney_lab.protocol_sources import (
@@ -2245,19 +2244,14 @@ async def get_workspace_session()->dict[str,object]:
         principal,store=_commercial_workspace()
         try:
             store.record_workspace_access(principal)
-            routes=["researcher"]
-            if any(role.value in {"reviewer","lab_admin","organization_admin"}
-                   for role in principal.roles):
-                routes.append("reviewer")
-            if any(role.value in {"lab_admin","organization_admin"}
-                   for role in principal.roles):
-                routes.append("admin")
+            # Lane DI (2026-10-08): the experimenter's bench is the one
+            # workspace; the reviewer and lab-admin screens are gone.
             return {
                 "principal_id":principal.principal_id,
                 "display_name":principal.display_name,
                 "organization_id":principal.organization_id,
                 "roles":sorted(role.value for role in principal.roles),
-                "workspaces":routes,
+                "workspaces":["researcher"],
                 "authentication_method":principal.authentication_method,
             }
         finally:
@@ -2435,35 +2429,6 @@ async def create_workspace_experiment_observation(
                     if payload.get("protocol_step_id") is not None else None
                 ),
             )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post(
-    "/api/workspace/reviewer/experiments/{session_id}/actions",
-    status_code=201,
-)
-async def create_workspace_experiment_review_action(
-    session_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            state=store.record_experiment_review_action(
-                principal,
-                session_id,
-                event_key=str(payload.get("idempotency_key", "")),
-                action=str(payload.get("action", "")),
-                comment=str(payload.get("comment", "")),
-            )
-            return {
-                "session_id":state["session_id"],
-                "version":state["version"],
-                "recorded":True,
-            }
         finally:
             store.close()
     except Exception as exc:
@@ -2749,60 +2714,6 @@ def download_workspace_experiment_evidence(
         raise _workspace_http_error(exc) from exc
 
 
-@app.get("/api/workspace/protocol-adaptations")
-def get_workspace_protocol_adaptations()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {
-                "adaptations":list(store.list_lab_adaptations(principal))
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/protocol-adaptations/{adapted_revision_id}")
-def get_workspace_protocol_adaptation(
-    adapted_revision_id:str,
-)->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.lab_adaptation(principal,adapted_revision_id)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post(
-    "/api/workspace/protocols/{base_revision_id}/adaptations",
-    status_code=201,
-)
-async def create_workspace_protocol_adaptation(
-    base_revision_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    raw_changes=payload.get("changes")
-    if not isinstance(raw_changes,list):
-        raise HTTPException(status_code=400,detail="workspace_error")
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.create_lab_adaptation(
-                principal,
-                base_revision_id=base_revision_id,
-                changes=tuple(raw_changes),
-                change_summary=str(payload.get("change_summary", "")),
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
 @app.get("/api/workspace/protocol-library")
 def get_workspace_protocol_library(search:str="")->dict[str,object]:
     try:
@@ -2873,100 +2784,6 @@ async def set_workspace_protocol_preference(
         raise _workspace_http_error(exc) from exc
 
 
-@app.get("/api/workspace/admin/memberships")
-def get_workspace_memberships()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {
-                "memberships":list(store.membership_summaries(principal)),
-                "permission_levels":[
-                    {
-                        "role":role.value,
-                        "permissions":list(permissions_for_roles((role,))),
-                    }
-                    for role in Role
-                ],
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.put("/api/workspace/admin/memberships/{target_principal_id}")
-async def set_workspace_membership(
-    target_principal_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.set_membership(
-                principal,
-                target_principal_id=target_principal_id,
-                target_subject=str(payload.get("subject", "")),
-                display_name=str(payload.get("display_name", "")),
-                role=str(payload.get("role", "")),
-                active=payload.get("active") is True,
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.put("/api/workspace/admin/retention")
-async def update_workspace_retention(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        retention_days=int(payload.get("analytics_retention_days", 0))
-    except (TypeError,ValueError) as exc:
-        raise HTTPException(status_code=422,detail="retention_invalid") from exc
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.update_analytics_retention(
-                principal,retention_days=retention_days)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/reviewer/inbox")
-def get_workspace_reviewer_inbox()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {"items":list(store.source_inbox(principal))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/reviewer/revisions/{revision_id}/translations")
-async def add_workspace_translation(revision_id:str,request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            translation_id=store.add_translation(
-                principal,
-                revision_id=revision_id,
-                language=str(payload.get("language", "")),
-                original_text=str(payload.get("original_text", "")),
-                translated_text=str(payload.get("translated_text", "")),
-                status=str(payload.get("status", "machine")),
-            )
-            return {"translation_id":translation_id,"label":str(payload.get("status","machine"))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
 @app.get("/api/workspace/knowledge")
 def get_workspace_knowledge()->dict[str,object]:
     try:
@@ -3001,23 +2818,6 @@ async def create_workspace_knowledge(request:Request)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
-@app.post("/api/workspace/reviewer/knowledge/{knowledge_id}/promote")
-async def promote_workspace_knowledge(knowledge_id:str,request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            promotion_id=store.promote_knowledge(
-                principal,knowledge_id=knowledge_id,
-                comment=str(payload.get("comment", "")),
-            )
-            return {"promotion_id":promotion_id,"effective_kind":"approved_protocol_fact"}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
 @app.get("/api/workspace/assets")
 def get_workspace_assets()->dict[str,object]:
     try:
@@ -3036,31 +2836,6 @@ def get_workspace_asset_diff(asset_id:str)->dict[str,object]:
         principal,store=_commercial_workspace()
         try:
             return store.asset_card_diff(principal,asset_id)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/admin/assets",status_code=201)
-async def create_workspace_asset(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            version_id=store.add_asset_card_version(
-                principal,
-                asset_id=str(payload.get("asset_id", "")),
-                asset_kind=str(payload.get("asset_kind", "")),
-                name=str(payload.get("name", "")),
-                location=(payload.get("location")
-                          if isinstance(payload.get("location"),dict) else {}),
-                review_status=str(payload.get("review_status", "draft")),
-                photo_url=(str(payload["photo_url"]) if payload.get("photo_url") else None),
-                barcode=(str(payload["barcode"]) if payload.get("barcode") else None),
-                sds_url=(str(payload["sds_url"]) if payload.get("sds_url") else None),
-            )
-            return {"version_id":version_id}
         finally:
             store.close()
     except Exception as exc:
@@ -3745,25 +3520,6 @@ async def import_github_dry_lab_workflow(request:Request)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
-@app.post("/api/workspace/reviewer/dry-lab/{workflow_revision_id}/decision")
-async def decide_dry_lab_workflow(
-    workflow_revision_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.review_computational_workflow(
-                principal,workflow_revision_id,
-                action=str(payload.get("action", "")),
-                comment=str(payload.get("comment", "")),
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
 @app.post("/api/workspace/dry-lab/links",status_code=201)
 async def link_dry_lab_workflow(request:Request)->dict[str,object]:
     payload=await _json_object(request)
@@ -3798,48 +3554,6 @@ def get_dry_lab_workflow_links(
                 )),
                 "execution_supported":False,
             }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/analytics")
-def get_workspace_analytics()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.analytics_summary(principal)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/pilot-metrics")
-def get_workspace_pilot_metrics()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.pilot_metrics_summary(principal)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/security")
-def get_workspace_admin_security()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            overview=store.admin_security_overview(principal)
-            overview["authentication"]={
-                "current_method":principal.authentication_method,
-                "production_requirement":"oidc",
-                "development_identity_operationally_accepted":False,
-            }
-            return overview
         finally:
             store.close()
     except Exception as exc:
@@ -4687,18 +4401,6 @@ def get_admin_metrics(
 )->dict[str,object]:
     """Return aggregate product/operations signals without private lab content."""
 
-    if _workspace_settings().enabled:
-        try:
-            principal,workspace=_commercial_workspace()
-            try:
-                return {
-                    "workspace":workspace.analytics_summary(principal),
-                    "legacy_global_metrics_disabled":True,
-                }
-            finally:
-                workspace.close()
-        except Exception as exc:
-            raise _workspace_http_error(exc) from exc
     _require_admin_access(x_voice_workflow_admin_token)
     try:
         report_settings=ExperimentReportSettings.from_environment()

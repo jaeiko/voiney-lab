@@ -18,7 +18,7 @@ class FrontendSessionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         block = html.split(
             "const RESEARCHER_ERROR_MESSAGES", 1
-        )[1].split("function renderAdminMetrics", 1)[0]
+        )[1].split("async function loadWorkspaceSession", 1)[0]
         harness = r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 const RESEARCHER_ERROR_MESSAGES""" + block.split(
@@ -68,7 +68,7 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
             "encodeURIComponent(event.evidence.evidence_id)",
             "function linkDryLabWorkflow",
             "function loadDryLabLinks",
-            "관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.",
+            "관찰은 프로토콜 원문의 지침을 바꾸지 않습니다.",
             "자동 해석 안 함",
             "코드는 실행하지 않습니다.",
             'new Set(["ready","in_progress","paused","blocked"])',
@@ -111,145 +111,6 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
         self.assertNotIn("innerHTML", link_block)
         self.assertIn("workspaceRow", link_block)
 
-    def test_reviewer_packet_is_decision_first_and_decisions_require_confirmation(self):
-        html = (
-            ROOT / "src" / "voiney_lab" / "static" / "index.html"
-        ).read_text(encoding="utf-8")
-        for required in (
-            'id="reviewer-protocol"',
-            'id="reviewer-version"',
-            'id="reviewer-requester"',
-            'id="reviewer-reason"',
-            'id="reviewer-change-summary"',
-            'id="reviewer-impact"',
-            'id="reviewer-risk"',
-            'id="reviewer-history"',
-            'id="reviewer-decision-confirmation"',
-            'id="reviewer-decision-confirm"',
-            '>수정 요청</button>',
-            '>사용 중지</button>',
-        ):
-            self.assertIn(required, html)
-        reviewer_markup = html.split(
-            '<section id="reviewer-workspace"', 1
-        )[1].split('<section id="admin-workspace"', 1)[0]
-        ordered_ids = (
-            'id="reviewer-inbox"',
-            'id="reviewer-protocol"',
-            'id="reviewer-reason"',
-            'id="reviewer-change-summary"',
-            'id="reviewer-risk"',
-            'id="reviewer-consequence-title"',
-            'id="reviewer-approve"',
-            'id="reviewer-technical-details"',
-            'id="reviewer-diff"',
-        )
-        positions = [reviewer_markup.index(item) for item in ordered_ids]
-        self.assertEqual(positions, sorted(positions))
-        self.assertEqual(html.count("async function loadReviewerWorkspace"), 1)
-        self.assertEqual(html.count("async function loadReviewerDiff"), 1)
-        block = "const REVIEW_ACTIONS" + html.split(
-            "const REVIEW_ACTIONS", 1
-        )[1].split("async function importProtocolsIo", 1)[0]
-        self.assertNotIn("innerHTML", block)
-        harness = r"""
-const assert=(ok,message)=>{if(!ok)throw new Error(message)};
-class Element{constructor(){this.children=[];this.textContent="";this.hidden=false;this.disabled=false;this.value="";this.className=""}replaceChildren(...items){this.children=[...items]}appendChild(item){this.children.push(item);return item}append(...items){this.children.push(...items)}addEventListener(){}setAttribute(){}}
-const names=["reviewer-protocol","reviewer-version","reviewer-requester","reviewer-source","reviewer-reason","reviewer-change-summary","reviewer-impact","reviewer-risk","reviewer-history","reviewer-selection","reviewer-action-guidance","reviewer-decision-confirmation","reviewer-confirm-title","reviewer-confirm-consequence","reviewer-approve","reviewer-reject","reviewer-revoke","reviewer-comment","reviewer-status","reviewer-diff","reviewer-resolved-inbox"];
-const ids=Object.fromEntries(names.map(name=>[name,new Element()]));
-const $=id=>ids[id]||null,setText=(id,value)=>{if(ids[id])ids[id].textContent=String(value)};
-const ROLE_LABELS=Object.freeze({researcher:"연구자",reviewer:"검토자",lab_admin:"랩 관리자",organization_admin:"조직 관리자"});
-const document={createElement:()=>new Element()};
-function workspaceRow(title,detail){const row=new Element(),bold=new Element(),small=new Element();bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
-function workspaceFetch(){throw new Error("network must not be used by renderer")}
-let selectedWorkspaceRevision="revision-1",pendingReviewerDecision=null,selectedReviewerAllowedActions=new Set();
-""" + block + r"""
-const packet={review_context:{protocol_title:"ANKOM Fiber Analysis",revision_id:"revision-1",version_label:"v2",requester_display_name:"Reviewer Requester",change_reason:"Clarify the acid warning",source:{connector_kind:"protocols_io",version_identity:"source-v2"}},change_summary:{changed_fields:["steps","warnings"],step_count_before:2,step_count_after:2,warning_count_before:1,warning_count_after:2,structured_adaptation_changes:[]},experimental_impact:{status:"not_assessed"},risk:{level:"not_assessed",source_signal:"hazard_review"},decision_state:{state:"review_required",allowed_actions:["approved","rejected"]},history:[{action:"rejected",affected_version:"v1",actor_display_name:"Reviewer A",actor_role:"reviewer",created_at:"2026-08-24T12:00:00Z",comment:"Clarify exposure controls."}]};
-renderReviewerPacket(packet);
-assert(ids["reviewer-protocol"].textContent==="ANKOM Fiber Analysis","protocol title missing");
-assert(ids["reviewer-version"].textContent.includes("v2")&&ids["reviewer-requester"].textContent==="Reviewer Requester","version or requester missing");
-assert(ids["reviewer-reason"].textContent==="Clarify the acid warning","request reason missing");
-assert(ids["reviewer-change-summary"].children.length===3,"structured change summary missing");
-assert(ids["reviewer-impact"].textContent.includes("평가 정보 없음")&&ids["reviewer-risk"].textContent.includes("위험 수준 판정이 아닙니다"),"unknown impact or risk was implied");
-assert(ids["reviewer-history"].children[0].children[1].textContent.includes("Reviewer A"),"reviewer audit identity missing");
-assert(!ids["reviewer-approve"].disabled&&!ids["reviewer-reject"].disabled&&ids["reviewer-revoke"].disabled,"decision state was not enforced");
-assert(stageReviewerDecision("approved")===false&&ids["reviewer-status"].textContent.includes("근거"),"blank rationale reached confirmation");
-ids["reviewer-comment"].value="Source, warnings, and impact boundary reviewed.";
-assert(stageReviewerDecision("approved")===true&&!ids["reviewer-decision-confirmation"].hidden&&ids["reviewer-confirm-consequence"].textContent.includes("새 실험"),"approval consequence confirmation missing");
-assert(stageReviewerDecision("revoked")===false,"disallowed stale decision reached confirmation");
-renderReviewerPacket({...packet,catalog_analysis_gate:{representation:"recovery_triage",analysis_status:"analysis_failed",failure_code:"protocol_analysis_invalid_evidence"},decision_state:{state:"review_required",allowed_actions:["rejected"],available_for_new_operational_sessions:false}});
-assert(ids["reviewer-approve"].disabled&&!ids["reviewer-reject"].disabled&&ids["reviewer-action-guidance"].textContent.includes("분석")&&ids["reviewer-action-guidance"].textContent.includes("승인"),"failed analysis was represented as executable approval");
-"""
-        result = run_node_harness(harness)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_admin_workspace_uses_guided_safe_connection_and_permission_language(self):
-        html = (
-            ROOT / "src" / "voiney_lab" / "static" / "index.html"
-        ).read_text(encoding="utf-8")
-        admin_markup = html.split(
-            '<section id="admin-workspace"', 1
-        )[1].split('<!-- New Session Confirmation Modal -->', 1)[0]
-        for required in (
-            "랩 관리",
-            "구성원과 역할",
-            "연결 서비스",
-            "로그인 및 보안",
-            "데이터 및 보관",
-            "서비스 상태 · 운영",
-            "내부 계정 키",
-            "로그인 연결 키",
-            "서버에 준비된 로그인 정보",
-            "서비스 선택",
-            "로그인 정보 선택",
-            "접근 범위 지정",
-            "구성 검사",
-            "활성화",
-            "로그인 · 권한 변경 기록",
-            "외부 서비스와 실제로 통신했다는 뜻은 아닙니다.",
-            'id="admin-attention"',
-            'id="admin-security-summary"',
-            'id="admin-security-activity"',
-        ):
-            self.assertIn(required, admin_markup)
-        for developer_term in (
-            "Principal ID",
-            "OIDC subject",
-            "secret://",
-            "서버 자격 증명 참조",
-        ):
-            self.assertNotIn(developer_term, admin_markup)
-
-        block = "const ADMIN_ROLE_LABELS" + html.split(
-            "const ADMIN_ROLE_LABELS", 1
-        )[1].split("function updateElnWritebackAvailability", 1)[0]
-        self.assertNotIn("innerHTML", block)
-        harness = r"""
-const assert=(ok,message)=>{if(!ok)throw new Error(message)};
-class Element{constructor(){this.children=[];this.textContent="";this.hidden=false;this.disabled=false;this.value="";this.className="";this.placeholder="";this.type=""}replaceChildren(...items){this.children=[...items]}appendChild(item){this.children.push(item);return item}append(...items){this.children.push(...items)}addEventListener(kind,handler){this["on"+kind]=handler}setAttribute(){}}
-const names=["admin-permission-preview","admin-member-role","admin-security-summary","admin-security-activity","admin-retention-days","admin-connector-status","admin-connectors","admin-connector-secret","admin-webhook-secret","admin-connector-kind","admin-connector-scope-help","admin-webhook-credential-field","admin-connector-roots"];
-const ids=Object.fromEntries(names.map(name=>[name,new Element()]));ids["admin-member-role"].value="researcher";ids["admin-connector-kind"].value="google_drive";
-const $=id=>ids[id]||null;
-const document={createElement:()=>new Element()};
-function workspaceRow(title,detail){const row=new Element(),bold=new Element(),small=new Element();bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
-function workspaceFetch(){throw new Error("network must not be used by renderer")}
-""" + block + r"""
-adminPermissionLevels=new Map([["researcher",["protocol.read","protocol.execute"]]]);
-renderAdminPermissionPreview();
-assert(ids["admin-permission-preview"].textContent.includes("프로토콜 보기")&&ids["admin-permission-preview"].textContent.includes("실험 실행"),"friendly permission preview missing");
-renderAdminSecurity({authentication:{production_requirement:"oidc",current_method:"development"},connections:{total:2,enabled:1,needs_test:0,failed:1},retention:{analytics_retention_days:30},activity:[{action:"connector.configuration_tested",outcome:"failure",reason_code:"credential_unavailable",actor_display_name:"Admin A",created_at:"2026-08-24T12:00:00Z",target_kind:"connector"}]});
-assert(ids["admin-security-summary"].children.length===6,"security posture cards missing");
-assert(ids["admin-security-activity"].children[0].children[0].textContent.includes("연결 구성 검사"),"activity action not productized");
-assert(ids["admin-security-activity"].children[0].children[1].textContent.includes("로그인 정보")&&!ids["admin-security-activity"].children[0].children[1].textContent.includes("secret://"),"safe failure visibility missing");
-const pending=connectorRow({connector_id:"connector-1",display_name:"Drive",connector_kind:"google_drive",operational_status:"needs_test",allowed_roots:["folder:approved"],last_checked_at:null,last_failure_code:null});
-assert(pending.children[2].children[0].textContent==="구성 검사","test action missing before enable");
-assert(!pending.children[1].textContent.includes("folder:approved")&&pending.children[3].children[1].textContent.includes("folder:approved"),"connector internals were not progressively disclosed");
-const ready=connectorRow({connector_id:"connector-1",display_name:"Drive",connector_kind:"google_drive",operational_status:"ready_to_enable",allowed_roots:["folder:approved"],last_checked_at:"now",last_failure_code:null});
-assert(ready.children[2].children[0].textContent==="연결 활성화","enable action missing after check");
-"""
-        result = run_node_harness(harness)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_chat_viewport_and_late_visual_use_production_handlers(self):
         html = (
             ROOT / "src" / "voiney_lab" / "static" / "index.html"
@@ -259,7 +120,7 @@ assert(ready.children[2].children[0].textContent==="연결 활성화","enable ac
         ).read_text(encoding="utf-8")
         self.assertIn("align-items:start", css)
         self.assertIn("position:sticky", css)
-        self.assertIn(".shell[hidden],.workspace-page[hidden]{display:none}", css)
+        self.assertIn(".shell[hidden]{display:none}", css)
         self.assertIn("top:4.5rem", css)
         self.assertIn("calc(100dvh - 5.5rem)", css)
         self.assertIn("overflow-y:auto", css)
@@ -622,13 +483,12 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         self.assertIn('실험 진행 경과 시간', html)
         self.assertIn('<summary>개발 상세 정보</summary>', html)
         self.assertIn('id="voice-profile"', html)
-        self.assertIn('id="admin-metrics-load"', html)
-        self.assertIn('function renderAdminMetrics', html)
         self.assertNotIn('X-Voice-Workflow-Admin-Token', html)
-        self.assertIn('/api/workspace/admin/analytics', html)
         self.assertIn('id="researcher-workspace"', html)
-        self.assertIn('id="reviewer-workspace"', html)
-        self.assertIn('id="admin-workspace"', html)
+        # Lane DI (2026-10-08): one screen, the experimenter's bench.
+        self.assertNotIn('id="reviewer-workspace"', html)
+        self.assertNotIn('id="admin-workspace"', html)
+        self.assertNotIn('id="workspace-bar"', html)
         self.assertIn('X-Voice-Dev-Profile', html)
         self.assertIn('/^\\/api\\/web-visuals\\/[0-9a-f]{64}$/.test', html)
         self.assertNotIn('if(imgObj.protocol==="https:")imgUrl=', html)
