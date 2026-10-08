@@ -54,6 +54,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
 from voiney_lab.curated_protocol import (
+    _SOURCE_UN_WORD,
     _TRANSLATABLE_TERMS,
     PURPOSE_FACT_KEY,
     CuratedProtocolFixture,
@@ -478,20 +479,26 @@ def required_terms_for(
 #: "관계없이", "상관없이" and "무관하게", in any form, are not negations here
 #: nor in the narrow check (``curated_protocol._KOREAN_NEGATION``); 무관 holds
 #: no negation word and is listed so the table names all three.
+#: Lane TS, human decision 1 of 2026-10-08: the table is also counted
+#: (``negation_count``): the source and the Korean must hold as many of its
+#: words, so a double negation lost or made on one side is refused. "unless"
+#: and "nothing" joined the English side and "안 되" the Korean one; "~지
+#: 않으면 안 되" and "~없으면 안 되" say "must" and are no negation here.
 NEGATION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "en": (
         r"not", r"no", r"never", r"none", r"nor", r"neither", r"without",
-        r"cannot", r"[a-z]+n['’]t",
+        r"cannot", r"[a-z]+n['’]t", r"unless", r"nothing",
         r"avoid(?:s|ing|ed|ance)?", r"eliminat(?:e|es|ing|ed|ion)",
         r"prevent(?:s|ing|ed|ion)?", r"refrain(?:s|ing|ed)?",
         r"prohibit(?:s|ing|ed)?",
     ),
     "ko": (
         r"않", r"없", r"지\s*말", r"지\s*마", r"말고", r"말아", r"못", r"금지",
-        r"피(?:하|합|해|했|할|함)", r"방지", r"삼가",
+        r"피(?:하|합|해|했|할|함)", r"방지", r"삼가", r"안\s*(?:되|돼|됩|된)",
     ),
     "ko_not_negation": (
         r"관계\s*없", r"상관\s*없", r"무관", r"끊임\s*없", r"틀림\s*없", r"잘못",
+        r"지\s*않으면\s*안\s*(?:되|돼|됩|된)", r"없으면\s*안\s*(?:되|돼|됩|된)",
     ),
 }
 _NEGATION_PATTERNS = {
@@ -505,9 +512,133 @@ _NOT_NEGATION_KO = re.compile("|".join(NEGATION_VOCABULARY["ko_not_negation"]))
 def negation_or_avoidance(language: str, text: str) -> bool:
     """Whether ``text`` holds a negation or avoidance word of the table."""
 
+    return negation_count(language, text) > 0
+
+
+def negation_count(language: str, text: str) -> int:
+    """How many negation or avoidance words of the table ``text`` holds."""
+
     if language == "ko":
         text = _NOT_NEGATION_KO.sub(" ", text)
-    return _NEGATION_PATTERNS[language].search(text) is not None
+    return len(_NEGATION_PATTERNS[language].findall(text))
+
+
+def _negations_pair(source: str, korean: str) -> bool:
+    """The Korean holds as many negations as the source (lane TS, decision 1).
+
+    An "un-" word of the source ("uninoculated") may be read with its own
+    않 ("접종하지 않은") or without one ("비접종"), so each one widens the
+    count the Korean may hold by one.
+    """
+
+    expected = negation_count("en", source)
+    return expected <= negation_count("ko", korean) <= (
+        expected + len(_SOURCE_UN_WORD.findall(source)))
+
+
+#: Hazard words, one table (lane TS, human decision 1 of 2026-10-08): where
+#: the source holds a word of an entry's English pattern, the Korean must hold
+#: one of its Korean forms or keep the English word itself ("Warning" kept as
+#: a section name). Each pattern is a regular expression; English ones match
+#: whole words, any case. Measured on the 585 stored and measured translations
+#: left on 2026-10-08 (lane TS report), no passed reading lacked its entry's
+#: Korean; "burn" was left out ("the samples will burn" ↔ "시료가 타서").
+HAZARD_VOCABULARY: tuple[tuple[str, str, str], ...] = (
+    ("toxic", r"(?:neuro|cyto|geno)?toxi(?:c|city|ns?)|poison(?:s|ous)?", r"독성|독소|유독|중독"),
+    ("flammable", r"(?:in)?flammable|combustible", r"인화|가연|불이?\s*붙"),
+    ("corrosive", r"corrosive", r"부식"),
+    ("carcinogen", r"carcinogen(?:s|ic)?", r"발암"),
+    ("mutagen", r"mutagen(?:s|ic)?", r"돌연변이"),
+    ("hazard", r"(?:bio)?hazard(?:s|ous)?", r"위험|유해|위해"),
+    ("danger", r"danger(?:s|ous)?", r"위험"),
+    ("harmful", r"harmful", r"유해|해로|해롭"),
+    ("irritant", r"irritan(?:t|ts)|irritat(?:e|es|ing|ion)", r"자극"),
+    ("explosive", r"explosi(?:ve|on)", r"폭발"),
+    ("caution", r"caution", r"주의|조심"),
+    ("warning", r"warning", r"경고|주의"),
+    ("prohibition", r"do\s+not|don['’]t|never|must\s+not",
+     r"지\s*마|지\s*말|않|금지|절대|안\s*(?:되|돼|됩)|못"),
+    ("avoid", r"avoid(?:s|ing|ed)?", r"피하|피해|피할|피합|피했|방지|않|삼가"),
+    ("must", r"must(?!\s+not)", r"반드시|꼭|야\s*(?:합|해|하|한|됩|돼|된|만)|필수|필요"),
+    ("glove", r"gloves?", r"장갑|글러브"),
+    ("fume_hood", r"fume\s*hoods?|fume\s*cupboards?", r"흄\s*후드|후드|흄\s*배기"),
+    ("eye_protection", r"goggles?|safety\s+glasses|eye\s+protection|face\s+shield",
+     r"보안경|고글|보호\s*안경|안면\s*보호|눈\s*보호"),
+    ("lab_coat", r"lab\s+coats?", r"실험복|가운"),
+    ("ventilation", r"ventilat(?:e|ed|ion)", r"환기|통풍"),
+    ("uv", r"uv|ultraviolet", r"자외선|ＵＶ"),
+    ("radiation", r"radiation|radioactiv(?:e|ity)", r"방사"),
+    ("sharps", r"sharps?|needles?|scalpels?|razor\s+blades?",
+     r"날카|바늘|니들|메스|칼날|면도날"),
+)
+_HAZARD_PATTERNS = tuple(
+    (name,
+     re.compile(r"(?<![A-Za-z])(?:" + english + r")(?![A-Za-z])", re.IGNORECASE),
+     re.compile(korean, re.IGNORECASE))
+    for name, english, korean in HAZARD_VOCABULARY
+)
+
+
+def _hazard_missing(source: str, korean: str) -> bool:
+    """A hazard word of the source has neither its Korean nor itself in the Korean."""
+
+    for _name, english, korean_forms in _HAZARD_PATTERNS:
+        if english.search(source) and not (
+                korean_forms.search(korean) or english.search(korean)):
+            return True
+    return False
+
+
+#: What ends a sentence: ., !, ? or 。 before a space or the end, or ; before
+#: a space. Not a decimal point, an abbreviation or an initial.
+_SENTENCE_END = re.compile(r"[.!?。](?=\s|$)|;(?=\s)")
+_NOT_A_SENTENCE_END = re.compile(
+    r"(?:^|[\s(])(?:e\.g|i\.e|etc|approx|vs|figs?|no|cat|mins?|sec|hrs?|ca|dr|st|ref|"
+    r"vol|eq|resp|incl|max|conc|temp|spp?|[A-Z])$",
+    re.IGNORECASE,
+)
+
+
+def sentence_count(text: str) -> int:
+    """How many sentences ``text`` holds, at least one (lane TS, decision 1).
+
+    Links are not read ("protocols.io | https://dx.doi.org/..."), and a part
+    with no word of two letters (a stray number, a page mark) is no sentence.
+    """
+
+    said = re.sub(r"https?://\S+", " ", " ".join(text.split()))
+    parts: list[str] = []
+    start = 0
+    for end in _SENTENCE_END.finditer(said):
+        before = said[start:end.start()]
+        if end.group() == "." and _NOT_A_SENTENCE_END.search(before):
+            continue
+        parts.append(before)
+        start = end.end()
+    parts.append(said[start:])
+    return max(1, sum(1 for part in parts if re.search(r"[A-Za-z가-힣]{2}", part)))
+
+
+def meaning_issue(source_text: str, korean: str) -> str | None:
+    """Why a Korean reading may say something else than its source (lane TS).
+
+    Human decision 1 of 2026-10-08, after the checks of numbers, units,
+    negation and names: the negations must pair up (``negation_count_changed``),
+    every hazard word must carry over (``hazard_missing``) and no more than
+    half the sentences may go (``sentences_dropped``: fewer than half the
+    source's sentences is refused; two sentences read as one is usual
+    Korean, so it is not). Measured on the 585 readings left on 2026-10-08,
+    no machine reading lost half its sentences; two reviewed in-gel readings
+    that summarise three or four sentences in one did (lane TS report).
+    """
+
+    if not _negations_pair(source_text, korean):
+        return "negation_count_changed"
+    if _hazard_missing(source_text, korean):
+        return "hazard_missing"
+    if 2 * sentence_count(korean) < sentence_count(source_text):
+        return "sentences_dropped"
+    return None
 
 
 def _name_issue(korean: str, required_terms: Sequence[str]) -> str | None:
@@ -523,24 +654,42 @@ def _name_issue(korean: str, required_terms: Sequence[str]) -> str | None:
     return None
 
 
+def statement_issue(
+    source_text: str, korean: str,
+    *, required_terms: Sequence[str] = (), step_label: str | None = None,
+) -> str | None:
+    """Why a Korean reading of one source statement may not be shown or read.
+
+    The one check every reading passes -- the step card's stored machine
+    Korean, the safety box, the start screen's safety notices, the reader
+    translation and the spoken safety warning (lane TS, decision 2): the
+    mechanical check (``reader_translation_issue``: numbers and units,
+    negation, names), with the negation it reads also allowed where both sides
+    hold a word of ``NEGATION_VOCABULARY``, then ``meaning_issue``. ``None``
+    means it may be used.
+    """
+
+    issue = reader_translation_issue(
+        source_text, korean, required_terms=tuple(required_terms), step_label=step_label)
+    # A negation_changed answer means the length and the quantities passed
+    # and the names were not looked at yet (the check's order).
+    if issue == "negation_changed" and negation_or_avoidance(
+            "en", source_text) and negation_or_avoidance("ko", korean):
+        issue = _name_issue(korean, required_terms)
+    return issue or meaning_issue(source_text, korean)
+
+
 def check_translation(
     unit: TranslationUnit, korean: str | None,
     glossary: Sequence[GlossaryEntry] = (),
 ) -> str:
     if not isinstance(korean, str) or not korean.strip():
         return "missing"
-    required = required_terms_for(unit, glossary)
-    issue = reader_translation_issue(
+    return statement_issue(
         unit.source_text, korean,
-        required_terms=required,
+        required_terms=required_terms_for(unit, glossary),
         step_label=_label_only_in_the_korean(unit, korean),
-    )
-    # A negation_changed answer means the length and the quantities passed
-    # and the names were not looked at yet (the check's order).
-    if issue == "negation_changed" and negation_or_avoidance(
-            "en", unit.source_text) and negation_or_avoidance("ko", korean):
-        issue = _name_issue(korean, required)
-    return issue or "passed"
+    ) or "passed"
 
 
 def _label_only_in_the_korean(unit: TranslationUnit, korean: str) -> str | None:
