@@ -17870,7 +17870,10 @@ class CuratedProtocolSession:
             choice = len(self.timer_choices_for_step(self.current_index)) > 1
             running = self.timer_status().get("state") == "running"
             if ko:
-                answer = f"{step.source_label}단계 원문에는 {listed}로 적혀 있어요."
+                # 으로/로 follows the last value said, not its bracket.
+                last = parts[-1].rsplit("(", 1)[-1].rstrip(")")
+                particle = _with_ro(last)[len(last):]
+                answer = f"{step.source_label}단계 원문에는 {listed}{particle} 적혀 있어요."
                 if not running:
                     answer += (
                         " 타이머를 시작하면 원문 값 중에서 고르실 수 있어요."

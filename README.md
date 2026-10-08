@@ -776,7 +776,7 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
   the router on, a `start_timer` proposal at such a step gets the same question.
 - **Time questions** (decision 3, front rule `step_time`). "몇 분 반응시켜?",
   "이 단계 몇 분이야?", "몇 시간 배양해?", "시간 얼마나 걸려?" are answered from
-  the verified values with the source literal ("1단계 원문에는 ‘15 min’(15분)로
+  the verified values with the source literal ("1단계 원문에는 ‘15 min’(15분)으로
   적혀 있어요."), or the source sentence where no value was verified — only for
   timers read from an analysis, so the in-gel routing is as it was. "몇 분
   지났어?" says the running timer's time gone and left (every fixture);

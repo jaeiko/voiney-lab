@@ -502,7 +502,7 @@ class TheTimeQuestionTests(_Catalog):
                 # "이 단계" is said like "2단계": lane R6's wrapper (decision 7)
                 # names the step it answers for, around the same answer.
                 self.assertIn(
-                    "1단계 원문에는 ‘15 min’(15분)로 적혀 있어요. "
+                    "1단계 원문에는 ‘15 min’(15분)으로 적혀 있어요. "
                     "타이머를 시작하려면 '타이머 시작해줘'라고 말씀해 주세요.",
                     plan.speech_text,
                 )
