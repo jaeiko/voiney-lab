@@ -496,7 +496,9 @@ request, a server check and a yes.
   단계가 아니어서 이동하지 않았어요.", "원문은 7단계에서 2~7단계를 반복하라고
   해요. 앞 단계로 돌아가기는 7단계에서만 할 수 있어서 …", "원문은 12단계에서
   반복 구간을 말하지 않아요. …". A question ("2단계로 돌아가도 돼?") asks
-  nothing.
+  nothing. (Since lane CF, decision 3, an earlier step anywhere else is a
+  revert, asked once; see the lane CF section. The return within the repeat
+  at the step that states it is unchanged.)
   The earlier repeat policy holds: the agent says no number of rounds and
   never that a round was enough; the hand-over record
   (`human_led_repeat_disclosure`, `repeat_interval_record`) and
@@ -744,6 +746,83 @@ acts on carries where it came from (`value_source`: `source`, `operator`, or
   words are read. The answers and the voice-given counts are not persisted
   for recovery: after a reconnect the open question is asked again where the
   run stands.
+
+## Confirming values, going back, questions before the start, the file followed (lane CF)
+
+Decisions of 2026-10-08, from field interviews with three life-science
+researchers (2026-10-07/08): at the bench everything has to work by voice,
+re-asking must not slow the work, simple commands should just run, and a
+value's decimal point must never be lost. The server owns every state change;
+when to ask is a rule, never a model; anything hard to undo is asked once; and
+nothing recorded is deleted -- a revert or a correction is an event appended
+beside what it amends.
+
+- **How a value is confirmed** (decision 1, front rule
+  `experimenter_setting`), per experimenter, remembered:
+  - 되읽기 (readback, the default): "0.5 mL로 기록했어요." (aloud "영 점 오
+    밀리리터로 기록했어요."), nothing asked; "방금 기록 고쳐 줘, …" fixes it.
+  - 바로 확인 (confirm): "0.5 mL로 기록할까요? 맞으면 '네'라고 해 주세요." before
+    it is stored; a yes stores and reads it back, a no stores nothing ("기록하지
+    않았어요. 값을 다시 말씀해 주세요."). A note with no value is not asked about.
+  - 조용히 (quiet): "기록했어요." only; the values are confirmed together in
+    lane N's end-of-run review.
+  Changed by voice ("확인 질문 켜 줘", "바로 확인 모드로 바꿔 줘", "확인 질문 꺼
+  줘", "되읽기 모드로 해 줘", "조용히 모드") or on the screen ("수치 확인 방식").
+  Kept append-only in the workspace (`experimenter_settings`, schema 8), or in
+  the server's memory while it runs when there is no workspace; applied when a
+  session opens. Simple commands (start, next, timer, questions, anything
+  that is not a note) ask nothing in any way; ending, skipping steps, going
+  back and taking back a completion are asked once in every way. ("다음 단계"
+  and "완료했어" naming no step are still asked about first, lane XO: that
+  question is the completion's own safety, not a setting.)
+- **The decimal point** (decision 2). "0.5 mL", "0점5 mL", "영 점 오
+  밀리리터", "점 오 밀리리터" and "공 점 오 mL" are one value, 0.5 mL, and every
+  one is read back "영 점 오 밀리리터"; "오 점 영" is 5.0. The note keeps the
+  words as the STT gave them; the value read back is in `note_record.values`.
+  A "점" with no digits after it ("5점 mL", "오 점 밀리리터") or a written point
+  beside a spoken one ("0.5점 mL", "점 0.5 mL") is not stored: "소수점이
+  분명하지 않아 기록하지 않았어요. 값을 다시 말씀해 주세요. 예: '영 점 오
+  밀리리터'." A correction to such a value is not offered either.
+- **Going back** (decision 3, front rule `step_revert`). "이전 단계로 돌아가",
+  "방금 완료 취소", "N단계 완료 취소해 줘" and "N단계로 돌아가" to an earlier step
+  ask once: "3단계 완료를 취소하고 3단계로 돌아갈까요?" (the completions it takes
+  back named; "N단계로 돌아갈까요?" when there are none). A yes moves back --
+  "3단계 완료를 취소하고 3단계로 돌아왔어요." -- and records `step_reverted`
+  (experiment report and durable session) with the completions taken back
+  (`reverted_step_ids`), how it was said, and the repeat it went back inside
+  (`in_repeat`) or none. The completion records stay; a step completed again
+  is recorded as done again. Lane R7's return at the step that states a repeat
+  is unchanged (a new round). The report lists the revert under "원문과 다르게
+  한 점" ("7단계에서 4단계로 되돌아갔다 — 4~6단계 완료 취소(처음 완료 기록은
+  남김), 반복 구간 밖, 10:42."). Recovery accepts the completions a revert took
+  back, and a stopped run offers no continue-from place carrying one.
+- **Conditions and counts before the start** (decision 4, front rule
+  `prestart_question`). With the setting "시작 전에 묻기" (the server's
+  default), pressing "이 프로토콜로 시작" (the greeting asks) or saying
+  "프로토콜 시작해줘" asks lane CB's questions one after another before step 1:
+  "시작 전에 여쭤볼 게 2개 있어요. 답하신 것은 실험 중에 다시 묻지 않아요. 지금
+  모르면 '나중에'라고 해 주세요. (1/2) …". Replies: 네 / 아니요 for a
+  condition, a number or "아직 몰라" for a count, "나중에" (asked at its step),
+  "다 나중에"; the last reply starts the experiment. Answers are kept as lane
+  CB keeps them (`asked: before_start`), recorded after `session_started`, and
+  not asked again; the report says "사람이 답함 · 시작 전에 답함". "실험 중에
+  묻기" (voice: "분기 질문은 실험 중에 물어봐 줘"; screen: "조건 분기·반복 횟수
+  질문") keeps lane CB's way. A session with no setting applied -- the rule
+  tools, replay, the evaluation set -- keeps lane CB's way too.
+- **The file the run follows** (decision 5, front rule `protocol_basis`).
+  "지금 기준: {파일 이름} · {올린 날짜}" (Korea time, "2026년 10월 7일 올림") on
+  the top rail and in the before-start check, as the answer to "어느 프로토콜
+  기준이야?" / "지금 기준 뭐야?" / "기준 파일 알려줘", and as "기준 파일" in the
+  report's run information. "현재 프로토콜 버전 알려줘" keeps its own answer.
+- **Wording** (decision 6). Voice sentences no longer call the protocol's
+  evidence, requirements or completion check "승인된"; they say "원문" or
+  "프로토콜". "승인" naming the approved safety documents (the SOP corpus) and
+  the person's own report confirmation stays.
+- **Someone else's words** (decision 7). A note starts only with words that
+  ask for one ("기록해 줘", "메모해 줘", "실험노트에 적어 줘"); checked and kept
+  by test. A spill said as having happened (lane RT, decision 6) and "the
+  sample looks different" (the appearance rule) still record without such
+  words.
 
 ## Timers for an uploaded protocol (lane PT, 2026-10-08)
 
@@ -1469,7 +1548,9 @@ The browser consumes these main groups:
 - `/api/workspace/knowledge` and `/api/workspace/assets`: read routes with no
   screen (lane DI); and
 - `/api/experiment-reports/*`: tenant-scoped report reads/exports, and the
-  report's values to confirm (`/review`, lane N).
+  report's values to confirm (`/review`, lane N); and
+- `/api/experimenter/settings` (`GET`, `PUT`): the experimenter's way of
+  confirming values and when the source's questions are asked (lane CF).
 
 For deployment probes, `GET /healthz` is a pure liveness check (the process
 can serve a request); `GET /readyz` validates identity, workspace,

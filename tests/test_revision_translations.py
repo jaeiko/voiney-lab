@@ -354,9 +354,9 @@ class StorageTests(unittest.TestCase):
             store.close()
         store = self.store()
         try:
-            self.assertEqual(WORKSPACE_SCHEMA_VERSION, 7)
+            self.assertEqual(WORKSPACE_SCHEMA_VERSION, 8)
             self.assertEqual(store._connection.execute(
-                "SELECT schema_version FROM schema_metadata").fetchone()[0], 7)
+                "SELECT schema_version FROM schema_metadata").fetchone()[0], 8)
             self.assertEqual(store._connection.execute(
                 "SELECT content_text FROM protocol_translations "
                 "WHERE translation_id='translation-old'").fetchone()[0],

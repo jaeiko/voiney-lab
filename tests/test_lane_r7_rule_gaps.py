@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -336,18 +335,9 @@ class ReturnWithinARepeatTests(_Turns, unittest.TestCase):
 
     def test_a_return_outside_the_repeat_is_refused_with_the_reason(self) -> None:
         cases = (
-            (4, "1단계로 돌아가",
-             "원문이 5단계에서 말하는 반복 구간은 2~4단계예요. 1단계는 그 안의 앞 단계가 "
-             "아니어서 이동하지 않았어요. 지금 5단계를 유지합니다."),
             (4, "6단계로 돌아가",
              "원문이 5단계에서 말하는 반복 구간은 2~4단계예요. 6단계는 그 안의 앞 단계가 "
              "아니어서 이동하지 않았어요. 지금 5단계를 유지합니다."),
-            (2, "2단계로 돌아가",
-             "원문은 5단계에서 2~4단계를 반복하라고 해요. 앞 단계로 돌아가기는 5단계에서만 "
-             "할 수 있어서 이동하지 않았어요. 지금 3단계를 유지합니다."),
-            (5, "2단계로 돌아가",
-             "원문은 6단계에서 반복 구간을 말하지 않아요. 그래서 2단계로 이동하지 않았어요. "
-             "지금 6단계를 유지합니다."),
             (4, "5단계로 돌아가", "지금이 5단계예요. 단계를 옮기지 않았어요."),
             (4, "9단계로 돌아가",
              "이 프로토콜은 1~6단계예요. 9단계는 없어서 이동하지 않았어요. 지금 5단계를 유지합니다."),
@@ -363,15 +353,26 @@ class ReturnWithinARepeatTests(_Turns, unittest.TestCase):
                 self.assertEqual(self.projection(), before)
                 self.assertFalse(self.say("응").state_changed)
                 self.assertEqual(self.projection(), before)
+        # Lane CF, decision 3: an earlier step that is not a return within
+        # the repeat stated here is gone back to by a revert, asked once.
+        for index, said, question in (
+            (4, "1단계로 돌아가", "1단계로 돌아갈까요?"),
+            (2, "2단계로 돌아가", "2단계로 돌아갈까요?"),
+            (5, "2단계로 돌아가", "2단계로 돌아갈까요?"),
+        ):
+            with self.subTest(said=said, at=index + 1):
+                self.open(index)
+                before = self.projection()
+                plan = self.say(said)
+                self.assertEqual(self.session.last_front_rule, "step_revert")
+                self.assertEqual(plan.speech_text, question)
+                self.assertEqual(self.projection(), before)
 
     def test_a_protocol_with_no_repeat_moves_nowhere(self) -> None:
         self.open(4, fixture=_fixture(with_repeat=False))
         plan = self.say("2단계로 돌아가")
-        self.assertEqual(
-            plan.speech_text,
-            "원문은 5단계에서 반복 구간을 말하지 않아요. 그래서 2단계로 이동하지 않았어요. "
-            "지금 5단계를 유지합니다.",
-        )
+        # Lane CF, decision 3: asked once as a revert; nothing moves yet.
+        self.assertEqual(plan.speech_text, "2단계로 돌아갈까요?")
         self.assertEqual(self.label(), "5")
 
     def test_a_question_about_going_back_asks_nothing(self) -> None:
@@ -738,7 +739,9 @@ class InGelScenarioTests(_Turns, unittest.TestCase):
         self.say("응")
         self.assertEqual(self.label(), "17")
         self.open(17, fixture=self.fixture)
-        self.assertTrue(re.match(r"원문은 20단계에서 17~18단계를", self.say("17단계로 돌아가").speech_text))
+        # Lane CF, decision 3: from step 18 it is a revert, asked once.
+        self.assertEqual(self.say("17단계로 돌아가").speech_text, "17단계로 돌아갈까요?")
+        self.assertEqual(self.session.last_front_rule, "step_revert")
 
     def test_starting_at_step_10(self) -> None:
         self.open(None, fixture=self.fixture)

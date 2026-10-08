@@ -1,7 +1,7 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
 import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -11,7 +11,7 @@ from urllib.parse import unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -187,6 +187,7 @@ from voiney_lab.protocol_translation import (
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
+    EXPERIMENTER_SETTING_VALUES,
     ApprovalReplayError,
     WorkspaceConflictError,
     WorkspaceError,
@@ -685,6 +686,25 @@ def _workspace_branch_skipped_step_ids(state:Any)->tuple[str,...]:
     return tuple(found)
 
 
+def _workspace_reverted_step_ids(state:Any)->tuple[str,...]:
+    """The steps a confirmed revert took the completion of (lane CF, decision 3).
+
+    Read from the durable record's step records, so a run that went back can
+    be continued after the connection dropped: the completions stay in the
+    record, past the step the run stands on.
+    """
+
+    found:list[str]=[]
+    for event in (state or {}).get("events") or ():
+        payload=event.get("payload") if isinstance(event.get("payload"),dict) else {}
+        record=payload.get("step_record")
+        if isinstance(record,dict) and record.get("kind")=="step_revert":
+            for item in record.get("reverted_step_ids") or ():
+                if str(item) not in found:
+                    found.append(str(item))
+    return tuple(found)
+
+
 def _transition_workspace_experiment(
     session:ListenerSession,
     *,
@@ -792,6 +812,10 @@ def _record_workspace_experiment_progress(
             event_type=(
                 "repeat_returned"
                 if move_kind in {"repeat_return","repeat_round"} else
+                # Lane CF, decision 3: a confirmed revert, beside the
+                # completions it takes back (they stay marked completed).
+                "step_reverted"
+                if move_kind=="step_revert" else
                 "steps_skipped"
                 if move_kind=="start_at_step" and not record.get("experiment_started") else
                 # Lane CB, decision 1: the answer that skipped the step the run
@@ -914,20 +938,118 @@ def _record_workspace_record_fix(
         store.close()
 
 
-def _note_readback(plan:Any,language:str)->Any:
+# --- Lane CF (2026-10-08): the experimenter's settings and the file followed --
+
+#: The setting defaults (decisions 1 and 4): values read back and not asked
+#: about, the source's conditions and counts asked before the start.
+EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
+    "confirm_mode":"readback","question_timing":"before_start",
+}
+#: Where the settings are kept while the server runs when there is no
+#: workspace to keep them in, by the experimenter (one, "local", without one).
+_EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
+
+
+def _experimenter_settings_key()->str:
+    principal=_REQUEST_PRINCIPAL.get()
+    return principal.principal_id if principal is not None else "local"
+
+
+def _load_experimenter_settings()->dict[str,str]:
+    """This experimenter's settings: the workspace's record, else the server's memory."""
+
+    settings=dict(EXPERIMENTER_SETTING_DEFAULTS)
+    if _workspace_settings().enabled:
+        try:
+            principal,store=_commercial_workspace()
+            try:
+                settings.update(store.experimenter_settings(principal))
+                return settings
+            finally:
+                store.close()
+        except Exception as exc:  # noqa: BLE001 - the defaults still run the session
+            log.warning("experimenter settings unavailable error=%s",type(exc).__name__)
+    settings.update(_EXPERIMENTER_SETTINGS_MEMORY.get(_experimenter_settings_key(),{}))
+    return settings
+
+
+def _save_experimenter_settings(changes:Mapping[str,Any],source:str)->dict[str,str]:
+    """Keep a change (voice or screen) and return the settings after it.
+
+    Appended to the workspace's record (never updated in place); without a
+    workspace, kept in the server's memory while it runs.
+    """
+
+    if not isinstance(changes,Mapping) or not changes:
+        raise WorkspaceError("Experimenter setting is invalid.")
+    for name,value in changes.items():
+        if value not in EXPERIMENTER_SETTING_VALUES.get(str(name),()):
+            raise WorkspaceError("Experimenter setting is invalid.")
+    if _workspace_settings().enabled:
+        principal,store=_commercial_workspace()
+        try:
+            for name,value in changes.items():
+                store.record_experimenter_setting(
+                    principal,name=str(name),value=str(value),source=source)
+            return {**EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal)}
+        finally:
+            store.close()
+    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
+    kept.update({str(name):str(value) for name,value in changes.items()})
+    return {**EXPERIMENTER_SETTING_DEFAULTS,**kept}
+
+
+@app.get("/api/experimenter/settings")
+def get_experimenter_settings()->dict[str,object]:
+    return {"settings":_load_experimenter_settings()}
+
+
+@app.put("/api/experimenter/settings")
+def put_experimenter_settings(body:dict[str,Any]=Body(...))->dict[str,object]:
+    try:
+        return {"settings":_save_experimenter_settings(body,"screen")}
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+def _source_basis_from(fixture_filename:Any,entry:Mapping[str,Any]|None)->dict[str,Any]:
+    """The file a run follows and when it was uploaded (decision 5).
+
+    ``entry`` is the catalog entry the session was configured from (its
+    ``source_filename`` and ``created_at``); without one, the fixture's own
+    file name and no date. Only text is taken.
+    """
+
+    entry=entry or {}
+    text=lambda value: value if isinstance(value,str) and value.strip() else None  # noqa: E731
+    return {
+        "filename":text(entry.get("source_filename")) or text(fixture_filename),
+        "uploaded_at":text(entry.get("created_at")),
+    }
+
+
+def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
     """A stored note read back, never asked about (lane N, decision 1).
 
-    A measurement is said value by value ("피에이치 칠 점 이로 기록했어요");
-    any other note says where it went ("2단계에 기록했어요").
+    A value is said value by value, decimal point included ("영 점 오
+    밀리리터로 기록했어요"), however it was said -- "0점5", "영 점 오" and
+    "0.5" read alike (lane CF, decision 2); any other note says where it went
+    ("2단계에 기록했어요"). In the 조용히 way nothing is read back: the values
+    are confirmed in the end-of-run review (lane CF, decision 1).
     """
 
     note=getattr(plan,"note_record",None) or {}
     if not note:
         return plan
-    values=[value for value in note.get("measurements") or () if value]
+    read=[str(value.get("text")) for value in note.get("values") or () if value.get("text")]
+    values=read or (
+        [value for value in note.get("measurements") or () if value]
+        if note.get("category")=="measurement" else [])
     if language!="ko":
         display=speech=f"Recorded at step {note.get('step_label')}."
-    elif note.get("category")=="measurement" and values:
+    elif confirm_mode=="quiet":
+        display=speech="기록했어요."
+    elif values:
         shown=", ".join(values)
         spoken=", ".join(spoken_korean(value) for value in values)
         display=f"{josa_ro(shown)} 기록했어요."
@@ -4580,7 +4702,10 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     # both the session's own words.
     round_status=getattr(curated,"repeat_round_status",None)
     open_question=getattr(curated,"open_server_question",None)
+    # Lane CF, decision 5: "지금 기준: {파일 이름} · {올린 날짜}".
+    basis=getattr(curated,"source_basis",None)
     return {
+        "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
         "translation_pending":_translation_pending(fixture),
         "repeat_round":round_status() if callable(round_status) else None,
@@ -5274,6 +5399,19 @@ def _open_experiment_report(
                     "confirmed_by":"experimenter_start",
                 },
             )
+        basis=curated.source_basis() if callable(getattr(curated,"source_basis",None)) else None
+        if basis:
+            # Lane CF, decision 5: the file the run followed and its upload.
+            store.append_event(
+                session.experiment_report_id,
+                event_key="protocol-basis",
+                event_type="protocol_basis_recorded",
+                payload={
+                    "filename":basis.get("filename"),
+                    "uploaded_at":basis.get("uploaded_at"),
+                    "words":basis.get("words"),
+                },
+            )
     return store.get_report(session.experiment_report_id)
 
 
@@ -5409,6 +5547,12 @@ def _record_experiment_report_plan(
         event_type="repeat_returned"
         step_id=post_step.step_id if post_step is not None else step_id
         step_label=post_step.source_label if post_step is not None else step_label
+    elif plan.state_changed and move_kind=="step_revert":
+        # Lane CF, decision 3: at the step gone back to; the completions it
+        # takes back stay in the record.
+        event_type="step_reverted"
+        step_id=post_step.step_id if post_step is not None else step_id
+        step_label=post_step.source_label if post_step is not None else step_label
     elif plan.state_changed and move_kind=="start_at_step":
         if record.get("experiment_started"):
             skipped_after_start=True
@@ -5465,6 +5609,30 @@ def _record_experiment_report_plan(
             ),
             payload=payload,
         )
+    if plan.state_changed and move_kind=="prestart_answers":
+        # Lane CF, decision 4: the answers given before the start, each as
+        # lane CB records an answer at its step, in the protocol's order.
+        order={item.step_id:index for index,item in enumerate(curated.fixture.steps)}
+        by_label={item.source_label:item for item in curated.fixture.steps}
+        answered=[
+            ("branch_answered",item,str(item.get("step_label") or ""))
+            for item in record.get("answers") or ()
+        ]+[
+            ("repeat_registered",item,str((item.get("repeated_step_labels") or [""])[0]))
+            for item in record.get("registered") or ()
+        ]
+        answered.sort(key=lambda entry:order.get(
+            getattr(by_label.get(entry[2]),"step_id",""),10_000))
+        for kind,item,label in answered:
+            step=by_label.get(label)
+            report=store.append_event(
+                session.experiment_report_id,
+                event_key=f"{event_key}-before-start-{kind.replace('_','-')}-{label}",
+                event_type=kind,
+                step_id=step.step_id if step is not None else None,
+                step_label=label,
+                payload={**payload,"step_record":dict(item)},
+            )
     if skipped_after_start:
         report=store.append_event(
             session.experiment_report_id,
@@ -6002,6 +6170,29 @@ async def _finish_all_research_operations(
         )
 
 
+def _session_greeting_text(session:Any,language:str)->str:
+    """The greeting; with the source's questions open before the start, the first of them.
+
+    Lane CF, decision 4: the start pressed, the conditions and counts the run
+    would ask at its steps are asked first; the greeting asks the first one.
+    """
+
+    curated=getattr(session,"curated_protocol_session",None)
+    title=curated.fixture.title if curated is not None else "the selected protocol"
+    asked=(
+        curated.open_prestart_questions()
+        if curated is not None and language=="ko"
+        and callable(getattr(curated,"open_prestart_questions",None)) else None
+    )
+    if asked:
+        return f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. {asked}"
+    return {
+        "ko":f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
+        "en":f"This is Voiney Lab. {title} is ready. Would you like to begin, or ask a question first?",
+        "vi":f"Voiney Lab đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
+    }.get(language,"Voiney Lab is ready.")
+
+
 async def _send_session_greeting(
     sender:LockedSender,session:ListenerSession,*,language:str,
 ) -> None:
@@ -6011,15 +6202,7 @@ async def _send_session_greeting(
         return
     session.greeting_emitted=True
     greeting_turn_id=2_000_000_000  # Reserved display/audio identity; user turns start at 1.
-    title=(
-        session.curated_protocol_session.fixture.title
-        if session.curated_protocol_session is not None else "the selected protocol"
-    )
-    greeting={
-        "ko":f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
-        "en":f"This is Voiney Lab. {title} is ready. Would you like to begin, or ask a question first?",
-        "vi":f"Voiney Lab đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
-    }.get(language,"Voiney Lab is ready.")
+    greeting=_session_greeting_text(session,language)
     generation=session.generation
     configuration_id=session.accepted_configuration_id
     greeting_id=hashlib.sha256(
@@ -7186,6 +7369,21 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             display_text=f"{plan.display_text} {download}",
                             speech_text=f"{plan.speech_text} {download}",
                         )
+            if getattr(plan,"setting_change",None):
+                # Lane CF, decision 1: a setting said aloud is kept for the
+                # experimenter's next session and shown on the screen.
+                try:
+                    saved=await asyncio.to_thread(
+                        _save_experimenter_settings,dict(plan.setting_change),"voice")
+                except Exception as exc:  # noqa: BLE001 - this session keeps it
+                    log.warning("experimenter setting not kept error=%s",type(exc).__name__)
+                    saved={**EXPERIMENTER_SETTING_DEFAULTS,**curated.experimenter_settings()}
+                    unsaved=" 설정을 저장하지 못해 이번 실험에만 적용돼요."
+                    plan=replace(
+                        plan,display_text=f"{plan.display_text}{unsaved}",
+                        speech_text=f"{plan.speech_text}{unsaved}",
+                    )
+                await current_text("experimenter.settings",turn_id=turn_id,settings=saved)
             if (
                 plan.action is CuratedProtocolAction.RECORD_CORRECTION
                 and plan.record_fix is not None
@@ -7417,7 +7615,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             and turn_language=="ko"
                         ):
                             # Lane N, decision 1: read back, not asked about.
-                            plan=_note_readback(plan,turn_language)
+                            plan=_note_readback(
+                                plan,turn_language,curated.confirm_mode)
                         elif plan.action is CuratedProtocolAction.RECORD_OBSERVATION:
                             acknowledgment=(
                                 f"말씀한 관찰 내용을 현재 {plan.step_label}단계 실험 타임라인에 기록했습니다. 프로토콜 상태는 변경하지 않았습니다."
@@ -8525,6 +8724,8 @@ async def voice_socket(websocket:WebSocket):
                     context=server_tool_context(trusted_config,control["language"])
                     selected_curated_fixture=None
                     selected_revision_id=None
+                    # Lane CF, decision 5: the catalog entry's file and upload.
+                    selected_basis_entry=None
                     selection_failure=None
                     if requested_mode=="cascade":
                         if requested_protocol_id is None:
@@ -8576,6 +8777,12 @@ async def voice_socket(websocket:WebSocket):
                                                     catalog.load_executable_fixture(
                                                         requested_protocol_id))
                                                 selected_revision_id=entry.revision_id
+                                                selected_basis_entry={
+                                                    "source_filename":getattr(
+                                                        entry,"source_filename",None),
+                                                    "created_at":getattr(
+                                                        entry,"created_at",None),
+                                                }
                                             else:
                                                 selection_failure=(
                                                     "protocol_selection_unavailable")
@@ -8666,6 +8873,24 @@ async def voice_socket(websocket:WebSocket):
 
                         session.curated_protocol_session.set_safety_pack(safety_pack)
                         session.curated_protocol_session.activate_configured()
+                        # Lane CF: the experimenter's settings (decisions 1, 4),
+                        # the file the run follows (decision 5), and -- the
+                        # start pressed -- the source's questions asked before
+                        # the start (decision 4). A recovered run skips them.
+                        experimenter_settings=await asyncio.to_thread(
+                            _load_experimenter_settings)
+                        session.curated_protocol_session.apply_experimenter_settings(
+                            experimenter_settings)
+                        session.curated_protocol_session.set_source_basis(
+                            _source_basis_from(
+                                getattr(selected_curated_fixture,"source_filename",None),
+                                selected_basis_entry))
+                        session.curated_protocol_session.open_prestart_questions()
+                        await websocket.send_text(event(
+                            "experimenter.settings",
+                            configuration_id=configuration_id,
+                            settings=experimenter_settings,
+                        ))
                         pack_dict = safety_pack.public_dict()
                         if session.curated_protocol_session and hasattr(session.curated_protocol_session, "fixture") and session.curated_protocol_session.fixture:
                             pack_dict["step_guidance"] = [
@@ -8714,6 +8939,9 @@ async def voice_socket(websocket:WebSocket):
                             # Lane CB, decision 1: steps a source condition
                             # answered "no" passed over.
                             branch_skipped_step_ids=_workspace_branch_skipped_step_ids(
+                                experiment_state),
+                            # Lane CF, decision 3: completions a revert took back.
+                            reverted_step_ids=_workspace_reverted_step_ids(
                                 experiment_state),
                         )
                     pipeline="cascade"

@@ -2695,7 +2695,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ))
         response=next(
             item for item in socket.text if item["type"]=="reply.delta")
-        self.assertIn("승인할 수 없습니다",response["text"])
+        self.assertIn("반영할 수 없습니다",response["text"])
         self.assertIn("HPLC water",response["text"])
         self.assertEqual(session.curated_protocol_session.current_index,1)
 
