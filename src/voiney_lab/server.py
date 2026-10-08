@@ -1012,6 +1012,22 @@ def put_experimenter_settings(body:dict[str,Any]=Body(...))->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+def _source_basis_from(fixture_filename:Any,entry:Mapping[str,Any]|None)->dict[str,Any]:
+    """The file a run follows and when it was uploaded (decision 5).
+
+    ``entry`` is the catalog entry the session was configured from (its
+    ``source_filename`` and ``created_at``); without one, the fixture's own
+    file name and no date. Only text is taken.
+    """
+
+    entry=entry or {}
+    text=lambda value: value if isinstance(value,str) and value.strip() else None  # noqa: E731
+    return {
+        "filename":text(entry.get("source_filename")) or text(fixture_filename),
+        "uploaded_at":text(entry.get("created_at")),
+    }
+
+
 def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
     """A stored note read back, never asked about (lane N, decision 1).
 
@@ -4683,7 +4699,10 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     # both the session's own words.
     round_status=getattr(curated,"repeat_round_status",None)
     open_question=getattr(curated,"open_server_question",None)
+    # Lane CF, decision 5: "지금 기준: {파일 이름} · {올린 날짜}".
+    basis=getattr(curated,"source_basis",None)
     return {
+        "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
         "translation_pending":_translation_pending(fixture),
         "repeat_round":round_status() if callable(round_status) else None,
@@ -5374,6 +5393,19 @@ def _open_experiment_report(
                         for item in shown
                     ],
                     "confirmed_by":"experimenter_start",
+                },
+            )
+        basis=curated.source_basis() if callable(getattr(curated,"source_basis",None)) else None
+        if basis:
+            # Lane CF, decision 5: the file the run followed and its upload.
+            store.append_event(
+                session.experiment_report_id,
+                event_key="protocol-basis",
+                event_type="protocol_basis_recorded",
+                payload={
+                    "filename":basis.get("filename"),
+                    "uploaded_at":basis.get("uploaded_at"),
+                    "words":basis.get("words"),
                 },
             )
     return store.get_report(session.experiment_report_id)
@@ -8688,6 +8720,8 @@ async def voice_socket(websocket:WebSocket):
                     context=server_tool_context(trusted_config,control["language"])
                     selected_curated_fixture=None
                     selected_revision_id=None
+                    # Lane CF, decision 5: the catalog entry's file and upload.
+                    selected_basis_entry=None
                     selection_failure=None
                     if requested_mode=="cascade":
                         if requested_protocol_id is None:
@@ -8739,6 +8773,12 @@ async def voice_socket(websocket:WebSocket):
                                                     catalog.load_executable_fixture(
                                                         requested_protocol_id))
                                                 selected_revision_id=entry.revision_id
+                                                selected_basis_entry={
+                                                    "source_filename":getattr(
+                                                        entry,"source_filename",None),
+                                                    "created_at":getattr(
+                                                        entry,"created_at",None),
+                                                }
                                             else:
                                                 selection_failure=(
                                                     "protocol_selection_unavailable")
@@ -8829,14 +8869,18 @@ async def voice_socket(websocket:WebSocket):
 
                         session.curated_protocol_session.set_safety_pack(safety_pack)
                         session.curated_protocol_session.activate_configured()
-                        # Lane CF: the experimenter's settings (decisions 1, 4)
-                        # and -- the start pressed -- the source's questions
-                        # asked before the start (decision 4). A recovered run
-                        # skips them.
+                        # Lane CF: the experimenter's settings (decisions 1, 4),
+                        # the file the run follows (decision 5), and -- the
+                        # start pressed -- the source's questions asked before
+                        # the start (decision 4). A recovered run skips them.
                         experimenter_settings=await asyncio.to_thread(
                             _load_experimenter_settings)
                         session.curated_protocol_session.apply_experimenter_settings(
                             experimenter_settings)
+                        session.curated_protocol_session.set_source_basis(
+                            _source_basis_from(
+                                getattr(selected_curated_fixture,"source_filename",None),
+                                selected_basis_entry))
                         session.curated_protocol_session.open_prestart_questions()
                         await websocket.send_text(event(
                             "experimenter.settings",

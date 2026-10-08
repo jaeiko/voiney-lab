@@ -2828,6 +2828,8 @@ FRONT_RULES: dict[str, str] = {
                             "confirming values or the time the source's questions "
                             "are asked changes; no workflow state does (lane CF, "
                             "decisions 1 and 4)",
+    "protocol_basis": "'어느 프로토콜 기준이야?': '지금 기준: {파일 이름} · {올린 "
+                      "날짜}', the words the screen shows (lane CF, decision 5)",
     "prestart_question": "the reply to a question asked before the start -- a "
                          "source condition or a person-decided count, '나중에' or "
                          "'다 나중에'; the last reply starts the experiment "
@@ -3753,6 +3755,22 @@ def step_revert_request(transcript: str) -> StepRevertRequest | None:
         number = match.group("number")
         return StepRevertRequest("undo_completion", int(number) if number else None)
     return None
+
+
+# Decision 5: which file the run follows. "현재 프로토콜 버전 알려줘" keeps its
+# own answer (the protocol audit); these ask for the file and its upload.
+_BASIS_QUESTION = re.compile(
+    r"^(?:지금|현재)?\s*(?:어느|어떤|무슨)\s*(?:프로토콜|파일|버전|문서|pdf|PDF)\s*"
+    r"(?:기준|기준으로\s*(?:하고\s*있어|하는\s*거야|해))(?:이야|이에요|인가요|야|이지|이냐)?$"
+    r"|^(?:지금|현재)\s*기준(?:이)?\s*(?:뭐야|뭐예요|뭐지|뭔가요|어떻게\s*돼)$"
+    r"|^기준\s*(?:파일|프로토콜|문서)(?:이|가)?\s*(?:뭐야|뭐예요|알려\s*줘|알려\s*주세요|뭐지)$"
+    r"|^(?:지금\s*)?(?:어느|어떤|무슨)\s*프로토콜로\s*(?:하고\s*있어|하는\s*거야|진행\s*중이야|진행하고\s*있어)$"
+)
+
+
+def protocol_basis_question(transcript: str) -> bool:
+    said = " ".join(transcript.split()).strip(" .!?。？")
+    return bool(said) and _BASIS_QUESTION.fullmatch(said) is not None
 
 
 # Lane R7, decision 1: something spilled, was knocked over or overflowed --
@@ -7383,11 +7401,13 @@ class CuratedProtocolSession:
         #: where it stands, the answers and what was left for later. Open
         #: until the last is answered, when the experiment starts.
         self._prestart: dict[str, Any] | None = None
+        #: The file the run follows and when it was uploaded (decision 5).
+        self._source_basis: dict[str, Any] | None = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
         self.safety_pack = safety_pack
 
-    # --- lane CF: the experimenter's settings ---------------------------------
+    # --- lane CF: the experimenter's settings and the file the run follows --
 
     def apply_experimenter_settings(self, settings: Mapping[str, Any]) -> None:
         """Take the experimenter's settings; an unknown value keeps the session's own."""
@@ -7407,6 +7427,36 @@ class CuratedProtocolSession:
     @property
     def pending_note_confirmation(self) -> dict[str, Any] | None:
         return self._pending_note_confirmation
+
+    def set_source_basis(self, basis: Mapping[str, Any] | None) -> None:
+        self._source_basis = dict(basis) if basis else None
+
+    def source_basis(self) -> dict[str, Any] | None:
+        """{"filename", "uploaded_at", "words"}, or None when the server named no file."""
+
+        if not self._source_basis:
+            return None
+        return {**self._source_basis, "words": self.source_basis_words()}
+
+    def source_basis_words(self) -> str:
+        """"지금 기준: {파일 이름} · {올린 날짜}" (decision 5)."""
+
+        basis = self._source_basis or {}
+        name = str(
+            basis.get("filename") or getattr(self.fixture, "source_filename", None)
+            or getattr(self.fixture, "title", "") or "파일 이름 기록 없음"
+        )
+        uploaded = basis.get("uploaded_at")
+        when = "올린 날짜 기록 없음"
+        if uploaded:
+            try:
+                from zoneinfo import ZoneInfo
+
+                moment = datetime.fromisoformat(str(uploaded)).astimezone(ZoneInfo("Asia/Seoul"))
+                when = f"{moment.year}년 {moment.month}월 {moment.day}일 올림"
+            except (ValueError, KeyError):
+                when = "올린 날짜 기록 없음"
+        return f"지금 기준: {name} · {when}"
 
     @property
     def pending_completion_confirmation(self) -> PendingCompletionConfirmation | None:
@@ -9437,12 +9487,12 @@ class CuratedProtocolSession:
         )
         return replace(plan, speech_text=f"{heard}{ending} 기록할까요? 맞으면 '네'라고 해 주세요.")
 
-    # --- lane CF: words about the experimenter's own settings ---------------
+    # --- lane CF: words about the experimenter's own settings and file -------
 
     def _plan_experimenter_words(
         self, transcript: str, *, turn_id: int,
     ) -> CuratedProtocolTurnPlan | None:
-        """A setting said aloud (decisions 1 and 4)."""
+        """A setting said aloud (decisions 1, 4), or "어느 프로토콜 기준이야?" (5)."""
 
         setting = experimenter_setting_request(transcript)
         if setting is not None:
@@ -9483,6 +9533,11 @@ class CuratedProtocolSession:
                         self._words_plan(words, intent_kind="experimenter_setting_changed"),
                         setting_change=dict(setting),
                     )
+            self._replay[turn_id] = plan
+            return plan
+        if protocol_basis_question(transcript):
+            self._last_front_rule = "protocol_basis"
+            plan = self._words_plan(f"{self.source_basis_words()}.", intent_kind="protocol_basis")
             self._replay[turn_id] = plan
             return plan
         return None
@@ -14625,8 +14680,8 @@ class CuratedProtocolSession:
                 if language == "ko" and transcript_quality is None else None
             )
             if said_here is not None:
-                # Lane CF, decisions 1 and 4: a setting said aloud. It
-                # changes no workflow state.
+                # Lane CF, decisions 1, 4 and 5: a setting said aloud, or
+                # "어느 프로토콜 기준이야?". Neither changes the workflow.
                 return said_here
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.

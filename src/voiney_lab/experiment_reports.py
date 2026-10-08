@@ -1743,8 +1743,9 @@ def build_report_facts(
     skip: tuple[str, list[str], str] | None = None
     early_keys: dict[str, str] = {}
     returns: list[ReportReturn] = []
-    # Lane CF, decision 3: reverts.
+    # Lane CF, decision 3: reverts; decision 5: the file the run followed.
     reverts: list[ReportRevert] = []
+    basis_words = ""
     # Lane CB, decision 5.
     branch_answers: list[ReportBranchAnswer] = []
     repetitions: list[ReportRepetition] = []
@@ -1870,6 +1871,10 @@ def build_report_facts(
                 in_repeat=(pair[0], pair[-1]) if pair else None,
                 at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
             ))
+        elif kind == "protocol_basis_recorded" and not basis_words:
+            filename = " ".join(str(payload.get("filename") or "").split())
+            words = " ".join(str(payload.get("words") or "").split())
+            basis_words = words.removeprefix("지금 기준:").strip() or filename
         elif kind == "branch_answered":
             record = step_record(payload)
             branch_answers.append(ReportBranchAnswer(
@@ -2155,6 +2160,9 @@ def build_report_facts(
         ("결과", outcome_words),
         ("기록", record_counts(records)),
         ("프로토콜 상태", _protocol_state_words(report_data)),
+    ) + (
+        # Lane CF, decision 5: "{파일 이름} · {올린 날짜}".
+        (("기준 파일", basis_words),) if basis_words else ()
     ) + (
         (("안전 주의 확인", (
             f"시작 전 화면에서 원문 안전 주의 {safety_notices_acknowledged}건을 보고 시작함"

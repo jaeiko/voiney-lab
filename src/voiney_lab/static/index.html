@@ -34,6 +34,7 @@
       </div>
       <div class="rail-divider"></div>
       <span id="rail-pdf-title" class="rail-title" title="선택된 실험 PDF">프로토콜을 고르세요</span>
+      <span id="rail-basis" class="rail-title" title="이 실험이 따르는 원문 파일과 올린 날짜">지금 기준: —</span>
       <span id="rail-step-badge" class="rail-badge" title="현재 단계">—</span>
       <span id="rail-timer-badge" class="rail-timer" title="타이머">⏱ 00:00</span>
       <span id="rail-safety-badge" class="rail-safety" title="바인딩된 안전 지침">🛡️ 안전 자료 확인 중</span>
@@ -927,7 +928,7 @@ function renderCuratedProtocolState(message){
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
  const previousBlockReason=curatedProtocolState?.attached===true?curatedProtocolState.block_reason:null;
  if(Number.isInteger(message.turn_id)&&Number.isInteger(message.generation))turnHold(turnProgressKey(message.turn_id,message.generation)).observationGateSet=value.block_reason===OBSERVATION_HOLD_REASON&&previousBlockReason!==OBSERVATION_HOLD_REASON;
- curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
+ curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;renderSourceBasis(curatedScreenFields?.source_basis);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?"개발용 큐레이션 분석(원문 PDF 기준)":"분석 통과한 프로토콜";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id],["readiness_status",value.readiness_status],["development_only",String(value.development_only)]]);
@@ -1752,6 +1753,15 @@ function executionReasonRows(host,title,items,hint){
 function renderExecutionReasons(review){
  executionReasonRows($("protocol-blockers"),"실행을 막는 사유",review?.execution_blockers,null);
 }
+// Lane CF decision 5: "지금 기준: {파일 이름} · {올린 날짜}", the words the
+// server says when asked "어느 프로토콜 기준이야?".
+function basisWords(filename,uploadedAt){
+ const name=typeof filename==="string"&&filename.trim()?filename.trim():"파일 이름 기록 없음";
+ let when="올린 날짜 기록 없음";
+ if(typeof uploadedAt==="string"&&uploadedAt){const moment=new Date(uploadedAt);if(!Number.isNaN(moment.getTime())){const parts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",year:"numeric",month:"numeric",day:"numeric"}).formatToParts(moment).map(part=>[part.type,part.value]));when=`${parts.year}년 ${parts.month}월 ${parts.day}일 올림`;}}
+ return `지금 기준: ${name} · ${when}`;
+}
+function renderSourceBasis(basis){const rail=$("rail-basis");if(rail)rail.textContent=basis&&typeof basis.words==="string"?basis.words:"지금 기준: —";}
 // Lane CF decisions 1 and 4: the settings are the server's; the screen shows them and asks it to change them.
 function renderExperimenterSettings(settings){
  if(!settings||typeof settings!=="object")return;
@@ -1783,6 +1793,8 @@ function renderStartSummary(review){
  const blockers=Array.isArray(review.execution_blockers)?review.execution_blockers:[],notices=Array.isArray(review.execution_notices)?review.execution_notices:[],safety=Array.isArray(review.safety_notices)?review.safety_notices:[];
  const steps=Number.isInteger(review.step_count)?review.step_count:(Array.isArray(review.sections)?review.sections.reduce((sum,section)=>sum+(Array.isArray(section?.steps)?section.steps.length:0),0):0);
  const parts=[`${review.title||review.source?.filename||"올린 PDF"}`];
+ const catalogEntry=protocolCatalog.get(review.protocol_id);
+ parts.push(basisWords(catalogEntry?.source_filename||review.source?.filename,catalogEntry?.created_at));
  if(review.analysis_available===true||review.analysis_payload_sha256)parts.push(`단계 ${steps}개`);
  parts.push(`원문 안전 주의 ${safety.length}건`);
  if(notices.length)parts.push(`시작 전 알림 ${notices.length}건`);
