@@ -38,7 +38,7 @@ _KNOWLEDGE_KINDS = {
     "historical_observation",
     "troubleshooting_note",
 }
-_CONNECTOR_KINDS = {"google_drive", "protocols_io", "github", "elabftw"}
+_CONNECTOR_KINDS = {"google_drive", "protocols_io", "github"}
 _ANALYTICS_CATEGORIES = {
     "voice",
     "agent",
@@ -3854,126 +3854,6 @@ class WorkspaceStore:
             }
             for row in rows
         )
-
-    def record_eln_writeback(
-        self,
-        principal: Principal,
-        *,
-        connector_id: str,
-        experiment_session_id: str,
-        report_id: str,
-        protocol_revision_id: str,
-        external_experiment_id: str,
-        request_sha256: str,
-        idempotency_key: str,
-    ) -> str:
-        require_permission(principal, Permission.ELN_WRITEBACK)
-        connector = self._connection.execute(
-            """SELECT connector_kind,enabled,validation_status FROM connector_configurations
-            WHERE connector_id=? AND organization_id=?""",
-            (connector_id, principal.organization_id),
-        ).fetchone()
-        if connector is None:
-            raise WorkspaceNotFoundError("Connector is not available.")
-        if (
-            connector["connector_kind"] != "elabftw"
-            or not connector["enabled"]
-            or connector["validation_status"] != "configuration_verified"
-        ):
-            raise WorkspaceError("Connector does not support ELN write-back.")
-        self._experiment_row(principal, experiment_session_id)
-        self.require_resource(principal, "experiment_report", report_id)
-        self.get_revision(principal, protocol_revision_id)
-        if _SHA256.fullmatch(request_sha256) is None:
-            raise WorkspaceError("ELN request hash is invalid.")
-        writeback_id = f"eln-writeback-{secrets.token_hex(16)}"
-        try:
-            self._connection.execute(
-                """INSERT INTO eln_writeback_events
-                (writeback_id,idempotency_key,organization_id,connector_id,report_id,
-                protocol_revision_id,external_experiment_id,request_sha256,
-                actor_principal_id,created_at,experiment_session_id)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    writeback_id,
-                    _identifier(idempotency_key, "Idempotency key"),
-                    principal.organization_id,
-                    connector_id,
-                    _identifier(report_id, "Report identifier"),
-                    protocol_revision_id,
-                    _text(external_experiment_id, "ELN experiment identifier", maximum=500),
-                    request_sha256,
-                    principal.principal_id,
-                    _now(),
-                    _identifier(
-                        experiment_session_id, "Experiment session identifier"
-                    ),
-                ),
-            )
-            self._connection.commit()
-        except sqlite3.IntegrityError as exc:
-            raise ApprovalReplayError("ELN write-back request was already used.") from exc
-        return writeback_id
-
-    def claim_eln_writeback_request(
-        self,
-        principal: Principal,
-        *,
-        connector_id: str,
-        experiment_session_id: str,
-        report_id: str,
-        protocol_revision_id: str,
-        idempotency_key: str,
-    ) -> None:
-        require_permission(principal, Permission.ELN_WRITEBACK)
-        connector = self.connector_for_use(
-            principal, connector_id, expected_kind="elabftw"
-        )
-        self._experiment_row(principal, experiment_session_id)
-        self.require_resource(principal, "experiment_report", report_id)
-        self.get_revision(principal, protocol_revision_id)
-        try:
-            self._connection.execute(
-                """INSERT INTO eln_writeback_requests(
-                organization_id,idempotency_key,connector_id,report_id,
-                protocol_revision_id,actor_principal_id,status,created_at,
-                completed_at,experiment_session_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    principal.organization_id,
-                    _identifier(idempotency_key, "Idempotency key"),
-                    connector.connector_id,
-                    _identifier(report_id, "Report identifier"),
-                    protocol_revision_id,
-                    principal.principal_id,
-                    "processing",
-                    _now(),
-                    None,
-                    _identifier(
-                        experiment_session_id, "Experiment session identifier"
-                    ),
-                ),
-            )
-            self._connection.commit()
-        except sqlite3.IntegrityError as exc:
-            raise ApprovalReplayError("ELN write-back request was already used.") from exc
-
-    def finish_eln_writeback_request(
-        self, principal: Principal, idempotency_key: str, *, succeeded: bool
-    ) -> None:
-        cursor = self._connection.execute(
-            """UPDATE eln_writeback_requests SET status=?,completed_at=?
-            WHERE organization_id=? AND idempotency_key=? AND status='processing'""",
-            (
-                "completed" if succeeded else "failed",
-                _now(),
-                principal.organization_id,
-                _identifier(idempotency_key, "Idempotency key"),
-            ),
-        )
-        if cursor.rowcount != 1:
-            raise WorkspaceConflictError("ELN write-back request state is unavailable.")
-        self._connection.commit()
 
     def record_analytics(
         self,

@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -229,13 +229,6 @@ from voiney_lab.drylab_workflows import (
     DryLabWorkflowRegistry,
     inspect_nextflow_snapshot,
     inspect_snakemake_snapshot,
-)
-from voiney_lab.eln_connectors import (
-    CompletedStep,
-    ELabFtwConnector,
-    ElnConnectorError,
-    ExperimentWriteback,
-    Observation as ElnObservation,
 )
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
@@ -496,7 +489,7 @@ def _workspace_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=exc.code)
     if isinstance(exc,(ApprovalReplayError,WorkspaceConflictError)):
         return HTTPException(status_code=409,detail=exc.code)
-    if isinstance(exc,(TranslationIntegrityError,SourceConnectorError,ElnConnectorError)):
+    if isinstance(exc,(TranslationIntegrityError,SourceConnectorError)):
         return HTTPException(status_code=422,detail=getattr(exc,"code","invalid_request"))
     if isinstance(exc,(IdentityConfigurationError,ConfigurationError)):
         return HTTPException(status_code=503,detail=getattr(exc,"code","configuration_invalid"))
@@ -735,17 +728,6 @@ def _connector_configuration_failure(connector:object)->str|None:
             and ".." not in root
             and "\\" not in root
             for root in roots
-        )
-    elif kind=="elabftw":
-        parsed=urlparse(roots[0]) if len(roots)==1 else None
-        valid=bool(
-            parsed
-            and parsed.scheme=="https"
-            and parsed.netloc
-            and parsed.username is None
-            and parsed.password is None
-            and not parsed.query
-            and not parsed.fragment
         )
     elif kind=="protocols_io":
         valid=all(
@@ -2967,169 +2949,6 @@ async def set_workspace_connector_enabled(
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/eln/elabftw/writeback",status_code=201)
-async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
-    """Write one exact completed report only after an explicit user confirmation."""
-
-    payload=await _json_object(request)
-    if payload.get("confirmed") is not True:
-        raise HTTPException(status_code=409,detail="eln_confirmation_required")
-    connector_id=str(payload.get("connector_id", ""))
-    report_id=str(payload.get("report_id", ""))
-    revision_id=str(payload.get("protocol_revision_id", ""))
-    idempotency_key=str(payload.get("idempotency_key", ""))
-    principal=None
-    store=None
-    claimed=False
-    try:
-        principal,store=_commercial_workspace()
-        configured=store.connector_for_use(
-            principal,connector_id,expected_kind="elabftw")
-        revision=store.get_revision(principal,revision_id)
-        source=store.source_for_revision(principal,revision_id)
-        report_settings=ExperimentReportSettings.from_environment()
-        if not report_settings.enabled or report_settings.database_path is None:
-            raise WorkspaceNotFoundError("Experiment report is not available.")
-        store.require_resource(principal,"experiment_report",report_id)
-        report=ExperimentReportStore(report_settings.database_path).get_report(report_id)
-        if report.get("status")!="completed" or not report.get("ended_at"):
-            raise WorkspaceConflictError(
-                "Only a completed experiment report can be written back.")
-        experiment_session_id=report.get("session_id")
-        if not isinstance(experiment_session_id,str):
-            raise WorkspaceConflictError(
-                "Experiment report has no durable session identity.")
-        experiment=store.get_experiment(principal,experiment_session_id)
-        if experiment.get("status")!="completed":
-            raise WorkspaceConflictError(
-                "Only a completed experiment session can be written back.")
-        if (
-            experiment.get("protocol_id")!=report.get("protocol_id")
-            or experiment.get("protocol_revision_id")
-            !=report.get("protocol_revision")
-        ):
-            raise WorkspaceConflictError(
-                "Experiment session and report protocol identities do not match."
-            )
-        identity=revision.content.get("execution_identity")
-        identity_matches=(
-            revision.source_hash==report.get("protocol_sha256")
-            or (
-                isinstance(identity,dict)
-                and identity.get("protocol_id")==report.get("protocol_id")
-                and identity.get("source_sha256")==report.get("protocol_sha256")
-            )
-        )
-        if not identity_matches:
-            raise WorkspaceConflictError(
-                "The report and selected protocol lineage revision do not match.")
-        bases=tuple(
-            root.rstrip("/") for root in configured.allowed_roots
-            if root.startswith("https://")
-        )
-        if len(bases)!=1:
-            raise WorkspaceError("eLabFTW connector origin is invalid.")
-        completed_steps=[]
-        observations=[]
-        timer_events=[]
-        deviations=[]
-        for item in report.get("events",[]):
-            if not isinstance(item,dict):
-                continue
-            event_type=item.get("event_type")
-            step_id=str(item.get("step_id") or item.get("step_label") or "unlabeled")
-            created_at=str(item.get("created_at") or report["started_at"])
-            wording=item.get("user_wording")
-            if event_type=="step_completed":
-                completed_steps.append(CompletedStep(step_id,created_at,None))
-            elif event_type=="observation":
-                value=(wording if isinstance(wording,str) and wording.strip()
-                       else str((item.get("payload") or {}).get("summary") or "recorded"))
-                observations.append(ElnObservation(step_id,created_at,value[:2000]))
-            elif event_type=="timer_started":
-                timer=(item.get("payload") or {}).get("timer")
-                safe_timer={
-                    key:value for key,value in (timer.items() if isinstance(timer,dict) else ())
-                    if key in {
-                        "source_duration_seconds","started_at","elapsed_seconds",
-                        "remaining_seconds","completion_state","demo_bypassed",
-                    } and isinstance(value,(str,int,float,bool))
-                }
-                timer_events.append({
-                    "event_type":"timer_started","step_id":step_id,
-                    "recorded_at":created_at,"timer":safe_timer,
-                })
-            elif event_type in {"anomaly","blocked"}:
-                label=wording if isinstance(wording,str) and wording.strip() else event_type
-                deviations.append(f"{step_id}: {label[:2000]}")
-        experiment=ExperimentWriteback(
-            report_id=report_id,
-            protocol_id=str(report["protocol_id"]),
-            protocol_revision_id=revision_id,
-            protocol_title=str(report["protocol_title"]),
-            protocol_version=(source.version_identity or str(revision.revision_number)),
-            protocol_source_url=source.canonical_url,
-            source_status=str(source.metadata.get("source_status") or "Imported draft"),
-            started_at=str(report["started_at"]),
-            ended_at=str(report["ended_at"]),
-            completed_steps=tuple(completed_steps),
-            observations=tuple(observations),
-            timer_events=tuple(timer_events),
-            deviations=tuple(deviations),
-            report_url=None,
-        )
-        store.claim_eln_writeback_request(
-            principal,connector_id=connector_id,
-            experiment_session_id=experiment_session_id,report_id=report_id,
-            protocol_revision_id=revision_id,idempotency_key=idempotency_key,
-        )
-        claimed=True
-        result=await asyncio.to_thread(
-            ELabFtwConnector(
-                server_configured_base_url=bases[0],
-                api_key=_resolve_server_secret(configured.credential_reference),
-            ).write_completed_experiment,
-            experiment,confirmed=True,
-        )
-        writeback_id=store.record_eln_writeback(
-            principal,connector_id=connector_id,
-            experiment_session_id=experiment_session_id,report_id=report_id,
-            protocol_revision_id=revision_id,
-            external_experiment_id=result.external_experiment_id,
-            request_sha256=result.request_sha256,
-            idempotency_key=idempotency_key,
-        )
-        store.finish_eln_writeback_request(
-            principal,idempotency_key,succeeded=True)
-        store.record_analytics(
-            principal,category="connector",metric_name="eln_writeback",
-            dimensions={"connector_kind":"elabftw","status":"ok"},
-        )
-        return {
-            "writeback_id":writeback_id,
-            "connector_kind":"elabftw",
-            "experiment_session_id":experiment_session_id,
-            "external_experiment_id":result.external_experiment_id,
-            "location":result.location,
-            "raw_audio_transmitted":False,
-            "transcript_transmitted":False,
-        }
-    except Exception as exc:
-        if store is not None and principal is not None and claimed:
-            try:
-                store.finish_eln_writeback_request(
-                    principal,idempotency_key,succeeded=False)
-            except Exception as finish_exc:
-                log.warning(
-                    "eln_writeback.finish_failed succeeded=false error=%s",
-                    type(finish_exc).__name__,
-                )
-        raise _workspace_http_error(exc) from exc
-    finally:
-        if store is not None:
-            store.close()
 
 
 @app.post("/api/workspace/sources/protocols-io/import")

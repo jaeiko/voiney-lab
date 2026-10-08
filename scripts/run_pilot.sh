@@ -73,11 +73,9 @@ eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
 # --- Outside the pilot's scope -----------------------------------------------
 # MOSS (the org-governed approved-safety-document corpus) has its own flag.
 export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"
-# Dry-lab workflows and the eLabFTW ELN write-back have no launcher flag of
-# their own: both sit behind the commercial workspace, which the reviewer
-# inbox, protocol library and experiment timeline also need, so disabling it
-# would take the pilot's own approval path with it. Both paths are inert
-# until an admin creates and verifies a connector for them.
+# Dry-lab workflows have no launcher flag of their own: they sit behind the
+# commercial workspace, which the protocol library and experiment timeline
+# also need. The path is inert until a connector is created and verified.
 
 # --- Approved safety documents: decided here, never by a .env ---------------
 # operational needs OIDC, which the pilot does not have yet: without it the
@@ -171,8 +169,6 @@ report_feature "moss_safety_documents:" "$VOINEY_LAB_MOSS_ENABLED"
 echo
 echo "--- No launcher flag of their own (reported, not disabled) ---"
 printf '%-30s %s\n' "dry_lab_workflows:" \
-  "behind the workspace; inert without a verified connector"
-printf '%-30s %s\n' "eln_writeback (eLabFTW):" \
   "behind the workspace; inert without a verified connector"
 
 XAI_REFUSAL=""
