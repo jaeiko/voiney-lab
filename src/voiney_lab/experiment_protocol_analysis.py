@@ -2339,6 +2339,17 @@ def verify_step_timers(
                 seen.add(item.literal)
                 refuse(getattr(owner, "action_id", None), text, item.literal,
                        item.reason, owner_page)
+        if step_verified and any(
+            domain.states_unnumbered_time(owner.instruction_source_text)
+            for owner in (step, *step.sub_actions)
+        ):
+            # The step's words also state a time without a number ("Change
+            # the temperature at 150 °C, O/N." under a "14:00:00" line):
+            # which one applies is not the server's to choose.
+            for timer in step_verified:
+                refuse(timer.action_id, timer.excerpt, timer.literal,
+                       "with_unnumbered_alternative", timer.page_number)
+            step_verified = []
         if step.step_id in ambiguous_steps:
             construct = ambiguous_steps[step.step_id]
             for timer in step_verified:

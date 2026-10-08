@@ -263,6 +263,31 @@ class TheServerVerificationTests(_Catalog):
         self.assertEqual(table.manifest(), {"w1": 600})
         self.assertIn(("w2", "not_in_step_text"), {(r.step_id, r.reason) for r in table.refused})
 
+    def test_a_step_whose_words_say_overnight_keeps_no_timer_from_a_duration_line(self) -> None:
+        """ANKOM step 64: "Change the temperature at 150 °C, O/N." over "14:00:00"."""
+
+        pdf = Path(self.temp.name) / "overnight.pdf"
+        write_text_pdf(pdf, "ON Protocol\nSection heat\n1. Heat the oven, O/N.\n14:00:00",
+                       title="ON Protocol")
+        extraction = extract_protocol_pdf(pdf)
+        text = "1. Heat the oven, O/N."
+        protocol = domain.ExperimentProtocol(
+            "on",
+            domain.ProtocolMetadata(extraction, "ON Protocol", "en", evidence=_evidence("ON Protocol")),
+            sections=(domain.ProtocolSection("heat", "Section heat", _evidence("Section heat"), (
+                domain.ProtocolSourceStep("o1", "1", text, _evidence(text), sub_actions=(
+                    _action("oa1", "Heat the oven, O/N.", "14:00:00"),
+                )),
+            )),),
+        )
+        domain.validate_protocol(protocol)
+        table = verify_step_timers(protocol, extraction)
+        self.assertEqual(table.manifest(), {})
+        self.assertEqual(
+            {(r.literal, r.reason) for r in table.refused},
+            {("14:00:00", "with_unnumbered_alternative"), ("O/N", "no_number")},
+        )
+
     def test_a_time_in_the_steps_own_text_is_read_when_the_analysis_attached_none(self) -> None:
         """Human decision during the measurement: the analysis seldom attaches one."""
 

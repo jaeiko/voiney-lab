@@ -762,8 +762,9 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
 - **What does not** (decision 2). No number ("overnight", "until clear"), a
   bound ("at least 30 min", "a minimum of 2 hours", "30분 이상"), an interval
   ("every 10 min"), a time since something else ("After 2 hours, remove"), a
-  number beside an unnumbered alternative ("1 h or overnight"), and a step
-  the analysis marked as having an ambiguous time. Each is listed with its
+  number beside an unnumbered alternative ("1 h or overnight") -- in one
+  excerpt, or anywhere in the step's words ("O/N" over a "14:00:00" line) --
+  and a step the analysis marked as having an ambiguous time. Each is listed with its
   reason; asked about,
   the step's source sentence is read back.
 - **Choices** (decision 2). A range ("12–16 h"), printed alternatives ("15 or

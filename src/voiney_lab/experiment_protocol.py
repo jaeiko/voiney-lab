@@ -2404,6 +2404,12 @@ def read_source_durations(text: str) -> SourceDurationReading:
     return SourceDurationReading(tuple(durations), tuple(refused))
 
 
+def states_unnumbered_time(text: str) -> bool:
+    """Whether ``text`` states a time without a number: "overnight", "O/N", "until"."""
+
+    return _UNNUMBERED_TIME.search(text) is not None
+
+
 @dataclass(frozen=True)
 class VerifiedStepTimer:
     """One duration of a step that passed the server's source check."""
