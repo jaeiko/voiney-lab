@@ -138,6 +138,7 @@
               <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
               <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
               <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
+              <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
               <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
               <div class="protocol-review-actions">
                 <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
@@ -1807,8 +1808,34 @@ function renderStartSummary(review){
  executionReasonRows($("protocol-execution-blockers"),"실행을 막는 사유",blockers,"원문을 확인하고 고친 PDF 를 올리거나 분석을 다시 시도하세요.");
  executionReasonRows($("protocol-execution-notices"),"시작 전 알림",notices,"막지 않습니다. 그 단계에 이르면 한 번 알리고 원문을 그대로 읽어 드립니다.");
  renderSafetyNotices(safety,review.available_for_execution===true);
+ renderStepTimers(review.timers);
  if(start){start.hidden=review.available_for_execution!==true||sessionActive;start.disabled=isRegisteringProtocol;}
  return true;
+}
+// Lane PT, decision 4: each step's timer as the server verified it against
+// the source (value and the excerpt it was read from), and each time it
+// could not verify, with the reason. Values and reasons are the server's.
+function renderStepTimers(timers){
+ const host=$("protocol-step-timers");if(!host)return;host.replaceChildren();
+ const verified=Array.isArray(timers?.verified)?timers.verified:[],refused=Array.isArray(timers?.refused)?timers.refused:[];
+ host.hidden=!timers||typeof timers!=="object";if(host.hidden)return;
+ const group=document.createElement("section"),heading=document.createElement("h4");
+ group.className="protocol-review-group";
+ heading.textContent=verified.length?`단계 타이머 ${verified.length}개 · 원문에서 확인한 시간`:"원문에서 확인한 단계 타이머 없음";group.appendChild(heading);
+ for(const item of verified){
+  const row=document.createElement("p");row.className="protocol-review-status";
+  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ‘${item.source_literal||""}’${item.source==="step_text"?" · 단계 문장에서 읽음":""} · p.${item.source_page_number??"—"} · 발췌 “${item.source_excerpt||""}”`;
+  group.appendChild(row);
+ }
+ if(refused.length){
+  const sub=document.createElement("h4");sub.textContent=`타이머로 만들지 않은 시간 표현 ${refused.length}건`;group.appendChild(sub);
+  for(const item of refused){
+   const row=document.createElement("p");row.className="protocol-review-status";
+   row.textContent=`${item.step_label?`${item.step_label}단계`:"시작 전 준비"} · ‘${item.source_literal||""}’ · ${item.reason_ko||item.reason||""}`;
+   group.appendChild(row);
+  }
+ }
+ host.appendChild(group);
 }
 function renderSafetyNotices(items,runnable){
  const host=$("protocol-safety-notices");if(!host)return;host.replaceChildren();

@@ -266,6 +266,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "branch_condition", "repeat_count", "repeat_round",
             # lane CF, decisions 1, 3, 4 and 5
             "experimenter_setting", "step_revert", "prestart_question", "protocol_basis",
+            # lane PT, decision 3
+            "step_time",
         })
 
 
