@@ -581,6 +581,18 @@ tool each, and the front rules keep only what needs them.
   상황의 안전 안내는 원문에 없어요." said once
   (`answer_checks.ungrounded_safety_instructions`,
   `llm_router.without_ungrounded_safety`).
+- **No made-up permission** (lane TS, decision 3 of 2026-10-08). In the same
+  place, a sentence that permits something about a hazard -- "~없이 해도
+  돼요", "~안 해도 돼요", "~해도 괜찮아요", "~없이 ~할 수 있어요", "맨손으로",
+  "맨눈으로", "필요 없어요", "독성이 없어요", "without gloves", "not necessary"
+  -- about protective equipment, ventilation, exposure, UV or radiation, a
+  biological hazard, sharps or handling a chemical
+  (`answer_checks.permissive_hazard_topics`) stays only when a sentence of the
+  protocol's text or an approved safety document itself permits something
+  about every topic it names ("Gloves are not required"); naming the topic
+  ("Wear gloves") permits nothing. A sentence that only says whether it may be
+  done is not in the source ("…해도 되는지는 확인할 수 없어요") permits nothing
+  and stays. An outside-PDF explanation holding a permission is refused.
 
 ## Notes said aloud, the report's values confirmed, and a later start continued (lane N)
 
@@ -599,7 +611,12 @@ researcher before they go in.
   router's `record_log` allow-list (`RECORD_LOG_RULES`: observation,
   measurement, deviation, memo, anomaly); a memo keeps the record's `note`
   category, and a router note stores the utterance's own span, never the
-  model's spelling. Once stored the note is read back, never asked about: a
+  model's spelling. When the words hold a negation (안, 않, 없, 못, 말고, no,
+  not, without, ...), a router note's value must hold every clause a negation
+  stands in ("침전물 안 보임 남겨 줘" → "침전물 안 보임"); a value that leaves one
+  out ("침전물") is replaced by everything said
+  (`tools.record_value_keeping_negation`, lane TS, decision 4). The front
+  rule's note already keeps the words as said. Once stored the note is read back, never asked about: a
   measurement value by value ("피에이치 칠 점 이로 기록했어요"), anything else
   "N단계에 기록했어요". The command alone asks "어떤 내용을 기록할까요?". A
   completion said as a note ("완료했다고 기록해 줘") and a spill keep their
@@ -863,6 +880,45 @@ already translated; the stored row, its text and its source hash do not
 change, and each sentence's judgement is computed once (lane FX). A step
 whose source is Korean shows no "한국어 번역이 없어 원문으로 보여 드립니다."
 line on its card (lane FX).
+
+Since lane TS (human decision 1 of 2026-10-08) a Korean reading must also say
+what its source says, by three more mechanical checks
+(`protocol_translation.meaning_issue`, run after the ones above by
+`statement_issue`):
+
+- **Negations pair up** (`negation_count_changed`). The source and the Korean
+  hold as many words of `NEGATION_VOCABULARY`; an "un-" word of the source
+  ("uninoculated") may be read with or without its own 않. So "Never open the
+  lid without waiting for the rotor to stop." ↔ "로터가 멈추기를 기다리지 않고
+  뚜껑을 엽니다." (two negations read as one, the opposite instruction) is
+  refused. "~지 않으면 안 되" and "~없으면 안 되" say "must" and are not counted.
+- **Hazard words carry over** (`hazard_missing`). A source word of
+  `HAZARD_VOCABULARY` (toxic, flammable, corrosive, carcinogen, hazard,
+  caution, warning, do not, never, avoid, must, glove, fume hood, goggles,
+  UV, sharps, ...) needs its Korean (독성, 인화, 부식, 발암, 위험, 주의, 경고,
+  하지 마, 절대, 피하, 반드시, 장갑, 흄후드, 보안경, 자외선, 메스, ...) or the
+  English word kept. "Work in a fume hood; acrylamide is a neurotoxin." ↔
+  "아크릴아마이드를 다룹니다." is refused.
+- **Sentences are not dropped** (`sentences_dropped`). A Korean with fewer
+  than half the source's sentences is refused; two sentences read as one is
+  usual Korean and passes. Decimal points, abbreviations ("e.g.", "approx."),
+  initials and links do not end a sentence.
+
+Measured on the 585 stored and measured translations left on this machine
+on 2026-10-08, no machine translation changed its verdict; two reviewed in-gel
+readings that read three or four source sentences as one are now refused --
+step 1's warning (so the safety box and the voice use its source) and step
+24's sub-action (which nothing re-checks, so its card is unchanged).
+
+**Safety warnings on the screen and in the voice** (lane TS, decision 2).
+The safety box, the start screen's safety notices and the spoken step warning
+hold a warning's Korean, reviewed or machine, to the same `statement_issue`.
+On the screen a checked Korean line stands beside its source, the source open
+(it used to be folded under the Korean); a line whose Korean fails shows its
+source alone. The voice reads a warning's Korean only when it passes; otherwise
+it says "이 안전 주의는 번역 확인이 안 돼서 원문을 읽어 드릴게요. 화면의 원문을 꼭
+확인해 주세요." and reads the source
+(`curated_protocol.SAFETY_SOURCE_READ_LEAD`).
 
 The workspace store still holds the knowledge-entry and asset-card tables with
 their read routes (`/api/workspace/knowledge`, `/api/workspace/assets`); no
