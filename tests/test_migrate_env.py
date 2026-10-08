@@ -47,7 +47,7 @@ def old_unprefixed(new: str) -> str:
 
 OLD_MOSS = OLD_PREFIX + "MOSS_ENABLED"
 OLD_CATALOG = OLD_PREFIX + "SAFETY_CATALOG"
-OLD_PROFILES = OLD_PREFIX + "DEV_AUTH_PROFILES"
+OLD_FACILITY = OLD_PREFIX + "FACILITY_ID"
 OLD_OCR = OLD_PREFIX + "OCR_PROVIDERS"
 OLD_UNREAD = OLD_PREFIX + "NO_LONGER_READ"
 OLD_CHAT = old_unprefixed("VOINEY_LAB_ANSWER_MODEL")
@@ -65,7 +65,7 @@ FAKE_ENV = (
     f"UNRELATED_TOOL_TOKEN=keep {SECRET}-3\n"
     f"{OLD_CATALOG}=/absolute/{SECRET}-4/catalog.sqlite\n"
     "VOINEY_LAB_USAGE_SCOPE=demo\n"
-    f"{OLD_PROFILES}='[{{\"id\": \"{SECRET}-5\"}},\n {{\"id\": \"b\"}}]'\n"
+    f"{OLD_FACILITY}='[{{\"id\": \"{SECRET}-5\"}},\n {{\"id\": \"b\"}}]'\n"
     f"{OLD_OCR}=clova\n"
     f"COHERE_API_KEY=sk-co-{SECRET}-6\n"
     f"{OLD_UNREAD}=x={SECRET}-7\n"
@@ -102,7 +102,7 @@ class CheckTests(MigrateEnvCase):
         original = self.given(FAKE_ENV)
         code, output = self.run_tool("--check")
         self.assertEqual(code, 1)
-        for old in (OLD_MOSS, OLD_CHAT, OLD_VOICE, OLD_CATALOG, OLD_PROFILES, OLD_OCR):
+        for old in (OLD_MOSS, OLD_CHAT, OLD_VOICE, OLD_CATALOG, OLD_FACILITY, OLD_OCR):
             self.assertIn(f"  {old} → {renamed(old)}\n", output)
         stays = output.split("그대로인 이름")[1].split("코드가 읽지 않는 이름")[0]
         self.assertIn("  XAI_API_KEY\n", stays)

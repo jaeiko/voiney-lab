@@ -15,18 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.runnable_fixture import runnable_fixture_assumed
+from tests.identity_support import development_principal
 from tests.protocol_vocabulary_support import build_fixture
 from tests.test_voice_pause_resume_persistence import _QueuedSocket
 from voiney_lab import experiment_protocol as domain
 import voiney_lab.server as server_module
 from voiney_lab.experiment_reports import ExperimentReportStore
-from voiney_lab.identity import Principal, Role
 from voiney_lab.server import (
     ListenerSession,
     ServerConfig,
@@ -102,14 +101,7 @@ class VoiceNotesHarness:
         self.addCleanup(tmp.cleanup)
         self.workspace_dir = Path(tmp.name) / "workspace"
         self.report_db = Path(tmp.name) / "reports.sqlite"
-        self.principal = Principal(
-            principal_id=PROFILE["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=PROFILE["organization_id"],
-            display_name=PROFILE["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        self.principal = development_principal()
         store = initialize_workspace_store(WorkspaceSettings(True, self.workspace_dir))
         store.bootstrap_principal(self.principal)
         store.bind_resource(self.principal, "protocol_catalog", PROTOCOL_ID)
@@ -120,7 +112,6 @@ class VoiceNotesHarness:
             "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "true",
             "VOINEY_LAB_EXPERIMENT_REPORT_DB": str(self.report_db),
             "VOINEY_LAB_USAGE_SCOPE": "demo",
-            "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([PROFILE]),
             "VOINEY_LAB_LLM_ROUTER_ENABLED": "false",
         }
 

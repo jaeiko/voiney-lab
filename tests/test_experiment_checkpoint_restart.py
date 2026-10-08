@@ -15,7 +15,6 @@ each exercised; the last one runs on the in-gel fixture and needs its PDF.
 from __future__ import annotations
 
 import asyncio
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,7 +25,7 @@ import pytest
 
 from voiney_lab.curated_protocol import CuratedProtocolSession
 from voiney_lab.experiment_reports import ExperimentReportSettings
-from voiney_lab.identity import AuthorizationDeniedError, Principal, Role
+from voiney_lab.identity import Principal, Role
 from voiney_lab.server import ServerConfig, app, voice_socket
 from voiney_lab.workspace_store import (
     ExperimentCheckpointUnavailableError,
@@ -37,6 +36,7 @@ from voiney_lab.workspace_store import (
 )
 
 from tests.runnable_fixture import runnable_fixture_assumed
+from tests.identity_support import development_principal
 from tests.protocol_vocabulary_support import SOURCE_PDF, build_fixture, in_gel_fixture
 from tests.test_candidate_a_websocket_integration import _ScriptedSocket
 
@@ -266,12 +266,13 @@ def test_nothing_completed_means_nothing_to_continue(tmp_path):
 def test_only_the_owner_continues_only_a_stopped_experiment_at_an_offered_checkpoint(tmp_path):
     researcher = _principal("researcher")
     colleague = _principal("colleague")
-    lab_admin = _principal("lab-admin", role=Role.LAB_ADMIN)
-    reviewer = _principal("reviewer", role=Role.REVIEWER)
+    # Lane DI (2026-10-08): one identity, so a colleague is a colleague
+    # whatever their membership row once called them.
+    colleague_two = _principal("colleague-two")
     outsider = _principal("outsider", tenant="tenant-b")
     store = _store(tmp_path)
     try:
-        for principal in (researcher, colleague, lab_admin, reviewer, outsider):
+        for principal in (researcher, colleague, colleague_two, outsider):
             store.bootstrap_principal(principal)
         stopped = _stopped_after(store, researcher, 2)
         source_id, version = stopped["session_id"], stopped["version"]
@@ -286,22 +287,16 @@ def test_only_the_owner_continues_only_a_stopped_experiment_at_an_offered_checkp
                 researcher, source_id, checkpoint_step_id="step-1",
                 expected_version=version,
             )
-        # A lab admin may write to the tenant's experiments, but continuing
-        # one is the owner's: the carried completions are theirs.
-        for other in (colleague, lab_admin, outsider):
+        # Continuing an experiment is the owner's: the carried completions
+        # are theirs. Nobody else in the tenant, nor another tenant, sees it.
+        for other in (colleague, colleague_two, outsider):
             with pytest.raises(WorkspaceNotFoundError):
                 store.restart_experiment_from_checkpoint(
                     other, source_id, checkpoint_step_id="step-3",
                     expected_version=version,
                 )
-        with pytest.raises(AuthorizationDeniedError):
-            store.restart_experiment_from_checkpoint(
-                reviewer, source_id, checkpoint_step_id="step-3",
-                expected_version=version,
-            )
-        # A reviewer may read the timeline but is not offered the owner's
-        # checkpoints.
-        assert store.experiment_timeline(reviewer, source_id)["recovery"]["checkpoints"] == []
+            with pytest.raises(WorkspaceNotFoundError):
+                store.experiment_timeline(other, source_id)
 
         open_one = store.start_experiment(
             researcher, protocol_id=PROTOCOL, protocol_revision_id=REVISION,
@@ -316,38 +311,21 @@ def test_only_the_owner_continues_only_a_stopped_experiment_at_an_offered_checkp
         store.close()
 
 
-def _profiles():
-    return [{
-        "profile_id": "researcher-a",
-        "principal_id": "principal-researcher-a",
-        "organization_id": "tenant-a",
-        "display_name": "Researcher A",
-        "roles": ["researcher"],
-    }]
-
-
 def _api_principal() -> Principal:
-    return Principal(
-        principal_id="principal-researcher-a", subject="dev:researcher-a",
-        organization_id="tenant-a", display_name="Researcher A",
-        roles=frozenset({Role.RESEARCHER}), authentication_method="development",
-    )
+    return development_principal()
 
 
 async def _post(path: str, body: dict[str, object]):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        return await client.post(
-            path, json=body, headers={"X-Voice-Dev-Profile": "researcher-a"}
-        )
+        return await client.post(path, json=body)
 
 
 def test_the_http_route_starts_the_new_session(monkeypatch, tmp_path):
     monkeypatch.setenv("VOINEY_LAB_WORKSPACE_ENABLED", "true")
     monkeypatch.setenv("VOINEY_LAB_WORKSPACE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", "demo")
-    monkeypatch.setenv("VOINEY_LAB_DEV_AUTH_PROFILES", json.dumps(_profiles()))
     for name in (
         "VOINEY_LAB_OIDC_ISSUER",
         "VOINEY_LAB_OIDC_AUDIENCE",
@@ -452,7 +430,6 @@ class CheckpointVoiceRecoveryTests(unittest.TestCase):
         return socket
 
     def test_session_start_restores_the_checkpoint_step(self) -> None:
-        profile = _profiles()[0]
         principal = _api_principal()
         steps = tuple(step.step_id for step in self.fixture.steps)
         with tempfile.TemporaryDirectory() as directory:
@@ -461,7 +438,6 @@ class CheckpointVoiceRecoveryTests(unittest.TestCase):
                 "VOINEY_LAB_WORKSPACE_ENABLED": "true",
                 "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace),
                 "VOINEY_LAB_USAGE_SCOPE": "demo",
-                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             store = _store(workspace)
             try:

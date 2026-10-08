@@ -251,9 +251,8 @@ class UvicornQueryStringFilter(logging.Filter):
     """Keep uvicorn's request lines, but only the length of each query value.
 
     uvicorn writes the full URL into its access line and its WebSocket line,
-    which would put a typed library search (``?search=``), an uploaded file
-    name (``?filename=``) or a development profile id (``?dev_profile=``) in
-    the log. A record in the shape uvicorn 0.52 emits keeps its path with each
+    which would put a typed search (``?search=``) or an uploaded file name
+    (``?filename=``) in the log. A record in the shape uvicorn 0.52 emits keeps its path with each
     value replaced by its length; any other record on these loggers loses
     every query string it carries, so a format change errs toward removal.
     """
@@ -459,10 +458,7 @@ async def commercial_identity_boundary(request:Request,call_next):
             raise IdentityConfigurationError(
                 "Operational scope requires the tenant workspace."
             )
-        principal=_identity_resolver().resolve(
-            request.headers.get("authorization"),
-            dev_profile_id=request.headers.get("x-voice-dev-profile"),
-        )
+        principal=_identity_resolver().resolve(request.headers.get("authorization"))
         store=initialize_workspace_store(settings)
         try:
             store.bootstrap_principal(principal)
@@ -2025,7 +2021,6 @@ async def get_workspace_session()->dict[str,object]:
                 "principal_id":principal.principal_id,
                 "display_name":principal.display_name,
                 "organization_id":principal.organization_id,
-                "roles":sorted(role.value for role in principal.roles),
                 "workspaces":["researcher"],
                 "authentication_method":principal.authentication_method,
             }
@@ -8279,14 +8274,7 @@ async def voice_socket(websocket:WebSocket):
                 raise IdentityConfigurationError(
                     "Operational scope requires the tenant workspace.")
             headers=getattr(websocket,"headers",{})
-            query_params=getattr(websocket,"query_params",{})
-            principal=_identity_resolver().resolve(
-                headers.get("authorization"),
-                dev_profile_id=(
-                    headers.get("x-voice-dev-profile")
-                    or query_params.get("dev_profile")
-                ),
-            )
+            principal=_identity_resolver().resolve(headers.get("authorization"))
             workspace=initialize_workspace_store(settings)
             try:
                 workspace.bootstrap_principal(principal)

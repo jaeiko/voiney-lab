@@ -16,10 +16,7 @@ from typing import Any, Iterable
 
 from voiney_lab.identity import (
     AuthorizationDeniedError,
-    Permission,
     Principal,
-    Role,
-    require_permission,
     require_same_tenant,
 )
 
@@ -916,31 +913,16 @@ class WorkspaceStore:
             WHERE organization_id=? AND principal_id=? AND active=1""",
             (principal.organization_id, principal.principal_id),
         ).fetchall()
-        stored = frozenset(Role(row[0]) for row in rows)
-        if not principal.roles.intersection(stored):
+        # Lane DI (2026-10-08): an active membership row is the whole check;
+        # its role text is history, not a permission.
+        if not rows:
             raise AuthorizationDeniedError("No active tenant membership exists.")
 
     def effective_principal(self, principal: Principal) -> Principal:
-        """Intersect verified claims with active, tenant-managed memberships."""
+        """The principal once an active, tenant-managed membership is confirmed."""
 
-        rows = self._connection.execute(
-            """SELECT role FROM memberships
-            WHERE organization_id=? AND principal_id=? AND active=1""",
-            (principal.organization_id, principal.principal_id),
-        ).fetchall()
-        effective_roles = principal.roles.intersection(
-            Role(row["role"]) for row in rows
-        )
-        if not effective_roles:
-            raise AuthorizationDeniedError("No active tenant membership exists.")
-        return Principal(
-            principal_id=principal.principal_id,
-            subject=principal.subject,
-            organization_id=principal.organization_id,
-            display_name=principal.display_name,
-            roles=frozenset(effective_roles),
-            authentication_method=principal.authentication_method,
-        )
+        self.verify_membership(principal)
+        return principal
 
     def bind_resource(
         self,
@@ -998,9 +980,7 @@ class WorkspaceStore:
     def _experiment_row(
         self, principal: Principal, session_id: str, *, write: bool = False
     ) -> sqlite3.Row:
-        require_permission(
-            principal, Permission.REPORT_WRITE if write else Permission.REPORT_READ
-        )
+        del write  # every member of the tenant may read and write their own experiments
         self.verify_membership(principal)
         session_id = _identifier(session_id, "Experiment session identifier")
         row = self._connection.execute(
@@ -1008,12 +988,7 @@ class WorkspaceStore:
         ).fetchone()
         if row is None or row["organization_id"] != principal.organization_id:
             raise WorkspaceNotFoundError("Experiment session is not available.")
-        elevated = bool(
-            principal.roles.intersection(
-                {Role.REVIEWER, Role.LAB_ADMIN, Role.ORGANIZATION_ADMIN}
-            )
-        )
-        if not elevated and row["owner_principal_id"] != principal.principal_id:
+        if row["owner_principal_id"] != principal.principal_id:
             raise WorkspaceNotFoundError("Experiment session is not available.")
         return row
 
@@ -1093,7 +1068,6 @@ class WorkspaceStore:
     ) -> dict[str, object]:
         """Create one durable experiment bound to an exact protocol revision."""
 
-        require_permission(principal, Permission.REPORT_WRITE)
         self.verify_membership(principal)
         selected_id = session_id or f"experiment-{secrets.token_hex(16)}"
         selected_id = _identifier(selected_id, "Experiment session identifier")
@@ -1211,15 +1185,11 @@ class WorkspaceStore:
     def list_experiments(
         self, principal: Principal, *, active_only: bool = False
     ) -> tuple[dict[str, object], ...]:
-        require_permission(principal, Permission.REPORT_READ)
         self.verify_membership(principal)
         clauses = ["organization_id=?"]
         parameters: list[object] = [principal.organization_id]
-        if not principal.roles.intersection(
-            {Role.REVIEWER, Role.LAB_ADMIN, Role.ORGANIZATION_ADMIN}
-        ):
-            clauses.append("owner_principal_id=?")
-            parameters.append(principal.principal_id)
+        clauses.append("owner_principal_id=?")
+        parameters.append(principal.principal_id)
         if active_only:
             clauses.append("status IN ('ready','in_progress','paused','blocked')")
         rows = self._connection.execute(
@@ -1955,7 +1925,6 @@ class WorkspaceStore:
     ) -> dict[str, object]:
         """Return tenant-scoped evidence metadata including its server-only path."""
 
-        require_permission(principal, Permission.REPORT_READ)
         self._experiment_row(principal, session_id)
         selected_id = _identifier(evidence_id, "Evidence identifier")
         row = self._connection.execute(
@@ -2516,7 +2485,6 @@ class WorkspaceStore:
         provenance: Mapping[str, object],
         revision_id: str | None = None,
     ) -> str:
-        require_permission(principal, Permission.KNOWLEDGE_WRITE)
         if kind not in _KNOWLEDGE_KINDS or kind == "approved_protocol_fact":
             raise WorkspaceError("Knowledge kind requires reviewer promotion.")
         if revision_id is not None:
@@ -2541,7 +2509,6 @@ class WorkspaceStore:
     def knowledge_entries(
         self, principal: Principal
     ) -> tuple[dict[str, object], ...]:
-        require_permission(principal, Permission.PROTOCOL_READ)
         rows = self._connection.execute(
             """SELECT k.*,
             CASE WHEN EXISTS(SELECT 1 FROM knowledge_promotion_events p
@@ -2571,7 +2538,6 @@ class WorkspaceStore:
         barcode: str | None = None,
         sds_url: str | None = None,
     ) -> str:
-        require_permission(principal, Permission.ASSET_MANAGE)
         if asset_kind not in {"reagent", "equipment"}:
             raise WorkspaceError("Asset kind is invalid.")
         if review_status not in {"draft", "reviewed"}:
@@ -2601,7 +2567,6 @@ class WorkspaceStore:
         return version_id
 
     def asset_cards(self, principal: Principal) -> tuple[dict[str, object], ...]:
-        require_permission(principal, Permission.ASSET_READ)
         rows = self._connection.execute(
             """SELECT a.* FROM asset_card_versions a
             WHERE a.organization_id=? AND a.created_at=(
@@ -2620,7 +2585,6 @@ class WorkspaceStore:
     def asset_card_history(
         self, principal: Principal, asset_id: str
     ) -> tuple[dict[str, object], ...]:
-        require_permission(principal, Permission.ASSET_READ)
         rows = self._connection.execute(
             """SELECT * FROM asset_card_versions
             WHERE organization_id=? AND asset_id=? ORDER BY created_at,version_id""",

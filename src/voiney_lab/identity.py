@@ -1,8 +1,7 @@
-"""OIDC-compatible identity resolution and centralized tenant RBAC."""
+"""OIDC-compatible identity resolution for the one identity the MVP knows: the experimenter."""
 
 from __future__ import annotations
 
-import json
 import hashlib
 import os
 import re
@@ -35,65 +34,15 @@ class IdentityConfigurationError(IdentityError):
 
 
 class Role(str, Enum):
+    """The one identity the MVP knows: the experimenter at the bench.
+
+    Lane DI (2026-10-08, decision 4): the reviewer and lab-admin roles went
+    with their screens. The value keeps the memberships table's vocabulary
+    ('researcher'), so rows written before this change still count as a
+    membership; the stored role text is no longer read as a permission.
+    """
+
     RESEARCHER = "researcher"
-    REVIEWER = "reviewer"
-    LAB_ADMIN = "lab_admin"
-    ORGANIZATION_ADMIN = "organization_admin"
-
-
-class Permission(str, Enum):
-    PROTOCOL_READ = "protocol.read"
-    PROTOCOL_IMPORT = "protocol.import"
-    PROTOCOL_EXECUTE = "protocol.execute"
-    PROTOCOL_REVIEW = "protocol.review"
-    PROTOCOL_APPROVE = "protocol.approve"
-    PROTOCOL_REVOKE = "protocol.revoke"
-    REPORT_READ = "report.read"
-    REPORT_WRITE = "report.write"
-    CONNECTOR_READ = "connector.read"
-    CONNECTOR_MANAGE = "connector.manage"
-    ELN_WRITEBACK = "eln.writeback"
-    KNOWLEDGE_WRITE = "knowledge.write"
-    KNOWLEDGE_PROMOTE = "knowledge.promote"
-    ASSET_READ = "asset.read"
-    ASSET_MANAGE = "asset.manage"
-    ANALYTICS_READ = "analytics.read"
-    MEMBERSHIP_MANAGE = "membership.manage"
-    RETENTION_MANAGE = "retention.manage"
-
-
-_ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
-    Role.RESEARCHER: frozenset(
-        {
-            Permission.PROTOCOL_READ,
-            Permission.PROTOCOL_IMPORT,
-            Permission.PROTOCOL_EXECUTE,
-            Permission.REPORT_READ,
-            Permission.REPORT_WRITE,
-            Permission.CONNECTOR_READ,
-            Permission.ELN_WRITEBACK,
-            Permission.KNOWLEDGE_WRITE,
-            Permission.ASSET_READ,
-        }
-    ),
-    Role.REVIEWER: frozenset(
-        {
-            Permission.PROTOCOL_READ,
-            Permission.PROTOCOL_IMPORT,
-            Permission.PROTOCOL_EXECUTE,
-            Permission.PROTOCOL_REVIEW,
-            Permission.PROTOCOL_APPROVE,
-            Permission.PROTOCOL_REVOKE,
-            Permission.REPORT_READ,
-            Permission.CONNECTOR_READ,
-            Permission.KNOWLEDGE_WRITE,
-            Permission.KNOWLEDGE_PROMOTE,
-            Permission.ASSET_READ,
-        }
-    ),
-    Role.LAB_ADMIN: frozenset(Permission),
-    Role.ORGANIZATION_ADMIN: frozenset(Permission),
-}
 
 
 @dataclass(frozen=True)
@@ -120,25 +69,6 @@ class Principal:
             raise IdentityError("Principal has no active role.")
 
 
-def require_permission(principal: Principal, permission: Permission) -> None:
-    if not any(permission in _ROLE_PERMISSIONS[role] for role in principal.roles):
-        raise AuthorizationDeniedError("The principal lacks the required role.")
-
-
-def permissions_for_roles(roles: frozenset[Role] | tuple[Role, ...]) -> tuple[str, ...]:
-    """Return the canonical effective permissions for trusted role values."""
-
-    return tuple(
-        sorted(
-            {
-                permission.value
-                for role in roles
-                for permission in _ROLE_PERMISSIONS[role]
-            }
-        )
-    )
-
-
 def require_same_tenant(principal: Principal, resource_tenant_id: str) -> None:
     if principal.organization_id != resource_tenant_id:
         raise AuthorizationDeniedError("The resource is not available.")
@@ -150,7 +80,6 @@ class OidcSettings:
     audience: str
     jwks_url: str
     tenant_claim: str = "organization_id"
-    roles_claim: str = "roles"
     display_name_claim: str = "name"
 
     @classmethod
@@ -179,10 +108,6 @@ class OidcSettings:
                 "VOINEY_LAB_OIDC_TENANT_CLAIM", "organization_id"
             ).strip()
             or "organization_id",
-            roles_claim=env.get(
-                "VOINEY_LAB_OIDC_ROLES_CLAIM", "roles"
-            ).strip()
-            or "roles",
             display_name_claim=env.get(
                 "VOINEY_LAB_OIDC_NAME_CLAIM", "name"
             ).strip()
@@ -235,20 +160,11 @@ def principal_from_oidc_claims(
 ) -> Principal:
     subject = claims.get("sub")
     tenant = claims.get(settings.tenant_claim)
-    raw_roles = claims.get(settings.roles_claim)
     if not isinstance(subject, str) or not isinstance(tenant, str):
         raise AuthenticationRequiredError("Required identity claims are absent.")
-    if isinstance(raw_roles, str):
-        role_values = (raw_roles,)
-    elif isinstance(raw_roles, list) and all(
-        isinstance(value, str) for value in raw_roles
-    ):
-        role_values = tuple(raw_roles)
-    else:
-        raise AuthorizationDeniedError("No recognized tenant role was supplied.")
-    roles = frozenset(Role(value) for value in role_values if value in Role._value2member_map_)
-    if not roles:
-        raise AuthorizationDeniedError("No recognized tenant role was supplied.")
+    # Lane DI (2026-10-08): every authenticated person is the experimenter;
+    # a roles claim, if the issuer sends one, is not read.
+    roles = frozenset({Role.RESEARCHER})
     display = claims.get(settings.display_name_claim)
     if len(subject) > 512:
         raise AuthenticationRequiredError("OIDC subject is too long.")
@@ -297,50 +213,28 @@ class DevIdentityProvider:
     def from_environment(
         cls, environment: Mapping[str, str] | None = None
     ) -> DevIdentityProvider:
-        env = os.environ if environment is None else environment
-        raw = env.get("VOINEY_LAB_DEV_AUTH_PROFILES", "").strip()
-        if not raw:
-            profile = DevIdentityProfile(
-                profile_id="local-admin",
-                principal_id="dev-local-admin",
-                organization_id="tenant-local-demo",
-                display_name="Local Lab Admin",
-                roles=frozenset({Role.LAB_ADMIN}),
-            )
-            return cls({profile.profile_id: profile})
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise IdentityConfigurationError("Development identity profiles are invalid.") from exc
-        if not isinstance(payload, list) or len(payload) > 20:
-            raise IdentityConfigurationError("Development identity profiles are invalid.")
-        profiles: dict[str, DevIdentityProfile] = {}
-        try:
-            for item in payload:
-                if not isinstance(item, dict):
-                    raise ValueError
-                profile = DevIdentityProfile(
-                    profile_id=str(item["profile_id"]),
-                    principal_id=str(item["principal_id"]),
-                    organization_id=str(item["organization_id"]),
-                    display_name=str(item["display_name"]),
-                    roles=frozenset(Role(value) for value in item["roles"]),
-                )
-                if profile.profile_id in profiles:
-                    raise ValueError
-                profiles[profile.profile_id] = profile
-        except (KeyError, TypeError, ValueError) as exc:
-            raise IdentityConfigurationError("Development identity profiles are invalid.") from exc
-        return cls(profiles)
+        """The one development identity (lane DI, 2026-10-08, decision 4).
 
-    def authenticate(self, profile_id: str | None = None) -> Principal:
-        selected = profile_id or "local-admin"
-        try:
-            return self._profiles[selected].principal()
-        except KeyError as exc:
-            raise AuthenticationRequiredError(
-                "Development identity profile is unavailable."
-            ) from exc
+        Until a login exists, every request in a non-operational scope is
+        the experimenter. The ids keep their earlier values so experiments
+        recorded under them stay the same person's; only the shown name
+        changed. The environment is accepted and ignored: a client-chosen
+        profile (header or query string) used to pick the identity, and
+        that path is gone.
+        """
+
+        del environment
+        profile = DevIdentityProfile(
+            profile_id="local-admin",
+            principal_id="dev-local-admin",
+            organization_id="tenant-local-demo",
+            display_name="실험자 (개발 로그인)",
+            roles=frozenset({Role.RESEARCHER}),
+        )
+        return cls({profile.profile_id: profile})
+
+    def authenticate(self) -> Principal:
+        return next(iter(self._profiles.values())).principal()
 
 
 class IdentityResolver:
@@ -359,12 +253,7 @@ class IdentityResolver:
         if usage_scope == "operational" and oidc_settings is None:
             raise IdentityConfigurationError("Operational scope requires OIDC.")
 
-    def resolve(
-        self,
-        authorization: str | None,
-        *,
-        dev_profile_id: str | None = None,
-    ) -> Principal:
+    def resolve(self, authorization: str | None) -> Principal:
         if authorization:
             scheme, separator, token = authorization.partition(" ")
             if separator != " " or scheme.casefold() != "bearer" or not token:
@@ -379,4 +268,4 @@ class IdentityResolver:
             raise AuthenticationRequiredError("Authentication is required.")
         if self.dev_provider is None:
             raise AuthenticationRequiredError("Development authentication is disabled.")
-        return self.dev_provider.authenticate(dev_profile_id)
+        return self.dev_provider.authenticate()

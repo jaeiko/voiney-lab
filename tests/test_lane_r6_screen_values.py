@@ -76,8 +76,7 @@ class ExperimentListNameTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             store = initialize_workspace_store(WorkspaceSettings(True, Path(temp)))
             first, second = _principal("a"), _principal("b")
-            reviewer = _principal("c", Role.REVIEWER)
-            for principal in (first, second, reviewer):
+            for principal in (first, second):
                 store.bootstrap_principal(principal)
             store.start_experiment(
                 first, session_id="experiment-1", protocol_id="in-gel",
@@ -85,8 +84,11 @@ class ExperimentListNameTests(unittest.TestCase):
             store.start_experiment(
                 second, session_id="experiment-2", protocol_id="in-gel",
                 protocol_revision_id="rev-1")
+            # Lane DI (2026-10-08): each person lists their own experiments.
             items = {
-                item["session_id"]: item for item in store.list_experiments(reviewer)
+                item["session_id"]: item
+                for owner in (first, second)
+                for item in store.list_experiments(owner)
             }
             store.close()
         self.assertEqual(items["experiment-1"]["day_sequence"], 1)

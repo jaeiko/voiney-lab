@@ -81,9 +81,8 @@ each one before the session:
   Candidate A development fixture loads.
 - `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
   transcripts and audio are written to disk.
-- `VOINEY_LAB_DEV_AUTH_PROFILES` lists the participants' profiles.
-  Under `reference_only` everyone is a development identity, and with no
-  profiles everyone is the `local-admin` lab administrator.
+- Under a non-operational scope everyone is the one development identity,
+  the experimenter (lane DI, 2026-10-08); a login comes before the pilot.
 - The safety card filters facility SOPs by `VOINEY_LAB_FACILITY_ID`
   only when the SOP itself is in the `operational` scope, so a
   `reference_only` catalog filters none: put only this laboratory's documents

@@ -549,19 +549,19 @@ def test_researchers_cannot_enumerate_other_users_or_tenants(tmp_path):
     owner = _principal("owner", "tenant-a")
     colleague = _principal("colleague", "tenant-a")
     outsider = _principal("outsider", "tenant-b")
-    reviewer = _principal("reviewer", "tenant-a", Role.REVIEWER)
     store = _store(tmp_path)
     try:
-        for principal in (owner, colleague, outsider, reviewer):
+        for principal in (owner, colleague, outsider):
             store.bootstrap_principal(principal)
         session = store.start_experiment(
             owner,
             protocol_id="protocol-a",
             protocol_revision_id="revision-a",
         )
+        # Lane DI (2026-10-08): no role sees another person's experiments;
+        # an experiment is listed for its owner only.
         assert len(store.list_experiments(owner)) == 1
         assert store.list_experiments(colleague) == ()
-        assert len(store.list_experiments(reviewer)) == 1
         with pytest.raises(WorkspaceNotFoundError):
             store.get_experiment(colleague, session["session_id"])
         with pytest.raises(WorkspaceNotFoundError):

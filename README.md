@@ -1452,13 +1452,12 @@ VOINEY_LAB_OIDC_ISSUER=https://id.example.test/
 VOINEY_LAB_OIDC_AUDIENCE=voice-workflow-agent
 VOINEY_LAB_OIDC_JWKS_URL=https://id.example.test/.well-known/jwks.json
 VOINEY_LAB_OIDC_TENANT_CLAIM=organization_id
-VOINEY_LAB_OIDC_ROLES_CLAIM=roles
 VOINEY_LAB_OIDC_NAME_CLAIM=name
 ```
 
-For a non-operational local demo, omit OIDC values and optionally set a JSON
-allowlist in `VOINEY_LAB_DEV_AUTH_PROFILES`. If omitted, one local
-lab-admin profile is created. Do not enable development identities in operational
+For a non-operational local demo, omit the OIDC values: every request is then
+the one development identity, the experimenter (lane DI, 2026-10-08; a login
+comes before the pilot). Do not enable development identities in operational
 scope.
 
 ## API surface

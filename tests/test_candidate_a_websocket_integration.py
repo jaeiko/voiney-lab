@@ -29,7 +29,7 @@ from voiney_lab.server import (
 )
 import voiney_lab.server as server_module
 from tests.runnable_fixture import runnable_fixture_assumed
-from voiney_lab.identity import Principal, Role
+from tests.identity_support import development_principal
 from voiney_lab.workspace_store import (
     WorkspaceConflictError,
     WorkspaceSettings,
@@ -271,21 +271,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             async def receive(self):
                 return next(self.messages)
 
-        profile = {
-            "profile_id": "researcher-a",
-            "principal_id": "principal-researcher-a",
-            "organization_id": "tenant-a",
-            "display_name": "Researcher A",
-            "roles": ["researcher"],
-        }
-        principal = Principal(
-            principal_id=profile["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=profile["organization_id"],
-            display_name=profile["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        principal = development_principal()
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir) / "workspace"
             store = initialize_workspace_store(
@@ -298,7 +284,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "VOINEY_LAB_WORKSPACE_ENABLED": "true",
                 "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
                 "VOINEY_LAB_USAGE_SCOPE": "demo",
-                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             initial = {
                 "type": "session.start",
@@ -392,21 +377,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             async def receive(self):
                 return next(self.messages)
 
-        profile = {
-            "profile_id": "researcher-a",
-            "principal_id": "principal-researcher-a",
-            "organization_id": "tenant-a",
-            "display_name": "Researcher A",
-            "roles": ["researcher"],
-        }
-        principal = Principal(
-            principal_id=profile["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=profile["organization_id"],
-            display_name=profile["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        principal = development_principal()
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir) / "workspace"
             store = initialize_workspace_store(
@@ -420,7 +391,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "VOINEY_LAB_WORKSPACE_ENABLED": "true",
                 "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
                 "VOINEY_LAB_USAGE_SCOPE": "demo",
-                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             patches = (
                 patch(
@@ -660,21 +630,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
     # only when the user picked an open experiment) -----------------------
 
     def _bootstrap_tenant(self, workspace_dir):
-        profile = {
-            "profile_id": "researcher-a",
-            "principal_id": "principal-researcher-a",
-            "organization_id": "tenant-a",
-            "display_name": "Researcher A",
-            "roles": ["researcher"],
-        }
-        principal = Principal(
-            principal_id=profile["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=profile["organization_id"],
-            display_name=profile["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        principal = development_principal()
         store = initialize_workspace_store(WorkspaceSettings(True, workspace_dir))
         store.bootstrap_principal(principal)
         store.close()
@@ -682,7 +638,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             "VOINEY_LAB_WORKSPACE_ENABLED": "true",
             "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
             "VOINEY_LAB_USAGE_SCOPE": "demo",
-            "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
         }
         return environment, principal
 

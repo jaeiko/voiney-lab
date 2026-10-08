@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 
 import httpx
 
-from voiney_lab.identity import Principal, Role
+from voiney_lab.identity import AuthenticationRequiredError, Principal, Role
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.server import app
+from voiney_lab import server as server_module
 from voiney_lab.workspace_store import (
     WorkspaceSettings,
     initialize_workspace_store,
@@ -16,34 +16,38 @@ from voiney_lab.workspace_store import (
 
 
 def _profiles():
+    """Several identities for the tenant-scoping tests.
+
+    Lane DI (2026-10-08): the server resolves one development identity and
+    reads no client-chosen profile, so these tests install a fake resolver
+    (``_configure``) and name the identity per request (``_request``).
+    The profile ids are historical; every identity is an experimenter.
+    """
+
     return [
         {
             "profile_id": "admin-a",
             "principal_id": "principal-admin-a",
             "organization_id": "tenant-a",
             "display_name": "Admin A",
-            "roles": ["lab_admin"],
         },
         {
             "profile_id": "reviewer-a",
             "principal_id": "principal-reviewer-a",
             "organization_id": "tenant-a",
             "display_name": "Reviewer A",
-            "roles": ["reviewer"],
         },
         {
             "profile_id": "researcher-a",
             "principal_id": "principal-researcher-a",
             "organization_id": "tenant-a",
             "display_name": "Researcher A",
-            "roles": ["researcher"],
         },
         {
             "profile_id": "reviewer-b",
             "principal_id": "principal-reviewer-b",
             "organization_id": "tenant-b",
             "display_name": "Reviewer B",
-            "roles": ["reviewer"],
         },
     ]
 
@@ -55,18 +59,27 @@ def _principal(profile_id: str) -> Principal:
         subject=f"dev:{profile_id}",
         organization_id=profile["organization_id"],
         display_name=profile["display_name"],
-        roles=frozenset(Role(value) for value in profile["roles"]),
+        roles=frozenset({Role.RESEARCHER}),
         authentication_method="development",
     )
+
+
+_CURRENT_PROFILE: list[str | None] = [None]
+
+
+class _FakeResolver:
+    def resolve(self, authorization):
+        profile = _CURRENT_PROFILE[0]
+        if profile is None or not any(item["profile_id"] == profile for item in _profiles()):
+            raise AuthenticationRequiredError("The test named no configured identity.")
+        return _principal(profile)
 
 
 def _configure(monkeypatch, tmp_path, *, scope="demo"):
     monkeypatch.setenv("VOINEY_LAB_WORKSPACE_ENABLED", "true")
     monkeypatch.setenv("VOINEY_LAB_WORKSPACE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", scope)
-    monkeypatch.setenv(
-        "VOINEY_LAB_DEV_AUTH_PROFILES", json.dumps(_profiles())
-    )
+    monkeypatch.setattr(server_module, "_identity_resolver", lambda: _FakeResolver())
     for name in (
         "VOINEY_LAB_OIDC_ISSUER",
         "VOINEY_LAB_OIDC_AUDIENCE",
@@ -79,8 +92,7 @@ async def _request(
     method, path, *, profile=None, json_body=None, content=None, headers=None
 ):
     request_headers = dict(headers or {})
-    if profile:
-        request_headers["X-Voice-Dev-Profile"] = profile
+    _CURRENT_PROFILE[0] = profile
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -93,7 +105,7 @@ async def _request(
         )
 
 
-def test_workspace_session_routes_and_server_allowlisted_dev_identity(monkeypatch, tmp_path):
+def test_workspace_session_routes_and_unknown_identities_are_refused(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     # Lane DI (2026-10-08): the bench is the one workspace, whatever the
     # profile's roles say; the reviewer and admin screens are gone.

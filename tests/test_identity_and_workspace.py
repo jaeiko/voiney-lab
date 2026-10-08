@@ -4,16 +4,13 @@ import pytest
 
 from voiney_lab.identity import (
     AuthenticationRequiredError,
-    AuthorizationDeniedError,
     DevIdentityProvider,
     IdentityConfigurationError,
     IdentityResolver,
     OidcSettings,
-    Permission,
     Principal,
     Role,
     principal_from_oidc_claims,
-    require_permission,
 )
 from voiney_lab.workspace_store import (
     WorkspaceError,
@@ -49,19 +46,7 @@ def workspace(tmp_path):
         store.close()
 
 
-def test_rbac_permissions_are_centralized_and_default_deny():
-    researcher = _principal("researcher", "tenant-a", Role.RESEARCHER)
-    reviewer = _principal("reviewer", "tenant-a", Role.REVIEWER)
-
-    require_permission(researcher, Permission.PROTOCOL_EXECUTE)
-    require_permission(reviewer, Permission.PROTOCOL_APPROVE)
-    with pytest.raises(AuthorizationDeniedError):
-        require_permission(researcher, Permission.PROTOCOL_APPROVE)
-    with pytest.raises(AuthorizationDeniedError):
-        require_permission(reviewer, Permission.CONNECTOR_MANAGE)
-
-
-def test_operational_identity_requires_oidc_and_dev_profiles_are_allowlisted():
+def test_operational_identity_requires_oidc_and_the_dev_identity_is_the_experimenter():
     with pytest.raises(IdentityConfigurationError):
         IdentityResolver(usage_scope="operational", oidc_settings=None)
 
@@ -70,9 +55,15 @@ def test_operational_identity_requires_oidc_and_dev_profiles_are_allowlisted():
         oidc_settings=None,
         dev_provider=DevIdentityProvider.from_environment({}),
     )
-    assert resolver.resolve(None).principal_id == "dev-local-admin"
+    # Lane DI (2026-10-08): one development identity, chosen by nobody.
+    principal = resolver.resolve(None)
+    assert principal.principal_id == "dev-local-admin"
+    assert principal.roles == frozenset({Role.RESEARCHER})
+    assert principal.authentication_method == "development"
     with pytest.raises(AuthenticationRequiredError):
-        resolver.resolve(None, dev_profile_id="client-invented-admin")
+        IdentityResolver(
+            usage_scope="development", oidc_settings=None, dev_provider=None
+        ).resolve(None)
 
 
 def test_oidc_claims_accept_opaque_subject_but_hash_local_identifier():
@@ -112,8 +103,8 @@ def test_oidc_claims_accept_opaque_subject_but_hash_local_identifier():
 
 
 def test_cross_tenant_ids_are_non_enumerable_across_sensitive_resources(workspace):
-    tenant_a = _principal("tenant-a-admin", "tenant-a", Role.LAB_ADMIN)
-    tenant_b = _principal("tenant-b-admin", "tenant-b", Role.LAB_ADMIN)
+    tenant_a = _principal("tenant-a-admin", "tenant-a", Role.RESEARCHER)
+    tenant_b = _principal("tenant-b-admin", "tenant-b", Role.RESEARCHER)
     workspace.bootstrap_principal(tenant_a)
     workspace.bootstrap_principal(tenant_b)
     workspace.bind_resource(tenant_a, "report", "report-a")
@@ -148,7 +139,7 @@ def test_workspace_settings_require_explicit_absolute_storage(tmp_path):
 
 
 def test_asset_location_cards_are_versioned_reviewable_and_tenant_private(workspace):
-    admin = _principal("admin", "tenant-a", Role.LAB_ADMIN)
+    admin = _principal("admin", "tenant-a", Role.RESEARCHER)
     researcher = _principal("researcher", "tenant-a", Role.RESEARCHER)
     outsider = _principal("outsider", "tenant-b", Role.RESEARCHER)
     for principal in (admin, researcher, outsider):
