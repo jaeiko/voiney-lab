@@ -1187,6 +1187,18 @@ class ReportReturn:
     key: str = ""
 
 
+@dataclass(frozen=True)
+class ReportRevert:
+    """A confirmed revert (lane CF's step_reverted event): the completions it took back."""
+
+    from_label: str
+    to_label: str
+    reverted_labels: tuple[str, ...]
+    in_repeat: tuple[str, str] | None  # the repeat's first and last step, when inside one
+    at: str  # local HH:MM
+    key: str = ""
+
+
 #: Lane CB: where a value the run acted on came from, in the report's words.
 VALUE_SOURCE_WORDS = {"source": "원문", "operator": "사람이 답함", "lab_default": "연구실 기본값"}
 
@@ -1292,6 +1304,7 @@ class ReportFacts:
     #: uses (decision 4).
     item_step_texts: tuple[tuple[str, str], ...] = ()
     returns: tuple[ReportReturn, ...] = ()
+    reverts: tuple[ReportRevert, ...] = ()
     #: Lane N, decision 3: the values the report holds and whether each was
     #: confirmed; and the texts of those not confirmed, which model prose may
     #: not state.
@@ -1727,6 +1740,8 @@ def build_report_facts(
     skip: tuple[str, list[str], str] | None = None
     early_keys: dict[str, str] = {}
     returns: list[ReportReturn] = []
+    # Lane CF, decision 3: reverts.
+    reverts: list[ReportRevert] = []
     # Lane CB, decision 5.
     branch_answers: list[ReportBranchAnswer] = []
     repetitions: list[ReportRepetition] = []
@@ -1841,6 +1856,16 @@ def build_report_facts(
                 from_label=str(record.get("from_step") or ""), to_label=str(record.get("to_step") or label),
                 round=whole_number(record.get("round")), at=at.strftime("%H:%M") if at else "",
                 key=str(event.get("event_key") or ""),
+            ))
+        elif kind == "step_reverted":
+            record = step_record(payload)
+            span = record.get("in_repeat") if isinstance(record.get("in_repeat"), Mapping) else None
+            pair = tuple(str(item) for item in (span or {}).get("repeated_step_labels") or ())
+            reverts.append(ReportRevert(
+                from_label=str(record.get("from_step") or ""), to_label=str(record.get("to_step") or label),
+                reverted_labels=tuple(str(item) for item in record.get("reverted_step_labels") or ()),
+                in_repeat=(pair[0], pair[-1]) if pair else None,
+                at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
             ))
         elif kind == "branch_answered":
             record = step_record(payload)
@@ -1995,6 +2020,16 @@ def build_report_facts(
         round_words = f"{back.round}회차(말로 확인한 돌아가기 기준)" if back.round else "회차 기록 없음"
         deviations.append(point(f"{back.from_label}단계에서 {back.to_label}단계로 돌아갔다 — {round_words}"
                                 + (f", {back.at}." if back.at else "."), back.key))
+    for back in reverts:
+        # Lane CF, decision 3: the completions taken back stay in the record.
+        labels = back.reverted_labels
+        span = labels[0] if len(labels) == 1 else f"{labels[0]}~{labels[-1]}" if labels else ""
+        taken = f"{span}단계 완료 취소(처음 완료 기록은 남김)" if labels else "완료 취소 없음"
+        where = (f"반복 구간 {back.in_repeat[0]}~{back.in_repeat[1]}단계 안"
+                 if back.in_repeat else "반복 구간 밖")
+        deviations.append(point(
+            f"{back.from_label}단계에서 {back.to_label}단계로 되돌아갔다 — {taken}, {where}"
+            + (f", {back.at}." if back.at else "."), back.key))
     for label, record, key, next_label in declined_rounds:
         # Lane CB, decision 3: the rounds the source (or the person) asked
         # for and the person stopped short of; the round by confirmed returns.
@@ -2145,7 +2180,7 @@ def build_report_facts(
         purpose_from_pdf=purpose, keywords=keywords, sections=tuple(sections),
         materials=materials, equipment=equipment, deviations=tuple(deviations),
         confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
-        zone=zone, items=items, returns=tuple(returns),
+        zone=zone, items=items, returns=tuple(returns), reverts=tuple(reverts),
         review=tuple(review) if review_offered else (),
         unconfirmed_texts=tuple(dict.fromkeys(unconfirmed_texts)),
         branch_answers=tuple(branch_answers), repetitions=tuple(repetitions),

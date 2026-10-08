@@ -2826,6 +2826,12 @@ FRONT_RULES: dict[str, str] = {
     "experimenter_setting": "'확인 질문 켜 줘', '조용히 모드', '되읽기 모드로 해 줘': "
                             "the experimenter's way of confirming values changes; "
                             "no workflow state does (lane CF, decision 1)",
+    "step_revert": "'이전 단계로 돌아가', '방금 완료 취소', 'N단계 완료 취소해 줘', "
+                   "and 'N단계로 돌아가' to an earlier step that is not a return "
+                   "within the repeat stated here: asked once, 'N단계 완료를 "
+                   "취소하고 N단계로 돌아갈까요?'; a yes goes back and the revert "
+                   "is recorded beside the completions, which stay (lane CF, "
+                   "decision 3)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -3695,6 +3701,42 @@ def decimal_problem(content: str) -> bool:
     return bool(_TWO_POINTS.search(content) and _ANY_UNIT.search(content))
 
 
+# Decision 3: going back by voice -- "이전 단계로 돌아가", "방금 완료 취소",
+# "3단계 완료 취소해 줘". "N단계로 돌아가" is lane R7's request.
+_REVERT_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래요?))?"
+_PREVIOUS_STEP = re.compile(
+    r"^(?:(?:그럼|그러면|자|아|그냥)\s+)*(?:이전|전|앞|바로\s*전|직전|바로\s*앞)\s*단계로\s*(?:다시\s*)?"
+    rf"(?:되?돌아\s*(?:가(?:자|요)?{_REVERT_POLITE}|갈게요?|갈래요?)|가(?:자|요)?{_REVERT_POLITE}"
+    rf"|이동(?:해)?{_REVERT_POLITE})$"
+)
+_UNDO_COMPLETION = re.compile(
+    r"^(?:(?:그럼|자|아)\s+)*(?:(?P<number>[1-9][0-9]?)\s*단계\s*|(?:방금|마지막|아까)\s*)?"
+    r"(?:완료(?:한\s*(?:거|것|단계))?(?:를|을)?\s*)취소(?:해|하자|할게|할래)?"
+    rf"{_REVERT_POLITE}$"
+)
+
+
+@dataclass(frozen=True)
+class StepRevertRequest:
+    """A revert asked for: "previous" or "undo_completion", with a step named or not."""
+
+    kind: str
+    number: int | None
+
+
+def step_revert_request(transcript: str) -> StepRevertRequest | None:
+    said = " ".join(transcript.split()).strip(" .!。")
+    if not said or "?" in said or "？" in said:
+        return None
+    if _PREVIOUS_STEP.fullmatch(said):
+        return StepRevertRequest("previous", None)
+    match = _UNDO_COMPLETION.fullmatch(said)
+    if match is not None:
+        number = match.group("number")
+        return StepRevertRequest("undo_completion", int(number) if number else None)
+    return None
+
+
 # Lane R7, decision 1: something spilled, was knocked over or overflowed --
 # "흘렸어", "엎질렀어", "쏟았어", "넘쳤어" -- is a problem at the bench, whether or
 # not the words say what it was ("튜브를 흘렸어" was read as a question about
@@ -4354,6 +4396,11 @@ _STEP_MOVE_AFFIRMATIVE: dict[str, re.Pattern[str]] = {
     "start_at_step": re.compile(
         r"(?:시작(?:해|해줘|해요|할게요?|하자)|건너뛰(?:어|어줘|어요|자)"
         r"|그렇게\s*해(?:줘|요)?|해줘)"
+    ),
+    # Lane CF, decision 3: "응 돌아가", "취소해 줘".
+    "step_revert": re.compile(
+        r"(?:되?돌아\s*(?:가(?:자|요|\s*줘)?|갈게요?)|취소(?:해|해줘|해요|하자)?"
+        r"|그렇게\s*해(?:줘|요)?|해줘|가자)"
     ),
 }
 
@@ -9791,6 +9838,14 @@ class CuratedProtocolSession:
 
         if self._pause_state == "paused" or self._experiment_ended():
             return None
+        revert = step_revert_request(transcript)
+        if revert is not None:
+            return self._plan_step_revert_request(
+                revert, command_key=command_key, turn_id=turn_id, language=language,
+                configuration_id=configuration_id, generation=generation,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+                transcript=transcript,
+            )
         request = step_move_request(transcript)
         if request is None:
             return None
@@ -9808,6 +9863,19 @@ class CuratedProtocolSession:
             kind = "start_at_step"
         elif request.kind in {"from", "go"} and target is not None and target >= current:
             return None
+        elif (
+            target is not None and target < current
+            and self._repeat_return_refusal(current, target) is not None
+        ):
+            # Lane CF, decision 3: an earlier step that is not a return
+            # within the repeat stated here is gone back to by a revert.
+            return self._plan_step_revert_request(
+                StepRevertRequest("named_step", request.number),
+                command_key=command_key, turn_id=turn_id, language=language,
+                configuration_id=configuration_id, generation=generation,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+                transcript=transcript,
+            )
         else:
             kind = "repeat_return"
         move: dict[str, Any] = {
@@ -9880,6 +9948,103 @@ class CuratedProtocolSession:
             actor_principal_id=actor_principal_id,
             actor_role=actor_role,
             open_question=None,
+        )
+
+    def _plan_step_revert_request(
+        self,
+        request: StepRevertRequest,
+        *,
+        transcript: str,
+        command_key: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """Going back asked for (lane CF, decision 3): asked once, or refused with why.
+
+        "이전 단계로 돌아가" and "방금 완료 취소" go back one step; "N단계
+        완료 취소해 줘" and "N단계로 돌아가" (an earlier step that is not a
+        return within the repeat stated here, lane R7) go back to N. The
+        question names the completions it takes back. Nothing moves on this
+        turn; before the start it is left to the other rules.
+        """
+
+        if not self.active:
+            return None
+        steps = self.fixture.steps
+        current = self.current_index
+        if request.number is None:
+            target: int | None = current - 1 if current > 0 else None
+        else:
+            target = self._step_index_for_label(str(request.number))
+        move: dict[str, Any] = {
+            "kind": "step_revert",
+            "said": request.kind,
+            "said_number": request.number,
+            "was_active": True,
+            "from_index": current,
+            "from_label": steps[current].source_label,
+            "workflow_revision": self._revision,
+            "requested_turn_id": turn_id,
+            "configuration_id": configuration_id,
+            "requested_generation": generation,
+        }
+        refusal = None
+        if request.number is None and target is None:
+            refusal = "first_step"
+        elif target is None:
+            refusal = "no_such_step"
+        elif target >= current:
+            refusal = "already_here" if target == current and request.kind == "named_step" else "not_completed_yet"
+        if target is not None:
+            move.update(
+                target_index=target,
+                target_step_id=steps[target].step_id,
+                target_label=steps[target].source_label,
+            )
+        if refusal is None:
+            assert target is not None
+            taken_back = [
+                step for step in steps[target:current]
+                if step.step_id in self._completed_step_ids
+            ]
+            move["reverted_step_labels"] = [step.source_label for step in taken_back]
+            move["reverted_step_ids"] = [step.step_id for step in taken_back]
+            move["in_repeat"] = None
+            for interval in self._repeat_intervals_by_id().values():
+                if steps[target].step_id in self._repeat_span(interval):
+                    first, last = self._range_labels(interval)
+                    move["in_repeat"] = {
+                        "repetition_id": str(interval["repetition_id"]),
+                        "repeated_step_labels": [first, last],
+                    }
+                    break
+        else:
+            move["refusal"] = refusal
+        self._last_front_rule = "step_revert"
+        return self._execute_turn_intent(
+            CuratedControlIntent(
+                intent_kind=(
+                    "step_revert_refused" if refusal is not None
+                    else "step_revert_confirmation_required"
+                ),
+                action=(
+                    CuratedProtocolAction.DECLINE_COMPLETION if refusal is not None
+                    else CuratedProtocolAction.CLARIFY_COMPLETION
+                ),
+                target_step=str(move.get("target_label") or request.number or ""),
+                requires_confirmation=refusal is None,
+                language=language,
+                normalized_transcript=command_key,
+                step_move=move,
+            ),
+            transcript=transcript, command_key=command_key, turn_id=turn_id,
+            language=language, configuration_id=configuration_id,
+            generation=generation, actor_principal_id=actor_principal_id,
+            actor_role=actor_role, open_question=None,
         )
 
     def _repeat_return_refusal(self, current: int, target: int) -> str | None:
@@ -9960,6 +10125,18 @@ class CuratedProtocolSession:
             )
         if refusal == "state_changed":
             return f"그 사이 진행 상태가 바뀌어 단계를 옮기지 않았어요.{keep}"
+        if refusal == "first_step":
+            return f"{current}단계가 첫 단계라 돌아갈 단계가 없어요.{keep}"
+        if refusal == "not_completed_yet":
+            return f"{target}단계는 아직 완료하지 않았어요. 단계를 옮기지 않았어요.{keep}"
+        if move["kind"] == "step_revert":
+            reverted = move.get("reverted_step_labels") or []
+            if reverted:
+                return (
+                    f"{self._label_span(reverted)}단계 완료를 취소하고 "
+                    f"{target}단계로 돌아갈까요?"
+                )
+            return f"{target}단계로 돌아갈까요?"
         if move["kind"] == "start_at_step":
             skipped = move["skipped_labels"]
             span = skipped[0] if len(skipped) == 1 else f"{skipped[0]}~{skipped[-1]}"
@@ -9990,6 +10167,8 @@ class CuratedProtocolSession:
                     f"알겠습니다. {target}단계로 돌아가지 않았습니다. "
                     f"지금 {current_label}단계입니다."
                 )
+            elif move["kind"] == "step_revert":
+                response = f"알겠습니다. 되돌리지 않았습니다. 지금 {current_label}단계입니다."
             elif self.active:
                 response = (
                     f"알겠습니다. 건너뛰지 않았습니다. 지금 {current_label}단계입니다."
@@ -10042,6 +10221,13 @@ class CuratedProtocolSession:
             if self.active and self.current_index != 0:
                 return "state_changed"
             if not self.active and self._experiment_started_at is not None:
+                return "state_changed"
+        elif move["kind"] == "step_revert":
+            # Lane CF, decision 3: still where it was asked, going back.
+            if (
+                not self.active or self.current_index != move.get("from_index")
+                or target >= self.current_index
+            ):
                 return "state_changed"
         elif move["kind"] == "repeat_round":
             # Lane CB, decision 3: the run must still stand at the last step
@@ -10096,6 +10282,39 @@ class CuratedProtocolSession:
         step = steps[target]
         label = step.source_label
         timer_seconds = self.timer_seconds_for_step(target)
+        if move["kind"] == "step_revert":
+            # Lane CF, decision 3: the completions after the step gone back
+            # to are taken back by this record; the completion records stay,
+            # and the steps keep their "done before" so a second completion
+            # is recorded as done again.
+            reverted = list(move.get("reverted_step_labels") or [])
+            record = {
+                "kind": "step_revert",
+                "said": move.get("said"),
+                "from_step": move["from_label"],
+                "to_step": label,
+                "reverted_step_labels": reverted,
+                "reverted_step_ids": list(move.get("reverted_step_ids") or []),
+                "in_repeat": move.get("in_repeat"),
+            }
+            control_text = _control_speech(
+                CuratedProtocolAction.NEXT, language, label,
+                development_only=self.fixture.development_only,
+                step_index=target, timer_active=False,
+                step_timer_seconds=timer_seconds,
+            )
+            lead = (
+                f"{self._label_span(reverted)}단계 완료를 취소하고 {label}단계로 돌아왔어요."
+                if reverted else f"{label}단계로 돌아왔어요."
+            )
+            control_text = control_text.replace(f"{label}단계로 이동했습니다.", lead, 1)
+            if not control_text.startswith(lead):
+                control_text = f"{lead} {control_text}"
+            return self._arrival_plan(
+                control_text, language=language, intent_kind=intent.intent_kind,
+                requested_transition="step_revert", step_record=record,
+                action=CuratedProtocolAction.NEXT,
+            )
         if move["kind"] in {"repeat_return", "repeat_round"}:
             repetition_id = str(move["repetition_id"])
             returns = self._repeat_returns.get(repetition_id, 0) + 1
@@ -11324,6 +11543,7 @@ class CuratedProtocolSession:
         completed_step_ids: tuple[str, ...],
         skipped_step_ids: tuple[str, ...] = (),
         branch_skipped_step_ids: tuple[str, ...] = (),
+        reverted_step_ids: tuple[str, ...] = (),
     ) -> None:
         """Restore only a server-persisted exact-revision progress checkpoint.
 
@@ -11338,8 +11558,10 @@ class CuratedProtocolSession:
         which then need no completion. ``branch_skipped_step_ids`` are the
         steps a source condition answered "no" passed over (lane CB, decision
         1), as the durable record holds them: steps before the current one
-        that then need no completion either. Anything else is refused as
-        before.
+        that then need no completion either. ``reverted_step_ids`` are the
+        steps whose completion a confirmed revert took back (lane CF,
+        decision 3): their completions stay in the durable record, past the
+        step the run stands on. Anything else is refused as before.
         """
 
         indexes = {
@@ -11377,8 +11599,15 @@ class CuratedProtocolSession:
             step.step_id for step in self.fixture.steps[len(skipped):current_index]
             if step.step_id not in passed
         )
+        reverted = set(reverted_step_ids)
         if completed != expected and not self._completed_in_an_earlier_round(
             current_index, completed, expected
+        ) and not (
+            # Lane CF, decision 3: completions a confirmed revert took back
+            # stay in the durable record; they lie past the current step.
+            reverted
+            and set(expected) <= set(completed)
+            and set(completed) - set(expected) <= reverted
         ):
             raise CuratedProtocolFixtureError(
                 "Experiment recovery cannot bypass an incomplete protocol step."

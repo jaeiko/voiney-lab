@@ -10,8 +10,9 @@ screen:
 * 조용히 (quiet): nothing is read back; the values are confirmed together in
   the end-of-experiment review (lane N).
 
-Simple commands never ask, whichever way is chosen; ending the experiment
-and skipping steps are always asked about once.
+Simple commands never ask, whichever way is chosen; ending the experiment,
+skipping steps, going back a step and taking back a completion are always
+asked about once.
 """
 
 from __future__ import annotations
@@ -203,6 +204,12 @@ class SimpleCommandTests(unittest.TestCase):
                 turns.say("프로토콜 시작해줘")
                 turns.say("1단계 완료했어")
                 turns.say("2단계 완료했어")
+                self.assertEqual(
+                    turns.text("이전 단계로 돌아가"), "2단계 완료를 취소하고 2단계로 돌아갈까요?")
+                turns.say("아니")
+                self.assertEqual(
+                    turns.text("방금 완료 취소"), "2단계 완료를 취소하고 2단계로 돌아갈까요?")
+                turns.say("아니")
                 self.assertIn("종료할까요", turns.text("실험 종료해"))
                 self.assertTrue(turns.session.active)
 

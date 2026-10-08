@@ -686,6 +686,25 @@ def _workspace_branch_skipped_step_ids(state:Any)->tuple[str,...]:
     return tuple(found)
 
 
+def _workspace_reverted_step_ids(state:Any)->tuple[str,...]:
+    """The steps a confirmed revert took the completion of (lane CF, decision 3).
+
+    Read from the durable record's step records, so a run that went back can
+    be continued after the connection dropped: the completions stay in the
+    record, past the step the run stands on.
+    """
+
+    found:list[str]=[]
+    for event in (state or {}).get("events") or ():
+        payload=event.get("payload") if isinstance(event.get("payload"),dict) else {}
+        record=payload.get("step_record")
+        if isinstance(record,dict) and record.get("kind")=="step_revert":
+            for item in record.get("reverted_step_ids") or ():
+                if str(item) not in found:
+                    found.append(str(item))
+    return tuple(found)
+
+
 def _transition_workspace_experiment(
     session:ListenerSession,
     *,
@@ -793,6 +812,10 @@ def _record_workspace_experiment_progress(
             event_type=(
                 "repeat_returned"
                 if move_kind in {"repeat_return","repeat_round"} else
+                # Lane CF, decision 3: a confirmed revert, beside the
+                # completions it takes back (they stay marked completed).
+                "step_reverted"
+                if move_kind=="step_revert" else
                 "steps_skipped"
                 if move_kind=="start_at_step" and not record.get("experiment_started") else
                 # Lane CB, decision 1: the answer that skipped the step the run
@@ -5488,6 +5511,12 @@ def _record_experiment_report_plan(
         event_type="repeat_returned"
         step_id=post_step.step_id if post_step is not None else step_id
         step_label=post_step.source_label if post_step is not None else step_label
+    elif plan.state_changed and move_kind=="step_revert":
+        # Lane CF, decision 3: at the step gone back to; the completions it
+        # takes back stay in the record.
+        event_type="step_reverted"
+        step_id=post_step.step_id if post_step is not None else step_id
+        step_label=post_step.source_label if post_step is not None else step_label
     elif plan.state_changed and move_kind=="start_at_step":
         if record.get("experiment_started"):
             skipped_after_start=True
@@ -8819,6 +8848,9 @@ async def voice_socket(websocket:WebSocket):
                             # Lane CB, decision 1: steps a source condition
                             # answered "no" passed over.
                             branch_skipped_step_ids=_workspace_branch_skipped_step_ids(
+                                experiment_state),
+                            # Lane CF, decision 3: completions a revert took back.
+                            reverted_step_ids=_workspace_reverted_step_ids(
                                 experiment_state),
                         )
                     pipeline="cascade"

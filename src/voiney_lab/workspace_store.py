@@ -2007,6 +2007,9 @@ class WorkspaceStore:
                 item["step_id"] == step_id for item in carried
             ):
                 return
+            # After a revert (lane CF) a step can be reached twice; the later
+            # place is the one the record now stands for.
+            places[:] = [item for item in places if item["step_id"] != step_id]
             places.append({
                 "step_id": step_id,
                 "step_label": step_label,
@@ -2020,6 +2023,20 @@ class WorkspaceStore:
 
         waiting = False
         for event in session.get("events", ()):
+            if event.get("event_type") == "step_reverted":
+                # Lane CF, decision 3: a revert takes completions back. No
+                # place carries them any more; the record keeps them.
+                record = (event.get("payload") or {}).get("step_record")
+                taken = {
+                    str(item) for item in (record or {}).get("reverted_step_ids") or ()
+                } if isinstance(record, Mapping) else set()
+                carried = tuple(item for item in carried if item["step_id"] not in taken)
+                places[:] = [
+                    place_ for place_ in places
+                    if not set(place_["carried_step_ids"]) & taken  # type: ignore[arg-type]
+                ]
+                waiting = bool(carried)
+                continue
             if event.get("event_type") not in _STEP_PROGRESS_EVENTS:
                 continue
             if waiting:
