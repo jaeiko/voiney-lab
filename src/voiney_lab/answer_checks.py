@@ -458,6 +458,7 @@ def safety_instruction_topics(sentence: str) -> tuple[str, ...]:
 _PERMISSIVE = re.compile(
     r"[가-힣]도\s*(?:돼|되|됩|된다|괜찮|무방|상관\s*없|문제\s*(?:없|안\s*(?:돼|되|됩)))"
     r"|맨\s*(?:손|눈|살)\s*으?로(?![^.!?\n]*(?:마세요|마십시오|말아|말고|않|금지|안\s*(?:돼|되|됩)))"
+    r"|없이\s+(?:\S+\s+){0,2}?\S*\s*수\s*있"
     r"|필요\s*(?:없|하지\s*않|는\s*없|치\s*않)"
     r"|(?:독성|위험|유해성?)\s*(?:이|가|은|는|도)?\s*(?:없|적|낮)|무해|무독|해롭지\s*않|위험하지\s*않"
     r"|안전(?:해요|합니다|하다|해서)"
@@ -471,6 +472,28 @@ _PERMISSIVE = re.compile(
     r"|\b(?:you\s+)?(?:can|may)\s+(?:\w+\s+){0,3}?without\b",
     re.I,
 )
+#: What turns a permission into a question about one: "다뤄도 되는지에 대한
+#: 정보가 없어요", "봐도 안전한지는 확인할 수 없어요", "whether it is safe to".
+#: Measured on the lane TS live run (2026-10-08): four such sentences were
+#: taken out before this, each saying only that the source does not tell.
+_ASKS_WHETHER_KO = re.compile(r"(?:는지|은지|한지|ㄴ지|지는|지를|지에|여부|냐|나요|는가|니까|까요)")
+_ASKS_WHETHER_EN = re.compile(r"\b(?:whether|if)\b[^.!?]{0,40}$", re.I)
+
+
+def _permits(sentence: str) -> bool:
+    """Whether a sentence permits something, not merely asks whether it may be done."""
+
+    for match in _PERMISSIVE.finditer(sentence):
+        rest = sentence[match.end():]
+        word = re.match(r"\S*(?:\s+\S+)?", rest)
+        if word is not None and _ASKS_WHETHER_KO.search(word.group()):
+            continue
+        if match.group().startswith("맨") and re.search(r"[가-힣]지는|는지|한지|은지|여부", rest):
+            continue
+        if _ASKS_WHETHER_EN.search(sentence[:match.start()]):
+            continue
+        return True
+    return False
 
 
 def _either(korean: str, english: str) -> re.Pattern[str]:
@@ -542,7 +565,7 @@ PERMISSIVE_HAZARD_TOPICS: tuple[tuple[str, Callable[[str], bool], re.Pattern[str
 def permissive_hazard_topics(sentence: str) -> tuple[str, ...]:
     """The hazard topics a sentence permits something about; empty when it permits nothing."""
 
-    if not _PERMISSIVE.search(sentence):
+    if not _permits(sentence):
         return ()
     return tuple(name for name, said, _ground in PERMISSIVE_HAZARD_TOPICS if said(sentence))
 
@@ -552,7 +575,7 @@ def _permitted_topics(grounding: str) -> set[str]:
 
     permitted: set[str] = set()
     for sentence in _SENTENCE_END.split(grounding):
-        if _PERMISSIVE.search(sentence):
+        if _permits(sentence):
             permitted.update(
                 name for name, _said, ground in PERMISSIVE_HAZARD_TOPICS if ground.search(sentence))
     return permitted
