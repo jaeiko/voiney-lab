@@ -471,6 +471,33 @@ class TheTimeQuestionTests(_Catalog):
         self.assertIn("지금 돌고 있는 단계 타이머는 없어요", plan.speech_text)
 
 
+class TheStartScreenTests(_Catalog):
+    """Decision 4: the review lists each timer with its excerpt, and each refusal."""
+
+    def test_the_review_lists_timers_and_refusals(self) -> None:
+        self.assertEqual(
+            self.catalog.review(self.protocol_id)["timers"],
+            {"verified": [], "refused": []},
+        )
+        self.store_analysis()
+        timers = self.catalog.review(self.protocol_id)["timers"]
+        self.assertEqual(
+            [(t["step_label"], t["source_literal"], t["value_ko"], t["choice"])
+             for t in timers["verified"]],
+            [
+                ("1", "15 min", "15분", False),
+                ("3", "12-16 h", "12시간 또는 16시간", True),
+                ("4", "30 min", "30분", True),
+                ("4", "1 h", "1시간", True),
+                ("6", "00:05:00", "5분", False),
+            ],
+        )
+        self.assertEqual(timers["verified"][0]["source_excerpt"], "15 min")
+        refused = {(r["step_label"], r["source_literal"]): r["reason_ko"] for r in timers["refused"]}
+        self.assertIn("overnight", refused[("2", "overnight")])
+        self.assertIn("최소", refused[("5", "2 hours")])
+
+
 class TheInGelSidecarIsUnchangedTests(unittest.TestCase):
     def test_the_sidecar_fixture_has_no_analysis_timer_table(self) -> None:
         from tests.lane_cb_support import headspace_fixture
@@ -502,6 +529,32 @@ def _with_step(protocol, index, step):
     steps = list(section.steps)
     steps[index] = step
     return _replace(protocol, sections=(_replace(section, steps=tuple(steps)),))
+
+
+
+class TheStartScreenRendersTimersTests(unittest.TestCase):
+    """Decision 4, on the page: the production script lists timers and refusals."""
+
+    def test_the_start_summary_lists_each_timer_and_each_refusal(self) -> None:
+        from tests.test_screen_cleanup import run_page_script
+
+        result = run_page_script(r"""
+const review={protocol_id:"p",title:"Protocol Timer",available_for_execution:true,analysis_available:true,step_count:7,
+ execution_blockers:[],execution_notices:[],safety_notices:[],
+ timers:{verified:[
+  {step_label:"1",value_ko:"15분",choice:false,source_literal:"15 min",source_page_number:1,source_excerpt:"15 min"},
+  {step_label:"3",value_ko:"12시간 또는 16시간",choice:true,source_literal:"12-16 h",source_page_number:1,source_excerpt:"12-16 h"}],
+  refused:[{step_label:"2",source_literal:"overnight",reason:"no_number",reason_ko:"숫자로 적힌 시간이 없어요(overnight, until … 같은 표현)."}]}};
+renderStartSummary(review);
+const host=node("protocol-step-timers");
+assert(host.hidden===false,"the timer list stayed hidden");
+const text=visibleText(host);
+for(const want of ["단계 타이머 2개","1단계 · 15분 · 원문 ‘15 min’","3단계 · 12시간 또는 16시간 (시작할 때 고름)","타이머로 만들지 않은 시간 표현 1건","2단계 · ‘overnight’ · 숫자로 적힌 시간이 없어요"])
+ assert(text.includes(want),`missing: ${want} in ${text}`);
+renderStartSummary({...review,timers:undefined});
+assert(node("protocol-step-timers").hidden===true,"a review without timers still showed the list");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 
 if __name__ == "__main__":

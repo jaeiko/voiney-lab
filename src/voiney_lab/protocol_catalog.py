@@ -471,6 +471,58 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
 }
 
 
+def _duration_ko(seconds: int) -> str:
+    """"12시간", "1시간 30분", "15분", "30초": a timer value said in Korean."""
+
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = [
+        f"{value}{unit}"
+        for value, unit in ((hours, "시간"), (minutes, "분"), (secs, "초"))
+        if value
+    ]
+    return " ".join(parts) or "0초"
+
+
+def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, object]]]:
+    """The start screen's timer list (lane PT, decision 4).
+
+    ``verified``: each step's timer values with the source excerpt they were
+    read from; a step with more than one value is a choice the experimenter
+    makes when starting the timer. ``refused``: each time the server did not
+    make a timer from, with the reason in Korean.
+    """
+
+    choices = table.choices()
+    return {
+        "verified": [
+            {
+                "step_id": timer.step_id,
+                "step_label": timer.source_label,
+                "source_literal": timer.literal,
+                "source_excerpt": timer.excerpt,
+                "source_page_number": timer.page_number,
+                "seconds": list(timer.seconds),
+                "value_ko": " 또는 ".join(_duration_ko(s) for s in timer.seconds),
+                "choice": timer.step_id in choices,
+            }
+            for timer in table.verified
+        ],
+        "refused": [
+            {
+                "step_id": item.step_id,
+                "step_label": item.source_label,
+                "source_literal": item.literal,
+                "source_excerpt": item.excerpt,
+                "source_page_number": item.page_number,
+                "reason": item.reason,
+                "reason_ko": item.reason_ko,
+            }
+            for item in table.refused
+        ],
+    }
+
+
 def _safety_notice_sources(protocol: Any) -> list[dict[str, object]]:
     """Every safety statement the source declares, step by step, verbatim.
 
@@ -1794,6 +1846,7 @@ class ProtocolCatalog:
             "execution_blockers": [],
             "execution_notices": [],
             "safety_notice_sources": [],
+            "timers": {"verified": [], "refused": []},
         }
         ocr_projection = base["ocr"]
         base["pipeline"] = self._pipeline(
@@ -1848,6 +1901,15 @@ class ProtocolCatalog:
                 # server adds the Korean beside each (it holds the
                 # translation store); the words here are the document's.
                 "safety_notice_sources": _safety_notice_sources(protocol),
+                # Step timers for the start screen (lane PT, decision 4):
+                # each verified value with its source excerpt, and each time
+                # the server could not verify, with the reason.
+                "timers": _review_timers(
+                    self._step_timer_table(
+                        revision, extraction,
+                        protocol_with_display_step_labels(protocol),
+                    )
+                ),
             }
         )
         return base
