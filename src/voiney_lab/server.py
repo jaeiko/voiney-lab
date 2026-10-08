@@ -5573,6 +5573,30 @@ def _record_experiment_report_plan(
             ),
             payload=payload,
         )
+    if plan.state_changed and move_kind=="prestart_answers":
+        # Lane CF, decision 4: the answers given before the start, each as
+        # lane CB records an answer at its step, in the protocol's order.
+        order={item.step_id:index for index,item in enumerate(curated.fixture.steps)}
+        by_label={item.source_label:item for item in curated.fixture.steps}
+        answered=[
+            ("branch_answered",item,str(item.get("step_label") or ""))
+            for item in record.get("answers") or ()
+        ]+[
+            ("repeat_registered",item,str((item.get("repeated_step_labels") or [""])[0]))
+            for item in record.get("registered") or ()
+        ]
+        answered.sort(key=lambda entry:order.get(
+            getattr(by_label.get(entry[2]),"step_id",""),10_000))
+        for kind,item,label in answered:
+            step=by_label.get(label)
+            report=store.append_event(
+                session.experiment_report_id,
+                event_key=f"{event_key}-before-start-{kind.replace('_','-')}-{label}",
+                event_type=kind,
+                step_id=step.step_id if step is not None else None,
+                step_label=label,
+                payload={**payload,"step_record":dict(item)},
+            )
     if skipped_after_start:
         report=store.append_event(
             session.experiment_report_id,
@@ -6110,6 +6134,29 @@ async def _finish_all_research_operations(
         )
 
 
+def _session_greeting_text(session:Any,language:str)->str:
+    """The greeting; with the source's questions open before the start, the first of them.
+
+    Lane CF, decision 4: the start pressed, the conditions and counts the run
+    would ask at its steps are asked first; the greeting asks the first one.
+    """
+
+    curated=getattr(session,"curated_protocol_session",None)
+    title=curated.fixture.title if curated is not None else "the selected protocol"
+    asked=(
+        curated.open_prestart_questions()
+        if curated is not None and language=="ko"
+        and callable(getattr(curated,"open_prestart_questions",None)) else None
+    )
+    if asked:
+        return f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. {asked}"
+    return {
+        "ko":f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
+        "en":f"This is Voiney Lab. {title} is ready. Would you like to begin, or ask a question first?",
+        "vi":f"Voiney Lab đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
+    }.get(language,"Voiney Lab is ready.")
+
+
 async def _send_session_greeting(
     sender:LockedSender,session:ListenerSession,*,language:str,
 ) -> None:
@@ -6119,15 +6166,7 @@ async def _send_session_greeting(
         return
     session.greeting_emitted=True
     greeting_turn_id=2_000_000_000  # Reserved display/audio identity; user turns start at 1.
-    title=(
-        session.curated_protocol_session.fixture.title
-        if session.curated_protocol_session is not None else "the selected protocol"
-    )
-    greeting={
-        "ko":f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
-        "en":f"This is Voiney Lab. {title} is ready. Would you like to begin, or ask a question first?",
-        "vi":f"Voiney Lab đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
-    }.get(language,"Voiney Lab is ready.")
+    greeting=_session_greeting_text(session,language)
     generation=session.generation
     configuration_id=session.accepted_configuration_id
     greeting_id=hashlib.sha256(
@@ -8790,11 +8829,15 @@ async def voice_socket(websocket:WebSocket):
 
                         session.curated_protocol_session.set_safety_pack(safety_pack)
                         session.curated_protocol_session.activate_configured()
-                        # Lane CF, decision 1: the experimenter's settings.
+                        # Lane CF: the experimenter's settings (decisions 1, 4)
+                        # and -- the start pressed -- the source's questions
+                        # asked before the start (decision 4). A recovered run
+                        # skips them.
                         experimenter_settings=await asyncio.to_thread(
                             _load_experimenter_settings)
                         session.curated_protocol_session.apply_experimenter_settings(
                             experimenter_settings)
+                        session.curated_protocol_session.open_prestart_questions()
                         await websocket.send_text(event(
                             "experimenter.settings",
                             configuration_id=configuration_id,

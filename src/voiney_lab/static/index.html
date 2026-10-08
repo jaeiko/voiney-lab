@@ -118,11 +118,15 @@
                 <option value="auto">자동 감지</option>
                 <option value="en">English</option>
               </select></label>
-              <!-- Lane CF decision 1: the experimenter's own setting, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
+              <!-- Lane CF decisions 1 and 4: the experimenter's own settings, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
               <label class="control-field"><span>수치 확인 방식</span><select id="confirm-mode" aria-label="수치 확인 방식" aria-describedby="experimenter-settings-status">
                 <option value="readback" selected>되읽기 · 기록한 수치를 되읽고 묻지 않음</option>
                 <option value="confirm">바로 확인 · 수치마다 맞는지 물음</option>
                 <option value="quiet">조용히 · 실험 끝에 한 번에 확인</option>
+              </select></label>
+              <label class="control-field"><span>조건 분기·반복 횟수 질문</span><select id="question-timing" aria-label="조건 분기와 반복 횟수 질문 시점" aria-describedby="experimenter-settings-status">
+                <option value="before_start" selected>시작 전에 묻기</option>
+                <option value="during">실험 중에 묻기</option>
               </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
               <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
                 <option value="">기본 마이크 (시스템 설정)</option>
@@ -1748,11 +1752,12 @@ function executionReasonRows(host,title,items,hint){
 function renderExecutionReasons(review){
  executionReasonRows($("protocol-blockers"),"실행을 막는 사유",review?.execution_blockers,null);
 }
-// Lane CF decision 1: the setting is the server's; the screen shows it and asks the server to change it.
+// Lane CF decisions 1 and 4: the settings are the server's; the screen shows them and asks it to change them.
 function renderExperimenterSettings(settings){
  if(!settings||typeof settings!=="object")return;
- const mode=$("confirm-mode");
+ const mode=$("confirm-mode"),timing=$("question-timing");
  if(mode&&["readback","confirm","quiet"].includes(settings.confirm_mode))mode.value=settings.confirm_mode;
+ if(timing&&["before_start","during"].includes(settings.question_timing))timing.value=settings.question_timing;
 }
 async function loadExperimenterSettings(){
  try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
@@ -2168,6 +2173,7 @@ $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){l
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
+$("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
 globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
 </script>
 </body>

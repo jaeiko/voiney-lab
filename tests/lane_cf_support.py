@@ -45,7 +45,12 @@ class Session(Turns):
         confirm_mode: str = "readback",
         question_timing: str = "during",
     ) -> CuratedProtocolSession:
-        """Open a session; ``step_index`` None leaves it before the start."""
+        """Open a session; ``step_index`` None leaves it before the start.
+
+        ``question_timing`` defaults to "during" here so a session opened at
+        a step behaves as lane CB's did; the pre-start tests pass
+        "before_start", the setting's own default.
+        """
 
         self.session = CuratedProtocolSession(fixture or headspace_fixture())
         self.session.apply_experimenter_settings(

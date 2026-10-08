@@ -1199,6 +1199,9 @@ class ReportRevert:
     key: str = ""
 
 
+#: Lane CF, decision 4: an answer given before the start, in the report's words.
+BEFORE_START_WORDS = "시작 전에 답함"
+
 #: Lane CB: where a value the run acted on came from, in the report's words.
 VALUE_SOURCE_WORDS = {"source": "원문", "operator": "사람이 답함", "lab_default": "연구실 기본값"}
 
@@ -1873,7 +1876,8 @@ def build_report_facts(
                 step_label=str(record.get("step_label") or label),
                 condition=" ".join(str(record.get("condition_source_text") or "").split()),
                 answer="예" if record.get("answer") == "yes" else "아니요",
-                value_source=value_source_words(record.get("value_source")),
+                value_source=value_source_words(record.get("value_source")) + (
+                    f" · {BEFORE_START_WORDS}" if record.get("asked") == "before_start" else ""),
                 at=at.strftime("%H:%M") if at else "",
                 skipped_labels=tuple(str(item) for item in record.get("skipped_step_labels") or ()),
                 key=str(event.get("event_key") or ""),
@@ -1883,7 +1887,8 @@ def build_report_facts(
             first, last = _range_pair(record)
             repetitions.append(ReportRepetition(
                 first=first, last=last, asked_at=label, count=whole_number(record.get("count")),
-                value_source=value_source_words(record.get("value_source")),
+                value_source=value_source_words(record.get("value_source")) + (
+                    f" · {BEFORE_START_WORDS}" if record.get("asked") == "before_start" else ""),
                 per_round=record.get("decided") == "per_round",
                 at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
             ))
@@ -1979,6 +1984,11 @@ def build_report_facts(
     for answer in branch_answers:
         if answer.step_label and answer.step_label not in shown:
             shown.append(answer.step_label)
+    for repetition in repetitions:
+        # Lane CF, decision 4: a count given before the start is shown at its
+        # step even when the run did not reach it.
+        if repetition.asked_at and repetition.asked_at in order and repetition.asked_at not in shown:
+            shown.append(repetition.asked_at)
     shown.sort(key=lambda item: order.get(item, 10_000))
     for label in shown:
         source = by_label.get(label, {})

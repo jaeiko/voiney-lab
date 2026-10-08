@@ -2823,9 +2823,15 @@ FRONT_RULES: dict[str, str] = {
                     "return does, a no moves on and is recorded as done "
                     "differently; with no count, '한 번 더 하시나요?' after each "
                     "round (lane CB, decision 3)",
-    "experimenter_setting": "'확인 질문 켜 줘', '조용히 모드', '되읽기 모드로 해 줘': "
-                            "the experimenter's way of confirming values changes; "
-                            "no workflow state does (lane CF, decision 1)",
+    "experimenter_setting": "'확인 질문 켜 줘', '조용히 모드', '되읽기 모드로 해 줘', "
+                            "'질문은 실험 중에 물어봐 줘': the experimenter's way of "
+                            "confirming values or the time the source's questions "
+                            "are asked changes; no workflow state does (lane CF, "
+                            "decisions 1 and 4)",
+    "prestart_question": "the reply to a question asked before the start -- a "
+                         "source condition or a person-decided count, '나중에' or "
+                         "'다 나중에'; the last reply starts the experiment "
+                         "(lane CF, decision 4)",
     "step_revert": "'이전 단계로 돌아가', '방금 완료 취소', 'N단계 완료 취소해 줘', "
                    "and 'N단계로 돌아가' to an earlier step that is not a return "
                    "within the repeat stated here: asked once, 'N단계 완료를 "
@@ -2873,8 +2879,10 @@ class _OpenQuestions:
     #: step, open until answered (not for one turn only).
     branch: bool = False
     repeat_count: bool = False
-    #: Lane CF: "0.5 mL로 기록할까요?" in the 바로 확인 way (one turn).
+    #: Lane CF: "0.5 mL로 기록할까요?" in the 바로 확인 way (one turn), and
+    #: the questions asked before the start (open until answered).
     note_confirm: bool = False
+    prestart: bool = False
 
     @property
     def first_open(self) -> str | None:
@@ -2883,7 +2891,7 @@ class _OpenQuestions:
         for name in (
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
             "step_move", "record_fix", "note_confirm", "report_review", "branch",
-            "repeat_count",
+            "repeat_count", "prestart",
         ):
             if getattr(self, name):
                 return name
@@ -3491,11 +3499,13 @@ def apply_record_fix(text: str, x: str, y: str) -> str | None:
 # Decision 1: how a recorded value is confirmed, per experimenter. 되읽기
 # (readback, the default) reads it back and asks nothing; 바로 확인 (confirm)
 # asks "맞으면 '네'라고 해 주세요" before it is stored; 조용히 (quiet) reads
-# nothing back and leaves the values to lane N's end-of-run review. The
-# question timing is kept with the settings; decision 4 gives it its effect.
+# nothing back and leaves the values to lane N's end-of-run review. Decision
+# 4: whether the source's conditions and person-decided counts are asked
+# before the start or at their steps.
 CONFIRM_MODES = ("readback", "confirm", "quiet")
 QUESTION_TIMINGS = ("before_start", "during")
 CONFIRM_MODE_WORDS = {"readback": "되읽기", "confirm": "바로 확인", "quiet": "조용히"}
+QUESTION_TIMING_WORDS = {"before_start": "시작 전에 묻기", "during": "실험 중에 묻기"}
 _SETTING_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래))?"
 _SETTING_DO = rf"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|켜|변경해|전환해){_SETTING_POLITE})?"
 _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
@@ -3505,6 +3515,14 @@ _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
      {"confirm_mode": "readback"}),
     (re.compile(rf"^되읽기(?:\s*모드)?{_SETTING_DO}$"), {"confirm_mode": "readback"}),
     (re.compile(rf"^(?:조용히|조용한)\s*모드{_SETTING_DO}$"), {"confirm_mode": "quiet"}),
+    (re.compile(
+        rf"^(?:(?:조건|분기|횟수|조건\s*분기)\s*(?:와|랑|하고)?\s*)*(?:횟수\s*)?질문(?:은|는|을)?\s*"
+        rf"(?:실험\s*(?:중에|하면서)|그\s*단계에서|단계마다)\s*(?:물어\s*(?:봐)?|해){_SETTING_POLITE}$"
+    ), {"question_timing": "during"}),
+    (re.compile(
+        rf"^(?:(?:조건|분기|횟수|조건\s*분기)\s*(?:와|랑|하고)?\s*)*(?:횟수\s*)?질문(?:은|는|을)?\s*"
+        rf"(?:실험\s*)?시작\s*전에\s*(?:(?:한\s*번에|다)\s*)?(?:물어\s*(?:봐)?|해){_SETTING_POLITE}$"
+    ), {"question_timing": "before_start"}),
 )
 
 
@@ -7353,13 +7371,18 @@ class CuratedProtocolSession:
         self._report_review: dict[str, Any] | None = None
         self.safety_pack: Any = None
         #: Lane CF (2026-10-08). The experimenter's settings, as the server
-        #: applies them when a session opens (decision 1). The session's own
-        #: default is lane N's readback. The question timing is kept with
-        #: them; decision 4 gives it its effect.
+        #: applies them when a session opens (decisions 1 and 4). The
+        #: session's own defaults are lane N's readback and lane CB's
+        #: questions at the step; the server's setting default asks before
+        #: the start.
         self.confirm_mode: str = "readback"
         self.question_timing: str = "during"
         #: The one-turn "0.5 mL로 기록할까요?" of the 바로 확인 way.
         self._pending_note_confirmation: dict[str, Any] | None = None
+        #: The questions asked before the start (decision 4): the queue,
+        #: where it stands, the answers and what was left for later. Open
+        #: until the last is answered, when the experiment starts.
+        self._prestart: dict[str, Any] | None = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
         self.safety_pack = safety_pack
@@ -8538,6 +8561,9 @@ class CuratedProtocolSession:
     def open_server_question(self) -> dict[str, Any] | None:
         """The server question open at the current step, for the card (decision 4)."""
 
+        if self._prestart_open():
+            # Lane CF, decision 4: the question asked before the start.
+            return {"kind": "prestart", "text": self._prestart_question_words()}
         branch = self._open_branch()
         if branch is not None:
             return {"kind": "branch", "text": self._branch_question_words(branch)}
@@ -9416,32 +9442,348 @@ class CuratedProtocolSession:
     def _plan_experimenter_words(
         self, transcript: str, *, turn_id: int,
     ) -> CuratedProtocolTurnPlan | None:
-        """A setting said aloud (decision 1)."""
+        """A setting said aloud (decisions 1 and 4)."""
 
         setting = experimenter_setting_request(transcript)
         if setting is not None:
-            ((_, value),) = setting.items()
+            ((name, value),) = setting.items()
             self._last_front_rule = "experimenter_setting"
-            shown = CONFIRM_MODE_WORDS[value]
-            if self.confirm_mode == value:
-                plan = self._words_plan(f"이미 '{shown}' 방식이에요.", intent_kind="experimenter_setting_unchanged")
+            if name == "confirm_mode":
+                shown = CONFIRM_MODE_WORDS[value]
+                if self.confirm_mode == value:
+                    plan = self._words_plan(f"이미 '{shown}' 방식이에요.", intent_kind="experimenter_setting_unchanged")
+                else:
+                    self.confirm_mode = value
+                    words = {
+                        "confirm": "수치를 기록할 때마다 맞는지 여쭤볼게요.",
+                        "readback": "수치를 기록하면 되읽어 드리고 묻지 않아요. 틀리면 '고쳐 줘'라고 해 주세요.",
+                        "quiet": "기록은 되읽지 않고, 실험이 끝날 때 수치를 한 번에 확인해요.",
+                    }[value]
+                    plan = replace(
+                        self._words_plan(
+                            f"확인 방식을 '{shown}'{josa_ro(shown)[len(shown):]} 바꿨어요. {words}",
+                            intent_kind="experimenter_setting_changed",
+                        ),
+                        setting_change=dict(setting),
+                    )
             else:
-                self.confirm_mode = value
-                words = {
-                    "confirm": "수치를 기록할 때마다 맞는지 여쭤볼게요.",
-                    "readback": "수치를 기록하면 되읽어 드리고 묻지 않아요. 틀리면 '고쳐 줘'라고 해 주세요.",
-                    "quiet": "기록은 되읽지 않고, 실험이 끝날 때 수치를 한 번에 확인해요.",
-                }[value]
-                plan = replace(
-                    self._words_plan(
-                        f"확인 방식을 '{shown}'{josa_ro(shown)[len(shown):]} 바꿨어요. {words}",
-                        intent_kind="experimenter_setting_changed",
-                    ),
-                    setting_change=dict(setting),
-                )
+                if self.question_timing == value:
+                    plan = self._words_plan(
+                        f"이미 '{QUESTION_TIMING_WORDS[value]}'로 되어 있어요.",
+                        intent_kind="experimenter_setting_unchanged",
+                    )
+                else:
+                    self.question_timing = value
+                    words = (
+                        "조건 분기와 반복 횟수는 실험 중에 그 단계에서 여쭤볼게요."
+                        if value == "during" else
+                        "조건 분기와 반복 횟수는 실험을 시작하기 전에 한 번에 여쭤볼게요."
+                    )
+                    plan = replace(
+                        self._words_plan(words, intent_kind="experimenter_setting_changed"),
+                        setting_change=dict(setting),
+                    )
             self._replay[turn_id] = plan
             return plan
         return None
+
+    # --- lane CF, decision 4: the source's questions asked before the start --
+
+    def _prestart_items(self) -> list[dict[str, Any]]:
+        """Every condition and person-decided count lane CB would ask, in step order."""
+
+        steps = self.fixture.steps
+        order = {step.step_id: index for index, step in enumerate(steps)}
+        labels = {step.step_id: step.source_label for step in steps}
+        items: list[tuple[int, dict[str, Any]]] = []
+        for branch in self._branches():
+            anchor = getattr(branch, "step_id", None) or (
+                branch.branch_step_ids[0] if branch.branch_step_ids else None
+            )
+            if anchor not in order:
+                continue
+            items.append((order[anchor], {
+                "kind": "branch", "id": branch.branch_id,
+                "step_id": anchor, "step_label": labels[anchor],
+            }))
+        for interval in self._repeat_intervals_by_id().values():
+            if interval.get("kind") != "OperatorDeterminedRepetition":
+                continue
+            repetition_id = str(interval["repetition_id"])
+            if repetition_id in self._operator_repetition_counts:
+                continue
+            repeated = [item for item in interval["repeated_step_ids"] if item in order]  # type: ignore[union-attr]
+            if not repeated:
+                continue
+            first, last = self._range_labels(interval)
+            gate = self._branch_gating(interval)
+            items.append((order[repeated[0]], {
+                "kind": "count", "id": repetition_id, "range": f"{first}~{last}",
+                "gate": gate.branch_id if gate is not None else None,
+            }))
+        items.sort(key=lambda pair: pair[0])
+        return [item for _, item in items]
+
+    def _prestart_open(self) -> bool:
+        return (
+            self._prestart is not None and not self.active
+            and self._experiment_started_at is None
+        )
+
+    def open_prestart_questions(self) -> str | None:
+        """Open the questions before the start; the words that ask the first, or None.
+
+        Called when the experimenter presses "이 프로토콜로 시작" (the server's
+        greeting says it) and when "프로토콜 시작해줘" is said. Nothing to ask,
+        the setting "실험 중에 묻기", or a run already started: None.
+        """
+
+        if self._prestart_open():
+            return self._prestart_question_words(with_intro=True)
+        if (
+            self.question_timing != "before_start" or self.active
+            or self._experiment_started_at is not None or self._experiment_ended()
+        ):
+            return None
+        if getattr(getattr(self.fixture, "draft", None), "protocol", None) is None:
+            # A fixture with no analysed protocol states no condition or count.
+            return None
+        items = self._prestart_items()
+        if not items:
+            return None
+        self._prestart = {"items": items, "index": 0, "answers": {}, "deferred": []}
+        return self._prestart_question_words(with_intro=True)
+
+    def _prestart_question_words(self, *, with_intro: bool = False) -> str:
+        state = self._prestart or {}
+        items = state.get("items") or []
+        index = int(state.get("index") or 0)
+        item = items[index]
+        total = len(items)
+        if item["kind"] == "branch":
+            branch = self._branch_by_id(item["id"])
+            question = (
+                f"({index + 1}/{total}) {item['step_label']}단계에는 원문 조건이 있어요: "
+                f"“{self._condition_words(branch)}”. 이 조건에 해당하나요? "
+                "맞으면 '네', 아니면 '아니요', 지금 모르면 '나중에'라고 해 주세요."
+            )
+        else:
+            interval = self._repeat_intervals_by_id()[item["id"]]
+            source = " ".join(str(interval.get("source_text") or "").split())
+            question = (
+                f"({index + 1}/{total}) {item['range']}단계는 원문이 횟수를 정하지 않아요: “{source}”. "
+                "몇 번(몇 개) 하시나요? 아직 모르면 '아직 몰라', 지금 정하지 않으려면 '나중에'라고 해 주세요."
+            )
+        if not with_intro:
+            return question
+        return (
+            f"시작 전에 여쭤볼 게 {total}개 있어요. 답하신 것은 실험 중에 다시 묻지 않아요. "
+            f"지금 모르면 '나중에'라고 해 주세요. {question}"
+        )
+
+    _PRESTART_LATER = re.compile(
+        r"^(?:그건\s*|이건\s*)?(?:나중에|이따가?|그때|그\s*단계에서)\s*(?:물어\s*(?:봐)?(?:\s*줘)?|할게요?|정할게요?|답할게요?)?$"
+    )
+    _PRESTART_ALL_LATER = re.compile(
+        r"^(?:다|전부|모두|나머지(?:는)?(?:\s*다)?|나머지\s*다)\s*(?:나중에|그때|그\s*단계에서)"
+        r"\s*(?:물어\s*(?:봐)?(?:\s*줘)?|할게요?|정할게요?|답할게요?)?$"
+    )
+
+    def _prestart_reply(self, transcript: str) -> int | str | None:
+        said = " ".join(transcript.split()).strip(" .!。")
+        if self._PRESTART_ALL_LATER.fullmatch(said):
+            return "all_later"
+        if self._PRESTART_LATER.fullmatch(said):
+            return "later"
+        state = self._prestart or {}
+        item = (state.get("items") or [{}])[int(state.get("index") or 0)]
+        if item.get("kind") == "branch":
+            reply = branch_condition_reply(transcript)
+            return "later" if reply == "unknown" else reply
+        return repetition_count_reply(transcript)
+
+    def _prestart_on_start(self, language: str) -> CuratedProtocolTurnPlan | None:
+        """A start while questions are asked, or the start that opens them."""
+
+        if language != "ko":
+            return None
+        if self._prestart_open():
+            return self._words_plan(
+                f"먼저 시작 전 질문에 답해 주세요. {self._prestart_question_words()}",
+                intent_kind="prestart_question_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+        opened = self.open_prestart_questions()
+        if opened is None:
+            return None
+        return self._words_plan(
+            opened, intent_kind="prestart_questions_opened",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+        )
+
+    def _plan_prestart_answer(
+        self,
+        reply: int | str,
+        *,
+        transcript: str,
+        command_key: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Keep the answer, ask the next question, or start once the last is answered."""
+
+        state = self._prestart
+        assert state is not None
+        items = state["items"]
+        index = int(state["index"])
+        item = items[index]
+        utterance = " ".join(transcript.split())
+        if reply == "all_later":
+            for rest in items[index:]:
+                state["deferred"].append(rest["id"])
+            index = len(items)
+            lead = "나머지는 그 단계에서 여쭤볼게요."
+        else:
+            if reply == "later":
+                state["deferred"].append(item["id"])
+                lead = (
+                    f"{item['step_label']}단계 조건은 그 단계에서 여쭤볼게요."
+                    if item["kind"] == "branch" else
+                    f"{item['range']}단계 횟수는 그 단계에서 여쭤볼게요."
+                )
+            elif item["kind"] == "branch":
+                state["answers"][item["id"]] = {"answer": reply, "utterance": utterance}
+                lead = (
+                    "조건에 해당한다고 들었어요." if reply == "yes"
+                    else "조건에 해당하지 않는다고 들었어요."
+                )
+            else:
+                count = reply if isinstance(reply, int) and not isinstance(reply, bool) else None
+                state["answers"][item["id"]] = {"count": count, "utterance": utterance}
+                lead = (
+                    f"{count}회로 들었어요." if count is not None else
+                    f"알겠어요. {item['range']}단계는 한 번 할 때마다 한 번 더 하실지 여쭤볼게요."
+                )
+            index += 1
+            # A count under a condition is asked only when the condition was
+            # answered yes; otherwise it waits for its step, as lane CB does.
+            while index < len(items) and items[index].get("gate") and (
+                (state["answers"].get(items[index]["gate"]) or {}).get("answer") != "yes"
+            ):
+                state["deferred"].append(items[index]["id"])
+                index += 1
+        state["index"] = index
+        if index < len(items):
+            plan = self._words_plan(
+                f"{lead} {self._prestart_question_words()}",
+                intent_kind="prestart_answer_recorded",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+            self._replay[turn_id] = plan
+            return plan
+        record = self._commit_prestart_answers(
+            actor_principal_id=actor_principal_id, actor_role=actor_role,
+        )
+        started = self._execute_turn_intent(
+            CuratedControlIntent(
+                intent_kind="prestart_start",
+                action=CuratedProtocolAction.START,
+                requested_transition="start",
+                requested_followup="describe_new_current_step",
+                confidence_source="server_prestart_question",
+                allows_state_mutation=True,
+                language=language,
+                normalized_transcript=command_key,
+            ),
+            transcript=transcript, command_key=command_key, turn_id=turn_id,
+            language=language, configuration_id=configuration_id,
+            generation=generation, actor_principal_id=actor_principal_id,
+            actor_role=actor_role, open_question=None,
+        )
+        recorded = " 시작 전 답을 기록했어요." if record["answers"] or record["registered"] else ""
+        opening = f"{lead}{recorded}"
+        plan = replace(
+            started,
+            display_text=f"{opening}\n\n{started.display_text}" if started.display_text else opening,
+            speech_text=f"{opening} {started.speech_text}" if started.speech_text else opening,
+            step_record=record,
+        )
+        self._replay[turn_id] = plan
+        return plan
+
+    def _commit_prestart_answers(
+        self, *, actor_principal_id: str | None, actor_role: str,
+    ) -> dict[str, Any]:
+        """Keep the answers as lane CB keeps them at the step, marked as asked before the start."""
+
+        state = self._prestart or {"items": [], "answers": {}, "deferred": []}
+        self._prestart = None
+        now = datetime.now(timezone.utc).isoformat()
+        steps = {step.step_id: step for step in self.fixture.steps}
+        record: dict[str, Any] = {
+            "kind": "prestart_answers", "answers": [], "registered": [],
+            "deferred": list(state["deferred"]),
+        }
+        for item in state["items"]:
+            answer = state["answers"].get(item["id"])
+            if answer is None:
+                continue
+            if item["kind"] == "branch":
+                branch = self._branch_by_id(item["id"])
+                condition = " ".join(str(branch.condition_source_text).split())
+                self._branch_answers[item["id"]] = {
+                    "branch_id": item["id"], "step_id": item["step_id"],
+                    "step_label": item["step_label"], "condition_source_text": condition,
+                    "answer": answer["answer"], "value_source": VALUE_SOURCE_OPERATOR,
+                    "answered_at": now, "actor_principal_id": actor_principal_id or None,
+                    "actor_role": actor_role, "utterance": answer["utterance"],
+                    "asked": "before_start",
+                }
+                registered = []
+                if answer["answer"] == "yes":
+                    for interval in self._repeat_intervals_by_id().values():
+                        gate = self._branch_gating(interval)
+                        guidance = self._repetition_guidance(interval)
+                        if gate is None or gate.branch_id != item["id"] or guidance is None:
+                            continue
+                        first, last = self._range_labels(interval)
+                        registered.append({
+                            "repetition_id": str(interval["repetition_id"]),
+                            "repeated_step_labels": [first, last],
+                            "count": guidance["count"], "value_source": guidance["value_source"],
+                        })
+                record["answers"].append({
+                    "kind": "branch_answer", "branch_id": item["id"],
+                    "step_id": item["step_id"], "step_label": item["step_label"],
+                    "condition_source_text": condition, "answer": answer["answer"],
+                    "value_source": VALUE_SOURCE_OPERATOR, "skipped_step_labels": [],
+                    "skipped_step_ids": [], "registered": registered, "asked": "before_start",
+                })
+            else:
+                interval = self._repeat_intervals_by_id()[item["id"]]
+                first, last = self._range_labels(interval)
+                anchor = steps.get(str(interval.get("anchor_step_id") or ""))
+                count = answer["count"]
+                decided = "before_start" if count is not None else "per_round"
+                self._registered_repetitions[item["id"]] = {
+                    "count": count, "value_source": VALUE_SOURCE_OPERATOR, "decided": decided,
+                    "recorded_at": now, "actor_principal_id": actor_principal_id or None,
+                    "actor_role": actor_role, "utterance": answer["utterance"],
+                    "asked": "before_start",
+                }
+                record["registered"].append({
+                    "kind": "repeat_registered", "repetition_id": item["id"],
+                    "repeated_step_labels": [first, last],
+                    "stated_at_step": anchor.source_label if anchor is not None else "",
+                    "count": count, "value_source": VALUE_SOURCE_OPERATOR, "decided": decided,
+                    "source_text": " ".join(str(interval.get("source_text") or "").split()),
+                    "asked": "before_start",
+                })
+        return record
 
     def open_report_review(
         self, items: Sequence[Mapping[str, Any]], *, report_id: str,
@@ -11529,8 +11871,9 @@ class CuratedProtocolSession:
         self._branch_answers.clear()
         self._registered_repetitions.clear()
         self._declined_round = None
-        # Lane CF: a value question.
+        # Lane CF: a value question and the questions before the start.
         self._pending_note_confirmation = None
+        self._prestart = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -11706,8 +12049,9 @@ class CuratedProtocolSession:
         self._branch_answers.clear()
         self._registered_repetitions.clear()
         self._declined_round = None
-        # Lane CF: a value question.
+        # Lane CF: a value question and the questions before the start.
         self._pending_note_confirmation = None
+        self._prestart = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -11853,7 +12197,7 @@ class CuratedProtocolSession:
         tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None],
         tuple[dict[str, Any] | None, dict[str, int], frozenset[str]],
         tuple[dict[str, Any] | None, dict[str, Any] | None, str | None],
-        tuple[dict[str, Any] | None],
+        tuple[dict[str, Any] | None, str | None],
     ]:
         return (
             self.active,
@@ -11921,10 +12265,12 @@ class CuratedProtocolSession:
                 {key: dict(value) for key, value in self._registered_repetitions.items()},
                 dict(self._declined_round) if self._declined_round is not None else None,
             ),
-            # Lane CF: a value question rolls back with the turn that asked it.
+            # Lane CF: a value question and the questions before the start
+            # roll back with the turn that changed them.
             (
                 dict(self._pending_note_confirmation)
                 if self._pending_note_confirmation is not None else None,
+                json.dumps(self._prestart) if self._prestart is not None else None,
             ),
         )
 
@@ -12009,8 +12355,9 @@ class CuratedProtocolSession:
                 key: dict(value) for key, value in answered[1].items()
             }
             self._declined_round = dict(answered[2]) if answered[2] is not None else None
-            asked = checkpoint[26] if len(checkpoint) >= 27 else (None,)
+            asked = checkpoint[26] if len(checkpoint) >= 27 else (None, None)
             self._pending_note_confirmation = dict(asked[0]) if asked[0] is not None else None
+            self._prestart = json.loads(asked[1]) if asked[1] is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -12030,6 +12377,7 @@ class CuratedProtocolSession:
             self._declined_round = None
             self._report_review = None
             self._pending_note_confirmation = None
+            self._prestart = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -13190,10 +13538,12 @@ class CuratedProtocolSession:
             # semantic fallback leave such a turn to the rules.
             branch=self._branch_question_open(),
             repeat_count=self._count_question_open(),
-            # Lane CF: the 바로 확인 value question (one turn).
+            # Lane CF: the 바로 확인 value question (one turn), and the
+            # questions before the start (open until answered).
             note_confirm=self._note_confirmation_valid(
                 turn_id=turn_id, configuration_id=configuration_id, generation=generation,
             ),
+            prestart=self._prestart_open(),
         )
 
     def _note_confirmation_valid(
@@ -14158,6 +14508,20 @@ class CuratedProtocolSession:
             )
         elif (
             language == "ko" and transcript_quality is None
+            and self._prestart_open()
+            and (prestart_reply := self._prestart_reply(transcript)) is not None
+        ):
+            # Lane CF, decision 4: the reply to a question asked before the
+            # start. The last one starts the experiment.
+            self._last_front_rule = "prestart_question"
+            return self._plan_prestart_answer(
+                prestart_reply, transcript=transcript, command_key=command_key,
+                turn_id=turn_id, language=language,
+                configuration_id=configuration_id, generation=generation,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+            )
+        elif (
+            language == "ko" and transcript_quality is None
             and self._branch_question_open()
             and (branch_reply := branch_condition_reply(transcript)) is not None
         ):
@@ -14261,8 +14625,8 @@ class CuratedProtocolSession:
                 if language == "ko" and transcript_quality is None else None
             )
             if said_here is not None:
-                # Lane CF, decision 1: a setting said aloud. It changes no
-                # workflow state.
+                # Lane CF, decisions 1 and 4: a setting said aloud. It
+                # changes no workflow state.
                 return said_here
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.
@@ -14858,6 +15222,16 @@ class CuratedProtocolSession:
                 intent, transcript=transcript,
                 actor_principal_id=actor_principal_id, actor_role=actor_role,
             )
+        elif (
+            command is CuratedProtocolAction.START
+            and intent.intent_kind == "workflow_command"
+            and not self.active
+            and self._experiment_started_at is None
+            and (held := self._prestart_on_start(language)) is not None
+        ):
+            # Lane CF, decision 4: the source's conditions and counts are
+            # asked before the run starts; the last answer starts it.
+            plan = held
         elif intent.intent_kind == "untargeted_quantity_question":
             plan = self._quantity_target_plan(intent, language=language)
         elif intent.intent_kind == "targeted_quantity_question":
