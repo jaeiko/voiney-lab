@@ -79,18 +79,11 @@ class TheGateItselfTests(unittest.TestCase):
         )
         self.assertIn("2 source page(s)", reason.message)
 
-    def test_it_is_a_gate_a_reviewer_can_clear(self) -> None:
-        from voiney_lab.protocol_catalog import (
-            _ACKNOWLEDGEABLE_GATES,
-            ProtocolCatalog,
-        )
-
-        code = domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value
-        self.assertIn(code, _ACKNOWLEDGEABLE_GATES)
-        self.assertEqual(
-            ProtocolCatalog._BLOCKER_RESOLUTION[code],
-            {"kind": "reviewer_can_clear", "action": "acknowledge_gate"},
-        )
+    def test_it_is_a_notice_the_experimenter_reads_before_the_start(self) -> None:
+        # Lane DI (2026-10-08): not an execution blocker. The page's own text
+        # is shown at the step (the session's unread-page disclosure).
+        code = domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ
+        self.assertNotIn(code, domain.EXECUTION_BLOCKING_REASON_CODES)
 
 
 class DerivedFromTheMergeTests(unittest.TestCase):
@@ -277,12 +270,7 @@ class TheProductionPathTests(unittest.TestCase):
         from voiney_lab.experiment_protocol_store import (
             initialize_protocol_store,
         )
-        from voiney_lab.protocol_catalog import (
-            ProtocolCatalog,
-            SharedSecretApprovalPolicy,
-        )
-
-        globals().setdefault("SharedSecretApprovalPolicy", SharedSecretApprovalPolicy)
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         from tests.test_protocol_catalog import analysis_draft, write_text_pdf
 
@@ -364,70 +352,23 @@ class TheProductionPathTests(unittest.TestCase):
         )
         return entry
 
-    def _acknowledge(self, entry, code):
-        analyzed = self.catalog.get_entry(entry.protocol_id)
-        self.catalog.acknowledge_readiness_gate(
-            analyzed.protocol_id,
-            analyzed.revision_id,
-            reason_code=code,
-            actor_principal_id="reviewer@example.org",
-            actor_role="reviewer",
-            comment="Read the page against the source.",
-        )
-
-    def test_an_omitted_value_blocks_execution_until_someone_reads_it(self):
+    def test_an_omitted_value_is_a_notice_and_the_analysis_may_run(self):
         code = domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value
         entry = self._register_with_coverage(omit_a_value=True)
 
-        blocked = self.catalog.get_entry(entry.protocol_id)
-        self.assertFalse(blocked.available_for_execution)
-        self.assertIn(
-            code,
-            {
-                item["code"]
-                for item in self.catalog.review(entry.protocol_id)["outstanding_blockers"]
-            },
-        )
-
-        # Clearing only the safety gate is not enough: this one still stands.
-        self._acknowledge(
-            entry,
-            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-        )
-        self.assertFalse(
-            self.catalog.get_entry(entry.protocol_id).available_for_execution
-        )
-
-        # Cleared and approved, it can run. The gate is a gate, not a wall.
-        self._acknowledge(entry, code)
-        approved = self.catalog.get_entry(entry.protocol_id)
-        self.catalog.approve(
-            approved.protocol_id,
-            approved.revision_id,
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
-        )
-        self.assertTrue(
-            self.catalog.get_entry(entry.protocol_id).available_for_execution
-        )
+        # Lane DI (2026-10-08): the omission is told to the experimenter
+        # before the start and the page's own words are shown at the step;
+        # it does not keep the document from running.
+        stored = self.catalog.get_entry(entry.protocol_id)
+        self.assertTrue(stored.available_for_execution)
+        review = self.catalog.review(entry.protocol_id)
+        self.assertEqual(review["execution_blockers"], [])
+        self.assertIn(code, {item["code"] for item in review["execution_notices"]})
 
     def test_the_executable_fixture_carries_the_unread_page(self) -> None:
         """The assignment that existed only in a test file until now."""
 
         entry = self._register_with_coverage(omit_a_value=True)
-        for code in (
-            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-            domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value,
-        ):
-            self._acknowledge(entry, code)
-        approved = self.catalog.get_entry(entry.protocol_id)
-        self.catalog.approve(
-            approved.protocol_id,
-            approved.revision_id,
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
-        )
-
         fixture = self.catalog.load_executable_fixture(entry.protocol_id)
         self.assertIsNotNone(fixture.unread_pages)
         self.assertEqual(set(fixture.unread_pages), {1})
@@ -442,24 +383,12 @@ class TheProductionPathTests(unittest.TestCase):
 
     def test_a_fully_accounted_document_carries_no_unread_page(self) -> None:
         entry = self._register_with_coverage(omit_a_value=False)
-        current = self.catalog.get_entry(entry.protocol_id)
         self.assertNotIn(
             domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value,
             {
                 item["code"]
-                for item in self.catalog.review(entry.protocol_id)["outstanding_blockers"]
+                for item in self.catalog.review(entry.protocol_id)["execution_notices"]
             },
-        )
-        self._acknowledge(
-            entry,
-            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-        )
-        approved = self.catalog.get_entry(entry.protocol_id)
-        self.catalog.approve(
-            approved.protocol_id,
-            approved.revision_id,
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
         )
         fixture = self.catalog.load_executable_fixture(entry.protocol_id)
         self.assertIsNone(fixture.unread_pages)
@@ -547,22 +476,13 @@ class ADeclinedValueBlocksWithoutDiscardingTests(unittest.TestCase):
             crowded.status, domain.ReadinessStatus.ANALYSIS_REQUIRED
         )
 
-    def test_both_new_reasons_are_gates_a_reviewer_can_clear(self) -> None:
-        from voiney_lab.protocol_catalog import (
-            _ACKNOWLEDGEABLE_GATES,
-            ProtocolCatalog,
-        )
-
+    def test_both_new_reasons_are_notices_under_the_mvp_rule(self) -> None:
         for code in (
-            domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value,
-            domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value,
+            domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED,
+            domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES,
         ):
-            with self.subTest(code=code):
-                self.assertIn(code, _ACKNOWLEDGEABLE_GATES)
-                self.assertEqual(
-                    ProtocolCatalog._BLOCKER_RESOLUTION[code]["action"],
-                    "acknowledge_gate",
-                )
+            with self.subTest(code=code.value):
+                self.assertNotIn(code, domain.EXECUTION_BLOCKING_REASON_CODES)
 
 
 class TheRealRefusalScenarioTests(unittest.TestCase):

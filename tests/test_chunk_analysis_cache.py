@@ -41,7 +41,6 @@ from voiney_lab.protocol_claim_analysis import (
     prepare_chunk_claim_request_context,
 )
 
-from voiney_lab.protocol_catalog import _ACKNOWLEDGEABLE_GATES
 
 from tests.test_protocol_chunk_analysis import FakeChunkModel
 from tests.test_protocol_claim_analysis import RichClaimModel, write_pages
@@ -330,11 +329,13 @@ class ChunkAnalysisCacheTests(unittest.TestCase):
         }
         self.assertEqual(counts, {7})
 
-        # And that is safe because the readiness gate does not take its word.
+        # And that is safe because readiness still records that the count is
+        # the model's reading (a notice the experimenter sees before starting;
+        # lane CB guides the rounds from that count, lane DI 2026-10-08).
         from voiney_lab import experiment_protocol as domain
-        self.assertIn(
-            domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value,
-            {code for code in _ACKNOWLEDGEABLE_GATES} | {"unconfirmed_fixed_repetition"},
+        self.assertNotIn(
+            domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
+            domain.EXECUTION_BLOCKING_REASON_CODES,
         )
 
     def test_an_edited_evidence_handle_is_refused(self) -> None:

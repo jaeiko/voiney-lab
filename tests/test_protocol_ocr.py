@@ -14,8 +14,6 @@ from voiney_lab.experiment_protocol_store import (
 from voiney_lab.protocol_catalog import (
     ProtocolCatalog,
     ProtocolOcrRequiredError,
-    ProtocolOcrReviewError,
-    SharedSecretApprovalPolicy,
 )
 from voiney_lab.protocol_ocr import (
     OcrPage,
@@ -91,7 +89,7 @@ def test_ocr_result_requires_exact_source_and_complete_ordered_pages():
         )
 
 
-def test_scanned_pdf_ocr_requires_human_review_before_analysis(tmp_path):
+def test_scanned_pdf_ocr_text_is_accepted_for_analysis_at_once(tmp_path):
     source = tmp_path / "scanned.pdf"
     _blank_pdf(source)
     store = initialize_protocol_store(
@@ -109,45 +107,21 @@ def test_scanned_pdf_ocr_requires_human_review_before_analysis(tmp_path):
             catalog.request_analysis(registered.protocol_id, "analysis-before-ocr")
 
         provider = FakeOcrProvider()
-        completed = catalog.run_ocr(
+        # Lane PX 3 / lane DI (2026-10-08): the validated OCR text is
+        # accepted for analysis at once, under a recorded authority; there
+        # is no OCR review step. The result is not executable by itself.
+        accepted = catalog.run_ocr(
             registered.protocol_id, provider, ocr_id="ocr-first"
         )
         assert provider.calls == 1
-        assert completed["state"] == "review_required"
-        assert completed["pages"][0]["source_page_number"] == 1
-        assert completed["executable"] is False
-        entry = catalog.get_entry(registered.protocol_id)
-        assert entry.analysis_status == "ocr_review_required"
-        assert entry.available_for_execution is False
-        with pytest.raises(ProtocolOcrRequiredError):
-            catalog.request_analysis(registered.protocol_id, "analysis-unreviewed")
-
-        rejected = catalog.review_ocr(
-            registered.protocol_id,
-            decision="rejected",
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
-            comment="Page 2 did not match the scan.",
-        )
-        assert rejected["state"] == "rejected"
-        with pytest.raises(ProtocolOcrRequiredError):
-            catalog.request_analysis(registered.protocol_id, "analysis-rejected")
-
-        rerun = catalog.run_ocr(
-            registered.protocol_id, provider, ocr_id="ocr-corrected"
-        )
-        assert rerun["state"] == "review_required"
-        accepted = catalog.review_ocr(
-            registered.protocol_id,
-            decision="accepted",
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
-            actor_principal_id="reviewer-a",
-            actor_role="reviewer",
-        )
         assert accepted["state"] == "accepted_for_analysis"
         assert accepted["accepted_for_analysis"] is True
+        assert accepted["pages"][0]["source_page_number"] == 1
         assert accepted["executable"] is False
+        assert accepted["review"]["authority"] == "automatic_upload_ocr"
+        entry = catalog.get_entry(registered.protocol_id)
+        assert entry.analysis_status == "structured_analysis_ready"
+        assert entry.available_for_execution is False
 
         requested = catalog.request_analysis(
             registered.protocol_id, "analysis-after-reviewed-ocr"
@@ -191,12 +165,5 @@ def test_invalid_provider_result_is_persisted_as_bounded_failure(tmp_path):
         assert status["failure_code"] == "protocol_ocr_result_invalid"
         assert "pages" not in status
         assert catalog.get_entry(protocol_id).analysis_status == "ocr_failed"
-        with pytest.raises(ProtocolOcrReviewError):
-            catalog.review_ocr(
-                protocol_id,
-                decision="accepted",
-                policy=SharedSecretApprovalPolicy("review-secret"),
-                presented_secret="review-secret",
-            )
     finally:
         store.close()

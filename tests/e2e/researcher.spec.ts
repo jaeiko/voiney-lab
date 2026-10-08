@@ -36,7 +36,7 @@ test.describe('Researcher / Bench workspace', () => {
     await expect(page.locator('.experiment-context-card')).toBeVisible();
     await expect(page.locator('#experiment-context-name')).not.toHaveText('');
     await expect(page.locator('#experiment-context-version')).not.toHaveText('');
-    await expect(page.locator('#experiment-context-approval')).not.toHaveText('');
+    await expect(page.locator('#experiment-context-experimenter')).not.toHaveText('');
     await expect(page.locator('#experiment-context-actions')).not.toHaveText('');
 
     // Experiment ledger / timeline empty state before any session exists

@@ -667,6 +667,61 @@ class ReadinessAssessment:
         return tuple(reason.code.value for reason in self.reasons)
 
 
+#: The readiness reasons that keep a Protocol out of execution under the MVP
+#: rule (human decision of 2026-10-08, lane DI): the analysis produced nothing
+#: runnable, a page could not be read, or the source contradicts itself on a
+#: safety-critical value. Every other reason is a notice: the experimenter
+#: reads it before pressing start, and the session says the source's own
+#: words at the step it belongs to. ``assess_readiness`` itself is unchanged
+#: -- it still records every reason -- so stored assessments keep their
+#: meaning and this split is applied where the catalog reads them.
+EXECUTION_BLOCKING_REASON_CODES: frozenset[ReadinessReasonCode] = frozenset(
+    {
+        ReadinessReasonCode.INVALID_PROTOCOL,
+        ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_FAILED,
+        ReadinessReasonCode.NO_EXECUTABLE_STEPS,
+        ReadinessReasonCode.SOURCE_PAGE_REQUIRES_OCR,
+        ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
+    }
+)
+
+#: Reasons naming a construct this version has no guidance for yet. The
+#: session says so once when the run reaches the step, and reads the source.
+#: Conditional branches and the three repetition kinds are not here: lane CB
+#: guides them (the condition is asked, the count is asked or read from the
+#: source, the rounds are counted).
+NO_GUIDANCE_YET_REASON_CODES: frozenset[ReadinessReasonCode] = frozenset(
+    {
+        ReadinessReasonCode.UNSUPPORTED_PARALLEL_BACKGROUND_WORK,
+        ReadinessReasonCode.UNSUPPORTED_RECURRING_REMINDER,
+        ReadinessReasonCode.UNSUPPORTED_RECURRING_ACTION,
+        ReadinessReasonCode.UNSUPPORTED_REUSABLE_SUBPROCEDURE,
+    }
+)
+
+
+def execution_blocking_reasons(
+    assessment: ReadinessAssessment,
+) -> tuple[ReadinessReason, ...]:
+    """The reasons that keep this assessment's Protocol out of execution."""
+
+    return tuple(
+        reason for reason in assessment.reasons
+        if reason.code in EXECUTION_BLOCKING_REASON_CODES
+    )
+
+
+def execution_notice_reasons(
+    assessment: ReadinessAssessment,
+) -> tuple[ReadinessReason, ...]:
+    """The reasons the experimenter is told before starting; none blocks."""
+
+    return tuple(
+        reason for reason in assessment.reasons
+        if reason.code not in EXECUTION_BLOCKING_REASON_CODES
+    )
+
+
 def _error(
     code: ProtocolValidationCode,
     message: str,

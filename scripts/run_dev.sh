@@ -18,7 +18,6 @@ PORT="${PORT:-8000}"
 
 BOOTSTRAP_ONLY=false
 CHECK_ONLY=false
-TEST_MODE=false
 while [[ "$#" -ne 0 ]]; do
   case "$1" in
     --bootstrap-only)
@@ -31,12 +30,8 @@ while [[ "$#" -ne 0 ]]; do
       CHECK_ONLY=true
       shift
       ;;
-    --test-mode)
-      TEST_MODE=true
-      shift
-      ;;
     *)
-      echo "usage: $0 [--bootstrap-only] [--check-only] [--test-mode]"
+      echo "usage: $0 [--bootstrap-only] [--check-only]"
       exit 2
       ;;
   esac
@@ -116,20 +111,6 @@ eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
 # Raw microphone evidence remains off unless the operator explicitly opts in
 # before startup with VOINEY_LAB_STT_DIAGNOSTICS_ENABLED=true. Any
 # configured diagnostic directory must remain below data/runtime and is ignored.
-
-if [[ "$TEST_MODE" == "true" ]]; then
-  # Development test mode. The server only honours it outside an operational
-  # usage scope, so the scope is set here too; it never changes a readiness
-  # verdict, it only lets an analysed protocol be run with gates outstanding.
-  export VOINEY_LAB_USAGE_SCOPE="demo"
-  export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="true"
-  echo
-  echo "!!! TEST MODE ON (--test-mode) !!!"
-  echo "  VOINEY_LAB_USAGE_SCOPE=demo"
-  echo "  VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true"
-  echo "  Analysed protocols can be activated and run with readiness gates"
-  echo "  outstanding. Development only; not for real experiments."
-fi
 
 echo
 echo "=== Non-secret capability check ==="

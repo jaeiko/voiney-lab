@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 from tests.protocol_vocabulary_support import build_fixture
 from tests.test_voice_pause_resume_persistence import _QueuedSocket
 from voiney_lab import experiment_protocol as domain
@@ -93,7 +93,7 @@ class VoiceNotesHarness:
     fixture = None
 
     def setUp(self) -> None:
-        activation = development_activation_recorded()
+        activation = runnable_fixture_assumed()
         activation.__enter__()
         self.addCleanup(activation.__exit__, None, None, None)
         if self.fixture is None:

@@ -7090,6 +7090,10 @@ class CuratedProtocolSession:
         # with the rest of the session, and never written to the approval
         # ledger.
         self._acknowledged_unread_pages: dict[int, dict[str, object]] = {}
+        #: The steps at which this run has already said that a construct
+        #: there has no guidance yet (decision of 2026-10-08, lane DI): said
+        #: once per step per run, with the source's own sentence.
+        self._no_guidance_notices_said: set[str] = set()
         #: step_id -> the endpoint observation that released that step's gate.
         #:
         #: A repeat-until step waits on a visible endpoint the source states,
@@ -8483,23 +8487,76 @@ class CuratedProtocolSession:
         }
 
     def _enter_step_notice(self, language: str) -> str:
-        """What is asked on coming to stand on the current step: the condition, else the count.
+        """What is said on coming to stand on the current step.
 
-        Both questions are open until answered at that step; this only says
-        them. Called where the run arrives on a step -- the start, an advance,
-        a return, a later start, a skip -- and by a condition's yes, which may
-        uncover the count question behind it.
+        First the notice that a construct at this step has no guidance yet
+        (once per step per run, decision of 2026-10-08), then the condition
+        question, else the count question. The questions are open until
+        answered at that step; this only says them. Called where the run
+        arrives on a step -- the start, an advance, a return, a later start,
+        a skip -- and by a condition's yes, which may uncover the count
+        question behind it.
         """
 
         if language != "ko":
             return ""
+        parts = []
+        notice = self._no_guidance_notice()
+        if notice:
+            parts.append(notice)
         branch = self._open_branch()
         if branch is not None:
-            return self._branch_question_words(branch)
-        interval = self._open_count_interval()
-        if interval is not None:
-            return self._count_question_words(interval)
-        return ""
+            parts.append(self._branch_question_words(branch))
+        else:
+            interval = self._open_count_interval()
+            if interval is not None:
+                parts.append(self._count_question_words(interval))
+        return " ".join(parts)
+
+    #: What each construct without guidance is called in the one-time notice.
+    _NO_GUIDANCE_WORDS: dict[str, str] = {
+        "unsupported_parallel_background_work": "동시 작업",
+        "unsupported_recurring_reminder": "반복 알림",
+        "unsupported_recurring_action": "일정 간격으로 되풀이하는 동작",
+        "unsupported_reusable_subprocedure": "다른 곳에서 다시 쓰는 하위 절차",
+    }
+
+    def _no_guidance_notice(self) -> str:
+        """Once per step per run: a construct here has no guidance yet; the source is read.
+
+        The MVP rule (human decision of 2026-10-08) stops these constructs
+        from blocking execution. What replaces the block is this sentence,
+        said when the run arrives on the step, followed by the source's own
+        words for the construct -- never a paraphrase, and nothing is done
+        about the construct on the system's authority. The step's own text is
+        presented as at any other step.
+        """
+
+        if not 0 <= self.current_index < len(self.fixture.steps):
+            return ""
+        step = self.fixture.steps[self.current_index]
+        if step.step_id in self._no_guidance_notices_said:
+            return ""
+        reasons = [
+            reason
+            for reason in self.fixture.draft.readiness.reasons
+            if reason.step_id == step.step_id
+            and reason.code in domain.NO_GUIDANCE_YET_REASON_CODES
+        ]
+        if not reasons:
+            return ""
+        self._no_guidance_notices_said.add(step.step_id)
+        sentences = []
+        for reason in reasons:
+            name = self._NO_GUIDANCE_WORDS.get(reason.code.value, "이 구조")
+            quoted = " ".join(
+                str(reason.evidence.source_excerpt if reason.evidence else "").split()
+            )
+            sentence = f"이 단계의 {name}은 아직 안내 기능이 없어요. 원문을 읽어 드릴게요."
+            if quoted:
+                sentence += f" “{quoted}”"
+            sentences.append(sentence)
+        return " ".join(sentences)
 
     def _step_question_hold(
         self, intent: CuratedControlIntent, language: str,
@@ -11132,6 +11189,8 @@ class CuratedProtocolSession:
         # A new run owes the warnings again. The duty is per execution, not
         # per protocol: the person at the bench this time has not heard them.
         self._disclosed_safety_warnings.clear()
+        # A new run is told again which steps have no guidance yet.
+        self._no_guidance_notices_said.clear()
         # A new run re-enters every repeat interval. Whether the last
         # person judged one finished says nothing about this one.
         self._repeat_intervals.clear()

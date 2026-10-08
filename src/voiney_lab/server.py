@@ -11,7 +11,7 @@ from urllib.parse import unquote_plus, urlparse
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -113,7 +113,6 @@ from voiney_lab.web_visuals import (
 )
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
-    ProtocolApprovalError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogEntry,
@@ -121,7 +120,6 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
-    SharedSecretApprovalPolicy,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -411,7 +409,6 @@ async def lifespan(_: FastAPI):
     """Warm optional in-memory retrieval without making it a startup dependency."""
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
-    log_readiness_gate_test_mode()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
     await asyncio.to_thread(start_moss_runtime_from_environment)
@@ -1224,10 +1221,7 @@ def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
     if not settings.enabled:
         raise ProtocolCatalogUnavailableError("Protocol catalog is disabled.")
     store=initialize_protocol_store(settings)
-    return ProtocolCatalog(
-        store,skip_readiness_gates=_test_mode_skips_readiness_gates(),
-        on_execution_authorized=_translate_authorized_revision,
-        on_analysis_ready=_translate_analyzed_revision),store
+    return ProtocolCatalog(store,on_analysis_ready=_translate_analyzed_revision),store
 
 
 def _revision_translation_store():
@@ -1237,18 +1231,6 @@ def _revision_translation_store():
     if not settings.enabled:
         return None
     return initialize_workspace_store(settings)
-
-
-def _revision_translation_fixture(
-    catalog:ProtocolCatalog,protocol_id:str,
-)->CuratedProtocolFixture:
-    """The fixture a session will run for this protocol, as sessions load it."""
-
-    config=server_config()
-    candidate=_configured_candidate_fixture(config)
-    if candidate is not None and candidate.protocol_id==protocol_id:
-        return candidate
-    return catalog.load_executable_fixture(protocol_id)
 
 
 def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None:
@@ -1270,20 +1252,6 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
             or not RoleModel.from_environment("translation").has_key()):
         return None
     return _start_revision_translation
-
-
-def _translate_authorized_revision(
-    catalog:ProtocolCatalog,protocol_id:str,
-)->None:
-    """Translate an executable revision's sentences once, off the request.
-
-    The same revision translated when its analysis passed makes no model
-    call here: every stored sentence is skipped.
-    """
-
-    runner=_revision_translation_runner()
-    if runner is not None:
-        runner(_revision_translation_fixture(catalog,protocol_id))
 
 
 def _translate_analyzed_revision(
@@ -2075,47 +2043,22 @@ def _candidate_fixture_execution_state(
 )->dict[str,object]:
     """Answer whether the configured development fixture may execute right now.
 
-    Until 2026-09-05 this answer was the literal ``True``.  A fixture is
-    configured by a launcher environment variable, so every readiness gate
-    could be blocked -- an unresolved ambiguity, no declared safety warning,
-    two unsupported repeat-untils -- and the UI still offered the protocol as
-    runnable.  Being the configured fixture is a statement about which file
-    the server loaded, and it was standing in for a statement about whether
-    anyone had judged the protocol fit to run.
-
-    The answer now comes from the same place it comes from for every other
-    protocol: the catalog entry materialized from this exact fixture, which is
-    executable only when a recorded development activation stands *and* every
-    blocking readiness reason is either absent or cleared by a person.  It is
-    additionally gated on a non-operational usage scope, which the
-    activate-development endpoint already required and this path did not.
-
-    Anything that cannot be read is a no.  A disabled store, a missing entry,
-    a fixture the store does not match -- none of those are reasons to assume
-    yes, because a fixture whose authority cannot be read has no authority.
+    The same question the catalog answers for every uploaded PDF (decision
+    of 2026-10-08): the entry materialized from this exact fixture is
+    executable when its analysis carries no execution blocker. Being the
+    configured fixture says which file the server loaded, not that it may
+    run, so a disabled store, a missing entry or a fixture the store does not
+    match is a no. The curated fixture is development material and never runs
+    under the operational usage scope.
     """
 
     state:dict[str,object]={
         "available_for_execution":False,
-        "blocked_reason":"development_activation_not_recorded",
-        "outstanding_blockers":[],
-        "development_activation":{
-            "activated":False,
-            "actor_principal_id":None,
-            "actor_role":None,
-            "recorded_at":None,
-            "authority":None,
-        },
-        "approval":{
-            "status":"review_required",
-            "final_approval":False,
-            "actor_principal_id":None,
-            "actor_role":None,
-            "recorded_at":None,
-            "authority":None,
-        },
+        "blocked_reason":"development_fixture_not_materialized",
+        "execution_blockers":[],
+        "execution_notices":[],
     }
-    if not _development_activation_allowed():
+    if not _development_fixture_allowed():
         state["blocked_reason"]="usage_scope_not_development"
         return state
     settings=_protocol_store_settings()
@@ -2129,24 +2072,14 @@ def _candidate_fixture_execution_state(
         return state
     try:
         if not catalog.development_fixture_is_materialized(fixture):
-            state["blocked_reason"]="development_fixture_not_materialized"
             return state
         entry=catalog.get_entry(fixture.protocol_id)
-        state["development_activation"]=catalog.development_activation_context(
-            fixture.protocol_id)
-        state["approval"]=catalog.approval_context(fixture.protocol_id)
-        state["available_for_execution"]=bool(entry.available_for_execution)
         review=catalog.review(fixture.protocol_id)
-        state["outstanding_blockers"]=review.get("outstanding_blockers") or []
-        if entry.available_for_execution:
-            state["blocked_reason"]=None
-        elif review.get("readiness_gates_cleared") is not True:
-            # Readiness comes first in the truth of it. Reporting a missing
-            # activation while two capability blockers stand tells a reviewer
-            # to press activate, which is what the STEP 26 screen did.
-            state["blocked_reason"]="readiness_gates_blocked"
-        elif state["development_activation"].get("activated"):
-            state["blocked_reason"]="readiness_gates_blocked"
+        state["available_for_execution"]=bool(entry.available_for_execution)
+        state["execution_blockers"]=review.get("execution_blockers") or []
+        state["execution_notices"]=review.get("execution_notices") or []
+        state["blocked_reason"]=(
+            None if entry.available_for_execution else "execution_blocked")
     except Exception:  # noqa: BLE001 - see the docstring: unreadable is a no
         state["available_for_execution"]=False
         state["blocked_reason"]="protocol_catalog_unavailable"
@@ -2164,29 +2097,26 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "source_sha256":fixture.source_pdf_sha256,
         "revision_id":fixture.revision_id,
         "readiness_status":fixture.draft.readiness.status.value,
-        "approval_status":(
-            "development_only_not_final_acceptance"
-            if execution["available_for_execution"] else "unapproved"),
         "analysis_status":"validated_curated_fixture",
         "step_count":len(fixture.steps),
         "created_at":None,
         "available_for_execution":execution["available_for_execution"],
+        "execution_blocker_codes":[
+            item.get("code") for item in execution.get("execution_blockers") or []
+            if isinstance(item,dict)],
         "development_only":True,
-        "development_activation":execution["development_activation"],
+        "lifecycle_state":(
+            "ready" if execution["available_for_execution"] else "blocked"),
         "execution_blocked_reason":execution["blocked_reason"],
-        "outstanding_blockers":execution.get("outstanding_blockers") or [],
-        "approval":execution["approval"],
     }
 
 
 def _catalog_entry_projection(
     catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
 )->dict[str,object]:
-    """Project one catalog entry with its existing approval evidence."""
+    """Project one catalog entry as the screen reads it."""
 
-    public=entry.public_dict()
-    public["approval"]=catalog.approval_context(entry.protocol_id)
-    return public
+    return entry.public_dict()
 
 
 def _public_protocol_catalog_entries(
@@ -2255,35 +2185,6 @@ def log_protocol_catalog_runtime_configuration()->None:
         )
 
 
-#: A reviewer finding the catalog refuses for what it says, not for who sent
-#: it: the catalog's own refusal sentence -> (reason code, HTTP status).
-#: They all reached the screen as 403 "protocol_approval_denied", which read
-#: as a permission problem (lane R6, decision 5). 400 is a request the
-#: endpoint does not support, 422 one whose content does not hold. Every
-#: sentence here is one protocol_catalog.py raises (tested).
-FINDING_REJECTIONS:dict[str,tuple[str,int]]={
-    "A reviewer finding must cite the segments it rests on.":("finding_evidence_missing",422),
-    "An ambiguity decision must cite the segments it rests on.":("finding_evidence_missing",422),
-    "The cited evidence segments do not resolve on that page.":("finding_evidence_span_mismatch",422),
-    "This analysis revision has no such ambiguity.":("ambiguity_not_found",422),
-    "Ambiguity decision is unsupported.":("finding_unsupported",400),
-    "This readiness reason cannot be cleared by acknowledgement.":("finding_unsupported",400),
-    "A validated analysis revision is required for acknowledgement.":("analysis_revision_missing",422),
-    "A validated analysis revision is required to resolve an ambiguity.":("analysis_revision_missing",422),
-    "A validated analysis revision is required to record a finding.":("analysis_revision_missing",422),
-    "A validated analysis revision is required to revoke a finding.":("analysis_revision_missing",422),
-    "This analysis revision does not carry that readiness gate.":("finding_target_not_found",422),
-    "This analysis revision has no such fixed repetition.":("finding_target_not_found",422),
-    "That page is not in this source.":("finding_target_not_found",422),
-    "That label is not a numbered line on that page.":("finding_target_not_found",422),
-    "A confirmed count must be a number.":("finding_value_invalid",400),
-    "A confirmed count must be positive.":("finding_value_invalid",400),
-    "The confirmed count does not match the analysed count.":("finding_value_mismatch",422),
-    "This analysis revision carries no confirmation to revoke.":("finding_not_recorded",422),
-    "This analysis revision carries no finding to revoke.":("finding_not_recorded",422),
-}
-
-
 def _catalog_http_error(exc:Exception)->HTTPException:
     if isinstance(exc,(AuthenticationRequiredError,AuthorizationDeniedError,WorkspaceError)):
         return _workspace_http_error(exc)
@@ -2320,13 +2221,6 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
-    if isinstance(exc,ProtocolApprovalError) and str(exc) in FINDING_REJECTIONS:
-        # A finding refused for its content: its reason, and not 403, which
-        # is kept for a real permission refusal (lane R6, decision 5).
-        code,status=FINDING_REJECTIONS[str(exc)]
-        return HTTPException(status_code=status,detail=code)
-    if isinstance(exc,ProtocolApprovalError):
-        return HTTPException(status_code=403,detail=exc.code)
     if isinstance(exc,ProtocolRegistrationError):
         return HTTPException(status_code=400,detail=exc.code)
     return HTTPException(
@@ -3040,303 +2934,12 @@ async def update_workspace_retention(request:Request)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
-def _workspace_catalog_analysis_gate(
-    principal: Principal,
-    workspace,
-    revision_id: str,
-) -> dict[str, object] | None:
-    """Project the live catalog gate for one local-PDF workspace revision."""
-
-    revision = workspace.get_revision(principal, revision_id)
-    source = workspace.source_for_revision(principal, revision_id)
-    if source.connector_kind != "local_pdf":
-        return None
-    protocol_id = source.metadata.get("catalog_protocol_id")
-    execution_identity = revision.content.get("execution_identity")
-    if not isinstance(execution_identity, dict):
-        execution_identity = {}
-    recorded_protocol_id = execution_identity.get("protocol_id")
-    recorded_source_hash = execution_identity.get("source_sha256")
-    base: dict[str, object] = {
-        "kind": "catalog_structured_analysis",
-        "catalog_protocol_id": (
-            protocol_id if isinstance(protocol_id, str) else None
-        ),
-        "workspace_revision_id": revision_id,
-        "source_hash": source.source_hash,
-        "candidate_revision_id": None,
-        "analysis_status": "analysis_unavailable",
-        "failure_code": None,
-        "failure_detail": None,
-        "readiness_status": "analysis_required",
-        "execution_approval_allowed": False,
-        "available_for_execution": False,
-        "representation": "recovery_triage",
-        "action": "승인 전에 올바른 구조 분석을 다시 만들어 주세요.",
-    }
-    if (
-        not isinstance(protocol_id, str)
-        or not protocol_id
-        or recorded_protocol_id != protocol_id
-        or recorded_source_hash != source.source_hash
-        or revision.source_hash != source.source_hash
-        or source.version_identity != source.source_hash
-    ):
-        base.update(
-            {
-                "analysis_status": "invalid_source_revision",
-                "failure_code": "invalid_source_revision",
-                "action": "검토 전에 원문과 버전의 연결을 바로잡아 주세요.",
-            }
-        )
-        return base
-    try:
-        _scope_catalog_resource(protocol_id)
-        catalog, catalog_store = _open_protocol_catalog()
-        try:
-            entry = catalog.get_entry(protocol_id)
-            review = catalog.review(protocol_id)
-        finally:
-            catalog_store.close()
-    except (
-        HTTPException,
-        ProtocolCatalogError,
-        ProtocolConfigurationError,
-        ProtocolFeatureDisabledError,
-    ):
-        base["failure_code"] = "protocol_catalog_unavailable"
-        base["action"] = "검토·승인 전에 프로토콜 카탈로그를 복구해 주세요."
-        return base
-    analysis_failure = review.get("analysis_failure")
-    readiness = review.get("readiness")
-    readiness_status = (
-        readiness.get("status")
-        if isinstance(readiness, dict)
-        and isinstance(readiness.get("status"), str)
-        else "analysis_required"
-    )
-    failure_code = (
-        analysis_failure.get("code")
-        if isinstance(analysis_failure, dict)
-        and isinstance(analysis_failure.get("code"), str)
-        else None
-    )
-    failure_detail = (
-        analysis_failure.get("detail")
-        if isinstance(analysis_failure, dict)
-        and isinstance(analysis_failure.get("detail"), dict)
-        else None
-    )
-    exact_source = entry.source_sha256 == source.source_hash
-    analyzed_revision = (
-        review.get("analysis_available") is True
-        and entry.revision_id.startswith("pdf-")
-        and "-analysis-" in entry.revision_id
-    )
-    approval_allowed = bool(
-        exact_source
-        and analyzed_revision
-        and readiness_status == "guidance_ready"
-    )
-    if not exact_source:
-        status = "invalid_source_revision"
-        failure_code = "invalid_source_revision"
-        action = "이 원문 버전으로 분석을 다시 해 주세요."
-    elif failure_code is not None:
-        status = "analysis_failed"
-        action = "구조 분석을 다시 시도해 주세요. 이 항목은 복구용이며 실행할 수 없습니다."
-    elif not analyzed_revision:
-        status = entry.analysis_status
-        action = "실행 승인 전에 구조 분석을 끝내 주세요."
-    elif readiness_status != "guidance_ready":
-        status = "analysis_not_ready"
-        action = "승인 전에 실행 준비·안전 차단 항목을 해결해 주세요."
-    elif entry.approval_status == "approved":
-        status = "approved"
-        action = "The exact analyzed revision is already execution-approved."
-    else:
-        status = "approval_ready"
-        action = "Approve this exact analyzed revision for Researcher execution."
-    base.update(
-        {
-            "candidate_revision_id": (
-                entry.revision_id if analyzed_revision else None
-            ),
-            "analysis_status": status,
-            "failure_code": failure_code,
-            "failure_detail": failure_detail,
-            "readiness_status": readiness_status,
-            "execution_approval_allowed": approval_allowed,
-            "available_for_execution": entry.available_for_execution,
-            "representation": (
-                "execution_approval"
-                if approval_allowed
-                else "recovery_triage"
-            ),
-            "action": action,
-        }
-    )
-    return base
-
-
-def _apply_workspace_catalog_gate(
-    packet: dict[str, object],
-    gate: dict[str, object] | None,
-) -> dict[str, object]:
-    if gate is None:
-        return packet
-    packet["catalog_analysis_gate"] = gate
-    decision_state = packet.get("decision_state")
-    if not isinstance(decision_state, dict):
-        return packet
-    actions = decision_state.get("allowed_actions")
-    allowed = list(actions) if isinstance(actions, list) else []
-    if gate.get("execution_approval_allowed") is not True:
-        allowed = [action for action in allowed if action != "approved"]
-    decision_state["allowed_actions"] = allowed
-    decision_state["available_for_new_operational_sessions"] = bool(
-        decision_state.get("state") == "approved"
-        and gate.get("available_for_execution") is True
-    )
-    decision_state["execution_gate_state"] = gate.get("analysis_status")
-    return packet
-
-
 @app.get("/api/workspace/reviewer/inbox")
 def get_workspace_reviewer_inbox()->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
             return {"items":list(store.source_inbox(principal))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/reviewer/revisions/{revision_id}/diff")
-def get_workspace_revision_diff(revision_id:str)->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            require_permission(principal,Permission.PROTOCOL_REVIEW)
-            packet=store.revision_diff(principal,revision_id)
-            return _apply_workspace_catalog_gate(
-                packet,
-                _workspace_catalog_analysis_gate(
-                    principal,
-                    store,
-                    revision_id,
-                ),
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/reviewer/revisions/{revision_id}/decision")
-async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            action=str(payload.get("action", ""))
-            comment=str(payload.get("comment", ""))
-            idempotency_key=str(payload.get("idempotency_key", ""))
-            replacement_revision_id=(
-                str(payload["replacement_revision_id"])
-                if payload.get("replacement_revision_id") else None
-            )
-            gate=_workspace_catalog_analysis_gate(
-                principal,
-                store,
-                revision_id,
-            )
-            catalog_entry=None
-            if action=="approved" and gate is not None:
-                packet=_apply_workspace_catalog_gate(
-                    store.revision_diff(principal,revision_id),
-                    gate,
-                )
-                decision_state=packet.get("decision_state")
-                allowed=(
-                    decision_state.get("allowed_actions",[])
-                    if isinstance(decision_state,dict) else []
-                )
-                if (
-                    gate.get("execution_approval_allowed") is not True
-                    or "approved" not in allowed
-                ):
-                    raise WorkspaceConflictError(
-                        "Valid structured analysis of this exact source revision "
-                        "is required before execution approval."
-                    )
-                if (
-                    not comment.strip()
-                    or len(comment)>4000
-                    or re.fullmatch(
-                        r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}",
-                        idempotency_key,
-                    ) is None
-                ):
-                    raise WorkspaceError("Approval request is invalid.")
-                protocol_id=gate.get("catalog_protocol_id")
-                candidate_revision_id=gate.get("candidate_revision_id")
-                if not isinstance(protocol_id,str) or not isinstance(
-                    candidate_revision_id,str
-                ):
-                    raise WorkspaceConflictError(
-                        "Catalog analysis identity is unavailable."
-                    )
-                catalog,catalog_store=_open_protocol_catalog()
-                try:
-                    role=next(
-                        item.value for item in principal.roles
-                        if item.value in {
-                            "reviewer","lab_admin","organization_admin",
-                        }
-                    )
-                    catalog_entry=catalog.approve(
-                        protocol_id,
-                        candidate_revision_id,
-                        policy=SharedSecretApprovalPolicy(
-                            "tenant-rbac-authorized"
-                        ),
-                        presented_secret="tenant-rbac-authorized",
-                        actor_principal_id=principal.principal_id,
-                        actor_role=role,
-                        comment=comment,
-                        actor_display_name=principal.display_name,
-                    )
-                finally:
-                    catalog_store.close()
-            event=store.record_approval(
-                principal,
-                revision_id=revision_id,
-                action=action,
-                comment=comment,
-                idempotency_key=idempotency_key,
-                replacement_revision_id=replacement_revision_id,
-            )
-            store.record_analytics(
-                principal,
-                category="protocol",
-                metric_name="review_decision",
-                dimensions={"status":event.action,"event_kind":"approval"},
-            )
-            state=store.revision_operational_state(principal,revision_id)
-            if catalog_entry is not None:
-                state.update(
-                    {
-                        "catalog_protocol_id":catalog_entry.protocol_id,
-                        "catalog_revision_id":catalog_entry.revision_id,
-                        "available_for_new_operational_sessions":(
-                            catalog_entry.available_for_execution
-                        ),
-                    }
-                )
-            return {"event":event.__dict__,"state":state}
         finally:
             store.close()
     except Exception as exc:
@@ -4287,11 +3890,7 @@ def list_protocol_catalog()->dict[str,object]:
             ]
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
-    payload:dict[str,object]={"protocols":entries}
-    if _test_mode_skips_readiness_gates():
-        # Drives the page-top banner; absent when test mode is off.
-        payload["test_mode"]={"readiness_gates_skipped":True}
-    return payload
+    return {"protocols":entries}
 
 
 @app.get("/api/protocols/{protocol_id}")
@@ -4526,82 +4125,20 @@ def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
         client,require_env("VOINEY_LAB_ANALYSIS_MODEL"),reasoning_effort)
 
 
-def _auto_activate_ready_uploads_enabled() -> bool:
-    scope = (
-        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
-        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
-    ).strip().casefold()
-    if scope == "operational":
-        return False  # NEVER silently bypass human/facility approval in operational mode
-    raw = os.environ.get("VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS", "false").strip().casefold()
-    return raw in ("1", "true", "yes", "on")
+def _development_fixture_allowed() -> bool:
+    """Whether the configured development fixture may run in this usage scope.
 
-
-def _development_activation_allowed() -> bool:
-    """Fail closed outside an explicitly non-operational runtime scope."""
+    The curated in-gel fixture is development material. It runs under the
+    demo, reference_only and test_only scopes and never under operational;
+    an unset scope is a no. This is the one place the usage scope still
+    bears on execution (decision of 2026-10-08).
+    """
 
     scope = (
         os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
         or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     return scope in {"demo", "reference_only", "test_only"}
-
-
-READINESS_GATE_TEST_MODE_ENV = "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"
-READINESS_GATE_TEST_MODE_LABEL = "테스트 모드: 실행 준비 게이트를 건너뜀"
-
-
-def _readiness_gate_test_mode_requested() -> bool:
-    raw = os.environ.get(READINESS_GATE_TEST_MODE_ENV, "false").strip().casefold()
-    return raw in ("1", "true", "yes", "on")
-
-
-def _test_mode_skips_readiness_gates() -> bool:
-    """Whether development test mode lets analysed protocols skip readiness gates.
-
-    Off unless a person sets the variable before starting the server; no
-    launcher sets it. It is honoured only in the scopes that already permit
-    development activation, so an operational runtime ignores it (the
-    startup log says so). It never changes a readiness verdict and never
-    stands in for the development activation itself.
-    """
-
-    return _readiness_gate_test_mode_requested() and _development_activation_allowed()
-
-
-def log_readiness_gate_test_mode() -> None:
-    """Say loudly at startup that test mode is on, or that it was ignored."""
-
-    if not _readiness_gate_test_mode_requested():
-        return
-    if _test_mode_skips_readiness_gates():
-        banner = "!" * 72
-        log.warning(banner)
-        log.warning(
-            "%s (%s=true)",
-            READINESS_GATE_TEST_MODE_LABEL, READINESS_GATE_TEST_MODE_ENV,
-        )
-        log.warning(
-            "TEST MODE: analysed protocols can be activated and run with "
-            "readiness gates outstanding. Development only; not for real "
-            "experiments."
-        )
-        log.warning(banner)
-        return
-    scope = (
-        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
-        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
-    ).strip().casefold()
-    log.warning(
-        "readiness_gate_test_mode.ignored %s=true reason=%s usage_scope=%s",
-        READINESS_GATE_TEST_MODE_ENV,
-        (
-            "operational_usage_scope"
-            if scope == "operational"
-            else "usage_scope_not_development"
-        ),
-        scope or "unset",
-    )
 
 
 @app.post("/api/protocols/{protocol_id}/ocr",status_code=202)
@@ -4670,67 +4207,6 @@ def get_protocol_ocr_status(protocol_id:str)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
-@app.post("/api/protocols/{protocol_id}/ocr/review")
-async def review_protocol_ocr(
-    protocol_id:str,
-    request:Request,
-    x_protocol_approval_token:str|None=Header(default=None),
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        _scope_catalog_resource(protocol_id)
-        catalog,store=_open_protocol_catalog()
-        try:
-            actor=None
-            role=None
-            if _workspace_settings().enabled:
-                actor=_REQUEST_PRINCIPAL.get()
-                if actor is None:
-                    raise AuthenticationRequiredError(
-                        "Authentication is required."
-                    )
-                require_permission(actor,Permission.PROTOCOL_REVIEW)
-                role=next(
-                    item.value for item in actor.roles
-                    if item.value in {
-                        "reviewer","lab_admin","organization_admin",
-                    }
-                )
-                policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
-                presented="tenant-rbac-authorized"
-            else:
-                policy=SharedSecretApprovalPolicy(
-                    os.environ.get(
-                        "VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN"
-                    )
-                )
-                presented=x_protocol_approval_token
-            ocr=catalog.review_ocr(
-                protocol_id,
-                decision=str(payload.get("decision", "")),
-                policy=policy,
-                presented_secret=presented,
-                actor_principal_id=(actor.principal_id if actor else None),
-                actor_role=role,
-                comment=str(
-                    payload.get(
-                        "comment",
-                        "OCR page text reviewed against the source PDF.",
-                    )
-                ),
-            )
-            return {
-                "ocr":ocr,
-                "protocol":catalog.get_entry(protocol_id).public_dict(),
-                "structured_analysis_started":False,
-                "executable":False,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
 @app.post("/api/protocols/{protocol_id}/analysis",status_code=202)
 async def trigger_protocol_analysis(
     protocol_id:str,background:bool=True
@@ -4763,14 +4239,6 @@ async def trigger_protocol_analysis(
                 model,
                 analysis_id=analysis_id,
             )
-            if _auto_activate_ready_uploads_enabled():
-                try:
-                    rev = catalog._latest_protocol_revision(protocol_id)
-                    analysis = catalog._latest_analysis(rev)
-                    if analysis is not None and analysis.readiness.status.value == "guidance_ready":
-                        entry = catalog.activate_development(protocol_id)
-                except Exception as auto_exc:
-                    log.warning("Auto-activation skipped for %s: %s", protocol_id, auto_exc)
             public=entry.public_dict()
             public["analysis_run"]=catalog.analysis_run_status(
                 protocol_id).public_dict()
@@ -4848,14 +4316,6 @@ async def _begin_background_analysis(
                     "Protocol analysis provider is not configured."
                 ) from exc
             entry=catalog.analyze(protocol_id,model,analysis_id=analysis_id)
-            if _auto_activate_ready_uploads_enabled():
-                try:
-                    rev=catalog._latest_protocol_revision(protocol_id)
-                    analysis=catalog._latest_analysis(rev)
-                    if analysis is not None and analysis.readiness.status.value=="guidance_ready":
-                        entry=catalog.activate_development(protocol_id)
-                except Exception as auto_exc:
-                    log.warning("Auto-activation skipped for %s: %s",protocol_id,auto_exc)
             public=entry.public_dict()
             public["analysis_run"]=catalog.analysis_run_status(
                 protocol_id).public_dict()
@@ -4962,30 +4422,17 @@ def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
 
 @app.get("/api/protocols/{protocol_id}/review")
 def get_protocol_review(protocol_id: str) -> dict[str, object]:
-    """Expose the source-linked analysis draft without approving or activating it."""
+    """Expose the source-linked analysis, its notices and its safety statements."""
 
     try:
         _scope_catalog_resource(protocol_id)
         catalog, store = _open_protocol_catalog()
         try:
             review = catalog.review(protocol_id)
-            readiness = review.get("readiness")
-            # An acknowledged gate counts as cleared here, exactly as it does
-            # for approval. Reading the readiness status alone meant a
-            # Protocol whose only blocker a reviewer had already signed off
-            # could never be activated, because the stored status does not
-            # know about acknowledgements.
-            review["development_activation_allowed"] = bool(
-                _development_activation_allowed()
-                and review.get("analysis_available") is True
-                and isinstance(readiness, dict)
-                and (
-                    readiness.get("status") == "guidance_ready"
-                    or review.get("readiness_gates_cleared") is True
-                    or _test_mode_skips_readiness_gates()
-                )
-                and review.get("available_for_execution") is not True
-            )
+            # The screen the experimenter reads before pressing start
+            # (decision of 2026-10-08): the source's safety statements with
+            # their stored Korean beside them, never collapsed.
+            review["safety_notices"]=_review_safety_notices(catalog,protocol_id,review)
             review["pipeline"]=_pipeline_with_translation(catalog,protocol_id,review)
             return review
         finally:
@@ -4997,21 +4444,13 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
 def _pipeline_with_translation(
     catalog:ProtocolCatalog,protocol_id:str,review:dict[str,object],
 )->dict[str,object]:
-    """The catalog's stage line, with what the server alone knows (lane PX 4).
-
-    Whether the person's one confirmation is a press here (test mode) or a
-    reviewer's approval, and how far the revision's Korean has come.
+    """The catalog's stage line, with what the server alone knows (lane PX 4):
+    how far the revision's Korean has come.
     """
 
     pipeline=dict(review.get("pipeline") or {})
     if not pipeline:
         return pipeline
-    if pipeline.get("stage")=="activation":
-        pipeline["action"]=(
-            "'이 프로토콜로 시작'을 한 번 누르면 개발용으로 활성화하고 실험을 시작합니다."
-            if review.get("development_activation_allowed") else
-            "검토자가 검토 화면에서 남은 사유를 확인·해제하고 이 분석 버전을 승인하면 "
-            "실행할 수 있습니다.")
     if review.get("analysis_available") is True:
         try:
             pipeline["translation"]=_translation_progress(catalog,protocol_id)
@@ -5019,6 +4458,32 @@ def _pipeline_with_translation(
             log.warning("revision_translation progress_failed error=%s",type(exc).__name__)
             pipeline["translation"]={"state":"unknown","message":"번역 상태를 읽지 못했습니다."}
     return pipeline
+
+
+def _review_safety_notices(
+    catalog:ProtocolCatalog,protocol_id:str,review:dict[str,object],
+)->list[dict[str,object]]:
+    """The source's safety statements with their Korean, for the start screen.
+
+    The fixture a session will run, with its stored translations, so the
+    Korean shown here is the Korean the step will show; a line whose
+    translation is missing or fails the mechanical check shows the source
+    alone. Empty before an analysis has passed.
+    """
+
+    if review.get("analysis_available") is not True:
+        return []
+    try:
+        fixture=_with_revision_translations(
+            catalog.load_analysis_fixture(protocol_id),start_missing=False)
+    except Exception as exc:  # noqa: BLE001 - the sources stand without Korean
+        log.warning("safety_notices fixture_unavailable error=%s",type(exc).__name__)
+        return [
+            {**item,"primary_text":None,"translation_check":"missing"}
+            for item in review.get("safety_notice_sources") or []
+            if isinstance(item,dict)
+        ]
+    return fixture_safety_notices(fixture)
 
 
 def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,object]:
@@ -5078,376 +4543,6 @@ def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,obj
         "refused":refused,"steps_total":len(step_keys),"steps_korean":steps_korean,
         "message":message,
     }
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
-def approve_protocol_revision(
-    protocol_id:str,
-    revision_id:str,
-    x_protocol_approval_token:str|None=Header(default=None),
-)->dict[str,object]:
-    """Service-authorized approval; deliberately absent from the public UI."""
-
-    try:
-        _scope_catalog_resource(protocol_id)
-        catalog,store=_open_protocol_catalog()
-        try:
-            actor=None
-            role=None
-            if _workspace_settings().enabled:
-                actor=_REQUEST_PRINCIPAL.get()
-                if actor is None:
-                    raise AuthenticationRequiredError("Authentication is required.")
-                require_permission(actor,Permission.PROTOCOL_APPROVE)
-                role=next(
-                    item.value for item in actor.roles
-                    if item.value in {"reviewer","lab_admin","organization_admin"}
-                )
-                policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
-                presented="tenant-rbac-authorized"
-            else:
-                policy=SharedSecretApprovalPolicy(
-                    os.environ.get("VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN"))
-                presented=x_protocol_approval_token
-            entry=catalog.approve(
-                protocol_id,
-                revision_id,
-                policy=policy,
-                presented_secret=presented,
-                actor_principal_id=actor.principal_id if actor else None,
-                actor_role=role,
-                actor_display_name=actor.display_name if actor else None,
-            )
-            return _catalog_entry_projection(catalog,entry)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-def _development_activation_actor() -> tuple[str | None, str | None]:
-    """Name the person taking a development decision, or refuse to take it.
-
-    An activation is the recorded authority that makes a blocked draft
-    runnable, so "who" is not decoration.  Where a workspace is configured the
-    principal is required and must hold the review permission; where none is
-    configured -- a single-operator development host -- the actor is recorded
-    as unattributed rather than invented.
-    """
-
-    if not _workspace_settings().enabled:
-        return None, None
-    actor = _REQUEST_PRINCIPAL.get()
-    if actor is None:
-        raise AuthenticationRequiredError("Authentication is required.")
-    require_permission(actor, Permission.PROTOCOL_REVIEW)
-    role = next(
-        (
-            item.value for item in actor.roles
-            if item.value in {"reviewer", "lab_admin", "organization_admin"}
-        ),
-        None,
-    )
-    return actor.principal_id, role
-
-
-def _reviewer_finding_actor() -> tuple[str, str]:
-    """Name the person recording a finding, or refuse to record one.
-
-    A finding clears a readiness gate. It is the whole of the human judgement
-    this system insists on, so it is never recorded for nobody: unlike a
-    development activation, which may be attributed to the host on a
-    single-operator machine, a finding without an actor is refused outright.
-
-    Where a workspace is configured the principal is required and must hold
-    PROTOCOL_REVIEW. Where none is configured the operator identity the host
-    already resolved is used, and if the host cannot name one the request
-    fails closed rather than inventing "local".
-    """
-
-    if _workspace_settings().enabled:
-        actor = _REQUEST_PRINCIPAL.get()
-        if actor is None:
-            raise AuthenticationRequiredError("Authentication is required.")
-        require_permission(actor, Permission.PROTOCOL_REVIEW)
-        role = next(
-            (
-                item.value for item in actor.roles
-                if item.value in {"reviewer", "lab_admin", "organization_admin"}
-            ),
-            None,
-        )
-        if not role:
-            raise AuthorizationDeniedError(
-                "A reviewing role is required to record a finding."
-            )
-        return actor.principal_id, role
-    actor = _REQUEST_PRINCIPAL.get()
-    if actor is None or not getattr(actor, "principal_id", ""):
-        raise AuthenticationRequiredError(
-            "A named reviewer is required to record a finding."
-        )
-    role = next(
-        (
-            item.value for item in actor.roles
-            if item.value in {"reviewer", "lab_admin", "organization_admin"}
-        ),
-        None,
-    )
-    if not role:
-        raise AuthorizationDeniedError(
-            "A reviewing role is required to record a finding."
-        )
-    return actor.principal_id, role
-
-
-def _finding_segment_ids(payload: dict[str, object]) -> tuple[str, ...]:
-    """Read the citation a finding must carry, without repairing it.
-
-    An empty or malformed list is passed through as empty and the catalog
-    refuses it there. Filling one in here would be the server citing evidence
-    on the reviewer's behalf, which is the one thing this citation exists to
-    prevent.
-    """
-
-    raw = payload.get("evidence_segment_ids")
-    if not isinstance(raw, list) or any(
-        not isinstance(item, str) for item in raw
-    ):
-        return ()
-    return tuple(raw[:64])
-
-
-def _finding_comment(payload: dict[str, object]) -> str | None:
-    comment = payload.get("comment")
-    return comment if isinstance(comment, str) and comment.strip() else None
-
-
-def _finding_response(
-    catalog: ProtocolCatalog, protocol_id: str, entry: ProtocolCatalogEntry,
-) -> dict[str, object]:
-    review = catalog.review(protocol_id)
-    return {
-        "protocol_id": protocol_id,
-        "revision_id": entry.revision_id,
-        "readiness_status": entry.readiness_status,
-        "readiness_gates_cleared": review.get("readiness_gates_cleared"),
-        "available_for_execution": entry.available_for_execution,
-        "outstanding_blockers": review.get("outstanding_blockers"),
-        "reviewer_findings": review.get("reviewer_findings"),
-    }
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/acknowledge-gate")
-def acknowledge_protocol_readiness_gate(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Record a reviewer confirming this Protocol's safety warnings."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        reason_code = body.get("reason_code")
-        if not isinstance(reason_code, str) or not reason_code:
-            raise HTTPException(status_code=400, detail="reason_code_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.acknowledge_readiness_gate(
-                protocol_id,
-                revision_id,
-                reason_code=reason_code,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/confirm-repetition")
-def confirm_protocol_fixed_repetition(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Record a reviewer confirming one bounded repetition and its count."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        repetition_id = body.get("repetition_id")
-        repeat_count = body.get("repeat_count")
-        if not isinstance(repetition_id, str) or not repetition_id:
-            raise HTTPException(status_code=400, detail="repetition_id_required")
-        if isinstance(repeat_count, bool) or not isinstance(repeat_count, int):
-            raise HTTPException(status_code=400, detail="repeat_count_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.confirm_fixed_repetition(
-                protocol_id,
-                revision_id,
-                repetition_id=repetition_id,
-                repeat_count=repeat_count,
-                evidence_segment_ids=_finding_segment_ids(body),
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/revoke-repetition")
-def revoke_protocol_fixed_repetition(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Withdraw a repetition confirmation; the Protocol blocks again."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        repetition_id = body.get("repetition_id")
-        if not isinstance(repetition_id, str) or not repetition_id:
-            raise HTTPException(status_code=400, detail="repetition_id_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.revoke_fixed_repetition_confirmation(
-                protocol_id,
-                revision_id,
-                repetition_id=repetition_id,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/resolve-ambiguity")
-def resolve_protocol_ambiguity(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Record which of two source statements a reviewer read as authoritative."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        ambiguity_id = body.get("ambiguity_id")
-        decision = body.get("decision")
-        if not isinstance(ambiguity_id, str) or not ambiguity_id:
-            raise HTTPException(status_code=400, detail="ambiguity_id_required")
-        if not isinstance(decision, str) or not decision:
-            raise HTTPException(status_code=400, detail="decision_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.resolve_ambiguity(
-                protocol_id,
-                revision_id,
-                ambiguity_id=ambiguity_id,
-                decision=decision,
-                evidence_segment_ids=_finding_segment_ids(body),
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/activate-development")
-def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
-    """Explicit developer action promoting an analyzed protocol draft to active development execution."""
-    if not _development_activation_allowed():
-        raise HTTPException(
-            status_code=403,
-            detail="development_activation_not_allowed",
-        )
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _development_activation_actor()
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.activate_development(
-                protocol_id,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-            )
-            return {
-                "protocol_id": protocol_id,
-                "status": "active_development",
-                "development_only": True,
-                "available_for_execution": entry.available_for_execution,
-                "development_activation": catalog.development_activation_context(
-                    protocol_id
-                ),
-                "message": "Protocol draft activated for development session.",
-            }
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/deactivate-development")
-def deactivate_protocol_for_development(protocol_id: str) -> dict[str, object]:
-    """Withdraw a development activation; the draft stops being executable."""
-
-    if not _development_activation_allowed():
-        raise HTTPException(
-            status_code=403,
-            detail="development_activation_not_allowed",
-        )
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _development_activation_actor()
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.deactivate_development(
-                protocol_id,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-            )
-            return {
-                "protocol_id": protocol_id,
-                "status": "development_activation_withdrawn",
-                "development_only": True,
-                "available_for_execution": entry.available_for_execution,
-                "development_activation": catalog.development_activation_context(
-                    protocol_id
-                ),
-                "message": "Development activation withdrawn.",
-            }
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
 
 
 @app.get("/api/protocols/{protocol_id}/revisions/{revision_id}/assets/{asset_id}")
@@ -6065,7 +5160,10 @@ class ListenerSession:
         #: The words that open the report's value review (lane N, decision 3),
         #: said once after the end of the experiment.
         self.report_review_intro:tuple[str,str]|None=None
-        self.test_mode_readiness_gates_skipped=False
+        #: The source's safety statements shown to the experimenter before
+        #: the press of start that opened this session (decision of
+        #: 2026-10-08); written into the experiment report when it opens.
+        self.safety_notices_shown:list[dict[str,Any]]|None=None
         self.session_id=new_session_id()
         self.voice_connection_id="voice-"+secrets.token_hex(16)
         self.experiment_state_version:int|None=None
@@ -6229,6 +5327,7 @@ class ListenerSession:
         self.accepted_language=None; self.accepted_protocol_id=None
         self.accepted_input_language=InputLanguagePreference.AUTO
         self.accepted_revision_id=None
+        self.safety_notices_shown=None
         self.greeting_audio_ready=False
         self.client_audio_constraints={}
         self._reset_turn_identity()
@@ -7228,6 +6327,45 @@ def curated_safety_items(curated:CuratedProtocolSession)->list[dict[str,Any]]:
     return items
 
 
+def fixture_safety_notices(fixture:CuratedProtocolFixture)->list[dict[str,Any]]:
+    """Every safety statement the source declares, with its Korean, for the start screen.
+
+    The step's own PDF warnings and its sub-actions' warnings, in source
+    order, each with the page it stands on and its step label. A line
+    carries Korean only where a stored translation exists and passes the
+    same mechanical check the safety box applies; otherwise
+    ``primary_text`` is None and the screen shows the source itself. The
+    source text is the document's own excerpt, never a summary.
+    """
+
+    items:list[dict[str,Any]]=[]
+    seen:set[tuple[str,str]]=set()
+    lookup=getattr(fixture,"localization_source",None)
+    for step in fixture.steps:
+        statements=list(step.warnings)
+        for action in step.sub_actions:
+            statements.extend(action.warnings)
+        for index,warning in enumerate(statements,1):
+            source=" ".join(str(
+                warning.evidence.source_excerpt or warning.source_text or "").split())
+            if not source or (step.step_id,source) in seen:
+                continue
+            seen.add((step.step_id,source))
+            primary,check=_safety_translation(
+                source,fixture.localized_fact(step.step_id,f"warning_{index}"))
+            items.append({
+                "step_id":step.step_id,"step_label":step.source_label,
+                "statement_id":warning.statement_id,"warning_index":index,
+                "source_page_number":warning.evidence.source_page_number,
+                "source_text":source,"source_language":"en",
+                "primary_text":primary,"translation_check":check,
+                "translation_source":(
+                    lookup(step.step_id,f"warning_{index}") if callable(lookup)
+                    else None),
+            })
+    return items
+
+
 def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     """What the page draws beside a fixture state: the safety list, the round, the open question.
 
@@ -7952,17 +7090,27 @@ def _open_experiment_report(
                 event_type="experimenter_recorded",
                 payload={"display_name":experimenter},
             )
-        if getattr(session,"test_mode_readiness_gates_skipped",False):
-            readiness=curated.fixture.draft.readiness
+        shown=getattr(session,"safety_notices_shown",None)
+        if shown is not None:
+            # The one human confirmation of the MVP rule (decision of
+            # 2026-10-08): the experimenter pressed start on the screen that
+            # showed the source's safety statements. What was shown is
+            # recorded in the document's own words.
             store.append_event(
                 session.experiment_report_id,
-                event_key="test-mode-readiness-gates-skipped",
-                event_type="test_mode_readiness_gates_skipped",
+                event_key="safety-notices-acknowledged",
+                event_type="safety_notices_acknowledged",
                 payload={
-                    "switch":READINESS_GATE_TEST_MODE_ENV,
-                    "readiness_status":readiness.status.value,
-                    "outstanding_reason_codes":sorted(
-                        set(readiness.reason_codes)),
+                    "notice_count":len(shown),
+                    "notices":[
+                        {
+                            "step_label":item.get("step_label"),
+                            "source_page_number":item.get("source_page_number"),
+                            "source_text":item.get("source_text"),
+                        }
+                        for item in shown
+                    ],
+                    "confirmed_by":"experimenter_start",
                 },
             )
     return store.get_report(session.experiment_report_id)
@@ -8900,22 +8048,6 @@ def _record_screen_history(
         log.warning("router history screen bundle rejected control=%s",control)
 
 
-def _router_development_note(
-    outcome:RouterTurnOutcome,settings:LlmRouterSettings,
-)->str:
-    """The folded development line under a router answer (test mode only)."""
-
-    answer=outcome.answer
-    parts=[f"LLM 라우터 · {settings.model}"]
-    if answer is not None:
-        parts.append(f"근거 종류 {answer.source_kind}")
-        if answer.evidence_ids:
-            parts.append("근거 "+", ".join(answer.evidence_ids))
-    if "total_ms" in outcome.timings_ms:
-        parts.append(f"{round(outcome.timings_ms['total_ms'])} ms")
-    return " · ".join(parts)
-
-
 def _router_route_fields(
     outcome:RouterTurnOutcome,settings:LlmRouterSettings,
 )->dict[str,object]:
@@ -9391,7 +8523,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         brain_terminals={}
         answer_output=None
         brain_snapshot=None
-        source_boundary_note=None
         router_outcome:RouterTurnOutcome|None=None
         router_before=(
             history_before(curated)
@@ -9434,11 +8565,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         plan=router_outcome.plan,
                     )
                 )
-                if router_outcome.handled_by=="llm":
-                    # Development information about the answer, beside it
-                    # and folded; shown only in development test mode.
-                    source_boundary_note=_router_development_note(
-                        router_outcome,session.llm_router_settings)
                 for name,value in router_outcome.timings_ms.items():
                     timings[f"router_{name}"]=value
             else:
@@ -9694,17 +8820,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 envelope=curated.protocol_answer_envelope(
                     replace(plan,facts=tuple(facts)),language=turn_language)
                 speech=envelope.speech_summary
-                # The answer alone is the reply. Where it came from is a
-                # development detail: it goes beside the reply, folded, and
-                # only in development test mode (never a pilot run).
+                # The answer alone is the reply.
                 display=envelope.direct_answer
-                source_boundary_note=(
-                    "근거 경계: 활성 프로토콜의 확인된 내용이며, "
-                    "활성화된 경우에만 부족한 설명을 읽기 전용 참고자료에서 확인합니다."
-                    if turn_language=="ko" else
-                    "Source boundary: the active protocol remains authoritative; "
-                    "missing explanation is checked read-only."
-                )
                 plan=replace(
                     plan,display_text=display,speech_text=speech,
                     speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
@@ -9730,7 +8847,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         ))),
                         translation_status="answer_brain_grounded",
                     )
-                    source_boundary_note=None
                 research_context={
                     "query":resolved_query,"reference_query":reference_query,
                     "step":step,"facts":tuple(facts),
@@ -10470,12 +9586,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             source_plan_scopes=list(plan.source_plan_scopes),
             unresolved_dimensions=list(plan.unresolved_dimensions),
             display_document=getattr(plan, "display_document", None),
-            # Only in development test mode, which run_pilot.sh forces off:
-            # a development-only protocol alone does not mean a development
-            # run, since the pilot's reference_only scope may activate one.
-            development_note=(
-                source_boundary_note
-                if _test_mode_skips_readiness_gates() else None))
+            development_note=None)
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         if speech_policy=="speak":
@@ -11642,13 +10753,16 @@ async def voice_socket(websocket:WebSocket):
                                 selected_procedure_definitions,procedure_store))
                     configuration_stage="session_state"
                     session.set_tool_context(context)
-                    # Recorded in the experiment report when it opens.
-                    session.test_mode_readiness_gates_skipped=bool(
-                        selected_curated_fixture is not None
-                        and _test_mode_skips_readiness_gates())
                     if selected_curated_fixture is not None:
                         selected_curated_fixture=_with_revision_translations(
                             selected_curated_fixture)
+                    # The experimenter's press of start is the one human
+                    # confirmation (decision of 2026-10-08). The source's
+                    # safety statements shown before it are recorded in the
+                    # experiment report when it opens.
+                    session.safety_notices_shown=(
+                        fixture_safety_notices(selected_curated_fixture)
+                        if selected_curated_fixture is not None else None)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
                     _subscribe_translations(session,sender)
                     recovery_session_id=control.get("experiment_session_id")

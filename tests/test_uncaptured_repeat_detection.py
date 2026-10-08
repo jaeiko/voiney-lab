@@ -156,23 +156,20 @@ class WhatTheAnalysisMissedTests(unittest.TestCase):
             [(item["source_page_number"], item["declared_range"]) for item in missed],
         )
 
-    def test_it_blocks_execution_and_a_reviewer_can_clear_it(self) -> None:
+    def test_it_is_recorded_and_told_to_the_experimenter_before_the_start(self) -> None:
         from voiney_lab import experiment_protocol as domain
-        from voiney_lab.protocol_catalog import (
-            _ACKNOWLEDGEABLE_GATES,
-            ProtocolCatalog,
-        )
 
-        code = (
-            domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value
-        )
-        self.assertIn(code, self.draft.readiness.reason_codes)
+        code = domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION
+        self.assertIn(code.value, self.draft.readiness.reason_codes)
         self.assertIs(
             self.draft.readiness.status, domain.ReadinessStatus.ANALYSIS_REQUIRED
         )
-        self.assertIn(code, _ACKNOWLEDGEABLE_GATES)
-        self.assertEqual(
-            ProtocolCatalog._BLOCKER_RESOLUTION[code]["action"], "acknowledge_gate"
+        # Lane DI (2026-10-08): a notice, not an execution blocker. The
+        # experimenter reads it before starting and the step's source is
+        # read out as it stands.
+        self.assertNotIn(code, domain.EXECUTION_BLOCKING_REASON_CODES)
+        self.assertIn(
+            code, {r.code for r in domain.execution_notice_reasons(self.draft.readiness)}
         )
 
     def test_a_complete_analysis_raises_nothing(self) -> None:

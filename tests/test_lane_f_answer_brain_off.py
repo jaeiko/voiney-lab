@@ -189,13 +189,12 @@ class RevisionTranslationTests(unittest.TestCase):
 
     def _authorize(self, environment: dict[str, str]):
         fixture = object()
+        catalog = SimpleNamespace(load_analysis_fixture=lambda protocol_id: fixture)
         with patch.dict(os.environ, {
             **environment, "VOINEY_LAB_WORKSPACE_ENABLED": "true",
             "VOINEY_LAB_WORKSPACE_DATA_DIR": self.temp.name,
-        }), patch.object(
-            server_module, "_revision_translation_fixture", return_value=fixture,
-        ), patch.object(server_module, "_start_revision_translation") as start:
-            server_module._translate_authorized_revision(object(), "protocol-1")
+        }), patch.object(server_module, "_start_revision_translation") as start:
+            server_module._translate_analyzed_revision(catalog, "protocol-1")
         return fixture, start
 
     def test_with_the_answer_brain_off_an_authorized_revision_is_translated(self) -> None:

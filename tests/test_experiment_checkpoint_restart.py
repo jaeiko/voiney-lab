@@ -36,7 +36,7 @@ from voiney_lab.workspace_store import (
     initialize_workspace_store,
 )
 
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 from tests.protocol_vocabulary_support import SOURCE_PDF, build_fixture, in_gel_fixture
 from tests.test_candidate_a_websocket_integration import _ScriptedSocket
 
@@ -423,7 +423,7 @@ class CheckpointVoiceRecoveryTests(unittest.TestCase):
         cls.fixture = in_gel_fixture()
 
     def setUp(self) -> None:
-        activation = development_activation_recorded()
+        activation = runnable_fixture_assumed()
         activation.__enter__()
         self.addCleanup(activation.__exit__, None, None, None)
 

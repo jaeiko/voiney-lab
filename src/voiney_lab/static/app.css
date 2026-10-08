@@ -26,13 +26,6 @@
       --radius-pill:9999px;
     }
     *{box-sizing:border-box}
-    .test-mode-banner{
-      padding:10px 16px;
-      background:var(--amber);color:#1a1300;
-      font-weight:800;text-align:center;
-      border-bottom:3px solid var(--red);
-    }
-    .test-mode-banner[hidden]{display:none}
     body{
       margin:0;
       background:
@@ -409,7 +402,19 @@
     .protocol-review-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.65rem}
     .protocol-review-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);padding:.45rem .7rem;font-weight:750;cursor:pointer}
     .protocol-review-actions button:disabled{cursor:not-allowed;opacity:.45}
-    #protocol-development-activate{border-color:var(--green-cta);color:var(--green-cta)}
+    #protocol-start{border-color:var(--green-cta);color:var(--green-cta);font-size:.95rem;padding:.6rem 1rem}
+    /* Lane DI (2026-10-08): the start screen. The source's safety statements
+       beside their Korean, never folded, above the one start button. */
+    .protocol-start-summary{grid-column:1/-1;margin-top:.35rem;padding:.75rem;border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card)}
+    .protocol-start-summary[hidden]{display:none}
+    .protocol-start-summary h3{margin:0 0 .35rem;color:var(--ink);font-size:.9rem}
+    .protocol-execution-reasons,.protocol-safety-notices{display:grid;gap:.55rem;min-width:0}
+    .protocol-safety-group{border-color:var(--amber)}
+    .safety-notice-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.25rem .9rem;padding:.45rem 0;border-top:1px solid var(--border)}
+    .safety-notice-row:first-of-type{border-top:0}
+    .safety-notice-where{grid-column:1/-1;color:var(--muted);font-size:.68rem;font-weight:800}
+    .safety-notice-source,.safety-notice-korean{margin:0;font-size:.82rem;line-height:1.5;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+    .safety-notice-korean{font-weight:650}
 
     .session-context{
       display:flex;

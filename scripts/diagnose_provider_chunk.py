@@ -524,10 +524,7 @@ def _walk(source, extraction, plan, validated):
         ProtocolPersistenceSettings,
         initialize_protocol_store,
     )
-    from voiney_lab.protocol_catalog import (
-        AMBIGUITY_SINGLE_AUTHORITATIVE,
-        ProtocolCatalog,
-    )
+    from voiney_lab.protocol_catalog import ProtocolCatalog
     from voiney_lab.protocol_chunk_analysis import (
         assemble_validated_protocol_claims,
         merge_validated_chunk_results,
@@ -604,63 +601,19 @@ def _walk(source, extraction, plan, validated):
                 domain.assess_readiness(stored),
                 draft.capability_policy.profile_id,
             )
-            revision_id = "pdf-1-analysis-1"
-            findings: dict[str, object] = {}
-            catalog.acknowledge_readiness_gate(
-                protocol_id,
-                revision_id,
-                reason_code=(
-                    domain.ReadinessReasonCode
-                    .NO_DECLARED_SAFETY_WARNINGS.value
-                ),
-                actor_principal_id="reviewer@example.org",
-                actor_role="reviewer",
-                comment="Provider run; warnings reviewed against the source.",
-            )
-            findings["safety_gate_acknowledged"] = True
-            for construct in stored.constructs:
-                if isinstance(construct, domain.SourceAmbiguity):
-                    catalog.resolve_ambiguity(
-                        protocol_id,
-                        revision_id,
-                        ambiguity_id=construct.ambiguity_id,
-                        decision=AMBIGUITY_SINGLE_AUTHORITATIVE,
-                        evidence_segment_ids=(
-                            construct.evidence.evidence_segment_ids
-                        ),
-                        actor_principal_id="reviewer@example.org",
-                        actor_role="reviewer",
-                        comment="Statements state the same value.",
-                    )
-                elif isinstance(construct, domain.FixedRangeRepetition):
-                    catalog.confirm_fixed_repetition(
-                        protocol_id,
-                        revision_id,
-                        repetition_id=construct.repetition_id,
-                        repeat_count=construct.repeat_count,
-                        evidence_segment_ids=(
-                            construct.evidence.evidence_segment_ids
-                        ),
-                        actor_principal_id="reviewer@example.org",
-                        actor_role="reviewer",
-                        comment="Source states this count.",
-                    )
-            findings["ambiguities_resolved"] = len(
-                catalog.ambiguity_findings(protocol_id, revision_id)
-            )
-            findings["repetitions_confirmed"] = len(
-                catalog.repetition_findings(protocol_id, revision_id)
-            )
-            out["reviewer_findings"] = findings
-            try:
-                activated = catalog.activate_development(protocol_id)
-            except Exception as error:  # noqa: BLE001
-                out["development_activation"] = {"ok": False, **_reason(error)}
-                return out
-            out["development_activation"] = {
-                "ok": True,
-                "available_for_execution": activated.available_for_execution,
-                "approval_status": activated.approval_status,
+            # The execution rule (decision of 2026-10-08): a passed analysis
+            # with no execution blocker may run; the experimenter's press of
+            # start is the one human confirmation.
+            entry = catalog.get_entry(protocol_id)
+            review = catalog.review(protocol_id)
+            out["execution_rule"] = {
+                "available_for_execution": entry.available_for_execution,
+                "execution_blockers": [
+                    item["code"] for item in review["execution_blockers"]
+                ],
+                "execution_notices": [
+                    item["code"] for item in review["execution_notices"]
+                ],
             }
             try:
                 fixture = catalog.load_executable_fixture(protocol_id)

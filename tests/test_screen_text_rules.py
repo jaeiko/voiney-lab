@@ -164,11 +164,10 @@ assert(note.textContent==="한국어는 자동 번역입니다. 정확한 내용
 class AnswerTextPageTests(unittest.TestCase):
     """Principles 2, 3 and 6 for chat answers."""
 
-    def _reply(self, test_mode: bool, text: str, note: str | None) -> str:
-        # The protocol is development-only in both cases: in a pilot run that
-        # alone must not show development info.
+    def _reply(self, text: str, note: str | None) -> str:
+        # The protocol is development-only: that alone must not show
+        # development info (there is no test mode any more, lane DI).
         return PAGE_SETUP + r"""
-testModeReadinessGatesSkipped=""" + json.dumps(test_mode) + r""";
 await send({...baseState,development_only:true},{safety_items:[],translation_source:"reviewed"});
 await onMessage({data:JSON.stringify({type:"speech.start",turn_id:4,generation:0})},sessionGeneration,socket);
 const message={configuration_id:7,turn_id:4,generation:0,text:""" + json.dumps(text, ensure_ascii=False) + r""",development_note:""" + json.dumps(note, ensure_ascii=False) + r"""};
@@ -182,19 +181,11 @@ const devs=[];const walkDev=item=>{if(String(item.className||"").split(" ").incl
     def test_a_pilot_screen_never_shows_the_grounding_boundary(self):
         boundary = "근거 경계: 활성 프로토콜의 확인된 내용이며, 활성화된 경우에만 부족한 설명을 읽기 전용 참고자료에서 확인합니다."
         result = run_page_script(self._reply(
-            False, "직접 답변\nHPLC water는 2단계에 나옵니다.\n\n근거 경계\n활성 프로토콜의 확인된 내용입니다.", boundary) + r"""
+            "직접 답변\nHPLC water는 2단계에 나옵니다.\n\n근거 경계\n활성 프로토콜의 확인된 내용입니다.", boundary) + r"""
 assert(!reply.textContent.includes("근거 경계")&&!reply.textContent.includes("활성 프로토콜의 확인된 내용"),"boundary on a pilot screen: "+reply.textContent);
 assert(!reply.textContent.includes("직접 답변"),"label on screen");
 assert(reply.textContent.includes("HPLC water는 2단계에 나옵니다."),"answer missing");
 assert(devs.length===0,"development info shown in a pilot run");
-""")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_development_test_mode_folds_the_boundary_under_development_info(self):
-        boundary = "근거 경계: 활성 프로토콜의 확인된 내용입니다."
-        result = run_page_script(self._reply(True, "HPLC water는 2단계에 나옵니다.", boundary) + r"""
-assert(devs.length===1&&devs[0].open===false&&devs[0].children[0].textContent==="개발 정보","development info not folded");
-assert(devs[0].textContent.includes("근거 경계"),"boundary missing from development info");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -203,7 +194,7 @@ assert(devs[0].textContent.includes("근거 경계"),"boundary missing from deve
             "답변 · 한국어 참고 번역\n2단계: 두 세척 용액을 준비합니다.\n\n"
             "원문 · English\n2 Prepare two wash solutions.\n\n출처\ncurrent_step · 원문 p.3"
         )
-        result = run_page_script(self._reply(False, text, None) + r"""
+        result = run_page_script(self._reply(text, None) + r"""
 for(const label of ["답변 · 한국어","참고 번역","원문 · English"])assert(!reply.textContent.includes(label),`label "${label}" on screen: ${reply.textContent}`);
 assert(reply.textContent.includes("2단계: 두 세척 용액을 준비합니다."),"Korean body missing");
 assert(folds.length===1&&folds[0].open===false&&folds[0].children[0].textContent==="원문","source not one closed 원문 fold");
@@ -216,7 +207,7 @@ assert(folds[0].textContent.includes("2 Prepare two wash solutions.")&&folds[0].
             "실험 목적\n원문에 적힌 실험 목적입니다.\n\n원문 · English · PDF p.2\n"
             "This protocol describes in-gel digestion of proteins."
         )
-        result = run_page_script(self._reply(False, text, None) + r"""
+        result = run_page_script(self._reply(text, None) + r"""
 assert(!reply.textContent.includes("원문 · English")&&!reply.textContent.includes("원문에 적힌"),"label left: "+reply.textContent);
 assert(folds.length===1&&folds[0].open===true&&folds[0].textContent.includes("in-gel digestion of proteins"),"untranslated source not open");
 """)
@@ -345,9 +336,9 @@ class SafetyItemsServerTests(unittest.TestCase):
 
 @unittest.skipUnless(SOURCE_PDF.is_file(), "requires the licensed Candidate A source PDF")
 class PilotAnswerServerTests(unittest.TestCase):
-    """A related-question reply carries no boundary text; the note only in test mode."""
+    """A related-question reply carries no boundary text and no development note."""
 
-    def test_no_boundary_text_and_the_note_only_in_test_mode(self):
+    def test_no_boundary_text_and_no_development_note(self):
         from dataclasses import replace
 
         from tests.test_curated_protocol_cascade import CuratedProtocolServerCascadeTests, Socket
@@ -355,19 +346,15 @@ class PilotAnswerServerTests(unittest.TestCase):
 
         CuratedProtocolServerCascadeTests.setUpClass()
         cases = (
-            # (test mode as run_dev.sh --test-mode sets it, development-only)
-            ({"VOINEY_LAB_USAGE_SCOPE": "demo",
-              "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES": "true"}, True),
-            # run_pilot.sh: reference_only, test mode forced off -- even a
-            # development-activated protocol gets no note.
-            ({"VOINEY_LAB_USAGE_SCOPE": "reference_only",
-              "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES": "false"}, True),
-            ({"VOINEY_LAB_USAGE_SCOPE": "reference_only",
-              "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES": "false"}, False),
+            # (usage scope, development-only). Lane DI (2026-10-08): there is
+            # no test mode any more, so no scope and no fixture ever gets the
+            # folded development note.
+            ({"VOINEY_LAB_USAGE_SCOPE": "demo"}, True),
+            ({"VOINEY_LAB_USAGE_SCOPE": "reference_only"}, True),
+            ({"VOINEY_LAB_USAGE_SCOPE": "reference_only"}, False),
         )
         for environment, development_only in cases:
-            test_mode = environment["VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"] == "true"
-            with self.subTest(test_mode=test_mode, development_only=development_only), \
+            with self.subTest(scope=environment["VOINEY_LAB_USAGE_SCOPE"], development_only=development_only), \
                     patch.dict("os.environ", environment):
                 harness = CuratedProtocolServerCascadeTests()
                 harness.fixture = replace(
@@ -409,10 +396,7 @@ class PilotAnswerServerTests(unittest.TestCase):
                     self.assertNotIn("근거 경계", text)
                     self.assertNotIn("직접 답변", text)
                 self.assertIn("HPLC water", reply["text"])
-                if test_mode:
-                    self.assertIn("근거 경계", reply["development_note"])
-                else:
-                    self.assertIsNone(reply["development_note"])
+                self.assertIsNone(reply["development_note"])
                 state = next(
                     item for item in socket.text if item["type"] == "protocol.fixture.state")
                 self.assertIn("screen", state)

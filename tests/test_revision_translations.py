@@ -31,10 +31,7 @@ from voiney_lab.curated_protocol import (
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.language import Transcription
-from voiney_lab.protocol_catalog import (
-    ProtocolCatalog,
-    SharedSecretApprovalPolicy,
-)
+from voiney_lab.protocol_catalog import ProtocolCatalog
 from voiney_lab.protocol_translation import (
     BatchResult,
     TranslationUnit,
@@ -614,18 +611,15 @@ class LiveTranslationTests(unittest.TestCase):
         self.assertEqual(spoken, ["자동 번역입니다. " + reading])
 
 
-class ActivationTests(unittest.TestCase):
-    """1 and 8. Made when a revision becomes executable, with the reader model."""
+class GenerationTests(unittest.TestCase):
+    """1 and 8. Made when an analysis passes, with the reader model."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.store = initialize_protocol_store(
             ProtocolPersistenceSettings(True, self.root / "catalog"))
-        self.calls: list[str] = []
-        self.catalog = ProtocolCatalog(
-            self.store,
-            on_execution_authorized=lambda catalog, pid: self.calls.append(pid))
+        self.catalog = ProtocolCatalog(self.store)
         self.sample_pdf = self.root / "sample.pdf"
         write_text_pdf(
             self.sample_pdf,
@@ -640,49 +634,26 @@ class ActivationTests(unittest.TestCase):
         self.store.append_analysis_revision(
             self.protocol_id, 1, f"analysis-{registration.entry.source_sha256[:24]}",
             draft.protocol, draft.readiness, draft.capability_policy_id)
-        self.catalog.acknowledge_readiness_gate(
-            self.protocol_id, "pdf-1-analysis-1",
-            reason_code=domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-            actor_principal_id="reviewer@example.org", actor_role="reviewer",
-            comment="Warnings reviewed against the source.")
 
     def tearDown(self) -> None:
         self.store.close()
         self.temp.cleanup()
 
-    def test_activation_and_approval_each_hand_over_the_revision(self) -> None:
-        self.assertEqual(self.calls, [])
-        self.catalog.activate_development(self.protocol_id)
-        self.assertEqual(self.calls, [self.protocol_id])
-        self.catalog.approve(
-            self.protocol_id, "pdf-1-analysis-1",
-            policy=SharedSecretApprovalPolicy("secret"), presented_secret="secret")
-        self.assertEqual(self.calls, [self.protocol_id, self.protocol_id])
-
-    def test_a_failed_translation_never_undoes_the_activation(self) -> None:
-        def broken(catalog, protocol_id):
-            raise RuntimeError("provider down")
-
-        self.catalog.on_execution_authorized = broken
-        entry = self.catalog.activate_development(self.protocol_id)
-        self.assertTrue(entry.available_for_execution)
-
     def test_the_server_translates_the_fixture_sessions_run(self) -> None:
         seen = []
-        self.catalog.activate_development(self.protocol_id)
         saved = getattr(server_module.app.state, "revision_translation_runner", None)
         server_module.app.state.revision_translation_runner = seen.append
         try:
-            with patch.object(server_module, "server_config"), patch.object(
-                server_module, "_configured_candidate_fixture", return_value=None,
-            ):
-                server_module._translate_authorized_revision(
-                    self.catalog, self.protocol_id)
+            server_module._translate_analyzed_revision(self.catalog, self.protocol_id)
         finally:
             server_module.app.state.revision_translation_runner = saved
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0].revision_id,
                          self.catalog.get_entry(self.protocol_id).revision_id)
+        # The same fixture a session runs (lane DI: the passed analysis).
+        self.assertEqual(
+            seen[0].fixture_sha256,
+            self.catalog.load_executable_fixture(self.protocol_id).fixture_sha256)
 
     def test_without_the_workspace_or_the_model_role_nothing_runs(self) -> None:
         with patch.dict(os.environ, {
@@ -690,7 +661,7 @@ class ActivationTests(unittest.TestCase):
             "VOINEY_LAB_MULTI_BRAIN_ENABLED": "true",
             "XAI_API_KEY": "offline",
         }), patch.object(server_module, "_start_revision_translation") as start:
-            server_module._translate_authorized_revision(self.catalog, self.protocol_id)
+            server_module._translate_analyzed_revision(self.catalog, self.protocol_id)
         start.assert_not_called()
 
     def test_generation_is_stored_through_the_workspace(self) -> None:

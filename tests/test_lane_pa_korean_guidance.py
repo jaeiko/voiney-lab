@@ -9,14 +9,12 @@ Korean; the codes stay as they were.
 
 from __future__ import annotations
 
-import inspect
 import re
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.test_protocol_catalog import write_text_pdf
-from voiney_lab import server
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import ProtocolCatalog
@@ -70,22 +68,6 @@ class CatalogRecoveryGuidanceTests(unittest.TestCase):
                 action = self.failure_after(code, attempt)["action"]
                 self.assertRegex(action, HANGUL)
                 self.assertIsNone(re.search(r"[A-Za-z]{3,} [a-z]{3,} [a-z]{3,}", action), action)
-
-
-class WorkspaceGateGuidanceTests(unittest.TestCase):
-    def test_the_workspace_recovery_actions_are_korean(self) -> None:
-        source = inspect.getsource(server._workspace_catalog_analysis_gate)
-        for english in (
-            "Regenerate valid structured analysis before approval.",
-            "Repair the immutable source/revision binding before review.",
-            "Restore the catalog before review or approval.",
-            "Regenerate analysis for this exact immutable source revision.",
-            "Retry structured analysis; this item is recovery/triage only.",
-            "Complete structured analysis before execution approval.",
-            "Resolve readiness and safety blockers before approval.",
-        ):
-            self.assertNotIn(english, source)
-        self.assertIn("구조 분석을 다시 시도해 주세요.", source)
 
 
 if __name__ == "__main__":

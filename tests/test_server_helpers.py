@@ -21,7 +21,7 @@ from voiney_lab.server import CascadeTranscriptionContext, ListenerEvent, Listen
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 
 class FakeResponse:
     def __init__(self,content=b"",status=200,content_type="audio/pcm"):
@@ -660,7 +660,7 @@ class ServerTests(unittest.TestCase):
                     source_label="1",step_id="step-1",
                     instruction_source_text="Exact source instruction.",
                     evidence=SimpleNamespace(source_page_number=1),
-                    warnings=(),
+                    warnings=(),sub_actions=(),
                 ),)
                 self.draft=SimpleNamespace(readiness=SimpleNamespace(
                     status=SimpleNamespace(value="analysis_required")))
@@ -693,13 +693,12 @@ class ServerTests(unittest.TestCase):
             "voiney_lab.server.ProcedureStore",
         ) as procedure_store, patch(
             "voiney_lab.server.load_procedure_definitions",
-        ) as procedure_loader, development_activation_recorded():
+        ) as procedure_loader, runnable_fixture_assumed():
             # "Without persistence" is about the *session* not being written
-            # down, not about the protocol's authority.  Since STEP 23 a
-            # configured fixture is selectable only when a recorded
-            # development activation stands; that gate is asserted in
-            # tests/test_development_activation_gate.py and stepped around
-            # here so this test keeps testing what it is named for.
+            # down, not about the protocol's rule.  Since STEP 23 a
+            # configured fixture is selectable only when its catalog entry may
+            # run; that rule is asserted in tests/test_lane_di_execution_rule.py
+            # and assumed here so this test keeps testing what it is named for.
             asyncio.run(voice_socket(socket))
         ready=next(item for item in socket.sent if item["type"]=="session.ready")
         self.assertEqual({key:ready[key] for key in (

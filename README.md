@@ -1172,13 +1172,12 @@ same key in a repo-root `.env`. Their optional settings are only defaults
 (lane XO, decision 1): a name already set in the shell is left alone, and a
 name written in the `.env` keeps the file's value
 (`configuration.launcher_defaults`). The settings a launcher fixes for safety
--- the paths it verified, the analysis model the development launcher clears,
-the pilot's safety catalog, usage scope and test mode -- stay fixed.
+-- the paths it verified and the pilot's safety catalog and usage scope --
+stay fixed.
 
 ```bash
 ./scripts/run_dev.sh                 # development, port 8000
 ./scripts/run_dev.sh --bootstrap-only  # load the curated fixture, do not serve
-./scripts/run_dev.sh --test-mode       # also skip execution readiness gates
 ./scripts/run_dev.sh --check-only      # print the settings, touch nothing under data/runtime
 ./scripts/run_pilot.sh               # controlled pilot, port 8080
 ./scripts/run_pilot.sh --check-only  # print the configuration, do not serve
@@ -1202,11 +1201,10 @@ authority `automatic_invalid_response_retry`, and the progress line says
 provider is never sent again by itself, nor is a person's own retry; if the
 second answer fails too, a person presses "분석 다시 시도". The four features only xAI provides --
 external reference search, web image search, generated images and semantic
-intent -- default to off. Its
-`--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
-`VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` and says so loudly;
-without the flag neither variable is set. `scripts/run_candidate_a.sh` is the
-former name and now forwards to it.
+intent -- default to off. There is no test mode any more (lane DI,
+2026-10-08): an analysed protocol runs under the one execution rule in every
+scope. `scripts/run_candidate_a.sh` is the former name and now forwards to
+it.
 
 `scripts/run_pilot.sh` loads no fixture, keeps its state under
 `data/runtime/pilot/`, and turns every feature that reaches outside the
@@ -1215,8 +1213,7 @@ approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
 `VOINEY_LAB_GENERATED_VISUALS_ENABLED`, `VOINEY_LAB_SEMANTIC_INTENT_ENABLED` —
 along with `VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator set in
 the shell (and, but for MOSS, wrote in the `.env`), so enabling one is a
-deliberate act taken before startup. Test
-mode is forced off whatever the environment said. Dry-lab workflows and the
+deliberate act taken before startup. Dry-lab workflows and the
 eLabFTW ELN write-back have no flag of their own: both sit behind the
 commercial workspace that the reviewer inbox and experiment timeline also
 need, and both stay inert until an admin configures and verifies a connector,
@@ -1243,8 +1240,8 @@ these holds, so a checkout without a reviewed catalog reports exit 1;
 `docs/APPROVED_DOCUMENT_OPERATIONS.md` §4 describes how to put one in place.
 
 The development launcher differs on each of these points. `run_dev.sh` takes
-the safety catalog and scope from the environment or `.env` (`--test-mode`
-sets the scope to `demo`), keeps its state under
+the safety catalog and scope from the environment or `.env`, keeps its state
+under
 `data/runtime/candidate-a-live-acceptance/`, and serves on port 8000. With no
 catalog file in the `demo` or `test_only` scope, its step safety card falls
 back to the fictional records in
@@ -1350,8 +1347,8 @@ system. Both have one structure (`experiment_reports.report_blocks`):
   name of the signed-in person who started the experiment (blank for the
   researcher to fill where no workspace names anyone); time taken; steps
   completed n/N; completed, or stopped at which step; the protocol's
-  approval state in words; and, for a test-mode run, that the readiness
-  gates were skipped;
+  state in words ("분석 통과 · 실험자가 시작함", lane DI); and the safety
+  statements the experimenter saw before pressing start, by count;
 - 1 purpose and 2 background and principle, from the protocol's PDF -- or,
   when the PDF has no background, a short one from the report model's general
   knowledge, labelled "AI 일반 지식 — 출처 없음, 확인 필요" (lane N);
@@ -1471,22 +1468,6 @@ parameter or else the file name. The image is never read.
 | `VOINEY_LAB_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
 | `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
 | `VOINEY_LAB_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
-| `VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES` | Default `false`. Development test mode; see below |
-
-`VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` lets an analysed
-Protocol be development-activated and run while readiness gates are still
-outstanding. It is honoured only in the `demo`, `reference_only` and
-`test_only` scopes; under `operational` it is ignored and the startup log says
-so. It does not change any readiness verdict, the outstanding-gate list, the
-source-evidence validation, or service approval, and a Protocol with no
-analysis, or a failed one, still cannot run. While it is on, the startup log
-and a page-top banner read "테스트 모드: 실행 준비 게이트를 건너뜀", an
-activation made through it carries `test_mode_readiness_gates_skipped` in the
-ledger, and each experiment report opened in such a session starts with a
-`test_mode_readiness_gates_skipped` event. `./scripts/run_dev.sh --test-mode`
-turns it on, together with the `demo` scope; `scripts/run_pilot.sh` always turns
-it off, with a `[WARN]` when the environment had it on. A server started any
-other way reads it from the environment or `.env`.
 
 `VOINEY_LAB_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the

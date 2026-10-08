@@ -37,14 +37,12 @@ from voiney_lab.experiment_protocol_config import (
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import (
-    ProtocolApprovalError,
     ProtocolCatalog,
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolChunkedAnalysisRequiredError,
     ProtocolOcrRequiredError,
     ProtocolRegistrationError,
-    SharedSecretApprovalPolicy,
 )
 from voiney_lab.protocol_ocr import (
     OcrPage,
@@ -161,11 +159,13 @@ def analysis_draft(path: Path, protocol_id: str, title: str) -> ProtocolAnalysis
     )
     domain.validate_protocol(protocol)
     readiness = domain.assess_readiness(protocol)
-    # The safety confirmation is the only gate left open, and only a reviewer
-    # closes it. Nothing structural is blocking.
+    # The safety reason is the only one recorded, and under the MVP rule
+    # (lane DI, 2026-10-08) it is a notice the experimenter reads before
+    # starting, not a gate. Nothing structural is blocking.
     assert readiness.reason_codes == (
         domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
     ), readiness.reason_codes
+    assert domain.execution_blocking_reasons(readiness) == ()
     return ProtocolAnalysisDraft(
         extraction,
         protocol,
@@ -216,27 +216,12 @@ class ProtocolCatalogTests(unittest.TestCase):
             draft.readiness,
             draft.capability_policy_id,
         )
+        # The MVP rule (lane DI, 2026-10-08): a passed analysis with no
+        # execution blocker may run. Nothing is approved or activated; the
+        # experimenter's press of start is the one confirmation.
         analyzed = self.catalog.get_entry(registration.entry.protocol_id)
-        # Approval now requires a reviewer to confirm the safety warnings,
-        # whether extraction produced any or not. Extracted warnings are model
-        # judgement and never discharge the review on their own.
-        self.catalog.acknowledge_readiness_gate(
-            analyzed.protocol_id,
-            analyzed.revision_id,
-            reason_code=(
-                domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
-            ),
-            actor_principal_id="reviewer@example.org",
-            actor_role="reviewer",
-            comment="Warnings reviewed against the source.",
-        )
-        approved = self.catalog.approve(
-            analyzed.protocol_id,
-            analyzed.revision_id,
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
-        )
-        return approved
+        assert analyzed.available_for_execution, analyzed
+        return analyzed
 
     def test_two_pdfs_have_distinct_ids_revisions_and_isolated_sessions(self):
         alpha = self._approve(self.alpha, "alpha.pdf")
@@ -314,13 +299,6 @@ class ProtocolCatalogTests(unittest.TestCase):
             self.catalog.load_executable_fixture(registered.entry.protocol_id)
         with self.assertRaises(ProtocolCatalogNotFoundError):
             self.catalog.get_entry("protocol-" + "0" * 32)
-        with self.assertRaises(ProtocolApprovalError):
-            self.catalog.approve(
-                registered.entry.protocol_id,
-                registered.entry.revision_id,
-                policy=SharedSecretApprovalPolicy("secret"),
-                presented_secret="wrong",
-            )
         scanned = self.root / "scanned.pdf"
         write_text_pdf(scanned, None, title="Scanned")
         scanned_entry = self.catalog.register(
@@ -369,9 +347,9 @@ class ProtocolCatalogTests(unittest.TestCase):
         )
         review = self.catalog.review(entry.protocol_id)
         self.assertTrue(review["analysis_available"])
-        # A reviewer must confirm the safety warnings first, so the draft is
-        # not ready on extraction alone. That is the point of this test: a
-        # review projection never makes a draft executable.
+        # The safety reason is recorded and shown as a notice; under the MVP
+        # rule (lane DI) it does not block, so a passed analysis is runnable
+        # as soon as it is stored. The review projection itself writes nothing.
         self.assertEqual(review["readiness"]["status"], "analysis_required")
         self.assertEqual(
             [reason["code"] for reason in review["readiness"]["reasons"]],
@@ -382,66 +360,20 @@ class ProtocolCatalogTests(unittest.TestCase):
             review["sections"][0]["steps"][0]["evidence"]["source_page_number"],
             1,
         )
-        self.assertFalse(review["available_for_execution"])
-        self.assertEqual(self.catalog.get_entry(entry.protocol_id).approval_status, "unapproved")
-
-    def test_approval_context_projects_only_recorded_approval_evidence(self):
-        entry = self.catalog.register(
-            self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
-        ).entry
+        self.assertTrue(review["available_for_execution"])
+        self.assertEqual(review["execution_blockers"], [])
         self.assertEqual(
-            self.catalog.approval_context(entry.protocol_id),
-            {
-                "status": "review_required",
-                "final_approval": False,
-                "actor_principal_id": None,
-                "actor_role": None,
-                # Lane R6, decision 5: the approver's readable name, if recorded.
-                "actor_display_name": None,
-                "recorded_at": None,
-                "authority": None,
-            },
+            [item["code"] for item in review["execution_notices"]],
+            [domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value],
         )
-        draft = analysis_draft(self.alpha, entry.protocol_id, "Protocol Alpha")
-        analysis = self.store.append_analysis_revision(
-            entry.protocol_id,
-            1,
-            "analysis-approval-context",
-            draft.protocol,
-            draft.readiness,
-            draft.capability_policy_id,
-        )
-        revision_id = f"pdf-1-analysis-{analysis.analysis_revision_number}"
-        self.catalog.acknowledge_readiness_gate(
-            entry.protocol_id,
-            revision_id,
-            reason_code=(
-                domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
-            ),
-            actor_principal_id="reviewer@example.org",
-            actor_role="reviewer",
-            comment="Warnings reviewed against the source.",
-        )
-        approved = self.catalog.approve(
-            entry.protocol_id,
-            revision_id,
-            policy=SharedSecretApprovalPolicy("secret"),
-            presented_secret="secret",
-            actor_principal_id="reviewer-approval-context",
-            actor_role="reviewer",
-            comment="Source, hazards, and readiness reviewed.",
-        )
-        context = self.catalog.approval_context(entry.protocol_id)
-        self.assertEqual(context["status"], "approved")
-        self.assertTrue(context["final_approval"])
         self.assertEqual(
-            context["actor_principal_id"], "reviewer-approval-context"
+            [item["source_text"] for item in review["safety_notice_sources"]],
+            ["Wear gloves."],
         )
-        self.assertEqual(context["actor_role"], "reviewer")
-        self.assertEqual(context["authority"], "service_policy")
-        self.assertIsInstance(context["recorded_at"], str)
-        self.assertEqual(approved.revision_id, f"pdf-1-analysis-{analysis.analysis_revision_number}")
-
+        self.assertEqual(
+            {event.event_type for event in self.store.list_events(entry.protocol_id)},
+            {"protocol_registered"},
+        )
 
     def test_analysis_endpoint_owns_store_in_worker_and_status_is_read_only(self):
         entry = self.catalog.register(
@@ -519,10 +451,11 @@ class ProtocolCatalogTests(unittest.TestCase):
             status = get_protocol_analysis_status(entry.protocol_id)
 
         self.assertEqual(status["state"], "review_required")
-        # Blocked, not review_required, because the safety confirmation is
-        # still outstanding: an unacknowledged acknowledgeable gate has always
-        # read as blocked here, and every analysis now carries one.
-        self.assertEqual(status["lifecycle_state"], "blocked")
+        # Lane DI (2026-10-08): the safety confirmation is no longer a gate
+        # that holds the lifecycle at "blocked" -- it is the experimenter's
+        # press of start. A passed analysis with no execution blocker is
+        # "ready"; the start screen shows the source's safety statements.
+        self.assertEqual(status["lifecycle_state"], "ready")
 
     def test_missing_provider_configuration_is_actionable_persisted_failure(self):
         entry = self.catalog.register(
@@ -807,8 +740,12 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertEqual(first.entry.protocol_id, self.fixture.protocol_id)
         self.assertEqual(second.entry.revision_id, first.entry.revision_id)
         self.assertEqual(first.entry.readiness_status, "analysis_required")
-        self.assertEqual(first.entry.approval_status, "unapproved")
-        self.assertFalse(first.entry.available_for_execution)
+        # Lane DI (2026-10-08): the curated fixture's analysis carries notices
+        # only, so once materialized it may run; it is named as development
+        # material rather than approved.
+        self.assertTrue(first.entry.available_for_execution)
+        self.assertTrue(first.entry.development_only)
+        self.assertEqual(first.entry.execution_blocker_codes, ())
         self.assertTrue(
             self.catalog.development_fixture_is_materialized(self.fixture)
         )
@@ -823,7 +760,6 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "development_fixture_materialized")
         self.assertTrue(events[0].payload["development_only"])
-        self.assertFalse(events[0].payload["final_approval"])
         self.assertNotIn("approved", {event.event_type for event in events})
 
         duplicate = self.catalog.register(
@@ -877,34 +813,16 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         ]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]["revision_id"], self.fixture.revision_id)
-        # Materializing a fixture records what the store holds; it grants no
-        # authority to run it.  Until a person activates it for development
-        # the projection says so, and says why.
-        self.assertEqual(matching[0]["approval_status"], "unapproved")
-        self.assertFalse(matching[0]["available_for_execution"])
-        # Readiness first: a fixture whose gates are not cleared is blocked
-        # by that, and saying "no activation recorded" while readiness stands
-        # tells a reviewer to press activate and wonder why nothing happens.
-        self.assertEqual(
-            matching[0]["execution_blocked_reason"],
-            "readiness_gates_blocked",
-        )
-        self.assertTrue(matching[0]["outstanding_blockers"])
-        self.assertFalse(matching[0]["development_activation"]["activated"])
+        # Lane DI (2026-10-08): a materialized fixture whose analysis carries
+        # no execution blocker may run; the projection says so and names it
+        # development material. No approval or activation is projected.
+        self.assertTrue(matching[0]["available_for_execution"])
+        self.assertIsNone(matching[0]["execution_blocked_reason"])
+        self.assertEqual(matching[0]["execution_blocker_codes"], [])
         self.assertTrue(matching[0]["development_only"])
-        self.assertEqual(
-            matching[0]["approval"],
-            {
-                "status": "review_required",
-                "final_approval": False,
-                "actor_principal_id": None,
-                "actor_role": None,
-                # Lane R6, decision 5: the approver's readable name, if recorded.
-                "actor_display_name": None,
-                "recorded_at": None,
-                "authority": None,
-            },
-        )
+        self.assertEqual(matching[0]["lifecycle_state"], "ready")
+        self.assertNotIn("approval", matching[0])
+        self.assertNotIn("approval_status", matching[0])
         rendered = "\n".join(logs.output)
         self.assertIn(
             str(self.settings.data_dir / "protocol_workspace.sqlite"), rendered
@@ -1009,33 +927,11 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn('--port "$PORT"', launcher)
         self.assertNotIn("--reload", launcher)
 
-    def test_development_launcher_enables_test_mode_only_behind_the_flag(self):
-        """--test-mode is opt-in; without it the launcher sets neither variable."""
-
-        repository = Path(__file__).resolve().parents[1]
-        launcher = (repository / "scripts/run_dev.sh").read_text(encoding="utf-8")
-        self.assertIn('TEST_MODE=false', launcher)
-        self.assertIn('--test-mode)', launcher)
-        gated = launcher[launcher.index('if [[ "$TEST_MODE" == "true" ]]; then'):]
-        gated = gated[: gated.index("\nfi\n")]
-        self.assertIn(
-            'export VOINEY_LAB_USAGE_SCOPE="demo"', gated
-        )
-        self.assertIn(
-            'export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="true"',
-            gated,
-        )
-        # Nowhere else in the launcher does either variable get set.
-        outside = launcher.replace(gated, "")
-        self.assertNotIn("VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES", outside)
-        self.assertNotIn("export VOINEY_LAB_USAGE_SCOPE", outside)
-
     def test_pilot_launcher_is_isolated_and_off_outside_the_source_document(self):
         """The pilot launcher owns its data root and opts out, not in.
 
         The four out-of-source features and MOSS must each keep a value the
-        operator exported themselves, so turning one on is deliberate; test
-        mode is forced off whatever the environment said.
+        operator exported themselves, so turning one on is deliberate.
         """
 
         repository = Path(__file__).resolve().parents[1]
@@ -1061,13 +957,8 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             'export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"',
             launcher,
         )
-        self.assertIn(
-            'export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="false"',
-            launcher,
-        )
-        self.assertNotIn(
-            'VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="true"', launcher
-        )
+        # Lane DI (2026-10-08): there is no test mode to force off.
+        self.assertNotIn("TEST_MODE", launcher)
         self.assertIn("--check-only", launcher)
         self.assertIn('--host "$HOST"', launcher)
         self.assertIn('--port "$PORT"', launcher)
@@ -1356,7 +1247,6 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         transport = httpx.ASGITransport(app=server_module.app)
         environment = {
             "VOINEY_LAB_WORKSPACE_ENABLED": "false",
-            "VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN": "review-token",
         }
         analyses_started: list[str] = []
 
@@ -1404,20 +1294,21 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 run = await client.get(f"/api/protocols/{protocol_id}/analysis/status")
                 self.assertEqual(run.json()["state"], "structured_analysis_ready")
 
-                # No separate OCR approval exists any more: there is nothing
-                # awaiting a person's review.
+                # No OCR approval route exists any more (lane DI): the OCR
+                # text is read as source text and the experimenter's start
+                # covers it.
                 reviewed = await client.post(
                     f"/api/protocols/{protocol_id}/ocr/review",
                     json={"decision": "accepted", "comment": "Compared to PDF."},
-                    headers={"X-Protocol-Approval-Token": "review-token"},
                 )
-                self.assertEqual(reviewed.status_code, 409, reviewed.text)
-                self.assertEqual(reviewed.json(), {"detail": "protocol_ocr_review_invalid"})
+                # The path now falls through to the static-file mount, which
+                # answers a POST with 405; either way no route handles it.
+                self.assertIn(reviewed.status_code, (404, 405), reviewed.text)
         self.assertEqual(provider.calls, 1)
         self.assertTrue(provider.source_pdf.is_file())
         self.provider_factory.assert_not_called()
 
-    async def test_review_and_development_activation_are_explicit_and_scope_gated(self):
+    async def test_review_says_a_passed_analysis_may_run_and_what_the_experimenter_reads(self):
         source = self.root / "reviewable.pdf"
         source_bytes = write_text_pdf(
             source,
@@ -1430,6 +1321,13 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
             content=source_bytes,
         )
         protocol_id = registration.json()["protocol"]["protocol_id"]
+        before = await self._request(
+            "GET", f"/api/protocols/{protocol_id}/review",
+            content_type="application/json",
+        )
+        self.assertEqual(before.status_code, 200, before.text)
+        self.assertFalse(before.json()["available_for_execution"])
+        self.assertEqual(before.json()["safety_notices"], [])
         catalog, store = self._open_catalog()
         try:
             draft = analysis_draft(source, protocol_id, "Protocol Reviewable")
@@ -1441,53 +1339,55 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 draft.readiness,
                 draft.capability_policy_id,
             )
-            # Development activation is still guidance read out to a person, so
-            # the safety confirmation applies to it as it does to approval.
-            catalog.acknowledge_readiness_gate(
-                protocol_id,
-                "pdf-1-analysis-1",
-                reason_code=(
-                    domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
-                ),
-                actor_principal_id="reviewer@example.org",
-                actor_role="reviewer",
-                comment="Warnings reviewed against the source.",
-            )
         finally:
             store.close()
 
-        with patch.dict(os.environ, {"VOINEY_LAB_USAGE_SCOPE": "demo"}):
-            review = await self._request(
-                "GET",
-                f"/api/protocols/{protocol_id}/review",
-                content_type="application/json",
-            )
+        # Lane DI (2026-10-08): no approval, activation or test mode. The
+        # analysis passed and carries no execution blocker, so the protocol
+        # may run in any scope; the one confirmation is the press of start.
+        # ("operational" is not in the loop only because that scope requires
+        # a configured login (OIDC) before any request is answered; the
+        # execution rule itself does not read the scope.)
+        for scope in ("demo", "reference_only"):
+            with patch.dict(os.environ, {"VOINEY_LAB_USAGE_SCOPE": scope}):
+                review = await self._request(
+                    "GET",
+                    f"/api/protocols/{protocol_id}/review",
+                    content_type="application/json",
+                )
             self.assertEqual(review.status_code, 200, review.text)
-            self.assertTrue(review.json()["development_activation_allowed"])
-            self.assertFalse(review.json()["available_for_execution"])
-            activated = await self._request(
-                "POST",
-                f"/api/protocols/{protocol_id}/activate-development",
-                content_type="application/json",
+            payload = review.json()
+            self.assertTrue(payload["available_for_execution"], scope)
+            self.assertEqual(payload["lifecycle_state"], "ready")
+            self.assertEqual(payload["execution_blockers"], [])
+            self.assertEqual(
+                [item["code"] for item in payload["execution_notices"]],
+                [domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value],
             )
-            self.assertEqual(activated.status_code, 200, activated.text)
-            self.assertTrue(activated.json()["available_for_execution"])
-            self.assertTrue(activated.json()["development_only"])
-
-        with patch.dict(
-            os.environ, {"VOINEY_LAB_USAGE_SCOPE": "operational"}
+            self.assertEqual(payload["pipeline"]["stage"], "ready")
+            self.assertIn("이 프로토콜로 시작", payload["pipeline"]["action"])
+            # The start screen's safety statements: the source's words, the
+            # page, the step, and the Korean beside them (none stored here).
+            self.assertEqual(
+                [(n["step_label"], n["source_page_number"], n["source_text"], n["primary_text"])
+                 for n in payload["safety_notices"]],
+                [("1", 1, "Wear gloves.", None)],
+            )
+            for gone in ("gates", "reviewer_actions", "reviewer_findings",
+                         "outstanding_blockers", "readiness_gates_cleared",
+                         "development_activation_allowed", "approval_status"):
+                self.assertNotIn(gone, payload, gone)
+        # The approval and activation routes are gone.
+        for route in (
+            f"/api/protocols/{protocol_id}/activate-development",
+            f"/api/protocols/{protocol_id}/revisions/pdf-1-analysis-1/approve",
+            f"/api/protocols/{protocol_id}/revisions/pdf-1-analysis-1/findings/acknowledge-gate",
         ):
-            blocked = await self._request(
-                "POST",
-                f"/api/protocols/{protocol_id}/activate-development",
-                content_type="application/json",
-            )
-        self.assertEqual(blocked.status_code, 403, blocked.text)
-        self.assertEqual(
-            blocked.json(), {"detail": "development_activation_not_allowed"}
-        )
+            gone = await self._request("POST", route, content_type="application/json")
+            # No route handles the path; it falls through to the static mount,
+            # which answers a POST with 405.
+            self.assertIn(gone.status_code, (404, 405), route)
         self.provider_factory.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

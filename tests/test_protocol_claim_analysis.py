@@ -29,10 +29,8 @@ from voiney_lab.experiment_protocol_store import (
 )
 from voiney_lab.protocol_catalog import (
     CLAIM_CHUNK_ANALYSIS_ENABLED_ENV,
-    ProtocolApprovalError,
     ProtocolCatalog,
     ProtocolCatalogUnavailableError,
-    SharedSecretApprovalPolicy,
     _analysis_state,
 )
 from voiney_lab.protocol_chunk_analysis import (
@@ -1516,7 +1514,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             [self.action, self.action],
         )
 
-    def test_analysis_required_claim_result_cannot_be_approved_or_executed(self):
+    def test_the_claim_result_runs_only_when_no_execution_blocker_stands(self):
         merged = merge_validated_chunk_results(
             self.extraction,
             self.plan,
@@ -1533,7 +1531,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 source_filename="blocked.pdf",
                 media_type="application/pdf",
             ).entry
-            analysis = store.append_analysis_revision(
+            store.append_analysis_revision(
                 entry.protocol_id,
                 1,
                 "analysis-claim-blocked",
@@ -1541,15 +1539,24 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 draft.readiness,
                 draft.capability_policy_id,
             )
-            with self.assertRaises(ProtocolApprovalError):
-                catalog.approve(
-                    entry.protocol_id,
-                    f"pdf-1-analysis-{analysis.analysis_revision_number}",
-                    policy=SharedSecretApprovalPolicy("secret"),
-                    presented_secret="secret",
+            # Lane DI (2026-10-08): the catalog's verdict is the blocker list
+            # and nothing else -- no approval exists to refuse.
+            blockers = domain.execution_blocking_reasons(draft.readiness)
+            stored = catalog.get_entry(entry.protocol_id)
+            self.assertEqual(
+                stored.execution_blocker_codes,
+                tuple(reason.code.value for reason in blockers),
+            )
+            if blockers:
+                self.assertFalse(stored.available_for_execution)
+                with self.assertRaises(ProtocolCatalogUnavailableError):
+                    catalog.load_executable_fixture(entry.protocol_id)
+            else:
+                self.assertTrue(stored.available_for_execution)
+                self.assertEqual(
+                    catalog.load_executable_fixture(entry.protocol_id).status,
+                    "analysis_passed",
                 )
-            with self.assertRaises(ProtocolCatalogUnavailableError):
-                catalog.load_executable_fixture(entry.protocol_id)
         finally:
             store.close()
 
@@ -1918,7 +1925,9 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                     chunk_limits=ChunkAnalysisLimits(max_retries=0),
                 )
                 self.assertEqual(analyzed.analysis_status, "review_required")
-                self.assertFalse(analyzed.available_for_execution)
+                # Lane DI (2026-10-08): a passed analysis with no execution
+                # blocker may run; the experimenter's start is the confirmation.
+                self.assertTrue(analyzed.available_for_execution)
                 status = catalog.analysis_run_status(entry.protocol_id)
                 self.assertEqual(status.total_chunks, 3)
                 self.assertEqual(status.completed_chunks, 3)

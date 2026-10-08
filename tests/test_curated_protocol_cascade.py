@@ -60,7 +60,7 @@ from voiney_lab.server import (
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import EndpointDetector, TurnState
 
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -4307,11 +4307,11 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ), patch(
             "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
-        ), development_activation_recorded():
+        ), runnable_fixture_assumed():
             # This test is about what the curated boundary does once a session
             # is running.  Selecting the fixture at all now needs a recorded
             # development activation, which the in-gel fixture cannot earn:
-            # see tests/development_activation.
+            # see tests/runnable_fixture.
             asyncio.run(scenario())
 
         procedure_store.assert_not_called()
@@ -4536,7 +4536,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             side_effect=AssertionError(
                 "legacy procedure catalog must not be loaded when a "
                 "curated protocol was selected"),
-        ) as load_definitions, development_activation_recorded():
+        ) as load_definitions, runnable_fixture_assumed():
             # The assertion here is that the curated selection wins over the
             # legacy procedure stack; reaching that selection needs a recorded
             # development activation, which is stepped around, not weakened.

@@ -12,22 +12,18 @@ const entry = (runnable: boolean) => ({
   protocol_id: PROTOCOL_ID, title: 'In-gel digestion', source_filename: 'in-gel-digestion.pdf',
   source_sha256: 'a'.repeat(64), revision_id: REVISION_ID,
   readiness_status: runnable ? 'guidance_ready' : 'analysis_required',
-  approval_status: 'development_only', analysis_status: 'analysis_complete', step_count: 25,
+  analysis_status: 'review_required', step_count: 25,
   created_at: '2026-10-05T01:00:00+00:00', available_for_execution: runnable, development_only: true,
   lifecycle_state: runnable ? 'ready' : 'blocked',
-  approval: { status: 'development_only', final_approval: false, actor_principal_id: 'local-admin', actor_role: 'lab_admin', recorded_at: '2026-10-05T01:02:00+00:00' },
 });
 
 const review = {
-  protocol_id: PROTOCOL_ID, revision_id: 'pdf-1-analysis-2', source: { filename: 'in-gel-digestion.pdf', page_count: 9 },
-  readiness: { status: 'analysis_required', reasons: [] }, gates: {},
+  protocol_id: PROTOCOL_ID, revision_id: 'pdf-1-analysis-2', source: { filename: 'in-gel-digestion.pdf', page_count: 9 }, analysis_available: true,
+  readiness: { status: 'analysis_required', reasons: [] },
   constructs: [{ construct_type: 'SourceAmbiguity', ambiguity_id: 'amb-1', step_id: 'step-4', resolved: false }],
-  outstanding_blockers: [{
-    code: 'unresolved_ambiguity', kind: 'reviewer_can_clear', step_id: 'step-4', source_page_number: 4,
-    reviewer_action: 'resolve_ambiguity', already_acknowledged: false,
-    decision_options: ['single_statement_is_authoritative', 'distinct_statements'], clearing_decision: 'single_statement_is_authoritative',
-    citable_segments: [{ segment_id: 'seg-p4-0', source_page_number: 4, segment_index: 0, excerpt: 'Incubate the gel pieces at 37 °C for 30 min.' }],
-  }],
+  execution_blockers: [{ code: 'no_executable_steps', kind: 'blocking', message_ko: '실행할 단계를 원문에서 찾지 못했습니다.' }],
+  execution_notices: [{ code: 'unresolved_ambiguity', kind: 'source_note', step_id: 'step-4', source_page_number: 4, message_ko: '원문에 서로 다른 두 서술이 있습니다.' }],
+  safety_notices: [],
 };
 
 const fixtureState = (overrides: Record<string, unknown> = {}) => ({
@@ -90,17 +86,21 @@ test.describe('Remaining screen words (lane U2)', () => {
     expect(colour).toBe('rgb(250, 119, 124)');
   });
 
-  test('review choices say what they do in plain words, and an empty check list is not drawn', async ({ page }) => {
+  test('the analysis result lists the blocker and the notice in plain words', async ({ page }) => {
     await page.route('**/api/protocols', route => route.fulfill({ json: { protocols: [entry(false)] } }));
     await page.route(`**/api/protocols/${PROTOCOL_ID}/review`, route => route.fulfill({ json: review }));
     await page.goto('/');
     await page.waitForFunction(() => typeof renderProtocolReview === 'function');
     await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
-    await page.locator('#protocol-blockers .citation-row').first().waitFor();
-    const options = await page.locator('#protocol-blockers select option').allTextContents();
-    expect(options).toContain('한 진술이 기준임 · 이 근거로 해결된 것으로 표시');
-    expect(options.some(text => text.endsWith('기록만 하고 해결로 표시하지 않음'))).toBe(true);
-    expect(options.join(' ')).not.toContain('사유를 해제');
+    const summary = page.locator('#protocol-start-summary');
+    await expect(summary).toBeVisible();
+    await expect(summary).toContainText('실행을 막는 사유 1건');
+    await expect(summary).toContainText('실행할 단계를 원문에서 찾지 못했습니다.');
+    await expect(summary).toContainText('시작 전 알림 1건');
+    await expect(summary).toContainText('원문에 적힌 안전 주의 없음');
+    await expect(page.locator('#protocol-start')).toBeHidden();
+    const text = await visibleText(page, '#researcher-workspace');
+    for (const word of ['검토자', '승인', '해제']) expect(text).not.toContain(word);
     const headings = await page.locator('#protocol-review-content h4').allTextContents();
     expect(headings).not.toContain('실행 전 확인 조건');
   });

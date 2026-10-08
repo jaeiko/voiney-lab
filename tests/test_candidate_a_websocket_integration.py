@@ -29,7 +29,7 @@ from voiney_lab.server import (
 )
 from voiney_lab.semantic_intent import SemanticIntentSettings
 import voiney_lab.server as server_module
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 from voiney_lab.identity import Principal, Role
 from voiney_lab.workspace_store import (
     WorkspaceConflictError,
@@ -116,8 +116,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
     fit to run, and its readiness carries two unsupported repeat-untils that
     no reviewer action can clear.  These tests are about durability, recovery
     and turn handling *behind* that wall, so they step around exactly one gate
-    and nothing else -- see ``tests/development_activation``.  The gate itself
-    is pinned in ``tests/test_development_activation_gate.py``.
+    and nothing else -- see ``tests/runnable_fixture``.  The rule itself
+    is pinned in ``tests/test_lane_di_execution_rule.py``.
     """
 
     @classmethod
@@ -132,7 +132,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         )
 
     def setUp(self) -> None:
-        activation = development_activation_recorded()
+        activation = runnable_fixture_assumed()
         activation.__enter__()
         self.addCleanup(activation.__exit__, None, None, None)
 

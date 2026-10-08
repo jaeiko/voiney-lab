@@ -175,11 +175,6 @@ class CatalogAutomaticAcceptanceTests(_CatalogCase):
             domain.SourceEvidence(1, statement), analysed)
         self.assertEqual(verified.continued_on_page_number, 2)
 
-    def test_without_the_flag_a_result_still_waits_for_a_person(self) -> None:
-        entry = self.register(self.mixed, "mixed.pdf")
-        status = self.catalog.run_ocr(entry.protocol_id, FakeOcrProvider(), ocr_id="ocr-manual")
-        self.assertEqual(status["state"], "review_required")
-        self.assertFalse(status["accepted_for_analysis"])
 
 
 class ServerUploadTests(unittest.IsolatedAsyncioTestCase):

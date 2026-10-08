@@ -33,7 +33,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 from tests.test_frontend import run_node_harness
 from voiney_lab.curated_protocol import load_curated_protocol_fixture
 from voiney_lab.identity import Principal, Role
@@ -129,7 +129,7 @@ class VoiceSessionHarness:
         cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
 
     def setUp(self) -> None:
-        activation = development_activation_recorded()
+        activation = runnable_fixture_assumed()
         activation.__enter__()
         self.addCleanup(activation.__exit__, None, None, None)
         self._fresh_tenant()

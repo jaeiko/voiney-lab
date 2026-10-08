@@ -82,9 +82,6 @@ each one before the session:
 - `VOINEY_LAB_PROCEDURE_CATALOG` and
   `VOINEY_LAB_PROCEDURE_STORE` are empty (the older procedure stack
   described in `CLAUDE.md`).
-- `VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS` is false or unset. Under
-  `reference_only` it would development-activate an analysed upload with no
-  person involved.
 - `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
   transcripts and audio are written to disk.
 - `VOINEY_LAB_DEV_AUTH_PROFILES` lists the participants' profiles.
