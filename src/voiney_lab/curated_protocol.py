@@ -57,17 +57,7 @@ from voiney_lab.llm_router import (
     tool_value_rule,
     validate_tool_proposals,
 )
-from voiney_lab.semantic_intent import (
-    SemanticIntent,
-    SemanticIntentContext,
-    SemanticIntentDecision,
-    SemanticIntentProposal,
-    SemanticIntentSettings,
-    evaluate_semantic_proposal,
-    has_completion_evidence,
-    normalize_semantic_utterance,
-    semantic_fallback_reason,
-)
+from voiney_lab.intent_fences import has_completion_evidence
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -5834,101 +5824,6 @@ def curated_intent_from_arbitration(
     return None
 
 
-#: The complete allowlist of curated actions a semantic proposal may reach.
-#: A meaning absent from this table cannot be projected at all, so the resolver
-#: can never introduce a workflow action.  Read-only meanings map to the
-#: existing read-only actions; bounded control maps to the existing bounded
-#: control action; ``COMPLETE_CURRENT_STEP`` deliberately maps to the explicit
-#: completion confirmation rather than to a transition, so the semantic path
-#: holds no mutation authority of its own.  ``STOP`` has no entry on purpose.
-_SEMANTIC_INTENT_PROJECTION: dict[SemanticIntent, dict[str, Any]] = {
-    SemanticIntent.CURRENT_STEP: {
-        "intent_kind": "semantic_current_step",
-        "action": CuratedProtocolAction.CURRENT,
-        "target_step": "authoritative_current_step",
-    },
-    SemanticIntent.NEXT_STEP_INFORMATION: {
-        "intent_kind": "semantic_next_step_information",
-        "action": CuratedProtocolAction.NEXT_INFORMATION,
-        "requested_followup": "describe_next_step_without_transition",
-        "target_step": "authoritative_current_step",
-    },
-    SemanticIntent.REPEAT: {
-        "intent_kind": "semantic_repeat",
-        "action": CuratedProtocolAction.REPEAT,
-        "target_step": "authoritative_current_step",
-    },
-    SemanticIntent.TIMER_STATUS: {
-        "intent_kind": "semantic_step_timer_status",
-        "action": CuratedProtocolAction.TIMER_STATUS,
-    },
-    SemanticIntent.TIMER_INFORMATION: {
-        "intent_kind": "semantic_step_timer_information",
-        "action": CuratedProtocolAction.TIMER_STATUS,
-    },
-    SemanticIntent.START_TIMER: {
-        "intent_kind": "semantic_start_step_timer",
-        "action": CuratedProtocolAction.START_TIMER,
-    },
-    SemanticIntent.PAUSE: {
-        "intent_kind": "semantic_pause_workflow",
-        "action": CuratedProtocolAction.PAUSE,
-    },
-    SemanticIntent.RESUME: {
-        "intent_kind": "semantic_resume_workflow",
-        "action": CuratedProtocolAction.RESUME,
-        "allows_state_mutation": True,
-    },
-    SemanticIntent.NOT_DONE: {
-        "intent_kind": "semantic_not_done",
-        "action": CuratedProtocolAction.DECLINE_COMPLETION,
-        "target_step": "authoritative_current_step",
-    },
-    SemanticIntent.RELATED_QUESTION: {
-        "intent_kind": "semantic_related_question",
-        "action": CuratedProtocolAction.RELATED_QUESTION,
-        "target_step": "authoritative_current_step",
-        "question_kind": "related_knowledge",
-    },
-    SemanticIntent.COMPLETE_CURRENT_STEP: {
-        "intent_kind": "semantic_completion_confirmation_required",
-        "action": CuratedProtocolAction.CLARIFY_COMPLETION,
-        "requested_transition": "next",
-        "requested_followup": "confirm_current_step_completion",
-        "target_step": "authoritative_current_step",
-        "requires_confirmation": True,
-        "allows_state_mutation": False,
-    },
-}
-
-
-def curated_intent_from_semantic_decision(
-    decision: SemanticIntentDecision,
-    *,
-    language: str,
-    normalized_transcript: str,
-) -> CuratedControlIntent | None:
-    """Project one *accepted* semantic proposal into the curated contract.
-
-    A refused decision, or an accepted one whose meaning has no entry in
-    ``_SEMANTIC_INTENT_PROJECTION``, returns ``None`` so the deterministic
-    outcome stands unchanged.
-    """
-
-    if not decision.accepted or decision.intent is None:
-        return None
-    projection = _SEMANTIC_INTENT_PROJECTION.get(decision.intent)
-    if projection is None:
-        return None
-    return CuratedControlIntent(
-        language=language,
-        normalized_transcript=normalized_transcript,
-        confidence=decision.confidence,
-        confidence_source="semantic_intent_fallback",
-        **projection,
-    )
-
-
 _WORKFLOW_COMMANDS = {
     "시작": CuratedProtocolAction.START,
     "시작해": CuratedProtocolAction.START,
@@ -7081,7 +6976,6 @@ class CuratedProtocolSession:
         self._pending_observation_confirmation: PendingObservationConfirmation | None = None
         self._pending_transcript_confirmation: PendingTranscriptConfirmation | None = None
         self._workflow_status: str = "preview"
-        self._last_semantic_decision: SemanticIntentDecision | None = None
         #: The front rule (FRONT_RULES) that planned the last turn, or None
         #: when no front rule owned it. Telemetry only; never rolled back.
         self._last_front_rule: str | None = None
@@ -11297,109 +11191,11 @@ class CuratedProtocolSession:
             protocol_vocabulary=self._protocol_vocabulary(),
         )
 
-    def semantic_intent_context(
-        self,
-        transcript: str,
-        *,
-        language: str,
-        deterministic_reason: str,
-        now: float | None = None,
-    ) -> SemanticIntentContext:
-        """Build the server-owned context one semantic proposal may reason over.
-
-        Only workflow milestones travel here - never protocol prose, quantities,
-        or safety text - so a proposal can never be grounded in fabricated
-        scientific content.
-        """
-
-        step = (
-            self.fixture.steps[self.current_index]
-            if 0 <= self.current_index < len(self.fixture.steps)
-            else None
-        )
-        timer = self.timer_status(now=now)
-        timer_state = str(timer.get("state") or "unavailable")
-        duration = int(timer.get("duration_seconds") or 0)
-        remaining = timer.get("remaining_seconds")
-        capsule_pending = None
-        if not self.active:
-            capsule_pending = "greeting_pending"
-        elif self._pending_completion_confirmation is not None:
-            capsule_pending = "completion_gate"
-        elif self._pending_observation_confirmation is not None:
-            capsule_pending = "observation_gate"
-        elif self._pending_transcript_confirmation is not None:
-            capsule_pending = "transcript_gate"
-        elif self._pending_note_capture:
-            capsule_pending = "observation_note"
-        return SemanticIntentContext(
-            utterance=normalize_semantic_utterance(transcript),
-            normalized_utterance=_utterance_key(transcript),
-            language=language,
-            session_phase=self.workflow_status,
-            workflow_active=bool(self.active),
-            current_step_label=step.source_label if step is not None else None,
-            step_timer_state=timer_state,
-            step_timer_configured=duration > 0,
-            step_timer_remaining_seconds=(
-                int(remaining) if isinstance(remaining, (int, float)) else None
-            ),
-            pending_interaction=capsule_pending,
-            deterministic_reason=deterministic_reason,
-        )
-
-    @property
-    def last_semantic_decision(self) -> SemanticIntentDecision | None:
-        """The most recent semantic policy ruling, for turn telemetry only."""
-
-        return self._last_semantic_decision
-
     @property
     def last_front_rule(self) -> str | None:
         """The FRONT_RULES name that planned the last turn, for telemetry only."""
 
         return self._last_front_rule
-
-    def _apply_semantic_intent_fallback(
-        self,
-        intent: CuratedControlIntent,
-        proposal: SemanticIntentProposal | None,
-        *,
-        transcript: str,
-        language: str,
-        arbitration_intent: str | None,
-        settings: SemanticIntentSettings,
-    ) -> CuratedControlIntent:
-        """Validate one proposal against server context and project it, or not.
-
-        The eligibility gate is re-evaluated here rather than trusted from the
-        caller: a proposal that arrives for an utterance the deterministic path
-        actually resolved is discarded, not applied.
-        """
-
-        if proposal is None:
-            return intent
-        reason = semantic_fallback_reason(
-            deterministic_action=intent.action.value,
-            deterministic_intent_kind=intent.intent_kind,
-            arbitration_intent=arbitration_intent,
-        )
-        if reason is None:
-            self._last_semantic_decision = SemanticIntentDecision(
-                False, "deterministic_route_owns_turn"
-            )
-            return intent
-        context = self.semantic_intent_context(
-            transcript, language=language, deterministic_reason=reason
-        )
-        decision = evaluate_semantic_proposal(proposal, context, settings)
-        self._last_semantic_decision = decision
-        projected = curated_intent_from_semantic_decision(
-            decision, language=language, normalized_transcript=context.normalized_utterance
-        )
-        if projected is None:
-            return intent
-        return projected
 
     def context_capsule(self) -> WorkflowContextCapsule:
         step = self.fixture.steps[self.current_index] if 0 <= self.current_index < len(self.fixture.steps) else None
@@ -12817,9 +12613,6 @@ class CuratedProtocolSession:
         (None when an open question, not the words, decided the turn).
         """
 
-        if intent.confidence_source == "semantic_intent_fallback":
-            # A model's reading is never a front rule.
-            return None
         if intent.action is CuratedProtocolAction.REPORT_ANOMALY and intent.spill_reported:
             # Lane RT, decision 6: a spill said as having happened is the
             # front rules' to record, router or not. With the router on, a
@@ -12959,8 +12752,6 @@ class CuratedProtocolSession:
         configuration_id: int | None = None,
         generation: int | None = None,
         arbitration: RequestArbitration | None = None,
-        semantic_proposal: SemanticIntentProposal | None = None,
-        semantic_settings: SemanticIntentSettings | None = None,
         #: Who is speaking, for the endpoint-observation record. Optional
         #: because a session may run with no workspace and therefore no
         #: principal; the record then names the role and leaves the identity
@@ -12978,8 +12769,6 @@ class CuratedProtocolSession:
             configuration_id=configuration_id,
             generation=generation,
             arbitration=arbitration,
-            semantic_proposal=semantic_proposal,
-            semantic_settings=semantic_settings,
             actor_principal_id=actor_principal_id,
             actor_role=actor_role,
             front_only=False,
@@ -13044,8 +12833,6 @@ class CuratedProtocolSession:
         configuration_id: int | None = None,
         generation: int | None = None,
         arbitration: RequestArbitration | None = None,
-        semantic_proposal: SemanticIntentProposal | None = None,
-        semantic_settings: SemanticIntentSettings | None = None,
         actor_principal_id: str | None = None,
         actor_role: str = "voice_operator",
         front_only: bool,
@@ -13078,7 +12865,6 @@ class CuratedProtocolSession:
         # What reading the turn may clear before the rules know who owns it.
         # A front-only reading that hands the turn on puts these back.
         untouched = (
-            self._last_semantic_decision,
             self._pending_completion_confirmation,
             self._pending_observation_confirmation,
             self._pending_transcript_confirmation,
@@ -13089,7 +12875,6 @@ class CuratedProtocolSession:
             self._pending_step_move,
             self._pending_record_fix,
         ) if front_only else None
-        self._last_semantic_decision = None
         # The front rule that owns this turn, once one does (FRONT_RULES).
         front_rule: str | None = None
         # "끝났어", "다 끝났어", "끝" said alone (lane XO, decision 5).
@@ -13995,21 +13780,6 @@ class CuratedProtocolSession:
                         allows_state_mutation=True,
                         normalized_transcript=command_key,
                     )
-                # The deterministic result above is the fast path and the
-                # default.  A semantic proposal only ever gets to replace a
-                # catch-all outcome, and only after server-owned policy accepts
-                # it; every gate below still runs on whatever survives.
-                if semantic_proposal is not None:
-                    intent = self._apply_semantic_intent_fallback(
-                        intent,
-                        semantic_proposal,
-                        transcript=transcript,
-                        language=language,
-                        arbitration_intent=shared_decision.intent.value,
-                        settings=(
-                            semantic_settings or SemanticIntentSettings()
-                        ),
-                    )
                 if observation_hold is not None:
                     # An open endpoint question owns the whole turn (F5).
                     front_rule = "observation_reply"
@@ -14265,7 +14035,6 @@ class CuratedProtocolSession:
         if front_only and front_rule is None:
             # No front rule owns this turn: it is handed on untouched.
             (
-                self._last_semantic_decision,
                 self._pending_completion_confirmation,
                 self._pending_observation_confirmation,
                 self._pending_transcript_confirmation,
@@ -17338,7 +17107,6 @@ class CuratedProtocolSession:
 
         if turn_id in self._replay:
             return self._replay[turn_id]
-        self._last_semantic_decision = None
         self._last_front_rule = None
         self._pending_completion_confirmation = None
         self._pending_transcript_confirmation = None
@@ -17470,7 +17238,6 @@ class CuratedProtocolSession:
             generation=generation,
         )
         verdict = validate_tool_proposals(proposals, facts, basis)
-        self._last_semantic_decision = None
         self._last_front_rule = None
         if verdict.effect == "refuse" and facts.open_question is not None:
             plan = self._ask_open_question_again(

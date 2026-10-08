@@ -72,15 +72,10 @@ Canonical workflow events
 ```
 
 The main runtime routing boundary is
-`src/voiney_lab/runtime_routing.py`. An optional, disabled-by-default
-semantic intent fallback (`semantic_intent.py`) sits behind it: when
-deterministic routing returns a catch-all, it may *propose* one of the existing
-bounded workflow actions, and server-owned policy in the same boundary decides
-whether that proposal is used. It never mutates workflow state - see
-[Semantic intent fallback](#semantic-intent-fallback). An LLM router that
-takes over intent judgment behind deterministic front rules is wired behind a
-setting that is off by default - see
-[LLM router (off by default)](#llm-router-off-by-default).
+`src/voiney_lab/runtime_routing.py`. An LLM router that takes over intent
+judgment behind deterministic front rules is wired behind a setting that is
+off by default - see [LLM router (off by default)](#llm-router-off-by-default).
+The utterance fences its tool validation applies live in `intent_fences.py`.
 Tenant/RBAC logic is in
 `identity.py` and `workspace_store.py`. Protocol source adapters are in
 `protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
@@ -763,79 +758,6 @@ acts on carries where it came from (`value_source`: `source`, `operator`, or
   for recovery: after a reconnect the open question is asked again where the
   run stands.
 
-## Semantic intent fallback
-
-Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
-`타임 얼마나 남았어?` are recognized deterministically, but `Time 얼마나 남았어?`
-is the same question in a form no regex table anticipated. The semantic intent
-fallback answers that class of utterance without giving a model any authority.
-
-```text
-STT
- → deterministic intent fast path            (unchanged, still the fast path)
- → semantic intent proposal                  (only when the fast path returns a catch-all)
- → server-owned policy validation            (evidence, context, and tier gates)
- → deterministic workflow state machine      (the only thing that transitions)
- → persistence
- → acknowledgement
-```
-
-The resolver may propose only an intent that already exists in the curated
-action contract - current step, next-step information, complete current step,
-not done, start timer, timer status, timer-operation information, pause, resume,
-stop, repeat, related question, or `unknown` - and returns structured data (`intent`, `target`,
-`mutation_requested`, `confidence`, `explicit_action_evidence`, `reason`), never
-free-form instructions. It uses the same xAI chat boundary as the rest of the
-product; no second provider is introduced.
-
-Mutation safety is structural, not advisory:
-
-- **Read-only intents** need only the read-only confidence floor. A timer
-  question is answered from the server's own timer, so it can report "the timer
-  is not started yet" but can never invent a timer the approved step does not
-  define.
-- **Bounded control** (start timer, pause, resume) additionally requires
-  `mutation_requested`, a verbatim action span copied from the utterance, a
-  actual action request rather than an informational or hypothetical question,
-  an active workflow, no open confirmation gate, and the higher mutation
-  confidence floor. A polite request may end in question punctuation; it still
-  passes the same verbatim-evidence and server-state gates.
-- **Checkpoint intents** never execute. A completion proposal is downgraded to
-  the existing explicit completion confirmation, so the researcher's own answer
-  commits the step. A stop proposal is refused outright: ending a run stays a
-  deterministically worded command.
-- Source-defined observation checkpoints, transcript-quality blocks, pending
-  confirmation gates, and the deterministic non-mutating completion guards
-  (hypothetical, quoted, negated, future completion) are all evaluated
-  independently of the proposal and continue to win.
-
-Failure is always closed. If the fallback is disabled, the resolver is
-unreachable, the call times out, the structured output is malformed, the
-proposed intent is unsupported, or confidence is below the floor, the turn keeps
-exactly the outcome the deterministic path already produced. A turn the
-deterministic path resolves never constructs a provider client at all, so voice
-interaction never depends on the model being available.
-
-Enable it per deployment (see `.env.example`):
-
-```bash
-VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true
-VOINEY_LAB_SEMANTIC_INTENT_MODEL=grok-4.20-0309-non-reasoning
-VOINEY_LAB_SEMANTIC_INTENT_TIMEOUT_SECONDS=2.5
-VOINEY_LAB_SEMANTIC_INTENT_MIN_CONFIDENCE=0.6
-VOINEY_LAB_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE=0.85
-```
-
-The dedicated non-reasoning model keeps this small typed classification off the
-slower general reasoning path. The 2.5-second value is a hard provider boundary,
-not permission to retry; the request uses no tools and caps its output at 160
-tokens.
-
-Every turn publishes a privacy-safe ruling on `turn.route_decision` under
-`semantic_fallback` (`status`, `reason_code`, `proposed_intent`, `accepted`,
-`confidence`, `latency_ms`) - reason codes and enum values only, never
-utterance text or model prose.
-
 ## LLM router (off by default)
 
 Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
@@ -849,11 +771,6 @@ above. The router role's `VOINEY_LAB_ROUTER_PROVIDER` (default `xai`),
 `VOINEY_LAB_ROUTER_REASONING` choose the model (see [Model providers by
 role](#model-providers-by-role)), and `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`
 (default 2.5) how long a turn waits for it; it needs that provider's key.
-
-The router and the semantic-intent fallback are never both on: with
-`VOINEY_LAB_LLM_ROUTER_ENABLED=true` and
-`VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true` the server refuses to start and says
-why (lane M1, decision 4) -- one turn is decided along one line.
 
 On, a turn goes:
 
@@ -1199,9 +1116,9 @@ once more by itself, recorded as `protocol_analysis_retry_started` with
 authority `automatic_invalid_response_retry`, and the progress line says
 "다시 시도 중(1/1)". A failed source-evidence check, a time-out or a missing
 provider is never sent again by itself, nor is a person's own retry; if the
-second answer fails too, a person presses "분석 다시 시도". The four features only xAI provides --
-external reference search, web image search, generated images and semantic
-intent -- default to off. There is no test mode any more (lane DI,
+second answer fails too, a person presses "분석 다시 시도". The three features only xAI provides --
+external reference search, web image search and generated images -- default
+to off. There is no test mode any more (lane DI,
 2026-10-08): an analysed protocol runs under the one execution rule in every
 scope. `scripts/run_candidate_a.sh` is the former name and now forwards to
 it.
@@ -1210,7 +1127,7 @@ it.
 `data/runtime/pilot/`, and turns every feature that reaches outside the
 approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
 `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED`,
-`VOINEY_LAB_GENERATED_VISUALS_ENABLED`, `VOINEY_LAB_SEMANTIC_INTENT_ENABLED` —
+`VOINEY_LAB_GENERATED_VISUALS_ENABLED` —
 along with `VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator set in
 the shell (and, but for MOSS, wrote in the `.env`), so enabling one is a
 deliberate act taken before startup. Dry-lab workflows and the
@@ -1473,9 +1390,7 @@ parameter or else the file name. The image is never read.
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the
 current deployment example. Protocol analysis explicitly defaults to high
 reasoning effort. Lower effort levels remain deployment-configurable but must
-pass protocol-specific completeness and evidence validation before use. The
-separate low-latency semantic-intent path keeps its dedicated non-reasoning
-model and timeout settings.
+pass protocol-specific completeness and evidence validation before use.
 
 The browser's analysis request returns at once (`analysis_pending`) and the
 provider call runs in a background task; the screen polls the status and shows
@@ -1750,7 +1665,6 @@ tests/test_phase3_acceptance.py
 tests/test_protocol_catalog.py
 tests/test_runtime_intent_routing.py
 tests/test_safety_pack.py
-tests/test_semantic_intent_fallback.py
 tests/test_stability_and_semantic_hardening.py
 tests/test_transcript_admission.py
 ```

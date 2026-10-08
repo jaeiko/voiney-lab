@@ -184,20 +184,13 @@ from voiney_lab.llm_router import (
     front_history_turn,
     history_before,
     history_turn,
-    refuse_two_turn_deciders,
     route_turn_with_llm_router,
     screen_history_turn,
 )
 from voiney_lab.model_providers import RoleModel, chat_client
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
-    route_curated_runtime_turn_with_semantics,
-)
-from voiney_lab.semantic_intent import (
-    SemanticIntentContext,
-    SemanticIntentProposal,
-    SemanticIntentSettings,
-    propose_semantic_intent,
+    route_curated_runtime_turn,
 )
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
@@ -253,9 +246,6 @@ _load_project_environment()
 # Refuse to start while an old setting name is set, in the process environment
 # or the .env just loaded, so an unmigrated .env cannot fall back to defaults.
 refuse_old_setting_names()
-# One turn, one deciding path (lane M1, decision 4): the LLM router and the
-# semantic-intent fallback are never both on.
-refuse_two_turn_deciders()
 # xAI is no longer a default (lane XO, decision 2): a feature only xAI provides
 # is refused at start-up, by name, when it is on without XAI_API_KEY.
 refuse_xai_only_features_without_key()
@@ -1519,29 +1509,6 @@ def _role_client(
         role,asynchronous=asynchronous,timeout=timeout,
         max_retries=0 if max_retries is _KEEP_SDK_RETRIES else max_retries,
     )
-
-
-def semantic_intent_resolver(
-    settings:SemanticIntentSettings,
-)->Callable[[SemanticIntentContext],Awaitable[SemanticIntentProposal|None]]|None:
-    """Bind the existing xAI chat boundary as a read-only intent proposer.
-
-    Returns ``None`` when the fallback is disabled, and the client is built
-    lazily inside the coroutine so a turn the deterministic path resolves never
-    constructs a provider client at all.
-    """
-
-    if not settings.enabled:
-        return None
-
-    async def resolve(context:SemanticIntentContext)->SemanticIntentProposal|None:
-        client=AsyncOpenAI(
-            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-            max_retries=0)
-        client.model=settings.model
-        return await propose_semantic_intent(client,context,settings=settings)
-
-    return resolve
 
 
 @dataclass(frozen=True)
@@ -3849,7 +3816,6 @@ class ListenerSession:
                  web_visual_settings:WebVisualSettings|None=None,
                  generated_visual_settings:GeneratedVisualSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
-                 semantic_intent_settings:SemanticIntentSettings|None=None,
                  llm_router_settings:LlmRouterSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
@@ -3884,8 +3850,6 @@ class ListenerSession:
         self.spoken_recently:collections.deque[tuple[float,str]]=collections.deque(
             maxlen=ECHO_MEMORY_SENTENCES)
         self.last_playback_ended_at:float|None=None
-        self.semantic_intent_settings=(
-            semantic_intent_settings or SemanticIntentSettings())
         #: The lane R router (off by default): a turn the front rules hand on
         #: goes to the model, and to the rules when the model cannot be used.
         self.llm_router_settings=llm_router_settings or LlmRouterSettings()
@@ -7268,16 +7232,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             pre_transition_index=curated.current_index
             turn_actor_principal_id,turn_actor_role=_voice_turn_actor()
             async def rules_route()->CuratedRuntimeRoute:
-                return await route_curated_runtime_turn_with_semantics(
+                return route_curated_runtime_turn(
                     curated,
                     transcript,turn_id=turn_id,language=turn_language,
                     transcript_quality=transcription_quality_issue(transcription),
                     configuration_id=session.accepted_configuration_id,
                     generation=generation,
                     arbitration=request_arbitration,
-                    resolver=semantic_intent_resolver(
-                        session.semantic_intent_settings),
-                    semantic_settings=session.semantic_intent_settings,
                     actor_principal_id=turn_actor_principal_id,
                     actor_role=turn_actor_role)
             if session.llm_router_settings.enabled:
@@ -7303,9 +7264,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             else:
                 routed_turn=await rules_route()
             plan=routed_turn.plan
-            semantic_outcome=(
-                routed_turn.semantic.public_payload()
-                if routed_turn.semantic is not None else None)
             await current_text(
                 "turn.route_decision",turn_id=turn_id,
                 normalized_text=routed_turn.arbitration.normalized_text,
@@ -7326,7 +7284,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     }
                     else None
                 ),
-                semantic_fallback=semantic_outcome,
                 **(
                     _router_route_fields(router_outcome,session.llm_router_settings)
                     if router_outcome is not None else {}
@@ -7335,8 +7292,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             log.info(
                 "turn.route_decision turn_id=%s generation=%s text_sha256=%s "
                 "intent=%s runtime_router=%s action=%s state_mutation=%s "
-                "answer_origin=%s fallback_reason=%s semantic_status=%s "
-                "semantic_reason=%s semantic_intent=%s",
+                "answer_origin=%s fallback_reason=%s",
                 turn_id,generation,
                 hashlib.sha256(
                     routed_turn.arbitration.normalized_text.encode("utf-8")
@@ -7348,9 +7304,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     None if plan.answer_origin not in {"unsupported","current_protocol"}
                     else "local_specialized_answer_unavailable"
                 ),
-                (semantic_outcome or {}).get("status"),
-                (semantic_outcome or {}).get("reason_code"),
-                (semantic_outcome or {}).get("proposed_intent"),
             )
             _record_workspace_metric(
                 category="agent",metric_name="turn_route",
@@ -7362,18 +7315,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "status":"mutated" if plan.state_changed else "read_only",
                 },
             )
-            if semantic_outcome is not None:
-                _record_workspace_metric(
-                    category="agent",metric_name="semantic_intent_fallback",
-                    dimensions={
-                        "route":"semantic_intent_fallback",
-                        "status":str(semantic_outcome["status"]),
-                        "reason_code":str(semantic_outcome["reason_code"]),
-                        "intent":str(
-                            semantic_outcome["proposed_intent"] or "none"),
-                        "event_kind":plan.action.value,
-                    },
-                )
             stt_diagnostic_metadata.update({
                 "normalized_transcript":(
                     plan.normalized_transcript
@@ -9126,7 +9067,6 @@ async def voice_socket(websocket:WebSocket):
         external_settings=ExternalReferenceSettings.from_environment()
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
-        semantic_intent_settings=SemanticIntentSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
         web_visual_settings=WebVisualSettings.from_environment(external_settings)
         generated_visual_settings=GeneratedVisualSettings.from_environment()
@@ -9149,7 +9089,6 @@ async def voice_socket(websocket:WebSocket):
                 if generated_visual_settings.enabled else None),
         },
         "multi_brain":multi_brain_settings.public_capability(),
-        "semantic_intent_fallback":semantic_intent_settings.public_capability(),
     }
     if llm_router_settings.enabled:
         research_capabilities["llm_router"]=llm_router_settings.public_capability()
@@ -9166,7 +9105,6 @@ async def voice_socket(websocket:WebSocket):
         web_visual_settings=web_visual_settings,
         generated_visual_settings=generated_visual_settings,
         multi_brain_settings=multi_brain_settings,
-        semantic_intent_settings=semantic_intent_settings,
         llm_router_settings=llm_router_settings,
     ); task=None; trusted_config=None; procedure_store=None
     # Every sentence this connection synthesizes is remembered for the echo

@@ -286,7 +286,7 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
             "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voiney_lab.server.route_curated_runtime_turn_with_semantics",
+            "voiney_lab.server.route_curated_runtime_turn",
             side_effect=AssertionError("language mismatch must stop before routing"),
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))

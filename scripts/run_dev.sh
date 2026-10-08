@@ -127,7 +127,6 @@ from voiney_lab.external_references import (
 from voiney_lab.generated_visuals import GeneratedVisualSettings
 from voiney_lab.model_providers import ROLES, RoleModel
 from voiney_lab.multi_brain import MultiBrainSettings
-from voiney_lab.semantic_intent import SemanticIntentSettings
 from voiney_lab.web_visuals import WebVisualSettings
 
 load_dotenv(Path.cwd() / ".env", override=False)
@@ -155,7 +154,6 @@ print("allowed_domain_count:", len(references.allowed_domains))
 print("web_image_search:", "enabled" if web_images.enabled else "disabled")
 print("generated_visuals:", "enabled" if generated.enabled else "disabled")
 print("experiment_reports:", os.environ.get("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", "false"))
-print("semantic_intent:", "enabled" if SemanticIntentSettings.from_environment().enabled else "disabled")
 print("barge_in_prefix_ms:", os.environ.get("VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS", "800"))
 for role in ROLES:
     chosen = RoleModel.from_environment(role)

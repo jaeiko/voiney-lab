@@ -84,7 +84,6 @@ class XaiOnlyFeatureRefusalTests(unittest.TestCase):
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
             "VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED",
             "VOINEY_LAB_GENERATED_VISUALS_ENABLED",
-            "VOINEY_LAB_SEMANTIC_INTENT_ENABLED",
         })
         for name, label in XAI_ONLY_FEATURES.items():
             with self.subTest(name=name):
@@ -166,7 +165,7 @@ class DevLauncherTests(_LauncherCopy):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for line in (
             "authoritative_web_search: disabled", "web_image_search: disabled",
-            "generated_visuals: disabled", "semantic_intent: disabled",
+            "generated_visuals: disabled",
             "[OK] --check-only",
         ):
             self.assertIn(line, result.stdout)
@@ -230,7 +229,7 @@ class PilotLauncherSettingsTests(_LauncherCopy):
     def test_with_nothing_set_it_starts_without_an_xai_key(self) -> None:
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r"semantic_intent:\s+disabled")
+        self.assertRegex(result.stdout, r"generated_visuals:\s+disabled")
 
 
 if __name__ == "__main__":

@@ -216,38 +216,8 @@ class TheImageStepLinkTests(unittest.TestCase):
 class CompletionIsPositionalOnlyTests(unittest.TestCase):
     """Task 3: the model cannot judge completion, and does not.
 
-    A semantic proposal to complete a step maps to an explicit confirmation
-    request, not to a transition, so the semantic path holds no mutation
-    authority. And the only basis for calling a step final is its position.
+    The only basis for calling a step final is its position.
     """
-
-    def test_completing_a_step_grants_no_mutation(self) -> None:
-        from voiney_lab.curated_protocol import (
-            _SEMANTIC_INTENT_PROJECTION,
-            SemanticIntent,
-        )
-
-        projection = _SEMANTIC_INTENT_PROJECTION[
-            SemanticIntent.COMPLETE_CURRENT_STEP
-        ]
-        self.assertIs(projection["allows_state_mutation"], False)
-        self.assertIs(projection["requires_confirmation"], True)
-        self.assertEqual(
-            projection["requested_followup"], "confirm_current_step_completion"
-        )
-
-    def test_only_resuming_may_mutate_from_a_semantic_proposal(self) -> None:
-        from voiney_lab.curated_protocol import (
-            _SEMANTIC_INTENT_PROJECTION,
-            SemanticIntent,
-        )
-
-        mutating = {
-            intent
-            for intent, projection in _SEMANTIC_INTENT_PROJECTION.items()
-            if projection.get("allows_state_mutation")
-        }
-        self.assertEqual(mutating, {SemanticIntent.RESUME})
 
     def test_final_step_is_a_position_not_a_judgement(self) -> None:
         session = Path("src/voiney_lab/curated_protocol.py").read_text()
