@@ -914,7 +914,8 @@ function updateStepSafetyGuidance(){
   const useKorean=korean&&checked;
   const body=document.createElement("p");body.className=useKorean?"safety-text":"safety-text source-as-body";
   body.textContent=normalizePresentationText(useKorean?item.primary_text:item.source_text);row.appendChild(body);
-  if(useKorean&&item.translation_check!=="source_is_korean")row.appendChild(sourceToggle(item.source_text));
+  // Lane TS, decision 2: a checked Korean line stands beside its source, the source open.
+  if(useKorean&&item.translation_check!=="source_is_korean"){const source=document.createElement("p");source.className="safety-text safety-source";source.lang=String(item.source_language||"en");source.textContent=normalizePresentationText(item.source_text);row.appendChild(source);}
   box.appendChild(row);
  }
 }

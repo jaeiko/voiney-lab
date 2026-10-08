@@ -104,16 +104,19 @@ class TrueRefusalsKeptTests(unittest.TestCase):
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
 class InGelUnchangedTests(unittest.TestCase):
-    def test_the_safety_box_keeps_its_reviewed_warning(self) -> None:
+    def test_the_safety_box_shows_the_source_of_its_summarised_warning(self) -> None:
+        # Lane TS, decision 1: the reviewed Korean of step 1's warning reads
+        # four source sentences as one ("Dust will be your worse enemy ...",
+        # "e.g., skin cells, jumper fibers" are not in it), so the box shows
+        # the source. It passed before.
         from voiney_lab.server import curated_safety_items
 
         fixture = in_gel_fixture()
         curated = CuratedProtocolSession(fixture)
         curated.active = True
         item = curated_safety_items(curated)[0]
-        self.assertEqual(item["primary_text"], " ".join(
-            fixture.localized_fact("candidate-a-step-01", "warning_1").split()))
-        self.assertEqual(item["translation_check"], "passed")
+        self.assertIsNone(item["primary_text"])
+        self.assertEqual(item["translation_check"], "sentences_dropped")
 
     def test_a_reviewed_line_that_adds_a_negation_is_still_refused(self) -> None:
         fixture = in_gel_fixture()

@@ -49,7 +49,6 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSpeechMode,
     josa_ro,
     load_curated_protocol_fixture,
-    reader_translation_issue,
     spoken_korean,
 )
 from voiney_lab.experiment_protocol_analysis import (
@@ -181,6 +180,7 @@ from voiney_lab.protocol_translation import (
     is_korean,
     openai_batch_translator,
     openai_glossary_maker,
+    statement_issue,
     stored_checks,
     translation_revision_key,
     translation_units,
@@ -4537,14 +4537,17 @@ _SAFETY_DOCUMENT_KINDS={
 def _safety_translation(source:str,translation:str|None)->tuple[str|None,str]:
     """A safety line's Korean, or None with why it may not be shown.
 
-    The same mechanical check a reader translation passes -- every number
-    with its unit, and a negation neither dropped nor added -- run on each
-    line on its own, so one bad line falls back to its source alone.
+    The check every Korean reading passes (``statement_issue``: every
+    number with its unit, a negation neither dropped nor added, as many
+    negations on both sides, every hazard word carried over and no half of
+    the sentences dropped -- lane TS, decisions 1 and 2), run on each line on
+    its own, so one bad line falls back to its source alone. Reviewed or
+    machine, a line is held to it.
     """
 
     if not isinstance(translation,str) or not translation.strip():
         return None,"missing"
-    issue=reader_translation_issue(source,translation)
+    issue=statement_issue(source,translation)
     if issue is not None:
         return None,issue
     return " ".join(translation.split()),"passed"
@@ -4824,7 +4827,8 @@ async def _apply_reader_translation(
     Only for a step with no reviewed translation, only when translation is
     on (the translation role's own settings, not the answer brain -- lane F,
     decision 1), and only a reading that keeps every number,
-    unit and protocol term (``reader_translation_issue``). The reading is
+    unit and protocol term, and says what the source says
+    (``statement_issue``, lane TS). The reading is
     spoken after "자동 번역입니다." and shown above the unchanged source with
     no label of its own -- the page says once, at the head of the protocol
     card, that its Korean is an automatic translation; a failed or refused
@@ -4846,7 +4850,7 @@ async def _apply_reader_translation(
         except Exception as exc:
             status=f"provider_{type(exc).__name__}"
         else:
-            issue=reader_translation_issue(
+            issue=statement_issue(
                 statement,candidate,required_terms=terms,step_label=label)
             if issue is None:
                 korean=candidate

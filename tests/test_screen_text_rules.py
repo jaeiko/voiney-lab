@@ -72,10 +72,10 @@ for(const item of items){const text=box.textContent;assert(text.includes(item.so
         result = run_page_script(PAGE_SETUP + r"""
 await send(baseState,{safety_items:items,translation_source:"reviewed"});
 const [passed,negation,,missing,,korean]=rows();
-// Passed: Korean body, the source folded and closed.
+// Passed: Korean body, the source open beside it (lane TS, decision 2 --
+// it was folded closed under the Korean before).
 assert(kids(passed,"safety-text")[0].textContent==="맨손으로 젤을 만지지 마세요.","Korean body missing");
-const fold=kids(passed,"source-toggle")[0];
-assert(fold&&fold.open===false&&fold.textContent.includes("Do not touch the gel"),"source not folded under the Korean line");
+assert(kids(passed,"safety-text")[1].textContent==="Do not touch the gel with bare hands."&&kids(passed,"source-toggle").length===0,"source not open beside the Korean line");
 // Failed negation and missing Korean: the source is the body, nothing folded.
 for(const [row,text] of [[negation,"Never leave the scalpel uncapped."],[missing,"Wear nitrile gloves."]]){
  const body=kids(row,"safety-text")[0];
