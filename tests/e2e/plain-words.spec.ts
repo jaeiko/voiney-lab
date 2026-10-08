@@ -107,18 +107,6 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
     await expect(page.locator('#protocol-review-content')).toContainText('9쪽');
   });
 
-  test('the computational workflow panel is folded away by default', async ({ page }) => {
-    await page.goto('/');
-    const panel = page.locator('#experiment-workflow-panel');
-    await expect(panel).toBeVisible();
-    await expect(panel).not.toHaveAttribute('open', '');
-    await expect(page.locator('#experiment-workflow-link')).toBeHidden();
-    await expect(page.locator('#experiment-workflow-status')).toBeHidden();
-    await expect(page.locator('#experiment-session-ledger')).not.toContainText('메타데이터');
-    await panel.locator('summary').click();
-    await expect(page.locator('#experiment-workflow-link')).toBeVisible();
-  });
-
   test('a turn card shows one status, and a finished turn keeps no progress label', async ({ page }) => {
     await page.goto('/');
     await page.waitForFunction(() => typeof applyTurnState === 'function');

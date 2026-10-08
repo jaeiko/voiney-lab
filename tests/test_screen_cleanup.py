@@ -168,38 +168,6 @@ assert(cancelled.status.textContent==="중단됨"&&cancelled.error==="",`cancell
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-class DryLabWorkflowLoadingTests(unittest.TestCase):
-    """Item 3: opening the page does not ask for the dry-lab workflow list."""
-
-    def test_page_open_skips_workflows_and_loads_them_on_demand(self):
-        result = run_page_script(r"""
-const calls=[];
-globalThis.fetch=async url=>{url=String(url);calls.push(url);
- if(url==="/api/protocols")return json({protocols:[]});
- if(url==="/api/workspace/session")return json({workspaces:["researcher"]});
- if(url==="/api/workspace/connectors")return json({connectors:[]});
- if(url.startsWith("/api/workspace/protocol-library"))return json({protocols:[]});
- if(url==="/api/workspace/experiments")return json({experiments:[]});
- if(url.startsWith("/api/workspace/experiments/exp-1/timeline"))return json({timeline:[],session:{session_id:"exp-1",version:1,status:"in_progress",protocol_id:"p-1",current_step_label:"1"}});
- if(url.startsWith("/api/workspace/dry-lab/links"))return json({links:[]});
- if(url==="/api/workspace/dry-lab/workflows")return json({workflows:[{workflow_revision_id:"wf-1",engine:"snakemake",repository:"lab/flows",commit_sha:"a".repeat(40),source_path:"Snakefile",approval_state:"approved"}]});
- throw new Error(`unexpected ${url}`);};
-const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
-const workflowCalls=()=>calls.filter(url=>url==="/api/workspace/dry-lab/workflows").length;
-assert((pageListeners.load||[]).length===1,"the page load handler was not registered");
-pageListeners.load[0]();await settle();
-assert(calls.includes("/api/workspace/session")&&calls.includes("/api/protocols"),`page open did not load the workspace: ${calls}`);
-assert(workflowCalls()===0,`page open still requested dry-lab workflows: ${calls}`);
-await loadExperimentTimeline("exp-1");
-assert(workflowCalls()===1,`an open experiment did not load the workflow picker: ${calls}`);
-const picker=node("experiment-workflow-revision");
-assert(picker.children.some(option=>option.value==="wf-1"),"approved workflow missing from the researcher picker");
-await loadExperimentTimeline("exp-1");
-assert(workflowCalls()===1,"the researcher picker refetched on every timeline refresh");
-""")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-
 class DuplicateUploadNoticeTests(unittest.TestCase):
     """Item 4: a re-upload of a stored PDF names the file it matched."""
 

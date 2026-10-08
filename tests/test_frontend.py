@@ -48,10 +48,6 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
             'id="manual-observation-content"',
             'id="experiment-evidence-file"',
             'id="experiment-event-timeline"',
-            'id="experiment-protocol-lineage"',
-            'id="experiment-workflow-revision"',
-            'id="experiment-workflow-link"',
-            'id="experiment-workflow-links"',
             'id="experiment-context-name"',
             'id="experiment-context-version"',
             'id="experiment-context-experimenter"',
@@ -66,11 +62,8 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
             'link.className="experiment-evidence-download"',
             'link.textContent="원본 증거 다운로드"',
             "encodeURIComponent(event.evidence.evidence_id)",
-            "function linkDryLabWorkflow",
-            "function loadDryLabLinks",
             "관찰은 프로토콜 원문의 지침을 바꾸지 않습니다.",
             "자동 해석 안 함",
-            "코드는 실행하지 않습니다.",
             'new Set(["ready","in_progress","paused","blocked"])',
             'experimentIsResumable()?"실험 이어하기":"새 실험 시작"',
             'experiment_session_id:currentExperimentSessionId',
@@ -105,11 +98,6 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
         self.assertNotIn("innerHTML", render_block)
         self.assertIn("textContent", render_block)
         self.assertNotIn("original_filename}`", render_block)
-        link_block = html.split("async function loadDryLabLinks", 1)[1].split(
-            "async function linkDryLabWorkflow", 1
-        )[0]
-        self.assertNotIn("innerHTML", link_block)
-        self.assertIn("workspaceRow", link_block)
 
     def test_chat_viewport_and_late_visual_use_production_handlers(self):
         html = (

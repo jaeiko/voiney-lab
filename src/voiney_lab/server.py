@@ -225,11 +225,6 @@ from voiney_lab.protocol_sources import (
     normalize_protocols_io_identifier,
     verify_github_webhook_signature,
 )
-from voiney_lab.drylab_workflows import (
-    DryLabWorkflowRegistry,
-    inspect_nextflow_snapshot,
-    inspect_snakemake_snapshot,
-)
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
     glossary_entries,
@@ -3274,109 +3269,6 @@ async def receive_github_webhook(
     finally:
         if store is not None:
             store.close()
-
-
-@app.get("/api/workspace/dry-lab/workflows")
-def get_dry_lab_workflows()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {"workflows":list(store.computational_workflows(principal))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/sources/github/dry-lab/import",status_code=201)
-async def import_github_dry_lab_workflow(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            configured=store.connector_for_use(
-                principal,str(payload.get("connector_id", "")),expected_kind="github"
-            )
-            repository=str(payload.get("repository", ""))
-            ref=str(payload.get("ref", ""))
-            path=str(payload.get("path", ""))
-            engine=str(payload.get("engine", "")).casefold()
-            allowed=[]
-            for root in configured.allowed_roots:
-                match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
-                if match and match.group(1)==repository and match.group(2)==ref:
-                    prefix=match.group(3).rstrip("/")
-                    if path==prefix or path.startswith(prefix+"/"):
-                        allowed.append(prefix)
-            if not allowed:
-                raise AuthorizationDeniedError(
-                    "GitHub workflow is outside the connector allowlist.")
-            snapshot=await asyncio.to_thread(
-                GitHubConnector(
-                    installation_token=_resolve_server_secret(
-                        configured.credential_reference),
-                    allowed_repositories=(repository,),allowed_refs=(ref,),
-                    allowed_path_prefixes=tuple(allowed),
-                ).fetch,
-                repository,ref,path,
-            )
-            if engine=="snakemake":
-                metadata=inspect_snakemake_snapshot(snapshot)
-            elif engine=="nextflow":
-                metadata=inspect_nextflow_snapshot(snapshot)
-            else:
-                raise WorkspaceError("Dry-lab workflow engine is invalid.")
-            imported=DryLabWorkflowRegistry(store).import_metadata(
-                principal,snapshot,metadata)
-            store.record_analytics(
-                principal,category="connector",metric_name="dry_lab_import",
-                dimensions={"connector_kind":"github","status":"review_required"},
-            )
-            return {**imported,"code_executed":False,"metadata_only":True}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/dry-lab/links",status_code=201)
-async def link_dry_lab_workflow(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            link_id=store.link_wet_dry_workflow(
-                principal,
-                experiment_session_id=str(payload.get("experiment_session_id", "")),
-                protocol_revision_id=str(payload.get("protocol_revision_id", "")),
-                workflow_revision_id=str(payload.get("workflow_revision_id", "")),
-            )
-            return {"link_id":link_id,"execution_started":False}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/dry-lab/links")
-def get_dry_lab_workflow_links(
-    experiment_session_id:str,
-)->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {
-                "experiment_session_id":experiment_session_id,
-                "links":list(store.wet_dry_workflow_links(
-                    principal,
-                    experiment_session_id=experiment_session_id,
-                )),
-                "execution_supported":False,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
 
 
 async def _spool_protocol_pdf_upload(

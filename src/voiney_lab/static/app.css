@@ -943,7 +943,6 @@
     .workflow-paused-banner button:hover{background:var(--green-cta-hover)}
     #rail-pause-session.is-resume{background:var(--green-cta);color:#03210f;border-color:var(--green-cta);font-weight:850}
     .experiment-context-grid strong .dev-code-details,#procedure-meta .dev-code-details,#procedure-handoff .dev-code-details{font-weight:400}
-    .experiment-workflow-panel{margin-top:.75rem}
     .finding-status:empty{display:none}
     .finding-status{color:var(--amber);font-weight:700}
     .audio-echo-notice{margin:.35rem 0 0;color:var(--amber);font-size:.8rem;font-weight:700}
