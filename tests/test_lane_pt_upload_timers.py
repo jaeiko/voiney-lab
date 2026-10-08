@@ -343,6 +343,16 @@ class TheServerVerificationTests(_Catalog):
                 self.assertEqual(reading.durations, ())
                 self.assertEqual({r.reason for r in reading.refused}, {reason})
         self.assertEqual(domain.read_source_durations("5분의 1, 10 mL").durations, ())
+        # Measured on the corpus (decision 5): a tube label and a lead time.
+        self.assertEqual(domain.read_source_durations("Label 7 tubes (S1-S7).").durations, ())
+        self.assertEqual(
+            {r.reason for r in domain.read_source_durations("30 min before use").refused},
+            {"elapsed_reference"},
+        )
+        self.assertEqual(
+            [d.seconds for d in domain.read_source_durations("5-min, 1h30min, 24hr").durations],
+            [(300,), (5400,), (86400,)],
+        )
 
 
 class TheChoiceTests(_Catalog):

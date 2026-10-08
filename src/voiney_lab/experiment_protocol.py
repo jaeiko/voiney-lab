@@ -2219,17 +2219,21 @@ _DURATION_UNIT_SECONDS: dict[str, int] = {
     "minutes": 60, "minute": 60, "mins": 60, "min": 60, "분": 60,
     "seconds": 1, "second": 1, "secs": 1, "sec": 1, "s": 1, "초": 1,
 }
-_UNIT = (
-    r"(?:hours?|hrs?|h|minutes?|mins?|min|seconds?|secs?|sec|s|시간|분(?!\s*의)|초)"
+#: Single-letter units only in lower case ("3 h", "30 s"): "S7" in "(S1-S7)"
+#: is a tube label, not seven seconds.
+_UNIT_WORD = (
+    r"(?:hours?|hrs?|minutes?|mins?|min|seconds?|secs?|sec|시간|분(?!\s*의)|초)"
     r"(?![A-Za-z])"
 )
+_UNIT = rf"(?:{_UNIT_WORD}|(?-i:[hs])(?![A-Za-z]))"
 _NUMBER = r"\d+(?:\.\d+)?"
-_PAIR = rf"{_NUMBER}(?:\s*|-){_UNIT}"
+#: "5 min", "5min", and "5-min" -- the hyphen only before a unit word.
+_PAIR = rf"{_NUMBER}(?:\s*{_UNIT}|-{_UNIT_WORD})"
 _COMPOUND = rf"{_PAIR}(?:\s*{_PAIR})*"
 _CLOCK = r"(?<![\d:])\d{1,2}:\d{2}:\d{2}(?![\d:])"
 _ALTERNATIVE = r"\s*(?:[-–—~～]|to|or|또는|혹은)\s*"
 _SOURCE_DURATION = re.compile(
-    rf"(?<![\d.])(?:"
+    rf"(?<![A-Za-z\d.])(?:"
     rf"(?P<between>between\s+(?P<b1>{_NUMBER})\s+and\s+(?P<b2>{_NUMBER})\s*(?P<bu>{_UNIT}))"
     rf"|(?P<pair>(?P<p1>{_COMPOUND}){_ALTERNATIVE}(?P<p2>{_COMPOUND}))"
     rf"|(?P<bare>(?P<n1>{_NUMBER}){_ALTERNATIVE}(?P<n2>{_NUMBER})\s*(?P<nu>{_UNIT}))"
@@ -2239,6 +2243,7 @@ _SOURCE_DURATION = re.compile(
     re.I,
 )
 _PAIR_PARTS = re.compile(rf"({_NUMBER})(?:\s*|-)({_UNIT})", re.I)
+#: A number glued to a letter before it ("S1", "pH7") is not a time.
 #: A bound, not a length: "at least 30 min", "up to 2 h", "30분 이상".
 _OPEN_BOUND_BEFORE = re.compile(
     r"(?:at\s+least|no\s+(?:less|more)\s+than|not\s+(?:less|more)\s+than|"
@@ -2255,9 +2260,12 @@ _OPEN_BOUND_AFTER = re.compile(
 #: A repeat interval: "every 10 min", "10분마다".
 _INTERVAL_BEFORE = re.compile(r"(?:every|each|per|매)\s*$", re.I)
 _INTERVAL_AFTER = re.compile(r"^\s*(?:마다|간격|intervals?)", re.I)
-#: Time since something else: "After 2 hours, remove ...", "30분 후".
+#: A point relative to something else: "After 2 hours, remove ...", "30분 후",
+#: "30 min before use".
 _ELAPSED_BEFORE = re.compile(r"(?:after|post)\s*[~≈]?\s*$", re.I)
-_ELAPSED_AFTER = re.compile(r"^\s*(?:후|뒤|지나|경과|later|after\b)", re.I)
+_ELAPSED_AFTER = re.compile(
+    r"^\s*(?:후|뒤|지나|경과|전에|전부터|later|after\b|before\b|prior\b|ahead\b)", re.I
+)
 #: A time the source states without a number.
 _UNNUMBERED_TIME = re.compile(
     r"(?<![A-Za-z])(?:overnight|o/n|until|till|several\s+(?:hours|minutes|days)|"
@@ -2271,7 +2279,7 @@ SOURCE_DURATION_REFUSAL_KO: dict[str, str] = {
     "with_unnumbered_alternative": "숫자 없는 시간 표현(overnight, until …)이 함께 적혀 있어 길이를 정할 수 없어요.",
     "open_bound": "정해진 길이가 아니라 최소·최대·이내 같은 한계로 적혀 있어요.",
     "interval": "반복 간격(매 …마다)으로 적혀 있어요.",
-    "elapsed_reference": "다른 작업부터 흐른 시간(after …, … 후)을 가리켜요.",
+    "elapsed_reference": "다른 작업의 앞뒤 시점(after …, before …, … 후)을 가리켜요.",
     "not_whole_seconds": "초 단위로 떨어지지 않는 값이에요.",
     "unclear_range": "앞 값이 뒤 값보다 커서 범위로 읽을 수 없어요.",
     "no_duration": "시간 숫자와 단위를 찾지 못했어요.",
