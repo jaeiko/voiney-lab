@@ -194,6 +194,36 @@ WAL/SHM files, start one instance), then confirm
 version has no translations until a session opens on it (or it is activated or
 approved again), which starts its generation once.
 
+## Lane DI (2026-10-08): tables kept, writers removed
+
+The MVP diet removed the reviewer and lab-admin screens, protocol approval
+and revocation, lab adaptations, the source inbox, the protocols.io / Google
+Drive / GitHub connectors and their webhook receipts, the dry-lab
+(Snakemake/Nextflow) metadata, the eLabFTW write-back, analytics and the
+admin audit. The commercial workspace schema stays at 7: no table is dropped,
+no migration runs, and an existing database opens unchanged. Nothing writes
+to those tables any more; their historical rows are kept as record. Reading
+them is possible only with SQLite directly.
+
+Also removed, with no storage of their own: the semantic-intent fallback, the
+xAI web-image search and image generation, the config-gated legacy
+`procedures.py` / `procedure_store.py` stack and its demo database under
+`data/procedure_demo/` (deleted from the repository; a copy on a host is
+simply unused), and the roles/permission table of the identity layer (every
+principal is the one experimenter identity; the `roles` column keeps its
+historical values).
+
+Removed settings, written here without their `VOINEY_LAB_` prefix because
+the setting-names test counts a prefixed name in a document as a current
+one (`scripts/migrate_env.py --check` reports them under "코드가 읽지 않는
+설정"): `PROCEDURE_CATALOG`, `PROCEDURE_STORE`, `SECRET_REFERENCES`,
+`DEV_AUTH_PROFILES`, `OIDC_ROLES_CLAIM`, `GENERATED_VISUALS_ENABLED`,
+`GENERATED_VISUAL_MODEL`, `GENERATED_VISUAL_TIMEOUT_SECONDS`,
+`WEB_VISUAL_SEARCH_ENABLED`, `WEB_VISUAL_TIMEOUT_SECONDS`,
+`SEMANTIC_INTENT_ENABLED`, `SEMANTIC_INTENT_MODEL`,
+`SEMANTIC_INTENT_TIMEOUT_SECONDS`, `SEMANTIC_INTENT_MIN_CONFIDENCE` and
+`SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE`.
+
 ## Environment setting names → `VOINEY_LAB_` (2026-10-04)
 
 This changes configuration, not a store: no database, ledger, table or file

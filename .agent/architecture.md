@@ -12,12 +12,12 @@ Browser
                                            xAI STT
                                                │
                                     RequestArbitration
-             ┌─────────────────┬───────────────┼───────────────┐
-             │                 │               │               │
-       emergency gate   curated runtime  deterministic    general brain
-                         router            procedure        + tools
-             │                 │               │               │
-             └─────────────────┴──── server-owned state ───────┘
+             ┌─────────────────┬───────────────┐
+             │                 │               │
+       emergency gate   curated runtime   general brain
+                         router             + tools
+             │                 │               │
+             └─────────────────┴── server-owned state
                                                │
                                       segmented xAI TTS
 ```
@@ -53,8 +53,8 @@ Accepted turns follow:
 2. xAI STT returns structured transcription metadata.
 3. admission gates reject empty/non-speech/keyterm echo.
 4. `arbitrate_request` produces one immutable request classification.
-5. `route_curated_runtime_turn`, deterministic procedure gates, or the general
-   brain execute the route.
+5. `route_curated_runtime_turn` (the rules' path) or the general brain
+   execute the route.
 6. `turn.route_decision` exposes a compact observable projection.
 7. sentence TTS streams through generation-aware audio segments.
 8. `turn.done` and `playback.completed` close timing ownership.
@@ -89,8 +89,8 @@ is forbidden is two paths separately deciding the same turn's state change.
 
 `VOINEY_LAB_LLM_ROUTER_ENABLED` (default `false`), `..._MODEL`
 (default `grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default
-2.5). Off, `run_turn` calls `route_curated_runtime_turn_with_semantics` as
-before and nothing below runs. On:
+2.5). Off, `run_turn` calls `route_curated_runtime_turn` as before and
+nothing below runs. On:
 
 ```text
 STT → emergency gate (server.py, F1)
@@ -106,7 +106,7 @@ STT → emergency gate (server.py, F1)
                       → CuratedProtocolSession.apply_tool_proposal
                            → _execute_turn_intent  (the same branches plan() uses)
       timeout · provider error · nothing usable · refused · answer rejected
-         → the rules' own route (route_curated_runtime_turn_with_semantics);
+         → the rules' own route (route_curated_runtime_turn);
            a rejected answer the rules cannot answer either says
            "PDF에서 확인할 수 없어요."
 ```
@@ -171,28 +171,35 @@ STT → emergency gate (server.py, F1)
 raw PDF stream
   → size/media/encryption/structure checks
   → immutable source bytes + SHA-256 + extracted pages
-  → text-empty branch: trusted OCR adapter
+  → text-empty branch: trusted OCR adapter, run by the upload itself
   → exact-source/page validation + append-only OCR evidence
-  → human accept/reject against the PDF
-  → explicit analysis job (single-pass or page-bounded evidence claims)
+  → analysis job started by the upload (single-pass or page-bounded evidence claims)
   → per-claim source-bound segment selection + server-owned exact-excerpt resolution
   → complete-chunk deterministic merge + whole-document consistency gate
   → typed ExperimentProtocol validation
   → fail-closed readiness assessment
-  → source-linked review projection
-  → service approval OR non-operational development activation
+  → source-linked analysis result (the start screen's summary)
+  → execution verdict at read time: analysis passed + no execution blocker
+  → the experimenter presses "이 프로토콜로 시작" (writes safety_notices_acknowledged)
   → executable CuratedProtocolFixture
 ```
 
-The review projection is read-only and includes prerequisites, materials,
+The analysis result is read-only and includes prerequisites, materials,
 equipment, sections, steps, sub-actions, quantities, timers, observations,
-warnings, missing values, advanced constructs, and readiness reasons. Unsupported
-conditional/parallel/repeat constructs and missing or conflicting execution values
-remain explicit and block execution.
+warnings, missing values, advanced constructs, readiness reasons and the
+execution rule's two lists (lane DI, 2026-10-08). `assess_readiness` is
+unchanged; the catalog splits its reasons when it is read: an invalid
+protocol, a failed source-evidence check, no executable step, a page still
+needing OCR and a safety-critical conflict block the start
+(`execution_blockers`); every other reason is an `execution_notice` read on
+the start screen, and a construct the guidance cannot handle yet (parallel
+work, a recurring step, a reusable subprocedure) is said once at its step --
+"이 단계의 동시 작업은 아직 안내 기능이 없어요. 원문을 읽어 드릴게요." --
+and the source is read. There is no approval, revocation, reviewer finding or
+development activation.
 
 Structured protocol analysis requires the deployment-supplied
-`VOINEY_LAB_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
-separate from the bounded low-latency semantic-intent model and timeout policy.
+`VOINEY_LAB_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`.
 When the default-off deployment gate
 `VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native
 documents over eight pages enter the evidence-claim path even when their
@@ -212,13 +219,14 @@ non-contiguous selections. Every required chunk must validate before merge,
 one total-run deadline, and provider concurrency remains serial by default.
 
 OCR is a source-preserving extraction boundary in `protocol_ocr.py`, not an
-approval or execution authority. HTTP callers cannot choose a provider; the
-server accepts only a deployment-injected `ProtocolOcrProvider`. Results must
-match the immutable PDF SHA-256 and contain every page exactly once and in order
-within per-page/document limits. Completed, failed, and reviewed states are
-append-only protocol events. Accepted OCR text becomes input only to a later
-explicit structured-analysis request; it never auto-starts analysis or produces
-an executable revision.
+execution authority. HTTP callers cannot choose a provider; the server accepts
+only a deployment-injected `ProtocolOcrProvider`. Results must match the
+immutable PDF SHA-256 and contain every page exactly once and in order within
+per-page/document limits. Completed and failed states are append-only protocol
+events. The upload runs OCR and then the analysis by itself (lane PX); the OCR
+text is accepted as source text automatically and the experimenter's start
+covers it (lane DI, 2026-10-08). OCR never produces an executable revision on
+its own: the analysis and the execution rule still decide.
 
 ## Evidence and provider boundaries
 
@@ -226,42 +234,24 @@ Authority order is active protocol/approved safety catalog first. Optional exter
 text research and supplemental model knowledge are marked as reference context and
 cannot mutate workflow state.
 
-Explicit image intent uses:
-
-1. PubChem for known chemical structures;
-2. Wikimedia Commons with source-license metadata;
-3. at most one xAI Responses web-search request with
-   `enable_image_search:true`.
-
-External display bytes require a rights label, HTTPS/SSRF admission, MIME/dimension
-validation, size bounds, and same-origin SHA-256 asset serving. Without those, only
-the source link is emitted.
-
-## Computational workflow metadata
-
-`drylab_workflows.py` inspects UTF-8 Snakemake/Nextflow entry points fetched by
-the read-only GitHub connector. Repository, resolved commit, relative path,
-source hash, engine declarations, config/schema/environment paths, and declared
-rules/processes form an immutable review-required revision. The in-process
-registry has no execute method; the future `SeqeraLaunchBoundary` protocol is not
-implemented or called.
-
-A wet/dry link is admitted only for a real visible durable ExperimentSession,
-its source-hash-bound matching protocol lineage, and an approved metadata-only
-workflow revision. Link and review events are append-only; a revoked revision
-cannot be reapproved. The read API returns pinned repository/commit/path evidence
-and fixed `execution_supported:false` / `execution_started:false` fields.
+An image request ("사진 보여줘") is still recognised by the rules
+(`_WEB_VISUAL_REQUEST_PATTERNS`), but the xAI web-image search and image
+generation were removed on 2026-10-08 (lane DI); the turn answers with one
+`protocol.visual.state` of `visual_failed` and the source step is read. Lane WV
+rebuilds web and picture search for the steps. The Snakemake/Nextflow metadata
+lane (`drylab_workflows.py`) was removed the same day.
 
 ## Persistence and reporting
 
 - Protocol catalog: SQLite plus content-addressed source objects.
-- Procedure state: SQLite, with deterministic observation/timer/completion gates.
+- Experiment workspace: SQLite (schema 7), the experimenter's durable
+  ExperimentSession with checkpoints, observations, evidence metadata and
+  recovery. The approval, adaptation, connector, inbox, dry-lab, ELN-audit,
+  membership and analytics tables stay in the schema but nothing writes to
+  them any more (lane DI, 2026-10-08; see `docs/MIGRATION_NOTES.md`).
 - Experiment reports: append-only SQLite metadata/events associated by session
   identity with the durable tenant ExperimentSession, plus deterministic
   JSON/Markdown/CSV/DOCX exports.
-- ELN write-back: explicit-confirmation eLabFTW adapter that requires a completed
-  durable session and matching completed report/revision, then records the
-  idempotent request and append-only external identity provenance.
 - Safety handoff: bounded JSONL queue and separate worker producing reviewable EML
   and status artifacts; it does not send mail automatically.
 - Runtime metrics: bounded in-memory aggregates derived from event allowlists.
@@ -269,13 +259,14 @@ and fixed `execution_supported:false` / `execution_started:false` fields.
 `GET /api/admin/metrics` requires a configured shared token and returns aggregate
 report, catalog, route, intent, tool, and latency data. It excludes audio,
 transcripts, free text, private titles, and identifiers. A shared token is an MVP
-boundary, not a substitute for production SSO/RBAC.
+boundary, not a substitute for a production login.
 
 ## Frontend authority
 
-The browser cockpit renders canonical server snapshots/events. It never infers
-completion or workflow state from assistant prose. Upload handling has explicit
-OCR extraction, page review, analysis polling/retry, structured review, and
-development activation states. Turn cards
-keep route/tool/latency diagnostics in an expandable region. Source and external
-visuals have distinct labels.
+The browser cockpit is one experimenter screen (lane DI, 2026-10-08). It
+renders canonical server snapshots/events and never infers completion or
+workflow state from assistant prose. Upload handling has explicit OCR,
+analysis polling/retry and start-screen states (analysis summary, safety
+statements with their Korean, execution blockers, notices); the one button is
+"이 프로토콜로 시작". Turn cards keep route/tool/latency diagnostics in an
+expandable region.

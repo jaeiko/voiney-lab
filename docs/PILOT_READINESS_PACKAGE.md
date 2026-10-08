@@ -6,16 +6,17 @@ human field validation happened — none did in this environment.
 
 ## 1. Pilot flow — validated without bypassing workflow controls
 
-The full flow (Protocol Source → analysis → human review boundary → Approved
-Protocol Revision → ExperimentSession → deterministic START → voice guidance
-→ protocol questions → timer → Observation → Evidence → Pause → Resume →
-disconnect/recovery → Timeline → completion → report → optional ELN
-boundary) is exercised end to end by:
+The full flow (protocol PDF upload → automatic OCR and analysis →
+source-evidence check → start screen → the experimenter's start →
+ExperimentSession → voice guidance → protocol questions → timer →
+Observation → Evidence → Pause → Resume → disconnect/recovery → Timeline →
+completion → report) is exercised end to end by (counts as of 2026-08-24;
+the reviewer/admin parts were removed on 2026-10-08, lane DI):
 
 - 790 pytest cases + 691 subtests (current full local suite), including
   `test_curated_protocol_cascade.py`'s multi-turn scenario tests.
-- 38 Playwright browser tests (`tests/e2e/`) across desktop and mobile,
-  covering the researcher/reviewer/admin workspaces.
+- Playwright browser tests (`tests/e2e/`) across desktop and mobile,
+  covering the experimenter's bench.
 - `python scripts/replay_turns.py` and both
   `scripts/evaluate_candidate_a_*.py` evaluators (deterministic,
   provider-free routing checks — see
@@ -33,11 +34,11 @@ weakens `authorized_completion_step_id`/`authorized_observation_arguments`.
 allowlist, without raw audio/transcripts/identities: **route distribution**,
 **barge-in cancellation count**, and **turn latency percentiles**.
 
-The admin workspace and `GET /api/workspace/admin/pilot-metrics` now provide a
-tenant-scoped, read-only rollup. The endpoint combines durable
-`ExperimentSession` event metadata with retention-bounded analytics; it never
-returns raw audio, transcripts, user identifiers, free text, secrets, or model
-reasoning.
+The admin workspace and its pilot-metrics endpoint were removed on 2026-10-08
+(lane DI). The KPI table below is kept as the definitions a pilot should
+count by hand from the experiment timeline and the report; `runtime_metrics`
+and `GET /api/admin/metrics` (shared token) still give the content-free
+route/latency aggregates.
 
 | KPI | Definition and source |
 |---|---|
@@ -61,27 +62,21 @@ infer those values from missing events.
 ### Pre-study checklist (operator)
 - [ ] `python -m pytest -q` and `npx playwright test` both green on the exact commit being piloted.
 - [ ] `GET /readyz` returns `200` with the expected capability flags for this deployment.
-- [ ] Protocol to be used is an **Approved Protocol Revision** (not a development/draft activation) unless the pilot explicitly intends to demonstrate the review flow.
+- [ ] The protocol PDF to be used was uploaded, its analysis passed, and the start screen offers "이 프로토콜로 시작" (no blocker).
 - [ ] Backup created **and verified** with `scripts/pilot_state_backup.py` per
   `docs/DEPLOYMENT_RUNBOOK.md` before the session.
 - [ ] Participant briefed per the privacy/data-handling explanation below.
 
-### Researcher quick-start
-1. Select the approved protocol from the researcher workspace.
-2. Press "세션 시작" (Start session) and wait for `LISTENING`.
+### Experimenter quick-start
+1. Upload the protocol PDF, wait for the analysis, read the start screen (safety statements beside their Korean, blockers, notices) and press "이 프로토콜로 시작".
+2. Wait for `LISTENING`.
 3. Speak naturally — "프로토콜 시작해줘" to begin, "현재 단계 알려줘" to hear the current step again, "다음 단계로 넘어가줘" only after you have actually completed the step.
 4. Use the observation/evidence controls on the bench workspace for anything you want on the record — voice or manual, either is fine.
 5. "일시정지" (Pause) at any point; resume later by reselecting the same experiment session.
 
-### Reviewer quick-start
-1. Open the reviewer workspace; new/changed sources appear in the inbox.
-2. Read the diff before deciding — accepting OCR text is not the same as approving a protocol.
-3. Approve, reject, or revoke; every decision is append-only and visible in the audit trail.
-
-### Admin setup checklist
+### Operator setup checklist
 - [ ] Confirm the OIDC configuration (not development identity) is active if this is anything beyond a fully controlled internal pilot.
-- [ ] Confirm connector configuration state is what's expected — the admin workspace explicitly labels each as configured-but-not-live-tested where applicable.
-- [ ] Set the analytics retention policy deliberately (1–3650 days).
+- [ ] Every participant is an experimenter: there are no reviewer or administrator roles (lane DI, 2026-10-08).
 
 ### Test session protocol
 Run the pilot flow (Section 1) once, end to end, with a real researcher, on
@@ -90,9 +85,9 @@ or multi-session pilot. Record every deviation from expected behavior using
 the incident template below, not just "it worked" / "it didn't."
 
 ### Measurable KPI definitions
-Capture the admin pilot-metrics response at the start and end of the agreed
-pilot window. Report both snapshots, their difference where appropriate, the
-configured analytics-retention period, and the explicit limitations above.
+Count the KPIs above from the experiment timelines and reports at the start
+and end of the agreed pilot window. Report both counts, their difference
+where appropriate, and the explicit limitations above.
 
 ### Incident/error recording template
 ```
@@ -107,7 +102,7 @@ Reproducible? (steps if yes)
 ```
 
 ### Post-session interview questions
-1. Did the system ever advance, complete, or approve something without your explicit confirmation?
+1. Did the system ever advance, complete, or start something without your explicit confirmation?
 2. Was the current step always clear? If not, when did it become unclear?
 3. Did Pause/Resume/recovery behave the way you expected?
 4. Was voice recognition accurate for your speech patterns? Any repeated corrections?
@@ -125,16 +120,16 @@ for the complete, code-enforced list.
 ### Known limitations (state these to every pilot participant)
 - Controlled-pilot system: not a validated GLP/GMP/clinical system, not a
   full ELN/LIMS, not an autonomous scientist, not a safety authority.
-- No external integration (Drive, GitHub, protocols.io, OIDC against a real
-  IdP, eLabFTW, OCR) has been live-tested in this environment — see
-  `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`'s classification table.
+- No external integration (OIDC against a real IdP, OCR, translation) has
+  been live-tested in this environment; the Drive, GitHub, protocols.io and
+  eLabFTW integrations were removed on 2026-10-08 (lane DI).
   xAI STT/TTS and the LLM structured-analysis endpoint **were** live-tested
   this pass (Section 4 below).
 
 ### Abort / stop criteria
 Stop the pilot session immediately if:
-- Any workflow step is marked complete, approved, or written to an ELN
-  without the participant's explicit confirmation having occurred.
+- Any workflow step is marked complete, or a protocol started, without the
+  participant's explicit confirmation having occurred.
 - An observation or evidence entry is treated as an instruction that changes
   subsequent guidance.
 - The system produces safety-relevant guidance that contradicts the

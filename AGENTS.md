@@ -7,7 +7,7 @@ source-linked protocol evidence.
 ## Non-negotiable rules
 
 1. Never invent protocol steps, quantities, units, timers, chemical properties,
-   safety limits, observations, history, approval, or completion.
+   safety limits, observations, history, or completion.
 2. LLM output never mutates workflow state: a model may only *propose* a
    change. Every mutation -- read by the deterministic front rules or proposed
    through a tool call -- passes the server's identity, revision, observation,
@@ -51,13 +51,15 @@ source-linked protocol evidence.
 ## Current architecture map
 
 - `src/voiney_lab/server.py`: FastAPI, WebSocket, Cascade voice loop,
-  protocol APIs, external visual jobs, admin boundary.
+  protocol APIs (upload, automatic OCR and analysis, the execution rule's
+  start), the experimenter's workspace APIs.
 - `intent_arbitration.py`: shared deterministic request classifier.
-- `runtime_routing.py`: production curated-protocol routing boundary.
-- `semantic_intent.py`: bounded read-only semantic intent fallback vocabulary
-  and server-owned proposal policy; it holds no mutation authority and is
-  consulted only when deterministic routing returns a catch-all. Its evidence
-  and target fences are shared with the LLM router.
+- `runtime_routing.py`: production curated-protocol routing boundary
+  (`route_curated_runtime_turn`, the rules' path).
+- `intent_fences.py`: the verbatim evidence and target fences (completion
+  evidence, interrogative and hypothetical evidence, current-step targets)
+  that the LLM router's validation applies; the semantic-intent fallback that
+  once held them was removed on 2026-10-08 (lane DI).
 - `curated_protocol.py`: source-bounded plan and checkpoint state machine;
   `front_plan` (the front rules) and `apply_tool_proposal` (a validated
   router proposal through the same branches).
@@ -68,11 +70,15 @@ source-linked protocol evidence.
 - `answer_checks.py`: server checks on a model-written answer (numbers,
   state-change claims, display labels, outside-PDF explanations, server
   values), shared by every answering role.
-- `protocol_catalog.py`: immutable PDF/catalog lifecycle and source-linked review.
+- `protocol_catalog.py`: immutable PDF/catalog lifecycle, source-linked
+  analysis result and the execution rule: `available_for_execution` is
+  "analysis passed, no execution blocker"; the experimenter's start is the
+  one human confirmation (lane DI, 2026-10-08).
 - `experiment_protocol*.py`: structured analysis model, validation, readiness,
   persistence, and fail-closed advanced constructs.
-- `web_visuals.py` / `external_references.py`: feature-gated current xAI/public
-  research adapters and same-origin visual proxy.
+- `external_references.py`: feature-gated public text research adapter
+  (reference context only). The xAI web-image search and image generation
+  were removed on 2026-10-08 (lane DI); lane WV rebuilds them.
 - `experiment_reports.py`: append-only workflow event ledger and exports.
 - `runtime_metrics.py`: bounded content-free route/tool/latency aggregates.
 - `static/index.html`: production browser cockpit; it renders canonical server
@@ -84,13 +90,13 @@ source-linked protocol evidence.
 - Add a production-boundary test, not only a helper test, for routing/provider/UI
   changes.
 - PDF lifecycle work must test success, corrupt/unsupported input, long-running
-  status, missing values, unsupported constructs, and operational approval gates.
+  status, missing values, unsupported constructs, and the execution rule
+  (what blocks a start, what is only announced, the start event).
 - Provider calls must be fake-backed offline. Live tests are opt-in, bounded, and
   may never print credentials or full proprietary prompts/documents.
 - Use immutable typed models for durable domain objects. Validate external data at
   ingress and use parameterized SQL.
-- Keep frontend text insertion on `textContent`; external images must be rights-
-  labeled, byte-validated, and same-origin proxied.
+- Keep frontend text insertion on `textContent`.
 
 ## Verification
 

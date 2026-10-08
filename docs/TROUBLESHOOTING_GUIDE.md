@@ -1,17 +1,18 @@
 # Troubleshooting Guide
 
-Date: 2026-08-24
+Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen)
 
 The safe default is always to preserve the last server-confirmed state. Do not
 repeat a state-changing command until the experiment timeline shows whether the
 first attempt committed. Do not repair production state by editing SQLite.
 
-## Researcher symptoms
+## Experimenter symptoms
 
 | Symptom | Meaning | Safe recovery |
 |---|---|---|
 | Protocol list is loading or empty | Catalog may be disabled, empty, unavailable, or still loading | Wait once, refresh, then have an operator check `/readyz` and catalog configuration; do not select an invented revision |
-| Start action is disabled | No executable exact revision is selected, or approval/revision context is invalid | Reselect the intended approved revision; ask a reviewer if it is draft/revoked |
+| "이 프로토콜로 시작" is not offered | The analysis has not finished, or it carries an execution blocker ("실행을 막는 사유": unreadable page, failed source-evidence check, no executable step, safety-critical conflict) | Read the blocker on the start screen and fix it at the source (a readable PDF, a resolved conflict); nothing on the screen overrides it |
+| Start screen shows "시작 전 알림" | Readiness found something that does not block (a missing value, an ambiguity, a construct without guidance) | Read it before starting; the step will read the source and ask for the value when it comes |
 | “Listening” never appears | Microphone permission, audio device, WebSocket, or configuration acceptance failed | Check browser microphone permission and device, reload once, then check service health; no experiment step changed |
 | Speech rejected / language uncertain | Empty, non-speech, or language-inconsistent transcript admission | Speak again clearly; first verify the current step if the command could mutate state |
 | Stale/conflict message | Another tab, voice turn, or user changed the session version | Reload the timeline and explicitly reselect the experiment; never overwrite the newer state |
@@ -19,25 +20,16 @@ first attempt committed. Do not repair production state by editing SQLite.
 | Resume disclosure says items were not restored | Expected recovery boundary | Reconfirm any pending completion, restart timers intentionally, and ask again for prior conversational context if needed |
 | Evidence download fails | File missing, changed, linked, unauthorized, or hash/size-invalid | Preserve the timeline record, contact the operator, and restore/reattach only through an approved incident process |
 
-## Reviewer symptoms
-
-| Symptom | Meaning | Safe recovery |
-|---|---|---|
-| Inbox item disappeared | Another decision or source update may have changed eligibility | Reload the inbox and history; do not recreate a decision against an old packet |
-| Decision returns conflict | Revision/approval state changed or idempotency key was reused differently | Reload the exact revision and its audit history, then decide on the current allowed actions |
-| Approve is unavailable | Source is in development, review evidence is incomplete, revision is terminal, or role lacks authority | Resolve the displayed blocker or create/review a new immutable revision; never bypass the gate |
-| OCR accepted but protocol still not executable | OCR review and protocol approval are intentionally separate | Start/complete structured analysis, review evidence, then approve the resulting exact revision |
-
-## Administrator symptoms
+## Operator symptoms
 
 | Symptom | Meaning | Safe recovery |
 |---|---|---|
 | `/readyz` returns 503 | Required local configuration did not parse | Read the non-secret exception class, inspect service configuration locally, correct it, and restart; do not add secrets to incident logs |
 | Operational identity configuration invalid | OIDC issuer/audience/JWKS is incomplete or malformed | Configure all OIDC values with HTTPS metadata; operational mode must not fall back to development identity |
-| Connector says check required | New/migrated connector is disabled and untested | Verify server credential provisioning and scope, run configuration check, then enable |
-| Configuration check passes but provider call fails | The check does not contact the provider | Disable the connector, validate credentials/scope with an authorized bounded provider test, and record the result accurately |
-| Connector check fails | Credential handle is unavailable or scope syntax is invalid | Correct only the server credential mapping or configured scope; browser users cannot inspect secret values |
-| Pilot counters appear lower than expected | Action/failure metrics may have aged out under analytics retention | Record the configured retention window; compare durable session/event counts separately |
+| OCR never finishes | The injected OCR provider is missing or failed | Check the provider configuration; the protocol stays blocked (`source_page_requires_ocr`) until the pages are read |
+
+The reviewer and administrator screens were removed on 2026-10-08 (lane DI);
+there is no inbox, approval, connector or pilot-metrics symptom any more.
 
 ## Service and storage
 

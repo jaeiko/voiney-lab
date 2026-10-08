@@ -8303,9 +8303,9 @@ class CuratedProtocolSession:
     def _repetition_guidance(self, interval: dict[str, object]) -> dict[str, Any] | None:
         """How this repeat is led -- its count and where it came from -- or None.
 
-        A fixed repetition is led by the count the source states (a reviewer
-        confirms it before an approved run; a development run takes the
-        analysis's reading); one whose count the person gave or left open
+        A fixed repetition is led by the count the source states, as the
+        analysis read it (lane DI, 2026-10-08: no reviewer confirms it any
+        more); one whose count the person gave or left open
         ("아직 몰라"), by that; a repeat-until by nobody here (the person's
         observation, lane R7). A repeat written under a condition is led only
         once the condition was answered yes. Nothing here invents a count.

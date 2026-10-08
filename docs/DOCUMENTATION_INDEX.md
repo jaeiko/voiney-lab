@@ -12,10 +12,10 @@ history. Current code and tests take precedence if a historical report differs.
 | [`README.md`](../README.md) | Current runnable product contract, setup, API groups, security, and limitations |
 | [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) | Current component, state-authority, persistence, identity, and failure design |
 | [`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md) | Implemented, contract-tested, live-tested, and unavailable capability classification |
-| [`USER_GUIDE.md`](USER_GUIDE.md) | Researcher, reviewer, and administrator workflows |
+| [`USER_GUIDE.md`](USER_GUIDE.md) | The experimenter's workflow (one screen since lane DI, 2026-10-08) |
 | [`PILOT_DEPLOYMENT_GUIDE.md`](PILOT_DEPLOYMENT_GUIDE.md) | Controlled-pilot preparation, execution, and closeout |
 | [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | Process, probes, backup/restore, monitoring, and incident operations |
-| [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | Fail-closed recovery by symptom and role |
+| [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | Fail-closed recovery by symptom |
 | [`PILOT_READINESS_PACKAGE.md`](PILOT_READINESS_PACKAGE.md) | Study checklist, KPI definitions, participant brief, and abort criteria |
 | [`MIGRATION_NOTES.md`](MIGRATION_NOTES.md) | Forward-only durable-storage migration behavior |
 | [`archive/PRODUCTIZATION_FINAL_REPORT.md`](archive/PRODUCTIZATION_FINAL_REPORT.md) | Current productization and commercialization handoff |
