@@ -224,7 +224,8 @@ class RoutingTests(unittest.TestCase):
 
     def test_a_question_left_open_lapses_when_the_model_answers(self) -> None:
         session = _session()
-        session.plan("다음 단계", turn_id=2, language="ko", configuration_id=1, generation=1)
+        # Lane VX, decision 1: "다음 단계" no longer asks; "완료했어" does.
+        session.plan("완료했어", turn_id=2, language="ko", configuration_id=1, generation=1)
         self.assertIsNotNone(session.pending_completion_confirmation)
         client = FakeRouterClient(answer_reply("버퍼 1은 Tris-HCl buffer입니다.", source_kind="none"))
         outcome, _ = _route(session, "버퍼 1은 뭐야?", client, turn_id=3)

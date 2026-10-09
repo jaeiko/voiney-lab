@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import unittest
 
-from tests.lane_cb_support import RANGE_21, Recorded, Turns, index_of
+from tests.lane_cb_support import FIRST_HINT, RANGE_21, Recorded, Turns, index_of
 from voiney_lab.curated_protocol import FRONT_RULES, CuratedProtocolAction
 
 ASK_19 = (
@@ -36,7 +36,9 @@ class OperatorCountTests(Turns, unittest.TestCase):
         plan = self.enter_19()
         self.assertEqual(self.label(), "19")
         self.assertTrue(plan.state_changed)
-        self.assertTrue(plan.speech_text.startswith("19단계로 이동했습니다."))
+        # Lane VX, decision 1: a named completion says what it recorded first.
+        self.assertTrue(plan.speech_text.startswith(
+            "18단계 완료로 기록했어요." + FIRST_HINT + " 19단계로 이동했습니다."))
         self.assertTrue(plan.speech_text.endswith(ASK_19), plan.speech_text)
         self.assertIn(ASK_19, plan.display_text)
         question = self.session.open_server_question()
@@ -112,7 +114,7 @@ class OperatorCountTests(Turns, unittest.TestCase):
         plan = self.say("19단계 완료했어")
         self.assertTrue(plan.state_changed)
         self.assertEqual(self.label(), "20")
-        self.assertEqual(plan.speech_text, "20단계로 이동했습니다. 안내를 화면에 표시했습니다.")
+        self.assertEqual(plan.speech_text, "19단계 완료로 기록했어요. 20단계로 이동했습니다. 안내를 화면에 표시했습니다.")
         self.say("20단계 완료했어")
         self.assertEqual(self.label(), "21")
 
@@ -138,7 +140,9 @@ class OperatorCountTests(Turns, unittest.TestCase):
         )
         plan = self.say("18단계 완료했어")
         self.assertEqual(self.label(), "19")
-        self.assertEqual(plan.speech_text, "19단계로 이동했습니다. 안내를 화면에 표시했습니다.")
+        self.assertEqual(
+            plan.speech_text,
+            "18단계 완료로 기록했어요." + FIRST_HINT + " 19단계로 이동했습니다. 안내를 화면에 표시했습니다.")
         self.assertIsNone(self.session.open_server_question())
 
     def test_the_answer_rolls_back_with_its_turn(self) -> None:
@@ -158,7 +162,9 @@ class OperatorCountTests(Turns, unittest.TestCase):
     def test_the_fixed_range_asks_nothing(self) -> None:
         self.open(index_of("11"))
         plan = self.say("11단계 완료했어")
-        self.assertEqual(plan.speech_text, "12단계로 이동했습니다. 안내를 화면에 표시했습니다.")
+        self.assertEqual(
+            plan.speech_text,
+            "11단계 완료로 기록했어요." + FIRST_HINT + " 12단계로 이동했습니다. 안내를 화면에 표시했습니다.")
         self.assertIsNone(self.session.open_server_question())
 
     def test_the_front_rule_is_described(self) -> None:

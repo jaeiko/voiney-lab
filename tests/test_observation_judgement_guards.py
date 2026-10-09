@@ -122,7 +122,8 @@ class CompletionPromptTests(unittest.TestCase):
     """The completion prompt reads the same reply; the fictional fixture suffices."""
 
     def test_a_questioning_yes_does_not_confirm_completion(self):
-        for opener in ("다음", "2단계 완료했어"):
+        # Lane VX, decision 1: "다음" no longer asks; "완료했어" does.
+        for opener in ("완료했어", "2단계 완료했어"):
             for reply in QUESTIONING_YES:
                 with self.subTest(opener=opener, reply=reply):
                     session = CuratedProtocolSession(

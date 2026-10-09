@@ -25,7 +25,8 @@ from voiney_lab.curated_protocol import (
 #: Two different ways the session asks for confirmation before advancing:
 #: a bare "next", and a completion report naming a step other than the
 #: current one.
-QUESTION_OPENERS = ("다음", "2단계 완료했어")
+#: Lane VX, decision 1: "다음" no longer asks; "완료했어" does.
+QUESTION_OPENERS = ("완료했어", "2단계 완료했어")
 #: Each pair is the same answer with 아니요 and with 아니오.
 REPLY_PAIRS = (
     ("아니요", "아니오"),

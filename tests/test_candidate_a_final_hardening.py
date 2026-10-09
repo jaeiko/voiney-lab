@@ -12,6 +12,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     ProtocolKnowledgeView,
+    forward_step_request,
     load_curated_protocol_fixture,
     normalize_scientific_request,
 )
@@ -258,6 +259,12 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
                     reply, turn_id=1, language=language,
                     configuration_id=index, generation=4,
                 )
+                if language == "ko" and forward_step_request(reply):
+                    # Lane VX, decision 1: words that move on ("넘어가자",
+                    # "다음 단계로 이동할게") move on with no question open.
+                    self.assertTrue(rejected.state_changed)
+                    self.assertEqual(unowned.current_index, opening + 1)
+                    continue
                 self.assertFalse(rejected.state_changed)
                 self.assertEqual(unowned.current_index, opening)
 

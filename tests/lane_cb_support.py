@@ -87,6 +87,9 @@ REAL_STEPS: dict[int, str] = {
     43: "Place a filter paper disc (12.5 cm) on top of one of the metal plates.",
 }
 STEP_COUNT = 46
+#: Lane VX, decision 1: said after "N단계 완료로 기록했어요." the first time
+#: words move on in a session (a named completion included).
+FIRST_HINT = " 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요."
 CONDITION_42 = "If using newly made Porapak tubes"
 RANGE_16 = "Repeat steps 12-15 twice more, to wash bacterial cells."
 RANGE_21 = (

@@ -2190,6 +2190,43 @@ _UNCERTAIN_MARKERS = re.compile(
     r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b|let\s+me\s+check"
     r"|(?:i(?:'|’)ll|will)\s+check|need\s+to|have\s+to"
 )
+#: Words that move on (lane VX, decision 1): "다음", "다음 단계로", "넘어가",
+#: "다음으로 가자", "다음 단계 진행해줘", and a completion said with them
+#: ("완료했으니 다음으로 넘어가"). Said as a command -- the whole utterance,
+#: once or twice -- never as a question ("넘어가도 돼?", "넘어갈까?").
+_FORWARD_MOVE = (
+    r"(?:가|가자|가요|가죠|가\s*줘|가\s*주세요|갈게요?|갑시다|"
+    r"넘어\s*가(?:자|요|죠|\s*줘|\s*주세요)?|넘어\s*갈게요?|넘어\s*갑시다|"
+    r"진행(?:해|해요|해줘|하자|할게요?|합시다)?|이동(?:해|해요|해줘|하자|할게요?|합시다)?)"
+)
+_FORWARD_WORDS = (
+    r"(?:다음(?:\s*(?:단계|스텝))?(?:(?:으로|로)?(?:\s*" + _FORWARD_MOVE + r")?"
+    r"|(?:를|을)\s*" + _FORWARD_MOVE + r")"
+    r"|넘어\s*가(?:자|요|죠|\s*줘|\s*주세요)?|넘어\s*갈게요?|넘어\s*갑시다)"
+)
+_FORWARD_STEP = re.compile(
+    r"(?:(?:이제|그럼|그러면|자|좋아|됐고)\s*)?"
+    r"(?:(?:(?:벌써|이미|방금|다)\s*)?(?:완료|끝|다\s*)(?:했어요?|했으니까?|했고|했습니다|냈어|냈고|"
+    r"났어|났으니까?|났고)\s*,?\s*(?:이제\s*)?)?"
+    + _FORWARD_WORDS + r"(?:\s*,?\s*" + _FORWARD_WORDS + r")?",
+)
+
+
+def forward_step_request(transcript: str) -> bool:
+    """Whether the words move on to the next step (lane VX, decision 1).
+
+    The form decides: "다음", "다음 단계로", "넘어가", "다음으로 가자" move on;
+    "다음 단계 알려줘", "다음 단계 뭐야" ask about it, and "넘어가도 돼?"
+    asks permission, which is no command. A completion naming its step
+    ("3단계 끝났어") is the targeted completion's, not this.
+    """
+
+    if _QUESTION_MARKERS.search(transcript or ""):
+        return False
+    key = normalize_conversational_utterance(re.sub(r"[.…,]+", " ", transcript or ""))
+    return bool(key) and _FORWARD_STEP.fullmatch(key) is not None
+
+
 # Reading the source line back ("…탈색될 때까지 2-7단계를 반복합니다") names
 # the endpoint without reporting it.
 _SOURCE_RECITATION = re.compile(
@@ -2775,6 +2812,12 @@ FRONT_RULES: dict[str, str] = {
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
     "targeted_completion": "a completion that names the current step (D2)",
+    "forward_step": "words that move on -- '다음', '다음 단계로', '넘어가', '다음으로 "
+                    "가자' -- said as a command: the step is completed and the next "
+                    "presented, '3단계 완료로 기록했어요.' first, with no question; "
+                    "'N단계 완료하셨나요?' as before where the endpoint is still to "
+                    "be observed, a timer at the step has not run out, 바로 확인 "
+                    "was chosen or it is the last step (lane VX, decision 1)",
     "start_command": "an explicit start of an experiment that has never "
                      "started, and any start or resume after it ended, "
                      "which is not restarted by voice (decision 2, 2026-10-03)",
@@ -4085,6 +4128,22 @@ _NEXT_INFORMATION_PATTERNS = (
         r"알려\s*(?:줘|줄래|주세요|줄\s*수\s*있어\??)|보기\s*(?:해\s*줘|해줘)?|설명해\s*줘|보여\s*줘)|"
         r"(?:미리\s*(?:보기|알려\s*(?:줘|줄래|주세요|줄\s*수\s*있어\??))))\??$",
         re.IGNORECASE,
+    ),
+    # Lane VX, decision 1: the next step asked about in other words reads it
+    # too -- "다음 단계는?", "다음 뭐야", "다음 단계 말해줘", "다음 단계 안내해
+    # 줘", "다음에 뭐 하면 돼". Asked, nothing moves and nothing is asked back.
+    re.compile(
+        r"^(?:(?:이제|그럼|혹시|그)\s*)?다음(?:\s*(?:단계|스텝|거|것))?\s*"
+        r"(?:는|은|(?:는|은|이|가)?\s*(?:뭐야|뭐예요|뭐에요|뭐지|뭔데|뭐|무엇|뭐였지|뭐였더라))$",
+    ),
+    re.compile(
+        r"^(?:(?:이제|그럼|혹시|그)\s*)?다음(?:\s*(?:단계|스텝|거|것))?"
+        r"(?:\s*(?:을|를|에\s*대해(?:서)?))?\s*"
+        r"(?:말해|읽어|안내해|알려)\s*(?:줘|줄래|주세요|주라|줄\s*수\s*있어)$",
+    ),
+    re.compile(
+        r"^(?:(?:이제|그럼|혹시|그)\s*)?다음에(?:는)?\s*(?:뭐|무엇을?|뭘)\s*"
+        r"(?:하면\s*(?:돼|되지|될까)|해야\s*(?:돼|해|하지)|해|하지|하나)(?:요)?$",
     ),
     re.compile(
         r"^(?:please\s+)?(?:what(?:'s|\s+is)\s+(?:the\s+)?next\s+step|"
@@ -6180,13 +6239,15 @@ def curated_intent_from_arbitration(
         )
     if decision.intent is RequestIntent.COMBINED_LEARNING_NEXT:
         return CuratedControlIntent(
+            # Read by the CLARIFY_COMPLETION branch, which answers the
+            # rationale and the next step together and asks nothing back
+            # (lane VX, decision 1).
             intent_kind="learning_and_next_preview",
             action=CuratedProtocolAction.CLARIFY_COMPLETION,
-            requested_transition="next",
-            requested_followup="explain_rationale_preview_next_confirm_completion",
+            requested_transition=None,
+            requested_followup="explain_rationale_preview_next",
             target_step="authoritative_current_step",
             question_kind="combined_information",
-            requires_confirmation=True,
             allows_state_mutation=False,
             **common,
         )
@@ -7507,6 +7568,9 @@ class CuratedProtocolSession:
         self._prestart: dict[str, Any] | None = None
         #: The file the run follows and when it was uploaded (decision 5).
         self._source_basis: dict[str, Any] | None = None
+        #: Lane VX, decision 1: "잘못 넘어갔으면 '방금 완료 취소'라고 해
+        #: 주세요." is said the first time words move on, once a session.
+        self._forward_hint_said = False
 
     def set_safety_pack(self, safety_pack: Any) -> None:
         self.safety_pack = safety_pack
@@ -13049,6 +13113,41 @@ class CuratedProtocolSession:
     ADVANCE_REFUSED_AT_FINAL_STEP = "already_at_final_step"
     ADVANCE_REFUSED_NOT_ACTIVE = "run_not_active"
 
+    def _forward_needs_question(self) -> bool:
+        """Whether words that move on are asked about first (lane VX, decision 1).
+
+        The question "N단계 완료하셨나요?" stays where it was asked before for
+        a reason: the step's endpoint is still to be observed (a repeat-until),
+        a timer running at the step has not run out, or the experimenter
+        chose 바로 확인. At the last step there is no next step to present,
+        and completing it ends the experiment, so it is asked too. An open
+        question is the caller's to leave as it is.
+        """
+
+        steps = self.fixture.steps
+        if not self.active or not 0 <= self.current_index < len(steps):
+            return True
+        if self.confirm_mode == "confirm":
+            return True
+        if self.current_index >= len(steps) - 1:
+            return True
+        if self.endpoint_observation_outstanding(self.current_index):
+            return True
+        timer = self.timer_status()
+        return bool(
+            timer.get("state") == "running"
+            and timer.get("step_index") == self.current_index
+        )
+
+    def _forward_record_words(self, label: str) -> str:
+        """"3단계 완료로 기록했어요.", with how to take it back the first time in a session."""
+
+        words = f"{label}단계 완료로 기록했어요."
+        if not self._forward_hint_said:
+            self._forward_hint_said = True
+            words += " 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요."
+        return words
+
     def _peek_advance_refusal(self) -> str | None:
         """Would a forward move be refused right now, without moving?
 
@@ -15261,6 +15360,48 @@ class CuratedProtocolSession:
                 allows_state_mutation=False,
             )
         if (
+            front_rule is None
+            and language == "ko"
+            and transcript_quality is None
+            and self.active
+            and self._pause_state != "paused"
+            # An open question is what it was: answered, or asked again.
+            and open_questions.first_open is None
+            and forward_step_request(transcript)
+        ):
+            # Lane VX, decision 1: words that move on complete the step and
+            # present the next one without a question -- unless the step's
+            # endpoint is still to be observed, a timer running at it has not
+            # run out, the experimenter chose 바로 확인, or there is no next
+            # step; then "N단계 완료하셨나요?" is asked as before.
+            front_rule = "forward_step"
+            if self._forward_needs_question():
+                if intent.action is not CuratedProtocolAction.CLARIFY_COMPLETION:
+                    intent = CuratedControlIntent(
+                        intent_kind="next_step_confirmation_required",
+                        action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                        requested_transition="next",
+                        requested_followup="confirm_current_step_completion",
+                        target_step="authoritative_current_step",
+                        requires_confirmation=True,
+                        language=language,
+                        allows_state_mutation=False,
+                        normalized_transcript=command_key,
+                    )
+            else:
+                intent = CuratedControlIntent(
+                    intent_kind="forward_step",
+                    action=CuratedProtocolAction.NEXT,
+                    reported_completion=True,
+                    requested_transition="next",
+                    requested_followup="describe_new_current_step",
+                    target_step="authoritative_current_step",
+                    confidence_source="deterministic_forward_words",
+                    language=language,
+                    allows_state_mutation=True,
+                    normalized_transcript=command_key,
+                )
+        if (
             transcript_quality is not None
             and (
                 intent.action not in {
@@ -15396,6 +15537,7 @@ class CuratedProtocolSession:
             actor_principal_id=actor_principal_id,
             actor_role=actor_role,
             open_question=open_question,
+            forward_said=front_rule in {"forward_step", "targeted_completion"},
         )
 
     def _execute_turn_intent(
@@ -15411,6 +15553,7 @@ class CuratedProtocolSession:
         actor_principal_id: str | None,
         actor_role: str,
         open_question: dict[str, Any] | None,
+        forward_said: bool = False,
     ) -> CuratedProtocolTurnPlan:
         """Carry out what a turn was read as: its branch, then the turn's gates.
 
@@ -15418,6 +15561,8 @@ class CuratedProtocolSession:
         tool proposal the server accepted (apply_tool_proposal): one set of
         branches and one set of post-turn gates for both, never a second
         state machine. ``open_question`` is the question a pause would hold.
+        ``forward_said``: the words moved on with no question asked (lane VX,
+        decision 1), so an advance says what it recorded.
         """
 
         command = intent.action
@@ -17129,6 +17274,7 @@ class CuratedProtocolSession:
                 )
                 early_exit = self._record_early_step_timer_exit()
                 self._clear_step_timer()
+                completed_label = steps[self.current_index].source_label
                 completion_record = self._completion_record(
                     self.current_index, intent.reported_completion
                 )
@@ -17188,6 +17334,10 @@ class CuratedProtocolSession:
                     )
                 if rounds_notice and language == "ko":
                     control_text = f"{rounds_notice}{control_text}"
+                if forward_said and intent.reported_completion and language == "ko":
+                    # Lane VX, decision 1: nothing was asked, so what was
+                    # recorded is said first.
+                    control_text = f"{self._forward_record_words(completed_label)} {control_text}"
                 plan = self._arrival_plan(
                     control_text, language=language, intent_kind=intent.intent_kind,
                     requested_transition=intent.requested_transition,
@@ -17598,16 +17748,14 @@ class CuratedProtocolSession:
                         if language == "ko"
                         else "The current step is the final step, so there is no next step to preview."
                     )
-                confirmation = (
-                    "현재 단계를 실제로 완료하셨나요? 확인 전에는 상태를 변경하지 않습니다."
-                    if language == "ko"
-                    else "Have you actually completed the current step? The state will not change before confirmation."
-                )
-                response = f"{learning_display}\n\nNext-step preview\n{preview}\n\n{confirmation}"
-                speech = f"{learning_speech} {preview} {confirmation}"
+                # Lane VX, decision 1: asking about the next step reads it and
+                # asks nothing back -- "현재 단계를 실제로 완료하셨나요?" is gone
+                # from here, and no completion question is left open.
+                response = f"{learning_display}\n\nNext-step preview\n{preview}"
+                speech = f"{learning_speech} {preview}"
                 combined_facts = (*learning_facts, *next_facts[:4])
                 plan = CuratedProtocolTurnPlan(
-                    action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                    action=CuratedProtocolAction.NEXT_INFORMATION,
                     display_text=response,
                     speech_text=speech,
                     speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
@@ -17623,7 +17771,7 @@ class CuratedProtocolSession:
                         "verified_sidecar" if language == "ko" else "source_language"
                     ),
                     intent_kind=intent.intent_kind,
-                    requested_transition="next",
+                    requested_transition=None,
                     requested_followup=intent.requested_followup,
                     target_step=step.source_label,
                     intent_confidence=intent.confidence,
@@ -18144,7 +18292,6 @@ class CuratedProtocolSession:
             plan.action is CuratedProtocolAction.CLARIFY_COMPLETION
             and plan.intent_kind in {
                 "next_step_confirmation_required",
-                "learning_and_next_preview",
                 # A semantic proposal can only ever reach this gate; the
                 # researcher's explicit answer, not the model, commits the step.
                 "semantic_completion_confirmation_required",
