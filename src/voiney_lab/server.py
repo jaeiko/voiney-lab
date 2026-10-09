@@ -5103,7 +5103,12 @@ async def _run_web_lookup(
         except Exception:  # noqa: BLE001
             pass
     finally:
-        await _release_held_audio(sender,session,turn_id,generation,1)
+        # The held answer audio is let go whatever happened; a page that
+        # closed meanwhile cannot be sent to, and that is not an error here.
+        try:
+            await _release_held_audio(sender,session,turn_id,generation,1)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # --- Lane WV, decision 3: a drawing from the step's words ------------------------
