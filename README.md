@@ -887,6 +887,84 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
   column reads `timer_manifest` as before, so a step whose timer was a choice
   shows its started duration only through the timer event.
 
+## Pictures and the web: the source's figure, a web explanation, a drawing (lane WV, 2026-10-09)
+
+The field interview's first worry: "I'd rather the agent referred to the
+protocol I uploaded than looked up a general method on the internet; what I
+fear most is being told different conditions." So the uploaded protocol comes
+first, and the web and a drawing are only ever for an explanation. A value
+(an amount, a time, a temperature, a concentration, a count) and a safety
+instruction never come from the web or from a drawing: a sentence that
+carries one is taken out before it is shown or said, and what the source
+does not say stays "원문에 없어요". Everything shown names its kind: "원문
+그림", "웹 자료 · 출처", "AI 가 그린 그림 — 실제와 다를 수 있음".
+
+- **The source's own figure first** (decision 1, `source_figures.py`). The
+  pictures printed on the page the current step's evidence sits on (and the
+  page it continues on) are cut from the uploaded PDF by the one PDF engine
+  (`pdf_text_engine.page_images` and `render_clips_png`, in its child
+  process) and shown in the "원문 PDF 그림" panel with the caption printed
+  under each ("원문 캡션 · …"). Which placed picture is a figure is decided
+  by geometry alone: a fill, a badge, a logo repeated across pages, a card
+  with text printed over it (protocols.io draws its note and expected-result
+  boxes that way) and the frame around a picture are not; tiles are one
+  figure. The crops are cached per source hash and page in memory only, cut
+  in a thread once a step is shown, and sent as `protocol.figures.state`;
+  the screen fields carry `source_figures` (None while they are being cut)
+  and the route `/api/protocols/{id}/revisions/{rev}/figures/{figure_id}`
+  serves the hash-labelled bytes same-origin. "그림 보여줘", "이 단계 그림
+  있어?", "사진 보여줘" say "화면에 원문 그림을 띄웠어요" (with the source's
+  caption) or that the source has none and name the two other ways. The
+  in-gel development fixture's hand-selected crop is unchanged and shown
+  first when it exists.
+- **A web explanation and a photograph, after the source** (decision 2,
+  `web_explanations.py`). "써모믹서가 어떻게 생겼어?", "젤 밴드 실제 사진
+  보여줘", "웹에서 찾아봐" with a thing named (and a bare "웹에서 찾아봐"
+  after a question) are answered by the rules first; then the server asks
+  the OpenAI Responses API's `web_search` tool (chosen from the official
+  documents read on 2026-10-09: its citations must be shown clearly and
+  clickably, which the page does, and it states no limit on storing or
+  changing the results, which Google's grounding terms forbid -- caching,
+  modifying and interspersing other content with grounded results are not
+  allowed there, and lane RP found the same). The answer is checked by the
+  server: every sentence with a number, a safety instruction or permission,
+  a state claim or a server question is taken out and counted; an answer
+  with no citation is not shown. A freely licensed Wikimedia Commons
+  photograph (public domain, CC0, CC BY, CC BY-SA only) is found through the
+  MediaWiki API with the User-Agent its etiquette asks for, fetched by the
+  server from Wikimedia's own hosts, checked (PNG/JPEG, size), served from
+  `/api/web-visuals/{asset_id}` and labelled with its title, author and
+  licence. The voice says the rules' answer at once; the web's one or two
+  sentences are said after it with "자세한 건 화면에 출처와 함께 띄웠어요"
+  only while the answer's audio is still held, otherwise the screen alone
+  (`protocol.web.state`, `protocol.web.result`). The report keeps links only
+  (a `web_reference` event), never the web's words or picture. The
+  experimenter turns the web off with the "웹 찾아보기" setting or "웹 찾아보기
+  꺼 줘" (`web_lookup`, kept with the other settings for the run); the server
+  feature is off by default (`VOINEY_LAB_WEB_EXPLANATIONS_ENABLED`, which
+  needs `OPENAI_API_KEY`; `VOINEY_LAB_WEB_EXPLANATION_MODEL`,
+  `VOINEY_LAB_WEB_EXPLANATION_TIMEOUT_SECONDS`, `VOINEY_LAB_WEB_PHOTOS_ENABLED`).
+- **A drawing from the step's words** (decision 3, `drawn_diagrams.py`).
+  "그림으로 그려 줘" has a text model write an SVG of the step (the same
+  OpenAI key, `VOINEY_LAB_DRAWN_DIAGRAMS_ENABLED`, off by default;
+  `VOINEY_LAB_DRAWN_DIAGRAM_MODEL`, `VOINEY_LAB_DRAWN_DIAGRAM_TIMEOUT_SECONDS`).
+  The server rebuilds it from an allow-list (no script, link, style, image
+  or external reference), takes out every number that is not one of the
+  step's own values and every safety instruction, writes "AI 가 그린 그림 —
+  실제와 다를 수 있음" into the picture, serves it from
+  `/api/drawn-visuals/{asset_id}` and shows it only for the step it was drawn
+  for (`protocol.drawing.state`, `protocol.drawing.result`); a step is drawn
+  once per run. Measured against image models on 2026-10-09 (lane report):
+  an SVG can be checked and corrected, costs about a thousandth of an image
+  and takes about as long; the image models painted the step's quantities
+  into the picture whether asked to or not, where nothing can check them.
+- **The front rule** (decision 4, `visual_request`). A picture request --
+  the source's figure, a web lookup of a thing named, a drawing -- is read by
+  the rules before any model, router on or off, and changes no state; a bare
+  "웹에서 찾아봐" keeps its older reading, "그거 어떻게 생겼어?" with nothing
+  recent is asked back as before, and a value asked with a picture word
+  ("그림에 나온 온도 몇 도야?") is a value question.
+
 ## LLM router (off by default)
 
 Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
