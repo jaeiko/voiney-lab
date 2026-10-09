@@ -489,7 +489,10 @@ def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, obj
 
     ``verified``: each step's timer values with the source excerpt they were
     read from; a step with more than one value is a choice the experimenter
-    makes when starting the timer. ``refused``: each time the server did not
+    makes when starting the timer. ``bound`` says whether the source states
+    the value as a minimum, an approximate value or a maximum, and
+    ``bound_ko`` is the word the screen shows before it -- "최소", "약",
+    "최대" (lane VX, decision 4). ``refused``: each time the server did not
     make a timer from, with the reason in Korean.
     """
 
@@ -506,6 +509,8 @@ def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, obj
                 "value_ko": " 또는 ".join(_duration_ko(s) for s in timer.seconds),
                 "choice": timer.step_id in choices,
                 "source": timer.source,
+                "bound": timer.bound,
+                "bound_ko": domain.TIMER_BOUND_KO.get(timer.bound, ""),
             }
             for timer in table.verified
         ],

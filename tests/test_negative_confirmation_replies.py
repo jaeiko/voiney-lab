@@ -71,7 +71,8 @@ AFFIRMATIVES = ("네", "예", "완료했어요")
 OBSERVATION_AFFIRMATIVES = ("네", "예")
 #: A bare "next", and a completion report naming a step other than the
 #: current one: the two ways the session asks before advancing.
-QUESTION_OPENERS = ("다음", "2단계 완료했어")
+#: Lane VX, decision 1: "다음" no longer asks; "완료했어" does.
+QUESTION_OPENERS = ("완료했어", "2단계 완료했어")
 
 
 def _answer(opener: str, reply: str):

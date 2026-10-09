@@ -78,7 +78,8 @@ class ReplyTests(unittest.TestCase):
                 )
                 session.active = True
                 session.current_index = 0
-                _turn(session, "다음", 1)
+                # Lane VX, decision 1: "다음" no longer asks; "완료했어" does.
+                _turn(session, "완료했어", 1)
                 self.assertIsNotNone(session.pending_completion_confirmation)
                 plan = _turn(session, reply, 2)
                 self.assertEqual(plan.intent_kind, "pending_completion_confirmed")

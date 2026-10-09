@@ -115,7 +115,7 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
                 ):
                     self.assertNotIn(opening, routed.plan.speech_text or "")
 
-    def test_combined_learning_and_next_previews_then_requires_explicit_confirmation(self) -> None:
+    def test_combined_learning_and_next_previews_and_asks_nothing(self) -> None:
         workflow = self.active_workflow()
         before = workflow.state()
         routed = self.route(
@@ -127,15 +127,17 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
             RequestIntent.COMBINED_LEARNING_NEXT,
         )
         self.assertEqual(routed.plan.intent_kind, "learning_and_next_preview")
-        self.assertEqual(routed.plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        # Lane VX, decision 1: asking about the next step reads it and asks
+        # nothing back, so a "네" after it does not move the run.
+        self.assertEqual(routed.plan.action, CuratedProtocolAction.NEXT_INFORMATION)
         self.assertIn("다음 단계는 2단계", routed.plan.speech_text or "")
-        self.assertIn("실제로 완료", routed.plan.speech_text or "")
+        self.assertNotIn("실제로 완료", routed.plan.speech_text or "")
         self.assertFalse(routed.state_mutation)
         self.assertEqual(workflow.state()["current_step_label"], before["current_step_label"])
 
         confirmed = self.route(workflow, "네", turn_id=2)
-        self.assertTrue(confirmed.state_mutation)
-        self.assertEqual(workflow.state()["current_step_label"], "2")
+        self.assertFalse(confirmed.state_mutation)
+        self.assertEqual(workflow.state()["current_step_label"], before["current_step_label"])
 
     def test_visual_request_is_recognized_without_mutation(self) -> None:
         workflow = self.active_workflow()

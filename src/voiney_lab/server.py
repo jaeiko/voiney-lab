@@ -794,6 +794,11 @@ def _record_workspace_experiment_progress(
                 "deadline_at","started_at",
             )
         }
+        # Lane VX, decision 4: the timer as it is named ("최소 2시간") and
+        # what the source states its value as.
+        event_payload["timer"].update({
+            key:planned_timer[key] for key in ("name","bound") if key in planned_timer
+        })
     # Lane R7: a return within a repeat, a later start and a step completed
     # again in a later round are recorded as what they are. A step already
     # marked completed is not marked again: the durable session keeps one
@@ -5585,6 +5590,10 @@ def _record_experiment_report_plan(
         payload["workspace_event_key"]=(
             f"voice-{generation}-{turn_id}-observation-{plan.action.value}"
         )
+        if plan.note_record.get("experimenter_confirmed") is True:
+            # Lane VX, decision 3: the value was said "네" to in the 바로
+            # 확인 way; the end-of-experiment review does not ask it again.
+            payload["experimenter_confirmed"]=True
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,

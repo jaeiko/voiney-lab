@@ -446,10 +446,12 @@ class _ProviderContract:
         session.activate_configured()
         session.plan("시작", turn_id=1, language="ko", configuration_id=1, generation=1)
         session.current_index = 3
-        said = "다음 단계로 넘어가자"
+        # Lane VX, decision 1: "다음 단계로 넘어가자" is now a front rule's and
+        # never reaches the model; "다음 거 하자" still does.
+        said = "자 이제 다음 거 하자"
         # A step other than the current one is refused (no skipping).
         fake = self.fake_tool_call("change_state", {
-            "action": "next", "target_step": "1", "evidence": "다음 단계로 넘어가자",
+            "action": "next", "target_step": "1", "evidence": "다음 거 하자",
         })
 
         async def rules():

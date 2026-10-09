@@ -335,8 +335,9 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 self.assertTrue(plan.state_changed)
                 self.assertEqual(session.current_index, 1)
         # Lane R0 (decision 4): naming no step, these ask first; the yes
-        # moves on.
-        for untargeted in ("좋아 completed 했어", "다 했으니까 다음으로 넘어가줘"):
+        # moves on. Lane VX, decision 1: "다 했으니까 다음으로 넘어가줘" says
+        # to move on, so it moves on without the question (below).
+        for untargeted in ("좋아 completed 했어",):
             with self.subTest(utterance=untargeted):
                 session = self.session("1")
                 plan = session.plan(untargeted, turn_id=2, language="ko")
@@ -346,6 +347,11 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 confirmed = session.plan("네", turn_id=3, language="ko")
                 self.assertTrue(confirmed.state_changed)
                 self.assertEqual(session.current_index, 1)
+        session = self.session("1")
+        moved = session.plan("다 했으니까 다음으로 넘어가줘", turn_id=2, language="ko")
+        self.assertTrue(moved.state_changed)
+        self.assertEqual(session.current_index, 1)
+        self.assertTrue(moved.speech_text.startswith("1단계 완료로 기록했어요."))
 
     def test_multilingual_underspecified_result_query_parity(self) -> None:
         for utterance, lang in (

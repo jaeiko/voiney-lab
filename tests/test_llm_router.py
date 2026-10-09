@@ -451,7 +451,8 @@ class ApplyToolProposalTests(unittest.TestCase):
 
     def test_an_open_question_is_asked_again_not_lost(self) -> None:
         session = _session(self.fixture)
-        _say(session, 2, "다음 단계")
+        # Lane VX, decision 1: "다음 단계" no longer asks; "완료했어" does.
+        _say(session, 2, "완료했어")
         verdict, plan = _propose(session, 3, "버퍼 1은 뭐야 다음 단계", _change("next", "다음 단계"))
         self.assertEqual(verdict.reason_code, "pending_gate_owns_turn")
         self.assertEqual(plan.speech_text, "먼저 질문에 답해 주세요. 4단계 완료하셨나요?")

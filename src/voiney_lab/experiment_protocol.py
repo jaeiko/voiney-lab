@@ -2208,8 +2208,11 @@ def assess_readiness(
 #
 # A timer for an uploaded protocol is a duration the source prints: the
 # number and its unit, read here from the analysis's excerpt and nowhere
-# else. Nothing is inferred -- "overnight", "until clear", "at least 2 h" and
-# "after 16 h" make no timer, and the excerpt is read back instead. The
+# else. Nothing is inferred -- "overnight", "until clear", "more than 2 h"
+# and "after 16 h" make no timer, and the excerpt is read back instead.
+# A minimum, an approximate value and a maximum the source prints ("a
+# minimum of 2 hours", "~16 hours", "up to 2 h") run a timer of that value,
+# marked as what it is (lane VX, decision 4). The
 # server checks every value it keeps against the step's own source
 # (experiment_protocol_analysis.verify_step_timers), the same level of trust
 # the in-gel sidecar manifest gets from its loader.
@@ -2244,7 +2247,33 @@ _SOURCE_DURATION = re.compile(
 )
 _PAIR_PARTS = re.compile(rf"({_NUMBER})(?:\s*|-)({_UNIT})", re.I)
 #: A number glued to a letter before it ("S1", "pH7") is not a time.
-#: A bound, not a length: "at least 30 min", "up to 2 h", "30분 이상".
+#: Lane VX, decision 4: a minimum, a maximum and an approximate value the
+#: source prints are a timer of that value, marked as such: "a minimum of 2
+#: hours", "at least 30 min", "최소 2시간", "2시간 이상"; "up to 2 h", "no
+#: more than 2 h", "최대 2시간", "30분 이내"; "~16 hours", "about 16 h", "약
+#: 16시간", "16시간 정도". A strict comparison ("more than 5 min", "less than
+#: 5 min", "5분 초과") states no value to run and stays refused.
+_MINIMUM_BEFORE = re.compile(
+    r"(?:(?<![A-Za-z])(?:a\s+)?minimum(?:\s+of)?|(?<![A-Za-z])at\s+least|"
+    r"(?<![A-Za-z])no\s+less\s+than|(?<![A-Za-z])not\s+less\s+than|≥|최소(?:\s*한)?)"
+    r"\s*[~≈∼～]?\s*$",
+    re.I,
+)
+_MAXIMUM_BEFORE = re.compile(
+    r"(?:(?<![A-Za-z])(?:a\s+)?maximum(?:\s+of)?|(?<![A-Za-z])max\.?|(?<![A-Za-z])up\s+to|"
+    r"(?<![A-Za-z])no\s+more\s+than|(?<![A-Za-z])not\s+more\s+than|(?<![A-Za-z])within|≤|최대)"
+    r"\s*[~≈∼～]?\s*$",
+    re.I,
+)
+_MINIMUM_AFTER = re.compile(r"^\s*(?:or\s+(?:more|longer)|and\s+(?:more|longer)|이상)", re.I)
+_MAXIMUM_AFTER = re.compile(r"^\s*(?:or\s+(?:less|shorter)|이하|이내|까지)", re.I)
+_APPROXIMATE_BEFORE = re.compile(
+    r"(?:(?<![A-Za-z])(?:about|approximately|approx\.?|around|roughly|circa|ca\.)|"
+    r"(?<![가-힣])(?:약|대략)|[~≈∼～])\s*$",
+    re.I,
+)
+_APPROXIMATE_AFTER = re.compile(r"^\s*(?:정도|쯤|가량|내외|or\s+so\b)", re.I)
+#: A bound, not a length: "more than 30 min", "less than 5 min", "30분 초과".
 _OPEN_BOUND_BEFORE = re.compile(
     r"(?:at\s+least|no\s+(?:less|more)\s+than|not\s+(?:less|more)\s+than|"
     r"more\s+than|less\s+than|longer\s+than|shorter\s+than|up\s+to|within|"
@@ -2274,10 +2303,14 @@ _UNNUMBERED_TIME = re.compile(
     re.I,
 )
 
+#: Lane VX, decision 4: the word said and shown before a value the source
+#: states as a minimum, an approximate value or a maximum.
+TIMER_BOUND_KO: dict[str, str] = {"minimum": "최소", "approximate": "약", "maximum": "최대"}
+
 SOURCE_DURATION_REFUSAL_KO: dict[str, str] = {
     "no_number": "숫자로 적힌 시간이 없어요(overnight, until … 같은 표현).",
     "with_unnumbered_alternative": "숫자 없는 시간 표현(overnight, until …)이 함께 적혀 있어 길이를 정할 수 없어요.",
-    "open_bound": "정해진 길이가 아니라 최소·최대·이내 같은 한계로 적혀 있어요.",
+    "open_bound": "정해진 길이가 아니라 '…보다 길게', '…보다 짧게' 같은 비교로 적혀 있어요.",
     "interval": "반복 간격(매 …마다)으로 적혀 있어요.",
     "elapsed_reference": "다른 작업의 앞뒤 시점(after …, before …, … 후)을 가리켜요.",
     "not_whole_seconds": "초 단위로 떨어지지 않는 값이에요.",
@@ -2303,6 +2336,10 @@ class SourceDuration:
 
     literal: str
     seconds: tuple[int, ...]
+    #: Lane VX, decision 4: "exact", or "minimum" / "approximate" / "maximum"
+    #: for a single value the source prints as such; the literal then holds
+    #: those words too ("a minimum of 2 hours", "~16 hours", "up to 2 h").
+    bound: str = "exact"
 
     @property
     def is_choice(self) -> bool:
@@ -2369,16 +2406,59 @@ def read_source_durations(text: str) -> SourceDurationReading:
         literal = match.group(0).strip()
         before = text[max(0, match.start() - 24):match.start()]
         after = text[match.end():match.end() + 16]
+        values = _match_seconds(match)
         reason: str | None = None
+        bound = "exact"
+        # Where the bound's own words start and end, to keep them in the literal.
+        start, end = match.start(), match.end()
+        minimum_before = _MINIMUM_BEFORE.search(before)
+        maximum_before = _MAXIMUM_BEFORE.search(before)
+        minimum_after = _MINIMUM_AFTER.search(after)
+        maximum_after = _MAXIMUM_AFTER.search(after)
+        kinds = {
+            kind for kind, found in (
+                ("minimum", minimum_before or minimum_after),
+                ("maximum", maximum_before or maximum_after),
+            ) if found
+        }
+        approximate_before = _APPROXIMATE_BEFORE.search(before)
+        # "every ~10 min", "after ~16 hours": the interval and the elapsed
+        # time are read past an approximate mark.
+        plain_before = before[:approximate_before.start()] if approximate_before else before
         if unnumbered:
             reason = "with_unnumbered_alternative"
+        elif kinds:
+            if len(kinds) > 1 or len(values) > 1 or (
+                _INTERVAL_BEFORE.search(plain_before) or _INTERVAL_AFTER.search(after)
+                or _ELAPSED_BEFORE.search(plain_before) or _ELAPSED_AFTER.search(after)
+            ):
+                # A bounded range or a bound on a time since something else
+                # is no single value to run.
+                reason = "open_bound"
+            else:
+                bound = kinds.pop()
+                found_before = minimum_before or maximum_before
+                found_after = minimum_after or maximum_after
+                if found_before:
+                    start = match.start() - len(before) + found_before.start()
+                if found_after:
+                    end = match.end() + found_after.end()
         elif _OPEN_BOUND_BEFORE.search(before) or _OPEN_BOUND_AFTER.search(after):
             reason = "open_bound"
-        elif _INTERVAL_BEFORE.search(before) or _INTERVAL_AFTER.search(after):
+        elif _INTERVAL_BEFORE.search(plain_before) or _INTERVAL_AFTER.search(after):
             reason = "interval"
-        elif _ELAPSED_BEFORE.search(before) or _ELAPSED_AFTER.search(after):
+        elif _ELAPSED_BEFORE.search(plain_before) or _ELAPSED_AFTER.search(after):
             reason = "elapsed_reference"
-        values = _match_seconds(match)
+        elif len(values) == 1:
+            approximate_after = _APPROXIMATE_AFTER.search(after)
+            if approximate_before or approximate_after:
+                bound = "approximate"
+                if approximate_before:
+                    start = match.start() - len(before) + approximate_before.start()
+                if approximate_after:
+                    end = match.end() + approximate_after.end()
+        if bound != "exact":
+            literal = text[start:end].strip()
         if reason is None and any(
             value <= 0 or value != int(value) for value in values
         ):
@@ -2395,7 +2475,7 @@ def read_source_durations(text: str) -> SourceDurationReading:
             refused.append(RefusedSourceDuration(literal, reason))
             continue
         seconds = tuple(dict.fromkeys(int(value) for value in values))
-        durations.append(SourceDuration(literal, seconds))
+        durations.append(SourceDuration(literal, seconds, bound))
     if unnumbered and not durations and not refused:
         refused.extend(
             RefusedSourceDuration(word, "no_number")
@@ -2424,6 +2504,8 @@ class VerifiedStepTimer:
     #: "analysis_duration": a duration the analysis attached to the step;
     #: "step_text": read by the server in the step's own instruction text.
     source: str = "analysis_duration"
+    #: Lane VX, decision 4: "exact", "minimum", "approximate" or "maximum".
+    bound: str = "exact"
 
 
 @dataclass(frozen=True)
@@ -2450,6 +2532,8 @@ class TimerChoice:
     seconds: int
     literal: str
     excerpt: str
+    #: Lane VX, decision 4: "exact", "minimum", "approximate" or "maximum".
+    bound: str = "exact"
 
 
 @dataclass(frozen=True)
@@ -2472,7 +2556,9 @@ class StepTimerTable:
             options = by_step.setdefault(timer.step_id, [])
             for seconds in timer.seconds:
                 if all(option.seconds != seconds for option in options):
-                    options.append(TimerChoice(seconds, timer.literal, timer.excerpt))
+                    options.append(TimerChoice(
+                        seconds, timer.literal, timer.excerpt, timer.bound,
+                    ))
         return by_step
 
     def manifest(self) -> dict[str, int]:
@@ -2491,6 +2577,17 @@ class StepTimerTable:
 
     def for_step(self, step_id: str) -> tuple[VerifiedStepTimer, ...]:
         return tuple(timer for timer in self.verified if timer.step_id == step_id)
+
+    def bound_for(self, step_id: str, seconds: int) -> str:
+        """What the source states ``seconds`` as at that step: "exact", "minimum", …."""
+
+        return next(
+            (
+                timer.bound for timer in self.verified
+                if timer.step_id == step_id and seconds in timer.seconds
+            ),
+            "exact",
+        )
 
     def refused_for_step(self, step_id: str) -> tuple[RefusedStepTime, ...]:
         return tuple(item for item in self.refused if item.step_id == step_id)

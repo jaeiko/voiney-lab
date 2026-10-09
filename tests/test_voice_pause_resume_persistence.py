@@ -272,7 +272,9 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
                     await say(2, "정지")
                     seen["paused"] = self._snapshot(listener)
                     await say(3, phrase)
-                    await say(4, "다음")
+                    # Lane VX, decision 1: "다음" no longer asks; "다 했어" does,
+                    # and "완료했어" answers it.
+                    await say(4, "다 했어")
                     await say(5, "완료했어")
                     seen["end"] = self._snapshot(listener)
 

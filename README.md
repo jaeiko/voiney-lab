@@ -772,9 +772,10 @@ beside what it amends.
   the server's memory while it runs when there is no workspace; applied when a
   session opens. Simple commands (start, next, timer, questions, anything
   that is not a note) ask nothing in any way; ending, skipping steps, going
-  back and taking back a completion are asked once in every way. ("다음 단계"
-  and "완료했어" naming no step are still asked about first, lane XO: that
-  question is the completion's own safety, not a setting.)
+  back and taking back a completion are asked once in every way. ("완료했어"
+  naming no step is still asked about first, lane XO; "다음 단계" moves on
+  without the question since lane VX, decision 1 -- except in the 바로 확인
+  way, among others: see that section.)
 - **The decimal point** (decision 2). "0.5 mL", "0점5 mL", "영 점 오
   밀리리터", "점 오 밀리리터" and "공 점 오 mL" are one value, 0.5 mL, and every
   one is read back "영 점 오 밀리리터"; "오 점 영" is 5.0. The note keeps the
@@ -856,7 +857,8 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
   These rows carry `source: "step_text"`; the analysis's durations carry
   `"analysis_duration"`. One value kept from both is one timer.
 - **What does not** (decision 2). No number ("overnight", "until clear"), a
-  bound ("at least 30 min", "a minimum of 2 hours", "30분 이상"), an interval
+  bound (a strict comparison, "more than 30 min"; a minimum, an approximate
+  value and a maximum run a timer since lane VX, decision 4), an interval
   ("every 10 min"), a time since something else ("After 2 hours, remove"), a
   number beside an unnumbered alternative ("1 h or overnight") -- in one
   excerpt, or anywhere in the step's words ("O/N" over a "14:00:00" line) --
@@ -874,8 +876,8 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
 - **Time questions** (decision 3, front rule `step_time`). "몇 분 반응시켜?",
   "이 단계 몇 분이야?", "몇 시간 배양해?", "시간 얼마나 걸려?" are answered from
   the verified values with the source literal ("1단계 원문에는 ‘15 min’(15분)으로
-  적혀 있어요."), or the source sentence where no value was verified — only for
-  timers read from an analysis, so the in-gel routing is as it was. "몇 분
+  적혀 있어요."), or the source sentence where no value was verified (the in-gel
+  sidecar timers answer too since lane VX, decision 5). "몇 분
   지났어?" says the running timer's time gone and left (every fixture);
   "얼마나 남았어?" is unchanged.
 - **Start screen** (decision 4). `GET /api/protocols/{id}/review` carries
@@ -886,6 +888,67 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
   the in-gel wording ("60분") is unchanged. The experiment report's timer
   column reads `timer_manifest` as before, so a step whose timer was a choice
   shows its started duration only through the timer event.
+
+## Moving on by the words, start now, bounded timers, sidecar time (lane VX)
+
+Decisions of 2026-10-09, following the field interviews (interview B: "단순한
+명령은 바로 수행하고, 중요한 데이터만 확인해 달라"; interview A: "타이밍을 놓치면
+안 된다") and what lanes CF and PT left. A question changes no state; moving
+on needs words that say so and the server's checks; no time is made that the
+source does not print; nothing recorded is deleted.
+
+- **"다음 단계" by the form of the words** (decision 1, front rule
+  `forward_step`). Words that move on -- "다음", "다음 단계(로)", "넘어가(자)",
+  "다음으로 가자", "다음 단계 진행해줘", "다음 단계를 진행해 줘", and a completion
+  said with them ("완료했으니 다음으로 넘어가") -- complete the current step and
+  present the next with no question, led by "3단계 완료로 기록했어요." and, the
+  first time in a session, "잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요." A
+  completion naming its step ("3단계 끝났어", lane D2) says the same line. The
+  question "N단계 완료하셨나요?" is still asked, as before, where the current
+  step's endpoint is still to be observed (a repeat-until), a timer running at
+  the step has not run out, the experimenter chose 바로 확인, or it is the last
+  step (completing it ends the experiment); an open question is left as it
+  was. Words that ask -- "다음 단계 알려줘", "다음 단계 뭐야", "다음엔 뭐 해",
+  "다음 단계는?", "다음 단계 말해줘/읽어줘/안내해줘", "다음에 뭐 하면 돼" -- read
+  the next step and change nothing, and "이 단계 왜 하는지 알려주고 다음 단계도
+  알려줘" no longer ends with "현재 단계를 실제로 완료하셨나요?" (replay turn 5).
+  A question about moving on ("넘어가도 돼?", "다음 단계 진행할까?") and a
+  completion naming no step ("완료했어", "끝났어") are asked about as before.
+  Korean only, like the other rules of lanes CB, N and CF.
+- **"그냥 시작해" before the start** (decision 2, front rule
+  `prestart_question`). While lane CF's questions before the start are asked,
+  "그냥 시작해", "질문은 나중에", "바로 시작" (and "일단 시작해", "질문 말고 그냥
+  시작해", …) leave every question still to ask for its step and start: "남은
+  질문은 그 단계에서 여쭤볼게요. 실험을 시작합니다. …". Asked ("그냥 시작해도
+  돼?"), they are no answer.
+- **A value confirmed when recorded** (decision 3). A value said "네" to in the
+  바로 확인 way carries `experimenter_confirmed` on its observation event; the
+  end-of-experiment review (lane N, decision 3) treats it as confirmed, so it
+  is not read out again, and the report shows it "(실험자 확인)". A correction
+  made after it takes the confirmation back.
+- **A minimum, an approximate value, a maximum** (decision 4). The source's
+  value only: "a minimum of 2 hours", "at least 30 min", "최소 2시간", "2시간
+  이상" run a timer named "최소 2시간", and run out it is said "최소 시간 2시간이
+  지났어요." (never that the step is over); "~16 hours", "about 16 h", "약
+  16시간", "16시간 정도" run 16 hours, said "약 16시간"; "up to 2 h", "no more
+  than 2 h", "최대 2시간", "30분 이내" run a timer said, run out, "최대 시간
+  2시간이 됐어요.". `read_source_durations` marks each value `exact`,
+  `minimum`, `approximate` or `maximum` and keeps the bound's words in the
+  literal; `timer_status()` carries the timer's `name` and `bound`, and the
+  durable timer record keeps them; the start screen's timer list shows
+  "최소"/"약"/"최대" before the value (`bound_ko`). A strict comparison ("more
+  than 5 min", "5분 초과"), a bounded range and a bound on a time since
+  something else make no timer, as before.
+- **The step's time on the in-gel sidecar** (decision 5, front rule
+  `step_time`). "몇 분 반응시켜?", "이 단계 몇 분이야?", "얼마나 걸려?" are
+  answered on the sidecar timers too: "3단계 타이머는 15분이에요. 원문에는
+  ‘…’라고 적혀 있어요." A step with no timer reads its sentence ("‘until’: 숫자로
+  적힌 시간이 없어요 …"). Asked while an endpoint question is open, that question
+  stays open.
+- **A timer start with no timer** (decision 6). On the in-gel sidecar,
+  "타이머 시작해줘" at a step with no timer says "이 단계에는 원문에 시간이
+  없어요." and changes nothing (it used to claim a change the durable session
+  refused, which with the workspace on turned the reply into a save failure).
 
 ## LLM router (off by default)
 

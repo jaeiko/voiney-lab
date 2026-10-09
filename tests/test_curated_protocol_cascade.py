@@ -71,6 +71,14 @@ EXPECTED_FIXTURE_SHA256 = "69517f0fe629d0e4dc356c78ff3d407ed0f510de24d325e1575b0
 EXPECTED_SCHEMA_SHA256 = "9f34928becbfcd4a63b1339f5200187abd1755801e326637f0f9d8d02ac17b02"
 
 
+#: Lane VX, decision 1: a completion that names its step ("현재 단계를
+#: 완료했어") says what it recorded first, and the first time in a session
+#: how to take it back.
+MOVED_TO_2_SAID = (
+    "1단계 완료로 기록했어요. 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요. "
+    "2단계로 이동했습니다. 안내를 화면에 표시했습니다."
+)
+
 class RecordingCompletions:
     def __init__(self, fact_id: str = "current_step", error: Exception | None = None):
         self.fact_id = fact_id
@@ -507,7 +515,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(repeat.action, CuratedProtocolAction.REPEAT)
         self.assertFalse(current.state_changed)
         self.assertFalse(repeat.state_changed)
-        confirmation = session.plan("다음", turn_id=4, language="ko")
+        # Lane VX, decision 1: "다음" no longer asks; "완료했어" does.
+        confirmation = session.plan("완료했어", turn_id=4, language="ko")
         self.assertEqual(
             confirmation.action, CuratedProtocolAction.CLARIFY_COMPLETION
         )
@@ -1048,11 +1057,16 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 ("다시 말해 줘", "다시 말해줘"),
             ),
             (
+                # Lane VX, decision 1: "단계로 넘어가죠" (no "다음") is still
+                # asked about; the words that move on are under NEXT below.
                 CuratedProtocolAction.CLARIFY_COMPLETION,
+                ("단계로 넘어가죠",),
+            ),
+            (
+                CuratedProtocolAction.NEXT,
                 (
                     "다음 단계로 넘어가 줘",
                     "다음 단계로 넘어가죠",
-                    "단계로 넘어가죠",
                     "다음 단계를 진행해 줘",
                     "다음 단계를 진행해줘",
                     "다음 단계를 진행해 주세요",
@@ -3053,7 +3067,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn(self.fixture.steps[1].instruction_source_text, next_reply)
         self.assertEqual(
             next_tts.call_args.args[0],
-            "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            MOVED_TO_2_SAID,
         )
         self.assertEqual(next_client.chat.completions.calls, [])
         self.assertTrue(next_session.playback_ended(1))
@@ -3665,7 +3679,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             self.assertEqual(session.curated_protocol_session.current_index, 1)
             self.assertEqual(
                 tts.call_args_list[0].args[0],
-                "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+                MOVED_TO_2_SAID,
             )
             self.assertIn(
                 self.fixture.steps[1].instruction_source_text,
@@ -3852,10 +3866,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.current_index, 1)
         self.assertEqual(
             tts.call_args.args[0],
-            "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            MOVED_TO_2_SAID,
         )
         closing_state = session.curated_protocol_session.state(
-            spoken_summary="2단계로 이동했습니다. 안내를 화면에 표시했습니다."
+            spoken_summary=MOVED_TO_2_SAID
         )
         state_events = [
             item for item in socket.text
@@ -4152,7 +4166,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
-            "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            MOVED_TO_2_SAID,
             self.fixture.localized_fact(
                 self.fixture.steps[1].step_id, "current_step"
             ),
