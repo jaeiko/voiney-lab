@@ -4,6 +4,7 @@ import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, l
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -6820,10 +6821,57 @@ def _session_quiet(session:ListenerSession)->bool:
     return session.state is TurnState.IDLE and session.active_turn_id is None
 
 
+def _record_timer_notice(
+    session:ListenerSession,curated:CuratedProtocolSession,notice:TimerNotice,*,said:bool,
+)->None:
+    """Append a timer notice to the experiment record (lane VT, decision 8).
+
+    Its own event, never changed after -- "timer_end_notice" or
+    "timer_last_minute_notice" -- at the timer's step: what it said, when it
+    fell due, whether and when it was said aloud, the setting it was given
+    under. Once per notice (its key). No record open, nothing is written.
+    """
+
+    store=session.experiment_report_store
+    if store is None or session.experiment_report_id is None:
+        return
+    try:
+        store.append_event(
+            session.experiment_report_id,
+            event_key=f"timer-notice-{notice.notice_id}",
+            event_type=(
+                "timer_end_notice" if notice.kind=="timer_ended" else "timer_last_minute_notice"
+            ),
+            step_id=notice.step_id,step_label=notice.step_label,
+            payload={
+                "notice":notice.public_dict(),
+                "spoken":said,
+                "said_at":datetime.now(timezone.utc).isoformat() if said else None,
+                "proactive_mode":curated.proactive_mode,
+                "next_step_label":notice.next_step_label,
+                "development_only":curated.fixture.development_only,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the notice was given; the log says it was not kept
+        log.warning("timer notice not recorded error=%s",type(exc).__name__)
+
+
 async def _deliver_timer_notice(
     session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
     notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
     wait_seconds:float=TIMER_NOTICE_SPEAK_WAIT_SECONDS,
+)->bool:
+    """Show and maybe say a timer notice, then keep it in the record (decisions 1, 8)."""
+
+    said=await _show_and_say_timer_notice(
+        session,sender,curated,notice,sleep=sleep,wait_seconds=wait_seconds)
+    await asyncio.to_thread(_record_timer_notice,session,curated,notice,said=said)
+    return said
+
+
+async def _show_and_say_timer_notice(
+    session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
+    notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]],wait_seconds:float,
 )->bool:
     """Show a timer notice now; say it once the session is quiet (lane VT, decision 1).
 
