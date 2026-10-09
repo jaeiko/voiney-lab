@@ -966,6 +966,9 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # Lane WV, decision 2: the web is looked at for an explanation or a
     # photograph unless the experimenter turns it off.
     "web_lookup":"on",
+    # Lane VT, decision 6: everything is said first unless the experimenter
+    # keeps it to what is needed or turns it off.
+    "proactive_mode":"all",
 }
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).

@@ -150,6 +150,12 @@
               <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
                 <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
                 <option value="off">끔 · 원문에서만 찾기</option>
+              </select></label>
+              <!-- Lane VT decision 6: what the server says before it is asked (the same as saying "먼저 알려 주기 꺼 줘"). -->
+              <label class="control-field"><span>먼저 알려 주기</span><select id="proactive-mode" aria-label="먼저 알려 주기" aria-describedby="experimenter-settings-status">
+                <option value="all" selected>모두 · 타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계</option>
+                <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
+                <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
               </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
               <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
                 <option value="">기본 마이크 (시스템 설정)</option>
@@ -1887,6 +1893,8 @@ function renderExperimenterSettings(settings){
  if(timing&&["before_start","during"].includes(settings.question_timing))timing.value=settings.question_timing;
  const web=$("web-lookup");
  if(web&&["on","off"].includes(settings.web_lookup))web.value=settings.web_lookup;
+ const proactive=$("proactive-mode");
+ if(proactive&&["all","needed","off"].includes(settings.proactive_mode))proactive.value=settings.proactive_mode;
 }
 async function loadExperimenterSettings(){
  try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
@@ -2340,6 +2348,7 @@ $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0]
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
 $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting("web_lookup",event.target.value);});
+$("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("proactive_mode",event.target.value);});
 globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
 </script>
 </body>
