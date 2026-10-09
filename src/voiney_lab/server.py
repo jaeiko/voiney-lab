@@ -6799,6 +6799,8 @@ TIMER_NOTICE_TICK_SECONDS=1.0
 #: How long a notice to be said waits for the experimenter to stop speaking
 #: and an answer to stop playing; past it the notice stays on the screen only.
 TIMER_NOTICE_SPEAK_WAIT_SECONDS=120.0
+#: A last minute's notice waits less: said later it would say the wrong time.
+TIMER_LAST_MINUTE_SPEAK_WAIT_SECONDS=30.0
 TIMER_NOTICE_POLL_SECONDS=0.2
 #: Turn ids the server's own notices are said under, beside the greeting's
 #: (2_000_000_000); user turns start at 1.
@@ -6916,7 +6918,13 @@ async def _timer_notice_tick(
         return ()
     notices=curated.due_timer_notices(now=now)
     for notice in notices:
-        await _deliver_timer_notice(session,sender,curated,notice)
+        await _deliver_timer_notice(
+            session,sender,curated,notice,
+            wait_seconds=(
+                TIMER_LAST_MINUTE_SPEAK_WAIT_SECONDS if notice.kind=="timer_last_minute"
+                else TIMER_NOTICE_SPEAK_WAIT_SECONDS
+            ),
+        )
     return notices
 
 

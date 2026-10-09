@@ -3781,6 +3781,9 @@ WEB_LOOKUP_VALUES = ("on", "off")
 #: screen notice and the sound of a timer's end stay.
 PROACTIVE_MODES = ("all", "needed", "off")
 PROACTIVE_MODE_WORDS = {"all": "모두", "needed": "필요한 것만", "off": "끄기"}
+#: Decision 2: a timer at least this long is told its last minute, once.
+TIMER_LAST_MINUTE_FROM_SECONDS = 300
+TIMER_LAST_MINUTE_SECONDS = 60
 #: The notices each choice says aloud; the screen shows a timer's every
 #: notice whatever is chosen (decision 6).
 PROACTIVE_SPOKEN_KINDS: dict[str, frozenset[str]] = {
@@ -8099,11 +8102,13 @@ class CuratedProtocolSession:
 
         Decision 1: the moment the server's timer has run out ("expired" in
         ``timer_status``), "15분 타이머가 끝났어요." -- a minimum or a maximum
-        timer in lane VX's words -- and "다음은 N단계, …". Each is given once
-        per timer started. Nothing here moves a step, completes one or changes
-        the timer; a timer goes on running through a pause (as it does when
-        asked), so its end is told in a pause too. Only while the experiment
-        runs.
+        timer in lane VX's words -- and "다음은 N단계, …". Decision 2: a timer
+        of five minutes or more, one minute before, "1분 남았어요." ("최소
+        시간까지 1분 남았어요." for a minimum) and the same line on the next
+        step; not once the end has come. Each is given once per timer started.
+        Nothing here moves a step, completes one or changes the timer; a timer
+        goes on running through a pause (as it does when asked), so it is told
+        in a pause too. Only while the experiment runs.
         """
 
         if (
@@ -8117,10 +8122,22 @@ class CuratedProtocolSession:
         status = self.timer_status(now=current_time)
         key = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
         deadline = self._timer_started_at + self._timer_duration_seconds
-        if status["state"] != "expired" or (key, "timer_ended") in self._timer_notices_given:
-            return ()
-        self._timer_notices_given.add((key, "timer_ended"))
-        return (self._timer_notice("timer_ended", status, key, due_at=deadline),)
+        given = self._timer_notices_given
+        if status["state"] == "expired":
+            if (key, "timer_ended") in given:
+                return ()
+            # The last minute is not told once the end has come.
+            given.update({(key, "timer_ended"), (key, "timer_last_minute")})
+            return (self._timer_notice("timer_ended", status, key, due_at=deadline),)
+        if (
+            self._timer_duration_seconds >= TIMER_LAST_MINUTE_FROM_SECONDS
+            and deadline - current_time <= TIMER_LAST_MINUTE_SECONDS
+            and (key, "timer_last_minute") not in given
+        ):
+            given.add((key, "timer_last_minute"))
+            return (self._timer_notice(
+                "timer_last_minute", status, key, due_at=deadline - TIMER_LAST_MINUTE_SECONDS),)
+        return ()
 
     def _timer_notice(
         self, kind: str, status: Mapping[str, Any], key: tuple[Any, ...], *, due_at: float,

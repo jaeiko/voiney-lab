@@ -64,6 +64,12 @@ class Notices(Turns):
         self.duration = duration
         return session
 
+    @staticmethod
+    def ends(session: CuratedProtocolSession, now: float):
+        """The timer-end notices due at ``now`` (decision 2's last minute aside)."""
+
+        return tuple(n for n in session.due_timer_notices(now=now) if n.kind == "timer_ended")
+
     def state_of(self, session: CuratedProtocolSession):
         return (session.active, session.current_index, session.workflow_status,
                 session.state()["revision"], session._timer_started_at)
@@ -74,7 +80,7 @@ class TheEndTests(Notices, unittest.TestCase):
     def test_it_is_told_once_the_moment_the_timer_runs_out(self) -> None:
         session = self.at_timer(1, fixture=wash(localizations=STEP_3_KOREAN))
         before = self.state_of(session)
-        self.assertEqual(session.due_timer_notices(now=T0 + 599), ())
+        self.assertEqual(self.ends(session, T0 + 599), ())
         (notice,) = session.due_timer_notices(now=T0 + 600)
         self.assertEqual(notice.kind, "timer_ended")
         self.assertEqual(
@@ -119,7 +125,7 @@ class TheEndTests(Notices, unittest.TestCase):
         session = self.at_timer(1, fixture=wash())
         self.assertEqual(len(session.due_timer_notices(now=T0 + 600)), 1)
         session.start_timer(now=T0 + 700)
-        self.assertEqual(session.due_timer_notices(now=T0 + 1299), ())
+        self.assertEqual(self.ends(session, T0 + 1299), ())
         self.assertEqual(len(session.due_timer_notices(now=T0 + 1300)), 1)
 
     def test_a_pause_does_not_stop_the_timer_so_its_end_is_told(self) -> None:
@@ -156,7 +162,7 @@ class TheWordsByKindTests(_Catalog, Notices):
             with self.subTest(step=index + 1):
                 session = self.at_timer(index, fixture=self.fixture)
                 self.assertEqual(self.duration, seconds)
-                self.assertEqual(session.due_timer_notices(now=T0 + seconds - 1), ())
+                self.assertEqual(self.ends(session, T0 + seconds - 1), ())
                 (notice,) = session.due_timer_notices(now=T0 + seconds)
                 self.assertEqual(notice.display_text, words)
                 self.assertNotIn("끝났" if index in (0, 2) else "지났", notice.display_text)
@@ -316,7 +322,7 @@ class DeliveryTests(_Server):
 
     def test_the_tick_gives_it_once(self) -> None:
         async def ticks():
-            first = await _timer_notice_tick(self.listener, self.sender, now=T0 + 599)
+            first = await _timer_notice_tick(self.listener, self.sender, now=T0 + 500)
             second = await _timer_notice_tick(self.listener, self.sender, now=T0 + 600)
             third = await _timer_notice_tick(self.listener, self.sender, now=T0 + 601)
             return first, second, third
