@@ -4729,7 +4729,7 @@ _VALUE_ACTION_NAMES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bdry|\bdried|\bspeedvac|건조|말리", re.I), "건조"),
     (re.compile(r"\bcool|\bchill|식히|냉각", re.I), "냉각"),
     (re.compile(r"\bstain|염색", re.I), "염색"),
-    (re.compile(r"\bshak|\bagitat|\brock|흔들|교반", re.I), "교반"),
+    (re.compile(r"\bshak|\bagitat|\brock|\bstir|흔들|교반|저어", re.I), "교반"),
     (re.compile(r"\bmix|\bvortex|섞|혼합", re.I), "혼합"),
     (re.compile(r"\bdigest|소화", re.I), "소화"),
     (re.compile(r"\bsonicat|초음파", re.I), "초음파 처리"),
@@ -4737,7 +4737,8 @@ _VALUE_ACTION_NAMES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bplace|\bleave|\bkeep|\bstore|\bstand|\blet\b|두|보관|방치", re.I), "두는"),
 )
 _STEP_TEMPERATURE = re.compile(
-    r"(?<![\w.])(?P<value>-?\d+(?:\.\d+)?)\s*(?:°\s*C|˚\s*C|º\s*C|℃|C(?![A-Za-z])|도(?![가-힣]))"
+    r"(?<![\w.])(?P<value>-?\d+(?:\.\d+)?)\s*"
+    r"(?:[°˚º⁰o]\s*C(?![A-Za-z])|℃|C(?![A-Za-z])|도(?![가-힣]))"
 )
 #: A temperature the source states in words: room temperature only (a place
 #: such as "the fridge" or "on ice" states no temperature value).

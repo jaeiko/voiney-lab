@@ -118,6 +118,21 @@ class OneValueTests(_Rule, unittest.TestCase):
                 self.assertIs(plan.action, CuratedProtocolAction.CLARIFY_PARAMETER)
                 self.assertEqual(self.session.last_front_rule, "reference_value")
 
+    def test_a_degree_printed_as_a_superscript_zero_or_a_letter_o(self) -> None:
+        # The CDC PulseNet method of the DS-2 regression set prints "50⁰C";
+        # scanned methods often "37 oC".
+        fixture = build_fixture(
+            protocol_id="lane-vt-degrees", title="Fictional degrees", steps=(
+                "1 Shake tubes gently at 50 RPM in 50⁰C shaker-incubator for 15 minutes.",
+                "2 Continuously stir the suspension at 37 oC for 5 min.",
+                "3 Record the result.",
+            ),
+        )
+        for index, words in ((0, "이 단계의 교반 온도는 50°C예요."), (1, "이 단계의 교반 온도는 37°C예요.")):
+            with self.subTest(step=index + 1):
+                self.open(index, fixture=fixture)
+                self.assertEqual(self.ask("그거 몇 도야?").display_text, words)
+
     def test_the_front_rule_plans_it_as_the_rules_do(self) -> None:
         self.open(1, fixture=notes_fixture())
         front = self.ask("그거 얼마나 넣어?", front=True)
