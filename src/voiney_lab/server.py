@@ -157,6 +157,7 @@ from voiney_lab.llm_router import (
     screen_history_turn,
 )
 from voiney_lab.model_providers import RoleModel, chat_client
+from voiney_lab import source_figures
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
     route_curated_runtime_turn,
@@ -3717,6 +3718,54 @@ def export_experiment_report(report_id:str,format_name:str):
     )
 
 
+@app.get("/api/protocols/{protocol_id}/revisions/{revision_id}/figures/{figure_id}")
+def get_protocol_source_figure(protocol_id:str,revision_id:str,figure_id:str):
+    """One figure cut from the uploaded PDF, same-origin, hash-labelled (lane WV, decision 1)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None and candidate.protocol_id==protocol_id:
+            fixture=candidate
+        else:
+            catalog,store=_open_protocol_catalog()
+            try:
+                fixture=catalog.load_executable_fixture(protocol_id)
+            finally:
+                store.close()
+        if (
+            fixture.revision_id!=revision_id
+            or fixture.source_pdf_path is None
+            or fixture.source_pdf_sha256 is None
+        ):
+            raise ProtocolCatalogNotFoundError("Protocol figure is unknown.")
+        found=source_figures.figure_content(
+            fixture.source_pdf_path,fixture.source_pdf_sha256,figure_id)
+        if found is None:
+            raise ProtocolCatalogNotFoundError("Protocol figure is unknown.")
+        figure,content=found
+        if hashlib.sha256(content).hexdigest()!=figure.sha256:
+            raise ProtocolCatalogUnavailableError("Protocol figure identity changed.")
+        return Response(
+            content=content,
+            media_type=figure.mime_type,
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":f'inline; filename="{figure.figure_id}.png"',
+                "X-Protocol-Source-SHA256":str(fixture.source_pdf_sha256),
+                "X-Protocol-Asset-SHA256":figure.sha256,
+                "X-Protocol-Source-Page":str(figure.source_page),
+                "X-Protocol-Visual-Kind":"source_figure",
+            },
+        )
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get(
     "/api/protocols/{protocol_id}/revisions/{revision_id}/source-pages/{source_page}"
 )
@@ -4710,7 +4759,92 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
         "translation_pending":_translation_pending(fixture),
         "repeat_round":round_status() if callable(round_status) else None,
         "open_question":open_question() if callable(open_question) else None,
+        # Lane WV, decision 1: the step's own figures, cut from the uploaded
+        # PDF -- the list once its pages are cut, None while they are being.
+        "source_figures":_screen_source_figures(curated),
     }
+
+
+def _screen_source_figures(curated:Any)->list[dict[str,Any]]|None:
+    """The current step's source figures for the screen, from the cache only."""
+
+    fixture=getattr(curated,"fixture",None)
+    index=getattr(curated,"current_index",None)
+    if fixture is None or not isinstance(index,int) or not (
+        getattr(curated,"active",False)
+        or getattr(curated,"workflow_status",None) in {"preview","ready"}
+    ):
+        return []
+    figures=source_figures.cached_figures_for_step(fixture,index)
+    if figures is None:
+        return None
+    return [
+        figure.public_dict(
+            protocol_id=fixture.protocol_id,revision_id=fixture.revision_id,
+            source_sha256=str(fixture.source_pdf_sha256),
+        ) for figure in figures
+    ]
+
+
+async def _send_source_figures(
+    session:ListenerSession,curated:CuratedProtocolSession,
+    send:Callable[...,Awaitable[Any]],*,configuration_id:int|None,
+)->None:
+    """Cut the current step's pages in a thread and send the figures once (lane WV).
+
+    Sent as ``protocol.figures.state`` for the step the pages were cut for;
+    the page draws it only while that step is still the one shown. Nothing
+    is sent when the session moved on, and nothing here changes state.
+    """
+
+    fixture=curated.fixture
+    index=curated.current_index
+    if getattr(fixture,"source_pdf_path",None) is None:
+        return
+    step=fixture.steps[index] if 0<=index<len(fixture.steps) else None
+    if step is None:
+        return
+    try:
+        figures=await asyncio.to_thread(source_figures.figures_for_step,fixture,index)
+    except Exception as exc:  # noqa: BLE001 - a picture is never worth a failed turn
+        log.warning("source figures: cut failed error=%s",type(exc).__name__)
+        return
+    if (
+        not session.active or curated.current_index!=index
+        or session.accepted_configuration_id!=configuration_id
+    ):
+        return
+    try:
+        await send(
+            "protocol.figures.state",
+            configuration_id=configuration_id,
+            protocol_id=fixture.protocol_id,revision_id=fixture.revision_id,
+            source_document_hash=fixture.source_pdf_sha256,
+            step_id=step.step_id,step_label=step.source_label,
+            figures=[
+                figure.public_dict(
+                    protocol_id=fixture.protocol_id,revision_id=fixture.revision_id,
+                    source_sha256=str(fixture.source_pdf_sha256),
+                ) for figure in figures
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 - a closed page misses a redraw
+        log.info("source figures: send skipped error=%s",type(exc).__name__)
+
+
+def _queue_source_figures(
+    session:ListenerSession,curated:CuratedProtocolSession,
+    send:Callable[...,Awaitable[Any]],*,force:bool=False,
+)->None:
+    """After a fixture state: cut and send the step's figures when not yet cut."""
+
+    fixture=getattr(curated,"fixture",None)
+    if fixture is None or getattr(fixture,"source_pdf_path",None) is None:
+        return
+    if not force and source_figures.cached_figures_for_step(fixture,curated.current_index) is not None:
+        return
+    session.track_visual_task(asyncio.create_task(_send_source_figures(
+        session,curated,send,configuration_id=session.accepted_configuration_id)))
 
 
 #: Statuses that would call a stored machine translation something else.
@@ -7809,6 +7943,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             state=curated.state(spoken_summary=plan.spoken_summary),
             screen=curated_screen_fields(curated),
             action=plan.action.value)
+        _queue_source_figures(session,curated,current_text)
         ended=_experiment_ended_event(
             session,curated,plan,
             report=(
@@ -8081,7 +8216,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "approved_visual":"original_source",
                     "no_visual":"no_visual",
                 }[visual_output.preferred_class]
-            if existing_visual is None:
+            if plan.visual_kind=="source_figure":
+                # Lane WV, decision 1: the step's own figures are on the
+                # screen (the fixture state carried them, or they are sent
+                # once cut); nothing else is looked for.
+                _queue_source_figures(session,curated,current_text,force=True)
+            elif existing_visual is None:
                 # Lane DI (2026-10-08): the xAI web-image search and image
                 # generation are gone (lane WV builds their successor). The
                 # PDF's own visual is the only one shown, so a request for
@@ -9017,6 +9157,9 @@ async def voice_socket(websocket:WebSocket):
                         screen=curated_screen_fields(session.curated_protocol_session),
                         action="attached",
                     ))
+                    _queue_source_figures(
+                        session,session.curated_protocol_session,
+                        lambda kind,**fields: websocket.send_text(event(kind,**fields)))
                 await websocket.send_text(event("session.started",state=session.state.value,
                                                 pipeline=pipeline))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,

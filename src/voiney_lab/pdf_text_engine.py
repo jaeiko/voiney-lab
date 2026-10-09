@@ -39,6 +39,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -133,6 +134,49 @@ class PdfImageBox(NamedTuple):
     y0: float
     x1: float
     y1: float
+
+
+class PdfImageInfo(NamedTuple):
+    """One placed picture with the size of the bytes behind it (lane WV).
+
+    ``xref`` is 0 for an inline image. ``width_px``/``height_px`` are the
+    picture's own pixel size: a 2-by-2 picture stretched over a card is a
+    fill, not a figure. Geometry only; nothing here reads a word.
+    """
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    xref: int
+    width_px: int
+    height_px: int
+
+
+class PdfPageImages(NamedTuple):
+    """The pictures placed on one page, with the page's size in points."""
+
+    page_number: int
+    width: float
+    height: float
+    images: tuple[PdfImageInfo, ...]
+
+
+class PdfDocumentImages(NamedTuple):
+    """The requested pages' pictures, and the xrefs that repeat across the document.
+
+    ``repeated_xrefs`` are the pictures placed on three or more pages -- a
+    logo, a running header -- so a caller can leave them out of the figures.
+    """
+
+    pages: tuple[PdfPageImages, ...]
+    repeated_xrefs: frozenset[int]
+
+
+#: Longest side, in pixels, a cropped figure is rendered at.
+FIGURE_RENDER_MAX_SIDE_PX = 1000
+#: The most a crop is enlarged beyond 72 dpi; a thumbnail stays a thumbnail.
+FIGURE_RENDER_MAX_SCALE = 3.0
 
 
 @dataclass(frozen=True)
@@ -413,6 +457,85 @@ def render_page_png_in_process(
         document.close()
 
 
+def page_images_in_process(
+    path: str | Path, page_numbers: Sequence[int]
+) -> PdfDocumentImages:
+    """Where the pictures sit on the given pages, and which xrefs repeat (lane WV)."""
+
+    import pymupdf
+
+    document = pymupdf.open(Path(path), filetype="pdf")
+    try:
+        if document.needs_pass and not document.authenticate(""):
+            raise PdfEngineDocumentError("encrypted")
+        wanted = sorted({int(number) for number in page_numbers})
+        if any(not 1 <= number <= document.page_count for number in wanted):
+            raise PdfEngineDocumentError("page_out_of_range")
+        counts: dict[int, int] = {}
+        for index in range(document.page_count):
+            for xref in {item[0] for item in document[index].get_images(full=True)}:
+                if xref:
+                    counts[xref] = counts.get(xref, 0) + 1
+        pages: list[PdfPageImages] = []
+        for number in wanted:
+            page = document[number - 1]
+            found: list[PdfImageInfo] = []
+            for info in page.get_image_info(xrefs=True):
+                x0, y0, x1, y1 = info["bbox"]
+                found.append(PdfImageInfo(
+                    round(float(x0), 2), round(float(y0), 2),
+                    round(float(x1), 2), round(float(y1), 2),
+                    int(info.get("xref") or 0),
+                    int(info.get("width") or 0), int(info.get("height") or 0),
+                ))
+            pages.append(PdfPageImages(
+                number, round(page.rect.width, 2), round(page.rect.height, 2),
+                tuple(found),
+            ))
+        return PdfDocumentImages(
+            tuple(pages), frozenset(xref for xref, n in counts.items() if n >= 3),
+        )
+    finally:
+        document.close()
+
+
+def render_clips_png_in_process(
+    path: str | Path,
+    clips: Sequence[tuple[int, tuple[float, float, float, float]]],
+    *,
+    max_side_px: int = FIGURE_RENDER_MAX_SIDE_PX,
+) -> tuple[bytes, ...]:
+    """Each clip (page number, points box) as PNG bytes, in memory (lane WV).
+
+    A clip is rendered at the scale that fits ``max_side_px`` on its longer
+    side, at most ``FIGURE_RENDER_MAX_SCALE`` times 72 dpi and never below it.
+    """
+
+    import pymupdf
+
+    document = pymupdf.open(Path(path), filetype="pdf")
+    try:
+        if document.needs_pass and not document.authenticate(""):
+            raise PdfEngineDocumentError("encrypted")
+        out: list[bytes] = []
+        for page_number, box in clips:
+            if not 1 <= int(page_number) <= document.page_count:
+                raise PdfEngineDocumentError("page_out_of_range")
+            page = document[int(page_number) - 1]
+            rect = pymupdf.Rect(*(float(value) for value in box)) & page.rect
+            if rect.is_empty or rect.width < 1 or rect.height < 1:
+                raise PdfEngineDocumentError("clip_out_of_range")
+            longer = max(rect.width, rect.height)
+            scale = max(1.0, min(FIGURE_RENDER_MAX_SCALE, max_side_px / longer))
+            pixmap = page.get_pixmap(
+                matrix=pymupdf.Matrix(scale, scale), clip=rect, alpha=False
+            )
+            out.append(pixmap.tobytes("png"))
+        return tuple(out)
+    finally:
+        document.close()
+
+
 def _document_payload(document: EngineDocument) -> dict[str, object]:
     return {
         "status": "ok",
@@ -479,6 +602,36 @@ def main() -> int:
                 request["path"], int(request["page_number"]), int(request["dpi"])
             )
             reply = {"status": "ok", "png_base64": base64.b64encode(png).decode("ascii")}
+        elif operation == "images":
+            found = page_images_in_process(
+                request["path"], [int(number) for number in request["page_numbers"]]
+            )
+            reply = {
+                "status": "ok",
+                "repeated_xrefs": sorted(found.repeated_xrefs),
+                "pages": [
+                    {
+                        "page_number": page.page_number,
+                        "width": page.width,
+                        "height": page.height,
+                        "images": [list(image) for image in page.images],
+                    }
+                    for page in found.pages
+                ],
+            }
+        elif operation == "clips":
+            pngs = render_clips_png_in_process(
+                request["path"],
+                [
+                    (int(clip["page_number"]), tuple(float(v) for v in clip["box"]))
+                    for clip in request["clips"]
+                ],
+                max_side_px=int(request.get("max_side_px") or FIGURE_RENDER_MAX_SIDE_PX),
+            )
+            reply = {
+                "status": "ok",
+                "pngs_base64": [base64.b64encode(png).decode("ascii") for png in pngs],
+            }
         else:
             raise ValueError("unknown operation")
     except PdfEngineDocumentError as error:
@@ -650,6 +803,95 @@ def render_page_png(
     if not png.startswith(b"\x89PNG\r\n\x1a\n"):
         raise PdfEngineError("PDF engine returned an unusable result.")
     return png
+
+
+def _parse_image_info(raw: object) -> PdfImageInfo:
+    if (
+        not isinstance(raw, list)
+        or len(raw) != 7
+        or not all(
+            isinstance(item, (int, float)) and not isinstance(item, bool)
+            for item in raw[:4]
+        )
+        or not all(isinstance(item, int) and not isinstance(item, bool) for item in raw[4:])
+    ):
+        raise PdfEngineError("PDF engine returned an unusable result.")
+    return PdfImageInfo(*(float(item) for item in raw[:4]), *(int(item) for item in raw[4:]))
+
+
+def page_images(path: str | Path, page_numbers: Sequence[int]) -> PdfDocumentImages:
+    """The pictures placed on the given pages, read in a child process (lane WV)."""
+
+    payload = _run_worker(
+        {
+            "operation": "images",
+            "path": str(path),
+            "page_numbers": [int(number) for number in page_numbers],
+            "address_space_bytes": PDF_WORKER_ADDRESS_SPACE_BYTES,
+        }
+    )
+    pages = payload.get("pages")
+    repeated = payload.get("repeated_xrefs")
+    if (
+        not isinstance(pages, list)
+        or not isinstance(repeated, list)
+        or any(not isinstance(item, int) or isinstance(item, bool) for item in repeated)
+    ):
+        raise PdfEngineError("PDF engine returned an unusable result.")
+    parsed: list[PdfPageImages] = []
+    for page in pages:
+        if (
+            not isinstance(page, dict)
+            or not isinstance(page.get("page_number"), int)
+            or not isinstance(page.get("width"), (int, float))
+            or not isinstance(page.get("height"), (int, float))
+            or not isinstance(page.get("images"), list)
+        ):
+            raise PdfEngineError("PDF engine returned an unusable result.")
+        parsed.append(PdfPageImages(
+            int(page["page_number"]), float(page["width"]), float(page["height"]),
+            tuple(_parse_image_info(image) for image in page["images"]),
+        ))
+    return PdfDocumentImages(tuple(parsed), frozenset(repeated))
+
+
+def render_clips_png(
+    path: str | Path,
+    clips: Sequence[tuple[int, tuple[float, float, float, float]]],
+    *,
+    max_side_px: int = FIGURE_RENDER_MAX_SIDE_PX,
+) -> tuple[bytes, ...]:
+    """Each clip as PNG bytes, rendered in a child process; kept in memory only."""
+
+    if not clips:
+        return ()
+    payload = _run_worker(
+        {
+            "operation": "clips",
+            "path": str(path),
+            "clips": [
+                {"page_number": int(page_number), "box": [float(v) for v in box]}
+                for page_number, box in clips
+            ],
+            "max_side_px": int(max_side_px),
+            "address_space_bytes": PDF_RENDER_ADDRESS_SPACE_BYTES,
+        }
+    )
+    encoded = payload.get("pngs_base64")
+    if not isinstance(encoded, list) or len(encoded) != len(clips):
+        raise PdfEngineError("PDF engine returned an unusable result.")
+    pngs: list[bytes] = []
+    for item in encoded:
+        if not isinstance(item, str):
+            raise PdfEngineError("PDF engine returned an unusable result.")
+        try:
+            png = base64.b64decode(item, validate=True)
+        except ValueError as error:
+            raise PdfEngineError("PDF engine returned an unusable result.") from error
+        if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise PdfEngineError("PDF engine returned an unusable result.")
+        pngs.append(png)
+    return tuple(pngs)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess
