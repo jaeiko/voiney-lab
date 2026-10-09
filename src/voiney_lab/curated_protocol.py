@@ -2890,7 +2890,9 @@ FRONT_RULES: dict[str, str] = {
     "prestart_question": "the reply to a question asked before the start -- a "
                          "source condition or a person-decided count, '나중에' or "
                          "'다 나중에'; the last reply starts the experiment "
-                         "(lane CF, decision 4)",
+                         "(lane CF, decision 4); '그냥 시작해', '질문은 나중에', "
+                         "'바로 시작' leave the rest for their steps and start it "
+                         "(lane VX, decision 2)",
     "step_revert": "'이전 단계로 돌아가', '방금 완료 취소', 'N단계 완료 취소해 줘', "
                    "and 'N단계로 돌아가' to an earlier step that is not a return "
                    "within the repeat stated here: asked once, 'N단계 완료를 "
@@ -9850,9 +9852,20 @@ class CuratedProtocolSession:
         r"^(?:다|전부|모두|나머지(?:는)?(?:\s*다)?|나머지\s*다)\s*(?:나중에|그때|그\s*단계에서)"
         r"\s*(?:물어\s*(?:봐)?(?:\s*줘)?|할게요?|정할게요?|답할게요?)?$"
     )
+    #: Lane VX, decision 2: "그냥 시작해", "질문은 나중에", "바로 시작" -- every
+    #: question still to ask is left for its step, and the experiment starts.
+    #: Asked ("그냥 시작해도 돼?") it is no answer.
+    _PRESTART_START_NOW = re.compile(
+        r"^(?:(?:그냥|바로|일단|우선)\s*시작(?:해|해요|해\s*줘|해\s*주세요|하자|할게요?|합시다|하죠)?"
+        r"|질문(?:은|들은)?\s*(?:다\s*|전부\s*|모두\s*)?나중에"
+        r"(?:\s*(?:해\s*줘|해|하자|할게요?|물어\s*봐(?:\s*줘)?|하고\s*(?:그냥\s*)?시작(?:해|해\s*줘|하자)?))?"
+        r"|질문(?:은)?\s*(?:말고|없이|빼고)\s*(?:그냥\s*|바로\s*)?시작(?:해|해\s*줘|하자|할게요?)?)$"
+    )
 
     def _prestart_reply(self, transcript: str) -> int | str | None:
         said = " ".join(transcript.split()).strip(" .!。")
+        if self._PRESTART_START_NOW.fullmatch(said):
+            return "start_now"
         if self._PRESTART_ALL_LATER.fullmatch(said):
             return "all_later"
         if self._PRESTART_LATER.fullmatch(said):
@@ -9904,11 +9917,14 @@ class CuratedProtocolSession:
         index = int(state["index"])
         item = items[index]
         utterance = " ".join(transcript.split())
-        if reply == "all_later":
+        if reply in {"all_later", "start_now"}:
             for rest in items[index:]:
                 state["deferred"].append(rest["id"])
             index = len(items)
-            lead = "나머지는 그 단계에서 여쭤볼게요."
+            lead = (
+                "남은 질문은 그 단계에서 여쭤볼게요." if reply == "start_now"
+                else "나머지는 그 단계에서 여쭤볼게요."
+            )
         else:
             if reply == "later":
                 state["deferred"].append(item["id"])
@@ -16449,6 +16465,11 @@ class CuratedProtocolSession:
                     # ("영 점 오 밀리리터" is 0.5 mL), for the readback.
                     "values": [value.public_dict() for value in measured_values(content)],
                 }
+                if intent.note_confirmed:
+                    # Lane VX, decision 3: said "네" to in the 바로 확인 way, the
+                    # value is the experimenter's confirmed one already; the
+                    # end-of-experiment review does not ask it again.
+                    note_record["experimenter_confirmed"] = True
                 self._last_record = {
                     "turn_id": turn_id,
                     "generation": generation,

@@ -5585,6 +5585,10 @@ def _record_experiment_report_plan(
         payload["workspace_event_key"]=(
             f"voice-{generation}-{turn_id}-observation-{plan.action.value}"
         )
+        if plan.note_record.get("experimenter_confirmed") is True:
+            # Lane VX, decision 3: the value was said "네" to in the 바로
+            # 확인 way; the end-of-experiment review does not ask it again.
+            payload["experimenter_confirmed"]=True
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,
