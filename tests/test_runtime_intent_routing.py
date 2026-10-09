@@ -144,7 +144,10 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
         routed = self.route(workflow, "이 장비 사진을 찾아줘.")
         self.assertEqual(routed.arbitration.intent, RequestIntent.VISUAL)
         self.assertEqual(routed.plan.action, CuratedProtocolAction.VISUAL_REQUEST)
-        self.assertEqual(routed.plan.visual_intent, "lab_equipment_image")
+        # Lane WV (2026-10-09): "찾아줘" asks the web; the source figure, if
+        # any, is shown first and the lookup is the server's to run.
+        self.assertEqual(routed.plan.visual_kind, "web_lookup")
+        self.assertEqual(routed.plan.visual_intent, "web_explanation")
         self.assertFalse(routed.state_mutation)
 
     def test_timer_start_classifier_accepts_korean_english_and_mixed_script(self) -> None:

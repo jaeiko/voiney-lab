@@ -31,6 +31,7 @@ from voiney_lab.experiment_protocol_analysis import (
     parse_protocol_analysis_response,
 )
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab import source_figures
 from voiney_lab.completion_intent import (
     CompletionIntentDecision,
     classify_korean_completion_command,
@@ -2548,6 +2549,118 @@ _WEB_VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:원본|실제|인터넷|웹).*(?:사진|이미지).*(?:보여|찾아)"),
     re.compile(r"(?:find|show).*(?:real|web|source).*(?:photo|image)"),
 )
+
+# --- Lane WV (2026-10-09): pictures and the web, the uploaded protocol first --
+#
+# Three readings of a picture request, each read by rule and none changing
+# state. Decision 1, a source figure: "그림 보여줘", "이 단계 그림 있어?",
+# "사진 보여줘" show the pictures printed on the step's own page. Decision 2,
+# the web: "웹에서 찾아봐", "X가 어떻게 생겼어?", "실제 사진" ask for an
+# explanation or a photograph from the web, shown with its source and never
+# used for a value or a safety instruction. Decision 3, a drawing: "그림으로
+# 그려 줘" asks for a diagram drawn from the step's words.
+_FIGURE_PRESENCE_PATTERNS = (
+    re.compile(
+        r"(?:그림|사진|이미지|삽화|시각\s*자료|도식|figure|image|picture|photo)"
+        r"(?:이|가|은|는|도)?\s*(?:있(?:어|나|니|을까|나요|습니까|어요)|없(?:어|나|니|어요)|"
+        r"있는지|is\s+there|are\s+there)"
+    ),
+    re.compile(r"(?:is|are)\s+there\s+(?:a|any)\s+(?:figure|image|picture|photo)"),
+)
+_DRAWING_REQUEST_PATTERNS = (
+    re.compile(r"(?:그림|도식|도표|그래픽|다이어그램|스케치)(?:으로|로)?\s*(?:그려|그림\s*그려|만들어)"),
+    re.compile(r"그려\s*(?:줘|주세요|줄래|봐|보여)"),
+    re.compile(r"(?:draw|sketch)\b.*(?:this|the|a|me)|\bdiagram\b.*(?:draw|make|show)|\b(?:draw|sketch)\s+(?:it|this|a|me)"),
+)
+_WEB_LOOKUP_REQUEST_PATTERNS = (
+    re.compile(r"(?:웹|인터넷|구글|온라인|넷)(?:에서|으로|로)?\s*(?:찾아|검색|알아|확인)"),
+    re.compile(r"(?:검색해|찾아봐|찾아\s*봐|찾아\s*줘|찾아보)"),
+    re.compile(r"(?:어떻게\s*생겼|어떤\s*모양|어떻게\s*생긴|생김새|모양이\s*어때)"),
+    re.compile(r"(?:실제|진짜|실물)\s*(?:사진|모습|이미지|그림)"),
+    re.compile(r"(?:search|look\s*up|look\s+(?:it\s+)?up|google)\b"),
+    re.compile(r"what\s+does\s+(?:it|this|that|an?\s+\w+|the\s+\w+)\s+look\s+like|real\s+(?:photo|picture)"),
+)
+#: The thing asked about in "X가 어떻게 생겼어?" / "X 실제 사진 보여줘" when
+#: X is not a term the protocol table knows: the words before the particle.
+_APPEARANCE_SUBJECT = re.compile(
+    r"^(?P<subject>[^?？]+?)\s*(?:이|가|은|는|을|를|의)?\s*"
+    r"(?:실제|진짜|실물)?\s*(?:사진|모습|이미지|그림)?\s*(?:이|가|은|는|을|를)?\s*"
+    r"(?:어떻게\s*생겼|어떤\s*모양|어떻게\s*생긴|생김새|모양이\s*어때|보여|찾아|검색)"
+)
+_WEB_SUBJECT_STOP_WORDS = frozenset({
+    "이게", "이건", "이것", "그게", "그건", "그것", "그거", "저게", "저것", "얘", "이",
+    "그", "저", "이거", "요거", "요게", "현재", "지금", "단계", "이 단계", "현재 단계",
+    "웹에서", "인터넷에서", "웹", "인터넷", "더", "좀", "다시", "한번", "한 번", "빨리",
+    "그냥", "여기", "거기", "뭐", "뭘", "무엇을", "뭔가", "것", "거", "뭐가", "뭐를",
+})
+#: Words said before the thing ("좀 더 찾아봐"), never the thing itself.
+_WEB_SUBJECT_LEAD = re.compile(r"^(?:(?:더|좀|다시|한번|한\s*번|그냥|빨리|얼른)\s*)+")
+
+
+#: A question for a value: never a picture request, whatever picture word
+#: it carries ("그림에 나온 온도가 몇 도야?" is answered from the source).
+_VALUE_QUESTION = re.compile(
+    r"얼마|몇\s*(?:분|도|번|개|회|시간|초|ml|밀리|마이크로|퍼센트|%)|몇\s*(?:이|가|이야|인가|인지)|"
+    r"농도|온도|부피|용량|시간\s*(?:은|이|동안)|분\s*동안|"
+    r"\bhow\s+(?:much|many|long|hot)\b|\btemperature\b|\bconcentration\b|\bvolume\b"
+)
+LANE_WV_PICTURE_KINDS = ("source_figure", "web_lookup", "drawn_diagram")
+
+
+def asked_about_values(transcript: str) -> bool:
+    """Whether the turn asks for a quantity, a time, a temperature or a count."""
+
+    return _VALUE_QUESTION.search(_utterance_key(transcript)) is not None
+
+
+def picture_request_kind(transcript: str) -> str | None:
+    """Which lane WV picture request a turn is, or None.
+
+    ``"drawn_diagram"`` for a drawing asked for, ``"web_lookup"`` for the
+    web (an explanation, a photograph, "how does it look"), ``"source_figure"``
+    for the step's own figures. A question about the protocol's values is
+    none of these, whatever picture word it carries.
+    """
+
+    key = _utterance_key(transcript)
+    if not key:
+        return None
+    if any(pattern.search(key) for pattern in _DRAWING_REQUEST_PATTERNS):
+        return "drawn_diagram"
+    if any(pattern.search(key) for pattern in _WEB_LOOKUP_REQUEST_PATTERNS):
+        return "web_lookup"
+    if any(pattern.search(key) for pattern in _FIGURE_PRESENCE_PATTERNS):
+        return "source_figure"
+    if (
+        any(pattern.search(key) for pattern in _VISUAL_REQUEST_PATTERNS)
+        or any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
+    ):
+        return "source_figure"
+    return None
+
+
+def web_lookup_subject(transcript: str) -> str | None:
+    """The thing a web lookup asks about, as the person said it, or None.
+
+    "써모믹서가 어떻게 생겼어?" -> "써모믹서"; a pronoun ("이게", "그거") or
+    nothing before the question is None, so the step's own words decide.
+    """
+
+    said = " ".join(transcript.split()).strip(" .!?。？")
+    match = _APPEARANCE_SUBJECT.match(said)
+    if match is None:
+        return None
+    subject = match.group("subject").strip(" ,")
+    subject = re.sub(r"^(?:이|그|저|현재|지금)\s+단계(?:의|에서|에)?\s*", "", subject)
+    subject = re.sub(r"^(?:웹|인터넷|구글|온라인)(?:에서|으로|로)?\s*", "", subject).strip()
+    subject = _WEB_SUBJECT_LEAD.sub("", subject).strip(" ,")
+    if (
+        not subject or subject in _WEB_SUBJECT_STOP_WORDS or len(subject) > 40
+        or not re.search(r"[가-힣A-Za-z]{2}", subject)
+    ):
+        return None
+    return subject
+
 _TERM_QUESTION_PATTERNS = (
     (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅|엠빅|암비크", re.I), "ambic"),
     (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물|에이치\s*피\s*엘\s*씨\s*워터|에이치피엘씨\s*워터", re.I), "hplc_water"),
@@ -2900,6 +3013,13 @@ FRONT_RULES: dict[str, str] = {
                    "취소하고 N단계로 돌아갈까요?'; a yes goes back and the revert "
                    "is recorded beside the completions, which stay (lane CF, "
                    "decision 3)",
+    "visual_request": "a picture asked for -- the step's own figure ('그림 보여줘', "
+                      "'이 단계 그림 있어?', '사진 보여줘'), a web lookup of a thing "
+                      "named ('X가 어떻게 생겼어?', '실제 사진', '웹에서 찾아봐'), or a "
+                      "drawing ('그림으로 그려 줘') -- read by rule, router or not, "
+                      "and never a state change; the server shows the source's "
+                      "figure first and runs the web or the drawing after the "
+                      "answer (lane WV, decision 4)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2915,6 +3035,8 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
     CuratedProtocolAction.PREVIEW_STEP: "step_lookup",
     CuratedProtocolAction.NEXT_INFORMATION: "step_lookup",
     CuratedProtocolAction.FULL_DETAIL: "step_lookup",
+    # Lane WV, decision 4: a picture request is the rules' own turn.
+    CuratedProtocolAction.VISUAL_REQUEST: "visual_request",
 }
 #: The protocol-query scopes that are server values (decision 3); purpose,
 #: overview, materials and the like stay with the model.
@@ -3648,6 +3770,10 @@ CONFIRM_MODES = ("readback", "confirm", "quiet")
 QUESTION_TIMINGS = ("before_start", "during")
 CONFIRM_MODE_WORDS = {"readback": "되읽기", "confirm": "바로 확인", "quiet": "조용히"}
 QUESTION_TIMING_WORDS = {"before_start": "시작 전에 묻기", "during": "실험 중에 묻기"}
+#: Lane WV, decision 2: whether the web is looked at for an explanation or a
+#: photograph. On by default; the experimenter turns it off ("웹 찾아보기 꺼
+#: 줘") and the server keeps the choice with the other settings.
+WEB_LOOKUP_VALUES = ("on", "off")
 _SETTING_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래))?"
 _SETTING_DO = rf"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|켜|변경해|전환해){_SETTING_POLITE})?"
 _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
@@ -3657,6 +3783,10 @@ _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
      {"confirm_mode": "readback"}),
     (re.compile(rf"^되읽기(?:\s*모드)?{_SETTING_DO}$"), {"confirm_mode": "readback"}),
     (re.compile(rf"^(?:조용히|조용한)\s*모드{_SETTING_DO}$"), {"confirm_mode": "quiet"}),
+    (re.compile(rf"^웹\s*(?:찾아보기|검색|조회)(?:은|는|을|를)?\s*(?:꺼|끄|그만\s*해|하지\s*마){_SETTING_POLITE}$"),
+     {"web_lookup": "off"}),
+    (re.compile(rf"^웹\s*(?:찾아보기|검색|조회)(?:은|는|을|를)?\s*(?:켜|다시\s*켜){_SETTING_POLITE}$"),
+     {"web_lookup": "on"}),
     (re.compile(
         rf"^(?:(?:조건|분기|횟수|조건\s*분기)\s*(?:와|랑|하고)?\s*)*(?:횟수\s*)?질문(?:은|는|을)?\s*"
         rf"(?:실험\s*(?:중에|하면서)|그\s*단계에서|단계마다)\s*(?:물어\s*(?:봐)?|해){_SETTING_POLITE}$"
@@ -5597,6 +5727,45 @@ def classify_curated_control_intent(
             coreference_status=CoreferenceStatus.RESOLVED.value,
             coreference_reason="recent_admitted_protocol_purpose",
         )
+    # Lane WV: a picture asked for -- the step's own figure, a web lookup
+    # of something named, or a drawing -- is read here, before a "how does
+    # it look" is taken for a reference with nothing to resolve.
+    picture_kind = picture_request_kind(key)
+    if picture_kind is not None and not asked_about_values(key):
+        subject = web_lookup_subject(transcript) if picture_kind == "web_lookup" else None
+        # "그 사진 보여줘" / "그거 어떻게 생겼어?" with nothing recent to point
+        # at is asked back below, as before; a bare "웹에서 찾아봐" names
+        # nothing either and keeps the older reading (the question just
+        # asked, searched on the web, or asked back when there is none).
+        unresolved_reference = (
+            subject is None and not normalized_entities
+            and _COREFERENCE_REFERENCE.search(key) is not None
+            and coreference.status is not CoreferenceStatus.RESOLVED
+        )
+        bare_web = picture_kind == "web_lookup" and subject is None and not normalized_entities
+        if not unresolved_reference and not bare_web:
+            return CuratedControlIntent(
+                intent_kind="visual_request",
+                action=CuratedProtocolAction.VISUAL_REQUEST,
+                target_step="authoritative_current_step",
+                visual_requested=True,
+                visual_kind=picture_kind,
+                visual_intent={
+                    "source_figure": "source_figure",
+                    "web_lookup": "web_explanation",
+                    "drawn_diagram": "drawn_diagram",
+                }[picture_kind],
+                requested_entity=normalized_entity or subject,
+                requested_entities=normalized_entities or ((subject,) if subject else ()),
+                resolved_entity=normalized_entity,
+                transcript_correction_note=correction_note,
+                transcript_corrections=corrections,
+                question_dimensions=dimensions,
+                language=language,
+                normalized_transcript=key,
+                coreference_status=coreference.status.value,
+                coreference_reason=coreference.reason_code,
+            )
     if (
         not normalized_entities
         and _COREFERENCE_REFERENCE.search(key)
@@ -7563,6 +7732,8 @@ class CuratedProtocolSession:
         #: the start.
         self.confirm_mode: str = "readback"
         self.question_timing: str = "during"
+        #: Lane WV, decision 2: "on" unless the experimenter turned it off.
+        self.web_lookup: str = "on"
         #: The one-turn "0.5 mL로 기록할까요?" of the 바로 확인 way.
         self._pending_note_confirmation: dict[str, Any] | None = None
         #: The questions asked before the start (decision 4): the queue,
@@ -7591,9 +7762,15 @@ class CuratedProtocolSession:
         timing = settings.get("question_timing")
         if timing in QUESTION_TIMINGS:
             self.question_timing = str(timing)
+        web = settings.get("web_lookup")
+        if web in WEB_LOOKUP_VALUES:
+            self.web_lookup = str(web)
 
     def experimenter_settings(self) -> dict[str, str]:
-        return {"confirm_mode": self.confirm_mode, "question_timing": self.question_timing}
+        return {
+            "confirm_mode": self.confirm_mode, "question_timing": self.question_timing,
+            "web_lookup": self.web_lookup,
+        }
 
     @property
     def pending_note_confirmation(self) -> dict[str, Any] | None:
@@ -9565,6 +9742,87 @@ class CuratedProtocolSession:
         first, last = self._range_labels(interval)
         return f"{first}~{last}단계 {required}회를 모두 마쳤어요. ", None
 
+    # --- lane WV: a picture asked for -----------------------------------------
+
+    def source_figures_for_current_step(self) -> tuple[Any, ...]:
+        """The current step's own figures, cut from the uploaded PDF (decision 1)."""
+
+        if not 0 <= self.current_index < len(self.fixture.steps):
+            return ()
+        return source_figures.figures_for_step(self.fixture, self.current_index)
+
+    def web_lookup_subject_words(self, plan: Any, transcript: str) -> str:
+        """What a web lookup is about, for the server: the plan's entity or the words said."""
+
+        return self._picture_subject_words(plan, transcript)
+
+    def _picture_subject_words(self, intent: Any, transcript: str) -> str:
+        """What a web lookup is about, as the person said it or as the source spells it."""
+
+        said = web_lookup_subject(transcript)
+        if said:
+            return said
+        entity = getattr(intent, "resolved_entity", None) or getattr(intent, "requested_entity", None)
+        if entity:
+            korean = _korean_name_said(entity, _utterance_key(transcript))
+            if korean:
+                return korean
+            spelled = _source_spelling(
+                entity, tuple(fact.text for fact in self.fixture.facts_for_step(self.current_index)),
+            )
+            return spelled or entity.replace("_", " ")
+        return "이 단계 내용"
+
+    def _picture_words(
+        self,
+        intent: CuratedControlIntent,
+        source_visual: ProtocolVisualAsset | None,
+        *,
+        language: str,
+        transcript: str,
+    ) -> str:
+        """The words for a lane WV picture request; the source's figure first.
+
+        Decision 1: "그림 보여줘" with a figure on the step's page says the
+        figure is on the screen; without one it says so and names the two
+        other ways. Decisions 2 and 3 are the server's to carry out; the
+        words here are the ones that stand when it does not (the web turned
+        off, no drawing model) and the server replaces them when it acts.
+        """
+
+        figures = self.source_figures_for_current_step()
+        shown = bool(figures) or source_visual is not None
+        kind = intent.visual_kind
+        if language != "ko":
+            lead = "The source figure for this step is on the screen. " if shown else ""
+            if kind == "source_figure":
+                return lead.strip() or "The source has no figure for this step."
+            if kind == "web_lookup":
+                return f"{lead}Web lookup is off; the source stays the reference."
+            return f"{lead}Drawing is off; the source stays the reference."
+        if kind == "source_figure":
+            if shown:
+                count = len(figures) if figures else 1
+                caption = figures[0].caption if figures and figures[0].caption else ""
+                words = "화면에 원문 그림을 띄웠어요." if count == 1 else f"화면에 원문 그림 {count}장을 띄웠어요."
+                if caption and count == 1:
+                    words += f" 원문 설명: {caption}"
+                return words
+            return (
+                "이 단계 원문에는 그림이 없어요. 웹에서 찾아보려면 '웹에서 찾아봐', "
+                "도식이 필요하면 '그림으로 그려 줘'라고 말해 주세요."
+            )
+        lead = "화면에 원문 그림을 띄웠어요. " if shown else ""
+        if kind == "web_lookup":
+            subject = self._picture_subject_words(intent, transcript)
+            if self.web_lookup == "off":
+                return (
+                    f"{lead}웹 찾아보기를 꺼 두셔서 {subject}{_josa(subject, '은', '는')} "
+                    "찾아보지 않았어요. 설정에서 켤 수 있어요."
+                )
+            return f"{lead}{subject}{_josa(subject, '은', '는')} 웹 찾아보기가 꺼져 있어 찾아보지 않았어요. 원문이 기준이에요."
+        return f"{lead}그림 그리기가 꺼져 있어 그리지 않았어요. 원문이 기준이에요."
+
     def _words_plan(
         self,
         words: str,
@@ -9776,6 +10034,24 @@ class CuratedProtocolSession:
                     plan = replace(
                         self._words_plan(
                             f"확인 방식을 '{shown}'{josa_ro(shown)[len(shown):]} 바꿨어요. {words}",
+                            intent_kind="experimenter_setting_changed",
+                        ),
+                        setting_change=dict(setting),
+                    )
+            elif name == "web_lookup":
+                # Lane WV, decision 2.
+                if self.web_lookup == value:
+                    plan = self._words_plan(
+                        "이미 웹 찾아보기가 꺼져 있어요." if value == "off" else "이미 웹 찾아보기가 켜져 있어요.",
+                        intent_kind="experimenter_setting_unchanged",
+                    )
+                else:
+                    self.web_lookup = value
+                    plan = replace(
+                        self._words_plan(
+                            "웹 찾아보기를 껐어요. 설명과 사진은 원문에서만 찾아요."
+                            if value == "off" else
+                            "웹 찾아보기를 켰어요. 설명과 사진은 원문이 먼저이고, 웹 자료는 출처와 함께 화면에 띄워요.",
                             intent_kind="experimenter_setting_changed",
                         ),
                         setting_change=dict(setting),
@@ -17694,7 +17970,13 @@ class CuratedProtocolSession:
         elif command is CuratedProtocolAction.VISUAL_REQUEST:
             step = steps[self.current_index]
             source_visual = self.fixture.visual_for_step(self.current_index)
-            if source_visual is not None:
+            lane_wv_words = (
+                self._picture_words(intent, source_visual, language=language, transcript=transcript)
+                if intent.visual_kind in LANE_WV_PICTURE_KINDS else None
+            )
+            if lane_wv_words is not None:
+                control_text = lane_wv_words
+            elif source_visual is not None:
                 control_text = {
                     "en": f"The verified original visual for step {step.source_label} is shown.",
                     "vi": f"Hình ảnh gốc đã xác minh cho bước {step.source_label} được hiển thị.",
@@ -17768,12 +18050,21 @@ class CuratedProtocolSession:
                 coreference_status=intent.coreference_status,
                 coreference_reason=intent.coreference_reason,
             )
-            if intent.requested_entities:
+            # A question asked beside the picture ("차이를 설명하고 그림도
+            # 보여줘") is still answered from the source; a picture alone
+            # (lane WV) is just the picture.
+            asks_more = any(
+                dimension not in {"visual", "related_knowledge"}
+                for dimension in intent.question_dimensions
+            )
+            if intent.requested_entities and (
+                intent.visual_kind not in LANE_WV_PICTURE_KINDS or asks_more
+            ):
                 envelope=self.protocol_answer_envelope(
                     replace(plan, claim_requests=intent.claim_requests),
                     language=language,
                 )
-                visual_status=(
+                visual_status=lane_wv_words or (
                     "검증된 원본 시각 자료를 함께 표시합니다."
                     if source_visual is not None else
                     "요청하신 시각 자료를 별도로 확인합니다."
@@ -17784,7 +18075,10 @@ class CuratedProtocolSession:
                         f"직접 답변\n{envelope.direct_answer}\n\n"
                         f"시각 자료\n{visual_status}"
                     ),
-                    speech_text=envelope.speech_summary,
+                    speech_text=(
+                        f"{envelope.speech_summary} {lane_wv_words}"
+                        if lane_wv_words else envelope.speech_summary
+                    ),
                     speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
                     primary_text=envelope.direct_answer,
                     source_texts=tuple(fact.text for fact in plan.facts[:8]),
