@@ -201,27 +201,48 @@ echo "REPORT_DB  = $VOINEY_LAB_EXPERIMENT_REPORT_DB"
 echo
 echo "=== Loading curated fixture ==="
 
-python -B - <<'PY'
+# Lane BT, decision 3 (2026-10-09): a fixture that cannot be loaded is that
+# fixture's problem, not the server's. The server leaves an unloaded fixture
+# unrunnable on its own, so the launcher says so loudly and starts anyway;
+# from 2026-10-08 one refused load kept the whole server down. The argument
+# is "true" for --bootstrap-only, which still fails as it always did.
+load_curated_fixture() {
+  python -B - "$1" <<'PY'
 import os
+import sys
 from pathlib import Path
 
-from voiney_lab.curated_protocol import load_curated_protocol_fixture
-from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
-from voiney_lab.experiment_protocol_store import initialize_protocol_store
-from voiney_lab.protocol_catalog import ProtocolCatalog
-
-fixture = load_curated_protocol_fixture(
-    Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_FIXTURE"]),
-    Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE"]),
-    Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF"]),
-)
-
-settings = ProtocolPersistenceSettings.from_environment()
-store = initialize_protocol_store(settings)
+strict = sys.argv[1:] == ["true"]
 try:
-    bootstrap = ProtocolCatalog(store).bootstrap_development_fixture(fixture)
-finally:
-    store.close()
+    from voiney_lab.curated_protocol import load_curated_protocol_fixture
+    from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
+    from voiney_lab.experiment_protocol_store import initialize_protocol_store
+    from voiney_lab.protocol_catalog import ProtocolCatalog
+
+    fixture = load_curated_protocol_fixture(
+        Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_FIXTURE"]),
+        Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE"]),
+        Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF"]),
+    )
+
+    settings = ProtocolPersistenceSettings.from_environment()
+    store = initialize_protocol_store(settings)
+    try:
+        bootstrap = ProtocolCatalog(store).bootstrap_development_fixture(fixture)
+    finally:
+        store.close()
+except Exception as exc:
+    if strict:
+        raise
+    print()
+    print("[WARN] ============================================================")
+    print(
+        "[WARN] 개발 픽스처를 적재하지 못함 — 이 픽스처는 실행할 수 없음: "
+        + type(exc).__name__
+    )
+    print("[WARN]", exc)
+    print("[WARN] ============================================================")
+    sys.exit(0)
 
 print("[OK] LOAD_OK")
 print("protocol_id:", fixture.protocol_id)
@@ -231,11 +252,16 @@ print("steps:", len(fixture.steps))
 print("status:", fixture.status)
 print("materialized:", "existing" if bootstrap.deduplicated else "created")
 PY
+}
 
 if [[ "$BOOTSTRAP_ONLY" == "true" ]]; then
+  load_curated_fixture true
   echo "[OK] Candidate A bootstrap complete; server not started"
   exit 0
 fi
+
+load_curated_fixture false || echo \
+  "[WARN] 개발 픽스처를 적재하지 못함 — 이 픽스처는 실행할 수 없음: 적재 과정 종료 코드 $?"
 
 echo
 echo "=== Starting Voiney Lab ==="
