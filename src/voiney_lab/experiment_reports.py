@@ -1067,6 +1067,11 @@ def record_amendments(events: Sequence[Mapping[str, Any]]) -> dict[str, dict[str
 # checklist. Each confirmation is its own event. A value confirmed carries
 # "실험자 확인" in the report; one left unconfirmed is listed apart under
 # "확인되지 않은 값", and model prose may not state it.
+#
+# Lane VX, decision 3: a value said "네" to when it was recorded, in the 바로
+# 확인 way, is confirmed already -- its observation event says so
+# (``experimenter_confirmed``) -- and is not asked again; a correction made
+# after it takes the confirmation back, as it does a reviewed value's.
 
 REVIEW_CONFIRMED = "report_value_confirmed"
 REVIEW_DEFERRED = "report_review_deferred"
@@ -1092,7 +1097,10 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
             confirmed[str(payload.get("item_id") or "")] = " ".join(str(payload.get("text") or "").split())
     items: list[dict[str, Any]] = []
 
-    def add(prefix: str, event: Mapping[str, Any], kind: str, text: str, **extra: Any) -> None:
+    def add(
+        prefix: str, event: Mapping[str, Any], kind: str, text: str, *,
+        confirmed_when_recorded: bool = False, **extra: Any,
+    ) -> None:
         key = str(event.get("event_key") or "")
         change = amended.get(key, {})
         if change.get("status") == "취소됨":
@@ -1107,7 +1115,9 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
             "source_key": key,
             "corrected": change.get("status") == "정정됨",
             "original": " ".join(text.split()) if change.get("status") == "정정됨" else "",
-            "confirmed": confirmed.get(item_id) == latest,
+            "confirmed": confirmed.get(item_id) == latest or (
+                confirmed_when_recorded and not change
+            ),
             **extra,
         })
 
@@ -1118,7 +1128,10 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
         record = payload.get("step_record") if isinstance(payload.get("step_record"), Mapping) else {}
         if kind == "observation" and wording:
             category = str(event.get("category") or "")
-            extra = {"workspace_event_key": payload.get("workspace_event_key")}
+            extra = {
+                "workspace_event_key": payload.get("workspace_event_key"),
+                "confirmed_when_recorded": payload.get("experimenter_confirmed") is True,
+            }
             if category == "measurement":
                 add("r", event, "측정", wording, **extra)
             elif category == "deviation":

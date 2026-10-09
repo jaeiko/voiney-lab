@@ -162,7 +162,10 @@ class ObservationPromptHoldTests(unittest.TestCase):
             with self.subTest(question=question):
                 session = self._prompted_at("7")
                 answered = self._turn(session, question, 2)
-                self.assertIn(answered.action, QUESTION_ROUTES)
+                # Lane VX, decision 5: "얼마나 걸려?" is the step-time question
+                # on the in-gel sidecar too, read-only like the others.
+                self.assertIn(
+                    answered.action, QUESTION_ROUTES | {CuratedProtocolAction.TIMER_STATUS})
                 self.assertFalse(answered.state_changed)
                 pending = session.pending_observation_confirmation
                 self.assertIsNotNone(pending)

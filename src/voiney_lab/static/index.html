@@ -1933,6 +1933,9 @@ function renderStartSummary(review){
 // Lane PT, decision 4: each step's timer as the server verified it against
 // the source (value and the excerpt it was read from), and each time it
 // could not verify, with the reason. Values and reasons are the server's.
+// Lane VX, decision 4: a value the source states as a minimum, an
+// approximate value or a maximum is shown with the server's word for it
+// ("최소 2시간", "약 16시간", "최대 2시간").
 function renderStepTimers(timers){
  const host=$("protocol-step-timers");if(!host)return;host.replaceChildren();
  const verified=Array.isArray(timers?.verified)?timers.verified:[],refused=Array.isArray(timers?.refused)?timers.refused:[];
@@ -1942,7 +1945,7 @@ function renderStepTimers(timers){
  heading.textContent=verified.length?`단계 타이머 ${verified.length}개 · 원문에서 확인한 시간`:"원문에서 확인한 단계 타이머 없음";group.appendChild(heading);
  for(const item of verified){
   const row=document.createElement("p");row.className="protocol-review-status";
-  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ‘${item.source_literal||""}’${item.source==="step_text"?" · 단계 문장에서 읽음":""} · p.${item.source_page_number??"—"} · 발췌 “${item.source_excerpt||""}”`;
+  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${typeof item.bound_ko==="string"&&item.bound_ko?`${item.bound_ko} `:""}${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ‘${item.source_literal||""}’${item.source==="step_text"?" · 단계 문장에서 읽음":""} · p.${item.source_page_number??"—"} · 발췌 “${item.source_excerpt||""}”`;
   group.appendChild(row);
  }
  if(refused.length){

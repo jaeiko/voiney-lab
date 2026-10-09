@@ -22,6 +22,7 @@ from unittest.mock import patch
 from tests.lane_cb_support import (
     CONDITION_42,
     CONDITION_43,
+    FIRST_HINT,
     Recorded,
     Turns,
     headspace_fixture,
@@ -62,7 +63,9 @@ class ConditionalBranchTests(Turns, unittest.TestCase):
         self.assertEqual(self.label(), "42")
         self.assertTrue(plan.state_changed)
         self.assertTrue(plan.speech_text.endswith(ASK_42), plan.speech_text)
-        self.assertTrue(plan.speech_text.startswith("42단계로 이동했습니다."))
+        # Lane VX, decision 1: a named completion says what it recorded first.
+        self.assertTrue(plan.speech_text.startswith(
+            "41단계 완료로 기록했어요." + FIRST_HINT + " 42단계로 이동했습니다."))
         self.assertIn(ASK_42, plan.display_text)
         question = self.session.open_server_question()
         self.assertEqual((question["kind"], question["text"]), ("branch", ASK_42))
@@ -162,7 +165,9 @@ class ConditionalBranchTests(Turns, unittest.TestCase):
         self.open(index_of("11"))
         plan = self.say("11단계 완료했어")
         self.assertEqual(self.label(), "12")
-        self.assertEqual(plan.speech_text, "12단계로 이동했습니다. 안내를 화면에 표시했습니다.")
+        self.assertEqual(
+            plan.speech_text,
+            "11단계 완료로 기록했어요." + FIRST_HINT + " 12단계로 이동했습니다. 안내를 화면에 표시했습니다.")
         self.assertIsNone(self.session.open_server_question())
         self.assertIsNone(plan.step_record)
 
@@ -222,7 +227,8 @@ class BranchOverLaterStepsTests(Turns, unittest.TestCase):
         self.assertTrue(moved.state_changed)
         self.assertEqual(self.label(), "46")
         self.assertTrue(moved.speech_text.startswith(
-            "44~45단계는 조건에 해당하지 않아 건너뛰고 46단계로 이동했습니다."), moved.speech_text)
+            "43단계 완료로 기록했어요." + FIRST_HINT
+            + " 44~45단계는 조건에 해당하지 않아 건너뛰고 46단계로 이동했습니다."), moved.speech_text)
         self.assertEqual(moved.step_record["kind"], "branch_steps_skipped")
         self.assertEqual(moved.step_record["skipped_step_labels"], ["44", "45"])
         self.assertEqual(moved.step_record["branch_id"], "branch-43")

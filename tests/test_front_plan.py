@@ -151,8 +151,9 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
                 self.assertTrue(session.active)
 
     def test_yes_and_no_to_an_open_question_are_front_f4(self) -> None:
+        # Lane VX, decision 1: "다음 단계" no longer asks; "완료했어" does.
         for question, reply in (
-            ("다음 단계", "네"), ("다음 단계", "응응"), ("다음 단계", "아니"),
+            ("완료했어", "네"), ("완료했어", "응응"), ("완료했어", "아니"),
             ("실험 종료", "네"), ("실험 종료", "아니"), ("다 했어", "예"),
         ):
             with self.subTest(question=question, reply=reply):
@@ -185,13 +186,19 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
 
     def test_everything_else_is_handed_on_untouched(self) -> None:
         for said in (
-            "다 했어", "완료했어", "다음 단계", "다음 단계로 넘어가자", "넘어가",
+            "다 했어", "완료했어",
             "5단계 완료", "자 이제 다음 거 하자",
             "자세히 알려줘", "타이머 시작해줘", "버퍼 1은 뭐야?", "어디까지 했지?",
             "오늘 점심 뭐 먹지",
         ):
             with self.subTest(said=said):
                 self.assert_handed_on((said,), step_index=3)
+        # Lane VX, decision 1: words that move on are the front rules'.
+        for said in ("다음 단계", "다음 단계로 넘어가자", "넘어가"):
+            with self.subTest(said=said):
+                front, session = self.assert_front((said,), "forward_step", step_index=3)
+                self.assertTrue(front.state_changed)
+                self.assertEqual(session.current_index, 4)
         # Lane N, decision 1: a note asked for in words is the front rules'.
         self.assert_front(("메모해줘 튜브 라벨 A-17",), "note_record", step_index=3)
         # Decision 3 (lane R3): the current step is a server value.
@@ -219,12 +226,12 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
     def test_an_unanswered_question_is_put_back(self) -> None:
         # "버퍼 1은 뭐야?" does not answer "4단계 완료하셨나요?"; plan() lets the
         # question go, but front_plan() hands the turn on with it still open.
-        session = self.assert_handed_on(("다음 단계", "버퍼 1은 뭐야?"), step_index=3)
+        session = self.assert_handed_on(("완료했어", "버퍼 1은 뭐야?"), step_index=3)
         self.assertIsNone(session.pending_completion_confirmation)
 
     def test_a_question_left_open_survives_a_front_hand_on(self) -> None:
         rules_only, front_first = self._twins(3)
-        self._say(rules_only, front_first, "다음 단계", 2)
+        self._say(rules_only, front_first, "완료했어", 2)
         self.assertIsNotNone(front_first.pending_completion_confirmation)
         self.assertIsNone(front_first.front_plan(
             "버퍼 1은 뭐야?", turn_id=3, language="ko", configuration_id=1, generation=1,
@@ -270,6 +277,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "step_time",
             # lane WV, decision 4
             "visual_request",
+            # lane VX, decision 1
+            "forward_step",
         })
 
 

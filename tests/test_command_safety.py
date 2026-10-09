@@ -208,12 +208,15 @@ class CompletionTests(_AtStep4, unittest.TestCase):
         self.assertFalse(plan.state_changed)
         self.assertEqual(session.current_index, 3)
 
-    def test_next_step_asks_the_same_question(self) -> None:
+    def test_next_step_moves_on_and_says_what_it_recorded(self) -> None:
+        # Lane VX, decision 1: "다음 단계" moves on without the question
+        # lane XO asked, and says what it recorded.
         session = self._at_step_4()
-        asked = _turn(session, "다음 단계", 2)
-        self.assertEqual(asked.action, CuratedProtocolAction.CLARIFY_COMPLETION)
-        self.assertEqual(asked.speech_text, "4단계 완료하셨나요?")
-        self.assertEqual(asked.display_text, "4단계 완료하셨나요?")
+        moved = _turn(session, "다음 단계", 2)
+        self.assertEqual(moved.action, CuratedProtocolAction.NEXT)
+        self.assertTrue(moved.state_changed)
+        self.assertEqual(session.current_index, 4)
+        self.assertTrue(moved.speech_text.startswith("4단계 완료로 기록했어요."))
 
     def test_the_question_read_back_is_not_a_yes(self) -> None:
         session = self._at_step_4()
@@ -226,7 +229,8 @@ class CompletionTests(_AtStep4, unittest.TestCase):
         for yes in DOUBLED_YES:
             with self.subTest(yes=yes):
                 session = self._at_step_4()
-                _turn(session, "다음 단계", 2)
+                # Lane VX, decision 1: "다음 단계" no longer asks; "다 했어" does.
+                _turn(session, "다 했어", 2)
                 confirmed = _turn(session, yes, 3)
                 self.assertEqual(confirmed.action, CuratedProtocolAction.NEXT)
                 self.assertEqual(session.current_index, 4)
@@ -264,7 +268,8 @@ class FrozenQuestionTests(_AtStep4, unittest.TestCase):
 
     def test_a_question_asked_again_is_answered_no_as_before(self) -> None:
         session = self._at_step_4()
-        _turn(session, "다음 단계", 2)
+        # Lane VX, decision 1: "다음 단계" no longer asks; "다 했어" does.
+        _turn(session, "다 했어", 2)
         _turn(session, "정지", 3)
         _turn(session, "재개", 4)
         kept = _turn(session, "아니", 5)

@@ -1145,6 +1145,9 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "step_label",
                 "deadline_at",
                 "started_at",
+                # Lane VX, decision 4: the timer's name and kind.
+                "name",
+                "bound",
             })
             self.assertEqual(timer_event["payload"]["timer"]["state"], "running")
             self.assertEqual(

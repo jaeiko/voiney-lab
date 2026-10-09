@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.lane_cb_support import Recorded, Turns, index_of
+from tests.lane_cb_support import FIRST_HINT, Recorded, Turns, index_of
 from tests.test_lane_r7_rule_gaps import _fixture as wash_fixture
 from voiney_lab import server as server_module
 from voiney_lab.curated_protocol import FRONT_RULES, CuratedProtocolAction
@@ -55,7 +55,7 @@ class FixedRepeatRoundsTests(Turns, unittest.TestCase):
     def test_a_completion_naming_no_step_is_asked_about_first_as_before(self) -> None:
         # Lane XO, decision 5 still asks "16단계 완료하셨나요?"; its yes then
         # meets the round question.
-        for said in ("완료했어", "다음 단계"):
+        for said in ("완료했어",):
             with self.subTest(said=said):
                 self.at_16()
                 asked = self.say(said)
@@ -63,6 +63,13 @@ class FixedRepeatRoundsTests(Turns, unittest.TestCase):
                 plan = self.say("응")
                 self.assertEqual(plan.display_text, ROUND_2_OF_3)
                 self.assertEqual(self.label(), "16")
+        # Lane VX, decision 1: "다음 단계" moves on without the completion
+        # question, so the round question is asked at once.
+        self.at_16()
+        plan = self.say("다음 단계")
+        self.assertEqual(plan.display_text, ROUND_2_OF_3)
+        self.assertFalse(plan.state_changed)
+        self.assertEqual(self.label(), "16")
 
     def test_a_yes_goes_back_the_way_a_return_does_and_records_the_round(self) -> None:
         for said in ("응", "네", "돌아가", "한 번 더"):
@@ -99,7 +106,9 @@ class FixedRepeatRoundsTests(Turns, unittest.TestCase):
         done = self.say("16단계 완료했어")
         self.assertTrue(done.state_changed)
         self.assertEqual(self.label(), "17")
+        # Lane VX, decision 1: a named completion says what it recorded first.
         self.assertTrue(done.speech_text.startswith(
+            "16단계 완료로 기록했어요. "
             "12~15단계 3회를 모두 마쳤어요. 17단계로 이동했습니다. 안내를 화면에 표시했습니다."
         ), done.speech_text)
         self.assertEqual(done.step_record["kind"], "repeat_round_completion")
@@ -167,7 +176,12 @@ class FixedRepeatRoundsTests(Turns, unittest.TestCase):
         self.open(index_of("12"))
         for label, following in (("12", "13"), ("13", "14"), ("14", "15"), ("15", "16")):
             plan = self.say(f"{label}단계 완료했어")
-            self.assertEqual(plan.speech_text, f"{following}단계로 이동했습니다. 안내를 화면에 표시했습니다.")
+            # Lane VX, decision 1: what was recorded is said first; the hint
+            # how to take it back only the first time in the session.
+            hint = FIRST_HINT if label == "12" else ""
+            self.assertEqual(
+                plan.speech_text,
+                f"{label}단계 완료로 기록했어요.{hint} {following}단계로 이동했습니다. 안내를 화면에 표시했습니다.")
             self.assertIsNone(self.session.open_server_question())
 
     def test_the_round_question_rolls_back_with_its_turn(self) -> None:
