@@ -8,6 +8,7 @@ All writes use the separate immutable Protocol store, never ProcedureStore.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -1604,6 +1605,37 @@ class ProtocolCatalog:
         }
 
     @staticmethod
+    def _development_fixture_event_id(
+        fixture: CuratedProtocolFixture,
+        analysis_payload_sha256: str,
+        payload: dict[str, object],
+    ) -> str:
+        """Name the materialization event by everything the event records.
+
+        Keyed on the fixture alone, the event collided with its own earlier
+        record as soon as the analysis changed, so the analysis digest joined
+        the id. The id still could not see the event's own payload. Lane DI
+        (2026-10-08) dropped ``final_approval`` from it, and every store that
+        had materialized this fixture before then held a row under the same id
+        with the old payload: the store refused, correctly, and from
+        2026-10-08 ``scripts/run_dev.sh`` did not start.
+
+        The digest of the payload as the store writes it is part of the id
+        now (lane BT, 2026-10-09). A changed payload is a new event appended
+        beside the old one, and the old row stays exactly as it was written.
+        """
+
+        event_sha256 = hashlib.sha256(
+            json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        return (
+            f"development-fixture-{fixture.fixture_sha256[:48]}"
+            f"-{analysis_payload_sha256[:16]}-{event_sha256[:16]}"
+        )
+
+    @staticmethod
     def _development_analysis_identity(
         fixture: CuratedProtocolFixture,
     ) -> tuple[str, str]:
@@ -1678,16 +1710,13 @@ class ProtocolCatalog:
             raise ProtocolCatalogUnavailableError(
                 "Development fixture revision is unavailable."
             )
+        payload = self._development_fixture_payload(fixture)
         self.store.append_event(
-            # The event names the analysis it materialized, for the reason
-            # above: keyed on the fixture alone it collided with its own
-            # earlier record as soon as the analysis changed.
-            f"development-fixture-{fixture.fixture_sha256[:48]}"
-            f"-{payload_sha256[:16]}",
+            self._development_fixture_event_id(fixture, payload_sha256, payload),
             fixture.protocol_id,
             revision.revision_number,
             _DEVELOPMENT_FIXTURE_EVENT,
-            self._development_fixture_payload(fixture),
+            payload,
             analysis_revision_number=analysis.analysis_revision_number,
         )
         return ProtocolDevelopmentBootstrap(
