@@ -3781,6 +3781,58 @@ WEB_LOOKUP_VALUES = ("on", "off")
 #: screen notice and the sound of a timer's end stay.
 PROACTIVE_MODES = ("all", "needed", "off")
 PROACTIVE_MODE_WORDS = {"all": "모두", "needed": "필요한 것만", "off": "끄기"}
+#: The notices each choice says aloud; the screen shows a timer's every
+#: notice whatever is chosen (decision 6).
+PROACTIVE_SPOKEN_KINDS: dict[str, frozenset[str]] = {
+    "all": frozenset({"timer_ended", "timer_last_minute", "repeat_round", "return_summary"}),
+    "needed": frozenset({"timer_ended", "repeat_round"}),
+    "off": frozenset(),
+}
+
+
+@dataclass(frozen=True)
+class TimerNotice:
+    """One thing the server says about the step timer before it is asked (lane VT).
+
+    Read-only: it moves no step, completes nothing and leaves the timer as
+    it is. ``spoken`` is whether the experimenter's "먼저 알려 주기" has it
+    said; the screen shows it either way, a timer's end with a sound
+    (``chime``). Its words come from the server's timer and the source: the
+    timer as it is named, and the next step's number with the first sentence
+    of its checked Korean.
+    """
+
+    notice_id: str
+    kind: str  # "timer_ended" | "timer_last_minute"
+    display_text: str
+    speech_text: str
+    spoken: bool
+    chime: bool
+    due_at: float
+    step_index: int
+    step_id: str | None
+    step_label: str | None
+    next_step_label: str | None
+    timer: dict[str, Any]
+    #: "verified_sidecar" when it carries a step's Korean (the server names a
+    #: stored machine translation as such), else "not_applicable".
+    translation_status: str = "not_applicable"
+
+    def public_dict(self) -> dict[str, Any]:
+        """What the screen and the record take: no clock of the server's own."""
+
+        return {
+            "notice_id": self.notice_id,
+            "notice_kind": self.kind,
+            "text": self.display_text,
+            "spoken": self.spoken,
+            "chime": self.chime,
+            "due_at": datetime.fromtimestamp(self.due_at, tz=timezone.utc).isoformat(),
+            "step_id": self.step_id,
+            "step_label": self.step_label,
+            "next_step_label": self.next_step_label,
+            "timer": dict(self.timer),
+        }
 _PROACTIVE_NAME = r"먼저\s*알려\s*주기(?:은|는|을|를|가)?\s*"
 _SETTING_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래))?"
 _SETTING_DO = rf"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|켜|변경해|전환해){_SETTING_POLITE})?"
@@ -7753,6 +7805,10 @@ class CuratedProtocolSession:
         self.web_lookup: str = "on"
         #: Lane VT, decision 6: what is said before it is asked (PROACTIVE_MODES).
         self.proactive_mode: str = "all"
+        #: Lane VT, decisions 1-2: (timer, kind) of the timer notices already
+        #: given, so each is given once. Not part of a turn's checkpoint: a
+        #: notice given stays given whatever a later turn rolls back.
+        self._timer_notices_given: set[tuple[Any, ...]] = set()
         #: The one-turn "0.5 mL로 기록할까요?" of the 바로 확인 way.
         self._pending_note_confirmation: dict[str, Any] | None = None
         #: The questions asked before the start (decision 4): the queue,
@@ -7928,16 +7984,19 @@ class CuratedProtocolSession:
             prefix = {"minimum": "at least", "approximate": "about", "maximum": "up to"}.get(bound)
         return f"{prefix} {words}" if prefix else words
 
-    def _timer_end_words(self, language: str) -> str | None:
+    def _timer_end_words(
+        self, language: str, timer: Mapping[str, Any] | None = None,
+    ) -> str | None:
         """What is said of a minimum or a maximum timer that has run out, or None.
 
         Lane VX, decision 4: a minimum's end is not the step's end, so it is
         never said to be over -- "최소 시간 2시간이 지났어요." -- and a
         maximum's is "최대 시간 2시간이 됐어요.". Any other timer is said as it
-        was.
+        was. ``timer`` is a ``timer_status()`` already read (lane VT reads it
+        at the notice's own time); without one, it is read now.
         """
 
-        timer = self.timer_status()
+        timer = self.timer_status() if timer is None else timer
         bound = timer.get("bound")
         if timer.get("state") != "expired" or bound not in {"minimum", "maximum"}:
             return None
@@ -8027,6 +8086,109 @@ class CuratedProtocolSession:
             "name": self._timer_name(self._timer_duration_seconds, bound, "ko"),
             "bound": bound,
         }
+
+    # --- Lane VT, decisions 1-2: the step timer told before it is asked -------
+
+    def proactive_says(self, kind: str) -> bool:
+        """Whether "먼저 알려 주기" has a notice of this kind said aloud (decision 6)."""
+
+        return kind in PROACTIVE_SPOKEN_KINDS.get(self.proactive_mode, frozenset())
+
+    def due_timer_notices(self, now: float | None = None) -> tuple[TimerNotice, ...]:
+        """The step timer's notices due at ``now`` and not given yet, as given now.
+
+        Decision 1: the moment the server's timer has run out ("expired" in
+        ``timer_status``), "15분 타이머가 끝났어요." -- a minimum or a maximum
+        timer in lane VX's words -- and "다음은 N단계, …". Each is given once
+        per timer started. Nothing here moves a step, completes one or changes
+        the timer; a timer goes on running through a pause (as it does when
+        asked), so its end is told in a pause too. Only while the experiment
+        runs.
+        """
+
+        if (
+            not self.active or self._experiment_ended()
+            or self._timer_started_at is None or self._timer_duration_seconds is None
+            or self._timer_step_index is None
+            or not 0 <= self._timer_step_index < len(self.fixture.steps)
+        ):
+            return ()
+        current_time = time.time() if now is None else now
+        status = self.timer_status(now=current_time)
+        key = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
+        deadline = self._timer_started_at + self._timer_duration_seconds
+        if status["state"] != "expired" or (key, "timer_ended") in self._timer_notices_given:
+            return ()
+        self._timer_notices_given.add((key, "timer_ended"))
+        return (self._timer_notice("timer_ended", status, key, due_at=deadline),)
+
+    def _timer_notice(
+        self, kind: str, status: Mapping[str, Any], key: tuple[Any, ...], *, due_at: float,
+    ) -> TimerNotice:
+        index = int(status["step_index"])
+        steps = self.fixture.steps
+        step = steps[index]
+        if kind == "timer_ended":
+            first = self._timer_end_words("ko", status) or f"{status['name']} 타이머가 끝났어요."
+        else:
+            first = (
+                "최소 시간까지 1분 남았어요." if status.get("bound") == "minimum"
+                else "최대 시간까지 1분 남았어요." if status.get("bound") == "maximum"
+                else "1분 남았어요."
+            )
+        next_index = index + 1
+        shown, said = first, first
+        next_label = None
+        translated = False
+        if next_index < len(steps):
+            next_label = steps[next_index].source_label
+            sentence = self._checked_first_sentence(next_index)
+            if sentence is None:
+                line = f"다음은 {next_label}단계예요. 화면에서 확인해 주세요."
+                shown, said = f"{first} {line}", f"{first} {line}"
+            else:
+                shown = f"{first} 다음은 {next_label}단계, {sentence}"
+                said = f"{first} 다음은 {next_label}단계, {spoken_korean(sentence)}"
+                translated = True
+        notice_id = hashlib.sha256(
+            f"{step.step_id}\x1f{key[1]!r}\x1f{key[2]}\x1f{kind}".encode("utf-8")
+        ).hexdigest()[:32]
+        return TimerNotice(
+            notice_id=notice_id, kind=kind, display_text=shown, speech_text=said,
+            spoken=self.proactive_says(kind), chime=kind == "timer_ended", due_at=due_at,
+            step_index=index, step_id=step.step_id, step_label=step.source_label,
+            next_step_label=next_label,
+            timer={
+                "name": status.get("name"), "bound": status.get("bound"),
+                "duration_seconds": status.get("duration_seconds"),
+                "started_at": status.get("started_at"), "deadline_at": status.get("deadline_at"),
+            },
+            translation_status="verified_sidecar" if translated else "not_applicable",
+        )
+
+    def _checked_first_sentence(self, index: int) -> str | None:
+        """The first sentence of a step's Korean that passed the check, or None.
+
+        Lane TS's rule (``protocol_translation.statement_issue``), as a spoken
+        warning's: a step written in Korean is its own reading; otherwise its
+        reviewed or machine Korean is read only when it passes every check.
+        The step label the Korean begins with ("4단계: ") is left out.
+        """
+
+        from voiney_lab.protocol_translation import is_korean, statement_issue  # imports this module
+
+        step = self.fixture.steps[index]
+        source = step.instruction_source_text
+        if is_korean(source):
+            korean = source
+        else:
+            korean = self._localized_fact(step.step_id, "current_step")
+            if korean is None or statement_issue(source, korean) is not None:
+                return None
+        body = re.sub(r"^\s*[0-9A-Za-z.]+\s*단계\s*[:：]\s*", "", " ".join(korean.split()))
+        body = re.sub(rf"^{re.escape(step.source_label)}\s*[.)]?\s+", "", body)
+        first = re.split(r"(?<=[.!?。])\s+", body, maxsplit=1)[0].strip()
+        return first or None
 
     def experiment_timer_status(self, now: float | None = None) -> dict[str, Any]:
         current_time = time.time() if now is None else now
@@ -12708,6 +12870,7 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._timer_notices_given = set()
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
