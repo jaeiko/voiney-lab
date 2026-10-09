@@ -46,7 +46,6 @@ TIME_LEFT = ("시간 얼마나 남았지", "Time 얼마나 남았어?", "시간 
 WAIT = ("쫌만 기다려 봐", "좀 기다려 줘", "잠깐 기다려", "기다려")
 NOT_THESE = (
     ("뭐라고 써 있어?", CuratedProtocolAction.REPEAT),
-    ("시간이 얼마나 걸려?", CuratedProtocolAction.TIMER_STATUS),
     ("결과 기다려 봐야 해?", CuratedProtocolAction.PAUSE),
 )
 
@@ -129,6 +128,13 @@ class FrontWordTests(_Miniprep, unittest.TestCase):
                 plan = _turn(session, said, 2)
                 self.assertIsNot(plan.action, not_this)
                 self.assertEqual(session.workflow_status, "active")
+        # Lane VX, decision 5: "시간이 얼마나 걸려?" asks the step's source
+        # time (step_time), for a sidecar timer too -- not the time left.
+        session = self._started()
+        plan = _turn(session, "시간이 얼마나 걸려?", 2)
+        self.assertEqual(plan.intent_kind, "step_duration_question")
+        self.assertFalse(plan.state_changed)
+        self.assertEqual(session.workflow_status, "active")
 
 
 class EndedExperimentTests(_Miniprep, unittest.TestCase):

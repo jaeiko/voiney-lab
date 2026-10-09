@@ -2807,7 +2807,8 @@ FRONT_RULES: dict[str, str] = {
                  "분이야?'), answered from the values the server verified against "
                  "the source, or the source's words read back where it states no "
                  "fixed length; and '몇 분 지났어?', the running timer's time gone "
-                 "(lane PT, decision 3)",
+                 "(lane PT, decision 3); for a sidecar timer (the in-gel fixture) "
+                 "its value and the step's source sentence (lane VX, decision 5)",
     "coreference_clarify": "F7 '그거' and other references asked back (D3)",
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
@@ -12456,7 +12457,6 @@ class CuratedProtocolSession:
             )
         if (
             self.active
-            and self.analysis_timers
             and step is not None
             and _STEP_DURATION_QUESTION.search(time_key)
             and not _STEP_DURATION_NOT.search(time_key)
@@ -12467,8 +12467,8 @@ class CuratedProtocolSession:
         ):
             # "몇 분 반응시켜?", "이 단계 몇 분이야?" (lane PT, decision 3):
             # the current step's verified source time, or its words read
-            # back. Only for timers read from an analysis; the in-gel
-            # development fixture keeps its sidecar and its routing as were.
+            # back -- for a sidecar timer too, from its value and the step's
+            # source sentence (lane VX, decision 5).
             return CuratedControlIntent(
                 intent_kind="step_duration_question",
                 action=CuratedProtocolAction.TIMER_STATUS,
@@ -13649,6 +13649,14 @@ class CuratedProtocolSession:
                 )
             # Otherwise a change described without a problem is an answer
             # this reader could not place, not an anomaly: it is asked again.
+        elif routed.intent_kind == "step_duration_question":
+            # "얼마나 걸려?" asks the step's source time (lane VX, decision 5
+            # for the in-gel sidecar): a read-only question, answered with the
+            # prompt kept, as the question routes below keep it.
+            self._pending_observation_confirmation = replace(
+                held, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            return routed
         elif (
             routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
             or self._names_another_step(routed)
@@ -16247,10 +16255,13 @@ class CuratedProtocolSession:
                         f"Started a {time_str_en} timer. You can watch the remaining time on screen."
                     )
                 else:
+                    # Lane VX, decision 6: a sidecar step with no timer (the
+                    # in-gel fixture) says so in one sentence and nothing is
+                    # started or changed.
                     response = (
-                        f"현재 {step.source_label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 전체 실험 경과 시간은 계속 기록 중입니다."
+                        "이 단계에는 원문에 시간이 없어요."
                         if language == "ko" else
-                        f"Step {step.source_label} has no separate protocol-defined timer. The overall experiment elapsed time is still being recorded."
+                        f"Step {step.source_label} states no time in the source."
                     )
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.START_TIMER,
@@ -16264,8 +16275,9 @@ class CuratedProtocolSession:
                     # as a change, the durable session refused it ("requires a
                     # running current-step timer") and the turn was rolled back
                     # with a save failure, so the source was never read (lane
-                    # PT). The in-gel fixture keeps its reading as it was.
-                    state_changed=success or not self.analysis_timers,
+                    # PT for an analysis's timers; lane VX, decision 6 for the
+                    # in-gel sidecar).
+                    state_changed=success,
                     primary_text=response,
                     intent_kind=intent.intent_kind,
                     timer_payload=self.timer_status(),
@@ -19243,6 +19255,8 @@ class CuratedProtocolSession:
         verify ("overnight", "at least 2 h") is read as the source words it.
         """
 
+        if not self.analysis_timers:
+            return self._sidecar_time_answer(language)
         step = self.fixture.steps[self.current_index]
         table = self.fixture.timer_table or domain.StepTimerTable()
         timers = table.for_step(step.step_id)
@@ -19295,6 +19309,50 @@ class CuratedProtocolSession:
             if ko else
             f"The source for Step {step.source_label} states no time."
         )
+
+    def _sidecar_time_answer(self, language: str) -> str:
+        """The step's sidecar timer and its source sentence (lane VX, decision 5).
+
+        The in-gel development fixture's timers are a sidecar manifest the
+        loader checked against the source, not an analysis's: the answer is
+        that value and the step's own sentence. A step with no timer says
+        so, and why where its sentence states a time without a number.
+        """
+
+        step = self.fixture.steps[self.current_index]
+        label = step.source_label
+        sentence = " ".join(step.instruction_source_text.split())
+        seconds = self.timer_seconds_for_step(self.current_index)
+        ko = language == "ko"
+        if seconds:
+            words = _duration_words_long(seconds, language)
+            running = self.timer_status().get("state") == "running"
+            if not ko:
+                return f"The Step {label} timer is {words}. The source says '{sentence}'."
+            answer = (
+                f"{label}단계 타이머는 {josa(words, '이에요', '예요')}. "
+                f"원문에는 ‘{sentence}’라고 적혀 있어요."
+            )
+            if not running:
+                answer += " 타이머를 시작하려면 '타이머 시작해줘'라고 말씀해 주세요."
+            return answer
+        reading = domain.read_source_durations(sentence)
+        if reading.refused:
+            item = reading.refused[0]
+            if not ko:
+                return (
+                    f"The source for Step {label} says '{sentence}'. "
+                    f"'{item.literal}' states no fixed length, so there is no timer."
+                )
+            return (
+                f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있어요. ‘{item.literal}’: "
+                f"{domain.SOURCE_DURATION_REFUSAL_KO[item.reason]} 그래서 타이머는 만들지 않았어요."
+            )
+        if not ko:
+            return f"The source for Step {label} says '{sentence}', and it has no timer."
+        if reading.durations:
+            return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있어요. 이 단계에는 확인된 타이머가 없어요."
+        return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있고, 시간은 적혀 있지 않아요."
 
     def _elapsed_answer(self, language: str) -> str:
         """"몇 분 지났어?": the running timer's time gone and left (lane PT, decision 3)."""

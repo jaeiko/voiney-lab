@@ -624,8 +624,11 @@ class TheInGelSidecarIsUnchangedTests(unittest.TestCase):
         turns = Turns()
         session = turns.open(0, fixture=fixture)
         self.assertFalse(session.analysis_timers)
+        # Lane VX, decision 5: the step-time question is the front rule's for
+        # a sidecar timer too, answered from it and the step's sentence.
         plan = turns.say("몇 분 동안 해?")
-        self.assertNotEqual(plan.intent_kind, "step_duration_question")
+        self.assertEqual(plan.intent_kind, "step_duration_question")
+        self.assertIn("1단계 원문에는", plan.speech_text)
 
 
 def domain_action(name: str):
