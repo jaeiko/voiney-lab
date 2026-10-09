@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab import experiment_protocol_analysis as analysis_module
@@ -442,6 +443,42 @@ class ClaimTokensTests(RefusalAssertions):
         source = extraction(f"{TITLE}\n{STEP}", line)
         self.assert_refused(source, "claim_not_found", materials=[material("Dimethyl sulfoxide (DMSO)", TITLE)])
         self.assert_refused(source, "quote_not_found", materials=[material("Dimethyl sulfoxide (DMSO)", line)])
+
+
+class ChunkMergeRevalidationTests(unittest.TestCase):
+    """protocol_claim_analysis revalidates a merged Protocol with this same check.
+
+    Its own segment check stays exact: a chunk claim's excerpt is the segment
+    text the server cut, and the claim must equal it.
+    """
+
+    def test_the_merge_revalidation_is_the_shared_check(self):
+        from voiney_lab import protocol_claim_analysis
+
+        self.assertIs(
+            protocol_claim_analysis.validate_protocol_analysis_evidence,
+            analysis_module.validate_protocol_analysis_evidence,
+        )
+
+    def test_the_merge_revalidation_reads_the_rules(self):
+        line = "8. Dimethyl sulfoxide (DMSO; Sigma-Aldrich)"
+        source = listed(line)
+        draft = parse(source, materials=[material("Dimethyl sulfoxide (DMSO", line)])
+
+        def named(name: str):
+            return replace(
+                draft.protocol,
+                materials=(replace(draft.protocol.materials[0], name_source_text=name),),
+            )
+
+        verified, _ = analysis_module.validate_protocol_analysis_evidence(
+            named("Dimethyl sulfoxide (DMSO)"), source
+        )
+        self.assertEqual(verified.materials[0].name_source_text, "Dimethyl sulfoxide (DMSO)")
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            analysis_module.validate_protocol_analysis_evidence(
+                named("Dimethyl sulfoxide (DMS0)"), source
+            )
 
 
 if __name__ == "__main__":
