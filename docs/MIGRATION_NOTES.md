@@ -224,6 +224,99 @@ one (`scripts/migrate_env.py --check` reports them under "코드가 읽지 않�
 `SEMANTIC_INTENT_TIMEOUT_SECONDS`, `SEMANTIC_INTENT_MIN_CONFIDENCE` and
 `SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE`.
 
+## Commercial workspace schema 7 → 8 (lane CF, 2026-10-08)
+
+Lane DI left the schema at 7. The same day lane CF raised it to 8 (commit
+`44aa23d`, decisions 1–2) to keep how each experimenter wants a recorded value
+confirmed. `MIGRATION_7_TO_8` in `workspace_store.py` adds one table and
+changes nothing else:
+
+- `experimenter_settings`: one row per change -- `sequence_id`,
+  `organization_id` and `principal_id` (foreign keys to `organizations` and
+  `principals`), `name` (`confirm_mode` or `question_timing`, by a CHECK),
+  `value`, `source` (`voice` or `screen`, by a CHECK) and `created_at`, with
+  an index on (organization, principal, name, sequence). Update and delete
+  triggers make it append-only. The values a name may take are checked in
+  code (`EXPERIMENTER_SETTING_VALUES`: `readback`, `confirm`, `quiet`;
+  `before_start`, `during`), not by the column.
+- `schema_metadata` is rebuilt to hold 8, as each earlier migration did.
+
+No existing table or row is changed. A schema-7 database is migrated in place
+when the workspace is opened (`initialize_workspace_store`), in one
+`BEGIN IMMEDIATE` transaction that is rolled back on failure ("Commercial
+workspace migration failed."); a new database runs schema 1 and every
+migration up to 8. `tests/test_lane_cf_confirm_mode.py` builds a schema-7
+store, opens it, and checks the version and the append-only triggers.
+
+Lane CF's decision 3 (`68662d0`) changed no schema: a confirmed revert is
+appended as a `step_reverted` event to the existing workspace progress record
+and to the experiment report, beside the completions it takes back, which
+stay in the record.
+
+### Reading older data
+
+A store migrated from 7 holds no setting rows, so every experimenter starts
+with the defaults (`EXPERIMENTER_SETTING_DEFAULTS` in `server.py`:
+`confirm_mode=readback`, `question_timing=before_start`). A setting's value is
+its latest row by `sequence_id`; the earlier rows stay as the record of the
+changes. Without a workspace (`VOINEY_LAB_WORKSPACE_ENABLED=false`) the
+settings are held in the server's memory and are gone when it stops. Lane
+WV's `web_lookup` (2026-10-09) is not in this table: it is held in memory
+beside it and starts `on`.
+
+### Going back
+
+There is no down-migration. Code older than `44aa23d` expects schema 7 and
+refuses a schema-8 database when it opens it ("Commercial workspace schema is
+unsupported."). Going back means restoring the copy taken before the upgrade
+-- the schema 3 → 4 procedure: stop, back up the SQLite file with its WAL/SHM
+files, start one instance -- and that copy has none of the settings recorded
+since. Moving forward again runs the migration again; its table, index and
+triggers are created with `IF NOT EXISTS`. After an upgrade, confirm
+`schema_metadata.schema_version = 8`.
+
+## Lane BT (2026-10-09): the development fixture's event id
+
+No schema change, and no stored row is rewritten or deleted. This is the
+protocol store (`protocol_workspace.sqlite`), not the commercial workspace.
+
+`ProtocolCatalog.bootstrap_development_fixture` records each load of the
+curated development fixture as a `development_fixture_materialized` event.
+Its id used to be `development-fixture-<fixture SHA-256, first 48>-<analysis
+payload SHA-256, first 16>`; it now ends with `-<event payload SHA-256, first
+16>` as well, the digest of the payload as the store writes it.
+
+The reason: lane DI (`2cbdcff`, 2026-10-08) dropped `"final_approval": false`
+from that payload. A store that had loaded the fixture before then held a row
+under the same id with the old payload; the store refused the different
+content (`DuplicateProtocolIdentifierError`), and from 2026-10-08
+`scripts/run_dev.sh` stopped before it started the server.
+
+### Reading older data
+
+The older rows keep their ids, payloads (with `final_approval`) and times. The
+first load with this version appends one new event, under the new id, for the
+fixture's analysis; a later load of the same fixture appends nothing. A
+store first loaded after lane DI, whose row already has the current payload
+under the old id, also gets one new event with the same content. The readers
+take any matching event of the type and never one in particular:
+`development_fixture_is_materialized` looks for one whose payload is the
+current one, and the catalog's `development_only` for any one of the type on
+the revision.
+
+`scripts/run_dev.sh` also changed (decision 3): when the fixture does not
+load, it prints `[WARN] 개발 픽스처를 적재하지 못함 — 이 픽스처는 실행할 수
+없음: <error type>` and still starts the server, which leaves that fixture
+unrunnable. `--bootstrap-only` still ends with a non-zero code.
+
+### Going back
+
+Code from before lane DI computes the old id with the old payload, which
+matches its own older rows. Code from lane DI up to this change computes the
+old id with the new payload, so on a store that holds a pre-DI row it refuses
+again, exactly as it did from 2026-10-08. The events this version appends need
+no undoing.
+
 ## Environment setting names → `VOINEY_LAB_` (2026-10-04)
 
 This changes configuration, not a store: no database, ledger, table or file
