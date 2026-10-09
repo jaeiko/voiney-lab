@@ -659,20 +659,6 @@
     .step-visual a{display:inline-block;margin-top:.5rem;color:var(--cyan);font-size:.78rem;font-weight:800;text-decoration:none}
     .step-visual a:hover{text-decoration:underline}
     .visual-status{color:var(--muted);font-size:.76rem}
-    .step-visual .source-figure{margin:.55rem 0 0;padding:0}
-    .step-visual .source-figure+.source-figure{margin-top:.9rem;padding-top:.75rem;border-top:1px solid var(--border)}
-    .step-visual figcaption{margin-top:.4rem;font-size:.78rem;line-height:1.45;color:var(--subtext)}
-    .web-lookup-panel{border-style:dashed}
-    .web-lookup-note{margin:.35rem 0 0;font-size:.74rem;color:var(--muted)}
-    .web-lookup-text{margin:.5rem 0 0;font-size:.84rem;line-height:1.55;color:var(--subtext)}
-    .web-lookup .web-photo{margin:.6rem 0 0;padding:0}
-    .web-lookup-sources{margin-top:.5rem;font-size:.78rem}
-    .web-lookup-sources a{color:var(--cyan);text-decoration:none}
-    .web-lookup-sources a:hover{text-decoration:underline}
-    .drawn-panel{border-style:dotted}
-    .drawn-label{color:#b8860b;font-weight:800}
-    .step-visual .drawn-figure{margin:.5rem 0 0;padding:0}
-    .step-visual .drawn-figure img{background:#fff}
 
     .web-reference-panel{
       padding:1.15rem;
