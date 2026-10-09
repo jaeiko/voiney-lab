@@ -1005,9 +1005,25 @@ class ProtocolAnalysisTests(unittest.TestCase):
             ),
         )
 
+        # Lane EV, rule first_equal_span (human decision 2026-10-09): matches
+        # whose plain text is the same are one excerpt, the first on the page;
+        # matches that differ when read plainly still fail closed.
+        verified = analysis_module._verified_evidence(
+            domain.SourceEvidence(1, "Use buffer."),
+            extraction,
+        )
+        self.assertEqual(verified.source_excerpt, "Use   buffer.")
+        extraction = replace(
+            extraction,
+            pages=(
+                replace(extraction.pages[0], text="Use 5-\n10 mL. Use 5-10 mL."),
+                extraction.pages[1],
+            ),
+        )
+
         with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
             analysis_module._verified_evidence(
-                domain.SourceEvidence(1, "Use buffer."),
+                domain.SourceEvidence(1, "Use 5-10  mL."),
                 extraction,
             )
 
@@ -1111,6 +1127,8 @@ class ProtocolAnalysisTests(unittest.TestCase):
         accepted = (
             ("1", "1. Existing numeric heading."),
             ("A", "A. Existing nonnumeric heading."),
+            # Lane EV, rule paren_label (human decision 2026-10-09).
+            ("1", "1) Parenthesized label."),
         )
         rejected = (
             ("1", "10 Longer numeric heading."),
@@ -1118,7 +1136,6 @@ class ProtocolAnalysisTests(unittest.TestCase):
             ("1", "Introduction before 1 Existing heading."),
             ("2", "1 Different heading."),
             ("1", "1: Unsupported punctuation."),
-            ("1", "1) Unsupported punctuation."),
             ("A", "A Unsupported nonnumeric heading."),
         )
 

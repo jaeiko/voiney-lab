@@ -8,6 +8,7 @@ optional persistence to the existing Slice 2 and Slice 3 contracts.
 
 from __future__ import annotations
 
+import datetime
 import json
 import hashlib
 import re
@@ -1339,7 +1340,7 @@ def _verified_evidence(
                 matching_source_pages=matching_pages,
             ),
         )
-    if len(spans) != 1:
+    if len(spans) != 1 and not _spans_hold_the_same_text(page_text, spans):
         raise ProtocolAnalysisEvidenceError(
             "Protocol evidence has more than one normalized source match.",
             diagnostic=_evidence_diagnostic(
@@ -1350,13 +1351,48 @@ def _verified_evidence(
                 matching_source_pages=(evidence.source_page_number,),
             ),
         )
-    original_start, original_end = spans[0]
+    original_start, original_end = min(spans)
     return _verified_continuation(
         replace(
             evidence,
             source_excerpt=page_text[original_start:original_end],
         ),
         extraction,
+    )
+
+
+def _spans_hold_the_same_text(
+    page_text: str, spans: tuple[tuple[int, int], ...]
+) -> bool:
+    """Whether every match of an excerpt on its page is the same text.
+
+    Rule first_equal_span (human decision 2026-10-09, lane EV, from lane
+    DS-2's replay): a page that prints one sentence twice -- a title in the
+    running header and above the abstract, one warning under two steps --
+    with its line breaks in different places refused the excerpt as
+    ambiguous, while an excerpt printed verbatim twice was always accepted
+    (the exact check above never asks how often). Matches whose text is the
+    same once read plainly (whitespace runs as one space, soft hyphens left
+    out) are now one excerpt, recorded as the first on the page.
+
+    Still different: matches that are the same only in a later comparison
+    form -- "5-" / "10" joined at the line end against a printed "5-10", an
+    OCR Hangul break joined, a protocols.io time mark skipped -- stay
+    ambiguous, and only the cited page is ever searched, so the same
+    sentence on another page is not this excerpt. Lane DS-2's tool cut the
+    match list to its first for every caller (the page-end block, the
+    cross-page rule and the step-number check, which count matches); here
+    only this evidence check reads it.
+    """
+
+    return (
+        len(
+            {
+                _normalized_text_with_bounds(page_text[start:end])[0]
+                for start, end in spans
+            }
+        )
+        == 1
     )
 
 
@@ -1532,6 +1568,268 @@ def _claim_occurs_in_text(
     return False
 
 
+#: The metadata fields that hold a date (lane EV, rule iso_date).
+_METADATA_DATE_FIELDS = frozenset({"created_date", "modified_date", "publication_date"})
+_ISO_DATE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})")
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+#: Around a written date: no letter or digit, and no number punctuation that
+#: holds on to a digit -- "0.5 April 2020" does not print 5 April, nor does
+#: "1:10 January 2020" print 10 January or "10 January 20201" the year 2020.
+_DATE_BEFORE = r"(?<![^\W_])(?<![0-9][.,:/\-–−])"
+_DATE_AFTER = r"(?![0-9])(?![.,:/\-–−][0-9])"
+
+
+def _written_date_forms(claim: str) -> tuple[str, ...]:
+    """The forms in which a page prints the ISO date a claim holds."""
+
+    match = _ISO_DATE.fullmatch(claim)
+    if match is None:
+        return ()
+    try:
+        date = datetime.date(int(match[1]), int(match[2]), int(match[3]))
+    except ValueError:
+        return ()
+    name = _MONTH_NAMES[date.month - 1]
+    forms = [
+        f"{date.day} {name} {date.year}",
+        f"{date.day:02d} {name} {date.year}",
+        f"{date.day} {name[:3]} {date.year}",
+        f"{name} {date.day}, {date.year}",
+        f"{name} {date.day} {date.year}",
+        f"{name[:3]} {date.day}, {date.year}",
+        f"{date.year}/{date.month:02d}/{date.day:02d}",
+        f"{date.year}.{date.month:02d}.{date.day:02d}",
+        f"{date.year}년 {date.month}월 {date.day}일",
+    ]
+    if date.day > 12 or date.day == date.month:
+        # Day first, only where it cannot be read month first: 03.04.2020
+        # is 3 April or 4 March depending on the convention.
+        forms += [
+            f"{date.day}.{date.month}.{date.year}",
+            f"{date.day:02d}.{date.month:02d}.{date.year}",
+        ]
+    return tuple(dict.fromkeys(forms))
+
+
+def _written_date_in_excerpt(claim: str, evidence: domain.SourceEvidence) -> bool:
+    """Whether a metadata date claim is the date its own excerpt prints.
+
+    Rule iso_date (human decision 2026-10-09, lane EV, from lane DS-2's
+    replay): models write a metadata date as "2020-04-03" where the page
+    prints "Published: 3 April 2020", and the claim was refused although the
+    page states that very date. A created, modified or publication date that
+    is a bare ISO calendar date is now the same as that date printed in its
+    own evidence excerpt (page text by now: the excerpt was verified first) in
+    one of lane DS-2's written forms -- "3 April 2020", "03 April 2020", "3 Apr
+    2020", "April 3, 2020", "April 3 2020", "Apr 3, 2020", "2020/04/03",
+    "2020.04.03", "2020년 4월 3일", and the day-first "20.03.2018" -- month
+    names in any case, a line break as a space.
+
+    Still different: a date the page prints outside the cited excerpt; a day-
+    first number date that could be read month first ("03.04.2020"); a date
+    whose digits the page continues ("13 April", "0.5 April", "1:10 January",
+    "20201"); a calendar date that does not exist; a claim that is anything
+    but a bare ISO date ("2020-04-03 이후 ..."); any field but the three dates.
+    Lane DS-2's tool looked on the whole page and matched substrings; this
+    reads only the excerpt the claim cites, so the date the claim holds is the
+    one it quotes, and refuses a continued digit, so a different day or year
+    never matches. A year alone or the ISO form itself is not listed here: the
+    exact comparison already finds those.
+    """
+
+    excerpt, _, _ = _normalized_text_with_bounds(evidence.source_excerpt)
+    return any(
+        re.search(
+            _DATE_BEFORE + re.escape(form) + _DATE_AFTER, excerpt, re.IGNORECASE
+        )
+        for form in _written_date_forms(claim)
+    )
+
+
+#: Lane EV, rule claim_tokens: the characters of a claim and of its page by
+#: their part in the comparison (``_token_kinds``).
+_TOKEN_WORD = re.compile(r"\w")
+_TOKEN_BRACKETS = frozenset("()[]{}")
+_TOKEN_CLAUSE = frozenset(".,:;")
+_TOKEN_QUOTES = frozenset("\"'“”‘’")
+_TOKEN_HYPHENS = frozenset("-‐‑")
+
+
+def _token_kinds(text: str) -> list[str]:
+    """Each character's part: "word", "space", "layout" or "symbol".
+
+    Layout is the punctuation a claim may leave out or add: a bracket; a
+    period, comma, colon or semicolon that no digit follows; a quotation
+    mark with no digit beside it; a hyphen between two letters (across a
+    line break too). Every other character that is not a letter, digit or
+    space is a symbol and must be the same character in the same place: a
+    decimal point, a ratio or time colon, a thousands comma, a minus or
+    range dash, a minute or second mark, %, °, ×, /, ± and any other sign.
+    """
+
+    kinds: list[str] = []
+    for index, character in enumerate(text):
+        before = text[index - 1] if index else ""
+        after = text[index + 1] if index + 1 < len(text) else ""
+        if character.isspace():
+            kind = "space"
+        elif _TOKEN_WORD.match(character):
+            kind = "word"
+        elif character in _TOKEN_BRACKETS:
+            kind = "layout"
+        elif character in _TOKEN_CLAUSE:
+            kind = "symbol" if after.isdigit() else "layout"
+        elif character in _TOKEN_QUOTES:
+            # "30’" is 30 minutes and "40’’" 40 seconds: a mark held by a
+            # digit, or by such a mark, is a unit.
+            held = before.isdigit() or after.isdigit() or (
+                before in _TOKEN_QUOTES and kinds[-1] == "symbol"
+            )
+            kind = "symbol" if held else "layout"
+        elif character in _TOKEN_HYPHENS:
+            following = text[index + 1 :].lstrip()[:1]
+            kind = "layout" if before.isalpha() and following.isalpha() else "symbol"
+        else:
+            kind = "symbol"
+        kinds.append(kind)
+    return kinds
+
+
+def _claim_tokens(
+    text: str,
+) -> tuple[list[tuple[str, int, int]], list[str], list[str]]:
+    """Words and symbols with their bounds, the layout between them, kinds.
+
+    ``gaps[i]`` is the layout before token ``i``; the last gap is after the
+    last token.
+    """
+
+    kinds = _token_kinds(text)
+    tokens: list[tuple[str, int, int]] = []
+    gaps = [""]
+    index = 0
+    while index < len(text):
+        kind = kinds[index]
+        if kind == "word":
+            end = index
+            while end < len(text) and kinds[end] == "word":
+                end += 1
+            tokens.append((text[index:end], index, end))
+            gaps.append("")
+            index = end
+            continue
+        if kind == "symbol":
+            tokens.append((text[index], index, index + 1))
+            gaps.append("")
+        elif kind == "layout":
+            gaps[-1] += text[index]
+        index += 1
+    return tokens, gaps, kinds
+
+
+def _open_token_edge(text: str, kinds: list[str], index: int) -> bool:
+    """Whether a matched stretch may end at ``index`` without being glued."""
+
+    return (
+        not 0 <= index < len(text)
+        or kinds[index] == "space"
+        or (kinds[index] == "layout" and text[index] not in _TOKEN_HYPHENS)
+    )
+
+
+def _claim_token_span(
+    claim: str, source_text: str, *, ocr_derived: bool = False
+) -> tuple[int, int] | None:
+    """Where the page prints a claim's words and symbols, layout aside.
+
+    Rule claim_tokens (human decision 2026-10-09, lane EV, from lane DS-2's
+    replay): a list printing "Dimethyl sulfoxide (DMSO; Sigma-Aldrich, ...)"
+    refused the material "Dimethyl sulfoxide (DMSO)", and a page breaking
+    "(DW\\xad\\nMEA)" refused "(DW-MEA)". A claim is now the same as a
+    stretch of its evidence page that holds its words and symbols in order
+    with nothing between them but whitespace and layout (``_token_kinds``),
+    where between two of its words the claim and the page have the same
+    layout or one of them has none, and where the stretch is not glued to
+    more of a word or number on the page. Every comparison form of the exact
+    check is tried, so an OCR Hangul line break still joins.
+
+    Still different: a word that differs by a letter or by case ("mM" /
+    "MM"); a digit, decimal point, ratio, sign, range dash, unit or other
+    symbol that differs or is missing ("0.5" / "0 5" / ".5", "1:1000" /
+    "1-1000", "−20" / "20", "2-8" / "2 8", "30’" / "30", "ng/µL" with the µ
+    a font glyph / "ng/L", "◦C" / "°C"); two different layout marks in one
+    place ("), place" / ").\\nplace"); a stretch the page continues as a
+    longer number or compound ("5 mL" in "0.5 mL", "mouse" in "anti-mouse");
+    a dropped negation ("가열한다" / "가열하지 않는다"); another page.
+    Lane DS-2's tool compared casefolded word tokens and dropped every other
+    character; in its own replay that accepted "50 ng/L" for "50 ng/µL" and
+    "1 g/kg" for "1 µg/kg", so symbols, case and number punctuation are kept
+    here.
+    """
+
+    for form in _comparison_forms(ocr_derived):
+        page, starts, ends = _normalized_text_with_bounds(source_text, **form)
+        canonical_claim, _, _ = _normalized_text_with_bounds(claim, **form)
+        claim_tokens, claim_gaps, _ = _claim_tokens(canonical_claim)
+        if not claim_tokens:
+            continue
+        page_tokens, page_gaps, kinds = _claim_tokens(page)
+        words = [token for token, _, _ in claim_tokens]
+        size = len(words)
+        for first in range(len(page_tokens) - size + 1):
+            if page_tokens[first][0] != words[0] or [
+                token for token, _, _ in page_tokens[first : first + size]
+            ] != words:
+                continue
+            if any(
+                claim_gaps[position]
+                and page_gaps[first + position]
+                and claim_gaps[position] != page_gaps[first + position]
+                for position in range(1, size)
+            ):
+                continue
+            start = page_tokens[first][1]
+            end = page_tokens[first + size - 1][2]
+            if _open_token_edge(page, kinds, start - 1) and _open_token_edge(
+                page, kinds, end
+            ):
+                return starts[start], ends[end - 1]
+    return None
+
+
+def _claim_is_supported(
+    record: Any,
+    field_name: str,
+    claim: str,
+    evidence: domain.SourceEvidence,
+    extraction: ProtocolPdfExtraction,
+) -> bool:
+    """Whether a structured claim is backed by its evidence.
+
+    The evidence page prints the claim; or (lane EV) a metadata date claim is
+    the date its excerpt prints, or the evidence page prints the claim's
+    words and symbols with other layout. Only this check reads the lane EV
+    rules: the timer checks and the page-end rule keep the exact comparison.
+    """
+
+    if _claim_occurs_on_evidence_page(claim, evidence, extraction):
+        return True
+    if (
+        isinstance(record, domain.ProtocolMetadata)
+        and field_name in _METADATA_DATE_FIELDS
+        and _written_date_in_excerpt(claim, evidence)
+    ):
+        return True
+    page = extraction.pages[evidence.source_page_number - 1]
+    return (
+        _claim_token_span(claim, page.text, ocr_derived=page.ocr_derived)
+        is not None
+    )
+
+
 #: A step number that may stand bare before its text: "3", or a protocols.io
 #: sub-step "6.1". Any other label needs its period ("A.").
 _BARE_STEP_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)*")
@@ -1542,9 +1840,24 @@ _LINE_HEAD_STEP_NUMBER = re.compile(r"(?:^|[\n\r])[ \t\u00a0]*[0-9]+(?:\.[0-9]+)
 
 
 def _source_label_markers(source_label: str) -> tuple[str, ...]:
-    if _BARE_STEP_NUMBER.fullmatch(source_label):
-        return (f"{source_label}.", source_label)
-    return (f"{source_label}.",)
+    """How a page prints a step label: "3." always, a step number also bare.
+
+    Rule paren_label (human decision 2026-10-09, lane EV, from lane DS-2's
+    replay): the label in parentheses, "(3)" or "3)", is the same label -- an
+    FDA method numbers its steps "(1) Add a few drops ..." and every step of
+    it was refused. A marker is still whole and still opens the excerpt or
+    its line, so other text in parentheses stays a different label: "(0.5)"
+    or "0.5)" for 5, "(13)" or "13)" for 3, "(1:100)" or "(1000)" for 100,
+    "(1 mL)" for 1. So does a label that holds the parentheses itself ("(1)";
+    the prompt asks for the number alone). Same definition as lane DS-2's.
+    """
+
+    markers = (
+        (f"{source_label}.", source_label)
+        if _BARE_STEP_NUMBER.fullmatch(source_label)
+        else (f"{source_label}.",)
+    )
+    return (*markers, f"({source_label})", f"{source_label})")
 
 
 def _source_label_is_at_excerpt_start(
@@ -1734,7 +2047,9 @@ def _verify_claim_tree(
             if (
                 not isinstance(claim, str)
                 or claim_evidence is None
-                or not _claim_occurs_on_evidence_page(
+                or not _claim_is_supported(
+                    value,
+                    field_name,
                     claim,
                     claim_evidence,
                     extraction,
