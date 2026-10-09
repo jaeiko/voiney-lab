@@ -1649,6 +1649,157 @@ def _written_date_in_excerpt(claim: str, evidence: domain.SourceEvidence) -> boo
     )
 
 
+#: Lane EV, rule claim_tokens: the characters of a claim and of its page by
+#: their part in the comparison (``_token_kinds``).
+_TOKEN_WORD = re.compile(r"\w")
+_TOKEN_BRACKETS = frozenset("()[]{}")
+_TOKEN_CLAUSE = frozenset(".,:;")
+_TOKEN_QUOTES = frozenset("\"'“”‘’")
+_TOKEN_HYPHENS = frozenset("-‐‑")
+
+
+def _token_kinds(text: str) -> list[str]:
+    """Each character's part: "word", "space", "layout" or "symbol".
+
+    Layout is the punctuation a claim may leave out or add: a bracket; a
+    period, comma, colon or semicolon that no digit follows; a quotation
+    mark with no digit beside it; a hyphen between two letters (across a
+    line break too). Every other character that is not a letter, digit or
+    space is a symbol and must be the same character in the same place: a
+    decimal point, a ratio or time colon, a thousands comma, a minus or
+    range dash, a minute or second mark, %, °, ×, /, ± and any other sign.
+    """
+
+    kinds: list[str] = []
+    for index, character in enumerate(text):
+        before = text[index - 1] if index else ""
+        after = text[index + 1] if index + 1 < len(text) else ""
+        if character.isspace():
+            kind = "space"
+        elif _TOKEN_WORD.match(character):
+            kind = "word"
+        elif character in _TOKEN_BRACKETS:
+            kind = "layout"
+        elif character in _TOKEN_CLAUSE:
+            kind = "symbol" if after.isdigit() else "layout"
+        elif character in _TOKEN_QUOTES:
+            # "30’" is 30 minutes and "40’’" 40 seconds: a mark held by a
+            # digit, or by such a mark, is a unit.
+            held = before.isdigit() or after.isdigit() or (
+                before in _TOKEN_QUOTES and kinds[-1] == "symbol"
+            )
+            kind = "symbol" if held else "layout"
+        elif character in _TOKEN_HYPHENS:
+            following = text[index + 1 :].lstrip()[:1]
+            kind = "layout" if before.isalpha() and following.isalpha() else "symbol"
+        else:
+            kind = "symbol"
+        kinds.append(kind)
+    return kinds
+
+
+def _claim_tokens(
+    text: str,
+) -> tuple[list[tuple[str, int, int]], list[str], list[str]]:
+    """Words and symbols with their bounds, the layout between them, kinds.
+
+    ``gaps[i]`` is the layout before token ``i``; the last gap is after the
+    last token.
+    """
+
+    kinds = _token_kinds(text)
+    tokens: list[tuple[str, int, int]] = []
+    gaps = [""]
+    index = 0
+    while index < len(text):
+        kind = kinds[index]
+        if kind == "word":
+            end = index
+            while end < len(text) and kinds[end] == "word":
+                end += 1
+            tokens.append((text[index:end], index, end))
+            gaps.append("")
+            index = end
+            continue
+        if kind == "symbol":
+            tokens.append((text[index], index, index + 1))
+            gaps.append("")
+        elif kind == "layout":
+            gaps[-1] += text[index]
+        index += 1
+    return tokens, gaps, kinds
+
+
+def _open_token_edge(text: str, kinds: list[str], index: int) -> bool:
+    """Whether a matched stretch may end at ``index`` without being glued."""
+
+    return (
+        not 0 <= index < len(text)
+        or kinds[index] == "space"
+        or (kinds[index] == "layout" and text[index] not in _TOKEN_HYPHENS)
+    )
+
+
+def _claim_token_span(
+    claim: str, source_text: str, *, ocr_derived: bool = False
+) -> tuple[int, int] | None:
+    """Where the page prints a claim's words and symbols, layout aside.
+
+    Rule claim_tokens (human decision 2026-10-09, lane EV, from lane DS-2's
+    replay): a list printing "Dimethyl sulfoxide (DMSO; Sigma-Aldrich, ...)"
+    refused the material "Dimethyl sulfoxide (DMSO)", and a page breaking
+    "(DW\\xad\\nMEA)" refused "(DW-MEA)". A claim is now the same as a
+    stretch of its evidence page that holds its words and symbols in order
+    with nothing between them but whitespace and layout (``_token_kinds``),
+    where between two of its words the claim and the page have the same
+    layout or one of them has none, and where the stretch is not glued to
+    more of a word or number on the page. Every comparison form of the exact
+    check is tried, so an OCR Hangul line break still joins.
+
+    Still different: a word that differs by a letter or by case ("mM" /
+    "MM"); a digit, decimal point, ratio, sign, range dash, unit or other
+    symbol that differs or is missing ("0.5" / "0 5" / ".5", "1:1000" /
+    "1-1000", "−20" / "20", "2-8" / "2 8", "30’" / "30", "ng/µL" with the µ
+    a font glyph / "ng/L", "◦C" / "°C"); two different layout marks in one
+    place ("), place" / ").\\nplace"); a stretch the page continues as a
+    longer number or compound ("5 mL" in "0.5 mL", "mouse" in "anti-mouse");
+    a dropped negation ("가열한다" / "가열하지 않는다"); another page.
+    Lane DS-2's tool compared casefolded word tokens and dropped every other
+    character; in its own replay that accepted "50 ng/L" for "50 ng/µL" and
+    "1 g/kg" for "1 µg/kg", so symbols, case and number punctuation are kept
+    here.
+    """
+
+    for form in _comparison_forms(ocr_derived):
+        page, starts, ends = _normalized_text_with_bounds(source_text, **form)
+        canonical_claim, _, _ = _normalized_text_with_bounds(claim, **form)
+        claim_tokens, claim_gaps, _ = _claim_tokens(canonical_claim)
+        if not claim_tokens:
+            continue
+        page_tokens, page_gaps, kinds = _claim_tokens(page)
+        words = [token for token, _, _ in claim_tokens]
+        size = len(words)
+        for first in range(len(page_tokens) - size + 1):
+            if page_tokens[first][0] != words[0] or [
+                token for token, _, _ in page_tokens[first : first + size]
+            ] != words:
+                continue
+            if any(
+                claim_gaps[position]
+                and page_gaps[first + position]
+                and claim_gaps[position] != page_gaps[first + position]
+                for position in range(1, size)
+            ):
+                continue
+            start = page_tokens[first][1]
+            end = page_tokens[first + size - 1][2]
+            if _open_token_edge(page, kinds, start - 1) and _open_token_edge(
+                page, kinds, end
+            ):
+                return starts[start], ends[end - 1]
+    return None
+
+
 def _claim_is_supported(
     record: Any,
     field_name: str,
@@ -1658,16 +1809,24 @@ def _claim_is_supported(
 ) -> bool:
     """Whether a structured claim is backed by its evidence.
 
-    The evidence page prints the claim, or (lane EV) a metadata date claim is
-    the date its excerpt prints.
+    The evidence page prints the claim; or (lane EV) a metadata date claim is
+    the date its excerpt prints, or the evidence page prints the claim's
+    words and symbols with other layout. Only this check reads the lane EV
+    rules: the timer checks and the page-end rule keep the exact comparison.
     """
 
     if _claim_occurs_on_evidence_page(claim, evidence, extraction):
         return True
-    return (
+    if (
         isinstance(record, domain.ProtocolMetadata)
         and field_name in _METADATA_DATE_FIELDS
         and _written_date_in_excerpt(claim, evidence)
+    ):
+        return True
+    page = extraction.pages[evidence.source_page_number - 1]
+    return (
+        _claim_token_span(claim, page.text, ocr_derived=page.ocr_derived)
+        is not None
     )
 
 

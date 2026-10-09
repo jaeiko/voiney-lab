@@ -360,5 +360,89 @@ class EqualSpansTests(unittest.TestCase):
         )
 
 
+def material(name: str, excerpt: str, page: int = 1) -> dict:
+    return {"material_id": "material-1", "name_source_text": name, "evidence": evidence(page, excerpt)}
+
+
+def listed(line: str) -> ProtocolPdfExtraction:
+    return extraction(f"{TITLE}\n{line}\n{STEP}")
+
+
+class ClaimTokensTests(RefusalAssertions):
+    """Rule claim_tokens: a claim whose words the page prints with other layout punctuation."""
+
+    def assert_supported(self, line: str, claim: str) -> None:
+        draft = parse(listed(line), materials=[material(claim, line)])
+        self.assertEqual(draft.protocol.materials[0].name_source_text, claim)
+
+    def test_a_name_closed_where_the_page_goes_on_to_its_supplier(self):
+        # PMC8250384: every material of the list, in both providers' answers.
+        for line, claim in (
+            ("8. Dimethyl sulfoxide (DMSO; Sigma-Aldrich, catalog number: D2650)", "Dimethyl sulfoxide (DMSO)"),
+            ("3. 1 M Manganese Chloride (MnCl2; Sigma-Aldrich)", "1 M Manganese Chloride (MnCl2)"),
+            ("2. 1 M HEPES pH 7.9 (HEPES (K+); Sigma-Aldrich)", "1 M HEPES pH 7.9 (HEPES (K+))"),
+            ("10. 0.5 M Ethylenediaminetetraacetic acid (EDTA; Invitrogen)", "0.5 M Ethylenediaminetetraacetic acid (EDTA)"),
+            ("12. 10% Sodium dodecyl sulfate (SDS; Sigma-Aldrich)", "10% Sodium dodecyl sulfate (SDS)"),
+            ("• Cell culture Dishes (60 × 15 mm; Eppendorf)", "Cell culture Dishes (60 × 15 mm)"),
+        ):
+            with self.subTest(claim=claim):
+                self.assert_supported(line, claim)
+
+    def test_a_hyphen_where_the_page_breaks_the_line(self):
+        # PMC6706156: a soft hyphen at the line end; an OCR page that lost it.
+        self.assert_supported("malt-extract agar (DW\u00ad\nMEA) plates", "malt-extract agar (DW-MEA) plates")
+        self.assert_supported("pieces are rec\nommended", "pieces are rec-\nommended")
+
+    def test_a_parenthesis_the_claim_leaves_out(self):
+        # PMC8250384 (low quality scan): "acid (TAPS) pH 8.5 (w/v)".
+        self.assert_supported("propanesulfonic acid (TAPS) pH 8.5 (w/v)", "TAPS pH 8.5")
+
+    def test_a_line_break_inside_a_link(self):
+        line = "licence (https://\ncreativecommons.org/licenses/by/\n4.0/)."
+        draft = parse(listed(line), metadata={
+            "license": "https://creativecommons.org/licenses/by/4.0/",
+            "license_evidence": evidence(1, line),
+        })
+        self.assertEqual(draft.protocol.metadata.license, "https://creativecommons.org/licenses/by/4.0/")
+
+    def test_the_shared_text_check_is_unchanged(self):
+        # Only the claim check reads tokens: the timer checks and the page-end
+        # rule keep the exact comparison.
+        self.assertFalse(analysis_module._claim_occurs_in_text(
+            "Dimethyl sulfoxide (DMSO)", "Dimethyl sulfoxide (DMSO; Sigma)"
+        ))
+
+    def test_the_human_decisions_refusals(self):
+        cases = {
+            "0.5 / 5": ("Add 0.5 mL buffer; stock", "5 mL buffer; stock)"),
+            "0.5 / 5, decimal point dropped": ("Add 0 5 mL buffer;", "Add 0.5 mL (buffer)"),
+            "0.5 / 5, leading point": ("Add 5 mL buffer;", "Add .5 mL buffer)"),
+            "1:1000 / 1:100": ("Dilute 1:1000 PBS;", "Dilute 1:100 (PBS)"),
+            "1:1000 / 1-1000": ("Dilute 1-1000;", "Dilute 1:1000)"),
+            "30 / 3": ("Spin for 30 min;", "Spin for 3 min)"),
+            "30’ / 30": ("Incubate 30’ on ice;", "Incubate 30 (on ice)"),
+            "40’’ / 40’": ("Heat-shock at 42°C for 40’’;", "Heat-shock at 42°C for 40’)"),
+            "mL / µL": ("Add 50 µL water;", "Add 50 mL water)"),
+            "ng/µL / ng/L": ("50 ng/\uf06dL solution;", "50 ng/L solution)"),
+            "mM / MM": ("Add 5 MM NaCl;", "Add 5 mM NaCl)"),
+            "하지 않는다 / 한다": ("시료를 가열하지 않는다;", "시료를 가열한다)"),
+            "do not / do": ("Do not vortex the tube;", "Do vortex the tube)"),
+            "−20 / 20": ("Store at −20 °C;", "Store at 20 °C)"),
+            "2-8 / 2 8": ("Store at 2-8 °C;", "Store at 2 8 °C)"),
+            "5–10 / 5, 10": ("Repeat steps 5–10;", "Repeat steps 5, 10)"),
+            "anti-mouse / mouse": ("Add anti-mouse IgG;", "mouse IgG)"),
+            "◦C / °C": ("Spin at 4 °C;", "Spin at 4 ◦C)"),
+        }
+        for name, (line, claim) in cases.items():
+            with self.subTest(name):
+                self.assert_refused(listed(line), "claim_not_found", materials=[material(claim, line)])
+
+    def test_the_name_on_a_different_page_is_refused(self):
+        line = "8. Dimethyl sulfoxide (DMSO; Sigma-Aldrich)"
+        source = extraction(f"{TITLE}\n{STEP}", line)
+        self.assert_refused(source, "claim_not_found", materials=[material("Dimethyl sulfoxide (DMSO)", TITLE)])
+        self.assert_refused(source, "quote_not_found", materials=[material("Dimethyl sulfoxide (DMSO)", line)])
+
+
 if __name__ == "__main__":
     unittest.main()
