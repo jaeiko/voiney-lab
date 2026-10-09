@@ -262,7 +262,7 @@ its latest row by `sequence_id`; the earlier rows stay as the record of the
 changes. Without a workspace (`VOINEY_LAB_WORKSPACE_ENABLED=false`) the
 settings are held in the server's memory and are gone when it stops. Lane
 WV's `web_lookup` (2026-10-09) is not in this table: it is held in memory
-beside it and starts `on`.
+beside it and starts `on` (until schema 9, below, puts it in the table).
 
 ### Going back
 
@@ -316,6 +316,62 @@ matches its own older rows. Code from lane DI up to this change computes the
 old id with the new payload, so on a store that holds a pre-DI row it refuses
 again, exactly as it did from 2026-10-08. The events this version appends need
 no undoing.
+
+## Commercial workspace schema 8 → 9 (lane VT, 2026-10-09)
+
+Lane VT's decision 7 raised the schema to 9 so that two more settings are
+kept in `experimenter_settings`: lane WV's `web_lookup` ("웹 찾아보기", `on`
+or `off`), which was held only in the server's memory, and lane VT's
+`proactive_mode` ("먼저 알려 주기", `all`, `needed` or `off`). The table's
+`name` CHECK allowed only `confirm_mode` and `question_timing`, and SQLite
+cannot widen a CHECK in place, so `MIGRATION_8_TO_9` in `workspace_store.py`
+builds the table again:
+
+- the rows are copied to `experimenter_settings_v8`, and the table's
+  AUTOINCREMENT counter (its `sqlite_sequence` row) to
+  `experimenter_settings_v8_sequence`;
+- the table is dropped (a drop fires no trigger, so the append-only triggers
+  do not refuse it) and created again, column for column as before, with
+  `name IN ('confirm_mode','question_timing','web_lookup','proactive_mode')`;
+- every row is copied back with its own `sequence_id`, and the counter is put
+  back as it was, so the next row gets the number it would have got;
+- the index `experimenter_settings_principal` and the triggers
+  `experimenter_settings_no_update` and `experimenter_settings_no_delete` are
+  created with the same statements as schema 8's, and both copies are
+  dropped;
+- `schema_metadata` is rebuilt to hold 9, as each earlier migration did.
+
+No other table or row changes. The values each name may take are still
+checked in code (`EXPERIMENTER_SETTING_VALUES`). The migration runs in one
+`BEGIN IMMEDIATE` transaction when the workspace is opened and is rolled back
+on failure ("Commercial workspace migration failed."); a new database runs
+schema 1 and every migration up to 9. `tests/test_lane_vt_settings_store.py`
+builds a schema-8 store with rows of two experimenters and a counter past its
+last row, opens it, and checks the rows, the counter, the index and trigger
+statements, the append-only triggers, the two new names, and that opening it
+a second time changes nothing.
+
+### Reading older data
+
+Every setting a schema-8 store holds keeps its value: a value is still the
+latest row of its name by `sequence_id`. A store migrated from 8 holds no
+`web_lookup` or `proactive_mode` row, so they start at their defaults
+(`EXPERIMENTER_SETTING_DEFAULTS` in `server.py`: `web_lookup=on`,
+`proactive_mode=all`). A `web_lookup` changed before this version was held
+in memory only and was gone when that server stopped; it is not recovered.
+From this version a change of either setting, by voice or on the screen, is
+appended to the table like the others. Without a workspace the settings are
+still held in the server's memory.
+
+### Going back
+
+There is no down-migration. Code older than this version expects schema 8
+and refuses a schema-9 database when it opens it ("Commercial workspace
+schema is unsupported."). Going back means restoring the copy taken before
+the upgrade -- the schema 3 → 4 procedure: stop, back up the SQLite file with
+its WAL/SHM files, start one instance -- and that copy has none of the
+settings recorded since. Moving forward again runs the migration again.
+After an upgrade, confirm `schema_metadata.schema_version = 9`.
 
 ## Environment setting names → `VOINEY_LAB_` (2026-10-04)
 

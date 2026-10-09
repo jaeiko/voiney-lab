@@ -967,12 +967,10 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # photograph unless the experimenter turns it off.
     "web_lookup":"on",
 }
-#: Lane WV's settings are kept in the server's memory for the run, beside the
-#: workspace's record of the others (the workspace's own table is not this
-#: lane's to change).
-_LANE_WV_SETTING_VALUES:dict[str,tuple[str,...]]={"web_lookup":("on","off")}
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
+#: Lane WV's "web_lookup" used to be kept here even with a workspace; since
+#: workspace schema 9 (lane VT, decision 7) it is kept with the others.
 _EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
 
 
@@ -990,11 +988,6 @@ def _load_experimenter_settings()->dict[str,str]:
             principal,store=_commercial_workspace()
             try:
                 settings.update(store.experimenter_settings(principal))
-                settings.update({
-                    name:value for name,value in
-                    _EXPERIMENTER_SETTINGS_MEMORY.get(_experimenter_settings_key(),{}).items()
-                    if name in _LANE_WV_SETTING_VALUES
-                })
                 return settings
             finally:
                 store.close()
@@ -1013,27 +1006,21 @@ def _save_experimenter_settings(changes:Mapping[str,Any],source:str)->dict[str,s
 
     if not isinstance(changes,Mapping) or not changes:
         raise WorkspaceError("Experimenter setting is invalid.")
-    allowed={**EXPERIMENTER_SETTING_VALUES,**_LANE_WV_SETTING_VALUES}
     for name,value in changes.items():
-        if value not in allowed.get(str(name),()):
+        if value not in EXPERIMENTER_SETTING_VALUES.get(str(name),()):
             raise WorkspaceError("Experimenter setting is invalid.")
-    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
-    lane_wv={str(name):str(value) for name,value in changes.items() if name in _LANE_WV_SETTING_VALUES}
-    others={str(name):str(value) for name,value in changes.items() if name not in _LANE_WV_SETTING_VALUES}
+    changed={str(name):str(value) for name,value in changes.items()}
     if _workspace_settings().enabled:
         principal,store=_commercial_workspace()
         try:
-            for name,value in others.items():
+            for name,value in changed.items():
                 store.record_experimenter_setting(
                     principal,name=name,value=value,source=source)
-            kept.update(lane_wv)
-            return {
-                **EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal),
-                **{name:value for name,value in kept.items() if name in _LANE_WV_SETTING_VALUES},
-            }
+            return {**EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal)}
         finally:
             store.close()
-    kept.update({**others,**lane_wv})
+    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
+    kept.update(changed)
     return {**EXPERIMENTER_SETTING_DEFAULTS,**kept}
 
 

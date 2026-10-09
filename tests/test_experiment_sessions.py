@@ -48,7 +48,7 @@ def test_schema_v1_migrates_forward_without_losing_workspace_identity(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 8
+        ).fetchone()[0] == 9
         assert store._connection.execute(
             "SELECT name FROM organizations WHERE organization_id='tenant-a'"
         ).fetchone()[0] == "Existing tenant"
@@ -100,7 +100,7 @@ def test_schema_v2_migrates_observation_tables_and_preserves_sessions(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 8
+        ).fetchone()[0] == 9
         assert store._connection.execute(
             "SELECT protocol_revision_id FROM experiment_sessions WHERE session_id='experiment-v2'"
         ).fetchone()[0] == "revision-a"
@@ -206,7 +206,7 @@ def test_schema_v4_adds_session_provenance_without_losing_legacy_writeback(tmp_p
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 8
+        ).fetchone()[0] == 9
         legacy = store._connection.execute(
             """SELECT report_id,experiment_session_id
             FROM eln_writeback_requests WHERE idempotency_key='legacy-request'"""
