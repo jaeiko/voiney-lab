@@ -2967,6 +2967,13 @@ FRONT_RULES: dict[str, str] = {
                    "취소하고 N단계로 돌아갈까요?'; a yes goes back and the revert "
                    "is recorded beside the completions, which stay (lane CF, "
                    "decision 3)",
+    "visual_request": "a picture asked for -- the step's own figure ('그림 보여줘', "
+                      "'이 단계 그림 있어?', '사진 보여줘'), a web lookup of a thing "
+                      "named ('X가 어떻게 생겼어?', '실제 사진', '웹에서 찾아봐'), or a "
+                      "drawing ('그림으로 그려 줘') -- read by rule, router or not, "
+                      "and never a state change; the server shows the source's "
+                      "figure first and runs the web or the drawing after the "
+                      "answer (lane WV, decision 4)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2982,6 +2989,8 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
     CuratedProtocolAction.PREVIEW_STEP: "step_lookup",
     CuratedProtocolAction.NEXT_INFORMATION: "step_lookup",
     CuratedProtocolAction.FULL_DETAIL: "step_lookup",
+    # Lane WV, decision 4: a picture request is the rules' own turn.
+    CuratedProtocolAction.VISUAL_REQUEST: "visual_request",
 }
 #: The protocol-query scopes that are server values (decision 3); purpose,
 #: overview, materials and the like stay with the model.
