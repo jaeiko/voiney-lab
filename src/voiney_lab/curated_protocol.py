@@ -9902,12 +9902,13 @@ class CuratedProtocolSession:
                 f"한 번 더 하시나요? 하시면 {first}단계로 돌아갈게요."
             )
         else:
+            ended = self._round_end_words(rounds_done, guidance)
             display = (
-                f"{first}~{last}단계를 한 번 더 해야 해요"
+                f"{ended}{first}~{last}단계를 한 번 더 해야 해요"
                 f"({round_words(rounds_done + 1, required, spoken=False)}). {first}단계로 돌아갈까요?"
             )
             speech = (
-                f"{first}~{last}단계를 한 번 더 해야 해요"
+                f"{ended}{first}~{last}단계를 한 번 더 해야 해요"
                 f"({round_words(rounds_done + 1, required, spoken=True)}). {first}단계로 돌아갈까요?"
             )
         labels = {item.step_id: item.source_label for item in steps}
@@ -10062,7 +10063,26 @@ class CuratedProtocolSession:
         if required is None or rounds_done != required:
             return "", None
         first, last = self._range_labels(interval)
-        return f"{first}~{last}단계 {required}회를 모두 마쳤어요. ", None
+        ended = self._round_end_words(rounds_done, guidance)
+        return f"{ended}{first}~{last}단계 {required}회를 모두 마쳤어요. ", None
+
+    def _round_end_words(self, rounds_done: int, guidance: Mapping[str, Any]) -> str:
+        """"3회 중 1회째 끝났어요. " as a round of a source-fixed repeat ends, else "".
+
+        Lane VT, decision 4: only a count the source states (lane CB's fixed
+        repetition) is counted aloud; a count a person gave or left open, or a
+        repeat-until, is not. Under "먼저 알려 주기: 끄기" it is not said; the
+        card still shows the round.
+        """
+
+        required = guidance.get("count")
+        if (
+            guidance.get("value_source") != VALUE_SOURCE_SOURCE
+            or not isinstance(required, int) or isinstance(required, bool)
+            or not self.proactive_says("repeat_round")
+        ):
+            return ""
+        return f"{required}회 중 {rounds_done}회째 끝났어요. "
 
     # --- lane WV: a picture asked for -----------------------------------------
 

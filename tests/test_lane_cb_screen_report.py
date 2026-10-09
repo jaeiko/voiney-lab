@@ -33,7 +33,8 @@ class ScreenFieldsTests(Turns, unittest.TestCase):
         self.assertEqual(fields["open_question"]["kind"], "repeat_round")
         self.assertEqual(
             fields["open_question"]["text"],
-            "12~15단계를 한 번 더 해야 해요(2/3회차). 12단계로 돌아갈까요?",
+            # Lane VT, decision 4: the round that ended is counted first.
+            "3회 중 1회째 끝났어요. 12~15단계를 한 번 더 해야 해요(2/3회차). 12단계로 돌아갈까요?",
         )
         self.say("응")
         fields = server_module.curated_screen_fields(self.session)
