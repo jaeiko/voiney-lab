@@ -164,7 +164,9 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             ("타이머 얼마나 남았어", "timer_remaining"),
             ("얼마나 남았어?", "timer_remaining"),
             ("그거 뭐야", "coreference_clarify"),
-            ("그거 얼마나 넣어?", "coreference_clarify"),
+            # Lane VT, decision 3: an amount asked of "그거" is counted
+            # among the step's values, no longer asked back as it stands.
+            ("그거 얼마나 넣어?", "reference_value"),
             ("다시 말해줘", "repeat_last_reply"),
             ("소리가 안 나", "repeat_last_reply"),
             ("검색 취소해", "cancel_background_job"),
@@ -271,6 +273,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "note_record", "record_fix", "report_review",
             # lane CB, decisions 1, 2 and 3
             "branch_condition", "repeat_count", "repeat_round",
+            # lane VT, decision 3
+            "reference_value",
             # lane CF, decisions 1, 3, 4 and 5
             "experimenter_setting", "step_revert", "prestart_question", "protocol_basis",
             # lane PT, decision 3
