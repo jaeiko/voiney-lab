@@ -27,9 +27,12 @@ from voiney_lab.curated_protocol import FRONT_RULES, CuratedProtocolAction
 from voiney_lab.identity import Principal, Role
 from voiney_lab.workspace_store import WorkspaceSettings, initialize_workspace_store
 
-ROUND_2_OF_3 = "12~15단계를 한 번 더 해야 해요(2/3회차). 12단계로 돌아갈까요?"
-ROUND_2_OF_3_SPOKEN = "12~15단계를 한 번 더 해야 해요(3회 중 2회차). 12단계로 돌아갈까요?"
-ROUND_3_OF_3 = "12~15단계를 한 번 더 해야 해요(3/3회차). 12단계로 돌아갈까요?"
+# Lane VT, decision 4: the round that ended is counted first ("3회 중 1회째
+# 끝났어요."), the count being the source's.
+ROUND_2_OF_3 = "3회 중 1회째 끝났어요. 12~15단계를 한 번 더 해야 해요(2/3회차). 12단계로 돌아갈까요?"
+ROUND_2_OF_3_SPOKEN = (
+    "3회 중 1회째 끝났어요. 12~15단계를 한 번 더 해야 해요(3회 중 2회차). 12단계로 돌아갈까요?")
+ROUND_3_OF_3 = "3회 중 2회째 끝났어요. 12~15단계를 한 번 더 해야 해요(3/3회차). 12단계로 돌아갈까요?"
 
 
 class FixedRepeatRoundsTests(Turns, unittest.TestCase):
@@ -109,7 +112,7 @@ class FixedRepeatRoundsTests(Turns, unittest.TestCase):
         # Lane VX, decision 1: a named completion says what it recorded first.
         self.assertTrue(done.speech_text.startswith(
             "16단계 완료로 기록했어요. "
-            "12~15단계 3회를 모두 마쳤어요. 17단계로 이동했습니다. 안내를 화면에 표시했습니다."
+            "3회 중 3회째 끝났어요. 12~15단계 3회를 모두 마쳤어요. 17단계로 이동했습니다. 안내를 화면에 표시했습니다."
         ), done.speech_text)
         self.assertEqual(done.step_record["kind"], "repeat_round_completion")
         self.assertEqual(done.step_record["round"], 3)
@@ -265,7 +268,8 @@ class RegisteredRepeatRoundsTests(Turns, unittest.TestCase):
         plan = self.say("네")
         self.assertEqual(
             plan.display_text,
-            "조건에 해당한다고 기록했어요. 36~41단계를 한 번 더 해야 해요(2/3회차). 36단계로 돌아갈까요?",
+            "조건에 해당한다고 기록했어요. 3회 중 1회째 끝났어요. "
+            "36~41단계를 한 번 더 해야 해요(2/3회차). 36단계로 돌아갈까요?",
         )
         self.assertEqual(plan.step_record["kind"], "branch_answer")
         self.assertEqual(self.session.open_server_question()["kind"], "repeat_round")
@@ -277,7 +281,9 @@ class RegisteredRepeatRoundsTests(Turns, unittest.TestCase):
         self.assertEqual(self.label(), "42")
         self.assertIsNone(self.session.open_server_question())  # the condition was answered
         third = self.say("42단계 완료했어")
-        self.assertEqual(third.display_text, "36~41단계를 한 번 더 해야 해요(3/3회차). 36단계로 돌아갈까요?")
+        self.assertEqual(
+            third.display_text,
+            "3회 중 2회째 끝났어요. 36~41단계를 한 번 더 해야 해요(3/3회차). 36단계로 돌아갈까요?")
 
     def test_an_unanswered_condition_holds_the_repeat(self) -> None:
         self.open(index_of("41"))

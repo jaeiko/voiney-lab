@@ -81,6 +81,23 @@ def _clean_text(value: str, *, maximum: int = 1600) -> str:
     return cleaned
 
 
+#: The experiment record's events by their Korean names, as the screen's
+#: event list shows them; the report's timeline (CSV) carries them beside the
+#: event type. Lane VT, decision 8: the timer notices the server gave first.
+EVENT_NAMES_KO: dict[str, str] = {
+    "session_started": "세션 시작", "step_completed": "단계 완료", "step_advanced": "단계 이동",
+    "observation": "관찰 기록", "blocked": "진행 차단", "anomaly": "이상 사항",
+    "session_stopped": "세션 종료", "timer_started": "타이머 시작",
+    "workflow_paused": "일시정지", "workflow_resumed": "재개", "step_presented": "단계 안내",
+    "source_consulted": "참고 자료 확인", "system_anomaly": "시스템 이상",
+    "safety_notices_acknowledged": "안전 주의 확인", "workflow_completed": "실험 완료",
+    "report_finalized": "기록 마감", "record_corrected": "기록 정정",
+    "record_retracted": "기록 취소", "report_value_confirmed": "값 확인",
+    "report_review_deferred": "값 확인 화면으로",
+    "timer_end_notice": "타이머 끝 알림", "timer_last_minute_notice": "타이머 1분 전 알림",
+}
+
+
 class ExperimentReportStore:
     """Small SQLite store with one report per procedure session."""
 
@@ -560,6 +577,7 @@ class ExperimentReportStore:
             "user_wording", "created_at",
             "source_duration_seconds", "timer_started_at", "elapsed_seconds",
             "remaining_seconds", "completion_state", "demo_bypassed",
+            "event_name_ko",
         ))
         for event in report["events"]:
             payload = event.get("payload") or {}
@@ -576,6 +594,7 @@ class ExperimentReportStore:
                 timer.get("remaining_seconds", ""),
                 timer.get("completion_state", ""),
                 timer.get("demo_bypassed", ""),
+                EVENT_NAMES_KO.get(str(event["event_type"]), ""),
             ))
         return output.getvalue().encode("utf-8-sig")
 

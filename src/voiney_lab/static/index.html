@@ -150,6 +150,12 @@
               <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
                 <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
                 <option value="off">끔 · 원문에서만 찾기</option>
+              </select></label>
+              <!-- Lane VT decision 6: what the server says before it is asked (the same as saying "먼저 알려 주기 꺼 줘"). -->
+              <label class="control-field"><span>먼저 알려 주기</span><select id="proactive-mode" aria-label="먼저 알려 주기" aria-describedby="experimenter-settings-status">
+                <option value="all" selected>모두 · 타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계</option>
+                <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
+                <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
               </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
               <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
                 <option value="">기본 마이크 (시스템 설정)</option>
@@ -230,6 +236,7 @@
             <div class="workflow-details-rows">
               <div class="workflow-detail-row"><b>출처</b><span id="procedure-source">—</span></div>
               <div class="workflow-detail-row"><b>타이머</b><span id="procedure-timer">—</span></div>
+              <div class="workflow-detail-row" id="timer-notice-container" hidden><b>타이머 알림</b><span id="timer-notice" role="status">—</span></div>
               <div class="workflow-detail-row" id="observation-container"><b>관찰</b><span id="procedure-observation">—</span></div>
               <div class="workflow-detail-row" id="handoff-container" hidden><b>진행 제한</b><span id="procedure-handoff">—</span></div>
               <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
@@ -425,7 +432,7 @@ const SERVER_CODE_LABELS=Object.freeze({
  pipeline_stage:Object.freeze({extraction:"원문 읽기",ocr:"OCR",analysis:"분석",evidence:"근거 대조",readiness:"실행 준비",translation:"번역",ready:"실행 가능"}),
  block_reason:Object.freeze({unsupported_repeat_until:"반복 종료 조건 미지원",unresolved_ambiguity:"실행 제어 미해결",final_step_boundary:"마지막 단계 경계",endpoint_observation_not_reported:"관찰 결과 보고 필요",repeat_interval_open:"반복 구간 진행 중",next_step_not_startable:"다음 단계 시작 불가 · 사람 확인 필요",already_at_final_step:"이미 마지막 단계",run_not_active:"실행 중이 아님"}),
  experiment_report_status:Object.freeze({in_progress:"진행 중",completed:"완료",blocked:"진행 차단",stopped:"종료됨",incomplete:"미완료"}),
- experiment_report_event:Object.freeze({session_started:"세션 시작",step_completed:"단계 완료",step_advanced:"단계 이동",observation:"관찰 기록",blocked:"진행 차단",anomaly:"이상 사항",session_stopped:"세션 종료",timer_started:"타이머 시작",workflow_paused:"일시정지",workflow_resumed:"재개",step_presented:"단계 안내",source_consulted:"참고 자료 확인",system_anomaly:"시스템 이상",safety_notices_acknowledged:"안전 주의 확인",workflow_completed:"실험 완료",report_finalized:"기록 마감",record_corrected:"기록 정정",record_retracted:"기록 취소",report_value_confirmed:"값 확인",report_review_deferred:"값 확인 화면으로"}),
+ experiment_report_event:Object.freeze({session_started:"세션 시작",step_completed:"단계 완료",step_advanced:"단계 이동",observation:"관찰 기록",blocked:"진행 차단",anomaly:"이상 사항",session_stopped:"세션 종료",timer_started:"타이머 시작",workflow_paused:"일시정지",workflow_resumed:"재개",step_presented:"단계 안내",source_consulted:"참고 자료 확인",system_anomaly:"시스템 이상",safety_notices_acknowledged:"안전 주의 확인",workflow_completed:"실험 완료",report_finalized:"기록 마감",record_corrected:"기록 정정",record_retracted:"기록 취소",report_value_confirmed:"값 확인",report_review_deferred:"값 확인 화면으로",timer_end_notice:"타이머 끝 알림",timer_last_minute_notice:"타이머 1분 전 알림"}),
  timer_completion_state:Object.freeze({completed:"완료",in_progress:"진행 중",not_started:"시작 전"}),
  report_status:REPORT_LABELS,
  safety_report_urgency:Object.freeze({emergency:"응급",urgent:"긴급",routine:"일반"}),
@@ -1887,6 +1894,8 @@ function renderExperimenterSettings(settings){
  if(timing&&["before_start","during"].includes(settings.question_timing))timing.value=settings.question_timing;
  const web=$("web-lookup");
  if(web&&["on","off"].includes(settings.web_lookup))web.value=settings.web_lookup;
+ const proactive=$("proactive-mode");
+ if(proactive&&["all","needed","off"].includes(settings.proactive_mode))proactive.value=settings.proactive_mode;
 }
 async function loadExperimenterSettings(){
  try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
@@ -2191,6 +2200,10 @@ async function playFiller(data,meta,generation=sessionGeneration){if(generation!
 // VOINEY_LAB_CASCADE_FILLER_MODE=tone: the waiting cue is one short, quiet tone made here.
 // The server sends no audio for it and nothing is said.
 const FILLER_TONE={frequency_hz:660,duration_s:.15,attack_s:.015,peak_gain:.06};
+// Lane VT decision 1: the sound of a timer's end, made here; nothing is said by it.
+const TIMER_NOTICE_TONE={frequency_hz:880,duration_s:.35,attack_s:.02,peak_gain:.12};
+function playTimerNoticeTone(){if(!playContext||typeof playContext.createOscillator!=="function"||typeof playContext.createGain!=="function")return false;try{const start=playContext.currentTime||0,end=start+TIMER_NOTICE_TONE.duration_s,tone=playContext.createOscillator(),envelope=playContext.createGain();tone.type="sine";tone.frequency.setValueAtTime(TIMER_NOTICE_TONE.frequency_hz,start);envelope.gain.setValueAtTime(0,start);envelope.gain.linearRampToValueAtTime(TIMER_NOTICE_TONE.peak_gain,start+TIMER_NOTICE_TONE.attack_s);envelope.gain.linearRampToValueAtTime(0,end);tone.connect(envelope);envelope.connect(cascadeGain||playContext.destination);tone.onended=()=>{try{envelope.disconnect();}catch(_){}};tone.start(start);tone.stop(end);return true;}catch(_){return false;}}
+function renderTimerNotice(notice){const host=$("timer-notice"),row=$("timer-notice-container");if(host)host.textContent=normalizePresentationText(notice.text);if(row)row.hidden=false;return notice.chime===true?playTimerNoticeTone():false;}
 async function playFillerTone(meta,generation=sessionGeneration){if(generation!==sessionGeneration||!currentCascadeMessage(meta)||cascadeTurnInterrupted(meta)||playing||activeSource||!sessionActive||!playContext||typeof playContext.createOscillator!=="function"||typeof playContext.createGain!=="function")return false;clearFillerPlayback();const epoch=playbackEpoch;await playContext.resume();if(generation!==sessionGeneration||epoch!==playbackEpoch||playing||activeSource)return false;const start=playContext.currentTime||0,end=start+FILLER_TONE.duration_s,tone=playContext.createOscillator(),envelope=playContext.createGain();tone.type="sine";tone.frequency.setValueAtTime(FILLER_TONE.frequency_hz,start);envelope.gain.setValueAtTime(0,start);envelope.gain.linearRampToValueAtTime(FILLER_TONE.peak_gain,start+FILLER_TONE.attack_s);envelope.gain.linearRampToValueAtTime(0,end);tone.connect(envelope);envelope.connect(cascadeGain||playContext.destination);fillerSource=tone;fillerIdentity={turn_id:meta.turn_id,generation:meta.generation};tone.onended=()=>{try{envelope.disconnect();}catch(_){}if(fillerSource!==tone)return;fillerSource=null;fillerIdentity=null;};tone.start(start);tone.stop(end);return true;}
 // What a Turn card says about its waiting cue. The tone's label is brief: it
 // goes after FILLER_LISTENING_MS, or as soon as the answer starts playing. A
@@ -2236,6 +2249,13 @@ async function onMessage(e,generation,current){
  }
  if(m.type==="session.greeting"){
   const accepted=acceptedSessionConfiguration,key=m.greeting_id;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof key!=="string"||greetingEvents.has(key))return;greetingEvents.add(key);activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=key;if(node.children?.[0])node.children[0].textContent="Session greeting";node.querySelector(".transcript").textContent="새 세션 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="세션 준비 안내 · 음성으로 중단 가능";renderState("THINKING");
+ }
+ // Lane VT decisions 1-2: the server tells the step timer before it is asked -- on the screen (a timer's end with a short sound) and, when the setting has it said, as a turn of its own like the greeting.
+ if(m.type==="protocol.timer.notice"){
+  const accepted=acceptedSessionConfiguration;if(!accepted||m.configuration_id!==accepted.configuration_id||typeof m.text!=="string")return;renderTimerNotice(m);
+ }
+ if(m.type==="protocol.notice.speech"){
+  const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof m.text!=="string")return;activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=`notice-${m.notice_id||m.turn_id}`;if(node.children?.[0])node.children[0].textContent="먼저 알림";node.querySelector(".transcript").textContent="타이머 알림";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="서버가 먼저 알림 · 음성으로 중단 가능";renderState("THINKING");
  }
  if(m.type==="session.greeting.failed"){
   const accepted=acceptedSessionConfiguration;if(accepted?.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&m.turn_id>0&&Number.isInteger(m.generation)){const node=turnNode(m.turn_id,generation);node.querySelector(".turn-status").textContent="세션은 준비됐지만 안내 음성을 재생하지 못했습니다.";renderState("LISTENING");}
@@ -2302,7 +2322,7 @@ async function onMessage(e,generation,current){
  if(m.type==="audio.complete"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){audioComplete=true;pump(generation);}
  if(m.type==="audio.replay.available"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){}
  if(m.type==="audio.replay.request"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){const node=turnNode(m.turn_id,generation),status=node.querySelector(".replay-status");if(lastReplayableAudio){pendingVoiceReplay=true;if(status)status.textContent="현재 안내 뒤에 마지막 답변을 한 번 다시 재생합니다.";pump(generation);}else if(status)status.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";}
- if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;const isGreeting=m.route==="server_greeting"||Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const statsEl=turnNode(m.turn_id,generation).querySelector(".stats");if(statsEl){statsEl.textContent=isGreeting?"경로 server_greeting · 세션 안내":`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;}if(Number.isInteger(m.generation)){const serverKey=turnProgressKey(m.turn_id,m.generation);turnHold(serverKey).done={route:m.route,result_kind:m.result_kind,speech_mode:m.speech_mode};const progress=turnProgress.get(serverKey);if(progress?.state==="blocked")renderTurnState(turnNode(m.turn_id,generation),"blocked",progress.route,serverKey);}if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
+ if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;const isGreeting=m.route==="server_greeting"||Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const statsEl=turnNode(m.turn_id,generation).querySelector(".stats");if(statsEl){statsEl.textContent=isGreeting?(m.route==="server_notice"?"경로 server_notice · 먼저 알림":"경로 server_greeting · 세션 안내"):`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;}if(Number.isInteger(m.generation)){const serverKey=turnProgressKey(m.turn_id,m.generation);turnHold(serverKey).done={route:m.route,result_kind:m.result_kind,speech_mode:m.speech_mode};const progress=turnProgress.get(serverKey);if(progress?.state==="blocked")renderTurnState(turnNode(m.turn_id,generation),"blocked",progress.route,serverKey);}if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
  if(m.type==="playback.completed"&&!cascadeTurnInterrupted(m)&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const isGreeting=Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(stats&&!isGreeting&&!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
  if(m.type==="error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(researcherErrorMessage(m.message),m.turn_id);}
 }
@@ -2340,6 +2360,7 @@ $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0]
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
 $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting("web_lookup",event.target.value);});
+$("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("proactive_mode",event.target.value);});
 globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
 </script>
 </body>

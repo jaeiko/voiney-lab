@@ -22,7 +22,7 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 8
+WORKSPACE_SCHEMA_VERSION = 9
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -773,10 +773,57 @@ DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
 
-#: The values each setting may take (lane CF, decisions 1 and 4).
+#: Lane VT (2026-10-09), decision 7: the settings table takes two more names,
+#: lane WV's "web_lookup" and lane VT's "proactive_mode". SQLite cannot widen
+#: a CHECK in place, so the table is built again: its rows are copied with
+#: their sequence ids, the AUTOINCREMENT counter is put back as it was, and
+#: the index and both append-only triggers are made as schema 8 made them.
+#: DROP TABLE fires no trigger, so the append-only rows are not refused.
+MIGRATION_8_TO_9 = """
+CREATE TABLE experimenter_settings_v8 AS SELECT * FROM experimenter_settings;
+CREATE TABLE experimenter_settings_v8_sequence AS
+ SELECT seq FROM sqlite_sequence WHERE name='experimenter_settings';
+DROP TABLE experimenter_settings;
+CREATE TABLE experimenter_settings(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ name TEXT NOT NULL CHECK(name IN ('confirm_mode','question_timing','web_lookup','proactive_mode')),
+ value TEXT NOT NULL,
+ source TEXT NOT NULL CHECK(source IN ('voice','screen')),
+ created_at TEXT NOT NULL
+);
+INSERT INTO experimenter_settings(
+ sequence_id,organization_id,principal_id,name,value,source,created_at
+) SELECT sequence_id,organization_id,principal_id,name,value,source,created_at
+ FROM experimenter_settings_v8 ORDER BY sequence_id;
+DELETE FROM sqlite_sequence WHERE name='experimenter_settings';
+INSERT INTO sqlite_sequence(name,seq)
+ SELECT 'experimenter_settings',seq FROM experimenter_settings_v8_sequence;
+CREATE INDEX experimenter_settings_principal
+ ON experimenter_settings(organization_id,principal_id,name,sequence_id);
+CREATE TRIGGER experimenter_settings_no_update BEFORE UPDATE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experimenter_settings_no_delete BEFORE DELETE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+DROP TABLE experimenter_settings_v8;
+DROP TABLE experimenter_settings_v8_sequence;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=9)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(9);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+#: The values each setting may take (lane CF, decisions 1 and 4; lane WV,
+#: decision 2; lane VT, decision 6).
 EXPERIMENTER_SETTING_VALUES: dict[str, tuple[str, ...]] = {
     "confirm_mode": ("readback", "confirm", "quiet"),
     "question_timing": ("before_start", "during"),
+    "web_lookup": ("on", "off"),
+    "proactive_mode": ("all", "needed", "off"),
 }
 
 
@@ -2865,6 +2912,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 8
+    if version == 8:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_8_TO_9 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 9
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

@@ -2923,6 +2923,13 @@ FRONT_RULES: dict[str, str] = {
                  "(lane PT, decision 3); for a sidecar timer (the in-gel fixture) "
                  "its value and the step's source sentence (lane VX, decision 5)",
     "coreference_clarify": "F7 '그거' and other references asked back (D3)",
+    "reference_value": "'그거 얼마나 넣어?', '그거 몇 분이야?', '그거 몇 도야?' -- an "
+                       "amount, a time or a temperature asked of '그거' with nothing "
+                       "recent it names: the current step's values of that kind are "
+                       "counted; one is said with what it belongs to, two or three "
+                       "are asked back ('A요, B요?'), more go to the list on the "
+                       "screen, none is said so; the next words pick one. Nothing "
+                       "changes (lane VT, decision 3)",
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
     "targeted_completion": "a completion that names the current step (D2)",
@@ -3774,6 +3781,85 @@ QUESTION_TIMING_WORDS = {"before_start": "시작 전에 묻기", "during": "실�
 #: photograph. On by default; the experimenter turns it off ("웹 찾아보기 꺼
 #: 줘") and the server keeps the choice with the other settings.
 WEB_LOOKUP_VALUES = ("on", "off")
+#: Lane VT, decision 6: what the server says before it is asked. "all" (the
+#: default): a timer's end and its last minute, a fixed repeat's round, and
+#: where the run stands on coming back (decisions 1, 2, 4, 5); "needed": a
+#: timer's end and the round (1, 4); "off": nothing is said first -- the
+#: screen notice and the sound of a timer's end stay.
+PROACTIVE_MODES = ("all", "needed", "off")
+PROACTIVE_MODE_WORDS = {"all": "모두", "needed": "필요한 것만", "off": "끄기"}
+#: Decision 2: a timer at least this long is told its last minute, once.
+TIMER_LAST_MINUTE_FROM_SECONDS = 300
+TIMER_LAST_MINUTE_SECONDS = 60
+#: Decision 5: words after a silence longer than this are answered led by
+#: where the run stands -- unless they are a command.
+RETURN_SUMMARY_AFTER_SECONDS = 600
+#: The answers that change nothing and may be led by it; a command (a move,
+#: a start or an end, a timer, a record, a setting) is carried out alone.
+_RETURN_SUMMARY_ACTIONS = frozenset({
+    CuratedProtocolAction.CURRENT, CuratedProtocolAction.FULL_DETAIL,
+    CuratedProtocolAction.NEXT_INFORMATION, CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.OPERATIONAL_DEVIATION, CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.VISUAL_REQUEST,
+    CuratedProtocolAction.PROTOCOL_QUERY, CuratedProtocolAction.CLARIFY_REFERENCE,
+    CuratedProtocolAction.CLARIFY_PARAMETER, CuratedProtocolAction.OFF_TOPIC,
+    CuratedProtocolAction.UNSUPPORTED, CuratedProtocolAction.AGENT_META,
+    CuratedProtocolAction.TIMER_STATUS, CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE, CuratedProtocolAction.LAB_DOMAIN_QA,
+})
+#: The notices each choice says aloud; the screen shows a timer's every
+#: notice whatever is chosen (decision 6).
+PROACTIVE_SPOKEN_KINDS: dict[str, frozenset[str]] = {
+    "all": frozenset({"timer_ended", "timer_last_minute", "repeat_round", "return_summary"}),
+    "needed": frozenset({"timer_ended", "repeat_round"}),
+    "off": frozenset(),
+}
+
+
+@dataclass(frozen=True)
+class TimerNotice:
+    """One thing the server says about the step timer before it is asked (lane VT).
+
+    Read-only: it moves no step, completes nothing and leaves the timer as
+    it is. ``spoken`` is whether the experimenter's "먼저 알려 주기" has it
+    said; the screen shows it either way, a timer's end with a sound
+    (``chime``). Its words come from the server's timer and the source: the
+    timer as it is named, and the next step's number with the first sentence
+    of its checked Korean.
+    """
+
+    notice_id: str
+    kind: str  # "timer_ended" | "timer_last_minute"
+    display_text: str
+    speech_text: str
+    spoken: bool
+    chime: bool
+    due_at: float
+    step_index: int
+    step_id: str | None
+    step_label: str | None
+    next_step_label: str | None
+    timer: dict[str, Any]
+    #: "verified_sidecar" when it carries a step's Korean (the server names a
+    #: stored machine translation as such), else "not_applicable".
+    translation_status: str = "not_applicable"
+
+    def public_dict(self) -> dict[str, Any]:
+        """What the screen and the record take: no clock of the server's own."""
+
+        return {
+            "notice_id": self.notice_id,
+            "notice_kind": self.kind,
+            "text": self.display_text,
+            "spoken": self.spoken,
+            "chime": self.chime,
+            "due_at": datetime.fromtimestamp(self.due_at, tz=timezone.utc).isoformat(),
+            "step_id": self.step_id,
+            "step_label": self.step_label,
+            "next_step_label": self.next_step_label,
+            "timer": dict(self.timer),
+        }
+_PROACTIVE_NAME = r"먼저\s*알려\s*주기(?:은|는|을|를|가)?\s*"
 _SETTING_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래))?"
 _SETTING_DO = rf"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|켜|변경해|전환해){_SETTING_POLITE})?"
 _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
@@ -3787,6 +3873,15 @@ _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
      {"web_lookup": "off"}),
     (re.compile(rf"^웹\s*(?:찾아보기|검색|조회)(?:은|는|을|를)?\s*(?:켜|다시\s*켜){_SETTING_POLITE}$"),
      {"web_lookup": "on"}),
+    # Lane VT, decision 6: "먼저 알려 주기 꺼 줘 / 켜 줘 / 모두 / 필요한 것만".
+    (re.compile(rf"^{_PROACTIVE_NAME}(?:꺼|끄기|그만\s*해|하지\s*마){_SETTING_POLITE}$"),
+     {"proactive_mode": "off"}),
+    (re.compile(rf"^{_PROACTIVE_NAME}(?:켜|다시\s*켜){_SETTING_POLITE}$"),
+     {"proactive_mode": "all"}),
+    (re.compile(rf"^{_PROACTIVE_NAME}(?:모두|전부){_SETTING_DO}$"),
+     {"proactive_mode": "all"}),
+    (re.compile(rf"^{_PROACTIVE_NAME}필요한\s*(?:것|거)만{_SETTING_DO}$"),
+     {"proactive_mode": "needed"}),
     (re.compile(
         rf"^(?:(?:조건|분기|횟수|조건\s*분기)\s*(?:와|랑|하고)?\s*)*(?:횟수\s*)?질문(?:은|는|을)?\s*"
         rf"(?:실험\s*(?:중에|하면서)|그\s*단계에서|단계마다)\s*(?:물어\s*(?:봐)?|해){_SETTING_POLITE}$"
@@ -4608,6 +4703,118 @@ _VESSEL_AFTER = re.compile(r"\s*tubes?\b", re.I)
 _VALUE_TO_SUBSTANCE = re.compile(
     r"\s*(?:of\s+)?(?:the\s+)?(?:above\s+)?", re.I,
 )
+
+
+# --- Lane VT, decision 3: "그거" asked for a value, with nothing it names ----
+# "그거 얼마나 넣어?", "그거 몇 분이야?", "그거 몇 도야?": an amount, a time or
+# a temperature asked of a reference with no name. The current step's values
+# of that kind are counted, the source's own; nothing is guessed.
+
+_VAGUE_VALUE_REFERENCE = re.compile(
+    r"^(?:(?:그럼|그러면|근데|그래서|자|이제|아까|여기서|저기)\s*)*"
+    r"(?:그거|그건|그게|그것|이거|이건|이게|이것|저거|저건|저게)(?:은|는|이|가|도)?\s+(?P<rest>.+)$"
+)
+_TEMPERATURE_QUESTION = re.compile(
+    r"^(?:몇\s*도|온도(?:가|는|를|는요)?\s*(?:몇|얼마|어떻게|뭐))"
+)
+#: What each kind is called when there is none ("지금 단계에는 정해진 시간이 없어요.").
+VALUE_KIND_WORDS = {"amount": "넣는 양", "time": "정해진 시간", "temperature": "정해진 온도"}
+#: A source verb, and the Korean name of what a time or a temperature is for.
+_VALUE_ACTION_NAMES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bincubat|\bgrow|\bcultur|배양|인큐베이", re.I), "배양"),
+    (re.compile(r"\bcentrifug|\bspin|원심", re.I), "원심분리"),
+    (re.compile(r"\bdestain|탈색", re.I), "탈색"),
+    (re.compile(r"\bwash|\brinse|세척|헹", re.I), "세척"),
+    (re.compile(r"\bheat|\bboil|\bdenatur|가열|끓", re.I), "가열"),
+    (re.compile(r"\bdry|\bdried|\bspeedvac|건조|말리", re.I), "건조"),
+    (re.compile(r"\bcool|\bchill|식히|냉각", re.I), "냉각"),
+    (re.compile(r"\bstain|염색", re.I), "염색"),
+    (re.compile(r"\bshak|\bagitat|\brock|\bstir|흔들|교반|저어", re.I), "교반"),
+    (re.compile(r"\bmix|\bvortex|섞|혼합", re.I), "혼합"),
+    (re.compile(r"\bdigest|소화", re.I), "소화"),
+    (re.compile(r"\bsonicat|초음파", re.I), "초음파 처리"),
+    (re.compile(r"\bblock|블로킹", re.I), "블로킹"),
+    (re.compile(r"\bplace|\bleave|\bkeep|\bstore|\bstand|\blet\b|두|보관|방치", re.I), "두는"),
+)
+_STEP_TEMPERATURE = re.compile(
+    r"(?<![\w.])(?P<value>-?\d+(?:\.\d+)?)\s*"
+    r"(?:[°˚º⁰o]\s*C(?![A-Za-z])|℃|C(?![A-Za-z])|도(?![가-힣]))"
+)
+#: A temperature the source states in words: room temperature only (a place
+#: such as "the fridge" or "on ice" states no temperature value).
+_STEP_TEMPERATURE_WORDS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\broom\s+temperature\b|\bRT\b|실온|상온", re.I), "실온"),
+)
+#: Korean said for a protocol's English name, for a pick said aloud.
+_PICK_TRANSLITERATIONS = (("솔루션", "solution"), ("버퍼", "buffer"), ("에이", "a"), ("비", "b"))
+
+
+def vague_value_question(transcript: str) -> tuple[str, str] | None:
+    """(kind, the question after the reference) for "그거 얼마나 넣어?" and its kin.
+
+    ``kind`` is "amount", "time" or "temperature"; None for anything else --
+    a concentration, a question that is not one of these, or no "그거".
+    """
+
+    match = _VAGUE_VALUE_REFERENCE.match(_utterance_key(transcript))
+    if match is None:
+        return None
+    rest = match.group("rest").strip()
+    if untargeted_quantity_question(rest) == "amount":
+        return "amount", rest
+    if _STEP_DURATION_QUESTION.search(rest) and not _STEP_DURATION_NOT.search(rest):
+        return "time", rest
+    if _TEMPERATURE_QUESTION.match(rest):
+        return "temperature", rest
+    return None
+
+
+def _value_action_name(text: str, at: int) -> str | None:
+    """The Korean name of the action nearest before ``at`` in its sentence ("배양")."""
+
+    start = max(text.rfind(". ", 0, at) + 2, 0)
+    end = text.find(". ", at)
+    sentence = text[start:end if end >= 0 else len(text)]
+    position = at - start
+    best: tuple[int, str] | None = None
+    after: tuple[int, str] | None = None
+    for pattern, name in _VALUE_ACTION_NAMES:
+        for found in pattern.finditer(sentence):
+            if found.start() <= position:
+                if best is None or found.start() > best[0]:
+                    best = (found.start(), name)
+            elif after is None or found.start() < after[0]:
+                after = (found.start(), name)
+    chosen = best or after
+    return chosen[1] if chosen else None
+
+
+_TIME_TOKEN = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:min|minutes?|h\b|hrs?|hours?|s\b|sec|seconds?|분|시간|초)|\bovernight\b|\d{1,2}:\d{2}:\d{2}",
+    re.I,
+)
+
+
+def _first_time_position(text: str) -> int:
+    match = _TIME_TOKEN.search(text)
+    return match.start() if match else len(text)
+
+
+def _pick_key(text: str) -> str:
+    key = re.sub(r"\s+", "", _utterance_key(text).casefold())
+    for korean, english in _PICK_TRANSLITERATIONS:
+        key = key.replace(korean, english)
+    return key
+
+
+@dataclass(frozen=True)
+class ValueCandidate:
+    """One value of the current step a "그거" may be about (decision 3)."""
+
+    name: str        # what it belongs to: "solution A", "배양 시간"
+    shown: str       # the answer as shown
+    said: str        # the answer as said
+    keys: tuple[str, ...]  # what a pick may say for it
 
 
 def untargeted_quantity_question(transcript: str) -> str | None:
@@ -7734,6 +7941,17 @@ class CuratedProtocolSession:
         self.question_timing: str = "during"
         #: Lane WV, decision 2: "on" unless the experimenter turned it off.
         self.web_lookup: str = "on"
+        #: Lane VT, decision 6: what is said before it is asked (PROACTIVE_MODES).
+        self.proactive_mode: str = "all"
+        #: Lane VT, decision 5: when the experimenter's words were last heard.
+        self._last_heard_at: float | None = None
+        #: Lane VT, decision 3: "A요, B요?" asked of a "그거"; only the next
+        #: turn's words pick one.
+        self._pending_value_choice: dict[str, Any] | None = None
+        #: Lane VT, decisions 1-2: (timer, kind) of the timer notices already
+        #: given, so each is given once. Not part of a turn's checkpoint: a
+        #: notice given stays given whatever a later turn rolls back.
+        self._timer_notices_given: set[tuple[Any, ...]] = set()
         #: The one-turn "0.5 mL로 기록할까요?" of the 바로 확인 way.
         self._pending_note_confirmation: dict[str, Any] | None = None
         #: The questions asked before the start (decision 4): the queue,
@@ -7765,11 +7983,14 @@ class CuratedProtocolSession:
         web = settings.get("web_lookup")
         if web in WEB_LOOKUP_VALUES:
             self.web_lookup = str(web)
+        proactive = settings.get("proactive_mode")
+        if proactive in PROACTIVE_MODES:
+            self.proactive_mode = str(proactive)
 
     def experimenter_settings(self) -> dict[str, str]:
         return {
             "confirm_mode": self.confirm_mode, "question_timing": self.question_timing,
-            "web_lookup": self.web_lookup,
+            "web_lookup": self.web_lookup, "proactive_mode": self.proactive_mode,
         }
 
     @property
@@ -7906,16 +8127,19 @@ class CuratedProtocolSession:
             prefix = {"minimum": "at least", "approximate": "about", "maximum": "up to"}.get(bound)
         return f"{prefix} {words}" if prefix else words
 
-    def _timer_end_words(self, language: str) -> str | None:
+    def _timer_end_words(
+        self, language: str, timer: Mapping[str, Any] | None = None,
+    ) -> str | None:
         """What is said of a minimum or a maximum timer that has run out, or None.
 
         Lane VX, decision 4: a minimum's end is not the step's end, so it is
         never said to be over -- "최소 시간 2시간이 지났어요." -- and a
         maximum's is "최대 시간 2시간이 됐어요.". Any other timer is said as it
-        was.
+        was. ``timer`` is a ``timer_status()`` already read (lane VT reads it
+        at the notice's own time); without one, it is read now.
         """
 
-        timer = self.timer_status()
+        timer = self.timer_status() if timer is None else timer
         bound = timer.get("bound")
         if timer.get("state") != "expired" or bound not in {"minimum", "maximum"}:
             return None
@@ -8005,6 +8229,173 @@ class CuratedProtocolSession:
             "name": self._timer_name(self._timer_duration_seconds, bound, "ko"),
             "bound": bound,
         }
+
+    # --- Lane VT, decisions 1-2: the step timer told before it is asked -------
+
+    def proactive_says(self, kind: str) -> bool:
+        """Whether "먼저 알려 주기" has a notice of this kind said aloud (decision 6)."""
+
+        return kind in PROACTIVE_SPOKEN_KINDS.get(self.proactive_mode, frozenset())
+
+    def due_timer_notices(self, now: float | None = None) -> tuple[TimerNotice, ...]:
+        """The step timer's notices due at ``now`` and not given yet, as given now.
+
+        Decision 1: the moment the server's timer has run out ("expired" in
+        ``timer_status``), "15분 타이머가 끝났어요." -- a minimum or a maximum
+        timer in lane VX's words -- and "다음은 N단계, …". Decision 2: a timer
+        of five minutes or more, one minute before, "1분 남았어요." ("최소
+        시간까지 1분 남았어요." for a minimum) and the same line on the next
+        step; not once the end has come. Each is given once per timer started.
+        Nothing here moves a step, completes one or changes the timer; a timer
+        goes on running through a pause (as it does when asked), so it is told
+        in a pause too. Only while the experiment runs.
+        """
+
+        if (
+            not self.active or self._experiment_ended()
+            or self._timer_started_at is None or self._timer_duration_seconds is None
+            or self._timer_step_index is None
+            or not 0 <= self._timer_step_index < len(self.fixture.steps)
+        ):
+            return ()
+        current_time = time.time() if now is None else now
+        status = self.timer_status(now=current_time)
+        key = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
+        deadline = self._timer_started_at + self._timer_duration_seconds
+        given = self._timer_notices_given
+        if status["state"] == "expired":
+            if (key, "timer_ended") in given:
+                return ()
+            # The last minute is not told once the end has come.
+            given.update({(key, "timer_ended"), (key, "timer_last_minute")})
+            return (self._timer_notice("timer_ended", status, key, due_at=deadline),)
+        if (
+            self._timer_duration_seconds >= TIMER_LAST_MINUTE_FROM_SECONDS
+            and deadline - current_time <= TIMER_LAST_MINUTE_SECONDS
+            and (key, "timer_last_minute") not in given
+        ):
+            given.add((key, "timer_last_minute"))
+            return (self._timer_notice(
+                "timer_last_minute", status, key, due_at=deadline - TIMER_LAST_MINUTE_SECONDS),)
+        return ()
+
+    def note_heard(self, now: float | None = None) -> float | None:
+        """Mark the experimenter's words as heard now; the silence before them, in seconds.
+
+        Lane VT, decision 5. The silence runs from the last words heard, or
+        from the experiment's start when none were heard since. None before
+        the experiment runs.
+        """
+
+        current_time = time.time() if now is None else now
+        since = self._last_heard_at if self._last_heard_at is not None else self._experiment_started_at
+        self._last_heard_at = current_time
+        if not self.active or since is None:
+            return None
+        return max(0.0, current_time - since)
+
+    def with_return_summary(
+        self, plan: CuratedProtocolTurnPlan, *, silence: float | None, now: float | None = None,
+    ) -> CuratedProtocolTurnPlan:
+        """The answer led by "지금 N단계예요(타이머 ○분 남았어요)." after a long silence.
+
+        Lane VT, decision 5: words after more than ten minutes of silence get
+        one line first on where the run stands -- the step, and the step
+        timer's time left while it runs -- when they are not a command; a
+        command is carried out alone, at once. Under "먼저 알려 주기: 모두"
+        only. Read from the server's state; nothing changes.
+        """
+
+        if (
+            silence is None or silence <= RETURN_SUMMARY_AFTER_SECONDS
+            or not self.active or self._experiment_ended()
+            or plan.state_changed or plan.action not in _RETURN_SUMMARY_ACTIONS
+            or getattr(plan, "setting_change", None)
+            or not self.proactive_says("return_summary")
+        ):
+            return plan
+        label = self.fixture.steps[self.current_index].source_label
+        timer = self.timer_status(now=now)
+        line = f"지금 {label}단계예요."
+        if timer["state"] == "running" and timer.get("step_index") == self.current_index:
+            remaining = int(timer["remaining_seconds"])
+            left = _duration_words_long(max(60, round(remaining / 60) * 60), "ko")
+            line = f"지금 {label}단계예요(타이머 {left} 남았어요)."
+        primary = plan.primary_text
+        return replace(
+            plan,
+            display_text=f"{line} {plan.display_text}",
+            speech_text=f"{line} {plan.speech_text}",
+            primary_text=f"{line} {primary}" if isinstance(primary, str) and primary else primary,
+        )
+
+    def _timer_notice(
+        self, kind: str, status: Mapping[str, Any], key: tuple[Any, ...], *, due_at: float,
+    ) -> TimerNotice:
+        index = int(status["step_index"])
+        steps = self.fixture.steps
+        step = steps[index]
+        if kind == "timer_ended":
+            first = self._timer_end_words("ko", status) or f"{status['name']} 타이머가 끝났어요."
+        else:
+            first = (
+                "최소 시간까지 1분 남았어요." if status.get("bound") == "minimum"
+                else "최대 시간까지 1분 남았어요." if status.get("bound") == "maximum"
+                else "1분 남았어요."
+            )
+        next_index = index + 1
+        shown, said = first, first
+        next_label = None
+        translated = False
+        if next_index < len(steps):
+            next_label = steps[next_index].source_label
+            sentence = self._checked_first_sentence(next_index)
+            if sentence is None:
+                line = f"다음은 {next_label}단계예요. 화면에서 확인해 주세요."
+                shown, said = f"{first} {line}", f"{first} {line}"
+            else:
+                shown = f"{first} 다음은 {next_label}단계, {sentence}"
+                said = f"{first} 다음은 {next_label}단계, {spoken_korean(sentence)}"
+                translated = True
+        notice_id = hashlib.sha256(
+            f"{step.step_id}\x1f{key[1]!r}\x1f{key[2]}\x1f{kind}".encode("utf-8")
+        ).hexdigest()[:32]
+        return TimerNotice(
+            notice_id=notice_id, kind=kind, display_text=shown, speech_text=said,
+            spoken=self.proactive_says(kind), chime=kind == "timer_ended", due_at=due_at,
+            step_index=index, step_id=step.step_id, step_label=step.source_label,
+            next_step_label=next_label,
+            timer={
+                "name": status.get("name"), "bound": status.get("bound"),
+                "duration_seconds": status.get("duration_seconds"),
+                "started_at": status.get("started_at"), "deadline_at": status.get("deadline_at"),
+            },
+            translation_status="verified_sidecar" if translated else "not_applicable",
+        )
+
+    def _checked_first_sentence(self, index: int) -> str | None:
+        """The first sentence of a step's Korean that passed the check, or None.
+
+        Lane TS's rule (``protocol_translation.statement_issue``), as a spoken
+        warning's: a step written in Korean is its own reading; otherwise its
+        reviewed or machine Korean is read only when it passes every check.
+        The step label the Korean begins with ("4단계: ") is left out.
+        """
+
+        from voiney_lab.protocol_translation import is_korean, statement_issue  # imports this module
+
+        step = self.fixture.steps[index]
+        source = step.instruction_source_text
+        if is_korean(source):
+            korean = source
+        else:
+            korean = self._localized_fact(step.step_id, "current_step")
+            if korean is None or statement_issue(source, korean) is not None:
+                return None
+        body = re.sub(r"^\s*[0-9A-Za-z.]+\s*단계\s*[:：]\s*", "", " ".join(korean.split()))
+        body = re.sub(rf"^{re.escape(step.source_label)}\s*[.)]?\s+", "", body)
+        first = re.split(r"(?<=[.!?。])\s+", body, maxsplit=1)[0].strip()
+        return first or None
 
     def experiment_timer_status(self, now: float | None = None) -> dict[str, Any]:
         current_time = time.time() if now is None else now
@@ -9580,12 +9971,13 @@ class CuratedProtocolSession:
                 f"한 번 더 하시나요? 하시면 {first}단계로 돌아갈게요."
             )
         else:
+            ended = self._round_end_words(rounds_done, guidance)
             display = (
-                f"{first}~{last}단계를 한 번 더 해야 해요"
+                f"{ended}{first}~{last}단계를 한 번 더 해야 해요"
                 f"({round_words(rounds_done + 1, required, spoken=False)}). {first}단계로 돌아갈까요?"
             )
             speech = (
-                f"{first}~{last}단계를 한 번 더 해야 해요"
+                f"{ended}{first}~{last}단계를 한 번 더 해야 해요"
                 f"({round_words(rounds_done + 1, required, spoken=True)}). {first}단계로 돌아갈까요?"
             )
         labels = {item.step_id: item.source_label for item in steps}
@@ -9740,7 +10132,26 @@ class CuratedProtocolSession:
         if required is None or rounds_done != required:
             return "", None
         first, last = self._range_labels(interval)
-        return f"{first}~{last}단계 {required}회를 모두 마쳤어요. ", None
+        ended = self._round_end_words(rounds_done, guidance)
+        return f"{ended}{first}~{last}단계 {required}회를 모두 마쳤어요. ", None
+
+    def _round_end_words(self, rounds_done: int, guidance: Mapping[str, Any]) -> str:
+        """"3회 중 1회째 끝났어요. " as a round of a source-fixed repeat ends, else "".
+
+        Lane VT, decision 4: only a count the source states (lane CB's fixed
+        repetition) is counted aloud; a count a person gave or left open, or a
+        repeat-until, is not. Under "먼저 알려 주기: 끄기" it is not said; the
+        card still shows the round.
+        """
+
+        required = guidance.get("count")
+        if (
+            guidance.get("value_source") != VALUE_SOURCE_SOURCE
+            or not isinstance(required, int) or isinstance(required, bool)
+            or not self.proactive_says("repeat_round")
+        ):
+            return ""
+        return f"{required}회 중 {rounds_done}회째 끝났어요. "
 
     # --- lane WV: a picture asked for -----------------------------------------
 
@@ -10056,6 +10467,31 @@ class CuratedProtocolSession:
                         ),
                         setting_change=dict(setting),
                     )
+            elif name == "proactive_mode":
+                # Lane VT, decision 6.
+                shown = PROACTIVE_MODE_WORDS[value]
+                if self.proactive_mode == value:
+                    plan = self._words_plan(
+                        f"이미 먼저 알려 주기가 '{shown}'{josa_ro(shown)[len(shown):]} 되어 있어요.",
+                        intent_kind="experimenter_setting_unchanged",
+                    )
+                else:
+                    self.proactive_mode = value
+                    words = {
+                        "off": "먼저 알려 주기를 껐어요. 타이머가 끝나면 화면 알림과 소리만 내요.",
+                        "needed": (
+                            "먼저 알려 주기를 '필요한 것만'으로 바꿨어요. "
+                            "타이머가 끝날 때와 반복 횟수만 말로 알려 드려요."
+                        ),
+                        "all": (
+                            "먼저 알려 주기를 '모두'로 바꿨어요. 타이머가 끝날 때와 1분 전, "
+                            "반복 횟수, 오래 쉬었다 말씀하실 때 지금 단계를 말로 알려 드려요."
+                        ),
+                    }[value]
+                    plan = replace(
+                        self._words_plan(words, intent_kind="experimenter_setting_changed"),
+                        setting_change=dict(setting),
+                    )
             else:
                 if self.question_timing == value:
                     plan = self._words_plan(
@@ -10081,6 +10517,234 @@ class CuratedProtocolSession:
             self._replay[turn_id] = plan
             return plan
         return None
+
+    # --- lane VT, decision 3: "그거" asked for a value, with nothing it names --
+
+    def _value_candidates(self, kind: str) -> tuple[ValueCandidate, ...]:
+        """The current step's values of one kind, each with what it belongs to.
+
+        Amounts are the substances the step's own source text gives a value
+        to (lane M1's reading); times are the step's verified timers; a
+        temperature is a degree the step's text prints, or "room temperature",
+        "on ice", "fridge" where it prints that. What a time or a temperature
+        belongs to is named by the action before it ("배양 시간").
+        """
+
+        index = self.current_index
+        step = self.fixture.steps[index]
+        source = " ".join(step.instruction_source_text.split())
+        found: list[ValueCandidate] = []
+        if kind == "amount":
+            seen: set[str] = set()
+            for name, phrase in self._quantity_candidates("amount"):
+                if name.casefold() in seen:
+                    continue
+                seen.add(name.casefold())
+                parsed = _parsed_value("amount", phrase)
+                head = f"이 단계의 {name}{_josa(name, '은', '는')}"
+                if parsed is None:
+                    shown = f"{head} 원문에 ‘{phrase}’{_josa(phrase, '이라고', '라고')} 적혀 있어요."
+                    said = shown
+                else:
+                    value = _qualified(parsed[0], phrase, source, True)
+                    spoken_value = spoken_korean(value)
+                    shown = f"{head} {value}{_josa(value, '이에요', '예요')}."
+                    said = f"{head} {spoken_value}{_josa(spoken_value, '이에요', '예요')}."
+                found.append(ValueCandidate(name, shown, said, (_pick_key(name),)))
+            return tuple(found)
+        named: list[tuple[str, str, str]] = []  # (name, value shown, value said)
+        if kind == "time":
+            table = self.fixture.timer_table
+            if table is not None:
+                literals: list[tuple[str, str, tuple[int, ...], str]] = []
+                for timer in table.verified:
+                    if timer.step_id == step.step_id and all(t[0] != timer.literal for t in literals):
+                        literals.append((timer.literal, timer.excerpt, timer.seconds, timer.bound))
+                for literal, excerpt, seconds, bound in literals:
+                    at = source.find(literal)
+                    action = _value_action_name(source, at if at >= 0 else len(source))
+                    value = (
+                        self._timer_name(seconds[0], bound, "ko") if len(seconds) == 1
+                        else "~".join(_duration_words_long(item, "ko") for item in seconds)
+                    )
+                    # A time is said as written ("1시간"), as the timer answers say it.
+                    named.append((f"{action} 시간" if action else "시간", value, value))
+            elif self.timer_seconds_for_step(index) > 0:
+                seconds = self.timer_seconds_for_step(index)
+                at = _first_time_position(source)
+                action = _value_action_name(source, at)
+                value = self._timer_name(seconds, "exact", "ko")
+                named.append((f"{action} 시간" if action else "시간", value, value))
+        else:
+            values: list[tuple[str, int]] = []
+            for match in _STEP_TEMPERATURE.finditer(source):
+                value = f"{match.group('value')}°C"
+                if all(item[0] != value for item in values):
+                    values.append((value, match.start()))
+            for pattern, words in _STEP_TEMPERATURE_WORDS:
+                match = pattern.search(source)
+                if match is not None and all(item[0] != words for item in values):
+                    values.append((words, match.start()))
+            values.sort(key=lambda item: item[1])
+            for value, at in values:
+                action = _value_action_name(source, at)
+                named.append((
+                    f"{action} 온도" if action else "온도", value,
+                    spoken_korean(value) if value[0].isdigit() or value[0] == "-" else value,
+                ))
+        counts: dict[str, int] = {}
+        for name, _shown, _said in named:
+            counts[name] = counts.get(name, 0) + 1
+        ordinal = {}
+        for name, shown_value, said_value in named:
+            label = name
+            if counts[name] > 1:
+                ordinal[name] = ordinal.get(name, 0) + 1
+                label = f"{('첫', '두', '세', '네', '다섯')[min(ordinal[name], 5) - 1]} 번째 {name}"
+            head = f"이 단계의 {label}{_josa(label, '은', '는')}"
+            found.append(ValueCandidate(
+                label,
+                f"{head} {shown_value}{_josa(shown_value, '이에요', '예요')}.",
+                f"{head} {said_value}{_josa(said_value, '이에요', '예요')}.",
+                (_pick_key(label), _pick_key(name.split()[0])) if counts[name] == 1 else (_pick_key(label),),
+            ))
+        return tuple(found)
+
+    def _plan_vague_value(
+        self, transcript: str, *, turn_id: int, configuration_id: int | None,
+        generation: int | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """"그거 얼마나 넣어?" with nothing it names: answered, asked back or told none."""
+
+        if not self.active or self._pause_state == "paused":
+            return None
+        asked = vague_value_question(transcript)
+        if asked is None:
+            return None
+        kind, rest = asked
+        step = self.fixture.steps[self.current_index]
+        # A "그거" the last turns name, or a question that names its target,
+        # goes the way it went (decision 3: "대상을 말한 질문은 지금 경로").
+        discourse = (
+            self._discourse_context
+            if self._discourse_context.step_id == step.step_id
+            and self._discourse_context.workflow_revision == self._revision
+            else None
+        )
+        if resolve_bounded_coreference(
+            transcript, explicit_entities=(), context=discourse,
+        ).status is CoreferenceStatus.RESOLVED:
+            return None
+        if any(_term_pattern(term.text).search(rest) for term in self._protocol_vocabulary().terms):
+            return None
+        candidates = self._value_candidates(kind)
+        facts = tuple(
+            fact for fact in self.fixture.facts_for_step(self.current_index)
+            if fact.fact_id == "current_step"
+        )
+        self._last_front_rule = "reference_value"
+        if len(candidates) == 1:
+            plan = self._value_answer_plan(candidates[0], facts, intent_kind="reference_value_answer")
+        elif not candidates:
+            words = f"지금 단계에는 {VALUE_KIND_WORDS[kind]}{_josa(VALUE_KIND_WORDS[kind], '이', '가')} 없어요. 어떤 것을 말씀하시나요?"
+            plan = replace(
+                self._words_plan(words, intent_kind="reference_value_none",
+                                 action=CuratedProtocolAction.CLARIFY_PARAMETER),
+            )
+        else:
+            names = [candidate.name for candidate in candidates]
+            if len(candidates) <= 3:
+                words = ", ".join(f"{name}{_josa(name, '이요', '요')}" for name in names) + "?"
+                shown = words
+            else:
+                words = (
+                    f"이 단계에는 {VALUE_KIND_WORDS[kind]}{_josa(VALUE_KIND_WORDS[kind], '이', '가')} "
+                    f"{len(candidates)}가지 있어요. 화면의 목록에서 골라 주세요."
+                )
+                shown = f"{words}\n" + "\n".join(f"{n}. {name}" for n, name in enumerate(names, 1))
+            plan = replace(
+                self._words_plan(words, intent_kind="reference_value_choice",
+                                 action=CuratedProtocolAction.CLARIFY_PARAMETER),
+                display_text=shown, primary_text=shown, requested_entities=tuple(names),
+            )
+            self._pending_value_choice = {
+                "kind": kind,
+                "candidates": candidates,
+                "step_index": self.current_index,
+                "workflow_revision": self._revision,
+                "requested_turn_id": turn_id,
+                "configuration_id": configuration_id,
+                "requested_generation": generation,
+            }
+        self._replay[turn_id] = plan
+        return plan
+
+    def _value_answer_plan(
+        self, candidate: ValueCandidate, facts: tuple[CuratedProtocolFact, ...], *, intent_kind: str,
+    ) -> CuratedProtocolTurnPlan:
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.QUESTION,
+            display_text=candidate.shown,
+            speech_text=candidate.said,
+            speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+            facts=facts,
+            step_label=step.source_label,
+            final_step=self.current_index == len(steps) - 1,
+            state_changed=False,
+            primary_text=candidate.shown,
+            source_texts=tuple(fact.text for fact in facts),
+            source_pages=tuple(fact.source_page for fact in facts),
+            evidence_ids=tuple(fact.fact_id for fact in facts),
+            intent_kind=intent_kind,
+            target_step=step.source_label,
+            requested_entities=(candidate.name,),
+        )
+
+    def _value_choice_valid(
+        self, *, turn_id: int, configuration_id: int | None, generation: int | None,
+    ) -> bool:
+        asked = self._pending_value_choice
+        return bool(
+            asked is not None
+            and self.active
+            and self._pause_state != "paused"
+            and self.current_index == asked.get("step_index")
+            and self._revision == asked.get("workflow_revision")
+            and turn_id == asked.get("requested_turn_id", -2) + 1
+            and (asked.get("configuration_id") is None or configuration_id == asked.get("configuration_id"))
+            and (
+                asked.get("requested_generation") is None or generation is None
+                or generation >= asked.get("requested_generation")
+            )
+        )
+
+    def _plan_value_pick(
+        self, transcript: str, *, turn_id: int,
+    ) -> CuratedProtocolTurnPlan | None:
+        """The next words after "A요, B요?" pick one: its value is said (decision 3)."""
+
+        asked = self._pending_value_choice or {}
+        candidates: tuple[ValueCandidate, ...] = tuple(asked.get("candidates") or ())
+        said = _pick_key(transcript)
+        chosen = [candidate for candidate in candidates if any(key and key in said for key in candidate.keys)]
+        if len(chosen) != 1:
+            ordinal = [
+                index for pattern, index in _CHOICE_ORDINALS
+                if pattern.fullmatch(_utterance_key(transcript).rstrip("요 ").strip())
+            ]
+            chosen = [candidates[ordinal[0]]] if len(ordinal) == 1 and ordinal[0] < len(candidates) else []
+        if len(chosen) != 1:
+            return None
+        facts = tuple(
+            fact for fact in self.fixture.facts_for_step(self.current_index)
+            if fact.fact_id == "current_step"
+        )
+        self._last_front_rule = "reference_value"
+        plan = self._value_answer_plan(chosen[0], facts, intent_kind="reference_value_picked")
+        self._replay[turn_id] = plan
+        return plan
 
     # --- lane CF, decision 4: the source's questions asked before the start --
 
@@ -12511,6 +13175,8 @@ class CuratedProtocolSession:
         # Lane CF: a value question and the questions before the start.
         self._pending_note_confirmation = None
         self._prestart = None
+        # Lane VT: "A요, B요?" asked of a "그거".
+        self._pending_value_choice = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -12661,6 +13327,7 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._timer_notices_given = set()
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
@@ -12689,6 +13356,8 @@ class CuratedProtocolSession:
         # Lane CF: a value question and the questions before the start.
         self._pending_note_confirmation = None
         self._prestart = None
+        # Lane VT: "A요, B요?" asked of a "그거".
+        self._pending_value_choice = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -14554,6 +15223,7 @@ class CuratedProtocolSession:
             self._pending_step_move,
             self._pending_record_fix,
             self._pending_note_confirmation,
+            self._pending_value_choice,
         ) if front_only else None
         # The front rule that owns this turn, once one does (FRONT_RULES).
         front_rule: str | None = None
@@ -15363,6 +16033,24 @@ class CuratedProtocolSession:
             if note_confirm_valid:
                 # And "0.5 mL로 기록할까요?" (lane CF).
                 self._pending_note_confirmation = None
+            if language == "ko" and transcript_quality is None:
+                # Lane VT, decision 3: the words after "A요, B요?" pick one;
+                # anything else goes on as a turn of its own.
+                picked = (
+                    self._plan_value_pick(transcript, turn_id=turn_id)
+                    if self._value_choice_valid(
+                        turn_id=turn_id, configuration_id=configuration_id, generation=generation)
+                    else None
+                )
+                self._pending_value_choice = None
+                if picked is not None:
+                    return picked
+                vague = self._plan_vague_value(
+                    transcript, turn_id=turn_id, configuration_id=configuration_id,
+                    generation=generation,
+                )
+                if vague is not None:
+                    return vague
             said_here = (
                 self._plan_experimenter_words(transcript, turn_id=turn_id)
                 if language == "ko" and transcript_quality is None else None
@@ -15878,6 +16566,7 @@ class CuratedProtocolSession:
                 self._pending_step_move,
                 self._pending_record_fix,
                 self._pending_note_confirmation,
+                self._pending_value_choice,
             ) = untouched
             return None
         return self._execute_turn_intent(

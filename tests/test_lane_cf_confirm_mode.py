@@ -106,9 +106,11 @@ class VoiceSettingTests(Session, unittest.TestCase):
 
     def test_the_settings_are_what_the_router_snapshot_names(self) -> None:
         self.open_with(1, confirm_mode="quiet")
-        # Lane WV (2026-10-09) added "web_lookup", on unless turned off.
+        # Lane WV (2026-10-09) added "web_lookup", on unless turned off, and
+        # lane VT "proactive_mode", all unless kept to what is needed or off.
         self.assertEqual(self.session.experimenter_settings(),
-                         {"confirm_mode": "quiet", "question_timing": "during", "web_lookup": "on"})
+                         {"confirm_mode": "quiet", "question_timing": "during", "web_lookup": "on",
+                          "proactive_mode": "all"})
 
     def test_an_unknown_value_falls_back_to_the_default(self) -> None:
         self.open_with(1, confirm_mode="sometimes")
@@ -287,11 +289,12 @@ class SettingsApiTests(unittest.TestCase):
             server_module._REQUEST_PRINCIPAL.reset(token)
 
     def test_defaults_then_a_screen_change(self) -> None:
-        # Lane WV (2026-10-09) added "web_lookup", on by default.
+        # Lane WV (2026-10-09) added "web_lookup", on by default, and lane VT
+        # "proactive_mode", all by default.
         self.assertEqual(
             self.call(server_module.get_experimenter_settings),
             {"settings": {"confirm_mode": "readback", "question_timing": "before_start",
-                          "web_lookup": "on"}})
+                          "web_lookup": "on", "proactive_mode": "all"}})
         changed = self.call(server_module.put_experimenter_settings, {"confirm_mode": "quiet"})
         self.assertEqual(changed["settings"]["confirm_mode"], "quiet")
         self.assertEqual(
@@ -319,7 +322,8 @@ class WorkspaceSchemaTests(unittest.TestCase):
 
         from voiney_lab import workspace_store as ws
 
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 8)
+        # Lane VT (2026-10-09) raised the schema to 9; a 7 still opens.
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 9)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ws.WORKSPACE_DATABASE_FILENAME
             connection = sqlite3.connect(path)
@@ -332,7 +336,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             try:
                 version = store._connection.execute(
                     "SELECT schema_version FROM schema_metadata").fetchone()[0]
-                self.assertEqual(version, 8)
+                self.assertEqual(version, 9)
                 principal = development_principal()
                 store.bootstrap_principal(principal)
                 store.record_experimenter_setting(

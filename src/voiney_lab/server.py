@@ -4,6 +4,7 @@ import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, l
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
+    TimerNotice,
     josa_ro,
     load_curated_protocol_fixture,
     spoken_korean,
@@ -966,13 +968,14 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # Lane WV, decision 2: the web is looked at for an explanation or a
     # photograph unless the experimenter turns it off.
     "web_lookup":"on",
+    # Lane VT, decision 6: everything is said first unless the experimenter
+    # keeps it to what is needed or turns it off.
+    "proactive_mode":"all",
 }
-#: Lane WV's settings are kept in the server's memory for the run, beside the
-#: workspace's record of the others (the workspace's own table is not this
-#: lane's to change).
-_LANE_WV_SETTING_VALUES:dict[str,tuple[str,...]]={"web_lookup":("on","off")}
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
+#: Lane WV's "web_lookup" used to be kept here even with a workspace; since
+#: workspace schema 9 (lane VT, decision 7) it is kept with the others.
 _EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
 
 
@@ -990,11 +993,6 @@ def _load_experimenter_settings()->dict[str,str]:
             principal,store=_commercial_workspace()
             try:
                 settings.update(store.experimenter_settings(principal))
-                settings.update({
-                    name:value for name,value in
-                    _EXPERIMENTER_SETTINGS_MEMORY.get(_experimenter_settings_key(),{}).items()
-                    if name in _LANE_WV_SETTING_VALUES
-                })
                 return settings
             finally:
                 store.close()
@@ -1013,27 +1011,21 @@ def _save_experimenter_settings(changes:Mapping[str,Any],source:str)->dict[str,s
 
     if not isinstance(changes,Mapping) or not changes:
         raise WorkspaceError("Experimenter setting is invalid.")
-    allowed={**EXPERIMENTER_SETTING_VALUES,**_LANE_WV_SETTING_VALUES}
     for name,value in changes.items():
-        if value not in allowed.get(str(name),()):
+        if value not in EXPERIMENTER_SETTING_VALUES.get(str(name),()):
             raise WorkspaceError("Experimenter setting is invalid.")
-    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
-    lane_wv={str(name):str(value) for name,value in changes.items() if name in _LANE_WV_SETTING_VALUES}
-    others={str(name):str(value) for name,value in changes.items() if name not in _LANE_WV_SETTING_VALUES}
+    changed={str(name):str(value) for name,value in changes.items()}
     if _workspace_settings().enabled:
         principal,store=_commercial_workspace()
         try:
-            for name,value in others.items():
+            for name,value in changed.items():
                 store.record_experimenter_setting(
                     principal,name=name,value=value,source=source)
-            kept.update(lane_wv)
-            return {
-                **EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal),
-                **{name:value for name,value in kept.items() if name in _LANE_WV_SETTING_VALUES},
-            }
+            return {**EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal)}
         finally:
             store.close()
-    kept.update({**others,**lane_wv})
+    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
+    kept.update(changed)
     return {**EXPERIMENTER_SETTING_DEFAULTS,**kept}
 
 
@@ -4051,6 +4043,8 @@ class ListenerSession:
         self._microphone_chunk_sequence=0
         self.greeting_emitted=False
         self.greeting_audio_ready=False
+        #: Lane VT: the timer notices said so far, for their turn ids.
+        self.timer_notice_turns=0
         self.client_audio_constraints:dict[str,object]={}
         self.stt_settings=CascadeSttSettings.from_environment()
     @property
@@ -6798,6 +6792,209 @@ async def _send_session_greeting(
         tools_used=[],timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},
     )
 
+# --- Lane VT, decisions 1-2: the step timer told before it is asked -----------
+
+#: How often the server looks at the step timer: a timer's end is told within
+#: this of the moment it runs out.
+TIMER_NOTICE_TICK_SECONDS=1.0
+#: The wall clock the step timer runs on (the curated session's time.time),
+#: for when the experimenter's words are heard (decision 5).
+_wall_clock=time.time
+#: How long a notice to be said waits for the experimenter to stop speaking
+#: and an answer to stop playing; past it the notice stays on the screen only.
+TIMER_NOTICE_SPEAK_WAIT_SECONDS=120.0
+#: A last minute's notice waits less: said later it would say the wrong time.
+TIMER_LAST_MINUTE_SPEAK_WAIT_SECONDS=30.0
+TIMER_NOTICE_POLL_SECONDS=0.2
+#: Turn ids the server's own notices are said under, beside the greeting's
+#: (2_000_000_000); user turns start at 1.
+_TIMER_NOTICE_TURN_BASE=2_000_000_100
+
+
+def _session_quiet(session:ListenerSession)->bool:
+    """No one is speaking and nothing is playing or being answered."""
+
+    if not session.active:
+        return False
+    if session.state is TurnState.COOLDOWN:
+        return session.clock()>=session.cooldown_until
+    return session.state is TurnState.IDLE and session.active_turn_id is None
+
+
+def _record_timer_notice(
+    session:ListenerSession,curated:CuratedProtocolSession,notice:TimerNotice,*,said:bool,
+)->None:
+    """Append a timer notice to the experiment record (lane VT, decision 8).
+
+    Its own event, never changed after -- "timer_end_notice" or
+    "timer_last_minute_notice" -- at the timer's step: what it said, when it
+    fell due, whether and when it was said aloud, the setting it was given
+    under. Once per notice (its key). No record open, nothing is written.
+    """
+
+    store=session.experiment_report_store
+    if store is None or session.experiment_report_id is None:
+        return
+    try:
+        store.append_event(
+            session.experiment_report_id,
+            event_key=f"timer-notice-{notice.notice_id}",
+            event_type=(
+                "timer_end_notice" if notice.kind=="timer_ended" else "timer_last_minute_notice"
+            ),
+            step_id=notice.step_id,step_label=notice.step_label,
+            payload={
+                "notice":notice.public_dict(),
+                "spoken":said,
+                "said_at":datetime.now(timezone.utc).isoformat() if said else None,
+                "proactive_mode":curated.proactive_mode,
+                "next_step_label":notice.next_step_label,
+                "development_only":curated.fixture.development_only,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the notice was given; the log says it was not kept
+        log.warning("timer notice not recorded error=%s",type(exc).__name__)
+
+
+async def _deliver_timer_notice(
+    session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
+    notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+    wait_seconds:float=TIMER_NOTICE_SPEAK_WAIT_SECONDS,
+)->bool:
+    """Show and maybe say a timer notice, then keep it in the record (decisions 1, 8)."""
+
+    said=await _show_and_say_timer_notice(
+        session,sender,curated,notice,sleep=sleep,wait_seconds=wait_seconds)
+    await asyncio.to_thread(_record_timer_notice,session,curated,notice,said=said)
+    return said
+
+
+async def _show_and_say_timer_notice(
+    session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
+    notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]],wait_seconds:float,
+)->bool:
+    """Show a timer notice now; say it once the session is quiet (lane VT, decision 1).
+
+    The screen gets it at once, a timer's end with a sound. When "먼저 알려
+    주기" has it said, it waits for the experimenter to finish speaking and
+    any answer to finish playing -- nothing is cut off -- and is then said
+    the way the greeting is: one turn of the server's own, through the same
+    TTS, playback and echo memory as every answer, so its sound coming back
+    through the microphone is the agent's own voice and no command. Nothing
+    here changes the workflow. Returns whether it was said.
+    """
+
+    configuration_id=session.accepted_configuration_id
+    generation=session.generation
+    await sender.text(
+        "protocol.timer.notice",configuration_id=configuration_id,
+        generation=generation,**notice.public_dict(),
+    )
+    if not notice.spoken:
+        return False
+    deadline=session.clock()+wait_seconds
+    frames:list[bytes]|None=None
+
+    def unchanged()->bool:
+        return bool(
+            session.active and session.accepted_configuration_id==configuration_id
+            and session.generation==generation
+        )
+
+    while True:
+        if not unchanged():
+            return False
+        if _session_quiet(session):
+            if frames is None:
+                # A stored machine translation is named as such, and "자동
+                # 번역입니다." said first once a session -- only now that it
+                # is about to be said.
+                notice=_label_machine_translation(session,curated,notice)
+                try:
+                    pcm=await asyncio.to_thread(synthesize,said(notice.speech_text),"ko")
+                except Exception as exc:  # noqa: BLE001 - the screen keeps it
+                    log.warning("timer notice tts failed error=%s",type(exc).__name__)
+                    return False
+                frames=frame_complete_audio(pcm)
+                if not frames:
+                    return False
+                # Speaking may have begun while it was synthesized.
+                continue
+            break
+        if session.clock()>=deadline:
+            log.info("timer notice not said notice_id=%s reason=not_quiet",notice.notice_id)
+            return False
+        await sleep(TIMER_NOTICE_POLL_SECONDS)
+    session.refresh_cooldown()
+    session.timer_notice_turns+=1
+    turn_id=_TIMER_NOTICE_TURN_BASE+session.timer_notice_turns
+    session.active_turn_id=turn_id
+    session.turn_generations[turn_id]=generation
+    session.turn_committed_at[turn_id]=session.clock()
+    session.detector.state=TurnState.PROCESSING
+    if not session.start_playback(turn_id):
+        return False
+    fields={"configuration_id":configuration_id,"turn_id":turn_id,"generation":generation}
+    await sender.text(
+        "protocol.notice.speech",notice_id=notice.notice_id,notice_kind=notice.kind,
+        text=notice.display_text,**fields,
+    )
+    await sender.text(
+        "reply.delta",segment_index=0,text=notice.display_text,
+        primary_text=notice.display_text,speech_text=notice.speech_text,
+        answer_origin="server_notice",source_texts=[],source_pages=[],
+        evidence_ids=[],translation_status=notice.translation_status,**fields,
+    )
+    await sender.text("state.changed",state=session.state.value,**fields)
+    await sender.segment(turn_id,0,frames,generation)
+    await sender.text("reply.complete",text=notice.display_text,**fields)
+    await sender.text("audio.complete",segment_count=1,**fields)
+    await sender.text(
+        "turn.done",route="server_notice",pipeline="cascade",
+        result_kind=notice.kind,fact_id=None,speech_mode="control",
+        segment_count=1,input_frames=0,output_frames=len(frames),tools_used=[],
+        timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},**fields,
+    )
+    log.info("timer notice said notice_id=%s kind=%s turn_id=%s",notice.notice_id,notice.kind,turn_id)
+    return True
+
+
+async def _timer_notice_tick(
+    session:ListenerSession,sender:LockedSender,*,now:float|None=None,
+)->tuple[TimerNotice,...]:
+    """Give the step timer's notices that are due (decisions 1-2), once each."""
+
+    curated=session.curated_protocol_session
+    if (
+        curated is None or not session.active or session.accepted_mode!="cascade"
+        or not session.greeting_audio_ready
+    ):
+        return ()
+    notices=curated.due_timer_notices(now=now)
+    for notice in notices:
+        await _deliver_timer_notice(
+            session,sender,curated,notice,
+            wait_seconds=(
+                TIMER_LAST_MINUTE_SPEAK_WAIT_SECONDS if notice.kind=="timer_last_minute"
+                else TIMER_NOTICE_SPEAK_WAIT_SECONDS
+            ),
+        )
+    return notices
+
+
+async def _watch_timer_notices(session:ListenerSession,sender:LockedSender)->None:
+    """For one voice connection: look at the step timer every second."""
+
+    while True:
+        await asyncio.sleep(TIMER_NOTICE_TICK_SECONDS)
+        try:
+            await _timer_notice_tick(session,sender)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the next second tries again
+            log.warning("timer notice failed error=%s",type(exc).__name__)
+
+
 def _claim_admitted_answer(
     output:AnswerBrainOutput,
     plan:object,
@@ -7390,6 +7587,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             history_before(curated)
             if session.llm_router_settings.enabled else None
         )
+        #: Lane VT, decision 5: the silence before these words.
+        silence=curated.note_heard(now=_wall_clock())
         try:
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             if not session.llm_router_settings.enabled:
@@ -7887,6 +8086,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             display_text=f"{plan.display_text} {download}",
                             speech_text=f"{plan.speech_text} {download}",
                         )
+            # Lane VT, decision 5: after a long silence, an answer that is
+            # not a command is led by where the run stands.
+            plan=curated.with_return_summary(plan,silence=silence,now=_wall_clock())
             web_lookup_now=_web_lookup_wanted(session,curated,plan)
             if web_lookup_now:
                 plan=_web_lookup_words(curated,plan,transcript,turn_language)
@@ -9081,6 +9283,8 @@ async def voice_socket(websocket:WebSocket):
     _SPEAKING_SESSION.set(session)
     curated_fixture=None
     sender=LockedSender(websocket); pipeline="cascade"
+    # Lane VT, decisions 1-2: the step timer is told when it runs out.
+    timer_notices=asyncio.create_task(_watch_timer_notices(session,sender))
     await websocket.send_text(event("ready",sample_rate=16000,
                                     pipelines=["cascade"],frame_ms=20,
                                     frame_bytes=FRAME_BYTES,vad_mode=config.mode,
@@ -9895,6 +10099,9 @@ async def voice_socket(websocket:WebSocket):
             task.cancel()
             try: await task
             except (asyncio.CancelledError, WebSocketDisconnect): pass
+        timer_notices.cancel()
+        try: await timer_notices
+        except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
         _unsubscribe_translations(session)
         session.stop()
         if workspace_context_token is not None:
