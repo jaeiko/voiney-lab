@@ -1111,6 +1111,8 @@ class ProtocolAnalysisTests(unittest.TestCase):
         accepted = (
             ("1", "1. Existing numeric heading."),
             ("A", "A. Existing nonnumeric heading."),
+            # Lane EV, rule paren_label (human decision 2026-10-09).
+            ("1", "1) Parenthesized label."),
         )
         rejected = (
             ("1", "10 Longer numeric heading."),
@@ -1118,7 +1120,6 @@ class ProtocolAnalysisTests(unittest.TestCase):
             ("1", "Introduction before 1 Existing heading."),
             ("2", "1 Different heading."),
             ("1", "1: Unsupported punctuation."),
-            ("1", "1) Unsupported punctuation."),
             ("A", "A Unsupported nonnumeric heading."),
         )
 

@@ -1646,9 +1646,24 @@ _LINE_HEAD_STEP_NUMBER = re.compile(r"(?:^|[\n\r])[ \t\u00a0]*[0-9]+(?:\.[0-9]+)
 
 
 def _source_label_markers(source_label: str) -> tuple[str, ...]:
-    if _BARE_STEP_NUMBER.fullmatch(source_label):
-        return (f"{source_label}.", source_label)
-    return (f"{source_label}.",)
+    """How a page prints a step label: "3." always, a step number also bare.
+
+    Rule paren_label (human decision 2026-10-09, lane EV, from lane DS-2's
+    replay): the label in parentheses, "(3)" or "3)", is the same label -- an
+    FDA method numbers its steps "(1) Add a few drops ..." and every step of
+    it was refused. A marker is still whole and still opens the excerpt or
+    its line, so other text in parentheses stays a different label: "(0.5)"
+    or "0.5)" for 5, "(13)" or "13)" for 3, "(1:100)" or "(1000)" for 100,
+    "(1 mL)" for 1. So does a label that holds the parentheses itself ("(1)";
+    the prompt asks for the number alone). Same definition as lane DS-2's.
+    """
+
+    markers = (
+        (f"{source_label}.", source_label)
+        if _BARE_STEP_NUMBER.fullmatch(source_label)
+        else (f"{source_label}.",)
+    )
+    return (*markers, f"({source_label})", f"{source_label})")
 
 
 def _source_label_is_at_excerpt_start(

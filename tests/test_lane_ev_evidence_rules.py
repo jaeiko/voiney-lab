@@ -215,5 +215,78 @@ class WrittenDateTests(RefusalAssertions):
         self.assert_refused(source, "claim_not_found", metadata=date_claim("2020-04-03", TITLE))
 
 
+def numbered_page(*lines: str) -> ProtocolPdfExtraction:
+    return extraction("\n".join((TITLE, *lines)))
+
+
+class ParenthesizedLabelTests(RefusalAssertions):
+    """Rule paren_label: a step label printed in parentheses."""
+
+    def test_a_label_printed_in_parentheses_opens_its_excerpt(self):
+        # fda_eam_4_7_icpms: "(1) Add a few drops of reagent grade deionized water".
+        for text in ("(1) Add a few drops of water.", "1) Add a few drops of water."):
+            with self.subTest(text=text):
+                draft = parse(numbered_page(text), steps=[step("1", text)])
+                self.assertEqual(draft.protocol.sections[0].steps[0].source_label, "1")
+
+    def test_a_label_printed_in_parentheses_before_the_excerpt(self):
+        text = "Add a few drops of water."
+        for printed in ("(1)", "1)"):
+            with self.subTest(printed=printed):
+                parse(numbered_page(f"{printed} {text}"), steps=[step("1", text)])
+
+    def test_every_label_form_reads_its_parentheses(self):
+        for label, text in (("a", "(a) Add water."), ("6.1", "6.1) Add water."), ("12", "(12) Add water.")):
+            with self.subTest(label=label):
+                parse(numbered_page(text), steps=[step(label, text)])
+
+    def test_a_label_that_holds_the_parentheses_is_still_refused(self):
+        # fda_eam_4_13_iodine: the label "(1)" -- the prompt asks for the number.
+        text = "(1) Add water."
+        self.assert_refused(numbered_page(text), "source_label_not_found", steps=[step("(1)", text)])
+
+    def test_a_figure_caption_step_is_still_refused(self):
+        # PMC6093710: "Step 1: the tagged protein ..." is a figure legend.
+        text = "Step 1: the tagged protein is extracted."
+        self.assert_refused(numbered_page(text), "source_label_not_found", steps=[step("Step 1", text)])
+
+    def test_the_human_decisions_refusals(self):
+        add = "Add water."
+        cases = {
+            "0.5 / 5": ("5", "(0.5) Add water.", None),
+            "0.5 / 5, before the excerpt": ("5", "0.5) Add water.", add),
+            "1:1000 / 1:100": ("100", "(1:100) Add water.", None),
+            "1:1000 / 1:100, longer number": ("100", "(1000) Add water.", None),
+            "1:1000 / 1:100, before the excerpt": ("100", "1:100) Add water.", add),
+            "30 / 3": ("3", "(30) Add water.", None),
+            "30 / 3, a longer number": ("3", "(13) Add water.", None),
+            "30 / 3, before the excerpt": ("3", "13) Add water.", add),
+            "mL / µL": ("1", "(1 mL) Add water.", None),
+            "µL / mL": ("1", "(1 µL) Add water.", None),
+        }
+        for name, (label, line, excerpt) in cases.items():
+            with self.subTest(name):
+                self.assert_refused(
+                    numbered_page(line),
+                    "source_label_not_found",
+                    steps=[step(label, line if excerpt is None else excerpt)],
+                )
+
+    def test_the_label_never_loosens_the_instruction(self):
+        for page, claim in (
+            ("(1) Do not add water.", "(1) Add water."),
+            ("(1) 시료를 가열하지 않는다.", "(1) 시료를 가열한다."),
+        ):
+            with self.subTest(claim=claim):
+                self.assert_refused(
+                    numbered_page(page), "claim_not_found", steps=[step("1", claim, excerpt=page)]
+                )
+
+    def test_the_numbered_text_on_a_different_page_is_refused(self):
+        source = extraction(f"{TITLE}\nAdd water.", "(1) Add water.")
+        self.assert_refused(source, "source_label_not_found", steps=[step("1", "Add water.")])
+        self.assert_refused(source, "quote_not_found", steps=[step("1", "(1) Add water.")])
+
+
 if __name__ == "__main__":
     unittest.main()
