@@ -1024,12 +1024,191 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
     )
 
 
+# --- Where a match stands on its page (lane EB, human decision 2026-10-09) --
+
+#: How much of the page on each side of a match is read to decide whether the
+#: match stands alone: a number, a word or two, the Korean word after it.
+_BESIDE = 80
+_LINE_BREAK_CHARACTERS = frozenset("\n\r\x0b\x0c\x85  ")
+
+
+def _beside_text(window: str) -> tuple[str, list[int]]:
+    """``window`` as the boundary rules read it, with each character's position.
+
+    Soft hyphens are left out; a whitespace run is one space, or one line
+    break when it holds one, so a rule can tell a line from a sentence; a
+    line break after a hyphen that ends a word or a number is joined, as the
+    comparison's line-end hyphen form joins it ("anti-" / "mouse", "5-" /
+    "10"). A hyphen alone on its line is not joined to the next line.
+    """
+
+    characters: list[str] = []
+    positions: list[int] = []
+    index = 0
+    while index < len(window):
+        character = window[index]
+        if character == "­":
+            index += 1
+            continue
+        if character.isspace():
+            start = index
+            while index < len(window) and window[index].isspace():
+                index += 1
+            breaks = any(item in _LINE_BREAK_CHARACTERS for item in window[start:index])
+            if (
+                breaks
+                and len(characters) > 1
+                and characters[-1] in _LINE_END_HYPHENS
+                and characters[-2].isalnum()
+            ):
+                continue
+            characters.append("\n" if breaks else " ")
+            positions.append(start)
+            continue
+        characters.append(character)
+        positions.append(index)
+        index += 1
+    return "".join(characters), positions
+
+
+#: Characters that make a digit right after them part of one number: a minus
+#: or plus sign, a range dash or tilde, ±.
+_NUMBER_SIGNS = frozenset("-‐‑‒–−⁻－+＋±∓~～∼")
+#: Punctuation that holds two digits together as one number: a decimal
+#: point or comma, a thousands comma, a ratio or time colon, a fraction
+#: slash, a range printed with an em dash.
+_NUMBER_POINTS = frozenset(".,:/—．，：／")
+#: A range, ratio or ± printed with spaces: "5 – 10", "1 : 100" with one
+#: space on each side on one line, and "20 ± 2", "4 ~ 5" also across a line
+#: break. A hyphen at a line end or start is a page number ("- 106 -") or a
+#: list mark, not a range.
+_SPACED_NUMBER_BEFORE = re.compile(r"\d [-‐‑‒–−:：] $|\d\s?[~～∼±∓]\s?$")
+_SPACED_NUMBER_AFTER = re.compile(r" [-‐‑‒–−:：] \d|\s?[~～∼±∓]\s?\d")
+
+
+def _is_digit(character: str) -> bool:
+    return bool(character) and character.isnumeric() and not character.isalpha()
+
+
+def _number_continues(before: str, matched: str, after: str) -> bool:
+    """Whether the page continues a number the match starts or ends with.
+
+    Rule (a): "5" in "0.5", "15", "−20", "1:1000", "1,000", "1/2", "5-10",
+    "5 – 10", "20 ± 2" or "4⏎~ 5" is part of a longer number, so the match
+    is not evidence of that number. A decimal point, comma, colon or slash
+    holds two digits, so "doi:10.1371" and "doi.org/10.1371" still print
+    10.1371; a sign or range mark holds the digit after it on its own
+    ("−20", "+4", "~5"). A number the page prints glued to another is
+    refused although a reader might see two ("5.7" and "1%" printed
+    "5.71%"): the page text alone cannot tell them apart.
+    """
+
+    first, last = matched[0], matched[-1]
+    left, right = before[-1:], after[:1]
+    if _is_digit(first) and (
+        _is_digit(left)
+        or left in _NUMBER_SIGNS
+        or (
+            left in _NUMBER_POINTS
+            and (
+                _is_digit(before[-2:-1])
+                # A leading decimal point: ".5".
+                or (left in {".", "．"} and not before[-2:-1].isalpha())
+            )
+        )
+        or _SPACED_NUMBER_BEFORE.search(before)
+    ):
+        return True
+    if (
+        first in _NUMBER_SIGNS | _NUMBER_POINTS
+        and _is_digit(left)
+        and _is_digit(matched[1:2])
+    ):
+        return True
+    if _is_digit(last) and (
+        _is_digit(right)
+        or (right in _NUMBER_SIGNS | _NUMBER_POINTS and _is_digit(after[1:2]))
+        or right in {"±", "∓"}
+        or _SPACED_NUMBER_AFTER.match(after)
+    ):
+        return True
+    return (
+        last in _NUMBER_SIGNS | _NUMBER_POINTS
+        and _is_digit(right)
+        and _is_digit(matched[-2:-1])
+    )
+
+
+def _reads_alone(before: str, matched: str, after: str) -> bool:
+    """Whether a match stands on its page as what it says.
+
+    Lane EB (human decision 2026-10-09, from lane EV's report): the exact
+    comparison read a claim or a quote as a substring of its page, so "5 mL
+    buffer" was found in "Add 0.5 mL buffer." and "20 °C" in "Store at −20
+    °C.". ``before`` and ``after`` are the page's own text on each side of
+    ``matched``, read by ``_beside_text``; the match is refused where
+    the page continues it as a longer number (``_number_continues``). It is a
+    comparison only: page
+    text, stored excerpts, hashes and evidence identities are untouched. A
+    match with nothing printed in it (an empty claim) keeps its earlier
+    reading.
+    """
+
+    before, after = before[-_BESIDE:], after[:_BESIDE]
+    start, end = len(before), len(before) + len(matched)
+    text, positions = _beside_text(before + matched + after)
+    inside = [
+        index
+        for index, position in enumerate(positions)
+        if start <= position < end and text[index] not in " \n"
+    ]
+    if not inside:
+        return True
+    first, last = inside[0], inside[-1] + 1
+    parts = (text[:first], text[first:last], text[last:])
+    return not _number_continues(*parts)
+
+
+def _span_reads_alone(text: str, start: int, end: int) -> bool:
+    return _reads_alone(
+        text[max(0, start - _BESIDE) : start], text[start:end], text[end : end + _BESIDE]
+    )
+
+
+def _exact_starts(text: str, part: str):
+    """Every place ``part`` is printed in ``text`` as it is."""
+
+    if not part:
+        yield 0
+        return
+    start = text.find(part)
+    while start >= 0:
+        yield start
+        start = text.find(part, start + 1)
+
+
+def _occurs_alone_exactly(text: str, part: str) -> bool:
+    return any(
+        _span_reads_alone(text, start, start + len(part))
+        for start in _exact_starts(text, part)
+    )
+
+
 def _canonical_match_spans(
     source_text: str,
     excerpt: str,
     *,
     ocr_derived: bool = False,
+    alone: bool = False,
 ) -> tuple[tuple[int, int], ...]:
+    """Every span of ``source_text`` that holds ``excerpt`` in a comparison form.
+
+    With ``alone`` only the spans that stand on the page as what they say
+    (``_reads_alone``, lane EB): the evidence and claim checks. Without it
+    every span, for the checks that locate text rather than verify it -- the
+    page-end block, a step number before an excerpt.
+    """
+
     spans: list[tuple[int, int]] = []
     for form in _comparison_forms(ocr_derived):
         canonical_source, starts, ends = _normalized_text_with_bounds(
@@ -1050,7 +1229,12 @@ def _canonical_match_spans(
                 )
             )
             offset = match_index + 1
-    return tuple(dict.fromkeys(spans))
+    found = tuple(dict.fromkeys(spans))
+    if alone:
+        return tuple(
+            (start, end) for start, end in found if _span_reads_alone(source_text, start, end)
+        )
+    return found
 
 
 def _matching_source_pages(
@@ -1060,8 +1244,10 @@ def _matching_source_pages(
     return tuple(
         page.source_page_number
         for page in extraction.pages
-        if excerpt in page.text
-        or _canonical_match_spans(page.text, excerpt, ocr_derived=page.ocr_derived)
+        if _occurs_alone_exactly(page.text, excerpt)
+        or _canonical_match_spans(
+            page.text, excerpt, ocr_derived=page.ocr_derived, alone=True
+        )
     )
 
 
@@ -1154,7 +1340,15 @@ def _statement_across_page_end(
             statement,
             ocr_derived=page.ocr_derived or following.ocr_derived,
         )
-        if start < junction and end > junction + 1
+        if start < junction
+        and end > junction + 1
+        # Read beside the two pages' own text (lane EB), not only the
+        # joined block and head.
+        and _reads_alone(
+            page.text[: tail[0] + start],
+            joined[start:end],
+            following.text[next_start + end - junction - 1 :],
+        )
     ]
     if len(crossing) != 1:
         return None
@@ -1310,10 +1504,10 @@ def _verified_evidence(
         )
     page = extraction.pages[evidence.source_page_number - 1]
     page_text = page.text
-    if evidence.source_excerpt in page_text:
+    if _occurs_alone_exactly(page_text, evidence.source_excerpt):
         return _verified_continuation(evidence, extraction)
     spans = _canonical_match_spans(
-        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True
     )
     if not spans and evidence.continued_on_page_number is None:
         cut = _statement_across_page_end(
@@ -1558,13 +1752,24 @@ def _claim_occurs_on_evidence_page(
 def _claim_occurs_in_text(
     claim: str, source_text: str, *, ocr_derived: bool = False
 ) -> bool:
-    if claim in source_text:
+    """Whether the text prints the claim, as it is or in a comparison form.
+
+    Only where the claim stands alone (``_reads_alone``, lane EB): the claim
+    check, the timer checks and the page-end rule all read this.
+    """
+
+    if _occurs_alone_exactly(source_text, claim):
         return True
     for form in _comparison_forms(ocr_derived):
-        normalized_page, _, _ = _normalized_text_with_bounds(source_text, **form)
+        normalized_page, starts, ends = _normalized_text_with_bounds(source_text, **form)
         normalized_claim, _, _ = _normalized_text_with_bounds(claim, **form)
-        if normalized_claim and normalized_claim in normalized_page:
-            return True
+        if not normalized_claim:
+            continue
+        for index in _exact_starts(normalized_page, normalized_claim):
+            if _span_reads_alone(
+                source_text, starts[index], ends[index + len(normalized_claim) - 1]
+            ):
+                return True
     return False
 
 
@@ -1767,7 +1972,8 @@ def _claim_token_span(
     Lane DS-2's tool compared casefolded word tokens and dropped every other
     character; in its own replay that accepted "50 ng/L" for "50 ng/µL" and
     "1 g/kg" for "1 µg/kg", so symbols, case and number punctuation are kept
-    here.
+    here. The stretch must also stand alone like an exact match
+    (``_reads_alone``, lane EB): no spaced range around it.
     """
 
     for form in _comparison_forms(ocr_derived):
@@ -1793,8 +1999,10 @@ def _claim_token_span(
                 continue
             start = page_tokens[first][1]
             end = page_tokens[first + size - 1][2]
-            if _open_token_edge(page, kinds, start - 1) and _open_token_edge(
-                page, kinds, end
+            if (
+                _open_token_edge(page, kinds, start - 1)
+                and _open_token_edge(page, kinds, end)
+                and _span_reads_alone(source_text, starts[start], ends[end - 1])
             ):
                 return starts[start], ends[end - 1]
     return None
@@ -1809,10 +2017,12 @@ def _claim_is_supported(
 ) -> bool:
     """Whether a structured claim is backed by its evidence.
 
-    The evidence page prints the claim; or (lane EV) a metadata date claim is
-    the date its excerpt prints, or the evidence page prints the claim's
-    words and symbols with other layout. Only this check reads the lane EV
-    rules: the timer checks and the page-end rule keep the exact comparison.
+    The evidence page prints the claim, standing alone (lane EB); or (lane
+    EV) a metadata date claim is the date its excerpt prints, or the
+    evidence page prints the claim's words and symbols with other layout.
+    Only this check reads the lane EV rules: the timer checks and the
+    page-end rule keep the exact comparison, which lane EB bounds for all of
+    them.
     """
 
     if _claim_occurs_on_evidence_page(claim, evidence, extraction):
