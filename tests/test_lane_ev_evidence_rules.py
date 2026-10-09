@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import unittest
 
+from voiney_lab import experiment_protocol as domain
 from voiney_lab import experiment_protocol_analysis as analysis_module
 from voiney_lab.experiment_protocol_analysis import ProtocolAnalysisEvidenceError
 from voiney_lab.experiment_protocol_pdf import (
@@ -286,6 +287,77 @@ class ParenthesizedLabelTests(RefusalAssertions):
         source = extraction(f"{TITLE}\nAdd water.", "(1) Add water.")
         self.assert_refused(source, "source_label_not_found", steps=[step("1", "Add water.")])
         self.assert_refused(source, "quote_not_found", steps=[step("1", "(1) Add water.")])
+
+
+def verify(text: str, excerpt: str, page: int = 1, *pages: str):
+    source = extraction(text, *pages)
+    return analysis_module._verified_evidence(
+        domain.SourceEvidence(page, excerpt), source
+    )
+
+
+TWICE = "Do not allow sample \nto go to dryness.\nNote.\nDo not allow sample to go to \ndryness."
+
+
+class EqualSpansTests(unittest.TestCase):
+    """Rule first_equal_span: one excerpt printed more than once on its page."""
+
+    def assert_refused(self, reason_code: str, text: str, excerpt: str, page: int = 1, *pages: str) -> None:
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
+            verify(text, excerpt, page, *pages)
+        self.assertEqual(raised.exception.diagnostic.reason_code, reason_code)
+
+    def test_a_sentence_printed_twice_is_the_first_one(self):
+        # epa_365_1: the same warning under two steps, broken at different places.
+        verified = verify(TWICE, "Do not allow sample to go to dryness.")
+
+        self.assertEqual(verified.source_excerpt, "Do not allow sample \nto go to dryness.")
+
+    def test_a_title_printed_in_the_header_and_the_body_is_supported(self):
+        # PMC7988192: the title in the running header and above the abstract.
+        source = extraction(
+            "SP3 Protocol for \nProteomic Plant Sample Preparation\n"
+            "Abstract text.\nSP3 Protocol for Proteomic Plant \nSample Preparation\n"
+            f"{TITLE}\n{STEP}"
+        )
+        draft = parse(
+            source,
+            metadata={
+                "title": "SP3 Protocol for Proteomic Plant Sample Preparation",
+                "evidence": evidence(1, "SP3 Protocol for Proteomic Plant Sample Preparation"),
+            },
+        )
+
+        self.assertEqual(
+            draft.protocol.metadata.evidence.source_excerpt,
+            "SP3 Protocol for \nProteomic Plant Sample Preparation",
+        )
+
+    def test_matches_that_are_the_same_only_in_a_comparison_form_stay_ambiguous(self):
+        # "5-\n10" and "5-10" are one range only once the line-end hyphen is
+        # joined; read plainly they are different text.
+        self.assert_refused(
+            "ambiguous_source_match", "for 5-\n10 min.\nThen\nfor 5-10 min.", "for 5-10  min."
+        )
+
+    def test_the_human_decisions_refusals(self):
+        cases = {
+            "0.5 / 5": ("Add 0.5 mL\nbuffer.\nThen\nAdd 0.5\nmL buffer.", "Add 5 mL buffer."),
+            "1:1000 / 1:100": ("Dilute 1:1000 in\nPBS.\nThen\nDilute 1:1000\nin PBS.", "Dilute 1:100 in PBS."),
+            "1:100 / 1:1000": ("Dilute 1:100 in\nPBS.\nThen\nDilute 1:100\nin PBS.", "Dilute 1:1000 in PBS."),
+            "30 / 3": ("Spin for 30\nmin.\nThen\nSpin for\n30 min.", "Spin for 3 min."),
+            "mL / µL": ("Add 50 µL\nwater.\nThen\nAdd 50\nµL water.", "Add 50 mL water."),
+            "하지 않는다 / 한다": ("시료를 가열하지\n않는다.\n그리고\n시료를\n가열하지 않는다.", "시료를 가열한다."),
+            "do not / do": (TWICE, "Do allow sample to go to dryness."),
+        }
+        for name, (text, excerpt) in cases.items():
+            with self.subTest(name):
+                self.assert_refused("quote_not_found", text, excerpt)
+
+    def test_the_sentence_printed_twice_on_a_different_page_is_refused(self):
+        self.assert_refused(
+            "quote_not_found", "Title page.", "Do not allow sample to go to dryness.", 1, TWICE
+        )
 
 
 if __name__ == "__main__":

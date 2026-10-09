@@ -1340,7 +1340,7 @@ def _verified_evidence(
                 matching_source_pages=matching_pages,
             ),
         )
-    if len(spans) != 1:
+    if len(spans) != 1 and not _spans_hold_the_same_text(page_text, spans):
         raise ProtocolAnalysisEvidenceError(
             "Protocol evidence has more than one normalized source match.",
             diagnostic=_evidence_diagnostic(
@@ -1351,13 +1351,48 @@ def _verified_evidence(
                 matching_source_pages=(evidence.source_page_number,),
             ),
         )
-    original_start, original_end = spans[0]
+    original_start, original_end = min(spans)
     return _verified_continuation(
         replace(
             evidence,
             source_excerpt=page_text[original_start:original_end],
         ),
         extraction,
+    )
+
+
+def _spans_hold_the_same_text(
+    page_text: str, spans: tuple[tuple[int, int], ...]
+) -> bool:
+    """Whether every match of an excerpt on its page is the same text.
+
+    Rule first_equal_span (human decision 2026-10-09, lane EV, from lane
+    DS-2's replay): a page that prints one sentence twice -- a title in the
+    running header and above the abstract, one warning under two steps --
+    with its line breaks in different places refused the excerpt as
+    ambiguous, while an excerpt printed verbatim twice was always accepted
+    (the exact check above never asks how often). Matches whose text is the
+    same once read plainly (whitespace runs as one space, soft hyphens left
+    out) are now one excerpt, recorded as the first on the page.
+
+    Still different: matches that are the same only in a later comparison
+    form -- "5-" / "10" joined at the line end against a printed "5-10", an
+    OCR Hangul break joined, a protocols.io time mark skipped -- stay
+    ambiguous, and only the cited page is ever searched, so the same
+    sentence on another page is not this excerpt. Lane DS-2's tool cut the
+    match list to its first for every caller (the page-end block, the
+    cross-page rule and the step-number check, which count matches); here
+    only this evidence check reads it.
+    """
+
+    return (
+        len(
+            {
+                _normalized_text_with_bounds(page_text[start:end])[0]
+                for start, end in spans
+            }
+        )
+        == 1
     )
 
 
