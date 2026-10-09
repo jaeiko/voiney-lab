@@ -1024,12 +1024,343 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
     )
 
 
+# --- Where a match stands on its page (lane EB, human decision 2026-10-09) --
+
+#: How much of the page on each side of a match is read to decide whether the
+#: match stands alone: a number, a word or two, the Korean word after it.
+_BESIDE = 80
+_LINE_BREAK_CHARACTERS = frozenset("\n\r\x0b\x0c\x85  ")
+
+
+def _beside_text(window: str) -> tuple[str, list[int]]:
+    """``window`` as the boundary rules read it, with each character's position.
+
+    Soft hyphens are left out; a whitespace run is one space, or one line
+    break when it holds one, so a rule can tell a line from a sentence; a
+    line break after a hyphen that ends a word or a number is joined, as the
+    comparison's line-end hyphen form joins it ("anti-" / "mouse", "5-" /
+    "10"). A hyphen alone on its line is not joined to the next line.
+    """
+
+    characters: list[str] = []
+    positions: list[int] = []
+    index = 0
+    while index < len(window):
+        character = window[index]
+        if character == "­":
+            index += 1
+            continue
+        if character.isspace():
+            start = index
+            while index < len(window) and window[index].isspace():
+                index += 1
+            breaks = any(item in _LINE_BREAK_CHARACTERS for item in window[start:index])
+            if (
+                breaks
+                and len(characters) > 1
+                and characters[-1] in _LINE_END_HYPHENS
+                and characters[-2].isalnum()
+            ):
+                continue
+            characters.append("\n" if breaks else " ")
+            positions.append(start)
+            continue
+        characters.append(character)
+        positions.append(index)
+        index += 1
+    return "".join(characters), positions
+
+
+#: Characters that make a digit right after them part of one number: a minus
+#: or plus sign, a range dash or tilde, ±.
+_NUMBER_SIGNS = frozenset("-‐‑‒–−⁻－+＋±∓~～∼")
+#: Punctuation that holds two digits together as one number: a decimal
+#: point or comma, a thousands comma, a ratio or time colon, a fraction
+#: slash, a range printed with an em dash.
+_NUMBER_POINTS = frozenset(".,:/—．，：／")
+#: A range, ratio or ± printed with spaces: "5 – 10", "1 : 100" with one
+#: space on each side on one line, and "20 ± 2", "4 ~ 5" also across a line
+#: break. A hyphen at a line end or start is a page number ("- 106 -") or a
+#: list mark, not a range.
+_SPACED_NUMBER_BEFORE = re.compile(r"\d [-‐‑‒–−:：] $|\d\s?[~～∼±∓]\s?$")
+_SPACED_NUMBER_AFTER = re.compile(r" [-‐‑‒–−:：] \d|\s?[~～∼±∓]\s?\d")
+
+
+def _is_digit(character: str) -> bool:
+    return bool(character) and character.isnumeric() and not character.isalpha()
+
+
+def _number_continues(before: str, matched: str, after: str) -> bool:
+    """Whether the page continues a number the match starts or ends with.
+
+    Rule (a): "5" in "0.5", "15", "−20", "1:1000", "1,000", "1/2", "5-10",
+    "5 – 10", "20 ± 2" or "4⏎~ 5" is part of a longer number, so the match
+    is not evidence of that number. A decimal point, comma, colon or slash
+    holds two digits, so "doi:10.1371" and "doi.org/10.1371" still print
+    10.1371; a sign or range mark holds the digit after it on its own
+    ("−20", "+4", "~5"). A number the page prints glued to another is
+    refused although a reader might see two ("5.7" and "1%" printed
+    "5.71%"): the page text alone cannot tell them apart.
+    """
+
+    first, last = matched[0], matched[-1]
+    left, right = before[-1:], after[:1]
+    if _is_digit(first) and (
+        _is_digit(left)
+        or left in _NUMBER_SIGNS
+        or (
+            left in _NUMBER_POINTS
+            and (
+                _is_digit(before[-2:-1])
+                # A leading decimal point: ".5".
+                or (left in {".", "．"} and not before[-2:-1].isalpha())
+            )
+        )
+        or _SPACED_NUMBER_BEFORE.search(before)
+    ):
+        return True
+    if (
+        first in _NUMBER_SIGNS | _NUMBER_POINTS
+        and _is_digit(left)
+        and _is_digit(matched[1:2])
+    ):
+        return True
+    if _is_digit(last) and (
+        _is_digit(right)
+        or (right in _NUMBER_SIGNS | _NUMBER_POINTS and _is_digit(after[1:2]))
+        or right in {"±", "∓"}
+        or _SPACED_NUMBER_AFTER.match(after)
+    ):
+        return True
+    return (
+        last in _NUMBER_SIGNS | _NUMBER_POINTS
+        and _is_digit(right)
+        and _is_digit(matched[-2:-1])
+    )
+
+
+#: Marks that hold two parts of one English word together: a hyphen
+#: ("anti-mouse"), an en dash ("DAB–HCl"), an apostrophe ("Dulbecco’s").
+_WORD_JOINERS = frozenset("-‐‑–'’")
+#: A Korean negative ending right after a word the match stops inside:
+#: "건조시키" in "건조시키지 마십시오", "가열하" in "가열하지 않는다".
+_KOREAN_NEGATIVE_ENDING = re.compile(r"지 ?(?:않|마|말)")
+
+
+def _is_latin_letter(character: str) -> bool:
+    """A letter of an English word: not Hangul, CJK or a superscript mark."""
+
+    return (
+        bool(character)
+        and character.isalpha()
+        and not _is_hangul(character)
+        and character not in "ªº"
+        and unicodedata.category(character) != "Lm"
+        and not (
+            "぀" <= character <= "ヿ"
+            or "㐀" <= character <= "鿿"
+            or "豈" <= character <= "﫿"
+        )
+    )
+
+
+def _word_continues(before: str, matched: str, after: str) -> bool:
+    """Whether the match starts or ends inside a word of its page.
+
+    Rule (b): an English word goes on past the match -- "mouse" in
+    "anti-mouse", "anti-⏎mouse" or "antimouse", "PBS" in "PBST", a quote
+    that stops at "phosphate-" where the page goes on "buffered" -- so the
+    page says something else. Letters only: a digit beside a word is a
+    reference or affiliation mark the text layer prints as text
+    ("Henikoff1", "previously12", "1Department"), and a number that goes on
+    is rule (a)'s. A Korean word may go on (a particle: "에탄올" in "에탄올을"),
+    unless what follows is a negative ending: "건조시키" in "건조시키지 마십시오".
+    """
+
+    first, last = matched[0], matched[-1]
+    left, right = before[-1:], after[:1]
+    letter = _is_latin_letter
+    if letter(first) and (
+        letter(left) or (left in _WORD_JOINERS and letter(before[-2:-1]))
+    ):
+        return True
+    if first in _WORD_JOINERS and letter(left) and letter(matched[1:2]):
+        return True
+    if letter(last) and (
+        letter(right) or (right in _WORD_JOINERS and letter(after[1:2]))
+    ):
+        return True
+    if last in _WORD_JOINERS and letter(right) and letter(matched[-2:-1]):
+        return True
+    return (
+        _is_hangul(last)
+        and bool(right)
+        and _is_hangul(right)
+        and _KOREAN_NEGATIVE_ENDING.match(after) is not None
+    )
+
+
+#: Words that negate what follows them in English.
+_ENGLISH_NEGATIONS = frozenset(
+    {
+        "not", "no", "never", "cannot", "nor", "neither", "none", "without",
+        "avoid", "avoids", "avoided", "avoiding",
+    }
+)
+#: Words a negation reaches the match through: "not to touch", "never be".
+_NEGATION_REACHES_THROUGH = frozenset({"to", "be", "been", "ever"})
+#: Punctuation that ends a sentence or a clause.
+_CLAUSE_END = re.compile(r"[.!?;,。、！？；，]")
+#: Marks between a negation and the match that do not end its clause.
+_OPENING_MARKS = frozenset("([{\"'“‘「『:：")
+_CLAUSE_TOKENS = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*|\d+|[^\s\w]")
+#: A match that opens with a form's field label ("Authors:") starts a field
+#: of its own, whatever value the field before it ends in ("AOAC/ASTM: No").
+_FIELD_LABEL = re.compile(r"[A-Z][A-Za-z-]*(?: [A-Za-z-]+){0,2}:")
+#: A Korean negation right after the match: the rest of its word (up to
+#: three letters: "가열" in "가열해서는 안 된다") and then "지 않", "지 마십시오",
+#: "지 말 것", "지 못", "안 된다", "금지", "불가", "없이", "아니다".
+_KOREAN_NEGATION_AFTER = re.compile(
+    r"[가-힣]{0,3}?\s?(?:지\s?(?:않|마(?:십|시|라|세|요)|말(?:\s?것|고|아|며|도록|자|기|라|$)|못)"
+    r"|안\s?(?:되|돼|됨|된|됩)|금지|불가(?!피)|없[가-힣]|아니(?!면)|아닌|아님)"
+)
+#: The same right after a match that ends in "지" ("가열하지 않는다").
+_KOREAN_NEGATION_AFTER_JI = re.compile(
+    r"\s?(?:않|마(?:십|시|라|세|요)|말(?:\s?것|고|아|며|도록|자|기|라|$)|못)"
+)
+#: A word broken at the line end before its negative ending: "건조시키" /
+#: "지 마십시오".
+_KOREAN_NEGATION_NEXT_LINE = re.compile(r"지\s?(?:않|마|말|못)")
+
+
+def _english_negation(tokens: list[str], matched: str) -> bool:
+    word = tokens[-1].lower()
+    negation = word in _ENGLISH_NEGATIONS or word.endswith(("n't", "n’t"))
+    if word == "no" and _is_digit(matched[0]):
+        # "No 5": the number sign.
+        return False
+    if not negation and word in _NEGATION_REACHES_THROUGH and len(tokens) > 1:
+        previous = tokens[-2].lower()
+        negation = previous in _ENGLISH_NEGATIONS or previous.endswith(("n't", "n’t"))
+    return negation
+
+
+def _negation_beside(before: str, matched: str, after: str) -> bool:
+    """Whether the page negates the match right before or right after it.
+
+    Rule (c): in the match's own sentence or clause, the word right before
+    it is a negation the match leaves out -- "allow sample to go to dryness."
+    in "Do not allow sample to go to dryness.", also "not to", "don't",
+    "never", "no", "avoid", "without", "금지" -- or the Korean right after it
+    negates it: "가열하지 않는다", "건조시키지 마십시오", "흔들지 말 것",
+    "가열해서는 안 된다", "사용 금지", "교반 없이". A negation the match quotes
+    is its own. A line break ends the clause before a match that opens with
+    a capital or a digit, and a match that opens with a field label starts
+    its own (a form's "AOAC/ASTM: No" before "Authors:"); "No 5" is the
+    number sign.
+    """
+
+    clause = "" if _FIELD_LABEL.match(matched) else _CLAUSE_END.split(before)[-1]
+    if matched[0].isupper() or _is_digit(matched[0]):
+        clause = clause.rsplit("\n", 1)[-1]
+    tokens = _CLAUSE_TOKENS.findall(clause)
+    while tokens and tokens[-1] in _OPENING_MARKS:
+        tokens.pop()
+    if tokens and (
+        _english_negation(tokens, matched) or "금지" in (tokens[-1][:2], tokens[-1][-2:])
+    ):
+        return True
+    line, _, next_line = after.partition("\n")
+    line = _CLAUSE_END.split(line, 1)[0]
+    if _KOREAN_NEGATION_AFTER.match(line):
+        return True
+    ends_in_ji = matched.endswith(("지", "지는", "지도")) and not matched.endswith(
+        ("까지", "까지는", "까지도")
+    )
+    if ends_in_ji and _KOREAN_NEGATION_AFTER_JI.match(line):
+        return True
+    if line.strip() or not _is_hangul(matched[-1]):
+        return False
+    return bool(
+        _KOREAN_NEGATION_NEXT_LINE.match(next_line)
+        or (ends_in_ji and _KOREAN_NEGATION_AFTER_JI.match(next_line))
+    )
+
+
+def _reads_alone(before: str, matched: str, after: str) -> bool:
+    """Whether a match stands on its page as what it says.
+
+    Lane EB (human decision 2026-10-09, from lane EV's report): the exact
+    comparison read a claim or a quote as a substring of its page, so "5 mL
+    buffer" was found in "Add 0.5 mL buffer.", "20 °C" in "Store at −20
+    °C." and "allow sample to go to dryness." in "Do not allow sample to go
+    to dryness.". ``before`` and ``after`` are the page's own text on each
+    side of ``matched``, read by ``_beside_text``; the match is refused where
+    the page continues it as a longer number (``_number_continues``), goes
+    on with the word it starts or ends in (``_word_continues``) or negates it
+    right beside it (``_negation_beside``). It is a comparison only: page
+    text, stored excerpts, hashes and evidence identities are untouched. A
+    match with nothing printed in it (an empty claim) keeps its earlier
+    reading.
+    """
+
+    before, after = before[-_BESIDE:], after[:_BESIDE]
+    start, end = len(before), len(before) + len(matched)
+    text, positions = _beside_text(before + matched + after)
+    inside = [
+        index
+        for index, position in enumerate(positions)
+        if start <= position < end and text[index] not in " \n"
+    ]
+    if not inside:
+        return True
+    first, last = inside[0], inside[-1] + 1
+    parts = (text[:first], text[first:last], text[last:])
+    return not (
+        _number_continues(*parts) or _word_continues(*parts) or _negation_beside(*parts)
+    )
+
+
+def _span_reads_alone(text: str, start: int, end: int) -> bool:
+    return _reads_alone(
+        text[max(0, start - _BESIDE) : start], text[start:end], text[end : end + _BESIDE]
+    )
+
+
+def _exact_starts(text: str, part: str):
+    """Every place ``part`` is printed in ``text`` as it is."""
+
+    if not part:
+        yield 0
+        return
+    start = text.find(part)
+    while start >= 0:
+        yield start
+        start = text.find(part, start + 1)
+
+
+def _occurs_alone_exactly(text: str, part: str) -> bool:
+    return any(
+        _span_reads_alone(text, start, start + len(part))
+        for start in _exact_starts(text, part)
+    )
+
+
 def _canonical_match_spans(
     source_text: str,
     excerpt: str,
     *,
     ocr_derived: bool = False,
+    alone: bool = False,
 ) -> tuple[tuple[int, int], ...]:
+    """Every span of ``source_text`` that holds ``excerpt`` in a comparison form.
+
+    With ``alone`` only the spans that stand on the page as what they say
+    (``_reads_alone``, lane EB): the evidence and claim checks. Without it
+    every span, for the checks that locate text rather than verify it -- the
+    page-end block, a step number before an excerpt.
+    """
+
     spans: list[tuple[int, int]] = []
     for form in _comparison_forms(ocr_derived):
         canonical_source, starts, ends = _normalized_text_with_bounds(
@@ -1050,7 +1381,12 @@ def _canonical_match_spans(
                 )
             )
             offset = match_index + 1
-    return tuple(dict.fromkeys(spans))
+    found = tuple(dict.fromkeys(spans))
+    if alone:
+        return tuple(
+            (start, end) for start, end in found if _span_reads_alone(source_text, start, end)
+        )
+    return found
 
 
 def _matching_source_pages(
@@ -1060,8 +1396,10 @@ def _matching_source_pages(
     return tuple(
         page.source_page_number
         for page in extraction.pages
-        if excerpt in page.text
-        or _canonical_match_spans(page.text, excerpt, ocr_derived=page.ocr_derived)
+        if _occurs_alone_exactly(page.text, excerpt)
+        or _canonical_match_spans(
+            page.text, excerpt, ocr_derived=page.ocr_derived, alone=True
+        )
     )
 
 
@@ -1154,7 +1492,15 @@ def _statement_across_page_end(
             statement,
             ocr_derived=page.ocr_derived or following.ocr_derived,
         )
-        if start < junction and end > junction + 1
+        if start < junction
+        and end > junction + 1
+        # Read beside the two pages' own text (lane EB), not only the
+        # joined block and head.
+        and _reads_alone(
+            page.text[: tail[0] + start],
+            joined[start:end],
+            following.text[next_start + end - junction - 1 :],
+        )
     ]
     if len(crossing) != 1:
         return None
@@ -1310,10 +1656,10 @@ def _verified_evidence(
         )
     page = extraction.pages[evidence.source_page_number - 1]
     page_text = page.text
-    if evidence.source_excerpt in page_text:
+    if _occurs_alone_exactly(page_text, evidence.source_excerpt):
         return _verified_continuation(evidence, extraction)
     spans = _canonical_match_spans(
-        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True
     )
     if not spans and evidence.continued_on_page_number is None:
         cut = _statement_across_page_end(
@@ -1558,13 +1904,24 @@ def _claim_occurs_on_evidence_page(
 def _claim_occurs_in_text(
     claim: str, source_text: str, *, ocr_derived: bool = False
 ) -> bool:
-    if claim in source_text:
+    """Whether the text prints the claim, as it is or in a comparison form.
+
+    Only where the claim stands alone (``_reads_alone``, lane EB): the claim
+    check, the timer checks and the page-end rule all read this.
+    """
+
+    if _occurs_alone_exactly(source_text, claim):
         return True
     for form in _comparison_forms(ocr_derived):
-        normalized_page, _, _ = _normalized_text_with_bounds(source_text, **form)
+        normalized_page, starts, ends = _normalized_text_with_bounds(source_text, **form)
         normalized_claim, _, _ = _normalized_text_with_bounds(claim, **form)
-        if normalized_claim and normalized_claim in normalized_page:
-            return True
+        if not normalized_claim:
+            continue
+        for index in _exact_starts(normalized_page, normalized_claim):
+            if _span_reads_alone(
+                source_text, starts[index], ends[index + len(normalized_claim) - 1]
+            ):
+                return True
     return False
 
 
@@ -1767,7 +2124,8 @@ def _claim_token_span(
     Lane DS-2's tool compared casefolded word tokens and dropped every other
     character; in its own replay that accepted "50 ng/L" for "50 ng/µL" and
     "1 g/kg" for "1 µg/kg", so symbols, case and number punctuation are kept
-    here.
+    here. The stretch must also stand alone like an exact match
+    (``_reads_alone``, lane EB): no spaced range, no negation beside it.
     """
 
     for form in _comparison_forms(ocr_derived):
@@ -1793,11 +2151,44 @@ def _claim_token_span(
                 continue
             start = page_tokens[first][1]
             end = page_tokens[first + size - 1][2]
-            if _open_token_edge(page, kinds, start - 1) and _open_token_edge(
-                page, kinds, end
+            if (
+                _open_token_edge(page, kinds, start - 1)
+                and _open_token_edge(page, kinds, end)
+                and _span_reads_alone(source_text, starts[start], ends[end - 1])
             ):
                 return starts[start], ends[end - 1]
     return None
+
+
+#: An affiliation mark the text layer prints glued to an author's name: one
+#: lowercase letter ("Prataa,*,1", "Rocha-Santosa") or ORCID's "ID"
+#: ("RedmondID1*").
+_AFFILIATION_MARK = re.compile(r"(?:[a-z]|ID)(?=[\s,*†‡§#\d]|$)")
+
+
+def _author_name_on_page(claim: str, page: ProtocolPdfPage) -> bool:
+    """Whether the page prints an author's name with an affiliation mark after it.
+
+    Lane EB, rule (b) narrowed for author names (decision 3): "Joana C.
+    Prata" printed "Joana C. Prataa,*,1" is the name and its affiliation
+    letter, not a longer word. The mark is read past only right after the
+    name; the name still stands alone otherwise (``_reads_alone``).
+    """
+
+    spans = (
+        *((start, start + len(claim)) for start in _exact_starts(page.text, claim)),
+        *_canonical_match_spans(page.text, claim, ocr_derived=page.ocr_derived),
+    )
+    for start, end in spans:
+        after = page.text[end : end + _BESIDE]
+        mark = _AFFILIATION_MARK.match(after)
+        if mark is not None and _reads_alone(
+            page.text[max(0, start - _BESIDE) : start],
+            page.text[start:end],
+            after[mark.end() :],
+        ):
+            return True
+    return False
 
 
 def _claim_is_supported(
@@ -1809,10 +2200,12 @@ def _claim_is_supported(
 ) -> bool:
     """Whether a structured claim is backed by its evidence.
 
-    The evidence page prints the claim; or (lane EV) a metadata date claim is
-    the date its excerpt prints, or the evidence page prints the claim's
-    words and symbols with other layout. Only this check reads the lane EV
-    rules: the timer checks and the page-end rule keep the exact comparison.
+    The evidence page prints the claim, standing alone (lane EB); or (lane
+    EV) a metadata date claim is the date its excerpt prints, or the
+    evidence page prints the claim's words and symbols with other layout; or
+    (lane EB) an author's name is printed with its affiliation mark. Only
+    this check reads the lane EV rules: the timer checks and the page-end
+    rule keep the exact comparison, which lane EB bounds for all of them.
     """
 
     if _claim_occurs_on_evidence_page(claim, evidence, extraction):
@@ -1824,6 +2217,12 @@ def _claim_is_supported(
     ):
         return True
     page = extraction.pages[evidence.source_page_number - 1]
+    if (
+        isinstance(record, domain.ProtocolMetadata)
+        and field_name == "authors"
+        and _author_name_on_page(claim, page)
+    ):
+        return True
     return (
         _claim_token_span(claim, page.text, ocr_derived=page.ocr_derived)
         is not None
