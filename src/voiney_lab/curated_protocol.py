@@ -3715,6 +3715,10 @@ CONFIRM_MODES = ("readback", "confirm", "quiet")
 QUESTION_TIMINGS = ("before_start", "during")
 CONFIRM_MODE_WORDS = {"readback": "되읽기", "confirm": "바로 확인", "quiet": "조용히"}
 QUESTION_TIMING_WORDS = {"before_start": "시작 전에 묻기", "during": "실험 중에 묻기"}
+#: Lane WV, decision 2: whether the web is looked at for an explanation or a
+#: photograph. On by default; the experimenter turns it off ("웹 찾아보기 꺼
+#: 줘") and the server keeps the choice with the other settings.
+WEB_LOOKUP_VALUES = ("on", "off")
 _SETTING_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래))?"
 _SETTING_DO = rf"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|켜|변경해|전환해){_SETTING_POLITE})?"
 _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
@@ -3724,6 +3728,10 @@ _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
      {"confirm_mode": "readback"}),
     (re.compile(rf"^되읽기(?:\s*모드)?{_SETTING_DO}$"), {"confirm_mode": "readback"}),
     (re.compile(rf"^(?:조용히|조용한)\s*모드{_SETTING_DO}$"), {"confirm_mode": "quiet"}),
+    (re.compile(rf"^웹\s*(?:찾아보기|검색|조회)(?:은|는|을|를)?\s*(?:꺼|끄|그만\s*해|하지\s*마){_SETTING_POLITE}$"),
+     {"web_lookup": "off"}),
+    (re.compile(rf"^웹\s*(?:찾아보기|검색|조회)(?:은|는|을|를)?\s*(?:켜|다시\s*켜){_SETTING_POLITE}$"),
+     {"web_lookup": "on"}),
     (re.compile(
         rf"^(?:(?:조건|분기|횟수|조건\s*분기)\s*(?:와|랑|하고)?\s*)*(?:횟수\s*)?질문(?:은|는|을)?\s*"
         rf"(?:실험\s*(?:중에|하면서)|그\s*단계에서|단계마다)\s*(?:물어\s*(?:봐)?|해){_SETTING_POLITE}$"
@@ -7651,6 +7659,8 @@ class CuratedProtocolSession:
         #: the start.
         self.confirm_mode: str = "readback"
         self.question_timing: str = "during"
+        #: Lane WV, decision 2: "on" unless the experimenter turned it off.
+        self.web_lookup: str = "on"
         #: The one-turn "0.5 mL로 기록할까요?" of the 바로 확인 way.
         self._pending_note_confirmation: dict[str, Any] | None = None
         #: The questions asked before the start (decision 4): the queue,
@@ -7676,9 +7686,15 @@ class CuratedProtocolSession:
         timing = settings.get("question_timing")
         if timing in QUESTION_TIMINGS:
             self.question_timing = str(timing)
+        web = settings.get("web_lookup")
+        if web in WEB_LOOKUP_VALUES:
+            self.web_lookup = str(web)
 
     def experimenter_settings(self) -> dict[str, str]:
-        return {"confirm_mode": self.confirm_mode, "question_timing": self.question_timing}
+        return {
+            "confirm_mode": self.confirm_mode, "question_timing": self.question_timing,
+            "web_lookup": self.web_lookup,
+        }
 
     @property
     def pending_note_confirmation(self) -> dict[str, Any] | None:
@@ -9605,13 +9621,18 @@ class CuratedProtocolSession:
             return ()
         return source_figures.figures_for_step(self.fixture, self.current_index)
 
-    def _picture_subject_words(self, intent: CuratedControlIntent, transcript: str) -> str:
+    def web_lookup_subject_words(self, plan: Any, transcript: str) -> str:
+        """What a web lookup is about, for the server: the plan's entity or the words said."""
+
+        return self._picture_subject_words(plan, transcript)
+
+    def _picture_subject_words(self, intent: Any, transcript: str) -> str:
         """What a web lookup is about, as the person said it or as the source spells it."""
 
         said = web_lookup_subject(transcript)
         if said:
             return said
-        entity = intent.resolved_entity or intent.requested_entity
+        entity = getattr(intent, "resolved_entity", None) or getattr(intent, "requested_entity", None)
         if entity:
             korean = _korean_name_said(entity, _utterance_key(transcript))
             if korean:
@@ -9664,6 +9685,11 @@ class CuratedProtocolSession:
         lead = "화면에 원문 그림을 띄웠어요. " if shown else ""
         if kind == "web_lookup":
             subject = self._picture_subject_words(intent, transcript)
+            if self.web_lookup == "off":
+                return (
+                    f"{lead}웹 찾아보기를 꺼 두셔서 {subject}{_josa(subject, '은', '는')} "
+                    "찾아보지 않았어요. 설정에서 켤 수 있어요."
+                )
             return f"{lead}{subject}{_josa(subject, '은', '는')} 웹 찾아보기가 꺼져 있어 찾아보지 않았어요. 원문이 기준이에요."
         return f"{lead}그림 그리기가 꺼져 있어 그리지 않았어요. 원문이 기준이에요."
 
@@ -9878,6 +9904,24 @@ class CuratedProtocolSession:
                     plan = replace(
                         self._words_plan(
                             f"확인 방식을 '{shown}'{josa_ro(shown)[len(shown):]} 바꿨어요. {words}",
+                            intent_kind="experimenter_setting_changed",
+                        ),
+                        setting_change=dict(setting),
+                    )
+            elif name == "web_lookup":
+                # Lane WV, decision 2.
+                if self.web_lookup == value:
+                    plan = self._words_plan(
+                        "이미 웹 찾아보기가 꺼져 있어요." if value == "off" else "이미 웹 찾아보기가 켜져 있어요.",
+                        intent_kind="experimenter_setting_unchanged",
+                    )
+                else:
+                    self.web_lookup = value
+                    plan = replace(
+                        self._words_plan(
+                            "웹 찾아보기를 껐어요. 설명과 사진은 원문에서만 찾아요."
+                            if value == "off" else
+                            "웹 찾아보기를 켰어요. 설명과 사진은 원문이 먼저이고, 웹 자료는 출처와 함께 화면에 띄워요.",
                             intent_kind="experimenter_setting_changed",
                         ),
                         setting_change=dict(setting),

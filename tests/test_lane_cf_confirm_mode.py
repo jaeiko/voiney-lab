@@ -106,8 +106,9 @@ class VoiceSettingTests(Session, unittest.TestCase):
 
     def test_the_settings_are_what_the_router_snapshot_names(self) -> None:
         self.open_with(1, confirm_mode="quiet")
+        # Lane WV (2026-10-09) added "web_lookup", on unless turned off.
         self.assertEqual(self.session.experimenter_settings(),
-                         {"confirm_mode": "quiet", "question_timing": "during"})
+                         {"confirm_mode": "quiet", "question_timing": "during", "web_lookup": "on"})
 
     def test_an_unknown_value_falls_back_to_the_default(self) -> None:
         self.open_with(1, confirm_mode="sometimes")
@@ -286,9 +287,11 @@ class SettingsApiTests(unittest.TestCase):
             server_module._REQUEST_PRINCIPAL.reset(token)
 
     def test_defaults_then_a_screen_change(self) -> None:
+        # Lane WV (2026-10-09) added "web_lookup", on by default.
         self.assertEqual(
             self.call(server_module.get_experimenter_settings),
-            {"settings": {"confirm_mode": "readback", "question_timing": "before_start"}})
+            {"settings": {"confirm_mode": "readback", "question_timing": "before_start",
+                          "web_lookup": "on"}})
         changed = self.call(server_module.put_experimenter_settings, {"confirm_mode": "quiet"})
         self.assertEqual(changed["settings"]["confirm_mode"], "quiet")
         self.assertEqual(

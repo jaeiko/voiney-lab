@@ -158,6 +158,12 @@ from voiney_lab.llm_router import (
 )
 from voiney_lab.model_providers import RoleModel, chat_client
 from voiney_lab import source_figures
+from voiney_lab.web_explanations import (
+    WEB_PHOTOS,
+    WebExplanationSettings,
+    explain_with_web,
+    find_commons_photo,
+)
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
     route_curated_runtime_turn,
@@ -945,7 +951,14 @@ def _record_workspace_record_fix(
 #: about, the source's conditions and counts asked before the start.
 EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     "confirm_mode":"readback","question_timing":"before_start",
+    # Lane WV, decision 2: the web is looked at for an explanation or a
+    # photograph unless the experimenter turns it off.
+    "web_lookup":"on",
 }
+#: Lane WV's settings are kept in the server's memory for the run, beside the
+#: workspace's record of the others (the workspace's own table is not this
+#: lane's to change).
+_LANE_WV_SETTING_VALUES:dict[str,tuple[str,...]]={"web_lookup":("on","off")}
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
 _EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
@@ -965,6 +978,11 @@ def _load_experimenter_settings()->dict[str,str]:
             principal,store=_commercial_workspace()
             try:
                 settings.update(store.experimenter_settings(principal))
+                settings.update({
+                    name:value for name,value in
+                    _EXPERIMENTER_SETTINGS_MEMORY.get(_experimenter_settings_key(),{}).items()
+                    if name in _LANE_WV_SETTING_VALUES
+                })
                 return settings
             finally:
                 store.close()
@@ -983,20 +1001,27 @@ def _save_experimenter_settings(changes:Mapping[str,Any],source:str)->dict[str,s
 
     if not isinstance(changes,Mapping) or not changes:
         raise WorkspaceError("Experimenter setting is invalid.")
+    allowed={**EXPERIMENTER_SETTING_VALUES,**_LANE_WV_SETTING_VALUES}
     for name,value in changes.items():
-        if value not in EXPERIMENTER_SETTING_VALUES.get(str(name),()):
+        if value not in allowed.get(str(name),()):
             raise WorkspaceError("Experimenter setting is invalid.")
+    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
+    lane_wv={str(name):str(value) for name,value in changes.items() if name in _LANE_WV_SETTING_VALUES}
+    others={str(name):str(value) for name,value in changes.items() if name not in _LANE_WV_SETTING_VALUES}
     if _workspace_settings().enabled:
         principal,store=_commercial_workspace()
         try:
-            for name,value in changes.items():
+            for name,value in others.items():
                 store.record_experimenter_setting(
-                    principal,name=str(name),value=str(value),source=source)
-            return {**EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal)}
+                    principal,name=name,value=value,source=source)
+            kept.update(lane_wv)
+            return {
+                **EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal),
+                **{name:value for name,value in kept.items() if name in _LANE_WV_SETTING_VALUES},
+            }
         finally:
             store.close()
-    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
-    kept.update({str(name):str(value) for name,value in changes.items()})
+    kept.update({**others,**lane_wv})
     return {**EXPERIMENTER_SETTING_DEFAULTS,**kept}
 
 
@@ -3718,6 +3743,27 @@ def export_experiment_report(report_id:str,format_name:str):
     )
 
 
+@app.get("/api/web-visuals/{asset_id}")
+def get_web_visual(asset_id:str):
+    """A Commons photograph the server fetched and checked (lane WV, decision 2), same-origin."""
+
+    photo=WEB_PHOTOS.get(asset_id)
+    if photo is None:
+        raise HTTPException(status_code=404,detail="web_visual_unknown")
+    return Response(
+        content=photo.content,
+        media_type=photo.mime_type,
+        headers={
+            "Cache-Control":"private, no-store",
+            "X-Content-Type-Options":"nosniff",
+            "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            "Content-Disposition":f'inline; filename="{photo.asset_id[:16]}"',
+            "X-Web-Visual-Source":photo.page_url,
+            "X-Web-Visual-Licence":photo.licence,
+        },
+    )
+
+
 @app.get("/api/protocols/{protocol_id}/revisions/{revision_id}/figures/{figure_id}")
 def get_protocol_source_figure(protocol_id:str,revision_id:str,figure_id:str):
     """One figure cut from the uploaded PDF, same-origin, hash-labelled (lane WV, decision 1)."""
@@ -3892,7 +3938,8 @@ class ListenerSession:
                  external_reference_settings:ExternalReferenceSettings|None=None,
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
-                 llm_router_settings:LlmRouterSettings|None=None)->None:
+                 llm_router_settings:LlmRouterSettings|None=None,
+                 web_explanation_settings:WebExplanationSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -3910,6 +3957,8 @@ class ListenerSession:
         self.supplemental_knowledge_settings=(
             supplemental_knowledge_settings or SupplementalKnowledgeSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
+        #: Lane WV, decision 2: the web explanation and photograph (off by default).
+        self.web_explanation_settings=web_explanation_settings or WebExplanationSettings(False)
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
         self.reader_translations:dict[tuple[str,str,str],str]={}
@@ -4830,6 +4879,200 @@ async def _send_source_figures(
         )
     except Exception as exc:  # noqa: BLE001 - a closed page misses a redraw
         log.info("source figures: send skipped error=%s",type(exc).__name__)
+
+
+# --- Lane WV, decision 2: the web, after the source ------------------------------
+
+def _web_lookup_wanted(session:ListenerSession,curated:CuratedProtocolSession,plan:Any)->bool:
+    """Whether this turn asks the web, and the web may be asked."""
+
+    return bool(
+        session.web_explanation_settings.enabled
+        and getattr(curated,"web_lookup","on")=="on"
+        and getattr(curated,"active",False)
+        and (
+            getattr(plan,"visual_kind",None)=="web_lookup"
+            or getattr(plan,"requested_followup",None)=="search_external_reference"
+        )
+    )
+
+
+def _web_lookup_subject(curated:CuratedProtocolSession,plan:Any,transcript:str)->str:
+    words=getattr(curated,"web_lookup_subject_words",None)
+    subject=words(plan,transcript) if callable(words) else ""
+    if subject=="이 단계 내용" and getattr(plan,"requested_followup",None)=="search_external_reference":
+        query=getattr(curated,"reference_query_for",None)
+        resolved=query(transcript,plan) if callable(query) else None
+        if isinstance(resolved,str) and resolved.strip():
+            subject=" ".join(resolved.split())[:60]
+    return subject or "이 단계 내용"
+
+
+def _web_lookup_words(
+    curated:CuratedProtocolSession,plan:Any,transcript:str,language:str,
+)->Any:
+    """The rules' words for a web lookup the server will now run."""
+
+    subject=_web_lookup_subject(curated,plan,transcript)
+    if language!="ko":
+        words=f"Looking it up on the web; the result goes on the screen with its sources."
+    else:
+        words=(
+            f"{subject}{_josa_eun_neun(subject)} 웹에서 찾아볼게요. "
+            "찾으면 화면에 출처와 함께 띄울게요. 값과 안전 지시는 원문만 따라요."
+        )
+    if getattr(plan,"visual_kind",None)=="web_lookup":
+        speech=str(plan.speech_text or "")
+        lead="화면에 원문 그림을 띄웠어요. " if speech.startswith("화면에 원문 그림을 띄웠어요.") else ""
+        display=str(plan.display_text or "")
+        old_sentence=speech[len(lead):]
+        return replace(
+            plan,
+            speech_text=f"{lead}{words}",
+            display_text=display.replace(old_sentence,words) if old_sentence and old_sentence in display else display,
+            primary_text=(
+                str(plan.primary_text).replace(old_sentence,words)
+                if isinstance(plan.primary_text,str) and old_sentence and old_sentence in plan.primary_text
+                else plan.primary_text
+            ),
+        )
+    return replace(
+        plan,
+        speech_text=f"{plan.speech_text} {words}" if plan.speech_text else words,
+        display_text=f"{plan.display_text}\n\n{words}" if plan.display_text else words,
+    )
+
+
+def _josa_eun_neun(word:str)->str:
+    last=word.strip()[-1:] if word.strip() else ""
+    if last and "가"<=last<="힣":
+        return "은" if (ord(last)-ord("가"))%28 else "는"
+    return "는"
+
+
+def _record_web_reference(
+    session:ListenerSession,curated:CuratedProtocolSession,*,turn_id:int,generation:int,
+    subject:str,links:list[str],photo_page_url:str|None,model:str,
+)->None:
+    """Links only, never the web's words or picture, in the experiment report."""
+
+    store=session.experiment_report_store
+    if store is None:
+        return
+    try:
+        report=_open_experiment_report(session,curated)
+        step=curated.fixture.steps[curated.current_index] if curated.active else None
+        store.append_event(
+            report["report_id"],
+            event_key=f"turn-{turn_id}-generation-{generation}-web_reference",
+            event_type="web_reference",
+            step_id=step.step_id if step is not None else None,
+            step_label=step.source_label if step is not None else None,
+            user_wording=subject[:200],
+            confirmation_state="shown_on_screen",
+            source_tier="web_reference",
+            payload={
+                "links":links[:10],
+                "photo_page_url":photo_page_url,
+                "model":model,
+                "text_kept":False,
+                "note":"웹 자료는 화면에만 보였고 보고서에는 링크만 남김 (줄 WV)",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the report never blocks the turn
+        log.warning("web reference not recorded error=%s",type(exc).__name__)
+
+
+async def _run_web_lookup(
+    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    curated:CuratedProtocolSession,plan:Any,transcript:str,language:str,
+    speak_by:float|None,clock:Callable[[],float],
+)->None:
+    """Ask the web about the thing named, after the rules' answer (lane WV, decision 2).
+
+    The source answered first and is never changed by this. What the web
+    says is checked (no value, no safety instruction, no state claim), shown
+    on the screen with its sources, and said in one or two sentences only
+    when the answer's audio is still playing; otherwise the screen alone.
+    """
+
+    settings=session.web_explanation_settings
+    configuration_id=session.accepted_configuration_id
+    subject=_web_lookup_subject(curated,plan,transcript)
+    fields={"configuration_id":configuration_id,"turn_id":turn_id,"generation":generation}
+    try:
+        await sender.text("protocol.web.state",status="running",subject=subject,**fields)
+        step=curated.fixture.steps[curated.current_index]
+        protocol=curated.fixture.draft.protocol
+        names=", ".join(
+            " ".join(str(getattr(item,"name_source_text","")).split())
+            for item in (*getattr(protocol,"materials",()),*getattr(protocol,"equipment",()))
+            if getattr(item,"name_source_text","")
+        )[:600]
+        client=AsyncOpenAI(
+            api_key=require_env("OPENAI_API_KEY"),max_retries=0,
+            timeout=settings.timeout_seconds)
+        result=await explain_with_web(
+            client,settings,subject=subject,question=transcript,
+            step_text=step.instruction_source_text,protocol_names=names,language=language)
+        photo=None
+        if result.shown and settings.photos:
+            try:
+                photo=await asyncio.wait_for(
+                    find_commons_photo(result.english_term or subject),timeout=8.0)
+            except asyncio.TimeoutError:
+                photo=None
+        if not session.is_current(turn_id,generation):
+            return
+        spoken_aloud=False
+        if (
+            result.shown and result.spoken and speak_by is not None and language=="ko"
+            and (turn_id,generation) in session.held_audio_complete and clock()<speak_by
+        ):
+            words=f"{result.spoken} 자세한 건 화면에 출처와 함께 띄웠어요."
+            pcm=await asyncio.to_thread(synthesize,said(words),language)
+            frames=frame_complete_audio(pcm)
+            if (
+                frames and session.is_current(turn_id,generation)
+                and (turn_id,generation) in session.held_audio_complete
+            ):
+                await sender.segment(turn_id,1,frames,generation)
+                await _release_held_audio(sender,session,turn_id,generation,2)
+                spoken_aloud=True
+        await sender.text(
+            "protocol.web.result",
+            status=result.status if result.shown else result.status,
+            subject=subject,spoken=result.spoken if result.shown else "",
+            screen=result.screen if result.shown else "",
+            english_term=result.english_term,
+            citations=[item.public_dict() for item in result.citations] if result.shown else [],
+            photo=photo.public_dict() if photo is not None else None,
+            removed_count=len(result.removed_sentences),
+            spoken_aloud=spoken_aloud,model=result.model,elapsed_ms=result.elapsed_ms,
+            search_count=result.search_count,backend="openai_responses_web_search",
+            **fields,
+        )
+        log.info(
+            "web_lookup turn_id=%s status=%s searches=%s citations=%s removed=%s photo=%s "
+            "spoken=%s elapsed_ms=%s",
+            turn_id,result.status,result.search_count,len(result.citations),
+            len(result.removed_sentences),photo is not None,spoken_aloud,result.elapsed_ms)
+        if result.shown:
+            _record_web_reference(
+                session,curated,turn_id=turn_id,generation=generation,subject=subject,
+                links=[item.url for item in result.citations],
+                photo_page_url=photo.page_url if photo is not None else None,
+                model=result.model)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the web never costs the turn
+        log.warning("web lookup failed turn_id=%s error=%s",turn_id,type(exc).__name__)
+        try:
+            await sender.text("protocol.web.result",status="provider_error",subject=subject,**fields)
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        await _release_held_audio(sender,session,turn_id,generation,1)
 
 
 def _queue_source_figures(
@@ -7002,6 +7245,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         answer_output=None
         brain_snapshot=None
         router_outcome:RouterTurnOutcome|None=None
+        #: Lane WV, decision 2: whether this turn asks the web after the answer.
+        web_lookup_now=False
         router_before=(
             history_before(curated)
             if session.llm_router_settings.enabled else None
@@ -7503,6 +7748,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             display_text=f"{plan.display_text} {download}",
                             speech_text=f"{plan.speech_text} {download}",
                         )
+            web_lookup_now=_web_lookup_wanted(session,curated,plan)
+            if web_lookup_now:
+                plan=_web_lookup_words(curated,plan,transcript,turn_language)
             if getattr(plan,"setting_change",None):
                 # Lane CF, decision 1: a setting said aloud is kept for the
                 # experimenter's next session and shown on the screen.
@@ -8068,24 +8316,36 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # Lane F, decision 3: the delta's document again, so the screen
             # need not keep the delta's copy.
             display_document=getattr(plan, "display_document", None))
-        if (
-            speech_policy=="speak" and research_context is not None
-            and research_context.get("outside_pdf") is not None
+        web_speak_by:float|None=None
+        if speech_policy=="speak" and (
+            (research_context is not None and research_context.get("outside_pdf") is not None)
+            or web_lookup_now
         ):
             # Lane R6, decision 6: the answer plays now; an outside-PDF
             # explanation ready before it ends is said right after it.
             # Otherwise audio.complete goes when the answer's audio ends.
+            # Lane WV, decision 2: the web's one or two sentences the same
+            # way, within the lookup's own time limit.
             session.held_audio_complete.add((turn_id,generation))
-            research_context["speak_by"]=(
-                clock()+sum(len(frame) for frame in frames)/32000+0.3)
+            answer_ends=clock()+sum(len(frame) for frame in frames)/32000+0.3
+            if research_context is not None and research_context.get("outside_pdf") is not None:
+                research_context["speak_by"]=answer_ends
+            if web_lookup_now:
+                web_speak_by=answer_ends+min(
+                    15.0,session.web_explanation_settings.timeout_seconds)
             async def release_when_answer_ends(deadline:float)->None:
                 await asyncio.sleep(max(0.0,deadline-clock()))
                 await _release_held_audio(sender,session,turn_id,generation,1)
             session.track_visual_task(asyncio.create_task(
-                release_when_answer_ends(research_context["speak_by"])))
+                release_when_answer_ends(web_speak_by or answer_ends)))
         else:
             await current_text(
                 "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
+        if web_lookup_now:
+            session.track_visual_task(asyncio.create_task(_run_web_lookup(
+                session=session,sender=sender,turn_id=turn_id,generation=generation,
+                curated=curated,plan=plan,transcript=transcript,language=turn_language,
+                speak_by=web_speak_by,clock=clock)))
         if (
             router_outcome is not None and router_before is not None
             and session.is_current(turn_id,generation)
@@ -8638,6 +8898,7 @@ async def voice_socket(websocket:WebSocket):
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
+        web_explanation_settings=WebExplanationSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
         await websocket.send_text(event(
             "error",message=f"invalid non-secret configuration: {exc}"))
@@ -8647,6 +8908,7 @@ async def voice_socket(websocket:WebSocket):
         "external_text":external_settings.public_capability(),
         "supplemental_model":supplemental_settings.public_capability(),
         "multi_brain":multi_brain_settings.public_capability(),
+        "web_explanation":web_explanation_settings.public_capability(),
     }
     if llm_router_settings.enabled:
         research_capabilities["llm_router"]=llm_router_settings.public_capability()
@@ -8662,6 +8924,7 @@ async def voice_socket(websocket:WebSocket):
         supplemental_knowledge_settings=supplemental_settings,
         multi_brain_settings=multi_brain_settings,
         llm_router_settings=llm_router_settings,
+        web_explanation_settings=web_explanation_settings,
     ); task=None; trusted_config=None
     # Every sentence this connection synthesizes is remembered for the echo
     # check; tasks started from here inherit the binding.

@@ -128,6 +128,11 @@
               <label class="control-field"><span>조건 분기·반복 횟수 질문</span><select id="question-timing" aria-label="조건 분기와 반복 횟수 질문 시점" aria-describedby="experimenter-settings-status">
                 <option value="before_start" selected>시작 전에 묻기</option>
                 <option value="during">실험 중에 묻기</option>
+              </select></label>
+              <!-- Lane WV decision 2: the web is looked at only for an explanation or a photograph, shown with its source; the experimenter can turn it off (the same as saying "웹 찾아보기 꺼 줘"). -->
+              <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
+                <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
+                <option value="off">끔 · 원문에서만 찾기</option>
               </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
               <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
                 <option value="">기본 마이크 (시스템 설정)</option>
@@ -245,6 +250,7 @@
                 <span hidden><b>SHA-256</b> <span id="source-short-hash">—</span></span>
               </div>
               <div id="procedure-visual" class="step-visual" hidden></div>
+              <div id="procedure-web" class="step-visual web-lookup-panel" hidden></div>
             </section>
             <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
               <h2 id="web-ref-title">참고 자료</h2>
@@ -792,6 +798,49 @@ function applySourceFiguresState(message){
  renderStepVisual($("procedure-visual"),state,curatedScreenFields);
  return true;
 }
+// Lane WV, decision 2: what the web said about the thing asked, shown with
+// its sources under the source figures, and a line in the turn card. Values
+// and safety instructions never come from here: the server took them out.
+const webEvents=new Map();let lastWebLookupStepId=null;
+function safeWebCitation(item){return item&&typeof item==="object"&&typeof item.url==="string"&&item.url.startsWith("https://")&&typeof item.title==="string"?item:null;}
+function safeWebPhoto(value){if(!value||typeof value!=="object"||typeof value.asset_id!=="string"||!/^[0-9a-f]{64}$/.test(value.asset_id)||value.url!==`/api/web-visuals/${value.asset_id}`||!["image/png","image/jpeg"].includes(value.mime_type)||typeof value.title!=="string"||typeof value.licence!=="string"||!value.licence||typeof value.page_url!=="string"||!value.page_url.startsWith("https://"))return null;return value;}
+function webEventAccepted(message,browserGeneration){const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(message?.turn_id,browserGeneration),known=turnServerGenerations.get(browserKey);return !!accepted&&accepted.mode==="cascade"&&message.configuration_id===accepted.configuration_id&&Number.isInteger(message.turn_id)&&Number.isInteger(message.generation)&&known===message.generation;}
+function applyWebLookupState(message,browserGeneration=sessionGeneration){
+ if(!webEventAccepted(message,browserGeneration)||message.status!=="running")return false;
+ const key=`${message.generation}:${message.turn_id}`;if(webEvents.has(key))return false;webEvents.set(key,{terminal:false});
+ const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;
+ target.textContent=typeof message.subject==="string"&&message.subject?`웹에서 '${normalizePresentationText(message.subject)}'를 찾아보는 중…`:"웹에서 찾아보는 중…";target.hidden=false;
+ return true;
+}
+function renderWebLookupResult(container,message){
+ const block=document.createElement("section");block.className="web-lookup";
+ const heading=document.createElement("div");heading.className="visual-status";heading.textContent=`웹 자료 · 출처 · '${normalizePresentationText(message.subject||"")}'`;block.appendChild(heading);
+ const note=document.createElement("p");note.className="web-lookup-note";note.textContent="설명과 사진만 웹에서 가져왔어요. 양·시간·온도·농도·횟수와 안전 지시는 원문만 따릅니다.";block.appendChild(note);
+ if(typeof message.screen==="string"&&message.screen.trim()){const text=document.createElement("p");text.className="web-lookup-text";text.textContent=normalizePresentationText(message.screen);block.appendChild(text);}
+ const photo=safeWebPhoto(message.photo);
+ if(photo){const figure=document.createElement("figure");figure.className="web-photo";const image=document.createElement("img");image.alt=normalizePresentationText(photo.title);image.loading="lazy";image.src=photo.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`웹 자료 · 출처 Wikimedia Commons · ${normalizePresentationText(photo.title)}${photo.author?` · 작성자 ${normalizePresentationText(photo.author)}`:""} · ${normalizePresentationText(photo.licence)} · 실험 PDF 원문 사진이 아니에요`;figure.appendChild(caption);const link=document.createElement("a");link.href=photo.page_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="원본 페이지 · 라이선스 보기";figure.appendChild(link);block.appendChild(figure);}
+ const citations=Array.isArray(message.citations)?message.citations.map(safeWebCitation).filter(Boolean):[];
+ if(citations.length){const list=document.createElement("div");list.className="web-lookup-sources";const label=document.createElement("div");label.className="visual-status";label.textContent=`출처 (${citations.length})`;list.appendChild(label);for(const item of citations){const line=document.createElement("div");const link=document.createElement("a");link.href=item.url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`${normalizePresentationText(item.title||item.domain||item.url)} · ${item.domain||""}`;line.appendChild(link);list.appendChild(line);}block.appendChild(list);}
+ if(Number.isInteger(message.removed_count)&&message.removed_count>0){const removed=document.createElement("p");removed.className="visual-status";removed.textContent=`값이나 안전 지시가 섞인 문장 ${message.removed_count}개는 뺐어요.`;block.appendChild(removed);}
+ container.appendChild(block);
+}
+function applyWebLookupResult(message,browserGeneration=sessionGeneration){
+ if(!webEventAccepted(message,browserGeneration))return false;
+ const key=`${message.generation}:${message.turn_id}`,record=webEvents.get(key);if(record?.terminal)return false;webEvents.set(key,{terminal:true,status:message.status});
+ const node=turnNode(message.turn_id,browserGeneration),snapshot=beginChatPatch(node);
+ const status=node.querySelector?.(".filler-status");if(status){status.textContent="";status.hidden=true;}
+ const outcome=node.querySelector?.(".turn-visual");
+ if(message.status==="success"){
+  const panel=$("procedure-web");if(panel){panel.replaceChildren();panel.hidden=false;renderWebLookupResult(panel,message);}
+  if(outcome){outcome.hidden=false;const line=document.createElement("div");line.className="visual-status web-lookup-line";line.textContent=`웹 자료 · 출처와 함께 오른쪽 '원문 PDF 그림' 칸에 띄웠어요${message.spoken_aloud?"":" · 음성 없이 화면만"}`;outcome.appendChild(line);}
+  announceMilestone("웹 자료를 화면에 띄웠습니다.");
+ }else if(outcome){
+  outcome.hidden=false;const line=document.createElement("div");line.className="visual-status web-lookup-line";
+  line.textContent={timeout:"웹 찾아보기 시간 초과 · 원문은 그대로예요",no_citations:"출처 없는 웹 답은 띄우지 않았어요",empty:"웹에서 쓸 만한 설명을 찾지 못했어요",disabled:"웹 찾아보기가 꺼져 있어요",provider_error:"웹 찾아보기에 실패했어요 · 원문은 그대로예요"}[message.status]||"웹 찾아보기 결과 없음";
+  outcome.appendChild(line);
+ }
+ finishChatPatch(snapshot,"web");return true;
+}
 // Lane DI (2026-10-08): the xAI web-image search and image generation are
 // gone (lane WV builds their successor). The server still says, once per
 // request, that no visual beyond the PDF's own could be shown.
@@ -819,7 +868,7 @@ function resetSessionUI(){
  experimentEndedOnScreen=false;workflowPaused=false;
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
- toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();
+ toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();
  turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
  webReferenceHistory.length=0;
  if($("task-web-reference-panel"))$("task-web-reference-panel").hidden=true;
@@ -970,6 +1019,7 @@ function renderCuratedProtocolState(message){
  $("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";
  startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value,curatedScreenFields);
+ if(value.current_step_id!==lastWebLookupStepId){const webPanel=$("procedure-web");if(webPanel){webPanel.replaceChildren();webPanel.hidden=true;}lastWebLookupStepId=value.current_step_id;}
  // Lane U2 decision 5: the handoff row (red) is shown only for a real block;
  // "nothing handed over" is not a problem and is not shown. The readiness
  // and development status are developer details (procedure-meta above).
@@ -1786,6 +1836,8 @@ function renderExperimenterSettings(settings){
  const mode=$("confirm-mode"),timing=$("question-timing");
  if(mode&&["readback","confirm","quiet"].includes(settings.confirm_mode))mode.value=settings.confirm_mode;
  if(timing&&["before_start","during"].includes(settings.question_timing))timing.value=settings.question_timing;
+ const web=$("web-lookup");
+ if(web&&["on","off"].includes(settings.web_lookup))web.value=settings.web_lookup;
 }
 async function loadExperimenterSettings(){
  try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
@@ -2157,6 +2209,8 @@ async function onMessage(e,generation,current){
  if(m.type==="experiment.session.error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
  if(m.type==="protocol.visual.state")applyGeneratedVisualState(m,generation);
  if(m.type==="protocol.figures.state")applySourceFiguresState(m);
+ if(m.type==="protocol.web.state")applyWebLookupState(m,generation);
+ if(m.type==="protocol.web.result")applyWebLookupResult(m,generation);
  if(m.type==="research.state")applyResearchState(m,generation);
  if(m.type==="research.result")applyResearchResult(m,generation);
  if(m.type==="brain.state")applyBrainState(m,generation);
@@ -2231,6 +2285,7 @@ $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-upda
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
+$("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting("web_lookup",event.target.value);});
 globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
 </script>
 </body>
