@@ -128,6 +128,12 @@ class LaneEvExamplesTests(BoundaryAssertions):
             page(line), "claim_not_found", materials=[material("Antibody stock", line, "20 °C")]
         )
 
+    def test_a_quote_without_its_negation_is_refused(self):
+        source = extraction(f"{TITLE}\nDo not allow sample to go to dryness.")
+        self.assert_refused(
+            source, "quote_not_found", steps=[step("", "allow sample to go to dryness.")]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

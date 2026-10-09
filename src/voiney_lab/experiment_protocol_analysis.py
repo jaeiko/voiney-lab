@@ -1200,17 +1200,105 @@ def _word_continues(before: str, matched: str, after: str) -> bool:
     )
 
 
+#: Words that negate what follows them in English.
+_ENGLISH_NEGATIONS = frozenset(
+    {
+        "not", "no", "never", "cannot", "nor", "neither", "none", "without",
+        "avoid", "avoids", "avoided", "avoiding",
+    }
+)
+#: Words a negation reaches the match through: "not to touch", "never be".
+_NEGATION_REACHES_THROUGH = frozenset({"to", "be", "been", "ever"})
+#: Punctuation that ends a sentence or a clause.
+_CLAUSE_END = re.compile(r"[.!?;,。、！？；，]")
+#: Marks between a negation and the match that do not end its clause.
+_OPENING_MARKS = frozenset("([{\"'“‘「『:：")
+_CLAUSE_TOKENS = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*|\d+|[^\s\w]")
+#: A match that opens with a form's field label ("Authors:") starts a field
+#: of its own, whatever value the field before it ends in ("AOAC/ASTM: No").
+_FIELD_LABEL = re.compile(r"[A-Z][A-Za-z-]*(?: [A-Za-z-]+){0,2}:")
+#: A Korean negation right after the match: the rest of its word (up to
+#: three letters: "가열" in "가열해서는 안 된다") and then "지 않", "지 마십시오",
+#: "지 말 것", "지 못", "안 된다", "금지", "불가", "없이", "아니다".
+_KOREAN_NEGATION_AFTER = re.compile(
+    r"[가-힣]{0,3}?\s?(?:지\s?(?:않|마(?:십|시|라|세|요)|말(?:\s?것|고|아|며|도록|자|기|라|$)|못)"
+    r"|안\s?(?:되|돼|됨|된|됩)|금지|불가(?!피)|없[가-힣]|아니(?!면)|아닌|아님)"
+)
+#: The same right after a match that ends in "지" ("가열하지 않는다").
+_KOREAN_NEGATION_AFTER_JI = re.compile(
+    r"\s?(?:않|마(?:십|시|라|세|요)|말(?:\s?것|고|아|며|도록|자|기|라|$)|못)"
+)
+#: A word broken at the line end before its negative ending: "건조시키" /
+#: "지 마십시오".
+_KOREAN_NEGATION_NEXT_LINE = re.compile(r"지\s?(?:않|마|말|못)")
+
+
+def _english_negation(tokens: list[str], matched: str) -> bool:
+    word = tokens[-1].lower()
+    negation = word in _ENGLISH_NEGATIONS or word.endswith(("n't", "n’t"))
+    if word == "no" and _is_digit(matched[0]):
+        # "No 5": the number sign.
+        return False
+    if not negation and word in _NEGATION_REACHES_THROUGH and len(tokens) > 1:
+        previous = tokens[-2].lower()
+        negation = previous in _ENGLISH_NEGATIONS or previous.endswith(("n't", "n’t"))
+    return negation
+
+
+def _negation_beside(before: str, matched: str, after: str) -> bool:
+    """Whether the page negates the match right before or right after it.
+
+    Rule (c): in the match's own sentence or clause, the word right before
+    it is a negation the match leaves out -- "allow sample to go to dryness."
+    in "Do not allow sample to go to dryness.", also "not to", "don't",
+    "never", "no", "avoid", "without", "금지" -- or the Korean right after it
+    negates it: "가열하지 않는다", "건조시키지 마십시오", "흔들지 말 것",
+    "가열해서는 안 된다", "사용 금지", "교반 없이". A negation the match quotes
+    is its own. A line break ends the clause before a match that opens with
+    a capital or a digit, and a match that opens with a field label starts
+    its own (a form's "AOAC/ASTM: No" before "Authors:"); "No 5" is the
+    number sign.
+    """
+
+    clause = "" if _FIELD_LABEL.match(matched) else _CLAUSE_END.split(before)[-1]
+    if matched[0].isupper() or _is_digit(matched[0]):
+        clause = clause.rsplit("\n", 1)[-1]
+    tokens = _CLAUSE_TOKENS.findall(clause)
+    while tokens and tokens[-1] in _OPENING_MARKS:
+        tokens.pop()
+    if tokens and (
+        _english_negation(tokens, matched) or "금지" in (tokens[-1][:2], tokens[-1][-2:])
+    ):
+        return True
+    line, _, next_line = after.partition("\n")
+    line = _CLAUSE_END.split(line, 1)[0]
+    if _KOREAN_NEGATION_AFTER.match(line):
+        return True
+    ends_in_ji = matched.endswith(("지", "지는", "지도")) and not matched.endswith(
+        ("까지", "까지는", "까지도")
+    )
+    if ends_in_ji and _KOREAN_NEGATION_AFTER_JI.match(line):
+        return True
+    if line.strip() or not _is_hangul(matched[-1]):
+        return False
+    return bool(
+        _KOREAN_NEGATION_NEXT_LINE.match(next_line)
+        or (ends_in_ji and _KOREAN_NEGATION_AFTER_JI.match(next_line))
+    )
+
+
 def _reads_alone(before: str, matched: str, after: str) -> bool:
     """Whether a match stands on its page as what it says.
 
     Lane EB (human decision 2026-10-09, from lane EV's report): the exact
     comparison read a claim or a quote as a substring of its page, so "5 mL
-    buffer" was found in "Add 0.5 mL buffer." and "20 °C" in "Store at −20
-    °C.". ``before`` and ``after`` are the page's own text on each side of
-    ``matched``, read by ``_beside_text``; the match is refused where
-    the page continues it as a longer number (``_number_continues``) or goes
-    on with the word it starts or ends in (``_word_continues``). It is a
-    comparison only: page
+    buffer" was found in "Add 0.5 mL buffer.", "20 °C" in "Store at −20
+    °C." and "allow sample to go to dryness." in "Do not allow sample to go
+    to dryness.". ``before`` and ``after`` are the page's own text on each
+    side of ``matched``, read by ``_beside_text``; the match is refused where
+    the page continues it as a longer number (``_number_continues``), goes
+    on with the word it starts or ends in (``_word_continues``) or negates it
+    right beside it (``_negation_beside``). It is a comparison only: page
     text, stored excerpts, hashes and evidence identities are untouched. A
     match with nothing printed in it (an empty claim) keeps its earlier
     reading.
@@ -1228,7 +1316,9 @@ def _reads_alone(before: str, matched: str, after: str) -> bool:
         return True
     first, last = inside[0], inside[-1] + 1
     parts = (text[:first], text[first:last], text[last:])
-    return not (_number_continues(*parts) or _word_continues(*parts))
+    return not (
+        _number_continues(*parts) or _word_continues(*parts) or _negation_beside(*parts)
+    )
 
 
 def _span_reads_alone(text: str, start: int, end: int) -> bool:
@@ -2035,7 +2125,7 @@ def _claim_token_span(
     character; in its own replay that accepted "50 ng/L" for "50 ng/µL" and
     "1 g/kg" for "1 µg/kg", so symbols, case and number punctuation are kept
     here. The stretch must also stand alone like an exact match
-    (``_reads_alone``, lane EB): no spaced range around it.
+    (``_reads_alone``, lane EB): no spaced range, no negation beside it.
     """
 
     for form in _comparison_forms(ocr_derived):
