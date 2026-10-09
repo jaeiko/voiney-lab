@@ -669,6 +669,10 @@
     .web-lookup-sources{margin-top:.5rem;font-size:.78rem}
     .web-lookup-sources a{color:var(--cyan);text-decoration:none}
     .web-lookup-sources a:hover{text-decoration:underline}
+    .drawn-panel{border-style:dotted}
+    .drawn-label{color:#b8860b;font-weight:800}
+    .step-visual .drawn-figure{margin:.5rem 0 0;padding:0}
+    .step-visual .drawn-figure img{background:#fff}
 
     .web-reference-panel{
       padding:1.15rem;

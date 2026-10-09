@@ -251,6 +251,7 @@
               </div>
               <div id="procedure-visual" class="step-visual" hidden></div>
               <div id="procedure-web" class="step-visual web-lookup-panel" hidden></div>
+              <div id="procedure-drawing" class="step-visual drawn-panel" hidden></div>
             </section>
             <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
               <h2 id="web-ref-title">참고 자료</h2>
@@ -841,6 +842,37 @@ function applyWebLookupResult(message,browserGeneration=sessionGeneration){
  }
  finishChatPatch(snapshot,"web");return true;
 }
+// Lane WV, decision 3: a diagram the server drew from the step's words,
+// checked, labelled "AI 가 그린 그림 — 실제와 다를 수 있음", drawn only for
+// the step shown and only from the same-origin route.
+const drawingEvents=new Map();
+function safeDrawnDiagram(value,state){if(!value||typeof value!=="object"||typeof value.asset_id!=="string"||!/^[0-9a-f]{64}$/.test(value.asset_id)||value.url!==`/api/drawn-visuals/${value.asset_id}`||value.mime_type!=="image/svg+xml"||typeof value.step_id!=="string"||value.step_id!==state?.current_step_id||typeof value.label!=="string"||!value.label)return null;return value;}
+function applyDrawingState(message,browserGeneration=sessionGeneration){
+ if(!webEventAccepted(message,browserGeneration)||message.status!=="running")return false;
+ const key=`${message.generation}:${message.turn_id}`;if(drawingEvents.has(key))return false;drawingEvents.set(key,{terminal:false});
+ const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;
+ target.textContent="원문을 바탕으로 그림을 그리는 중…";target.hidden=false;
+ return true;
+}
+function applyDrawingResult(message,browserGeneration=sessionGeneration){
+ if(!webEventAccepted(message,browserGeneration))return false;
+ const key=`${message.generation}:${message.turn_id}`,record=drawingEvents.get(key);if(record?.terminal)return false;drawingEvents.set(key,{terminal:true,status:message.status});
+ const node=turnNode(message.turn_id,browserGeneration),snapshot=beginChatPatch(node);
+ const status=node.querySelector?.(".filler-status");if(status){status.textContent="";status.hidden=true;}
+ const outcome=node.querySelector?.(".turn-visual");
+ const diagram=message.status==="success"?safeDrawnDiagram(message.diagram,curatedProtocolState):null;
+ if(diagram){
+  const panel=$("procedure-drawing");
+  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=diagram.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);}
+  if(outcome){outcome.hidden=false;const line=document.createElement("div");line.className="visual-status drawn-line";line.textContent=`${normalizePresentationText(diagram.label)} · 오른쪽 '원문 PDF 그림' 칸에 띄웠어요`;outcome.appendChild(line);}
+  announceMilestone("AI가 그린 그림을 화면에 띄웠습니다.");
+ }else if(outcome){
+  outcome.hidden=false;const line=document.createElement("div");line.className="visual-status drawn-line";
+  line.textContent={timeout:"그림 그리기 시간 초과 · 원문은 그대로예요",unusable:"그린 그림을 쓸 수 없어 띄우지 않았어요",provider_error:"그림 그리기에 실패했어요 · 원문은 그대로예요"}[message.status]||"그림을 띄우지 못했어요";
+  outcome.appendChild(line);
+ }
+ finishChatPatch(snapshot,"drawing");return true;
+}
 // Lane DI (2026-10-08): the xAI web-image search and image generation are
 // gone (lane WV builds their successor). The server still says, once per
 // request, that no visual beyond the PDF's own could be shown.
@@ -868,7 +900,7 @@ function resetSessionUI(){
  experimentEndedOnScreen=false;workflowPaused=false;
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
- toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();
+ toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
  turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
  webReferenceHistory.length=0;
  if($("task-web-reference-panel"))$("task-web-reference-panel").hidden=true;
@@ -1019,7 +1051,7 @@ function renderCuratedProtocolState(message){
  $("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";
  startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value,curatedScreenFields);
- if(value.current_step_id!==lastWebLookupStepId){const webPanel=$("procedure-web");if(webPanel){webPanel.replaceChildren();webPanel.hidden=true;}lastWebLookupStepId=value.current_step_id;}
+ if(value.current_step_id!==lastWebLookupStepId){for(const id of ["procedure-web","procedure-drawing"]){const panel=$(id);if(panel){panel.replaceChildren();panel.hidden=true;}}lastWebLookupStepId=value.current_step_id;}
  // Lane U2 decision 5: the handoff row (red) is shown only for a real block;
  // "nothing handed over" is not a problem and is not shown. The readiness
  // and development status are developer details (procedure-meta above).
@@ -2211,6 +2243,8 @@ async function onMessage(e,generation,current){
  if(m.type==="protocol.figures.state")applySourceFiguresState(m);
  if(m.type==="protocol.web.state")applyWebLookupState(m,generation);
  if(m.type==="protocol.web.result")applyWebLookupResult(m,generation);
+ if(m.type==="protocol.drawing.state")applyDrawingState(m,generation);
+ if(m.type==="protocol.drawing.result")applyDrawingResult(m,generation);
  if(m.type==="research.state")applyResearchState(m,generation);
  if(m.type==="research.result")applyResearchResult(m,generation);
  if(m.type==="brain.state")applyBrainState(m,generation);

@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote_plus
+from urllib.parse import quote, unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -40,6 +40,7 @@ from voiney_lab.cascade_filler import (
     cascade_filler_status_speech_enabled,
 )
 from voiney_lab.curated_protocol import (
+    LANE_WV_PICTURE_KINDS,
     STT_CONTROL_KEYTERMS,
     control_words,
     ClaimAdmissionStatus,
@@ -163,6 +164,12 @@ from voiney_lab.web_explanations import (
     WebExplanationSettings,
     explain_with_web,
     find_commons_photo,
+)
+from voiney_lab.drawn_diagrams import (
+    DRAWN_DIAGRAMS,
+    DRAWN_LABEL,
+    DrawnDiagramSettings,
+    draw_step_diagram,
 )
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
@@ -3758,8 +3765,29 @@ def get_web_visual(asset_id:str):
             "X-Content-Type-Options":"nosniff",
             "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; sandbox",
             "Content-Disposition":f'inline; filename="{photo.asset_id[:16]}"',
-            "X-Web-Visual-Source":photo.page_url,
-            "X-Web-Visual-Licence":photo.licence,
+            "X-Web-Visual-Source":quote(photo.page_url,safe=":/?#&=%"),
+            "X-Web-Visual-Licence":quote(photo.licence,safe=" "),
+        },
+    )
+
+
+@app.get("/api/drawn-visuals/{asset_id}")
+def get_drawn_visual(asset_id:str):
+    """A diagram the server drew from the step's words and checked (lane WV, decision 3)."""
+
+    diagram=DRAWN_DIAGRAMS.get(asset_id)
+    if diagram is None:
+        raise HTTPException(status_code=404,detail="drawn_visual_unknown")
+    return Response(
+        content=diagram.content,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control":"private, no-store",
+            "X-Content-Type-Options":"nosniff",
+            "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            "Content-Disposition":f'inline; filename="{diagram.asset_id[:16]}.svg"',
+            # Header values are Latin-1: the label is in the picture itself.
+            "X-Drawn-Visual-Step":quote(diagram.step_id,safe=""),
         },
     )
 
@@ -3939,7 +3967,8 @@ class ListenerSession:
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
                  llm_router_settings:LlmRouterSettings|None=None,
-                 web_explanation_settings:WebExplanationSettings|None=None)->None:
+                 web_explanation_settings:WebExplanationSettings|None=None,
+                 drawn_diagram_settings:DrawnDiagramSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -3959,6 +3988,8 @@ class ListenerSession:
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
         #: Lane WV, decision 2: the web explanation and photograph (off by default).
         self.web_explanation_settings=web_explanation_settings or WebExplanationSettings(False)
+        #: Lane WV, decision 3: a diagram drawn from the step's words (off by default).
+        self.drawn_diagram_settings=drawn_diagram_settings or DrawnDiagramSettings(False)
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
         self.reader_translations:dict[tuple[str,str,str],str]={}
@@ -5073,6 +5104,98 @@ async def _run_web_lookup(
             pass
     finally:
         await _release_held_audio(sender,session,turn_id,generation,1)
+
+
+# --- Lane WV, decision 3: a drawing from the step's words ------------------------
+
+def _drawing_wanted(session:ListenerSession,curated:CuratedProtocolSession,plan:Any)->bool:
+    return bool(
+        session.drawn_diagram_settings.enabled
+        and getattr(curated,"active",False)
+        and getattr(plan,"visual_kind",None)=="drawn_diagram"
+    )
+
+
+_DRAWING_OFF_WORDS="그림 그리기가 꺼져 있어 그리지 않았어요. 원문이 기준이에요."
+_DRAWING_ON_WORDS=(
+    "이 단계 원문을 바탕으로 그림을 그리고 있어요. 다 되면 화면에 띄울게요. "
+    "실제와 다를 수 있고, 수치는 원문 그대로예요."
+)
+
+
+def _drawing_words(plan:Any,language:str)->Any:
+    """The rules' words for a drawing the server will now make."""
+
+    words=(
+        _DRAWING_ON_WORDS if language=="ko"
+        else "Drawing a diagram from this step's words; it goes on the screen, and it may differ from the real thing."
+    )
+    speech=str(plan.speech_text or "")
+    display=str(plan.display_text or "")
+    if _DRAWING_OFF_WORDS in speech:
+        return replace(
+            plan,
+            speech_text=speech.replace(_DRAWING_OFF_WORDS,words),
+            display_text=display.replace(_DRAWING_OFF_WORDS,words),
+            primary_text=(
+                str(plan.primary_text).replace(_DRAWING_OFF_WORDS,words)
+                if isinstance(plan.primary_text,str) else plan.primary_text
+            ),
+        )
+    return replace(
+        plan,
+        speech_text=f"{speech} {words}".strip(),
+        display_text=f"{display}\n\n{words}" if display else words,
+    )
+
+
+async def _run_drawing(
+    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    curated:CuratedProtocolSession,language:str,
+)->None:
+    """Draw the current step from its words, checked, screen only (lane WV, decision 3)."""
+
+    settings=session.drawn_diagram_settings
+    configuration_id=session.accepted_configuration_id
+    fixture=curated.fixture
+    step=fixture.steps[curated.current_index]
+    fields={"configuration_id":configuration_id,"turn_id":turn_id,"generation":generation,
+            "protocol_id":fixture.protocol_id,"revision_id":fixture.revision_id,
+            "step_id":step.step_id,"step_label":step.source_label}
+    try:
+        await sender.text("protocol.drawing.state",status="running",label=DRAWN_LABEL,**fields)
+        extra=tuple(
+            " ".join(str(getattr(item,"source_text","")).split())
+            for group in (step.sub_actions,step.notes,step.expected_results)
+            for item in group if getattr(item,"source_text","")
+        )
+        client=AsyncOpenAI(
+            api_key=require_env("OPENAI_API_KEY"),max_retries=0,
+            timeout=settings.timeout_seconds)
+        result=await draw_step_diagram(
+            client,settings,step_id=step.step_id,step_label=step.source_label,
+            step_text=step.instruction_source_text,
+            source_sha256=str(fixture.source_pdf_sha256 or fixture.fixture_sha256),
+            extra_texts=extra,language=language)
+        await sender.text(
+            "protocol.drawing.result",status=result.status,
+            diagram=result.diagram.public_dict() if result.diagram is not None else None,
+            label=DRAWN_LABEL,model=result.model,elapsed_ms=result.elapsed_ms,
+            reason=result.reason,**fields)
+        log.info(
+            "drawing turn_id=%s status=%s elapsed_ms=%s removed_numbers=%s removed_texts=%s",
+            turn_id,result.status,result.elapsed_ms,
+            len(result.diagram.removed_numbers) if result.diagram else None,
+            len(result.diagram.removed_texts) if result.diagram else None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the drawing never costs the turn
+        log.warning("drawing failed turn_id=%s error=%s",turn_id,type(exc).__name__)
+        try:
+            await sender.text("protocol.drawing.result",status="provider_error",diagram=None,
+                              label=DRAWN_LABEL,**fields)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _queue_source_figures(
@@ -7247,6 +7370,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         router_outcome:RouterTurnOutcome|None=None
         #: Lane WV, decision 2: whether this turn asks the web after the answer.
         web_lookup_now=False
+        #: Lane WV, decision 3: whether this turn draws the step after the answer.
+        drawing_now=False
         router_before=(
             history_before(curated)
             if session.llm_router_settings.enabled else None
@@ -7751,6 +7876,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             web_lookup_now=_web_lookup_wanted(session,curated,plan)
             if web_lookup_now:
                 plan=_web_lookup_words(curated,plan,transcript,turn_language)
+            drawing_now=_drawing_wanted(session,curated,plan)
+            if drawing_now:
+                plan=_drawing_words(plan,turn_language)
             if getattr(plan,"setting_change",None):
                 # Lane CF, decision 1: a setting said aloud is kept for the
                 # experimenter's next session and shown on the screen.
@@ -8346,6 +8474,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 session=session,sender=sender,turn_id=turn_id,generation=generation,
                 curated=curated,plan=plan,transcript=transcript,language=turn_language,
                 speak_by=web_speak_by,clock=clock)))
+        if drawing_now:
+            session.track_visual_task(asyncio.create_task(_run_drawing(
+                session=session,sender=sender,turn_id=turn_id,generation=generation,
+                curated=curated,language=turn_language)))
         if (
             router_outcome is not None and router_before is not None
             and session.is_current(turn_id,generation)
@@ -8476,10 +8608,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "approved_visual":"original_source",
                     "no_visual":"no_visual",
                 }[visual_output.preferred_class]
-            if plan.visual_kind=="source_figure":
-                # Lane WV, decision 1: the step's own figures are on the
-                # screen (the fixture state carried them, or they are sent
-                # once cut); nothing else is looked for.
+            if plan.visual_kind in LANE_WV_PICTURE_KINDS:
+                # Lane WV: the step's own figures are on the screen (the
+                # fixture state carried them, or they are sent once cut); the
+                # web (decision 2) and the drawing (decision 3) run as their
+                # own tasks and say so themselves, so nothing is "failed" here.
                 _queue_source_figures(session,curated,current_text,force=True)
             elif existing_visual is None:
                 # Lane DI (2026-10-08): the xAI web-image search and image
@@ -8899,6 +9032,7 @@ async def voice_socket(websocket:WebSocket):
         multi_brain_settings=MultiBrainSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
         web_explanation_settings=WebExplanationSettings.from_environment()
+        drawn_diagram_settings=DrawnDiagramSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
         await websocket.send_text(event(
             "error",message=f"invalid non-secret configuration: {exc}"))
@@ -8909,6 +9043,7 @@ async def voice_socket(websocket:WebSocket):
         "supplemental_model":supplemental_settings.public_capability(),
         "multi_brain":multi_brain_settings.public_capability(),
         "web_explanation":web_explanation_settings.public_capability(),
+        "drawn_diagram":drawn_diagram_settings.public_capability(),
     }
     if llm_router_settings.enabled:
         research_capabilities["llm_router"]=llm_router_settings.public_capability()
@@ -8925,6 +9060,7 @@ async def voice_socket(websocket:WebSocket):
         multi_brain_settings=multi_brain_settings,
         llm_router_settings=llm_router_settings,
         web_explanation_settings=web_explanation_settings,
+        drawn_diagram_settings=drawn_diagram_settings,
     ); task=None; trusted_config=None
     # Every sentence this connection synthesizes is remembered for the echo
     # check; tasks started from here inherit the binding.
