@@ -794,6 +794,11 @@ def _record_workspace_experiment_progress(
                 "deadline_at","started_at",
             )
         }
+        # Lane VX, decision 4: the timer as it is named ("최소 2시간") and
+        # what the source states its value as.
+        event_payload["timer"].update({
+            key:planned_timer[key] for key in ("name","bound") if key in planned_timer
+        })
     # Lane R7: a return within a repeat, a later start and a step completed
     # again in a later round are recorded as what they are. A step already
     # marked completed is not marked again: the durable session keeps one

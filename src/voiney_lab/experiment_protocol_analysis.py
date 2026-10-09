@@ -2219,9 +2219,11 @@ def verify_step_timers(
     * the excerpt is printed on a page between the step's anchor page and the
       next step's, found there as the analysis's own claim check finds text;
     * the server reads a number and a unit in the excerpt itself
-      (``domain.read_source_durations``), not qualified as a bound, an
-      interval or a time since something else, and with no unnumbered time
-      ("overnight", "until ...") beside it;
+      (``domain.read_source_durations``), not qualified as a strict
+      comparison, an interval or a time since something else, and with no
+      unnumbered time ("overnight", "until ...") beside it -- a minimum, an
+      approximate value or a maximum the source prints is kept and marked
+      as such (lane VX, decision 4);
     * where the analysis also wrote seconds, they are one of the values read.
 
     Times printed in the step's own instruction text (its and its
@@ -2300,6 +2302,7 @@ def verify_step_timers(
                     step_verified.append(domain.VerifiedStepTimer(
                         step.step_id, step.source_label, action.action_id,
                         excerpt, duration.literal, duration.seconds, page_number,
+                        bound=duration.bound,
                     ))
         # The times the step's own instruction text prints (human decision
         # during lane PT's measurement, 2026-10-08): the analysis seldom
@@ -2330,6 +2333,7 @@ def verify_step_timers(
                     step.step_id, step.source_label,
                     getattr(owner, "action_id", None), text, duration.literal,
                     duration.seconds, owner_page, source="step_text",
+                    bound=duration.bound,
                 ))
             for item in reading.refused:
                 if item.literal in seen or any(

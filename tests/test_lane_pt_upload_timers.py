@@ -151,7 +151,8 @@ class TheUploadedExecutableHasSourceTimersTests(_Catalog):
         self.fixture = self.catalog.load_executable_fixture(self.protocol_id)
 
     def test_the_timer_table_has_the_sidecar_shape(self) -> None:
-        self.assertEqual(self.fixture.timer_manifest, {"step-1": 900, "step-6": 300})
+        # Lane VX, decision 4: step 5's "a minimum of 2 hours" is a timer too.
+        self.assertEqual(self.fixture.timer_manifest, {"step-1": 900, "step-5": 7200, "step-6": 300})
         self.assertIsNotNone(self.fixture.timer_table)
 
     def test_timer_seconds_for_step_reads_it(self) -> None:
@@ -182,11 +183,15 @@ class TheUploadedExecutableHasSourceTimersTests(_Catalog):
         # session would refuse it and roll the reply back to a save failure.
         self.assertFalse(plan.state_changed)
 
-    def test_a_bound_is_not_a_length(self) -> None:
+    def test_a_minimum_is_a_timer_of_its_value(self) -> None:
+        # Lane VX, decision 4: "a minimum of 2 hours" runs a 2-hour timer
+        # named "최소 2시간" (lane PT made none).
         turns = Turns()
         session = turns.open(4, fixture=self.fixture)
         turns.say("타이머 시작해줘")
-        self.assertEqual(session.timer_status()["state"], "not_started")
+        self.assertEqual(session.timer_status()["state"], "running")
+        self.assertEqual(session.timer_status()["duration_seconds"], 7200)
+        self.assertEqual(session.timer_status()["name"], "최소 2시간")
 
 
 class TheServerVerificationTests(_Catalog):
@@ -206,6 +211,8 @@ class TheServerVerificationTests(_Catalog):
                 ("step-3", "12-16 h", (43200, 57600)),
                 ("step-4", "30 min", (1800,)),
                 ("step-4", "1 h", (3600,)),
+                # Lane VX, decision 4: a minimum is a timer of its value.
+                ("step-5", "a minimum of 2 hours", (7200,)),
                 ("step-6", "00:05:00", (300,)),
             ],
         )
@@ -213,7 +220,6 @@ class TheServerVerificationTests(_Catalog):
             {(r.step_id, r.literal, r.reason) for r in table.refused},
             {
                 ("step-2", "overnight", "no_number"),
-                ("step-5", "2 hours", "open_bound"),
             },
         )
         self.assertEqual(
@@ -357,8 +363,10 @@ class TheServerVerificationTests(_Catalog):
             ("Incubate overnight", "no_number"),
             ("stir until dissolved", "no_number"),
             ("1 h at RT or overnight at 4 C", "with_unnumbered_alternative"),
-            ("for at least 30 min", "open_bound"),
-            ("30분 이상", "open_bound"),
+            # Lane VX, decision 4: "at least 30 min" and "30분 이상" are
+            # minimum timers now (below); a strict comparison is refused.
+            ("for more than 30 min", "open_bound"),
+            ("30분 초과", "open_bound"),
             ("every 10 min", "interval"),
             ("After 2 hours, remove", "elapsed_reference"),
             ("3000 - 5 min", "unclear_range"),
@@ -367,6 +375,11 @@ class TheServerVerificationTests(_Catalog):
                 reading = domain.read_source_durations(text)
                 self.assertEqual(reading.durations, ())
                 self.assertEqual({r.reason for r in reading.refused}, {reason})
+        for text, seconds in (("for at least 30 min", 1800), ("30분 이상", 1800)):
+            with self.subTest(text=text):
+                reading = domain.read_source_durations(text)
+                self.assertEqual(
+                    [(d.seconds, d.bound) for d in reading.durations], [((seconds,), "minimum")])
         self.assertEqual(domain.read_source_durations("5분의 1, 10 mL").durations, ())
         # Measured on the corpus (decision 5): a tube label and a lead time.
         self.assertEqual(domain.read_source_durations("Label 7 tubes (S1-S7).").durations, ())
@@ -589,13 +602,16 @@ class TheStartScreenTests(_Catalog):
                 ("3", "12-16 h", "12시간 또는 16시간", True),
                 ("4", "30 min", "30분", True),
                 ("4", "1 h", "1시간", True),
+                # Lane VX, decision 4: listed with the word "최소" before it.
+                ("5", "a minimum of 2 hours", "2시간", False),
                 ("6", "00:05:00", "5분", False),
             ],
         )
+        self.assertEqual(timers["verified"][4]["bound_ko"], "최소")
         self.assertEqual(timers["verified"][0]["source_excerpt"], "15 min")
         refused = {(r["step_label"], r["source_literal"]): r["reason_ko"] for r in timers["refused"]}
         self.assertIn("overnight", refused[("2", "overnight")])
-        self.assertIn("최소", refused[("5", "2 hours")])
+        self.assertNotIn(("5", "2 hours"), refused)
 
 
 class TheInGelSidecarIsUnchangedTests(unittest.TestCase):

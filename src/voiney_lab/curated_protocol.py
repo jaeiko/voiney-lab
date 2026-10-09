@@ -7705,6 +7705,54 @@ class CuratedProtocolSession:
         choices = self.timer_choices_for_step(index)
         return self.timer_seconds_for_step(index) or (choices[0].seconds if choices else 0)
 
+    def _timer_bound(self, index: int, seconds: int) -> str:
+        """How the source states ``seconds`` at that step (lane VX, decision 4).
+
+        "minimum", "approximate", "maximum" or "exact"; a sidecar timer (the
+        in-gel fixture) is always "exact".
+        """
+
+        table = self.fixture.timer_table
+        if table is None or not 0 <= index < len(self.fixture.steps):
+            return "exact"
+        return table.bound_for(self.fixture.steps[index].step_id, seconds)
+
+    @staticmethod
+    def _timer_name(seconds: int, bound: str, language: str) -> str:
+        """"최소 2시간", "약 16시간", "최대 2시간", "15분": a timer as it is named."""
+
+        words = _duration_words_long(seconds, language)
+        if language == "ko":
+            prefix = domain.TIMER_BOUND_KO.get(bound)
+        else:
+            prefix = {"minimum": "at least", "approximate": "about", "maximum": "up to"}.get(bound)
+        return f"{prefix} {words}" if prefix else words
+
+    def _timer_end_words(self, language: str) -> str | None:
+        """What is said of a minimum or a maximum timer that has run out, or None.
+
+        Lane VX, decision 4: a minimum's end is not the step's end, so it is
+        never said to be over -- "최소 시간 2시간이 지났어요." -- and a
+        maximum's is "최대 시간 2시간이 됐어요.". Any other timer is said as it
+        was.
+        """
+
+        timer = self.timer_status()
+        bound = timer.get("bound")
+        if timer.get("state") != "expired" or bound not in {"minimum", "maximum"}:
+            return None
+        words = _duration_words_long(int(timer.get("duration_seconds") or 0), language)
+        if language != "ko":
+            return (
+                f"The minimum time of {words} has passed." if bound == "minimum"
+                else f"The maximum time of {words} has been reached."
+            )
+        subject = josa(words, "이", "가")
+        return (
+            f"최소 시간 {subject} 지났어요." if bound == "minimum"
+            else f"최대 시간 {subject} 됐어요."
+        )
+
     def start_timer(
         self,
         step_index: int | None = None,
@@ -7760,6 +7808,7 @@ class CuratedProtocolSession:
             if 0 <= self._timer_step_index < len(self.fixture.steps)
             else step
         )
+        bound = self._timer_bound(self._timer_step_index, self._timer_duration_seconds)
         return {
             "state": state,
             "duration_seconds": self._timer_duration_seconds,
@@ -7772,6 +7821,11 @@ class CuratedProtocolSession:
             "started_at": datetime.fromtimestamp(
                 self._timer_started_at, tz=timezone.utc
             ).isoformat(),
+            # Lane VX, decision 4: "최소 2시간", "약 16시간", "최대 2시간",
+            # "15분" -- the timer as it is named -- and what the source states
+            # the value as.
+            "name": self._timer_name(self._timer_duration_seconds, bound, "ko"),
+            "bound": bound,
         }
 
     def experiment_timer_status(self, now: float | None = None) -> dict[str, Any]:
@@ -16038,7 +16092,11 @@ class CuratedProtocolSession:
                 rem = timer_info.get("remaining_seconds", 0)
                 timer_suffix = f" (진행 중인 타이머 {rem // 60}분 {rem % 60}초 남음)" if language == "ko" else f" (Timer running: {rem // 60}m {rem % 60}s remaining)"
             elif timer_info.get("state") == "expired":
-                timer_suffix = " (타이머가 완료되었습니다)" if language == "ko" else " (Timer expired)"
+                ended = self._timer_end_words(language)
+                timer_suffix = (
+                    f" ({ended.rstrip('.')})" if ended
+                    else " (타이머가 완료되었습니다)" if language == "ko" else " (Timer expired)"
+                )
             control_text = (
                 f"워크플로를 재개합니다. 현재 {step.source_label}단계입니다.{timer_suffix}"
                 if language == "ko" else
@@ -16156,7 +16214,9 @@ class CuratedProtocolSession:
                         ),
                         None,
                     )
-                    words = _duration_words_long(duration, language)
+                    words = self._timer_name(
+                        duration, self._timer_bound(self.current_index, duration), language,
+                    )
                     response = (
                         f"원문 ‘{literal}’에 따라 {words} 타이머를 시작했습니다. 화면에서 남은 시간을 확인할 수 있습니다."
                         if language == "ko" else
@@ -16287,7 +16347,7 @@ class CuratedProtocolSession:
                     f"Step {step.source_label} timer is running with approximately {time_str_en} remaining."
                 )
             elif state == "expired":
-                response = (
+                response = self._timer_end_words(language) or (
                     f"현재 {step.source_label}단계 타이머가 이미 완료되었습니다. 다음 작업으로 진행할 수 있습니다."
                     if language == "ko" else
                     f"Step {step.source_label} timer has expired. You can proceed with the next action."
@@ -19053,8 +19113,13 @@ class CuratedProtocolSession:
 
         step = self.fixture.steps[self.current_index]
         spoken = (
-            _duration_words_long if self.analysis_timers else _duration_words
-        )(facts.step_timer_seconds, language)
+            self._timer_name(
+                facts.step_timer_seconds,
+                self._timer_bound(self.current_index, facts.step_timer_seconds), language,
+            )
+            if self.analysis_timers else
+            _duration_words(facts.step_timer_seconds, language)
+        )
         question = (
             f"원문은 {spoken}입니다. {_with_ro(spoken)} 시작할까요?"
             if language == "ko" else
@@ -19090,7 +19155,7 @@ class CuratedProtocolSession:
 
         choices = self.timer_choices_for_step(self.current_index)
         values = [choice.seconds for choice in choices]
-        words = [_duration_words_long(value, language) for value in values]
+        words = [self._timer_name(choice.seconds, choice.bound, language) for choice in choices]
         literals = list(dict.fromkeys(choice.literal for choice in choices))
         if language != "ko":
             head = "The source states " + ", ".join(f"'{text}'" for text in literals) + "."
@@ -19185,7 +19250,7 @@ class CuratedProtocolSession:
         if timers:
             parts = []
             for timer in timers:
-                words = [_duration_words_long(value, language) for value in timer.seconds]
+                words = [self._timer_name(value, timer.bound, language) for value in timer.seconds]
                 if ko:
                     value = (
                         f"{words[0]}에서 {words[1]} 사이" if len(words) == 2
@@ -19248,7 +19313,12 @@ class CuratedProtocolSession:
                 f"About {gone} has passed on the Step {label} timer; about {left} left."
             )
         if state == "expired":
-            total = _duration_words_long(int(timer.get("duration_seconds", 0)), language)
+            ended = self._timer_end_words(language)
+            if ended:
+                return ended
+            total = self._timer_name(
+                int(timer.get("duration_seconds", 0)), str(timer.get("bound") or "exact"), language,
+            )
             return (
                 f"{step.source_label}단계 타이머 {total}이 다 지났어요. 다음 작업으로 진행할 수 있습니다."
                 if ko else
