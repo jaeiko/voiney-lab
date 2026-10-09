@@ -8,6 +8,7 @@ optional persistence to the existing Slice 2 and Slice 3 contracts.
 
 from __future__ import annotations
 
+import datetime
 import json
 import hashlib
 import re
@@ -1532,6 +1533,109 @@ def _claim_occurs_in_text(
     return False
 
 
+#: The metadata fields that hold a date (lane EV, rule iso_date).
+_METADATA_DATE_FIELDS = frozenset({"created_date", "modified_date", "publication_date"})
+_ISO_DATE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})")
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+#: Around a written date: no letter or digit, and no number punctuation that
+#: holds on to a digit -- "0.5 April 2020" does not print 5 April, nor does
+#: "1:10 January 2020" print 10 January or "10 January 20201" the year 2020.
+_DATE_BEFORE = r"(?<![^\W_])(?<![0-9][.,:/\-–−])"
+_DATE_AFTER = r"(?![0-9])(?![.,:/\-–−][0-9])"
+
+
+def _written_date_forms(claim: str) -> tuple[str, ...]:
+    """The forms in which a page prints the ISO date a claim holds."""
+
+    match = _ISO_DATE.fullmatch(claim)
+    if match is None:
+        return ()
+    try:
+        date = datetime.date(int(match[1]), int(match[2]), int(match[3]))
+    except ValueError:
+        return ()
+    name = _MONTH_NAMES[date.month - 1]
+    forms = [
+        f"{date.day} {name} {date.year}",
+        f"{date.day:02d} {name} {date.year}",
+        f"{date.day} {name[:3]} {date.year}",
+        f"{name} {date.day}, {date.year}",
+        f"{name} {date.day} {date.year}",
+        f"{name[:3]} {date.day}, {date.year}",
+        f"{date.year}/{date.month:02d}/{date.day:02d}",
+        f"{date.year}.{date.month:02d}.{date.day:02d}",
+        f"{date.year}년 {date.month}월 {date.day}일",
+    ]
+    if date.day > 12 or date.day == date.month:
+        # Day first, only where it cannot be read month first: 03.04.2020
+        # is 3 April or 4 March depending on the convention.
+        forms += [
+            f"{date.day}.{date.month}.{date.year}",
+            f"{date.day:02d}.{date.month:02d}.{date.year}",
+        ]
+    return tuple(dict.fromkeys(forms))
+
+
+def _written_date_in_excerpt(claim: str, evidence: domain.SourceEvidence) -> bool:
+    """Whether a metadata date claim is the date its own excerpt prints.
+
+    Rule iso_date (human decision 2026-10-09, lane EV, from lane DS-2's
+    replay): models write a metadata date as "2020-04-03" where the page
+    prints "Published: 3 April 2020", and the claim was refused although the
+    page states that very date. A created, modified or publication date that
+    is a bare ISO calendar date is now the same as that date printed in its
+    own evidence excerpt (page text by now: the excerpt was verified first) in
+    one of lane DS-2's written forms -- "3 April 2020", "03 April 2020", "3 Apr
+    2020", "April 3, 2020", "April 3 2020", "Apr 3, 2020", "2020/04/03",
+    "2020.04.03", "2020년 4월 3일", and the day-first "20.03.2018" -- month
+    names in any case, a line break as a space.
+
+    Still different: a date the page prints outside the cited excerpt; a day-
+    first number date that could be read month first ("03.04.2020"); a date
+    whose digits the page continues ("13 April", "0.5 April", "1:10 January",
+    "20201"); a calendar date that does not exist; a claim that is anything
+    but a bare ISO date ("2020-04-03 이후 ..."); any field but the three dates.
+    Lane DS-2's tool looked on the whole page and matched substrings; this
+    reads only the excerpt the claim cites, so the date the claim holds is the
+    one it quotes, and refuses a continued digit, so a different day or year
+    never matches. A year alone or the ISO form itself is not listed here: the
+    exact comparison already finds those.
+    """
+
+    excerpt, _, _ = _normalized_text_with_bounds(evidence.source_excerpt)
+    return any(
+        re.search(
+            _DATE_BEFORE + re.escape(form) + _DATE_AFTER, excerpt, re.IGNORECASE
+        )
+        for form in _written_date_forms(claim)
+    )
+
+
+def _claim_is_supported(
+    record: Any,
+    field_name: str,
+    claim: str,
+    evidence: domain.SourceEvidence,
+    extraction: ProtocolPdfExtraction,
+) -> bool:
+    """Whether a structured claim is backed by its evidence.
+
+    The evidence page prints the claim, or (lane EV) a metadata date claim is
+    the date its excerpt prints.
+    """
+
+    if _claim_occurs_on_evidence_page(claim, evidence, extraction):
+        return True
+    return (
+        isinstance(record, domain.ProtocolMetadata)
+        and field_name in _METADATA_DATE_FIELDS
+        and _written_date_in_excerpt(claim, evidence)
+    )
+
+
 #: A step number that may stand bare before its text: "3", or a protocols.io
 #: sub-step "6.1". Any other label needs its period ("A.").
 _BARE_STEP_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)*")
@@ -1734,7 +1838,9 @@ def _verify_claim_tree(
             if (
                 not isinstance(claim, str)
                 or claim_evidence is None
-                or not _claim_occurs_on_evidence_page(
+                or not _claim_is_supported(
+                    value,
+                    field_name,
                     claim,
                     claim_evidence,
                     extraction,
