@@ -1139,6 +1139,67 @@ def _number_continues(before: str, matched: str, after: str) -> bool:
     )
 
 
+#: Marks that hold two parts of one English word together: a hyphen
+#: ("anti-mouse"), an en dash ("DAB–HCl"), an apostrophe ("Dulbecco’s").
+_WORD_JOINERS = frozenset("-‐‑–'’")
+#: A Korean negative ending right after a word the match stops inside:
+#: "건조시키" in "건조시키지 마십시오", "가열하" in "가열하지 않는다".
+_KOREAN_NEGATIVE_ENDING = re.compile(r"지 ?(?:않|마|말)")
+
+
+def _is_latin_letter(character: str) -> bool:
+    """A letter of an English word: not Hangul, CJK or a superscript mark."""
+
+    return (
+        bool(character)
+        and character.isalpha()
+        and not _is_hangul(character)
+        and character not in "ªº"
+        and unicodedata.category(character) != "Lm"
+        and not (
+            "぀" <= character <= "ヿ"
+            or "㐀" <= character <= "鿿"
+            or "豈" <= character <= "﫿"
+        )
+    )
+
+
+def _word_continues(before: str, matched: str, after: str) -> bool:
+    """Whether the match starts or ends inside a word of its page.
+
+    Rule (b): an English word goes on past the match -- "mouse" in
+    "anti-mouse", "anti-⏎mouse" or "antimouse", "PBS" in "PBST", a quote
+    that stops at "phosphate-" where the page goes on "buffered" -- so the
+    page says something else. Letters only: a digit beside a word is a
+    reference or affiliation mark the text layer prints as text
+    ("Henikoff1", "previously12", "1Department"), and a number that goes on
+    is rule (a)'s. A Korean word may go on (a particle: "에탄올" in "에탄올을"),
+    unless what follows is a negative ending: "건조시키" in "건조시키지 마십시오".
+    """
+
+    first, last = matched[0], matched[-1]
+    left, right = before[-1:], after[:1]
+    letter = _is_latin_letter
+    if letter(first) and (
+        letter(left) or (left in _WORD_JOINERS and letter(before[-2:-1]))
+    ):
+        return True
+    if first in _WORD_JOINERS and letter(left) and letter(matched[1:2]):
+        return True
+    if letter(last) and (
+        letter(right) or (right in _WORD_JOINERS and letter(after[1:2]))
+    ):
+        return True
+    if last in _WORD_JOINERS and letter(right) and letter(matched[-2:-1]):
+        return True
+    return (
+        _is_hangul(last)
+        and bool(right)
+        and _is_hangul(right)
+        and _KOREAN_NEGATIVE_ENDING.match(after) is not None
+    )
+
+
 def _reads_alone(before: str, matched: str, after: str) -> bool:
     """Whether a match stands on its page as what it says.
 
@@ -1147,7 +1208,8 @@ def _reads_alone(before: str, matched: str, after: str) -> bool:
     buffer" was found in "Add 0.5 mL buffer." and "20 °C" in "Store at −20
     °C.". ``before`` and ``after`` are the page's own text on each side of
     ``matched``, read by ``_beside_text``; the match is refused where
-    the page continues it as a longer number (``_number_continues``). It is a
+    the page continues it as a longer number (``_number_continues``) or goes
+    on with the word it starts or ends in (``_word_continues``). It is a
     comparison only: page
     text, stored excerpts, hashes and evidence identities are untouched. A
     match with nothing printed in it (an empty claim) keeps its earlier
@@ -1166,7 +1228,7 @@ def _reads_alone(before: str, matched: str, after: str) -> bool:
         return True
     first, last = inside[0], inside[-1] + 1
     parts = (text[:first], text[first:last], text[last:])
-    return not _number_continues(*parts)
+    return not (_number_continues(*parts) or _word_continues(*parts))
 
 
 def _span_reads_alone(text: str, start: int, end: int) -> bool:
@@ -2008,6 +2070,37 @@ def _claim_token_span(
     return None
 
 
+#: An affiliation mark the text layer prints glued to an author's name: one
+#: lowercase letter ("Prataa,*,1", "Rocha-Santosa") or ORCID's "ID"
+#: ("RedmondID1*").
+_AFFILIATION_MARK = re.compile(r"(?:[a-z]|ID)(?=[\s,*†‡§#\d]|$)")
+
+
+def _author_name_on_page(claim: str, page: ProtocolPdfPage) -> bool:
+    """Whether the page prints an author's name with an affiliation mark after it.
+
+    Lane EB, rule (b) narrowed for author names (decision 3): "Joana C.
+    Prata" printed "Joana C. Prataa,*,1" is the name and its affiliation
+    letter, not a longer word. The mark is read past only right after the
+    name; the name still stands alone otherwise (``_reads_alone``).
+    """
+
+    spans = (
+        *((start, start + len(claim)) for start in _exact_starts(page.text, claim)),
+        *_canonical_match_spans(page.text, claim, ocr_derived=page.ocr_derived),
+    )
+    for start, end in spans:
+        after = page.text[end : end + _BESIDE]
+        mark = _AFFILIATION_MARK.match(after)
+        if mark is not None and _reads_alone(
+            page.text[max(0, start - _BESIDE) : start],
+            page.text[start:end],
+            after[mark.end() :],
+        ):
+            return True
+    return False
+
+
 def _claim_is_supported(
     record: Any,
     field_name: str,
@@ -2019,10 +2112,10 @@ def _claim_is_supported(
 
     The evidence page prints the claim, standing alone (lane EB); or (lane
     EV) a metadata date claim is the date its excerpt prints, or the
-    evidence page prints the claim's words and symbols with other layout.
-    Only this check reads the lane EV rules: the timer checks and the
-    page-end rule keep the exact comparison, which lane EB bounds for all of
-    them.
+    evidence page prints the claim's words and symbols with other layout; or
+    (lane EB) an author's name is printed with its affiliation mark. Only
+    this check reads the lane EV rules: the timer checks and the page-end
+    rule keep the exact comparison, which lane EB bounds for all of them.
     """
 
     if _claim_occurs_on_evidence_page(claim, evidence, extraction):
@@ -2034,6 +2127,12 @@ def _claim_is_supported(
     ):
         return True
     page = extraction.pages[evidence.source_page_number - 1]
+    if (
+        isinstance(record, domain.ProtocolMetadata)
+        and field_name == "authors"
+        and _author_name_on_page(claim, page)
+    ):
+        return True
     return (
         _claim_token_span(claim, page.text, ocr_derived=page.ocr_derived)
         is not None
