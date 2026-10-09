@@ -6892,7 +6892,6 @@ async def _show_and_say_timer_notice(
     )
     if not notice.spoken:
         return False
-    notice=_label_machine_translation(session,curated,notice)
     deadline=session.clock()+wait_seconds
     frames:list[bytes]|None=None
 
@@ -6907,6 +6906,10 @@ async def _show_and_say_timer_notice(
             return False
         if _session_quiet(session):
             if frames is None:
+                # A stored machine translation is named as such, and "자동
+                # 번역입니다." said first once a session -- only now that it
+                # is about to be said.
+                notice=_label_machine_translation(session,curated,notice)
                 try:
                     pcm=await asyncio.to_thread(synthesize,said(notice.speech_text),"ko")
                 except Exception as exc:  # noqa: BLE001 - the screen keeps it

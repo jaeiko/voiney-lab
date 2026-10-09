@@ -311,6 +311,29 @@ class DeliveryTests(_Server):
         self.assertEqual(self.synthesized, [])
         self.assertEqual(self.listener.active_turn_id, 9)
 
+    def test_a_machine_translation_is_named_only_when_said(self) -> None:
+        curated = CuratedProtocolSession(wash(machine_localizations=STEP_3_KOREAN))
+        curated.activate_configured()
+        curated.plan("프로토콜 시작해줘", turn_id=1, language="ko", configuration_id=41, generation=1)
+        curated.current_index = 1
+        curated.start_timer(now=T0)
+        self.listener.curated_protocol_session = self.curated = curated
+        (notice,) = curated.due_timer_notices(now=T0 + 600)
+        # Not said (an answer plays throughout): nothing is announced.
+        self.listener.active_turn_id = 9
+        self.listener.detector.state = TurnState.AGENT_SPEAKING
+        self.assertFalse(self.deliver(notice, wait_seconds=5.0))
+        self.assertFalse(self.listener.auto_translation_announced)
+        # Said: "자동 번역입니다." first, once, and the reply is named unreviewed.
+        self.listener.active_turn_id = None
+        self.listener.detector.state = TurnState.IDLE
+        self.sent.clear()
+        self.assertTrue(self.deliver(notice))
+        self.assertTrue(self.synthesized[-1].startswith("자동 번역입니다. 10분 타이머가 끝났어요."))
+        delta = next(item for item in self.sent if item["type"] == "reply.delta")
+        self.assertEqual(delta["translation_status"], "model_assisted_unreviewed")
+        self.assertTrue(self.listener.auto_translation_announced)
+
     def test_off_shows_it_with_its_sound_and_says_nothing(self) -> None:
         self.curated.apply_experimenter_settings({"proactive_mode": "off"})
         (notice,) = self.curated.due_timer_notices(now=T0 + 600)
