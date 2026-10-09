@@ -3791,6 +3791,22 @@ PROACTIVE_MODE_WORDS = {"all": "모두", "needed": "필요한 것만", "off": "�
 #: Decision 2: a timer at least this long is told its last minute, once.
 TIMER_LAST_MINUTE_FROM_SECONDS = 300
 TIMER_LAST_MINUTE_SECONDS = 60
+#: Decision 5: words after a silence longer than this are answered led by
+#: where the run stands -- unless they are a command.
+RETURN_SUMMARY_AFTER_SECONDS = 600
+#: The answers that change nothing and may be led by it; a command (a move,
+#: a start or an end, a timer, a record, a setting) is carried out alone.
+_RETURN_SUMMARY_ACTIONS = frozenset({
+    CuratedProtocolAction.CURRENT, CuratedProtocolAction.FULL_DETAIL,
+    CuratedProtocolAction.NEXT_INFORMATION, CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.OPERATIONAL_DEVIATION, CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.VISUAL_REQUEST,
+    CuratedProtocolAction.PROTOCOL_QUERY, CuratedProtocolAction.CLARIFY_REFERENCE,
+    CuratedProtocolAction.CLARIFY_PARAMETER, CuratedProtocolAction.OFF_TOPIC,
+    CuratedProtocolAction.UNSUPPORTED, CuratedProtocolAction.AGENT_META,
+    CuratedProtocolAction.TIMER_STATUS, CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE, CuratedProtocolAction.LAB_DOMAIN_QA,
+})
 #: The notices each choice says aloud; the screen shows a timer's every
 #: notice whatever is chosen (decision 6).
 PROACTIVE_SPOKEN_KINDS: dict[str, frozenset[str]] = {
@@ -7926,6 +7942,8 @@ class CuratedProtocolSession:
         self.web_lookup: str = "on"
         #: Lane VT, decision 6: what is said before it is asked (PROACTIVE_MODES).
         self.proactive_mode: str = "all"
+        #: Lane VT, decision 5: when the experimenter's words were last heard.
+        self._last_heard_at: float | None = None
         #: Lane VT, decision 3: "A요, B요?" asked of a "그거"; only the next
         #: turn's words pick one.
         self._pending_value_choice: dict[str, Any] | None = None
@@ -8259,6 +8277,56 @@ class CuratedProtocolSession:
             return (self._timer_notice(
                 "timer_last_minute", status, key, due_at=deadline - TIMER_LAST_MINUTE_SECONDS),)
         return ()
+
+    def note_heard(self, now: float | None = None) -> float | None:
+        """Mark the experimenter's words as heard now; the silence before them, in seconds.
+
+        Lane VT, decision 5. The silence runs from the last words heard, or
+        from the experiment's start when none were heard since. None before
+        the experiment runs.
+        """
+
+        current_time = time.time() if now is None else now
+        since = self._last_heard_at if self._last_heard_at is not None else self._experiment_started_at
+        self._last_heard_at = current_time
+        if not self.active or since is None:
+            return None
+        return max(0.0, current_time - since)
+
+    def with_return_summary(
+        self, plan: CuratedProtocolTurnPlan, *, silence: float | None, now: float | None = None,
+    ) -> CuratedProtocolTurnPlan:
+        """The answer led by "지금 N단계예요(타이머 ○분 남았어요)." after a long silence.
+
+        Lane VT, decision 5: words after more than ten minutes of silence get
+        one line first on where the run stands -- the step, and the step
+        timer's time left while it runs -- when they are not a command; a
+        command is carried out alone, at once. Under "먼저 알려 주기: 모두"
+        only. Read from the server's state; nothing changes.
+        """
+
+        if (
+            silence is None or silence <= RETURN_SUMMARY_AFTER_SECONDS
+            or not self.active or self._experiment_ended()
+            or plan.state_changed or plan.action not in _RETURN_SUMMARY_ACTIONS
+            or getattr(plan, "setting_change", None)
+            or not self.proactive_says("return_summary")
+        ):
+            return plan
+        label = self.fixture.steps[self.current_index].source_label
+        timer = self.timer_status(now=now)
+        line = f"지금 {label}단계예요."
+        if timer["state"] == "running" and timer.get("step_index") == self.current_index:
+            remaining = int(timer["remaining_seconds"])
+            left = _duration_words_long(max(60, round(remaining / 60) * 60), "ko")
+            line = f"지금 {label}단계예요(타이머 {left} 남았어요)."
+        primary = plan.primary_text
+        return replace(
+            plan,
+            display_text=f"{line} {plan.display_text}",
+            speech_text=f"{line} {plan.speech_text}",
+            primary_text=f"{line} {primary}" if isinstance(primary, str) and primary else primary,
+        )
 
     def _timer_notice(
         self, kind: str, status: Mapping[str, Any], key: tuple[Any, ...], *, due_at: float,

@@ -6796,6 +6796,9 @@ async def _send_session_greeting(
 #: How often the server looks at the step timer: a timer's end is told within
 #: this of the moment it runs out.
 TIMER_NOTICE_TICK_SECONDS=1.0
+#: The wall clock the step timer runs on (the curated session's time.time),
+#: for when the experimenter's words are heard (decision 5).
+_wall_clock=time.time
 #: How long a notice to be said waits for the experimenter to stop speaking
 #: and an answer to stop playing; past it the notice stays on the screen only.
 TIMER_NOTICE_SPEAK_WAIT_SECONDS=120.0
@@ -7533,6 +7536,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             history_before(curated)
             if session.llm_router_settings.enabled else None
         )
+        #: Lane VT, decision 5: the silence before these words.
+        silence=curated.note_heard(now=_wall_clock())
         try:
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             if not session.llm_router_settings.enabled:
@@ -8030,6 +8035,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             display_text=f"{plan.display_text} {download}",
                             speech_text=f"{plan.speech_text} {download}",
                         )
+            # Lane VT, decision 5: after a long silence, an answer that is
+            # not a command is led by where the run stands.
+            plan=curated.with_return_summary(plan,silence=silence,now=_wall_clock())
             web_lookup_now=_web_lookup_wanted(session,curated,plan)
             if web_lookup_now:
                 plan=_web_lookup_words(curated,plan,transcript,turn_language)
