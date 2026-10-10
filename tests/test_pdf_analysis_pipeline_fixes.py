@@ -387,12 +387,11 @@ class EvidencePerFieldTests(unittest.TestCase):
             step("3", 1, "Wash the band with 500 µL of solution A."),
             metadata=self.metadata(created_date="Created: Dec 05, 2024"),
         )
-        with self.assertRaises(ProtocolAnalysisEvidenceError) as context:
-            parse(payload)
-        self.assertEqual(context.exception.diagnostic.reason_code, "claim_not_found")
-        self.assertEqual(
-            context.exception.diagnostic.field_path, "protocol.metadata.created_date"
-        )
+        # Not on the shared page: since lane EV2 (decision 2) the date is
+        # emptied and recorded rather than the analysis refused for it.
+        draft = parse(payload)
+        self.assertIsNone(draft.protocol.metadata.created_date)
+        self.assertEqual(draft.protocol.cleared_fields, ("metadata.created_date",))
 
     def test_a_field_evidence_quote_must_be_on_its_page(self):
         payload = response(
@@ -402,9 +401,12 @@ class EvidencePerFieldTests(unittest.TestCase):
                 created_date_evidence=evidence(1, "Created: Dec 05, 2024"),
             ),
         )
-        with self.assertRaises(ProtocolAnalysisEvidenceError) as context:
-            parse(payload)
-        self.assertEqual(context.exception.diagnostic.reason_code, "quote_not_found")
+        # The quote is not on page 1: since lane EV2 (decision 2) the date
+        # and its evidence are emptied and recorded.
+        draft = parse(payload)
+        self.assertIsNone(draft.protocol.metadata.created_date)
+        self.assertIsNone(draft.protocol.metadata.created_date_evidence)
+        self.assertEqual(draft.protocol.cleared_fields, ("metadata.created_date",))
 
     def note_value_step(self, value: dict) -> dict:
         return step(

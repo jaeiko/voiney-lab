@@ -28,9 +28,12 @@ from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
+    ProtocolAnalysisIncompleteError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolAnalysisModel,
+    ProtocolAnalysisTooManyPagesError,
     analyze_protocol_extraction,
+    check_analysis_page_count,
     prepare_protocol_analysis_request,
     verify_step_timers,
 )
@@ -464,6 +467,17 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
     "protocol_pdf_too_large": (
         "PDF 가 등록 한도보다 큽니다. 더 작은 파일로 다시 올리세요."
     ),
+    # Lane EV2, decision 4.
+    "protocol_analysis_incomplete": (
+        "원문에 번호가 붙은 단계가 분석 결과보다 훨씬 많아, 원문 일부만 읽은 분석으로 보고 "
+        "쓰지 않았습니다. '분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 "
+        "듭니다). 다시 해도 같으면 절차가 있는 쪽만 골라 PDF 로 만들어 올려 주세요."
+    ),
+    "protocol_analysis_too_many_pages": (
+        "한 번에 분석하는 문서는 60쪽까지입니다. 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 "
+        "만들어 다시 올려 주세요(쪽 범위를 고르는 화면은 아직 없습니다). 분석 모델은 "
+        "부르지 않았고 원문은 바뀌지 않습니다."
+    ),
 }
 _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
     "실패 원인을 확인한 뒤 '분석 다시 시도'를 누르세요. 다시 시도해도 원문은 "
@@ -577,6 +591,9 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "protocol_analysis_not_configured": "분석 모델 설정이 없어 분석을 시작하지 못했습니다.",
     "ocr_required": "글자 층이 없는 쪽의 OCR 글이 아직 없어 분석할 수 없습니다.",
     "protocol_pdf_too_large": "PDF 가 등록 한도보다 큽니다.",
+    "protocol_analysis_incomplete": "분석이 원문 단계를 다 담지 못했어요.",
+    "protocol_analysis_too_many_pages": (
+        "원문이 60쪽을 넘어 한 번에 분석하지 않았어요. 분석할 쪽 범위를 줄여야 합니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
     "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
     "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
@@ -639,6 +656,50 @@ def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, obj
             for item in table.refused
         ],
     }
+
+
+def _repeat_count_checks_ko(protocol: domain.ExperimentProtocol) -> list[str]:
+    """One line per fixed repeat whose count the experimenter should check.
+
+    Lane EV2, decision 3: a count is the total number of runs. A count
+    stored without saying how the source states it (every analysis before
+    the decision) is kept as it was and needs checking; a count the source
+    states two ways is asked before the start. A count the source states as
+    a total, or as runs after the first (made a total by the server), needs
+    no line.
+    """
+
+    labels = {
+        step.step_id: step.source_label
+        for section in protocol_with_display_step_labels(protocol).sections
+        for step in section.steps
+    }
+    lines: list[str] = []
+    for construct in protocol.constructs:
+        if not isinstance(construct, domain.FixedRangeRepetition) or (
+            construct.repeat_count_kind
+            in {domain.REPEAT_COUNT_TOTAL, domain.REPEAT_COUNT_ADDITIONAL}
+        ):
+            continue
+        where = (
+            f"{labels.get(construct.start_step_id, construct.start_step_id)}~"
+            f"{labels.get(construct.end_step_id, construct.end_step_id)}단계"
+        )
+        source = " ".join(construct.range_source_text.split())
+        if construct.repeat_count_kind == domain.REPEAT_COUNT_AMBIGUOUS:
+            how = (
+                "처음을 포함한 총 횟수인지 더 하는 횟수인지 원문이 두 가지로 읽혀 "
+                "시작할 때 여쭤봅니다"
+            )
+        elif construct.repeat_count is not None:
+            how = (
+                f"분석이 {construct.repeat_count}회로 읽음"
+                "(처음을 포함한 총 횟수인지 원문을 확인하세요)"
+            )
+        else:
+            how = "분석이 횟수를 읽지 않음(원문을 확인하세요)"
+        lines.append(f"반복 횟수 확인 필요 · {where} · 원문 “{source}” · {how}")
+    return lines
 
 
 def _safety_notice_sources(protocol: Any) -> list[dict[str, object]]:
@@ -1664,9 +1725,11 @@ class ProtocolCatalog:
             )
             lifecycle_state = "blocked" if blocker_codes else "ready"
         available = analysis is not None and not blocker_codes
+        # An analysis whose title was emptied (lane EV2, decision 2) is named
+        # as one without an analysis is: by the file's own title or name.
         title = (
             analysis.protocol.metadata.title
-            if analysis is not None
+            if analysis is not None and analysis.protocol.metadata.title
             else extraction.metadata.title or Path(revision.original_filename).stem
         )
         return ProtocolCatalogEntry(
@@ -1945,7 +2008,10 @@ class ProtocolCatalog:
                     "code": latest_failure,
                     "detail": latest_failure_detail,
                     "retryable": latest_failure
-                    not in {"ocr_required", "protocol_pdf_too_large"},
+                    not in {
+                        "ocr_required", "protocol_pdf_too_large",
+                        "protocol_analysis_too_many_pages",
+                    },
                     # Lane PA decision 4 (2026-10-06): the recovery guidance
                     # is the server's, in Korean.
                     "action": _ANALYSIS_RECOVERY_ACTIONS.get(
@@ -1993,6 +2059,13 @@ class ProtocolCatalog:
             "execution_notices": [],
             "safety_notice_sources": [],
             "timers": {"verified": [], "refused": []},
+            # Lane EV2, decision 2: the fields emptied because the source did
+            # not confirm them, and the one line the start screen shows.
+            "cleared_fields": [],
+            "cleared_fields_ko": None,
+            # Lane EV2, decision 3: the fixed repeat counts to check before
+            # the start, one line each.
+            "repeat_count_checks_ko": [],
         }
         ocr_projection = base["ocr"]
         base["pipeline"] = self._pipeline(
@@ -2047,6 +2120,17 @@ class ProtocolCatalog:
                 # server adds the Korean beside each (it holds the
                 # translation store); the words here are the document's.
                 "safety_notice_sources": _safety_notice_sources(protocol),
+                "cleared_fields": [
+                    {
+                        "field": field,
+                        "label_ko": domain.cleared_field_label_ko(field, protocol),
+                    }
+                    for field in protocol.cleared_fields
+                ],
+                "cleared_fields_ko": domain.cleared_fields_line_ko(
+                    protocol.cleared_fields, protocol
+                ),
+                "repeat_count_checks_ko": _repeat_count_checks_ko(protocol),
                 # Step timers for the start screen (lane PT, decision 4):
                 # each verified value with its source excerpt, and each time
                 # the server could not verify, with the reason.
@@ -2668,6 +2752,14 @@ class ProtocolCatalog:
         )
         extraction = extract_protocol_pdf(source)
         extraction = self._extraction_for_analysis(revision, extraction)
+        try:
+            # Lane EV2, decision 4: a document longer than one analysis
+            # reads is refused here, before any model call, with the advice
+            # to upload the pages that hold the procedure.
+            check_analysis_page_count(extraction)
+        except ProtocolAnalysisTooManyPagesError as exc:
+            self._record_analysis_failure(revision, analysis_id, exc)
+            raise
         status = _analysis_state(extraction)
         if status == "ocr_required":
             raise ProtocolOcrRequiredError(
@@ -2746,15 +2838,20 @@ class ProtocolCatalog:
             draft.readiness,
             draft.capability_policy_id,
         )
+        ready_payload: dict[str, object] = {
+            "status": "analysis_ready",
+            "analysis_payload_sha256": analysis.payload_sha256,
+        }
+        if draft.protocol.cleared_fields:
+            # Lane EV2, decision 2: the fields emptied because the source
+            # did not confirm them, kept in the ledger beside the analysis.
+            ready_payload["cleared_fields"] = list(draft.protocol.cleared_fields)
         self.store.append_event(
             f"analysis-ready-{analysis_id}",
             protocol_id,
             revision.revision_number,
             _ANALYSIS_READY_EVENT,
-            {
-                "status": "analysis_ready",
-                "analysis_payload_sha256": analysis.payload_sha256,
-            },
+            ready_payload,
             analysis_revision_number=analysis.analysis_revision_number,
         )
         self.store.append_event(
@@ -2799,6 +2896,12 @@ class ProtocolCatalog:
         }
         if truncated:
             failure_payload["truncated"] = True
+        if isinstance(exc, ProtocolAnalysisIncompleteError):
+            # Lane EV2, decision 4: the two counts the refusal compared.
+            failure_payload["step_counts"] = {
+                "source_numbered_steps": exc.source_numbered_steps,
+                "analysis_steps": exc.analysis_steps,
+            }
         evidence_failure = _safe_evidence_failure(
             exc,
             source_revision=_revision_id(revision.revision_number),
