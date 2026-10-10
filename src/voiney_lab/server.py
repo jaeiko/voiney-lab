@@ -182,7 +182,10 @@ from voiney_lab.runtime_routing import (
     route_curated_runtime_turn,
 )
 from voiney_lab.setting_names import refuse_old_setting_names
-from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
+from voiney_lab.vad import (
+    DEFAULT_SENSITIVITY, SENSITIVITY_MARGINS_DB, EndpointDetector, EndpointResult,
+    SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
+)
 from voiney_lab import voice_providers
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
 from voiney_lab.identity import (
@@ -4113,6 +4116,19 @@ class ListenerSession:
         self.timer_notice_preparing:set[str]=set()
         self.client_audio_constraints:dict[str,object]={}
         self.stt_settings=CascadeSttSettings.from_environment()
+        #: Lane SP1, decision 1: the wearer's voice level measured this
+        #: session (never stored), the "민감도" its margin comes from, and
+        #: whether the next utterance is the sentence read to measure it.
+        self.level_reference:SpeakerLevelReference|None=None
+        self.speaker_sensitivity:str=DEFAULT_SENSITIVITY
+        self.calibration_pending:bool=False
+        #: When utterances were taken for another person's voice (the
+        #: session clock), for decision 3's "시끄러운 곳" suggestion.
+        self.ignored_speech_at:collections.deque[float]=collections.deque(maxlen=64)
+        self.ignored_speech_count:int=0
+        #: Turns of the server's own words (a calibration prompt, a
+        #: suggestion), numbered from _SERVER_WORDS_TURN_BASE.
+        self.server_words_turns:int=0
     @property
     def state(self): return self.detector.state
     def remember_spoken(self,text:str)->None:
@@ -4224,6 +4240,71 @@ class ListenerSession:
 
         self.timer_notice_pending.clear(); self.timer_notice_superseded.clear()
         self.timer_notice_audio.clear(); self.timer_notice_preparing.clear()
+    # --- lane SP1, decision 1: the wearer's voice level ---------------------
+    def forget_level_reference(self)->None:
+        """A new session measures again (decision 1: never stored)."""
+
+        self.level_reference=None
+        self.calibration_pending=False
+        self.ignored_speech_at.clear()
+        self.ignored_speech_count=0
+    def set_speaker_sensitivity(self,sensitivity:str)->str:
+        """Take the "민감도" setting; a reference already measured keeps its level."""
+
+        chosen=sensitivity if sensitivity in SENSITIVITY_MARGINS_DB else DEFAULT_SENSITIVITY
+        self.speaker_sensitivity=chosen
+        if self.level_reference is not None:
+            self.level_reference=self.level_reference.with_sensitivity(chosen)
+        return chosen
+    def arm_voice_calibration(self)->None:
+        """The next utterance is the sentence read to measure the wearer's level."""
+
+        self.calibration_pending=True
+    def set_level_reference(self,level_db:float)->SpeakerLevelReference:
+        """Measure the wearer at ``level_db`` (the calibration sentence's median voiced level)."""
+
+        self.level_reference=level_reference_from(level_db,self.speaker_sensitivity)
+        self.calibration_pending=False
+        return self.level_reference
+    def ignores_level(self,level_db:float|None)->bool:
+        """Whether an utterance this loud is another person's voice (decision 1).
+
+        Only with a reference measured, and never for the calibration
+        sentence itself, which may be read at any level.
+        """
+
+        return (
+            self.level_reference is not None
+            and not self.calibration_pending
+            and not self.level_reference.accepts(level_db)
+        )
+    def _ignored_speech_event(
+        self,kind:str,turn_id:int,result:EndpointResult,generation:int|None,
+        *,during_playback:bool,
+    )->ListenerEvent:
+        """The event an utterance taken for another person's voice becomes."""
+
+        assert self.level_reference is not None
+        now=self.clock()
+        self.ignored_speech_at.append(now)
+        self.ignored_speech_count+=1
+        return ListenerEvent(
+            kind,turn_id,
+            replace(result,utterance=None),
+            generation,reason="other_speaker_level",
+            diagnostics={
+                "level_db":round(result.voiced_level_db,1) if result.voiced_level_db is not None else -100.0,
+                "reference_db":round(self.level_reference.reference_db,1),
+                "margin_db":round(self.level_reference.margin_db,1),
+                "sensitivity":self.level_reference.sensitivity,
+                "during_playback":during_playback,
+                "ignored_count":self.ignored_speech_count,
+            })
+    def ignored_speech_in_last(self,seconds:float)->int:
+        """How many utterances were taken for another person's in the last ``seconds``."""
+
+        now=self.clock()
+        return sum(1 for at in self.ignored_speech_at if now-at<=seconds)
     def start(self,experiment_session_id:str|None=None):
         self.generation+=1
         self.greeting_emitted=False
@@ -4239,6 +4320,7 @@ class ListenerSession:
         self.experiment_state_version=None
         self.experiment_report_id=None
         self.forget_timer_notices()
+        self.forget_level_reference()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
     def stop(self):
@@ -4257,6 +4339,7 @@ class ListenerSession:
         self.client_audio_constraints={}
         self._reset_turn_identity()
         self.forget_timer_notices()
+        self.forget_level_reference()
         if self.curated_protocol_session is not None:
             # A review the researcher did not finish goes to the screen, and
             # the report's prose is prepared (lane N, decision 3).
@@ -4401,6 +4484,18 @@ class ListenerSession:
                     self.turn_generations.get(self.active_turn_id or 0,
                                               self.generation)))
                 self.active_turn_id=None; self.framer=FrameBuffer()
+            elif result.utterance is not None and self.ignores_level(result.voiced_level_db):
+                # Lane SP1, decision 1: quieter than the wearer by more than
+                # the margin -- another person's voice. Not sent to speech
+                # recognition, not kept; the session listens again.
+                output.append(self._ignored_speech_event(
+                    "speech.ignored",self.active_turn_id or 0,result,
+                    self.turn_generations.get(self.active_turn_id or 0,self.generation),
+                    during_playback=False))
+                self.active_turn_id=None; self.framer=FrameBuffer()
+                self._restore_primary_detector(TurnState.COOLDOWN)
+                self._reset_interrupt_input()
+                self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000
             elif result.utterance is not None:
                 if self.active_turn_id is None: raise RuntimeError("committed utterance has no turn_id")
                 self.endpoint_at=self.clock()
@@ -4469,6 +4564,23 @@ class ListenerSession:
                     self._reset_interrupt_input(
                         playback=self.state==TurnState.AGENT_SPEAKING)
                     continue
+                if self.ignores_level(result.voiced_level_db):
+                    # Lane SP1, decision 1: another person's voice while the
+                    # agent speaks or thinks -- playback goes on, nothing is
+                    # transcribed.
+                    rejected=replace(
+                        result,utterance=None,rejected=True,
+                        rejection_reason="other_speaker_level")
+                    output.append(ListenerEvent(
+                        "barge_in_rejected",candidate[0],rejected,candidate[1],
+                        reason="other_speaker_level",
+                        diagnostics=dict(self._interrupt_candidate_diagnostics)))
+                    output.append(self._ignored_speech_event(
+                        "speech.ignored",candidate[0],result,candidate[1],
+                        during_playback=self.state==TurnState.AGENT_SPEAKING))
+                    self._reset_interrupt_input(
+                        playback=self.state==TurnState.AGENT_SPEAKING)
+                    break
                 self._interrupt_candidate_endpoint_at=self.clock()
                 self._interrupt_candidate_diagnostics[
                     "candidate_endpoint_monotonic_ms"
@@ -7321,6 +7433,173 @@ def _end_notice_playback_later(
     session.track_timer_notice_task(asyncio.create_task(end_when_over()),playback=True)
 
 
+# --- Lane SP1 (2026-10-10), decision 1: the wearer's voice measured once ----
+
+#: Turn ids of the server's own words beside the greeting's and the notices'.
+_SERVER_WORDS_TURN_BASE=2_000_000_300
+#: The short sentence the wearer reads so their level can be measured.
+VOICE_CALIBRATION_SENTENCE="목소리를 맞출게요. 지금 이 문장을 평소처럼 읽어 주세요."
+VOICE_CALIBRATION_PROMPT=(
+    "목소리를 맞출게요. 화면의 문장을 평소 목소리로 읽어 주세요. "
+    "건너뛰려면 '건너뛰기'라고 하세요."
+)
+VOICE_CALIBRATION_DONE="목소리를 맞췄어요. 이제 이보다 많이 작은 말은 다른 사람 말로 보고 듣지 않아요."
+VOICE_CALIBRATION_SKIPPED="알겠어요. 목소리 맞추기는 건너뛸게요."
+VOICE_CALIBRATION_RETRY="목소리를 재지 못했어요. 화면의 문장을 한 번 더 읽어 주세요."
+_VOICE_CALIBRATION_REQUEST=re.compile(
+    r"^(?:내\s*)?목소리(?:를|도)?\s*(?:다시\s*|또\s*|한\s*번\s*더\s*)?"
+    r"(?:맞춰|맞추|재|재어|측정해|등록해)(?:\s*(?:줘|줘요|주세요|줄래|보자|볼게|줄래요))?$"
+)
+_VOICE_CALIBRATION_SKIP=re.compile(
+    r"^(?:건너\s*(?:뛰기|뛰어|뛸게|뛰자|뛰어\s*줘|뛰어도\s*돼)|넘어가(?:자|줘|요|도\s*돼)?|"
+    r"괜찮아(?:요)?|됐어(?:요)?|아니(?:요|야|오)?|안\s*할래(?:요)?|나중에(?:\s*할게(?:요)?)?|skip)$"
+)
+
+
+def voice_calibration_asked(transcript:str)->bool:
+    """Whether the words ask for the wearer's voice to be measured (again)."""
+
+    said=" ".join(transcript.split()).strip(" .!。")
+    return bool(said) and "?" not in said and "？" not in said and bool(
+        _VOICE_CALIBRATION_REQUEST.fullmatch(said))
+
+
+def voice_calibration_skipped(transcript:str)->bool:
+    """Whether the words answer the calibration prompt with a skip."""
+
+    said=" ".join(transcript.split()).strip(" .!。?？")
+    return bool(_VOICE_CALIBRATION_SKIP.fullmatch(said))
+
+
+async def _finish_voice_calibration(
+    session:ListenerSession,current_text:Callable[...,Awaitable[bool]],
+    finish:Callable[...,Awaitable[None]],transcript:str,*,
+    voiced_level_db:float|None,turn_id:int,
+)->None:
+    """Take the sentence read as the wearer's level, or the skip said instead."""
+
+    if voice_calibration_skipped(transcript):
+        session.calibration_pending=False
+        state,words="skipped",VOICE_CALIBRATION_SKIPPED
+        log.info("voice calibration skipped by voice turn_id=%s",turn_id)
+    elif voiced_level_db is None:
+        state,words="prompted",VOICE_CALIBRATION_RETRY
+        log.info("voice calibration no voiced level turn_id=%s",turn_id)
+    else:
+        reference=session.set_level_reference(voiced_level_db)
+        state,words="measured",VOICE_CALIBRATION_DONE
+        log.info(
+            "voice calibration measured level_db=%.1f margin_db=%.1f sensitivity=%s turn_id=%s",
+            reference.reference_db,reference.margin_db,reference.sensitivity,turn_id)
+    await current_text("transcript",turn_id=turn_id,text=transcript)
+    reference=session.level_reference
+    fields:dict[str,Any]={
+        "state":state,"sentence":VOICE_CALIBRATION_SENTENCE,
+        "sensitivity":session.speaker_sensitivity,
+    }
+    if state=="measured" and reference is not None:
+        fields.update(
+            level_db=round(reference.reference_db,1),
+            margin_db=round(reference.margin_db,1),
+            threshold_db=round(reference.threshold_db,1))
+    await current_text("speaker.calibration",turn_id=turn_id,**fields)
+    await finish(words,"voice_calibration",outcome="complete")
+
+
+async def _say_server_words(
+    session:ListenerSession,sender:LockedSender,text:str,*,kind:str,
+    route:str="server_words",sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+    wait_seconds:float=TIMER_NOTICE_SPEAK_WAIT_SECONDS,
+)->int|None:
+    """Say ``text`` as one turn of the server's own once the session is quiet.
+
+    The way a timer notice is said (lane VT, decision 1; lane VF, decision
+    2): after the experimenter's words and any answer, through the same TTS,
+    playback and echo memory as every answer. Nothing here touches the
+    workflow. Returns the turn id, or None when it was not said.
+    """
+
+    configuration_id=session.accepted_configuration_id
+    deadline=session.clock()+wait_seconds
+    frames:list[bytes]|None=None
+    while True:
+        if not (session.active and session.accepted_configuration_id==configuration_id):
+            log.info("server words not said kind=%s reason=session_changed",kind)
+            return None
+        if _session_quiet(session):
+            if frames is None:
+                try:
+                    pcm=await asyncio.to_thread(
+                        synthesize,said(text),session.accepted_language or "ko")
+                except Exception as exc:  # noqa: BLE001 - the screen keeps it
+                    log.warning("server words tts failed kind=%s error=%s",kind,type(exc).__name__)
+                    return None
+                frames=frame_complete_audio(pcm)
+                if not frames:
+                    return None
+                # Speaking may have begun while it was synthesized.
+                continue
+            break
+        if session.clock()>=deadline:
+            log.info("server words not said kind=%s reason=not_quiet",kind)
+            return None
+        await sleep(TIMER_NOTICE_POLL_SECONDS)
+    session.refresh_cooldown()
+    session.server_words_turns+=1
+    turn_id=_SERVER_WORDS_TURN_BASE+session.server_words_turns
+    generation=session.generation
+    session.active_turn_id=turn_id
+    session.turn_generations[turn_id]=generation
+    session.turn_committed_at[turn_id]=session.clock()
+    session.detector.state=TurnState.PROCESSING
+    if not session.start_playback(turn_id):
+        return None
+    fields={"configuration_id":configuration_id,"turn_id":turn_id,"generation":generation}
+    await sender.text("server.words",words_kind=kind,text=text,**fields)
+    await sender.text(
+        "reply.delta",segment_index=0,text=text,primary_text=text,speech_text=text,
+        answer_origin="server_words",source_texts=[],source_pages=[],
+        evidence_ids=[],translation_status="not_applicable",**fields,
+    )
+    await sender.text("state.changed",state=session.state.value,**fields)
+    await sender.segment(turn_id,0,frames,generation)
+    await sender.text("reply.complete",text=text,**fields)
+    await sender.text("audio.complete",segment_count=1,**fields)
+    await sender.text(
+        "turn.done",route=route,pipeline="cascade",result_kind=kind,fact_id=None,
+        speech_mode="control",segment_count=1,input_frames=0,output_frames=len(frames),
+        tools_used=[],timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},**fields,
+    )
+    log.info("server words said kind=%s turn_id=%s",kind,turn_id)
+    _end_notice_playback_later(session,sender,turn_id,generation,frames,sleep=sleep)
+    return turn_id
+
+
+async def _prompt_voice_calibration(
+    sender:LockedSender,session:ListenerSession,*,
+    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+)->bool:
+    """Ask the wearer to read the calibration sentence (decision 1), then listen for it."""
+
+    await sender.text(
+        "speaker.calibration",configuration_id=session.accepted_configuration_id,
+        generation=session.generation,state="prompting",
+        sentence=VOICE_CALIBRATION_SENTENCE,sensitivity=session.speaker_sensitivity,
+    )
+    turn_id=await _say_server_words(
+        session,sender,VOICE_CALIBRATION_PROMPT,kind="voice_calibration",sleep=sleep)
+    if turn_id is None:
+        return False
+    session.arm_voice_calibration()
+    await sender.text(
+        "speaker.calibration",configuration_id=session.accepted_configuration_id,
+        generation=session.generation,state="prompted",turn_id=turn_id,
+        sentence=VOICE_CALIBRATION_SENTENCE,sensitivity=session.speaker_sensitivity,
+    )
+    log.info("voice calibration prompted on screen turn_id=%s",turn_id)
+    return True
+
+
 async def _timer_notice_tick(
     session:ListenerSession,sender:LockedSender,*,now:float|None=None,
     sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
@@ -7556,7 +7835,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                    sender:LockedSender|None=None,filler:CascadeFiller|None=None,
                    accepted_transcription:Transcription|None=None,
                    accepted_stt_ms:int|None=None,
-                   accepted_stt_context:CascadeTranscriptionContext|None=None)->None:
+                   accepted_stt_context:CascadeTranscriptionContext|None=None,
+                   voiced_level_db:float|None=None)->None:
     sender=sender or LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
@@ -7586,7 +7866,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             turn_id,generation,state,route=route,timings_ms=timings_ms)
         if fields is None: return False
         await sender.text("turn.state",**fields); return True
-    async def finish_blocked_voice(text:str,route:str)->None:
+    async def finish_blocked_voice(text:str,route:str,*,outcome:str="blocked")->None:
         """Complete one deterministic non-mutating clarification turn."""
 
         timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
@@ -7594,7 +7874,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "reply.delta",turn_id=turn_id,segment_index=0,text=text
         ):
             return
-        session.set_turn_terminal_outcome(turn_id,generation,"blocked")
+        session.set_turn_terminal_outcome(turn_id,generation,outcome)
         try:
             await progress("synthesizing",route=route)
             pcm=await asyncio.to_thread(
@@ -7733,6 +8013,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "state.changed",state=session.state.value,turn_id=turn_id,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
+        return
+    if session.calibration_pending:
+        # Lane SP1, decision 1: the sentence read to measure the wearer's
+        # voice level. It is no command: nothing is routed, nothing changes.
+        await _finish_voice_calibration(
+            session,current_text,finish_blocked_voice,transcript,
+            voiced_level_db=voiced_level_db,turn_id=turn_id)
         return
     admission = classify_transcription_language(
         transcription,session.accepted_input_language,
@@ -7958,6 +8245,17 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         session.last_confirmed_language=turn_language
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
+    if voice_calibration_asked(transcript):
+        # Lane SP1, decision 1: "목소리 다시 맞춰 줘" -- the next sentence
+        # measures the wearer again. A front rule of the server's: read-only.
+        session.arm_voice_calibration()
+        await current_text(
+            "speaker.calibration",turn_id=turn_id,state="prompted",
+            sentence=VOICE_CALIBRATION_SENTENCE,sensitivity=session.speaker_sensitivity)
+        log.info("voice calibration prompted by voice turn_id=%s",turn_id)
+        await finish_blocked_voice(
+            VOICE_CALIBRATION_PROMPT,"voice_calibration",outcome="complete")
+        return
     request_arbitration=arbitrate_request(transcript)
     if session.curated_protocol_session is not None:
         curated=session.curated_protocol_session
@@ -9365,6 +9663,7 @@ async def run_turn_safely(
     *,accepted_transcription:Transcription|None=None,
     accepted_stt_ms:int|None=None,
     accepted_stt_context:CascadeTranscriptionContext|None=None,
+    voiced_level_db:float|None=None,
 ):
     generation=session.turn_generations.get(turn_id,session.generation)
     _SPEAKING_SESSION.set(session)
@@ -9414,7 +9713,8 @@ async def run_turn_safely(
         sender=sender,filler=filler,
         accepted_transcription=accepted_transcription,
         accepted_stt_ms=accepted_stt_ms,
-        accepted_stt_context=accepted_stt_context)
+        accepted_stt_context=accepted_stt_context,
+        voiced_level_db=voiced_level_db)
     except asyncio.CancelledError:
         log.info("voice turn audio interrupted by barge-in turn_id=%s generation=%s", turn_id, generation)
         session.cascade_failed(turn_id)
@@ -9805,6 +10105,21 @@ async def voice_socket(websocket:WebSocket):
                     if item.diagnostics:
                         fields.update(item.diagnostics)
                     await websocket.send_text(event(item.kind,**fields))
+                    if item.kind=="speech.ignored":
+                        # Lane SP1, decision 1: no words, no audio -- the
+                        # level only (AGENTS.md rule 6).
+                        log.info(
+                            "speech.ignored reason=%s level_db=%s reference_db=%s "
+                            "margin_db=%s voiced_frames=%d total_frames=%d "
+                            "during_playback=%s turn_id=%s",
+                            fields["reason"],fields.get("level_db"),
+                            fields.get("reference_db"),fields.get("margin_db"),
+                            item.result.voiced_frames,item.result.total_frames,
+                            fields.get("during_playback"),item.turn_id)
+                        _record_workspace_metric(
+                            category="voice",metric_name="speech_ignored",
+                            dimensions={"reason":str(fields["reason"])[:100]},
+                        )
                     if (
                         item.kind=="barge_in_rejected"
                         and session.resume_deferred_playback_end(
@@ -9863,7 +10178,8 @@ async def voice_socket(websocket:WebSocket):
                                 accepted_stt_ms=(
                                     accepted["stt_ms"] if accepted else None),
                                 accepted_stt_context=(
-                                    accepted["context"] if accepted else None)))
+                                    accepted["context"] if accepted else None),
+                                voiced_level_db=item.result.voiced_level_db))
                 continue
             if message.get("text") is None:continue
             control=parse_control(message["text"])
@@ -10384,6 +10700,31 @@ async def voice_socket(websocket:WebSocket):
                     requested["noiseSuppression"],actual["noiseSuppression"],
                     requested["autoGainControl"],actual["autoGainControl"],
                 )
+            elif control["type"]=="client.voice_calibration":
+                # Lane SP1, decision 1: "목소리 맞추기" on the screen, or its skip.
+                valid=bool(
+                    session.active and session.accepted_mode=="cascade"
+                    and control["configuration_id"]
+                    ==session.accepted_configuration_id
+                    and control["generation"]==session.generation
+                )
+                if not valid:
+                    log.info(
+                        "client.voice_calibration rejected action=%s configuration_id=%s generation=%s",
+                        control["action"],control["configuration_id"],control["generation"])
+                    continue
+                if control["action"]=="skip":
+                    skipped=session.calibration_pending
+                    session.calibration_pending=False
+                    log.info("voice calibration skipped on screen pending=%s",skipped)
+                    await websocket.send_text(event(
+                        "speaker.calibration",configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,state="skipped",
+                        sentence=VOICE_CALIBRATION_SENTENCE,
+                        sensitivity=session.speaker_sensitivity))
+                else:
+                    session.track_visual_task(asyncio.create_task(
+                        _prompt_voice_calibration(sender,session)))
             elif control["type"]=="client.audio_ready":
                 valid=bool(
                     session.active and session.accepted_mode=="cascade"
