@@ -36,6 +36,12 @@
     .drawn-label{color:#b8860b;font-weight:800}
     .step-visual .drawn-figure{margin:.5rem 0 0;padding:0}
     .step-visual .drawn-figure img{background:#fff}
+    /* Lane VF decision 6: the check before the start folds to one line once
+       the experiment runs; its long boxes scroll inside a fixed height. */
+    .protocol-start-done{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:.2rem 0 .4rem;font-size:.84rem;font-weight:750;color:var(--ink)}
+    .protocol-start-done[hidden],#protocol-start-body[hidden]{display:none}
+    .protocol-start-done button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);padding:.3rem .6rem;font-weight:750;cursor:pointer}
+    .protocol-start-summary .protocol-safety-notices,.protocol-start-summary .protocol-execution-reasons{max-height:14rem;overflow:auto}
   </style>
 </head>
 <body>
@@ -163,13 +169,17 @@
             </div>
             <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
               <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
-              <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
-              <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
-              <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
-              <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
-              <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
-              <div class="protocol-review-actions">
-                <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
+              <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
+              <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
+              <div id="protocol-start-body">
+                <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
+                <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+                <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
+                <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
+                <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
+                <div class="protocol-review-actions">
+                  <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
+                </div>
               </div>
             </section>
             <details id="protocol-review-panel" class="protocol-review" hidden open>
@@ -549,6 +559,7 @@ function renderExperimentContext(){
  setText("experiment-context-actions",actions);
  setText("experiment-context-readiness",entry?catalogStatus(entry).label:"프로토콜 선택 필요");
  renderResumeDisclosure();
+ renderStartSummaryState();
 }
 function renderState(state,detail=""){
  const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR",visibleLabel=VOICE_STATE_LABELS[visibleState]||VOICE_STATE_LABELS.ERROR;$("state").textContent=visibleLabel;$("status").textContent=detail||view[0];
@@ -1922,6 +1933,30 @@ async function saveExperimenterSetting(name,value){
 // how many steps, the source's safety statements beside their Korean (never
 // folded), what keeps the protocol from running and what to do, the notices
 // about constructs the guidance cannot handle yet, and the translation state.
+// Lane VF decision 6 (2026-10-10): an experiment of the reviewed protocol
+// running -- the server's state for this session, or a saved session of the
+// same revision that can be resumed -- folds the check to one line and
+// takes the start button away; "다시 보기" opens the check again.
+let startSummaryOpened=false;
+function experimentStartedAt(){const started=curatedProtocolState?.timers?.experiment?.started_at;const at=typeof started==="string"?new Date(started):null;return at&&Number.isFinite(at.getTime())?`${String(at.getHours()).padStart(2,"0")}:${String(at.getMinutes()).padStart(2,"0")}`:null;}
+function experimentRunsForReview(review){
+ if(!review||typeof review!=="object")return false;
+ const state=curatedProtocolState;
+ if(sessionActive&&state?.attached===true&&state.active===true&&state.protocol_id===review.protocol_id)return true;
+ return experimentIsResumable()&&typeof review.revision_id==="string"&&currentExperimentProtocolRevision===review.revision_id;
+}
+function renderStartSummaryState(review=lastProtocolReview){
+ const host=$("protocol-start-summary"),done=$("protocol-start-done"),doneText=$("protocol-start-done-text"),reopen=$("protocol-start-review"),body=$("protocol-start-body"),start=$("protocol-start");
+ if(!host||host.hidden||!done||!body)return false;
+ const running=experimentRunsForReview(review);
+ if(!running)startSummaryOpened=false;
+ done.hidden=!running;
+ body.hidden=running&&!startSummaryOpened;
+ if(running&&doneText){const at=experimentStartedAt();doneText.textContent=at?`시작 전 확인 완료 · ${at}`:"시작 전 확인 완료";}
+ if(reopen)reopen.textContent=startSummaryOpened?"접기":"다시 보기";
+ if(start)start.hidden=review?.available_for_execution!==true||sessionActive||running;
+ return running;
+}
 function renderStartSummary(review){
  const host=$("protocol-start-summary"),overview=$("protocol-start-overview"),start=$("protocol-start");
  if(!host||!overview)return false;
@@ -1946,6 +1981,7 @@ function renderStartSummary(review){
  renderSafetyNotices(safety,review.available_for_execution===true);
  renderStepTimers(review.timers);
  if(start){start.hidden=review.available_for_execution!==true||sessionActive;start.disabled=isRegisteringProtocol;}
+ renderStartSummaryState(review);
  return true;
 }
 // Lane PT, decision 4: each step's timer as the server verified it against
@@ -2356,6 +2392,7 @@ $("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolRev
 $("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
 $("protocol-analysis-retry")?.addEventListener("click",async()=>{if(!currentProtocolReviewId)return;await analyzeRegisteredProtocol(currentProtocolReviewId);await loadProtocolCatalog(currentProtocolReviewId);restoreProtocolAnalysisNotice();});
 $("protocol-start")?.addEventListener("click",()=>{void startReviewedProtocol();});
+$("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!startSummaryOpened;renderStartSummaryState();});
 $("report-prose-again")?.addEventListener("click",()=>{void regenerateReportProse();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
 $("experiment-timeline-refresh")?.addEventListener("click",()=>{void loadExperimentSessions(currentExperimentSessionId);});
