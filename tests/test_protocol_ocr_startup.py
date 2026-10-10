@@ -80,8 +80,6 @@ class ServerStartupTests(unittest.TestCase):
         with patch.dict("os.environ", env), patch.multiple(
             server_module,
             log_protocol_catalog_runtime_configuration=lambda: None,
-            start_moss_runtime_from_environment=lambda: None,
-            stop_moss_runtime=lambda: None,
         ):
             asyncio.run(run())
         self.assertEqual(server_module._protocol_ocr_provider().engine_names, (GOOGLE,))

@@ -1,3 +1,5 @@
+> 보관: 2026-10-08 MVP 이전 설계 — PI·관리자 승인·반려·회수는 폐기, 리비전·검토자 입력 개념은 줄 RV 에서 다시 설계
+
 # Moss in-memory retrieval
 
 Voice Workflow Agent can optionally use [Moss](https://github.com/usemoss/moss) to
@@ -60,10 +62,11 @@ Create a project in the Moss portal and place its values only in
 the repository root `.env`:
 
 ```dotenv
-VOINEY_LAB_MOSS_PROJECT_ID=replace-with-moss-project-id
-VOINEY_LAB_MOSS_PROJECT_KEY=replace-with-moss-project-key
-VOINEY_LAB_MOSS_INDEX_NAME=voice_workflow_agent-approved-safety
-VOINEY_LAB_MOSS_MODEL_ID=moss-minilm
+# 옛 설정 이름: 줄 CL(2026-10-10)에서 Moss 연결과 함께 지워 VOINEY_LAB_ 접두사를 뗐다.
+MOSS_PROJECT_ID=replace-with-moss-project-id
+MOSS_PROJECT_KEY=replace-with-moss-project-key
+MOSS_INDEX_NAME=voice_workflow_agent-approved-safety
+MOSS_MODEL_ID=moss-minilm
 ```
 
 `.env` is ignored by Git. Do not put a key in a manifest, shell history, commit,
@@ -99,13 +102,13 @@ Preview and then create the non-sensitive demo index:
 python scripts/sync_moss_index.py \
   --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope demo \
-  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME" \
+  --index-name "$MOSS_INDEX_NAME" \
   --dry-run
 
 python scripts/sync_moss_index.py \
   --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope demo \
-  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME"
+  --index-name "$MOSS_INDEX_NAME"
 ```
 
 Enable Moss, restart Uvicorn, and ask:
@@ -125,7 +128,7 @@ For non-sensitive demo data:
 python scripts/sync_moss_index.py \
   --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope demo \
-  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME" \
+  --index-name "$MOSS_INDEX_NAME" \
   --dry-run
 ```
 
@@ -139,7 +142,7 @@ explicitly adds `--allow-sensitive-scope`:
 python scripts/sync_moss_index.py \
   --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope operational \
-  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME" \
+  --index-name "$MOSS_INDEX_NAME" \
   --allow-sensitive-scope \
   --dry-run
 ```
@@ -157,16 +160,16 @@ For demo or reference-only data, add:
 
 ```dotenv
 VOINEY_LAB_MOSS_ENABLED=true
-VOINEY_LAB_MOSS_ALLOWED_SCOPES=demo,reference_only
-VOINEY_LAB_MOSS_ALPHA=0.65
-VOINEY_LAB_MOSS_CANDIDATE_LIMIT=64
-VOINEY_LAB_MOSS_QUERY_TIMEOUT_MS=250
-VOINEY_LAB_MOSS_LOAD_TIMEOUT_SECONDS=60
-VOINEY_LAB_MOSS_AUTO_REFRESH=false
-VOINEY_LAB_MOSS_REFRESH_SECONDS=600
+MOSS_ALLOWED_SCOPES=demo,reference_only
+MOSS_ALPHA=0.65
+MOSS_CANDIDATE_LIMIT=64
+MOSS_QUERY_TIMEOUT_MS=250
+MOSS_LOAD_TIMEOUT_SECONDS=60
+MOSS_AUTO_REFRESH=false
+MOSS_REFRESH_SECONDS=600
 ```
 
-`VOINEY_LAB_MOSS_ALLOWED_SCOPES`는 쉼표로 구분하며 공백과 대소문자를
+`MOSS_ALLOWED_SCOPES`는 쉼표로 구분하며 공백과 대소문자를
 정규화하고 중복을 제거한다. 허용값은 `operational`, `demo`,
 `reference_only`뿐이며 빈 집합이나 알 수 없는 값은 거부하고 SQLite
 fallback을 유지한다.
@@ -185,7 +188,7 @@ To use a deliberately approved operational index, the operator must separately
 change:
 
 ```dotenv
-VOINEY_LAB_MOSS_ALLOWED_SCOPES=operational
+MOSS_ALLOWED_SCOPES=operational
 ```
 
 Restart Uvicorn after changing the index or runtime configuration. On successful
@@ -202,7 +205,7 @@ safe and completed through the original deterministic ordering.
 ## Tuning
 
 - `moss-minilm` is the speed-first model used for the voice demo.
-- `VOINEY_LAB_MOSS_ALPHA=0.65` keeps both semantic and keyword signal.
+- `MOSS_ALPHA=0.65` keeps both semantic and keyword signal.
 - Candidate count is bounded to 64 and result count remains three.
 - Query timeout is 250 ms so a stalled optional backend cannot hold the voice turn.
 - Automatic index refresh is off by default for a stable demo. Enable it only when

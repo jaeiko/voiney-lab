@@ -1571,7 +1571,6 @@ class ServerTests(unittest.TestCase):
             "workspace_enabled": True,
             "protocol_catalog_enabled": False,
             "experiment_reports_enabled": False,
-            "moss_enabled": False,
         })
         self.assertNotIn("key", json.dumps(body).lower())
         self.assertNotIn("secret", json.dumps(body).lower())

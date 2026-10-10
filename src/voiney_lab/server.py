@@ -128,11 +128,6 @@ from voiney_lab.language import (
 )
 from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.runtime_metrics import RUNTIME_METRICS
-from voiney_lab.moss_retrieval import (
-    get_moss_runtime,
-    start_moss_runtime_from_environment,
-    stop_moss_runtime,
-)
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
@@ -351,16 +346,16 @@ def log_cascade_filler_configuration()->None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Warm optional in-memory retrieval without making it a startup dependency."""
+    """Log the effective configuration and install the OCR provider.
+
+    The Moss in-memory retrieval this used to warm was deleted on 2026-10-10
+    (lane CL).
+    """
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
-    await asyncio.to_thread(start_moss_runtime_from_environment)
-    try:
-        yield
-    finally:
-        await asyncio.to_thread(stop_moss_runtime)
+    yield
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
@@ -376,7 +371,7 @@ async def healthz()->dict[str,object]:
 async def readyz()->JSONResponse:
     """Readiness: required configuration parses without exposing secrets.
 
-    Optional providers (moss, protocol analysis) report their configured
+    Optional providers (protocol analysis) report their configured
     state rather than being required for the process to be "ready" - this
     endpoint distinguishes configuration health from live external-provider
     reachability, which no local health check can verify without a real
@@ -394,7 +389,6 @@ async def readyz()->JSONResponse:
         capabilities["workspace_enabled"]=workspace.enabled
         capabilities["protocol_catalog_enabled"]=protocol.enabled
         capabilities["experiment_reports_enabled"]=reports.enabled
-        capabilities["moss_enabled"]=get_moss_runtime() is not None
     except Exception as exc:
         return JSONResponse(status_code=503,content={
             "status":"not_ready",
