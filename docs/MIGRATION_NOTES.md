@@ -427,3 +427,38 @@ line is not `.env` syntax.
 Old names set anywhere else -- a shell profile, a deploy or helper script, a
 service unit, a CI secret -- have to be renamed by hand; the refusal names
 each one.
+
+## Lane EV2 (2026-10-10): the fields an analysis emptied
+
+No schema change and no stored row rewritten. This is the protocol store
+(`protocol_workspace.sqlite`), where an analysis is kept as the JSON of its
+domain records.
+
+`ExperimentProtocol` has one more field, `cleared_fields` (a tuple of names,
+default empty). Since lane EV2's decision 2 an analysis whose only evidence
+failures are in fields execution never reads -- the metadata fields named by
+`CLEARABLE_METADATA_FIELDS` (title, authors, the three dates, version, DOI,
+source URI, license, source status), the description and a section's title --
+passes with those fields emptied (`""` for the title and a section title,
+`()` for the authors, `None` for the rest, and the field's own evidence
+`None`), and their names are recorded here: `metadata.<field>`,
+`description`, `sections.<section_id>.title_source_text`. The
+`protocol_analysis_ready` event carries the same list as `cleared_fields`
+when it is not empty. `validate_protocol` accepts an empty title or section
+title only when it is recorded so, and refuses a record that names any other
+field or a field that is not empty. The provider is never asked for the field
+and a response that sends it is refused.
+
+### Reading older data
+
+A payload written before this version has no `cleared_fields`; the decoder
+fills the default (`()`), so it reads as an analysis that emptied nothing,
+which it is. Nothing is migrated.
+
+### Going back
+
+Code from before this version refuses a payload that has `cleared_fields`
+("Stored Protocol analysis record fields are malformed."): an analysis that
+passed under this version cannot be read by older code. An analysis stored by
+this version that emptied nothing still carries the field (as `[]`), so the
+same holds for it. To go back, analyse the document again with the older code.

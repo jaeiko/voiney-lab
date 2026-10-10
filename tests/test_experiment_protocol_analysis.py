@@ -444,11 +444,12 @@ class ProtocolAnalysisSchemaTests(unittest.TestCase):
                 if record_type is domain.ExperimentProtocol:
                     # Page-coverage output of the chunk contract, which this
                     # older path does not have; withheld for the same reason
-                    # the extraction record is.
+                    # the extraction record is. Which fields the server
+                    # emptied is the server's record (lane EV2, decision 2).
                     record_fields = tuple(
                         field
                         for field in record_fields
-                        if field.name != "label_dispositions"
+                        if field.name not in {"label_dispositions", "cleared_fields"}
                     )
                 if record_type is domain.SourceEvidence:
                     # Segment handles are server-computed identities. Asking a

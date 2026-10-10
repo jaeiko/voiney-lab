@@ -1664,9 +1664,11 @@ class ProtocolCatalog:
             )
             lifecycle_state = "blocked" if blocker_codes else "ready"
         available = analysis is not None and not blocker_codes
+        # An analysis whose title was emptied (lane EV2, decision 2) is named
+        # as one without an analysis is: by the file's own title or name.
         title = (
             analysis.protocol.metadata.title
-            if analysis is not None
+            if analysis is not None and analysis.protocol.metadata.title
             else extraction.metadata.title or Path(revision.original_filename).stem
         )
         return ProtocolCatalogEntry(
@@ -1993,6 +1995,10 @@ class ProtocolCatalog:
             "execution_notices": [],
             "safety_notice_sources": [],
             "timers": {"verified": [], "refused": []},
+            # Lane EV2, decision 2: the fields emptied because the source did
+            # not confirm them, and the one line the start screen shows.
+            "cleared_fields": [],
+            "cleared_fields_ko": None,
         }
         ocr_projection = base["ocr"]
         base["pipeline"] = self._pipeline(
@@ -2047,6 +2053,16 @@ class ProtocolCatalog:
                 # server adds the Korean beside each (it holds the
                 # translation store); the words here are the document's.
                 "safety_notice_sources": _safety_notice_sources(protocol),
+                "cleared_fields": [
+                    {
+                        "field": field,
+                        "label_ko": domain.cleared_field_label_ko(field, protocol),
+                    }
+                    for field in protocol.cleared_fields
+                ],
+                "cleared_fields_ko": domain.cleared_fields_line_ko(
+                    protocol.cleared_fields, protocol
+                ),
                 # Step timers for the start screen (lane PT, decision 4):
                 # each verified value with its source excerpt, and each time
                 # the server could not verify, with the reason.
@@ -2746,15 +2762,20 @@ class ProtocolCatalog:
             draft.readiness,
             draft.capability_policy_id,
         )
+        ready_payload: dict[str, object] = {
+            "status": "analysis_ready",
+            "analysis_payload_sha256": analysis.payload_sha256,
+        }
+        if draft.protocol.cleared_fields:
+            # Lane EV2, decision 2: the fields emptied because the source
+            # did not confirm them, kept in the ledger beside the analysis.
+            ready_payload["cleared_fields"] = list(draft.protocol.cleared_fields)
         self.store.append_event(
             f"analysis-ready-{analysis_id}",
             protocol_id,
             revision.revision_number,
             _ANALYSIS_READY_EVENT,
-            {
-                "status": "analysis_ready",
-                "analysis_payload_sha256": analysis.payload_sha256,
-            },
+            ready_payload,
             analysis_revision_number=analysis.analysis_revision_number,
         )
         self.store.append_event(

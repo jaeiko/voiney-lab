@@ -149,6 +149,8 @@ _CONSTRUCT_NAMES = {
 _CONTINUATION_FIELDS = ("continued_on_page_number", "continued_excerpt")
 #: SourceEvidence fields never asked of a provider.
 _SERVER_EVIDENCE_FIELDS = frozenset(("evidence_segment_ids", *_CONTINUATION_FIELDS))
+#: ExperimentProtocol fields never asked of a provider.
+_SERVER_PROTOCOL_FIELDS = frozenset(("label_dispositions", "cleared_fields"))
 
 
 class _DomainResponseSchemaBuilder:
@@ -221,10 +223,12 @@ class _DomainResponseSchemaBuilder:
                 # step with no obligation to account for it -- withheld for the
                 # same reason the extraction record and the segment handles
                 # are.
+                # Which fields the server emptied (lane EV2, decision 2) is
+                # the server's record, withheld for the same reason.
                 record_fields = tuple(
                     field
                     for field in record_fields
-                    if field.name != "label_dispositions"
+                    if field.name not in _SERVER_PROTOCOL_FIELDS
                 )
             if record_type is domain.SourceEvidence:
                 # Segment handles are server-computed identities for spans the
@@ -826,6 +830,9 @@ class _DomainDecoder:
             # server finds it (lane PA).
             for name in _CONTINUATION_FIELDS:
                 record_fields.pop(name)
+        if record_type is domain.ExperimentProtocol:
+            # Nor say which fields were emptied (lane EV2, decision 2).
+            record_fields.pop("cleared_fields")
         unknown = set(value) - set(record_fields)
         if unknown:
             raise ProtocolAnalysisResponseError(
@@ -2651,6 +2658,92 @@ def _verify_claim_tree(
         )
 
 
+_CLEARABLE_METADATA_PATH = re.compile(
+    r"protocol\.metadata\.(" + "|".join(domain.CLEARABLE_METADATA_FIELDS) + r")(?:_evidence)?"
+)
+_CLEARABLE_DESCRIPTION_PATH = re.compile(r"protocol\.description\.(?:source_text|evidence)")
+_CLEARABLE_SECTION_TITLE_PATH = re.compile(r"protocol\.sections\[([0-9]+)\]\.title_source_text")
+
+
+def _unread_field(
+    error: ProtocolAnalysisEvidenceError, protocol: domain.ExperimentProtocol
+) -> str | None:
+    """The field execution never reads that an evidence failure is in, or None.
+
+    Lane EV2, human decision 2 (2026-10-10). The fields are named by
+    ``domain.CLEARABLE_METADATA_FIELDS``, the description and a section's
+    title (its title text only: the section's own quote stays required).
+    Nothing else is: a step and its label, a value, a duration, a timer, a
+    reminder, an observation, an expected result, a note, a tip, a warning,
+    a material, a piece of equipment, a prerequisite and a construct all
+    feed the run or its safety, and the shared metadata quote is the
+    protocol's own required evidence.
+    """
+
+    path = getattr(error.diagnostic, "field_path", None) or ""
+    metadata = _CLEARABLE_METADATA_PATH.fullmatch(path)
+    if metadata is not None:
+        return f"metadata.{metadata[1]}"
+    if _CLEARABLE_DESCRIPTION_PATH.fullmatch(path) and protocol.description is not None:
+        return "description"
+    section = _CLEARABLE_SECTION_TITLE_PATH.fullmatch(path)
+    if section is not None and int(section[1]) < len(protocol.sections):
+        return domain.section_title_field(protocol.sections[int(section[1])].section_id)
+    return None
+
+
+def _cleared(protocol: domain.ExperimentProtocol, field: str) -> domain.ExperimentProtocol:
+    """``protocol`` with one field execution never reads emptied and recorded."""
+
+    section_id = domain.cleared_section_id(field)
+    if section_id is not None:
+        protocol = replace(
+            protocol,
+            sections=tuple(
+                replace(section, title_source_text="")
+                if section.section_id == section_id else section
+                for section in protocol.sections
+            ),
+        )
+    elif field == "description":
+        protocol = replace(protocol, description=None)
+    else:
+        name = field.split(".", 1)[1]
+        empty: object = "" if name == "title" else () if name == "authors" else None
+        protocol = replace(
+            protocol,
+            metadata=replace(
+                protocol.metadata,
+                **{name: empty, domain.METADATA_FIELD_EVIDENCE[name]: None},
+            ),
+        )
+    return replace(protocol, cleared_fields=(*protocol.cleared_fields, field))
+
+
+def _verify_clearing_unread_fields(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction
+) -> tuple[domain.ExperimentProtocol, int]:
+    """Verify every quote and claim; empty a field execution never reads
+    instead of refusing the analysis for it (lane EV2, decision 2).
+
+    Each failure in such a field empties that field and records it, and the
+    whole response is verified again from the start; any other failure
+    refuses the response as before. Every pass empties a field not emptied
+    yet, so the loop ends.
+    """
+
+    while True:
+        try:
+            verified, evidence_count = _verify_evidence_tree(protocol, extraction)
+            _verify_claim_tree(verified, extraction)
+            return verified, evidence_count
+        except ProtocolAnalysisEvidenceError as exc:
+            field = _unread_field(exc, protocol)
+            if field is None or field in protocol.cleared_fields:
+                raise
+            protocol = _cleared(protocol, field)
+
+
 def _reject_deferred_state(protocol: domain.ExperimentProtocol) -> None:
     source_uri = protocol.metadata.source_uri
     if source_uri is not None and (
@@ -2745,8 +2838,7 @@ def parse_protocol_analysis_response(
                 source_hash=extraction.sha256,
             ),
         )
-    protocol, evidence_count = _verify_evidence_tree(protocol, extraction)
-    _verify_claim_tree(protocol, extraction)
+    protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
     _reject_deferred_state(protocol)
     try:
         domain.validate_protocol(protocol)

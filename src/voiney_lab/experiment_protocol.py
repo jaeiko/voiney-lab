@@ -587,6 +587,86 @@ class ExperimentProtocol:
     sections: tuple[ProtocolSection, ...] = ()
     constructs: tuple[WorkflowConstruct, ...] = ()
     description: SourceStatement | None = None
+    #: Fields the server emptied because the source did not confirm them
+    #: (lane EV2, human decision 2, 2026-10-10), as ``CLEARABLE_FIELDS``
+    #: names them: only fields execution never reads. Server-recorded after
+    #: evidence verification; never taken from a provider. Empty on every
+    #: analysis stored before the decision.
+    cleared_fields: tuple[str, ...] = ()
+
+
+#: The metadata fields execution never reads (lane EV2, decision 2): shown
+#: and reported, never a step, a value, a timer, a safety statement, a
+#: completion criterion or the order of the run.
+CLEARABLE_METADATA_FIELDS: tuple[str, ...] = (
+    "title",
+    "authors",
+    "created_date",
+    "modified_date",
+    "publication_date",
+    "version",
+    "doi",
+    "source_uri",
+    "license",
+    "source_status",
+)
+#: How each emptied field is named before the start.
+_CLEARED_FIELD_KO: dict[str, str] = {
+    "metadata.title": "제목",
+    "metadata.authors": "저자",
+    "metadata.created_date": "작성일",
+    "metadata.modified_date": "수정일",
+    "metadata.publication_date": "발행일",
+    "metadata.version": "버전",
+    "metadata.doi": "DOI",
+    "metadata.source_uri": "출처 URI",
+    "metadata.license": "라이선스",
+    "metadata.source_status": "출처 상태",
+    "description": "개요",
+}
+_SECTION_TITLE_PREFIX = "sections."
+_SECTION_TITLE_SUFFIX = ".title_source_text"
+
+
+def section_title_field(section_id: str) -> str:
+    """The ``cleared_fields`` name of one section's title."""
+
+    return f"{_SECTION_TITLE_PREFIX}{section_id}{_SECTION_TITLE_SUFFIX}"
+
+
+def cleared_section_id(field: str) -> str | None:
+    """The section whose title a ``cleared_fields`` name names, or None."""
+
+    if field.startswith(_SECTION_TITLE_PREFIX) and field.endswith(_SECTION_TITLE_SUFFIX):
+        section_id = field[len(_SECTION_TITLE_PREFIX) : -len(_SECTION_TITLE_SUFFIX)]
+        return section_id or None
+    return None
+
+
+def cleared_field_label_ko(
+    field: str, protocol: ExperimentProtocol | None = None
+) -> str:
+    """The Korean name of one emptied field ("저자", "절 제목(2번째 절)")."""
+
+    section_id = cleared_section_id(field)
+    if section_id is not None:
+        order = [section.section_id for section in protocol.sections] if protocol else []
+        return (
+            f"절 제목({order.index(section_id) + 1}번째 절)"
+            if section_id in order else "절 제목"
+        )
+    return _CLEARED_FIELD_KO.get(field, field)
+
+
+def cleared_fields_line_ko(
+    fields: tuple[str, ...], protocol: ExperimentProtocol | None = None
+) -> str | None:
+    """The one line shown before the start, or None when nothing was emptied."""
+
+    if not fields:
+        return None
+    names = "·".join(cleared_field_label_ko(field, protocol) for field in fields)
+    return f"원문에서 확인하지 못해 비운 칸: {names}"
 
 
 @dataclass(frozen=True)
@@ -1284,12 +1364,64 @@ def _validate_value_evidence(
             )
 
 
+def _validate_cleared_fields(protocol: ExperimentProtocol) -> None:
+    """Each emptied field is one execution never reads, named once, and empty.
+
+    Lane EV2, decision 2: an empty title or section title is valid only
+    where the server recorded emptying it; a field recorded as emptied holds
+    nothing (its own evidence included).
+    """
+
+    cleared = protocol.cleared_fields
+    if not isinstance(cleared, tuple) or len(set(cleared)) != len(cleared):
+        raise _error(
+            ProtocolValidationCode.INVALID_TEXT,
+            "cleared fields must be distinct names",
+            "cleared_fields",
+        )
+    section_ids = {section.section_id for section in protocol.sections}
+    titles = {section.section_id: section.title_source_text for section in protocol.sections}
+    for index, field in enumerate(cleared):
+        location = f"cleared_fields[{index}]"
+        if not isinstance(field, str):
+            raise _error(
+                ProtocolValidationCode.INVALID_TEXT,
+                "cleared field must be a name",
+                location,
+            )
+        section_id = cleared_section_id(field)
+        if section_id is not None:
+            empty = section_id in section_ids and titles[section_id] == ""
+        elif field == "description":
+            empty = protocol.description is None
+        elif field.startswith("metadata.") and field[9:] in CLEARABLE_METADATA_FIELDS:
+            name = field[9:]
+            value = getattr(protocol.metadata, name)
+            empty = value in ("", (), None) and (
+                getattr(protocol.metadata, METADATA_FIELD_EVIDENCE[name]) is None
+            )
+        else:
+            raise _error(
+                ProtocolValidationCode.INVALID_TEXT,
+                "only a field execution never reads can be emptied",
+                location,
+            )
+        if not empty:
+            raise _error(
+                ProtocolValidationCode.INVALID_TEXT,
+                "an emptied field must be empty",
+                location,
+            )
+
+
 def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
     """Validate all evidence, identifiers, references, and dependency graphs."""
 
     _identifier(protocol.protocol_id, "protocol_id")
     _validate_pdf(protocol.metadata.pdf)
-    _text(protocol.metadata.title, "metadata.title")
+    _validate_cleared_fields(protocol)
+    if "metadata.title" not in protocol.cleared_fields:
+        _text(protocol.metadata.title, "metadata.title")
     _text(protocol.metadata.original_language, "metadata.original_language")
     for index, author in enumerate(protocol.metadata.authors):
         _text(author, f"metadata.authors[{index}]")
@@ -1386,7 +1518,8 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
                 section_location,
             )
         section_locations[section.section_id] = section_location
-        _text(section.title_source_text, f"{section_location}.title_source_text")
+        if section_title_field(section.section_id) not in protocol.cleared_fields:
+            _text(section.title_source_text, f"{section_location}.title_source_text")
         _validate_evidence(
             section.evidence,
             protocol.metadata.pdf,
