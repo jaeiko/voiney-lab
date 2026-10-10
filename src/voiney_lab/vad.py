@@ -65,6 +65,13 @@ def voiced_median_level_db(frames: Iterable[tuple[bytes, bool]]) -> float | None
     return float(statistics.median(levels))
 
 
+def _median_level(levels: Iterable[float | None]) -> float | None:
+    """The median of the levels measured (None entries are silent frames)."""
+
+    voiced = [level for level in levels if level is not None]
+    return float(statistics.median(voiced)) if voiced else None
+
+
 def utterance_level_db(pcm: bytes, classifier: Callable[[bytes], bool]) -> float | None:
     """The median voiced-frame level of a committed utterance's PCM, in dBFS.
 
@@ -240,6 +247,12 @@ class EndpointDetector:
             if self.listening_onset else self.config.onset_window_frames)
         self.state = TurnState.IDLE
         self._prefix: deque[tuple[bytes, bool]] = deque(maxlen=self.config.prefix_frames)
+        #: Lane SP1, decision 1: each voiced frame's level, measured as it
+        #: arrives (about 25 µs a frame) so a commit only takes a median;
+        #: None for a frame the VAD called silent. Kept beside _prefix and
+        #: _utterance, one entry per frame.
+        self._prefix_levels: deque[float | None] = deque(maxlen=self.config.prefix_frames)
+        self._utterance_levels: list[float | None] = []
         self._onset: deque[bool] = deque(maxlen=self.onset_window_frames)
         self._resume: deque[bool] = deque(
             maxlen=self.config.listening_resume_window_frames)
@@ -257,10 +270,12 @@ class EndpointDetector:
     def reset(self, state: TurnState = TurnState.IDLE) -> None:
         self.state = state
         self._prefix.clear()
+        self._prefix_levels.clear()
         self._onset.clear()
         self._resume.clear()
         self._resume_voiced_frames=0
         self._utterance.clear()
+        self._utterance_levels.clear()
         self.voiced_frames = 0
         self.consecutive_silence_frames = 0
         self._committed = False
@@ -273,17 +288,21 @@ class EndpointDetector:
             return EndpointResult()
 
         voiced = bool(self.classifier(frame))
+        level = frame_level_db(frame) if voiced else None
         if self.state == TurnState.IDLE:
             self._prefix.append((frame, voiced))
+            self._prefix_levels.append(level)
             self._onset.append(voiced)
             if (len(self._onset) == self.onset_window_frames
                     and sum(self._onset) >= self.onset_voiced_frames):
                 self.state = TurnState.USER_SPEAKING
                 self._utterance = list(self._prefix)
+                self._utterance_levels = list(self._prefix_levels)
                 self._prefix_frames_retained = len(self._utterance)
                 self.voiced_frames = sum(flag for _, flag in self._utterance)
                 self.consecutive_silence_frames = self._trailing_silence()
                 self._prefix.clear()
+                self._prefix_levels.clear()
                 self._onset.clear()
                 self._resume.clear()
                 self._resume_voiced_frames=0
@@ -294,6 +313,7 @@ class EndpointDetector:
             return EndpointResult()
 
         self._utterance.append((frame, voiced))
+        self._utterance_levels.append(level)
         if not self.consecutive_silence_frames:
             if voiced:
                 self.voiced_frames += 1
@@ -346,6 +366,7 @@ class EndpointDetector:
         self._committed = True
         trim = self.consecutive_silence_frames
         kept = self._utterance[:-trim] if trim else self._utterance[:]
+        kept_levels = self._utterance_levels[:-trim] if trim else self._utterance_levels[:]
         accepted = self.voiced_frames >= self.config.minimum_voiced_frames
         result = EndpointResult(
             utterance=b"".join(frame for frame, _ in kept)
@@ -358,7 +379,7 @@ class EndpointDetector:
                 self._prefix_frames_retained,len(kept)),
             rejection_reason="minimum_voiced_frames"
             if not accepted else None,
-            voiced_level_db=voiced_median_level_db(kept) if accepted else None,
+            voiced_level_db=_median_level(kept_levels) if accepted else None,
         )
         if result.rejected:
             self.reset()
@@ -366,6 +387,8 @@ class EndpointDetector:
             # This transition and detachment make the accepted commit exactly once.
             self.state = TurnState.PROCESSING
             self._utterance.clear()
+            self._utterance_levels.clear()
             self._prefix.clear()
+            self._prefix_levels.clear()
             self._onset.clear()
         return result
