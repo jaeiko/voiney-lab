@@ -6819,11 +6819,18 @@ async def _send_session_greeting(
         tools_used=[],timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},
     )
 
-# --- Lane VT, decisions 1-2 / lane VF, decision 2: the step timer told before it is asked
+# --- Lane VT, decisions 1-2 / lane VF, decisions 2-3: the step timer told before it is asked
 
-#: How often the server looks at the step timer: a timer's end is told within
-#: this of the moment it runs out.
+#: How often the server looks at the step timer when no notice is near.
 TIMER_NOTICE_TICK_SECONDS=1.0
+#: The watcher wakes for a notice's due moment itself (lane VF, decision 3:
+#: the screen within a second of due), never sleeping less than this.
+TIMER_NOTICE_MIN_WAIT_SECONDS=0.02
+#: A spoken notice's sentence is synthesized this long before it falls due,
+#: so that it is said the moment it is due (lane VF, decision 3).
+TIMER_NOTICE_PREPARE_SECONDS=15.0
+#: Prepared notice audio kept for a session, at most.
+TIMER_NOTICE_PREPARED_MAX=8
 #: The wall clock the step timer runs on (the curated session's time.time),
 #: for when the experimenter's words are heard (decision 5).
 _wall_clock=time.time
@@ -6966,17 +6973,78 @@ def _begin_saying_timer_notice(
     return task
 
 
+def _prepare_timer_notice(
+    session:ListenerSession,curated:CuratedProtocolSession,notice:TimerNotice,
+)->asyncio.Task|None:
+    """Have a spoken notice's audio made before it falls due (lane VF, decision 3)."""
+
+    if (
+        not notice.spoken or notice.notice_id in session.timer_notice_audio
+        or notice.notice_id in session.timer_notice_preparing
+    ):
+        return None
+    session.timer_notice_preparing.add(notice.notice_id)
+    task=asyncio.create_task(_prepare_timer_notice_audio(session,curated,notice))
+    session.track_timer_notice_task(task)
+    return task
+
+
+async def _prepare_timer_notice_audio(
+    session:ListenerSession,curated:CuratedProtocolSession,notice:TimerNotice,
+)->None:
+    """Synthesize a notice's sentence ahead of its due moment, and keep the frames.
+
+    The sentence is the one that would be said now (a machine translation
+    named as such, "자동 번역입니다." first when not announced yet) without
+    announcing anything; when the sentence to be said differs at the time,
+    the audio is made again then. Nothing is said or shown here.
+    """
+
+    try:
+        labelled=_label_machine_translation(session,curated,notice,commit=False)
+        started=session.clock()
+        try:
+            pcm=await asyncio.to_thread(synthesize,labelled.speech_text,"ko")
+        except Exception as exc:  # noqa: BLE001 - made again when it is due
+            log.warning(
+                "timer notice prepare tts failed notice_id=%s error=%s",
+                notice.notice_id,type(exc).__name__)
+            return
+        frames=frame_complete_audio(pcm)
+        if not frames:
+            return
+        audio=session.timer_notice_audio
+        while len(audio)>=TIMER_NOTICE_PREPARED_MAX:
+            audio.pop(next(iter(audio)))
+        audio[notice.notice_id]=(labelled.speech_text,frames)
+        log.info(
+            "timer notice prepared notice_id=%s kind=%s due=%s synth_ms=%d",
+            notice.notice_id,notice.kind,notice.public_dict()["due_at"],
+            round((session.clock()-started)*1000))
+    finally:
+        session.timer_notice_preparing.discard(notice.notice_id)
+
+
 async def _timer_notice_frames(
     session:ListenerSession,notice:TimerNotice,
-)->list[bytes]|None:
-    """The audio of a notice about to be said, or None when it cannot be made."""
+)->tuple[list[bytes]|None,bool]:
+    """The audio of a notice about to be said, and whether it was made ahead.
 
+    Audio prepared for this notice is used when it was made from the very
+    sentence to be said now; otherwise the sentence is synthesized here.
+    None when it cannot be made.
+    """
+
+    prepared=session.timer_notice_audio.pop(notice.notice_id,None)
+    if prepared is not None and prepared[0]==notice.speech_text:
+        said(notice.speech_text)
+        return prepared[1],True
     try:
         pcm=await asyncio.to_thread(synthesize,said(notice.speech_text),"ko")
     except Exception as exc:  # noqa: BLE001 - the screen keeps it
         log.warning("timer notice tts failed error=%s",type(exc).__name__)
-        return None
-    return frame_complete_audio(pcm)
+        return None,False
+    return frame_complete_audio(pcm),False
 
 
 async def _say_timer_notice(
@@ -7004,6 +7072,9 @@ async def _say_timer_notice(
     shown_wall,shown_clock=shown
     deadline=session.clock()+wait_seconds
     frames:list[bytes]|None=None
+    prepared=False
+    quiet_at:float|None=None
+    synth_ms=0
     reason:str|None=None
     try:
         while True:
@@ -7014,12 +7085,16 @@ async def _say_timer_notice(
             if notice.notice_id in session.timer_notice_superseded:
                 reason="superseded_by_end"; break
             if _session_quiet(session):
+                if quiet_at is None:
+                    quiet_at=session.clock()
                 if frames is None:
                     # A stored machine translation is named as such, and "자동
                     # 번역입니다." said first once a session -- only now that it
                     # is about to be said.
                     notice=_label_machine_translation(session,curated,notice)
-                    frames=await _timer_notice_frames(session,notice)
+                    synth_started=session.clock()
+                    frames,prepared=await _timer_notice_frames(session,notice)
+                    synth_ms=round((session.clock()-synth_started)*1000)
                     if frames is None:
                         reason="tts_failed"; break
                     if not frames:
@@ -7033,6 +7108,7 @@ async def _say_timer_notice(
     finally:
         session.timer_notice_pending.pop(notice.notice_id,None)
         session.timer_notice_superseded.discard(notice.notice_id)
+        session.timer_notice_audio.pop(notice.notice_id,None)
     if reason is not None:
         log.info(
             "timer notice not said notice_id=%s kind=%s reason=%s",
@@ -7070,10 +7146,15 @@ async def _say_timer_notice(
         segment_count=1,input_frames=0,output_frames=len(frames),tools_used=[],
         timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},**fields,
     )
+    # Lane VF, decision 3: how late after its due moment the notice is
+    # said, of which how long it waited for quiet and how long its audio took.
     log.info(
-        "timer notice said notice_id=%s kind=%s turn_id=%s delay_ms=%d",
-        notice.notice_id,notice.kind,turn_id,
+        "timer notice said notice_id=%s kind=%s turn_id=%s due=%s delay_ms=%d "
+        "waited_ms=%d synth_ms=%d prepared=%s",
+        notice.notice_id,notice.kind,turn_id,notice.public_dict()["due_at"],
         round(((shown_wall-notice.due_at)+(session.clock()-shown_clock))*1000),
+        round(((quiet_at if quiet_at is not None else shown_clock)-shown_clock)*1000),
+        synth_ms,prepared,
     )
     _end_notice_playback_later(session,sender,turn_id,generation,frames,sleep=playback_sleep)
     return True
@@ -7131,6 +7212,8 @@ async def _timer_notice_tick(
     ):
         return ()
     current=_wall_clock() if now is None else now
+    for upcoming in curated.upcoming_timer_notices(now=current,within=TIMER_NOTICE_PREPARE_SECONDS):
+        _prepare_timer_notice(session,curated,upcoming)
     notices=curated.due_timer_notices(now=current)
     for notice in notices:
         shown=await _show_timer_notice(session,sender,notice,now=current)
@@ -7152,16 +7235,26 @@ async def _settle_timer_notices(session:ListenerSession)->None:
         await asyncio.gather(*list(session.timer_notice_tasks),return_exceptions=True)
 
 
+def _timer_notice_wait(session:ListenerSession,now:float)->float:
+    """How long the watcher sleeps: to the next notice's due moment, a second at most."""
+
+    curated=session.curated_protocol_session
+    due=curated.next_timer_notice_due() if curated is not None else None
+    if due is None:
+        return TIMER_NOTICE_TICK_SECONDS
+    return min(TIMER_NOTICE_TICK_SECONDS,max(TIMER_NOTICE_MIN_WAIT_SECONDS,due-now))
+
+
 async def _watch_timer_notices(
     session:ListenerSession,sender:LockedSender,*,
     clock:Callable[[],float]|None=None,
     sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
 )->None:
-    """For one voice connection: look at the step timer every second."""
+    """For one voice connection: look at the step timer every second, and at each due moment."""
 
     read_clock=_wall_clock if clock is None else clock
     while True:
-        await sleep(TIMER_NOTICE_TICK_SECONDS)
+        await sleep(_timer_notice_wait(session,read_clock()))
         try:
             await _timer_notice_tick(session,sender,now=read_clock(),sleep=sleep)
         except asyncio.CancelledError:

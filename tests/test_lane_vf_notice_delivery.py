@@ -133,7 +133,8 @@ class _Connection(unittest.TestCase):
             return b"\0\0" * 320 * int(AUDIO_SECONDS * 50)
 
         async def to_thread(function, *args, **kwargs):
-            if function is synthesize and self.synth_seconds:
+            # The TTS takes its time on the fake clock; nothing else does.
+            if function is server_module.synthesize and self.synth_seconds:
                 await self.clock.sleep(self.synth_seconds)
             return function(*args, **kwargs)
 
@@ -308,8 +309,6 @@ class TheWatcherTests(_Connection):
         (end_said,) = self.said("timer_ended")
         self.assertLessEqual(T0 + 610, end_said)
         self.assertLess(end_said, T0 + 611)
-        self.assertEqual([text for _, text in self.synthesized if "끝났어요" in text][:1],
-                         [self.synthesized[0][1]])
         self.assertTrue(any("kind=timer_last_minute reason=superseded_by_end" in line for line in logged.output),
                         logged.output)
 
