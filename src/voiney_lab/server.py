@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, We
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
-from voiney_lab.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
+from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
@@ -42,6 +42,7 @@ from voiney_lab.cascade_filler import (
 )
 from voiney_lab.curated_protocol import (
     LANE_WV_PICTURE_KINDS,
+    NO_FIGURE_WORDS,
     STT_CONTROL_KEYTERMS,
     control_words,
     ClaimAdmissionStatus,
@@ -52,7 +53,10 @@ from voiney_lab.curated_protocol import (
     TimerNotice,
     josa_ro,
     load_curated_protocol_fixture,
+    photo_asked,
+    plan_without_internal_names,
     spoken_korean,
+    web_lookup_subject,
 )
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
@@ -3903,6 +3907,55 @@ def get_protocol_source_page(
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
+
+@app.get(
+    "/api/protocols/{protocol_id}/revisions/{revision_id}/source-pages/{source_page}/image"
+)
+def get_protocol_source_page_image(
+    protocol_id:str,revision_id:str,source_page:int,
+):
+    """The source page itself as one image (lane VF, decision 8: "원본 쪽 보기").
+
+    Same-origin, rendered from the uploaded PDF by the one PDF engine and
+    kept in memory only; never labelled a figure.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None and candidate.protocol_id==protocol_id:
+            fixture=candidate
+        else:
+            catalog,store=_open_protocol_catalog()
+            try:
+                fixture=catalog.load_executable_fixture(protocol_id)
+            finally:
+                store.close()
+        if (
+            fixture.revision_id!=revision_id
+            or fixture.source_pdf_path is None
+            or fixture.source_pdf_sha256 is None
+        ):
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        png=source_figures.page_image(
+            fixture.source_pdf_path,fixture.source_pdf_sha256,source_page)
+        if png is None:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":f'inline; filename="source-page-{source_page}.png"',
+                "X-Protocol-Source-SHA256":str(fixture.source_pdf_sha256),
+                "X-Protocol-Source-Page":str(source_page),
+            })
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
 @dataclass(frozen=True)
 class ListenerEvent:
     kind:str
@@ -4045,6 +4098,19 @@ class ListenerSession:
         self.greeting_audio_ready=False
         #: Lane VT: the timer notices said so far, for their turn ids.
         self.timer_notice_turns=0
+        #: Lane VF, decision 2: this connection's notice tasks -- one saying
+        #: (or preparing) a notice, and apart from them one ending a said
+        #: notice's playback -- cancelled when the connection ends.
+        self.timer_notice_tasks:set[asyncio.Task]=set()
+        self.timer_notice_playback_tasks:set[asyncio.Task]=set()
+        #: Spoken notices shown and not said yet, by notice id.
+        self.timer_notice_pending:dict[str,TimerNotice]={}
+        #: Notices whose voice was given up: a timer's end came first.
+        self.timer_notice_superseded:set[str]=set()
+        #: Lane VF, decision 3: a notice's audio made before it fell due --
+        #: the sentence it was made from, and its frames -- by notice id.
+        self.timer_notice_audio:dict[str,tuple[str,list[bytes]]]={}
+        self.timer_notice_preparing:set[str]=set()
         self.client_audio_constraints:dict[str,object]={}
         self.stt_settings=CascadeSttSettings.from_environment()
     @property
@@ -4149,6 +4215,15 @@ class ListenerSession:
     def track_visual_task(self,task:asyncio.Task)->None:
         self.visual_tasks.add(task)
         task.add_done_callback(self.visual_tasks.discard)
+    def track_timer_notice_task(self,task:asyncio.Task,*,playback:bool=False)->None:
+        tasks=self.timer_notice_playback_tasks if playback else self.timer_notice_tasks
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+    def forget_timer_notices(self)->None:
+        """Drop what is kept for notices not said yet; their tasks see the session changed."""
+
+        self.timer_notice_pending.clear(); self.timer_notice_superseded.clear()
+        self.timer_notice_audio.clear(); self.timer_notice_preparing.clear()
     def start(self,experiment_session_id:str|None=None):
         self.generation+=1
         self.greeting_emitted=False
@@ -4163,6 +4238,7 @@ class ListenerSession:
         self.session_id=experiment_session_id or new_session_id()
         self.experiment_state_version=None
         self.experiment_report_id=None
+        self.forget_timer_notices()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
     def stop(self):
@@ -4180,6 +4256,7 @@ class ListenerSession:
         self.greeting_audio_ready=False
         self.client_audio_constraints={}
         self._reset_turn_identity()
+        self.forget_timer_notices()
         if self.curated_protocol_session is not None:
             # A review the researcher did not finish goes to the screen, and
             # the report's prose is prepared (lane N, decision 3).
@@ -4953,6 +5030,10 @@ def _web_lookup_words(
         )
     if getattr(plan,"visual_kind",None)=="web_lookup":
         speech=str(plan.speech_text or "")
+        if "웹에서 찾아볼게요" in speech:
+            # Already said so (lane VF, decision 8: a photograph looked up
+            # in place of a figure the source does not have).
+            return plan
         lead="화면에 원문 그림을 띄웠어요. " if speech.startswith("화면에 원문 그림을 띄웠어요.") else ""
         display=str(plan.display_text or "")
         old_sentence=speech[len(lead):]
@@ -5136,6 +5217,10 @@ def _drawing_words(plan:Any,language:str)->Any:
     )
     speech=str(plan.speech_text or "")
     display=str(plan.display_text or "")
+    if words in speech:
+        # Already said so (lane VF, decision 8: a drawing in place of a
+        # figure the source does not have).
+        return plan
     if _DRAWING_OFF_WORDS in speech:
         return replace(
             plan,
@@ -5151,6 +5236,70 @@ def _drawing_words(plan:Any,language:str)->Any:
         speech_text=f"{speech} {words}".strip(),
         display_text=f"{display}\n\n{words}" if display else words,
     )
+
+
+# --- Lane VF, decision 8: no figure in the source -> drawn, or a photo looked up ---
+
+_NO_FIGURE_DRAWING_WORDS="원문에는 그림이 없어서 그려 드릴게요. "+_DRAWING_ON_WORDS
+_PICTURE_WORD_ONLY=re.compile(r"(?:실제|진짜|실물)?\s*(?:사진|그림|이미지|모습|삽화|도식)")
+
+
+def _replace_words(plan:Any,old:str,new:str)->Any:
+    changes={}
+    for field in ("speech_text","display_text","primary_text"):
+        value=getattr(plan,field,None)
+        if isinstance(value,str) and old in value:
+            changes[field]=value.replace(old,new)
+    return replace(plan,**changes) if changes else plan
+
+
+def _picture_fallback(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,transcript:str,language:str,
+)->Any:
+    """A picture asked for that the source does not have: drawn, or a photo looked up.
+
+    Lane VF, decision 8 (decision of 2026-10-10: with no figure in the
+    source, draw at once instead of telling the experimenter to ask again).
+    The rules' plan says the step's page has no figure; here, when drawing
+    is on, the turn becomes a drawing -- "원문에는 그림이 없어서 그려 드릴게요."
+    and lane WV's checks and display as they are -- and when a photograph
+    was asked for ("사진", "실제 모습") of a thing named, the web is on and
+    looking up is allowed, it becomes a web lookup of that thing instead.
+    With both off the rules' words stand. Nothing here changes state.
+    """
+
+    if (
+        getattr(plan,"action",None) is not CuratedProtocolAction.VISUAL_REQUEST
+        or getattr(plan,"visual_kind",None)!="source_figure"
+        or not getattr(curated,"active",False)
+        or NO_FIGURE_WORDS not in str(plan.speech_text or "")
+        or language!="ko"
+    ):
+        return plan
+    if curated.source_figures_for_current_step():
+        return plan
+    subject=web_lookup_subject(transcript) if photo_asked(transcript) else None
+    if subject and _PICTURE_WORD_ONLY.fullmatch(subject):
+        # "사진 보여줘": the picture word itself is no thing to look up.
+        subject=None
+    if (
+        subject
+        and session.web_explanation_settings.enabled
+        and getattr(curated,"web_lookup","on")=="on"
+    ):
+        words=(
+            f"원문에는 사진이 없어서 {subject}{_josa_eun_neun(subject)} 웹에서 찾아볼게요. "
+            "찾으면 화면에 출처와 함께 띄울게요. 값과 안전 지시는 원문만 따라요."
+        )
+        plan=_replace_words(plan,NO_FIGURE_WORDS,words)
+        return replace(
+            plan,visual_kind="web_lookup",visual_intent="web_explanation",
+            requested_entity=subject,requested_entities=(subject,),
+        )
+    if session.drawn_diagram_settings.enabled:
+        plan=_replace_words(plan,NO_FIGURE_WORDS,_NO_FIGURE_DRAWING_WORDS)
+        return replace(plan,visual_kind="drawn_diagram",visual_intent="drawn_diagram")
+    return plan
 
 
 async def _run_drawing(
@@ -5235,7 +5384,7 @@ def _machine_text_marks(text:str)->tuple[str,...]:
 
 
 def _label_machine_translation(
-    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,*,commit:bool=True,
 )->Any:
     """Name a reply carrying a stored machine translation as unreviewed.
 
@@ -5261,14 +5410,17 @@ def _label_machine_translation(
             shown=spoken=True
     if not shown:
         return plan
-    curated.machine_translation_shown=True
     changes:dict[str,Any]={}
     if plan.translation_status in _MACHINE_RELABELLED_STATUSES:
         changes["translation_status"]="model_assisted_unreviewed"
     if spoken and not session.auto_translation_announced:
         changes["speech_text"]=f"{READER_TRANSLATION_SPOKEN_LEAD} {speech}"
-    if spoken:
-        session.auto_translation_announced=True
+    if commit:
+        # ``commit=False`` reads what would be said without saying it (lane
+        # VF, decision 3: a notice synthesized before it is due).
+        curated.machine_translation_shown=True
+        if spoken:
+            session.auto_translation_announced=True
     return replace(plan,**changes) if changes else plan
 
 
@@ -6792,11 +6944,18 @@ async def _send_session_greeting(
         tools_used=[],timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},
     )
 
-# --- Lane VT, decisions 1-2: the step timer told before it is asked -----------
+# --- Lane VT, decisions 1-2 / lane VF, decisions 2-3: the step timer told before it is asked
 
-#: How often the server looks at the step timer: a timer's end is told within
-#: this of the moment it runs out.
+#: How often the server looks at the step timer when no notice is near.
 TIMER_NOTICE_TICK_SECONDS=1.0
+#: The watcher wakes for a notice's due moment itself (lane VF, decision 3:
+#: the screen within a second of due), never sleeping less than this.
+TIMER_NOTICE_MIN_WAIT_SECONDS=0.02
+#: A spoken notice's sentence is synthesized this long before it falls due,
+#: so that it is said the moment it is due (lane VF, decision 3).
+TIMER_NOTICE_PREPARE_SECONDS=15.0
+#: Prepared notice audio kept for a session, at most.
+TIMER_NOTICE_PREPARED_MAX=8
 #: The wall clock the step timer runs on (the curated session's time.time),
 #: for when the experimenter's words are heard (decision 5).
 _wall_clock=time.time
@@ -6806,6 +6965,10 @@ TIMER_NOTICE_SPEAK_WAIT_SECONDS=120.0
 #: A last minute's notice waits less: said later it would say the wrong time.
 TIMER_LAST_MINUTE_SPEAK_WAIT_SECONDS=30.0
 TIMER_NOTICE_POLL_SECONDS=0.2
+#: When the page never reports a notice's playback ended, the session is
+#: returned to listening this long after the audio's own length (lane VF,
+#: decision 2).
+TIMER_NOTICE_PLAYBACK_GRACE_SECONDS=2.0
 #: Turn ids the server's own notices are said under, beside the greeting's
 #: (2_000_000_000); user turns start at 1.
 _TIMER_NOTICE_TURN_BASE=2_000_000_100
@@ -6856,78 +7019,233 @@ def _record_timer_notice(
         log.warning("timer notice not recorded error=%s",type(exc).__name__)
 
 
+def _timer_key(notice:TimerNotice)->tuple[Any,...]:
+    """The timer a notice speaks of: its step, start and length."""
+
+    return (notice.step_id,notice.timer.get("started_at"),notice.timer.get("duration_seconds"))
+
+
+async def _show_timer_notice(
+    session:ListenerSession,sender:LockedSender,notice:TimerNotice,*,now:float|None=None,
+)->tuple[float,float]:
+    """Put a timer notice on the screen now; the moment it was shown.
+
+    The screen gets every notice at once, a timer's end with a sound. Lane
+    VF, decision 2: a timer's end shown while the same timer's last minute
+    is still waiting to be said takes that minute's voice away -- said after
+    the end it would say the wrong time -- and the screen keeps it. Returns
+    the moment on the timer's clock and on the session's.
+    """
+
+    current=_wall_clock() if now is None else now
+    await sender.text(
+        "protocol.timer.notice",configuration_id=session.accepted_configuration_id,
+        generation=session.generation,**notice.public_dict(),
+    )
+    if notice.kind=="timer_ended":
+        for pending_id,pending in list(session.timer_notice_pending.items()):
+            if pending.kind=="timer_last_minute" and _timer_key(pending)==_timer_key(notice):
+                session.timer_notice_superseded.add(pending_id)
+    if notice.spoken:
+        session.timer_notice_pending[notice.notice_id]=notice
+    log.info(
+        "timer notice shown notice_id=%s kind=%s due=%s delay_ms=%d",
+        notice.notice_id,notice.kind,notice.public_dict()["due_at"],
+        round((current-notice.due_at)*1000),
+    )
+    return current,session.clock()
+
+
 async def _deliver_timer_notice(
     session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
     notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
-    wait_seconds:float=TIMER_NOTICE_SPEAK_WAIT_SECONDS,
+    wait_seconds:float=TIMER_NOTICE_SPEAK_WAIT_SECONDS,now:float|None=None,
+    playback_sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
 )->bool:
-    """Show and maybe say a timer notice, then keep it in the record (decisions 1, 8)."""
+    """Show a timer notice, say it once the session is quiet, keep it in the record."""
 
-    said=await _show_and_say_timer_notice(
-        session,sender,curated,notice,sleep=sleep,wait_seconds=wait_seconds)
-    await asyncio.to_thread(_record_timer_notice,session,curated,notice,said=said)
-    return said
+    shown=await _show_timer_notice(session,sender,notice,now=now)
+    return await _say_and_record_timer_notice(
+        session,sender,curated,notice,sleep=sleep,wait_seconds=wait_seconds,shown=shown,
+        playback_sleep=playback_sleep)
 
 
-async def _show_and_say_timer_notice(
+async def _say_and_record_timer_notice(
     session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
     notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]],wait_seconds:float,
+    shown:tuple[float,float],playback_sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
 )->bool:
-    """Show a timer notice now; say it once the session is quiet (lane VT, decision 1).
+    """The part of a notice that waits: say it, then keep it in the record (decisions 1, 8)."""
 
-    The screen gets it at once, a timer's end with a sound. When "먼저 알려
-    주기" has it said, it waits for the experimenter to finish speaking and
-    any answer to finish playing -- nothing is cut off -- and is then said
-    the way the greeting is: one turn of the server's own, through the same
-    TTS, playback and echo memory as every answer, so its sound coming back
-    through the microphone is the agent's own voice and no command. Nothing
-    here changes the workflow. Returns whether it was said.
+    said_aloud=await _say_timer_notice(
+        session,sender,curated,notice,sleep=sleep,wait_seconds=wait_seconds,shown=shown,
+        playback_sleep=playback_sleep)
+    await asyncio.to_thread(_record_timer_notice,session,curated,notice,said=said_aloud)
+    return said_aloud
+
+
+def _begin_saying_timer_notice(
+    session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
+    notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]],wait_seconds:float,
+    shown:tuple[float,float],
+)->asyncio.Task:
+    """Hand a shown notice to its own task (lane VF, decision 2): the watcher never waits on it."""
+
+    task=asyncio.create_task(_say_and_record_timer_notice(
+        session,sender,curated,notice,sleep=sleep,wait_seconds=wait_seconds,shown=shown,
+        playback_sleep=sleep))
+    session.track_timer_notice_task(task)
+    return task
+
+
+def _prepare_timer_notice(
+    session:ListenerSession,curated:CuratedProtocolSession,notice:TimerNotice,
+)->asyncio.Task|None:
+    """Have a spoken notice's audio made before it falls due (lane VF, decision 3)."""
+
+    if (
+        not notice.spoken or notice.notice_id in session.timer_notice_audio
+        or notice.notice_id in session.timer_notice_preparing
+    ):
+        return None
+    session.timer_notice_preparing.add(notice.notice_id)
+    task=asyncio.create_task(_prepare_timer_notice_audio(session,curated,notice))
+    session.track_timer_notice_task(task)
+    return task
+
+
+async def _prepare_timer_notice_audio(
+    session:ListenerSession,curated:CuratedProtocolSession,notice:TimerNotice,
+)->None:
+    """Synthesize a notice's sentence ahead of its due moment, and keep the frames.
+
+    The sentence is the one that would be said now (a machine translation
+    named as such, "자동 번역입니다." first when not announced yet) without
+    announcing anything; when the sentence to be said differs at the time,
+    the audio is made again then. Nothing is said or shown here, but the
+    sentence is remembered for the echo check (lane XO, 6b) as at every
+    TTS call: from now on its audio exists.
+    """
+
+    try:
+        labelled=_label_machine_translation(session,curated,notice,commit=False)
+        started=session.clock()
+        try:
+            pcm=await asyncio.to_thread(synthesize,said(labelled.speech_text),"ko")
+        except Exception as exc:  # noqa: BLE001 - made again when it is due
+            log.warning(
+                "timer notice prepare tts failed notice_id=%s error=%s",
+                notice.notice_id,type(exc).__name__)
+            return
+        frames=frame_complete_audio(pcm)
+        if not frames:
+            return
+        audio=session.timer_notice_audio
+        while len(audio)>=TIMER_NOTICE_PREPARED_MAX:
+            audio.pop(next(iter(audio)))
+        audio[notice.notice_id]=(labelled.speech_text,frames)
+        log.info(
+            "timer notice prepared notice_id=%s kind=%s due=%s synth_ms=%d",
+            notice.notice_id,notice.kind,notice.public_dict()["due_at"],
+            round((session.clock()-started)*1000))
+    finally:
+        session.timer_notice_preparing.discard(notice.notice_id)
+
+
+async def _timer_notice_frames(
+    session:ListenerSession,notice:TimerNotice,
+)->tuple[list[bytes]|None,bool]:
+    """The audio of a notice about to be said, and whether it was made ahead.
+
+    Audio prepared for this notice is used when it was made from the very
+    sentence to be said now; otherwise the sentence is synthesized here.
+    None when it cannot be made.
+    """
+
+    prepared=session.timer_notice_audio.pop(notice.notice_id,None)
+    if prepared is not None and prepared[0]==notice.speech_text:
+        said(notice.speech_text)
+        return prepared[1],True
+    try:
+        pcm=await asyncio.to_thread(synthesize,said(notice.speech_text),"ko")
+    except Exception as exc:  # noqa: BLE001 - the screen keeps it
+        log.warning("timer notice tts failed error=%s",type(exc).__name__)
+        return None,False
+    return frame_complete_audio(pcm),False
+
+
+async def _say_timer_notice(
+    session:ListenerSession,sender:LockedSender,curated:CuratedProtocolSession,
+    notice:TimerNotice,*,sleep:Callable[[float],Awaitable[Any]],wait_seconds:float,
+    shown:tuple[float,float],playback_sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+)->bool:
+    """Say a shown timer notice once the session is quiet (lane VT, decision 1).
+
+    When "먼저 알려 주기" has it said, it waits for the experimenter to finish
+    speaking and any answer to finish playing -- nothing is cut off -- and is
+    then said the way the greeting is: one turn of the server's own, through
+    the same TTS, playback and echo memory as every answer, so its sound
+    coming back through the microphone is the agent's own voice and no
+    command. Lane VF, decision 2: the experimenter interrupting an answer
+    meanwhile (a new generation) does not lose the notice; it is given up
+    only when the session or the timer it names is gone, when the same
+    timer's end has come first, or when the wait runs out. Nothing here
+    changes the workflow. Returns whether it was said.
     """
 
     configuration_id=session.accepted_configuration_id
-    generation=session.generation
-    await sender.text(
-        "protocol.timer.notice",configuration_id=configuration_id,
-        generation=generation,**notice.public_dict(),
-    )
     if not notice.spoken:
         return False
+    shown_wall,shown_clock=shown
     deadline=session.clock()+wait_seconds
     frames:list[bytes]|None=None
-
-    def unchanged()->bool:
-        return bool(
-            session.active and session.accepted_configuration_id==configuration_id
-            and session.generation==generation
-        )
-
-    while True:
-        if not unchanged():
-            return False
-        if _session_quiet(session):
-            if frames is None:
-                # A stored machine translation is named as such, and "자동
-                # 번역입니다." said first once a session -- only now that it
-                # is about to be said.
-                notice=_label_machine_translation(session,curated,notice)
-                try:
-                    pcm=await asyncio.to_thread(synthesize,said(notice.speech_text),"ko")
-                except Exception as exc:  # noqa: BLE001 - the screen keeps it
-                    log.warning("timer notice tts failed error=%s",type(exc).__name__)
-                    return False
-                frames=frame_complete_audio(pcm)
-                if not frames:
-                    return False
-                # Speaking may have begun while it was synthesized.
-                continue
-            break
-        if session.clock()>=deadline:
-            log.info("timer notice not said notice_id=%s reason=not_quiet",notice.notice_id)
-            return False
-        await sleep(TIMER_NOTICE_POLL_SECONDS)
+    prepared=False
+    quiet_at:float|None=None
+    synth_ms=0
+    reason:str|None=None
+    try:
+        while True:
+            if not (session.active and session.accepted_configuration_id==configuration_id):
+                reason="session_changed"; break
+            if not curated.timer_notice_stands(notice):
+                reason="timer_changed"; break
+            if notice.notice_id in session.timer_notice_superseded:
+                reason="superseded_by_end"; break
+            if _session_quiet(session):
+                if quiet_at is None:
+                    quiet_at=session.clock()
+                if frames is None:
+                    # A stored machine translation is named as such, and "자동
+                    # 번역입니다." said first once a session -- only now that it
+                    # is about to be said.
+                    notice=_label_machine_translation(session,curated,notice)
+                    synth_started=session.clock()
+                    frames,prepared=await _timer_notice_frames(session,notice)
+                    synth_ms=round((session.clock()-synth_started)*1000)
+                    if frames is None:
+                        reason="tts_failed"; break
+                    if not frames:
+                        reason="no_audio"; break
+                    # Speaking may have begun while it was synthesized.
+                    continue
+                break
+            if session.clock()>=deadline:
+                reason="not_quiet"; break
+            await sleep(TIMER_NOTICE_POLL_SECONDS)
+    finally:
+        session.timer_notice_pending.pop(notice.notice_id,None)
+        session.timer_notice_superseded.discard(notice.notice_id)
+        session.timer_notice_audio.pop(notice.notice_id,None)
+    if reason is not None:
+        log.info(
+            "timer notice not said notice_id=%s kind=%s reason=%s",
+            notice.notice_id,notice.kind,reason)
+        return False
+    assert frames is not None
     session.refresh_cooldown()
     session.timer_notice_turns+=1
     turn_id=_TIMER_NOTICE_TURN_BASE+session.timer_notice_turns
+    generation=session.generation
     session.active_turn_id=turn_id
     session.turn_generations[turn_id]=generation
     session.turn_committed_at[turn_id]=session.clock()
@@ -6955,14 +7273,64 @@ async def _show_and_say_timer_notice(
         segment_count=1,input_frames=0,output_frames=len(frames),tools_used=[],
         timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},**fields,
     )
-    log.info("timer notice said notice_id=%s kind=%s turn_id=%s",notice.notice_id,notice.kind,turn_id)
+    # Lane VF, decision 3: how late after its due moment the notice is
+    # said, of which how long it waited for quiet and how long its audio took.
+    log.info(
+        "timer notice said notice_id=%s kind=%s turn_id=%s due=%s delay_ms=%d "
+        "waited_ms=%d synth_ms=%d prepared=%s",
+        notice.notice_id,notice.kind,turn_id,notice.public_dict()["due_at"],
+        round(((shown_wall-notice.due_at)+(session.clock()-shown_clock))*1000),
+        round(((quiet_at if quiet_at is not None else shown_clock)-shown_clock)*1000),
+        synth_ms,prepared,
+    )
+    _end_notice_playback_later(session,sender,turn_id,generation,frames,sleep=playback_sleep)
     return True
+
+
+def _end_notice_playback_later(
+    session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    frames:list[bytes],*,sleep:Callable[[float],Awaitable[Any]],
+)->None:
+    """Return the session to listening when the page's playback.ended never comes.
+
+    Lane VF, decision 2: a notice's playback is ended by the page as every
+    answer's is; should that report not arrive, the session would stay
+    "speaking" and every later notice would be left unsaid. So once the
+    audio's own length and a grace have passed -- on ``sleep``'s clock, the
+    wall clock in production -- the server ends the turn itself, unless the
+    page already did, the experimenter interrupted, or a barge-in check is
+    open (its outcome ends the turn).
+    """
+
+    audio_seconds=len(frames)*FRAME_MS/1000
+
+    async def end_when_over()->None:
+        await sleep(audio_seconds+TIMER_NOTICE_PLAYBACK_GRACE_SECONDS)
+        if session.state is not TurnState.AGENT_SPEAKING or session.active_turn_id!=turn_id:
+            return
+        if not session.playback_ended(turn_id):
+            return
+        log.info(
+            "timer notice playback ended by server turn_id=%s audio_ms=%d",
+            turn_id,round(audio_seconds*1000))
+        await sender.text(
+            "state.changed",state=session.state.value,turn_id=turn_id,
+            generation=generation,cooldown_ms=session.detector.config.cooldown_ms,
+        )
+
+    session.track_timer_notice_task(asyncio.create_task(end_when_over()),playback=True)
 
 
 async def _timer_notice_tick(
     session:ListenerSession,sender:LockedSender,*,now:float|None=None,
+    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
 )->tuple[TimerNotice,...]:
-    """Give the step timer's notices that are due (decisions 1-2), once each."""
+    """Give the step timer's notices that are due (decisions 1-2), once each.
+
+    Each is shown here, at once; saying it is handed to a task of its own
+    (lane VF, decision 2), so one notice waiting for the experimenter to
+    finish never holds back the watcher or the next notice.
+    """
 
     curated=session.curated_protocol_session
     if (
@@ -6970,25 +7338,52 @@ async def _timer_notice_tick(
         or not session.greeting_audio_ready
     ):
         return ()
-    notices=curated.due_timer_notices(now=now)
+    current=_wall_clock() if now is None else now
+    for upcoming in curated.upcoming_timer_notices(now=current,within=TIMER_NOTICE_PREPARE_SECONDS):
+        _prepare_timer_notice(session,curated,upcoming)
+    notices=curated.due_timer_notices(now=current)
     for notice in notices:
-        await _deliver_timer_notice(
-            session,sender,curated,notice,
+        shown=await _show_timer_notice(session,sender,notice,now=current)
+        _begin_saying_timer_notice(
+            session,sender,curated,notice,sleep=sleep,
             wait_seconds=(
                 TIMER_LAST_MINUTE_SPEAK_WAIT_SECONDS if notice.kind=="timer_last_minute"
                 else TIMER_NOTICE_SPEAK_WAIT_SECONDS
             ),
+            shown=shown,
         )
     return notices
 
 
-async def _watch_timer_notices(session:ListenerSession,sender:LockedSender)->None:
-    """For one voice connection: look at the step timer every second."""
+async def _settle_timer_notices(session:ListenerSession)->None:
+    """Wait for this session's notice tasks (for tests and an orderly end)."""
 
+    while session.timer_notice_tasks:
+        await asyncio.gather(*list(session.timer_notice_tasks),return_exceptions=True)
+
+
+def _timer_notice_wait(session:ListenerSession,now:float)->float:
+    """How long the watcher sleeps: to the next notice's due moment, a second at most."""
+
+    curated=session.curated_protocol_session
+    due=curated.next_timer_notice_due() if curated is not None else None
+    if due is None:
+        return TIMER_NOTICE_TICK_SECONDS
+    return min(TIMER_NOTICE_TICK_SECONDS,max(TIMER_NOTICE_MIN_WAIT_SECONDS,due-now))
+
+
+async def _watch_timer_notices(
+    session:ListenerSession,sender:LockedSender,*,
+    clock:Callable[[],float]|None=None,
+    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+)->None:
+    """For one voice connection: look at the step timer every second, and at each due moment."""
+
+    read_clock=_wall_clock if clock is None else clock
     while True:
-        await asyncio.sleep(TIMER_NOTICE_TICK_SECONDS)
+        await sleep(_timer_notice_wait(session,read_clock()))
         try:
-            await _timer_notice_tick(session,sender)
+            await _timer_notice_tick(session,sender,now=read_clock(),sleep=sleep)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - the next second tries again
@@ -8089,6 +8484,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # Lane VT, decision 5: after a long silence, an answer that is
             # not a command is led by where the run stands.
             plan=curated.with_return_summary(plan,silence=silence,now=_wall_clock())
+            # Lane VF, decision 8: a figure the source does not have is drawn
+            # (or, a photograph asked for, looked up) instead of asked again.
+            plan=_picture_fallback(session,curated,plan,transcript,turn_language)
             web_lookup_now=_web_lookup_wanted(session,curated,plan)
             if web_lookup_now:
                 plan=_web_lookup_words(curated,plan,transcript,turn_language)
@@ -8487,6 +8885,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # persistence is the reporting-acknowledgement gate. Re-read the
             # possibly replaced plan only after both so neither display nor
             # TTS can use pre-persistence success language.
+            # Lane VF, decision 9: whatever path wrote the sentences, no
+            # internal identifier reaches the screen or the voice.
+            plan=plan_without_internal_names(plan,turn_language)
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -10102,6 +10503,10 @@ async def voice_socket(websocket:WebSocket):
         timer_notices.cancel()
         try: await timer_notices
         except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
+        for notice_task in list(session.timer_notice_tasks|session.timer_notice_playback_tasks):
+            notice_task.cancel()
+            try: await notice_task
+            except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
         _unsubscribe_translations(session)
         session.stop()
         if workspace_context_token is not None:

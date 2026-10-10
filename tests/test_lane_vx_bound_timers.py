@@ -209,10 +209,15 @@ class TheSpokenTimerTests(_Catalog):
         self.assertEqual(status["name"], "최소 2시간")
         self.assertEqual(status["bound"], "minimum")
         session._timer_started_at -= 7201
-        for said in ("타이머 얼마 남았어?", "몇 분 지났어?"):
+        # Lane VF, decision 5: the time left asked says how long ago the
+        # minimum passed; the time gone keeps lane VX's words.
+        for said, words in (
+            ("타이머 얼마 남았어?", "1단계 최소 시간 2시간은 1초 전에 지났어요."),
+            ("몇 분 지났어?", "최소 시간 2시간이 지났어요."),
+        ):
             with self.subTest(said=said):
                 plan = self.turns.say(said)
-                self.assertEqual(plan.speech_text, "최소 시간 2시간이 지났어요.")
+                self.assertEqual(plan.speech_text, words)
                 self.assertNotIn("끝났", plan.speech_text)
                 self.assertNotIn("완료", plan.speech_text)
 
@@ -232,7 +237,8 @@ class TheSpokenTimerTests(_Catalog):
         self.assertIn("최대 2시간 타이머를 시작했습니다", plan.speech_text)
         session._timer_started_at -= 7201
         plan = self.turns.say("타이머 얼마 남았어?")
-        self.assertEqual(plan.speech_text, "최대 시간 2시간이 됐어요.")
+        # Lane VF, decision 5: with how long ago.
+        self.assertEqual(plan.speech_text, "3단계 최대 시간 2시간은 1초 전에 됐어요.")
 
     def test_an_exact_timer_is_said_as_before(self) -> None:
         session = self.turns.open(4, fixture=self.fixture)
@@ -243,8 +249,8 @@ class TheSpokenTimerTests(_Catalog):
         self.assertEqual(session.timer_status()["name"], "10분")
         session._timer_started_at -= 601
         plan = self.turns.say("타이머 얼마 남았어?")
-        self.assertEqual(
-            plan.speech_text, "현재 5단계 타이머가 이미 완료되었습니다. 다음 작업으로 진행할 수 있습니다.")
+        # Lane VF, decision 5: the timer as it stands, with how long ago it ended.
+        self.assertEqual(plan.speech_text, "5단계 10분 타이머는 1초 전에 끝났어요.")
 
     def test_how_long_says_the_kind(self) -> None:
         self.turns.open(0, fixture=self.fixture)

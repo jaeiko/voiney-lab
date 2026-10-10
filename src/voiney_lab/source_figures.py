@@ -137,9 +137,53 @@ _cache: collections.OrderedDict[tuple[str, int], tuple[_Stored, ...]] = (
 _cache_lock = threading.Lock()
 
 
+#: Whole pages rendered for "원본 쪽 보기" (lane VF, decision 8), by (source
+#: SHA-256, page); a handful is kept.
+_page_cache: collections.OrderedDict[tuple[str, int], bytes] = collections.OrderedDict()
+PAGE_CACHE_PAGES = 16
+#: The page image's resolution: enough to read, far below the OCR render.
+PAGE_IMAGE_DPI = 120
+
+
 def clear_source_figure_cache() -> None:
     with _cache_lock:
         _cache.clear()
+        _page_cache.clear()
+
+
+def page_image(source_pdf: Path | None, source_sha256: str | None, page_number: int) -> bytes | None:
+    """The source page as one PNG, or None when there is no such page.
+
+    Lane VF, decision 8: the link under a figure that used to show the
+    page's text now shows the page itself. Rendered by the one PDF engine in
+    its child process, kept in memory only, never labelled a figure.
+    """
+
+    if (
+        source_pdf is None or not isinstance(source_sha256, str) or len(source_sha256) != 64
+        or not isinstance(page_number, int) or isinstance(page_number, bool) or page_number <= 0
+    ):
+        return None
+    key = (source_sha256, page_number)
+    with _cache_lock:
+        cached = _page_cache.get(key)
+        if cached is not None:
+            _page_cache.move_to_end(key)
+            return cached
+    extraction = extract_protocol_pdf(Path(source_pdf))
+    if extraction.sha256 != source_sha256 or not 1 <= page_number <= len(extraction.pages):
+        return None
+    try:
+        png = engine.render_page_png(Path(source_pdf), page_number, dpi=PAGE_IMAGE_DPI)
+    except engine.PdfEngineError as exc:
+        log.warning("source page image: engine failed page=%s error=%s", page_number, type(exc).__name__)
+        return None
+    with _cache_lock:
+        _page_cache[key] = png
+        _page_cache.move_to_end(key)
+        while len(_page_cache) > PAGE_CACHE_PAGES:
+            _page_cache.popitem(last=False)
+    return png
 
 
 # --- geometry ----------------------------------------------------------------

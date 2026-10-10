@@ -2605,6 +2605,25 @@ _VALUE_QUESTION = re.compile(
     r"\bhow\s+(?:much|many|long|hot)\b|\btemperature\b|\bconcentration\b|\bvolume\b"
 )
 LANE_WV_PICTURE_KINDS = ("source_figure", "web_lookup", "drawn_diagram")
+#: The rules' words when the step's page has no figure (lane WV, decision 1);
+#: the server replaces them when it draws or looks the thing up instead
+#: (lane VF, decision 8).
+NO_FIGURE_WORDS = (
+    "이 단계 원문에는 그림이 없어요. 웹에서 찾아보려면 '웹에서 찾아봐', "
+    "도식이 필요하면 '그림으로 그려 줘'라고 말해 주세요."
+)
+#: A photograph asked for, as against a drawing: "사진", "실제 모습", "실물".
+_PHOTO_WORDS = re.compile(r"사진|실제\s*모습|실물|photo|photograph|picture\s+of|real\s+(?:image|look)", re.I)
+
+
+def photo_asked(transcript: str) -> bool:
+    """Whether the words ask for a photograph ("사진", "실제 모습") rather than a drawing.
+
+    Lane VF, decision 8: with no figure in the source, a photograph asked
+    for may come from the web (only then); anything else asked for is drawn.
+    """
+
+    return _PHOTO_WORDS.search(_utterance_key(transcript)) is not None
 
 
 def asked_about_values(transcript: str) -> bool:
@@ -3281,6 +3300,35 @@ _TIMER_QUERY_PATTERNS = (
         re.I,
     ),
     re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
+    # Lane VF, decision 5 (2026-10-10): the time left asked with no target
+    # named -- "지금 몇 분 남았어?", "얼마나 더 남았어?", "언제 끝나?", "몇 분 더
+    # 기다려야 해?" -- is the server's timer, whatever words lead it in. The
+    # whole utterance, so "몇 단계 남았어?" (steps), "아직 색이 남았어" (an
+    # observation) and "언제 끝난 걸로 봐?" (the endpoint) stay what they are.
+    re.compile(
+        r"^(?:(?:지금|현재|아직|그럼|그래서|그러면|이제|근데|그런데|이거|이게|이건|이\s*단계|타이머|타임|"
+        r"시간|시간이|시간은|남은\s*시간|남은\s*시간이|남은\s*시간은|한|좀|대충|대략)\s*)*"
+        r"(?:"
+        r"(?:끝나(?:려면|기까지|기\s*전까지)\s*)?"
+        r"(?:몇\s*(?:분|초|시간)|얼마|얼마나|얼마\s*만큼|얼마큼|얼마쯤|얼마\s*정도)\s*(?:이나|나|쯤|정도)?\s*(?:더\s*)?"
+        r"(?:남았|남아\s*있|남았는지|남은\s*거|남은\s*건|남은\s*건지|남지|남나|기다려야|기다리면|기다려|있어야|걸려|걸리|"
+        r"남았어야)"
+        r"|(?:더\s*)?기다려야\s*(?:해|하나|하니|돼|되나|되니|할까)"
+        r"|언제(?:쯤|까지)?\s*(?:끝나|끝날|끝나는|다\s*되|되는|돼)"
+        r"|끝나(?:려면|기까지|기\s*전까지)\s*(?:얼마나|몇\s*(?:분|초|시간)|얼마)"
+        r"|남은\s*시간(?:이|은)?\s*(?:얼마|얼마나|몇\s*(?:분|초|시간)|알려|말해)?"
+        r")"
+        r"(?:\s*(?:더|이나|나|쯤|정도))?"
+        r"\s*(?:해|하|돼|되|있|야|이야|예요|에요|어|어요|지|죠|니|나|나요|는지|을까|ㄹ까|거야|거예요|건가|건가요|"
+        r"습니까|주세요|줘|줄래|주라|요|노|노\?|나노|노요)*"
+        r"\s*[?？]*\s*$"
+    ),
+    re.compile(
+        r"^(?:how\s+(?:much\s+)?(?:longer|more\s+time)|how\s+much\s+time\s+(?:do\s+(?:i|we)\s+have\s+)?left|"
+        r"when\s+(?:does|will|is)\s+(?:it|the\s+timer|this)\s+(?:end|done|finish|be\s+done|be\s+over)|"
+        r"how\s+long\s+(?:is\s+)?(?:left|remaining|to\s+go)|how\s+much\s+longer\s+(?:do\s+(?:i|we)\s+)?(?:have\s+to\s+)?wait)\??$",
+        re.I,
+    ),
 )
 _PREVIEW_STEP_PATTERNS = (
     re.compile(r"^(?:(?P<label>[1-9][0-9]?)\s*단계|step\s*(?P<en>[1-9][0-9]?))\s*(?:미리\s*알려줘|미리보기|미리\s*설명|예습)$", re.I),
@@ -3646,6 +3694,118 @@ def _final_syllable_batchim(text: str) -> int | None:
             reading = _SINO_DIGITS[int(character)]
             return (ord(reading[-1]) - 0xAC00) % 28
     return None
+
+
+# --- Lane VF, decision 9 (2026-10-10): no internal identifier reaches the experimenter
+
+#: A step parameter's role in the experimenter's words (Korean, English).
+PARAMETER_ROLE_WORDS: dict[str, tuple[str, str]] = {
+    "incubation_temperature": ("배양 온도", "incubation temperature"),
+    "incubation_duration": ("배양 시간", "incubation duration"),
+    "agitation_speed": ("부드러운 교반 속도", "gentle-agitation speed"),
+    "solution_volume": ("사용 용액 부피", "solution volume"),
+    "concentration": ("용액 농도", "solution concentration"),
+    "vessel_capacity": ("튜브 용량", "tube capacity"),
+    "gel_piece_size": ("젤 조각 크기", "gel-piece size"),
+}
+#: Other identifiers that have reached a sentence, in the experimenter's words.
+INTERNAL_NAME_WORDS: dict[str, tuple[str, str]] = {
+    **PARAMETER_ROLE_WORDS,
+    "solution_a": ("용액 A", "solution A"),
+    "solution_b": ("용액 B", "solution B"),
+    "hplc_water": ("HPLC 물", "HPLC water"),
+    "gel_plug": ("젤 플러그", "gel plug"),
+    "stained_protein_band": ("염색된 단백질 밴드", "stained protein band"),
+    "formic_acid": ("포름산", "formic acid"),
+    "sds_page": ("SDS-PAGE", "SDS-PAGE"),
+    "mass_spectrometry": ("질량분석", "mass spectrometry"),
+    "current_step": ("현재 단계", "current step"),
+}
+#: A step fact's evidence id ("note_1", "expected_result_2") in words.
+_EVIDENCE_KIND_WORDS: dict[str, tuple[str, str]] = {
+    "current_step": ("현재 단계", "current step"),
+    "sub_action": ("세부 동작", "sub-action"),
+    "warning": ("주의", "warning"),
+    "note": ("주석", "note"),
+    "expected_result": ("예상 결과", "expected result"),
+    "material": ("준비물", "material"),
+    "equipment": ("장비", "equipment"),
+    "prerequisite": ("사전 준비", "prerequisite"),
+}
+
+
+def evidence_words(evidence_id: str, language: str = "ko") -> str:
+    """A fact's evidence id as the experimenter reads it: "현재 단계", "주석 1", "예상 결과 2".
+
+    Lane VF, decision 9. An id of an unknown shape is shown as "원문" alone
+    rather than as the identifier.
+    """
+
+    index = 0 if language == "ko" else 1
+    match = re.fullmatch(r"([a-z]+(?:_[a-z]+)*?)(?:_(\d+))?", evidence_id or "")
+    if match is not None:
+        words = _EVIDENCE_KIND_WORDS.get(match.group(1))
+        if words is not None:
+            number = match.group(2)
+            return f"{words[index]} {number}" if number else words[index]
+    return "원문" if language == "ko" else "source"
+
+
+#: An English snake_case identifier: two or more lower-case words joined by
+#: underscores, standing on its own ("agitation_speed", "step_timer_status").
+_INTERNAL_NAME = re.compile(r"(?<![A-Za-z0-9_/.:-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9_/-])")
+#: What follows an identifier that was pasted in with a particle ("…에 연결된").
+_NAME_PARTICLE = re.compile(r"^\s*(?:에|에서|으로|로|은|는|이|가|을|를|과|와|의)(?=\s|$)")
+
+
+def hide_internal_names(text: str, language: str = "ko") -> str:
+    """``text`` with every internal identifier put in the experimenter's words or taken out.
+
+    Lane VF, decision 9: a sentence the experimenter sees or hears never
+    carries an English snake_case identifier. A known one becomes its
+    Korean (or English) words; an unknown one is taken out with the particle
+    it was glued to, and the spaces are closed up. The protocol's own
+    text, values and units are not identifiers and are left as they are.
+    """
+
+    if not text or "_" not in text:
+        return text
+    index = 0 if language == "ko" else 1
+
+    def replace(match: re.Match[str]) -> str:
+        known = INTERNAL_NAME_WORDS.get(match.group(0))
+        if known is not None:
+            return known[index]
+        return "\x00"
+
+    scrubbed = _INTERNAL_NAME.sub(replace, text)
+    if "\x00" in scrubbed:
+        # An unknown identifier: gone with a particle glued to it; a
+        # Korean "X의 값" without X reads as "값".
+        scrubbed = re.sub(r"\x00 ?(?:에|에서|으로|로|은|는|이|가|을|를|과|와|의)?(?=\s|$|[.,;:!?)\]])", "", scrubbed)
+        scrubbed = scrubbed.replace("\x00", "")
+        scrubbed = re.sub(r"[ \t]{2,}", " ", scrubbed)
+        scrubbed = re.sub(r" +([.,;:!?)\]])", r"\1", scrubbed)
+        scrubbed = re.sub(r"\(\s*\)", "", scrubbed).strip()
+    return scrubbed
+
+
+def plan_without_internal_names(plan: Any, language: str = "ko") -> Any:
+    """A turn plan whose shown and spoken sentences carry no internal identifier.
+
+    Applied once at the server's output stage (lane VF, decision 9), for
+    every answering path alike. The plan's own ids and evidence are not
+    sentences and are left alone.
+    """
+
+    changes: dict[str, Any] = {}
+    for field in ("display_text", "speech_text", "primary_text"):
+        value = getattr(plan, field, None)
+        if isinstance(value, str):
+            cleaned = hide_internal_names(value, language)
+            if cleaned != value:
+                changes[field] = cleaned
+    return replace(plan, **changes) if changes else plan
 
 
 def josa(text: str, with_batchim: str, without: str) -> str:
@@ -6798,14 +6958,16 @@ def _display_contract(
 ) -> str:
     if language == "en":
         citations = ", ".join(
-            f"{evidence_id} · p.{page}"
+            f"{evidence_words(evidence_id, 'en')} · p.{page}"
             for evidence_id, page in zip(evidence_ids, source_pages)
         )
         source_suffix = f"\n\nSource · {citations}" if citations else ""
         return primary_text + source_suffix
     source = "\n\n".join(source_texts)
+    # Lane VF, decision 9: the evidence named in words ("현재 단계", "주석 1"),
+    # never by its id ("current_step", "note_1").
     citations = ", ".join(
-        f"{evidence_id} · 원문 p.{page}"
+        f"{evidence_words(evidence_id, 'ko')} · 원문 p.{page}"
         for evidence_id, page in zip(evidence_ids, source_pages)
     )
     label = "답변 · 한국어 참고 번역" if translated else "답변 · 한국어"
@@ -8278,6 +8440,91 @@ class CuratedProtocolSession:
             return (self._timer_notice(
                 "timer_last_minute", status, key, due_at=deadline - TIMER_LAST_MINUTE_SECONDS),)
         return ()
+
+    # --- Lane VF (2026-10-10), decisions 2-3: the notices still to come -------
+
+    def _timer_notice_schedule(
+        self,
+    ) -> tuple[tuple[Any, ...], float, tuple[tuple[str, float], ...]] | None:
+        """The standing timer's key and deadline, and its notices not given yet.
+
+        Each notice as ``(kind, due moment)`` on the timer's clock, in the
+        order they fall due. The conditions are ``due_timer_notices``'s;
+        nothing is marked given here. None when no timer stands.
+        """
+
+        if (
+            not self.active or self._experiment_ended()
+            or self._timer_started_at is None or self._timer_duration_seconds is None
+            or self._timer_step_index is None
+            or not 0 <= self._timer_step_index < len(self.fixture.steps)
+        ):
+            return None
+        key = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
+        deadline = self._timer_started_at + self._timer_duration_seconds
+        given = self._timer_notices_given
+        items: list[tuple[str, float]] = []
+        if (
+            self._timer_duration_seconds >= TIMER_LAST_MINUTE_FROM_SECONDS
+            and (key, "timer_last_minute") not in given
+        ):
+            items.append(("timer_last_minute", deadline - TIMER_LAST_MINUTE_SECONDS))
+        if (key, "timer_ended") not in given:
+            items.append(("timer_ended", deadline))
+        return key, deadline, tuple(items)
+
+    def next_timer_notice_due(self) -> float | None:
+        """When the step timer's next notice falls due, on its clock, or None.
+
+        Lane VF, decision 3: the server's watcher wakes for that moment
+        itself instead of finding the notice on its next look.
+        """
+
+        schedule = self._timer_notice_schedule()
+        if schedule is None or not schedule[2]:
+            return None
+        return min(due_at for _, due_at in schedule[2])
+
+    def upcoming_timer_notices(
+        self, now: float | None = None, *, within: float,
+    ) -> tuple[TimerNotice, ...]:
+        """The notices falling due within ``within`` seconds after ``now``.
+
+        Lane VF, decision 3: a notice's sentence is synthesized before it
+        falls due. Each is built from the timer as it will stand at its due
+        moment, so its words and id are the ones ``due_timer_notices`` gives
+        then; nothing is marked given, nothing changes.
+        """
+
+        schedule = self._timer_notice_schedule()
+        if schedule is None:
+            return ()
+        current_time = time.time() if now is None else now
+        key, _deadline, items = schedule
+        return tuple(
+            self._timer_notice(kind, self.timer_status(now=due_at), key, due_at=due_at)
+            for kind, due_at in items
+            if current_time < due_at <= current_time + within
+        )
+
+    def timer_notice_stands(self, notice: TimerNotice) -> bool:
+        """Whether the timer a notice speaks of is still the one standing.
+
+        Lane VF, decision 2: a notice waiting to be said is given up when
+        the experiment has ended or the timer it names is gone or replaced
+        (the step moved on, a new run, a timer started again). The
+        experimenter interrupting an answer is none of these.
+        """
+
+        if (
+            not self.active or self._experiment_ended()
+            or self._timer_started_at is None or self._timer_duration_seconds is None
+            or self._timer_step_index != notice.step_index
+            or self._timer_duration_seconds != notice.timer.get("duration_seconds")
+        ):
+            return False
+        started = datetime.fromtimestamp(self._timer_started_at, tz=timezone.utc).isoformat()
+        return started == notice.timer.get("started_at")
 
     def note_heard(self, now: float | None = None) -> float | None:
         """Mark the experimenter's words as heard now; the silence before them, in seconds.
@@ -10219,10 +10466,7 @@ class CuratedProtocolSession:
                 if caption and count == 1:
                     words += f" 원문 설명: {caption}"
                 return words
-            return (
-                "이 단계 원문에는 그림이 없어요. 웹에서 찾아보려면 '웹에서 찾아봐', "
-                "도식이 필요하면 '그림으로 그려 줘'라고 말해 주세요."
-            )
+            return NO_FIGURE_WORDS
         lead = "화면에 원문 그림을 띄웠어요. " if shown else ""
         if kind == "web_lookup":
             subject = self._picture_subject_words(intent, transcript)
@@ -12722,16 +12966,7 @@ class CuratedProtocolSession:
             )
             if re.search(token_pattern, key, re.I) is None:
                 continue
-            role_labels = {
-                "incubation_temperature": ("배양 온도", "incubation temperature"),
-                "incubation_duration": ("배양 시간", "incubation duration"),
-                "agitation_speed": ("부드러운 교반 속도", "gentle-agitation speed"),
-                "solution_volume": ("사용 용액 부피", "solution volume"),
-                "concentration": ("용액 농도", "solution concentration"),
-                "vessel_capacity": ("튜브 용량", "tube capacity"),
-                "gel_piece_size": ("젤 조각 크기", "gel-piece size"),
-            }
-            label = role_labels.get(binding.role, ("단계 조건", "step condition"))[
+            label = PARAMETER_ROLE_WORDS.get(binding.role, ("단계 조건", "step condition"))[
                 0 if language == "ko" else 1
             ]
             rendered = f"{binding.value} {binding.unit}"
@@ -12791,10 +13026,14 @@ class CuratedProtocolSession:
                 )
                 if len(candidates) == 1:
                     item = candidates[0]
+                    # Lane VF, decision 9: the role in the experimenter's
+                    # words, never the identifier ("agitation_speed").
+                    role_words = PARAMETER_ROLE_WORDS.get(
+                        requested_role, ("단계 조건", "step condition"))
                     answer = (
-                        f"현재 {frame.step_label}단계에서 {item.value} {item.unit}는 {requested_role}에 연결된 값입니다."
+                        f"현재 {frame.step_label}단계에서 {item.value} {item.unit}는 {role_words[0]}입니다."
                         if language == "ko" else
-                        f"In step {frame.step_label}, {item.value} {item.unit} is bound to {requested_role}."
+                        f"In step {frame.step_label}, {item.value} {item.unit} is the {role_words[1]}."
                     )
                     add(
                         ClaimTargetType.PARAMETER,item.parameter_id,"role",
@@ -17281,7 +17520,11 @@ class CuratedProtocolSession:
             rem = timer_info.get("remaining_seconds", 0)
             minutes = rem // 60
             seconds = rem % 60
-            if intent.intent_kind in {
+            if intent.intent_kind == "step_timer_status":
+                # Lane VF, decision 5: the time left asked with no target
+                # named is the server's timer as it stands.
+                response = self._remaining_answer(language)
+            elif intent.intent_kind in {
                 "semantic_step_timer_information", "step_timer_question",
             }:
                 if state == "running":
@@ -20336,6 +20579,50 @@ class CuratedProtocolSession:
         if reading.durations:
             return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있어요. 이 단계에는 확인된 타이머가 없어요."
         return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있고, 시간은 적혀 있지 않아요."
+
+    def _remaining_answer(self, language: str) -> str:
+        """"몇 분 남았어?", "언제 끝나?": the step timer as it stands (lane VF, decision 5).
+
+        Running: "3단계 타이머 13분 57초 남았어요." Run out: "3단계 15분 타이머는
+        2분 전에 끝났어요." (a minimum or a maximum in lane VX's words: "최소
+        시간 2시간은 2분 전에 지났어요.", "최대 시간 2시간은 2분 전에 됐어요.").
+        No timer running: "지금 도는 타이머는 없어요." and, where this step's
+        source states a time the server verified, that time. Never "PDF에서
+        확인할 수 없어요."; nothing changes.
+        """
+
+        step = self.fixture.steps[self.current_index]
+        timer = self.timer_status()
+        ko = language == "ko"
+        state = timer.get("state")
+        label = timer.get("step_label") or step.source_label
+        if state == "running":
+            left = _duration_words_long(int(timer.get("remaining_seconds", 0)), language)
+            return (
+                f"{label}단계 타이머 {left} 남았어요." if ko
+                else f"Step {label} timer: {left} left."
+            )
+        if state == "expired":
+            gone = max(0, int(timer.get("elapsed_seconds", 0)) - int(timer.get("duration_seconds", 0)))
+            ago = _duration_words_long(gone if gone < 60 else gone - gone % 60, language)
+            duration = int(timer.get("duration_seconds", 0))
+            bound = str(timer.get("bound") or "exact")
+            words = _duration_words_long(duration, language)
+            if not ko:
+                if bound == "minimum":
+                    return f"The Step {label} minimum time of {words} passed {ago} ago."
+                if bound == "maximum":
+                    return f"The Step {label} maximum time of {words} was reached {ago} ago."
+                return f"The Step {label} {self._timer_name(duration, bound, language)} timer ended {ago} ago."
+            if bound == "minimum":
+                return f"{label}단계 최소 시간 {josa(words, '은', '는')} {ago} 전에 지났어요."
+            if bound == "maximum":
+                return f"{label}단계 최대 시간 {josa(words, '은', '는')} {ago} 전에 됐어요."
+            return f"{label}단계 {self._timer_name(duration, bound, language)} 타이머는 {ago} 전에 끝났어요."
+        none = "지금 도는 타이머는 없어요." if ko else "No timer is running now."
+        if self.timer_seconds_for_step(self.current_index) or self.timer_choices_for_step(self.current_index):
+            return f"{none} {self._source_time_answer(language)}"
+        return none
 
     def _elapsed_answer(self, language: str) -> str:
         """"몇 분 지났어?": the running timer's time gone and left (lane PT, decision 3)."""
