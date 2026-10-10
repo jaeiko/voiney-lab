@@ -53,6 +53,12 @@
     .voice-calibration-actions button,.voice-calibration-controls button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);padding:.3rem .6rem;font-weight:750;cursor:pointer}
     .voice-calibration-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}
     .voice-calibration-auto{display:inline-flex;align-items:center;gap:.3rem;font-size:.8rem;font-weight:600}
+    /* Lane SP1 decision 4: the folded list of voices not heard. */
+    .ignored-speech{margin:0 0 .5rem;font-size:.76rem;color:var(--muted)}
+    .ignored-speech[hidden]{display:none}
+    .ignored-speech summary{cursor:pointer;font-weight:700}
+    .ignored-speech ul{margin:.3rem 0 0;padding-left:1.1rem;max-height:9rem;overflow:auto}
+    .ignored-speech li{margin:.1rem 0}
   </style>
 </head>
 <body>
@@ -360,6 +366,8 @@
         <h2 id="timeline-title">실험 대화 💬</h2>
         <p>음성 대화와 검색 참고 자료</p>
       </div>
+      <!-- Lane SP1 decision 4 (2026-10-10): a voice the server took for another person's leaves one small line here with the time -- no words, since nothing was transcribed -- folded away; it goes into no record and no report. -->
+      <details id="ignored-speech" class="ignored-speech" hidden><summary id="ignored-speech-summary">다른 사람 말로 보여 듣지 않은 말 0개</summary><ul id="ignored-speech-list"></ul></details>
       <div id="log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="세션 대화 기록"></div>
       <button id="new-chat-update" type="button" hidden aria-label="최신 메시지로 이동">새 메시지 ↑</button>
     </section>
@@ -1977,6 +1985,24 @@ function requestVoiceCalibration(action){
  return true;
 }
 function hideVoiceCalibration(){const box=$("voice-calibration");if(box)box.hidden=true;setText("voice-calibration-status","");}
+// Lane SP1 decision 4 (2026-10-10): each voice the server took for another
+// person's is one small line, "다른 사람 말로 보여 듣지 않았어요 · 14:32", in a
+// list folded under the conversation. There are no words to show (nothing
+// was transcribed) and nothing about it is kept beyond this page.
+const IGNORED_SPEECH_LINES_MAX=50;
+let ignoredSpeechCount=0;
+function clockWords(moment=new Date()){try{return new Intl.DateTimeFormat("ko-KR",{hour:"2-digit",minute:"2-digit",hour12:false}).format(moment);}catch(_){const h=String(moment.getHours()).padStart(2,"0"),m=String(moment.getMinutes()).padStart(2,"0");return `${h}:${m}`;}}
+function renderIgnoredSpeech(m){
+ const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return;
+ const box=$("ignored-speech"),list=$("ignored-speech-list");if(!box||!list)return;
+ ignoredSpeechCount+=1;
+ const item=document.createElement("li");item.textContent=`다른 사람 말로 보여 듣지 않았어요 · ${clockWords()}${m.during_playback===true?" · 답하는 중":""}`;
+ if(typeof list.prepend==="function")list.prepend(item);else list.appendChild(item);
+ while(list.children.length>IGNORED_SPEECH_LINES_MAX){const last=list.children[list.children.length-1];if(last?.remove)last.remove();else break;}
+ setText("ignored-speech-summary",`다른 사람 말로 보여 듣지 않은 말 ${ignoredSpeechCount}개`);
+ box.hidden=false;
+}
+function resetIgnoredSpeech(){ignoredSpeechCount=0;const box=$("ignored-speech"),list=$("ignored-speech-list");if(list)list.replaceChildren();if(box)box.hidden=true;setText("ignored-speech-summary","다른 사람 말로 보여 듣지 않은 말 0개");}
 function renderVoiceCalibration(m){
  const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return;
  if(m.state==="measured")voiceReferenceMeasured=true;
@@ -2395,7 +2421,7 @@ async function onMessage(e,generation,current){
   if(acceptedSessionConfiguration.experiment_session_id&&acceptedSessionConfiguration.experiment_session_version!==null){currentExperimentSessionId=acceptedSessionConfiguration.experiment_session_id;currentExperimentSessionVersion=acceptedSessionConfiguration.experiment_session_version;void loadExperimentSessions(currentExperimentSessionId);}
   renderResearchCapabilities(m.research_capabilities);renderLanguageState(serverInputLanguage==="auto"?"auto":"manual",serverInputLanguage);$("protocol-id").value=m.protocol_id||"";renderSelectedProtocolContext();$("protocol-revision").textContent=m.revision_id||"—";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id} · ${m.revision_id}`:"서버 확인 완료 · 프로토콜 미선택";
   try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
-  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=false;renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
+  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=false;resetIgnoredSpeech();renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
  }
  if(m.type==="session.greeting"){
   const accepted=acceptedSessionConfiguration,key=m.greeting_id;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof key!=="string"||greetingEvents.has(key))return;greetingEvents.add(key);activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=key;if(node.children?.[0])node.children[0].textContent="Session greeting";node.querySelector(".transcript").textContent="새 세션 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="세션 준비 안내 · 음성으로 중단 가능";renderState("THINKING");
@@ -2467,8 +2493,8 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.processing"&&sessionActive&&!cascadeTurnInterrupted(m)&&(activeTurn===null||currentCascadeMessage(m)))renderState("THINKING");
  if(m.type==="speech.start"){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;if(Number.isInteger(m.generation)){const key=turnBrowserKey(m.turn_id,generation),known=turnServerGenerations.get(key);if(known===undefined)turnServerGenerations.set(key,m.generation);provisionalTurns.set(key,m.generation);}resetVoiceProcessing();}
  if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
- // Lane SP1 decision 1: a voice taken for another person's -- no transcript, no turn; the page only takes the provisional card down.
- if(m.type==="speech.ignored"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive&&m.during_playback!==true)renderState("LISTENING");}
+ // Lane SP1 decisions 1 and 4: a voice taken for another person's -- no transcript, no turn; the provisional card comes down and one small line with the time goes into the folded list.
+ if(m.type==="speech.ignored"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);renderIgnoredSpeech(m);if(sessionActive&&m.during_playback!==true)renderState("LISTENING");}
  if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation));if(filler)showFillerStatus(node,filler);updateVoiceProcessing("recognized");}
  if(m.type==="turn.state")applyTurnState(m,generation);
  if((m.type==="reply.complete"||m.type==="reply.delta")&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&!interruptedTurns.has(m.turn_id)){const owner=turnNode(m.turn_id,generation);if(!owner.dataset.greetingOwner)renderStructuredReply(owner,m);}
