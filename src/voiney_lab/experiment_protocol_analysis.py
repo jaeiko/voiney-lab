@@ -9,6 +9,7 @@ optional persistence to the existing Slice 2 and Slice 3 contracts.
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import hashlib
 import re
@@ -1405,7 +1406,161 @@ def _matching_source_pages(
     )
 
 
-def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
+# --- What a page prints at its edges besides its body (lane EV2, decision 1) --
+
+#: Non-blank lines read at each end of a page text for its running lines.
+_EDGE_LINES = 12
+#: A page number in a form no step label takes: "- 106 -", "Page 8",
+#: "p. 8 of 17"; and "8 of 17" or "8/17", which must name this page or the
+#: page count.
+_DASHED_PAGE_NUMBER = re.compile(r"[-‐‑‒–—−]\s*[0-9]{1,4}\s*[-‐‑‒–—−]")
+_WORDED_PAGE_NUMBER = re.compile(
+    r"(?:page|p\.)\s*[0-9]{1,4}(?:\s*(?:of|/)\s*[0-9]{1,4})?", re.IGNORECASE
+)
+_PAGE_OF_PAGES = re.compile(r"([0-9]{1,4})\s*(?:of|/)\s*([0-9]{1,4})", re.IGNORECASE)
+_BARE_PAGE_NUMBER = re.compile(r"[0-9]{1,4}")
+_NUMBER_RUN = re.compile(r"\d+")
+
+
+def _line_key(line: str) -> str:
+    """A line as running lines are compared: whitespace runs as one space,
+    every number as "#" ("Methods and Protoc. 2018, 1, 19 5 of 9" is the same
+    line on page 5 and on page 6)."""
+
+    return _NUMBER_RUN.sub("#", " ".join(unicodedata.normalize("NFC", line).split()))
+
+
+@dataclass(frozen=True)
+class _PageEdges:
+    """What a document prints at the edges of its pages besides its body."""
+
+    #: Line keys (``_line_key``) of its running header and footer lines.
+    running: frozenset[str]
+    #: The pages that print their own number alone on a line at an edge.
+    numbered: frozenset[int]
+    page_count: int
+
+    def is_furniture(self, line: str, page_number: int) -> bool:
+        """Whether a line is blank, a running line or this page's number.
+
+        A number alone on its line is the page number only when it is this
+        page's number and a page next to it prints its own number the same
+        way: otherwise it may be a step number, which is body text.
+        """
+
+        text = " ".join(line.split())
+        if not text:
+            return True
+        if _BARE_PAGE_NUMBER.fullmatch(text):
+            return int(text) == page_number and bool(
+                {page_number - 1, page_number + 1} & self.numbered
+            )
+        if _DASHED_PAGE_NUMBER.fullmatch(text) or _WORDED_PAGE_NUMBER.fullmatch(text):
+            return True
+        of_pages = _PAGE_OF_PAGES.fullmatch(text)
+        if of_pages is not None:
+            return int(of_pages[1]) == page_number or int(of_pages[2]) == self.page_count
+        return _line_key(text) in self.running
+
+
+@functools.lru_cache(maxsize=32)
+def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
+    """The running lines and the numbered pages of a document.
+
+    A running header or footer -- a journal line, a "Cite as" line, a
+    copyright line -- is printed at the same place among the first or the
+    last twelve non-blank lines of at least half the pages (two at the
+    least), the numbers in it aside, and never between those edges: a label
+    the body repeats (protocols.io's "Note") moves from page to page and is
+    printed mid-page too. A line with a number and no letter is never one: a
+    step number or a value printed alone on its line repeats too (a line of
+    punctuation alone, FDA's "`", may be).
+    """
+
+    counts: dict[tuple[str, int, str], int] = {}
+    inside: set[str] = set()
+    numbered: set[int] = set()
+    for number, text in enumerate(page_texts, start=1):
+        lines = [line for line in (" ".join(item.split()) for item in text.splitlines()) if line]
+        if str(number) in {*lines[:_EDGE_LINES], *lines[-_EDGE_LINES:]}:
+            numbered.add(number)
+        places = {
+            *(("top", index, _line_key(line)) for index, line in enumerate(lines[:_EDGE_LINES])),
+            *(
+                ("bottom", index, _line_key(line))
+                for index, line in enumerate(reversed(lines[-_EDGE_LINES:]))
+            ),
+        }
+        for place in places:
+            if any(character.isalpha() for character in place[2]) or "#" not in place[2]:
+                counts[place] = counts.get(place, 0) + 1
+        inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
+    needed = max(2, -(-len(page_texts) // 2))
+    return _PageEdges(
+        running=(
+            frozenset(
+                key for (_, _, key), count in counts.items()
+                if count >= needed and key not in inside
+            )
+            if len(page_texts) > 1 else frozenset()
+        ),
+        numbered=frozenset(numbered),
+        page_count=len(page_texts),
+    )
+
+
+def _page_edges(extraction: ProtocolPdfExtraction) -> _PageEdges:
+    return _edges_of(tuple(page.text for page in extraction.pages))
+
+
+def _page_body_end(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+) -> int:
+    """Where the body of a page ends: before its footer band and before the
+    blank, running and page-number lines that close its text."""
+
+    end = (
+        page.bottom_band_offset
+        if page.bottom_band_offset is not None
+        else len(page.text)
+    )
+    edges = _page_edges(extraction)
+    lines = page.text[:end].splitlines(keepends=True)
+    while lines and edges.is_furniture(lines[-1], page.source_page_number):
+        end -= len(lines.pop())
+    return end
+
+
+def _page_body_start(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction, end: int
+) -> int:
+    """Where the body of a page starts: past the blank, running and
+    page-number lines that open its text (PMC8250384's p.8 opens with its
+    page number, its journal header and its copyright footer)."""
+
+    edges = _page_edges(extraction)
+    start = 0
+    for line in page.text[:end].splitlines(keepends=True):
+        if not edges.is_furniture(line, page.source_page_number):
+            break
+        start += len(line)
+    body = page.text[start:end]
+    return start + len(body) - len(body.lstrip())
+
+
+def _is_furniture_block(
+    block: Any, page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+) -> bool:
+    edges = _page_edges(extraction)
+    return all(
+        edges.is_furniture(line, page.source_page_number)
+        for line in block.text.splitlines() or ("",)
+    )
+
+
+def _page_end_span(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+) -> tuple[int, int] | None:
     """The span of ``page.text`` holding the body text that ends the page.
 
     The body is the page text before its running-footer band. With text
@@ -1415,13 +1570,15 @@ def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
     not in the body. Geometry decides; no word is read. Without blocks (an OCR
     page) it is the body itself, so the cut piece must end the body. None
     where no such span can be fixed, which refuses the cut statement.
+
+    Lane EV2 (decision 1): a block made only of running lines or the page
+    number is not body text, wherever the text layer prints it (PMC8250384
+    prints its copyright footer, drawn lowest, at the top of the page text),
+    and neither are those lines where they close the text of a page without
+    blocks.
     """
 
-    end = (
-        page.bottom_band_offset
-        if page.bottom_band_offset is not None
-        else len(page.text)
-    )
+    end = _page_body_end(page, extraction)
     body = page.text[:end]
     if not body.strip():
         return None
@@ -1430,6 +1587,8 @@ def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
         return start, len(body.rstrip())
     located: list[tuple[float, tuple[int, int]]] = []
     for block in page.blocks:
+        if _is_furniture_block(block, page, extraction):
+            continue
         spans = _canonical_match_spans(body, block.text, ocr_derived=page.ocr_derived)
         if len(spans) == 1:
             located.append((block.y1, spans[0]))
@@ -1465,23 +1624,26 @@ def _statement_across_page_end(
     rules). A statement found more than once across the join is refused, as
     an ambiguous one on a page is. Page text is never changed: the result is
     two spans, each of its own page's characters.
+
+    Lane EV2 (human decision 1, 2026-10-10): the pages' running header and
+    footer lines and their page-number lines are not between the two pieces
+    (``_PageEdges``) -- the next page's text opens after them, and this
+    page's ends before them -- and lane EB's boundary rules are read on each
+    page's own text. Only these two pages are joined, so a statement over
+    three pages is never found, and any other text between the two pieces
+    keeps the statement from being found.
     """
 
     if not 0 < page_number < extraction.page_count:
         return None
     page = extraction.pages[page_number - 1]
     following = extraction.pages[page_number]
-    tail = _page_end_span(page)
+    tail = _page_end_span(page, extraction)
     if tail is None:
         return None
-    next_end = (
-        following.bottom_band_offset
-        if following.bottom_band_offset is not None
-        else len(following.text)
-    )
-    next_body = following.text[:next_end]
-    next_start = len(next_body) - len(next_body.lstrip())
-    head = next_body[next_start:]
+    next_end = _page_body_end(following, extraction)
+    next_start = _page_body_start(following, extraction, next_end)
+    head = following.text[next_start:next_end]
     if not head.strip():
         return None
     first = page.text[tail[0] : tail[1]]
