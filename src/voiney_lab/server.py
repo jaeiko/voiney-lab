@@ -7122,14 +7122,16 @@ async def _prepare_timer_notice_audio(
     The sentence is the one that would be said now (a machine translation
     named as such, "자동 번역입니다." first when not announced yet) without
     announcing anything; when the sentence to be said differs at the time,
-    the audio is made again then. Nothing is said or shown here.
+    the audio is made again then. Nothing is said or shown here, but the
+    sentence is remembered for the echo check (lane XO, 6b) as at every
+    TTS call: from now on its audio exists.
     """
 
     try:
         labelled=_label_machine_translation(session,curated,notice,commit=False)
         started=session.clock()
         try:
-            pcm=await asyncio.to_thread(synthesize,labelled.speech_text,"ko")
+            pcm=await asyncio.to_thread(synthesize,said(labelled.speech_text),"ko")
         except Exception as exc:  # noqa: BLE001 - made again when it is due
             log.warning(
                 "timer notice prepare tts failed notice_id=%s error=%s",
