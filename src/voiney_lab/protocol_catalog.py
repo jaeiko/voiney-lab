@@ -28,9 +28,12 @@ from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
+    ProtocolAnalysisIncompleteError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolAnalysisModel,
+    ProtocolAnalysisTooManyPagesError,
     analyze_protocol_extraction,
+    check_analysis_page_count,
     prepare_protocol_analysis_request,
     verify_step_timers,
 )
@@ -464,6 +467,17 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
     "protocol_pdf_too_large": (
         "PDF 가 등록 한도보다 큽니다. 더 작은 파일로 다시 올리세요."
     ),
+    # Lane EV2, decision 4.
+    "protocol_analysis_incomplete": (
+        "원문에 번호가 붙은 단계가 분석 결과보다 훨씬 많아, 원문 일부만 읽은 분석으로 보고 "
+        "쓰지 않았습니다. '분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 "
+        "듭니다). 다시 해도 같으면 절차가 있는 쪽만 골라 PDF 로 만들어 올려 주세요."
+    ),
+    "protocol_analysis_too_many_pages": (
+        "한 번에 분석하는 문서는 60쪽까지입니다. 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 "
+        "만들어 다시 올려 주세요(쪽 범위를 고르는 화면은 아직 없습니다). 분석 모델은 "
+        "부르지 않았고 원문은 바뀌지 않습니다."
+    ),
 }
 _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
     "실패 원인을 확인한 뒤 '분석 다시 시도'를 누르세요. 다시 시도해도 원문은 "
@@ -577,6 +591,9 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "protocol_analysis_not_configured": "분석 모델 설정이 없어 분석을 시작하지 못했습니다.",
     "ocr_required": "글자 층이 없는 쪽의 OCR 글이 아직 없어 분석할 수 없습니다.",
     "protocol_pdf_too_large": "PDF 가 등록 한도보다 큽니다.",
+    "protocol_analysis_incomplete": "분석이 원문 단계를 다 담지 못했어요.",
+    "protocol_analysis_too_many_pages": (
+        "원문이 60쪽을 넘어 한 번에 분석하지 않았어요. 분석할 쪽 범위를 줄여야 합니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
     "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
     "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
@@ -1991,7 +2008,10 @@ class ProtocolCatalog:
                     "code": latest_failure,
                     "detail": latest_failure_detail,
                     "retryable": latest_failure
-                    not in {"ocr_required", "protocol_pdf_too_large"},
+                    not in {
+                        "ocr_required", "protocol_pdf_too_large",
+                        "protocol_analysis_too_many_pages",
+                    },
                     # Lane PA decision 4 (2026-10-06): the recovery guidance
                     # is the server's, in Korean.
                     "action": _ANALYSIS_RECOVERY_ACTIONS.get(
@@ -2732,6 +2752,14 @@ class ProtocolCatalog:
         )
         extraction = extract_protocol_pdf(source)
         extraction = self._extraction_for_analysis(revision, extraction)
+        try:
+            # Lane EV2, decision 4: a document longer than one analysis
+            # reads is refused here, before any model call, with the advice
+            # to upload the pages that hold the procedure.
+            check_analysis_page_count(extraction)
+        except ProtocolAnalysisTooManyPagesError as exc:
+            self._record_analysis_failure(revision, analysis_id, exc)
+            raise
         status = _analysis_state(extraction)
         if status == "ocr_required":
             raise ProtocolOcrRequiredError(
@@ -2868,6 +2896,12 @@ class ProtocolCatalog:
         }
         if truncated:
             failure_payload["truncated"] = True
+        if isinstance(exc, ProtocolAnalysisIncompleteError):
+            # Lane EV2, decision 4: the two counts the refusal compared.
+            failure_payload["step_counts"] = {
+                "source_numbered_steps": exc.source_numbered_steps,
+                "analysis_steps": exc.analysis_steps,
+            }
         evidence_failure = _safe_evidence_failure(
             exc,
             source_revision=_revision_id(revision.revision_number),

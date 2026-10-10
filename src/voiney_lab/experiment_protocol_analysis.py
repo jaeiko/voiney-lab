@@ -327,6 +327,25 @@ class ProtocolAnalysisInputTooLargeError(ProtocolAnalysisInputError):
     code = "protocol_analysis_input_too_large"
 
 
+class ProtocolAnalysisTooManyPagesError(ProtocolAnalysisInputError):
+    """A document longer than one analysis reads (lane EV2, decision 4)."""
+
+    code = "protocol_analysis_too_many_pages"
+
+
+class ProtocolAnalysisIncompleteError(ProtocolAnalysisError):
+    """An analysis far shorter than the source's numbered steps (lane EV2, decision 4)."""
+
+    code = "protocol_analysis_incomplete"
+
+    def __init__(
+        self, message: str, *, source_numbered_steps: int, analysis_steps: int
+    ) -> None:
+        super().__init__(message)
+        self.source_numbered_steps = source_numbered_steps
+        self.analysis_steps = analysis_steps
+
+
 class ProtocolAnalysisModelError(ProtocolAnalysisError):
     code = "protocol_analysis_model_failed"
 
@@ -1444,7 +1463,7 @@ _BARE_PAGE_NUMBER = re.compile(r"[0-9]{1,4}")
 _NUMBER_RUN = re.compile(r"\d+")
 #: A numbered line: a number of one to three digits ("3.", "3)", "(3)",
 #: "Step 3", "3") and then a word. "1.5 mL", "5.2 시약" and "25 °C" are not.
-#: Never a running line.
+#: Never a running line (decision 1); counted as a step (decision 4).
 _NUMBERED_LINE = re.compile(
     r"\s*(?:step\s*)?\(?([0-9]{1,3})(?:\.(?![0-9])|\)|:)?\s+(?=[^\W\d_])",
     re.IGNORECASE,
@@ -2981,6 +3000,106 @@ def validate_protocol_analysis_evidence(
     return verified_protocol, evidence_count
 
 
+# --- A hollow pass and a document too long to read at once (lane EV2, 4) --
+
+#: The longest document one analysis reads (human decision 2026-10-10). Lane
+#: AQ passed a 197-page document with 13 steps; nothing told the experimenter
+#: that most of it was never read.
+MAX_ANALYSIS_PAGES = 60
+#: A source with at least this many numbered steps, and an analysis with
+#: fewer than this share of them, is a hollow pass. Measured on the stored
+#: responses (lane EV2 report, decision 4): of the documents of at most 60
+#: pages that number at least 20 steps, every passing DS-2 analysis and lane
+#: AQ's medium and low ones kept at least 0.55 of the count; the hollow
+#: passes of lane AQ's Flash-Lite kept at most 0.16 (2 of 101, 7 of 61, 12
+#: of 75).
+HOLLOW_MIN_SOURCE_STEPS = 20
+HOLLOW_STEP_SHARE = 0.25
+#: Where the back matter begins: nothing after it is a procedure.
+_BACK_MATTER = re.compile(
+    r"(?:references?|bibliography|literature cited|참고\s*문헌)\s*:?", re.IGNORECASE
+)
+_CITATION_YEAR = re.compile(r"(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])")
+
+
+def count_source_numbered_steps(extraction: ProtocolPdfExtraction) -> int:
+    """How many numbered steps the source prints, counted from its text alone.
+
+    Lane EV2, decision 4. Lines are read in page order, without the pages'
+    running header, footer and page-number lines, up to a references
+    heading. A run is a line numbered 1 and the lines numbered 2, 3, ... that
+    follow it in order; a run of at least two counts, unless most of its lines
+    hold a year (a numbered citation list). The count is generous -- a
+    numbered materials list counts too -- so a short analysis is held to only
+    a small share of it.
+    """
+
+    edges = _page_edges(extraction)
+    marks: list[tuple[int, str]] = []
+    for page in extraction.pages:
+        lines = page.text.splitlines()
+        stop = False
+        for line in lines:
+            if _BACK_MATTER.fullmatch(" ".join(line.split())):
+                stop = True
+                break
+            if edges.is_furniture(line, page.source_page_number):
+                continue
+            match = _NUMBERED_LINE.match(line)
+            if match is not None:
+                marks.append((int(match[1]), line))
+        if stop:
+            break
+    runs: list[list[str]] = []
+    current: list[tuple[int, str]] = []
+    for number, line in marks:
+        if current and number == current[-1][0] + 1:
+            current.append((number, line))
+        elif number == 1:
+            if len(current) >= 2:
+                runs.append([item for _, item in current])
+            current = [(number, line)]
+    if len(current) >= 2:
+        runs.append([item for _, item in current])
+    return sum(
+        len(run) for run in runs
+        if sum(1 for line in run if _CITATION_YEAR.search(line)) * 2 <= len(run)
+    )
+
+
+def hollow_analysis_check(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction
+) -> dict[str, object]:
+    """Whether an analysis holds far fewer steps than the source numbers.
+
+    Hollow when the source prints at least ``HOLLOW_MIN_SOURCE_STEPS``
+    numbered steps and the analysis has fewer than ``HOLLOW_STEP_SHARE`` of
+    them. A source that numbers fewer steps is never judged so: an
+    unnumbered procedure has nothing to count against.
+    """
+
+    source_steps = count_source_numbered_steps(extraction)
+    analysis_steps = sum(len(section.steps) for section in protocol.sections)
+    return {
+        "source_numbered_steps": source_steps,
+        "analysis_steps": analysis_steps,
+        "hollow": (
+            source_steps >= HOLLOW_MIN_SOURCE_STEPS
+            and analysis_steps < HOLLOW_STEP_SHARE * source_steps
+        ),
+    }
+
+
+def check_analysis_page_count(extraction: ProtocolPdfExtraction) -> None:
+    """Refuse a document longer than one analysis reads, before any model call."""
+
+    if extraction.page_count > MAX_ANALYSIS_PAGES:
+        raise ProtocolAnalysisTooManyPagesError(
+            f"Protocol has {extraction.page_count} pages; one analysis reads at "
+            f"most {MAX_ANALYSIS_PAGES}."
+        )
+
+
 def analyze_protocol_extraction(
     extraction: ProtocolPdfExtraction,
     model: ProtocolAnalysisModel,
@@ -2988,6 +3107,7 @@ def analyze_protocol_extraction(
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     max_input_bytes: int = MAX_SINGLE_PASS_INPUT_BYTES,
 ) -> ProtocolAnalysisDraft:
+    check_analysis_page_count(extraction)
     request = prepare_protocol_analysis_request(
         extraction,
         capability_policy=capability_policy,
@@ -3006,11 +3126,19 @@ def analyze_protocol_extraction(
         raise ProtocolAnalysisModelError(
             "Protocol analysis model request failed."
         ) from exc
-    return parse_protocol_analysis_response(
+    draft = parse_protocol_analysis_response(
         raw_response,
         extraction,
         capability_policy=capability_policy,
     )
+    hollow = hollow_analysis_check(draft.protocol, extraction)
+    if hollow["hollow"]:
+        raise ProtocolAnalysisIncompleteError(
+            "Protocol analysis holds far fewer steps than the source numbers.",
+            source_numbered_steps=int(hollow["source_numbered_steps"]),
+            analysis_steps=int(hollow["analysis_steps"]),
+        )
+    return draft
 
 
 def analyze_protocol_pdf(
