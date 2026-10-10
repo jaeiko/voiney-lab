@@ -185,6 +185,12 @@
               </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
               <!-- Lane SP1 decision 1: measure the wearer's voice again (the same as saying "목소리 다시 맞춰 줘"); the measurement is kept for this session only. -->
               <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button><label class="voice-calibration-auto"><input id="voice-calibration-at-start" type="checkbox" checked> 세션 시작 때 한 번</label></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
+              <!-- Lane SP1 decision 2: the browser's automatic gain control would lift a quieter (farther) voice toward the wearer's level and undo the measurement, so it is turned off on the microphone track once the voice is being measured (the default); the echo cancellation and noise suppression stay on. -->
+              <label class="control-field"><span>마이크 자동 음량 조절</span><select id="agc-mode" aria-label="마이크 자동 음량 조절" aria-describedby="agc-status">
+                <option value="calibrated" selected>목소리를 맞추면 끔 (기본)</option>
+                <option value="on">항상 켬 · 작은 소리도 키움</option>
+                <option value="off">항상 끔</option>
+              </select><small id="agc-status" class="mic-device-status" role="status"></small></label>
             </div>
             <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
               <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
@@ -1651,10 +1657,13 @@ function currentMicTrack(){return micStream?.getAudioTracks?.()[0]||micStream?.g
 async function openMicStream(){
  const supported=navigator.mediaDevices.getSupportedConstraints?.()||null,audioConstraints={channelCount:1};
  for(const name of ["echoCancellation","noiseSuppression","autoGainControl"]){if(!supported||supported[name]===true)audioConstraints[name]=true;}
+ // Lane SP1 decision 2: "항상 끔" opens the microphone without automatic gain control; "목소리를 맞추면 끔" turns it off on the track once the voice is measured (applyAutoGainControl below).
+ if("autoGainControl" in audioConstraints&&agcMode()==="off")audioConstraints.autoGainControl=false;
  if(readStoredMicDevice()){const deviceId=chosenMicDeviceId(await listMicDevices());if(deviceId)audioConstraints.deviceId={exact:deviceId};}
  return {stream:await navigator.mediaDevices.getUserMedia({audio:audioConstraints}),audioConstraints};
 }
 function reportMicSettings(stream,audioConstraints){
+ micAudioConstraints=audioConstraints;
  const names=["echoCancellation","noiseSuppression","autoGainControl"],track=stream.getAudioTracks?.()[0]||stream.getTracks?.()[0]||null,settings=track?.getSettings?.()||{},actual=Object.fromEntries(names.map(name=>[name,typeof settings[name]==="boolean"?settings[name]:null]));
  sendControl("client.audio_constraints",{requested:Object.fromEntries(names.map(name=>[name,audioConstraints[name]===true])),actual});
  setText("audio-processing-capability",actual.echoCancellation===true?"에코 제거 확인":actual.echoCancellation===false?"에코 제거 꺼짐 · 헤드폰 권장":"에코 제거 확인 불가 · 헤드폰 권장");
@@ -1663,6 +1672,30 @@ function reportMicSettings(stream,audioConstraints){
  // body, with what to do, instead of only in the developer chip.
  const echoNotice=$("audio-echo-notice");if(echoNotice){echoNotice.hidden=actual.echoCancellation===true;echoNotice.textContent=actual.echoCancellation===true?"":"이 마이크는 에코 제거가 켜지지 않아 스피커 소리가 내 말로 들어갈 수 있습니다. 헤드폰을 쓰거나 스피커 소리를 줄이세요.";}
  const name=track?.label;setText("mic-device-status",name?`사용 중 · ${name}`:"");
+ renderAgcStatus(actual.autoGainControl);
+}
+// Lane SP1 decision 2 (2026-10-10): the microphone's automatic gain control
+// is turned off on the open track while the wearer's voice is measured and
+// after -- it would lift a quieter voice toward the wearer's level -- and
+// turned back on only when the measurement was skipped. "항상 켬" and "항상
+// 끔" leave it as the name says. The track is not reopened (lane U2), and
+// the browser is told again what was asked and what it does.
+const AGC_MODE_STORAGE_KEY="voiney-lab.agc-mode";
+let micAudioConstraints={},voiceReferenceMeasured=false;
+function agcMode(){const select=$("agc-mode"),value=select?.value;if(["calibrated","on","off"].includes(value))return value;try{const stored=localStorage.getItem(AGC_MODE_STORAGE_KEY);return ["calibrated","on","off"].includes(stored)?stored:"calibrated";}catch(_){return "calibrated";}}
+function storeAgcMode(value){try{localStorage.setItem(AGC_MODE_STORAGE_KEY,value);}catch(_){}}
+function renderAgcStatus(actual){const mode=agcMode();setText("agc-status",actual===true?(mode==="calibrated"?"켜짐 · 목소리를 맞추면 꺼요":"켜짐"):actual===false?(mode==="calibrated"&&!voiceReferenceMeasured?"꺼짐 · 목소리 맞추는 중":"꺼짐"):"브라우저가 알려 주지 않음");}
+async function applyAutoGainControl(on){
+ const track=currentMicTrack();if(!track||typeof track.applyConstraints!=="function"||!("autoGainControl" in micAudioConstraints))return false;
+ if(micAudioConstraints.autoGainControl===on)return true;
+ try{await track.applyConstraints({autoGainControl:on});}catch(_){setText("agc-status","자동 음량 조절을 바꾸지 못했어요 · 이 마이크는 지원하지 않아요");return false;}
+ if(micStream)reportMicSettings(micStream,{...micAudioConstraints,autoGainControl:on});
+ return true;
+}
+function agcForCalibration(state){
+ if(agcMode()!=="calibrated")return;
+ if(state==="prompting"||state==="prompted"||state==="measured")void applyAutoGainControl(false);
+ else if(state==="skipped"&&!voiceReferenceMeasured)void applyAutoGainControl(true);
 }
 function onMicTrackEnded(){scheduleMicReconnect("ended");}
 function watchMicTrack(){
@@ -1946,6 +1979,8 @@ function requestVoiceCalibration(action){
 function hideVoiceCalibration(){const box=$("voice-calibration");if(box)box.hidden=true;setText("voice-calibration-status","");}
 function renderVoiceCalibration(m){
  const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return;
+ if(m.state==="measured")voiceReferenceMeasured=true;
+ agcForCalibration(m.state);
  const box=$("voice-calibration"),sentence=$("voice-calibration-sentence");
  if(m.state==="prompting"||m.state==="prompted"){
   if(sentence)sentence.textContent=normalizePresentationText(m.sentence||"");
@@ -2387,7 +2422,7 @@ async function onMessage(e,generation,current){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
   pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
  }
- if(m.type==="session.stopped"){hideVoiceCalibration();sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
+ if(m.type==="session.stopped"){hideVoiceCalibration();voiceReferenceMeasured=false;sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);}
  if(m.type==="session.language_confirmation_required"){$("language-status").textContent="Language confirmation required";}
@@ -2488,6 +2523,8 @@ $("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibrat
 $("voice-calibration-skip")?.addEventListener("click",()=>{requestVoiceCalibration("skip");});
 $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCalibrationAtStart(event.target.checked);});
 try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
+$("agc-mode")?.addEventListener("change",event=>{storeAgcMode(event.target.value);const on=event.target.value==="on"||(event.target.value==="calibrated"&&!voiceReferenceMeasured);void applyAutoGainControl(on);});
+try{const agc=$("agc-mode"),stored=localStorage.getItem(AGC_MODE_STORAGE_KEY);if(agc&&["calibrated","on","off"].includes(stored))agc.value=stored;}catch(_){}
 globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
 </script>
 </body>
