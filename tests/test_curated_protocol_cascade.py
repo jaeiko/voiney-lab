@@ -68,7 +68,7 @@ FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analys
 PROVENANCE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 EXPECTED_FIXTURE_SHA256 = "69517f0fe629d0e4dc356c78ff3d407ed0f510de24d325e1575b0adff998ee3c"
-EXPECTED_SCHEMA_SHA256 = "1048bb59a4b300c650af7f664560793aa53e52c93496cafd6a4dff8866d82334"
+EXPECTED_SCHEMA_SHA256 = "2533d564c54332d84ef3b7fdadb0d0010110fb0130a6772d907738a7482e07c9"
 
 
 #: Lane VX, decision 1: a completion that names its step ("현재 단계를

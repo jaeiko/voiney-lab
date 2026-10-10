@@ -500,3 +500,19 @@ Code from before this version refuses a payload whose fixed repetition has
 and refuses to load the curated development fixture under the re-pinned
 provenance ("Development protocol fixture schema identity is unsupported.");
 going back means restoring the older provenance file with the older code.
+
+## Lane EV2 (2026-10-10): the provider may state a statement's second page
+
+No schema change and no stored row rewritten. Since lane EV2's decision 5 the
+analysis response schema asks for `SourceEvidence.continued_on_page_number`
+and `continued_excerpt` (lane PA's fields, until now filled by the server
+only), and the prompt asks a model to split a quote that runs onto the next
+page into them. What a model writes there is kept only when the two pieces
+are found joined across the page end, as when the server splits a joined
+quote itself (decision 1); stored analyses already carry these fields, so
+nothing about reading them changes.
+
+The response schema changed again, so the curated development fixture's
+pinned schema identity was re-pinned once more (the same three places as for
+decision 3). Code from before lane EV2 refuses the re-pinned provenance, as
+described above.

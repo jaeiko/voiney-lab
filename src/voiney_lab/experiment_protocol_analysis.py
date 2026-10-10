@@ -59,7 +59,12 @@ then copy source_excerpt verbatim as one contiguous passage from that same
 extracted page. Use the shortest exact contiguous passage that fully supports
 the claim. Never cut an excerpt at a line-end hyphen or inside a word: quote
 through to where the word ends, taking in the next line of the page when the
-word continues there. Only source-layout whitespace that the downstream
+word continues there. When a passage you quote runs past the end of its page
+onto the next page, put the part on the cited page in source_excerpt and the
+part that opens the next page in continued_excerpt, with
+continued_on_page_number set to that next page's number. Leave the running
+header, footer and page number out of both parts, and never continue onto a
+third page. Only source-layout whitespace that the downstream
 validator normalizes may differ; every non-whitespace character must match
 the cited page. This applies to protocol, section, step, material, equipment,
 prerequisite, warning, note, expected-result, and image-related evidence
@@ -80,6 +85,13 @@ example "3 Wash..." or "3. Wash..."), and set source_label to that number
 without a trailing period. When the source prints no step numbers, leave
 source_label empty ("") for every step; never use a heading, a bullet, a
 section title, or a number the page does not print as a step label.
+For every fixed_range_repetition set repeat_count_kind to how the source
+states the count: "total" when it gives the number of runs including the
+first ("a total of 4 washes", "three cycles", "a second time"), "additional"
+when it gives the runs after the first ("once more", "one more time",
+"Repeat steps 5 and 6", "한 번 더"), and "ambiguous" when the wording reads
+either way ("Repeat steps 36-38 twice"); set repeat_count to the number as
+the source states it.
 metadata.evidence is always required: quote the protocol title from the page
 where it is printed. When a metadata field is printed on a different page than
 metadata.evidence,
@@ -152,10 +164,13 @@ _CONSTRUCT_NAMES = {
 }
 
 
-#: SourceEvidence fields the server fills after verification (lane PA).
+#: SourceEvidence fields of a statement the page cuts at its end (lane PA).
+#: The server fills them when it finds a quote across the page end; since
+#: lane EV2 (decision 5) a provider may state them too, and they are kept
+#: only when the two pieces are found joined across the page end.
 _CONTINUATION_FIELDS = ("continued_on_page_number", "continued_excerpt")
 #: SourceEvidence fields never asked of a provider.
-_SERVER_EVIDENCE_FIELDS = frozenset(("evidence_segment_ids", *_CONTINUATION_FIELDS))
+_SERVER_EVIDENCE_FIELDS = frozenset(("evidence_segment_ids",))
 #: ExperimentProtocol fields never asked of a provider.
 _SERVER_PROTOCOL_FIELDS = frozenset(("label_dispositions", "cleared_fields"))
 
@@ -243,8 +258,8 @@ class _DomainResponseSchemaBuilder:
                 # it to invent an identity, which is the opposite of why they
                 # exist, so this field is withheld exactly as the extraction
                 # record is withheld from ProtocolMetadata above. The second
-                # page of a statement cut at a page end is the server's
-                # finding (lane PA), withheld for the same reason.
+                # page of a statement cut at a page end is asked for (lane
+                # EV2, decision 5) and checked like the server's own finding.
                 record_fields = tuple(
                     field
                     for field in record_fields
@@ -859,11 +874,9 @@ class _DomainDecoder:
         record_fields = {field.name: field for field in fields(record_type)}
         if record_type is domain.ProtocolMetadata:
             record_fields.pop("pdf")
-        if record_type is domain.SourceEvidence:
-            # A provider cannot name the second page of a statement; the
-            # server finds it (lane PA).
-            for name in _CONTINUATION_FIELDS:
-                record_fields.pop(name)
+        # The second page of a statement a provider may name (lane EV2,
+        # decision 5): _verified_continuation keeps it only when the two
+        # pieces continue each other across the page end.
         if record_type is domain.ExperimentProtocol:
             # Nor say which fields were emptied (lane EV2, decision 2).
             record_fields.pop("cleared_fields")

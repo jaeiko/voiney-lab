@@ -456,16 +456,12 @@ class ProtocolAnalysisSchemaTests(unittest.TestCase):
                     # provider for one would invite it to invent an identity,
                     # so the field is withheld from the provider schema for
                     # the same reason the extraction record is. The second
-                    # page of a statement cut at a page end is the server's
-                    # finding too (lane PA, decision 3).
+                    # page of a statement cut at a page end is asked for
+                    # since lane EV2 (decision 5) and checked by the server.
                     record_fields = tuple(
                         field
                         for field in record_fields
-                        if field.name not in {
-                            "evidence_segment_ids",
-                            "continued_on_page_number",
-                            "continued_excerpt",
-                        }
+                        if field.name not in {"evidence_segment_ids"}
                     )
                 expected_names = {field.name for field in record_fields}
                 expected_required = {

@@ -212,9 +212,10 @@ class SourceEvidence:
     evidence_segment_ids: tuple[str, ...] = ()
     #: A statement the page cuts at its end and the next page finishes (lane
     #: PA, human decision 3, 2026-10-06): the next page and its own text that
-    #: completes the statement. Server-computed after the sentence was found
-    #: in the two pages joined; never taken from a provider. None for a
-    #: statement on one page.
+    #: completes the statement. Kept only after the sentence was found in the
+    #: two pages joined, whether the server split a quote across the page end
+    #: (lane EV2, decision 1) or the provider stated the second page itself
+    #: (decision 5). None for a statement on one page.
     continued_on_page_number: int | None = None
     continued_excerpt: str | None = None
 
