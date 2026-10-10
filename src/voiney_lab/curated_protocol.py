@@ -8279,6 +8279,91 @@ class CuratedProtocolSession:
                 "timer_last_minute", status, key, due_at=deadline - TIMER_LAST_MINUTE_SECONDS),)
         return ()
 
+    # --- Lane VF (2026-10-10), decisions 2-3: the notices still to come -------
+
+    def _timer_notice_schedule(
+        self,
+    ) -> tuple[tuple[Any, ...], float, tuple[tuple[str, float], ...]] | None:
+        """The standing timer's key and deadline, and its notices not given yet.
+
+        Each notice as ``(kind, due moment)`` on the timer's clock, in the
+        order they fall due. The conditions are ``due_timer_notices``'s;
+        nothing is marked given here. None when no timer stands.
+        """
+
+        if (
+            not self.active or self._experiment_ended()
+            or self._timer_started_at is None or self._timer_duration_seconds is None
+            or self._timer_step_index is None
+            or not 0 <= self._timer_step_index < len(self.fixture.steps)
+        ):
+            return None
+        key = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
+        deadline = self._timer_started_at + self._timer_duration_seconds
+        given = self._timer_notices_given
+        items: list[tuple[str, float]] = []
+        if (
+            self._timer_duration_seconds >= TIMER_LAST_MINUTE_FROM_SECONDS
+            and (key, "timer_last_minute") not in given
+        ):
+            items.append(("timer_last_minute", deadline - TIMER_LAST_MINUTE_SECONDS))
+        if (key, "timer_ended") not in given:
+            items.append(("timer_ended", deadline))
+        return key, deadline, tuple(items)
+
+    def next_timer_notice_due(self) -> float | None:
+        """When the step timer's next notice falls due, on its clock, or None.
+
+        Lane VF, decision 3: the server's watcher wakes for that moment
+        itself instead of finding the notice on its next look.
+        """
+
+        schedule = self._timer_notice_schedule()
+        if schedule is None or not schedule[2]:
+            return None
+        return min(due_at for _, due_at in schedule[2])
+
+    def upcoming_timer_notices(
+        self, now: float | None = None, *, within: float,
+    ) -> tuple[TimerNotice, ...]:
+        """The notices falling due within ``within`` seconds after ``now``.
+
+        Lane VF, decision 3: a notice's sentence is synthesized before it
+        falls due. Each is built from the timer as it will stand at its due
+        moment, so its words and id are the ones ``due_timer_notices`` gives
+        then; nothing is marked given, nothing changes.
+        """
+
+        schedule = self._timer_notice_schedule()
+        if schedule is None:
+            return ()
+        current_time = time.time() if now is None else now
+        key, _deadline, items = schedule
+        return tuple(
+            self._timer_notice(kind, self.timer_status(now=due_at), key, due_at=due_at)
+            for kind, due_at in items
+            if current_time < due_at <= current_time + within
+        )
+
+    def timer_notice_stands(self, notice: TimerNotice) -> bool:
+        """Whether the timer a notice speaks of is still the one standing.
+
+        Lane VF, decision 2: a notice waiting to be said is given up when
+        the experiment has ended or the timer it names is gone or replaced
+        (the step moved on, a new run, a timer started again). The
+        experimenter interrupting an answer is none of these.
+        """
+
+        if (
+            not self.active or self._experiment_ended()
+            or self._timer_started_at is None or self._timer_duration_seconds is None
+            or self._timer_step_index != notice.step_index
+            or self._timer_duration_seconds != notice.timer.get("duration_seconds")
+        ):
+            return False
+        started = datetime.fromtimestamp(self._timer_started_at, tz=timezone.utc).isoformat()
+        return started == notice.timer.get("started_at")
+
     def note_heard(self, now: float | None = None) -> float | None:
         """Mark the experimenter's words as heard now; the silence before them, in seconds.
 
