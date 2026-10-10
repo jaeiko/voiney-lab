@@ -42,11 +42,20 @@ class Setting:
 
 
 _NONE = "(없음)"
+#: Lane CL (2026-10-10, human decision 2): a role's provider and model have no
+#: default here -- a role nobody set should fail closed rather than reach a
+#: provider no one chose. The code still falls back to the old defaults
+#: (provider xai; the router grok-4.20-0309-non-reasoning, translation and
+#: supplemental grok-4.6) in model_providers.py, multi_brain.py,
+#: external_references.py, experiment_reports.py and voice_providers.py, so an
+#: unset role fails closed only while XAI_API_KEY is absent. Removing those
+#: fallbacks is outside lane CL's files; .env.example sets every role.
+_SET_ME = "설정 필요"
 
 SETTINGS: tuple[Setting, ...] = (
     # --- 공급자 키 --------------------------------------------------------------
     Setting("XAI_API_KEY", KEYS, _NONE,
-            "xAI API 키 (공급자가 xai 인 역할, STT·TTS·그림·웹 검색)",
+            "xAI API 키 (공급자를 xai 로 둔 역할·STT·TTS, 외부 근거 웹 검색)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
     Setting("ANTHROPIC_API_KEY", KEYS, _NONE, "Anthropic API 키 (공급자가 anthropic 인 역할)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
@@ -86,33 +95,31 @@ SETTINGS: tuple[Setting, ...] = (
             "Google Cloud Vision API 키"),
     # --- 모델 -----------------------------------------------------------------
     # --- 모델: 역할별 공급자·모델·추론 (줄 M1, 결정 1) ---------------------------
-    Setting("VOINEY_LAB_ROUTER_PROVIDER", MODELS, "xai",
+    Setting("VOINEY_LAB_ROUTER_PROVIDER", MODELS, _SET_ME,
             "LLM 라우터 공급자 (xai/anthropic/openai/google)"),
-    Setting("VOINEY_LAB_ROUTER_MODEL", MODELS, "grok-4.20-0309-non-reasoning",
+    Setting("VOINEY_LAB_ROUTER_MODEL", MODELS, _SET_ME,
             "LLM 라우터 모델"),
     Setting("VOINEY_LAB_ROUTER_REASONING", MODELS, "(공급자 기본)",
             "LLM 라우터 추론 (none/low/medium/high/xhigh/max)"),
-    Setting("VOINEY_LAB_ANSWER_PROVIDER", MODELS, "xai",
+    Setting("VOINEY_LAB_ANSWER_PROVIDER", MODELS, _SET_ME,
             "답변 공급자: 대화, multi-brain"),
-    Setting("VOINEY_LAB_ANSWER_MODEL", MODELS,
-            "(없음: 대화는 필수, multi-brain grok-4.6)", "답변 모델"),
+    Setting("VOINEY_LAB_ANSWER_MODEL", MODELS, _SET_ME, "답변 모델"),
     Setting("VOINEY_LAB_ANSWER_REASONING", MODELS, "(공급자 기본)", "답변 추론"),
-    Setting("VOINEY_LAB_TRANSLATION_PROVIDER", MODELS, "xai",
+    Setting("VOINEY_LAB_TRANSLATION_PROVIDER", MODELS, _SET_ME,
             "번역 공급자: 리비전 한국어, 단계 읽기 번역"),
-    Setting("VOINEY_LAB_TRANSLATION_MODEL", MODELS, "grok-4.6", "번역 모델"),
+    Setting("VOINEY_LAB_TRANSLATION_MODEL", MODELS, _SET_ME, "번역 모델"),
     Setting("VOINEY_LAB_TRANSLATION_REASONING", MODELS, "(공급자 기본)", "번역 추론"),
-    Setting("VOINEY_LAB_ANALYSIS_PROVIDER", MODELS, "xai", "PDF 프로토콜 분석 공급자"),
-    Setting("VOINEY_LAB_ANALYSIS_MODEL", MODELS, _NONE,
+    Setting("VOINEY_LAB_ANALYSIS_PROVIDER", MODELS, _SET_ME, "PDF 프로토콜 분석 공급자"),
+    Setting("VOINEY_LAB_ANALYSIS_MODEL", MODELS, _SET_ME,
             "PDF 프로토콜 분석 모델 (분석에 필수)"),
     Setting("VOINEY_LAB_ANALYSIS_REASONING", MODELS, "high",
             "프로토콜 분석 추론 (low/medium/high/xhigh)"),
-    Setting("VOINEY_LAB_REPORT_PROVIDER", MODELS, "xai", "실험 보고서 서술 공급자"),
-    Setting("VOINEY_LAB_REPORT_MODEL", MODELS,
-            "VOINEY_LAB_SUPPLEMENTAL_MODEL → grok-4.6", "실험 보고서 서술 모델"),
+    Setting("VOINEY_LAB_REPORT_PROVIDER", MODELS, _SET_ME, "실험 보고서 서술 공급자"),
+    Setting("VOINEY_LAB_REPORT_MODEL", MODELS, _SET_ME, "실험 보고서 서술 모델"),
     Setting("VOINEY_LAB_REPORT_REASONING", MODELS, "(공급자 기본)", "보고서 서술 추론"),
-    Setting("VOINEY_LAB_SUPPLEMENTAL_PROVIDER", MODELS, "xai",
+    Setting("VOINEY_LAB_SUPPLEMENTAL_PROVIDER", MODELS, _SET_ME,
             "PDF 밖 설명 공급자: 보조 모델 지식, 외부 근거 웹 검색(xai 만)"),
-    Setting("VOINEY_LAB_SUPPLEMENTAL_MODEL", MODELS, "grok-4.6",
+    Setting("VOINEY_LAB_SUPPLEMENTAL_MODEL", MODELS, _SET_ME,
             "PDF 밖 설명·외부 근거 검색 모델"),
     Setting("VOINEY_LAB_SUPPLEMENTAL_REASONING", MODELS, "low",
             "외부 근거 검색 추론 (low/medium/high)"),
@@ -151,7 +158,7 @@ SETTINGS: tuple[Setting, ...] = (
             "AI 도식(SVG) 생성 모델 (OpenAI Responses; 키는 OPENAI_API_KEY)"),
     Setting("VOINEY_LAB_DRAWN_DIAGRAM_TIMEOUT_SECONDS", MODELS, "20",
             "AI 도식 생성 제한 시간 (초, 3–60)"),
-    Setting("VOINEY_LAB_STT_PROVIDER", MODELS, "xai",
+    Setting("VOINEY_LAB_STT_PROVIDER", MODELS, _SET_ME,
             "음성 인식 공급자: xai, google_cloud, elevenlabs"),
     Setting("VOINEY_LAB_STT_MODEL", MODELS,
             "공급자 기본 (xai: 보내지 않음, google_cloud: latest_long, elevenlabs: scribe_v2)",
@@ -164,7 +171,7 @@ SETTINGS: tuple[Setting, ...] = (
             "xAI STT 음성 감지 임계값 (0–1, xai 만 씀)"),
     Setting("VOINEY_LAB_STT_FILLER_WORDS", MODELS, "0",
             "xAI STT 간투사 받아쓰기 (0/1, xai 만 씀)"),
-    Setting("VOINEY_LAB_TTS_PROVIDER", MODELS, "xai",
+    Setting("VOINEY_LAB_TTS_PROVIDER", MODELS, _SET_ME,
             "음성 합성 공급자: xai, google_cloud, elevenlabs"),
     Setting("VOINEY_LAB_TTS_MODEL", MODELS,
             "공급자 기본 (xai·google_cloud: 보내지 않음, elevenlabs: eleven_v4_turbo)",
