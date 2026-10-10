@@ -7456,6 +7456,26 @@ _VOICE_CALIBRATION_SKIP=re.compile(
 )
 
 
+#: Lane SP1, decision 5: what the STT writes for a sound that was no words
+#: -- a vortex mixer, an alarm, a breath the VAD took for speech: nothing,
+#: punctuation, or a filler syllable or two. Answering it would be a reply
+#: to a machine. "응", "네", "아니" and every real word are not fillers.
+_FILLER_ONLY=re.compile(
+    r"^(?:(?:음+|어+|아+|에+|흠+|엄+|으음|어어|아아|음음|um+|uh+|hm+|mm+|ah+|eh+|er+)"
+    r"[\s.,!?~…。，！？]*){1,3}$",re.IGNORECASE)
+
+
+def transcript_is_filler_only(transcript:str)->bool:
+    """Whether the words are no words: empty, punctuation, or filler syllables only."""
+
+    said=" ".join(transcript.split())
+    if not said:
+        return True
+    if not re.search(r"[0-9A-Za-z가-힣ㄱ-ㅎㅏ-ㅣ\u00C0-\u024F\u3040-\u30FF\u4E00-\u9FFF]",said):
+        return True
+    return bool(_FILLER_ONLY.fullmatch(said))
+
+
 def voice_calibration_asked(transcript:str)->bool:
     """Whether the words ask for the wearer's voice to be measured (again)."""
 
@@ -7994,18 +8014,26 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         keyterms=keyterm_dump_terms(stt_keyterms),
         duration_seconds=transcription.duration_seconds,
     )
-    if not input_decision.accepted:
+    if not input_decision.accepted or transcript_is_filler_only(transcript):
+        # Lane SP1, decision 5: a machine sound the VAD took for speech --
+        # the STT wrote nothing, or a filler -- is passed over in silence.
+        reason=(
+            input_decision.reason or "non_speech"
+            if not input_decision.accepted else "filler_only")
         if session.reject_empty_transcript(turn_id):
             _record_workspace_metric(
                 category="voice",metric_name="command_failure",
                 dimensions={
                     "status":"rejected",
-                    "reason_code":str(input_decision.reason or "non_speech")[:100],
+                    "reason_code":str(reason)[:100],
                 },
             )
+            log.info(
+                "speech.rejected reason=%s voiced_frames=%d total_frames=%d turn_id=%s",
+                reason,voiced_frames,input_frames,turn_id)
             await sender.text(
                 "speech.rejected",turn_id=turn_id,generation=generation,
-                reason=input_decision.reason or "non_speech",
+                reason=reason,
                 voiced_frames=voiced_frames,total_frames=input_frames,
                 duration_ms=input_frames*20,
             )
@@ -10056,9 +10084,12 @@ async def voice_socket(websocket:WebSocket):
                         keyterms=keyterm_dump_terms(stt_context.keyterms),
                         duration_seconds=transcription.duration_seconds,
                     )
-                    if not input_decision.accepted:
+                    if not input_decision.accepted or transcript_is_filler_only(transcription.text):
+                        # Lane SP1, decision 5: a filler is no interruption either.
                         rejected=session.reject_interrupt_candidate(
-                            item,input_decision.reason or "non_speech")
+                            item,
+                            input_decision.reason or "non_speech"
+                            if not input_decision.accepted else "filler_only")
                         if rejected is not None:
                             listener_events.append(rejected)
                         continue
