@@ -148,6 +148,23 @@ def parse_control(raw: str) -> dict[str, Any]:
             "generation":generation,"audio_context_state":state,
             "sample_rate":sample_rate,
         }
+    if message["type"]=="client.voice_calibration":
+        # Lane SP1 (2026-10-10), decision 1: the page asks for the wearer's
+        # voice to be measured ("목소리 맞추기"), or skips the measurement.
+        action=message.get("action")
+        if action not in ("start","skip"):
+            raise ProtocolError("client.voice_calibration action must be start or skip")
+        configuration_id=message.get("configuration_id")
+        generation=message.get("generation")
+        if (not isinstance(configuration_id,int) or isinstance(configuration_id,bool)
+                or configuration_id<=0 or
+                not isinstance(generation,int) or isinstance(generation,bool)
+                or generation<0):
+            raise ProtocolError("client.voice_calibration metadata is invalid")
+        return {
+            "type":"client.voice_calibration","action":action,
+            "configuration_id":configuration_id,"generation":generation,
+        }
     raise ProtocolError(f"unknown control type: {message.get('type')}")
 
 def event(event_type: str, **fields: Any) -> str:

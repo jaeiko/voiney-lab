@@ -1338,6 +1338,9 @@ class CuratedControlIntent:
     #: A spill, a knock-over or an overflow said as having happened (lane
     #: R7's reading): the front rules record it (lane RT, decision 6).
     spill_reported: bool = False
+    #: Lane SP1, decision 3: the yes to "N단계 완료하고 N+1단계로 갈까요?" in
+    #: 시끄러운 곳 mode carries the intent it confirmed; it is not asked again.
+    ambient_confirmed: bool = False
     #: A correction of the last note asked for and confirmed (lane N, decision 2).
     record_fix: dict[str, Any] | None = None
     #: Lane CB: the reply to an open source-condition question ("yes", "no",
@@ -3093,12 +3096,16 @@ class _OpenQuestions:
     #: the questions asked before the start (open until answered).
     note_confirm: bool = False
     prestart: bool = False
+    #: Lane SP1, decision 3: "N단계 완료하고 N+1단계로 갈까요?" (one turn) and
+    #: "시끄러운 곳 모드로 바꿀까요?" (until the next turn).
+    ambient: bool = False
 
     @property
     def first_open(self) -> str | None:
         """The name of the question this turn can answer, or None."""
 
         for name in (
+            "ambient",
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
             "step_move", "record_fix", "note_confirm", "report_review", "branch",
             "repeat_count", "prestart",
@@ -3948,6 +3955,18 @@ WEB_LOOKUP_VALUES = ("on", "off")
 #: screen notice and the sound of a timer's end stay.
 PROACTIVE_MODES = ("all", "needed", "off")
 PROACTIVE_MODE_WORDS = {"all": "모두", "needed": "필요한 것만", "off": "끄기"}
+#: Lane SP1 (2026-10-10), decision 3: "주변 소리". In "noisy" every command
+#: that changes the workflow (다음·완료·타이머 시작) and every record (메모·
+#: 수치) is asked about once before it is done -- "3단계 완료하고 4단계로
+#: 갈까요?" -- and only a yes on the next turn does it; the commands that
+#: already ask (종료, 단계 이동, 방금 완료 취소) keep their own question.
+#: Questions are answered as before. "quiet" (the default) changes nothing.
+AMBIENT_MODES = ("quiet", "noisy")
+AMBIENT_MODE_WORDS = {"quiet": "조용함", "noisy": "시끄러움"}
+#: Lane SP1, decision 1: "민감도" -- how much quieter than the wearer's
+#: measured voice a voice may be before it is taken for someone else's.
+SPEAKER_SENSITIVITIES = ("high", "normal", "low")
+SPEAKER_SENSITIVITY_WORDS = {"high": "높음", "normal": "보통", "low": "낮음"}
 #: Decision 2: a timer at least this long is told its last minute, once.
 TIMER_LAST_MINUTE_FROM_SECONDS = 300
 TIMER_LAST_MINUTE_SECONDS = 60
@@ -4050,6 +4069,21 @@ _SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
         rf"^(?:(?:조건|분기|횟수|조건\s*분기)\s*(?:와|랑|하고)?\s*)*(?:횟수\s*)?질문(?:은|는|을)?\s*"
         rf"(?:실험\s*)?시작\s*전에\s*(?:(?:한\s*번에|다)\s*)?(?:물어\s*(?:봐)?|해){_SETTING_POLITE}$"
     ), {"question_timing": "before_start"}),
+    # Lane SP1, decision 3: "시끄러운 곳 모드로 바꿔 줘", "조용한 곳 모드",
+    # "주변 소리 시끄러워" / "조용해".
+    (re.compile(rf"^시끄러운\s*(?:곳|데|환경)(?:\s*모드)?{_SETTING_DO}$"), {"ambient_mode": "noisy"}),
+    (re.compile(rf"^주변(?:\s*(?:소리|소음))?(?:은|는|이|가)?\s*시끄러(?:움|워|워요|운\s*곳){_SETTING_DO}$"),
+     {"ambient_mode": "noisy"}),
+    (re.compile(rf"^조용한\s*(?:곳|데|환경)(?:\s*모드)?{_SETTING_DO}$"), {"ambient_mode": "quiet"}),
+    (re.compile(rf"^주변(?:\s*(?:소리|소음))?(?:은|는|이|가)?\s*조용(?:함|해|해요|한\s*곳){_SETTING_DO}$"),
+     {"ambient_mode": "quiet"}),
+    # Lane SP1, decision 1: "민감도 높음으로", "민감도 높게 해 줘", "민감도 낮춰 줘".
+    (re.compile(rf"^(?:목소리\s*)?민감도(?:는|를|은)?\s*(?:높음|높게|높이|높여){_SETTING_POLITE}{_SETTING_DO}$"),
+     {"speaker_sensitivity": "high"}),
+    (re.compile(rf"^(?:목소리\s*)?민감도(?:는|를|은)?\s*(?:보통|중간)(?:으로)?{_SETTING_POLITE}{_SETTING_DO}$"),
+     {"speaker_sensitivity": "normal"}),
+    (re.compile(rf"^(?:목소리\s*)?민감도(?:는|를|은)?\s*(?:낮음|낮게|낮춰|낮추){_SETTING_POLITE}{_SETTING_DO}$"),
+     {"speaker_sensitivity": "low"}),
 )
 
 
@@ -8105,6 +8139,13 @@ class CuratedProtocolSession:
         self.web_lookup: str = "on"
         #: Lane VT, decision 6: what is said before it is asked (PROACTIVE_MODES).
         self.proactive_mode: str = "all"
+        #: Lane SP1, decisions 1 and 3: the experimenter's "민감도" and "주변 소리".
+        self.speaker_sensitivity: str = "normal"
+        self.ambient_mode: str = "quiet"
+        #: The command asked about in 시끄러운 곳 mode, answered on the next turn.
+        self._pending_ambient_confirmation: dict[str, Any] | None = None
+        #: "주변이 시끄러워 보여요. 시끄러운 곳 모드로 바꿀까요?" said, unanswered.
+        self._pending_ambient_suggestion: bool = False
         #: Lane VT, decision 5: when the experimenter's words were last heard.
         self._last_heard_at: float | None = None
         #: Lane VT, decision 3: "A요, B요?" asked of a "그거"; only the next
@@ -8148,12 +8189,225 @@ class CuratedProtocolSession:
         proactive = settings.get("proactive_mode")
         if proactive in PROACTIVE_MODES:
             self.proactive_mode = str(proactive)
+        ambient = settings.get("ambient_mode")
+        if ambient in AMBIENT_MODES:
+            self.ambient_mode = str(ambient)
+        sensitivity = settings.get("speaker_sensitivity")
+        if sensitivity in SPEAKER_SENSITIVITIES:
+            self.speaker_sensitivity = str(sensitivity)
 
     def experimenter_settings(self) -> dict[str, str]:
         return {
             "confirm_mode": self.confirm_mode, "question_timing": self.question_timing,
             "web_lookup": self.web_lookup, "proactive_mode": self.proactive_mode,
+            "ambient_mode": self.ambient_mode, "speaker_sensitivity": self.speaker_sensitivity,
         }
+
+    # --- lane SP1, decision 3: 시끄러운 곳 mode asks before it acts ---------
+
+    _AMBIENT_SERVER_ANSWER = "server_"
+
+    def _ambient_confirmation_needed(self, intent: CuratedControlIntent) -> bool:
+        """Whether this intent changes the workflow at once and so is asked about first.
+
+        A yes or no to a question of the server's own, a step move or a
+        return (they ask already), a problem reported with a completion (it
+        does not move on), and everything read-only are not.
+        """
+
+        if not self.active or intent.ambient_confirmed:
+            return False
+        if str(intent.confidence_source or "").startswith(self._AMBIENT_SERVER_ANSWER):
+            return False
+        if intent.step_move is not None or intent.branch_reply is not None or intent.count_reply is not None:
+            return False
+        if intent.requires_confirmation or self._names_another_step(intent):
+            return False
+        command = intent.action
+        if command is CuratedProtocolAction.NEXT:
+            if intent.reported_observation and intent.observation_predicate == "negative":
+                return False
+            return bool(
+                intent.allows_state_mutation
+                and (intent.requested_transition == "next" or intent.reported_completion))
+        if command is CuratedProtocolAction.START_TIMER:
+            return intent.intent_kind != "pending_timer_confirmed"
+        return False
+
+    def _ambient_question(self, intent: CuratedControlIntent, language: str) -> str:
+        steps = self.fixture.steps
+        label = steps[self.current_index].source_label
+        if intent.action is CuratedProtocolAction.START_TIMER:
+            return (
+                f"{label}단계 타이머를 시작할까요?" if language == "ko"
+                else f"Start the Step {label} timer?")
+        if self.current_index + 1 < len(steps):
+            following = steps[self.current_index + 1].source_label
+            return (
+                f"{label}단계 완료하고 {following}단계로 갈까요?" if language == "ko"
+                else f"Complete Step {label} and go to Step {following}?")
+        return (
+            f"{label}단계 완료하고 실험을 마칠까요?" if language == "ko"
+            else f"Complete Step {label} and finish the experiment?")
+
+    def _ask_ambient_confirmation(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        transcript: str,
+        command_key: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+        actor_principal_id: str | None,
+        actor_role: str,
+        open_question: dict[str, Any] | None,
+        forward_said: bool,
+    ) -> CuratedProtocolTurnPlan:
+        """Ask once; nothing moves. The intent is kept for the yes on the next turn."""
+
+        step = self.fixture.steps[self.current_index]
+        question = self._ambient_question(intent, language)
+        self._pending_ambient_confirmation = {
+            "intent": intent,
+            "transcript": transcript,
+            "command_key": command_key,
+            "open_question": open_question,
+            "forward_said": forward_said,
+            "actor_principal_id": actor_principal_id,
+            "actor_role": actor_role,
+            "language": language,
+            "configuration_id": configuration_id,
+            "requested_turn_id": turn_id,
+            "requested_generation": generation,
+            "workflow_revision": self._revision,
+            "step_index": self.current_index,
+            "step_id": step.step_id,
+            "question": question,
+        }
+        self._last_front_rule = "ambient_confirmation"
+        plan = CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            display_text=question,
+            speech_text=question,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=self.fixture.facts_for_step(self.current_index),
+            step_label=step.source_label,
+            final_step=self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=question,
+            intent_kind="ambient_confirmation_required",
+            target_step="authoritative_current_step",
+        )
+        self._replay[turn_id] = plan
+        return plan
+
+    def _ambient_confirmation_valid(
+        self, *, turn_id: int, configuration_id: int | None, generation: int | None,
+    ) -> bool:
+        pending = self._pending_ambient_confirmation
+        return bool(
+            pending is not None
+            and self.active
+            and self.current_index == pending["step_index"]
+            and self.fixture.steps[self.current_index].step_id == pending["step_id"]
+            and self._revision == pending["workflow_revision"]
+            and turn_id == pending["requested_turn_id"] + 1
+            and (pending["configuration_id"] is None or configuration_id == pending["configuration_id"])
+            and (
+                pending["requested_generation"] is None or generation is None
+                or generation >= pending["requested_generation"]
+            )
+        )
+
+    def open_ambient_suggestion(self) -> None:
+        """The server said "시끄러운 곳 모드로 바꿀까요?"; the next turn answers it."""
+
+        self._pending_ambient_suggestion = True
+
+    @property
+    def ambient_suggestion_open(self) -> bool:
+        return self._pending_ambient_suggestion
+
+    def _answer_ambient_question(
+        self,
+        transcript: str,
+        *,
+        turn_id: int,
+        language: str,
+        transcript_quality: str | None,
+        configuration_id: int | None,
+        generation: int | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """The yes or no to the mode's question or the server's suggestion; else None.
+
+        Either question is for one turn: words that are neither let it lapse,
+        and the turn goes on as any other (a command is asked about again).
+        """
+
+        confirmation = self._pending_ambient_confirmation
+        suggestion = self._pending_ambient_suggestion
+        if confirmation is None and not suggestion:
+            return None
+        valid = confirmation is not None and self._ambient_confirmation_valid(
+            turn_id=turn_id, configuration_id=configuration_id, generation=generation)
+        self._pending_ambient_confirmation = None
+        self._pending_ambient_suggestion = False
+        if transcript_quality is not None:
+            return None
+        key = _semantic_utterance_key(transcript)
+        withheld = _reply_withholds_assent(transcript)
+        binary = _binary_frame_reply(transcript)
+        affirmative = bool(
+            (not withheld and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(key))
+            or binary == "affirmative")
+        negative = bool(
+            (not withheld and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key))
+            or binary == "negative")
+        if valid and confirmation is not None:
+            if affirmative:
+                self._last_front_rule = "yes_no_open_question"
+                plan = self._execute_turn_intent(
+                    replace(confirmation["intent"], ambient_confirmed=True),
+                    transcript=confirmation["transcript"],
+                    command_key=confirmation["command_key"],
+                    turn_id=turn_id,
+                    language=confirmation["language"],
+                    configuration_id=configuration_id,
+                    generation=generation,
+                    actor_principal_id=confirmation["actor_principal_id"],
+                    actor_role=confirmation["actor_role"],
+                    open_question=confirmation["open_question"],
+                    forward_said=bool(confirmation["forward_said"]),
+                )
+                self._replay[turn_id] = plan
+                return plan
+            if negative:
+                self._last_front_rule = "yes_no_open_question"
+                plan = self._words_plan(
+                    "알겠어요. 그대로 둘게요." if language == "ko" else "All right, nothing changes.",
+                    intent_kind="ambient_confirmation_declined")
+                self._replay[turn_id] = plan
+                return plan
+            return None
+        if suggestion:
+            if affirmative:
+                self._last_front_rule = "yes_no_open_question"
+                self.ambient_mode = "noisy"
+                plan = replace(
+                    self._words_plan(
+                        "시끄러운 곳 모드로 바꿨어요. 상태를 바꾸는 말과 기록은 한 번 확인할게요.",
+                        intent_kind="experimenter_setting_changed"),
+                    setting_change={"ambient_mode": "noisy"})
+                self._replay[turn_id] = plan
+                return plan
+            if negative:
+                self._last_front_rule = "yes_no_open_question"
+                plan = self._words_plan("알겠어요. 그대로 둘게요.", intent_kind="ambient_suggestion_declined")
+                self._replay[turn_id] = plan
+                return plan
+        return None
 
     @property
     def pending_note_confirmation(self) -> dict[str, Any] | None:
@@ -10637,10 +10891,10 @@ class CuratedProtocolSession:
                 intent_kind="note_decimal_unclear",
                 action=CuratedProtocolAction.DECLINE_COMPLETION,
             )
-        if self.confirm_mode != "confirm" or intent.note_confirmed:
+        if (self.confirm_mode != "confirm" and self.ambient_mode != "noisy") or intent.note_confirmed:
             return None
         values = measured_values(content)
-        if not values:
+        if not values and self.ambient_mode != "noisy":
             return None
         step = self.fixture.steps[self.current_index]
         self._pending_note_confirmation = {
@@ -10654,15 +10908,22 @@ class CuratedProtocolSession:
             "configuration_id": configuration_id,
             "requested_generation": generation,
         }
-        shown = ", ".join(value.text for value in values)
-        heard = ", ".join(spoken_korean(value.text) for value in values)
-        ending = josa_ro(shown)[len(shown):]
+        if values:
+            shown = ", ".join(value.text for value in values)
+            heard = ", ".join(spoken_korean(value.text) for value in values)
+            ending = josa_ro(shown)[len(shown):]
+            asked_shown = f"{shown}{ending} 기록할까요? 맞으면 '네'라고 해 주세요."
+            asked_heard = f"{heard}{ending} 기록할까요? 맞으면 '네'라고 해 주세요."
+        else:
+            # Lane SP1, decision 3: in 시끄러운 곳 mode a note with no value
+            # is asked about too, with its words.
+            asked_shown = asked_heard = f"'{content}' 이렇게 기록할까요? 맞으면 '네'라고 해 주세요."
         plan = self._words_plan(
-            f"{shown}{ending} 기록할까요? 맞으면 '네'라고 해 주세요.",
+            asked_shown,
             intent_kind="note_confirmation_required",
             action=CuratedProtocolAction.CLARIFY_COMPLETION,
         )
-        return replace(plan, speech_text=f"{heard}{ending} 기록할까요? 맞으면 '네'라고 해 주세요.")
+        return replace(plan, speech_text=asked_heard)
 
     # --- lane CF: words about the experimenter's own settings and file -------
 
@@ -10731,6 +10992,44 @@ class CuratedProtocolSession:
                             "먼저 알려 주기를 '모두'로 바꿨어요. 타이머가 끝날 때와 1분 전, "
                             "반복 횟수, 오래 쉬었다 말씀하실 때 지금 단계를 말로 알려 드려요."
                         ),
+                    }[value]
+                    plan = replace(
+                        self._words_plan(words, intent_kind="experimenter_setting_changed"),
+                        setting_change=dict(setting),
+                    )
+            elif name == "ambient_mode":
+                # Lane SP1, decision 3.
+                shown = AMBIENT_MODE_WORDS[value]
+                if self.ambient_mode == value:
+                    plan = self._words_plan(
+                        f"이미 주변 소리가 '{shown}'으로 되어 있어요.",
+                        intent_kind="experimenter_setting_unchanged",
+                    )
+                else:
+                    self.ambient_mode = value
+                    words = (
+                        "시끄러운 곳 모드로 바꿨어요. 상태를 바꾸는 말과 기록은 한 번 확인할게요."
+                        if value == "noisy" else
+                        "조용한 곳 모드로 바꿨어요. 상태를 바꾸는 말은 바로 해요."
+                    )
+                    plan = replace(
+                        self._words_plan(words, intent_kind="experimenter_setting_changed"),
+                        setting_change=dict(setting),
+                    )
+            elif name == "speaker_sensitivity":
+                # Lane SP1, decision 1.
+                shown = SPEAKER_SENSITIVITY_WORDS[value]
+                if self.speaker_sensitivity == value:
+                    plan = self._words_plan(
+                        f"이미 민감도가 '{shown}'으로 되어 있어요.",
+                        intent_kind="experimenter_setting_unchanged",
+                    )
+                else:
+                    self.speaker_sensitivity = value
+                    words = {
+                        "high": "민감도를 '높음'으로 바꿨어요. 조금만 작은 말도 다른 사람 말로 봐요.",
+                        "normal": "민감도를 '보통'으로 바꿨어요.",
+                        "low": "민감도를 '낮음'으로 바꿨어요. 많이 작은 말만 다른 사람 말로 봐요.",
                     }[value]
                     plan = replace(
                         self._words_plan(words, intent_kind="experimenter_setting_changed"),
@@ -15141,6 +15440,8 @@ class CuratedProtocolSession:
             )
         )
         return _OpenQuestions(
+            ambient=self._pending_ambient_suggestion or self._ambient_confirmation_valid(
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation),
             completion=pending_valid,
             observation=observation_pending_valid,
             transcript=transcript_pending_valid,
@@ -15464,6 +15765,15 @@ class CuratedProtocolSession:
             self._pending_note_confirmation,
             self._pending_value_choice,
         ) if front_only else None
+        # Lane SP1, decision 3: the yes or no to 시끄러운 곳 mode's question,
+        # or to the server's suggestion of the mode (F4).
+        ambient_answer = self._answer_ambient_question(
+            transcript, turn_id=turn_id, language=language,
+            transcript_quality=transcript_quality,
+            configuration_id=configuration_id, generation=generation,
+        )
+        if ambient_answer is not None:
+            return ambient_answer
         # The front rule that owns this turn, once one does (FRONT_RULES).
         front_rule: str | None = None
         # "끝났어", "다 끝났어", "끝" said alone (lane XO, decision 5).
@@ -16920,6 +17230,16 @@ class CuratedProtocolSession:
                 primary_text=response,
                 intent_kind=intent.intent_kind,
                 speech_policy="speak" if spoken else "silent",
+            )
+
+        if self.ambient_mode == "noisy" and self._ambient_confirmation_needed(intent):
+            # Lane SP1, decision 3: in 시끄러운 곳 mode a command that would
+            # change the workflow now is asked about once; nothing moves.
+            return self._ask_ambient_confirmation(
+                intent, transcript=transcript, command_key=command_key, turn_id=turn_id,
+                language=language, configuration_id=configuration_id, generation=generation,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+                open_question=open_question, forward_said=forward_said,
             )
 
         if intent.step_move is not None:
