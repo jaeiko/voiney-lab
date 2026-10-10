@@ -602,13 +602,22 @@ function updateWorkflowTimer(){
   parts.push(`일시정지 중 (${formatElapsedClock(curPause)})`);
  }
  if(step){
-  if(step.state==="running"){
+  if(step.state==="running"||step.state==="expired"){
    const deadline=Date.parse(step.deadline_at);
-   const remaining=Number.isFinite(deadline)?Math.max(0,Math.ceil((deadline-Date.now())/1000)):Math.max(0,Number(step.remaining_seconds)||0);
-   // Lane U2 decision 5: minutes and seconds left, "14:55 남음".
-   parts.push(remaining>0?`단계 ${formatElapsedClock(remaining)} 남음`:`단계 완료 · ${formatElapsedClock(step.duration_seconds)}`);
-   if(railTimer)railTimer.textContent=`⏱ ${formatElapsedClock(remaining)} 남음`;
-   if(remaining===0)stopWorkflowTimer();
+   // Seconds left (positive) or gone past the end (negative), from the server's deadline.
+   const remaining=Number.isFinite(deadline)?Math.ceil((deadline-Date.now())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);
+   if(remaining>0){
+    // Lane U2 decision 5: minutes and seconds left, "14:55 남음".
+    parts.push(`단계 ${formatElapsedClock(remaining)} 남음`);
+    if(railTimer)railTimer.textContent=`⏱ ${formatElapsedClock(remaining)} 남음`;
+   }else{
+    // Lane VF decision 4: the server's "expired", shown as time gone past the
+    // end -- "끝남 · 2:13 지남" -- in the badge and the timer row alike, never
+    // as a timer counting up.
+    const over=formatElapsedClock(-remaining);
+    parts.push(`단계 ${formatElapsedClock(step.duration_seconds)} 타이머 끝남 · ${over} 지남`);
+    if(railTimer)railTimer.textContent=`⏱ 끝남 · ${over} 지남`;
+   }
   }else if(step.state==="not_started"&&Number(step.duration_seconds)>0){
    parts.push(`단계 타이머 ${formatElapsedClock(step.duration_seconds)} · 시작 전`);
   }else if(step.state==="stopped"||step.state==="completed"){
@@ -623,7 +632,7 @@ function startWorkflowTimer(){
  const experiment=curated.experiment;
  const step=curated.step;
  const pause=curated.pause;
- if(experiment?.state==="running"||step?.state==="running"||pause?.state==="paused"){
+ if(experiment?.state==="running"||step?.state==="running"||step?.state==="expired"||pause?.state==="paused"){
   workflowTimerHandle=setInterval(updateWorkflowTimer,1000);
   workflowTimerHandle?.unref?.();
  }
