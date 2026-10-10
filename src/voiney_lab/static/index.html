@@ -186,6 +186,16 @@
                 <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
                 <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
               </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
+              <!-- Lane SP1 decision 3: in a noisy place every command that changes the workflow and every record is asked about once (the same as saying "시끄러운 곳 모드로 바꿔 줘"); decision 1: how much quieter than the measured voice still counts as the wearer ("민감도 높음으로"). -->
+              <label class="control-field"><span>주변 소리</span><select id="ambient-mode" aria-label="주변 소리" aria-describedby="experimenter-settings-status">
+                <option value="quiet" selected>조용함 · 명령은 바로</option>
+                <option value="noisy">시끄러움 · 상태를 바꾸는 말과 기록은 한 번 확인</option>
+              </select></label>
+              <label class="control-field"><span>목소리 민감도</span><select id="speaker-sensitivity" aria-label="목소리 민감도" aria-describedby="experimenter-settings-status">
+                <option value="high">높음 · 조금만 작아도 거름 (6 dB)</option>
+                <option value="normal" selected>보통 (12 dB)</option>
+                <option value="low">낮음 · 많이 작을 때만 거름 (18 dB)</option>
+              </select></label>
               <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
                 <option value="">기본 마이크 (시스템 설정)</option>
               </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
@@ -2034,6 +2044,11 @@ function renderExperimenterSettings(settings){
  if(web&&["on","off"].includes(settings.web_lookup))web.value=settings.web_lookup;
  const proactive=$("proactive-mode");
  if(proactive&&["all","needed","off"].includes(settings.proactive_mode))proactive.value=settings.proactive_mode;
+ // Lane SP1 decisions 1 and 3.
+ const ambient=$("ambient-mode");
+ if(ambient&&["quiet","noisy"].includes(settings.ambient_mode))ambient.value=settings.ambient_mode;
+ const sensitivity=$("speaker-sensitivity");
+ if(sensitivity&&["high","normal","low"].includes(settings.speaker_sensitivity))sensitivity.value=settings.speaker_sensitivity;
 }
 async function loadExperimenterSettings(){
  try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
@@ -2545,6 +2560,8 @@ $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSettin
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
 $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting("web_lookup",event.target.value);});
 $("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("proactive_mode",event.target.value);});
+$("ambient-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("ambient_mode",event.target.value);});
+$("speaker-sensitivity")?.addEventListener("change",event=>{void saveExperimenterSetting("speaker_sensitivity",event.target.value);});
 $("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");});
 $("voice-calibration-skip")?.addEventListener("click",()=>{requestVoiceCalibration("skip");});
 $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCalibrationAtStart(event.target.checked);});

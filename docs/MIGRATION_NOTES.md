@@ -373,6 +373,62 @@ its WAL/SHM files, start one instance -- and that copy has none of the
 settings recorded since. Moving forward again runs the migration again.
 After an upgrade, confirm `schema_metadata.schema_version = 9`.
 
+## Workspace schema 9 → 10: two more experimenter settings (2026-10-10, lane SP1)
+
+Lane VT's schema 9 let the `experimenter_settings` table take four names by
+a CHECK (`confirm_mode`, `question_timing`, `web_lookup`, `proactive_mode`).
+Lane SP1's "주변 소리" (`ambient_mode`: `quiet` / `noisy`, decision 3) and
+"목소리 민감도" (`speaker_sensitivity`: `high` / `normal` / `low`, decision 1)
+are kept like the others, so the table takes six names.
+
+### What changes
+
+Exactly what schema 8 → 9 did, one name list wider:
+
+- `experimenter_settings` is copied to `experimenter_settings_v9` (and its
+  AUTOINCREMENT counter to `experimenter_settings_v9_sequence`), dropped, and
+  created again with `name IN ('confirm_mode','question_timing','web_lookup',
+  'proactive_mode','ambient_mode','speaker_sensitivity')`;
+- every row is copied back with its `sequence_id`, and `sqlite_sequence` is
+  put back to the counter as it was, so the next change gets the next id;
+- the index `experimenter_settings_principal` and the two append-only
+  triggers (`experimenter_settings_no_update`, `experimenter_settings_no_delete`)
+  are created with the same statements as schema 9's, and both copies are
+  dropped;
+- `schema_metadata` is rebuilt to hold 10, as each earlier migration did.
+
+No other table or row changes. The values each name may take are still
+checked in code (`EXPERIMENTER_SETTING_VALUES`). The migration runs in one
+`BEGIN IMMEDIATE` transaction when the workspace is opened and is rolled back
+on failure ("Commercial workspace migration failed."); a new database runs
+schema 1 and every migration up to 10. `tests/test_lane_sp1_settings_store.py`
+builds a schema-9 store with rows of two experimenters and a counter past its
+last row, opens it, and checks the rows, the counter, the index and trigger
+statements, the append-only triggers, the two new names, and that opening it
+a second time changes nothing.
+
+### Reading older data
+
+Every setting a schema-9 store holds keeps its value. A store migrated from 9
+holds no `ambient_mode` or `speaker_sensitivity` row, so they start at their
+defaults (`EXPERIMENTER_SETTING_DEFAULTS` in `server.py`: `ambient_mode=quiet`,
+`speaker_sensitivity=normal`). The wearer's measured voice level itself
+(decision 1) is never stored: it is measured again each session.
+
+### Before the first start after the upgrade
+
+Stop the server and copy the workspace SQLite file with its `-wal` and `-shm`
+files (the schema 3 → 4 procedure), then start one instance and confirm
+`schema_metadata.schema_version = 10`.
+
+### Going back
+
+There is no down-migration. Code older than this version expects schema 9
+and refuses a schema-10 database when it opens it ("Commercial workspace
+schema is unsupported."). Going back means restoring the copy taken before
+the upgrade, and that copy has none of the settings recorded since. Moving
+forward again runs the migration again.
+
 ## Environment setting names → `VOINEY_LAB_` (2026-10-04)
 
 This changes configuration, not a store: no database, ledger, table or file

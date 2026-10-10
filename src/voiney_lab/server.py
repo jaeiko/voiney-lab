@@ -978,6 +978,11 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # Lane VT, decision 6: everything is said first unless the experimenter
     # keeps it to what is needed or turns it off.
     "proactive_mode":"all",
+    # Lane SP1, decision 3: a quiet room until the experimenter says the
+    # place is noisy (or takes the server's suggestion); decision 1: the
+    # margin under the wearer's measured voice, "보통" (12 dB).
+    "ambient_mode":"quiet",
+    "speaker_sensitivity":"normal",
 }
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
@@ -4126,6 +4131,8 @@ class ListenerSession:
         #: session clock), for decision 3's "시끄러운 곳" suggestion.
         self.ignored_speech_at:collections.deque[float]=collections.deque(maxlen=64)
         self.ignored_speech_count:int=0
+        #: Lane SP1, decision 3: when "시끄러운 곳 모드로 바꿀까요?" was last said.
+        self.ambient_suggested_at:float|None=None
         #: Turns of the server's own words (a calibration prompt, a
         #: suggestion), numbered from _SERVER_WORDS_TURN_BASE.
         self.server_words_turns:int=0
@@ -4248,6 +4255,7 @@ class ListenerSession:
         self.calibration_pending=False
         self.ignored_speech_at.clear()
         self.ignored_speech_count=0
+        self.ambient_suggested_at=None
     def set_speaker_sensitivity(self,sensitivity:str)->str:
         """Take the "민감도" setting; a reference already measured keeps its level."""
 
@@ -4305,6 +4313,27 @@ class ListenerSession:
 
         now=self.clock()
         return sum(1 for at in self.ignored_speech_at if now-at<=seconds)
+    def noisy_mode_suggestion_due(self)->bool:
+        """Whether to suggest 시끄러운 곳 mode now (lane SP1, decision 3).
+
+        Three or more voices taken for other people's within a minute, the
+        room still "quiet", no suggestion open, and none made in the last
+        ten minutes. Suggested only; the experimenter's answer changes it.
+        """
+
+        curated=self.curated_protocol_session
+        if curated is None or getattr(curated,"ambient_mode","quiet")!="quiet":
+            return False
+        if getattr(curated,"ambient_suggestion_open",False):
+            return False
+        if self.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS)<AMBIENT_SUGGESTION_IGNORED_COUNT:
+            return False
+        if (
+            self.ambient_suggested_at is not None
+            and self.clock()-self.ambient_suggested_at<AMBIENT_SUGGESTION_GAP_SECONDS
+        ):
+            return False
+        return True
     def start(self,experiment_session_id:str|None=None):
         self.generation+=1
         self.greeting_emitted=False
@@ -7620,6 +7649,39 @@ async def _prompt_voice_calibration(
     return True
 
 
+#: Lane SP1, decision 3: the suggestion after this many ignored voices in
+#: this many seconds, at most once in the gap.
+AMBIENT_SUGGESTION_IGNORED_COUNT=3
+AMBIENT_SUGGESTION_WINDOW_SECONDS=60.0
+AMBIENT_SUGGESTION_GAP_SECONDS=600.0
+AMBIENT_SUGGESTION_WORDS="주변이 시끄러워 보여요. 시끄러운 곳 모드로 바꿀까요?"
+
+
+async def _suggest_noisy_mode(
+    sender:LockedSender,session:ListenerSession,*,
+    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+)->bool:
+    """Say "시끄러운 곳 모드로 바꿀까요?" once the session is quiet; the next turn answers it.
+
+    A suggestion only (decision 3): the mode changes on the experimenter's
+    yes, through the rules' own yes/no reading, never here.
+    """
+
+    curated=session.curated_protocol_session
+    if curated is None or not session.noisy_mode_suggestion_due():
+        return False
+    session.ambient_suggested_at=session.clock()
+    turn_id=await _say_server_words(
+        session,sender,AMBIENT_SUGGESTION_WORDS,kind="ambient_suggestion",sleep=sleep)
+    if turn_id is None:
+        return False
+    curated.open_ambient_suggestion()
+    log.info(
+        "ambient suggestion said turn_id=%s ignored_in_window=%d",
+        turn_id,session.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS))
+    return True
+
+
 async def _timer_notice_tick(
     session:ListenerSession,sender:LockedSender,*,now:float|None=None,
     sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
@@ -8822,6 +8884,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if getattr(plan,"setting_change",None):
                 # Lane CF, decision 1: a setting said aloud is kept for the
                 # experimenter's next session and shown on the screen.
+                if "speaker_sensitivity" in plan.setting_change:
+                    # Lane SP1, decision 1: and takes effect on this session's gate now.
+                    session.set_speaker_sensitivity(str(plan.setting_change["speaker_sensitivity"]))
                 try:
                     saved=await asyncio.to_thread(
                         _save_experimenter_settings,dict(plan.setting_change),"voice")
@@ -10151,6 +10216,10 @@ async def voice_socket(websocket:WebSocket):
                             category="voice",metric_name="speech_ignored",
                             dimensions={"reason":str(fields["reason"])[:100]},
                         )
+                        if session.noisy_mode_suggestion_due():
+                            # Lane SP1, decision 3: three in a minute -- suggest the mode.
+                            session.track_visual_task(asyncio.create_task(
+                                _suggest_noisy_mode(sender,session)))
                     if (
                         item.kind=="barge_in_rejected"
                         and session.resume_deferred_playback_end(
@@ -10386,6 +10455,10 @@ async def voice_socket(websocket:WebSocket):
                             _load_experimenter_settings)
                         session.curated_protocol_session.apply_experimenter_settings(
                             experimenter_settings)
+                        # Lane SP1, decision 1: the "민감도" margin of the
+                        # wearer's measurement is the experimenter's setting.
+                        session.set_speaker_sensitivity(
+                            str(experimenter_settings.get("speaker_sensitivity",DEFAULT_SENSITIVITY)))
                         session.curated_protocol_session.set_source_basis(
                             _source_basis_from(
                                 getattr(selected_curated_fixture,"source_filename",None),
