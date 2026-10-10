@@ -1,6 +1,7 @@
 # Troubleshooting Guide
 
-Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen)
+Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen) and
+2026-10-10 (lane CL: role settings, the pilot launcher's catalog check)
 
 The safe default is always to preserve the last server-confirmed state. Do not
 repeat a state-changing command until the experiment timeline shows whether the
@@ -27,6 +28,8 @@ first attempt committed. Do not repair production state by editing SQLite.
 | `/readyz` returns 503 | Required local configuration did not parse | Read the non-secret exception class, inspect service configuration locally, correct it, and restart; do not add secrets to incident logs |
 | Operational identity configuration invalid | OIDC issuer/audience/JWKS is incomplete or malformed | Configure all OIDC values with HTTPS metadata; operational mode must not fall back to development identity |
 | OCR never finishes | The injected OCR provider is missing or failed | Check the provider configuration; the protocol stays blocked (`source_page_requires_ocr`) until the pages are read |
+| A model feature never answers (analysis, translation, the router, the "AI 일반 지식" explanation, report prose) | That role's provider or model is not set. The setting table says "설정 필요"; an unset role still falls back to the code's old xai default and fails without `XAI_API_KEY` | Set `VOINEY_LAB_<ROLE>_PROVIDER` and `_MODEL` in `.env` as in `.env.example` and restart; `./scripts/run_dev.sh --check-only` prints each role's provider and model |
+| `./scripts/run_pilot.sh` exits 1 before serving | No approved safety catalog at `data/runtime/pilot/approved_safety_catalog.sqlite`, an unreadable one, a demo document in it, or no approved active `reference_only` document | Build and audit the catalog as in `docs/APPROVED_DOCUMENT_OPERATIONS.md` §4; `--check-only` must exit 0 before the pilot starts |
 
 The reviewer and administrator screens were removed on 2026-10-08 (lane DI);
 there is no inbox, approval, connector or pilot-metrics symptom any more.
@@ -64,8 +67,8 @@ checksum, and SQLite verification is not a successful restore.
 ## External provider failures
 
 - Keep the workflow at its server-confirmed checkpoint.
-- External source/web content is supplementary and cannot override approved
-  protocol or safety evidence.
+- External source/web content is supplementary and cannot override the
+  protocol's source or the approved safety documents.
 - Use fake-backed automated tests for diagnosis. A real provider test must be
   explicit, bounded, credential-authorized, and must not print credentials,
   proprietary documents, or full prompts.

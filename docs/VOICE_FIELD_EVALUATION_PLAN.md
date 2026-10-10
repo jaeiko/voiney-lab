@@ -1,5 +1,11 @@
 # Voice Field Evaluation Plan
 
+Status (2026-10-10): not run yet. VoineyLab is an MVP prototype, not
+field-validated; the 2026-10-10 voice test was one developer's run on the
+development server with the in-gel protocol, not this study. Filtering other
+people's speech is being built (lane SP1); the "background conversation"
+cells below test it once it lands.
+
 This plan measures bench-side voice reliability; it does not claim field performance that has not been observed. The checked-in harness consumes transcription/routing/timing result manifests and emits aggregates only. It never opens or persists audio.
 
 ## Metrics and release gates

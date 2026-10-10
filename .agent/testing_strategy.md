@@ -37,7 +37,7 @@ Our testing pyramid spans 5 layers:
 - **Missing Observation Gate**: Attempting step completion when required observation is missing must fail with `observation_required`.
 - **Premature Timer Gate**: Attempting step completion before fixed timer reaches 0 must fail with `timer_not_elapsed`.
 - **Observation Evidence Mismatch**: Verbatim checking ensures model cannot pass truncated or fabricated observation values (e.g., passing `A-17` when user said `A-170` must fail with `observation_evidence_mismatch`).
-- **Handoff Block Enforcement**: When a safety report is submitted, session transitions to `blocked_for_handoff`; subsequent step completions, timer starts, or observations must be rejected.
+- **Execution Rule**: An analysis carrying an execution blocker (failed source-evidence check, no executable step, a page still needing OCR, a safety-critical conflict) cannot start; the experimenter's start is the one human confirmation (`test_lane_di_execution_rule.py`). (The safety report's `blocked_for_handoff` was deleted with the report tools on 2026-10-10, lane CL.)
 
 ### 2. Intent Classification & Guardrail Tests (`test_completion_intent.py`)
 - **Positive Current Step Completion**: "현재 단계를 완료했습니다", "이 단계 완료했어요", "다 했어", "여기까지 마쳤어".
@@ -53,12 +53,14 @@ Our testing pyramid spans 5 layers:
 - **Endpoint Detection**: Verification of silence threshold before triggering turn completion.
 - **Barge-In Interruption**: Simulating incoming audio while in `PLAYBACK` must immediately trigger `playback.cancel` and abort pending TTS chunks.
 
-### 4. Grounded QA & Unsupported Handling Tests (`test_approved_references.py`, `test_moss_retrieval.py`)
-- **Supported Fact Grounding**: Queries about approved SOP steps return exact citations and accurate numerical quantities.
-- **Unsupported Query Detection**: Out-of-catalog questions (e.g., asking for unapproved reagent substitutions or off-label equipment use) return explicit unsupported messages directing the user to the lab supervisor.
+### 4. Grounded QA & Unsupported Handling Tests (`test_protocol_grounded_answers.py`, `test_answer_checks.py`, `test_lane_r6_voice_followups.py`, `test_lane_cl_kept_features.py`)
+- **Supported Fact Grounding**: Questions about a protocol step are answered from its source with exact numbers and units.
+- **Unsupported Query Detection**: What the source does not say is answered as such ("PDF에서 확인할 수 없어요."); substitutions and off-protocol use are not invented.
+- **Outside-PDF Explanation**: A term the source does not explain may get a short general explanation after the rules' answer, labelled "AI 일반 지식"; one carrying numbers, methods or quantities is dropped, and a quantity the source answers never gets one.
 - **Zero Hallucination Guarantee**: Assert that LLM responses do not invent phone numbers, legal regulations, or safety classifications.
+- (The approved-reference and Moss tests left with that code on 2026-10-10, lane CL.)
 
-### 5. Asynchronous Handoff & Worker Tests (`test_worker.py`, `test_experiment_reports.py`)
-- **Queue Persistence**: Reports placed in `inbox.jsonl` are atomically consumed and moved to `processed.txt`.
-- **Handoff Artifacts**: `.eml` files generated with correct subject, urgent prefix, location, and structured workflow snapshot.
-- **Retry Mechanism**: Worker retries failed LLM generation up to 3 times before marking `retry_pending` / `failed`.
+### 5. Experiment Record & Report Tests (`test_experiment_reports.py`, `test_lab_report.py`)
+- **Append-only Ledger**: Workflow, observation, value-confirmation and recovery events are only ever added.
+- **Exports**: JSON, Markdown, CSV and DOCX carry the same record, in the researcher's time zone and plain words.
+- (The safety report hand-off worker and its tests were deleted on 2026-10-10, lane CL.)
