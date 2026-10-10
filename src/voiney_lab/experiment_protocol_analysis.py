@@ -138,6 +138,13 @@ _RESPONSE_REQUIRED_FIELDS: dict[type[Any], frozenset[str]] = {
     # With per-field evidence on offer a provider cited only title_evidence
     # and left this out (lane P2, OCR reagent-kit run), so it is spelled out.
     domain.ProtocolMetadata: frozenset({"evidence"}),
+    # How the source states a repeat count (lane EV2, decision 3): asked
+    # every time, so a count is never read without it.
+    domain.FixedRangeRepetition: frozenset({"repeat_count_kind"}),
+}
+#: Fields whose strings are one of a fixed set (lane EV2, decision 3).
+_RESPONSE_STRING_CHOICES: dict[tuple[type[Any], str], tuple[str, ...]] = {
+    (domain.FixedRangeRepetition, "repeat_count_kind"): domain.REPEAT_COUNT_KINDS,
 }
 _CONSTRUCT_NAMES = {
     record_type: construct_name
@@ -258,6 +265,14 @@ class _DomainResponseSchemaBuilder:
             )
             for field in record_fields:
                 properties[field.name] = self.schema_for(hints[field.name])
+                choices = _RESPONSE_STRING_CHOICES.get((record_type, field.name))
+                if choices is not None:
+                    properties[field.name] = {
+                        "anyOf": [
+                            {"type": "string", "enum": list(choices)},
+                            {"type": "null"},
+                        ]
+                    }
                 if field.name in response_required or (
                     field.default is MISSING
                     and field.default_factory is MISSING
@@ -2744,6 +2759,34 @@ def _verify_clearing_unread_fields(
             protocol = _cleared(protocol, field)
 
 
+def _repeat_counts_as_totals(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
+    """Every fixed repeat count as the total number of runs (lane EV2, decision 3).
+
+    A count the source states as the runs after the first ("once more",
+    "Repeat steps 5 and 6") is one more in total; a count the source states
+    two ways ("Repeat steps 36-38 twice") is no count, so the experimenter is
+    asked for it. A total, and a count whose kind the response leaves out,
+    are kept as they are. Only a fresh response is read this way: a stored
+    analysis already holds totals.
+    """
+
+    constructs = []
+    for construct in protocol.constructs:
+        if isinstance(construct, domain.FixedRangeRepetition):
+            count = construct.repeat_count
+            if (
+                construct.repeat_count_kind == domain.REPEAT_COUNT_ADDITIONAL
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and count > 0
+            ):
+                construct = replace(construct, repeat_count=count + 1)
+            elif construct.repeat_count_kind == domain.REPEAT_COUNT_AMBIGUOUS:
+                construct = replace(construct, repeat_count=None)
+        constructs.append(construct)
+    return replace(protocol, constructs=tuple(constructs))
+
+
 def _reject_deferred_state(protocol: domain.ExperimentProtocol) -> None:
     source_uri = protocol.metadata.source_uri
     if source_uri is not None and (
@@ -2839,6 +2882,7 @@ def parse_protocol_analysis_response(
             ),
         )
     protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
+    protocol = _repeat_counts_as_totals(protocol)
     _reject_deferred_state(protocol)
     try:
         domain.validate_protocol(protocol)

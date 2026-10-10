@@ -462,3 +462,41 @@ Code from before this version refuses a payload that has `cleared_fields`
 passed under this version cannot be read by older code. An analysis stored by
 this version that emptied nothing still carries the field (as `[]`), so the
 same holds for it. To go back, analyse the document again with the older code.
+
+## Lane EV2 (2026-10-10): what a fixed repeat count means
+
+No schema change and no stored row rewritten; protocol store again.
+
+`FixedRangeRepetition` has one more field, `repeat_count_kind` (a string or
+`None`, default `None`), and `repeat_count` now means the total number of runs
+of the range, the first run included (lane EV2's decision 3). The analysis
+response states the kind for every fixed repetition: `total`, `additional`
+(the runs after the first: "once more", "Repeat steps 5 and 6") or
+`ambiguous` ("Repeat steps 36-38 twice"). When it parses a fresh response the
+server adds one to an `additional` count and stores no count for an
+`ambiguous` one (the experimenter is asked for it before the start, or at the
+range's first step with "실험 중에 묻기"). `validate_protocol` refuses any
+other kind and a count beside `ambiguous`.
+
+The response schema gained the field, so the curated development fixture's
+pinned schema identity (`curated_protocol._CANONICAL_SCHEMA_SHA256` and
+`canonical_schema_sha256` in
+`data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json`)
+was re-pinned to the new schema, as on 2026-10-05; the fixture itself is
+unchanged and holds no fixed repetition.
+
+### Reading older data
+
+A payload written before this version has no `repeat_count_kind`; it reads
+as `None`, its count is not changed, and the start screen shows one line for
+it: "반복 횟수 확인 필요 · <range>단계 · 원문 “…” · 분석이 N회로 읽음(처음을
+포함한 총 횟수인지 원문을 확인하세요)". Such a count is still led as stored. Re-run
+the analysis to have it read with its kind.
+
+### Going back
+
+Code from before this version refuses a payload whose fixed repetition has
+`repeat_count_kind` ("Stored Protocol analysis record fields are malformed.")
+and refuses to load the curated development fixture under the re-pinned
+provenance ("Development protocol fixture schema identity is unsupported.");
+going back means restoring the older provenance file with the older code.

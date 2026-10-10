@@ -68,7 +68,7 @@ DEVELOPMENT_FIXTURE_MODE = "offline_curated_development_fixture"
 #: was reviewed against, so every block of it is gated on this identity.
 CANDIDATE_A_PROTOCOL_ID = "candidate-a-curated-development-v1"
 _CANONICAL_SCHEMA_SHA256 = (
-    "9f34928becbfcd4a63b1339f5200187abd1755801e326637f0f9d8d02ac17b02"
+    "1048bb59a4b300c650af7f664560793aa53e52c93496cafd6a4dff8866d82334"
 )
 _PROVENANCE_FIELDS = {
     "candidate_filename",
@@ -9327,7 +9327,12 @@ class CuratedProtocolSession:
 
         found: dict[str, tuple[str, ...]] = {}
         for construct in self.fixture.draft.protocol.constructs:
-            if type(construct).__name__ != "OperatorDeterminedRepetition":
+            # A fixed count the source states two ways is asked the same way
+            # (lane EV2, decision 3).
+            if type(construct).__name__ != "OperatorDeterminedRepetition" and not (
+                type(construct).__name__ == "FixedRangeRepetition"
+                and getattr(construct, "repeat_count_kind", None) == domain.REPEAT_COUNT_AMBIGUOUS
+            ):
                 continue
             found[construct.repetition_id] = (
                 construct.start_step_id,
@@ -9382,8 +9387,24 @@ class CuratedProtocolSession:
                 "source_page_number": getattr(
                     getattr(construct, "evidence", None), "source_page_number", None
                 ),
+                # How the source states a fixed count (lane EV2, decision 3).
+                "count_kind": getattr(construct, "repeat_count_kind", None),
             }
         return found
+
+    @staticmethod
+    def _count_is_asked(interval: dict[str, object]) -> bool:
+        """Whether a person gives this repeat's count.
+
+        The source leaves it to them, or (lane EV2, decision 3) the source's
+        count reads two ways ("Repeat steps 36-38 twice": two runs in all, or
+        two more): lane CB/CF's count question asks it either way.
+        """
+
+        return interval.get("kind") == "OperatorDeterminedRepetition" or (
+            interval.get("kind") == "FixedRangeRepetition"
+            and interval.get("count_kind") == domain.REPEAT_COUNT_AMBIGUOUS
+        )
 
     def repetition_anchored_at(self, step_id: str) -> dict[str, object] | None:
         """The repetition whose sentence is written in this step's text."""
@@ -9671,7 +9692,7 @@ class CuratedProtocolSession:
         if not self._at_a_step():
             return None
         interval = self.repeat_interval_starting_at(self.current_index)
-        if interval is None or interval.get("kind") != "OperatorDeterminedRepetition":
+        if interval is None or not self._count_is_asked(interval):
             return None
         repetition_id = str(interval["repetition_id"])
         if (
@@ -9739,6 +9760,11 @@ class CuratedProtocolSession:
     def _count_question_words(self, interval: dict[str, object]) -> str:
         first, last = self._range_labels(interval)
         source = " ".join(str(interval.get("source_text") or "").split())
+        if interval.get("count_kind") == domain.REPEAT_COUNT_AMBIGUOUS:
+            return (
+                f"{first}~{last}단계 반복 횟수가 원문에서 두 가지로 읽혀요: “{source}”. "
+                "처음 한 번을 포함해 모두 몇 번 하시나요? 아직 모르면 '아직 몰라'라고 해 주세요."
+            )
         return (
             f"{first}~{last}단계는 원문이 횟수를 정하지 않아요: “{source}”. 몇 번(몇 개) 하시나요? "
             "아직 모르면 '아직 몰라'라고 해 주세요."
@@ -9773,7 +9799,7 @@ class CuratedProtocolSession:
         gate = self._branch_gating(interval)
         if gate is not None and self._branch_answer(gate) != "yes":
             return None
-        if kind == "FixedRangeRepetition":
+        if kind == "FixedRangeRepetition" and not self._count_is_asked(interval):
             construct = next(
                 (
                     item for item in self.fixture.draft.protocol.constructs
@@ -9785,7 +9811,7 @@ class CuratedProtocolSession:
             if not isinstance(count, int) or isinstance(count, bool) or count < 1:
                 return None
             return {"count": count, "value_source": VALUE_SOURCE_SOURCE, "decided": "source"}
-        if kind == "OperatorDeterminedRepetition":
+        if self._count_is_asked(interval):
             registered = self._registered_repetitions.get(repetition_id)
             if registered is not None:
                 return {
@@ -11010,7 +11036,7 @@ class CuratedProtocolSession:
                 "step_id": anchor, "step_label": labels[anchor],
             }))
         for interval in self._repeat_intervals_by_id().values():
-            if interval.get("kind") != "OperatorDeterminedRepetition":
+            if not self._count_is_asked(interval):
                 continue
             repetition_id = str(interval["repetition_id"])
             if repetition_id in self._operator_repetition_counts:
@@ -11073,9 +11099,16 @@ class CuratedProtocolSession:
         else:
             interval = self._repeat_intervals_by_id()[item["id"]]
             source = " ".join(str(interval.get("source_text") or "").split())
+            asked = (
+                f"{item['range']}단계 반복 횟수가 원문에서 두 가지로 읽혀요: “{source}”. "
+                "처음 한 번을 포함해 모두 몇 번 하시나요?"
+                if interval.get("count_kind") == domain.REPEAT_COUNT_AMBIGUOUS else
+                f"{item['range']}단계는 원문이 횟수를 정하지 않아요: “{source}”. "
+                "몇 번(몇 개) 하시나요?"
+            )
             question = (
-                f"({index + 1}/{total}) {item['range']}단계는 원문이 횟수를 정하지 않아요: “{source}”. "
-                "몇 번(몇 개) 하시나요? 아직 모르면 '아직 몰라', 지금 정하지 않으려면 '나중에'라고 해 주세요."
+                f"({index + 1}/{total}) {asked} "
+                "아직 모르면 '아직 몰라', 지금 정하지 않으려면 '나중에'라고 해 주세요."
             )
         if not with_intro:
             return question

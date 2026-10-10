@@ -641,6 +641,50 @@ def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, obj
     }
 
 
+def _repeat_count_checks_ko(protocol: domain.ExperimentProtocol) -> list[str]:
+    """One line per fixed repeat whose count the experimenter should check.
+
+    Lane EV2, decision 3: a count is the total number of runs. A count
+    stored without saying how the source states it (every analysis before
+    the decision) is kept as it was and needs checking; a count the source
+    states two ways is asked before the start. A count the source states as
+    a total, or as runs after the first (made a total by the server), needs
+    no line.
+    """
+
+    labels = {
+        step.step_id: step.source_label
+        for section in protocol_with_display_step_labels(protocol).sections
+        for step in section.steps
+    }
+    lines: list[str] = []
+    for construct in protocol.constructs:
+        if not isinstance(construct, domain.FixedRangeRepetition) or (
+            construct.repeat_count_kind
+            in {domain.REPEAT_COUNT_TOTAL, domain.REPEAT_COUNT_ADDITIONAL}
+        ):
+            continue
+        where = (
+            f"{labels.get(construct.start_step_id, construct.start_step_id)}~"
+            f"{labels.get(construct.end_step_id, construct.end_step_id)}단계"
+        )
+        source = " ".join(construct.range_source_text.split())
+        if construct.repeat_count_kind == domain.REPEAT_COUNT_AMBIGUOUS:
+            how = (
+                "처음을 포함한 총 횟수인지 더 하는 횟수인지 원문이 두 가지로 읽혀 "
+                "시작할 때 여쭤봅니다"
+            )
+        elif construct.repeat_count is not None:
+            how = (
+                f"분석이 {construct.repeat_count}회로 읽음"
+                "(처음을 포함한 총 횟수인지 원문을 확인하세요)"
+            )
+        else:
+            how = "분석이 횟수를 읽지 않음(원문을 확인하세요)"
+        lines.append(f"반복 횟수 확인 필요 · {where} · 원문 “{source}” · {how}")
+    return lines
+
+
 def _safety_notice_sources(protocol: Any) -> list[dict[str, object]]:
     """Every safety statement the source declares, step by step, verbatim.
 
@@ -1999,6 +2043,9 @@ class ProtocolCatalog:
             # not confirm them, and the one line the start screen shows.
             "cleared_fields": [],
             "cleared_fields_ko": None,
+            # Lane EV2, decision 3: the fixed repeat counts to check before
+            # the start, one line each.
+            "repeat_count_checks_ko": [],
         }
         ocr_projection = base["ocr"]
         base["pipeline"] = self._pipeline(
@@ -2063,6 +2110,7 @@ class ProtocolCatalog:
                 "cleared_fields_ko": domain.cleared_fields_line_ko(
                     protocol.cleared_fields, protocol
                 ),
+                "repeat_count_checks_ko": _repeat_count_checks_ko(protocol),
                 # Step timers for the start screen (lane PT, decision 4):
                 # each verified value with its source excerpt, and each time
                 # the server could not verify, with the reason.

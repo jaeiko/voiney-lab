@@ -481,8 +481,38 @@ class ConditionalBranch:
     action_id: str | None = None
 
 
+#: How the source states a fixed repetition's count (lane EV2, decision 3):
+#: the total ("a total of 4 washes", "three cycles", "a second time"), the
+#: runs after the first ("once more", "한 번 더", "Repeat steps 5 and 6"), or
+#: a wording that reads both ways ("Repeat steps 36-38 twice").
+REPEAT_COUNT_TOTAL = "total"
+REPEAT_COUNT_ADDITIONAL = "additional"
+REPEAT_COUNT_AMBIGUOUS = "ambiguous"
+REPEAT_COUNT_KINDS: tuple[str, ...] = (
+    REPEAT_COUNT_TOTAL,
+    REPEAT_COUNT_ADDITIONAL,
+    REPEAT_COUNT_AMBIGUOUS,
+)
+
+
 @dataclass(frozen=True)
 class FixedRangeRepetition:
+    """A range of steps the source repeats a stated number of times.
+
+    ``repeat_count`` is the total number of runs of the range, the first run
+    included (human decision 2026-10-10, lane EV2, decision 3): "Repeat step
+    21 once more" is 2, "a total of 4 washes" is 4. A session counts its
+    rounds against it ("n회 중 k회째"), so a count of the runs after the
+    first would skip one.
+
+    ``repeat_count_kind`` is how the source states the count, as the analysis
+    read it (``REPEAT_COUNT_KINDS``). The server turns an "additional" count
+    into the total (one more) and leaves an "ambiguous" one without a count,
+    for the experimenter to give before the start. None on an analysis stored
+    before the decision: its count is kept as it was and shown as needing a
+    check.
+    """
+
     repetition_id: str
     start_step_id: str
     end_step_id: str
@@ -492,6 +522,7 @@ class FixedRangeRepetition:
     section_id: str | None = None
     step_id: str | None = None
     action_id: str | None = None
+    repeat_count_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1199,6 +1230,23 @@ def _validate_construct(
             raise _error(
                 ProtocolValidationCode.INVALID_TIME_VALUE,
                 "repeat count must be positive when parsed",
+                location,
+            )
+        if construct.repeat_count_kind is not None and (
+            construct.repeat_count_kind not in REPEAT_COUNT_KINDS
+        ):
+            raise _error(
+                ProtocolValidationCode.INVALID_TEXT,
+                "repeat count kind is unknown",
+                location,
+            )
+        if (
+            construct.repeat_count_kind == REPEAT_COUNT_AMBIGUOUS
+            and construct.repeat_count is not None
+        ):
+            raise _error(
+                ProtocolValidationCode.INVALID_TIME_VALUE,
+                "a count the source states two ways is the experimenter's to give",
                 location,
             )
     elif isinstance(construct, RepeatUntil):
