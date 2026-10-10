@@ -92,7 +92,7 @@ pilot launcher refuses it because both records are demo documents.
 `scripts/run_pilot.sh` does not read either variable from `.env`. It fixes the
 catalog at `data/runtime/pilot/approved_safety_catalog.sqlite` (an absolute
 path under the checkout) and the scope at `reference_only`, the one scope a
-pilot without OIDC can run; `README.md` ("Launchers") gives the reasons. Build
+pilot without OIDC can run; `docs/BEHAVIOR_REFERENCE.md` ("Launchers") gives the reasons. Build
 the catalog from a reviewed manifest in a staging path as in §2, audit it with
 `--scope reference_only`, and copy it into place between server runs:
 

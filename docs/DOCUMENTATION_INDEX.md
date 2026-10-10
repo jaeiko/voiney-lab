@@ -11,6 +11,7 @@
 |---|---|
 | [`README.md`](../README.md) | 한 문장 정의와 상태, 지금 흐름, 값과 설명의 원칙, 하지 않는 것, 역할별 공급자, 실행 방법, 테스트 기준, 데이터·외부 AI, 라이선스, 다음 계획 |
 | [`AGENTS.md`](../AGENTS.md), [`.agent/`](../.agent/) | 코드가 지켜야 할 규칙. `.agent/architecture.md` 가 지금 구조의 기준 |
+| [`BEHAVIOR_REFERENCE.md`](BEHAVIOR_REFERENCE.md) | 지금 동작의 상세(영어). 2026-10-10 README 를 한국어로 다시 쓰며 옛 README 의 절들을 옮기고 줄 CL 에 맞게 고침. README 다음 |
 | [`CLAUDE.md`](../CLAUDE.md) | 코딩 에이전트의 작업 규칙 |
 | [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) | 구성 요소, 상태 권한, 저장, 실패 처리 |
 | [`MIGRATION_NOTES.md`](MIGRATION_NOTES.md) | 저장 스키마와 설정 이름이 바뀐 기록 (줄 CL 의 지운 설정 포함) |
