@@ -78,10 +78,16 @@ class TheSourceCountTests(unittest.TestCase):
         lines = "\n".join(("1. Add buffer.", "3. Mix.", "7. Spin."))
         self.assertEqual(count_source_numbered_steps(extraction(f"{TITLE}\n{lines}")), 0)
 
-    def test_nothing_after_the_references_heading_counts(self):
-        references = "\n".join(f"{n}. Doe J, Roe R. A method. J Biol Methods. 2019;{n}:1-9." for n in range(1, 41))
+    def test_the_list_a_references_heading_opens_does_not_count(self):
+        references = "\n".join(f"{n}. Doe J, Roe R. A method. J Biol Methods. {n}:1-9." for n in range(1, 41))
         source = extraction(f"{TITLE}\n{numbered(10)}\nReferences\n{references}")
         self.assertEqual(count_source_numbered_steps(source), 10)
+
+    def test_a_front_matter_references_list_does_not_stop_the_count(self):
+        # CDC's SOP lists two references on page 1; its procedure follows.
+        front = "References\n1. Manual of Clinical microbiology, 10th Edition\n2. CHEF Mapper XA, Instruction manual"
+        source = extraction(f"{TITLE}\n{front}\nProcedure\n{numbered(25)}")
+        self.assertEqual(count_source_numbered_steps(source), 25)
 
     def test_a_numbered_citation_list_does_not_count_without_its_heading(self):
         citations = "\n".join(f"{n}. Doe J (2019) A method. Plant Methods {n}:1-9." for n in range(1, 41))

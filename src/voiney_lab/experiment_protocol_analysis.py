@@ -3025,10 +3025,10 @@ MAX_ANALYSIS_PAGES = 60
 #: pages that number at least 20 steps, every passing DS-2 analysis and lane
 #: AQ's medium and low ones kept at least 0.55 of the count; the hollow
 #: passes of lane AQ's Flash-Lite kept at most 0.16 (2 of 101, 7 of 61, 12
-#: of 75).
+#: of 75), and one DS-2 analysis of a 24-page USGS manual held no step.
 HOLLOW_MIN_SOURCE_STEPS = 20
 HOLLOW_STEP_SHARE = 0.25
-#: Where the back matter begins: nothing after it is a procedure.
+#: A references heading: the numbered list it opens is not steps.
 _BACK_MATTER = re.compile(
     r"(?:references?|bibliography|literature cited|참고\s*문헌)\s*:?", re.IGNORECASE
 )
@@ -3039,41 +3039,44 @@ def count_source_numbered_steps(extraction: ProtocolPdfExtraction) -> int:
     """How many numbered steps the source prints, counted from its text alone.
 
     Lane EV2, decision 4. Lines are read in page order, without the pages'
-    running header, footer and page-number lines, up to a references
-    heading. A run is a line numbered 1 and the lines numbered 2, 3, ... that
-    follow it in order; a run of at least two counts, unless most of its lines
-    hold a year (a numbered citation list). The count is generous -- a
-    numbered materials list counts too -- so a short analysis is held to only
-    a small share of it.
+    running header, footer and page-number lines. A run is a line numbered 1
+    and the lines numbered 2, 3, ... that follow it in order; a run of at
+    least two counts, unless it is the list a references heading opens (CDC's
+    SOP lists its two references on page 1, a journal article its citations
+    at the end) or most of its lines hold a year (a numbered citation list
+    without its heading). The count is generous -- a numbered materials list
+    counts too -- so a short analysis is held to only a small share of it.
     """
 
     edges = _page_edges(extraction)
-    marks: list[tuple[int, str]] = []
+    # (number, line, whether the line is in the list a references heading
+    # opened: the first list numbered from 1 after the heading).
+    marks: list[tuple[int, str, bool]] = []
+    heading_seen = in_references = False
     for page in extraction.pages:
-        lines = page.text.splitlines()
-        stop = False
-        for line in lines:
+        for line in page.text.splitlines():
             if _BACK_MATTER.fullmatch(" ".join(line.split())):
-                stop = True
-                break
+                heading_seen, in_references = True, False
+                continue
             if edges.is_furniture(line, page.source_page_number):
                 continue
             match = _NUMBERED_LINE.match(line)
-            if match is not None:
-                marks.append((int(match[1]), line))
-        if stop:
-            break
+            if match is None:
+                continue
+            if int(match[1]) == 1:
+                in_references, heading_seen = heading_seen, False
+            marks.append((int(match[1]), line, in_references))
     runs: list[list[str]] = []
-    current: list[tuple[int, str]] = []
-    for number, line in marks:
-        if current and number == current[-1][0] + 1:
-            current.append((number, line))
-        elif number == 1:
-            if len(current) >= 2:
-                runs.append([item for _, item in current])
-            current = [(number, line)]
-    if len(current) >= 2:
-        runs.append([item for _, item in current])
+    current: list[tuple[int, str, bool]] = []
+    for mark in marks:
+        if current and mark[0] == current[-1][0] + 1:
+            current.append(mark)
+        elif mark[0] == 1:
+            if len(current) >= 2 and not current[0][2]:
+                runs.append([line for _, line, _ in current])
+            current = [mark]
+    if len(current) >= 2 and not current[0][2]:
+        runs.append([line for _, line, _ in current])
     return sum(
         len(run) for run in runs
         if sum(1 for line in run if _CITATION_YEAR.search(line)) * 2 <= len(run)
