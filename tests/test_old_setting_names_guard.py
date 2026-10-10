@@ -106,11 +106,6 @@ class EntryPointTests(unittest.TestCase):
         self.assert_refused(result, OLD_PREFIXED)
         self.assertIn("OldSettingNamesError", result.stderr)
 
-    def test_worker_refuses_to_import(self):
-        result = self.run_python("-c", "import voiney_lab.worker",
-                                 **{OLD_UNPREFIXED: SECRET})
-        self.assert_refused(result, OLD_UNPREFIXED)
-
     def test_launcher_check_module(self):
         refused = self.run_python("-B", "-m", "voiney_lab.setting_names",
                                   **{OLD_PREFIXED: SECRET, OLD_UNPREFIXED: SECRET})

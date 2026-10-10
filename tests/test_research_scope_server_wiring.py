@@ -8,7 +8,9 @@ research query -- now pass it.
 
 These tests run the server's own code: a related question goes through
 ``run_turn``, and a Source Brain query through ``_queue_curated_research``.
-They read the query where the server uses it, the approved-reference search.
+They read the query where the server uses it, the web-reference search
+(the approved lab-reference search that read it before was deleted on
+2026-10-10, lane CL).
 For in-gel the query is the same, character for character, as the one built
 without the scope (which ``test_protocol_scoped_research_query`` shows is the
 query sent before); for another protocol it names that protocol's material.
@@ -24,7 +26,7 @@ from unittest.mock import patch
 
 from voiney_lab import server as server_module
 from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
-from voiney_lab.external_references import plan_research_query
+from voiney_lab.external_references import ExternalReferenceSettings, plan_research_query
 from voiney_lab.language import Transcription
 from voiney_lab.multi_brain import SourceBrainOutput
 from voiney_lab.runtime_routing import route_curated_runtime_turn
@@ -84,6 +86,10 @@ def _listener(fixture, index: int) -> ListenerSession:
     session.turn_generations[1] = session.generation
     session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
     session.detector.state = TurnState.PROCESSING
+    # The web-reference search is where the query is read.
+    session.external_reference_settings = ExternalReferenceSettings(
+        True, ("pubchem.ncbi.nlm.nih.gov",), "offline-web", 2.0, 3, "candidate_a",
+    )
     return session
 
 
@@ -99,12 +105,15 @@ class _Recorder:
         self.calls.append((question, kwargs, query))
         return query
 
-    def search(self, query, **kwargs):
-        self.searched.append(query)
-        return {
-            "status": "no_admissible_evidence", "answerable": False,
-            "matches": [], "retrieval": {"backend": "sqlite"},
-        }
+    def web(self, *args):
+        recorder = self
+
+        class _Web:
+            async def search(self, query, *, language, **kwargs):
+                recorder.searched.append(query)
+                return {"status": "no_results", "matches": [], "images": []}
+
+        return _Web()
 
 
 async def _immediate(function, *args, **kwargs):
@@ -140,7 +149,11 @@ def _related_turn(session: ListenerSession, transcript: str) -> _Recorder:
     ), patch(
         "voiney_lab.server.plan_research_query", side_effect=recorder.plan,
     ), patch(
-        "voiney_lab.server.search_approved_lab_references", side_effect=recorder.search,
+        "voiney_lab.server.XaiAuthoritativeWebSearch", recorder.web,
+    ), patch(
+        "voiney_lab.server.AsyncOpenAI", return_value=object(),
+    ), patch(
+        "voiney_lab.server.require_env", return_value="offline",
     ), patch(
         "voiney_lab.server.asyncio.to_thread", side_effect=_immediate,
     ):
@@ -187,7 +200,11 @@ def _source_brain_research(
     with patch(
         "voiney_lab.server.plan_research_query", side_effect=recorder.plan,
     ), patch(
-        "voiney_lab.server.search_approved_lab_references", side_effect=recorder.search,
+        "voiney_lab.server.XaiAuthoritativeWebSearch", recorder.web,
+    ), patch(
+        "voiney_lab.server.AsyncOpenAI", return_value=object(),
+    ), patch(
+        "voiney_lab.server.require_env", return_value="offline",
     ), patch(
         "voiney_lab.server.asyncio.to_thread", side_effect=_immediate,
     ):

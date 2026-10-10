@@ -13,7 +13,6 @@ from unittest.mock import patch
 
 from voiney_lab.document_store import ingest_manifest, ingest_manifest_file
 from voiney_lab.moss_retrieval import (
-    MossRerankResult,
     MossRuntime,
     MossSettings,
     catalog_sections_for_moss,
@@ -21,7 +20,6 @@ from voiney_lab.moss_retrieval import (
     start_moss_runtime_from_environment,
 )
 from voiney_lab.retrieval import search_safety_documents
-from voiney_lab.tools import ToolContext, search_approved_safety_manual
 from tests.test_retrieval import operational_document
 
 
@@ -351,54 +349,3 @@ class MossRuntimeTests(unittest.TestCase):
             self.assertEqual(blocked.matches, original)
         finally:
             runtime.close()
-
-
-class MossToolIntegrationTests(unittest.TestCase):
-    def test_tool_uses_moss_only_after_sqlite_approval_gates(self):
-        with tempfile.TemporaryDirectory() as directory:
-            db = Path(directory) / "catalog.sqlite"
-            sections = [
-                {
-                    "section_code": f"SDS-04-{index}",
-                    "section_title": f"section {index}",
-                    "page_start": index,
-                    "page_end": index,
-                    "content": f"FICTIONAL CONTENT {index}.",
-                    "topic": "first_aid",
-                    "keywords": [],
-                }
-                for index in range(1, 5)
-            ]
-            ingest_manifest(
-                {"documents": [operational_document(sections=sections)]}, db
-            )
-
-            class Runtime:
-                settings = SimpleNamespace(candidate_limit=64)
-
-                @staticmethod
-                def allows_scope(scope):
-                    return scope == "operational"
-
-                @staticmethod
-                def rerank(query, matches, **_):
-                    return MossRerankResult(
-                        list(reversed(list(matches)))[:3], True, 4
-                    )
-
-            with patch(
-                "voiney_lab.moss_retrieval.get_moss_runtime",
-                return_value=Runtime(),
-            ):
-                result = search_approved_safety_manual(
-                    "first aid TEST-A100",
-                    context=ToolContext(db, None, "en", "operational"),
-                    topic="first_aid",
-                )
-
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["retrieval"], {"backend": "moss", "elapsed_ms": 4})
-        self.assertEqual(
-            [item["page_start"] for item in result["matches"]], [4, 3, 2]
-        )
-        self.assertNotIn("voice_workflow_agent_key", result["matches"][0])

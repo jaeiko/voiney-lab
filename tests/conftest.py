@@ -22,7 +22,7 @@ VOINEY_LAB_CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data
 
 # --- No test reaches a provider (lane M1, decision 6) ------------------------
 # Real keys for xAI, OpenAI, Anthropic, Gemini and the OCR services may sit in
-# the shell or in the repository .env. The server and the worker do not read
+# the shell or in the repository .env. The server does not read
 # the .env under pytest (PYTEST_VERSION is set), the keys are taken out of
 # this process's environment before any test module is imported, and a
 # connection to anything but this machine fails at once. A test that needs a

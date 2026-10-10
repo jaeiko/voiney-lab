@@ -5,7 +5,6 @@ from collections import deque
 import httpx
 from voiney_lab.audio import FRAME_BYTES
 from voiney_lab.brain import (
-    REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     BrainResult,
     SentenceSegment,
 )
@@ -15,7 +14,7 @@ from voiney_lab.experiment_reports import (
     ExperimentReportStore,
 )
 from pathlib import Path
-from voiney_lab.language import Transcription
+from voiney_lab.language import CLARIFICATION_TEXT, Transcription
 from voiney_lab.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
 from voiney_lab.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, app, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
 from voiney_lab.tools import ToolContext
@@ -84,11 +83,9 @@ class ServerTests(unittest.TestCase):
         with patch("voiney_lab.server.transcribe",return_value=transcription), \
              tts_patch as tts, \
              patch("voiney_lab.server.stream_brain_turn") as brain, \
-             patch("voiney_lab.tools.search_approved_safety_manual") as retrieval, \
-             patch("voiney_lab.brain.execute_tool") as execute, \
              patch("voiney_lab.server.AsyncOpenAI") as llm:
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        return session,socket,tts,brain,retrieval,execute,llm
+        return session,socket,tts,brain,llm
 
     def test_emergency_precedes_language_resolution_and_uses_fixed_language(self):
         cases=(
@@ -102,10 +99,10 @@ class ServerTests(unittest.TestCase):
         for transcription,language,response in cases:
             with self.subTest(transcription=transcription):
                 with patch("voiney_lab.server.resolve_turn_language") as resolver:
-                    session,socket,tts,brain,retrieval,execute,llm=self.run_emergency(transcription)
+                    session,socket,tts,brain,llm=self.run_emergency(transcription)
                 resolver.assert_not_called()
                 self.assertEqual(tts.call_args.args,(response,language))
-                for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+                for boundary in (brain,llm): boundary.assert_not_called()
                 event_types=[item["type"] for item in socket.text]
                 self.assertNotIn("session.language_confirmation_required",event_types)
                 self.assertNotIn("session.turn_language_resolved",event_types)
@@ -136,13 +133,8 @@ class ServerTests(unittest.TestCase):
         product_group=[{"role":"user","content":"Product ABC-7"},
                        {"role":"assistant","content":"Please provide its full label."}]
         session.history.commit(product_group,[{"document_id":"PRIVATE-REFERENCE"}])
-        pending={"location":"Lab A","summary":"unchanged","urgency":"urgent",
-                 "exposure_status":"unknown","language":"ko",
-                 "material_or_equipment":"Product ABC-7"}
-        session.history.pending_report=dict(pending)
-        _,socket,_,brain,retrieval,execute,llm=self.run_emergency(
+        _,socket,_,brain,llm=self.run_emergency(
             Transcription("Emergency!",None),session)
-        self.assertEqual(session.history.pending_report,pending)
         self.assertEqual(session.history.groups[0],product_group)
         self.assertEqual(session.history.source_references,[{"document_id":"PRIVATE-REFERENCE"}])
         self.assertEqual(session.last_confirmed_language,"ko")
@@ -153,7 +145,7 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("/trusted/catalog.sqlite",visible)
         self.assertNotIn("credential",visible.casefold())
         self.assertNotIn("database",visible.casefold())
-        for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+        for boundary in (brain,llm): boundary.assert_not_called()
 
     def test_emergency_preserves_full_capacity_product_history(self):
         session=self.emergency_session()
@@ -180,23 +172,19 @@ class ServerTests(unittest.TestCase):
     def test_emergency_sessions_are_isolated(self):
         korean=self.emergency_session()
         english=self.emergency_session()
-        korean.history.pending_report={"language":"ko","location":"K"}
-        english.history.pending_report={"language":"en","location":"E"}
         self.run_emergency(Transcription("도와줘!",None),korean)
         self.run_emergency(Transcription("Emergency!",None),english)
-        self.assertEqual(korean.history.pending_report,{"language":"ko","location":"K"})
-        self.assertEqual(english.history.pending_report,{"language":"en","location":"E"})
         self.assertEqual(korean.history.groups,[])
         self.assertEqual(english.history.groups,[])
 
     def test_emergency_tts_failure_keeps_fixed_text_response(self):
         with patch("voiney_lab.server.resolve_turn_language") as resolver, \
              patch("voiney_lab.server.log.exception"):
-            session,socket,_,brain,retrieval,execute,llm=self.run_emergency(
+            session,socket,_,brain,llm=self.run_emergency(
                 Transcription("Emergency!",None),
                 tts_result=RuntimeError("synthetic TTS failure"))
         resolver.assert_not_called()
-        for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+        for boundary in (brain,llm): boundary.assert_not_called()
         self.assertEqual([item["text"] for item in socket.text
                           if item["type"] in ("reply.delta","reply.complete")],
                          [ENGLISH_EMERGENCY_RESPONSE,ENGLISH_EMERGENCY_RESPONSE])
@@ -213,155 +201,16 @@ class ServerTests(unittest.TestCase):
 
     def test_language_clarification_tts_failure_has_no_first_audio_timing(self):
         with patch("voiney_lab.server.log.exception"):
-            session,socket,_,brain,retrieval,execute,llm=self.run_emergency(
+            session,socket,_,brain,llm=self.run_emergency(
                 Transcription("Please show the approved procedure.",None),
                 tts_result=RuntimeError("synthetic TTS failure"))
-        for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+        for boundary in (brain,llm): boundary.assert_not_called()
         done=next(item for item in socket.text if item["type"]=="turn.done")
         self.assertEqual(done["route"],"language_clarification")
         self.assertNotIn("first_audio_ms",done["timings_ms"])
         self.assertEqual((done["segment_count"],done["output_frames"]),(0,0))
         self.assertEqual(socket.binary,[])
         self.assertEqual(session.state,TurnState.COOLDOWN)
-
-    def test_pending_report_approval_precedes_language_resolution(self):
-        class Socket:
-            def __init__(self): self.text=[]; self.binary=[]
-            async def send_text(self,value): self.text.append(json.loads(value))
-            async def send_bytes(self,value): self.binary.append(value)
-
-        pending={"location":"Lab A","summary":"spill","urgency":"urgent",
-                 "exposure_status":"unknown","language":"ko"}
-        cases=(
-            Transcription("네, 지금 제출해 주세요.",None),
-            Transcription("지금 작성한 보고 초안 제출해 주세요.","en"),
-        )
-        for transcription in cases:
-            with self.subTest(transcription=transcription):
-                session=ListenerSession(tool_context=ToolContext(
-                    Path("/trusted/catalog.sqlite"),"FACILITY-A","en","operational"))
-                session.active=True; session.language_mode="auto"
-                session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
-                session.last_confirmed_language="en"
-                session.history.pending_report=dict(pending)
-                socket=Socket()
-                with patch("voiney_lab.server.transcribe",
-                           return_value=transcription), \
-                     patch("voiney_lab.server.resolve_turn_language") as resolver, \
-                     patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
-                     patch("voiney_lab.brain.execute_tool",return_value={
-                         "status":"success",
-                         "report_id":"SR-20260724-A1B2C3",
-                         "report_status":"queued_for_handoff",
-                     }) as execute, \
-                     patch("voiney_lab.server.AsyncOpenAI"), \
-                     patch.dict("os.environ",{
-                         "XAI_API_KEY":"test",
-                         "VOINEY_LAB_ANSWER_MODEL":"test",
-                     },clear=False):
-                    asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-                resolver.assert_not_called()
-                execute.assert_called_once()
-                name,arguments=execute.call_args.args
-                context=execute.call_args.kwargs["context"]
-                self.assertEqual(name,"create_safety_report")
-                self.assertEqual(arguments,pending)
-                self.assertEqual(
-                    (str(context.catalog_path),context.facility_id,
-                     context.language,context.usage_scope),
-                    ("/trusted/catalog.sqlite","FACILITY-A","ko","operational"),
-                )
-                self.assertIsNone(session.history.pending_report)
-                self.assertEqual(session.last_confirmed_language,"ko")
-                self.assertEqual(tts.call_args.args[1],"ko")
-                event_types=[item["type"] for item in socket.text]
-                self.assertNotIn("session.language_confirmation_required",event_types)
-                resolved=next(item for item in socket.text
-                              if item["type"]=="session.turn_language_resolved")
-                self.assertEqual(resolved["language"],"ko")
-                statuses=[item.get("status") for item in socket.text
-                          if item["type"] in ("tool.call","tool.result")]
-                self.assertEqual(statuses,["submitting","confirmed"])
-                done=next(item for item in socket.text if item["type"]=="turn.done")
-                self.assertEqual(done["route"],"brain")
-                self.assertEqual(done["tools_used"],["create_safety_report"])
-
-    def test_pending_report_cancellation_precedes_language_resolution(self):
-        class Socket:
-            def __init__(self): self.text=[]; self.binary=[]
-            async def send_text(self,value): self.text.append(json.loads(value))
-            async def send_bytes(self,value): self.binary.append(value)
-
-        pending={"location":"Lab A","summary":"spill","urgency":"routine",
-                 "exposure_status":"no","language":"ko"}
-        session=ListenerSession(tool_context=ToolContext(
-            Path("/trusted/catalog.sqlite"),None,"en","operational"))
-        session.active=True; session.language_mode="auto"
-        session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
-        session.history.pending_report=dict(pending)
-        socket=Socket()
-        with patch("voiney_lab.server.transcribe",
-                   return_value=Transcription("보고서를 취소해 주세요.","en")), \
-             patch("voiney_lab.server.resolve_turn_language") as resolver, \
-             patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
-             patch("voiney_lab.brain.execute_tool") as execute, \
-             patch("voiney_lab.server.AsyncOpenAI"), \
-             patch.dict("os.environ",{
-                 "XAI_API_KEY":"test",
-                 "VOINEY_LAB_ANSWER_MODEL":"test",
-             },clear=False):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        resolver.assert_not_called()
-        execute.assert_not_called()
-        self.assertIsNone(session.history.pending_report)
-        self.assertEqual(tts.call_args.args[1],"ko")
-        result=next(item for item in socket.text if item["type"]=="tool.result")
-        self.assertEqual(result["status"],"cancelled")
-        done=next(item for item in socket.text if item["type"]=="turn.done")
-        self.assertEqual(done["route"],"brain")
-        self.assertEqual(done["tools_used"],[])
-
-    def test_pending_report_correction_still_uses_language_resolution_and_brain(self):
-        class Socket:
-            def __init__(self): self.text=[]; self.binary=[]
-            async def send_text(self,value): self.text.append(json.loads(value))
-            async def send_bytes(self,value): self.binary.append(value)
-
-        pending={"location":"Lab A","summary":"spill","urgency":"urgent",
-                 "exposure_status":"unknown","language":"ko",
-                 "material_or_equipment":"acetone"}
-        session=ListenerSession(tool_context=ToolContext(
-            Path("/trusted/catalog.sqlite"),None,"ko","operational"))
-        session.active=True; session.language_mode="auto"
-        session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
-        session.history.pending_report=dict(pending)
-        socket=Socket()
-
-        async def fake_brain(client,history,transcript,sentence,mark_token,tool_event,
-                             tool_context,arbitration=None):
-            self.assertEqual(tool_context.language,"ko")
-            await sentence(SentenceSegment(0,"수정 내용을 다시 확인하겠습니다."))
-            return BrainResult(
-                [{"role":"user","content":transcript},
-                 {"role":"assistant","content":"수정 내용을 다시 확인하겠습니다."}],
-                "수정 내용을 다시 확인하겠습니다.",None,[],
-            )
-
-        with patch("voiney_lab.server.transcribe",return_value=Transcription(
-                 "네, 하지만 아세톤이 아니라 메탄올이에요.","ko")), \
-             patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
-             patch("voiney_lab.server.stream_brain_turn",
-                   side_effect=fake_brain) as brain, \
-             patch("voiney_lab.server.AsyncOpenAI"), \
-             patch.dict("os.environ",{
-                 "XAI_API_KEY":"test",
-                 "VOINEY_LAB_ANSWER_MODEL":"test",
-             },clear=False):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        brain.assert_called_once()
-        self.assertEqual(session.history.pending_report,pending)
-        self.assertIn("session.turn_language_resolved",
-                      [item["type"] for item in socket.text])
 
     def test_brain_turn_done_uses_server_authored_route(self):
         session=self.emergency_session()
@@ -370,8 +219,8 @@ class ServerTests(unittest.TestCase):
             async def send_text(self,value): self.text.append(json.loads(value))
             async def send_bytes(self,value): self.binary.append(value)
         socket=Socket()
-        async def fake_brain(client,history,transcript,sentence,mark_token,tool_event,
-                             tool_context,arbitration=None):
+        async def fake_brain(client,history,transcript,sentence,mark_token,
+                             tool_context):
             mark_token()
             await sentence(SentenceSegment(0,"Approved answer."))
             return BrainResult(
@@ -389,59 +238,6 @@ class ServerTests(unittest.TestCase):
         done=next(item for item in socket.text if item["type"]=="turn.done")
         self.assertEqual(done["route"],"brain")
         self.assertIn("first_audio_ms",done["timings_ms"])
-
-    def test_generic_progress_uses_only_observed_generation_and_tool_boundaries(self):
-        session=self.emergency_session()
-        session.language_mode="manual"; session.manual_language="ko"
-        session.turn_generations[1]=session.generation
-        session.accept_configuration(73,"cascade","ko","approved-demo")
-        class Socket:
-            def __init__(self): self.text=[]; self.binary=[]
-            async def send_text(self,value): self.text.append(json.loads(value))
-            async def send_bytes(self,value): self.binary.append(value)
-        socket=Socket()
-        async def fake_brain(client,history,transcript,sentence,mark_token,
-                             tool_event,tool_context,arbitration=None):
-            await tool_event("tool.call",{
-                "tool":"search_approved_safety_manual","round":0})
-            await tool_event("tool.result",{
-                "tool":"search_approved_safety_manual","round":0,
-                "status":"success","elapsed_ms":1})
-            await sentence(SentenceSegment(0,"승인된 정보에 근거한 응답입니다."))
-            return BrainResult(
-                [{"role":"user","content":transcript},
-                 {"role":"assistant","content":"승인된 정보에 근거한 응답입니다."}],
-                "승인된 정보에 근거한 응답입니다.",1,
-                ["search_approved_safety_manual"],
-            )
-        with patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription("승인된 정보를 알려 주세요","ko"),
-        ), patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ), patch(
-            "voiney_lab.server.stream_brain_turn",
-            side_effect=fake_brain,
-        ), patch(
-            "voiney_lab.server.AsyncOpenAI",
-        ), patch(
-            "voiney_lab.server.require_env",return_value="test",
-        ):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        progress=[item for item in socket.text if item["type"]=="turn.state"]
-        self.assertEqual([item["state"] for item in progress],[
-            "transcribing","routing","composing",
-            "checking_approved_information","composing","synthesizing",
-            "playing",
-        ])
-        self.assertEqual(
-            next(item for item in progress
-                 if item["state"]=="checking_approved_information")["route"],
-            "approved_information")
-        self.assertNotIn("checking_protocol",[item["state"] for item in progress])
-        visible=json.dumps(progress,ensure_ascii=False)
-        for forbidden in ("prompt","reasoning","arguments","Traceback"):
-            self.assertNotIn(forbidden,visible)
 
     def test_server_owned_tool_context_and_language_normalization(self):
         self.assertEqual(normalize_session_language("ko-KR"), "ko")
@@ -879,26 +675,21 @@ class ServerTests(unittest.TestCase):
         session=ListenerSession(tool_context=ToolContext(Path("/trusted/catalog.sqlite"),None,"ko","operational"))
         session.active=True
         session.history.commit([{"role":"user","content":"old"}],[{"document_id":"OLD"}])
-        session.history.pending_report={"language":"ko","location":"F"}
         session.set_tool_context(ToolContext(Path("/trusted/catalog.sqlite"),None,"en","operational"))
         self.assertEqual(session.tool_context.language,"en")
         self.assertEqual(len(session.history.messages()),1)
         self.assertEqual(session.history.source_references,[])
-        self.assertIsNone(session.history.pending_report)
 
     def test_auto_switch_preserves_state_and_reset_clears_it(self):
         session=ListenerSession(tool_context=ToolContext(Path("/trusted/catalog.sqlite"),None,"ko","operational"))
         session.active=True
         session.history.commit([{"role":"user","content":"safe history"}],[{"document_id":"OLD"}])
-        session.history.pending_report={"language":"ko","location":"F"}
         session.set_language_mode("auto")
         session.last_confirmed_language="en"
         self.assertEqual(len(session.history.messages()),2)
-        self.assertIsNotNone(session.history.pending_report)
         session.reset_sensitive_state()
         self.assertEqual(len(session.history.messages()),1)
         self.assertEqual(session.history.source_references,[])
-        self.assertIsNone(session.history.pending_report)
         self.assertIsNone(session.last_confirmed_language)
 
     def test_unresolved_server_turn_bypasses_brain_retrieval_and_report_mutation(self):
@@ -924,24 +715,19 @@ class ServerTests(unittest.TestCase):
                     Path("/trusted/catalog.sqlite"),None,"ko","operational"))
                 session.active=True; session.language_mode="auto"
                 session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
-                pending={"location":"F","summary":"unchanged","urgency":"routine",
-                         "exposure_status":"unknown","language":"ko"}
                 references=[{"document_id":"UNCHANGED"}]
-                session.history.pending_report=dict(pending)
                 session.history.source_references=list(references)
                 socket=Socket()
                 with patch("voiney_lab.server.transcribe",return_value=transcription), \
                      patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
                      patch("voiney_lab.server.stream_brain_turn") as brain, \
-                     patch("voiney_lab.tools.search_approved_safety_manual") as retrieval, \
                      patch("voiney_lab.server.AsyncOpenAI") as llm:
                     asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-                brain.assert_not_called(); retrieval.assert_not_called(); llm.assert_not_called()
-                self.assertEqual(session.history.pending_report,pending)
+                brain.assert_not_called(); llm.assert_not_called()
                 self.assertEqual(session.history.source_references,references)
                 self.assertEqual(
                     tts.call_args.args[0],
-                    REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"],
+                    CLARIFICATION_TEXT["ko"],
                 )
                 event_types=[item["type"] for item in socket.text]
                 self.assertIn("session.language_confirmation_required",event_types)
@@ -950,7 +736,7 @@ class ServerTests(unittest.TestCase):
                 self.assertIn("first_audio_ms",done["timings_ms"])
                 self.assertEqual(
                     [item["text"] for item in socket.text if item["type"]=="reply.delta"],
-                    [REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"]],
+                    [CLARIFICATION_TEXT["ko"]],
                 )
                 self.assertNotIn("tool.call",event_types)
                 self.assertNotIn("tool.result",event_types)
@@ -1605,9 +1391,9 @@ class ServerTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_stop_clears_history(self):
-        session=ListenerSession(); session.history.pending_report={"location":"before start"}; session.start(); self.assertIsNone(session.history.pending_report); session.active_turn_id=7; generation=session.generation; self.assertTrue(session.is_current(7,generation)); session.history.commit([{"role":"user","content":"x"}]); session.history.pending_report={"location":"before stop"}
-        session.stop(); self.assertEqual(len(session.history.messages()),1); self.assertIsNone(session.history.pending_report); self.assertFalse(session.is_current(7,generation))
-        session.history.pending_report={"location":"restart"}; session.start(); self.assertEqual(len(session.history.messages()),1); self.assertIsNone(session.history.pending_report); self.assertTrue(session.active); session.history.pending_report={"location":"second stop"}; session.stop(); self.assertIsNone(session.history.pending_report)
+        session=ListenerSession(); session.start(); session.active_turn_id=7; generation=session.generation; self.assertTrue(session.is_current(7,generation)); session.history.commit([{"role":"user","content":"x"}])
+        session.stop(); self.assertEqual(len(session.history.messages()),1); self.assertFalse(session.is_current(7,generation))
+        session.start(); self.assertEqual(len(session.history.messages()),1); self.assertTrue(session.active); session.stop()
         generation=session.generation
         session.stop(); self.assertEqual(len(session.history.messages()),1)
         self.assertGreater(session.generation,generation)
@@ -1626,35 +1412,6 @@ class ServerTests(unittest.TestCase):
         with patch("voiney_lab.server.log.exception") as logged:
             asyncio.run(voice_socket(socket))
         self.assertEqual(socket.receives,1); logged.assert_not_called()
-
-    def test_report_status_control_returns_worker_progress(self):
-        class Socket:
-            def __init__(self):
-                self.sent=[]
-                self.messages=iter((
-                    {"text":json.dumps({
-                        "type":"report.status.get",
-                        "report_id":"SR-20260722-A1B2C3",
-                    })},
-                    {"type":"websocket.disconnect","code":1000},
-                ))
-            async def accept(self): pass
-            async def send_text(self,value): self.sent.append(json.loads(value))
-            async def receive(self): return next(self.messages)
-        socket=Socket()
-        with patch(
-            "voiney_lab.server.check_safety_report_status",
-            return_value={
-                "status":"success","report_id":"SR-20260722-A1B2C3",
-                "report_status":"handoff_ready","attempts":1,
-                "workflow":{"procedure_id":"fictional-demo","step_id":"observe"},
-            },
-        ):
-            asyncio.run(voice_socket(socket))
-        status=next(item for item in socket.sent if item["type"]=="report.status")
-        self.assertEqual(status["report_status"],"handoff_ready")
-        self.assertEqual(status["attempts"],1)
-        self.assertEqual(status["workflow"]["step_id"],"observe")
 
     def test_each_experiment_report_export_has_safe_download_headers(self):
         with tempfile.TemporaryDirectory() as directory:
