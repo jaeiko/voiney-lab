@@ -1996,10 +1996,23 @@ function renderStepTimers(timers){
  host.hidden=!timers||typeof timers!=="object";if(host.hidden)return;
  const group=document.createElement("section"),heading=document.createElement("h4");
  group.className="protocol-review-group";
- heading.textContent=verified.length?`단계 타이머 ${verified.length}개 · 원문에서 확인한 시간`:"원문에서 확인한 단계 타이머 없음";group.appendChild(heading);
+ // Lane VF decision 7: the same step and the same length stated twice in
+ // the source ("15min", "00:15:00") is one timer with two source wordings,
+ // shown as one line; the server's list and the verified data are untouched.
+ const grouped=[];const byKey=new Map();
  for(const item of verified){
+  const key=`${item.step_label??""}${typeof item.bound_ko==="string"?item.bound_ko:""}${item.value_ko??""}${item.choice===true?"choice":""}`;
+  let entry=byKey.get(key);
+  if(!entry){entry={...item,literals:[],pages:[],excerpts:[],step_text:false};byKey.set(key,entry);grouped.push(entry);}
+  const literal=`‘${item.source_literal||""}’`;if(!entry.literals.includes(literal))entry.literals.push(literal);
+  const page=`p.${item.source_page_number??"—"}`;if(!entry.pages.includes(page))entry.pages.push(page);
+  const excerpt=`“${item.source_excerpt||""}”`;if(!entry.excerpts.includes(excerpt))entry.excerpts.push(excerpt);
+  if(item.source==="step_text")entry.step_text=true;
+ }
+ heading.textContent=grouped.length?`단계 타이머 ${grouped.length}개 · 원문에서 확인한 시간`:"원문에서 확인한 단계 타이머 없음";group.appendChild(heading);
+ for(const item of grouped){
   const row=document.createElement("p");row.className="protocol-review-status";
-  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${typeof item.bound_ko==="string"&&item.bound_ko?`${item.bound_ko} `:""}${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ‘${item.source_literal||""}’${item.source==="step_text"?" · 단계 문장에서 읽음":""} · p.${item.source_page_number??"—"} · 발췌 “${item.source_excerpt||""}”`;
+  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${typeof item.bound_ko==="string"&&item.bound_ko?`${item.bound_ko} `:""}${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ${item.literals.join(", ")}${item.step_text?" · 단계 문장에서 읽음":""} · ${item.pages.join(", ")} · 발췌 ${item.excerpts.join(" / ")}`;
   group.appendChild(row);
  }
  if(refused.length){
