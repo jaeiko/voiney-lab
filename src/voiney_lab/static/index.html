@@ -560,7 +560,7 @@ function renderExperimentContext(){
  setText("experiment-context-actions",actions);
  setText("experiment-context-readiness",entry?catalogStatus(entry).label:"프로토콜 선택 필요");
  renderResumeDisclosure();
- renderStartSummaryState();
+ foldStartSummary();
 }
 function renderState(state,detail=""){
  const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR",visibleLabel=VOICE_STATE_LABELS[visibleState]||VOICE_STATE_LABELS.ERROR;$("state").textContent=visibleLabel;$("status").textContent=detail||view[0];
@@ -1947,7 +1947,7 @@ function experimentRunsForReview(review){
  if(sessionActive&&state?.attached===true&&state.active===true&&state.protocol_id===review.protocol_id)return true;
  return experimentIsResumable()&&typeof review.revision_id==="string"&&currentExperimentProtocolRevision===review.revision_id;
 }
-function renderStartSummaryState(review=lastProtocolReview){
+function foldStartSummary(review=lastProtocolReview){
  const host=$("protocol-start-summary"),done=$("protocol-start-done"),doneText=$("protocol-start-done-text"),reopen=$("protocol-start-review"),body=$("protocol-start-body"),start=$("protocol-start");
  if(!host||host.hidden||!done||!body)return false;
  const running=experimentRunsForReview(review);
@@ -1983,7 +1983,7 @@ function renderStartSummary(review){
  renderSafetyNotices(safety,review.available_for_execution===true);
  renderStepTimers(review.timers);
  if(start){start.hidden=review.available_for_execution!==true||sessionActive;start.disabled=isRegisteringProtocol;}
- renderStartSummaryState(review);
+ foldStartSummary(review);
  return true;
 }
 // Lane PT, decision 4: each step's timer as the server verified it against
@@ -2407,7 +2407,7 @@ $("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolRev
 $("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
 $("protocol-analysis-retry")?.addEventListener("click",async()=>{if(!currentProtocolReviewId)return;await analyzeRegisteredProtocol(currentProtocolReviewId);await loadProtocolCatalog(currentProtocolReviewId);restoreProtocolAnalysisNotice();});
 $("protocol-start")?.addEventListener("click",()=>{void startReviewedProtocol();});
-$("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!startSummaryOpened;renderStartSummaryState();});
+$("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!startSummaryOpened;foldStartSummary();});
 $("report-prose-again")?.addEventListener("click",()=>{void regenerateReportProse();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
 $("experiment-timeline-refresh")?.addEventListener("click",()=>{void loadExperimentSessions(currentExperimentSessionId);});
