@@ -1348,6 +1348,26 @@ class _GeminiBackend:
         content = getattr(candidates[0], "content", None)
         return list(getattr(content, "parts", None) or ())
 
+    @staticmethod
+    def _finish_reason(response: Any, calls: bool) -> str:
+        """The OpenAI-style finish reason of a Gemini reply.
+
+        "length" when the model stopped at max_output_tokens (Gemini's
+        MAX_TOKENS, an enum or its name), so the analysis retry can tell an
+        answer cut at the output limit from one that broke the structure
+        another way (lane AQ, decision 4, 2026-10-10); "tool_calls" with a
+        function call; "stop" otherwise, as before.
+        """
+
+        if calls:
+            return "tool_calls"
+        candidates = getattr(response, "candidates", None) or ()
+        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        name = getattr(reason, "name", None)
+        if not isinstance(name, str):
+            name = reason if isinstance(reason, str) else ""
+        return "length" if name.rsplit(".", 1)[-1].upper() == "MAX_TOKENS" else "stop"
+
     @classmethod
     def _reply(cls, response: Any, model: str) -> SimpleNamespace:
         texts: list[str] = []
@@ -1368,7 +1388,7 @@ class _GeminiBackend:
             content="".join(texts), tool_calls=calls,
             usage=cls._usage(getattr(response, "usage_metadata", None)),
             model=str(getattr(response, "model_version", None) or model),
-            finish_reason="tool_calls" if calls else "stop",
+            finish_reason=cls._finish_reason(response, bool(calls)),
         )
 
     def create(self, **kwargs: Any) -> Any:

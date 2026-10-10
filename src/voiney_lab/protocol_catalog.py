@@ -18,12 +18,14 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
     MAX_SINGLE_PASS_INPUT_BYTES,
+    OpenAICompatibleProtocolAnalysisModel,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisInputTooLargeError,
@@ -89,6 +91,22 @@ _ANALYSIS_RETRY_EVENT = "protocol_analysis_retry_started"
 AUTOMATIC_RETRY_FAILURE_CODES = frozenset({"protocol_analysis_invalid_response"})
 AUTOMATIC_RETRY_LIMIT = 1
 AUTOMATIC_RETRY_AUTHORITY = "automatic_invalid_response_retry"
+#: Lane AQ, decision 4 (2026-10-10): the reasoning level the one automatic
+#: retry asks when the first answer was cut at the provider's output limit --
+#: one level below the first request, the lowest staying where it is. DS-2
+#: (2026-10-09) measured 51 of 195 Gemini 3.8 Flash "high" analysis calls
+#: cut at 65,536 output tokens, a median 61k of them thinking, and every
+#: same-setting retry cut again; the live server lost 12m47s on PMC8250384
+#: that way on 2026-10-10 02:01. An answer that broke the structure for any
+#: other reason is still sent again unchanged (lane AN).
+TRUNCATED_RETRY_REASONING: dict[str, str] = {
+    "xhigh": "high", "high": "medium", "medium": "low", "low": "low",
+}
+#: The OpenAI-style finish reason of an answer cut at the output limit. xAI
+#: and OpenAI chat completions say so themselves; the Gemini adapter reports
+#: MAX_TOKENS as this (model_providers). Any other or missing reason keeps
+#: the retry as it was.
+TRUNCATED_FINISH_REASON = "length"
 _CHUNK_PLAN_EVENT = "protocol_chunk_plan_created"
 _CHUNK_STARTED_EVENT = "protocol_chunk_analysis_started"
 _CHUNK_COMPLETED_EVENT = "protocol_chunk_analysis_completed"
@@ -312,12 +330,105 @@ def _automatic_retry_status(events: Sequence[Any]) -> dict[str, object] | None:
             state = "failed"
         elif event.event_type in {_ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT}:
             state = "passed"
-    return {
+    status: dict[str, object] = {
         "attempt": payload.get("attempt", 1),
         "limit": payload.get("limit", AUTOMATIC_RETRY_LIMIT),
         "state": state,
         "reason_code": payload.get("reason_code"),
     }
+    # A retry sent for an answer cut at the output limit says so, and what
+    # reasoning level it asked (lane AQ, decision 4); any other reads as
+    # lane AN wrote it.
+    for key in ("truncated", "reasoning_effort", "previous_reasoning_effort"):
+        if key in payload:
+            status[key] = payload[key]
+    return status
+
+
+def _truncated_retry_ko(retry: dict[str, object]) -> str:
+    """How the pipeline line says a retry was sent for a cut answer."""
+
+    level = retry.get("reasoning_effort")
+    previous = retry.get("previous_reasoning_effort")
+    if level and previous and level != previous:
+        return (f"첫 응답이 출력 한도에서 잘려 추론 수준을 한 단계 낮춰({previous}→{level}) "
+                "같은 요청을")
+    return "첫 응답이 출력 한도에서 잘렸고 추론 수준을 더 낮출 수 없어 같은 요청을 같은 설정으로"
+
+
+class _FinishReasonRecorder:
+    """An OpenAI-style client that remembers the last reply's finish reason.
+
+    Wrapped around the analysis model's client for one analysis so the
+    catalog can tell an answer cut at the output limit (finish reason
+    "length") from one that broke the structure another way (lane AQ,
+    decision 4). The request and the reply pass through unchanged; nothing
+    here judges the reply.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.finish_reason: str | None = None
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **request: Any) -> Any:
+        self.finish_reason = None
+        response = self._inner.chat.completions.create(**request)
+        choices = getattr(response, "choices", None) or ()
+        if choices:
+            reason = getattr(choices[0], "finish_reason", None)
+            self.finish_reason = reason if isinstance(reason, str) else None
+        return response
+
+
+@dataclass(frozen=True)
+class _ObservedAnalysisModel:
+    """The analysis model with its provider client observed.
+
+    Only the server's adapter (``OpenAICompatibleProtocolAnalysisModel``)
+    has a client to observe; any other ``ProtocolAnalysisModel`` is passed
+    through untouched and its retry is the same object, as before.
+    """
+
+    model: ProtocolAnalysisModel
+    recorder: _FinishReasonRecorder | None
+
+    @classmethod
+    def wrap(cls, model: ProtocolAnalysisModel) -> "_ObservedAnalysisModel":
+        if not isinstance(model, OpenAICompatibleProtocolAnalysisModel):
+            return cls(model, None)
+        recorder = _FinishReasonRecorder(model.client)
+        return cls(replace(model, client=recorder), recorder)
+
+    @property
+    def truncated(self) -> bool:
+        """Whether the last answer was cut at the provider's output limit."""
+
+        return (
+            self.recorder is not None
+            and self.recorder.finish_reason == TRUNCATED_FINISH_REASON
+        )
+
+    def retry(self) -> tuple[ProtocolAnalysisModel, dict[str, object]]:
+        """The model the automatic retry calls, and what its event records.
+
+        Unchanged unless the last answer was cut; then the same model one
+        reasoning level lower (``TRUNCATED_RETRY_REASONING``), or the same
+        model when its level is not known or already the lowest.
+        """
+
+        if not self.truncated:
+            return self.model, {}
+        current = getattr(self.model, "reasoning_effort", None)
+        lowered = TRUNCATED_RETRY_REASONING.get(current) if isinstance(current, str) else None
+        if lowered is None:
+            return self.model, {"truncated": True}
+        model = self.model if lowered == current else replace(self.model, reasoning_effort=lowered)
+        return model, {
+            "truncated": True,
+            "reasoning_effort": lowered,
+            "previous_reasoning_effort": current,
+        }
 
 
 #: What a person does after an analysis failure, by failure code (lane PA
@@ -2051,6 +2162,7 @@ class ProtocolCatalog:
 
         retry = automatic_retry or {}
         retry_count = f"{retry.get('attempt', 1)}/{retry.get('limit', AUTOMATIC_RETRY_LIMIT)}"
+        truncated_how = _truncated_retry_ko(retry) if retry.get("truncated") else None
 
         def result(stage: str, *, blocked: bool, message: str, action: str | None = None,
                    **extra: object) -> dict[str, object]:
@@ -2097,7 +2209,10 @@ class ProtocolCatalog:
                 stage = ("evidence" if failure_code == "protocol_analysis_invalid_evidence"
                          else "analysis")
                 message = _ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다.")
-                if retry.get("state") == "failed":
+                if retry.get("state") == "failed" and truncated_how:
+                    message += (f" {truncated_how} 자동으로 한 번 다시 보냈지만 "
+                                f"자동 재시도({retry_count})도 실패했습니다.")
+                elif retry.get("state") == "failed":
                     message += f" 같은 요청을 자동으로 한 번 다시 보냈지만 자동 재시도({retry_count})도 실패했습니다."
                 return result(
                     stage, blocked=True,
@@ -2110,6 +2225,12 @@ class ProtocolCatalog:
                     "chunk_planned", "chunk_analysis_in_progress", "merge_in_progress",
                 }
             ):
+                if retry.get("state") == "in_progress" and truncated_how:
+                    return result(
+                        "analysis", blocked=False,
+                        message=(f"분석 중입니다 · 다시 시도 중({retry_count}). {truncated_how} "
+                                 "자동으로 한 번 다시 보냈습니다."),
+                        automatic_retry=retry)
                 if retry.get("state") == "in_progress":
                     return result(
                         "analysis", blocked=False,
@@ -2571,15 +2692,19 @@ class ProtocolCatalog:
                 analysis_id=analysis_id,
                 limits=chunk_limits,
             )
+        observed = _ObservedAnalysisModel.wrap(model)
         try:
-            draft = analyze_protocol_extraction(extraction, model)
+            draft = analyze_protocol_extraction(extraction, observed.model)
         except Exception as exc:
             failure_code = self._record_analysis_failure(
-                revision, analysis_id, exc)
+                revision, analysis_id, exc, truncated=observed.truncated)
             if not self._automatic_retry_allowed(revision, failure_code):
                 raise
             # The same request again: the same extraction to the same model,
-            # nothing about the failure added (lane AN, decision 1).
+            # nothing about the failure added (lane AN, decision 1) -- except
+            # that an answer cut at the output limit is asked for one
+            # reasoning level lower (lane AQ, decision 4).
+            retry_model, retry_payload = observed.retry()
             retry_of, analysis_id = analysis_id, f"{analysis_id}-retry-1"
             self.store.append_event(
                 f"analysis-retry-{analysis_id}",
@@ -2594,17 +2719,20 @@ class ProtocolCatalog:
                     "limit": AUTOMATIC_RETRY_LIMIT,
                     "reason_code": failure_code,
                     "authority": AUTOMATIC_RETRY_AUTHORITY,
+                    **retry_payload,
                 },
             )
             logging.getLogger(__name__).info(
                 "protocol.analysis.automatic_retry protocol_id=%s attempt=1 limit=%d "
-                "reason_code=%s",
+                "reason_code=%s truncated=%s reasoning_effort=%s",
                 protocol_id, AUTOMATIC_RETRY_LIMIT, failure_code,
+                bool(retry_payload.get("truncated")), retry_payload.get("reasoning_effort"),
             )
             try:
-                draft = analyze_protocol_extraction(extraction, model)
+                draft = analyze_protocol_extraction(extraction, retry_model)
             except Exception as retry_exc:
-                self._record_analysis_failure(revision, analysis_id, retry_exc)
+                self._record_analysis_failure(
+                    revision, analysis_id, retry_exc, truncated=observed.truncated)
                 raise
         if draft.protocol.protocol_id != protocol_id:
             assigned_protocol = replace(draft.protocol, protocol_id=protocol_id)
@@ -2649,8 +2777,15 @@ class ProtocolCatalog:
         revision: ProtocolRevisionRecord,
         analysis_id: str,
         exc: BaseException,
+        *,
+        truncated: bool = False,
     ) -> str:
-        """Persist one attempt's bounded failure code; return the code."""
+        """Persist one attempt's bounded failure code; return the code.
+
+        ``truncated`` marks an answer the provider cut at its output limit
+        (lane AQ, decision 4), so the ledger tells that failure from one
+        the model wrote whole.
+        """
 
         failure_code = getattr(exc, "code", "analysis_failed")
         if not isinstance(failure_code, str) or not failure_code:
@@ -2662,6 +2797,8 @@ class ProtocolCatalog:
             "status": "failed",
             "failure_code": failure_code,
         }
+        if truncated:
+            failure_payload["truncated"] = True
         evidence_failure = _safe_evidence_failure(
             exc,
             source_revision=_revision_id(revision.revision_number),

@@ -56,9 +56,11 @@ draft must remain analysis_required rather than be described as complete. For
 every SourceEvidence object recursively, first select its source_page_number,
 then copy source_excerpt verbatim as one contiguous passage from that same
 extracted page. Use the shortest exact contiguous passage that fully supports
-the claim. Only source-layout whitespace that the downstream validator
-normalizes may differ; every non-whitespace character must match the cited
-page. This applies to protocol, section, step, material, equipment,
+the claim. Never cut an excerpt at a line-end hyphen or inside a word: quote
+through to where the word ends, taking in the next line of the page when the
+word continues there. Only source-layout whitespace that the downstream
+validator normalizes may differ; every non-whitespace character must match
+the cited page. This applies to protocol, section, step, material, equipment,
 prerequisite, warning, note, expected-result, and image-related evidence
 wherever present in the schema.
 Never paraphrase, summarize, translate, correct OCR, merge separated passages,
