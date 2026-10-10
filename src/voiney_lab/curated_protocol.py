@@ -3281,6 +3281,35 @@ _TIMER_QUERY_PATTERNS = (
         re.I,
     ),
     re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
+    # Lane VF, decision 5 (2026-10-10): the time left asked with no target
+    # named -- "지금 몇 분 남았어?", "얼마나 더 남았어?", "언제 끝나?", "몇 분 더
+    # 기다려야 해?" -- is the server's timer, whatever words lead it in. The
+    # whole utterance, so "몇 단계 남았어?" (steps), "아직 색이 남았어" (an
+    # observation) and "언제 끝난 걸로 봐?" (the endpoint) stay what they are.
+    re.compile(
+        r"^(?:(?:지금|현재|아직|그럼|그래서|그러면|이제|근데|그런데|이거|이게|이건|이\s*단계|타이머|타임|"
+        r"시간|시간이|시간은|남은\s*시간|남은\s*시간이|남은\s*시간은|한|좀|대충|대략)\s*)*"
+        r"(?:"
+        r"(?:끝나(?:려면|기까지|기\s*전까지)\s*)?"
+        r"(?:몇\s*(?:분|초|시간)|얼마|얼마나|얼마\s*만큼|얼마큼|얼마쯤|얼마\s*정도)\s*(?:이나|나|쯤|정도)?\s*(?:더\s*)?"
+        r"(?:남았|남아\s*있|남았는지|남은\s*거|남은\s*건|남은\s*건지|남지|남나|기다려야|기다리면|기다려|있어야|걸려|걸리|"
+        r"남았어야)"
+        r"|(?:더\s*)?기다려야\s*(?:해|하나|하니|돼|되나|되니|할까)"
+        r"|언제(?:쯤|까지)?\s*(?:끝나|끝날|끝나는|다\s*되|되는|돼)"
+        r"|끝나(?:려면|기까지|기\s*전까지)\s*(?:얼마나|몇\s*(?:분|초|시간)|얼마)"
+        r"|남은\s*시간(?:이|은)?\s*(?:얼마|얼마나|몇\s*(?:분|초|시간)|알려|말해)?"
+        r")"
+        r"(?:\s*(?:더|이나|나|쯤|정도))?"
+        r"\s*(?:해|하|돼|되|있|야|이야|예요|에요|어|어요|지|죠|니|나|나요|는지|을까|ㄹ까|거야|거예요|건가|건가요|"
+        r"습니까|주세요|줘|줄래|주라|요|노|노\?|나노|노요)*"
+        r"\s*[?？]*\s*$"
+    ),
+    re.compile(
+        r"^(?:how\s+(?:much\s+)?(?:longer|more\s+time)|how\s+much\s+time\s+(?:do\s+(?:i|we)\s+have\s+)?left|"
+        r"when\s+(?:does|will|is)\s+(?:it|the\s+timer|this)\s+(?:end|done|finish|be\s+done|be\s+over)|"
+        r"how\s+long\s+(?:is\s+)?(?:left|remaining|to\s+go)|how\s+much\s+longer\s+(?:do\s+(?:i|we)\s+)?(?:have\s+to\s+)?wait)\??$",
+        re.I,
+    ),
 )
 _PREVIEW_STEP_PATTERNS = (
     re.compile(r"^(?:(?P<label>[1-9][0-9]?)\s*단계|step\s*(?P<en>[1-9][0-9]?))\s*(?:미리\s*알려줘|미리보기|미리\s*설명|예습)$", re.I),
@@ -17366,7 +17395,11 @@ class CuratedProtocolSession:
             rem = timer_info.get("remaining_seconds", 0)
             minutes = rem // 60
             seconds = rem % 60
-            if intent.intent_kind in {
+            if intent.intent_kind == "step_timer_status":
+                # Lane VF, decision 5: the time left asked with no target
+                # named is the server's timer as it stands.
+                response = self._remaining_answer(language)
+            elif intent.intent_kind in {
                 "semantic_step_timer_information", "step_timer_question",
             }:
                 if state == "running":
@@ -20421,6 +20454,50 @@ class CuratedProtocolSession:
         if reading.durations:
             return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있어요. 이 단계에는 확인된 타이머가 없어요."
         return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있고, 시간은 적혀 있지 않아요."
+
+    def _remaining_answer(self, language: str) -> str:
+        """"몇 분 남았어?", "언제 끝나?": the step timer as it stands (lane VF, decision 5).
+
+        Running: "3단계 타이머 13분 57초 남았어요." Run out: "3단계 15분 타이머는
+        2분 전에 끝났어요." (a minimum or a maximum in lane VX's words: "최소
+        시간 2시간은 2분 전에 지났어요.", "최대 시간 2시간은 2분 전에 됐어요.").
+        No timer running: "지금 도는 타이머는 없어요." and, where this step's
+        source states a time the server verified, that time. Never "PDF에서
+        확인할 수 없어요."; nothing changes.
+        """
+
+        step = self.fixture.steps[self.current_index]
+        timer = self.timer_status()
+        ko = language == "ko"
+        state = timer.get("state")
+        label = timer.get("step_label") or step.source_label
+        if state == "running":
+            left = _duration_words_long(int(timer.get("remaining_seconds", 0)), language)
+            return (
+                f"{label}단계 타이머 {left} 남았어요." if ko
+                else f"Step {label} timer: {left} left."
+            )
+        if state == "expired":
+            gone = max(0, int(timer.get("elapsed_seconds", 0)) - int(timer.get("duration_seconds", 0)))
+            ago = _duration_words_long(gone if gone < 60 else gone - gone % 60, language)
+            duration = int(timer.get("duration_seconds", 0))
+            bound = str(timer.get("bound") or "exact")
+            words = _duration_words_long(duration, language)
+            if not ko:
+                if bound == "minimum":
+                    return f"The Step {label} minimum time of {words} passed {ago} ago."
+                if bound == "maximum":
+                    return f"The Step {label} maximum time of {words} was reached {ago} ago."
+                return f"The Step {label} {self._timer_name(duration, bound, language)} timer ended {ago} ago."
+            if bound == "minimum":
+                return f"{label}단계 최소 시간 {josa(words, '은', '는')} {ago} 전에 지났어요."
+            if bound == "maximum":
+                return f"{label}단계 최대 시간 {josa(words, '은', '는')} {ago} 전에 됐어요."
+            return f"{label}단계 {self._timer_name(duration, bound, language)} 타이머는 {ago} 전에 끝났어요."
+        none = "지금 도는 타이머는 없어요." if ko else "No timer is running now."
+        if self.timer_seconds_for_step(self.current_index) or self.timer_choices_for_step(self.current_index):
+            return f"{none} {self._source_time_answer(language)}"
+        return none
 
     def _elapsed_answer(self, language: str) -> str:
         """"몇 분 지났어?": the running timer's time gone and left (lane PT, decision 3)."""
