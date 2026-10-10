@@ -52,6 +52,7 @@ from voiney_lab.curated_protocol import (
     TimerNotice,
     josa_ro,
     load_curated_protocol_fixture,
+    plan_without_internal_names,
     spoken_korean,
 )
 from voiney_lab.experiment_protocol_analysis import (
@@ -8755,6 +8756,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # persistence is the reporting-acknowledgement gate. Re-read the
             # possibly replaced plan only after both so neither display nor
             # TTS can use pre-persistence success language.
+            # Lane VF, decision 9: whatever path wrote the sentences, no
+            # internal identifier reaches the screen or the voice.
+            plan=plan_without_internal_names(plan,turn_language)
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")

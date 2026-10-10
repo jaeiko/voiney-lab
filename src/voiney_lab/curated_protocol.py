@@ -3677,6 +3677,118 @@ def _final_syllable_batchim(text: str) -> int | None:
     return None
 
 
+# --- Lane VF, decision 9 (2026-10-10): no internal identifier reaches the experimenter
+
+#: A step parameter's role in the experimenter's words (Korean, English).
+PARAMETER_ROLE_WORDS: dict[str, tuple[str, str]] = {
+    "incubation_temperature": ("배양 온도", "incubation temperature"),
+    "incubation_duration": ("배양 시간", "incubation duration"),
+    "agitation_speed": ("부드러운 교반 속도", "gentle-agitation speed"),
+    "solution_volume": ("사용 용액 부피", "solution volume"),
+    "concentration": ("용액 농도", "solution concentration"),
+    "vessel_capacity": ("튜브 용량", "tube capacity"),
+    "gel_piece_size": ("젤 조각 크기", "gel-piece size"),
+}
+#: Other identifiers that have reached a sentence, in the experimenter's words.
+INTERNAL_NAME_WORDS: dict[str, tuple[str, str]] = {
+    **PARAMETER_ROLE_WORDS,
+    "solution_a": ("용액 A", "solution A"),
+    "solution_b": ("용액 B", "solution B"),
+    "hplc_water": ("HPLC 물", "HPLC water"),
+    "gel_plug": ("젤 플러그", "gel plug"),
+    "stained_protein_band": ("염색된 단백질 밴드", "stained protein band"),
+    "formic_acid": ("포름산", "formic acid"),
+    "sds_page": ("SDS-PAGE", "SDS-PAGE"),
+    "mass_spectrometry": ("질량분석", "mass spectrometry"),
+    "current_step": ("현재 단계", "current step"),
+}
+#: A step fact's evidence id ("note_1", "expected_result_2") in words.
+_EVIDENCE_KIND_WORDS: dict[str, tuple[str, str]] = {
+    "current_step": ("현재 단계", "current step"),
+    "sub_action": ("세부 동작", "sub-action"),
+    "warning": ("주의", "warning"),
+    "note": ("주석", "note"),
+    "expected_result": ("예상 결과", "expected result"),
+    "material": ("준비물", "material"),
+    "equipment": ("장비", "equipment"),
+    "prerequisite": ("사전 준비", "prerequisite"),
+}
+
+
+def evidence_words(evidence_id: str, language: str = "ko") -> str:
+    """A fact's evidence id as the experimenter reads it: "현재 단계", "주석 1", "예상 결과 2".
+
+    Lane VF, decision 9. An id of an unknown shape is shown as "원문" alone
+    rather than as the identifier.
+    """
+
+    index = 0 if language == "ko" else 1
+    match = re.fullmatch(r"([a-z]+(?:_[a-z]+)*?)(?:_(\d+))?", evidence_id or "")
+    if match is not None:
+        words = _EVIDENCE_KIND_WORDS.get(match.group(1))
+        if words is not None:
+            number = match.group(2)
+            return f"{words[index]} {number}" if number else words[index]
+    return "원문" if language == "ko" else "source"
+
+
+#: An English snake_case identifier: two or more lower-case words joined by
+#: underscores, standing on its own ("agitation_speed", "step_timer_status").
+_INTERNAL_NAME = re.compile(r"(?<![A-Za-z0-9_/.:-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9_/-])")
+#: What follows an identifier that was pasted in with a particle ("…에 연결된").
+_NAME_PARTICLE = re.compile(r"^\s*(?:에|에서|으로|로|은|는|이|가|을|를|과|와|의)(?=\s|$)")
+
+
+def hide_internal_names(text: str, language: str = "ko") -> str:
+    """``text`` with every internal identifier put in the experimenter's words or taken out.
+
+    Lane VF, decision 9: a sentence the experimenter sees or hears never
+    carries an English snake_case identifier. A known one becomes its
+    Korean (or English) words; an unknown one is taken out with the particle
+    it was glued to, and the spaces are closed up. The protocol's own
+    text, values and units are not identifiers and are left as they are.
+    """
+
+    if not text or "_" not in text:
+        return text
+    index = 0 if language == "ko" else 1
+
+    def replace(match: re.Match[str]) -> str:
+        known = INTERNAL_NAME_WORDS.get(match.group(0))
+        if known is not None:
+            return known[index]
+        return "\x00"
+
+    scrubbed = _INTERNAL_NAME.sub(replace, text)
+    if "\x00" in scrubbed:
+        # An unknown identifier: gone with a particle glued to it; a
+        # Korean "X의 값" without X reads as "값".
+        scrubbed = re.sub(r"\x00 ?(?:에|에서|으로|로|은|는|이|가|을|를|과|와|의)?(?=\s|$|[.,;:!?)\]])", "", scrubbed)
+        scrubbed = scrubbed.replace("\x00", "")
+        scrubbed = re.sub(r"[ \t]{2,}", " ", scrubbed)
+        scrubbed = re.sub(r" +([.,;:!?)\]])", r"\1", scrubbed)
+        scrubbed = re.sub(r"\(\s*\)", "", scrubbed).strip()
+    return scrubbed
+
+
+def plan_without_internal_names(plan: Any, language: str = "ko") -> Any:
+    """A turn plan whose shown and spoken sentences carry no internal identifier.
+
+    Applied once at the server's output stage (lane VF, decision 9), for
+    every answering path alike. The plan's own ids and evidence are not
+    sentences and are left alone.
+    """
+
+    changes: dict[str, Any] = {}
+    for field in ("display_text", "speech_text", "primary_text"):
+        value = getattr(plan, field, None)
+        if isinstance(value, str):
+            cleaned = hide_internal_names(value, language)
+            if cleaned != value:
+                changes[field] = cleaned
+    return replace(plan, **changes) if changes else plan
+
+
 def josa(text: str, with_batchim: str, without: str) -> str:
     """``text`` with the particle its last spoken syllable takes (을/를, 이/가)."""
 
@@ -6827,14 +6939,16 @@ def _display_contract(
 ) -> str:
     if language == "en":
         citations = ", ".join(
-            f"{evidence_id} · p.{page}"
+            f"{evidence_words(evidence_id, 'en')} · p.{page}"
             for evidence_id, page in zip(evidence_ids, source_pages)
         )
         source_suffix = f"\n\nSource · {citations}" if citations else ""
         return primary_text + source_suffix
     source = "\n\n".join(source_texts)
+    # Lane VF, decision 9: the evidence named in words ("현재 단계", "주석 1"),
+    # never by its id ("current_step", "note_1").
     citations = ", ".join(
-        f"{evidence_id} · 원문 p.{page}"
+        f"{evidence_words(evidence_id, 'ko')} · 원문 p.{page}"
         for evidence_id, page in zip(evidence_ids, source_pages)
     )
     label = "답변 · 한국어 참고 번역" if translated else "답변 · 한국어"
@@ -12836,16 +12950,7 @@ class CuratedProtocolSession:
             )
             if re.search(token_pattern, key, re.I) is None:
                 continue
-            role_labels = {
-                "incubation_temperature": ("배양 온도", "incubation temperature"),
-                "incubation_duration": ("배양 시간", "incubation duration"),
-                "agitation_speed": ("부드러운 교반 속도", "gentle-agitation speed"),
-                "solution_volume": ("사용 용액 부피", "solution volume"),
-                "concentration": ("용액 농도", "solution concentration"),
-                "vessel_capacity": ("튜브 용량", "tube capacity"),
-                "gel_piece_size": ("젤 조각 크기", "gel-piece size"),
-            }
-            label = role_labels.get(binding.role, ("단계 조건", "step condition"))[
+            label = PARAMETER_ROLE_WORDS.get(binding.role, ("단계 조건", "step condition"))[
                 0 if language == "ko" else 1
             ]
             rendered = f"{binding.value} {binding.unit}"
@@ -12905,10 +13010,14 @@ class CuratedProtocolSession:
                 )
                 if len(candidates) == 1:
                     item = candidates[0]
+                    # Lane VF, decision 9: the role in the experimenter's
+                    # words, never the identifier ("agitation_speed").
+                    role_words = PARAMETER_ROLE_WORDS.get(
+                        requested_role, ("단계 조건", "step condition"))
                     answer = (
-                        f"현재 {frame.step_label}단계에서 {item.value} {item.unit}는 {requested_role}에 연결된 값입니다."
+                        f"현재 {frame.step_label}단계에서 {item.value} {item.unit}는 {role_words[0]}입니다."
                         if language == "ko" else
-                        f"In step {frame.step_label}, {item.value} {item.unit} is bound to {requested_role}."
+                        f"In step {frame.step_label}, {item.value} {item.unit} is the {role_words[1]}."
                     )
                     add(
                         ClaimTargetType.PARAMETER,item.parameter_id,"role",
