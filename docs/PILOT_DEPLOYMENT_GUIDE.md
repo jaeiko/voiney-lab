@@ -1,7 +1,9 @@
 # Pilot Deployment Guide
 
-Date: 2026-08-24  
+Date: 2026-08-24, revised 2026-10-10 (lane CL)\
 Audience: Technical owner and laboratory pilot owner
+
+VoineyLab is an MVP prototype, not field-validated.
 
 This guide is the release checklist for one controlled, supervised pilot. The
 tested topology is one FastAPI/Uvicorn process and local SQLite/object storage.
@@ -19,7 +21,9 @@ Before installation, record:
 - whether provider-backed voice will be used;
 - incident owner, abort criteria, and restore objective.
 
-`CAPABILITY_MATRIX.md` is the current integration truth.
+The README's provider section (§4) records the values in use and which
+provider calls were live-tested, and when. (`CAPABILITY_MATRIX.md` was
+archived on 2026-10-10.)
 
 ## 2. Prepare the host
 
@@ -45,8 +49,13 @@ At minimum, review the configuration groups in `.env.example`:
 - usage scope and approved safety catalog;
 - protocol, workspace, and report storage;
 - OIDC identity for operational scope;
-- xAI credential and Cascade voice options;
-- the optional reference feature, disabled unless approved.
+- every role's provider and model -- the setting table's default is "설정
+  필요", so write each one as `.env.example` does -- and the keys they need
+  (OpenAI, Gemini, ElevenLabs, Google Cloud speech);
+- the Cascade voice options;
+- the features that reach outside the source (external web references, the
+  outside-PDF explanation), which the pilot launcher keeps off unless the
+  shell or `.env` sets them.
 
 Start the pilot with `scripts/run_pilot.sh`, not by hand. It decides the usage
 scope and the approved safety catalog itself and ignores `.env` for both:
@@ -92,6 +101,9 @@ Run from the repository root:
 ```bash
 source .venv/bin/activate
 python scripts/replay_turns.py
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check
@@ -158,8 +170,10 @@ Use a non-hazardous or fictional workflow to verify:
 2. Export the report formats the laboratory keeps (JSON, Markdown, CSV, DOCX).
 3. Stop the service and create/verify the post-session backup.
 4. Complete participant interviews and incident review.
-5. Do not advance beyond a supervised pilot until the remaining gates in
-   `PRODUCTIZATION_FINAL_REPORT.md` have owners and acceptance evidence.
+5. Do not advance beyond a supervised pilot until the remaining gates -- an
+   identity provider, the field evaluation in `VOICE_FIELD_EVALUATION_PLAN.md`,
+   and the providers' data-handling terms -- have owners and acceptance
+   evidence.
 
 ## Operational references
 

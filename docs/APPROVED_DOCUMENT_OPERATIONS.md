@@ -1,9 +1,12 @@
 # Approved laboratory reference operations
 
-This guide covers only the read-only reference tier. It does not approve a
-Candidate A transition, change the curated fixture, or create ProcedureStore
-state. Candidate A remains the execution authority for its own quantities,
-ordering, and transition rules.
+Revised 2026-10-10 (lane CL). This guide builds the approved safety-document
+catalog: the file `scripts/run_pilot.sh` requires before it serves (§4) and
+that the step safety card reads. The voice answer from approved lab
+references and the Moss reranker were deleted on 2026-10-10; what the catalog
+is for next (and the pilot launcher's check) is decided in lane PL. The
+catalog never changes a protocol: the protocol's source remains the authority
+for its own quantities, ordering, and transitions.
 
 ## 1. Prepare a reviewed manifest
 
@@ -71,18 +74,16 @@ Configuration belongs in the existing operator environment; this guide does not
 modify `.env`.
 
 Before launch, run the audit command against the exact configured path and scope.
-After launch, ask one related question whose answer is known to exist and verify:
-
-- current-protocol facts are checked first;
-- the Tool is shown only if approved reference retrieval actually runs;
-- title, version, checksum, section/page, and chunk ID match the catalog;
-- the answer is labelled additional approved guidance;
-- the current Candidate A step does not change.
+After launch, open a step whose safety card should carry a catalog excerpt
+and check that its title, version and section match the catalog and that the
+current step does not change. (Until 2026-10-10 a related voice question also
+searched this catalog and answered from a matching section; that path was
+deleted in lane CL.)
 
 The current VM catalog audited on 2026-08-10 contains only two approved, active,
 Korean `demo` records (`FICTIONAL-MOSS-DEMO-SDS-KO` and
-`FICTIONAL-MOSS-DEMO-SOP-KO`, version 1.0). It is suitable only for the fictional
-Moss demo. It cannot support operational Candidate A precautions until an
+`FICTIONAL-MOSS-DEMO-SOP-KO`, version 1.0). It is suitable only for a fictional
+demo (CI builds the same records for its browser tests). It cannot support operational Candidate A precautions until an
 appropriate laboratory reference is separately reviewed and configured, and the
 pilot launcher refuses it because both records are demo documents.
 
@@ -91,7 +92,7 @@ pilot launcher refuses it because both records are demo documents.
 `scripts/run_pilot.sh` does not read either variable from `.env`. It fixes the
 catalog at `data/runtime/pilot/approved_safety_catalog.sqlite` (an absolute
 path under the checkout) and the scope at `reference_only`, the one scope a
-pilot without OIDC can run; `README.md` ("Launchers") gives the reasons. Build
+pilot without OIDC can run; `docs/BEHAVIOR_REFERENCE.md` ("Launchers") gives the reasons. Build
 the catalog from a reviewed manifest in a staging path as in §2, audit it with
 `--scope reference_only`, and copy it into place between server runs:
 
@@ -156,14 +157,11 @@ What the step safety card shows depends on the manifest:
   every step and takes one of the card's three lines; the catalog has no field
   that limits a document to the whole session.
 
-## 5. Optional Moss reranking
+## 5. Moss reranking (deleted)
 
-Moss is an optional reranker behind the SQLite approval gate. Follow
-`docs/MOSS_RETRIEVAL.md`. The installed package is the `usemoss/moss` SDK; index
-creation/updating uploads selected section text to Moss Cloud. Do not sync
-laboratory content without explicit external-service approval. A disabled,
-unavailable, or timed-out Moss runtime falls back to deterministic SQLite
-ordering.
+The optional Moss reranker was deleted on 2026-10-10 (lane CL), with its
+settings and index sync script; it returns later for searching past records
+and manuals. The record is `docs/archive/MOSS_RETRIEVAL.md`.
 
 ## 6. Optional authoritative web references
 
@@ -205,8 +203,8 @@ path.
 ### Supplemental model knowledge is not a retrieval backend
 
 `SUPPLEMENTAL_MODEL_KNOWLEDGE` is a separately gated last resort for a narrow
-conceptual dimension after the protocol, original source, approved catalog, and
-enabled authoritative web tier do not answer it. It is never indexed into the
+conceptual dimension after the protocol, original source, and enabled
+authoritative web tier do not answer it. It is never indexed into the
 approved catalog and never gains document or URL citations.
 
 ```bash
@@ -221,7 +219,9 @@ available but web search is not terminally useful. It remains ineligible for
 safety controls, preparation instructions, substitutions, numerical operating
 values, completion criteria, or any state mutation. The UI label is “일반 모델
 설명 · 확인된 권위 근거 없음”; there is no citation list and no claim of
-verification. Disable it to exercise a strict evidence-only run.
+verification. Disable it to exercise a strict evidence-only run. (The screen now
+labels this answer "AI 일반 지식" (lane U3) and the short outside-PDF
+explanation "PDF 밖 설명 · AI 일반 지식" (lane R6).)
 
 Research status is Turn/generation owned. Once a result reaches `success`,
 `failed`, `timeout`, `cancelled`, `superseded`, or `unavailable`, neither the
@@ -275,6 +275,6 @@ HTTP 200.
 The local audit on 2026-08-10 found two active approved demo documents and three
 active sections in `demo` scope. The representative Candidate A/acetonitrile
 precaution query returned zero matches. Therefore the live local catalog is not
-useful Candidate A evidence. Do not claim internal-RAG success until a real
-reviewed laboratory manifest is staged, audited, and explicitly configured by
-the operator using Sections 1–4.
+useful Candidate A evidence. (The voice answer this gate judged was deleted on
+2026-10-10, lane CL; the catalog still feeds the step safety card and the
+pilot launcher's check.)

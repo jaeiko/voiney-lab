@@ -4,7 +4,10 @@ This documents the reproducible deployment path that already exists in this
 repository (`scripts/run_dev.sh` plus a directly-invoked `uvicorn`
 process), rather than introducing a new orchestration platform. It is scoped
 to a controlled research pilot, not a regulated GxP/clinical release — see
-`README.md`'s "Known limitations and deliberate non-goals" section.
+`README.md` §3 ("하지 않는 것"). The product is an MVP prototype, not
+field-validated. The controlled pilot itself runs `scripts/run_pilot.sh`,
+which refuses to start without its approved safety catalog
+(`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4).
 
 ## Process model
 
@@ -42,9 +45,11 @@ committed file) for secrets, matching the "no fake external validation" and
 - `GET /readyz` — configuration readiness. Returns `503` if identity,
   workspace, protocol-catalog, or report configuration fails to parse (for
   example, operational scope without complete OIDC settings); returns `200`
-  with non-secret identity mode and capability flags otherwise. This does
-  **not** verify live reachability of xAI or any other external provider — no
-  local probe should make a billable provider call.
+  with non-secret identity mode and capability flags (`workspace_enabled`,
+  `protocol_catalog_enabled`, `experiment_reports_enabled`; `moss_enabled`
+  left with the Moss connection on 2026-10-10, lane CL) otherwise. This does
+  **not** verify live reachability of any external provider — no local probe
+  should make a billable provider call.
 
 ## Durable state and backup
 
@@ -122,18 +127,18 @@ development identity.
 ## Observability
 
 `runtime_metrics.py` records bounded, content-free route/tool/latency
-aggregates. The tenant admin analytics page and
-`GET /api/workspace/admin/pilot-metrics` add completed-workflow, failed-command,
-recovery-event, mutation-failure, user-action, and completion-rate counters.
-Durable session counts are lifetime values; voice/action/failure counters obey
-the configured analytics-retention window. Neither includes raw audio,
+aggregates. `GET /api/admin/metrics` (the shared `VOINEY_LAB_ADMIN_TOKEN`)
+returns them with the experiment reports' aggregate counts (reports,
+completion rate, workflow events, anomalies and blocked steps). The tenant
+admin analytics page and `GET /api/workspace/admin/pilot-metrics` were
+removed on 2026-10-08 (lane DI). Nothing returned includes raw audio,
 transcripts, identities, free text, credential values, or model reasoning.
 
 Monitor at minimum:
 
 - `/healthz` availability and `/readyz` non-200 responses;
-- increases in failed commands or mutation failures;
-- recovery events and completion rate per controlled pilot window;
+- the report aggregates of `/api/admin/metrics`: completion rate, anomalies
+  and blocked steps per controlled pilot window;
 - service restart frequency, disk capacity, and backup verification failures.
 
 On a mutation failure, leave the workflow at its last server-confirmed state,

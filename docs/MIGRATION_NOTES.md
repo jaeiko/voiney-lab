@@ -224,6 +224,35 @@ one (`scripts/migrate_env.py --check` reports them under "코드가 읽지 않�
 `SEMANTIC_INTENT_TIMEOUT_SECONDS`, `SEMANTIC_INTENT_MIN_CONFIDENCE` and
 `SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE`.
 
+## Lane CL (2026-10-10): code without storage of its own removed
+
+No schema changes and no migration. Removed: the approved-safety-manual and
+lab-reference searches (the voice answer from approved lab references, which
+the research path ran on a related question), the safety report tools and
+the report hand-off worker `python -m voiney_lab.worker` with its
+`report.status.get` control, and the Moss reranker with its index sync script.
+The worker's files on a host (`reports/inbox.jsonl`, `reports/processed.txt`,
+`reports/status/`, `outbox/*.eml`) are no longer read or written; nothing
+deletes them. Past experiment records that cite `approved_lab_corpus` keep
+their rows and are still shown. `GET /readyz` no longer returns
+`moss_enabled`.
+
+Removed settings, without their `VOINEY_LAB_` prefix as above:
+`LAB_MANAGER_EMAIL`, `FROM_EMAIL`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`,
+`MOSS_AUTO_REFRESH`, `MOSS_INDEX_NAME`, `MOSS_MODEL_ID`,
+`MOSS_ALLOWED_SCOPES`, `MOSS_ALPHA`, `MOSS_CANDIDATE_LIMIT`,
+`MOSS_QUERY_TIMEOUT_MS`, `MOSS_LOAD_TIMEOUT_SECONDS` and
+`MOSS_REFRESH_SECONDS`. A `.env` that still sets one starts as before; the
+name is simply not read (`scripts/migrate_env.py --check` lists it under
+"코드가 읽지 않는 설정"). `VOINEY_LAB_MOSS_ENABLED` stays in the table only
+because the launchers and the test baseline command still set it to false;
+nothing reads it.
+
+The setting table's default for each role's provider and model, and for the
+STT and TTS providers, is now "설정 필요" (human decision 2). The code's old
+xai/grok fallback is unchanged, so an environment that sets no role behaves
+as before; `.env.example` sets every role to the values in use.
+
 ## Commercial workspace schema 7 → 8 (lane CF, 2026-10-08)
 
 Lane DI left the schema at 7. The same day lane CF raised it to 8 (commit
@@ -401,7 +430,8 @@ under `data/` is rewritten.
   `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` and its alias
   `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
 - There is no transition period. Instead the server (after it loads the
-  repository `.env`), the handoff worker, `scripts/run_dev.sh`,
+  repository `.env`), the handoff worker (deleted on 2026-10-10, lane CL),
+  `scripts/run_dev.sh`,
   `scripts/run_pilot.sh`, `scripts/run_ci_server.sh`,
   `scripts/collect_chunks.sh` and pytest refuse to start while an old name is
   set, with "옛 설정 이름 N개: (names). scripts/migrate_env.py 를 실행하세요." The

@@ -7,17 +7,12 @@ Importing voiney_lab.server installs the filter, exactly as uvicorn's import
 of the app does. Nothing here needs the licensed Candidate A PDF.
 """
 
-import hashlib
 import io
-import json
 import logging
-import tempfile
 import threading
 import time
 import unittest
 import warnings
-from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import quote
 
 import httpx
@@ -26,7 +21,6 @@ from uvicorn.logging import AccessFormatter, DefaultFormatter
 from websockets.sync.client import connect
 
 import voiney_lab.server  # noqa: F401  (installs the uvicorn log filter)
-from voiney_lab.worker import process_once
 
 SEARCH = "용매 누출"
 FILENAME = "김교수_시료목록.pdf"
@@ -156,51 +150,6 @@ class UvicornRequestLineTests(unittest.TestCase):
                 "opening /ws?<query removed>",
                 "GET /x?<query removed> failed",
             ],
-        )
-
-
-class _FakeCompletions:
-    def create(self, **kwargs):
-        report = json.loads(kwargs["messages"][1]["content"])
-        text = f"보고 {report['id']}를 관리자에게 인계합니다. Voice Workflow Agent 자동 인계"
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
-
-
-class WorkerLogTests(unittest.TestCase):
-    def test_the_report_location_reaches_the_log_as_size_and_digest(self):
-        location = "3층 김교수 연구실 흄후드 앞"
-        reports = [
-            {"id": "SR-20261001-AAAAAA", "location": location, "summary": "reported issue",
-             "urgency": "urgent", "exposure_status": "unknown", "language": "ko", "filed_at_epoch": 1},
-            # An urgency outside the known set is not copied into the log either.
-            {"id": "SR-20261001-BBBBBB", "location": location, "summary": "reported issue",
-             "urgency": "누가 다쳤어요", "exposure_status": "unknown", "language": "ko", "filed_at_epoch": 2},
-        ]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            inbox = root / "reports" / "inbox.jsonl"
-            inbox.parent.mkdir(parents=True)
-            inbox.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in reports), encoding="utf-8")
-            with self.assertLogs("voiney_lab.worker", "INFO") as captured:
-                handled = process_once(
-                    inbox_path=inbox,
-                    processed_path=root / "reports" / "processed.txt",
-                    status_dir=root / "reports" / "status",
-                    outbox_dir=root / "outbox",
-                    client=SimpleNamespace(chat=SimpleNamespace(completions=_FakeCompletions())),
-                )
-        self.assertEqual(handled, 2)
-        logged = "\n".join(captured.output)
-        for typed in (location, "김교수", "누가 다쳤어요"):
-            self.assertNotIn(typed, logged)
-        digest = hashlib.sha256(location.encode("utf-8")).hexdigest()[:16]
-        self.assertIn(
-            f"processing SR-20261001-AAAAAA (location_chars={len(location)} location_sha256={digest}, urgent)",
-            logged,
-        )
-        self.assertIn(
-            f"processing SR-20261001-BBBBBB (location_chars={len(location)} location_sha256={digest}, unknown_urgency)",
-            logged,
         )
 
 

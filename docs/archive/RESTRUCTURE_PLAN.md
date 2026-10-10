@@ -1,3 +1,5 @@
+> 보관: 2026-10-08 MVP 이전 설계 — PI·관리자 승인·반려·회수는 폐기, 리비전·검토자 입력 개념은 줄 RV 에서 다시 설계
+
 # 저장소 구조 정리 계획 — 패키지 이름 변경과 데이터 재배치
 
 - 상태: **실행 완료 (2026-09-29).** 1~5단계를 `feature/jaejun-restructure` 에 커밋 5개로 했다. 결과는 §10.
@@ -270,7 +272,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 | 3 | `moss_retrieval.py:256,431` | `"voice_workflow_agent_key"` | 외부 Moss 색인에 저장되는 메타데이터 필드 이름이다. 바꾸면 이미 올린 색인 항목과 맞지 않는다 |
 | 4 | `scripts/sync_moss_index.py:82` | 〃 | 동기화가 기존 색인 항목의 이 필드를 비교한다 |
 | 5 | `tests/test_moss_retrieval.py:223,404` | 〃 | 위 필드를 확인하는 테스트다 |
-| 6 | `.env.example:70` (`docs/MOSS_RETRIEVAL.md:65,179` 도 같은 값) | `VOINEY_LAB_MOSS_INDEX_NAME=voice_workflow_agent-approved-safety` | 외부 서비스에 이미 있는 색인 이름이다 |
+| 6 | `.env.example:70` (`docs/MOSS_RETRIEVAL.md:65,179` 도 같은 값) | `MOSS_INDEX_NAME=voice_workflow_agent-approved-safety` (옛 설정; 줄 CL, 2026-10-10 에 Moss 연결과 함께 삭제) | 외부 서비스에 이미 있는 색인 이름이다 |
 | 7 | `worker.py:171`, `.env.example:21` | `voice_workflow_agent@example.invalid` | 알림 메일 발신 주소의 기본값이다. 밖으로 나가는 값이라 바꾸면 동작이 바뀐다 |
 
 **저장소 안에 저장된 데이터를 확인한 결과 (바꿔도 기존 기록을 읽을 수 있다는 근거):**

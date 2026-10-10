@@ -1,5 +1,9 @@
 # Product Improvement Strategy & Prioritization Framework
 
+A generic rubric. The current direction and the next lanes are in
+`roadmap.md` (revised 2026-10-10); where this file and that one differ,
+`roadmap.md` is the plan.
+
 ## 1. Discovery Methodology for Laboratory AI Agents
 
 When building an enterprise-grade AI workflow agent for research laboratories, product decisions must be driven by empirical user observation rather than speculative chatbot features.
@@ -35,4 +39,4 @@ Every proposed improvement or architecture extension must be evaluated using thi
 2. **Long-Term Experiment Lifecycle**: Seamless continuation of multi-day experiments across shifts and lab handovers.
 3. **Structured Research Knowledge Base**: Transforming raw step observations into institutional lab intelligence.
 4. **Interactive Researcher Learning Mode**: Contextual explanations of protocol rationale and common pitfalls for novice trainees.
-5. **Protocol Versioning & Digital Signatures**: Cryptographic verification of protocol versions for strict regulatory compliance (GLP/GMP).
+5. **Protocol Versioning**: Reviewed versions kept as v1/v2 with the reviewer's name (lane RV). No digital signatures or GLP/GMP claim is planned.

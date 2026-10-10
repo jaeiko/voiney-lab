@@ -1,13 +1,18 @@
 # Security, Privacy & Safety Rules
 
-The current build is a controlled-pilot prototype. A configured shared token on
-the aggregate admin endpoint is a fail-closed MVP control, not production IAM.
+The current build is VoineyLab, an MVP prototype, not field-validated. A
+configured shared token on the aggregate admin endpoint is a fail-closed MVP
+control, not production IAM. Revised 2026-10-10 (lane CL) to the human
+decisions of that day.
 
-## 1. Safety & Approved Knowledge Boundary
+## 1. Safety & Knowledge Boundary
 
-1. **Approved Knowledge Exclusivity**:
-   - The agent is strictly prohibited from offering operational guidance on hazardous substances, biohazards, or dangerous machinery without an approved, verified document source in `approved_catalog.sqlite` or active protocol definitions.
-   - Reference excerpts retrieved from external sources or supplemental models are strictly marked as untrusted reference context; they must NEVER override active SOP safety constraints.
+1. **Values and safety come from the source or a person**:
+   - Values (amounts, times, temperatures, concentrations) and safety statements come only from the protocol's source (passing the source-evidence check) or from a value a person confirmed. The agent offers no operational guidance on hazardous substances, biohazards, or dangerous machinery beyond that.
+   - A term the source leaves unexplained may get a short general explanation, labelled "AI 일반 지식" on the screen and said as "PDF에는 따로 설명이 없어요. 일반적으로는 …"; the server drops one that carries numbers, methods or quantities.
+   - Safety precautions and completion criteria are never written by the AI.
+   - Reference excerpts from external sources or supplemental models are marked as untrusted reference context; they must NEVER override the protocol's safety statements or the approved safety documents (the facility SOP corpus).
+   - Planned (lane RV, not built): a value corrected in review is shown as "검토자 입력", a value the AI proposes as "AI 제안", and either becomes a run value only once a person confirms it.
 2. **Emergency Protocol Precedence**:
    - Immediate safety hazards (chemical burns, toxic fumes, fire, explosions, medical emergencies) immediately trigger deterministic emergency stop instructions:
      1. Stop work immediately.
@@ -36,7 +41,7 @@ the aggregate admin endpoint is a fail-closed MVP control, not production IAM.
      SSRF validation, size/MIME/dimension checks, and same-origin proxying.
    - When rights or bytes cannot be validated, emit only a cited source link.
 5. **Audit Trail Immutability**:
-   - Experiment event logs (`experiment_report_events`) and procedure session records (`procedure_sessions`) are append-only.
+   - Experiment event logs (`experiment_report_events`) and experiment session events (`experiment_session_events`) are append-only. (The procedure-session stack was deleted on 2026-10-08, lane DI.)
    - No mechanism exists to delete or alter historical incident records or timestamped observations.
 
 ---
@@ -44,8 +49,7 @@ the aggregate admin endpoint is a fail-closed MVP control, not production IAM.
 ## 3. Human Authorization & Governance Safeguards
 
 1. **Human-in-the-Loop Gate**:
-   - Submitting an incident report requires explicit verbal confirmation (`네, 제출해 주세요`, `Yes, submit the report`).
-   - The agent cannot self-submit or automatically escalate reports without human approval.
+   - A protocol starts only when the experimenter presses "이 프로토콜로 시작"; a step completes only after the experimenter's explicit confirmation; model output only proposes a change, which the server validates.
+   - There is no PI or administrator approval, and no revision approval, rejection or revocation (decision of 2026-10-08). The voice safety report and its hand-off were deleted on 2026-10-10 (lane CL).
 2. **No Autonomous Restart**:
-   - Once a workflow is placed into `blocked_for_handoff`, the agent software cannot unblock or resume the workflow.
-   - Only a designated human laboratory manager or PI can authorize an experiment restart after reviewing the handoff artifact.
+   - Model or voice output never resumes a blocked experiment or lifts a pause on its own; resuming needs the experimenter's explicit request, validated by the server.

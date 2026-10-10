@@ -1,6 +1,9 @@
 # User Guide — Controlled Pilot
 
-Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen)
+Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen) and
+2026-10-10 (lane CL: what the 10/10 voice test used)
+
+VoineyLab is an MVP prototype, not field-validated.
 
 This guide covers the experimenter's screen, the only one since 2026-10-08.
 It does not replace a laboratory SOP, safety training, or emergency
@@ -48,6 +51,26 @@ Useful commands include:
 - “I completed this step.”
 - “Pause the workflow.”
 
+What the 2026-10-10 voice test used, as it works now:
+
+- **Timers** — the step timer tells you one minute before its end and at its
+  end, on the screen and aloud (after you stop talking, if you are). "몇 분
+  남았어?" / "언제 끝나?" are answered from the timer; with none running,
+  "지금 도는 타이머는 없어요."
+- **"그거"** — "그거 얼마나 넣어?" and the like are matched to the current
+  step's own values.
+- **Questions** — what the source says is answered from the source. A term
+  the source does not explain ("HPLC water 가 뭐야?") may get a short general
+  explanation after that answer, said as "PDF에는 따로 설명이 없어요. 일반적으로는
+  …" and shown as "AI 일반 지식" (when the outside-PDF explanation is on). It
+  never carries values, methods or safety guidance.
+- **Pictures** — "그림 보여줘" shows the source's figure of the step, with
+  "그림 크게 보기" and "원본 쪽 보기". When the source has none and drawing is
+  on, a drawing is made at once and marked "AI 가 그린 그림". With the web
+  explanation on, "○○ 사진 보여줘" looks the thing up on the web, with sources.
+- **Notes** — "침전물 안 보임 남겨 줘" records what you said; a sentence with a
+  negation is kept whole.
+
 A completion request may ask for explicit confirmation. Confirm only after the
 physical work is actually complete. Explanations, warnings, protocol audits,
 history, and previews must not change the step.
@@ -88,4 +111,8 @@ step before retrying any state-changing command.
 4. Record issues using the incident template in `PILOT_READINESS_PACKAGE.md`.
 
 The reviewer and laboratory-administrator screens, protocol approval, lab
-adaptations and the eLabFTW export were removed on 2026-10-08 (lane DI).
+adaptations and the eLabFTW export were removed on 2026-10-08 (lane DI). The
+voice answer from approved lab references and the voice safety report were
+removed on 2026-10-10 (lane CL). A review tab, where a person reviews the
+analysis before it is registered, is planned (lane RV); it is not in this
+build.

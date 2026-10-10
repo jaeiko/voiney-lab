@@ -1,14 +1,18 @@
-# Current Architecture — Voice Workflow Agent
+# Current Architecture — VoineyLab
 
 Date: 2026-08-24  
 Scope: Controlled pilot, Cascade voice path
 
 Revised 2026-10-08 (lane DI): one experimenter screen, no approval step.
+Revised 2026-10-10 (lane CL): the approved-reference search, the safety
+report tools and their hand-off worker, and the Moss connection were
+deleted; the provider names below follow the settings.
 
 ## Product boundary
 
-Voice Workflow Agent is a hands-free execution and record layer for
-laboratory protocols uploaded as PDFs. It is not a general chatbot, an
+VoineyLab (formerly Voice Workflow Agent; the company is Voiney) is a
+hands-free execution and record layer for laboratory protocols uploaded as
+PDFs -- an MVP prototype, not field-validated. It is not a general chatbot, an
 autonomous experiment runner, an approval authority, a full ELN/LIMS, or an
 emergency/safety system.
 
@@ -64,8 +68,9 @@ canonical browser events          append-only session/report events
 4. Browser PCM is framed and admitted by WebRTC VAD. Each turn has connection,
    generation, and turn identities; barge-in and cancellation invalidate stale
    output.
-5. xAI STT output passes transcript/language admission. Empty, non-speech, or
-   inconsistent input is rejected without a workflow mutation.
+5. STT output (the provider is a setting: ElevenLabs `scribe_v2` in the
+   current `.env.example`) passes transcript/language admission. Empty,
+   non-speech, or inconsistent input is rejected without a workflow mutation.
 6. Shared arbitration classifies the request. Read-only questions remain read-
    only. A combined explanation/next request stages a completion confirmation.
 7. Deterministic protocol logic validates identity, revision, current step,
@@ -150,9 +155,12 @@ automatic failover, and regulated availability out of scope.
 
 ## External integration boundary
 
-The production adapters for xAI (STT, TTS, analysis, router), the OCR and
-translation providers and generic OIDC are server-side and constrained by
-credential/scope/origin rules. The protocols.io, Google Drive, GitHub and
-eLabFTW adapters were removed on 2026-10-08 (lane DI). See
-`CAPABILITY_MATRIX.md` for current live-test classification; contract
+The production adapters for the model roles (each role's provider is a
+setting: openai, google, anthropic or xai), the speech providers (ElevenLabs,
+Google Cloud, xAI), the OCR providers and generic OIDC are server-side and
+constrained by credential/scope/origin rules. The values in use are in the
+README's provider section, with the provider calls that were live-tested and
+when. The protocols.io, Google Drive, GitHub and eLabFTW adapters were removed
+on 2026-10-08 (lane DI); the approved-reference search, the safety report
+hand-off worker and the Moss reranker on 2026-10-10 (lane CL). Contract
 coverage must never be described as provider success.

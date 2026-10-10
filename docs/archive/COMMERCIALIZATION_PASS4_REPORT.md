@@ -109,7 +109,7 @@ Checked configuration presence only (booleans), never printed credential
 values.
 
 **Before this pass**, only `XAI_API_KEY`/`XAI_BASE_URL` and
-`VOINEY_LAB_MOSS_PROJECT_ID`/`VOINEY_LAB_MOSS_PROJECT_KEY`/etc. were configured in this
+`MOSS_PROJECT_ID`/`MOSS_PROJECT_KEY` (옛 설정; 줄 CL, 2026-10-10 에 Moss 연결과 함께 삭제)/etc. were configured in this
 environment; no Drive/GitHub/protocols.io/OIDC/eLabFTW/OCR/Seqera
 credentials exist here.
 

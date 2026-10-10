@@ -5,8 +5,6 @@ from typing import Any
 
 class ProtocolError(ValueError): pass
 
-REPORT_ID_PATTERN=re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
-
 def parse_control(raw: str) -> dict[str, Any]:
     try: message=json.loads(raw)
     except json.JSONDecodeError as exc: raise ProtocolError("control message must be valid JSON") from exc
@@ -96,14 +94,6 @@ def parse_control(raw: str) -> dict[str, Any]:
             "configuration_id": message.get("configuration_id"),
             "generation": message.get("generation"),
         }
-    if message["type"]=="report.status.get":
-        report_id=message.get("report_id")
-        if not isinstance(report_id,str):
-            raise ProtocolError("report.status.get needs a report_id")
-        normalized=report_id.strip().upper()
-        if REPORT_ID_PATTERN.fullmatch(normalized) is None:
-            raise ProtocolError("report.status.get report_id is invalid")
-        return {"type":"report.status.get","report_id":normalized}
     if message["type"] in {"experiment.report.get", "experiment.report.status.get"}:
         report_id = message.get("report_id")
         configuration_id = message.get("configuration_id")
