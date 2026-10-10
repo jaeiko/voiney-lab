@@ -478,7 +478,8 @@ await send(state,{source_figures:[figure]});
 assert(images().length===1&&images()[0].src===figure.url,`figure not drawn: ${JSON.stringify(panel().children.map(c=>c.tagName))}`);
 assert(panel().textContent.includes("원문 캡션 · Band in the tube before washing."),`caption missing: ${panel().textContent}`);
 assert(node("source-visual-state").textContent==="원문 그림",`state line: ${node("source-visual-state").textContent}`);
-assert(panel().textContent.includes("원문 페이지 크게 보기"),"page link missing");
+// Lane VF decision 8: two links -- the figure large, and the page as an image.
+assert(panel().textContent.includes("그림 크게 보기")&&panel().textContent.includes("원본 쪽 보기"),`links missing: ${panel().textContent}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 

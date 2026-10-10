@@ -2605,6 +2605,25 @@ _VALUE_QUESTION = re.compile(
     r"\bhow\s+(?:much|many|long|hot)\b|\btemperature\b|\bconcentration\b|\bvolume\b"
 )
 LANE_WV_PICTURE_KINDS = ("source_figure", "web_lookup", "drawn_diagram")
+#: The rules' words when the step's page has no figure (lane WV, decision 1);
+#: the server replaces them when it draws or looks the thing up instead
+#: (lane VF, decision 8).
+NO_FIGURE_WORDS = (
+    "이 단계 원문에는 그림이 없어요. 웹에서 찾아보려면 '웹에서 찾아봐', "
+    "도식이 필요하면 '그림으로 그려 줘'라고 말해 주세요."
+)
+#: A photograph asked for, as against a drawing: "사진", "실제 모습", "실물".
+_PHOTO_WORDS = re.compile(r"사진|실제\s*모습|실물|photo|photograph|picture\s+of|real\s+(?:image|look)", re.I)
+
+
+def photo_asked(transcript: str) -> bool:
+    """Whether the words ask for a photograph ("사진", "실제 모습") rather than a drawing.
+
+    Lane VF, decision 8: with no figure in the source, a photograph asked
+    for may come from the web (only then); anything else asked for is drawn.
+    """
+
+    return _PHOTO_WORDS.search(_utterance_key(transcript)) is not None
 
 
 def asked_about_values(transcript: str) -> bool:
@@ -10447,10 +10466,7 @@ class CuratedProtocolSession:
                 if caption and count == 1:
                     words += f" 원문 설명: {caption}"
                 return words
-            return (
-                "이 단계 원문에는 그림이 없어요. 웹에서 찾아보려면 '웹에서 찾아봐', "
-                "도식이 필요하면 '그림으로 그려 줘'라고 말해 주세요."
-            )
+            return NO_FIGURE_WORDS
         lead = "화면에 원문 그림을 띄웠어요. " if shown else ""
         if kind == "web_lookup":
             subject = self._picture_subject_words(intent, transcript)

@@ -42,6 +42,7 @@ from voiney_lab.cascade_filler import (
 )
 from voiney_lab.curated_protocol import (
     LANE_WV_PICTURE_KINDS,
+    NO_FIGURE_WORDS,
     STT_CONTROL_KEYTERMS,
     control_words,
     ClaimAdmissionStatus,
@@ -52,8 +53,10 @@ from voiney_lab.curated_protocol import (
     TimerNotice,
     josa_ro,
     load_curated_protocol_fixture,
+    photo_asked,
     plan_without_internal_names,
     spoken_korean,
+    web_lookup_subject,
 )
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
@@ -3904,6 +3907,55 @@ def get_protocol_source_page(
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
+
+@app.get(
+    "/api/protocols/{protocol_id}/revisions/{revision_id}/source-pages/{source_page}/image"
+)
+def get_protocol_source_page_image(
+    protocol_id:str,revision_id:str,source_page:int,
+):
+    """The source page itself as one image (lane VF, decision 8: "원본 쪽 보기").
+
+    Same-origin, rendered from the uploaded PDF by the one PDF engine and
+    kept in memory only; never labelled a figure.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None and candidate.protocol_id==protocol_id:
+            fixture=candidate
+        else:
+            catalog,store=_open_protocol_catalog()
+            try:
+                fixture=catalog.load_executable_fixture(protocol_id)
+            finally:
+                store.close()
+        if (
+            fixture.revision_id!=revision_id
+            or fixture.source_pdf_path is None
+            or fixture.source_pdf_sha256 is None
+        ):
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        png=source_figures.page_image(
+            fixture.source_pdf_path,fixture.source_pdf_sha256,source_page)
+        if png is None:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":f'inline; filename="source-page-{source_page}.png"',
+                "X-Protocol-Source-SHA256":str(fixture.source_pdf_sha256),
+                "X-Protocol-Source-Page":str(source_page),
+            })
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
 @dataclass(frozen=True)
 class ListenerEvent:
     kind:str
@@ -4978,6 +5030,10 @@ def _web_lookup_words(
         )
     if getattr(plan,"visual_kind",None)=="web_lookup":
         speech=str(plan.speech_text or "")
+        if "웹에서 찾아볼게요" in speech:
+            # Already said so (lane VF, decision 8: a photograph looked up
+            # in place of a figure the source does not have).
+            return plan
         lead="화면에 원문 그림을 띄웠어요. " if speech.startswith("화면에 원문 그림을 띄웠어요.") else ""
         display=str(plan.display_text or "")
         old_sentence=speech[len(lead):]
@@ -5161,6 +5217,10 @@ def _drawing_words(plan:Any,language:str)->Any:
     )
     speech=str(plan.speech_text or "")
     display=str(plan.display_text or "")
+    if words in speech:
+        # Already said so (lane VF, decision 8: a drawing in place of a
+        # figure the source does not have).
+        return plan
     if _DRAWING_OFF_WORDS in speech:
         return replace(
             plan,
@@ -5176,6 +5236,70 @@ def _drawing_words(plan:Any,language:str)->Any:
         speech_text=f"{speech} {words}".strip(),
         display_text=f"{display}\n\n{words}" if display else words,
     )
+
+
+# --- Lane VF, decision 8: no figure in the source -> drawn, or a photo looked up ---
+
+_NO_FIGURE_DRAWING_WORDS="원문에는 그림이 없어서 그려 드릴게요. "+_DRAWING_ON_WORDS
+_PICTURE_WORD_ONLY=re.compile(r"(?:실제|진짜|실물)?\s*(?:사진|그림|이미지|모습|삽화|도식)")
+
+
+def _replace_words(plan:Any,old:str,new:str)->Any:
+    changes={}
+    for field in ("speech_text","display_text","primary_text"):
+        value=getattr(plan,field,None)
+        if isinstance(value,str) and old in value:
+            changes[field]=value.replace(old,new)
+    return replace(plan,**changes) if changes else plan
+
+
+def _picture_fallback(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,transcript:str,language:str,
+)->Any:
+    """A picture asked for that the source does not have: drawn, or a photo looked up.
+
+    Lane VF, decision 8 (decision of 2026-10-10: with no figure in the
+    source, draw at once instead of telling the experimenter to ask again).
+    The rules' plan says the step's page has no figure; here, when drawing
+    is on, the turn becomes a drawing -- "원문에는 그림이 없어서 그려 드릴게요."
+    and lane WV's checks and display as they are -- and when a photograph
+    was asked for ("사진", "실제 모습") of a thing named, the web is on and
+    looking up is allowed, it becomes a web lookup of that thing instead.
+    With both off the rules' words stand. Nothing here changes state.
+    """
+
+    if (
+        getattr(plan,"action",None) is not CuratedProtocolAction.VISUAL_REQUEST
+        or getattr(plan,"visual_kind",None)!="source_figure"
+        or not getattr(curated,"active",False)
+        or NO_FIGURE_WORDS not in str(plan.speech_text or "")
+        or language!="ko"
+    ):
+        return plan
+    if curated.source_figures_for_current_step():
+        return plan
+    subject=web_lookup_subject(transcript) if photo_asked(transcript) else None
+    if subject and _PICTURE_WORD_ONLY.fullmatch(subject):
+        # "사진 보여줘": the picture word itself is no thing to look up.
+        subject=None
+    if (
+        subject
+        and session.web_explanation_settings.enabled
+        and getattr(curated,"web_lookup","on")=="on"
+    ):
+        words=(
+            f"원문에는 사진이 없어서 {subject}{_josa_eun_neun(subject)} 웹에서 찾아볼게요. "
+            "찾으면 화면에 출처와 함께 띄울게요. 값과 안전 지시는 원문만 따라요."
+        )
+        plan=_replace_words(plan,NO_FIGURE_WORDS,words)
+        return replace(
+            plan,visual_kind="web_lookup",visual_intent="web_explanation",
+            requested_entity=subject,requested_entities=(subject,),
+        )
+    if session.drawn_diagram_settings.enabled:
+        plan=_replace_words(plan,NO_FIGURE_WORDS,_NO_FIGURE_DRAWING_WORDS)
+        return replace(plan,visual_kind="drawn_diagram",visual_intent="drawn_diagram")
+    return plan
 
 
 async def _run_drawing(
@@ -8358,6 +8482,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # Lane VT, decision 5: after a long silence, an answer that is
             # not a command is led by where the run stands.
             plan=curated.with_return_summary(plan,silence=silence,now=_wall_clock())
+            # Lane VF, decision 8: a figure the source does not have is drawn
+            # (or, a photograph asked for, looked up) instead of asked again.
+            plan=_picture_fallback(session,curated,plan,transcript,turn_language)
             web_lookup_now=_web_lookup_wanted(session,curated,plan)
             if web_lookup_now:
                 plan=_web_lookup_words(curated,plan,transcript,turn_language)
