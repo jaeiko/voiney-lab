@@ -35,11 +35,14 @@ _FULL_SCALE = 32768.0
 #: Lane SP1, decision 1: how much quieter than the wearer's measured level a
 #: voice may be before it is taken for someone else's, by the "민감도"
 #: setting: 높음 filters at a small difference, 낮음 only at a large one. The
-#: default (보통) comes from the synthetic bench (lane SP1 report, section
-#: "여유값"): with a boom or earbud microphone the wearer's own sentences
-#: stay inside it in every condition measured, while a neighbour at 1 m on
-#: the same microphones falls outside it.
-SENSITIVITY_MARGINS_DB: dict[str, float] = {"high": 6.0, "normal": 12.0, "low": 18.0}
+#: values come from the synthetic bench (lane SP1 report, section 3-3):
+#: 12 dB (보통) keeps the wearer's own sentences, read at any level the bench
+#: varied them (±6 dB), inside the line even when the reference sentence was
+#: read beside a loud machine, and takes every neighbour at 1 m on a boom
+#: microphone out; 9 dB (높음) also takes a neighbour at 1 m out on an
+#: earbud microphone in a quiet room while still keeping the wearer there;
+#: 6 dB lost the wearer's quieter sentences, so it is not offered.
+SENSITIVITY_MARGINS_DB: dict[str, float] = {"high": 9.0, "normal": 12.0, "low": 18.0}
 DEFAULT_SENSITIVITY = "normal"
 
 
