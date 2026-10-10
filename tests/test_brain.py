@@ -84,4 +84,3 @@ class BrainTests(unittest.TestCase):
                                               tool_context=context))
                 payload=json.dumps(client.chat.completions.calls[0]["messages"],ensure_ascii=False)
                 self.assertIn(f"session language is {name}",payload)
-
