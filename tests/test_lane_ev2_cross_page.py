@@ -280,6 +280,45 @@ class OtherTextBetweenThePiecesIsRefusedTests(unittest.TestCase):
             validate_protocol_analysis_evidence(tampered, source())
 
 
+class StepLinesAreNeverRunningLinesTests(unittest.TestCase):
+    """A step line that differs from another only in its numbers is still body text."""
+
+    def extraction(self, pages: tuple[str, ...]) -> ProtocolPdfExtraction:
+        return ProtocolPdfExtraction(
+            original_filename="steps.pdf", byte_size=1, sha256="e" * 64,
+            media_type="application/pdf", page_count=len(pages), encrypted=False,
+            metadata=ProtocolPdfMetadata(None, None, None, None, None, None, None),
+            pages=tuple(ProtocolPdfPage(n, text, False) for n, text in enumerate(pages, start=1)),
+        )
+
+    def test_a_step_line_opening_every_page_is_not_skipped(self):
+        # "5. Wash ..." and "9. Wash ..." are one line once numbers are set aside.
+        pages = (
+            f"{TITLE}\n1. Wash the cells with 1 mL PBS.\n2. Spin the cells, then keep the",
+            "5. Wash the cells with 5 mL PBS.\npellet on ice.\n6. Spin.",
+            "9. Wash the cells with 9 mL PBS.\n10. Spin.",
+        )
+        quote = "2. Spin the cells, then keep the\npellet on ice."
+        payload = response(step("2", "Spin the cells, then keep the pellet on ice.", quote))
+        payload["protocol"]["sections"][0]["title_source_text"] = TITLE
+        payload["protocol"]["sections"][0]["evidence"] = evidence(TITLE)
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            parse_protocol_analysis_response(json.dumps(payload), self.extraction(pages))
+
+    def test_two_pages_have_no_running_lines(self):
+        # A line repeated on two pages is not enough to call it a header.
+        pages = (
+            f"{TITLE}\nWash the cells with PBS.\nKeep the",
+            "Wash the cells with PBS.\npellet on ice.",
+        )
+        quote = "Keep the\npellet on ice."
+        payload = response(step("", "Keep the pellet on ice.", quote))
+        payload["protocol"]["sections"][0]["title_source_text"] = TITLE
+        payload["protocol"]["sections"][0]["evidence"] = evidence(TITLE)
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            parse_protocol_analysis_response(json.dumps(payload), self.extraction(pages))
+
+
 class OcrPageEdgesTests(unittest.TestCase):
     """A page with no text blocks (OCR): its trailing page number line is not body."""
 

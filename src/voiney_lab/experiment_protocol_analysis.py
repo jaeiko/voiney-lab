@@ -1442,6 +1442,13 @@ _WORDED_PAGE_NUMBER = re.compile(
 _PAGE_OF_PAGES = re.compile(r"([0-9]{1,4})\s*(?:of|/)\s*([0-9]{1,4})", re.IGNORECASE)
 _BARE_PAGE_NUMBER = re.compile(r"[0-9]{1,4}")
 _NUMBER_RUN = re.compile(r"\d+")
+#: A numbered line: a number of one to three digits ("3.", "3)", "(3)",
+#: "Step 3", "3") and then a word. "1.5 mL", "5.2 시약" and "25 °C" are not.
+#: Never a running line.
+_NUMBERED_LINE = re.compile(
+    r"\s*(?:step\s*)?\(?([0-9]{1,3})(?:\.(?![0-9])|\)|:)?\s+(?=[^\W\d_])",
+    re.IGNORECASE,
+)
 
 
 def _line_key(line: str) -> str:
@@ -1491,12 +1498,14 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
 
     A running header or footer -- a journal line, a "Cite as" line, a
     copyright line -- is printed at the same place among the first or the
-    last twelve non-blank lines of at least half the pages (two at the
+    last twelve non-blank lines of at least half the pages (three at the
     least), the numbers in it aside, and never between those edges: a label
     the body repeats (protocols.io's "Note") moves from page to page and is
     printed mid-page too. A line with a number and no letter is never one: a
     step number or a value printed alone on its line repeats too (a line of
-    punctuation alone, FDA's "`", may be).
+    punctuation alone, FDA's "`", may be). Nor is a line that opens with a
+    step number: "5. Wash with 1 mL PBS." and "9. Wash with 2 mL PBS." are
+    one line once their numbers are set aside.
     """
 
     counts: dict[tuple[str, int, str], int] = {}
@@ -1507,17 +1516,22 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         if str(number) in {*lines[:_EDGE_LINES], *lines[-_EDGE_LINES:]}:
             numbered.add(number)
         places = {
-            *(("top", index, _line_key(line)) for index, line in enumerate(lines[:_EDGE_LINES])),
+            *(
+                ("top", index, _line_key(line))
+                for index, line in enumerate(lines[:_EDGE_LINES])
+                if not _NUMBERED_LINE.match(line)
+            ),
             *(
                 ("bottom", index, _line_key(line))
                 for index, line in enumerate(reversed(lines[-_EDGE_LINES:]))
+                if not _NUMBERED_LINE.match(line)
             ),
         }
         for place in places:
             if any(character.isalpha() for character in place[2]) or "#" not in place[2]:
                 counts[place] = counts.get(place, 0) + 1
         inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
-    needed = max(2, -(-len(page_texts) // 2))
+    needed = max(3, -(-len(page_texts) // 2))
     return _PageEdges(
         running=(
             frozenset(
