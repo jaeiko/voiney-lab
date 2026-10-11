@@ -203,6 +203,12 @@ class ProtocolCatalogEntry:
     #: The curated development fixture, as against an uploaded PDF's own
     #: analysis. Said on screen and in the report; it grants nothing.
     development_only: bool = False
+    #: What marks the stored analysis as older than the analyser (lane RN,
+    #: decision 3): ``repeat_count_kind_missing`` when a fixed repeat was
+    #: stored before lane EV2 asked how the source states its count. The
+    #: Korean line is advice ("다시 분석 권장"); the analysis still runs.
+    analysis_outdated_codes: tuple[str, ...] = ()
+    analysis_outdated_ko: str | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -219,6 +225,8 @@ class ProtocolCatalogEntry:
             "execution_blocker_codes": list(self.execution_blocker_codes),
             "development_only": self.development_only,
             "lifecycle_state": self.lifecycle_state,
+            "analysis_outdated_codes": list(self.analysis_outdated_codes),
+            "analysis_outdated_ko": self.analysis_outdated_ko,
         }
 
 
@@ -677,6 +685,32 @@ def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, obj
             for item in table.refused
         ],
     }
+
+
+#: Lane RN, decision 3: the one line the list and the start screen show over
+#: an analysis stored before the analyser improved.
+ANALYSIS_OUTDATED_KO = "분석기 개선 전 분석 · 다시 분석 권장"
+ANALYSIS_OUTDATED_REPEAT_KIND = "repeat_count_kind_missing"
+
+
+def _analysis_outdated_codes(protocol: domain.ExperimentProtocol) -> tuple[str, ...]:
+    """What marks a stored analysis as older than the analyser, if anything.
+
+    Lane RN, decision 3: a fixed repeat stored without ``repeat_count_kind``
+    was read before lane EV2 asked how the source states its count, so its
+    count may be one round short (headspace: "three … in total" stored as
+    2). The analysis is still served and still runs; this is the advice to
+    analyse it again. An analysis with no fixed repeat, or whose repeats
+    carry a kind, cannot be told from a current one and gets nothing.
+    """
+
+    if any(
+        isinstance(construct, domain.FixedRangeRepetition)
+        and construct.repeat_count_kind is None
+        for construct in protocol.constructs
+    ):
+        return (ANALYSIS_OUTDATED_REPEAT_KIND,)
+    return ()
 
 
 def _repeat_count_checks_ko(protocol: domain.ExperimentProtocol) -> list[str]:
@@ -1822,12 +1856,14 @@ class ProtocolCatalog:
         # page it could not read. Every other readiness reason is a notice
         # the experimenter sees before pressing start.
         blocker_codes: tuple[str, ...] = ()
+        outdated_codes: tuple[str, ...] = ()
         if analysis is not None:
             blocker_codes = tuple(
                 reason.code.value
                 for reason in domain.execution_blocking_reasons(analysis.readiness)
             )
             lifecycle_state = "blocked" if blocker_codes else "ready"
+            outdated_codes = _analysis_outdated_codes(analysis.protocol)
         available = analysis is not None and not blocker_codes
         # An analysis whose title was emptied (lane EV2, decision 2) is named
         # as one without an analysis is: by the file's own title or name.
@@ -1857,6 +1893,8 @@ class ProtocolCatalog:
             lifecycle_state=lifecycle_state,
             execution_blocker_codes=blocker_codes,
             development_only=development_only,
+            analysis_outdated_codes=outdated_codes,
+            analysis_outdated_ko=ANALYSIS_OUTDATED_KO if outdated_codes else None,
         )
 
     def list_entries(self) -> tuple[ProtocolCatalogEntry, ...]:
