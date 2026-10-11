@@ -110,6 +110,15 @@ class RefusalAssertions(unittest.TestCase):
             parse(source, **parts)
         self.assertEqual(raised.exception.diagnostic.reason_code, reason_code)
 
+    def assert_emptied(self, source: ProtocolPdfExtraction, field: str, **parts) -> None:
+        """A metadata value the page does not support is not accepted: since
+        lane EV2 (decision 2) the field is emptied and recorded instead of the
+        whole analysis being refused for it."""
+
+        draft = parse(source, **parts)
+        self.assertIn(getattr(draft.protocol.metadata, field), (None, (), ""))
+        self.assertEqual(draft.protocol.cleared_fields, (f"metadata.{field}",))
+
 
 def dated_page(date_line: str) -> ProtocolPdfExtraction:
     return extraction(f"{TITLE}\n{date_line}\n{STEP}")
@@ -164,28 +173,28 @@ class WrittenDateTests(RefusalAssertions):
                 parse(dated_page(line), metadata=date_claim(claim, line))
         # 03.04.2020 is 3 April day-first but 4 March month-first: refused.
         line = "Published: 03.04.2020"
-        self.assert_refused(
-            dated_page(line), "claim_not_found", metadata=date_claim("2020-04-03", line)
+        self.assert_emptied(
+            dated_page(line), "publication_date", metadata=date_claim("2020-04-03", line)
         )
 
     def test_the_date_must_be_in_the_fields_own_excerpt(self):
         # The page prints the date, but the evidence the claim cites does not.
-        self.assert_refused(
+        self.assert_emptied(
             dated_page("Published: 3 April 2020"),
-            "claim_not_found",
+            "publication_date",
             metadata=date_claim("2020-04-03", TITLE),
         )
 
     def test_only_a_metadata_date_field_reads_a_written_date(self):
         line = "Published: 3 April 2020"
-        self.assert_refused(
-            dated_page(line), "claim_not_found", metadata=date_claim("2020-04-03", line, "version")
+        self.assert_emptied(
+            dated_page(line), "version", metadata=date_claim("2020-04-03", line, "version")
         )
 
     def test_a_calendar_date_that_does_not_exist_is_refused(self):
         line = "Published: 30 February 2020"
-        self.assert_refused(
-            dated_page(line), "claim_not_found", metadata=date_claim("2020-02-30", line)
+        self.assert_emptied(
+            dated_page(line), "publication_date", metadata=date_claim("2020-02-30", line)
         )
 
     def test_the_human_decisions_refusals(self):
@@ -205,16 +214,16 @@ class WrittenDateTests(RefusalAssertions):
         }
         for name, (claim, line) in cases.items():
             with self.subTest(name):
-                self.assert_refused(
-                    dated_page(line), "claim_not_found", metadata=date_claim(claim, line)
+                self.assert_emptied(
+                    dated_page(line), "publication_date", metadata=date_claim(claim, line)
                 )
 
     def test_the_date_on_a_different_page_is_refused(self):
         line = "Published: 3 April 2020"
         source = extraction(f"{TITLE}\n{STEP}", line)
         # Cited from page 1, where it is not printed.
-        self.assert_refused(source, "quote_not_found", metadata=date_claim("2020-04-03", line))
-        self.assert_refused(source, "claim_not_found", metadata=date_claim("2020-04-03", TITLE))
+        self.assert_emptied(source, "publication_date", metadata=date_claim("2020-04-03", line))
+        self.assert_emptied(source, "publication_date", metadata=date_claim("2020-04-03", TITLE))
 
 
 def numbered_page(*lines: str) -> ProtocolPdfExtraction:

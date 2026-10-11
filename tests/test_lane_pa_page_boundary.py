@@ -26,7 +26,6 @@ from pathlib import Path
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisEvidenceError,
-    ProtocolAnalysisResponseError,
     parse_protocol_analysis_response,
     validate_protocol_analysis_evidence,
 )
@@ -266,11 +265,16 @@ class OtherEvidenceRulesStandTests(unittest.TestCase):
             PAGE_1_PART,
         ))
 
-    def test_a_provider_cannot_supply_the_second_page_itself(self):
+    def test_a_provider_supplied_second_page_is_kept_only_when_it_continues_the_first(self):
+        # Lane EV2, decision 5: the provider may name the second page; the
+        # server keeps it only as found in the two pages joined.
         payload = step("24", CROSSING, PAGE_1_PART)
         payload["evidence"]["continued_on_page_number"] = 2
         payload["evidence"]["continued_excerpt"] = "peptides."
-        with self.assertRaises(ProtocolAnalysisResponseError):
+        found = first_step(parse(payload)).evidence
+        self.assertEqual((found.source_page_number, found.continued_on_page_number), (1, 2))
+        payload["evidence"]["continued_excerpt"] = "Dry the extracted peptides"
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
             parse(payload)
 
     def test_a_recorded_second_page_that_does_not_continue_the_first_is_refused(self):

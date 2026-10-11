@@ -9,6 +9,7 @@ optional persistence to the existing Slice 2 and Slice 3 contracts.
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import hashlib
 import re
@@ -58,7 +59,12 @@ then copy source_excerpt verbatim as one contiguous passage from that same
 extracted page. Use the shortest exact contiguous passage that fully supports
 the claim. Never cut an excerpt at a line-end hyphen or inside a word: quote
 through to where the word ends, taking in the next line of the page when the
-word continues there. Only source-layout whitespace that the downstream
+word continues there. When a passage you quote runs past the end of its page
+onto the next page, put the part on the cited page in source_excerpt and the
+part that opens the next page in continued_excerpt, with
+continued_on_page_number set to that next page's number. Leave the running
+header, footer and page number out of both parts, and never continue onto a
+third page. Only source-layout whitespace that the downstream
 validator normalizes may differ; every non-whitespace character must match
 the cited page. This applies to protocol, section, step, material, equipment,
 prerequisite, warning, note, expected-result, and image-related evidence
@@ -79,6 +85,13 @@ example "3 Wash..." or "3. Wash..."), and set source_label to that number
 without a trailing period. When the source prints no step numbers, leave
 source_label empty ("") for every step; never use a heading, a bullet, a
 section title, or a number the page does not print as a step label.
+For every fixed_range_repetition set repeat_count_kind to how the source
+states the count: "total" when it gives the number of runs including the
+first ("a total of 4 washes", "three cycles", "a second time"), "additional"
+when it gives the runs after the first ("once more", "one more time",
+"Repeat steps 5 and 6", "한 번 더"), and "ambiguous" when the wording reads
+either way ("Repeat steps 36-38 twice"); set repeat_count to the number as
+the source states it.
 metadata.evidence is always required: quote the protocol title from the page
 where it is printed. When a metadata field is printed on a different page than
 metadata.evidence,
@@ -137,6 +150,13 @@ _RESPONSE_REQUIRED_FIELDS: dict[type[Any], frozenset[str]] = {
     # With per-field evidence on offer a provider cited only title_evidence
     # and left this out (lane P2, OCR reagent-kit run), so it is spelled out.
     domain.ProtocolMetadata: frozenset({"evidence"}),
+    # How the source states a repeat count (lane EV2, decision 3): asked
+    # every time, so a count is never read without it.
+    domain.FixedRangeRepetition: frozenset({"repeat_count_kind"}),
+}
+#: Fields whose strings are one of a fixed set (lane EV2, decision 3).
+_RESPONSE_STRING_CHOICES: dict[tuple[type[Any], str], tuple[str, ...]] = {
+    (domain.FixedRangeRepetition, "repeat_count_kind"): domain.REPEAT_COUNT_KINDS,
 }
 _CONSTRUCT_NAMES = {
     record_type: construct_name
@@ -144,10 +164,15 @@ _CONSTRUCT_NAMES = {
 }
 
 
-#: SourceEvidence fields the server fills after verification (lane PA).
+#: SourceEvidence fields of a statement the page cuts at its end (lane PA).
+#: The server fills them when it finds a quote across the page end; since
+#: lane EV2 (decision 5) a provider may state them too, and they are kept
+#: only when the two pieces are found joined across the page end.
 _CONTINUATION_FIELDS = ("continued_on_page_number", "continued_excerpt")
 #: SourceEvidence fields never asked of a provider.
-_SERVER_EVIDENCE_FIELDS = frozenset(("evidence_segment_ids", *_CONTINUATION_FIELDS))
+_SERVER_EVIDENCE_FIELDS = frozenset(("evidence_segment_ids",))
+#: ExperimentProtocol fields never asked of a provider.
+_SERVER_PROTOCOL_FIELDS = frozenset(("label_dispositions", "cleared_fields"))
 
 
 class _DomainResponseSchemaBuilder:
@@ -220,10 +245,12 @@ class _DomainResponseSchemaBuilder:
                 # step with no obligation to account for it -- withheld for the
                 # same reason the extraction record and the segment handles
                 # are.
+                # Which fields the server emptied (lane EV2, decision 2) is
+                # the server's record, withheld for the same reason.
                 record_fields = tuple(
                     field
                     for field in record_fields
-                    if field.name != "label_dispositions"
+                    if field.name not in _SERVER_PROTOCOL_FIELDS
                 )
             if record_type is domain.SourceEvidence:
                 # Segment handles are server-computed identities for spans the
@@ -231,8 +258,8 @@ class _DomainResponseSchemaBuilder:
                 # it to invent an identity, which is the opposite of why they
                 # exist, so this field is withheld exactly as the extraction
                 # record is withheld from ProtocolMetadata above. The second
-                # page of a statement cut at a page end is the server's
-                # finding (lane PA), withheld for the same reason.
+                # page of a statement cut at a page end is asked for (lane
+                # EV2, decision 5) and checked like the server's own finding.
                 record_fields = tuple(
                     field
                     for field in record_fields
@@ -253,6 +280,14 @@ class _DomainResponseSchemaBuilder:
             )
             for field in record_fields:
                 properties[field.name] = self.schema_for(hints[field.name])
+                choices = _RESPONSE_STRING_CHOICES.get((record_type, field.name))
+                if choices is not None:
+                    properties[field.name] = {
+                        "anyOf": [
+                            {"type": "string", "enum": list(choices)},
+                            {"type": "null"},
+                        ]
+                    }
                 if field.name in response_required or (
                     field.default is MISSING
                     and field.default_factory is MISSING
@@ -305,6 +340,25 @@ class ProtocolAnalysisInputError(ProtocolAnalysisError):
 
 class ProtocolAnalysisInputTooLargeError(ProtocolAnalysisInputError):
     code = "protocol_analysis_input_too_large"
+
+
+class ProtocolAnalysisTooManyPagesError(ProtocolAnalysisInputError):
+    """A document longer than one analysis reads (lane EV2, decision 4)."""
+
+    code = "protocol_analysis_too_many_pages"
+
+
+class ProtocolAnalysisIncompleteError(ProtocolAnalysisError):
+    """An analysis far shorter than the source's numbered steps (lane EV2, decision 4)."""
+
+    code = "protocol_analysis_incomplete"
+
+    def __init__(
+        self, message: str, *, source_numbered_steps: int, analysis_steps: int
+    ) -> None:
+        super().__init__(message)
+        self.source_numbered_steps = source_numbered_steps
+        self.analysis_steps = analysis_steps
 
 
 class ProtocolAnalysisModelError(ProtocolAnalysisError):
@@ -820,11 +874,12 @@ class _DomainDecoder:
         record_fields = {field.name: field for field in fields(record_type)}
         if record_type is domain.ProtocolMetadata:
             record_fields.pop("pdf")
-        if record_type is domain.SourceEvidence:
-            # A provider cannot name the second page of a statement; the
-            # server finds it (lane PA).
-            for name in _CONTINUATION_FIELDS:
-                record_fields.pop(name)
+        # The second page of a statement a provider may name (lane EV2,
+        # decision 5): _verified_continuation keeps it only when the two
+        # pieces continue each other across the page end.
+        if record_type is domain.ExperimentProtocol:
+            # Nor say which fields were emptied (lane EV2, decision 2).
+            record_fields.pop("cleared_fields")
         unknown = set(value) - set(record_fields)
         if unknown:
             raise ProtocolAnalysisResponseError(
@@ -1405,7 +1460,175 @@ def _matching_source_pages(
     )
 
 
-def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
+# --- What a page prints at its edges besides its body (lane EV2, decision 1) --
+
+#: Non-blank lines read at each end of a page text for its running lines.
+_EDGE_LINES = 12
+#: A page number in a form no step label takes: "- 106 -", "Page 8",
+#: "p. 8 of 17"; and "8 of 17" or "8/17", which must name this page or the
+#: page count.
+_DASHED_PAGE_NUMBER = re.compile(r"[-‐‑‒–—−]\s*[0-9]{1,4}\s*[-‐‑‒–—−]")
+_WORDED_PAGE_NUMBER = re.compile(
+    r"(?:page|p\.)\s*[0-9]{1,4}(?:\s*(?:of|/)\s*[0-9]{1,4})?", re.IGNORECASE
+)
+_PAGE_OF_PAGES = re.compile(r"([0-9]{1,4})\s*(?:of|/)\s*([0-9]{1,4})", re.IGNORECASE)
+_BARE_PAGE_NUMBER = re.compile(r"[0-9]{1,4}")
+_NUMBER_RUN = re.compile(r"\d+")
+#: A numbered line: a number of one to three digits ("3.", "3)", "(3)",
+#: "Step 3", "3") and then a word. "1.5 mL", "5.2 시약" and "25 °C" are not.
+#: Never a running line (decision 1); counted as a step (decision 4).
+_NUMBERED_LINE = re.compile(
+    r"\s*(?:step\s*)?\(?([0-9]{1,3})(?:\.(?![0-9])|\)|:)?\s+(?=[^\W\d_])",
+    re.IGNORECASE,
+)
+
+
+def _line_key(line: str) -> str:
+    """A line as running lines are compared: whitespace runs as one space,
+    every number as "#" ("Methods and Protoc. 2018, 1, 19 5 of 9" is the same
+    line on page 5 and on page 6)."""
+
+    return _NUMBER_RUN.sub("#", " ".join(unicodedata.normalize("NFC", line).split()))
+
+
+@dataclass(frozen=True)
+class _PageEdges:
+    """What a document prints at the edges of its pages besides its body."""
+
+    #: Line keys (``_line_key``) of its running header and footer lines.
+    running: frozenset[str]
+    #: The pages that print their own number alone on a line at an edge.
+    numbered: frozenset[int]
+    page_count: int
+
+    def is_furniture(self, line: str, page_number: int) -> bool:
+        """Whether a line is blank, a running line or this page's number.
+
+        A number alone on its line is the page number only when it is this
+        page's number and a page next to it prints its own number the same
+        way: otherwise it may be a step number, which is body text.
+        """
+
+        text = " ".join(line.split())
+        if not text:
+            return True
+        if _BARE_PAGE_NUMBER.fullmatch(text):
+            return int(text) == page_number and bool(
+                {page_number - 1, page_number + 1} & self.numbered
+            )
+        if _DASHED_PAGE_NUMBER.fullmatch(text) or _WORDED_PAGE_NUMBER.fullmatch(text):
+            return True
+        of_pages = _PAGE_OF_PAGES.fullmatch(text)
+        if of_pages is not None:
+            return int(of_pages[1]) == page_number or int(of_pages[2]) == self.page_count
+        return _line_key(text) in self.running
+
+
+@functools.lru_cache(maxsize=32)
+def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
+    """The running lines and the numbered pages of a document.
+
+    A running header or footer -- a journal line, a "Cite as" line, a
+    copyright line -- is printed at the same place among the first or the
+    last twelve non-blank lines of at least half the pages (three at the
+    least), the numbers in it aside, and never between those edges: a label
+    the body repeats (protocols.io's "Note") moves from page to page and is
+    printed mid-page too. A line with a number and no letter is never one: a
+    step number or a value printed alone on its line repeats too (a line of
+    punctuation alone, FDA's "`", may be). Nor is a line that opens with a
+    step number: "5. Wash with 1 mL PBS." and "9. Wash with 2 mL PBS." are
+    one line once their numbers are set aside.
+    """
+
+    counts: dict[tuple[str, int, str], int] = {}
+    inside: set[str] = set()
+    numbered: set[int] = set()
+    for number, text in enumerate(page_texts, start=1):
+        lines = [line for line in (" ".join(item.split()) for item in text.splitlines()) if line]
+        if str(number) in {*lines[:_EDGE_LINES], *lines[-_EDGE_LINES:]}:
+            numbered.add(number)
+        places = {
+            *(
+                ("top", index, _line_key(line))
+                for index, line in enumerate(lines[:_EDGE_LINES])
+                if not _NUMBERED_LINE.match(line)
+            ),
+            *(
+                ("bottom", index, _line_key(line))
+                for index, line in enumerate(reversed(lines[-_EDGE_LINES:]))
+                if not _NUMBERED_LINE.match(line)
+            ),
+        }
+        for place in places:
+            if any(character.isalpha() for character in place[2]) or "#" not in place[2]:
+                counts[place] = counts.get(place, 0) + 1
+        inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
+    needed = max(3, -(-len(page_texts) // 2))
+    return _PageEdges(
+        running=(
+            frozenset(
+                key for (_, _, key), count in counts.items()
+                if count >= needed and key not in inside
+            )
+            if len(page_texts) > 1 else frozenset()
+        ),
+        numbered=frozenset(numbered),
+        page_count=len(page_texts),
+    )
+
+
+def _page_edges(extraction: ProtocolPdfExtraction) -> _PageEdges:
+    return _edges_of(tuple(page.text for page in extraction.pages))
+
+
+def _page_body_end(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+) -> int:
+    """Where the body of a page ends: before its footer band and before the
+    blank, running and page-number lines that close its text."""
+
+    end = (
+        page.bottom_band_offset
+        if page.bottom_band_offset is not None
+        else len(page.text)
+    )
+    edges = _page_edges(extraction)
+    lines = page.text[:end].splitlines(keepends=True)
+    while lines and edges.is_furniture(lines[-1], page.source_page_number):
+        end -= len(lines.pop())
+    return end
+
+
+def _page_body_start(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction, end: int
+) -> int:
+    """Where the body of a page starts: past the blank, running and
+    page-number lines that open its text (PMC8250384's p.8 opens with its
+    page number, its journal header and its copyright footer)."""
+
+    edges = _page_edges(extraction)
+    start = 0
+    for line in page.text[:end].splitlines(keepends=True):
+        if not edges.is_furniture(line, page.source_page_number):
+            break
+        start += len(line)
+    body = page.text[start:end]
+    return start + len(body) - len(body.lstrip())
+
+
+def _is_furniture_block(
+    block: Any, page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+) -> bool:
+    edges = _page_edges(extraction)
+    return all(
+        edges.is_furniture(line, page.source_page_number)
+        for line in block.text.splitlines() or ("",)
+    )
+
+
+def _page_end_span(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+) -> tuple[int, int] | None:
     """The span of ``page.text`` holding the body text that ends the page.
 
     The body is the page text before its running-footer band. With text
@@ -1415,13 +1638,15 @@ def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
     not in the body. Geometry decides; no word is read. Without blocks (an OCR
     page) it is the body itself, so the cut piece must end the body. None
     where no such span can be fixed, which refuses the cut statement.
+
+    Lane EV2 (decision 1): a block made only of running lines or the page
+    number is not body text, wherever the text layer prints it (PMC8250384
+    prints its copyright footer, drawn lowest, at the top of the page text),
+    and neither are those lines where they close the text of a page without
+    blocks.
     """
 
-    end = (
-        page.bottom_band_offset
-        if page.bottom_band_offset is not None
-        else len(page.text)
-    )
+    end = _page_body_end(page, extraction)
     body = page.text[:end]
     if not body.strip():
         return None
@@ -1430,6 +1655,8 @@ def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
         return start, len(body.rstrip())
     located: list[tuple[float, tuple[int, int]]] = []
     for block in page.blocks:
+        if _is_furniture_block(block, page, extraction):
+            continue
         spans = _canonical_match_spans(body, block.text, ocr_derived=page.ocr_derived)
         if len(spans) == 1:
             located.append((block.y1, spans[0]))
@@ -1465,23 +1692,26 @@ def _statement_across_page_end(
     rules). A statement found more than once across the join is refused, as
     an ambiguous one on a page is. Page text is never changed: the result is
     two spans, each of its own page's characters.
+
+    Lane EV2 (human decision 1, 2026-10-10): the pages' running header and
+    footer lines and their page-number lines are not between the two pieces
+    (``_PageEdges``) -- the next page's text opens after them, and this
+    page's ends before them -- and lane EB's boundary rules are read on each
+    page's own text. Only these two pages are joined, so a statement over
+    three pages is never found, and any other text between the two pieces
+    keeps the statement from being found.
     """
 
     if not 0 < page_number < extraction.page_count:
         return None
     page = extraction.pages[page_number - 1]
     following = extraction.pages[page_number]
-    tail = _page_end_span(page)
+    tail = _page_end_span(page, extraction)
     if tail is None:
         return None
-    next_end = (
-        following.bottom_band_offset
-        if following.bottom_band_offset is not None
-        else len(following.text)
-    )
-    next_body = following.text[:next_end]
-    next_start = len(next_body) - len(next_body.lstrip())
-    head = next_body[next_start:]
+    next_end = _page_body_end(following, extraction)
+    next_start = _page_body_start(following, extraction, next_end)
+    head = following.text[next_start:next_end]
     if not head.strip():
         return None
     first = page.text[tail[0] : tail[1]]
@@ -2489,6 +2719,120 @@ def _verify_claim_tree(
         )
 
 
+_CLEARABLE_METADATA_PATH = re.compile(
+    r"protocol\.metadata\.(" + "|".join(domain.CLEARABLE_METADATA_FIELDS) + r")(?:_evidence)?"
+)
+_CLEARABLE_DESCRIPTION_PATH = re.compile(r"protocol\.description\.(?:source_text|evidence)")
+_CLEARABLE_SECTION_TITLE_PATH = re.compile(r"protocol\.sections\[([0-9]+)\]\.title_source_text")
+
+
+def _unread_field(
+    error: ProtocolAnalysisEvidenceError, protocol: domain.ExperimentProtocol
+) -> str | None:
+    """The field execution never reads that an evidence failure is in, or None.
+
+    Lane EV2, human decision 2 (2026-10-10). The fields are named by
+    ``domain.CLEARABLE_METADATA_FIELDS``, the description and a section's
+    title (its title text only: the section's own quote stays required).
+    Nothing else is: a step and its label, a value, a duration, a timer, a
+    reminder, an observation, an expected result, a note, a tip, a warning,
+    a material, a piece of equipment, a prerequisite and a construct all
+    feed the run or its safety, and the shared metadata quote is the
+    protocol's own required evidence.
+    """
+
+    path = getattr(error.diagnostic, "field_path", None) or ""
+    metadata = _CLEARABLE_METADATA_PATH.fullmatch(path)
+    if metadata is not None:
+        return f"metadata.{metadata[1]}"
+    if _CLEARABLE_DESCRIPTION_PATH.fullmatch(path) and protocol.description is not None:
+        return "description"
+    section = _CLEARABLE_SECTION_TITLE_PATH.fullmatch(path)
+    if section is not None and int(section[1]) < len(protocol.sections):
+        return domain.section_title_field(protocol.sections[int(section[1])].section_id)
+    return None
+
+
+def _cleared(protocol: domain.ExperimentProtocol, field: str) -> domain.ExperimentProtocol:
+    """``protocol`` with one field execution never reads emptied and recorded."""
+
+    section_id = domain.cleared_section_id(field)
+    if section_id is not None:
+        protocol = replace(
+            protocol,
+            sections=tuple(
+                replace(section, title_source_text="")
+                if section.section_id == section_id else section
+                for section in protocol.sections
+            ),
+        )
+    elif field == "description":
+        protocol = replace(protocol, description=None)
+    else:
+        name = field.split(".", 1)[1]
+        empty: object = "" if name == "title" else () if name == "authors" else None
+        protocol = replace(
+            protocol,
+            metadata=replace(
+                protocol.metadata,
+                **{name: empty, domain.METADATA_FIELD_EVIDENCE[name]: None},
+            ),
+        )
+    return replace(protocol, cleared_fields=(*protocol.cleared_fields, field))
+
+
+def _verify_clearing_unread_fields(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction
+) -> tuple[domain.ExperimentProtocol, int]:
+    """Verify every quote and claim; empty a field execution never reads
+    instead of refusing the analysis for it (lane EV2, decision 2).
+
+    Each failure in such a field empties that field and records it, and the
+    whole response is verified again from the start; any other failure
+    refuses the response as before. Every pass empties a field not emptied
+    yet, so the loop ends.
+    """
+
+    while True:
+        try:
+            verified, evidence_count = _verify_evidence_tree(protocol, extraction)
+            _verify_claim_tree(verified, extraction)
+            return verified, evidence_count
+        except ProtocolAnalysisEvidenceError as exc:
+            field = _unread_field(exc, protocol)
+            if field is None or field in protocol.cleared_fields:
+                raise
+            protocol = _cleared(protocol, field)
+
+
+def _repeat_counts_as_totals(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
+    """Every fixed repeat count as the total number of runs (lane EV2, decision 3).
+
+    A count the source states as the runs after the first ("once more",
+    "Repeat steps 5 and 6") is one more in total; a count the source states
+    two ways ("Repeat steps 36-38 twice") is no count, so the experimenter is
+    asked for it. A total, and a count whose kind the response leaves out,
+    are kept as they are. Only a fresh response is read this way: a stored
+    analysis already holds totals.
+    """
+
+    constructs = []
+    for construct in protocol.constructs:
+        if isinstance(construct, domain.FixedRangeRepetition):
+            count = construct.repeat_count
+            if (
+                construct.repeat_count_kind == domain.REPEAT_COUNT_ADDITIONAL
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and count > 0
+            ):
+                construct = replace(construct, repeat_count=count + 1)
+            elif construct.repeat_count_kind == domain.REPEAT_COUNT_AMBIGUOUS:
+                construct = replace(construct, repeat_count=None)
+        constructs.append(construct)
+    return replace(protocol, constructs=tuple(constructs))
+
+
 def _reject_deferred_state(protocol: domain.ExperimentProtocol) -> None:
     source_uri = protocol.metadata.source_uri
     if source_uri is not None and (
@@ -2583,8 +2927,8 @@ def parse_protocol_analysis_response(
                 source_hash=extraction.sha256,
             ),
         )
-    protocol, evidence_count = _verify_evidence_tree(protocol, extraction)
-    _verify_claim_tree(protocol, extraction)
+    protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
+    protocol = _repeat_counts_as_totals(protocol)
     _reject_deferred_state(protocol)
     try:
         domain.validate_protocol(protocol)
@@ -2669,6 +3013,109 @@ def validate_protocol_analysis_evidence(
     return verified_protocol, evidence_count
 
 
+# --- A hollow pass and a document too long to read at once (lane EV2, 4) --
+
+#: The longest document one analysis reads (human decision 2026-10-10). Lane
+#: AQ passed a 197-page document with 13 steps; nothing told the experimenter
+#: that most of it was never read.
+MAX_ANALYSIS_PAGES = 60
+#: A source with at least this many numbered steps, and an analysis with
+#: fewer than this share of them, is a hollow pass. Measured on the stored
+#: responses (lane EV2 report, decision 4): of the documents of at most 60
+#: pages that number at least 20 steps, every passing DS-2 analysis and lane
+#: AQ's medium and low ones kept at least 0.55 of the count; the hollow
+#: passes of lane AQ's Flash-Lite kept at most 0.16 (2 of 101, 7 of 61, 12
+#: of 75), and one DS-2 analysis of a 24-page USGS manual held no step.
+HOLLOW_MIN_SOURCE_STEPS = 20
+HOLLOW_STEP_SHARE = 0.25
+#: A references heading: the numbered list it opens is not steps.
+_BACK_MATTER = re.compile(
+    r"(?:references?|bibliography|literature cited|참고\s*문헌)\s*:?", re.IGNORECASE
+)
+_CITATION_YEAR = re.compile(r"(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])")
+
+
+def count_source_numbered_steps(extraction: ProtocolPdfExtraction) -> int:
+    """How many numbered steps the source prints, counted from its text alone.
+
+    Lane EV2, decision 4. Lines are read in page order, without the pages'
+    running header, footer and page-number lines. A run is a line numbered 1
+    and the lines numbered 2, 3, ... that follow it in order; a run of at
+    least two counts, unless it is the list a references heading opens (CDC's
+    SOP lists its two references on page 1, a journal article its citations
+    at the end) or most of its lines hold a year (a numbered citation list
+    without its heading). The count is generous -- a numbered materials list
+    counts too -- so a short analysis is held to only a small share of it.
+    """
+
+    edges = _page_edges(extraction)
+    # (number, line, whether the line is in the list a references heading
+    # opened: the first list numbered from 1 after the heading).
+    marks: list[tuple[int, str, bool]] = []
+    heading_seen = in_references = False
+    for page in extraction.pages:
+        for line in page.text.splitlines():
+            if _BACK_MATTER.fullmatch(" ".join(line.split())):
+                heading_seen, in_references = True, False
+                continue
+            if edges.is_furniture(line, page.source_page_number):
+                continue
+            match = _NUMBERED_LINE.match(line)
+            if match is None:
+                continue
+            if int(match[1]) == 1:
+                in_references, heading_seen = heading_seen, False
+            marks.append((int(match[1]), line, in_references))
+    runs: list[list[str]] = []
+    current: list[tuple[int, str, bool]] = []
+    for mark in marks:
+        if current and mark[0] == current[-1][0] + 1:
+            current.append(mark)
+        elif mark[0] == 1:
+            if len(current) >= 2 and not current[0][2]:
+                runs.append([line for _, line, _ in current])
+            current = [mark]
+    if len(current) >= 2 and not current[0][2]:
+        runs.append([line for _, line, _ in current])
+    return sum(
+        len(run) for run in runs
+        if sum(1 for line in run if _CITATION_YEAR.search(line)) * 2 <= len(run)
+    )
+
+
+def hollow_analysis_check(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction
+) -> dict[str, object]:
+    """Whether an analysis holds far fewer steps than the source numbers.
+
+    Hollow when the source prints at least ``HOLLOW_MIN_SOURCE_STEPS``
+    numbered steps and the analysis has fewer than ``HOLLOW_STEP_SHARE`` of
+    them. A source that numbers fewer steps is never judged so: an
+    unnumbered procedure has nothing to count against.
+    """
+
+    source_steps = count_source_numbered_steps(extraction)
+    analysis_steps = sum(len(section.steps) for section in protocol.sections)
+    return {
+        "source_numbered_steps": source_steps,
+        "analysis_steps": analysis_steps,
+        "hollow": (
+            source_steps >= HOLLOW_MIN_SOURCE_STEPS
+            and analysis_steps < HOLLOW_STEP_SHARE * source_steps
+        ),
+    }
+
+
+def check_analysis_page_count(extraction: ProtocolPdfExtraction) -> None:
+    """Refuse a document longer than one analysis reads, before any model call."""
+
+    if extraction.page_count > MAX_ANALYSIS_PAGES:
+        raise ProtocolAnalysisTooManyPagesError(
+            f"Protocol has {extraction.page_count} pages; one analysis reads at "
+            f"most {MAX_ANALYSIS_PAGES}."
+        )
+
+
 def analyze_protocol_extraction(
     extraction: ProtocolPdfExtraction,
     model: ProtocolAnalysisModel,
@@ -2676,6 +3123,7 @@ def analyze_protocol_extraction(
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     max_input_bytes: int = MAX_SINGLE_PASS_INPUT_BYTES,
 ) -> ProtocolAnalysisDraft:
+    check_analysis_page_count(extraction)
     request = prepare_protocol_analysis_request(
         extraction,
         capability_policy=capability_policy,
@@ -2694,11 +3142,19 @@ def analyze_protocol_extraction(
         raise ProtocolAnalysisModelError(
             "Protocol analysis model request failed."
         ) from exc
-    return parse_protocol_analysis_response(
+    draft = parse_protocol_analysis_response(
         raw_response,
         extraction,
         capability_policy=capability_policy,
     )
+    hollow = hollow_analysis_check(draft.protocol, extraction)
+    if hollow["hollow"]:
+        raise ProtocolAnalysisIncompleteError(
+            "Protocol analysis holds far fewer steps than the source numbers.",
+            source_numbered_steps=int(hollow["source_numbered_steps"]),
+            analysis_steps=int(hollow["analysis_steps"]),
+        )
+    return draft
 
 
 def analyze_protocol_pdf(
