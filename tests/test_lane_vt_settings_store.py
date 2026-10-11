@@ -90,17 +90,19 @@ class SchemaNineTests(unittest.TestCase):
         self.addCleanup(store.close)
         return store
 
-    def test_the_version_is_nine(self) -> None:
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 9)
+    def test_the_version_is_at_least_nine(self) -> None:
+        # Lane SP1 (2026-10-10) raised it to 10; a schema-8 store still
+        # opens, through 9, and the checks below still hold of it.
+        self.assertGreaterEqual(WORKSPACE_SCHEMA_VERSION, 9)
         store = self.open()
         self.assertEqual(store._connection.execute(
-            "SELECT schema_version FROM schema_metadata").fetchone()[0], 9)
+            "SELECT schema_version FROM schema_metadata").fetchone()[0], WORKSPACE_SCHEMA_VERSION)
 
     def test_a_schema_8_store_keeps_every_row_and_its_sequence(self) -> None:
         before = build_schema_8_store(self.directory)
         store = self.open()
         connection = store._connection
-        self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 9)
+        self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], WORKSPACE_SCHEMA_VERSION)
         self.assertEqual(
             [tuple(row) for row in connection.execute(
                 "SELECT * FROM experimenter_settings ORDER BY sequence_id")],

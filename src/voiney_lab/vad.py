@@ -1,12 +1,21 @@
-"""Frame-based WebRTC VAD and endpointing for M3 Listener."""
+"""Frame-based WebRTC VAD and endpointing for M3 Listener.
+
+Lane SP1 (2026-10-10), decision 1: beside "is this a voice", the committed
+utterance carries how loud it was -- the median level of its voiced frames
+in dBFS -- so the listener can tell the wearer's voice, measured once at
+the session's start, from a voice farther from the microphone.
+"""
 
 from __future__ import annotations
 
+from array import array
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 import logging
+import math
+import statistics
 
 import webrtcvad
 
@@ -18,6 +27,105 @@ from voiney_lab.configuration import (
 
 VAD_END_SILENCE_MS = 1000
 log = logging.getLogger("voiney_lab.vad")
+
+#: The level of a frame with no signal at all, and of one that is all zeros.
+LEVEL_FLOOR_DB = -100.0
+_FULL_SCALE = 32768.0
+
+#: Lane SP1, decision 1: how much quieter than the wearer's measured level a
+#: voice may be before it is taken for someone else's, by the "민감도"
+#: setting: 높음 filters at a small difference, 낮음 only at a large one. The
+#: values come from the synthetic bench (lane SP1 report, section 3-3):
+#: 12 dB (보통) keeps the wearer's own sentences, read at any level the bench
+#: varied them (±6 dB), inside the line even when the reference sentence was
+#: read beside a loud machine, and takes every neighbour at 1 m on a boom
+#: microphone out; 9 dB (높음) also takes a neighbour at 1 m out on an
+#: earbud microphone in a quiet room while still keeping the wearer there;
+#: 6 dB lost the wearer's quieter sentences, so it is not offered.
+SENSITIVITY_MARGINS_DB: dict[str, float] = {"high": 9.0, "normal": 12.0, "low": 18.0}
+DEFAULT_SENSITIVITY = "normal"
+
+
+def frame_level_db(frame: bytes) -> float:
+    """The RMS level of one PCM16 frame in dBFS; ``LEVEL_FLOOR_DB`` when silent."""
+
+    samples = array("h")
+    samples.frombytes(frame[: len(frame) - len(frame) % 2])
+    if not samples:
+        return LEVEL_FLOOR_DB
+    mean_square = math.sumprod(samples, samples) / len(samples)
+    if mean_square <= 0:
+        return LEVEL_FLOOR_DB
+    return max(LEVEL_FLOOR_DB, 10 * math.log10(mean_square) - 20 * math.log10(_FULL_SCALE))
+
+
+def voiced_median_level_db(frames: Iterable[tuple[bytes, bool]]) -> float | None:
+    """The median level of the frames the VAD called voiced; None without one."""
+
+    levels = [frame_level_db(frame) for frame, voiced in frames if voiced]
+    if not levels:
+        return None
+    return float(statistics.median(levels))
+
+
+def _median_level(levels: Iterable[float | None]) -> float | None:
+    """The median of the levels measured (None entries are silent frames)."""
+
+    voiced = [level for level in levels if level is not None]
+    return float(statistics.median(voiced)) if voiced else None
+
+
+def utterance_level_db(pcm: bytes, classifier: Callable[[bytes], bool]) -> float | None:
+    """The median voiced-frame level of a committed utterance's PCM, in dBFS.
+
+    The same number ``EndpointDetector`` puts in its commit, computed again
+    from the bytes with the same classifier (for a calibration sample or a
+    measurement outside the detector).
+    """
+
+    frames = [pcm[i:i + FRAME_BYTES] for i in range(0, len(pcm) - FRAME_BYTES + 1, FRAME_BYTES)]
+    return voiced_median_level_db((frame, bool(classifier(frame))) for frame in frames)
+
+
+@dataclass(frozen=True)
+class SpeakerLevelReference:
+    """The wearer's measured level and the margin under it that still counts as the wearer.
+
+    Measured once a session from a short sentence the wearer reads (lane
+    SP1, decision 1); never stored. An utterance whose median voiced level
+    is more than ``margin_db`` below ``reference_db`` is taken for another
+    person's voice: it is not sent to speech recognition and not kept.
+    """
+
+    reference_db: float
+    margin_db: float
+    sensitivity: str = DEFAULT_SENSITIVITY
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.reference_db):
+            raise ValueError("reference_db must be a finite dBFS level")
+        if not (0 <= self.margin_db <= 60):
+            raise ValueError("margin_db must be between 0 and 60 dB")
+
+    @property
+    def threshold_db(self) -> float:
+        return self.reference_db - self.margin_db
+
+    def accepts(self, level_db: float | None) -> bool:
+        """Whether an utterance of ``level_db`` is the wearer's; one with no level is."""
+
+        return level_db is None or level_db >= self.threshold_db
+
+    def with_sensitivity(self, sensitivity: str) -> "SpeakerLevelReference":
+        margin = SENSITIVITY_MARGINS_DB.get(sensitivity, SENSITIVITY_MARGINS_DB[DEFAULT_SENSITIVITY])
+        chosen = sensitivity if sensitivity in SENSITIVITY_MARGINS_DB else DEFAULT_SENSITIVITY
+        return SpeakerLevelReference(self.reference_db, margin, chosen)
+
+
+def level_reference_from(level_db: float, sensitivity: str = DEFAULT_SENSITIVITY) -> SpeakerLevelReference:
+    """A reference at the calibration sentence's level, with the setting's margin."""
+
+    return SpeakerLevelReference(level_db, SENSITIVITY_MARGINS_DB[DEFAULT_SENSITIVITY]).with_sensitivity(sensitivity)
 
 
 class TurnState(str, Enum):
@@ -120,6 +228,9 @@ class EndpointResult:
     total_frames: int = 0
     prefix_frames_retained: int = 0
     rejection_reason: str | None = None
+    #: Lane SP1, decision 1: the committed utterance's median voiced-frame
+    #: level in dBFS (None until a commit, or when no frame was voiced).
+    voiced_level_db: float | None = None
 
 
 class EndpointDetector:
@@ -139,6 +250,12 @@ class EndpointDetector:
             if self.listening_onset else self.config.onset_window_frames)
         self.state = TurnState.IDLE
         self._prefix: deque[tuple[bytes, bool]] = deque(maxlen=self.config.prefix_frames)
+        #: Lane SP1, decision 1: each voiced frame's level, measured as it
+        #: arrives (about 25 µs a frame) so a commit only takes a median;
+        #: None for a frame the VAD called silent. Kept beside _prefix and
+        #: _utterance, one entry per frame.
+        self._prefix_levels: deque[float | None] = deque(maxlen=self.config.prefix_frames)
+        self._utterance_levels: list[float | None] = []
         self._onset: deque[bool] = deque(maxlen=self.onset_window_frames)
         self._resume: deque[bool] = deque(
             maxlen=self.config.listening_resume_window_frames)
@@ -156,10 +273,12 @@ class EndpointDetector:
     def reset(self, state: TurnState = TurnState.IDLE) -> None:
         self.state = state
         self._prefix.clear()
+        self._prefix_levels.clear()
         self._onset.clear()
         self._resume.clear()
         self._resume_voiced_frames=0
         self._utterance.clear()
+        self._utterance_levels.clear()
         self.voiced_frames = 0
         self.consecutive_silence_frames = 0
         self._committed = False
@@ -172,17 +291,21 @@ class EndpointDetector:
             return EndpointResult()
 
         voiced = bool(self.classifier(frame))
+        level = frame_level_db(frame) if voiced else None
         if self.state == TurnState.IDLE:
             self._prefix.append((frame, voiced))
+            self._prefix_levels.append(level)
             self._onset.append(voiced)
             if (len(self._onset) == self.onset_window_frames
                     and sum(self._onset) >= self.onset_voiced_frames):
                 self.state = TurnState.USER_SPEAKING
                 self._utterance = list(self._prefix)
+                self._utterance_levels = list(self._prefix_levels)
                 self._prefix_frames_retained = len(self._utterance)
                 self.voiced_frames = sum(flag for _, flag in self._utterance)
                 self.consecutive_silence_frames = self._trailing_silence()
                 self._prefix.clear()
+                self._prefix_levels.clear()
                 self._onset.clear()
                 self._resume.clear()
                 self._resume_voiced_frames=0
@@ -193,6 +316,7 @@ class EndpointDetector:
             return EndpointResult()
 
         self._utterance.append((frame, voiced))
+        self._utterance_levels.append(level)
         if not self.consecutive_silence_frames:
             if voiced:
                 self.voiced_frames += 1
@@ -245,17 +369,20 @@ class EndpointDetector:
         self._committed = True
         trim = self.consecutive_silence_frames
         kept = self._utterance[:-trim] if trim else self._utterance[:]
+        kept_levels = self._utterance_levels[:-trim] if trim else self._utterance_levels[:]
+        accepted = self.voiced_frames >= self.config.minimum_voiced_frames
         result = EndpointResult(
             utterance=b"".join(frame for frame, _ in kept)
-            if self.voiced_frames >= self.config.minimum_voiced_frames else None,
-            rejected=self.voiced_frames < self.config.minimum_voiced_frames,
+            if accepted else None,
+            rejected=not accepted,
             forced=forced,
             voiced_frames=self.voiced_frames,
             total_frames=len(kept),
             prefix_frames_retained=min(
                 self._prefix_frames_retained,len(kept)),
             rejection_reason="minimum_voiced_frames"
-            if self.voiced_frames < self.config.minimum_voiced_frames else None,
+            if not accepted else None,
+            voiced_level_db=_median_level(kept_levels) if accepted else None,
         )
         if result.rejected:
             self.reset()
@@ -263,6 +390,8 @@ class EndpointDetector:
             # This transition and detachment make the accepted commit exactly once.
             self.state = TurnState.PROCESSING
             self._utterance.clear()
+            self._utterance_levels.clear()
             self._prefix.clear()
+            self._prefix_levels.clear()
             self._onset.clear()
         return result
