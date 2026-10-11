@@ -224,6 +224,35 @@ one (`scripts/migrate_env.py --check` reports them under "코드가 읽지 않�
 `SEMANTIC_INTENT_TIMEOUT_SECONDS`, `SEMANTIC_INTENT_MIN_CONFIDENCE` and
 `SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE`.
 
+## Lane CL (2026-10-10): code without storage of its own removed
+
+No schema changes and no migration. Removed: the approved-safety-manual and
+lab-reference searches (the voice answer from approved lab references, which
+the research path ran on a related question), the safety report tools and
+the report hand-off worker `python -m voiney_lab.worker` with its
+`report.status.get` control, and the Moss reranker with its index sync script.
+The worker's files on a host (`reports/inbox.jsonl`, `reports/processed.txt`,
+`reports/status/`, `outbox/*.eml`) are no longer read or written; nothing
+deletes them. Past experiment records that cite `approved_lab_corpus` keep
+their rows and are still shown. `GET /readyz` no longer returns
+`moss_enabled`.
+
+Removed settings, without their `VOINEY_LAB_` prefix as above:
+`LAB_MANAGER_EMAIL`, `FROM_EMAIL`, `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`,
+`MOSS_AUTO_REFRESH`, `MOSS_INDEX_NAME`, `MOSS_MODEL_ID`,
+`MOSS_ALLOWED_SCOPES`, `MOSS_ALPHA`, `MOSS_CANDIDATE_LIMIT`,
+`MOSS_QUERY_TIMEOUT_MS`, `MOSS_LOAD_TIMEOUT_SECONDS` and
+`MOSS_REFRESH_SECONDS`. A `.env` that still sets one starts as before; the
+name is simply not read (`scripts/migrate_env.py --check` lists it under
+"코드가 읽지 않는 설정"). `VOINEY_LAB_MOSS_ENABLED` stays in the table only
+because the launchers and the test baseline command still set it to false;
+nothing reads it.
+
+The setting table's default for each role's provider and model, and for the
+STT and TTS providers, is now "설정 필요" (human decision 2). The code's old
+xai/grok fallback is unchanged, so an environment that sets no role behaves
+as before; `.env.example` sets every role to the values in use.
+
 ## Commercial workspace schema 7 → 8 (lane CF, 2026-10-08)
 
 Lane DI left the schema at 7. The same day lane CF raised it to 8 (commit
@@ -457,7 +486,8 @@ under `data/` is rewritten.
   `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` and its alias
   `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
 - There is no transition period. Instead the server (after it loads the
-  repository `.env`), the handoff worker, `scripts/run_dev.sh`,
+  repository `.env`), the handoff worker (deleted on 2026-10-10, lane CL),
+  `scripts/run_dev.sh`,
   `scripts/run_pilot.sh`, `scripts/run_ci_server.sh`,
   `scripts/collect_chunks.sh` and pytest refuse to start while an old name is
   set, with "옛 설정 이름 N개: (names). scripts/migrate_env.py 를 실행하세요." The
@@ -483,3 +513,92 @@ line is not `.env` syntax.
 Old names set anywhere else -- a shell profile, a deploy or helper script, a
 service unit, a CI secret -- have to be renamed by hand; the refusal names
 each one.
+
+## Lane EV2 (2026-10-10): the fields an analysis emptied
+
+No schema change and no stored row rewritten. This is the protocol store
+(`protocol_workspace.sqlite`), where an analysis is kept as the JSON of its
+domain records.
+
+`ExperimentProtocol` has one more field, `cleared_fields` (a tuple of names,
+default empty). Since lane EV2's decision 2 an analysis whose only evidence
+failures are in fields execution never reads -- the metadata fields named by
+`CLEARABLE_METADATA_FIELDS` (title, authors, the three dates, version, DOI,
+source URI, license, source status), the description and a section's title --
+passes with those fields emptied (`""` for the title and a section title,
+`()` for the authors, `None` for the rest, and the field's own evidence
+`None`), and their names are recorded here: `metadata.<field>`,
+`description`, `sections.<section_id>.title_source_text`. The
+`protocol_analysis_ready` event carries the same list as `cleared_fields`
+when it is not empty. `validate_protocol` accepts an empty title or section
+title only when it is recorded so, and refuses a record that names any other
+field or a field that is not empty. The provider is never asked for the field
+and a response that sends it is refused.
+
+### Reading older data
+
+A payload written before this version has no `cleared_fields`; the decoder
+fills the default (`()`), so it reads as an analysis that emptied nothing,
+which it is. Nothing is migrated.
+
+### Going back
+
+Code from before this version refuses a payload that has `cleared_fields`
+("Stored Protocol analysis record fields are malformed."): an analysis that
+passed under this version cannot be read by older code. An analysis stored by
+this version that emptied nothing still carries the field (as `[]`), so the
+same holds for it. To go back, analyse the document again with the older code.
+
+## Lane EV2 (2026-10-10): what a fixed repeat count means
+
+No schema change and no stored row rewritten; protocol store again.
+
+`FixedRangeRepetition` has one more field, `repeat_count_kind` (a string or
+`None`, default `None`), and `repeat_count` now means the total number of runs
+of the range, the first run included (lane EV2's decision 3). The analysis
+response states the kind for every fixed repetition: `total`, `additional`
+(the runs after the first: "once more", "Repeat steps 5 and 6") or
+`ambiguous` ("Repeat steps 36-38 twice"). When it parses a fresh response the
+server adds one to an `additional` count and stores no count for an
+`ambiguous` one (the experimenter is asked for it before the start, or at the
+range's first step with "실험 중에 묻기"). `validate_protocol` refuses any
+other kind and a count beside `ambiguous`.
+
+The response schema gained the field, so the curated development fixture's
+pinned schema identity (`curated_protocol._CANONICAL_SCHEMA_SHA256` and
+`canonical_schema_sha256` in
+`data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json`)
+was re-pinned to the new schema, as on 2026-10-05; the fixture itself is
+unchanged and holds no fixed repetition.
+
+### Reading older data
+
+A payload written before this version has no `repeat_count_kind`; it reads
+as `None`, its count is not changed, and the start screen shows one line for
+it: "반복 횟수 확인 필요 · <range>단계 · 원문 “…” · 분석이 N회로 읽음(처음을
+포함한 총 횟수인지 원문을 확인하세요)". Such a count is still led as stored. Re-run
+the analysis to have it read with its kind.
+
+### Going back
+
+Code from before this version refuses a payload whose fixed repetition has
+`repeat_count_kind` ("Stored Protocol analysis record fields are malformed.")
+and refuses to load the curated development fixture under the re-pinned
+provenance ("Development protocol fixture schema identity is unsupported.");
+going back means restoring the older provenance file with the older code.
+
+## Lane EV2 (2026-10-10): the provider may state a statement's second page
+
+No schema change and no stored row rewritten. Since lane EV2's decision 5 the
+analysis response schema asks for `SourceEvidence.continued_on_page_number`
+and `continued_excerpt` (lane PA's fields, until now filled by the server
+only), and the prompt asks a model to split a quote that runs onto the next
+page into them. What a model writes there is kept only when the two pieces
+are found joined across the page end, as when the server splits a joined
+quote itself (decision 1); stored analyses already carry these fields, so
+nothing about reading them changes.
+
+The response schema changed again, so the curated development fixture's
+pinned schema identity was re-pinned once more (the same three places as for
+decision 3). Code from before lane EV2 refuses the re-pinned provenance, as
+described above.

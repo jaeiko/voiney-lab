@@ -485,10 +485,6 @@ class UtteranceFreeLogTests(unittest.TestCase):
         ), patch(
             "voiney_lab.server.answer_curated_protocol_question", side_effect=unsupported,
         ), patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={"status": "no_admissible_evidence", "answerable": False,
-                          "matches": [], "retrieval": {"backend": "sqlite"}},
-        ), patch(
             "voiney_lab.server.XaiAuthoritativeWebSearch", Web,
         ), patch(
             "voiney_lab.server.AsyncOpenAI", return_value=SimpleNamespace(),

@@ -3,8 +3,8 @@
 Real keys for xAI, OpenAI, Anthropic, Gemini and the OCR services may sit in
 the shell or in the repository .env. Under pytest:
 
-* the server and the worker do not read the repository .env (only the
-  old-setting-name check looks at it, in tests/conftest.py);
+* the server does not read the repository .env (only the old-setting-name
+  check looks at it, in tests/conftest.py);
 * tests/conftest.py takes the provider and OCR keys out of the environment
   before any test module is imported;
 * a connection to anything but this machine fails at once -- even an SDK
@@ -16,8 +16,6 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
-import subprocess
-import sys
 import threading
 import unittest
 from pathlib import Path
@@ -59,26 +57,6 @@ class KeysAreNotInTheTestProcessTests(unittest.TestCase):
             load.assert_not_called()
             server._load_project_environment(ROOT / "explicit.env")
             load.assert_called_once()
-
-    def test_the_worker_does_not_read_the_repository_dotenv(self) -> None:
-        probe = (
-            "import dotenv; calls = []; "
-            "dotenv.load_dotenv = lambda *a, **k: calls.append(a) or False; "
-            "import voiney_lab.worker; print(len(calls))"
-        )
-        for pytest_version, expected in (("9", "0"), (None, "1")):
-            environment = {k: v for k, v in os.environ.items() if k != "PYTEST_VERSION"}
-            if pytest_version is not None:
-                environment["PYTEST_VERSION"] = pytest_version
-            environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            with self.subTest(pytest=pytest_version):
-                result = subprocess.run(
-                    [sys.executable, "-c", probe], cwd=ROOT, env=environment,
-                    capture_output=True, text=True, timeout=120,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.strip(), expected)
-
 
 class NoConnectionLeavesThisMachineTests(unittest.TestCase):
     def test_an_outside_address_is_refused_at_once(self) -> None:

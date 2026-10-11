@@ -27,13 +27,13 @@
 
 ### Error Handling & Fail-Safe Defaults
 - Never swallow exceptions silently. Log exceptions with appropriate context using standard `logging`.
-- For external API failures (e.g. xAI LLM, TTS, STT, PubChem, Moss):
-  - Provide deterministic, graceful fallbacks (e.g., fallback to SQLite search if Moss is unavailable; return server-owned error speech if LLM fails).
+- For external API failures (e.g. a model role, STT, TTS, OCR, the web explanation):
+  - Provide deterministic, graceful fallbacks (e.g., the rules' path when the LLM router is late or fails; server-owned error speech if a model fails).
   - Never crash the WebSocket connection on model or search errors.
 
 ### Concurrency & Async Safety
 - Long-running or blocking I/O (file writes, SQLite transactions, subprocesses) must be run in `asyncio.to_thread` or handled via background queues.
-- Use `threading.Lock` or `asyncio.Lock` when writing to shared append-only files (e.g. `reports/inbox.jsonl`, `processed.txt`).
+- Use `threading.Lock` or `asyncio.Lock` when writing to shared append-only files.
 - Avoid race conditions during fast speech turns: use generation IDs and sequence counters to discard stale async tool results.
 
 ---
@@ -46,25 +46,17 @@
    - Ensure tables have `schema_version` verification on startup.
    - Use atomic transactions for multi-row state transitions.
 2. **File Operations**:
-   - When writing JSON status files or EML artifacts, write to temporary files first (`.filename.tmp`) and atomically rename (`os.replace`) to prevent partial reads by concurrent processes.
-   - Store all runtime files in configured directories (`reports/`, `outbox/`, `data/runtime/`), never hardcoding paths outside the project root.
+   - When writing JSON status files or exports, write to temporary files first (`.filename.tmp`) and atomically rename (`os.replace`) to prevent partial reads by concurrent processes.
+   - Store all runtime files in configured directories (`data/runtime/` and the configured data paths), never hardcoding paths outside the project root.
 
 ---
 
 ## 4. Frontend & WebSocket Communication Rules
 
 1. **Canonical Event Structure**:
-   - All server-to-client events sent over WebSocket must adhere to the standard envelope:
-     ```json
-     {
-       "type": "event.type.name",
-       "data": { ... },
-       "session_id": "...",
-       "timestamp": 1724150000.0
-     }
-     ```
+   - All server-to-client events sent over WebSocket are flat JSON built by `protocol.event`: `{"type": "event.type.name", ...fields}`.
 2. **Zero Inferred UI State**:
-   - The UI must render workflow state exclusively from server-emitted canonical state snapshots (`procedure.state`, `report.status`), never guessing state from assistant speech transcripts.
+   - The UI must render workflow state exclusively from server-emitted canonical state events (e.g. `turn.state`, `experiment.report.state`), never guessing state from assistant speech transcripts.
 3. **Accessibility & Responsive Design**:
    - The Cockpit dashboard must support desktop wide screens (grid layout) and tablet/mobile screens with zero horizontal overflow.
    - Colors must meet WCAG AA contrast standards, with high-visibility indicators for timer countdowns and emergency alerts.

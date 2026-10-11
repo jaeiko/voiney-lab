@@ -1,5 +1,11 @@
 # Current architecture
 
+VoineyLab (formerly Voice Workflow Agent; the company is Voiney) -- an MVP
+prototype, not field-validated. Revised 2026-10-10 (lane CL): the
+approved-safety and lab-reference searches, the safety report tools and their
+hand-off worker, and the Moss connection were deleted; each role's provider
+is a setting (the table says "설정 필요", `.env.example` has the values in use).
+
 ## Runtime topology
 
 ```text
@@ -9,21 +15,23 @@ Browser
                                                │
                                   ListenerSession + VAD
                                                │
-                                           xAI STT
+                                 STT (provider setting)
                                                │
                                     RequestArbitration
              ┌─────────────────┬───────────────┐
              │                 │               │
        emergency gate   curated runtime   general brain
-                         router             + tools
+                         router          (no protocol,
+                                          no tools)
              │                 │               │
              └─────────────────┴── server-owned state
                                                │
-                                      segmented xAI TTS
+                               segmented TTS (provider setting)
 ```
 
 Only the Cascade path exists. The server advertises `pipelines:["cascade"]` and a
-non-secret voice profile. `VOINEY_LAB_TTS_VOICE` defaults to `leo`; there is no active
+non-secret voice profile. `VOINEY_LAB_TTS_VOICE` defaults to the chosen provider's
+voice (`google_cloud`: `ko-KR-Chirp3-HD-Charon`); there is no active
 Realtime/Native configuration or transport.
 
 Where the 16 kHz above comes from: one module constant, `SAMPLE_RATE` in
@@ -33,7 +41,7 @@ Where the 16 kHz above comes from: one module constant, `SAMPLE_RATE` in
 `webrtcvad` accepts 8000, 16000, 32000, and 48000 (measured against the
 library's own `valid_rate_and_frame_length`; 22050 and 44100 are refused).
 Whether a specific provider requires it is **not** something this repository
-records — no xAI STT rate specification is present here, so do not state one.
+records — no provider's STT rate specification is present here, so do not state one.
 The browser resamples to it once, in `resamplePcm16`, from whatever rate its
 `AudioContext` chose. Note that the input and output paths each hold their own
 `16000` literals — the server's `ready` event and STT diagnostic records on one
@@ -50,11 +58,14 @@ never supply authoritative workflow state.
 Accepted turns follow:
 
 1. FrameBuffer and WebRTC VAD admit an endpoint.
-2. xAI STT returns structured transcription metadata.
+2. The STT provider (ElevenLabs `scribe_v2` in `.env.example`) returns
+   structured transcription metadata.
 3. admission gates reject empty/non-speech/keyterm echo.
 4. `arbitrate_request` produces one immutable request classification.
-5. `route_curated_runtime_turn` (the rules' path) or the general brain
-   execute the route.
+5. `route_curated_runtime_turn` (the rules' path) executes the route. The
+   general brain answers only a session without a protocol, which a voice
+   session never is (cascade refuses to start without one); since lane CL it
+   has no tools.
 6. `turn.route_decision` exposes a compact observable projection.
 7. sentence TTS streams through generation-aware audio segments.
 8. `turn.done` and `playback.completed` close timing ownership.
@@ -87,9 +98,9 @@ the router the line every turn goes along -- front rules, router, server
 validation -- and allows it to choose the model or tool per situation; what
 is forbidden is two paths separately deciding the same turn's state change.
 
-`VOINEY_LAB_LLM_ROUTER_ENABLED` (default `false`), `..._MODEL`
-(default `grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default
-2.5). Off, `run_turn` calls `route_curated_runtime_turn` as before and
+`VOINEY_LAB_LLM_ROUTER_ENABLED` (default `false`), the router role's
+`VOINEY_LAB_ROUTER_PROVIDER`/`_MODEL` ("설정 필요"; `.env.example`: openai
+`gpt-6-luna`) and `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS` (default 2.5). Off, `run_turn` calls `route_curated_runtime_turn` as before and
 nothing below runs. On:
 
 ```text
@@ -199,7 +210,8 @@ and the source is read. There is no approval, revocation, reviewer finding or
 development activation.
 
 Structured protocol analysis requires the deployment-supplied
-`VOINEY_LAB_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`.
+`VOINEY_LAB_ANALYSIS_MODEL`; the values in use are google `gemini-3.8-flash`
+at reasoning `low` (lane AQ, 2026-10-10).
 When the default-off deployment gate
 `VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native
 documents over eight pages enter the evidence-claim path even when their
@@ -230,21 +242,28 @@ its own: the analysis and the execution rule still decide.
 
 ## Evidence and provider boundaries
 
-Authority order is active protocol/approved safety catalog first. Optional external
-text research and supplemental model knowledge are marked as reference context and
-cannot mutate workflow state.
+Authority order is the active protocol's source first. The approved safety
+catalog feeds the step safety card; the voice answer from it (the research
+path's step 1, `search_approved_lab_references`) was deleted on 2026-10-10
+(lane CL). Optional external text research (xAI only, off by default), the
+short outside-PDF explanation ("AI 일반 지식", `external_references.py`
+`explain_outside_pdf`) and supplemental model knowledge are marked as
+reference context and cannot mutate workflow state.
 
-An image request ("사진 보여줘") is still recognised by the rules
-(`_WEB_VISUAL_REQUEST_PATTERNS`), but the xAI web-image search and image
-generation were removed on 2026-10-08 (lane DI); the turn answers with one
-`protocol.visual.state` of `visual_failed` and the source step is read. Lane WV
-rebuilds web and picture search for the steps. The Snakemake/Nextflow metadata
-lane (`drylab_workflows.py`) was removed the same day.
+A picture request ("그림 보여줘", "사진 보여줘") is recognised by the rules
+(`_WEB_VISUAL_REQUEST_PATTERNS`). The xAI web-image search and image
+generation were removed on 2026-10-08 (lane DI) and lane WV (2026-10-09)
+rebuilt pictures on OpenAI: the step's own source figure when it has one;
+otherwise, since lane VF, with `VOINEY_LAB_DRAWN_DIAGRAMS_ENABLED` a drawing
+made at once ("AI 가 그린 그림"), and for a named thing's photo with
+`VOINEY_LAB_WEB_EXPLANATIONS_ENABLED` a web lookup with its sources; with both
+off, the guidance sentence as before. The Snakemake/Nextflow metadata lane
+(`drylab_workflows.py`) was removed on 2026-10-08.
 
 ## Persistence and reporting
 
 - Protocol catalog: SQLite plus content-addressed source objects.
-- Experiment workspace: SQLite (schema 7), the experimenter's durable
+- Experiment workspace: SQLite (schema 9), the experimenter's durable
   ExperimentSession with checkpoints, observations, evidence metadata and
   recovery. The approval, adaptation, connector, inbox, dry-lab, ELN-audit,
   membership and analytics tables stay in the schema but nothing writes to
@@ -252,8 +271,9 @@ lane (`drylab_workflows.py`) was removed the same day.
 - Experiment reports: append-only SQLite metadata/events associated by session
   identity with the durable tenant ExperimentSession, plus deterministic
   JSON/Markdown/CSV/DOCX exports.
-- Safety handoff: bounded JSONL queue and separate worker producing reviewable EML
-  and status artifacts; it does not send mail automatically.
+- The safety report hand-off (a JSONL queue and a separate worker writing EML
+  files) was deleted on 2026-10-10 (lane CL), with the model tools that filed
+  and checked reports.
 - Runtime metrics: bounded in-memory aggregates derived from event allowlists.
 
 `GET /api/admin/metrics` requires a configured shared token and returns aggregate

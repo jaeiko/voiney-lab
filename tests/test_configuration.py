@@ -166,8 +166,6 @@ class VadConfigurationTests(unittest.TestCase):
 class VadStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_effective_non_secret_settings_are_logged_once_at_startup(self):
         with (
-            patch.object(server,"start_moss_runtime_from_environment"),
-            patch.object(server,"stop_moss_runtime"),
             patch.object(
                 server.asyncio,
                 "to_thread",

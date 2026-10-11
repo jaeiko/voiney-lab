@@ -17,7 +17,6 @@ from unittest.mock import patch
 
 import httpx
 
-from voiney_lab.brain import answer_approved_reference_question
 from voiney_lab.document_store import ingest_manifest
 from voiney_lab.external_references import (
     ExternalReferenceSettings,
@@ -27,7 +26,6 @@ from voiney_lab.external_references import (
     sanitize_external_search_answer,
 )
 from voiney_lab.retrieval import retrieve_approved_lab_documents
-from voiney_lab.tools import ToolContext, search_approved_lab_references
 
 from tests.test_retrieval import operational_document
 
@@ -108,20 +106,6 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(match["chunk_id"]), 64)
         self.assertNotEqual(match["document_id"], "FICTIONAL-DRAFT")
 
-    def test_tool_uses_read_only_baseline_without_moss(self):
-        ingest_manifest({"documents": [reference_document()]}, self.db)
-        context = ToolContext(self.db, None, "ko", "reference_only")
-        with patch(
-            "voiney_lab.moss_retrieval.get_moss_runtime",
-            return_value=None,
-        ):
-            result = search_approved_lab_references(
-                "acetonitrile precaution", context=context,
-                protocol_id="candidate-a-curated-development-v1",
-            )
-        self.assertTrue(result["answerable"])
-        self.assertEqual(result["retrieval"]["backend"], "sqlite")
-
     def test_catalog_audit_cli_is_read_only_and_omits_source_text(self):
         ingest_manifest({"documents": [reference_document()]}, self.db)
         result = subprocess.run(
@@ -147,41 +131,6 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("query status=success", result.stdout)
         self.assertIn("chunk_id=", result.stdout)
         self.assertNotIn("FICTIONAL TEST REFERENCE", result.stdout)
-
-    async def test_reference_answer_rejects_unknown_citation_and_preserves_numbers(self):
-        ingest_manifest({"documents": [reference_document()]}, self.db)
-        evidence = tuple(retrieve_approved_lab_documents(
-            "acetonitrile precaution", self.db,
-            filters={"approval_status": "approved", "lab_scope": "reference_only"},
-        )["matches"])
-        good = _ReferenceClient({
-            "answer_origin": "approved_lab_corpus",
-            "primary_text": "용기는 닫아 두고 환기되는 시험 구역을 사용하세요.",
-            "citation_ids": [evidence[0]["chunk_id"]],
-            "limitations": ["활성 프로토콜 자체의 지시가 아닙니다."],
-        })
-        answer = await answer_approved_reference_question(
-            good, "주의사항?", language="ko", protocol_id="candidate-a",
-            step_id="step-2", evidence=evidence,
-        )
-        self.assertEqual(answer.citations[0]["document_id"], evidence[0]["document_id"])
-        system_text = "\n".join(
-            str(message["content"]) for message in answer.messages
-            if message["role"] == "system"
-        )
-        self.assertIn("untrusted data", system_text.casefold())
-
-        bad = _ReferenceClient({
-            "answer_origin": "approved_lab_corpus",
-            "primary_text": "unsupported",
-            "citation_ids": ["unknown"],
-            "limitations": [],
-        })
-        with self.assertRaises(RuntimeError):
-            await answer_approved_reference_question(
-                bad, "주의사항?", language="ko", protocol_id="candidate-a",
-                step_id="step-2", evidence=evidence,
-            )
 
     def test_external_settings_are_disabled_or_strictly_allowlisted(self):
         with patch.dict(os.environ, {}, clear=True):
