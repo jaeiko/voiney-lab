@@ -3277,6 +3277,10 @@ def _analysis_run_public(catalog:ProtocolCatalog,protocol_id:str)->dict[str,obje
 
     status=catalog.analysis_run_status(protocol_id).public_dict()
     status["worker_running"]=_analysis_worker_running(protocol_id)
+    # Lane RN decision 4: the catalog's own stage line travels with the run
+    # status, so the screen says an automatic retry in the server's words
+    # (a cut answer, the reasoning level asked) instead of its own sentence.
+    status["pipeline"]=catalog.pipeline_status(protocol_id)
     return status
 
 

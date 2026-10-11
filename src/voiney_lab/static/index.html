@@ -234,6 +234,8 @@
               <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
               <div id="protocol-review-content" class="protocol-review-content"></div>
               <div id="protocol-blockers" class="protocol-review-content"></div>
+              <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
+              <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
               <div class="protocol-review-actions">
                 <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
                 <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
@@ -1962,8 +1964,14 @@ function confirmProtocolReanalysis(){const ask=globalThis.confirm;return typeof 
 function setProtocolAnalysisBusy(protocolId,busy){protocolAnalysisBusyFor=busy?protocolId:null;const retry=$("protocol-analysis-retry");if(retry&&(busy||currentProtocolReviewId===protocolId))retry.disabled=busy||isRegisteringProtocol;}
 function protocolAnalysisRunning(review){const running=["analysis_pending","analyzing"];return running.includes(review?.lifecycle_state)||running.includes(review?.reanalysis?.state)||["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(review?.analysis_status);}
 function automaticRetryCount(run,state){const retry=run?.automatic_retry;return retry&&typeof retry==="object"&&retry.state===state?`${Number.isInteger(retry.attempt)?retry.attempt:1}/${Number.isInteger(retry.limit)?retry.limit:1}`:"";}
-function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;}
-function restoreProtocolAnalysisNotice(){if(!currentProtocolReviewId)return;const status=$("protocol-upload-status"),output=$("protocol-analysis-progress");if(status&&protocolAnalysisNotice?.protocolId===currentProtocolReviewId)status.textContent=protocolAnalysisNotice.text;if(output&&protocolAnalysisProgressLine?.protocolId===currentProtocolReviewId)output.textContent=protocolAnalysisProgressLine.text;}
+function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);}
+function restoreProtocolAnalysisNotice(){if(!currentProtocolReviewId)return;const status=$("protocol-upload-status"),output=$("protocol-analysis-progress");if(status&&protocolAnalysisNotice?.protocolId===currentProtocolReviewId)status.textContent=protocolAnalysisNotice.text;if(output&&protocolAnalysisProgressLine?.protocolId===currentProtocolReviewId)output.textContent=protocolAnalysisProgressLine.text;showProtocolAnalysisBoxLine(currentProtocolReviewId);}
+// Lane RN decision 4 (2026-10-11): the same notice stands in the box that
+// holds the button ("올린 PDF 분석 결과"), with the time taken from the progress
+// line, for the protocol whose review is on screen; another protocol's review
+// takes it away and coming back restores it.
+function protocolAnalysisBoxLine(){const text=typeof protocolAnalysisNotice?.text==="string"?protocolAnalysisNotice.text:"",progress=protocolAnalysisProgressLine?.protocolId===protocolAnalysisNotice?.protocolId&&typeof protocolAnalysisProgressLine?.text==="string"?protocolAnalysisProgressLine.text:"",elapsed=(progress.match(/걸린 시간 \d+분 \d\d초/)||[""])[0];return elapsed&&!text.includes(elapsed)?`${text} · ${elapsed}`:text;}
+function showProtocolAnalysisBoxLine(protocolId){const box=$("protocol-review-analysis-notice");if(!box)return;const line=protocolId&&protocolAnalysisNotice?.protocolId===protocolId?protocolAnalysisBoxLine():"";box.textContent=line;box.hidden=!line;}
 function stopProtocolAnalysisPolling(){if(protocolAnalysisPollHandle!==null){clearInterval(protocolAnalysisPollHandle);protocolAnalysisPollHandle=null;}}
 function stopProtocolOcrPolling(){if(protocolOcrPollHandle!==null){clearInterval(protocolOcrPollHandle);protocolOcrPollHandle=null;}}
 function reviewEvidenceText(evidence){return evidence&&Number.isInteger(evidence.source_page_number)?`원문 p.${evidence.source_page_number} · ${String(evidence.source_excerpt||"")}`:"원문 근거 없음";}
@@ -2277,6 +2285,7 @@ function renderProtocolReview(review,options={}){
   const description=construct.source_text||construct.condition_source_text||construct.range_source_text||construct.resolution_source_text||"구조화 워크플로 항목";
   appendProtocolReviewGroup(`분기·반복·모호성 · ${serverCodeText("construct_type",construct.construct_type,"구조화 워크플로 항목")}`,[description,construct.resolved===false?"해결되지 않음":"",reviewEvidenceText(construct.evidence)],[["construct_type",construct.construct_type]]);
  }
+ showProtocolAnalysisBoxLine(typeof review?.protocol_id==="string"?review.protocol_id:null);
  if(retry){const failedState=["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status),passedState=review?.analysis_available===true&&review?.development_only!==true;retry.hidden=!(failedState||passedState);retry.dataset.reanalysis=String(passedState&&!failedState);retry.textContent=passedState&&!failedState?"다시 분석":"분석 다시 시도";retry.disabled=isRegisteringProtocol||protocolAnalysisBusyFor===review?.protocol_id||protocolAnalysisRunning(review);}
  if(ocrRun){ocrRun.hidden=!(ocr.state==="ocr_required"||ocr.state==="failed"||ocr.state==="rejected");ocrRun.disabled=isRegisteringProtocol;}
  return true;
@@ -2308,18 +2317,21 @@ async function pollProtocolAnalysisStatus(protocolId){
   const terminal=new Set(["review_required","analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled","ocr_required"]);
   const parts=Number.isInteger(run.total_chunks)&&run.total_chunks>0?` · 부분 ${run.completed_chunks||0} / ${run.total_chunks} 완료${run.failed_chunks?` · 실패 ${run.failed_chunks}`:""}`:"";
   const again=run.reanalysis===true,runWord=again?"다시 분석":"분석";
+  // Lane RN decision 4: an automatic retry is worded by the server's stage line
+  // (a cut answer, the reasoning level asked); without it the screen's own words.
+  const serverWording=run.automatic_retry&&typeof run.automatic_retry==="object"&&typeof run.pipeline?.message==="string"&&run.pipeline.message?run.pipeline.message:"";
   if(!terminal.has(run.state)){
    if(run.worker_running===false){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,again?PROTOCOL_ANALYSIS_INTERRUPTED_NOTICE.replace("'분석 다시 시도'","'다시 분석'"):PROTOCOL_ANALYSIS_INTERRUPTED_NOTICE,`${runWord} 중단 · 실행 상태 변경 없음`);return run;}
    setProtocolAnalysisBusy(protocolId,true);
    const elapsed=protocolAnalysisElapsedText(run.requested_at),retrying=automaticRetryCount(run,"in_progress"),already=protocolAnalysisDuplicatePressFor===protocolId?`이미 ${runWord} 중 · 새로 시작하지 않았습니다 · `:"";
-   const running=again?PROTOCOL_REANALYSIS_RUNNING_NOTICE:retrying?PROTOCOL_ANALYSIS_RETRY_NOTICE.replace("분석 중 · ",`분석 중 · 다시 시도 중(${retrying}) · `):PROTOCOL_ANALYSIS_RUNNING_NOTICE;
+   const running=again?PROTOCOL_REANALYSIS_RUNNING_NOTICE:serverWording?`${serverWording} 끝나면 통과 또는 실패를 여기에 알립니다.`:retrying?PROTOCOL_ANALYSIS_RETRY_NOTICE.replace("분석 중 · ",`분석 중 · 다시 시도 중(${retrying}) · `):PROTOCOL_ANALYSIS_RUNNING_NOTICE;
    showProtocolAnalysisNotice(protocolId,already+running,`${runWord} 중${retrying?` · 다시 시도 중(${retrying})`:""}${elapsed?` · ${elapsed}`:""}${parts} · 실행 상태 변경 없음`);return run;}
   stopProtocolAnalysisPolling();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,false);
   // The time taken is shown only for a run this page watched, never for one
   // that ended long ago and is merely being looked at again.
   const elapsed=protocolAnalysisStartedAt!==null?protocolAnalysisElapsedText(run.requested_at):"";protocolAnalysisStartedAt=null;
   const failed=Boolean(run.failure_code)||["analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled"].includes(run.state);
-  const notice=run.state==="ocr_required"?protocolUploadErrorMessage("ocr_required"):failed?(again?protocolReanalysisFailureNotice(run.failure_code||run.state,run.available_for_execution===true):protocolAnalysisFailureNotice(run.failure_code||run.state,Boolean(automaticRetryCount(run,"failed")))):again?PROTOCOL_REANALYSIS_PASS_NOTICE:PROTOCOL_ANALYSIS_PASS_NOTICE;
+  const notice=run.state==="ocr_required"?protocolUploadErrorMessage("ocr_required"):failed?(again?protocolReanalysisFailureNotice(run.failure_code||run.state,run.available_for_execution===true):serverWording?`분석 실패 · ${serverWording} '분석 다시 시도'를 눌러 다시 분석할 수 있습니다.`:protocolAnalysisFailureNotice(run.failure_code||run.state,Boolean(automaticRetryCount(run,"failed")))):again?PROTOCOL_REANALYSIS_PASS_NOTICE:PROTOCOL_ANALYSIS_PASS_NOTICE;
   const retried=automaticRetryCount(run,"passed");
   showProtocolAnalysisNotice(protocolId,notice,`${runWord} 끝${retried?` · 다시 시도 ${retried} 뒤 통과`:""}${elapsed?` · ${elapsed}`:""}${parts}`);
   await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);restoreProtocolAnalysisNotice();
