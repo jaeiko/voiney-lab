@@ -317,7 +317,17 @@ class CuratedProtocolFixture:
 
     @property
     def title(self) -> str:
-        return self.draft.protocol.metadata.title
+        """The protocol's title; the PDF file's name (without its extension)
+        where the analysis left the title empty (lane GE, decision 5: an
+        analysis that cleared the title, lane EV2 decision 2, is still named
+        in the voice answer and the report)."""
+
+        title = " ".join(str(self.draft.protocol.metadata.title or "").split())
+        if title:
+            return title
+        name = self.source_filename or (self.source_pdf_path.name if self.source_pdf_path else "")
+        stem = Path(name).stem if name else ""
+        return " ".join(stem.replace("_", " ").split()) or ""
 
     @property
     def steps(self) -> tuple[domain.ProtocolSourceStep, ...]:
