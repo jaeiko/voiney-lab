@@ -26,6 +26,19 @@ from voiney_lab.vad import (
     VadConfig,
 )
 
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, derived from the fixture)."""
+
+    from voiney_lab.curated_protocol import endpoint_words_for
+    from tests.protocol_vocabulary_support import in_gel_fixture
+    cache = _predicate.__dict__.setdefault("fixture", None)
+    if cache is None:
+        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
+    return _observation_predicate(endpoint_words_for(cache, label), said)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data" / "fixtures" / "development_protocols"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
@@ -184,21 +197,21 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
 
         # 2. Ask question about criterion (guard check: should not advance)
-        self.assertIsNone(_observation_predicate("7", "완전히 투명한가요?"))
+        self.assertIsNone(_predicate("7", "완전히 투명한가요?"))
         plan_q = self.session.plan("완전히 투명한가요?", turn_id=21, language="ko")
         self.assertFalse(plan_q.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
 
         # 3. Negative observation: "아직 색이 남아 있어요"
-        self.assertEqual(_observation_predicate("7", "아직 색이 남아 있어요"), "negative")
+        self.assertEqual(_predicate("7", "아직 색이 남아 있어요"), "negative")
         plan_neg = self.session.plan("아직 색이 남아 있어요", turn_id=22, language="ko")
         self.assertFalse(plan_neg.state_changed)
         self.assertEqual(plan_neg.speech_mode, CuratedProtocolSpeechMode.BLOCKED)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
 
         # 4. Positive observation: "어, 젤이 이제 완전히 투명해졌어" / "젤이 완전히 탈색되어 투명해요"
-        self.assertEqual(_observation_predicate("7", "어, 젤이 이제 완전히 투명해졌어"), "positive")
-        self.assertEqual(_observation_predicate("7", "젤이 완전히 탈색되어 투명해요"), "positive")
+        self.assertEqual(_predicate("7", "어, 젤이 이제 완전히 투명해졌어"), "positive")
+        self.assertEqual(_predicate("7", "젤이 완전히 탈색되어 투명해요"), "positive")
         plan_pos = self.session.plan("젤이 완전히 탈색되어 투명해요", turn_id=23, language="ko")
         self.assertTrue(plan_pos.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "8")
@@ -241,13 +254,14 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
 
     def test_question_focus_resolution_distinguishes_head_noun_from_relative_modifier(self) -> None:
         """Noun phrase modifiers ('젤 밴드가 들어있는 튜브') must isolate the head noun as focus."""
-        # 1. Modifier clause: focus is tube, context is stained_protein_band
+        # 1. Modifier clause: focus is tube, context is buffer (lane GE: the
+        # entities are found by their own Korean and English forms).
         focus, context = resolve_question_focus(
-            "여기서 젤 밴드가 들어있는 튜브가 뭐야?",
-            ("stained_protein_band", "tube"),
+            "여기서 버퍼가 들어있는 튜브가 뭐야?",
+            ("buffer", "tube"),
         )
         self.assertEqual(focus, ("tube",))
-        self.assertEqual(context, ("stained_protein_band",))
+        self.assertEqual(context, ("buffer",))
 
         # 2. Coordination clause: both are focus
         focus_coord, context_coord = resolve_question_focus(

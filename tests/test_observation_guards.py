@@ -94,13 +94,13 @@ class StepSevenFramesReadAsAWholeTests(unittest.TestCase):
         for frame in STEP_7_FRAMES:
             for wording in (frame, f"아니 {frame}", f"아니야, {frame}", f"어 {frame}"):
                 with self.subTest(wording=wording):
-                    self.assertEqual(_observation_predicate("7", wording), "positive")
+                    self.assertEqual(_predicate("7", wording), "positive")
 
     def test_a_negation_anywhere_makes_it_a_negative(self):
         for frame in STEP_7_FRAMES:
             for wording in _beside(frame)["negative"]:
                 with self.subTest(wording=wording):
-                    self.assertEqual(_observation_predicate("7", wording), "negative")
+                    self.assertEqual(_predicate("7", wording), "negative")
 
     def test_not_yet_a_wish_or_a_condition_is_asked_again(self):
         for frame in STEP_7_FRAMES:
@@ -110,14 +110,14 @@ class StepSevenFramesReadAsAWholeTests(unittest.TestCase):
                 "색이 빠지면",
             ):
                 with self.subTest(wording=wording):
-                    self.assertIsNone(_observation_predicate("7", wording))
+                    self.assertIsNone(_predicate("7", wording))
 
     def test_the_english_frames_read_as_before(self):
-        self.assertEqual(_observation_predicate("7", "fully destained"), "positive")
+        self.assertEqual(_predicate("7", "fully destained"), "positive")
         self.assertEqual(
-            _observation_predicate("7", "the gel is now transparent"), "positive"
+            _predicate("7", "the gel is now transparent"), "positive"
         )
-        self.assertEqual(_observation_predicate("7", "not fully destained"), "negative")
+        self.assertEqual(_predicate("7", "not fully destained"), "negative")
 
 
 class StepNineAndTwentyFramesReadAsAWholeTests(unittest.TestCase):
@@ -127,7 +127,7 @@ class StepNineAndTwentyFramesReadAsAWholeTests(unittest.TestCase):
                 for wording in (frame, f"아니 {frame}", f"어 {frame}"):
                     with self.subTest(step=label, wording=wording):
                         self.assertEqual(
-                            _observation_predicate(label, wording), "positive"
+                            _predicate(label, wording), "positive"
                         )
 
     def test_a_negation_anywhere_makes_it_a_negative(self):
@@ -136,7 +136,7 @@ class StepNineAndTwentyFramesReadAsAWholeTests(unittest.TestCase):
                 for wording in _beside(frame)["negative"]:
                     with self.subTest(step=label, wording=wording):
                         self.assertEqual(
-                            _observation_predicate(label, wording), "negative"
+                            _predicate(label, wording), "negative"
                         )
 
     def test_not_yet_a_wish_or_a_condition_is_asked_again(self):
@@ -147,16 +147,16 @@ class StepNineAndTwentyFramesReadAsAWholeTests(unittest.TestCase):
                     "흰색으로 변했다면",
                 ):
                     with self.subTest(step=label, wording=wording):
-                        self.assertIsNone(_observation_predicate(label, wording))
+                        self.assertIsNone(_predicate(label, wording))
 
     def test_the_english_frames_read_as_before(self):
         for label in ("9", "20"):
             with self.subTest(step=label):
                 self.assertEqual(
-                    _observation_predicate(label, "it turned white"), "positive"
+                    _predicate(label, "it turned white"), "positive"
                 )
                 self.assertEqual(
-                    _observation_predicate(label, "not white yet"), "negative"
+                    _predicate(label, "not white yet"), "negative"
                 )
 
 
@@ -183,25 +183,25 @@ class StepSevenSpokenWordingsTests(unittest.TestCase):
     def test_the_pilot_wordings_report_the_endpoint(self):
         for wording in STEP_7_WORDINGS:
             with self.subTest(wording=wording):
-                self.assertEqual(_observation_predicate("7", wording), "positive")
+                self.assertEqual(_predicate("7", wording), "positive")
 
     def test_they_are_read_as_a_whole_like_the_others(self):
         for frame in ("탈색돼 있어", "탈색이 완료됐어", "탈색 완료"):
             for wording in _beside(frame)["negative"] + ("탈색 완료 아니야",):
                 with self.subTest(wording=wording):
-                    self.assertEqual(_observation_predicate("7", wording), "negative")
+                    self.assertEqual(_predicate("7", wording), "negative")
             for wording in _beside(frame)["unread"]:
                 with self.subTest(wording=wording):
                     if wording == "아직 탈색돼 있어":
                         # Lane E's "아직 … 탈색 … 있어" (still stained) reads
                         # this first, as a negative.
                         self.assertEqual(
-                            _observation_predicate("7", wording), "negative"
+                            _predicate("7", wording), "negative"
                         )
                     else:
-                        self.assertIsNone(_observation_predicate("7", wording))
+                        self.assertIsNone(_predicate("7", wording))
         # A negation inside the wording leaves no wording to read: asked again.
-        self.assertIsNone(_observation_predicate("7", "탈색이 완료 안 됐어"))
+        self.assertIsNone(_predicate("7", "탈색이 완료 안 됐어"))
 
     def test_a_plan_a_time_or_a_question_about_it_is_no_report(self):
         for wording in (
@@ -219,13 +219,13 @@ class StepSevenSpokenWordingsTests(unittest.TestCase):
             "탈색이 완료될 때까지 반복합니다",
         ):
             with self.subTest(wording=wording):
-                self.assertNotEqual(_observation_predicate("7", wording), "positive")
+                self.assertNotEqual(_predicate("7", wording), "positive")
 
     def test_they_are_step_7_only(self):
         for label in ("6", "8", "9", "20"):
             for wording in ("탈색돼 있어", "탈색이 완료됐어", "탈색 완료"):
                 with self.subTest(step=label, wording=wording):
-                    self.assertIsNone(_observation_predicate(label, wording))
+                    self.assertIsNone(_predicate(label, wording))
 
 
 def _step_index(fixture, label: str) -> int:
@@ -485,6 +485,19 @@ class PendingAnomalyEndsWithTheStepTests(unittest.TestCase):
     SOURCE_PDF.is_file(),
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, derived from the fixture)."""
+
+    from voiney_lab.curated_protocol import endpoint_words_for
+    from tests.protocol_vocabulary_support import in_gel_fixture
+    cache = _predicate.__dict__.setdefault("fixture", None)
+    if cache is None:
+        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
+    return _observation_predicate(endpoint_words_for(cache, label), said)
+
 class PendingAnomalyEndsWithTheStepVoiceTests(VoiceSessionHarness, unittest.TestCase):
     def test_the_step_7_anomaly_stays_recorded_and_step_9_completes_on_yes(self):
         step_1 = self.fixture.steps[0]

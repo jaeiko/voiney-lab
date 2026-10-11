@@ -97,17 +97,17 @@ class PhraseTests(unittest.TestCase):
     def test_a_negation_after_the_endpoint_phrase_is_a_negative_report(self):
         for label, utterance in NEGATED:
             with self.subTest(step=label, utterance=utterance):
-                self.assertEqual(_observation_predicate(label, utterance), "negative")
+                self.assertEqual(_predicate(label, utterance), "negative")
 
     def test_a_question_a_hedge_or_the_source_read_back_is_no_report(self):
         for label, utterance in NOT_A_REPORT:
             with self.subTest(step=label, utterance=utterance):
-                self.assertIsNone(_observation_predicate(label, utterance))
+                self.assertIsNone(_predicate(label, utterance))
 
     def test_the_existing_reports_are_still_positive(self):
         for label, utterance in POSITIVES:
             with self.subTest(step=label, utterance=utterance):
-                self.assertEqual(_observation_predicate(label, utterance), "positive")
+                self.assertEqual(_predicate(label, utterance), "positive")
 
     def test_a_questioning_yes_is_neither_yes_nor_no(self):
         for reply in QUESTIONING_YES + ("아니?", "아니야?"):
@@ -146,6 +146,19 @@ class CompletionPromptTests(unittest.TestCase):
     SOURCE_PDF.is_file(),
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, derived from the fixture)."""
+
+    from voiney_lab.curated_protocol import endpoint_words_for
+    from tests.protocol_vocabulary_support import in_gel_fixture
+    cache = _predicate.__dict__.setdefault("fixture", None)
+    if cache is None:
+        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
+    return _observation_predicate(endpoint_words_for(cache, label), said)
+
 class RepeatStepTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

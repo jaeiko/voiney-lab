@@ -3,9 +3,9 @@
 ``stt_keyterms()`` used to send the same twenty in-gel terms to every
 protocol's speech recognition. Now the terms are the active protocol's own:
 its materials and equipment as its steps name them, the labelled reagents and
-abbreviations its prose defines, and the in-gel candidates only where the
-protocol's text contains them. In-gel therefore sends the same set as before;
-a protocol without those words sends none of them.
+abbreviations its prose defines, its acronym compounds, and then the other
+English words its steps use (lane GE, decision 3: no in-gel candidate list
+remains). A protocol without the in-gel words sends none of them.
 
 The keyterms are read where the Cascade runtime reads them --
 ``cascade_transcription_context`` and the multipart the xAI request is built
@@ -30,6 +30,7 @@ from voiney_lab.server import (
 )
 
 from tests.protocol_vocabulary_support import (
+    IN_GEL_DERIVED_TERMS,
     IN_GEL_TERMS,
     SOURCE_PDF,
     build_fixture,
@@ -78,29 +79,32 @@ class InGelKeytermTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.fixture = in_gel_fixture()
 
-    def test_in_gel_sends_the_same_terms_as_the_old_literal_at_every_step(self) -> None:
+    def test_in_gel_sends_its_own_terms_at_every_step(self) -> None:
         for active in (False, True):
             for index, step in enumerate(self.fixture.steps):
                 for control in (False, True):
                     with self.subTest(active=active, step=step.source_label, control=control):
                         session = _session_at(self.fixture, index, active=active)
                         terms = session.stt_keyterms(include_control_terms=control)
-                        before = tuple(dict.fromkeys((
-                            *IN_GEL_TERMS,
+                        self.assertLessEqual(set(IN_GEL_DERIVED_TERMS), set(terms))
+                        self.assertLessEqual(len(terms), 100)
+                        expected_tail = tuple(dict.fromkeys((
                             *(_step_tokens(step.source_label) if active else ()),
                             *(CONTROL_TERMS if control else ()),
-                        )))[:100]
-                        self.assertEqual(set(terms), set(before))
-                        self.assertEqual(len(terms), len(before))
-                        # Only the protocol terms were reordered; the step and
-                        # control phrases still follow them, in the same order.
-                        self.assertEqual(terms[len(IN_GEL_TERMS):], before[len(IN_GEL_TERMS):])
+                        )))
+                        # The protocol's words come first; the step and
+                        # control phrases follow them, in the same order.
+                        if expected_tail:
+                            self.assertEqual(terms[-len(expected_tail):], expected_tail)
+                        # The literal's words the document never contains are
+                        # not sent (no candidate list remains).
+                        self.assertNotIn("Evotip", terms)
 
     def test_the_boundary_sends_the_same_set(self) -> None:
         session = _session_at(self.fixture, 1)
         self.assertEqual(
             set(_boundary_keyterms(session)),
-            {*IN_GEL_TERMS, *_step_tokens("2"), *CONTROL_TERMS},
+            set(session.stt_keyterms(include_control_terms=True)),
         )
 
     def test_every_in_gel_term_is_spelled_as_the_in_gel_data_spells_it(self) -> None:
@@ -125,32 +129,17 @@ class InGelKeytermTests(unittest.TestCase):
         self.assertLess(at_2.index("Solution A"), at_2.index("trypsin"))
         self.assertNotEqual(at_2, at_21)
 
-    def test_the_echo_guard_decides_as_before_on_in_gel(self) -> None:
-        transcripts = (
-            "AMBIC, DTT, trypsin, acetonitrile, SDS-PAGE",
-            "HPLC water Solution A Solution B gel plug stained protein band",
-            "Thermomixer rpm incubation keratin contamination Evotip",
-            "AMBIC가 뭐야?",
-            "현재 단계 완료했어",
-            "2단계 완료",
-            "네",
-            "trypsin 넣었어",
-        )
+    def test_the_echo_guard_follows_the_terms_in_gel_sends(self) -> None:
         session = _session_at(self.fixture, 1)
         now = _boundary_keyterms(session)
-        before = tuple(dict.fromkeys((*IN_GEL_TERMS, *_step_tokens("2"), *CONTROL_TERMS)))
-        for text in transcripts:
-            with self.subTest(text=text):
-                self.assertEqual(
-                    classify_input_event(Transcription(text, "ko"), keyterms=now),
-                    classify_input_event(Transcription(text, "ko"), keyterms=before),
-                )
+        echo = "AMBIC, DTT, trypsin, acetonitrile, SDS-PAGE"
         self.assertEqual(
-            classify_input_event(
-                Transcription(transcripts[0], "ko"), keyterms=now
-            ).reason,
+            classify_input_event(Transcription(echo, "ko"), keyterms=now).reason,
             "keyterm_echo",
         )
+        for text in ("AMBIC가 뭐야?", "현재 단계 완료했어", "2단계 완료", "네", "trypsin 넣었어"):
+            with self.subTest(text=text):
+                self.assertTrue(classify_input_event(Transcription(text, "ko"), keyterms=now).accepted)
 
     def test_in_gel_never_relied_on_the_empty_inventory_fallback(self) -> None:
         session = CuratedProtocolSession(self.fixture)

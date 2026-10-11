@@ -7,7 +7,7 @@ acknowledgement, so the question asked again was never heard; and with no
 question open the same words advanced past the endpoint and dropped the
 problem. Both now record the problem, keep the step, leave the endpoint
 question open without taking a bare yes, and say -- once the record took it --
-"이상 사항은 기록했어요. 탈색이 끝났으면 한 번 더 말씀해 주세요."
+"이상 사항은 기록했어요. 탈색이 됐으면 한 번 더 말씀해 주세요."
 
 "탈색 완료했어" (and "탈수 완료했어" at steps 9 and 20) reports the endpoint,
 read as a whole as lane O's wordings are.
@@ -49,9 +49,10 @@ from voiney_lab.workspace_store import (
 
 #: What is said once the record took the problem, per step.
 RECORDED_REASK = {
-    "7": "이상 사항은 기록했어요. 탈색이 끝났으면 한 번 더 말씀해 주세요.",
-    "9": "이상 사항은 기록했어요. 젤이 하얗게 말랐으면 한 번 더 말씀해 주세요.",
-    "20": "이상 사항은 기록했어요. 젤이 하얗게 말랐으면 한 번 더 말씀해 주세요.",
+    # Lane GE: the endpoint in the step's own words, read off the source.
+    "7": "이상 사항은 기록했어요. 탈색이 됐으면 한 번 더 말씀해 주세요.",
+    "9": "이상 사항은 기록했어요. 흰색이 됐으면 한 번 더 말씀해 주세요.",
+    "20": "이상 사항은 기록했어요. 흰색이 됐으면 한 번 더 말씀해 주세요.",
 }
 #: The record write failing is answered as before.
 RECORD_FAILED = "실험 기록을 저장하지 못해 이상 사항이 기록되었다고 확인할 수 없습니다."
@@ -91,7 +92,7 @@ class CompletedWordingTests(unittest.TestCase):
             ("20", "탈수 완료했습니다"),
         ):
             with self.subTest(step=label, said=said):
-                self.assertEqual(_observation_predicate(label, said), "positive")
+                self.assertEqual(_predicate(label, said), "positive")
 
     def test_it_is_read_as_a_whole(self):
         for label, frame in (("7", "탈색 완료했어"), ("9", "탈수 완료했어")):
@@ -105,12 +106,12 @@ class CompletedWordingTests(unittest.TestCase):
                 (f"{frame} {frame[:-1]}으면 좋겠어", None),
             ):
                 with self.subTest(step=label, said=said):
-                    self.assertEqual(_observation_predicate(label, said), reading)
+                    self.assertEqual(_predicate(label, said), reading)
 
     def test_each_wording_stays_at_its_own_step(self):
-        self.assertIsNone(_observation_predicate("9", "탈색 완료했어"))
-        self.assertIsNone(_observation_predicate("7", "탈수 완료했어"))
-        self.assertIsNone(_observation_predicate("8", "탈색 완료했어"))
+        self.assertIsNone(_predicate("9", "탈색 완료했어"))
+        self.assertIsNone(_predicate("7", "탈수 완료했어"))
+        self.assertIsNone(_predicate("8", "탈색 완료했어"))
 
 
 class _InGelSteps:
@@ -425,6 +426,19 @@ class PausedReplyTests(unittest.TestCase):
     SOURCE_PDF.is_file(),
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, derived from the fixture)."""
+
+    from voiney_lab.curated_protocol import endpoint_words_for
+    from tests.protocol_vocabulary_support import in_gel_fixture
+    cache = _predicate.__dict__.setdefault("fixture", None)
+    if cache is None:
+        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
+    return _observation_predicate(endpoint_words_for(cache, label), said)
+
 class PausedVoiceTests(VoiceSessionHarness, unittest.TestCase):
     """Decisions 5 and 6 over the WebSocket, workspace and report on."""
 

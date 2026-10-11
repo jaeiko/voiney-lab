@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from voiney_lab.curated_protocol import (
+    ProtocolVocabulary,
     CuratedProtocolAction,
     CuratedProtocolSession,
     ProtocolKnowledgeView,
@@ -49,11 +50,12 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
 
     def test_protocol_wide_stt_terms_and_documented_multipart_order(self) -> None:
         terms = self.session().stt_keyterms()
+        # Lane GE: the protocol's own terms, derived from its materials,
+        # equipment, labelled reagents and abbreviations -- no literal list.
         for expected in (
             "AMBIC", "ammonium bicarbonate", "HPLC water", "DTT",
             "iodoacetamide", "trypsin", "formic acid", "LC-MS",
-            "SDS-PAGE", "gel plug", "stained protein band", "Thermomixer",
-            "rpm", "keratin", "contamination", "Evotip",
+            "SDS-PAGE", "Solution A", "Solution B", "Thermomixer",
         ):
             self.assertIn(expected, terms)
         self.assertNotIn("완료", terms)
@@ -116,6 +118,8 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
         normalized, entities, _, corrections = normalize_scientific_request(
             "AM BIC와 HPLG water가 뭐야? 800 rpm, Solution A, 37도",
             entity_inventory=("ambic", "hplc water", "solution a"),
+            # Lane GE: the words are heard through the protocol's vocabulary.
+            protocol_vocabulary=ProtocolVocabulary.from_fixture(self.fixture),
         )
         self.assertEqual(
             entities, ("ambic", "hplc_water", "rpm", "solution_a")
@@ -124,7 +128,8 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
         self.assertIn("37", normalized)
         self.assertIn("solution a", normalized)
         self.assertIn(("am bic", "AMBIC"), corrections)
-        self.assertIn(("hplg", "HPLC"), corrections)
+        # Lane GE: heard as the whole term the protocol spells.
+        self.assertIn(("hplg water", "HPLC water"), corrections)
 
     def test_corrupted_start_requests_confirmation_without_mutation(self) -> None:
         session = self.session("1")

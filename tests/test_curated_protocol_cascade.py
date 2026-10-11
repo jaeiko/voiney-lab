@@ -22,6 +22,7 @@ from voiney_lab.brain import (
     select_curated_protocol_answer,
 )
 from voiney_lab.curated_protocol import (
+    ProtocolVocabulary,
     DEVELOPMENT_FIXTURE_STATUS,
     CuratedProtocolAction,
     CuratedProtocolFixtureError,
@@ -637,8 +638,11 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         untouched,unresolved,note=normalize_scientific_query(
             "AMPIC가 뭐야?",entity_inventory=("ambic","ampic"),
         )
+        # Lane GE: with no protocol the caller's inventory is the vocabulary,
+        # so "AMPIC" said exactly is its "ampic" -- and is not repaired
+        # toward "ambic", which was the point of this case.
         self.assertIn("ampic",untouched)
-        self.assertIsNone(unresolved)
+        self.assertEqual(unresolved,"ampic")
         self.assertIsNone(note)
         labels,_,_=normalize_scientific_query(
             "Step 3의 Solution A와 Step 8의 Solution B",
@@ -4225,7 +4229,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         curated_session.active = True
         curated_session.current_index = 0
         prompt = "염색된 단백질 밴드와, 어, AMBIC가 무엇인지 설명해줘."
-        intent = classify_curated_control_intent(prompt, language="ko")
+        # Lane GE: the words are heard through the active protocol's own
+        # vocabulary; a caller with no protocol no longer hears in-gel's.
+        intent = classify_curated_control_intent(
+            prompt, language="ko",
+            protocol_vocabulary=ProtocolVocabulary.from_fixture(self.fixture),
+        )
         self.assertEqual(intent.action, CuratedProtocolAction.RELATED_QUESTION)
         self.assertIn("stained_protein_band", intent.requested_entities)
         self.assertIn("ambic", intent.requested_entities)

@@ -26,8 +26,18 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data/fixtures/development_protocols"
 SOURCE_PDF = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
 
-#: What stt_keyterms() sent for every protocol before this change: the in-gel
-#: document's terms, as a literal.
+#: The terms the in-gel document's own text gives (lane GE, decision 3):
+#: its material and equipment rows as the steps name them, its labelled
+#: reagents, the abbreviations it defines and their long forms, and its
+#: acronym compounds. Derived, not listed in the code.
+IN_GEL_DERIVED_TERMS = (
+    "acetonitrile", "ammonium bicarbonate", "formic acid", "trypsin", "DTT",
+    "iodoacetamide", "Thermomixer", "SDS-PAGE", "Solution A", "Solution B",
+    "AMBIC", "HPLC water", "LC-MS",
+)
+#: What stt_keyterms() sent for every protocol before lane G: the in-gel
+#: document's terms, as a literal (history; the words a protocol does not
+#: contain are no longer sent anywhere).
 IN_GEL_TERMS = (
     "AMBIC", "ammonium bicarbonate", "HPLC water", "acetonitrile",
     "Solution A", "Solution B", "DTT", "iodoacetamide", "trypsin",
