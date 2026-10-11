@@ -159,6 +159,12 @@ class ProtocolOcrRequiredError(ProtocolCatalogError):
     code = "ocr_required"
 
 
+class ProtocolReanalysisRefusedError(ProtocolCatalogError):
+    """The curated development fixture is served as curated, never analysed again."""
+
+    code = "reanalysis_not_allowed"
+
+
 class ProtocolOcrReviewError(ProtocolCatalogError):
     """An OCR result that does not hold against the source (evidence, not a person's review)."""
 
@@ -262,6 +268,11 @@ class ProtocolAnalysisRunStatus:
     #: (``in_progress``, ``passed``, ``failed``) and the failure it retried.
     #: None when the run on screen had none.
     automatic_retry: dict[str, object] | None = None
+    #: Whether the run on screen was asked for over a passed analysis (lane
+    #: RN, decision 2), and whether the revision may run right now -- on the
+    #: analysis it has, whatever this run does.
+    reanalysis: bool = False
+    available_for_execution: bool = False
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -281,6 +292,8 @@ class ProtocolAnalysisRunStatus:
             "lifecycle_state": self.lifecycle_state,
             "requested_at": self.requested_at,
             "automatic_retry": self.automatic_retry,
+            "reanalysis": self.reanalysis,
+            "available_for_execution": self.available_for_execution,
         }
 
 
@@ -483,6 +496,14 @@ _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
     "실패 원인을 확인한 뒤 '분석 다시 시도'를 누르세요. 다시 시도해도 원문은 "
     "바뀌지 않습니다."
 )
+#: What a person does after a re-analysis over a passed analysis failed
+#: (lane RN, decision 2): nothing is lost, the pass before it still runs.
+_REANALYSIS_RECOVERY_ACTION = (
+    "'다시 분석'을 눌러 다시 할 수 있습니다. 원문과 지금 분석은 바뀌지 않습니다."
+)
+_NOT_RETRYABLE_FAILURE_CODES = frozenset({
+    "ocr_required", "protocol_pdf_too_large", "protocol_analysis_too_many_pages",
+})
 
 #: One Korean line per readiness reason: what blocks execution and what a
 #: person does about it (lane PX, decision 4 of 2026-10-06). The English
@@ -1038,6 +1059,84 @@ class ProtocolCatalog:
         )
         return analyses[-1] if analyses else None
 
+    def _reanalysis_requested(self, revision: ProtocolRevisionRecord) -> bool:
+        """Whether the run on screen was asked for over a passed analysis."""
+
+        request = next(
+            (
+                event for event in reversed(self.store.list_events(revision.experiment_id))
+                if event.protocol_revision_number == revision.revision_number
+                and event.event_type == _ANALYSIS_REQUESTED_EVENT
+            ),
+            None,
+        )
+        return (
+            request is not None and isinstance(request.payload, dict)
+            and request.payload.get("reanalysis") is True
+        )
+
+    @staticmethod
+    def _reanalysis_status(
+        events: Sequence[Any], analysis: AnalysisRevisionRecord | None,
+    ) -> dict[str, object] | None:
+        """The run asked for over the latest passed analysis, or None.
+
+        Lane RN, decision 2: the lifecycle events after the pass (or after
+        the development fixture's record) are that run's. Its failure is its
+        own, never the executable analysis's, so the review says it apart
+        from ``analysis_failure``. None while no such run was asked for.
+        """
+
+        if analysis is None:
+            return None
+        last_pass = max(
+            (
+                index for index, event in enumerate(events)
+                if event.event_type in {
+                    _ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT,
+                    _DEVELOPMENT_FIXTURE_EVENT,
+                }
+            ),
+            default=-1,
+        )
+        after = tuple(
+            event for event in events[last_pass + 1:]
+            if event.event_type in {
+                _ANALYSIS_REQUESTED_EVENT, _ANALYSIS_STARTED_EVENT,
+                _ANALYSIS_FAILED_EVENT, _ANALYSIS_RETRY_EVENT,
+            }
+        )
+        if not after:
+            return None
+        state = {
+            _ANALYSIS_REQUESTED_EVENT: "analysis_pending",
+            _ANALYSIS_STARTED_EVENT: "analyzing",
+            _ANALYSIS_FAILED_EVENT: "analysis_failed",
+            _ANALYSIS_RETRY_EVENT: "analyzing",
+        }[after[-1].event_type]
+        failure: dict[str, object] | None = None
+        if state == "analysis_failed":
+            payload = after[-1].payload if isinstance(after[-1].payload, dict) else {}
+            code = payload.get("failure_code")
+            code = code if isinstance(code, str) and code else "analysis_failed"
+            detail = payload.get("evidence_failure")
+            failure = {
+                "code": code,
+                "detail": detail if isinstance(detail, dict) else None,
+                "retryable": code not in _NOT_RETRYABLE_FAILURE_CODES,
+                "action": _REANALYSIS_RECOVERY_ACTION,
+            }
+        return {
+            "state": state,
+            "requested_at": next(
+                (event.recorded_at for event in reversed(after)
+                 if event.event_type == _ANALYSIS_REQUESTED_EVENT),
+                None,
+            ),
+            "failure": failure,
+            "automatic_retry": _automatic_retry_status(after),
+        }
+
     def _latest_ocr_events(
         self, revision: ProtocolRevisionRecord
     ) -> tuple[object, ...]:
@@ -1422,8 +1521,9 @@ class ProtocolCatalog:
         revision = self._latest_protocol_revision(protocol_id)
         candidate_revision_id = _revision_id(revision.revision_number)
         events = self._latest_chunk_events(revision)
+        entry = self._entry_for_revision(revision)
+        reanalysis = self._reanalysis_requested(revision)
         if not events:
-            entry = self._entry_for_revision(revision)
             lifecycle_events = tuple(
                 event for event in self.store.list_events(revision.experiment_id)
                 if event.protocol_revision_number == revision.revision_number
@@ -1501,6 +1601,8 @@ class ProtocolCatalog:
                 lifecycle_state=entry.lifecycle_state,
                 requested_at=requested_at,
                 automatic_retry=_automatic_retry_status(lifecycle_events),
+                reanalysis=reanalysis,
+                available_for_execution=entry.available_for_execution,
             )
         plan_event = next(
             event for event in events if event.event_type == _CHUNK_PLAN_EVENT
@@ -1622,6 +1724,8 @@ class ProtocolCatalog:
             ),
             # The plan is the run's first record.
             requested_at=plan_event.recorded_at,
+            reanalysis=reanalysis,
+            available_for_execution=entry.available_for_execution,
         )
 
     def _entry_for_revision(
@@ -1999,28 +2103,29 @@ class ProtocolCatalog:
             ),
             None,
         )
+        reanalysis = self._reanalysis_status(revision_events, analysis)
         base: dict[str, object] = {
             **entry.public_dict(),
             "analysis_available": analysis is not None,
             "lifecycle_state": entry.lifecycle_state,
+            # Lane RN decision 2: a failure after a pass belongs to the run
+            # asked for over it (``reanalysis``), not to the analysis that
+            # passed, which still runs.
             "analysis_failure": (
                 {
                     "code": latest_failure,
                     "detail": latest_failure_detail,
-                    "retryable": latest_failure
-                    not in {
-                        "ocr_required", "protocol_pdf_too_large",
-                        "protocol_analysis_too_many_pages",
-                    },
+                    "retryable": latest_failure not in _NOT_RETRYABLE_FAILURE_CODES,
                     # Lane PA decision 4 (2026-10-06): the recovery guidance
                     # is the server's, in Korean.
                     "action": _ANALYSIS_RECOVERY_ACTIONS.get(
                         latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
                     ),
                 }
-                if latest_failure is not None
+                if latest_failure is not None and reanalysis is None
                 else None
             ),
+            "reanalysis": reanalysis,
             "source": {
                 "filename": revision.original_filename,
                 "sha256": revision.pdf_checksum,
@@ -2073,6 +2178,7 @@ class ProtocolCatalog:
             ocr=ocr_projection if isinstance(ocr_projection, dict) else {},
             failure_code=latest_failure,
             automatic_retry=_automatic_retry_status(revision_events),
+            reanalysis=reanalysis,
         )
         if analysis is None:
             return base
@@ -2222,6 +2328,7 @@ class ProtocolCatalog:
             ocr=self._ocr_projection(revision, extraction, include_text=False),
             failure_code=failure,
             automatic_retry=_automatic_retry_status(revision_events),
+            reanalysis=self._reanalysis_status(revision_events, analysis),
         )
 
     def _pipeline(
@@ -2233,6 +2340,7 @@ class ProtocolCatalog:
         ocr: dict[str, object],
         failure_code: str | None,
         automatic_retry: dict[str, object] | None = None,
+        reanalysis: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """One Korean line: the stage a document is at, whether it is stuck
         there, why, and what a person does (lane PX, decision 4).
@@ -2241,10 +2349,28 @@ class ProtocolCatalog:
         사람 확인 → 실행 가능. Translation is added by the server, which
         holds the translation store. A document that reached this method
         was read, so 원문 읽기 never blocks here. An automatic retry (lane
-        AN, decision 1) is said while it runs and after it failed.
+        AN, decision 1) is said while it runs and after it failed. A run
+        asked for over a passed analysis (lane RN, decision 2) is said beside
+        the pass, which still runs whatever that run does.
         """
 
         retry = automatic_retry or {}
+        again = reanalysis or {}
+        again_failure = again.get("failure") if isinstance(again.get("failure"), dict) else None
+        if again.get("state") in {"analysis_pending", "analyzing"}:
+            again_clause = (" 다시 분석 중입니다 · 원문 근거를 확인하고 있습니다 · "
+                            "지금 분석으로 계속 실행할 수 있습니다.")
+        elif again_failure is not None:
+            again_clause = (
+                " 다시 분석이 실패했습니다: "
+                f"{_ANALYSIS_FAILURE_KO.get(str(again_failure.get('code')), '분석이 실패했습니다.')} "
+                "지금까지의 통과 분석으로 계속 실행할 수 있습니다.")
+        else:
+            again_clause = ""
+        again_extra: dict[str, object] = (
+            {"reanalysis": again, **({"failure_code": again_failure["code"]} if again_failure else {})}
+            if again else {}
+        )
         retry_count = f"{retry.get('attempt', 1)}/{retry.get('limit', AUTOMATIC_RETRY_LIMIT)}"
         truncated_how = _truncated_retry_ko(retry) if retry.get("truncated") else None
 
@@ -2264,9 +2390,10 @@ class ProtocolCatalog:
         if entry.available_for_execution:
             return result(
                 "ready", blocked=False,
-                message="분석을 통과했습니다. 실행할 수 있습니다.",
-                action="시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요.",
-                ocr_page_numbers=ocr_pages)
+                message="분석을 통과했습니다. 실행할 수 있습니다." + again_clause,
+                action=(_REANALYSIS_RECOVERY_ACTION if again_failure is not None
+                        else "시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요."),
+                ocr_page_numbers=ocr_pages, **again_extra)
         if analysis is None:
             if ocr_state in {"queued", "in_progress"}:
                 return result(
@@ -2348,12 +2475,14 @@ class ProtocolCatalog:
             blockers[0].code.value, blockers[0].message) or "실행을 막는 사유가 있습니다."
         return result(
             "readiness", blocked=True,
-            message=f"{first}" + (f" (외 {len(blockers) - 1}건)" if len(blockers) > 1 else ""),
+            message=f"{first}" + (f" (외 {len(blockers) - 1}건)" if len(blockers) > 1 else "")
+            + again_clause.replace("지금 분석으로 계속 실행할 수 있습니다.", "지금 분석은 그대로입니다.")
+            .replace("지금까지의 통과 분석으로 계속 실행할 수 있습니다.", "지금 분석은 그대로입니다."),
             action=_BLOCKER_ACTIONS.get(
                 blockers[0].code.value,
-                "원문을 확인하고 고친 PDF 를 올리거나 '분석 다시 시도'를 누르세요."),
+                "원문을 확인하고 고친 PDF 를 올리거나 '다시 분석'을 누르세요."),
             remaining_reason_codes=[reason.code.value for reason in blockers],
-            ocr_page_numbers=ocr_pages)
+            ocr_page_numbers=ocr_pages, **again_extra)
 
     def register(
         self,
@@ -2943,12 +3072,32 @@ class ProtocolCatalog:
         retried = any(event.event_type == _ANALYSIS_RETRY_EVENT for event in events)
         return requests <= 1 and not retried
 
-    def request_analysis(self, protocol_id: str, analysis_id: str) -> ProtocolCatalogEntry:
-        """Persist an explicit analysis request without contacting a provider."""
+    def request_analysis(
+        self, protocol_id: str, analysis_id: str, *, reanalysis: bool = False,
+    ) -> ProtocolCatalogEntry:
+        """Persist an explicit analysis request without contacting a provider.
+
+        A revision that holds a passed analysis is not asked again by a plain
+        request (lane PA, decision 2: an upload never calls a passed analysis
+        again). ``reanalysis`` is the person's "다시 분석" (lane RN, decision
+        2): one more request event, naming the analysis it is asked over; a
+        pass then becomes one more analysis revision beside the old one, and
+        a failure leaves the old one as it is. The curated development
+        fixture is never analysed again.
+        """
 
         revision = self._latest_protocol_revision(protocol_id)
-        if self._latest_analysis(revision) is not None:
+        previous = self._latest_analysis(revision)
+        if previous is not None and not reanalysis:
             return self.get_entry(protocol_id)
+        if previous is not None and any(
+            event.event_type == _DEVELOPMENT_FIXTURE_EVENT
+            and event.protocol_revision_number == revision.revision_number
+            for event in self.store.list_events(revision.experiment_id)
+        ):
+            raise ProtocolReanalysisRefusedError(
+                "The curated development fixture is not analysed again."
+            )
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
         if pdf_object is None:
             raise ProtocolCatalogUnavailableError(
@@ -2968,12 +3117,20 @@ class ProtocolCatalog:
             raise ProtocolOcrRequiredError(
                 "Protocol requires reviewed OCR before structured analysis."
             )
+        request_payload: dict[str, object] = {
+            "status": "analysis_pending", "analysis_id": analysis_id,
+        }
+        if previous is not None:
+            request_payload["reanalysis"] = True
+            request_payload["previous_analysis_revision_number"] = (
+                previous.analysis_revision_number)
+            request_payload["previous_analysis_payload_sha256"] = previous.payload_sha256
         self.store.append_event(
             f"analysis-requested-{analysis_id}",
             protocol_id,
             revision.revision_number,
             _ANALYSIS_REQUESTED_EVENT,
-            {"status": "analysis_pending", "analysis_id": analysis_id},
+            request_payload,
         )
         return self.get_entry(protocol_id)
 

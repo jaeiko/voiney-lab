@@ -3073,34 +3073,67 @@ async def trigger_protocol_analysis(
                 principal=metric_principal,
             )
             return completed
-        ocr_running=_PROTOCOL_OCR_TASKS.get(protocol_id)
-        if ocr_running is not None and not ocr_running.done():
-            # Lane PX decision 3: the OCR chain starts the analysis itself
-            # once the OCR text is in; an analysis now would read the pages
-            # without it.
-            catalog,store=_open_protocol_catalog()
-            try:
-                public=catalog.get_entry(protocol_id).public_dict()
-                public["analysis_run"]=catalog.analysis_run_status(
-                    protocol_id).public_dict()
-                public["analysis_request_deferred"]="ocr_in_progress"
-                return public
-            finally:
-                store.close()
+        deferred=_analysis_deferred_for_ocr(protocol_id)
+        if deferred is not None:
+            return deferred
         return await _begin_background_analysis(
             protocol_id,principal=metric_principal,analysis_id=analysis_id)
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
 
+@app.post("/api/protocols/{protocol_id}/reanalysis",status_code=202)
+async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
+    """Analyse a protocol again over the analysis it has (lane RN, decision 2).
+
+    The person's one confirmation is on the screen. Here the request is one
+    more ledger event that names the analysis it is asked over, and a run off
+    the request path; a pass is one more analysis revision, a failure leaves
+    the old one as it is. The analysis route above keeps lane PA's rule and
+    never calls a passed analysis again, so an upload cannot reach this.
+    """
+
+    _scope_catalog_resource(protocol_id)
+    try:
+        deferred=_analysis_deferred_for_ocr(protocol_id)
+        if deferred is not None:
+            return deferred
+        return await _begin_background_analysis(
+            protocol_id,principal=_REQUEST_PRINCIPAL.get(),reanalysis=True)
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
+    """The answer while the upload-time OCR chain holds the protocol, else None.
+
+    Lane PX decision 3: the OCR chain starts the analysis itself once the OCR
+    text is in; an analysis now would read the pages without it.
+    """
+
+    ocr_running=_PROTOCOL_OCR_TASKS.get(protocol_id)
+    if ocr_running is None or ocr_running.done():
+        return None
+    catalog,store=_open_protocol_catalog()
+    try:
+        public=catalog.get_entry(protocol_id).public_dict()
+        public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
+        public["analysis_request_deferred"]="ocr_in_progress"
+        return public
+    finally:
+        store.close()
+
+
 async def _begin_background_analysis(
     protocol_id:str,*,principal:Principal|None,analysis_id:str|None=None,
+    reanalysis:bool=False,
 )->dict[str,object]:
     """Record the request, then run the analysis off the request path.
 
-    Shared by the analysis endpoint and the upload-time OCR chain (lane PX,
-    decision 3). A run already in progress, or an analysis that already
-    ended, is reported and not started again.
+    Shared by the analysis endpoint, the re-analysis endpoint and the
+    upload-time OCR chain (lane PX, decision 3). A run already in progress,
+    or an analysis that already ended, is reported and not started again --
+    unless ``reanalysis`` asks for one more over the ended one (lane RN, 2).
     """
 
     analysis_id=analysis_id or f"analysis-{secrets.token_hex(16)}"
@@ -3108,7 +3141,8 @@ async def _begin_background_analysis(
     def prepare_analysis()->dict[str,object]:
         catalog,store=_open_protocol_catalog()
         try:
-            entry=catalog.request_analysis(protocol_id,analysis_id)
+            entry=catalog.request_analysis(
+                protocol_id,analysis_id,reanalysis=reanalysis)
             public=entry.public_dict()
             public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
             return public

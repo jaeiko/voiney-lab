@@ -602,3 +602,51 @@ The response schema changed again, so the curated development fixture's
 pinned schema identity was re-pinned once more (the same three places as for
 decision 3). Code from before lane EV2 refuses the re-pinned provenance, as
 described above.
+
+## Lane RN (2026-10-11): a passed analysis analysed again, beside the old one
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) again.
+
+Since lane RN's decision 2 a person can ask for a new analysis of a protocol
+revision that already holds a passed one ("다시 분석", its own route
+`POST /api/protocols/{id}/reanalysis`). The ledger stays append-only: the
+request is one more `protocol_analysis_requested` event whose payload now
+also carries `reanalysis: true`, `previous_analysis_revision_number` and
+`previous_analysis_payload_sha256`; a pass is one more row in
+`analysis_revisions` (the next `analysis_revision_number`, so the entry's
+`revision_id` goes from `pdf-1-analysis-1` to `pdf-1-analysis-2`); a failure
+is one more `protocol_analysis_failed` event and nothing else. The old
+analysis row, its payload and its events are never touched. The server
+serves the latest stored analysis as the executable one; a failed
+re-analysis therefore leaves the revision on the analysis it had.
+
+The run status (`GET …/analysis/status`) gained `reanalysis`,
+`available_for_execution` and `worker_running` (decision 1: whether this
+server process still holds the run); the review gained `reanalysis` (the run
+asked for over the pass, with its own `failure`) and, with decision 3,
+`analysis_outdated_codes` / `analysis_outdated_ko` on every catalog entry
+(`repeat_count_kind_missing`: a fixed repeat stored without
+`repeat_count_kind`, that is, before lane EV2). None of these is stored.
+
+An experiment already running holds the fixture it loaded at its start and
+is not touched by a new analysis. Recovering a disconnected experiment,
+however, requires the exact revision it started on
+(`workspace_store.resume_experiment`), and the voice session loads the
+latest executable fixture, so after a re-analysis has passed such a recovery
+is refused with `WorkspaceConflictError` until the session start learns to
+load the experiment's own analysis revision (see the lane RN report).
+
+### Reading older data
+
+Nothing changes: a request event without the new keys reads as a first
+request, and a revision with one analysis reads as before.
+
+### Going back
+
+Code from before this version reads the ledger whole: the extra request
+keys are ignored, and a second analysis revision is served as the latest, as
+it already was for the development fixture (tests/test_aged_store.py). The
+only difference is cosmetic: the older review puts a failed re-analysis's
+code in `analysis_failure` beside `available_for_execution: true`, and the
+older screen then shows "분석 실패와 복구" over a protocol that still runs.
