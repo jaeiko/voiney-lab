@@ -1,3 +1,5 @@
+> 보관: 2026-10-08 MVP 이전 설계 — PI·관리자 승인·반려·회수는 폐기, 리비전·검토자 입력 개념은 줄 RV 에서 다시 설계
+
 # Lab Admin & Principal Investigator (PI) Product Plan: Enterprise AI Workflow Platform
 
 **Document**: `docs/LAB_ADMIN_PRODUCT_PLAN.md`  

@@ -4,6 +4,11 @@ This documents what the product can support for a real, controlled wet-lab
 pilot, and what still requires a human field study. It does not claim any
 human field validation happened — none did in this environment.
 
+Revised 2026-10-10 (lane CL). VoineyLab is an MVP prototype, not
+field-validated. The counts and provider evidence in §1 and §4 are dated
+records; the current test baselines are in the README (§6) and the providers
+in use, with what was live-tested, in the README (§4).
+
 ## 1. Pilot flow — validated without bypassing workflow controls
 
 The full flow (protocol PDF upload → automatic OCR and analysis →
@@ -19,8 +24,8 @@ the reviewer/admin parts were removed on 2026-10-08, lane DI):
   covering the experimenter's bench.
 - `python scripts/replay_turns.py` and both
   `scripts/evaluate_candidate_a_*.py` evaluators (deterministic,
-  provider-free routing checks — see
-  `docs/COMMERCIALIZATION_PASS3_REPORT.md` and Phase 16 evidence below).
+  provider-free routing checks; the 2026-08 record is
+  `docs/archive/COMMERCIALIZATION_PASS3_REPORT.md`).
 - A live server smoke test (index, static assets, `/api/workspace/session`,
   `/ws`, `/healthz`, `/readyz`) after every structural change this pass.
 
@@ -114,17 +119,19 @@ Raw audio and full transcripts are not retained in analytics. Observations
 and evidence you explicitly record are stored as `observation_only` /
 `not_interpreted` — they become part of your experiment record but never
 silently become new instructions. Model reasoning and provider secrets are
-never logged. See `README.md`'s "Security and privacy boundaries" section
-for the complete, code-enforced list.
+never logged. See the README (§7, "데이터와 외부 AI 처리") and
+`docs/BEHAVIOR_REFERENCE.md` ("Security and privacy boundaries") for the
+complete, code-enforced list.
 
 ### Known limitations (state these to every pilot participant)
 - Controlled-pilot system: not a validated GLP/GMP/clinical system, not a
   full ELN/LIMS, not an autonomous scientist, not a safety authority.
-- No external integration (OIDC against a real IdP, OCR, translation) has
-  been live-tested in this environment; the Drive, GitHub, protocols.io and
-  eLabFTW integrations were removed on 2026-10-08 (lane DI).
-  xAI STT/TTS and the LLM structured-analysis endpoint **were** live-tested
-  this pass (Section 4 below).
+- OIDC against a real IdP and OCR have not been live-tested; the Drive,
+  GitHub, protocols.io and eLabFTW integrations were removed on 2026-10-08
+  (lane DI). Of the providers in use (README §4), real calls are recorded for
+  the gpt-6-luna router (lane XO, 2026-10-05) and Gemini analysis and
+  translation (lane AQ, 2026-10-10). No speech-recognition accuracy has been
+  measured for any provider. Section 4 below is the 2026-08 xAI record.
 
 ### Abort / stop criteria
 Stop the pilot session immediately if:
@@ -133,7 +140,7 @@ Stop the pilot session immediately if:
 - An observation or evidence entry is treated as an instruction that changes
   subsequent guidance.
 - The system produces safety-relevant guidance that contradicts the
-  approved protocol's own text.
+  protocol's own text.
 
 ### Incident severity categories
 - **Critical**: any of the abort criteria above occurred.
@@ -143,7 +150,10 @@ Stop the pilot session immediately if:
   did not affect correctness.
 - **Low**: cosmetic or minor wording issues.
 
-## 4. Voice acceptance — retained provider-backed evidence
+## 4. Voice acceptance — retained provider-backed evidence (2026-08, xAI)
+
+This is a dated record. The product no longer uses xAI by default; the
+providers in use are in the README (§4).
 
 Beyond the deterministic, provider-free evaluators, Commercialization Pass 4
 performed genuine live validation of the two capabilities a real pilot session
@@ -154,9 +164,9 @@ productization phases:
 - **xAI STT**: the TTS output was fed back through `voice_workflow_agent.server.transcribe` (real `POST /v1/stt`), returning `response_status=200`, `detected_language="ko"` (correct), transcript length matching the source text, in ~415ms.
 - **LLM structured protocol analysis**: a live `POST /v1/chat/completions` call returned `200 OK` from the real model; the response was rejected by strict downstream evidence-retention validation because the test document was a deliberately minimal one-line synthetic PDF, not a realistic multi-page protocol — a test-input artifact, not an integration defect. The full parse/verify pipeline is otherwise covered by 100+ existing tests against a fake model.
 
-This upgrades xAI STT and TTS from "implemented, not live-tested" to
-**live-tested** in the integration classification. See
-`docs/COMMERCIALIZATION_PASS4_REPORT.md` for the updated table.
+This upgraded xAI STT and TTS from "implemented, not live-tested" to
+**live-tested** in the integration classification of that time
+(`docs/archive/COMMERCIALIZATION_PASS4_REPORT.md`).
 
 ## What this package does not and cannot claim
 

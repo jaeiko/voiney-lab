@@ -381,12 +381,6 @@ class PilotAnswerServerTests(unittest.TestCase):
                     "voiney_lab.server.answer_curated_protocol_question",
                     side_effect=unsupported,
                 ), patch(
-                    "voiney_lab.server.search_approved_lab_references",
-                    return_value={
-                        "status": "no_admissible_evidence", "answerable": False,
-                        "matches": [], "retrieval": {"backend": "sqlite"},
-                    },
-                ), patch(
                     "voiney_lab.server.asyncio.to_thread", side_effect=immediate,
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))

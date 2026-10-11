@@ -7,7 +7,7 @@
 | Routing | A–G replay plus real `run_turn` production boundary | 100% expected route; zero accidental mutation |
 | Workflow | State checkpoint comparison on every read-only family | zero unauthorized transitions |
 | Grounding | Exact number/unit/timer/source preservation fixtures | 100% for supported facts; zero invented values |
-| PDF onboarding | Simple, multi-step, ambiguous, conditional, corrupt, encrypted, and long-document cases | fail closed unless guidance-ready and approved |
+| PDF onboarding | Simple, multi-step, ambiguous, conditional, corrupt, encrypted, and long-document cases | fail closed unless the analysis passes and no execution blocker remains (no approval step since 2026-10-08) |
 | Voice | STT admission, VAD, interruption, stale generation, TTS contract | no stale audio; p95 reported, not hidden |
 | External research | domain policy, citations, one image-search maximum, proxy/rights gate | no provider content as protocol authority; no hotlinks |
 | Privacy | log/event/admin projection tests | no secrets, transcript/audio/free text/IDs in aggregates |

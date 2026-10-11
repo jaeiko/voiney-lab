@@ -1807,9 +1807,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("provider must not be constructed"),
         ), patch(
-            "voiney_lab.server.search_approved_lab_references",
-            side_effect=AssertionError("retrieval must not run"),
-        ), patch(
             "voiney_lab.server.XaiAuthoritativeWebSearch",
             side_effect=AssertionError("web search must not run"),
         ), patch(
@@ -1932,12 +1929,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI", return_value=client,
         ), patch(
             "voiney_lab.server.require_env", return_value="offline",
-        ), patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={
-                "status": "no_admissible_evidence", "answerable": False,
-                "matches": [], "retrieval": {"backend": "sqlite"},
-            },
         ), patch(
             "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
@@ -2388,9 +2379,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 "voiney_lab.server.synthesize",
                 side_effect=AssertionError("noise must not reach TTS"),
             ), patch(
-                "voiney_lab.server.search_approved_lab_references",
-                side_effect=AssertionError("noise must not reach retrieval"),
-            ), patch(
                 "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
@@ -2487,12 +2475,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={
-                "status":"no_admissible_evidence","answerable":False,
-                "matches":[],"retrieval":{"backend":"sqlite"},
-            },
-        ),patch(
             "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
         ),patch(
             "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
@@ -2507,7 +2489,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         tools=[item for item in socket.text if item["type"]=="tool.call"]
         self.assertEqual(
             [item["tool"] for item in tools],
-            ["search_approved_lab_references","search_authoritative_web"],
+            ["search_authoritative_web"],
         )
         reply=next(item for item in socket.text if item["type"]=="reply.delta")
         self.assertEqual(reply["answer_origin"],"current_protocol")
@@ -2552,12 +2534,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ),patch(
             "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
-        ),patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={
-                "status":"no_admissible_evidence","answerable":False,
-                "matches":[],"retrieval":{"backend":"sqlite"},
-            },
         ),patch(
             "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
         ),patch(
@@ -2630,12 +2606,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={
-                "status":"no_admissible_evidence","answerable":False,
-                "matches":[],"retrieval":{"backend":"sqlite"},
-            },
-        ),patch(
             "voiney_lab.server.XaiSupplementalKnowledge",Supplement,
         ),patch(
             "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
@@ -2687,12 +2657,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={
-                "status":"no_admissible_evidence","answerable":False,
-                "matches":[],"retrieval":{"backend":"sqlite"},
-            },
-        ),patch(
             "voiney_lab.server.XaiSupplementalKnowledge",
             side_effect=AssertionError("operational supplement must not run"),
         ),patch(
@@ -2740,9 +2704,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ), patch(
                     "voiney_lab.server.AsyncOpenAI",
                     side_effect=AssertionError("provider must not be constructed"),
-                ), patch(
-                    "voiney_lab.server.search_approved_lab_references",
-                    side_effect=AssertionError("retrieval must not run"),
                 ), patch(
                     "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
@@ -2845,79 +2806,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual((terminal["state"],terminal["revision"]),("complete",7))
         self.assertIsNone(session.advance_turn_progress(
             1,session.generation,"error"))
-
-    def test_related_question_uses_approved_reference_without_state_mutation(self):
-        session=self.make_session(index=1)
-        socket=Socket()
-        citation={
-            "chunk_id":"a"*64,"document_id":"approved-reference-1",
-            "document_sha256":"b"*64,"document_title":"Approved Lab Guide",
-            "document_version":"1","page_number":4,"section":"handling",
-            "source_language":"en","approval_status":"approved",
-            "original_excerpt":"Keep the fictional container closed.",
-        }
-        match={
-            **citation,"language":"en","original_text":citation["original_excerpt"],
-            "score":2.0,"version":"1","source_checksum":"b"*64,
-            "section_code":"handling",
-        }
-        grounded=SimpleNamespace(intent="unsupported")
-        approved=SimpleNamespace(
-            primary_text="추가 승인 참고자료에 따르면 용기를 닫아 두세요.",
-            citations=(citation,),limitations=("활성 프로토콜의 일부가 아닙니다.",),
-        )
-
-        async def immediate(function,*args,**kwargs):
-            return function(*args,**kwargs)
-
-        with patch.dict(os.environ,{},clear=True),patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription("2단계 할 때 주의사항 같은 거 있어?","ko"),
-        ),patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ) as tts,patch(
-            "voiney_lab.server.AsyncOpenAI",
-            return_value=SimpleNamespace(model="offline"),
-        ),patch(
-            "voiney_lab.server.require_env",
-            return_value="offline-test-value",
-        ),patch(
-            "voiney_lab.server.answer_curated_protocol_question",
-            return_value=grounded,
-        ),patch(
-            "voiney_lab.server.search_approved_lab_references",
-            return_value={
-                "status":"success","answerable":True,"matches":[match],
-                "retrieval":{"backend":"sqlite"},
-            },
-        ) as retrieval,patch(
-            "voiney_lab.server.answer_approved_reference_question",
-            return_value=approved,
-        ),patch(
-            "voiney_lab.server.asyncio.to_thread",
-            side_effect=immediate,
-        ):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-
-        self.assertEqual(session.curated_protocol_session.current_index,1)
-        self.assertTrue(session.curated_protocol_session.active)
-        retrieval.assert_called_once()
-        calls=[item for item in socket.text if item["type"]=="tool.call"]
-        results=[item for item in socket.text if item["type"]=="tool.result"]
-        self.assertEqual([item["tool"] for item in calls],[
-            "search_approved_lab_references",
-        ])
-        self.assertEqual(results[0]["retrieval_backend"],"sqlite")
-        reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertEqual(reply["answer_origin"],"current_protocol")
-        supplement=next(
-            item for item in socket.text if item["type"]=="research.result")
-        self.assertEqual(supplement["answer_origin"],"approved_lab_corpus")
-        self.assertEqual(supplement["citations"],[citation])
-        self.assertIn("활성 프로토콜",tts.call_args.args[0])
-        operation=next(
-            item for item in socket.text if item["type"]=="server.operation")
-        self.assertEqual(operation["operation"],"related_question_unresolved")
 
     def test_fresh_configured_proceed_uses_full_turn_ledger_and_step_one(self):
         session = self.make_session(index=0)
@@ -3168,30 +3056,26 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 "candidate-a-step-02/current_step",
             ),
         )
-        with patch(
-            "voiney_lab.server.search_approved_lab_references",
-            side_effect=AssertionError("deterministic Tier 0 route must not retrieve"),
-        ):
-            for transcript, index, result_kind, closing_index, fact_id in cases:
-                with self.subTest(transcript=transcript):
-                    session, socket, client, _, _, _ = self.run_question(
-                        transcript=transcript,
-                        index=index,
-                    )
-                    done = next(
-                        item for item in socket.text if item["type"] == "turn.done"
-                    )
-                    self.assertEqual(done["result_kind"], result_kind)
-                    self.assertEqual(done["fact_id"], fact_id)
-                    self.assertEqual(
-                        session.curated_protocol_session.current_index,
-                        closing_index,
-                    )
-                    self.assertEqual(client.chat.completions.calls, [])
-                    self.assertEqual(
-                        [item for item in socket.text if item["type"] == "tool.call"],
-                        [],
-                    )
+        for transcript, index, result_kind, closing_index, fact_id in cases:
+            with self.subTest(transcript=transcript):
+                session, socket, client, _, _, _ = self.run_question(
+                    transcript=transcript,
+                    index=index,
+                )
+                done = next(
+                    item for item in socket.text if item["type"] == "turn.done"
+                )
+                self.assertEqual(done["result_kind"], result_kind)
+                self.assertEqual(done["fact_id"], fact_id)
+                self.assertEqual(
+                    session.curated_protocol_session.current_index,
+                    closing_index,
+                )
+                self.assertEqual(client.chat.completions.calls, [])
+                self.assertEqual(
+                    [item for item in socket.text if item["type"] == "tool.call"],
+                    [],
+                )
 
     def test_subthreshold_playback_candidate_preserves_curated_checkpoint(self):
         session = self.make_session(index=0)

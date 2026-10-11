@@ -31,10 +31,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(parse_control('{"type":"session.set_language_mode","mode":"manual","language":"en"}'),
                          {"type":"session.set_language_mode","mode":"manual","language":"en"})
         self.assertEqual(parse_control('{"type":"session.reset"}'),{"type":"session.reset"})
-        self.assertEqual(
-            parse_control(
-                '{"type":"report.status.get","report_id":"sr-20260722-a1b2c3"}'),
-            {"type":"report.status.get","report_id":"SR-20260722-A1B2C3"})
         self.assertEqual(parse_control("{\"type\":\"playback.ended\",\"turn_id\":7}"),{"type":"playback.ended","turn_id":7})
         for value in (None,0,-1,True,"1"):
             with self.assertRaises(ProtocolError): parse_control(json.dumps({"type":"playback.ended","turn_id":value}))
@@ -77,8 +73,8 @@ class ProtocolTests(unittest.TestCase):
              "provider_gap_count":0,"provider_gap_ms":0,
              "client_underrun_count":-1,"client_underrun_ms":0,
              "scheduled_chunks":1,"audio_context_state":"running"},
-            {"type":"report.status.get","report_id":"not-a-report"},
-            {"type":"report.status.get","report_id":7},
+            # The safety report's status control was deleted (lane CL).
+            {"type":"report.status.get","report_id":"SR-20260722-A1B2C3"},
             {"type":"client.audio_constraints","requested":{},"actual":{}},
             {"type":"client.audio_constraints","requested":{
                 "echoCancellation":True,"noiseSuppression":True,

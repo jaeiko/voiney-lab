@@ -22,7 +22,7 @@ VOINEY_LAB_CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data
 
 # --- No test reaches a provider (lane M1, decision 6) ------------------------
 # Real keys for xAI, OpenAI, Anthropic, Gemini and the OCR services may sit in
-# the shell or in the repository .env. The server and the worker do not read
+# the shell or in the repository .env. The server does not read
 # the .env under pytest (PYTEST_VERSION is set), the keys are taken out of
 # this process's environment before any test module is imported, and a
 # connection to anything but this machine fails at once. A test that needs a
@@ -31,7 +31,7 @@ PROVIDER_SECRET_NAMES = (
     "XAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
     "GOOGLE_API_KEY", "VOINEY_LAB_CLOVA_OCR_SECRET",
     "VOINEY_LAB_CLOVA_OCR_INVOKE_URL", "VOINEY_LAB_GOOGLE_VISION_API_KEY",
-    "VOINEY_LAB_MOSS_PROJECT_KEY", "ELEVENLABS_API_KEY", "VOINEY_LAB_GOOGLE_SPEECH_API_KEY",
+    "ELEVENLABS_API_KEY", "VOINEY_LAB_GOOGLE_SPEECH_API_KEY",
     # Vertex AI (google-genai's own names): no test may switch to it or use ADC.
     "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS",

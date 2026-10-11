@@ -18,12 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
-    REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
     SentenceSegment,
-    answer_approved_reference_question,
     answer_curated_protocol_question,
-    confirmation_intent,
     stream_brain_turn,
 )
 from voiney_lab.configuration import (
@@ -131,11 +128,6 @@ from voiney_lab.language import (
 )
 from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.runtime_metrics import RUNTIME_METRICS
-from voiney_lab.moss_retrieval import (
-    get_moss_runtime,
-    start_moss_runtime_from_environment,
-    stop_moss_runtime,
-)
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
@@ -147,12 +139,7 @@ from voiney_lab.multi_brain import (
     VisualBrainOutput,
     activation_for,
 )
-from voiney_lab.tools import (
-    APPROVED_LAB_REFERENCE_TOOL_NAME,
-    ToolContext,
-    check_safety_report_status,
-    search_approved_lab_references,
-)
+from voiney_lab.tools import ToolContext
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voiney_lab.llm_router import (
     LlmRouterSettings,
@@ -359,16 +346,16 @@ def log_cascade_filler_configuration()->None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Warm optional in-memory retrieval without making it a startup dependency."""
+    """Log the effective configuration and install the OCR provider.
+
+    The Moss in-memory retrieval this used to warm was deleted on 2026-10-10
+    (lane CL).
+    """
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
-    await asyncio.to_thread(start_moss_runtime_from_environment)
-    try:
-        yield
-    finally:
-        await asyncio.to_thread(stop_moss_runtime)
+    yield
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
@@ -384,7 +371,7 @@ async def healthz()->dict[str,object]:
 async def readyz()->JSONResponse:
     """Readiness: required configuration parses without exposing secrets.
 
-    Optional providers (moss, protocol analysis) report their configured
+    Optional providers (protocol analysis) report their configured
     state rather than being required for the process to be "ready" - this
     endpoint distinguishes configuration health from live external-provider
     reachability, which no local health check can verify without a real
@@ -402,7 +389,6 @@ async def readyz()->JSONResponse:
         capabilities["workspace_enabled"]=workspace.enabled
         capabilities["protocol_catalog_enabled"]=protocol.enabled
         capabilities["experiment_reports_enabled"]=reports.enabled
-        capabilities["moss_enabled"]=get_moss_runtime() is not None
     except Exception as exc:
         return JSONResponse(status_code=503,content={
             "status":"not_ready",
@@ -5603,74 +5589,6 @@ async def _queue_curated_research(
                 correlation_id=f"research-{generation}-{turn_id}",
             )
 
-        # 1. Approved references (internal SQLite)
-        if (
-            session.tool_context is not None and not ctx["force_external"]
-            and not ctx.get("explain_only")
-        ):
-            if web_enabled:
-                await announce("approved_references")
-            await sender.text(
-                "tool.call",turn_id=turn_id,
-                tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0)
-            reference_started=clock()
-            try:
-                reference_result=await asyncio.wait_for(
-                    asyncio.to_thread(
-                        search_approved_lab_references,
-                        ctx["reference_query"],context=session.tool_context,
-                        protocol_id=curated.fixture.protocol_id,top_k=5,
-                    ),
-                    timeout=research_remaining(3.0),
-                )
-            except asyncio.TimeoutError:
-                reference_result={
-                    "status":"timeout_read","answerable":False,
-                    "matches":[],"retrieval":{"backend":"sqlite"},
-                }
-            if not session.owns_research_result(turn_id,generation,configuration_id):
-                return
-            reference_elapsed=round((clock()-reference_started)*1000)
-            reference_backend=(
-                reference_result.get("retrieval",{}).get("backend")
-                if isinstance(reference_result,dict) else None
-            )
-            matches=tuple(reference_result.get("matches",()))
-            await sender.text(
-                "tool.result",turn_id=turn_id,
-                tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0,
-                status=reference_result.get("status","error"),
-                elapsed_ms=reference_elapsed,
-                retrieval_backend=reference_backend,
-                match_count=len(matches))
-            if reference_result.get("answerable") and matches:
-                try:
-                    client=_role_client(RoleModel.from_environment("answer"))
-                    client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
-                    answer=await asyncio.wait_for(
-                        answer_approved_reference_question(
-                            client,ctx["query"],language=turn_language,
-                            protocol_id=curated.fixture.protocol_id,
-                            step_id=ctx["step"].step_id,evidence=matches),
-                        timeout=research_remaining(8.0),
-                    )
-                    if session.owns_research_result(turn_id,generation,configuration_id):
-                        research_plan=curated.apply_reference_answer(
-                            turn_id=turn_id,language=turn_language,
-                            primary_text=answer.primary_text,
-                            origin="approved_lab_corpus",
-                            citations=answer.citations,
-                            retrieval_backend=reference_backend or "sqlite",
-                            retrieval_scores=tuple(
-                                float(item["score"]) for item in matches
-                                if isinstance(item.get("score"),(int,float))
-                            ),limitations=answer.limitations,
-                        )
-                except Exception:
-                    log.info(
-                        "approved reference supplement failed closed turn_id=%s",
-                        turn_id)
-
         # 2. External Web Search (Grok 4.6)
         result=None
         if (
@@ -7882,23 +7800,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                output_frames=len(frames),tools_used=[],
                                route="deterministic_emergency")
         return
-    pending=session.history.pending_report
-    pending_language=(
-        pending.get("language")
-        if isinstance(pending,dict) and pending.get("language") in ("ko","en","vi")
-        else None
-    )
-    pending_intent=(
-        confirmation_intent(transcript,pending_language)
-        if pending_language is not None
-        else None
-    )
-    if pending_intent is not None:
-        turn_language=pending_language
-        session.last_confirmed_language=turn_language
-        await current_text("session.turn_language_resolved",turn_id=turn_id,
-                           language=turn_language)
-    elif session.curated_protocol_session is not None:
+    if session.curated_protocol_session is not None:
         turn_language="ko"
         session.last_confirmed_language="ko"
     else:
@@ -7907,14 +7809,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             manual_language=session.manual_language,
         )
         if not resolution.resolved:
-            fallback=pending_language or session.last_confirmed_language or (
+            fallback=session.last_confirmed_language or (
                 session.tool_context.language if session.tool_context else "ko")
-            clarification=(
-                REPORT_CONFIRMATION_CLARIFICATION_TEXT
-                if pending_language is not None
-                else CLARIFICATION_TEXT
-            )
-            text=clarification.get(fallback,clarification["ko"])
+            text=CLARIFICATION_TEXT.get(fallback,CLARIFICATION_TEXT["ko"])
             timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
             await current_text("session.language_confirmation_required",turn_id=turn_id,
                                reason=resolution.reason,languages=["ko","en"])
@@ -9284,13 +9181,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await progress("composing",route="brain")
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=segment.segment_index,text=segment.text): return
         await queue.put(segment)
-    async def tool_event(kind,fields):
-        if (kind=="tool.call" and
-                fields.get("tool")=="search_approved_safety_manual"):
-            await progress(
-                "checking_approved_information",route="approved_information")
-        if not await current_text(kind,turn_id=turn_id,**fields): return
-        log.info("%s turn_id=%s tool=%s status=%s elapsed_ms=%s",kind,turn_id,fields.get("tool"),fields.get("status"),fields.get("elapsed_ms"))
     async def consume():
         nonlocal output_frames,segment_count,first_audio
         while True:
@@ -9331,8 +9221,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         await progress("composing",route="brain")
         client=_role_client(RoleModel.from_environment("answer"),max_retries=_KEEP_SDK_RETRIES); client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
         result=await stream_brain_turn(
-            client,session.history,transcript,sentence,mark_token,tool_event,
-            tool_context=turn_context,arbitration=request_arbitration)
+            client,session.history,transcript,sentence,mark_token,
+            tool_context=turn_context)
         if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
         await queue.put(None); await consumer
         if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
@@ -10460,27 +10350,6 @@ async def voice_socket(websocket:WebSocket):
                         configuration_id=session.accepted_configuration_id,
                         generation=session.generation,
                         code="report_lookup_failed"))
-            elif control["type"]=="report.status.get":
-                try:
-                    result=await asyncio.to_thread(
-                        check_safety_report_status,control["report_id"])
-                    await websocket.send_text(event(
-                        "report.status",
-                        report_id=control["report_id"],
-                        status=result.get("status","error"),
-                        report_status=result.get("report_status"),
-                        attempts=result.get("attempts",0),
-                        workflow=result.get("workflow"),
-                    ))
-                except Exception as err:
-                    log.warning("report.status.get failed non-fatally: %s", err)
-                    await websocket.send_text(event(
-                        "report.status",
-                        report_id=control.get("report_id", "unknown"),
-                        status="error",
-                        report_status="lookup_failed",
-                        attempts=1,
-                    ))
             elif control["type"]=="playback.ended" and session.playback_ended(control["turn_id"]):
                 await _send_playback_terminal(
                     websocket,session,control["turn_id"],
