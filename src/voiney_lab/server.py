@@ -404,7 +404,9 @@ async def readyz()->JSONResponse:
 
 
 STATIC_DIR=Path(__file__).with_name("static")
-_PROTOCOL_ANALYSIS_TASKS:dict[str,asyncio.Task[None]]={}
+#: The analysis a worker holds for a protocol, or the slot reserved for
+#: one that is being recorded (lane RN, decision 1).
+_PROTOCOL_ANALYSIS_TASKS:dict[str,asyncio.Future[None]]={}
 _PROTOCOL_OCR_TASKS:dict[str,asyncio.Task[None]]={}
 _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar(
     "voice_workflow_request_principal",default=None)
@@ -3108,8 +3110,7 @@ async def _begin_background_analysis(
         try:
             entry=catalog.request_analysis(protocol_id,analysis_id)
             public=entry.public_dict()
-            public["analysis_run"]=catalog.analysis_run_status(
-                protocol_id).public_dict()
+            public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
             return public
         finally:
             store.close()
@@ -3189,32 +3190,60 @@ async def _begin_background_analysis(
                 principal=principal,
             )
 
-    running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
-    if running is not None and not running.done():
+    if _analysis_worker_running(protocol_id):
         catalog,store=_open_protocol_catalog()
         try:
             public=catalog.get_entry(protocol_id).public_dict()
-            public["analysis_run"]=catalog.analysis_run_status(
-                protocol_id).public_dict()
+            public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
             public["analysis_request_deduplicated"]=True
             return public
         finally:
             store.close()
-    public=await asyncio.to_thread(prepare_analysis)
-    state=(public.get("analysis_run") or {}).get("state")
-    if state in {"review_required","approved","revoked"}:
-        public["analysis_request_deduplicated"]=True
-        return public
-    task=asyncio.create_task(background_worker())
-    _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
-    task.add_done_callback(
-        lambda completed,pid=protocol_id: (
-            _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
-            if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
+    # Lane RN decision 1 (2026-10-11): the slot is taken before the ledger
+    # is written, so a second request that crosses this one finds the run
+    # going and starts nothing. Until the task exists the slot holds a bare
+    # future; a request that is not recorded frees it.
+    reservation:asyncio.Future[None]=asyncio.get_running_loop().create_future()
+    _PROTOCOL_ANALYSIS_TASKS[protocol_id]=reservation
+    try:
+        public=await asyncio.to_thread(prepare_analysis)
+        state=(public.get("analysis_run") or {}).get("state")
+        if state in {"review_required","approved","revoked"}:
+            public["analysis_request_deduplicated"]=True
+            return public
+        task=asyncio.create_task(background_worker())
+        _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
+        task.add_done_callback(
+            lambda completed,pid=protocol_id: (
+                _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
+                if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
+            )
         )
-    )
-    public["analysis_request_accepted"]=True
-    return public
+        public["analysis_request_accepted"]=True
+        (public.get("analysis_run") or {})["worker_running"]=True
+        return public
+    finally:
+        if _PROTOCOL_ANALYSIS_TASKS.get(protocol_id) is reservation:
+            _PROTOCOL_ANALYSIS_TASKS.pop(protocol_id,None)
+            reservation.cancel()
+
+
+def _analysis_worker_running(protocol_id:str)->bool:
+    """Whether this process holds a run (or a reserved slot) for the protocol."""
+
+    running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
+    return running is not None and not running.done()
+
+
+def _analysis_run_public(catalog:ProtocolCatalog,protocol_id:str)->dict[str,object]:
+    """The ledger's run status plus what only this process knows (lane RN, 1):
+    whether a worker still holds the run. The ledger alone reads "analyzing"
+    for a run a restart cut short, and the screen must not wait on that one.
+    """
+
+    status=catalog.analysis_run_status(protocol_id).public_dict()
+    status["worker_running"]=_analysis_worker_running(protocol_id)
+    return status
 
 
 @app.get("/api/protocols/{protocol_id}/analysis/status")
@@ -3225,7 +3254,7 @@ def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.analysis_run_status(protocol_id).public_dict()
+            return _analysis_run_public(catalog,protocol_id)
         finally:
             store.close()
     except Exception as exc:

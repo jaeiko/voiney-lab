@@ -1934,6 +1934,16 @@ function protocolAnalysisFailureNotice(code,retried=false){const reason=serverCo
 // structure is sent once more by the server itself; the line says so while it
 // runs ("다시 시도 중(1/1)") and how the run ended.
 const PROTOCOL_ANALYSIS_RETRY_NOTICE="분석 중 · 첫 응답이 정해진 형식에 맞지 않아 같은 요청을 자동으로 한 번 다시 보냈습니다. 끝나면 통과 또는 실패를 여기에 알립니다.";
+// Lane RN decision 1 (2026-10-11): a press while the run already goes starts
+// nothing on the server (it answers deduplicated); the screen says so, keeps
+// the run's own clock and keeps the button off until the run ends. A run the
+// server no longer holds (a restart cut it short) frees the button instead of
+// being waited on.
+const PROTOCOL_ANALYSIS_ALREADY_RUNNING_NOTICE="이미 분석 중 · 같은 프로토콜의 분석이 돌고 있어 새로 시작하지 않았습니다 · 끝나면 통과 또는 실패를 여기에 알립니다.";
+const PROTOCOL_ANALYSIS_INTERRUPTED_NOTICE="분석이 끝나지 않은 채 멈춰 있습니다(서버가 다시 시작되었을 수 있음) · '분석 다시 시도'를 누르면 새로 분석합니다 · 원문은 바뀌지 않습니다.";
+let protocolAnalysisBusyFor=null,protocolAnalysisDuplicatePressFor=null;
+function setProtocolAnalysisBusy(protocolId,busy){protocolAnalysisBusyFor=busy?protocolId:null;const retry=$("protocol-analysis-retry");if(retry&&(busy||currentProtocolReviewId===protocolId))retry.disabled=busy||isRegisteringProtocol;}
+function protocolAnalysisRunning(review){const running=["analysis_pending","analyzing"];return running.includes(review?.lifecycle_state)||running.includes(review?.reanalysis?.state)||["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(review?.analysis_status);}
 function automaticRetryCount(run,state){const retry=run?.automatic_retry;return retry&&typeof retry==="object"&&retry.state===state?`${Number.isInteger(retry.attempt)?retry.attempt:1}/${Number.isInteger(retry.limit)?retry.limit:1}`:"";}
 function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;}
 function restoreProtocolAnalysisNotice(){if(!currentProtocolReviewId)return;const status=$("protocol-upload-status"),output=$("protocol-analysis-progress");if(status&&protocolAnalysisNotice?.protocolId===currentProtocolReviewId)status.textContent=protocolAnalysisNotice.text;if(output&&protocolAnalysisProgressLine?.protocolId===currentProtocolReviewId)output.textContent=protocolAnalysisProgressLine.text;}
@@ -2246,7 +2256,7 @@ function renderProtocolReview(review,options={}){
   const description=construct.source_text||construct.condition_source_text||construct.range_source_text||construct.resolution_source_text||"구조화 워크플로 항목";
   appendProtocolReviewGroup(`분기·반복·모호성 · ${serverCodeText("construct_type",construct.construct_type,"구조화 워크플로 항목")}`,[description,construct.resolved===false?"해결되지 않음":"",reviewEvidenceText(construct.evidence)],[["construct_type",construct.construct_type]]);
  }
- if(retry){retry.hidden=!(["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status));retry.disabled=isRegisteringProtocol;}
+ if(retry){retry.hidden=!(["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status));retry.disabled=isRegisteringProtocol||protocolAnalysisBusyFor===review?.protocol_id||protocolAnalysisRunning(review);}
  if(ocrRun){ocrRun.hidden=!(ocr.state==="ocr_required"||ocr.state==="failed"||ocr.state==="rejected");ocrRun.disabled=isRegisteringProtocol;}
  return true;
 }
@@ -2255,7 +2265,10 @@ async function loadProtocolReview(protocolId=currentProtocolReviewId,options={})
  currentProtocolReviewId=protocolId;const panel=$("protocol-review-panel"),status=$("protocol-review-status"),start=$("protocol-start");if(panel){panel.hidden=false;panel.open=options.open!==false;}if(start)start.hidden=true;if(status)status.textContent="원문 근거와 구조 분석 결과를 불러오는 중…";
  // The start button acts on currentProtocolReviewId, so an answer that
  // arrives after the person picked another protocol must not be rendered.
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);return payload;}catch(_){if(currentProtocolReviewId===protocolId&&status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);
+  // Lane RN decision 1: a run that goes is watched again when its protocol is picked.
+  if(protocolAnalysisRunning(payload)&&protocolAnalysisPollHandle===null){startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);}
+  return payload;}catch(_){if(currentProtocolReviewId===protocolId&&status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
 }
 // Picking a protocol in the run list loads its analysis result: the start
 // summary (safety statements, notices, blockers) is always shown, and the
@@ -2273,8 +2286,12 @@ async function pollProtocolAnalysisStatus(protocolId){
   const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis/status`,{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)return null;const run=await response.json();if(currentProtocolReviewId!==protocolId)return null;
   const terminal=new Set(["review_required","analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled","ocr_required"]);
   const parts=Number.isInteger(run.total_chunks)&&run.total_chunks>0?` · 부분 ${run.completed_chunks||0} / ${run.total_chunks} 완료${run.failed_chunks?` · 실패 ${run.failed_chunks}`:""}`:"";
-  if(!terminal.has(run.state)){const elapsed=protocolAnalysisElapsedText(run.requested_at),retrying=automaticRetryCount(run,"in_progress");showProtocolAnalysisNotice(protocolId,retrying?PROTOCOL_ANALYSIS_RETRY_NOTICE.replace("분석 중 · ",`분석 중 · 다시 시도 중(${retrying}) · `):PROTOCOL_ANALYSIS_RUNNING_NOTICE,`분석 중${retrying?` · 다시 시도 중(${retrying})`:""}${elapsed?` · ${elapsed}`:""}${parts} · 실행 상태 변경 없음`);return run;}
-  stopProtocolAnalysisPolling();
+  if(!terminal.has(run.state)){
+   if(run.worker_running===false){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,PROTOCOL_ANALYSIS_INTERRUPTED_NOTICE,"분석 중단 · 실행 상태 변경 없음");return run;}
+   setProtocolAnalysisBusy(protocolId,true);
+   const elapsed=protocolAnalysisElapsedText(run.requested_at),retrying=automaticRetryCount(run,"in_progress"),already=protocolAnalysisDuplicatePressFor===protocolId?"이미 분석 중 · 새로 시작하지 않았습니다 · ":"";
+   showProtocolAnalysisNotice(protocolId,already+(retrying?PROTOCOL_ANALYSIS_RETRY_NOTICE.replace("분석 중 · ",`분석 중 · 다시 시도 중(${retrying}) · `):PROTOCOL_ANALYSIS_RUNNING_NOTICE),`분석 중${retrying?` · 다시 시도 중(${retrying})`:""}${elapsed?` · ${elapsed}`:""}${parts} · 실행 상태 변경 없음`);return run;}
+  stopProtocolAnalysisPolling();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,false);
   // The time taken is shown only for a run this page watched, never for one
   // that ended long ago and is merely being looked at again.
   const elapsed=protocolAnalysisStartedAt!==null?protocolAnalysisElapsedText(run.requested_at):"";protocolAnalysisStartedAt=null;
@@ -2304,17 +2321,21 @@ async function runProtocolOcr(){
  try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
 }
 async function analyzeRegisteredProtocol(protocolId){
- currentProtocolReviewId=protocolId;protocolAnalysisStartedAt=Date.now();showProtocolAnalysisNotice(protocolId,PROTOCOL_ANALYSIS_RUNNING_NOTICE,"분석 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음");startProtocolAnalysisPolling(protocolId);
+ const watchedSince=protocolAnalysisStartedAt;
+ currentProtocolReviewId=protocolId;protocolAnalysisStartedAt=Date.now();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,true);showProtocolAnalysisNotice(protocolId,PROTOCOL_ANALYSIS_RUNNING_NOTICE,"분석 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음");startProtocolAnalysisPolling(protocolId);
  try{
   const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
-  if(!response.ok){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(code),"");await loadProtocolReview(protocolId);return null;}
-  if(!payload){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("unexpected_server_error"),"");return null;}
-  const run=payload.analysis_run||{},pending=payload.analysis_request_accepted===true||["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(run.state||payload.analysis_status);
+  if(!response.ok){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(code),"");await loadProtocolReview(protocolId);return null;}
+  if(!payload){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("unexpected_server_error"),"");return null;}
+  const run=payload.analysis_run||{},running=["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(run.state||payload.analysis_status),pending=payload.analysis_request_accepted===true||running;
+  // Lane RN decision 1: the server found a run going and started nothing; the
+  // clock stays the run's own and the line says so until the run ends.
+  if(payload.analysis_request_deduplicated===true&&running){protocolAnalysisStartedAt=watchedSince??protocolAnalysisStartedAt;protocolAnalysisDuplicatePressFor=protocolId;const elapsed=protocolAnalysisElapsedText(run.requested_at);showProtocolAnalysisNotice(protocolId,PROTOCOL_ANALYSIS_ALREADY_RUNNING_NOTICE,`분석 중${elapsed?` · ${elapsed}`:""} · 실행 상태 변경 없음`);void pollProtocolAnalysisStatus(protocolId);return payload;}
   if(pending){void pollProtocolAnalysisStatus(protocolId);return payload;}
-  stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;
+  stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);
   showProtocolAnalysisNotice(protocolId,PROTOCOL_ANALYSIS_PASS_NOTICE,"");
   await loadProtocolReview(protocolId);return payload;
- }catch(_){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("network_error"),"");await loadProtocolReview(protocolId);return null;}
+ }catch(_){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("network_error"),"");await loadProtocolReview(protocolId);return null;}
 }
 async function startReviewedProtocol(){
  // Lane DI (2026-10-08): the one human confirmation. The protocol whose
