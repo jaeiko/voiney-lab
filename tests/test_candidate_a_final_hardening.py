@@ -243,7 +243,7 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
                 opening = session.current_index
                 session.plan(
                     "Guide me to the next step."
-                    if language == "en" else "다음 단계로 안내해 줘.",
+                    if language == "en" else "다음 단계로 넘어가도 돼?",
                     turn_id=1, language=language,
                     configuration_id=index, generation=4,
                 )
