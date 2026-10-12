@@ -1655,33 +1655,68 @@ def _page_body_start(
 
 
 def _is_furniture_block(
-    block: Any, page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+    block: Any,
+    page: ProtocolPdfPage,
+    extraction: ProtocolPdfExtraction,
+    span: tuple[int, int] | None = None,
 ) -> bool:
+    """Whether a text block is the running header or footer or the page number.
+
+    Its own lines are read, and -- lane EV3, decision 4 -- the page-text lines
+    it is printed on (``span``): FDA draws "Page 11 of 25" and "(April 2025)"
+    as two lines of one block where its page text prints them as one running
+    line.
+    """
+
     edges = _page_edges(extraction)
-    return all(
+    if all(
         edges.is_furniture(line, page.source_page_number)
         for line in block.text.splitlines() or ("",)
+    ):
+        return True
+    if span is None:
+        return False
+    text = page.text
+    first = text.rfind("\n", 0, span[0]) + 1
+    last = text.find("\n", span[1])
+    return all(
+        edges.is_furniture(line, page.source_page_number)
+        for line in text[first : len(text) if last < 0 else last].splitlines() or ("",)
     )
 
 
+def _visible_length(text: str) -> int:
+    return sum(1 for character in text if not character.isspace())
+
+
 def _page_end_span(
-    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction, *, reach: int = 0
 ) -> tuple[int, int] | None:
     """The span of ``page.text`` holding the body text that ends the page.
 
     The body is the page text before its running-footer band. With text
-    blocks (the PDF text layer), it is the block whose bottom edge is lowest
-    among the blocks found exactly once in the body: a side-column note such
-    as a step's duration sits beside the step, not below it, and the footer is
-    not in the body. Geometry decides; no word is read. Without blocks (an OCR
-    page) it is the body itself, so the cut piece must end the body. None
-    where no such span can be fixed, which refuses the cut statement.
+    blocks (the PDF text layer), the span ends with the block whose bottom
+    edge is lowest among the blocks found exactly once in the body: a
+    side-column note such as a step's duration sits beside the step, not
+    below it, and the footer is not in the body. Geometry decides; no word is
+    read. Without blocks (an OCR page) it is the body itself, so the cut piece
+    must end the body. None where no such span can be fixed, which refuses
+    the cut statement.
 
     Lane EV2 (decision 1): a block made only of running lines or the page
     number is not body text, wherever the text layer prints it (PMC8250384
     prints its copyright footer, drawn lowest, at the top of the page text),
     and neither are those lines where they close the text of a page without
     blocks.
+
+    Lane EV3 (decision 4, human decision 2026-10-12): the span runs up from
+    that block through the blocks just above it in the page text -- with only
+    whitespace between them, none drawn below the block after it -- until it
+    holds ``reach`` visible characters (the statement's), so a first piece of
+    several one-line blocks fits (Bio-protocol, CDC, FDA). Where two blocks
+    share the lowest bottom edge, the one later in the page text ends the
+    page. A block printed on running lines is not body text (see
+    ``_is_furniture_block``).
     """
 
     end = _page_body_end(page, extraction)
@@ -1691,18 +1726,31 @@ def _page_end_span(
     if not page.blocks:
         start = len(body) - len(body.lstrip())
         return start, len(body.rstrip())
-    located: list[tuple[float, tuple[int, int]]] = []
+    located: list[tuple[Any, tuple[int, int]]] = []
     for block in page.blocks:
-        if _is_furniture_block(block, page, extraction):
-            continue
         spans = _canonical_match_spans(body, block.text, ocr_derived=page.ocr_derived)
-        if len(spans) == 1:
-            located.append((block.y1, spans[0]))
+        if len(spans) == 1 and not _is_furniture_block(block, page, extraction, spans[0]):
+            located.append((block, spans[0]))
     if not located:
         return None
-    lowest = max(bottom for bottom, _ in located)
-    spans = [span for bottom, span in located if bottom == lowest]
-    return spans[0] if len(spans) == 1 else None
+    lowest = max(block.y1 for block, _ in located)
+    ends = sorted(
+        (span[1], index) for index, (block, span) in enumerate(located)
+        if block.y1 == lowest
+    )
+    if len(ends) > 1 and ends[-1][0] == ends[-2][0]:
+        return None
+    last_block, (start, last_end) = located[ends[-1][1]]
+    above = sorted(
+        (item for item in located if item[1][1] <= start), key=lambda item: item[1][1]
+    )
+    below = last_block
+    while above and _visible_length(body[start:last_end]) < reach:
+        block, (block_start, block_end) = above.pop()
+        if body[block_end:start].strip() or block.y0 > below.y0:
+            break
+        start, below = block_start, block
+    return start, last_end
 
 
 @dataclass(frozen=True)
@@ -1744,7 +1792,7 @@ def _statement_across_page_end(
         return None
     page = extraction.pages[page_number - 1]
     following = extraction.pages[page_number]
-    tail = _page_end_span(page, extraction)
+    tail = _page_end_span(page, extraction, reach=_visible_length(statement))
     if tail is None:
         return None
     next_end = _page_body_end(following, extraction)
