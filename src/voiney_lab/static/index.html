@@ -251,8 +251,9 @@
        page, high contrast, states said in words -- in place of the dark
        theme (a dark mode comes later). app.css keeps its token names; they
        are mapped onto the draft's here, and its fixed dark colours are
-       answered one by one below. Contrast on the page: text 15.6:1 (ink on
-       paper), muted 7.5:1, warning 6.6:1, danger 5.9:1, pending 7.0:1. */
+       answered one by one below. The text and state pairs keep WCAG AA
+       contrast (4.5:1); tests/test_lane_ui0_tokens.py reads it from these
+       values. */
     :root{
       color-scheme:light;
       --paper:#ffffff;--bench:#efefec;--line:#d4d4cf;--line-strong:#76766f;
