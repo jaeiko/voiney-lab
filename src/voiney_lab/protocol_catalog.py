@@ -3022,7 +3022,10 @@ class ProtocolCatalog:
         except Exception as exc:
             failure_code = self._record_analysis_failure(
                 revision, analysis_id, exc, truncated=observed.truncated)
-            if not self._automatic_retry_allowed(revision, failure_code):
+            repair = getattr(exc, "response_repair", None)
+            if not self._automatic_retry_allowed(
+                revision, failure_code, repaired=repair is not None
+            ):
                 raise
             # The same request again: the same extraction to the same model,
             # nothing about the failure added (lane AN, decision 1) -- except
@@ -3044,6 +3047,10 @@ class ProtocolCatalog:
                     "reason_code": failure_code,
                     "authority": AUTOMATIC_RETRY_AUTHORITY,
                     **retry_payload,
+                    **(
+                        {"response_repaired": repair.public_dict()}
+                        if repair is not None else {}
+                    ),
                 },
             )
             logging.getLogger(__name__).info(
@@ -3169,6 +3176,8 @@ class ProtocolCatalog:
         self,
         revision: ProtocolRevisionRecord,
         failure_code: str,
+        *,
+        repaired: bool = False,
     ) -> bool:
         """Whether this failure is sent again by itself (lane AN, decision 1).
 
@@ -3182,9 +3191,14 @@ class ProtocolCatalog:
         분석" over a passed analysis (lane RN) is a run of its own and gets
         the same one retry -- when the latest request asked for a
         re-analysis and no automatic retry was sent after it.
+
+        Lane EV3, decision 1: an answer read only after its brackets were
+        repaired (``repaired``) and then refused by any check is sent again
+        like the broken answer it was ("고쳐도 안 되면 지금처럼 자동
+        재시도한다"); refused whole, an evidence failure still is not.
         """
 
-        if failure_code not in AUTOMATIC_RETRY_FAILURE_CODES:
+        if failure_code not in AUTOMATIC_RETRY_FAILURE_CODES and not repaired:
             return False
         events = [
             event for event in self.store.list_events(revision.experiment_id)
