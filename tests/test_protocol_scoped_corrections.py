@@ -1,11 +1,12 @@
-"""In-gel mis-hearing repairs apply only to a protocol that has the substance.
+"""A protocol's words are heard through its own vocabulary (lane GE, decision 3).
 
-``normalize_scientific_request`` repairs the in-gel document's reagents --
-"엠빅" -> AMBIC, "트립씬" -> trypsin, "아세토나이트릴" -> acetonitrile -- and
-those repairs used to run on every protocol. A protocol with no acetonitrile
-was then told "활성 프로토콜에 언급된 Acetonitrile…". The rules are unchanged;
-the session now passes its own vocabulary, and a rule applies only when that
-protocol's text contains the substance.
+The in-gel mis-hearing repairs -- "엠빅" -> AMBIC, "트립씬" -> trypsin,
+"아세토나이트릴" -> acetonitrile -- used to be a list of that document's
+reagents. Now a Korean word is repaired to a term because it sounds like a
+term the active protocol's own text contains (``ProtocolVocabulary.hear``),
+whichever protocol that is; a protocol without the word never hears it, and a
+caller with no protocol hears nothing. A lexicon lab word said in Korean
+("탈색", "원심분리") counts where the protocol writes its English.
 
 Turns go through ``route_curated_runtime_turn``, the boundary the Cascade
 runtime calls.
@@ -16,7 +17,6 @@ from __future__ import annotations
 import unittest
 
 from voiney_lab.curated_protocol import (
-    _SUBSTANCE_PRESENCE_ALIASES,
     CuratedProtocolSession,
     ProtocolVocabulary,
     normalize_scientific_request,
@@ -30,20 +30,20 @@ from tests.protocol_vocabulary_support import (
     miniprep_fixture,
 )
 
-#: Each in-gel repair, the entity it leads to, and the correction it records
-#: (``None`` where the variant spelling is recognised without a rewrite).
-REPAIRS = (
-    ("아세토나이트릴이 뭐야?", "acetonitrile", None),
-    ("엠빅이 뭐야?", "ambic", ("엠빅", "AMBIC")),
-    ("에이 엠 빅이 뭐야?", "ambic", ("에이 엠 빅", "AMBIC")),
-    ("트립씬이 뭐야?", "trypsin", ("트립씬", "trypsin")),
-    ("디티티가 뭐야?", "dtt", ("디티티", "DTT")),
-    ("폼산이 뭐야?", "formic_acid", ("폼산", "formic acid")),
-    ("아이오도아세트아마이드가 뭐야?", "iodoacetamide", ("아이오도아세트아마이드", "iodoacetamide")),
-    ("솔루션 A는 뭐야?", "solution_a", None),
-    ("제트 플러그가 뭐야?", "gel_plug", ("제트 플러그", "gel plug")),
-    ("H PLC water가 뭐야?", "hplc_water", ("h plc water", "HPLC water")),
-    ("단백질 뱀드가 뭐야?", "stained_protein_band", ("단백질 뱀드", "단백질 밴드")),
+#: What in-gel hears: the words as a researcher says them, the entity key the
+#: term's spelling gives, and the term the heard words are repaired to.
+HEARD = (
+    ("아세토나이트릴이 뭐야?", "acetonitrile", "acetonitrile"),
+    ("엠빅이 뭐야?", "ambic", "AMBIC"),
+    ("에이 엠 빅이 뭐야?", "ambic", "AMBIC"),
+    ("트립씬이 뭐야?", "trypsin", "trypsin"),
+    ("디티티가 뭐야?", "dtt", "DTT"),
+    # A lexicon lab word said in Korean names its entity; the key keeps the
+    # Korean, so there is no correction to record.
+    ("폼산이 뭐야?", "formic_acid", None),
+    ("아이오도아세트아마이드가 뭐야?", "iodoacetamide", "iodoacetamide"),
+    ("솔루션 A는 뭐야?", "solution_a", "Solution A"),
+    ("H PLC water가 뭐야?", "hplc_water", "HPLC water"),
 )
 
 
@@ -60,52 +60,45 @@ def _turn(fixture, transcript: str):
     SOURCE_PDF.is_file(),
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
-class InGelCorrectionTests(unittest.TestCase):
+class InGelHearingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = in_gel_fixture()
         cls.vocabulary = ProtocolVocabulary.from_fixture(cls.fixture)
 
-    def test_in_gel_has_every_substance_the_repairs_resolve_to(self) -> None:
-        for entity in _SUBSTANCE_PRESENCE_ALIASES:
+    def test_in_gel_has_every_entity_it_hears(self) -> None:
+        for _transcript, entity, _term in HEARD:
             with self.subTest(entity=entity):
                 self.assertTrue(self.vocabulary.mentions_entity(entity))
 
-    def test_in_gel_is_repaired_as_before(self) -> None:
-        for transcript, entity, correction in REPAIRS:
+    def test_in_gel_hears_its_reagents_said_in_korean(self) -> None:
+        for transcript, entity, term in HEARD:
             with self.subTest(transcript=transcript):
                 plan = _turn(self.fixture, transcript)
                 self.assertIn(entity, plan.requested_entities)
-                if correction is not None:
-                    self.assertIn(correction, plan.transcript_corrections)
+                if term is not None:
+                    self.assertTrue(
+                        any(label == term for _observed, label in plan.transcript_corrections),
+                        plan.transcript_corrections,
+                    )
 
-    def test_scoping_to_in_gel_changes_no_result(self) -> None:
-        inventory = ("ambic", "hplc water", "solution a", "trypsin")
-        for transcript in (
-            *(case[0] for case in REPAIRS),
-            "AM BIC와 HPLG water가 뭐야? 800 rpm, Solution A, 37도",
-            "솔루션 B 구성은 뭐야?",
-            "anbi c는 왜 넣어?",
-            "jel tug을 어디에 넣어?",
-        ):
-            with self.subTest(transcript=transcript):
-                self.assertEqual(
-                    normalize_scientific_request(
-                        transcript, entity_inventory=inventory,
-                        protocol_vocabulary=self.vocabulary,
-                    ),
-                    normalize_scientific_request(transcript, entity_inventory=inventory),
-                )
+    def test_the_korean_name_said_is_repeated_before_the_spelling(self) -> None:
+        plan = _turn(self.fixture, "트립씬이 뭐야?")
+        self.assertIn("트립씬(trypsin)", plan.display_text)
+
+    def test_a_number_is_never_repaired(self) -> None:
+        plan = _turn(self.fixture, "37도에서 800 rpm으로 15분 돌려?")
+        self.assertFalse(any("37" in observed or "800" in observed or "15" in observed
+                             for observed, _label in plan.transcript_corrections))
 
 
-class OtherProtocolCorrectionTests(unittest.TestCase):
-    def test_a_protocol_without_the_substances_is_not_repaired_toward_them(self) -> None:
+class OtherProtocolHearingTests(unittest.TestCase):
+    def test_a_protocol_without_the_words_does_not_hear_them(self) -> None:
         fixture = miniprep_fixture()
-        for transcript, entity, correction in REPAIRS:
+        for transcript, entity, _term in HEARD:
             with self.subTest(transcript=transcript):
                 plan = _turn(fixture, transcript)
                 self.assertNotIn(entity, plan.requested_entities)
-                self.assertEqual(plan.transcript_corrections, ())
                 self.assertNotIn("활성 프로토콜에 언급된", plan.speech_text)
 
     def test_the_rewrite_itself_is_skipped(self) -> None:
@@ -125,7 +118,12 @@ class OtherProtocolCorrectionTests(unittest.TestCase):
                 self.assertIsNone(note)
                 self.assertEqual(corrections, ())
 
-    def test_each_rule_follows_its_own_substance(self) -> None:
+    def test_another_protocol_hears_its_own_term_said_in_korean(self) -> None:
+        plan = _turn(miniprep_fixture(), "라이소자임이 뭐야?")
+        self.assertIn("lysozyme", plan.requested_entities)
+        self.assertIn(("라이소자임이", "lysozyme"), plan.transcript_corrections)
+
+    def test_a_word_the_steps_use_is_heard_without_a_materials_list(self) -> None:
         fixture = build_fixture(
             protocol_id="fictional-rinse",
             title="Fictional column rinse",
@@ -137,14 +135,20 @@ class OtherProtocolCorrectionTests(unittest.TestCase):
         self.assertNotIn("ambic", ambic.requested_entities)
         self.assertEqual(ambic.transcript_corrections, ())
 
-    def test_general_lab_vocabulary_is_recognised_anywhere(self) -> None:
-        plan = _turn(miniprep_fixture(), "원심분리기가 뭐야?")
-        self.assertIn("centrifuge", plan.requested_entities)
+    def test_a_lexicon_word_is_heard_where_the_protocol_writes_it(self) -> None:
+        spinning = build_fixture(
+            protocol_id="fictional-spin",
+            title="Fictional spin",
+            steps=("1 Centrifuge the tube for 1 minute.", "2 Discard the supernatant."),
+        )
+        self.assertIn("centrifuge", _turn(spinning, "원심분리가 뭐야?").requested_entities)
+        self.assertNotIn("centrifuge", _turn(miniprep_fixture(), "원심분리가 뭐야?").requested_entities)
 
-    def test_a_caller_with_no_protocol_keeps_every_rule(self) -> None:
-        _, entities, _, corrections = normalize_scientific_request("엠빅이 뭐야?")
-        self.assertEqual(entities, ("ambic",))
-        self.assertIn(("엠빅", "AMBIC"), corrections)
+    def test_a_caller_with_no_protocol_hears_nothing(self) -> None:
+        _, entities, note, corrections = normalize_scientific_request("엠빅이 뭐야?")
+        self.assertEqual(entities, ())
+        self.assertIsNone(note)
+        self.assertEqual(corrections, ())
 
 
 if __name__ == "__main__":

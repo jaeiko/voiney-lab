@@ -22,6 +22,7 @@ from voiney_lab.brain import (
     select_curated_protocol_answer,
 )
 from voiney_lab.curated_protocol import (
+    ProtocolVocabulary,
     DEVELOPMENT_FIXTURE_STATUS,
     CuratedProtocolAction,
     CuratedProtocolFixtureError,
@@ -637,8 +638,11 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         untouched,unresolved,note=normalize_scientific_query(
             "AMPIC가 뭐야?",entity_inventory=("ambic","ampic"),
         )
+        # Lane GE: with no protocol the caller's inventory is the vocabulary,
+        # so "AMPIC" said exactly is its "ampic" -- and is not repaired
+        # toward "ambic", which was the point of this case.
         self.assertIn("ampic",untouched)
-        self.assertIsNone(unresolved)
+        self.assertEqual(unresolved,"ampic")
         self.assertIsNone(note)
         labels,_,_=normalize_scientific_query(
             "Step 3의 Solution A와 Step 8의 Solution B",
@@ -1969,7 +1973,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
             with patch(
                 "voiney_lab.server.transcribe",
-                return_value=Transcription("다음 단계로 안내해 줘.", "ko"),
+                return_value=Transcription("다음 단계로 넘어가도 돼?", "ko"),
             ), patch(
                 "voiney_lab.server.synthesize", return_value=b"\0\0"
             ) as tts, patch(
@@ -4185,8 +4189,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
     def test_polite_transition_requests_require_confirmation_while_preview_is_read_only(self):
         transition_prompts = (
-            "다음 단계로 안내해줘.",
-            "다음 단계로 안내해줄 수 있어?",
             "다음으로 넘어가자.",
             "다음 단계로 가줘.",
             "이제 다음 단계 진행해줘.",
@@ -4204,6 +4206,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.assertFalse(intent.allows_state_mutation)
 
         preview_prompts = (
+            # Lane GE, decision 1: a request to be guided to the next step
+            # describes it; only moving words change state.
+            "다음 단계로 안내해줘.",
+            "다음 단계로 안내해줄 수 있어?",
             "다음 단계가 뭐야?",
             "다음 단계 내용만 미리 알려줘.",
             "다음 단계는 뭘 하는 단계야?",
@@ -4223,7 +4229,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         curated_session.active = True
         curated_session.current_index = 0
         prompt = "염색된 단백질 밴드와, 어, AMBIC가 무엇인지 설명해줘."
-        intent = classify_curated_control_intent(prompt, language="ko")
+        # Lane GE: the words are heard through the active protocol's own
+        # vocabulary; a caller with no protocol no longer hears in-gel's.
+        intent = classify_curated_control_intent(
+            prompt, language="ko",
+            protocol_vocabulary=ProtocolVocabulary.from_fixture(self.fixture),
+        )
         self.assertEqual(intent.action, CuratedProtocolAction.RELATED_QUESTION)
         self.assertIn("stained_protein_band", intent.requested_entities)
         self.assertIn("ambic", intent.requested_entities)

@@ -83,11 +83,14 @@ class ProtocolTermsLanguageCheckTests(unittest.TestCase):
         f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
     )
     def test_in_gel_still_admits_every_word_it_did(self) -> None:
+        # Lane GE: the words come from in-gel's own analysis (terms, the lab
+        # words its steps write, its prose), no candidate list. "Evotip" is
+        # in no step of the document, so it is no longer sent or admitted.
         session = CuratedProtocolSession(in_gel_fixture())
         for index in range(len(session.fixture.steps)):
             session.current_index = index
             keyterms = session.stt_keyterms(include_control_terms=True)
-            for word in _PREVIOUS_WORDS:
+            for word in (word for word in _PREVIOUS_WORDS if word != "evotip"):
                 with self.subTest(step=index + 1, word=word):
                     self.assertFalse(_check(word, keyterms).clarification_required)
 

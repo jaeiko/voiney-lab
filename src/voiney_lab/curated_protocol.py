@@ -8,18 +8,20 @@ creates a store or treats the fixture as final protocol approval.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
 import struct
 import time
+import weakref
 import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from urllib.parse import quote
 
 from pypdf import PdfReader
@@ -315,7 +317,17 @@ class CuratedProtocolFixture:
 
     @property
     def title(self) -> str:
-        return self.draft.protocol.metadata.title
+        """The protocol's title; the PDF file's name (without its extension)
+        where the analysis left the title empty (lane GE, decision 5: an
+        analysis that cleared the title, lane EV2 decision 2, is still named
+        in the voice answer and the report)."""
+
+        title = " ".join(str(self.draft.protocol.metadata.title or "").split())
+        if title:
+            return title
+        name = self.source_filename or (self.source_pdf_path.name if self.source_pdf_path else "")
+        stem = Path(name).stem if name else ""
+        return " ".join(stem.replace("_", " ").split()) or ""
 
     @property
     def steps(self) -> tuple[domain.ProtocolSourceStep, ...]:
@@ -1591,19 +1603,6 @@ class ProtocolKnowledgeView:
         )
 
 
-#: Lab terms a protocol's own wording may contain. Being listed here sends
-#: nothing to STT: ProtocolVocabulary keeps a candidate only where the active
-#: protocol's text contains it, spelled the way that text spells it. These are
-#: the in-gel (Candidate A) document's terms, which is where the list came
-#: from; any other protocol is heard through its own materials, equipment and
-#: labelled reagents, so it needs no entry here.
-_STT_TERM_CANDIDATES = (
-    "AMBIC", "ammonium bicarbonate", "HPLC water", "acetonitrile",
-    "Solution A", "Solution B", "DTT", "iodoacetamide", "trypsin",
-    "formic acid", "LC-MS", "SDS-PAGE", "gel plug",
-    "stained protein band", "Thermomixer", "rpm", "incubation",
-    "keratin", "contamination", "Evotip",
-)
 #: The xAI STT request takes at most this many keyterms of 1-50 characters.
 _STT_KEYTERM_CAP = 100
 _STT_KEYTERM_MAX_CHARS = 50
@@ -1618,26 +1617,464 @@ _DEFINED_ABBREVIATION = re.compile(r"\(([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)\)")
 _HYPHENATED_ACRONYM = re.compile(
     r"(?<![A-Za-z0-9-])[A-Z]{2,}(?:-[A-Z]{2,})+(?![A-Za-z0-9-])"
 )
+#: An abbreviation and the word it qualifies, as protocol prose writes them
+#: ("HPLC water", "PBS buffer", "LC-MS grade"): one term, not two.
+_ACRONYM_COMPOUND = re.compile(
+    r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{2,})?)\s+([a-z]{3,})(?![A-Za-z0-9])"
+)
+#: A product or method name the prose capitalises word by word ("Odyssey
+#: Blocking Buffer", "Optical Density"), not at a sentence start.
+_CAPITALISED_COMPOUND = re.compile(
+    r"(?<![A-Za-z0-9])([A-Z][a-z]{2,}(?:®|™)?(?:\s+[A-Z][a-z]{2,}(?:®|™)?){1,3})(?![A-Za-z0-9])"
+)
+#: Words an acronym compound never takes as its second half.
+_ACRONYM_COMPOUND_STOP = frozenset({
+    "and", "the", "for", "with", "into", "from", "are", "was", "were", "then",
+    "that", "this", "each", "per", "until", "before", "after", "using", "add",
+    "mix", "wash", "place", "put", "pour", "keep", "set", "use", "take",
+})
 
 
-#: The in-gel reagents and gel pieces the mis-hearing repairs and entity
-#: patterns resolve to, with the protocol wording that shows a protocol has
-#: one. Those repairs apply only where the active protocol's text uses one of
-#: these surfaces; an entity not listed here is general lab vocabulary and is
-#: recognised in any protocol.
-_SUBSTANCE_PRESENCE_ALIASES: dict[str, tuple[str, ...]] = {
-    "ambic": ("ambic", "ammonium bicarbonate"),
-    "hplc_water": ("hplc water",),
-    "solution_a": ("solution a",),
-    "solution_b": ("solution b",),
-    "acetonitrile": ("acetonitrile",),
-    "gel_plug": ("gel plug",),
-    "stained_protein_band": ("stained protein band",),
-    "dtt": ("dtt", "dithiothreitol"),
-    "iodoacetamide": ("iodoacetamide",),
-    "trypsin": ("trypsin",),
-    "formic_acid": ("formic acid",),
+# --- Lane GE, decision 3 (2026-10-11): the protocol's own words, heard in Korean --
+#
+# Nothing below names any one document's reagents. A term is recognised, in
+# English or in the Korean a researcher says it in, because the active
+# protocol's own text contains it; a Korean word is repaired to a term because
+# it sounds like that term ("트립씬" -> trypsin, "엠빅" -> AMBIC, "제트 플러그"
+# -> gel plug). Numbers are never touched. The two lexicons are language
+# resources -- how a lab word reads in Korean, what an observable state is
+# called -- and an entry acts only where the protocol's text mentions its
+# English.
+
+_HANGUL_INITIALS = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+_HANGUL_FINALS = (
+    "", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ",
+    "ㄿ", "ㅀ", "ㅁ", "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+)
+#: Consonant classes shared by the two scripts: K T P S J L M N H.
+_INITIAL_SOUND = {
+    "ㄱ": "K", "ㄲ": "K", "ㅋ": "K", "ㄴ": "N", "ㄷ": "T", "ㄸ": "T", "ㅌ": "T",
+    "ㄹ": "L", "ㅁ": "M", "ㅂ": "P", "ㅃ": "P", "ㅍ": "P", "ㅅ": "S", "ㅆ": "S",
+    "ㅈ": "J", "ㅉ": "J", "ㅊ": "J", "ㅎ": "H", "ㅇ": "",
 }
+_FINAL_SOUND = {
+    "ㄱ": "K", "ㄲ": "K", "ㅋ": "K", "ㄳ": "K", "ㄺ": "K", "ㄴ": "N", "ㄵ": "N",
+    "ㄶ": "N", "ㄷ": "T", "ㅅ": "T", "ㅆ": "T", "ㅈ": "T", "ㅊ": "T", "ㅌ": "T",
+    "ㅎ": "T", "ㄹ": "L", "ㄼ": "L", "ㄽ": "L", "ㄾ": "L", "ㅀ": "L", "ㄻ": "M",
+    "ㅁ": "M", "ㅂ": "P", "ㅍ": "P", "ㅄ": "P", "ㄿ": "P", "ㅇ": "N",
+}
+#: How each letter of an abbreviation is read aloud in Korean.
+_LETTER_NAMES = {
+    "a": "에이", "b": "비", "c": "시", "d": "디", "e": "이", "f": "에프", "g": "지",
+    "h": "에이치", "i": "아이", "j": "제이", "k": "케이", "l": "엘", "m": "엠",
+    "n": "엔", "o": "오", "p": "피", "q": "큐", "r": "알", "s": "에스", "t": "티",
+    "u": "유", "v": "브이", "w": "더블유", "x": "엑스", "y": "와이", "z": "제트",
+}
+#: Ordinary English words of protocol prose that are not lab terms.
+_ORDINARY_ENGLISH = frozenset({
+    "about", "above", "added", "after", "again", "allow", "along", "already",
+    "always", "amount", "another", "approximately", "around", "avoid", "based",
+    "before", "begin", "being", "below", "between", "bottom", "briefly",
+    "carefully", "change", "check", "clean", "close", "collect", "color",
+    "colour", "completely", "contain", "containing", "continue", "could",
+    "cover", "during", "either", "empty", "ensure", "enough", "entire", "equal",
+    "every", "example", "excess", "final", "finally", "first", "following",
+    "follow", "fresh", "gently", "given", "immediately", "inside", "instead",
+    "label", "large", "least", "leave", "level", "light", "little", "longer",
+    "lower", "major", "manual", "material", "materials", "method", "minute",
+    "minutes", "mixture", "mixed", "needed", "never", "normal", "noted", "number",
+    "obtain", "often", "order", "other", "otherwise", "outside", "overnight",
+    "place", "placed", "please", "point", "prepare", "prepared", "present",
+    "press", "previous", "procedure", "process", "properly", "quickly",
+    "ready", "record", "remaining", "remove", "removed", "repeat", "replace",
+    "required", "result", "results", "right", "rinse", "second", "seconds",
+    "section", "several", "shake", "should", "shown", "since", "slowly", "small",
+    "solution", "solutions", "start", "steps", "still", "store", "stored",
+    "table", "taken", "their", "these", "thoroughly", "three", "through",
+    "times", "total", "transfer", "twice", "under", "until", "upper", "using",
+    "usually", "value", "volume", "water", "where", "which", "while", "whole",
+    "without", "would", "write", "above", "according", "additional", "caution",
+    "warning", "expected", "important", "necessary", "temperature", "hours",
+    "sample", "samples", "step", "note", "notes", "figure", "picture",
+})
+#: The word of a labelled reagent ("Solution A", "Buffer 2") as Korean says it.
+_REAGENT_WORD_KOREAN = {
+    "solution": ("용액", "솔루션", "용액은", "솔루션은"),
+    "buffer": ("버퍼", "완충액", "완충용액"),
+    "reagent": ("시약",),
+}
+_LETTER_NAME_SET = frozenset((*_LETTER_NAMES.values(), "씨", "에", "엘"))
+#: A Korean word that is never a mis-heard protocol term.
+_HEARING_STOP_WORDS = frozenset({
+    "단계", "프로토콜", "실험", "시작", "완료", "다음", "이전", "타이머", "온도",
+    "시간", "용액", "시약", "설명", "그림", "메모", "기록", "현재", "지금", "여기",
+    "그거", "이거", "저거", "뭐야", "무엇", "알려", "보여", "원문", "이유", "주의",
+    "안전", "장비", "재료", "준비", "확인", "질문", "대답", "사진", "이미지",
+    "오늘", "내일", "아까", "방금", "계속", "다시", "잠깐", "잠시", "조금", "많이",
+    "정도", "이상", "이하", "사항", "특이", "상태", "결과", "조건", "기준", "방법",
+    "교반", "배양", "세척", "건조", "냉각", "가열", "혼합", "원심", "분리", "측정",
+})
+_HANGUL_PARTICLE = re.compile(
+    r"(?:이랑|랑|이란|란|이에요|예요|입니다|이야|으로|에서|에게|한테|까지|부터|"
+    r"처럼|마다|조차|이나|나|도|만|의|이|가|은|는|을|를|로|에|과|와|야|요)$"
+)
+
+
+def _hangul_skeleton(text: str) -> str:
+    """The consonant classes of a Korean word, in order ("트립신" -> TLPSN)."""
+
+    out: list[str] = []
+    last_final: str | None = None
+    for char in text:
+        code = ord(char) - 0xAC00
+        if not 0 <= code < 11172:
+            continue
+        initial = _INITIAL_SOUND[_HANGUL_INITIALS[code // 588]]
+        # A final and the next initial of one class write one English sound
+        # (플러그 plug, 밸런스 balance): heard once.
+        if initial and initial != last_final:
+            out.append(initial)
+        final = _FINAL_SOUND.get(_HANGUL_FINALS[code % 28])
+        if final:
+            out.append(final)
+        last_final = final
+    return "".join(out)
+
+
+def _english_skeleton(word: str) -> str:
+    """The consonant classes of an English word as Korean hears it ("trypsin" -> TLPSN).
+
+    Digraphs read as one sound (ph, th, ch, sh, ck, qu, wh), c and g soften
+    before e/i/y, -tio-/-sio- read as 시, and an r after a vowel that is not
+    followed by a vowel is not heard (water 워터, partner 파트너).
+    """
+
+    w = re.sub(r"[^a-z]", "", word.casefold())
+    w = re.sub(r"([a-z])\1", r"\1", w)  # a doubled letter is one sound (buffer 버퍼, Odyssey 오디세이)
+    out: list[str] = []
+    i = 0
+    vowels = "aeiouy"
+    while i < len(w):
+        two, three, ch = w[i:i + 2], w[i:i + 3], w[i]
+        nxt = w[i + 1] if i + 1 < len(w) else ""
+        if three in ("tio", "sio", "tia", "cia"):
+            out.append("S")
+            i += 3
+            continue
+        if two == "ph":
+            out.append("P"); i += 2; continue
+        if two == "th":
+            out.append("T"); i += 2; continue
+        if two == "ch":
+            out.append("J"); i += 2; continue
+        if two == "sh":
+            out.append("S"); i += 2; continue
+        if two in ("ck", "qu"):
+            out.append("K"); i += 2; continue
+        if two == "wh":
+            out.append("H"); i += 2; continue
+        if two == "gh":
+            i += 2; continue
+        if two == "kn" and i == 0:
+            out.append("N"); i += 2; continue
+        if ch == "c":
+            out.append("S" if nxt and nxt in "eiy" else "K")
+        elif ch == "g":
+            out.append("J" if nxt and nxt in "eiy" else "K")
+        elif ch in "bpfv":
+            out.append("P")
+        elif ch in "dt":
+            out.append("T")
+        elif ch == "k":
+            out.append("K")
+        elif ch == "l":
+            out.append("L")
+        elif ch == "r":
+            previous = w[i - 1] if i > 0 else ""
+            if not (previous and previous in vowels and (not nxt or nxt not in vowels)):
+                out.append("L")
+        elif ch == "m":
+            out.append("M")
+        elif ch == "n":
+            out.append("N")
+        elif ch == "s":
+            out.append("S")
+        elif ch in "jz":
+            out.append("J")
+        elif ch == "h":
+            out.append("H")
+        elif ch == "x":
+            out.extend("KS")
+        i += 1
+    return "".join(out)
+
+
+def _letter_reading(word: str) -> str | None:
+    """"DTT" read letter by letter: 디티티. Only for an abbreviation."""
+
+    letters = re.sub(r"[^A-Za-z]", "", word)
+    if not (2 <= len(letters) <= 6 and letters.isupper()):
+        return None
+    return "".join(_LETTER_NAMES[char] for char in letters.casefold())
+
+
+def _skeleton_tolerance(skeleton: str) -> int:
+    length = len(skeleton)
+    return 0 if length <= 4 else 1 if length <= 7 else 2
+
+
+#: The Korean vowels an English first vowel is heard as (ambic 앰빅/엠빅/암빅,
+#: iodo- 아이오도, lysozyme 라이소자임, Odyssey 오디세이, Whatman 왓트만).
+_VOWEL_CLASSES = {
+    "a": "ㅏㅐㅔㅑㅒㅖㅘㅙㅓㅝ", "e": "ㅔㅐㅣㅖㅓ", "i": "ㅣㅏㅟㅐ", "o": "ㅗㅓㅘㅚㅏㅝ", "u": "ㅜㅓㅠㅡㅝㅏ", "y": "ㅣㅏㅡㅐ",
+}
+_HANGUL_VOWELS = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
+
+
+def _first_vowels_agree(korean: str, word: str) -> bool:
+    """Whether the first syllable's vowel can be the English word's first vowel.
+
+    A consonant cluster is read with an ㅡ (trypsin 트립신, spectrophotometer
+    스펙트로포토미터), which says nothing about the vowel; so is a first
+    syllable that spells a letter name.
+    """
+
+    code = ord(korean[0]) - 0xAC00
+    if not 0 <= code < 11172:
+        return True
+    vowel = _HANGUL_VOWELS[(code % 588) // 28]
+    letters = re.sub(r"[^a-z]", "", word.casefold())
+    match = re.search(r"[aeiouy]", letters)
+    if match is None:
+        return True
+    if vowel == "ㅡ" and match.start() >= 2:
+        return True
+    # A word-initial "io"/"yo" is said 요 (iodine 요오드, yogurt 요구르트).
+    if vowel == "ㅛ" and re.match(r"(?:io|yo)", letters):
+        return True
+    if match.start() == 0 and vowel in "ㅏㅐㅔㅗㅜㅣㅓㅡ" and letters[0] in "aeiou":
+        # A word opening with a vowel: 아세토-, 에어, 오디세이, 이오도-.
+        return vowel in _VOWEL_CLASSES[letters[0]]
+    return vowel in _VOWEL_CLASSES[match.group(0)]
+
+
+_LATIN_WITH_PARTICLE = re.compile(r"^([a-z0-9][a-z0-9-]*)([가-힣]{1,3})$")
+
+
+def _spoken_token(token: str) -> str:
+    """A Latin token with a Korean particle glued on ("water가") without it."""
+
+    match = _LATIN_WITH_PARTICLE.match(token.casefold())
+    if match is not None and _HANGUL_PARTICLE.fullmatch(match.group(2)):
+        return match.group(1)
+    return token
+
+
+def _entity_key(term_text: str) -> str:
+    """The entity key a term's spelling gives ("HPLC water" -> hplc_water)."""
+
+    return re.sub(r"[^a-z0-9]+", "_", term_text.casefold()).strip("_")
+
+
+@functools.lru_cache(maxsize=1)
+def _known_entity_keys() -> frozenset[str]:
+    """Entity keys the answer, report and research tables already have words
+    for (``INTERNAL_NAME_WORDS``, ``CANONICAL_RESEARCH_ENTITIES``, the lab
+    lexicon). Naming only: whether a term is heard never depends on it."""
+
+    return frozenset((*INTERNAL_NAME_WORDS, *CANONICAL_RESEARCH_ENTITIES, *(row[0] for row in _LAB_LEXICON)))
+
+
+def _entity_name(term_text: str) -> str:
+    """How a term is named as an entity (lane GE): its key where the tables
+    downstream know the key ("HPLC water" -> hplc_water, "AMBIC" -> ambic),
+    else the protocol's own spelling ("Tris-HCl buffer"), as lane G named a
+    registered PDF's material -- a snake_case name no table knows would be
+    taken out of a sentence (``hide_internal_names``) or searched as is."""
+
+    key = _entity_key(term_text)
+    return key if key in _known_entity_keys() else " ".join(term_text.split())
+
+
+#: Hangul syllable -> (initial, medial, final) indexes, for a one-jamo miss.
+def _jamo(syllable: str) -> tuple[int, int, int] | None:
+    code = ord(syllable) - 0xAC00
+    if not 0 <= code < 11172:
+        return None
+    return code // 588, (code % 588) // 28, code % 28
+
+
+def _one_jamo_apart(said: str, form: str) -> bool:
+    """Same syllable count, at most one initial, medial or final different:
+    "뱀드"/"밴드", "밴트"/"밴드" -- a speech-recognition miss of one sound."""
+
+    if len(said) != len(form) or said == form:
+        return said == form
+    differences = 0
+    for left, right in zip(said, form):
+        a, b = _jamo(left), _jamo(right)
+        if a is None or b is None:
+            if left != right:
+                return False
+            continue
+        differences += sum(x != y for x, y in zip(a, b))
+        if differences > 1:
+            return False
+    return differences == 1
+
+
+def _hangul_word(token: str) -> str | None:
+    """A Korean token with its particle taken off, or None for a non-Korean one."""
+
+    if not re.fullmatch(r"[가-힣]{2,}", token):
+        return None
+    stripped = _HANGUL_PARTICLE.sub("", token)
+    return stripped if len(stripped) >= 2 else token
+
+
+#: Lab words a researcher says in Korean, keyed by the English the protocol
+#: writes. ``stem`` surfaces match any ending (incubat- for incubate and
+#: incubation). An entry acts only where the active protocol mentions its
+#: English, so this names no protocol's reagents; it is how the language
+#: reads them.
+_LAB_LEXICON: tuple[tuple[str, tuple[str, ...], tuple[str, ...], bool], ...] = (
+    # key, English surfaces, Korean forms, stem
+    ("destaining", ("destain",), ("탈색",), True),
+    ("dehydration", ("dehydrat",), ("탈수",), True),
+    ("incubation", ("incubat",), ("배양", "인큐베이션", "인큐베이트"), True),
+    ("centrifuge", ("centrifug",), ("원심분리", "원심 분리", "원심분리기"), True),
+    ("pipette", ("pipett",), ("피펫", "파이펫"), True),
+    ("contamination", ("contaminat",), ("오염",), True),
+    ("keratin", ("keratin",), ("케라틴",), False),
+    ("electrophoresis", ("electrophoresis",), ("전기영동", "전기 영동"), False),
+    ("sds_page", ("sds-page", "sds page", "polyacrylamide gel electrophoresis"),
+     ("에스디에스 페이지", "에스디에스페이지", "단백질 전기영동", "겔 전기영동"), False),
+    ("coomassie", ("coomassie",), ("쿠마시", "쿠마씨", "쿠마시 블루"), False),
+    ("mass_spectrometry", ("mass spectrometr", "mass spec"), ("질량분석", "질량 분석"), True),
+    ("vortex", ("vortex",), ("볼텍스", "보텍스"), True),
+    ("rpm", ("rpm",), ("알피엠", "분당 회전"), False),
+    ("tube", ("tube",), ("튜브",), False),
+    ("microcentrifuge_tube", ("microcentrifuge tube",), ("마이크로센트리퓨즈 튜브", "원심분리 튜브", "에펜도르프 튜브"), False),
+    ("buffer", ("buffer",), ("버퍼", "완충액", "완충 용액"), False),
+    ("supernatant", ("supernatant",), ("상층액", "상등액"), False),
+    ("pellet", ("pellet",), ("펠릿", "펠렛", "침전물"), False),
+    ("formic_acid", ("formic acid", "formic"), ("포름산", "폼산"), False),
+    ("acetic_acid", ("acetic acid", "ch3cooh"), ("아세트산", "초산", "빙초산"), False),
+    ("ringer_solution", ("ringer's solution", "ringer solution", "ringer's"), ("링거 용액", "링거액", "링거스 솔루션", "링거"), False),
+    ("ethanol", ("ethanol",), ("에탄올",), False),
+    ("methanol", ("methanol",), ("메탄올",), False),
+    ("acetone", ("acetone",), ("아세톤",), False),
+    ("distilled_water", ("distilled water", "deionized water", "deionised water"), ("증류수", "탈이온수"), False),
+    ("sodium_chloride", ("sodium chloride",), ("염화나트륨", "염화 나트륨"), False),
+    ("hydrochloric_acid", ("hydrochloric acid",), ("염산",), False),
+    ("sulfuric_acid", ("sulfuric acid", "sulphuric acid"), ("황산",), False),
+    ("sodium_hydroxide", ("sodium hydroxide",), ("수산화나트륨", "수산화 나트륨"), False),
+    ("agarose", ("agarose",), ("아가로스", "아가로즈"), False),
+    ("antibody", ("antibod",), ("항체",), True),
+    ("membrane", ("membrane",), ("멤브레인", "막"), False),
+    ("gel_plug", ("gel plug", "plug of a stained protein band"), ("젤 플러그", "겔 플러그", "젤 플럭"), False),
+    ("stained_protein_band", ("stained protein band", "protein band", "gel band"),
+     ("염색된 단백질 밴드", "단백질 겔 밴드", "단백질 젤 밴드", "염색된 밴드", "단백질 밴드", "젤 밴드", "겔 밴드"), False),
+    ("primary_antibody", ("primary antibod",), ("1차 항체", "일차 항체"), True),
+    ("secondary_antibody", ("secondary antibod",), ("2차 항체", "이차 항체"), True),
+    ("spectrophotometer", ("spectrophotometer",), ("분광광도계", "분광 광도계", "스펙트로포토미터"), False),
+    ("petri_dish", ("petri dish",), ("페트리 접시", "페트리 디쉬", "페트리 디시", "페트리"), True),
+    ("nitrogen", ("nitrogen",), ("질소",), False),
+    ("oxygen", ("oxygen",), ("산소",), False),
+    ("incubator", ("incubator",), ("배양기", "인큐베이터"), False),
+    ("oven", ("oven",), ("오븐",), False),
+    ("fume_hood", ("fume hood",), ("흄후드", "흄 후드", "후드"), False),
+    ("autoclave", ("autoclav",), ("오토클레이브", "고압멸균", "고압 멸균"), True),
+    ("filter_paper", ("filter paper",), ("여과지", "필터 페이퍼", "거름종이"), True),
+    ("syringe", ("syringe",), ("주사기", "시린지"), False),
+    ("vial", ("vial",), ("바이알",), False),
+    ("erlenmeyer_flask", ("erlenmeyer flask", "erlenmeyer"), ("삼각 플라스크", "삼각플라스크", "얼렌마이어 플라스크"), False),
+    ("flask", ("flask",), ("플라스크",), False),
+    ("beaker", ("beaker",), ("비커",), False),
+    ("electrode", ("electrode",), ("전극",), False),
+    ("thermometer", ("thermometer",), ("온도계",), False),
+    ("balance", ("balance",), ("저울", "천칭"), False),
+    ("agar", ("agar",), ("아가", "한천"), False),
+    ("broth", ("broth",), ("브로스", "액체 배지"), False),
+    ("colony", ("colon",), ("콜로니", "집락"), True),
+    ("detergent", ("detergent",), ("세제",), False),
+    ("gloves", ("glove",), ("장갑",), True),
+    ("charcoal", ("charcoal",), ("차콜", "활성탄", "숯"), False),
+    ("ether", ("diethyl ether", "ether"), ("에테르", "디에틸 에테르", "다이에틸 에테르"), False),
+    ("tween", ("tween",), ("트윈",), False),
+    ("soil", ("soil",), ("토양", "흙"), False),
+    ("waste", ("waste",), ("폐기물",), False),
+    ("calibration", ("calibrat",), ("보정", "교정", "캘리브레이션"), True),
+    ("hygroscopic", ("hygroscopic",), ("흡습성",), False),
+    ("dilution", ("dilut",), ("희석",), True),
+    ("blank", ("blank",), ("블랭크", "공시료"), True),
+)
+#: Observable states a source names as an endpoint or an expected result, and
+#: the Korean a researcher reports them in. Paraphrases are whole reports of
+#: the state ("색이 빠졌어" for destained) rather than the word itself.
+_STATE_LEXICON: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...] = (
+    # key, English stems, Korean stems, Korean paraphrases
+    ("destained", ("destain",), ("탈색",),
+     ("색이 빠", "색 빠", "색이 다 빠", "색이 완전히 빠", "색은 빠", "색은 완전히 빠", "색이 전부 빠")),
+    ("transparent", ("transparent",), ("투명",), ()),
+    ("clear", ("clear",), ("맑", "투명"), ()),
+    ("white", ("white", "whitish"), ("흰색", "하얗", "하얀", "희게", "하얘"), ()),
+    ("dehydrated", ("dehydrat",), ("탈수",), ("말랐", "마른", "건조", "바싹")),
+    ("dry", ("dry", "dried"), ("말랐", "마른", "건조", "탈수"), ()),
+    ("dissolved", ("dissolv",), ("녹", "용해"), ()),
+    ("colorless", ("colorless", "colourless"), ("무색",), ()),
+    ("yellow", ("yellow",), ("노랗", "노란", "노래", "황색"), ()),
+    ("blue", ("blue",), ("파랗", "파란", "푸른", "청색"), ()),
+    ("red", ("red", "reddish"), ("빨갛", "빨간", "붉", "적색"), ()),
+    ("pink", ("pink",), ("분홍", "핑크"), ()),
+    ("purple", ("purple", "violet"), ("보라", "자색"), ()),
+    ("green", ("green",), ("초록", "녹색"), ()),
+    ("orange", ("orange",), ("주황",), ()),
+    ("brown", ("brown",), ("갈색",), ()),
+    ("cloudy", ("cloudy", "turbid"), ("탁", "흐려", "뿌옇", "뿌연"), ()),
+    ("precipitate", ("precipitat",), ("침전",), ()),
+    ("boiling", ("boil",), ("끓",), ()),
+    ("cooled", ("cool", "cold"), ("식", "차가워", "냉각"), ()),
+    ("solid", ("solid", "solidif"), ("굳", "고체"), ()),
+    ("melted", ("melt",), ("녹",), ()),
+    ("homogeneous", ("homogen", "uniform"), ("균일", "고르게"), ()),
+    ("stable", ("stable", "stabil", "constant"), ("안정", "일정"), ()),
+    ("warm", ("warm", "room temperature"), ("따뜻", "실온"), ()),
+    ("wet", ("wet", "moist"), ("젖", "축축"), ()),
+    ("thawed", ("thaw",), ("해동", "녹"), ()),
+    ("frozen", ("frozen", "freez"), ("얼", "냉동"), ()),
+    ("dark", ("dark",), ("어두", "진해", "검"), ()),
+    ("light", ("pale", "faint", "lighter"), ("연해", "옅", "흐릿"), ()),
+    ("foaming", ("foam", "bubbl"), ("거품",), ()),
+    ("separated", ("separat", "two layers", "phase"), ("분리", "층"), ()),
+    ("swollen", ("swell", "swollen"), ("부풀", "팽창"), ()),
+    ("shrunk", ("shrink", "shrunk"), ("줄어", "수축"), ()),
+)
+_STATE_KOREAN_WORDS = tuple(dict.fromkeys(
+    word for _, _, korean, paraphrases in _STATE_LEXICON for word in (*korean, *paraphrases)
+))
+_STATE_ENGLISH_STEMS = tuple(dict.fromkeys(
+    stem for _, english, _, _ in _STATE_LEXICON for stem in english
+))
+#: The state words long enough to find inside a whole utterance: one
+#: syllable ("식", "얼", "녹", "탁") is inside ordinary words ("지식",
+#: "얼마나", "녹화", "식사"), and so is a three-letter stem ("red", "dry").
+_STATE_KOREAN_WORDS_LONG = tuple(word for word in _STATE_KOREAN_WORDS if len(word.replace(" ", "")) >= 2)
+_STATE_ENGLISH_STEMS_LONG = tuple(stem for stem in _STATE_ENGLISH_STEMS if len(stem) >= 4)
+
+
+def _lexicon_english_pattern(surface: str, *, stem: bool) -> re.Pattern[str]:
+    words = r"\s+".join(re.escape(word) for word in surface.split())
+    tail = r"[a-z]*" if stem else r"(?:e?s)?"
+    return re.compile(rf"(?<![0-9A-Za-z]){words}{tail}(?![0-9A-Za-z])", re.IGNORECASE)
+
+
+_LAB_LEXICON_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    key: tuple(_lexicon_english_pattern(surface, stem=stem) for surface in english)
+    for key, english, _, stem in _LAB_LEXICON
+}
+_LAB_LEXICON_KOREAN: dict[str, tuple[str, ...]] = {key: korean for key, _, korean, _ in _LAB_LEXICON}
+_LAB_LEXICON_LABEL: dict[str, str] = {key: english[0] for key, english, _, _ in _LAB_LEXICON}
 
 
 def _term_pattern(term: str) -> re.Pattern[str]:
@@ -1699,6 +2136,123 @@ class ProtocolTerm:
     step_indexes: frozenset[int]
     #: A material or equipment name.
     resource: bool = False
+    #: The long form the protocol defines an abbreviation with
+    #: ("ammonium bicarbonate (AMBIC)" -> "ammonium bicarbonate").
+    defined_as: str | None = None
+    #: Heard in Korean by its sound within a tolerance. True for the
+    #: protocol's terms (its materials, equipment, labelled reagents,
+    #: abbreviations); False for the other words of its prose, which are
+    #: heard in Korean only as an exact, long match ("아세토나이트릴").
+    phonetic: bool = True
+    #: Derived once (lane GE: ``hear`` runs several times a turn).
+    words: tuple[str, ...] = field(init=False, compare=False, repr=False, default=())
+    skeletons: tuple[str, ...] = field(init=False, compare=False, repr=False, default=())
+    word_readings: tuple[str | None, ...] = field(init=False, compare=False, repr=False, default=())
+
+    def __post_init__(self) -> None:
+        words = tuple(self.text.split())
+        object.__setattr__(self, "words", words)
+        object.__setattr__(self, "skeletons", tuple(_english_skeleton(word) for word in words))
+        object.__setattr__(self, "word_readings", tuple(_letter_reading(word) for word in words))
+
+    @property
+    def key(self) -> str:
+        """The entity key this term's spelling gives ("HPLC water" -> hplc_water)."""
+
+        return _entity_key(self.text)
+
+    @property
+    def entity(self) -> str:
+        """The entity name a question about this term carries (``_entity_name``)."""
+
+        return _entity_name(self.text)
+
+    @property
+    def letter_reading(self) -> str | None:
+        """The whole term read letter by letter, for a one-word abbreviation."""
+
+        return self.word_readings[0] if len(self.words) == 1 else None
+
+    def hears(self, tokens: tuple[str, ...]) -> int | None:
+        """Whether these spoken tokens, one per word, say this term.
+
+        Each token is the word itself in English (one letter off for a word of
+        five or more), its sound in Korean (consonant classes within the
+        tolerance, first class equal), or an abbreviation's letters read out.
+        Returns the total distance, or None.
+        """
+
+        if len(tokens) != len(self.words):
+            return None
+        total = 0
+        exact = 0
+        near_in_context = False
+        for token, word, skeleton, reading in zip(tokens, self.words, self.skeletons, self.word_readings):
+            latin = _spoken_token(token).casefold()
+            if re.fullmatch(r"[a-z0-9][a-z0-9-]*", latin):
+                if latin == word.casefold():
+                    exact += 1
+                    continue
+                if len(latin) >= 5 and _edit_distance(latin, word.casefold()) == 1:
+                    total += 1
+                    continue
+                # One letter off a shorter word of a longer term, the rest
+                # said exactly ("plc water" for "HPLC water").
+                if (
+                    len(self.words) > 1 and len(latin) >= 3 and not near_in_context
+                    and _edit_distance(latin, word.casefold()) == 1
+                ):
+                    near_in_context = True
+                    total += 1
+                    continue
+                return None
+            korean = _hangul_word(token)
+            if korean is not None and korean in _REAGENT_WORD_KOREAN.get(word.casefold(), ()):
+                continue
+            if len(word) == 1 and word.isalpha() and korean is not None and korean == _LETTER_NAMES.get(word.casefold()):
+                continue
+            if korean is None or korean in _HEARING_STOP_WORDS or re.search(r"\d", token):
+                return None
+            if reading is not None:
+                said = korean.replace("씨", "시").replace("쓰", "스")
+                if said == reading:
+                    continue
+                # One syllable off only for a reading of three or more
+                # syllables, said at the same length ("디티" is not DTT's
+                # "디티티"; "어디" and "오븐" are not OD's "오디").
+                if len(reading) >= 3 and len(said) == len(reading) and _edit_distance(said, reading) <= 1:
+                    total += 1
+                    continue
+            heard = _hangul_skeleton(korean)
+            # "-er" is read with a final 르 (ether 에테르, meter 미터 without): the
+            # English drops that r, so the Korean drops the L it adds.
+            if heard.endswith("L") and re.search(r"(?:er|re|or|ar)$", word.casefold()) and not skeleton.endswith("L"):
+                heard = heard[:-1]
+            # A plural is said in the singular ("falcon tubes" 팔콘 튜브).
+            if skeleton.endswith("S") and re.search(r"[a-z]{3,}(?:e?s)$", word.casefold()) and not heard.endswith("S"):
+                skeleton = skeleton[:-1]
+            # A word with no consonant sound ("air" 에어) of a longer term is
+            # heard by its first vowel alone.
+            if not heard and not skeleton and len(self.words) > 1:
+                if _first_vowels_agree(korean, word):
+                    continue
+                return None
+            # A word of a longer term may be short ("water" of "HPLC water"); a
+            # one-word term needs three sounds, or "넣어" would be "nature".
+            minimum = 3 if len(self.words) == 1 else 1
+            if len(heard) < minimum or len(skeleton) < minimum or not heard or heard[0] != skeleton[0]:
+                return None
+            if not _first_vowels_agree(korean, word):
+                return None
+            distance = _edit_distance(heard, skeleton)
+            if distance > _skeleton_tolerance(skeleton):
+                return None
+            if not self.phonetic and (distance > 0 or len(skeleton) < 5):
+                return None
+            total += distance
+        if near_in_context and exact == 0:
+            return None
+        return total
 
 
 @dataclass(frozen=True)
@@ -1715,6 +2269,27 @@ class ProtocolVocabulary:
     corpus: str = ""
     #: Each material row as the steps name it, in the protocol's order.
     materials: tuple[str, ...] = ()
+    #: The other English words of five letters or more the protocol's text
+    #: uses (minus ordinary English and the words of its terms), each a
+    #: one-word term a question may name -- "acetonitrile" in a protocol
+    #: whose materials list omits it.
+    words: tuple[ProtocolTerm, ...] = ()
+    #: The lab-lexicon words the protocol writes, spelled as it writes them
+    #: ("gel plug", "rpm", "keratin"): sent to STT after its own terms.
+    lexicon_terms: tuple[ProtocolTerm, ...] = ()
+    #: What ``hear`` and ``lexicon_entities`` worked out, per vocabulary.
+    _cache: dict = field(default_factory=dict, compare=False, repr=False, hash=False)
+
+    @classmethod
+    def from_inventory(cls, inventory: Sequence[str]) -> "ProtocolVocabulary":
+        """A caller's own list of entities heard as terms, for a caller with
+        no active protocol (``normalize_scientific_request`` without one)."""
+
+        names = tuple(dict.fromkeys(" ".join(str(item).split()) for item in inventory if str(item).strip()))
+        return cls(
+            terms=tuple(ProtocolTerm(text=name, step_indexes=frozenset()) for name in names),
+            corpus="\n".join(names).casefold(),
+        )
 
     def mentions(self, surface: str) -> bool:
         """Whether the protocol's text uses ``surface`` as whole words."""
@@ -1722,14 +2297,198 @@ class ProtocolVocabulary:
         return _term_pattern(surface).search(self.corpus) is not None
 
     def mentions_entity(self, entity: str) -> bool:
-        """Whether a substance-scoped entity is one this protocol has.
+        """Whether the protocol's text names this entity: a term of its own,
+        a lexicon word it writes in English, or any spelling of the key."""
 
-        An entity outside ``_SUBSTANCE_PRESENCE_ALIASES`` is general lab
-        vocabulary, so it is always allowed.
+        if self.term_for(entity) is not None:
+            return True
+        patterns = _LAB_LEXICON_PATTERNS.get(entity)
+        if patterns is not None:
+            return any(pattern.search(self.corpus) for pattern in patterns)
+        return any(self.mentions(surface) for surface in _entity_surfaces(entity))
+
+    def term_for(self, entity: str) -> ProtocolTerm | None:
+        """The term ``entity`` names: by its entity name, key or spelling."""
+
+        folded = " ".join(entity.split()).casefold()
+        for term in (*self.terms, *self.words):
+            if term.entity == entity or term.key == entity or term.text.casefold() == folded:
+                return term
+        return None
+
+    def label(self, entity: str) -> str:
+        """How the entity is spelled: the protocol's own spelling, else the lexicon's, else the key in words."""
+
+        term = self.term_for(entity)
+        if term is not None:
+            return term.text
+        return _LAB_LEXICON_LABEL.get(entity) or entity.replace("_", " ")
+
+    def long_forms(self, entity: str) -> tuple[str, ...]:
+        """The long form the protocol defines ``entity`` with, if it does."""
+
+        term = self.term_for(entity)
+        return (term.defined_as,) if term is not None and term.defined_as else ()
+
+    def lexicon_entities(self) -> tuple[str, ...]:
+        """The lexicon words this protocol writes in English."""
+
+        found = self._cache.get("lexicon")
+        if found is None:
+            found = tuple(
+                key for key, patterns in _LAB_LEXICON_PATTERNS.items()
+                if any(pattern.search(self.corpus) for pattern in patterns)
+            )
+            self._cache["lexicon"] = found
+        return found
+
+    def _term_patterns(self) -> tuple[tuple[re.Pattern[str], str], ...]:
+        found = self._cache.get("patterns")
+        if found is None:
+            found = tuple((_term_pattern(term.text), term.entity) for term in (*self.terms, *self.words))
+            self._cache["patterns"] = found
+        return found
+
+    def hear(self, key: str) -> tuple[str, tuple[tuple[int, int, str], ...], tuple[tuple[str, str], ...]]:
+        """The utterance key with its terms heard: Korean words that sound like
+        a term, or a one-letter miss of it, become the term as the protocol
+        spells it; a lexicon word said in Korean becomes its English.
+
+        Returns the rewritten key, the spans (start, end, entity key) of every
+        term it now contains, and the corrections (what was heard, the term)
+        for the words that were rewritten. Tokens holding digits are never
+        changed. The longest term wins where two could claim the same words.
         """
 
-        aliases = _SUBSTANCE_PRESENCE_ALIASES.get(entity)
-        return aliases is None or any(self.mentions(alias) for alias in aliases)
+        cache = self._cache.setdefault("hear", {})
+        if key in cache:
+            return cache[key]
+        heard_result = self._hear(key)
+        if len(cache) > 2048:
+            cache.clear()
+        cache[key] = heard_result
+        return heard_result
+
+    def _hear(self, key: str) -> tuple[str, tuple[tuple[int, int, str], ...], tuple[tuple[str, str], ...]]:
+        tokens = key.split()
+        if not tokens:
+            return key, (), ()
+        lexicon = self.lexicon_entities()
+        rewritten: list[str] = []
+        corrections: list[tuple[str, str]] = []
+        index = 0
+        terms = sorted((*self.terms, *self.words), key=lambda term: -len(term.words))
+        while index < len(tokens):
+            token = tokens[index]
+            digits = re.search(r"\d", token) is not None
+            chosen: tuple[int, int, str] | None = None  # (distance, span length, replacement)
+            for term in terms:
+                size = len(term.words)
+                window = tuple(tokens[index:index + size])
+                if len(window) < size:
+                    continue
+                distance = term.hears(window)
+                if distance is None:
+                    continue
+                if chosen is None or (size, -distance) > (chosen[1], -chosen[0]):
+                    chosen = (distance, size, term.text)
+            if chosen is None and not digits:
+                # The pieces of one word said apart -- an abbreviation's letters
+                # ("에이 엠 빅", "디 티 티", "h plc") -- heard as the one word.
+                for size in (2, 3, 4):
+                    window = tokens[index:index + size]
+                    if len(window) < size or any(re.search(r"\d", t) for t in window):
+                        continue
+                    last = _hangul_word(window[-1]) or window[-1]
+                    if last in _HEARING_STOP_WORDS or _QUESTION_MARKERS.search(window[-1]):
+                        continue
+                    # Korean pieces: letter names ("에이", "엠", "디", "티") and
+                    # one short piece after them ("빅이") -- never ordinary
+                    # words ("있어 됐어 맞아" is no abbreviation).
+                    if (
+                        all(t in _LETTER_NAME_SET for t in window[:-1])
+                        and re.fullmatch(r"[가-힣]{1,2}", last)
+                    ):
+                        joined = ("".join(window[:-1]) + last,)
+                    elif all(re.fullmatch(r"[a-z]{1,3}", _spoken_token(t)) for t in window):
+                        joined = ("".join(_spoken_token(t) for t in window),)
+                    else:
+                        continue
+                    for term in terms:
+                        if len(term.words) != 1:
+                            continue
+                        distance = term.hears(joined)
+                        if distance is not None and (chosen is None or distance < chosen[0]):
+                            chosen = (distance, size, term.text)
+                    if chosen is not None and chosen[0] == 0:
+                        break
+            if chosen is None and not digits:
+                # A multi-word term whose first word was said in pieces ("h plc water").
+                for term in terms:
+                    if len(term.words) < 2:
+                        continue
+                    for pieces in (2, 3):
+                        head = tokens[index:index + pieces]
+                        if len(head) < pieces or not all(re.fullmatch(r"[a-z]{1,3}", _spoken_token(t)) for t in head):
+                            continue
+                        if "".join(_spoken_token(t) for t in head) != term.words[0].casefold():
+                            continue
+                        rest = tuple(tokens[index + pieces:index + pieces + len(term.words) - 1])
+                        if len(rest) < len(term.words) - 1:
+                            continue
+                        distance = term.hears((term.words[0], *rest))
+                        if distance is not None:
+                            chosen = (distance, pieces + len(rest), term.text)
+                            break
+                    if chosen is not None:
+                        break
+            if chosen is not None:
+                distance, size, replacement = chosen
+                heard = " ".join(
+                    _spoken_token(t) if re.match(r"[a-z0-9]", t.casefold()) else t
+                    for t in tokens[index:index + size]
+                )
+                if heard.casefold() != replacement.casefold():
+                    corrections.append((heard, replacement))
+                rewritten.append(replacement.casefold())
+                index += size
+                continue
+            rewritten.append(token)
+            index += 1
+        # A lexicon word of two or more words said with one sound missed
+        # ("단백질 뱀드" for "단백질 밴드"): the form, recorded as a correction.
+        for entity in lexicon:
+            for form in _LAB_LEXICON_KOREAN[entity]:
+                form_words = form.split()
+                if len(form_words) < 2:
+                    continue
+                for start in range(len(rewritten) - len(form_words) + 1):
+                    window = rewritten[start:start + len(form_words)]
+                    if any(re.search(r"\d", word) for word in window):
+                        continue
+                    bare = [_hangul_word(word) or word for word in window]
+                    if bare[:-1] != form_words[:-1] and window[:-1] != form_words[:-1]:
+                        continue
+                    if bare[-1] == form_words[-1] or window[-1] == form_words[-1]:
+                        continue
+                    if _one_jamo_apart(bare[-1], form_words[-1]):
+                        corrections.append((" ".join(window), form))
+                        rewritten[start:start + len(form_words)] = form_words
+        heard_key = " ".join(rewritten)
+        spans: list[tuple[int, int, str]] = []
+        for pattern, entity in self._term_patterns():
+            for match in pattern.finditer(heard_key):
+                spans.append((match.start(), match.end(), entity))
+        for entity in lexicon:
+            for pattern in _LAB_LEXICON_PATTERNS[entity]:
+                for match in pattern.finditer(heard_key):
+                    spans.append((match.start(), match.end(), entity))
+            # A lexicon word said in Korean ("탈색이", "원심 분리기"): named, as
+            # the key keeps it -- it is not a mis-hearing.
+            for form in _LAB_LEXICON_KOREAN[entity]:
+                for match in re.finditer(re.escape(form), heard_key):
+                    spans.append((match.start(), match.end(), entity))
+        return heard_key, tuple(dict.fromkeys(spans)), tuple(dict.fromkeys(corrections))
 
     @classmethod
     def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
@@ -1775,18 +2534,45 @@ class ProtocolVocabulary:
         )
         found: list[tuple[str, bool]] = [(name, True) for name in materials]
         found.extend(
+            (name.split("(")[0].strip(), True)
+            for name in materials if "(" in name and len(name.split("(")[0].strip()) >= 2
+        )
+        found.extend(
             (_resource_keyterm(item.name_source_text, prose_text), True)
             for item in protocol.equipment
         )
-        found.extend((candidate, False) for candidate in _STT_TERM_CANDIDATES)
+        defined: dict[str, str] = {}
         for text in corpus:
             found.extend((match.group(0), False) for match in _LABELLED_REAGENT.finditer(text))
-            found.extend(
-                (match.group(1), False)
-                for match in _DEFINED_ABBREVIATION.finditer(text)
-                if sum(char.isupper() for char in match.group(1)) >= 2
-            )
+            for match in _DEFINED_ABBREVIATION.finditer(text):
+                if sum(char.isupper() for char in match.group(1)) < 2:
+                    continue
+                found.append((match.group(1), False))
+                long_form = _source_abbreviation(match.group(1), (text,))
+                if long_form:
+                    defined.setdefault(match.group(1).casefold(), long_form)
+                    found.append((long_form, False))
             found.extend((match.group(0), False) for match in _HYPHENATED_ACRONYM.finditer(text))
+            found.extend(
+                (f"{match.group(1)} {match.group(2)}", False)
+                for match in _ACRONYM_COMPOUND.finditer(text)
+                if match.group(2).casefold() not in _ACRONYM_COMPOUND_STOP
+            )
+            for match in _CAPITALISED_COMPOUND.finditer(text):
+                before = text[:match.start()].rstrip()
+                # Not at a sentence start, not after a step number, and not
+                # the tail of a hyphenated name ("Sigma-Aldrich Catalog").
+                if (
+                    before and not re.search(r"[.!?:;\-–]$", before)
+                    and not re.search(r"^\d+[.)]?$", before.split()[-1] if before.split() else "")
+                ):
+                    compound = re.sub(r"[®™]", "", match.group(1))
+                    if not any(
+                        word.casefold() in _ORDINARY_ENGLISH or word.casefold() in _ACRONYM_COMPOUND_STOP
+                        or word.casefold() in _CATALOG_ROW_WORDS
+                        for word in compound.split()
+                    ):
+                        found.append((compound, False))
 
         terms: dict[str, ProtocolTerm] = {}
         for raw, resource in found:
@@ -1813,11 +2599,56 @@ class ProtocolVocabulary:
                     if pattern.search(text)
                 ),
                 resource=resource,
+                defined_as=defined.get(key),
             )
+        taken = {term.text.casefold() for term in terms.values()}
+        # A word of a term is that term ("bicarbonate" of "ammonium
+        # bicarbonate"), not an entity of its own.
+        taken.update(word.casefold() for term in terms.values() for word in re.split(r"[\s-]+", term.text))
+        lexicon_terms: dict[str, ProtocolTerm] = {}
+        all_text = (*step_texts, *corpus)
+        for key, english, _korean, stem in _LAB_LEXICON:
+            for surface in english:
+                pattern = _lexicon_english_pattern(surface, stem=stem)
+                spelled = next((m.group(0) for text in all_text if (m := pattern.search(text))), None)
+                if spelled is None:
+                    continue
+                spelled = " ".join(spelled.split())
+                if spelled.casefold() in taken or key in lexicon_terms:
+                    continue
+                lexicon_terms[key] = ProtocolTerm(
+                    text=spelled,
+                    step_indexes=frozenset(i for i, body in enumerate(step_texts) if pattern.search(body)),
+                    phonetic=False,
+                )
+                taken.update(word.casefold() for word in spelled.split())
+                break
+        words: dict[str, ProtocolTerm] = {}
+        for index, step in enumerate(fixture.steps):
+            for fact in fixture.facts_for_step(index):
+                if fact.kind in {"material", "equipment", "prerequisite"}:
+                    continue
+                for word in re.findall(r"(?<![A-Za-z0-9-])[A-Za-z][a-z]{4,}(?![A-Za-z0-9-])", fact.text):
+                    folded = word.casefold()
+                    if (
+                        folded in taken or folded in _ORDINARY_ENGLISH or folded in words
+                        or folded in _CATALOG_ROW_WORDS
+                    ):
+                        continue
+                    words[folded] = ProtocolTerm(
+                        text=word,
+                        step_indexes=frozenset(
+                            other for other, body in enumerate(step_texts)
+                            if _term_pattern(folded).search(body)
+                        ),
+                        phonetic=False,
+                    )
         return cls(
             terms=tuple(terms.values()),
             corpus="\n".join(corpus).casefold(),
             materials=tuple(name for name in materials if name),
+            words=tuple(words.values()),
+            lexicon_terms=tuple(lexicon_terms.values()),
         )
 
     def keyterms_near(self, index: int | None) -> tuple[str, ...]:
@@ -1830,7 +2661,7 @@ class ProtocolVocabulary:
         """
 
         if index is None:
-            return tuple(term.text for term in self.terms)
+            return tuple(term.text for term in (*self.terms, *self.lexicon_terms, *self.words))
 
         def rank(item: tuple[int, ProtocolTerm]) -> tuple[int, int, int]:
             order, term = item
@@ -1846,8 +2677,14 @@ class ProtocolVocabulary:
                 return (2, distance, order)
             return (3, 0, order)
 
+        # The protocol's other English words follow its terms (lane GE): the
+        # ones the steps around ``index`` use first, so they survive the cap.
         return tuple(
             term.text for _, term in sorted(enumerate(self.terms), key=rank)
+        ) + tuple(
+            term.text for _, term in sorted(enumerate(self.lexicon_terms), key=rank)
+        ) + tuple(
+            term.text for _, term in sorted(enumerate(self.words), key=rank)
         )
 
 
@@ -2247,25 +3084,102 @@ _POST_FRAME_NEGATION = re.compile(
     r"|아닌|아니(?!면)"
 )
 _PRE_FRAME_NEGATION_EN = re.compile(r"\b(?:not|never)\b|n(?:'|’)t\b")
-# How people in the 2026-10-01 voice test said the step-7 endpoint was reached:
-# "탈색으로 바뀌었어", "탈색 상태야", "탈색이 됐어". Each has to end as a
-# statement, so "탈색됐으면 좋겠어" or "탈색으로 바뀌었는지" is not one; the
-# question and hedge guards in _observation_predicate run before this.
+# A spoken report ends as a statement: "탈색됐으면 좋겠어" or "탈색으로
+# 바뀌었는지" is not one; the question and hedge guards in
+# _observation_predicate run before the frames.
 _STATEMENT_END = r"(?:어요|어|습니다|다|네요|네|음)(?=$|[\s.,!~])"
-_STEP_7_SPOKEN_ENDPOINT = re.compile(
-    r"탈색으로\s*(?:바뀌었|바꼈|변했)" + _STATEMENT_END
-    + r"|탈색(?:된|이\s*된)?\s*상태(?:야|예요|에요|이에요|입니다|이다|임)(?=$|[\s.,!~])"
-    + r"|탈색이?\s*(?:됐|되었)" + _STATEMENT_END
-    # Pilot log B and C: "탈색돼 있어", "탈색이 완료됐어"; and the bare
-    # "탈색 완료", which is not followed by what would make it a time or a
-    # plan ("탈색 완료 전", "탈색 완료하면", "탈색 완료 시간").
-    + r"|탈색이?\s*(?:돼|되어)\s*있" + _STATEMENT_END
-    + r"|탈색이?\s*완료\s*(?:됐|되었)" + _STATEMENT_END
-    # Lane O §7-4: "탈색 완료했어" was asked again where "탈색 완료" was not.
-    + r"|탈색(?:을|이)?\s*완료\s*(?:했|하였)" + _STATEMENT_END
-    + r"|탈색\s*완료(?:야|예요|에요|요|입니다|이다|임)?"
-    r"(?=$|[.,!~]|\s+(?!전|후|시|때|하|되|될|까지|여부|조건|기준|라고|라는|인지|단계))"
+#: What the source says before a state that is not yet reached: "If the band
+#: is still transparent", "not yet dry", "remains cloudy".
+_NOT_YET_STATE = re.compile(
+    r"(?:\bstill\b|\bnot\s+(?:yet\s+)?|\bno\s+longer\b|\bremains?\b|\bisn'?t\b|\bif\s+(?:the\s+)?\w+\s+is\s+still\b)"
+    r"[^.;]{0,24}$",
+    re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class EndpointWords:
+    """The observable states one step's source names as its endpoint (lane GE, decision 3).
+
+    Read off the analysis -- the repeat-until condition and the step's
+    expected result -- through the state lexicon: the English stems the
+    source writes, the Korean a researcher reports them in, and the states
+    the source names as not yet reached ("still transparent"). A step whose
+    source names no lexicon state has no words, and no utterance is read as
+    its endpoint; the yes/no question answers it instead.
+    """
+
+    positive_ko: tuple[str, ...] = ()
+    positive_en: tuple[str, ...] = ()
+    negative_ko: tuple[str, ...] = ()
+    negative_en: tuple[str, ...] = ()
+    paraphrases_ko: tuple[str, ...] = ()
+    #: The lexicon keys of the positive states, for a sentence about them.
+    positive_keys: tuple[str, ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not (self.positive_ko or self.positive_en or self.paraphrases_ko)
+
+
+def endpoint_words(texts: Sequence[str]) -> EndpointWords:
+    """The endpoint words these source sentences name."""
+
+    positive: dict[str, None] = {}
+    negative: dict[str, None] = {}
+    for text in texts:
+        folded = " ".join(str(text).split()).casefold()
+        for key, english, _korean, _paraphrases in _STATE_LEXICON:
+            for stem in english:
+                # The stem as a whole word with an ordinary ending: "destained",
+                # "dehydrating", "reddish" -- never "red" inside "reduction".
+                for match in re.finditer(
+                    rf"(?<![a-z]){re.escape(stem)}(?:e|ed|es|ing|s|ly|ish|dish|ness|er|ied|y)?(?![a-z])",
+                    folded,
+                ):
+                    before = folded[max(0, match.start() - 40):match.start()]
+                    if _NOT_YET_STATE.search(before):
+                        negative[key] = None
+                    else:
+                        positive[key] = None
+    for key in list(negative):
+        if key in positive:
+            del negative[key]
+    by_key = {key: (english, korean, paraphrases) for key, english, korean, paraphrases in _STATE_LEXICON}
+    positive_ko = tuple(dict.fromkeys(word for key in positive for word in by_key[key][1]))
+    negative_ko = tuple(dict.fromkeys(
+        word for key in negative for word in by_key[key][1] if word not in positive_ko
+    ))
+    return EndpointWords(
+        positive_ko=positive_ko,
+        positive_en=tuple(dict.fromkeys(stem for key in positive for stem in by_key[key][0])),
+        negative_ko=negative_ko,
+        negative_en=tuple(dict.fromkeys(stem for key in negative for stem in by_key[key][0])),
+        paraphrases_ko=tuple(dict.fromkeys(word for key in positive for word in by_key[key][2])),
+        positive_keys=tuple(positive),
+    )
+
+
+#: id(fixture) -> (weak reference to the fixture, {step index: its words}).
+#: Keyed by identity so a fixture's words are derived once; the weak
+#: reference tells a reused id apart from the fixture it was derived for.
+_ENDPOINT_WORDS_CACHE: dict[int, tuple["weakref.ReferenceType[CuratedProtocolFixture]", dict[int, EndpointWords]]] = {}
+
+
+def endpoint_words_for(fixture: CuratedProtocolFixture, step_label: str) -> EndpointWords:
+    """The endpoint words of the step with this source label, from the fixture alone."""
+
+    session = CuratedProtocolSession(fixture)
+    for index, step in enumerate(fixture.steps):
+        if step.source_label == step_label:
+            return session._endpoint_words(index)
+    return EndpointWords()
+
+
+def _alternation(words: Sequence[str]) -> str:
+    return "|".join(re.escape(word) for word in sorted(words, key=len, reverse=True))
+
+
 # "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
 _LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
 # A wish or a condition beside it ("탈색되면", "탈색이 됐으면 좋겠어",
@@ -2374,80 +3288,80 @@ def _endpoint_report_reading(key: str) -> str:
     return "positive"
 
 
-def _observation_predicate(step_label: str, transcript: str) -> str | None:
+def _observation_predicate(endpoint: EndpointWords | None, transcript: str) -> str | None:
     """Classify only explicit source-defined endpoint observations.
 
-    The phrases below do not invent a vision result: they preserve a user's
-    report and bind it to the source endpoint for the current step. Negative
-    patterns and question guards run first so phrases such as "not transparent"
-    or questions like "투명한가요?" never become a positive result by substring overlap.
-    A question, a hedge, or the source line read back is no report at all, and
-    a negation after a positive phrase makes it a negative one.
+    The frames below do not invent a vision result: they preserve a user's
+    report and bind it to the source endpoint for the current step, through
+    the words that step's source names (``EndpointWords``). Negative frames
+    and question guards run first so phrases such as "not transparent" or
+    questions like "투명한가요?" never become a positive result by substring
+    overlap. A question, a hedge, or the source line read back is no report
+    at all, and a negation after a positive phrase makes it a negative one.
+    A step with no endpoint words reads nothing.
     """
+
+    if endpoint is None or endpoint.empty:
+        return None
     key = _semantic_utterance_key(transcript)
-    if step_label in {"7", "9", "20"} and (
+    if (
         _reply_withholds_assent(transcript)
         or _SOURCE_RECITATION.search(" ".join(str(transcript).casefold().split()))
     ):
         return None
-    if step_label in {"7"}:
-        if re.search(
-            r"(?:투명한가요|투명한가\??|투명해져야\s*(?:하나요|해요|돼)|"
-            r"투명해지면\s*어떻게|is\s+it\s+transparent|should\s+it\s+be\s+transparent|"
-            r"투명해졌다고\s*말하면|탈색된\s*건가요|탈색된다는\s*(?:게|건)|"
-            r"의미|뜻|무슨|왜|알려|설명|meaning|what\s+does|explain)\??",
-            key,
-        ):
-            return None
-        if re.search(
-            r"(?:아직.*(?:색|색깔|염색|탈색).*(?:남아|안|있어|덜|남았)|"
-            r"투명하지\s*않|완전히\s*탈색되지\s*않|완전히\s*탈색된\s*건\s*아닌|"
-            r"still.*(?:stain|color)|not\s+(?:fully\s+)?(?:destained|transparent))",
-            key,
-        ):
-            return "negative"
-        if positive := re.search(
-            r"(?:완전히\s*탈색(?:됐|되었|되어|됐어|됐습니다|된|돼서)?|"
-            r"젤(?:이|은|이\s*(?:이제\s*)?)?\s*(?:이제\s*)?(?:완전히\s*)?투명(?:해|합니다|해졌어|해요|해졌습니다)|"
-            r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
-            r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
-            key,
-        ) or _STEP_7_SPOKEN_ENDPOINT.search(key):
-            # The negation right after the frame is the reading these frames
-            # always had; the whole-utterance reading below was added for the
-            # spoken wordings and then given to these too, since a negation
-            # before the frame ("탈색이 안 됐어 완전히 탈색됐어"), "아직" or a
-            # wish ("완전히 탈색되면") passed them as the endpoint reached.
-            if _frame_negated(key, positive):
-                return "negative"
-            reading = _endpoint_report_reading(key)
-            return None if reading == "unread" else reading
-    if step_label in {"9", "20"}:
-        if re.search(
-            r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
-            key,
-        ):
-            return None
-        if re.search(
-            r"(?:아직.*(?:투명|젖어|수분|건조)|흰색이\s*아니|"
-            r"not\s+(?:white|whitish|dehydrated|dry)|still\s+(?:clear|wet))",
-            key,
-        ):
-            return "negative"
-        if positive := re.search(
-            r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
-            r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
-            r"탈수(?:를|가)?\s*완료\s*(?:했|하였)" + _STATEMENT_END + r"|"
-            r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
-            key,
-        ):
-            # Read as a whole as at step 7: "안 됐어 흰색이야", "흰색이야
-            # 아직" and "흰색이 됐으면 좋겠어" passed as the endpoint reached.
-            if _frame_negated(key, positive):
-                return "negative"
-            reading = _endpoint_report_reading(key)
-            return None if reading == "unread" else reading
-    return None
+    words = _alternation(endpoint.positive_ko)
+    english = "|".join(re.escape(stem) for stem in endpoint.positive_en) or "(?!x)x"
+    if re.search(
+        rf"(?:(?:{words})(?:한가요|한가\??|해져야\s*(?:하나요|해요|돼)|해지면\s*어떻게|해졌다고\s*말하면|"
+        rf"된\s*건가요|된다는\s*(?:게|건))|is\s+it\s+(?:{english})|should\s+it\s+be\s+(?:{english})|"
+        r"의미|뜻|무슨|왜|알려|설명|meaning|what\s+does|explain)\??",
+        key,
+    ):
+        return None
+    not_yet = _alternation(endpoint.negative_ko)
+    not_yet_en = "|".join(re.escape(stem) for stem in endpoint.negative_en) or "(?!x)x"
+    colours = _alternation((*endpoint.positive_ko, *endpoint.negative_ko, "색", "색깔", "염색"))
+    still_wet = _alternation((*endpoint.negative_ko, "젖어", "수분", "축축", "촉촉"))
+    if re.search(
+        rf"(?:아직.*(?:{colours}).*(?:남아|남았|덜|안\s|안$|않|있어|젖어|수분)|아직.*(?:{still_wet})|"
+        rf"(?:{words})(?:하|되|돼)지\s*않|완전히\s*(?:{words})(?:되|돼)지\s*않|완전히\s*(?:{words})된\s*건\s*아닌|"
+        rf"(?:{words})(?:색|이|가)?\s*아니|"
+        + (rf"(?:{not_yet})|" if endpoint.negative_ko else "")
+        + rf"still.*(?:stain|colou?r|{not_yet_en})|not\s+(?:fully\s+)?(?:{english})[a-z]*)",
+        key,
+    ):
+        return "negative"
+    paraphrases = _alternation(endpoint.paraphrases_ko) or "(?!x)x"
+    frames = [
+        rf"완전히\s*(?:{words})(?:됐|되었|되어|됐어|됐습니다|된|돼서)?",
+        rf"(?:[가-힣]+(?:이|은|가|는)\s*)?(?:이제\s*)?(?:완전히\s*)?(?:{words})(?:해|합니다|해졌어|해요|해졌습니다|해져요)",
+        rf"(?:{words})(?:으로|로)\s*(?:바뀌었|바꼈|변했|변함)" + _STATEMENT_END,
+        rf"(?:{words})(?:이|가)?\s*(?:됐|되었)" + _STATEMENT_END,
+        rf"(?:{words})(?:이|가)?\s*(?:돼|되어)\s*있" + _STATEMENT_END,
+        rf"(?:{words})(?:된|이\s*된)?\s*상태(?:야|예요|에요|이에요|입니다|이다|임)(?=$|[\s.,!~])",
+        rf"(?:{words})(?:이야|이에요|예요|입니다|이다|임)(?=$|[\s.,!~])",
+        rf"(?:{words})(?:을|이|를|가)?\s*완료\s*(?:됐|되었|했|하였)" + _STATEMENT_END,
+        rf"(?:{words})\s*완료(?:야|예요|에요|요|입니다|이다|임)?"
+        r"(?=$|[.,!~]|\s+(?!전|후|시|때|하|되|될|까지|여부|조건|기준|라고|라는|인지|단계))",
+        rf"(?:{words})(?:어|어요|습니다|다|네요|네)(?=$|[\s.,!~])",
+        rf"(?:{paraphrases})",
+        rf"fully\s+(?:{english})[a-z]*",
+        rf"(?:is|looks?|turned|became)\s+(?:now\s+)?(?:{english})[a-z]*",
+    ]
+    if "destain" in endpoint.positive_en:
+        frames.append(r"colou?r\s+is\s+(?:now\s+)?gone")
+    positive = re.search("(?:" + "|".join(frames) + ")", key)
+    if positive is None:
+        return None
+    # A negation right after the frame, or anywhere in the reading of the
+    # whole utterance ("탈색이 안 됐어 완전히 탈색됐어"), makes it a negative;
+    # "아직" or a wish ("완전히 탈색되면") says neither, so it is asked again.
+    if _frame_negated(key, positive):
+        return "negative"
+    reading = _endpoint_report_reading(key)
+    return None if reading == "unread" else reading
+
+
 _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
         r"(?:완료|끝)(?:\s*조건|하려면|이라는\s*건)|"
@@ -2525,26 +3439,51 @@ _SOURCE_SILENT = re.compile(
 )
 
 
-def _entity_said(said: str) -> str | None:
-    """The first protocol entity named in ``said``, by the term table."""
+def _said_words(plan: Any) -> str:
+    """The plan's heard words with what was heard put back, for the Korean name an answer repeats."""
 
-    found = [
-        (match.start(), key)
-        for pattern, key in _TERM_QUESTION_PATTERNS
-        for match in [pattern.search(said)] if match is not None
-    ]
-    return min(found)[1] if found else None
+    heard = tuple(observed for observed, _label in (getattr(plan, "transcript_corrections", None) or ()))
+    return " ".join(((getattr(plan, "normalized_transcript", None) or ""), *heard)).strip()
 
 
-def _korean_name_said(entity: str, said: str) -> str | None:
-    """The Korean word the researcher used for ``entity`` ("탈색"), if any."""
+def _entity_said(said: str, vocabulary: "ProtocolVocabulary | None") -> str | None:
+    """The first protocol entity named in ``said``, heard through the protocol's vocabulary."""
 
-    for pattern, key in _TERM_QUESTION_PATTERNS:
-        if key != entity:
+    if vocabulary is None:
+        return None
+    _key, spans, _corrections = vocabulary.hear(_semantic_utterance_key(said))
+    return min(spans)[2] if spans else None
+
+
+def _korean_name_said(
+    entity: str, said: str, vocabulary: "ProtocolVocabulary | None" = None,
+) -> str | None:
+    """The Korean word the researcher used for ``entity`` ("탈색", "트립신"), if any."""
+
+    for form in _LAB_LEXICON_KOREAN.get(entity, ()):
+        if re.search(re.escape(form), said):
+            return form
+    term = vocabulary.term_for(entity) if vocabulary is not None else None
+    if term is None:
+        return None
+    tokens = said.split()
+    size = len(term.words)
+    for index in range(len(tokens) - size + 1):
+        window = tuple(tokens[index:index + size])
+        # Korean words, or a labelled reagent's Korean word with its label ("용액 B").
+        if not any(_hangul_word(token) is not None for token in window):
             continue
-        for match in pattern.finditer(said):
-            if re.search(r"[가-힣]", match.group(0)):
-                return match.group(0)
+        if not all(
+            _hangul_word(token) is not None or re.fullmatch(r"[A-Za-z0-9][가-힣]{0,2}", token)
+            for token in window
+        ):
+            continue
+        if term.hears(window) is not None:
+            return " ".join(
+                (_hangul_word(token) or _spoken_token(token).upper()) if _hangul_word(token) is None
+                else _hangul_word(token)
+                for token in window
+            )
     return None
 
 
@@ -2683,30 +3622,6 @@ def web_lookup_subject(transcript: str) -> str | None:
         return None
     return subject
 
-_TERM_QUESTION_PATTERNS = (
-    (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅|엠빅|암비크", re.I), "ambic"),
-    (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물|에이치\s*피\s*엘\s*씨\s*워터|에이치피엘씨\s*워터", re.I), "hplc_water"),
-    (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액|솔루션\s*a|솔루션\s*에이", re.I), "solution_a"),
-    (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액|솔루션\s*b|솔루션\s*비", re.I), "solution_b"),
-    (re.compile(r"acetonitrile|아세토니트릴|아세토나이트릴", re.I), "acetonitrile"),
-    (re.compile(r"gel\s*plug|젤\s*플러그|제트\s*플러그|젤\s*플럭", re.I), "gel_plug"),
-    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|(?:염색된\s*)?단백질\s*(?:겔|젤)\s*밴드|gel\s*band|(?:젤|겔)\s*(?:밴드|뱀드|뱄드|밸드|밴트)|단백질\s*밴드|염색된\s*밴드", re.I), "stained_protein_band"),
-    (re.compile(r"(?<![a-z0-9])(?:tube|microcentrifuge\s*tube|eppendorf|ep\s*tube)(?![a-z0-9])|튜브|마이크로센트리퓨즈\s*튜브|반응\s*튜브|원심분리\s*관|에펜도르프\s*튜브", re.I), "tube"),
-    (re.compile(r"(?<![a-z0-9])dtt(?![a-z0-9])|dithiothreitol|디티오트레이톨|디티티", re.I), "dtt"),
-    (re.compile(r"iodoacetamide|요오도아세트아미드|아이오도아세트아마이드|아이오도아세트아미드|이오도아세트아미드", re.I), "iodoacetamide"),
-    (re.compile(r"trypsin|트립신|트립씬", re.I), "trypsin"),
-    (re.compile(r"formic\s*acid|포름산|폼산", re.I), "formic_acid"),
-    (re.compile(r"(?<![a-z0-9])rpm(?![a-z0-9])|분당\s*회전", re.I), "rpm"),
-    (re.compile(r"incubat(?:e|ion)|배양", re.I), "incubation"),
-    (re.compile(r"contamination|오염|케라틴", re.I), "contamination"),
-    (re.compile(r"(?<![a-z0-9])sds[\s_-]*page(?![a-z0-9])|에스디에스[\s_-]*페이지|단백질\s*전기영동|겔\s*전기영동|polyacrylamide\s+gel\s+electrophoresis", re.I), "sds_page"),
-    (re.compile(r"electrophoresis|전기영동", re.I), "electrophoresis"),
-    (re.compile(r"coomassie(?:\s*blue)?|쿠마시(?:\s*블루)?|쿠마씨", re.I), "coomassie"),
-    (re.compile(r"destain(?:ing)?|탈색", re.I), "destaining"),
-    (re.compile(r"centrifuge|원심분리기|원심분리", re.I), "centrifuge"),
-    (re.compile(r"pipette|파이펫|피펫", re.I), "pipette"),
-    (re.compile(r"mass\s*spectrometr(?:y|ic)|질량분석", re.I), "mass_spectrometry"),
-)
 _AGENT_META_PATTERNS = (
     re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:의)?\s*(?:목적|역할|목표).*(?:뭐|무엇|알려|설명|있어)"),
     re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:는|가|는\s*대체)?\s*(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|무슨\s*일|어떤\s*일|기능이|역할이).*(?:뭐|무엇|알려|설명|있어|해)"),
@@ -4406,9 +5321,18 @@ _AUDIO_RECOVERY_PATTERNS = (
     re.compile(r"^(?:방금\s*)?(?:답변|음성).*(?:다시\s*)?(?:들려|재생해)"),
     re.compile(r"^(?:there(?:'|’)s\s+no\s+sound|i\s+can(?:'|’)t\s+hear(?:\s+the\s+answer)?|replay\s+that)$"),
 )
+#: A state the source names as an endpoint, asked what it means (lane GE:
+#: any lexicon state, the step found by the session).
 _EXPECTED_RESULT_PATTERNS = (
-    re.compile(r"(?:완전히\s*탈색|fully\s+destained).*(?:의미|무슨\s*뜻|설명|mean)"),
-    re.compile(r"(?:투명|transparent).*(?:젤|gel).*(?:의미|설명|mean)"),
+    re.compile(
+        r"(?:완전히\s*)?(?:" + "|".join(re.escape(word) for word in _STATE_KOREAN_WORDS_LONG)
+        + r")[가-힣]*.*(?:의미|무슨\s*뜻|설명|mean)"
+    ),
+    re.compile(
+        r"(?:fully\s+)?(?:" + "|".join(re.escape(stem) for stem in _STATE_ENGLISH_STEMS_LONG)
+        + r")[a-z]*.*(?:의미|설명|mean|explain)",
+        re.IGNORECASE,
+    ),
 )
 _UNRELIABLE_TRANSCRIPT_PATTERNS = (
     re.compile(r"^[\u3040-\u30ff]{2,12}$"),
@@ -4469,17 +5393,27 @@ _CANCEL_READONLY_PATTERNS = (
     re.compile(r"^(?:방금\s*)?(?:검색|자료\s*확인)(?:을|를)?\s*취소해$"),
     re.compile(r"^cancel\s+(?:that\s+)?(?:search|lookup)$"),
 )
+#: Words that make a question one about the protocol. General lab words only;
+#: a protocol's own terms count through ``ProtocolVocabulary`` (lane GE).
 _PROTOCOL_RELATED_TERMS = frozenset({
     "단계", "프로토콜", "절차", "실험", "용액", "시약", "재료", "장비",
     "주의", "주의사항", "안전", "안전하게", "위험", "경고", "온도", "시간", "겔", "밴드", "세척",
-    "탈색", "탈수", "ambic", "ammonium bicarbonate", "hplc water",
-    "hplc", "acetonitrile", "solution", "reagent", "성분", "구성", "역할",
-    "물질", "일반 물", "증류수", "왜", "bicarbonate", "중탄산", "케라틴",
-    "protocol", "procedure", "step", "gel", "destain", "dehydrat",
+    "solution", "reagent", "성분", "구성", "역할",
+    "물질", "일반 물", "증류수", "왜",
+    "protocol", "procedure", "step", "gel",
     "precaution", "warning", "equipment", "material", "temperature",
     "rpm", "회전", "교반", "배양", "incubat", "contamination", "단위",
-    "설정", "setting", "lc-ms", "lc ms", "grade", "등급", "색", "색깔",
+    "설정", "setting", "grade", "등급", "색", "색깔",
 })
+
+
+def _names_a_protocol_word(key: str, vocabulary: "ProtocolVocabulary | None") -> bool:
+    """Whether the utterance says a word of the active protocol's own vocabulary."""
+
+    if vocabulary is None:
+        return False
+    _heard, spans, _corrections = vocabulary.hear(key)
+    return bool(spans)
 _SAFETY_RELATED_TERMS = frozenset({
     "안전", "안전하게", "주의", "주의사항", "위험", "경고",
     "오염", "피해야", "safety", "safe", "precaution", "hazard",
@@ -4558,10 +5492,19 @@ _NEXT_INFORMATION_PATTERNS = (
         r"^(?:(?:이제|그럼|혹시|그)\s*)?다음(?:\s*(?:단계|스텝|거|것))?\s*"
         r"(?:는|은|(?:는|은|이|가)?\s*(?:뭐야|뭐예요|뭐에요|뭐지|뭔데|뭐|무엇|뭐였지|뭐였더라))$",
     ),
+    # Lane GE, decision 1 (2026-10-11): "다음 단계로 안내해 줘" describes the
+    # next step like "다음 단계 안내해 줘" does -- the "로" does not make it a
+    # move. Only moving words ("다음", "넘어가", "다음 단계로 가자", "다음
+    # 단계로 진행해 줘") change state; a request to be told, read or guided
+    # changes nothing.
     re.compile(
         r"^(?:(?:이제|그럼|혹시|그)\s*)?다음(?:\s*(?:단계|스텝|거|것))?"
-        r"(?:\s*(?:을|를|에\s*대해(?:서)?))?\s*"
-        r"(?:말해|읽어|안내해|알려)\s*(?:줘|줄래|주세요|주라|줄\s*수\s*있어)$",
+        r"(?:\s*(?:을|를|으로|로|에\s*대해(?:서)?))?\s*"
+        r"(?:말해|읽어|안내해|알려)\s*(?:줘|줄래|주세요|주라|줄\s*수\s*있어|주실래요|주시겠어요)$",
+    ),
+    re.compile(
+        r"^(?:(?:이제|그럼|혹시|그)\s*)?다음(?:\s*(?:단계|스텝))?(?:\s*(?:으로|로))?\s*"
+        r"안내\s*(?:좀\s*)?부탁(?:해|해요|합니다|드려요|드립니다)$",
     ),
     re.compile(
         r"^(?:(?:이제|그럼|혹시|그)\s*)?다음에(?:는)?\s*(?:뭐|무엇을?|뭘)\s*"
@@ -4630,14 +5573,28 @@ _WORKFLOW_CUE = re.compile(
     re.IGNORECASE,
 )
 _TERM_QUESTION_CUE = re.compile(
-    r"(?:뭐|무엇|무슨|왜|어떻게|어떤|설명|알려|의미|뜻|역할|안전|위험|주의|"
-    r"\?|what|why|how|explain|mean|role|safe)",
+    r"(?:뭐|무엇|무슨|왜|어떻게|어떤|설명|알려|의미|뜻|역할|안전|위험|주의|차이|비교|"
+    r"\?|what|why|how|explain|mean|role|safe|differ|compar|versus|\bvs\b)",
+    re.IGNORECASE,
+)
+
+
+_DEVIATION_CUE = re.compile(
+    r"(?:대신|말고|바꿔|써도|사용해도|넣어도|괜찮|가능|빼도|생략|instead|substitut|replace|skip)",
     re.IGNORECASE,
 )
 
 
 def _asks_about_a_term(key: str) -> bool:
     return bool(_TERM_QUESTION_CUE.search(key)) and not _WORKFLOW_CUE.search(key)
+
+
+def _names_a_term_to_act_on(key: str) -> bool:
+    """A question about a term, or a request to use something else for it."""
+
+    return _asks_about_a_term(key) or (
+        bool(_DEVIATION_CUE.search(key)) and not _WORKFLOW_CUE.search(key)
+    )
 
 
 def normalize_scientific_request(
@@ -4650,15 +5607,16 @@ def normalize_scientific_request(
 ]:
     """Resolve ordered known entities while preserving auditable corrections.
 
-    The mis-hearing repairs below ("엠빅" -> AMBIC, "아세토나이트릴" ->
-    acetonitrile) and the reagent entities they lead to are the in-gel
-    document's. With ``protocol_vocabulary`` they apply only to a substance
-    that protocol's text contains, so a protocol without AMBIC never hears
-    it. ``None`` -- a caller with no active protocol -- keeps every rule.
+    The words are heard through the active protocol's own vocabulary (lane
+    GE, decision 3): a Korean word that sounds like one of its terms becomes
+    that term as the protocol spells it ("트립씬" -> trypsin, "엠빅" ->
+    AMBIC), a one-letter miss of an English term in the inventory becomes the
+    term ("trypsun" -> trypsin), and a lexicon lab word said in Korean becomes
+    its English where the protocol writes it ("탈색" -> destain). Numbers are
+    never touched. An entity is then a term or lexicon word the request names,
+    but only in a question about it: "ethanol 준비됐어 다음으로" names none.
+    ``None`` -- a caller with no active protocol -- hears nothing.
     """
-
-    def present(entity: str) -> bool:
-        return protocol_vocabulary is None or protocol_vocabulary.mentions_entity(entity)
 
     raw = _semantic_utterance_key(transcript)
     key = re.sub(
@@ -4667,56 +5625,12 @@ def normalize_scientific_request(
         raw,
     )
     corrections: list[tuple[str, str]] = []
-
-    def repair(pattern: str, replacement: str, label: str, entity: str) -> None:
-        nonlocal key
-        if not present(entity):
-            return
-        match = re.search(pattern, key)
-        if match is None:
-            return
-        observed = match.group(0)
-        key = re.sub(pattern, replacement, key)
-        if observed.casefold() != label.casefold():
-            corrections.append((observed, label))
-
-    repair(r"(?<![a-z0-9])anbi[-\s]*c?(?![a-z0-9])", "ambic", "AMBIC", "ambic")
-    repair(r"(?<![a-z0-9])am\s+bic(?![a-z0-9])", "ambic", "AMBIC", "ambic")
-    repair(r"(?<![a-z0-9])jel\s+tug(?![a-z0-9])", "gel plug", "gel plug", "gel_plug")
-    repair(r"제트\s*플러그", "젤 플러그", "gel plug", "gel_plug")
-    repair(
-        r"(?:염색된\s*)?단백질\s*(?:뱀드|뱄드|밸드|밴트)", "단백질 밴드", "단백질 밴드",
-        "stained_protein_band",
-    )
-    repair(r"에이\s*엠\s*빅", "ambic", "AMBIC", "ambic")
-    repair(r"엠빅|암비크", "ambic", "AMBIC", "ambic")
-    repair(r"트립씬", "트립신", "trypsin", "trypsin")
-    repair(r"폼산", "포름산", "formic acid", "formic_acid")
-    repair(
-        r"아이오도아세트아마이드|이오도아세트아미드", "아이오도아세트아미드",
-        "iodoacetamide", "iodoacetamide",
-    )
-    repair(r"디티티", "dtt", "DTT", "dtt")
-    if present("ambic"):
-        key = re.sub(r"에이\s*엠\s*빅", "ambic", key)
-    key = re.sub(
-        r"솔루션\s*([ab])",
-        lambda match: (
-            f"solution {match.group(1)}"
-            if present(f"solution_{match.group(1)}") else match.group(0)
-        ),
-        key,
-    )
-    hplc_spaced = (
-        re.search(r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)", key)
-        if present("hplc_water") else None
-    )
-    if hplc_spaced is not None:
-        corrections.append((hplc_spaced.group(0), "HPLC water"))
-        key = re.sub(
-            r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)",
-            "hplc water", key,
-        )
+    spans: tuple[tuple[int, int, str], ...] = ()
+    if protocol_vocabulary is not None:
+        # The active protocol's own terms are heard first ("h plc water" ->
+        # HPLC water); the one-letter repair below takes what is left.
+        key, spans, heard = protocol_vocabulary.hear(key)
+        corrections.extend(heard)
     inventory = _scientific_entity_inventory(entity_inventory)
     inventory_tokens = {
         token for entity in inventory for token in entity.split()
@@ -4730,65 +5644,46 @@ def normalize_scientific_request(
                 continue
             if len(token) >= 3 and _edit_distance(token, canonical_token) == 1:
                 candidates.append((token, canonical_token))
-    if "hplc water" in inventory and re.search(r"(?<![a-z])plc\s*(?:water|워터)", key):
-        candidates.append(("plc", "hplc"))
     unique = tuple(dict.fromkeys(candidates))
     correction_note = None
     if len(unique) == 1:
         observed, replacement = unique[0]
         key = re.sub(rf"(?<![a-z0-9]){re.escape(observed)}(?![a-z0-9])", replacement, key)
         corrections.append((observed, replacement.upper()))
-    matches: list[tuple[int, int, str]] = []
-    for pattern, name in _TERM_QUESTION_PATTERNS:
-        if not present(name):
-            continue
-        for match in pattern.finditer(key):
-            matches.append((match.start(), match.end(), name))
-    if protocol_vocabulary is not None and _asks_about_a_term(key):
-        # The active protocol's own terms -- its material and equipment
-        # names, labelled reagents and defined abbreviations -- are entities
-        # too, named as the protocol spells them, so a question about any
-        # registered PDF's material is answered from that PDF. Only a
-        # question: "ethanol 준비됐어 다음으로" keeps reaching the semantic
-        # fallback as before.
-        claimed = {
-            surface for surfaces in _ENTITY_SOURCE_ALIASES.values()
-            for surface in surfaces
-        }
-        for term in protocol_vocabulary.terms:
-            folded = " ".join(term.text.split()).casefold()
-            if folded in claimed or len(folded) < 3:
-                continue
-            match = _term_pattern(term.text).search(key)
-            if match is not None:
-                matches.append((match.start(), match.end(), term.text))
-    # One stretch of the request names one entity: "microcentrifuge" is not
-    # also a "centrifuge", and a span the reviewed table already names keeps
-    # that name.
-    kept = [
-        item for index, item in enumerate(matches)
-        if not any(
-            (other[0] <= item[0] and item[1] <= other[1])
-            and ((other[1] - other[0]) > (item[1] - item[0]) or other_index < index)
-            for other_index, other in enumerate(matches)
-            if other_index != index
-        )
-    ]
-    entities = tuple(dict.fromkeys(
-        name for _, _, name in sorted(kept, key=lambda item: item[0])
-    ))
-    labels = {
-        "ambic": "AMBIC", "hplc_water": "HPLC water",
-        "solution_a": "Solution A", "solution_b": "Solution B",
-        "acetonitrile": "acetonitrile", "gel_plug": "gel plug",
-        "stained_protein_band": "stained protein band",
-        "dtt": "DTT", "iodoacetamide": "iodoacetamide",
-        "trypsin": "trypsin", "formic_acid": "formic acid",
-        "rpm": "rpm", "incubation": "incubation",
-        "contamination": "contamination",
-    }
-    if key != raw and not corrections and entities:
-        corrections.append((raw, labels.get(entities[0], entities[0])))
+    vocabulary = protocol_vocabulary
+    if vocabulary is not None:
+        if unique:
+            key, spans, _again = vocabulary.hear(key)
+    elif inventory:
+        # No active protocol: the caller's own entities are the vocabulary.
+        vocabulary = ProtocolVocabulary.from_inventory(inventory)
+        key, spans, heard = vocabulary.hear(key)
+        corrections.extend(heard)
+    entities: tuple[str, ...] = ()
+    if inventory and _names_a_term_to_act_on(key):
+        spans = (*spans, *(
+            (match.start(), match.end(), (
+                term.entity if vocabulary is not None and (term := vocabulary.term_for(entity)) is not None
+                else _entity_name(entity)
+            ))
+            for entity in inventory
+            for match in [_term_pattern(entity).search(key)] if match is not None
+        ))
+    if spans and _names_a_term_to_act_on(key):
+        # One stretch of the request names one entity: a span inside a
+        # longer one ("microcentrifuge tube" over "tube") is that entity.
+        kept = [
+            item for index, item in enumerate(spans)
+            if not any(
+                (other[0] <= item[0] and item[1] <= other[1])
+                and ((other[1] - other[0]) > (item[1] - item[0]) or other_index < index)
+                for other_index, other in enumerate(spans)
+                if other_index != index
+            )
+        ]
+        entities = tuple(dict.fromkeys(
+            name for _, _, name in sorted(kept, key=lambda item: item[0])
+        ))
     corrections = list(dict.fromkeys(corrections))
     if corrections:
         correction_note = " / ".join(
@@ -4823,7 +5718,7 @@ def question_dimensions(value: str) -> tuple[str, ...]:
         ("difference", ("차이", "다르", "다른", "difference", "versus")),
         ("preparation", ("준비", "만들", "prepare", "make")),
         ("safety", tuple(_SAFETY_RELATED_TERMS)),
-        ("expected_result", ("결과", "투명", "탈색", "result", "destain")),
+        ("expected_result", ("결과", "result", *_STATE_KOREAN_WORDS_LONG, *_STATE_ENGLISH_STEMS_LONG)),
         ("visual", ("사진", "이미지", "그림", "photo", "image", "visual")),
     )
     for name, terms in patterns:
@@ -5978,9 +6873,12 @@ def resolve_question_focus(
     # Relative modifier clause check:
     # Pattern: [Context Entity] (이|가|를|을)? (들어있는|담긴|담은|사용하는|안에 있는|포함된|넣은|넣어둔) [Focus Entity]
     entity_spans: list[tuple[int, int, str]] = []
-    for pattern, name in _TERM_QUESTION_PATTERNS:
-        if name in entities:
+    for name in entities:
+        for pattern in _entity_patterns(name):
             for match in pattern.finditer(key):
+                entity_spans.append((match.start(), match.end(), name))
+        for form in _LAB_LEXICON_KOREAN.get(name, ()):
+            for match in re.finditer(re.escape(form), key):
                 entity_spans.append((match.start(), match.end(), name))
 
     entity_spans.sort(key=lambda s: s[0])
@@ -6065,6 +6963,7 @@ def classify_curated_control_intent(
     current_step: int | str | None = None,
     max_steps: int = 25,
     protocol_vocabulary: ProtocolVocabulary | None = None,
+    endpoint_step_for: Callable[[str], str | None] | None = None,
 ) -> CuratedControlIntent:
     """Classify reviewed workflow shapes before any knowledge or model route."""
 
@@ -6510,7 +7409,10 @@ def classify_curated_control_intent(
             intent_kind="expected_result_explanation",
             action=CuratedProtocolAction.FULL_DETAIL,
             requested_followup="explain_expected_result",
-            target_step="7",
+            target_step=(
+                (endpoint_step_for(key) if endpoint_step_for is not None else None)
+                or "authoritative_current_step"
+            ),
             question_kind="expected_result",
             detail_level="detailed",
             language=language,
@@ -6721,7 +7623,9 @@ def classify_curated_control_intent(
             requested_entities=normalized_entities,
             resolved_entity=normalized_entity,
         )
-    if any(term in key for term in _PROTOCOL_RELATED_TERMS):
+    if any(term in key for term in _PROTOCOL_RELATED_TERMS) or _names_a_protocol_word(
+        key, protocol_vocabulary,
+    ):
         question_kind = (
             "safety"
             if any(term in key for term in _SAFETY_RELATED_TERMS)
@@ -7638,67 +8542,45 @@ def canonical_research_plan(entity_key: str) -> dict[str, Any]:
     }
 
 
-#: How the protocol text may spell an entity the request inventory names.
-#: Lower-case surfaces, matched against the source's own statements; a
-#: surface only finds a statement the active PDF actually contains, so the
-#: table names spellings, never what any one protocol does with them.
+#: How the protocol text may spell a lexicon entity ("incubat" for incubate
+#: and incubation). A protocol's own term is spelled as its key says; its
+#: defined long form comes from the vocabulary (``_entity_surfaces``).
 _ENTITY_SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
-    "ambic": ("ambic", "ammonium bicarbonate"),
-    "hplc_water": ("hplc water", "hplc"),
-    "solution_a": ("solution a",),
-    "solution_b": ("solution b",),
-    "acetonitrile": ("acetonitrile",),
-    "gel_plug": ("gel plug", "plug of a stained protein band"),
-    "stained_protein_band": (
-        "stained protein band", "protein band", "gel band", "band",
-    ),
-    "tube": ("microcentrifuge tube", "tube"),
-    "dtt": ("dtt", "dithiothreitol"),
-    "iodoacetamide": ("iodoacetamide",),
-    "trypsin": ("trypsin",),
-    "formic_acid": ("formic acid", "formic"),
-    "rpm": ("rpm",),
-    "incubation": ("incubat",),
-    "contamination": ("contaminat", "keratin"),
-    "sds_page": ("sds-page", "sds page", "polyacrylamide gel"),
-    "electrophoresis": ("electrophoresis",),
-    "coomassie": ("coomassie",),
-    "destaining": ("destain",),
-    "centrifuge": ("centrifug",),
-    "pipette": ("pipett",),
-    "mass_spectrometry": ("mass spectrometr", "mass spec"),
+    key: english for key, english, _, _ in _LAB_LEXICON
 }
-
-#: The named solutions a definition statement can be found for.
-_SOLUTION_SURFACES = {"solution_a": "solution a", "solution_b": "solution b"}
-
-#: The spelling to fall back on when the active PDF does not use the entity.
-_ENTITY_FALLBACK_LABELS = {
-    "ambic": "AMBIC", "hplc_water": "HPLC water",
-    "solution_a": "Solution A", "solution_b": "Solution B",
-    "dtt": "DTT", "formic_acid": "formic acid", "gel_plug": "gel plug",
-    "stained_protein_band": "stained protein band",
-}
-
-
+#: A labelled reagent the source defines ("Solution A: ...", "Buffer 2 is ...").
+_LABELLED_REAGENT_KEY = re.compile(r"(?:solution|buffer|reagent)_[a-z0-9]")
 #: Surfaces that are word stems ("incubat" for incubate/incubation); every
 #: other surface must match as whole words, so "ethanol" is not "methanol"
 #: and "PBS" is not "DPBS".
 _ENTITY_STEMS = frozenset({
-    "incubat", "contaminat", "centrifug", "pipett", "mass spectrometr", "destain",
+    surface for _, english, _, stem in _LAB_LEXICON if stem for surface in english
 })
 
 
-def _entity_surfaces(entity: str) -> tuple[str, ...]:
-    return _ENTITY_SOURCE_ALIASES.get(
-        entity, (" ".join(entity.replace("_", " ").split()).casefold(),)
-    )
+def _entity_surfaces(
+    entity: str, vocabulary: "ProtocolVocabulary | None" = None,
+) -> tuple[str, ...]:
+    """How the source may spell ``entity``: its key in words, the lexicon's
+    surfaces, and the long form the protocol defines it with."""
+
+    own = " ".join(entity.replace("_", " ").split()).casefold()
+    surfaces = _ENTITY_SOURCE_ALIASES.get(entity, (own,))
+    if vocabulary is not None:
+        term = vocabulary.term_for(entity)
+        if term is not None:
+            surfaces = (term.text.casefold(), *surfaces)
+        surfaces = (*surfaces, *(form.casefold() for form in vocabulary.long_forms(entity)))
+    return tuple(dict.fromkeys(surfaces))
 
 
-def _entity_patterns(entity: str) -> tuple[re.Pattern[str], ...]:
+def _entity_patterns(
+    entity: str, vocabulary: "ProtocolVocabulary | None" = None,
+) -> tuple[re.Pattern[str], ...]:
     patterns = []
-    for surface in _entity_surfaces(entity):
-        words = r"\s+".join(re.escape(word) for word in surface.split())
+    for surface in _entity_surfaces(entity, vocabulary):
+        # A hyphen and a space are one joint: "Tris-HCl buffer" is tris_hcl_buffer.
+        words = r"[\s-]+".join(re.escape(word) for word in re.split(r"[\s-]+", surface) if word)
         tail = r"[a-z]*" if surface in _ENTITY_STEMS else r"(?:e?s)?"
         patterns.append(re.compile(
             rf"(?<![0-9A-Za-z]){words}{tail}(?![0-9A-Za-z])", re.IGNORECASE
@@ -7706,15 +8588,19 @@ def _entity_patterns(entity: str) -> tuple[re.Pattern[str], ...]:
     return tuple(patterns)
 
 
-def _names_entity(text: str, entity: str) -> bool:
+def _names_entity(
+    text: str, entity: str, vocabulary: "ProtocolVocabulary | None" = None,
+) -> bool:
     derived = _derived_source_text(text)
-    return any(pattern.search(derived) for pattern in _entity_patterns(entity))
+    return any(pattern.search(derived) for pattern in _entity_patterns(entity, vocabulary))
 
 
-def _source_spelling(entity: str, texts: tuple[str, ...]) -> str | None:
+def _source_spelling(
+    entity: str, texts: tuple[str, ...], vocabulary: "ProtocolVocabulary | None" = None,
+) -> str | None:
     """The entity as the protocol itself writes it, from the first statement naming it."""
 
-    for pattern in _entity_patterns(entity):
+    for pattern in _entity_patterns(entity, vocabulary):
         for text in texts:
             match = pattern.search(_derived_source_text(text))
             if match:
@@ -9073,36 +9959,20 @@ class CuratedProtocolSession:
         }
 
     def _entity_inventory(self) -> tuple[str, ...]:
-        indexes = {
+        """The terms the steps around the current one use, as the protocol
+        spells them, with its materials and equipment: what a one-letter miss
+        in English is repaired toward (lane GE, decision 3)."""
+
+        nearby = {
             index for index in (
                 self.current_index - 1, self.current_index,
                 self.current_index + 1,
             ) if 0 <= index < len(self.fixture.steps)
         }
-        text = " ".join(
-            fact.text.casefold()
-            for index in indexes
-            for fact in self.fixture.facts_for_step(index)
-        )
-        aliases = {
-            "ambic": ("ambic", "ammonium bicarbonate"),
-            "hplc water": ("hplc water",),
-            "solution a": ("solution a",),
-            "solution b": ("solution b",),
-            "acetonitrile": ("acetonitrile",),
-            "gel plug": ("gel plug",),
-            "stained protein band": ("stained protein band",),
-            "dtt": ("dtt", "dithiothreitol"),
-            "iodoacetamide": ("iodoacetamide",),
-            "trypsin": ("trypsin",),
-            "formic acid": ("formic acid", "formic"),
-            "rpm": ("rpm",),
-            "incubation": ("incubat",),
-            "contamination": ("contaminat", "오염"),
-        }
         present = [
-            entity for entity, terms in aliases.items()
-            if any(term in text for term in terms)
+            term.text.casefold()
+            for term in self._protocol_vocabulary().terms
+            if term.resource or term.step_indexes & nearby
         ]
         return tuple(dict.fromkeys((*present, *self._recent_verified_entities)))
 
@@ -10702,11 +11572,12 @@ class CuratedProtocolSession:
             return said
         entity = getattr(intent, "resolved_entity", None) or getattr(intent, "requested_entity", None)
         if entity:
-            korean = _korean_name_said(entity, _utterance_key(transcript))
+            korean = _korean_name_said(entity, _utterance_key(transcript), self._protocol_vocabulary())
             if korean:
                 return korean
             spelled = _source_spelling(
                 entity, tuple(fact.text for fact in self.fixture.facts_for_step(self.current_index)),
+                self._protocol_vocabulary(),
             )
             return spelled or entity.replace("_", " ")
         return "이 단계 내용"
@@ -12899,9 +13770,10 @@ class CuratedProtocolSession:
         """
 
         steps = self.fixture.steps
+        vocabulary = self._protocol_vocabulary()
 
         def names(fact: CuratedProtocolFact) -> bool:
-            return _names_entity(fact.text, entity)
+            return _names_entity(fact.text, entity, vocabulary)
 
         # A step's own statements, not the material rows bound to it.
         mentions: list[tuple[int, CuratedProtocolFact]] = [
@@ -12910,7 +13782,7 @@ class CuratedProtocolSession:
             for fact in self.fixture.facts_for_step(index)
             if fact.kind not in {"material", "equipment"} and names(fact)
         ]
-        if entity in _SOLUTION_SURFACES:
+        if _LABELLED_REAGENT_KEY.fullmatch(_entity_key(entity)) is not None:
             # Where the source defines a named solution is where it is
             # introduced, whichever step names it first.
             defining = self._solution_definition(entity)
@@ -12935,11 +13807,7 @@ class CuratedProtocolSession:
         materials = tuple(fact for fact in overview if names(fact))
         supplied = tuple(fact for fact in facts if names(fact))
         texts = tuple(fact.text for fact in (*supplied, *(f for _, f in mentions), *materials))
-        label = (
-            _source_spelling(entity, texts)
-            or _ENTITY_FALLBACK_LABELS.get(entity)
-            or entity.replace("_", " ")
-        )
+        label = _source_spelling(entity, texts, vocabulary) or vocabulary.label(entity)
         if not mentions and not materials:
             text = (
                 f"활성 프로토콜 원문에서 {label}에 대한 내용을 찾지 못했습니다. "
@@ -12949,7 +13817,7 @@ class CuratedProtocolSession:
                 "Please consult approved reference materials."
             )
             return EntitySourceAnswer(entity, label, text, text, (), False)
-        spoken_name = _korean_name_said(entity, said)
+        spoken_name = _korean_name_said(entity, said, vocabulary)
         named = f"{spoken_name}({label})" if spoken_name else label
         topic = f"{named}{_josa(spoken_name or label, '은', '는')}"
         defined_as = _source_abbreviation(label, texts)
@@ -13021,9 +13889,9 @@ class CuratedProtocolSession:
         is/contains/made with ..." -- not a line that only uses it.
         """
 
-        surface = _SOLUTION_SURFACES.get(entity)
-        if surface is None:
+        if _LABELLED_REAGENT_KEY.fullmatch(_entity_key(entity)) is None:
             return None
+        surface = _entity_key(entity).replace("_", " ")
         name = rf"(?<![a-z0-9]){surface}(?![a-z0-9])"
         defines = re.compile(
             rf"{name}\s*[:=]|\bprepare\b[^.]*{name}|"
@@ -13186,7 +14054,7 @@ class CuratedProtocolSession:
             )
             if not found.found:
                 continue
-            composition = entity in _SOLUTION_SURFACES
+            composition = _LABELLED_REAGENT_KEY.fullmatch(_entity_key(entity)) is not None
             local = (
                 self._solution_definition(entity) is not None if composition
                 else found.defined_as is not None
@@ -13642,8 +14510,9 @@ class CuratedProtocolSession:
             self.fixture.steps[self.current_index].instruction_source_text
         ).casefold()
         named_here = tuple(
-            name for name, surface in _SOLUTION_SURFACES.items()
-            if re.search(rf"(?<![a-z0-9]){surface}(?![a-z0-9])", current_text)
+            term.entity for term in self._protocol_vocabulary().terms
+            if _LABELLED_REAGENT_KEY.fullmatch(term.key) is not None
+            and re.search(rf"(?<![a-z0-9]){re.escape(term.text.casefold())}(?![a-z0-9])", current_text)
         )
         if len(named_here) != 1:
             return None
@@ -14022,6 +14891,7 @@ class CuratedProtocolSession:
             current_step=self.current_index + 1,
             max_steps=len(self.fixture.steps),
             protocol_vocabulary=self._protocol_vocabulary(),
+            endpoint_step_for=self._step_naming_state,
         )
 
     @property
@@ -14321,24 +15191,9 @@ class CuratedProtocolSession:
             )
         selected: list[CuratedProtocolFact] = []
         seen: set[tuple[str, str]] = set()
-        alias_map = {
-            "ambic": ("ambic", "ammonium bicarbonate"),
-            "hplc_water": ("hplc water",),
-            "solution_a": ("solution a",),
-            "solution_b": ("solution b",),
-            "acetonitrile": ("acetonitrile",),
-            "gel_plug": ("gel plug", "plug of a stained protein band"),
-            "stained_protein_band": ("stained protein band", "gel band"),
-            "dtt": ("dtt", "dithiothreitol"),
-            "iodoacetamide": ("iodoacetamide",),
-            "trypsin": ("trypsin",),
-            "formic_acid": ("formic acid", "formic"),
-            "rpm": ("rpm",),
-            "incubation": ("incubat",),
-            "contamination": ("contaminat", "오염"),
-        }
+        vocabulary = self._protocol_vocabulary()
         aliases = tuple(
-            alias for entity in entities for alias in alias_map.get(entity, ())
+            alias for entity in entities for alias in _entity_surfaces(entity, vocabulary)
         )
         for index in sorted(indexes):
             step = self.fixture.steps[index]
@@ -14408,7 +15263,7 @@ class CuratedProtocolSession:
                         if claim.target_type is ClaimTargetType.ENTITY:
                             summaries.append(self.entity_source_answer(
                                 claim.target_id, language=language, facts=facts,
-                                said=plan.normalized_transcript or "",
+                                said=_said_words(plan),
                             ).spoken(alone=len(entity_claims) == 1 and len(visible) == 1))
                             continue
                         if claim.local_answer:
@@ -14478,7 +15333,7 @@ class CuratedProtocolSession:
         answers = tuple(
             self.entity_source_answer(
                 entity, language=language, facts=facts,
-                said=plan.normalized_transcript or "",
+                said=_said_words(plan),
             )
             for entity in entities
         )
@@ -15024,6 +15879,58 @@ class CuratedProtocolSession:
             return False
         return step_id not in self._endpoint_observations
 
+    def _endpoint_words(self, index: int) -> EndpointWords:
+        """The endpoint words of the step at ``index``: the repeat-until
+        sentence written there and the step's expected results (lane GE)."""
+
+        cache = _ENDPOINT_WORDS_CACHE.get(id(self.fixture))
+        if cache is None or cache[0]() is not self.fixture:
+            cache = (weakref.ref(self.fixture), {})
+            _ENDPOINT_WORDS_CACHE[id(self.fixture)] = cache
+        found = cache[1].get(index)
+        if found is None:
+            if not 0 <= index < len(self.fixture.steps):
+                found = EndpointWords()
+            else:
+                step = self.fixture.steps[index]
+                interval = self.repetition_anchored_at(step.step_id)
+                texts: list[str] = []
+                if interval is not None:
+                    texts.append(str(interval.get("source_text") or ""))
+                    texts.append(str(interval.get("condition_source_text") or ""))
+                    texts.extend(
+                        fact.text for fact in self.fixture.facts_for_step(index)
+                        if fact.kind == "expected_result"
+                    )
+                    texts.append(step.instruction_source_text)
+                found = endpoint_words(texts) if interval is not None else EndpointWords()
+            cache[1][index] = found
+        return found
+
+    def _endpoint_words_for_label(self, step_label: str | None) -> EndpointWords:
+        for index, step in enumerate(self.fixture.steps):
+            if step.source_label == (step_label or ""):
+                return self._endpoint_words(index)
+        return EndpointWords()
+
+    def _step_naming_state(self, key: str) -> str | None:
+        """The label of the step whose endpoint words the utterance names,
+        the current step first; for "완전히 탈색됐다는 게 무슨 뜻이야?"."""
+
+        order = [self.current_index, *range(len(self.fixture.steps))]
+        for index in dict.fromkeys(order):
+            if not 0 <= index < len(self.fixture.steps):
+                continue
+            words = self._endpoint_words(index)
+            if any(
+                word in key for word in (*words.positive_ko, *words.negative_ko)
+                if len(word.replace(" ", "")) >= 2
+            ) or any(
+                re.search(rf"(?<![a-z]){re.escape(stem)}", key) for stem in (*words.positive_en, *words.negative_en)
+            ):
+                return self.fixture.steps[index].source_label
+        return None
+
     def _stated_endpoint(self, index: int) -> tuple[str, int | None, str | None]:
         """The source's endpoint sentence at a repeat step, its page, and a translation.
 
@@ -15060,12 +15967,12 @@ class CuratedProtocolSession:
         the server replaces the rest of the reply.
         """
 
+        words = self._endpoint_words_for_label(step_label)
         if language == "en":
-            endpoint = {
-                "7": "Once destaining is complete",
-                "9": "Once the gel looks white and dry",
-                "20": "Once the gel looks white and dry",
-            }.get(step_label or "", "Once the endpoint is reached")
+            endpoint = (
+                f"Once it is {words.positive_keys[0]}" if words.positive_keys
+                else "Once the endpoint is reached"
+            )
             opening = (
                 "I recorded the issue." if recorded
                 else "I took the issue to record."
@@ -15077,11 +15984,10 @@ class CuratedProtocolSession:
                 else "Tôi đã nhận vấn đề để ghi."
             )
             return f"{opening} Khi đạt điểm kết thúc, vui lòng nói lại một lần nữa."
-        endpoint = {
-            "7": "탈색이 끝났으면",
-            "9": "젤이 하얗게 말랐으면",
-            "20": "젤이 하얗게 말랐으면",
-        }.get(step_label or "", "종점에 도달했으면")
+        endpoint = (
+            f"{words.positive_ko[0]}{_josa(words.positive_ko[0], '이', '가')} 됐으면"
+            if words.positive_ko else "종점에 도달했으면"
+        )
         opening = "이상 사항은 기록했어요." if recorded else "이상 사항 기록 요청을 받았어요."
         return f"{opening} {endpoint} 한 번 더 말씀해 주세요."
 
@@ -16427,9 +17333,9 @@ class CuratedProtocolSession:
             )
         elif observation_pending_valid and (
             observed := _observation_predicate(
-                observation_pending.step_label, transcript
+                self._endpoint_words_for_label(observation_pending.step_label), transcript
             )
-        ) == "positive" and _OBSERVATION_PROMPT_PROBLEM.search(
+        ) in ("positive", "negative") and _OBSERVATION_PROMPT_PROBLEM.search(
             normalized_confirmation
         ):
             # "완전히 탈색됐는데 튜브가 터졌어": the endpoint is reported in
@@ -16915,9 +17821,11 @@ class CuratedProtocolSession:
             and not self._names_another_step(intent)
         ):
             observed = _observation_predicate(
-                self.fixture.steps[self.current_index].source_label, transcript
+                self._endpoint_words(self.current_index), transcript
             )
-            if observed == "positive" and _OBSERVATION_PROMPT_PROBLEM.search(
+            # Lane GE: a "not yet" report beside a problem ("덜 말랐어
+            # 흘렸어") keeps the problem too, as an endpoint report does.
+            if observed in ("positive", "negative") and _OBSERVATION_PROMPT_PROBLEM.search(
                 normalized_confirmation
             ):
                 # The endpoint with a problem, said with no question open, is
@@ -21495,7 +22403,7 @@ class CuratedProtocolSession:
                 or not _SOURCE_SILENT.search(plan.speech_text or "")
             ):
                 return None
-            entity = _entity_said(transcript)
+            entity = _entity_said(transcript, self._protocol_vocabulary())
             if entity is not None:
                 answer = self.entity_source_answer(entity, language="ko")
                 if answer.found:

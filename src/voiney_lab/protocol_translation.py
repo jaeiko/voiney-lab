@@ -17,7 +17,8 @@ step, fixing one Korean form for the words the protocol repeats (names of
 reagents, equipment and products stay in English); it is stored with the
 revision. Each sentence call then carries the title, a short purpose, the
 glossary, and the step the sentence belongs to with the steps either side.
-The style is the reviewed in-gel Korean's (``STYLE_GUIDE``).
+The style is ``STYLE_GUIDE``: general rules for terms, units, numbers and
+the polite imperative form, with no document's example in them (lane GE).
 
 Sentences are translated purpose and safety first, then step by step from
 step 1, with the steps open sessions are on (current and next) ahead of the
@@ -88,21 +89,27 @@ GLOSSARY_MAX_CHARACTERS = 60000
 GLOSSARY_MAX_ENTRIES = 80
 PURPOSE_SUMMARY_CHARACTERS = 600
 
-#: The reviewed in-gel Korean (candidate_a_curated_analysis.localization.ko.json)
-#: is the house style every machine translation follows.
+#: The house style every machine translation follows (lane GE, decision 4):
+#: general rules only -- the terms, units and numbers of the source kept as
+#: written, the polite declarative form, and an instruction's imperative
+#: shape -- with no example taken from any one document.
 STYLE_GUIDE = (
     "Write in formal polite Korean declarative style (합니다체: '넣습니다', "
     "'배양합니다', '준비합니다'), as instructions to the reader, never "
-    "addressing the reader as '당신'. Begin a step instruction with its step "
-    "label followed by '단계: ' (for example '3단계: '), and an expected "
-    "result with '예상 결과: '. Keep names of reagents, solutions, kits, "
-    "products, instruments and brands in their original English spelling "
-    "(for example Solution A, HPLC water, acetonitrile, AMBIC, DTT, "
-    "trypsin, Thermomixer, speedvac), following the glossary. Write ordinary "
-    "words in Korean (water as 물 unless it is part of a reagent name, tube "
-    "튜브, gloves 장갑, gel 젤, chamber 챔버, hours 시간, room temperature "
-    "실온). Keep every number, unit, symbol, time, temperature, "
-    "concentration and ratio exactly as written."
+    "addressing the reader as '당신'. Write an instruction as an instruction "
+    "(an imperative sentence of the protocol becomes a 합니다체 instruction, "
+    "not a description or a suggestion). Begin a step instruction with its "
+    "step label followed by '단계: ' (for example '3단계: '), and an expected "
+    "result with '예상 결과: '. Keep the names of reagents, solutions, buffers, "
+    "kits, products, instruments, brands and labelled items in their original "
+    "English spelling exactly as the source writes them, following the "
+    "glossary; keep chemical formulas and abbreviations as written. Write "
+    "ordinary words in Korean (water as 물 unless it is part of a reagent "
+    "name, tube 튜브, gloves 장갑, chamber 챔버, hours 시간, room temperature "
+    "실온). Keep every number, unit, symbol, time, temperature, concentration, "
+    "volume, ratio and range exactly as written -- the same digits, the same "
+    "unit spelling, the same order -- and never convert, round, add or drop "
+    "one."
 )
 
 GLOSSARY_PROMPT = (

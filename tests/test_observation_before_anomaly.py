@@ -102,12 +102,12 @@ class EndpointWordingTests(unittest.TestCase):
     def test_the_reported_wordings_are_the_step_7_endpoint(self):
         for wording in REPORTED_ENDPOINT + ENDPOINT_VARIANTS:
             with self.subTest(wording=wording):
-                self.assertEqual(_observation_predicate("7", wording), "positive")
+                self.assertEqual(_predicate("7", wording), "positive")
 
     def test_negated_questioned_and_hedged_wordings_stay_non_positive(self):
         for wording in NOT_A_REPORT:
             with self.subTest(wording=wording):
-                self.assertNotEqual(_observation_predicate("7", wording), "positive")
+                self.assertNotEqual(_predicate("7", wording), "positive")
 
     def test_a_wish_or_condition_beside_the_new_wordings_is_not_a_report(self):
         # Found by the lane M combination check: each half reads alone, and
@@ -122,13 +122,13 @@ class EndpointWordingTests(unittest.TestCase):
             "탈색되길 바라 탈색됐어",
         ):
             with self.subTest(wording=wording):
-                self.assertIsNone(_observation_predicate("7", wording))
+                self.assertIsNone(_predicate("7", wording))
 
     def test_the_new_wordings_are_step_7_only(self):
         for label in ("6", "8", "9", "20"):
             for wording in REPORTED_ENDPOINT[:3]:
                 with self.subTest(label=label, wording=wording):
-                    self.assertIsNone(_observation_predicate(label, wording))
+                    self.assertIsNone(_predicate(label, wording))
 
 
 @unittest.skipUnless(
@@ -307,6 +307,15 @@ class VoiceTestReplayTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["payload"]["observation_predicate"], "positive")
         self.assertIn("탈색으로 바뀌었어", completed[0]["user_wording"])
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, here from the analysis JSON so
+    no licensed PDF is needed)."""
+
+    from tests.protocol_vocabulary_support import in_gel_endpoint_words
+    return _observation_predicate(in_gel_endpoint_words(label), said)
 
 
 if __name__ == "__main__":

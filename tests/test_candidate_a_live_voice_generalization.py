@@ -196,13 +196,13 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
 
     def test_owned_binary_frames_accept_natural_answers_but_never_unowned_or_so(self) -> None:
         session = self.session("1")
-        session.plan("다음 단계로 안내해 줘", turn_id=2, language="ko")
+        session.plan("다음 단계로 넘어가도 돼?", turn_id=2, language="ko")
         accepted = session.plan("어, 다 했어", turn_id=3, language="ko")
         self.assertEqual(accepted.intent_kind, "pending_completion_confirmed")
         self.assertTrue(accepted.state_changed)
 
         paraphrase = self.session("1")
-        paraphrase.plan("다음 단계로 안내해 줘", turn_id=2, language="ko")
+        paraphrase.plan("다음 단계로 넘어가도 돼?", turn_id=2, language="ko")
         accepted = paraphrase.plan("응, 모두 마쳤어요", turn_id=3, language="ko")
         self.assertTrue(accepted.state_changed)
 
@@ -212,7 +212,7 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         self.assertFalse(unowned.state_changed)
 
         unclear = self.session("1")
-        unclear.plan("다음 단계로 안내해 줘", turn_id=2, language="ko")
+        unclear.plan("다음 단계로 넘어가도 돼?", turn_id=2, language="ko")
         retry = unclear.plan("So", turn_id=3, language="ko")
         self.assertEqual(retry.action, CuratedProtocolAction.TRANSCRIPT_UNRELIABLE)
         self.assertFalse(retry.state_changed)
@@ -466,23 +466,27 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 self.assertFalse(plan.state_changed)
 
     def test_multi_entity_near_miss_and_completeness_gate(self) -> None:
+        # Lane GE: the words are heard through the protocol's own vocabulary --
+        # a Korean word that sounds like a term ("아세토나이트릴", "트립씬",
+        # "디티티"), a term spelled in English -- never through a table of this
+        # document's reagents. "염색된 단백질 밴드" and "젤 플러그" are prose,
+        # not terms, and are no longer heard.
         session = self.session("1")
-        # Real microphone STT variant: "뱀드" instead of "밴드" + AMBIC
         real_turn7 = session.plan(
-            "여기서 염색된 단백질 뱀드가 무엇이며 그리고 AMBIC가 무엇인지 설명해 줄 수 있어?",
+            "여기서 아세토나이트릴이 무엇이며 그리고 AMBIC가 무엇인지 설명해 줄 수 있어?",
             turn_id=2, language="ko",
         )
-        self.assertIn("stained_protein_band", real_turn7.requested_entities)
+        self.assertIn("acetonitrile", real_turn7.requested_entities)
         self.assertIn("ambic", real_turn7.requested_entities)
-        self.assertIn("단백질 밴드", real_turn7.primary_text or "")
+        self.assertIn("acetonitrile", real_turn7.primary_text or "")
         self.assertIn("AMBIC", real_turn7.primary_text or "")
         self.assertFalse(real_turn7.state_changed)
 
         # Other multi-entity near-misses and combinations
         for query, expected_entities in (
-            ("염색된 단백질 밴드와 AMBIC가 뭐야?", ("stained_protein_band", "ambic")),
-            ("젤 플러그와 HPLC water가 뭐야?", ("gel_plug", "hplc_water")),
-            ("제트 플러그와 에이치피엘씨 워터 설명해줘", ("gel_plug", "hplc_water")),
+            ("아세토나이트릴과 AMBIC가 뭐야?", ("acetonitrile", "ambic")),
+            ("트립씬과 HPLC water가 뭐야?", ("trypsin", "hplc_water")),
+            ("디티티와 에이치피엘씨 워터 설명해줘", ("dtt", "hplc_water")),
             ("Solution A and Solution B difference", ("solution_a", "solution_b")),
             ("DTT와 iodoacetamide 그리고 trypsin 설명해줘", ("dtt", "iodoacetamide", "trypsin")),
         ):
@@ -494,33 +498,19 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                     self.assertIn(ent, p.requested_entities)
                 # Verify completeness: every requested entity has a mention in primary_text
                 primary = p.primary_text or ""
-                labels_en = {
-                    "stained_protein_band": "Stained protein band",
+                labels = {
                     "ambic": "AMBIC",
-                    "gel_plug": "Gel plug",
-                    "hplc_water": "HPLC water",
-                    "solution_a": "Solution A",
-                    "solution_b": "Solution B",
-                    "dtt": "DTT",
-                    "iodoacetamide": "Iodoacetamide",
-                    "trypsin": "Trypsin",
-                }
-                labels_ko = {
-                    "stained_protein_band": "단백질 밴드",
-                    "ambic": "AMBIC",
-                    "gel_plug": "플러그",
                     "hplc_water": "HPLC water",
                     "solution_a": "Solution A",
                     "solution_b": "Solution B",
                     "dtt": "DTT",
                     # As the PDF spells them.
+                    "acetonitrile": "acetonitrile",
                     "iodoacetamide": "iodoacetamide",
                     "trypsin": "trypsin",
                 }
-                labels = labels_en if is_en else labels_ko
                 for ent in expected_entities:
                     self.assertIn(labels[ent], primary)
-
 
 if __name__ == "__main__":
     unittest.main()
