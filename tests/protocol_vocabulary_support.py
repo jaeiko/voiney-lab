@@ -178,3 +178,38 @@ def miniprep_fixture() -> CuratedProtocolFixture:
         materials=MINIPREP_MATERIALS,
         equipment=MINIPREP_EQUIPMENT,
     )
+
+
+def in_gel_endpoint_words(label: str):
+    """The endpoint words of an in-gel step, read off the analysis JSON alone.
+
+    The same texts ``CuratedProtocolSession._endpoint_words`` reads -- the
+    repeat-until sentence anchored at the step, the step's expected results
+    and its instruction -- taken from the fixture's analysis file, which is
+    in the repository, so a test needs no licensed PDF (lane GE).
+    """
+
+    import json
+
+    from voiney_lab.curated_protocol import EndpointWords, endpoint_words
+
+    analysis = json.loads((DATA / "candidate_a_curated_analysis.json").read_text(encoding="utf-8"))
+    protocol = analysis["protocol"]
+    step = next(
+        (item for section in protocol["sections"] for item in section["steps"]
+         if item.get("source_label") == label),
+        None,
+    )
+    if step is None:
+        return EndpointWords()
+    anchored = [
+        construct for construct in protocol.get("constructs", ())
+        if construct.get("step_id") == step["step_id"]
+        and (construct.get("repeated_step_ids") or construct.get("start_step_id"))
+    ]
+    if not anchored:
+        return EndpointWords()
+    texts = [construct.get("condition_source_text") or construct.get("range_source_text") or "" for construct in anchored]
+    texts.extend(result.get("source_text", "") for result in step.get("expected_results", ()))
+    texts.append(step.get("instruction_source_text", ""))
+    return endpoint_words(texts)

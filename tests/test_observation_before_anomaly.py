@@ -230,19 +230,6 @@ class OpenEndpointQuestionTests(unittest.TestCase):
     SOURCE_PDF.is_file(),
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
-
-
-def _predicate(label: str, said: str):
-    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
-    predicate reads the step's endpoint words, derived from the fixture)."""
-
-    from voiney_lab.curated_protocol import endpoint_words_for
-    from tests.protocol_vocabulary_support import in_gel_fixture
-    cache = _predicate.__dict__.setdefault("fixture", None)
-    if cache is None:
-        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
-    return _observation_predicate(endpoint_words_for(cache, label), said)
-
 class VoiceTestReplayTests(VoiceSessionHarness, unittest.TestCase):
     def test_turns_19_to_21_complete_step_7_with_the_observation_recorded(self):
         step_1 = self.fixture.steps[0]
@@ -320,6 +307,15 @@ class VoiceTestReplayTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["payload"]["observation_predicate"], "positive")
         self.assertIn("탈색으로 바뀌었어", completed[0]["user_wording"])
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, here from the analysis JSON so
+    no licensed PDF is needed)."""
+
+    from tests.protocol_vocabulary_support import in_gel_endpoint_words
+    return _observation_predicate(in_gel_endpoint_words(label), said)
 
 
 if __name__ == "__main__":

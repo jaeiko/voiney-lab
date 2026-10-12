@@ -146,19 +146,6 @@ class CompletionPromptTests(unittest.TestCase):
     SOURCE_PDF.is_file(),
     f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
 )
-
-
-def _predicate(label: str, said: str):
-    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
-    predicate reads the step's endpoint words, derived from the fixture)."""
-
-    from voiney_lab.curated_protocol import endpoint_words_for
-    from tests.protocol_vocabulary_support import in_gel_fixture
-    cache = _predicate.__dict__.setdefault("fixture", None)
-    if cache is None:
-        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
-    return _observation_predicate(endpoint_words_for(cache, label), said)
-
 class RepeatStepTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -226,6 +213,15 @@ class RepeatStepTests(unittest.TestCase):
                 self.assertTrue(plan.state_changed)
                 self.assertEqual(plan.observation_predicate, "positive")
                 self.assertEqual(session.current_index, self.index[label] + 1)
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, here from the analysis JSON so
+    no licensed PDF is needed)."""
+
+    from tests.protocol_vocabulary_support import in_gel_endpoint_words
+    return _observation_predicate(in_gel_endpoint_words(label), said)
 
 
 if __name__ == "__main__":

@@ -26,19 +26,6 @@ from voiney_lab.vad import (
     VadConfig,
 )
 
-
-def _predicate(label: str, said: str):
-    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
-    predicate reads the step's endpoint words, derived from the fixture)."""
-
-    from voiney_lab.curated_protocol import endpoint_words_for
-    from tests.protocol_vocabulary_support import in_gel_fixture
-    cache = _predicate.__dict__.setdefault("fixture", None)
-    if cache is None:
-        cache = _predicate.__dict__["fixture"] = in_gel_fixture()
-    return _observation_predicate(endpoint_words_for(cache, label), said)
-
-
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data" / "fixtures" / "development_protocols"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
@@ -500,3 +487,12 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.assertIn("localized_display_bullets", pub)
         self.assertIn("warnings", pub)
         self.assertEqual(pub["warnings"], list(guidance.warnings))
+
+
+def _predicate(label: str, said: str):
+    """``_observation_predicate`` for an in-gel step by its label (lane GE: the
+    predicate reads the step's endpoint words, here from the analysis JSON so
+    no licensed PDF is needed)."""
+
+    from tests.protocol_vocabulary_support import in_gel_endpoint_words
+    return _observation_predicate(in_gel_endpoint_words(label), said)
