@@ -919,6 +919,26 @@ function renderExperimentContext(){
 // The sheet open over the run view (decision 3), the pictures the step has had, and how long an answer card's words may be before the card offers the conversation.
 let runSheet="";
 const runFigureKeys=new Set(),runFigureKeysSeen=new Set(),RUN_CARD_LONG=120;
+// Lane UI0 decision 5 (2026-10-12): while the experiment runs the page asks
+// the browser to keep the screen on (Screen Wake Lock) where the browser has
+// it; a browser without it, or a refusal, is passed over in silence. The
+// lock is let go when the run view ends, and asked for again when the page
+// comes back into view (a browser lets it go while the page is hidden).
+let screenWakeLock=null,screenWakeLockWanted=false,screenWakeLockAsking=null;
+function keepScreenOn(on){
+ screenWakeLockWanted=Boolean(on);
+ if(!screenWakeLockWanted){const held=screenWakeLock;screenWakeLock=null;return held&&!held.released?Promise.resolve().then(()=>held.release()).then(()=>false,()=>false):Promise.resolve(false);}
+ if(screenWakeLock&&!screenWakeLock.released)return Promise.resolve(true);
+ if(screenWakeLockAsking)return screenWakeLockAsking;
+ const api=globalThis.navigator?.wakeLock;
+ if(!api||typeof api.request!=="function"||globalThis.document?.visibilityState==="hidden")return Promise.resolve(false);
+ screenWakeLockAsking=Promise.resolve().then(()=>api.request("screen")).then(lock=>{
+  if(!screenWakeLockWanted){Promise.resolve().then(()=>lock?.release?.()).catch(()=>{});return false;}
+  screenWakeLock=lock||null;lock?.addEventListener?.("release",()=>{if(screenWakeLock===lock)screenWakeLock=null;});return Boolean(lock);
+ },()=>false).finally(()=>{screenWakeLockAsking=null;});
+ return screenWakeLockAsking;
+}
+function onScreenVisibilityChange(){if(globalThis.document?.visibilityState==="visible"&&screenWakeLockWanted&&!screenWakeLock)return keepScreenOn(true);return Promise.resolve(Boolean(screenWakeLock));}
 function screenView(){
  if(experimentEndedOnScreen)return "after";
  const state=curatedProtocolState;
@@ -928,6 +948,7 @@ function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
+ if((view==="during")!==screenWakeLockWanted)void keepScreenOn(view==="during");
  return view;
 }
 // Lane UI0 decision 2 (2026-10-12): the 실험 중 view's own parts -- the status
@@ -3076,6 +3097,7 @@ $("experiment-evidence-upload")?.addEventListener("click",()=>{void uploadExperi
 for(const [name,parts] of Object.entries(RUN_SHEETS)){$(parts.opener)?.addEventListener("click",()=>{toggleRunSheet(name);});$(parts.close)?.addEventListener("click",()=>{closeRunSheet();});}
 $("run-sheet-backdrop")?.addEventListener("click",()=>{closeRunSheet();});
 globalThis.document?.addEventListener?.("keydown",event=>{onRunSheetKey(event);});
+globalThis.document?.addEventListener?.("visibilitychange",()=>{void onScreenVisibilityChange();});
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
