@@ -59,9 +59,18 @@
     .ignored-speech summary{cursor:pointer;font-weight:700}
     .ignored-speech ul{margin:.3rem 0 0;padding-left:1.1rem;max-height:9rem;overflow:auto}
     .ignored-speech li{margin:.1rem 0}
+    /* Lane UI0 decision 1 (2026-10-12): the page's three views, set on the
+       body by renderScreenView from the server's state. 실험 전 and 실험 후 keep
+       the page as it was (lane UI2 redraws them); 실험 중 puts the step card
+       across the page and keeps, of the setup, only the voice console. */
+    body[data-view="during"] .topbar,body[data-view="during"] .example-strip{display:none}
+    body[data-view="during"] .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat"}
+    body[data-view="during"] .voice-panel{grid-template-columns:minmax(0,1fr)}
+    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-grid{display:none}
+    body[data-view="during"] .timeline{position:static;max-height:none}
   </style>
 </head>
-<body>
+<body data-view="before">
   <!-- Hidden Screen Reader Live Announcer for Key Milestones -->
   <div id="screen-reader-announcer" class="visually-hidden-file-input" aria-live="polite" role="status"></div>
 
@@ -523,6 +532,7 @@ function showExperimentEnded(message){
  const status=message?.status==="completed"?"모든 단계를 마쳐 실험이 끝났습니다":"실험이 종료되었습니다";
  const report=message?.report==="saved"?" · 실험 기록 저장됨":message?.report==="failed"?" · 실험 기록을 저장하지 못했습니다":"";
  setText("procedure-status",`${status}${report}`);
+ renderScreenView();
 }
 function showWorkflowControlRefused(message){
  const text=message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
@@ -611,6 +621,22 @@ function renderExperimentContext(){
  setText("experiment-context-readiness",entry?catalogStatus(entry).label:"프로토콜 선택 필요");
  renderResumeDisclosure();
  foldStartSummary();
+ renderScreenView();
+}
+// Lane UI0 decision 1 (2026-10-12): one page and three views -- 실험 전,
+// 실험 중, 실험 후 -- chosen from the server's state alone. The experiment
+// runs while this session is live and the server's protocol state is active
+// (a pause included); it is over once the server said experiment.ended;
+// otherwise it has not started. The view only changes where things are drawn.
+function screenView(){
+ if(experimentEndedOnScreen)return "after";
+ const state=curatedProtocolState;
+ return sessionActive&&state?.attached===true&&state.active===true?"during":"before";
+}
+function renderScreenView(){
+ const view=screenView(),body=globalThis.document?.body;
+ if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
+ return view;
 }
 function renderState(state,detail=""){
  const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR",visibleLabel=VOICE_STATE_LABELS[visibleState]||VOICE_STATE_LABELS.ERROR;$("state").textContent=visibleLabel;$("status").textContent=detail||view[0];
