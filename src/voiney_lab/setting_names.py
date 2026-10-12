@@ -114,6 +114,8 @@ SETTINGS: tuple[Setting, ...] = (
             "PDF 프로토콜 분석 모델 (분석에 필수)"),
     Setting("VOINEY_LAB_ANALYSIS_REASONING", MODELS, "high",
             "프로토콜 분석 추론 (low/medium/high/xhigh)"),
+    Setting("VOINEY_LAB_ANALYSIS_RESPONSE_GRAMMAR", MODELS, "false",
+            "실험: 분석 공급자가 google 일 때 분석 JSON 스키마를 응답 문법(response_json_schema)으로 보냄 (줄 EV3 결정 2)"),
     Setting("VOINEY_LAB_REPORT_PROVIDER", MODELS, _SET_ME, "실험 보고서 서술 공급자"),
     Setting("VOINEY_LAB_REPORT_MODEL", MODELS, _SET_ME, "실험 보고서 서술 모델"),
     Setting("VOINEY_LAB_REPORT_REASONING", MODELS, "(공급자 기본)", "보고서 서술 추론"),
