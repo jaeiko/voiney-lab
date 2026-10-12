@@ -79,7 +79,7 @@
     body[data-view="during"] .shell{max-width:none;padding:0;gap:0}
     body[data-view="during"] .workflow-grid{gap:0}
     body[data-view="during"] #hero-setup,body[data-view="during"] #hero-setup.collapsed,body[data-view="during"] .voice-panel,body[data-view="during"] .voice-actions,body[data-view="during"] .setup-grid{display:contents}
-    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] .setup-col-right,body[data-view="during"] #protocol-start-summary,body[data-view="during"] #protocol-review-panel,body[data-view="during"] .dev-diagnostics{display:none}
+    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] #protocol-start-summary,body[data-view="during"] #protocol-review-panel,body[data-view="during"] .dev-diagnostics{display:none}
     /* The status line: the basis badge, the protocol, the step, the connection and the microphone. */
     body[data-view="during"] .sticky-rail{min-height:var(--run-statusbar-h);padding:.25rem 1rem;gap:.75rem;flex-wrap:nowrap;-webkit-backdrop-filter:none;backdrop-filter:none;transition:none}
     body[data-view="during"] .rail-left{flex:1 1 auto;flex-wrap:nowrap;gap:.75rem;min-width:0}
@@ -107,7 +107,7 @@
     body[data-view="during"] #audio-echo-notice:not([hidden]),body[data-view="during"] #mic-recovery:not([hidden]),body[data-view="during"] #voice-calibration:not([hidden]){position:fixed;left:1rem;right:1rem;bottom:calc(var(--run-bottom-h) + .5rem);z-index:96;margin:0;padding:1rem;border:2px solid var(--amber);border-radius:2px;background:var(--surface-raised);color:var(--ink)}
     body[data-view="during"] #voice-calibration:not([hidden]){z-index:97}
     /* The step card: the step's column, the timer, and below them the source and a block. */
-    body[data-view="during"] .procedure-card{display:grid;grid-template-columns:minmax(0,1fr) var(--run-timer-panel-w);grid-template-areas:"left timer" "more timer";grid-template-rows:minmax(0,1fr) auto;min-height:calc(100dvh - var(--run-statusbar-h) - var(--run-bottom-h));padding:0;border-width:0 0 1px;border-radius:0;box-shadow:none;overflow:visible}
+    body[data-view="during"] .procedure-card{display:grid;grid-template-columns:minmax(0,1fr) var(--run-timer-panel-w);grid-template-areas:"left timer" "more timer";grid-template-rows:minmax(0,1fr) auto;min-height:calc(100dvh - var(--run-statusbar-h) - var(--run-bottom-h));padding:0;border-width:0 0 1px;border-radius:0;box-shadow:none;overflow:visible;-webkit-backdrop-filter:none;backdrop-filter:none}
     body[data-view="during"] .run-left{grid-area:left;display:flex;flex-direction:column;gap:1rem;min-width:0;padding:1.5rem 1.5rem 1rem}
     body[data-view="during"] .procedure-head .label,body[data-view="during"] #procedure-title,body[data-view="during"] #procedure-meta,body[data-view="during"] #procedure-status:not(.blocked){display:none}
     body[data-view="during"] .procedure-head{justify-content:flex-start;flex-wrap:wrap;gap:.5rem}
@@ -157,7 +157,6 @@
     body[data-view="during"] .task-body-split{display:contents}
     body[data-view="during"] .task-body-left{grid-area:more;gap:.25rem;padding:0 1.5rem 1rem}
     body[data-view="during"] .spoken-summary,body[data-view="during"] .voice-command-hint,body[data-view="during"] .run-row-timer,body[data-view="during"] #observation-container,body[data-view="during"] .procedure-report,body[data-view="during"] .task-body-right{display:none}
-    body[data-view="during"] .timeline{position:static;max-height:none}
     body[data-view="during"] .procedure-card .run-timer[data-timer="none"] .run-timer-digits{font-size:min(4rem,22cqi)}
     /* A phone on its side: a little less room around the step. */
     @media (orientation:landscape) and (max-height:480px){
@@ -205,6 +204,49 @@
      body[data-view="during"]{--run-statusbar-h:96px;--run-bottom-h:calc(var(--target-run) + 88px)}
      body[data-view="during"] .voice-console{height:88px}
     }
+    /* Lane UI0 decision 3 (2026-10-12): the settings in three groups (프로토콜,
+       음성 입력, 안내 방식) lie open across the setup before and after the
+       experiment, side by side where there is room; on the run screen they,
+       the conversation and the pictures open as sheets -- from below on a
+       phone held upright, from the right on its side -- and a wide landscape
+       screen keeps the pictures as a right column. */
+    .setup-col-left,.settings-sheet{grid-column:1/-1}
+    .settings-sheet{min-width:0}
+    .settings-sheet-head{display:flex;align-items:center;flex-wrap:wrap;gap:.35rem 1rem;margin-bottom:.6rem}
+    .settings-sheet-head h2{margin:0;color:var(--ink);font-size:.95rem}
+    .settings-sheet-head .mic-device-status{margin:0}
+    .settings-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1rem 1.25rem;align-items:start}
+    .settings-group{display:flex;flex-direction:column;gap:.65rem;min-width:0;margin:0;padding:.75rem .85rem .85rem;border:1px solid var(--border);border-radius:var(--radius-sm)}
+    .settings-group legend{padding:0 .35rem;color:var(--ink);font-size:.85rem;font-weight:800}
+    .settings-sheet select{width:100%;min-width:0;padding:.55rem .75rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);font-size:.82rem}
+    .run-sheet-open,.run-sheet-close,.run-sheet-head,.run-sheet-backdrop,.run-fresh{display:none}
+    body[data-view="during"] .run-sheet-open{display:block}
+    body[data-view="during"] .run-fresh:not([hidden]){display:block;margin-top:.15rem;font-size:.75rem;font-weight:800;text-decoration:underline}
+    body[data-view="during"] .run-sheet-close{display:inline-flex;align-items:center;justify-content:center;flex:none;min-width:var(--target-run);min-height:var(--target-run);margin-left:auto;padding:0 1rem;border:2px solid var(--ink);border-radius:2px;background:transparent;color:var(--ink);font-size:1rem;font-weight:700;cursor:pointer}
+    body[data-view="during"] .run-sheet-head{display:flex;align-items:center;gap:1rem;font-size:1.125rem}
+    body[data-view="during"] .run-sheet-backdrop:not([hidden]){display:block;position:fixed;inset:0;z-index:140;background:rgba(0,0,0,.45)}
+    body[data-view="during"] .timeline,body[data-view="during"] #settings-sheet{display:none}
+    body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;flex-direction:column;gap:.75rem;position:fixed;left:0;right:0;bottom:0;top:auto;z-index:150;width:auto;max-height:min(85dvh,calc(100dvh - 1rem));margin:0;padding:1rem;overflow:auto;overscroll-behavior:contain;border:0;border-top:2px solid var(--ink);border-radius:0;background:var(--surface-raised);box-shadow:var(--shadow)}
+    body[data-view="during"][data-sheet="conversation"] .timeline{overflow:hidden}
+    body[data-view="during"] .timeline-head{align-items:center}
+    body[data-view="during"] .timeline #log{max-height:none}
+    body[data-view="during"] .settings-sheet select,body[data-view="during"] .settings-sheet .voice-calibration-controls button{min-height:var(--target-run);font-size:1rem}
+    body[data-view="during"] .settings-sheet-head h2{font-size:1.125rem}
+    body[data-view="during"] .procedure-card .run-card-again{align-self:flex-start;min-height:var(--target-run);padding:0 1rem;border:1px solid var(--border-accent);border-radius:2px;background:transparent;color:var(--ink);font-size:1rem;font-weight:700;cursor:pointer}
+    body[data-view="during"]{--run-actions:5}
+    @media (orientation:landscape){
+     body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{top:0;left:auto;width:min(34rem,100%);max-height:none;border-top:0;border-left:2px solid var(--ink)}
+    }
+    @media (orientation:landscape) and (min-width:1100px){
+     body[data-view="during"]{--run-actions:4;--run-timer-panel-w:340px;--run-figures-w:22rem}
+     body[data-view="during"] .procedure-card{grid-template-columns:minmax(0,1fr) var(--run-timer-panel-w) var(--run-figures-w);grid-template-areas:"left timer fig" "more timer fig"}
+     body[data-view="during"] .task-body-right,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;flex-direction:column;gap:.75rem;grid-area:fig;position:sticky;top:var(--run-statusbar-h);z-index:auto;width:auto;max-height:calc(100dvh - var(--run-statusbar-h) - var(--run-bottom-h));padding:1rem;overflow:auto;border:0;border-left:1px solid var(--border);box-shadow:none;background:none}
+     body[data-view="during"] #run-open-figures,body[data-view="during"] .task-body-right .run-sheet-head{display:none}
+     body[data-view="during"][data-sheet="figures"] .run-sheet-backdrop{display:none}
+     body[data-view="during"] .procedure-card p.step-body{font-size:2.75rem;line-height:3.25rem}
+     body[data-view="during"] .procedure-card p.step-body[data-length="medium"]{font-size:2.25rem;line-height:2.75rem}
+     body[data-view="during"] .procedure-card p.step-body[data-length="long"]{font-size:1.875rem;line-height:2.375rem}
+    }
   </style>
 </head>
 <body data-view="before">
@@ -230,6 +272,10 @@
       <span class="run-stat"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg><span id="run-mic">마이크 꺼짐</span></span>
     </div>
     <div class="rail-right">
+      <!-- Lane UI0 decision 3: on the run screen, the three sheets -- the conversation, the pictures, the settings. -->
+      <button id="run-open-conversation" type="button" class="btn-rail-secondary run-sheet-open" aria-controls="conversation-sheet" aria-expanded="false">대화 보기</button>
+      <button id="run-open-figures" type="button" class="btn-rail-secondary run-sheet-open" aria-controls="figures-sheet" aria-expanded="false">그림 보기<span id="run-figures-fresh" class="run-fresh" hidden>새 자료</span></button>
+      <button id="run-open-settings" type="button" class="btn-rail-secondary run-sheet-open" aria-controls="settings-sheet" aria-expanded="false">설정</button>
       <button id="rail-new-session" type="button" class="btn-rail-secondary">새 실험</button>
       <button id="rail-pause-session" type="button" class="btn-rail-secondary" disabled>일시정지</button>
       <button id="rail-stop-session" type="button" class="btn-rail-danger" disabled>종료</button>
@@ -308,58 +354,72 @@
                 <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
               </div>
             </div>
-            <div class="setup-col-right">
-              <label class="control-field"><span>실행할 프로토콜</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
-                  <option value="">카탈로그를 불러오는 중…</option>
-              </select></label>
-              <label class="control-field"><span>음성 입력 언어</span><select id="input-language" aria-label="음성 입력 언어">
-                <option value="ko" selected>한국어</option>
-                <option value="auto">자동 감지</option>
-                <option value="en">English</option>
-              </select></label>
-              <!-- Lane CF decisions 1 and 4: the experimenter's own settings, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
-              <label class="control-field"><span>수치 확인 방식</span><select id="confirm-mode" aria-label="수치 확인 방식" aria-describedby="experimenter-settings-status">
-                <option value="readback" selected>되읽기 · 기록한 수치를 되읽고 묻지 않음</option>
-                <option value="confirm">바로 확인 · 수치마다 맞는지 물음</option>
-                <option value="quiet">조용히 · 실험 끝에 한 번에 확인</option>
-              </select></label>
-              <label class="control-field"><span>조건 분기·반복 횟수 질문</span><select id="question-timing" aria-label="조건 분기와 반복 횟수 질문 시점" aria-describedby="experimenter-settings-status">
-                <option value="before_start" selected>시작 전에 묻기</option>
-                <option value="during">실험 중에 묻기</option>
-              </select></label>
-              <!-- Lane WV decision 2: the web is looked at only for an explanation or a photograph, shown with its source; the experimenter can turn it off (the same as saying "웹 찾아보기 꺼 줘"). -->
-              <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
-                <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
-                <option value="off">끔 · 원문에서만 찾기</option>
-              </select></label>
-              <!-- Lane VT decision 6: what the server says before it is asked (the same as saying "먼저 알려 주기 꺼 줘"). -->
-              <label class="control-field"><span>먼저 알려 주기</span><select id="proactive-mode" aria-label="먼저 알려 주기" aria-describedby="experimenter-settings-status">
-                <option value="all" selected>모두 · 타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계</option>
-                <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
-                <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
-              </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
-              <!-- Lane SP1 decision 3: in a noisy place every command that changes the workflow and every record is asked about once (the same as saying "시끄러운 곳 모드로 바꿔 줘"); decision 1: how much quieter than the measured voice still counts as the wearer ("민감도 높음으로"). -->
-              <label class="control-field"><span>주변 소리</span><select id="ambient-mode" aria-label="주변 소리" aria-describedby="experimenter-settings-status">
-                <option value="quiet" selected>조용함 · 명령은 바로</option>
-                <option value="noisy">시끄러움 · 상태를 바꾸는 말과 기록은 한 번 확인</option>
-              </select></label>
-              <label class="control-field"><span>목소리 민감도</span><select id="speaker-sensitivity" aria-label="목소리 민감도" aria-describedby="experimenter-settings-status">
-                <option value="high">높음 · 조금만 작아도 거름 (9 dB) · 이어버드에 맞음</option>
-                <option value="normal" selected>보통 (12 dB)</option>
-                <option value="low">낮음 · 많이 작을 때만 거름 (18 dB)</option>
-              </select></label>
-              <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
-                <option value="">기본 마이크 (시스템 설정)</option>
-              </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
-              <!-- Lane SP1 decision 1: measure the wearer's voice again (the same as saying "목소리 다시 맞춰 줘"); the measurement is kept for this session only. -->
-              <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button><label class="voice-calibration-auto"><input id="voice-calibration-at-start" type="checkbox" checked> 세션 시작 때 한 번</label></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
-              <!-- Lane SP1 decision 2: the browser's automatic gain control would lift a quieter (farther) voice toward the wearer's level and undo the measurement, so it is turned off on the microphone track once the voice is being measured (the default); the echo cancellation and noise suppression stay on. -->
-              <label class="control-field"><span>마이크 자동 음량 조절</span><select id="agc-mode" aria-label="마이크 자동 음량 조절" aria-describedby="agc-status">
-                <option value="calibrated" selected>목소리를 맞추면 끔 (기본)</option>
-                <option value="on">항상 켬 · 작은 소리도 키움</option>
-                <option value="off">항상 끔</option>
-              </select><small id="agc-status" class="mic-device-status" role="status"></small></label>
-            </div>
+            <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
+            <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
+              <div class="settings-sheet-head">
+                <h2 id="settings-sheet-title">설정</h2>
+                <small id="experimenter-settings-status" class="mic-device-status" role="status"></small>
+                <button id="run-close-settings" type="button" class="run-sheet-close">닫기</button>
+              </div>
+              <div class="settings-groups">
+                <fieldset class="settings-group" aria-labelledby="settings-group-protocol"><legend id="settings-group-protocol">프로토콜</legend>
+                  <label class="control-field"><span>실행할 프로토콜</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
+                      <option value="">카탈로그를 불러오는 중…</option>
+                  </select></label>
+                  <label class="control-field"><span>조건 분기·반복 횟수 질문</span><select id="question-timing" aria-label="조건 분기와 반복 횟수 질문 시점" aria-describedby="experimenter-settings-status">
+                    <option value="before_start" selected>시작 전에 묻기</option>
+                    <option value="during">실험 중에 묻기</option>
+                  </select></label>
+                </fieldset>
+                <fieldset class="settings-group" aria-labelledby="settings-group-voice"><legend id="settings-group-voice">음성 입력</legend>
+                  <label class="control-field"><span>음성 입력 언어</span><select id="input-language" aria-label="음성 입력 언어">
+                    <option value="ko" selected>한국어</option>
+                    <option value="auto">자동 감지</option>
+                    <option value="en">English</option>
+                  </select></label>
+                  <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
+                    <option value="">기본 마이크 (시스템 설정)</option>
+                  </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
+                  <!-- Lane SP1 decision 2: the browser's automatic gain control would lift a quieter (farther) voice toward the wearer's level and undo the measurement, so it is turned off on the microphone track once the voice is being measured (the default); the echo cancellation and noise suppression stay on. -->
+                  <label class="control-field"><span>마이크 자동 음량 조절</span><select id="agc-mode" aria-label="마이크 자동 음량 조절" aria-describedby="agc-status">
+                    <option value="calibrated" selected>목소리를 맞추면 끔 (기본)</option>
+                    <option value="on">항상 켬 · 작은 소리도 키움</option>
+                    <option value="off">항상 끔</option>
+                  </select><small id="agc-status" class="mic-device-status" role="status"></small></label>
+                  <!-- Lane SP1 decision 1: measure the wearer's voice again (the same as saying "목소리 다시 맞춰 줘"); the measurement is kept for this session only. -->
+                  <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button><label class="voice-calibration-auto"><input id="voice-calibration-at-start" type="checkbox" checked> 세션 시작 때 한 번</label></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
+                  <label class="control-field"><span>목소리 민감도</span><select id="speaker-sensitivity" aria-label="목소리 민감도" aria-describedby="experimenter-settings-status">
+                    <option value="high">높음 · 조금만 작아도 거름 (9 dB) · 이어버드에 맞음</option>
+                    <option value="normal" selected>보통 (12 dB)</option>
+                    <option value="low">낮음 · 많이 작을 때만 거름 (18 dB)</option>
+                  </select></label>
+                  <!-- Lane SP1 decision 3: in a noisy place every command that changes the workflow and every record is asked about once (the same as saying "시끄러운 곳 모드로 바꿔 줘"); decision 1: how much quieter than the measured voice still counts as the wearer ("민감도 높음으로"). -->
+                  <label class="control-field"><span>주변 소리</span><select id="ambient-mode" aria-label="주변 소리" aria-describedby="experimenter-settings-status">
+                    <option value="quiet" selected>조용함 · 명령은 바로</option>
+                    <option value="noisy">시끄러움 · 상태를 바꾸는 말과 기록은 한 번 확인</option>
+                  </select></label>
+                </fieldset>
+                <fieldset class="settings-group" aria-labelledby="settings-group-guidance"><legend id="settings-group-guidance">안내 방식</legend>
+                  <!-- Lane CF decisions 1 and 4: the experimenter's own settings, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
+                  <label class="control-field"><span>수치 확인 방식</span><select id="confirm-mode" aria-label="수치 확인 방식" aria-describedby="experimenter-settings-status">
+                    <option value="readback" selected>되읽기 · 기록한 수치를 되읽고 묻지 않음</option>
+                    <option value="confirm">바로 확인 · 수치마다 맞는지 물음</option>
+                    <option value="quiet">조용히 · 실험 끝에 한 번에 확인</option>
+                  </select></label>
+                  <!-- Lane VT decision 6: what the server says before it is asked (the same as saying "먼저 알려 주기 꺼 줘"). -->
+                  <label class="control-field"><span>먼저 알려 주기</span><select id="proactive-mode" aria-label="먼저 알려 주기" aria-describedby="experimenter-settings-status">
+                    <option value="all" selected>모두 · 타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계</option>
+                    <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
+                    <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
+                  </select></label>
+                  <!-- Lane WV decision 2: the web is looked at only for an explanation or a photograph, shown with its source; the experimenter can turn it off (the same as saying "웹 찾아보기 꺼 줘"). -->
+                  <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
+                    <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
+                    <option value="off">끔 · 원문에서만 찾기</option>
+                  </select></label>
+                </fieldset>
+              </div>
+            </section>
             <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
               <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
               <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
@@ -487,7 +547,9 @@
             </aside>
           </div>
 
-          <div class="task-body-right">
+          <!-- Lane UI0 decision 3: the pictures -- the source's figures, the AI drawing with its label, the web's explanation and photograph with their sources. On the run screen a sheet from below on a phone, the right column on a wide screen. -->
+          <div class="task-body-right" id="figures-sheet" aria-label="그림">
+            <div class="run-sheet-head"><b>그림</b><button id="run-close-figures" type="button" class="run-sheet-close">닫기</button></div>
             <section class="panel source-card" aria-labelledby="source-visual-title">
               <h2 id="source-visual-title">원문 PDF 그림</h2>
               <div class="source-meta" aria-live="polite">
@@ -543,10 +605,12 @@
       </section>
     </section>
 
-    <section class="panel timeline" aria-labelledby="timeline-title">
+    <!-- Lane UI0 decision 3: on the run screen the conversation is a drawer -- the long answers to read again, and the voices not heard. -->
+    <section class="panel timeline" id="conversation-sheet" aria-labelledby="timeline-title">
       <div class="timeline-head">
         <h2 id="timeline-title">실험 대화 💬</h2>
         <p>음성 대화와 검색 참고 자료</p>
+        <button id="run-close-conversation" type="button" class="run-sheet-close">닫기</button>
       </div>
       <!-- Lane SP1 decision 4 (2026-10-10): a voice the server took for another person's leaves one small line here with the time -- no words, since nothing was transcribed -- folded away; it goes into no record and no report. -->
       <details id="ignored-speech" class="ignored-speech" hidden><summary id="ignored-speech-summary">다른 사람 말로 보여 듣지 않은 말 0개</summary><ul id="ignored-speech-list"></ul></details>
@@ -560,6 +624,9 @@
       <div class="example"><b>시각 자료 & 검색</b>“SDS-PAGE 사진 보여줘.” · “AMBIC이 뭐야?”</div>
     </section>
   </main>
+
+  <!-- Lane UI0 decision 3: behind an open sheet; a touch on it closes the sheet. -->
+  <div id="run-sheet-backdrop" class="run-sheet-backdrop" hidden></div>
 
   <!-- New Session Confirmation Modal -->
   <div id="new-session-modal" class="modal-backdrop" hidden>
@@ -783,6 +850,9 @@ function renderExperimentContext(){
 // runs while this session is live and the server's protocol state is active
 // (a pause included); it is over once the server said experiment.ended;
 // otherwise it has not started. The view only changes where things are drawn.
+// The sheet open over the run view (decision 3), the pictures the step has had, and how long an answer card's words may be before the card offers the conversation.
+let runSheet="";
+const runFigureKeys=new Set(),runFigureKeysSeen=new Set(),RUN_CARD_LONG=120;
 function screenView(){
  if(experimentEndedOnScreen)return "after";
  const state=curatedProtocolState;
@@ -791,6 +861,7 @@ function screenView(){
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
+ if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
  return view;
 }
 // Lane UI0 decision 2 (2026-10-12): the 실험 중 view's own parts -- the status
@@ -798,7 +869,7 @@ function renderScreenView(){
 // card under the step -- redrawn wherever the page redraws its context. Each
 // is read from what the server sent; the connection and the microphone are
 // this browser's own.
-function renderRunView(){renderScreenView();renderRunStatus();renderRunTimer();renderRunCard();}
+function renderRunView(){renderScreenView();renderRunStatus();renderRunTimer();renderRunCard();renderRunFigureFlag();}
 function renderRunStatus(){
  const state=curatedProtocolState,attached=state?.attached===true,analysis=$("run-analysis-state");
  if(analysis){const text=attached?(state.development_only?"개발용 큐레이션 분석":"분석 통과"):"";analysis.textContent=text;analysis.hidden=!text;}
@@ -879,8 +950,33 @@ function renderRunCard(){
  if(entry.kind==="answer"&&nonemptyText(entry.notice)){const notice=document.createElement("p");notice.className="run-card-notice";notice.textContent=normalizePresentationText(entry.notice);card.appendChild(notice);}
  if(nonemptyText(entry.text)){const body=document.createElement("p");body.className="run-card-body";body.textContent=entry.text;card.appendChild(body);}
  if(entry.research&&nonemptyText(entry.research.text)){const more=document.createElement("div");more.className="run-card-more";more.appendChild(runBadge(entry.research.label,entry.research.label==="일반 설명"?"is-general":""));const text=document.createElement("p");text.className="run-card-body";text.textContent=entry.research.text;more.appendChild(text);card.appendChild(more);}
+ if(entry.text.length+(entry.research?.text?.length||0)>RUN_CARD_LONG){const again=document.createElement("button");again.type="button";again.className="run-card-again";again.textContent="대화 보기에서 전부 읽기";again.addEventListener?.("click",()=>{openRunSheet("conversation");});card.appendChild(again);}
  card.hidden=false;return entry.kind;
 }
+// Lane UI0 decision 3 (2026-10-12): the run screen's three sheets -- 대화
+// 보기, 그림, 설정 -- one open at a time over the run screen, opened and shut
+// by the experimenter; opening one asks nothing of the server. The 그림
+// button says "새 자료" while the step has a picture, a drawing or the web's
+// explanation that came after its sheet was last open.
+const RUN_SHEETS=Object.freeze({conversation:{opener:"run-open-conversation",close:"run-close-conversation"},figures:{opener:"run-open-figures",close:"run-close-figures"},settings:{opener:"run-open-settings",close:"run-close-settings"}});
+function renderRunSheets(){
+ const body=globalThis.document?.body;if(body?.dataset)body.dataset.sheet=runSheet;
+ for(const [name,parts] of Object.entries(RUN_SHEETS))$(parts.opener)?.setAttribute?.("aria-expanded",String(runSheet===name));
+ const backdrop=$("run-sheet-backdrop");if(backdrop)backdrop.hidden=!runSheet;
+ renderRunFigureFlag();
+}
+function openRunSheet(name){
+ if(!Object.prototype.hasOwnProperty.call(RUN_SHEETS,name)||screenView()!=="during")return false;
+ runSheet=name;if(name==="figures")for(const key of runFigureKeys)runFigureKeysSeen.add(key);
+ renderRunSheets();$(RUN_SHEETS[name].close)?.focus?.();
+ return true;
+}
+function closeRunSheet(){const was=runSheet;if(!was)return false;runSheet="";renderRunSheets();$(RUN_SHEETS[was].opener)?.focus?.();return true;}
+function toggleRunSheet(name){return runSheet===name?closeRunSheet():openRunSheet(name);}
+function onRunSheetKey(event){if(event?.key!=="Escape"||!runSheet)return false;closeRunSheet();return true;}
+function noteRunFigure(key){const step=curatedProtocolState?.current_step_id;if(typeof key!=="string"||!key||typeof step!=="string")return;runFigureKeys.add(`${step}|${key}`);if(runSheet==="figures")runFigureKeysSeen.add(`${step}|${key}`);renderRunFigureFlag();}
+function renderRunFigureFlag(){const flag=$("run-figures-fresh");if(!flag)return false;const step=curatedProtocolState?.current_step_id,fresh=typeof step==="string"&&[...runFigureKeys].some(key=>key.startsWith(`${step}|`)&&!runFigureKeysSeen.has(key));flag.hidden=!fresh||runSheet==="figures";return !flag.hidden;}
+
 // What the run view takes from a message the page has already handled: the
 // turn's name, its question and answer, a reference added to it, and the
 // line of voice. The same identity checks as the conversation's.
@@ -1179,8 +1275,8 @@ function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["sou
 function safeSourceFigure(value,state){if(!value||typeof value!=="object"||value.kind!=="source_figure"||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||typeof value.figure_id!=="string"||!/^source-figure-[1-9][0-9]*-[1-9][0-9]*$/.test(value.figure_id)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.caption!=="string"||typeof value.label!=="string"||!value.label||!["image/png","image/jpeg"].includes(value.mime_type)||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/figures/${encodeURIComponent(value.figure_id)}`)return null;return value;}
 function sourceFiguresOf(state,screen){if(!screen||typeof screen!=="object"||!("source_figures" in screen))return [];if(screen.source_figures===null)return null;if(!Array.isArray(screen.source_figures))return [];return screen.source_figures.map(item=>safeSourceFigure(item,state)).filter(Boolean);}
 function renderSourceFigures(container,state,figures,current){const pageUrl=page=>`/api/protocols/${encodeURIComponent(state.protocol_id)}/revisions/${encodeURIComponent(state.revision_id)}/source-pages/${page}`;const head=document.createElement("div");head.className="visual-status";head.textContent=figures.length===1?"원문 그림":`원문 그림 ${figures.length}장`;container.appendChild(head);if(current)$("source-visual-state").textContent=head.textContent;for(const figure of figures){const block=document.createElement("figure");block.className="source-figure";const status=document.createElement("div");status.className="visual-status";status.textContent=normalizePresentationText(figure.label);const image=document.createElement("img");image.alt=normalizePresentationText(figure.caption||figure.label);image.loading="lazy";image.src=figure.url;image.addEventListener?.("error",()=>{status.textContent="원문 그림을 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";image.remove();});block.appendChild(status);block.appendChild(image);if(figure.caption){const caption=document.createElement("figcaption");caption.textContent=`원문 캡션 · ${normalizePresentationText(figure.caption)}`;block.appendChild(caption);}// Lane VF decision 8: the cut figure itself, large, and the whole source page as an image.
-const links=document.createElement("div");links.className="source-figure-links";const large=document.createElement("a");large.href=figure.url;large.target="_blank";large.rel="noopener";large.textContent="그림 크게 보기";links.appendChild(large);const page=document.createElement("a");page.href=`${pageUrl(figure.source_page)}/image`;page.target="_blank";page.rel="noopener";page.textContent="원본 쪽 보기";links.appendChild(page);block.appendChild(links);container.appendChild(block);}}
-function renderStepVisual(container,state,screen){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const figures=state?sourceFiguresOf(state,screen):[];if(figures===null){const text=document.createElement("div");text.className="visual-status";text.textContent="원문 그림 확인 중…";container.appendChild(text);if(current)$("source-visual-state").textContent="원문 그림 확인 중";return;}if(figures.length){renderSourceFigures(container,state,figures,current);return;}const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=asset.url;image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=legacy?asset.url:asset.source_page_url;link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
+const links=document.createElement("div");links.className="source-figure-links";const large=document.createElement("a");large.href=figure.url;large.target="_blank";large.rel="noopener";large.textContent="그림 크게 보기";links.appendChild(large);const page=document.createElement("a");page.href=`${pageUrl(figure.source_page)}/image`;page.target="_blank";page.rel="noopener";page.textContent="원본 쪽 보기";links.appendChild(page);block.appendChild(links);container.appendChild(block);if(current)noteRunFigure(`figure:${figure.figure_id}`);}}
+function renderStepVisual(container,state,screen){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const figures=state?sourceFiguresOf(state,screen):[];if(figures===null){const text=document.createElement("div");text.className="visual-status";text.textContent="원문 그림 확인 중…";container.appendChild(text);if(current)$("source-visual-state").textContent="원문 그림 확인 중";return;}if(figures.length){renderSourceFigures(container,state,figures,current);return;}const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;if(current)noteRunFigure(`asset:${asset.asset_id}`);const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=asset.url;image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=legacy?asset.url:asset.source_page_url;link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
 
 
 // Lane WV, decision 1: the step's figures, cut after the state was drawn.
@@ -1225,7 +1321,7 @@ function applyWebLookupResult(message,browserGeneration=sessionGeneration){
  const status=node.querySelector?.(".filler-status");if(status){status.textContent="";status.hidden=true;}
  const outcome=node.querySelector?.(".turn-visual");
  if(message.status==="success"){
-  const panel=$("procedure-web");if(panel){panel.replaceChildren();panel.hidden=false;renderWebLookupResult(panel,message);}
+  const panel=$("procedure-web");if(panel){panel.replaceChildren();panel.hidden=false;renderWebLookupResult(panel,message);noteRunFigure(`web:${key}`);}
   if(outcome){outcome.hidden=false;const line=document.createElement("div");line.className="visual-status web-lookup-line";line.textContent=`웹 자료 · 출처와 함께 오른쪽 '원문 PDF 그림' 칸에 띄웠어요${message.spoken_aloud?"":" · 음성 없이 화면만"}`;outcome.appendChild(line);}
   announceMilestone("웹 자료를 화면에 띄웠습니다.");
  }else if(outcome){
@@ -1256,7 +1352,7 @@ function applyDrawingResult(message,browserGeneration=sessionGeneration){
  const diagram=message.status==="success"?safeDrawnDiagram(message.diagram,curatedProtocolState):null;
  if(diagram){
   const panel=$("procedure-drawing");
-  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=diagram.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);}
+  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=diagram.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);noteRunFigure(`drawing:${diagram.asset_id}`);}
   if(outcome){outcome.hidden=false;const line=document.createElement("div");line.className="visual-status drawn-line";line.textContent=`${normalizePresentationText(diagram.label)} · 오른쪽 '원문 PDF 그림' 칸에 띄웠어요`;outcome.appendChild(line);}
   announceMilestone("AI가 그린 그림을 화면에 띄웠습니다.");
  }else if(outcome){
@@ -1295,7 +1391,7 @@ function resetSessionUI(){
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
  turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
- webReferenceHistory.length=0;runTurns.clear();runCardKey=null;renderRunCaption("");
+ webReferenceHistory.length=0;runTurns.clear();runCardKey=null;renderRunCaption("");runFigureKeys.clear();runFigureKeysSeen.clear();runSheet="";renderRunSheets();
  if($("task-web-reference-panel"))$("task-web-reference-panel").hidden=true;
  if($("task-web-reference-content"))$("task-web-reference-content").replaceChildren();
  $("log").replaceChildren();renderExperimentReportList([]);
@@ -2911,6 +3007,9 @@ $("experiment-checkpoint-restart")?.addEventListener("click",()=>{void restartEx
 $("manual-observation-save")?.addEventListener("click",()=>{void saveManualObservation();});
 $("experiment-evidence-upload")?.addEventListener("click",()=>{void uploadExperimentEvidence();});
 
+for(const [name,parts] of Object.entries(RUN_SHEETS)){$(parts.opener)?.addEventListener("click",()=>{toggleRunSheet(name);});$(parts.close)?.addEventListener("click",()=>{closeRunSheet();});}
+$("run-sheet-backdrop")?.addEventListener("click",()=>{closeRunSheet();});
+globalThis.document?.addEventListener?.("keydown",event=>{onRunSheetKey(event);});
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
