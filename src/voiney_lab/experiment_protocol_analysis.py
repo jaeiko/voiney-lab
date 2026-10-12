@@ -64,7 +64,9 @@ onto the next page, put the part on the cited page in source_excerpt and the
 part that opens the next page in continued_excerpt, with
 continued_on_page_number set to that next page's number. Leave the running
 header, footer and page number out of both parts, and never continue onto a
-third page. Only source-layout whitespace that the downstream
+third page. When the quote ends on its own page, leave both
+continued_on_page_number and continued_excerpt null; never name a next page
+without its part. Only source-layout whitespace that the downstream
 validator normalizes may differ; every non-whitespace character must match
 the cited page. This applies to protocol, section, step, material, equipment,
 prerequisite, warning, note, expected-result, and image-related evidence
@@ -326,6 +328,36 @@ def _build_analysis_response_schema() -> dict[str, Any]:
 
 
 ANALYSIS_RESPONSE_SCHEMA = _build_analysis_response_schema()
+
+#: Lane EV3, decision 3 (human decision 2026-10-12): the schema the provider
+#: is sent says, on the two continuation fields, to leave both empty when a
+#: quote has no second piece. Only there: ``ANALYSIS_RESPONSE_SCHEMA`` is the
+#: validated contract, whose SHA-256 the curated development fixture pins as
+#: its schema identity, and a description is no part of the shape -- the
+#: model reads it, the decoder never does.
+_CONTINUATION_DESCRIPTIONS = {
+    "continued_on_page_number": (
+        "The next page's number, only when the quote runs past the end of its "
+        "page onto that page. null when there is no second part -- then "
+        "continued_excerpt is null too."
+    ),
+    "continued_excerpt": (
+        "The part of the quote that opens the next page, verbatim. null when "
+        "there is no second part -- then continued_on_page_number is null too; "
+        "never an empty string."
+    ),
+}
+
+
+def _provider_response_schema() -> dict[str, Any]:
+    schema = json.loads(json.dumps(ANALYSIS_RESPONSE_SCHEMA))
+    properties = schema["$defs"]["SourceEvidence"]["properties"]
+    for name, description in _CONTINUATION_DESCRIPTIONS.items():
+        properties[name] = {**properties[name], "description": description}
+    return schema
+
+
+ANALYSIS_PROVIDER_RESPONSE_SCHEMA = _provider_response_schema()
 
 
 class ProtocolAnalysisError(ValueError):
@@ -1851,6 +1883,18 @@ def _verified_evidence(
     extraction: ProtocolPdfExtraction,
 ) -> domain.SourceEvidence:
     if (
+        evidence.continued_on_page_number is not None
+        and isinstance(evidence.continued_excerpt, str)
+        and not evidence.continued_excerpt.strip()
+    ):
+        # Lane EV3, decision 3 (human decision 2026-10-12): a next page named
+        # with an empty second piece is no second piece. Gemini at "low"
+        # wrote the whole quote in source_excerpt that way (lane M3); it is
+        # then judged by lane EV2's decision-1 rule for one quote across the
+        # page end, or as a quote on its own page.
+        evidence = replace(
+            evidence, continued_on_page_number=None, continued_excerpt=None)
+    if (
         not isinstance(evidence.source_page_number, int)
         or isinstance(evidence.source_page_number, bool)
         or evidence.source_page_number <= 0
@@ -3333,7 +3377,7 @@ def analyze_protocol_extraction(
         raw_response = model.analyze(
             system_prompt=ANALYSIS_SYSTEM_PROMPT,
             input_json=input_json,
-            response_schema=ANALYSIS_RESPONSE_SCHEMA,
+            response_schema=ANALYSIS_PROVIDER_RESPONSE_SCHEMA,
         )
     except ProtocolAnalysisError:
         raise
