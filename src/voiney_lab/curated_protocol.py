@@ -8,6 +8,7 @@ creates a store or treats the fixture as final protocol approval.
 
 from __future__ import annotations
 
+import collections
 import functools
 import hashlib
 import json
@@ -8897,6 +8898,92 @@ def _count_quantities(value: str) -> list[tuple[str, str | None]]:
     )
 
 
+#: Lane FX2, human decision 2 of 2026-10-12: words that rank or multiply,
+#: which the source writes in letters and a Korean reading writes with a
+#: number -- "primary antibody" is "1차 항체", "a second time" is "두
+#: 번째로", "double distilled" is "2차 증류수". The value each one stands for.
+_SOURCE_RANK_WORDS = {
+    "primary": "1", "secondary": "2", "tertiary": "3", "quaternary": "4",
+    "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
+    "sixth": "6", "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10",
+    "single": "1", "double": "2", "triple": "3", "quadruple": "4",
+}
+_SOURCE_RANK_WORD = re.compile(
+    r"\b(" + "|".join(_SOURCE_RANK_WORDS) + r")\b", re.IGNORECASE)
+#: "1 second", "one second", "per second" are the time, not a rank.
+_SECOND_AS_TIME = re.compile(r"(?:\d|\bone|\bper|\beach)\s*$", re.IGNORECASE)
+#: The Korean forms of a rank or a multiple, written with a number once the
+#: counts are digits (``_normalized_counts``): "1차" (not "1차례", which is
+#: "once"), "2 번째", "2째", "1회차", "2중", "2배", "2겹".
+_KOREAN_RANK_FORM = re.compile(
+    r"(?<![0-9.])(\d+)\s*(?:차(?!례)|번\s*째|째|회\s*차|중|배|겹)")
+#: The Korean forms of a count written without a digit, which the quantity
+#: reading cannot see: "첫 번째" (1st); a Sino-Korean numeral before 차 or
+#: 색 -- "일차", "이색" (two-color), "삼색"; and a native count before a name
+#: kept in English -- "한 Falcon tube" (one falcon tube), "두 PVDF
+#: membrane" -- which ``_normalized_counts`` reads only before Korean.
+_KOREAN_LETTER_COUNTS = {
+    "일": "1", "이": "2", "삼": "3", "사": "4", "오": "5",
+    "한": "1", "두": "2", "세": "3", "네": "4", "다섯": "5", "여섯": "6",
+    "일곱": "7", "여덟": "8", "아홉": "9", "열": "10",
+}
+_KOREAN_LETTER_COUNT_FORM = re.compile(
+    r"(?<![가-힣])(?:(첫)\s*(?:번\s*)?째|([일이삼사오])(?:차(?!례)|색)"
+    r"|(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s+(?=[A-Za-z]))")
+
+
+def _source_rank_values(source: str) -> list[str]:
+    """The value of each rank or multiple word of the source (decision 2)."""
+
+    values = []
+    for match in _SOURCE_RANK_WORD.finditer(source):
+        word = match.group(1).casefold()
+        if word == "second" and _SECOND_AS_TIME.search(source[:match.start()]):
+            continue
+        values.append(_SOURCE_RANK_WORDS[word])
+    return values
+
+
+def _quantities_changed(source: str, reading: str) -> bool:
+    """Whether the reading states other numbers than the source (``reader_translation_issue``).
+
+    Each number with its own unit, counted by the same rules on both sides.
+    A rank or count word (lane FX2, decision 2) is the one difference let
+    through, word by word: a source word that ranks or multiplies
+    ("primary", "second", "double") lets one Korean form of the same number
+    ("1차", "두 번째", "2중") stand without a digit in the source, and a
+    count the source states ("two-color") is read by a Korean form with no
+    digit ("이색"). A form the source has no word for, a second form for one
+    word, and every number with a unit remain changes.
+    """
+
+    normalized_source = _normalized_counts(source)
+    normalized_reading = _normalized_counts(reading)
+    stated = collections.Counter(_count_quantities(normalized_source))
+    read = collections.Counter(_count_quantities(normalized_reading))
+    if stated == read:
+        return False
+    added = read - stated
+    dropped = stated - read
+    words = collections.Counter(_source_rank_values(source))
+    forms = collections.Counter(
+        match.group(1) for match in _KOREAN_RANK_FORM.finditer(normalized_reading))
+    for number, unit in list(added):
+        if unit is not None:
+            continue
+        let = min(added[(number, unit)], words[number], forms[number])
+        added[(number, unit)] -= let
+    letters = collections.Counter(
+        "1" if match.group(1) else _KOREAN_LETTER_COUNTS[match.group(2) or match.group(3)]
+        for match in _KOREAN_LETTER_COUNT_FORM.finditer(reading)
+    )
+    for number, unit in list(dropped):
+        if unit is not None:
+            continue
+        dropped[(number, unit)] -= min(dropped[(number, unit)], letters[number])
+    return bool(+added) or bool(+dropped)
+
+
 def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
     """The (number, unit) pairs a statement states, clock times as one each."""
 
@@ -8933,8 +9020,10 @@ def reader_translation_issue(
     Korean unit word only right after its number, counts written as words
     included, counted by the same rules on both sides ("Once" opening a
     sentence is a conjunction, not a count; a repeat count is a count) --
-    and no other; it must keep every reagent, material and equipment name
-    the statement uses in its original spelling (general nouns in
+    and no other, except that a rank or count word of the source may be
+    read in its Korean form ("primary" as "1차"; lane FX2, see
+    ``_quantities_changed``); it must keep every reagent, material and
+    equipment name the statement uses in its original spelling (general nouns in
     ``_TRANSLATABLE_TERMS`` may be Korean); and it must neither add nor
     drop a negation ("avoid" in any form pairs with "피하"). A leading
     "N단계:" for the statement's own label is allowed. ``None`` means the
@@ -8954,8 +9043,7 @@ def reader_translation_issue(
         reading = re.sub(
             rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
         source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
-    if _count_quantities(_normalized_counts(source)) != _count_quantities(
-            _normalized_counts(reading)):
+    if _quantities_changed(source, reading):
         return "quantities_changed"
     if bool(_SOURCE_NEGATION.search(source)) != bool(
             _KOREAN_NEGATION.search(_without_un_renderings(source, reading))):
