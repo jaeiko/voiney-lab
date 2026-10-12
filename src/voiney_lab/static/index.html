@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0a0d3a">
+  <meta name="theme-color" content="#ffffff">
   <title>Voiney Lab · Lab Copilot</title>
   <link rel="stylesheet" href="/app.css">
   <style>
@@ -84,7 +84,7 @@
     body[data-view="during"] .sticky-rail{min-height:var(--run-statusbar-h);padding:.25rem 1rem;gap:.75rem;flex-wrap:nowrap;-webkit-backdrop-filter:none;backdrop-filter:none;transition:none}
     body[data-view="during"] .rail-left{flex:1 1 auto;flex-wrap:nowrap;gap:.75rem;min-width:0}
     body[data-view="during"] .brand-mini,body[data-view="during"] .rail-divider,body[data-view="during"] #rail-timer-badge,body[data-view="during"] #rail-safety-badge{display:none}
-    body[data-view="during"] .rail-basis-badge{order:1;display:inline-flex;align-items:center;flex:0 1 auto;min-width:0;max-width:45%;height:32px;padding:0 .75rem;border-radius:2px;background:var(--ink);color:var(--canvas);font-size:1rem;font-weight:600;white-space:nowrap}
+    body[data-view="during"] .rail-basis-badge{order:1;display:inline-flex;align-items:center;flex:0 1 auto;min-width:0;max-width:45%;height:32px;padding:0 .75rem;border-radius:2px;background:var(--ink);color:var(--on-ink);font-size:1rem;font-weight:600;white-space:nowrap}
     body[data-view="during"] .rail-basis-badge #rail-basis{min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;color:inherit;font-size:inherit;font-weight:inherit}
     body[data-view="during"] .run-analysis-state:not([hidden]){display:inline;flex:none}
     body[data-view="during"] .run-analysis-state::before{content:" · "}
@@ -94,10 +94,10 @@
     /* The buttons along the bottom: pause or resume and stop, 64px. */
     body[data-view="during"] .rail-right{position:fixed;right:0;bottom:0;z-index:95;height:var(--target-run);gap:0;background:var(--ink)}
     body[data-view="during"] #rail-new-session,body[data-view="during"] #toggle-setup-btn{display:none}
-    body[data-view="during"] .rail-right button{width:var(--run-action-w);height:var(--target-run);min-height:var(--target-run);padding:.25rem;border:0;border-left:1px solid var(--muted);border-radius:0;background:var(--ink);color:var(--canvas);font-size:.9rem;font-weight:700;line-height:1.2;white-space:normal}
+    body[data-view="during"] .rail-right button{width:var(--run-action-w);height:var(--target-run);min-height:var(--target-run);padding:.25rem;border:0;border-left:1px solid var(--muted);border-radius:0;background:var(--ink);color:var(--on-ink);font-size:.9rem;font-weight:700;line-height:1.2;white-space:normal}
     body[data-view="during"] .rail-right button:disabled{opacity:.45}
     /* The voice console becomes the line of voice: what it is doing, and the last words. */
-    body[data-view="during"] .voice-console{position:fixed;left:0;right:calc(var(--run-action-w) * var(--run-actions));bottom:0;z-index:94;height:var(--run-bottom-h);margin:0;padding:0 1rem;gap:.75rem;grid-template-columns:auto minmax(0,1fr);border:0;border-radius:0;background:var(--ink);color:var(--canvas)}
+    body[data-view="during"] .voice-console{position:fixed;left:0;right:calc(var(--run-action-w) * var(--run-actions));bottom:0;z-index:94;height:var(--run-bottom-h);margin:0;padding:0 1rem;gap:.75rem;grid-template-columns:auto minmax(0,1fr);border:0;border-radius:0;background:var(--ink);color:var(--on-ink)}
     body[data-view="during"] .voice-console .controls{display:none}
     body[data-view="during"] .voice-console .pulse{width:1.5rem;height:1.5rem;font-size:.75rem}
     body[data-view="during"] .voice-console-body{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"state caption" "status caption";column-gap:.75rem;align-items:center;min-width:0}
@@ -146,9 +146,9 @@
     body[data-view="during"] .run-timer[data-timer="soon"]{outline-color:var(--ink)}
     body[data-view="during"] .run-timer[data-timer="soon"] .run-timer-bar{height:12px}
     body[data-view="during"] .procedure-card .run-timer[data-timer="soon"] .run-timer-foot{color:var(--ink)}
-    body[data-view="during"] .run-timer[data-timer="done"]{background:var(--ink);color:var(--canvas)}
-    body[data-view="during"] .procedure-card .run-timer[data-timer="done"] .run-timer-foot{color:var(--canvas)}
-    body[data-view="during"] .run-timer[data-timer="done"] .run-timer-bar,body[data-view="during"] .run-timer[data-timer="done"] .run-timer-bar>span{background:var(--canvas)}
+    body[data-view="during"] .run-timer[data-timer="done"]{background:var(--ink);color:var(--on-ink)}
+    body[data-view="during"] .procedure-card .run-timer[data-timer="done"] .run-timer-foot{color:var(--on-ink)}
+    body[data-view="during"] .run-timer[data-timer="done"] .run-timer-bar,body[data-view="during"] .run-timer[data-timer="done"] .run-timer-bar>span{background:var(--on-ink)}
     .run-timer .workflow-detail-row,.run-timer .workflow-detail-row b{color:inherit}
     .run-timer-notice{flex-wrap:wrap;padding-top:.5rem}
     .run-timer-notice[data-stale="true"]{display:none}
@@ -247,6 +247,72 @@
      body[data-view="during"] .procedure-card p.step-body[data-length="medium"]{font-size:2.25rem;line-height:2.75rem}
      body[data-view="during"] .procedure-card p.step-body[data-length="long"]{font-size:1.875rem;line-height:2.375rem}
     }
+    /* Lane UI0 decision 4 (2026-10-12): the draft's design tokens -- a light
+       page, high contrast, states said in words -- in place of the dark
+       theme (a dark mode comes later). app.css keeps its token names; they
+       are mapped onto the draft's here, and its fixed dark colours are
+       answered one by one below. Contrast on the page: text 15.6:1 (ink on
+       paper), muted 7.5:1, warning 6.6:1, danger 5.9:1, pending 7.0:1. */
+    :root{
+      color-scheme:light;
+      --paper:#ffffff;--bench:#efefec;--line:#d4d4cf;--line-strong:#76766f;
+      --ink:#1c1c1a;--ink-muted:#55554f;--on-ink:#ffffff;
+      --danger:#bf2229;--danger-soft:#fbeaea;
+      --warning:#f2a900;--warning-ink:#7a4f00;--warning-soft:#fff4d6;
+      --pending:#5b3cc4;--pending-soft:#efebfb;
+      --focus-ring:var(--ink);
+      --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-6:24px;--space-8:32px;--space-12:48px;
+      --radius-none:0;--radius-md:4px;
+      --stroke-hairline:1px;--stroke-state:2px;--stroke-focus:3px;--stroke-current:4px;
+      --font-sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,-apple-system,"Segoe UI",sans-serif;
+      --canvas:var(--bench);--surface-raised:var(--paper);--surface-card:var(--paper);--surface-onyx:var(--bench);--surface-onyx-raised:#e4e4e0;
+      --blurple:var(--ink);--blurple-hover:#3a3a36;--green-cta:var(--ink);--green-cta-hover:#3a3a36;
+      --magenta:var(--ink-muted);--cyan:var(--ink);
+      --muted:var(--ink-muted);--subtext:#3d3d38;
+      --border:var(--line);--border-focus:var(--ink);--border-accent:var(--line-strong);
+      --red:var(--danger);--amber:var(--warning-ink);
+      --shadow:none;--shadow-subtle:none;
+      --radius-sm:4px;--radius-lg:4px;--radius-pill:2px;
+    }
+    body{background:var(--bench);color:var(--ink);font-family:var(--font-sans);-webkit-font-smoothing:antialiased;word-break:keep-all;overflow-wrap:break-word}
+    button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,summary:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:var(--stroke-focus) solid var(--focus-ring);outline-offset:2px}
+    .panel,.sticky-rail,.session-badge,.modal-backdrop{-webkit-backdrop-filter:none;backdrop-filter:none}
+    .sticky-rail{background:var(--paper);border-bottom:1px solid var(--line);box-shadow:none}
+    .rail-title{color:var(--ink)}
+    .rail-safety{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
+    .btn-rail-danger{border-color:var(--danger);background:var(--danger-soft);color:var(--danger)}
+    .btn-rail-danger:hover:not(:disabled){background:var(--danger);color:var(--on-ink)}
+    .brand-mark{background:var(--ink);box-shadow:none}
+    .session-badge{background:var(--paper)}
+    .pulse{background:var(--bench);color:var(--ink-muted)}
+    .pulse.listening,.pulse.speaking{background:var(--bench);color:var(--ink)}
+    #start{background:var(--ink);color:var(--on-ink);box-shadow:none}
+    #start:hover:not(:disabled){background:var(--blurple-hover);box-shadow:none}
+    #stop:hover:not(:disabled){background:var(--line)}
+    #protocol-start{border-color:var(--ink);background:var(--ink);color:var(--on-ink)}
+    .experiment-context-card{border-color:var(--line);background:var(--paper)}
+    .experiment-resume-disclosure{background:var(--bench)}
+    .btn-file-select{background:var(--paper)}
+    .btn-file-select:hover{color:var(--on-ink)}
+    .protocol-review{background:var(--paper)}
+    .dev-diagnostics summary:hover{color:var(--ink-muted)}
+    .dev-diagnostics .dev-chips{background:var(--bench)}
+    .turn .transcript{color:var(--ink)}
+    .turn .filler-status{border-color:var(--pending);background:var(--pending-soft);color:var(--pending)}
+    .step-warning{border-left-color:var(--warning-ink);background:var(--warning-soft);color:var(--ink)}
+    .spoken-summary,.research-supplement{border-color:var(--line);background:var(--bench)}
+    .step-visual img{background:var(--paper)}
+    #procedure-status{border-color:var(--line);background:var(--bench);color:var(--ink)}
+    #procedure-status.blocked{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
+    .workflow-paused-banner{border-color:var(--warning-ink);background:var(--warning-soft)}
+    .workflow-paused-banner button,#rail-pause-session.is-resume{color:var(--on-ink)}
+    .workflow-paused-banner button:hover{background:var(--blurple-hover)}
+    .modal-backdrop{background:rgba(28,28,26,.45)}
+    .btn-modal-confirm{color:var(--on-ink)}
+    .btn-modal-confirm:hover{background:#9e1b21}
+    .step-visual a,.web-lookup-sources a,.experiment-evidence-download,.turn .turn-visual a,.source-figure-links a{text-decoration:underline;text-underline-offset:.18rem}
+    .drawn-label{color:var(--warning-ink)}
+    @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
 </head>
 <body data-view="before">
