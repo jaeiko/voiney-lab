@@ -3847,7 +3847,10 @@ FRONT_RULES: dict[str, str] = {
     "pause": "F3 a pause word, or wanting to stop without saying 종료",
     "end_command": "F3 a command with 종료 in it, asked about once (D5)",
     "yes_no_open_question": "F4 a yes or no to an open completion, end, "
-                            "transcript or step move question",
+                            "transcript or step move question; a yes and a no "
+                            "said at once ('네 아니', '아니 맞아') to any server "
+                            "yes/no question is neither, and the question is "
+                            "asked again (lane FX2, decision 1)",
     "observation_reply": "F5 any reply while an endpoint question is open, an "
                          "endpoint stated at a repeat-until step with no "
                          "question open (D9), and the reply to a note or "
@@ -6142,6 +6145,9 @@ def branch_condition_reply(transcript: str) -> str | None:
         return "unknown"
     if _reply_withholds_assent(transcript):
         return None
+    if _branch_reply_is_mixed(transcript):
+        # "네 아니": the key would hear only "아니" (lane FX2, decision 1).
+        return None
     if _BRANCH_YES.fullmatch(key):
         return "yes"
     if _BRANCH_NO.fullmatch(key):
@@ -6180,7 +6186,78 @@ def round_reply(transcript: str) -> str | None:
     return None
 
 
-_NATIVE_COUNT_WORDS = {value: f"{word} 번" for word, value in _NATIVE_COUNTS.items()}
+# --- A yes and a no in one reply (lane FX2, decision 1) ----------------------
+#: Sounds said while finding words, which answer nothing. "네", "응" and
+#: "그래" are not among them: the utterance key drops them at the start of a
+#: command, but in a reply they are the yes itself -- reading "네 아니" by
+#: its key heard only "아니".
+_REPLY_FILLERS = frozenset({
+    "어", "어어", "음", "음음", "으음", "아", "저기", "그러니까", "그니까",
+    "um", "uh", "well", "so", "oh", "ah",
+})
+#: Longer than this, the words are no short reply.
+_REPLY_WORD_LIMIT = 12
+
+
+def _reply_word_list(transcript: str) -> list[str]:
+    """The reply's words as said: no filler taken off, no word said twice merged."""
+
+    key = _utterance_key(transcript)
+    key = re.sub(r"(?<!\d)\.(?!\d)|[,!?。！？;:~…]", " ", key)
+    return key.split()
+
+
+def mixed_reply(
+    transcript: str,
+    affirmative: Callable[[str], bool],
+    negative: Callable[[str], bool],
+) -> bool:
+    """Whether the words say yes and no to one question at once (decision 1).
+
+    The reply is cut into its answers: each part is one the question's own
+    readers take as a yes (``affirmative``) or a no (``negative``), or a
+    filler. When the parts hold a yes and a no -- "네 아니", "응 아니야",
+    "아니 맞아", "아니 완료했어" -- the reply answers neither way, however much
+    it sounds like a correction. Words beside the answers ("아니 다음 단계
+    뭐야?") make it no mere reply, and a question or a hedge is never one;
+    such words are left to the rules that read them.
+    """
+
+    if _reply_withholds_assent(transcript):
+        return False
+    words = _reply_word_list(transcript)
+    if len(words) < 2 or len(words) > _REPLY_WORD_LIMIT:
+        return False
+    # reach[i]: the sets of answers a cut of the first i words can hold.
+    reach: list[set[frozenset[str]]] = [set() for _ in range(len(words) + 1)]
+    reach[0].add(frozenset())
+    for start in range(len(words)):
+        if not reach[start]:
+            continue
+        for end in range(start + 1, len(words) + 1):
+            part = " ".join(words[start:end])
+            kinds: set[str] = set()
+            if end == start + 1 and part in _REPLY_FILLERS:
+                kinds.add("")
+            if affirmative(part):
+                kinds.add("yes")
+            if negative(part):
+                kinds.add("no")
+            for kind in kinds:
+                for held in reach[start]:
+                    reach[end].add(held | {kind} if kind else held)
+    return any({"yes", "no"} <= held for held in reach[-1])
+
+
+def _branch_reply_is_mixed(transcript: str) -> bool:
+    return mixed_reply(
+        transcript,
+        lambda part: bool(_BRANCH_YES.fullmatch(part)),
+        lambda part: bool(_BRANCH_NO.fullmatch(part)),
+    )
+
+
+_NATIVE_COUNT_WORDS ={value: f"{word} 번" for word, value in _NATIVE_COUNTS.items()}
 
 
 def count_words(count: int, *, spoken: bool) -> str:
@@ -6847,6 +6924,24 @@ def _observation_binary_reply(value: str) -> str | None:
     if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
         return "negative"
     return None
+
+
+def _confirmation_yes(part: str) -> bool:
+    """A yes the server's own yes/no questions take, read on one part of a reply."""
+
+    return bool(_AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(part)) or (
+        _binary_frame_reply(part) == "affirmative"
+    )
+
+
+def _confirmation_no(part: str) -> bool:
+    return bool(_NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(part))
+
+
+def _confirmation_is_mixed(transcript: str) -> bool:
+    """A yes and a no at once to a completion, end, timer, record or mode question."""
+
+    return mixed_reply(transcript, _confirmation_yes, _confirmation_no)
 
 
 def resolve_question_focus(
@@ -9242,6 +9337,25 @@ class CuratedProtocolSession:
         self._pending_ambient_suggestion = False
         if transcript_quality is not None:
             return None
+        if (valid or suggestion) and _confirmation_is_mixed(transcript):
+            # "네 아니" (lane FX2, decision 1): neither, and asked again.
+            if valid and confirmation is not None:
+                self._pending_ambient_confirmation = {
+                    **confirmation, "requested_turn_id": turn_id,
+                    "requested_generation": generation,
+                }
+                question = str(confirmation.get("question") or "") or None
+            else:
+                self._pending_ambient_suggestion = True
+                question = "시끄러운 곳 모드로 바꿀까요?" if language == "ko" else None
+            self._last_front_rule = "yes_no_open_question"
+            plan = self._words_plan(
+                self._mixed_reply_words(question, language),
+                intent_kind="yes_no_reply_mixed",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+            self._replay[turn_id] = plan
+            return plan
         key = _semantic_utterance_key(transcript)
         withheld = _reply_withholds_assent(transcript)
         binary = _binary_frame_reply(transcript)
@@ -12632,6 +12746,15 @@ class CuratedProtocolSession:
             display, speech = self._review_question()
             again = "잘 듣지 못했어요. "
             return plan(f"{again}{display}", f"{again}{speech}", "report_review_unheard")
+        if _confirmation_is_mixed(transcript):
+            # "네 아니" (lane FX2, decision 1): no value confirmed or
+            # corrected; the same question, or the same fix, is asked again.
+            if state.get("fix") is not None:
+                words = self._mixed_reply_words(None, language)
+                return plan(words, words, "yes_no_reply_mixed")
+            display, speech = self._review_question()
+            lead = self._MIXED_REPLY_LEAD["ko"]
+            return plan(f"{lead} {display}", f"{lead} {speech}", "yes_no_reply_mixed")
         fix = state.get("fix")
         if fix is not None:
             state["fix"] = None
@@ -16650,6 +16773,136 @@ class CuratedProtocolSession:
             front_only=True,
         )
 
+    #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
+    _MIXED_REPLY_LEAD = {
+        "ko": "'네'와 '아니요'가 함께 들렸어요. 아무것도 바꾸지 않았어요.",
+        "en": "I heard both yes and no, so nothing changed.",
+    }
+    _MIXED_REPLY_ASK = {
+        "ko": "해당하면 '네', 아니면 '아니요'라고 말씀해 주세요.",
+        "en": "Please say 'yes' if it applies, or 'no' if it does not.",
+    }
+
+    def _mixed_reply_words(self, question: str | None, language: str) -> str:
+        lead = self._MIXED_REPLY_LEAD.get(language, self._MIXED_REPLY_LEAD["ko"])
+        ask = self._MIXED_REPLY_ASK.get(language, self._MIXED_REPLY_ASK["ko"])
+        return " ".join(part for part in (lead, question, ask) if part)
+
+    def _ask_mixed_reply_again(
+        self,
+        transcript: str,
+        open_questions: _OpenQuestions,
+        *,
+        turn_id: int,
+        language: str,
+        generation: int | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """A yes and a no said at once to the open question: nothing moves, it is asked again.
+
+        Lane FX2, decision 1 (2026-10-12). The open questions are read in the
+        order plan() answers them, each with its own replies, so the reply is
+        taken as mixed by the very readers that would otherwise have taken
+        one of its halves. The question stays open for the next words: a
+        one-turn question is asked again as of this turn, one open until
+        answered stays so.
+        """
+
+        move = self._pending_step_move
+        question: str | None = None
+        if open_questions.step_move and move is not None:
+            kind = str(move.get("kind"))
+            if kind == "repeat_round":
+                mixed = mixed_reply(
+                    transcript,
+                    lambda part: bool(_ROUND_YES.fullmatch(part)),
+                    lambda part: bool(_ROUND_NO.fullmatch(part)),
+                )
+                question = str(move.get("question") or "") or None
+            else:
+                said_back = _STEP_MOVE_AFFIRMATIVE.get(kind)
+                mixed = mixed_reply(
+                    transcript,
+                    lambda part: _confirmation_yes(part) or bool(
+                        said_back is not None and said_back.fullmatch(part)),
+                    _confirmation_no,
+                )
+        elif open_questions.record_fix or open_questions.note_confirm:
+            mixed = _confirmation_is_mixed(transcript)
+        elif open_questions.stop:
+            mixed = mixed_reply(
+                transcript,
+                lambda part: _confirmation_yes(part) or bool(_END_COMMAND.fullmatch(part)),
+                _confirmation_no,
+            )
+            question = "실험을 종료할까요?" if language == "ko" else "End the experiment?"
+        elif open_questions.timer and not (self._pending_timer_confirmation or {}).get("options"):
+            mixed = _confirmation_is_mixed(transcript)
+        elif open_questions.anomaly or open_questions.transcript:
+            mixed = _confirmation_is_mixed(transcript)
+        elif open_questions.completion:
+            mixed = _confirmation_is_mixed(transcript)
+            pending = self._pending_completion_confirmation
+            if pending is not None and language == "ko":
+                question = f"{self.fixture.steps[pending.step_index].source_label}단계 완료하셨나요?"
+        elif (
+            open_questions.observation
+            and self._pending_observation_confirmation is not None
+            and self._pending_observation_confirmation.accepts_yes_no
+        ):
+            mixed = mixed_reply(
+                transcript,
+                lambda part: bool(_OBSERVATION_AFFIRMATIVE.fullmatch(part)),
+                _confirmation_no,
+            )
+        elif language == "ko" and (open_questions.prestart or open_questions.branch):
+            if open_questions.prestart:
+                state = self._prestart or {}
+                item = (state.get("items") or [{}])[int(state.get("index") or 0)]
+                branch = (
+                    self._branch_by_id(item["id"]) if item.get("kind") == "branch" else None
+                )
+            else:
+                branch = self._open_branch()
+            if branch is None:
+                return None
+            mixed = _branch_reply_is_mixed(transcript)
+            question = f"원문 조건: “{self._condition_words(branch)}”."
+        else:
+            return None
+        if not mixed:
+            return None
+        # The one-turn questions open now are open on the next turn too.
+        asked = {"requested_turn_id": turn_id, "requested_generation": generation}
+        if open_questions.completion and self._pending_completion_confirmation is not None:
+            self._pending_completion_confirmation = replace(
+                self._pending_completion_confirmation, **asked)
+        if open_questions.observation and self._pending_observation_confirmation is not None:
+            self._pending_observation_confirmation = replace(
+                self._pending_observation_confirmation, **asked)
+        if open_questions.transcript and self._pending_transcript_confirmation is not None:
+            self._pending_transcript_confirmation = replace(
+                self._pending_transcript_confirmation, **asked)
+        for name, valid in (
+            ("_pending_note_capture", open_questions.note),
+            ("_pending_stop_confirmation", open_questions.stop),
+            ("_pending_timer_confirmation", open_questions.timer),
+            ("_pending_anomaly_confirmation", open_questions.anomaly),
+            ("_pending_step_move", open_questions.step_move),
+            ("_pending_record_fix", open_questions.record_fix),
+            ("_pending_note_confirmation", open_questions.note_confirm),
+        ):
+            held = getattr(self, name)
+            if valid and held is not None:
+                setattr(self, name, {**held, **asked})
+        self._last_front_rule = "yes_no_open_question"
+        plan = self._words_plan(
+            self._mixed_reply_words(question, language),
+            intent_kind="yes_no_reply_mixed",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+        )
+        self._replay[turn_id] = plan
+        return plan
+
     def _plan(
         self,
         transcript: str,
@@ -16815,6 +17068,15 @@ class CuratedProtocolSession:
         stale_observation_reply = (
             observation_pending is not None and not observation_pending_valid
         )
+        if transcript_quality is None:
+            # "네 아니", "아니 맞아" to any open yes/no question (lane FX2,
+            # decision 1): neither answer is taken; the question is asked again.
+            mixed = self._ask_mixed_reply_again(
+                transcript, open_questions, turn_id=turn_id, language=language,
+                generation=generation,
+            )
+            if mixed is not None:
+                return mixed
         stop_reply = (
             (
                 "affirmative"
