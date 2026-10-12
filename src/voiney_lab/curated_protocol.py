@@ -9046,10 +9046,12 @@ _SOURCE_RANK_WORD = re.compile(
 #: "1 second", "one second", "per second" are the time, not a rank.
 _SECOND_AS_TIME = re.compile(r"(?:\d|\bone|\bper|\beach)\s*$", re.IGNORECASE)
 #: The Korean forms of a rank or a multiple, written with a number once the
-#: counts are digits (``_normalized_counts``): "1차" (not "1차례", which is
-#: "once"), "2 번째", "2째", "1회차", "2중", "2배", "2겹".
+#: counts are digits (``_normalized_counts``): "1차", "2 번째", "2째",
+#: "1회차", "2중", "2배", "2겹" -- the counter ending the word or taking a
+#: particle ("2차로"), so "1차례" (once) and the 배 of "배양" are none.
 _KOREAN_RANK_FORM = re.compile(
-    r"(?<![0-9.])(\d+)\s*(?:차(?!례)|번\s*째|째|회\s*차|중|배|겹)")
+    r"(?<![0-9.:])(\d+)\s*(?:차|번\s*째|째|회\s*차|중|배|겹)"
+    r"(?=(?:이|가|은|는|을|를|의|에|로|으로|와|과|도|만|씩|까지|부터)?(?![가-힣]))")
 #: The Korean forms of a count written without a digit, which the quantity
 #: reading cannot see: "첫 번째" (1st); a Sino-Korean numeral before 차 or
 #: 색 -- "일차", "이색" (two-color), "삼색"; and a native count before a name
@@ -9100,7 +9102,8 @@ def _quantities_changed(source: str, reading: str) -> bool:
     dropped = stated - read
     words = collections.Counter(_source_rank_values(source))
     forms = collections.Counter(
-        match.group(1) for match in _KOREAN_RANK_FORM.finditer(normalized_reading))
+        match.group(1)
+        for match in _KOREAN_RANK_FORM.finditer(_READER_CLOCK.sub(" ", normalized_reading)))
     for number, unit in list(added):
         if unit is not None:
             continue

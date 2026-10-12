@@ -63,6 +63,9 @@ class RankAndCountWordsTests(unittest.TestCase):
             ("Dilute the antibody in blocking buffer.", "블로킹 버퍼에 2차 항체를 희석합니다."),
             # One rank word, one form: a count added beside it is a number.
             ("Add the secondary antibody and wash.", "2차 항체를 넣고 2회 세척합니다."),
+            # The 배 of "배양" is no multiple: the stray 2 before it is a number.
+            ("Dilute the secondary antibody and incubate in the secondary antibody.",
+             "2차 항체를 희석하고 항체에서 2 배양합니다."),
             # The count of "two-color" read as another number.
             ("For two-color detection, dilute together.", "삼색 검출의 경우 함께 희석합니다."),
             ("Inoculate one falcon tube with the colony.", "콜로니를 두 Falcon tubes에 접종합니다."),
