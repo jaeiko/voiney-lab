@@ -380,6 +380,22 @@ def _truncated_retry_ko(retry: dict[str, object]) -> str:
     return "첫 응답이 출력 한도에서 잘렸고 추론 수준을 더 낮출 수 없어 같은 요청을 같은 설정으로"
 
 
+def _response_repair_of(payload: object) -> dict[str, object] | None:
+    """The structural repair an analysis attempt's event records (lane EV3,
+    decision 1), or None for a response read as it came."""
+
+    repair = payload.get("response_repaired") if isinstance(payload, dict) else None
+    if not isinstance(repair, dict) or not isinstance(repair.get("bracket_count"), int):
+        return None
+    return repair
+
+
+def _response_repair_ko(repair: dict[str, object]) -> str:
+    """What the pipeline line says about a response read in a repaired shape."""
+
+    return f"응답 형식을 고쳐 읽음(괄호 {repair['bracket_count']}개)"
+
+
 class _FinishReasonRecorder:
     """An OpenAI-style client that remembers the last reply's finish reason.
 
@@ -1160,6 +1176,10 @@ class ProtocolCatalog:
                 "retryable": code not in _NOT_RETRYABLE_FAILURE_CODES,
                 "action": _REANALYSIS_RECOVERY_ACTION,
             }
+            repair = _response_repair_of(payload)
+            if repair is not None:
+                # Lane EV3, decision 1.
+                failure["response_repaired"] = repair
         return {
             "state": state,
             "requested_at": next(
@@ -2217,6 +2237,7 @@ class ProtocolCatalog:
             failure_code=latest_failure,
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=reanalysis,
+            events=revision_events,
         )
         if analysis is None:
             return base
@@ -2367,6 +2388,7 @@ class ProtocolCatalog:
             failure_code=failure,
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=self._reanalysis_status(revision_events, analysis),
+            events=revision_events,
         )
 
     def _pipeline(
@@ -2379,6 +2401,7 @@ class ProtocolCatalog:
         failure_code: str | None,
         automatic_retry: dict[str, object] | None = None,
         reanalysis: dict[str, object] | None = None,
+        events: Sequence[Any] = (),
     ) -> dict[str, object]:
         """One Korean line: the stage a document is at, whether it is stuck
         there, why, and what a person does (lane PX, decision 4).
@@ -2389,9 +2412,34 @@ class ProtocolCatalog:
         was read, so 원문 읽기 never blocks here. An automatic retry (lane
         AN, decision 1) is said while it runs and after it failed. A run
         asked for over a passed analysis (lane RN, decision 2) is said beside
-        the pass, which still runs whatever that run does.
+        the pass, which still runs whatever that run does. A response read
+        after its brackets were repaired (lane EV3, decision 1) is said on the
+        line of the attempt it belongs to.
         """
 
+        passed_repair = next(
+            (
+                _response_repair_of(event.payload) for event in events
+                if analysis is not None and event.event_type == _ANALYSIS_READY_EVENT
+                and event.analysis_revision_number == analysis.analysis_revision_number
+            ),
+            None,
+        )
+        failed_repair = next(
+            (
+                _response_repair_of(event.payload)
+                for event in reversed(_failures_not_superseded(events))
+                if event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+                and isinstance(event.payload, dict)
+                and isinstance(event.payload.get("failure_code"), str)
+            ),
+            None,
+        )
+        passed_clause = (
+            f" {_response_repair_ko(passed_repair)}: 고친 응답도 형식·원문 근거·경계 검사를 "
+            "모두 통과했습니다." if passed_repair else "")
+        passed_extra: dict[str, object] = (
+            {"response_repair": passed_repair} if passed_repair else {})
         retry = automatic_retry or {}
         again = reanalysis or {}
         again_failure = again.get("failure") if isinstance(again.get("failure"), dict) else None
@@ -2399,10 +2447,12 @@ class ProtocolCatalog:
             again_clause = (" 다시 분석 중입니다 · 원문 근거를 확인하고 있습니다 · "
                             "지금 분석으로 계속 실행할 수 있습니다.")
         elif again_failure is not None:
+            again_repair = _response_repair_of(again_failure)
             again_clause = (
                 " 다시 분석이 실패했습니다: "
                 f"{_ANALYSIS_FAILURE_KO.get(str(again_failure.get('code')), '분석이 실패했습니다.')} "
-                "지금까지의 통과 분석으로 계속 실행할 수 있습니다.")
+                + (f"{_response_repair_ko(again_repair)}. " if again_repair else "")
+                + "지금까지의 통과 분석으로 계속 실행할 수 있습니다.")
         else:
             again_clause = ""
         again_extra: dict[str, object] = (
@@ -2428,10 +2478,10 @@ class ProtocolCatalog:
         if entry.available_for_execution:
             return result(
                 "ready", blocked=False,
-                message="분석을 통과했습니다. 실행할 수 있습니다." + again_clause,
+                message="분석을 통과했습니다. 실행할 수 있습니다." + passed_clause + again_clause,
                 action=(_REANALYSIS_RECOVERY_ACTION if again_failure is not None
                         else "시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요."),
-                ocr_page_numbers=ocr_pages, **again_extra)
+                ocr_page_numbers=ocr_pages, **again_extra, **passed_extra)
         if analysis is None:
             if ocr_state in {"queued", "in_progress"}:
                 return result(
@@ -2463,12 +2513,15 @@ class ProtocolCatalog:
                                 f"자동 재시도({retry_count})도 실패했습니다.")
                 elif retry.get("state") == "failed":
                     message += f" 같은 요청을 자동으로 한 번 다시 보냈지만 자동 재시도({retry_count})도 실패했습니다."
+                if failed_repair:
+                    message += f" {_response_repair_ko(failed_repair)}."
                 return result(
                     stage, blocked=True,
                     message=message,
                     action=_ANALYSIS_RECOVERY_ACTIONS.get(
                         failure_code, _DEFAULT_ANALYSIS_RECOVERY_ACTION),
-                    failure_code=failure_code)
+                    failure_code=failure_code,
+                    **({"response_repair": failed_repair} if failed_repair else {}))
             if entry.lifecycle_state in {"analysis_pending", "analyzing"} or (
                 entry.analysis_status in {
                     "chunk_planned", "chunk_analysis_in_progress", "merge_in_progress",
@@ -2506,21 +2559,22 @@ class ProtocolCatalog:
             # list, but a pipeline line must still say something true.
             return result(
                 "ready", blocked=False,
-                message="분석을 통과했습니다. 실행할 수 있습니다.",
+                message="분석을 통과했습니다. 실행할 수 있습니다." + passed_clause,
                 action="시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요.",
-                ocr_page_numbers=ocr_pages)
+                ocr_page_numbers=ocr_pages, **passed_extra)
         first = readiness_reason_korean(
             blockers[0].code.value, blockers[0].message) or "실행을 막는 사유가 있습니다."
         return result(
             "readiness", blocked=True,
             message=f"{first}" + (f" (외 {len(blockers) - 1}건)" if len(blockers) > 1 else "")
+            + passed_clause
             + again_clause.replace("지금 분석으로 계속 실행할 수 있습니다.", "지금 분석은 그대로입니다.")
             .replace("지금까지의 통과 분석으로 계속 실행할 수 있습니다.", "지금 분석은 그대로입니다."),
             action=_BLOCKER_ACTIONS.get(
                 blockers[0].code.value,
                 "원문을 확인하고 고친 PDF 를 올리거나 '다시 분석'을 누르세요."),
             remaining_reason_codes=[reason.code.value for reason in blockers],
-            ocr_page_numbers=ocr_pages, **again_extra)
+            ocr_page_numbers=ocr_pages, **again_extra, **passed_extra)
 
     def register(
         self,
@@ -3013,6 +3067,16 @@ class ProtocolCatalog:
             # Lane EV2, decision 2: the fields emptied because the source
             # did not confirm them, kept in the ledger beside the analysis.
             ready_payload["cleared_fields"] = list(draft.protocol.cleared_fields)
+        if draft.response_repair is not None:
+            # Lane EV3, decision 1: the response was read after its brackets
+            # were repaired in one of the two fixed shapes; every check above
+            # ran on the repaired response like on any other.
+            ready_payload["response_repaired"] = draft.response_repair.public_dict()
+            logging.getLogger(__name__).info(
+                "protocol.analysis.response_repaired protocol_id=%s shapes=%s brackets=%d",
+                protocol_id, ",".join(draft.response_repair.shapes),
+                draft.response_repair.bracket_count,
+            )
         self.store.append_event(
             f"analysis-ready-{analysis_id}",
             protocol_id,
@@ -3063,6 +3127,11 @@ class ProtocolCatalog:
         }
         if truncated:
             failure_payload["truncated"] = True
+        repair = getattr(exc, "response_repair", None)
+        if repair is not None:
+            # Lane EV3, decision 1: this attempt was read after a repair of
+            # its brackets and then failed a check.
+            failure_payload["response_repaired"] = repair.public_dict()
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {

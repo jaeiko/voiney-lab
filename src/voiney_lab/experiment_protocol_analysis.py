@@ -332,6 +332,9 @@ class ProtocolAnalysisError(ValueError):
     """Base class for sanitized Slice 4 analysis failures."""
 
     code = "protocol_analysis_error"
+    #: The structural repair the response was read with, when it was (lane
+    #: EV3, decision 1), so a failure after the repair is recorded as one.
+    response_repair: "ResponseStructureRepair | None" = None
 
 
 class ProtocolAnalysisInputError(ProtocolAnalysisError):
@@ -614,6 +617,9 @@ class ProtocolAnalysisDraft:
     #: asserted by a chunk. A reviewer must be able to tell the two apart, so
     #: this travels with the draft rather than being inferred from the text.
     title_taken_from_the_file: bool = False
+    #: The structural characters the server changed to read the response as
+    #: JSON (lane EV3, decision 1); None for a response read as it came.
+    response_repair: "ResponseStructureRepair | None" = None
 
     @property
     def capability_policy_id(self) -> str:
@@ -2859,24 +2865,217 @@ def _reject_deferred_state(protocol: domain.ExperimentProtocol) -> None:
             )
 
 
+# --- A response that does not close as JSON (lane EV3, decision 1) ---------
+
+#: The two shapes a response is repaired in (human decision 2026-10-12).
+#: Lane M3 (2026-10-11) found 9 of 30 Gemini 3.8 Flash "low" and 6 of 28
+#: "medium" analysis responses that were not one JSON object although the
+#: model stopped by itself, never at the output limit: the text ends one
+#: closing brace short, or where the protocol's sections array ends and
+#: "constructs" begins the model closes one "}]" too many or opens a new
+#: "{". Gemini is sent the 196-property analysis schema as an instruction,
+#: not as a response grammar (lane P3), so nothing holds it to the shape.
+RESPONSE_REPAIR_CLOSING_BRACE = "closing_brace_added_at_end"
+RESPONSE_REPAIR_EXTRA_CLOSERS = "extra_closers_removed_before_constructs"
+RESPONSE_REPAIR_EXTRA_OPENER = "extra_opener_removed_before_constructs"
+_OPENERS = {"}": "{", "]": "["}
+#: What follows the "]" that closes ``protocol.sections`` in the two junction
+#: shapes; each group is one structural character to remove.
+_JUNCTION_SHAPES = (
+    (re.compile(r'\s*(\})\s*(\])\s*,\s*"constructs"\s*:'), RESPONSE_REPAIR_EXTRA_CLOSERS),
+    (re.compile(r'\s*,\s*(\{)\s*"constructs"\s*:'), RESPONSE_REPAIR_EXTRA_OPENER),
+)
+
+
+@dataclass(frozen=True)
+class ResponseStructureRepair:
+    """The structural characters the server changed to read a response."""
+
+    shapes: tuple[str, ...]
+    bracket_count: int
+
+    def public_dict(self) -> dict[str, object]:
+        return {"shapes": list(self.shapes), "bracket_count": self.bracket_count}
+
+    @property
+    def summary_ko(self) -> str:
+        return f"응답 형식을 고쳐 읽음(괄호 {self.bracket_count}개)"
+
+
+@dataclass(frozen=True)
+class _StructureWalk:
+    #: The brackets still open where the walk stopped, outermost first.
+    open_brackets: str
+    #: Where a closing bracket met no matching opener, or None.
+    mismatch_at: int | None
+    #: Just past the "]" that closes the protocol's sections array, or None.
+    sections_closed_at: int | None
+    in_string: bool
+
+
+def _walk_structure(text: str) -> _StructureWalk:
+    """Follow a JSON text's brackets outside its strings, as far as they match.
+
+    Only brackets, quotes, escapes and the colon after a key are read; every
+    other character is passed over. The sections array is the one opened as
+    ``sections`` of the object opened as ``protocol`` of the outermost one.
+    """
+
+    stack: list[tuple[str, str | None]] = []
+    key = last_string = None
+    in_string = escaped = False
+    string_start = 0
+    sections_closed_at = None
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+                last_string = text[string_start + 1 : index]
+            continue
+        if character == '"':
+            in_string, string_start = True, index
+        elif character == ":":
+            key = last_string if stack and stack[-1][0] == "{" else None
+        elif character in "{[":
+            stack.append((character, key if stack and stack[-1][0] == "{" else None))
+            key = None
+        elif character in "}]":
+            if not stack or stack[-1][0] != _OPENERS[character]:
+                return _StructureWalk(
+                    "".join(opener for opener, _ in stack), index, sections_closed_at, False)
+            _, owner = stack.pop()
+            if (
+                character == "]" and owner == "sections" and sections_closed_at is None
+                and [name for _, name in stack] == [None, "protocol"]
+            ):
+                sections_closed_at = index + 1
+    return _StructureWalk(
+        "".join(opener for opener, _ in stack), None, sections_closed_at, in_string)
+
+
+def _value_characters(text: str) -> str:
+    """A JSON text without its brackets and whitespace outside strings: what
+    a structural repair must leave exactly as it was."""
+
+    kept: list[str] = []
+    in_string = escaped = False
+    for character in text:
+        if in_string:
+            kept.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+            kept.append(character)
+        elif character not in "{}[]" and not character.isspace():
+            kept.append(character)
+    return "".join(kept)
+
+
+def _repaired_response_structure(
+    raw_response: str,
+) -> tuple[str, ResponseStructureRepair] | None:
+    """A response that is not one JSON object, repaired in the two shapes.
+
+    Lane EV3, decision 1 (human decision 2026-10-12). First the junction:
+    right after the "]" that closes ``protocol.sections``, an extra "}]"
+    before ``,"constructs":`` is removed, or a "{" opened right before
+    ``"constructs"``. Then the end: when every bracket matched, no string is
+    open, only the outermost object is still open and the text ends with
+    "}", one "}" is added after it. Nothing else is ever changed -- no value
+    character, no other bracket -- and the result must parse as one JSON
+    object; otherwise None, and the response is refused as before.
+    """
+
+    text = raw_response
+    shapes: list[str] = []
+    removed = 0
+    walk = _walk_structure(text)
+    if walk.sections_closed_at is not None:
+        for pattern, shape in _JUNCTION_SHAPES:
+            match = pattern.match(text, walk.sections_closed_at)
+            if match is None:
+                continue
+            drop = {match.start(group) for group in range(1, pattern.groups + 1)}
+            text = "".join(
+                character for index, character in enumerate(text) if index not in drop)
+            shapes.append(shape)
+            removed = len(drop)
+            walk = _walk_structure(text)
+            break
+    added = 0
+    body_end = len(text.rstrip())
+    if (
+        walk.mismatch_at is None and not walk.in_string and walk.open_brackets == "{"
+        and text[:body_end].endswith("}")
+    ):
+        text = text[:body_end] + "}" + text[body_end:]
+        shapes.append(RESPONSE_REPAIR_CLOSING_BRACE)
+        added = 1
+    if not shapes:
+        return None
+    try:
+        repaired = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(repaired, dict) or _value_characters(text) != _value_characters(
+        raw_response
+    ):
+        return None
+    return text, ResponseStructureRepair(tuple(shapes), removed + added)
+
+
 def parse_protocol_analysis_response(
     raw_response: str,
     extraction: ProtocolPdfExtraction,
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
 ) -> ProtocolAnalysisDraft:
-    """Strictly parse, evidence-check, and assess an untrusted model response."""
+    """Strictly parse, evidence-check, and assess an untrusted model response.
+
+    A response that is not one JSON object is read once more in the two
+    repaired shapes of lane EV3, decision 1; the repaired response then
+    passes every check below like any other, and the draft (or the failure)
+    carries the repair.
+    """
 
     if not isinstance(raw_response, str) or not raw_response.strip():
         raise ProtocolAnalysisResponseError(
             "Protocol analysis response is empty."
         )
+    repair = None
     try:
         response = json.loads(raw_response)
     except json.JSONDecodeError as exc:
-        raise ProtocolAnalysisResponseError(
-            "Protocol analysis response is not exactly one valid JSON object."
-        ) from exc
+        repaired = _repaired_response_structure(raw_response)
+        if repaired is None:
+            raise ProtocolAnalysisResponseError(
+                "Protocol analysis response is not exactly one valid JSON object."
+            ) from exc
+        response, repair = json.loads(repaired[0]), repaired[1]
+    try:
+        draft = _draft_from_response(
+            response, extraction, capability_policy=capability_policy)
+    except ProtocolAnalysisError as exc:
+        exc.response_repair = repair
+        raise
+    return draft if repair is None else replace(draft, response_repair=repair)
+
+
+def _draft_from_response(
+    response: object,
+    extraction: ProtocolPdfExtraction,
+    *,
+    capability_policy: domain.CapabilityPolicy,
+) -> ProtocolAnalysisDraft:
     expected_fields = {
         "analysis_schema_version",
         "pdf_sha256",
@@ -3149,11 +3348,13 @@ def analyze_protocol_extraction(
     )
     hollow = hollow_analysis_check(draft.protocol, extraction)
     if hollow["hollow"]:
-        raise ProtocolAnalysisIncompleteError(
+        incomplete = ProtocolAnalysisIncompleteError(
             "Protocol analysis holds far fewer steps than the source numbers.",
             source_numbered_steps=int(hollow["source_numbered_steps"]),
             analysis_steps=int(hollow["analysis_steps"]),
         )
+        incomplete.response_repair = draft.response_repair
+        raise incomplete
     return draft
 
 
