@@ -461,6 +461,21 @@ ANTHROPIC_MAX_UNION_PROPERTIES = 16
 #: schema accepted, the 196-property analysis schema refused; the small
 #: schemas the other roles send stay well under this.
 GEMINI_MAX_SCHEMA_PROPERTIES = 100
+#: Lane EV3, decision 2 (human decision 2026-10-12): an experimental switch,
+#: off by default. On, the analysis role's Gemini request carries its schema
+#: as the response grammar whatever its size, to measure on a small live
+#: sample whether a grammar keeps the answer one JSON object (lane M3: a fifth
+#: to a third were not) -- lane P3's 400 on the 196-property schema may hold.
+#: Other roles and providers never change; the server validates the reply
+#: exactly as before either way.
+ANALYSIS_RESPONSE_GRAMMAR_SETTING = "VOINEY_LAB_ANALYSIS_RESPONSE_GRAMMAR"
+
+
+def analysis_response_grammar_enabled(environment: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environment is None else environment
+    return env.get(ANALYSIS_RESPONSE_GRAMMAR_SETTING, "").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
 
 #: Anthropic has no JSON mode: a json_object request says so in the system
 #: prompt instead (OpenAI and Gemini send their own JSON modes).
@@ -1317,7 +1332,9 @@ class _GeminiBackend:
         if schema is not None:
             config["response_mime_type"] = "application/json"
             body = _any_of(schema[1])
-            if _schema_counts(body)[0] <= GEMINI_MAX_SCHEMA_PROPERTIES:
+            if _schema_counts(body)[0] <= GEMINI_MAX_SCHEMA_PROPERTIES or (
+                self.role_model.role == "analysis" and analysis_response_grammar_enabled()
+            ):
                 config["response_json_schema"] = body
             else:
                 # JSON mode, and the schema as an instruction (see above).

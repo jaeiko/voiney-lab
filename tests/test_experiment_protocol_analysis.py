@@ -22,6 +22,7 @@ from voiney_lab.experiment_protocol import (
     ReadinessStatus,
 )
 from voiney_lab.experiment_protocol_analysis import (
+    ANALYSIS_PROVIDER_RESPONSE_SCHEMA,
     ANALYSIS_RESPONSE_SCHEMA,
     ANALYSIS_RESPONSE_SCHEMA_NAME,
     ANALYSIS_SYSTEM_PROMPT,
@@ -790,9 +791,11 @@ class ProtocolAnalysisTests(unittest.TestCase):
         request = json.loads(model.calls[0]["input_json"])
         self.assertEqual(prompt, ANALYSIS_SYSTEM_PROMPT)
         self.assertNotIn("response_contract", request)
+        # Lane EV3, decision 3: the schema sent is the validated contract
+        # with a description on the two continuation fields.
         self.assertEqual(
             model.calls[0]["response_schema"],
-            ANALYSIS_RESPONSE_SCHEMA,
+            ANALYSIS_PROVIDER_RESPONSE_SCHEMA,
         )
         self.assertRegex(
             prompt,
@@ -877,9 +880,11 @@ class ProtocolAnalysisTests(unittest.TestCase):
         )
         self.assertGreaterEqual(draft.verified_evidence_count, 8)
         self.assertEqual(len(model.calls), 1)
+        # Lane EV3, decision 3: the schema sent is the validated contract
+        # with a description on the two continuation fields.
         self.assertEqual(
             model.calls[0]["response_schema"],
-            ANALYSIS_RESPONSE_SCHEMA,
+            ANALYSIS_PROVIDER_RESPONSE_SCHEMA,
         )
 
     def test_ordered_steps_and_dependencies_are_preserved(self):
@@ -1568,7 +1573,8 @@ class ProtocolAnalysisTests(unittest.TestCase):
                 "type": "json_schema",
                 "json_schema": {
                     "name": ANALYSIS_RESPONSE_SCHEMA_NAME,
-                    "schema": ANALYSIS_RESPONSE_SCHEMA,
+                    # Lane EV3, decision 3 (see above).
+                    "schema": ANALYSIS_PROVIDER_RESPONSE_SCHEMA,
                     "strict": True,
                 },
             },
