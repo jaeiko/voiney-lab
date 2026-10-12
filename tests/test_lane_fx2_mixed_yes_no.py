@@ -164,6 +164,20 @@ class MixedReplyTests(Session, unittest.TestCase):
         plan = self.say("네")
         self.assertEqual(plan.action, CuratedProtocolAction.STOP)
 
+    def test_a_mixed_reply_to_a_report_value_confirms_nothing(self) -> None:
+        self.open_with(index_of("13"))
+        self.session.active = False
+        self.session.open_report_review(
+            [{"item_id": "r.m", "kind": "measurement", "text": "pH 7.2", "step_label": "13"}],
+            report_id="report-1",
+        )
+        plan = self.say("응 아니야")
+        self.assertEqual(plan.intent_kind, "yes_no_reply_mixed")
+        self.assertIsNone(plan.report_review)
+        self.assertIn("pH 7.2", plan.speech_text)
+        plan = self.say("네")
+        self.assertEqual(plan.report_review["ops"][0]["op"], "confirm")
+
     def test_a_mixed_reply_before_the_start_starts_nothing(self) -> None:
         self.open_with(None, question_timing="before_start")
         self.say("프로토콜 시작해줘")
