@@ -2443,14 +2443,25 @@ class ProtocolCatalog:
         retry = automatic_retry or {}
         again = reanalysis or {}
         again_failure = again.get("failure") if isinstance(again.get("failure"), dict) else None
+        # Lane EV3, decision 5: the re-analysis's own automatic retry.
+        again_retry = again.get("automatic_retry") if isinstance(
+            again.get("automatic_retry"), dict) else {}
+        again_retry_count = (f"{again_retry.get('attempt', 1)}/"
+                             f"{again_retry.get('limit', AUTOMATIC_RETRY_LIMIT)}")
         if again.get("state") in {"analysis_pending", "analyzing"}:
-            again_clause = (" 다시 분석 중입니다 · 원문 근거를 확인하고 있습니다 · "
-                            "지금 분석으로 계속 실행할 수 있습니다.")
+            again_clause = (
+                (f" 다시 분석 중입니다 · 다시 시도 중({again_retry_count}) · 첫 응답이 정해진 "
+                 "형식에 맞지 않아 같은 요청을 자동으로 한 번 다시 보냈습니다 · "
+                 if again_retry.get("state") == "in_progress"
+                 else " 다시 분석 중입니다 · 원문 근거를 확인하고 있습니다 · ")
+                + "지금 분석으로 계속 실행할 수 있습니다.")
         elif again_failure is not None:
             again_repair = _response_repair_of(again_failure)
             again_clause = (
                 " 다시 분석이 실패했습니다: "
                 f"{_ANALYSIS_FAILURE_KO.get(str(again_failure.get('code')), '분석이 실패했습니다.')} "
+                + (f"같은 요청을 자동으로 한 번 다시 보냈지만 자동 재시도({again_retry_count})도 "
+                   "실패했습니다. " if again_retry.get("state") == "failed" else "")
                 + (f"{_response_repair_ko(again_repair)}. " if again_repair else "")
                 + "지금까지의 통과 분석으로 계속 실행할 수 있습니다.")
         else:
@@ -3166,6 +3177,11 @@ class ProtocolCatalog:
         analyses without recording one), and no automatic retry was sent for
         the revision before. A person's "분석 다시 시도" is a second request,
         so it is never retried automatically.
+
+        Lane EV3, decision 5 (human decision 2026-10-12): a person's "다시
+        분석" over a passed analysis (lane RN) is a run of its own and gets
+        the same one retry -- when the latest request asked for a
+        re-analysis and no automatic retry was sent after it.
         """
 
         if failure_code not in AUTOMATIC_RETRY_FAILURE_CODES:
@@ -3174,10 +3190,23 @@ class ProtocolCatalog:
             event for event in self.store.list_events(revision.experiment_id)
             if event.protocol_revision_number == revision.revision_number
         ]
-        requests = sum(
-            1 for event in events if event.event_type == _ANALYSIS_REQUESTED_EVENT)
+        requests = [
+            index for index, event in enumerate(events)
+            if event.event_type == _ANALYSIS_REQUESTED_EVENT
+        ]
         retried = any(event.event_type == _ANALYSIS_RETRY_EVENT for event in events)
-        return requests <= 1 and not retried
+        if len(requests) <= 1 and not retried:
+            return True
+        latest = events[requests[-1]] if requests else None
+        return (
+            latest is not None
+            and isinstance(latest.payload, dict)
+            and latest.payload.get("reanalysis") is True
+            and not any(
+                event.event_type == _ANALYSIS_RETRY_EVENT
+                for event in events[requests[-1] + 1:]
+            )
+        )
 
     def request_analysis(
         self, protocol_id: str, analysis_id: str, *, reanalysis: bool = False,
