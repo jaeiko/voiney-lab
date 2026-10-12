@@ -299,6 +299,11 @@ class CuratedProtocolFixture:
     #: mechanical check for this revision. Used only where ``localizations``
     #: (reviewed) has nothing; never presented as reviewed.
     machine_localizations: dict[str, str] | None = None
+    #: (source, Korean) pairs of the revision's translation glossary, put on
+    #: with its stored translations (lane FX2, decision 3): the Korean names
+    #: ``ProtocolVocabulary`` hears for the protocol's own terms ("진탕기"
+    #: for "shaker table"). Hearing only; no term, check or step reads them.
+    translation_glossary: tuple[tuple[str, str], ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -2256,6 +2261,86 @@ class ProtocolTerm:
         return total
 
 
+# --- The glossary's Korean names of the protocol's terms (lane FX2, decision 3)
+#: What may follow a Korean name and still leave it the name ("진탕기가",
+#: "히팅 블록은", "시약수로").
+_KOREAN_NAME_PARTICLES = (
+    r"(?:이|가|은|는|을|를|의|에|에서|에게|에는|에도|에서는|로|으로|로는|으로는|와|과"
+    r"|랑|이랑|하고|도|만|까지|부터|처럼|보다|이나|나|이야|야|이에요|예요|이요|요|이란|란"
+    r"|이라는|라는|이며|며|이고|고)?"
+)
+
+
+def _glossary_stem(text: str) -> str:
+    """A glossary source or a term, compared the same way: lower case, no
+    mark or parenthesis, each word in the singular ("Heating blocks" and
+    "heating block" alike; "Ringer's" is a possessive, not a plural)."""
+
+    text = re.sub(r"\([^()]*\)|[®™]", " ", text.casefold())
+
+    def singular(match: re.Match[str]) -> str:
+        word = match.group(0)
+        if word.endswith(("'s", "’s")):
+            return word
+        if word.endswith(("ches", "shes", "xes", "sses", "zes")):
+            return word[:-2]
+        if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+            return word[:-1]
+        return word
+
+    return " ".join(re.sub(r"[a-z][a-z'’-]*", singular, text).split())
+
+
+def _korean_name_forms(korean: str) -> tuple[str, ...]:
+    """The Korean names one glossary entry gives: its words and, written in
+    parentheses, another Korean name ("펠릿(침전물)"). A name holds at least
+    two Hangul syllables; a verb ("원심분리하다") is no name."""
+
+    parts = [re.sub(r"\([^()]*\)", " ", korean), *re.findall(r"\(([^()]*)\)", korean)]
+    forms = []
+    for part in parts:
+        name = " ".join(part.casefold().split())
+        if len(re.findall(r"[가-힣]", name)) < 2 or name.endswith("다"):
+            continue
+        forms.append(name)
+    return tuple(dict.fromkeys(forms))
+
+
+def _korean_name_pattern(name: str) -> re.Pattern[str]:
+    """A Korean name as said: whole, its spaces optional ("진탕 기",
+    "히팅블록"), followed by nothing or a particle (not part of the match)."""
+
+    letters = [re.escape(character) for character in name if not character.isspace()]
+    return re.compile(
+        r"(?<![가-힣a-z0-9])" + r"\s*".join(letters) + r"(?![a-z0-9])"
+        + r"(?=" + _KOREAN_NAME_PARTICLES + r"(?![가-힣]))"
+    )
+
+
+def _glossary_korean_names(
+    pairs: Sequence[tuple[str, str]], vocabulary: "ProtocolVocabulary",
+) -> tuple[tuple[str, str], ...]:
+    """(Korean name, entity) for each glossary entry whose source is a term of
+    the protocol -- its own terms first, then its lexicon words and the
+    other words of its prose. A source the vocabulary does not hold names
+    nothing: there is no term to hear it as."""
+
+    stems: dict[str, str] = {}
+    for term in (*vocabulary.terms, *vocabulary.lexicon_terms, *vocabulary.words):
+        stems.setdefault(_glossary_stem(term.text), term.entity)
+    names: dict[str, str] = {}
+    for source, korean in pairs:
+        candidates = (source, *re.findall(r"\(([^()]*)\)", source))
+        entity = next(
+            (stems[stem] for stem in map(_glossary_stem, candidates) if stem in stems), None,
+        )
+        if entity is None:
+            continue
+        for name in _korean_name_forms(korean):
+            names.setdefault(name, entity)
+    return tuple(names.items())
+
+
 @dataclass(frozen=True)
 class ProtocolVocabulary:
     """The technical terms one protocol's own text contains.
@@ -2278,6 +2363,11 @@ class ProtocolVocabulary:
     #: The lab-lexicon words the protocol writes, spelled as it writes them
     #: ("gel plug", "rpm", "keratin"): sent to STT after its own terms.
     lexicon_terms: tuple[ProtocolTerm, ...] = ()
+    #: (Korean name, entity): the names the revision's translation glossary
+    #: gives the terms above (lane FX2, decision 3), heard by ``hear`` as
+    #: that term. Never a term of their own, so neither the STT keyterms nor
+    #: the translation check's names change with them.
+    korean_names: tuple[tuple[str, str], ...] = ()
     #: What ``hear`` and ``lexicon_entities`` worked out, per vocabulary.
     _cache: dict = field(default_factory=dict, compare=False, repr=False, hash=False)
 
@@ -2379,7 +2469,14 @@ class ProtocolVocabulary:
         corrections: list[tuple[str, str]] = []
         index = 0
         terms = sorted((*self.terms, *self.words), key=lambda term: -len(term.words))
+        # The words that say a glossary Korean name ("삼각 플라스크가") are
+        # that name, not a sound to hear again as another term ("flask").
+        kept = self._korean_name_tokens(key)
         while index < len(tokens):
+            if index in kept:
+                rewritten.extend(tokens[index:kept[index]])
+                index = kept[index]
+                continue
             token = tokens[index]
             digits = re.search(r"\d", token) is not None
             chosen: tuple[int, int, str] | None = None  # (distance, span length, replacement)
@@ -2489,7 +2586,35 @@ class ProtocolVocabulary:
             for form in _LAB_LEXICON_KOREAN[entity]:
                 for match in re.finditer(re.escape(form), heard_key):
                     spans.append((match.start(), match.end(), entity))
+        # The glossary's Korean name of a term ("진탕기가"): named the same way.
+        for pattern, entity in self._korean_name_patterns():
+            for match in pattern.finditer(heard_key):
+                spans.append((match.start(), match.end(), entity))
         return heard_key, tuple(dict.fromkeys(spans)), tuple(dict.fromkeys(corrections))
+
+    def _korean_name_tokens(self, key: str) -> dict[int, int]:
+        """First token -> the token after it, for each glossary name said in ``key``."""
+
+        patterns = self._korean_name_patterns()
+        if not patterns:
+            return {}
+        spans = [(match.start(), match.end()) for match in re.finditer(r"\S+", key)]
+        kept: dict[int, int] = {}
+        for pattern, _entity in patterns:
+            for match in pattern.finditer(key):
+                first = next(i for i, (_, end) in enumerate(spans) if end > match.start())
+                after = next(i for i, (_, end) in enumerate(spans) if end >= match.end()) + 1
+                kept[first] = max(kept.get(first, after), after)
+        return kept
+
+    def _korean_name_patterns(self) -> tuple[tuple[re.Pattern[str], str], ...]:
+        found = self._cache.get("korean_names")
+        if found is None:
+            found = tuple(
+                (_korean_name_pattern(name), entity) for name, entity in self.korean_names
+            )
+            self._cache["korean_names"] = found
+        return found
 
     @classmethod
     def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
@@ -2644,13 +2769,17 @@ class ProtocolVocabulary:
                         ),
                         phonetic=False,
                     )
-        return cls(
-            terms=tuple(terms.values()),
-            corpus="\n".join(corpus).casefold(),
-            materials=tuple(name for name in materials if name),
-            words=tuple(words.values()),
-            lexicon_terms=tuple(lexicon_terms.values()),
-        )
+        built = {
+            "terms": tuple(terms.values()),
+            "corpus": "\n".join(corpus).casefold(),
+            "materials": tuple(name for name in materials if name),
+            "words": tuple(words.values()),
+            "lexicon_terms": tuple(lexicon_terms.values()),
+        }
+        glossary = getattr(fixture, "translation_glossary", None)
+        if not glossary:
+            return cls(**built)
+        return cls(**built, korean_names=_glossary_korean_names(glossary, cls(**built)))
 
     def keyterms_near(self, index: int | None) -> tuple[str, ...]:
         """Every term, the current step's neighbourhood first.
@@ -3464,6 +3593,10 @@ def _korean_name_said(
     for form in _LAB_LEXICON_KOREAN.get(entity, ()):
         if re.search(re.escape(form), said):
             return form
+    for name, named in (vocabulary.korean_names if vocabulary is not None else ()):
+        # The protocol's glossary name (lane FX2, decision 3).
+        if named == entity and _korean_name_pattern(name).search(said):
+            return name
     term = vocabulary.term_for(entity) if vocabulary is not None else None
     if term is None:
         return None
