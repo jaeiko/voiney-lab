@@ -78,12 +78,13 @@ test.describe('Remaining screen words (lane U2)', () => {
     expect(dev).toContain('readiness_status · analysis_required');
     expect(dev).toContain('development_only · true');
 
-    // A real block is still shown, in red, with its reason.
+    // A real block is still shown, in red, with its reason. Lane UI0 decision 4
+    // (2026-10-12): the red is the draft's danger token (#bf2229) on the light page.
     await send(page, { type: 'protocol.fixture.state', configuration_id: 7, action: 'block', state: fixtureState({ revision: 6, block_reason: 'procedure_blocked_for_handoff' }) });
     await expect(page.locator('#handoff-container')).toBeVisible();
     await expect(page.locator('#procedure-handoff')).toContainText('진행 제한');
     const colour = await page.locator('#procedure-handoff').evaluate(node => getComputedStyle(node).color);
-    expect(colour).toBe('rgb(250, 119, 124)');
+    expect(colour).toBe('rgb(191, 34, 41)');
   });
 
   test('the analysis result lists the blocker and the notice in plain words', async ({ page }) => {
