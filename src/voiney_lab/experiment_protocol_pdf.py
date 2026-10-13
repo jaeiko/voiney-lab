@@ -34,6 +34,7 @@ import re
 import os
 import stat
 import threading
+import time
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, replace
@@ -60,6 +61,7 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 
 __all__ = [
     "BOTTOM_BAND_FRACTION",
+    "IMAGE_MEDIA_TYPES",
     "MAX_PROTOCOL_PDF_BYTES",
     "OCR_REASON_DROPPED_GLYPHS",
     "OCR_REASON_NO_TEXT",
@@ -81,9 +83,17 @@ __all__ = [
     "ProtocolPdfTypeError",
     "ProtocolPdfWorkerError",
     "ProtocolPdfWorkerTimeoutError",
+    "ProtocolSourceConversionUnavailableError",
+    "ProtocolSourceFormatError",
+    "ProtocolSourceTooLargeError",
+    "SOURCE_MEDIA_TYPES",
+    "SourceConversion",
     "TextVerification",
     "clear_protocol_pdf_cache",
+    "convert_source_to_pdf",
     "extract_protocol_pdf",
+    "file_sha256",
+    "pdf_filename",
     "page_ocr_reason",
     "unreadable_character_count",
     "_worker_timeout_seconds",
@@ -617,3 +627,207 @@ def _extract_protocol_pdf_uncached(path: str | Path) -> ProtocolPdfExtraction:
         text_engine=pdf_text_engine.ENGINE_NAME,
         text_engine_version=pdf_text_engine.engine_version(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Sources that are not PDFs (lane AN, FM; human decision 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# A photo of a protocol is read through the same evidence path as a PDF: it is
+# turned into the PDF that extraction, OCR and the analysis read, and that PDF
+# is the source every quote is checked against and the page a person is
+# shown. The upload's own bytes are named by their checksum in the
+# registration (``SourceConversion``); nothing about the evidence check
+# changes.
+
+#: The photo formats read, by upload media type: the Pillow format name the
+#: file must open as.
+IMAGE_MEDIA_TYPES = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/heic": "HEIF",
+    "image/heif": "HEIF",
+}
+SOURCE_MEDIA_TYPES = frozenset({PDF_MEDIA_TYPE, *IMAGE_MEDIA_TYPES})
+#: A photo is placed on its page at the resolution OCR renders pages at, so
+#: OCR reads the photo's own pixels, neither enlarged nor shrunk.
+IMAGE_PDF_DPI = pdf_text_engine.OCR_RENDER_DPI
+#: The largest photo read, in pixels: a 48 MP phone photo fits; Pillow's own
+#: decompression-bomb guard refuses at 179 MP.
+MAX_SOURCE_IMAGE_PIXELS = 100_000_000
+#: JPEG quality of the photo inside the PDF. The photo is the evidence a
+#: person checks a handwritten value against, so it is kept close to as taken.
+IMAGE_PDF_JPEG_QUALITY = 95
+#: The date written into a photo's PDF (with a fixed title), so the same photo
+#: gives the same PDF bytes.
+_FIXED_PDF_DATE = time.gmtime(946684800)  # 2000-01-01T00:00:00Z
+
+
+class ProtocolSourceFormatError(ProtocolPdfError):
+    """The upload is not the format its media type names."""
+
+    code = "invalid_source_file"
+
+
+class ProtocolSourceTooLargeError(ProtocolPdfError):
+    code = "protocol_image_too_large"
+
+
+class ProtocolSourceConversionUnavailableError(ProtocolPdfError):
+    """This server lacks what turns the upload into a PDF (a system install)."""
+
+    code = "source_conversion_unavailable"
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class SourceConversion:
+    """What a registered PDF was made from (lane AN, FM)."""
+
+    media_type: str
+    sha256: str
+    byte_size: int
+    converter: str
+    #: Format details a person may want: the photo's pixel size, whether its
+    #: EXIF orientation was applied.
+    detail: tuple[tuple[str, object], ...] = ()
+    #: The name the file was uploaded under; the PDF is registered as
+    #: ``pdf_filename``.
+    filename: str | None = None
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "media_type": self.media_type,
+            "sha256": self.sha256,
+            "byte_size": self.byte_size,
+            "converter": self.converter,
+            **({"filename": self.filename} if self.filename is not None else {}),
+            **dict(self.detail),
+        }
+
+
+def pdf_filename(filename: str) -> str:
+    """The name a converted upload's PDF is registered under: "notes.jpg" ->
+    "notes.pdf"."""
+
+    stem, dot, _ = filename.rpartition(".")
+    return f"{stem if dot and stem else filename}.pdf"
+
+
+def source_media_type(content_type: str) -> str:
+    """The media type of an upload's Content-Type header, parameters dropped."""
+
+    return content_type.casefold().split(";", 1)[0].strip()
+
+
+def convert_source_to_pdf(
+    source: str | Path,
+    media_type: str,
+    destination: str | Path,
+) -> SourceConversion:
+    """Write the PDF an uploaded photo is read as."""
+
+    media_type = source_media_type(media_type)
+    if media_type in IMAGE_MEDIA_TYPES:
+        return image_to_pdf(source, media_type, destination)
+    raise ProtocolPdfTypeError("The upload is not a PDF or a photo.")
+
+
+def file_sha256(path: str | Path) -> str:
+    """The SHA-256 of a file, read in chunks."""
+
+    return _file_identity(Path(path))[0]
+
+
+def _file_identity(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(_HASH_CHUNK_BYTES), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def image_to_pdf(
+    source: str | Path, media_type: str, destination: str | Path
+) -> SourceConversion:
+    """One photo as a one-page PDF with no text layer, so OCR reads it.
+
+    The page is the photo at ``IMAGE_PDF_DPI``, turned upright by its EXIF
+    orientation; transparency is laid on white. A HEIC photo needs the
+    optional ``pillow-heif`` package (``pip install -e '.[heic]'``); without
+    it the upload is refused by name, never read in part.
+    """
+
+    source = Path(source)
+    expected = IMAGE_MEDIA_TYPES[source_media_type(media_type)]
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:  # pragma: no cover - Pillow is a dependency
+        raise ProtocolSourceConversionUnavailableError(
+            "Pillow is not installed.", code="image_support_unavailable"
+        ) from exc
+    if expected == "HEIF":
+        try:
+            import pillow_heif
+        except ImportError as exc:
+            raise ProtocolSourceConversionUnavailableError(
+                "HEIC photos need the optional pillow-heif package.",
+                code="heic_support_unavailable",
+            ) from exc
+        pillow_heif.register_heif_opener()
+    sha256, byte_size = _file_identity(source)
+    try:
+        with Image.open(source) as opened:
+            if opened.format != expected:
+                raise ProtocolSourceFormatError(
+                    "The photo is not the format its media type names."
+                )
+            width, height = opened.size
+            if width * height > MAX_SOURCE_IMAGE_PIXELS:
+                raise ProtocolSourceTooLargeError("The photo has too many pixels.")
+            orientation = opened.getexif().get(0x0112, 1)
+            image = ImageOps.exif_transpose(opened)
+            if image.mode in {"RGBA", "LA", "PA"} or (
+                image.mode == "P" and "transparency" in image.info
+            ):
+                image = image.convert("RGBA")
+                flat = Image.new("RGB", image.size, (255, 255, 255))
+                flat.paste(image, mask=image.getchannel("A"))
+                image = flat
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+            image.save(
+                Path(destination),
+                "PDF",
+                resolution=float(IMAGE_PDF_DPI),
+                quality=IMAGE_PDF_JPEG_QUALITY,
+                title="Protocol photo",
+                creationDate=_FIXED_PDF_DATE,
+                modDate=_FIXED_PDF_DATE,
+            )
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError) as exc:
+        if isinstance(exc, Image.DecompressionBombError):
+            raise ProtocolSourceTooLargeError("The photo has too many pixels.") from exc
+        raise ProtocolSourceFormatError("The photo could not be read.") from exc
+    return SourceConversion(
+        media_type=source_media_type(media_type),
+        sha256=sha256,
+        byte_size=byte_size,
+        converter=f"pillow-{_pillow_version()}",
+        detail=(
+            ("pixels", [width, height]),
+            ("exif_orientation_applied", orientation not in (None, 1)),
+            ("pdf_dpi", IMAGE_PDF_DPI),
+        ),
+    )
+
+
+def _pillow_version() -> str:
+    from PIL import __version__
+
+    return __version__

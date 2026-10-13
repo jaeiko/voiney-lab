@@ -66,13 +66,21 @@ from voiney_lab.experiment_protocol_config import (
 from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     MAX_PROTOCOL_PDF_BYTES,
+    SOURCE_MEDIA_TYPES,
     ProtocolPdfEncryptedError,
     ProtocolPdfError,
     ProtocolPdfMalformedError,
     ProtocolPdfTooLargeError,
     ProtocolPdfWorkerError,
     ProtocolPdfTypeError,
+    ProtocolSourceConversionUnavailableError,
+    ProtocolSourceFormatError,
+    ProtocolSourceTooLargeError,
+    convert_source_to_pdf,
     extract_protocol_pdf,
+    file_sha256,
+    pdf_filename,
+    source_media_type,
 )
 from voiney_lab.experiment_protocol_store import (
     PROTOCOL_DATABASE_FILENAME,
@@ -2112,6 +2120,15 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return _workspace_http_error(exc)
     if isinstance(exc,ProtocolPdfTooLargeError):
         return HTTPException(status_code=413,detail="protocol_pdf_too_large")
+    # Lane AN, FM: a photo that could not become its PDF.
+    # A converter this server lacks is the server's state (503), not the
+    # file's; a file that is not what its type names is the file's (422).
+    if isinstance(exc,ProtocolSourceConversionUnavailableError):
+        return HTTPException(status_code=503,detail=exc.code)
+    if isinstance(exc,ProtocolSourceTooLargeError):
+        return HTTPException(status_code=413,detail=exc.code)
+    if isinstance(exc,ProtocolSourceFormatError):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolPdfTypeError):
         return HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     if isinstance(exc,ProtocolPdfWorkerError):
@@ -2765,8 +2782,16 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols",status_code=201)
 async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
-    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
-    if media_type!=PDF_MEDIA_TYPE:
+    """Register one protocol source: a PDF or a photo.
+
+    Lane AN, FM (human decision 2026-10-13): a JPG, PNG or HEIC photo is
+    turned into the PDF that extraction, OCR and the analysis read -- one
+    evidence path -- and registered as it; the upload's own checksum is kept
+    with the registration.
+    """
+
+    media_type=source_media_type(request.headers.get("content-type",""))
+    if media_type not in SOURCE_MEDIA_TYPES:
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     length=request.headers.get("content-length")
     if length is not None:
@@ -2781,19 +2806,44 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise HTTPException(status_code=400,detail="invalid_content_length") from exc
     with tempfile.TemporaryDirectory(prefix="protocol-registration-") as root:
         temporary=Path(root)/"upload.pdf"
-        await _spool_protocol_pdf_upload(request,temporary)
+        original=None
+        if media_type==PDF_MEDIA_TYPE:
+            await _spool_protocol_pdf_upload(request,temporary)
+        else:
+            original=Path(root)/"upload.source"
+            await _spool_protocol_pdf_upload(request,original)
         try:
             catalog,store=_open_protocol_catalog()
             try:
-                result=catalog.register(
-                    temporary,
-                    source_filename=filename,
-                    media_type=media_type,
+                converted=None
+                # A photo uploaded before is found by its own checksum and not
+                # converted again.
+                result=(
+                    catalog.find_converted_upload(file_sha256(original))
+                    if original is not None else None
                 )
+                if result is None:
+                    if original is not None:
+                        converted=replace(
+                            await asyncio.to_thread(
+                                convert_source_to_pdf,original,media_type,temporary),
+                            filename=filename,
+                        )
+                    result=catalog.register(
+                        temporary,
+                        source_filename=(
+                            filename if converted is None else pdf_filename(filename)),
+                        media_type=PDF_MEDIA_TYPE,
+                        converted_from=converted,
+                    )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 _record_workspace_metric(
                     category="protocol",metric_name="upload",
-                    dimensions={"source_kind":"local_pdf","status":"stored"},
+                    dimensions={
+                        "source_kind":(
+                            "local_pdf" if converted is None else "local_photo"),
+                        "status":"stored",
+                    },
                 )
                 ocr=_automatic_ocr_on_upload(catalog,result.entry)
                 return {

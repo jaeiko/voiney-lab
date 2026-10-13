@@ -805,3 +805,32 @@ request) reads as two runs, each with its own retry.
 Code from before this version reads all of the above: the new OCR reason is
 an extraction value, not stored, and two retry events on a revision read as
 the retry of the run on screen.
+
+## Lane AN (2026-10-13): photos
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+`POST /api/protocols` also takes a JPG, PNG or HEIC photo (`image/jpeg`,
+`image/png`, `image/heic`, `image/heif`). It is turned into the PDF that
+extraction, OCR and the analysis read -- one image page at 300 dpi -- and that
+PDF is registered as the source, under the upload's name with `.pdf`
+(`notes.jpg` -> `notes.pdf`). The `protocol_registered` event of such a source
+carries `converted_from`: the upload's `media_type`, `sha256`, `byte_size`,
+`filename` and `converter` (`pillow-12.3.0`), and the photo's `pixels`,
+`exif_orientation_applied` and `pdf_dpi`. The same upload again is found by
+that checksum.
+
+### Reading older data
+
+A registration without `converted_from` reads as before.
+
+### Going back
+
+Code from before this version reads every event above: it ignores
+`converted_from`. A protocol registered from a photo reads as the PDF it is.
+
+### New dependencies
+
+`Pillow` (photos) is required; HEIC needs the optional extra `.[heic]`
+(`pillow-heif`).

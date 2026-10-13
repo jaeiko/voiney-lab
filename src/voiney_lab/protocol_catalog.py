@@ -50,6 +50,7 @@ from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
     ProtocolPdfPage,
+    SourceConversion,
     extract_protocol_pdf,
 )
 from voiney_lab.experiment_protocol_store import (
@@ -2722,7 +2723,15 @@ class ProtocolCatalog:
         *,
         source_filename: str,
         media_type: str,
+        converted_from: SourceConversion | None = None,
     ) -> ProtocolRegistration:
+        """Register one source PDF, or find the one already registered.
+
+        ``converted_from`` names the photo the PDF was made from (lane AN,
+        FM); it is kept in the registration event, where
+        ``find_converted_upload`` finds it.
+        """
+
         filename = _display_filename(source_filename)
         if media_type.casefold().split(";", 1)[0].strip() != PDF_MEDIA_TYPE:
             raise ProtocolRegistrationError(
@@ -2751,12 +2760,44 @@ class ProtocolCatalog:
                 "source_filename": filename,
                 "source_sha256": extraction.sha256,
                 "analysis_status": status,
+                **(
+                    {"converted_from": converted_from.payload()}
+                    if converted_from is not None else {}
+                ),
             },
         )
         return ProtocolRegistration(
             self._entry_for_revision(creation.protocol_revision),
             deduplicated=False,
         )
+
+    def find_converted_upload(self, sha256: str) -> ProtocolRegistration | None:
+        """The protocol a photo with this checksum made, if any (lane AN, FM).
+
+        An upload of the same file again is found by its own checksum before
+        it is converted again.
+        """
+
+        revision = self._revision_converted_from(sha256)
+        if revision is None:
+            return None
+        return ProtocolRegistration(self._entry_for_revision(revision), deduplicated=True)
+
+    def _revision_converted_from(self, sha256: str) -> ProtocolRevisionRecord | None:
+        """The revision registered from the upload with this checksum, if any."""
+
+        for experiment in self.store.list_experiments():
+            for event in self.store.list_events(experiment.experiment_id):
+                if event.event_type != "protocol_registered" or not isinstance(
+                    event.payload, dict
+                ):
+                    continue
+                origin = event.payload.get("converted_from")
+                if isinstance(origin, dict) and origin.get("sha256") == sha256:
+                    return self.store.get_protocol_revision(
+                        experiment.experiment_id, event.protocol_revision_number
+                    )
+        return None
 
     def analyze(
         self,
