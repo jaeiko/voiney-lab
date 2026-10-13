@@ -276,6 +276,35 @@ class LibreOfficeOnTheServerTests(unittest.TestCase):
             docx_to_pdf(source, self.root / "e.pdf", converter="/usr/bin/soffice", run=office)
         self.assertEqual(office.environments[0]["FONTCONFIG_FILE"], None)
 
+    def test_list_numbers_are_followed_by_a_space_in_the_copy_libreoffice_reads(self) -> None:
+        numbering = (
+            '<w:numbering xmlns:w="w"><w:abstractNum w:abstractNumId="0">'
+            '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:suff w:val="tab"/><w:lvlText w:val="%1."/></w:lvl>'
+            '<w:lvl w:ilvl="1"><w:start w:val="1"/><w:lvlText w:val="%2)"/></w:lvl>'
+            '<w:lvl w:ilvl="2"><w:suff w:val="nothing"/><w:lvlText w:val="%3"/></w:lvl>'
+            "</w:abstractNum></w:numbering>"
+        )
+        source = self.root / "list.docx"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("word/document.xml", "<w:document><w:t>1. Add 5 mL.</w:t></w:document>")
+            archive.writestr("word/numbering.xml", numbering)
+        copy = self.root / "copy.docx"
+        pdf_module._with_list_numbers_followed_by_space(source, copy)
+        with zipfile.ZipFile(copy) as archive:
+            written = archive.read("word/numbering.xml").decode()
+            self.assertEqual(archive.read("word/document.xml"), b"<w:document><w:t>1. Add 5 mL.</w:t></w:document>")
+        self.assertEqual(written.count('<w:suff w:val="space"/>'), 2)
+        self.assertIn('<w:suff w:val="nothing"/>', written)
+        self.assertNotIn('w:val="tab"', written)
+
+    def test_the_upload_s_own_checksum_is_kept(self) -> None:
+        source = self.root / "p.docx"
+        source.write_bytes(docx_bytes())
+        conversion = docx_to_pdf(source, self.root / "p.pdf", converter="/usr/bin/soffice", run=FakeOffice())
+        import hashlib
+
+        self.assertEqual(conversion.sha256, hashlib.sha256(source.read_bytes()).hexdigest())
+
     @unittest.skipUnless(
         pdf_module.find_office_converter() is not None and _nanum_installed(),
         "LibreOffice and fonts-nanum are not installed here")

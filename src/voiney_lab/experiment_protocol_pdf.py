@@ -942,6 +942,42 @@ def _docx_holds_hangul(archive) -> bool:
     )
 
 
+#: A Word list level's suffix element, and a level as a whole.
+_LIST_SUFFIX_TAB = re.compile(r'<w:suff w:val="tab"\s*/>')
+_LIST_LEVEL = re.compile(r"<w:lvl\b[\s\S]*?</w:lvl>")
+
+
+def _with_list_numbers_followed_by_space(source: Path, destination: Path) -> None:
+    """A copy of a .docx whose list numbers are followed by a space, not a tab.
+
+    Lane AN, FM a (2026-10-13). Word follows a list number with a tab (its
+    default, or ``<w:suff w:val="tab"/>``); the PDF LibreOffice prints keeps no
+    character for that tab, so the page reads "10.Then identify ..." and the
+    step number is refused as glued to its text (2 of the 15 corpus .docx,
+    measured live; the rule that a number is separated from its text by
+    whitespace is a human decision of 2026-10-05). With the suffix set to a
+    space the page reads "10. Then identify ...". Only ``word/numbering.xml``
+    of the copy changes; the uploaded file and its checksum do not.
+    """
+
+    import zipfile
+
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(
+        destination, "w", zipfile.ZIP_DEFLATED
+    ) as copy:
+        for item in archive.infolist():
+            data = archive.read(item.filename)
+            if item.filename == "word/numbering.xml":
+                text = _LIST_SUFFIX_TAB.sub('<w:suff w:val="space"/>', data.decode("utf-8"))
+                text = _LIST_LEVEL.sub(
+                    lambda level: level[0] if "<w:suff " in level[0]
+                    else level[0].replace("</w:lvl>", '<w:suff w:val="space"/></w:lvl>'),
+                    text,
+                )
+                data = text.encode("utf-8")
+            copy.writestr(item, data)
+
+
 def docx_to_pdf(
     source: str | Path,
     destination: str | Path,
@@ -980,7 +1016,7 @@ def docx_to_pdf(
     with tempfile.TemporaryDirectory(prefix="protocol-docx-") as root:
         work = Path(root)
         copy = work / "source.docx"
-        copy.write_bytes(source.read_bytes())
+        _with_list_numbers_followed_by_space(source, copy)
         environment = dict(os.environ)
         if korean:
             fonts = work / "fonts.conf"
