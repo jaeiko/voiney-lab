@@ -29,9 +29,11 @@ from voiney_lab.experiment_protocol_analysis import (
     parse_protocol_analysis_response,
 )
 from voiney_lab.experiment_protocol_pdf import (
+    OCR_REASON_DROPPED_GLYPHS,
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,
+    _with_dropped_hangul_pages_marked,
 )
 
 TITLE = "Phospholipidosis detection"
@@ -202,6 +204,29 @@ class PageFurnitureTests(unittest.TestCase):
                 "1", "Heat the sample and cover it with 2. Cool the vessel.",
                 "1. Heat the sample and cover it with", page=1,
                 continued_on_page_number=2, continued_excerpt="2. Cool the vessel."))
+
+
+class DroppedHangulTests(unittest.TestCase):
+    """(d) a text layer that drops its Hangul glyphs goes to OCR."""
+
+    def pages(self, *texts: str) -> tuple[ProtocolPdfPage, ...]:
+        return tuple(ProtocolPdfPage(n, text, False) for n, text in enumerate(texts, start=1))
+
+    def test_every_page_of_such_a_layer_is_marked(self):
+        dropped = "시험법\n . \n    .\n0.1 M Na2-EDTA 80% \n C18 \n . \n2 g 50 mL\n , \n"
+        marked = _with_dropped_hangul_pages_marked(self.pages(dropped, dropped, "4,800 ×g 10 .\n . \n"))
+        self.assertEqual([page.ocr_required for page in marked], [True, True, True])
+        self.assertEqual({page.ocr_reason for page in marked}, {OCR_REASON_DROPPED_GLYPHS})
+
+    def test_a_korean_layer_with_its_hangul_is_untouched(self):
+        page = "시료 2 g 을 50 mL 튜브에 넣는다.\n0.1 M Na2-EDTA 1 mL 를 넣고 섞는다.\n . \n"
+        pages = self.pages(page, page)
+        self.assertEqual(_with_dropped_hangul_pages_marked(pages), pages)
+
+    def test_dot_leaders_of_an_english_layer_are_untouched(self):
+        toc = "Contents\n.......\n1. Scope ........ 3\n.......\n2. Method ...... 4\n.......\n"
+        pages = self.pages(toc, "1. Scope of the method.")
+        self.assertEqual(_with_dropped_hangul_pages_marked(pages), pages)
 
 
 if __name__ == "__main__":

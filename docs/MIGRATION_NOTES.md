@@ -767,3 +767,35 @@ Code from before this version reads a piece run's events as a claim-chunk run
 (the same event types): while the run is going it shows its progress; after
 it ended, its status may stay at the last chunk event. The stored analysis
 itself reads and runs as any other.
+
+## Lane AN (2026-10-13): evidence past a page's layout
+
+No schema change and no stored row rewritten.
+
+The source-evidence check reads past five layouts the stored DS-2, M3 and EV3
+answers showed (lane AN, EV4): a running header, footer or page number a page
+prints in the middle of its body, a table header reprinted at the top of the
+next page and a header table's number-only cells are left out of the
+comparison; a soft hyphen, a subscript or superscript after a letter, and the
+spaces between two Hangul letters on one line compare as the characters they
+stand for (a superscript after a digit stays itself); a step label written
+"3)" or "(2)" is stored as the bare number. Quotes are stored as the model
+gave them.
+
+A PDF whose text layer drops its Hangul glyphs (lines left holding only their
+spaces and periods) now has each readable page marked for OCR with the new
+`ocr_reason` value `dropped_glyphs`, beside `no_text_layer` and
+`unreadable_glyphs`. The reason is computed at extraction and not stored by
+itself; an OCR run's events record the pages read as before.
+
+### Reading older data
+
+A stored analysis is not checked again; one that passed before still reads.
+A document registered before whose text layer drops its Hangul shows its
+pages as needing OCR the next time it is read; its stored analysis, if any,
+stays as it is.
+
+### Going back
+
+Code from before this version reads all of the above: the new OCR reason is
+an extraction value, not stored.
