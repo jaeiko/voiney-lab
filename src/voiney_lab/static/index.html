@@ -313,6 +313,86 @@
     .btn-modal-confirm:hover{background:#9e1b21}
     .step-visual a,.web-lookup-sources a,.experiment-evidence-download,.turn .turn-visual a,.source-figure-links a{text-decoration:underline;text-underline-offset:.18rem}
     .drawn-label{color:var(--warning-ink)}
+    /* Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1
+       and M1. The protocol list, each state in words, with the upload box
+       beside it (one column on a phone) and what is still being processed
+       under that box; the picked protocol's analysis line and its buttons
+       right under the list; then the check before the start beside the voice
+       console, the basis card and the microphone. The list is the catalog
+       the server sent; a row is picked through the same select as before. */
+    body:not([data-view="during"]) .voice-panel{display:block;padding:0;border:0;background:none;box-shadow:none;overflow:visible}
+    body:not([data-view="during"]) .voice-copy{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+    body:not([data-view="during"]) .voice-actions{display:flex;flex-direction:column;gap:var(--space-6)}
+    body:not([data-view="during"]) .setup-grid{margin-top:0}
+    body:not([data-view="during"]) .settings-sheet,body:not([data-view="during"]) .dev-diagnostics{padding:var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .protocol-library{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+    .library-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--space-1) var(--space-4)}
+    .library-head h2{margin:0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700;letter-spacing:-.01em}
+    .library-count{color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .library-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);align-items:start}
+    .library-main,.library-side{display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
+    .protocol-list{margin:0;padding:0;list-style:none;border:1px solid var(--line);background:var(--paper)}
+    .protocol-list>li+li{border-top:1px solid var(--line)}
+    .protocol-list-empty{padding:var(--space-4);color:var(--ink-muted);font-size:.9375rem;line-height:1.5rem}
+    .protocol-list-head{display:none}
+    .protocol-list-head+.protocol-list{margin-top:calc(-1 * var(--space-4))}
+    .protocol-row,.queue-row{display:grid;width:100%;margin:0;border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+    .protocol-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name steps" "badges badges" "date date" "line line";gap:var(--space-2) var(--space-3);align-items:start;min-height:var(--target-run);padding:var(--space-3) var(--space-4)}
+    .protocol-row:hover:not(:disabled),.queue-row:hover:not(:disabled){background:var(--bench)}
+    .protocol-row[aria-current="true"]{box-shadow:inset 0 0 0 var(--stroke-current) var(--ink)}
+    .protocol-row:disabled,.queue-row:disabled{cursor:not-allowed}
+    .protocol-row-title{grid-area:name;display:flex;flex-direction:column;gap:2px;min-width:0}
+    .protocol-row-name{font-size:1.125rem;line-height:1.625rem;font-weight:600;overflow-wrap:anywhere}
+    .protocol-row-file,.protocol-row-date,.protocol-row-steps,.queue-row-file{color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600;overflow-wrap:anywhere}
+    .protocol-row-steps{grid-area:steps;white-space:nowrap}
+    .protocol-row-date{grid-area:date}
+    .protocol-row-badges{grid-area:badges;display:flex;flex-wrap:wrap;gap:var(--space-2)}
+    .protocol-row-line,.queue-row-line{grid-area:line;color:var(--ink);font-size:.875rem;line-height:1.375rem;font-weight:400;white-space:pre-wrap;overflow-wrap:anywhere}
+    .protocol-row-line:empty,.queue-row-line:empty{display:none}
+    .ui-badge{display:inline-flex;align-items:center;gap:var(--space-1);min-height:24px;padding:0 var(--space-2);border:1px solid var(--line-strong);border-radius:2px;background:var(--paper);color:var(--ink);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .ui-badge[data-kind="done"]{border-color:var(--ink);background:var(--ink);color:var(--on-ink)}
+    .ui-badge[data-kind="pending"]{border:2px solid var(--pending);background:var(--pending-soft);color:var(--pending)}
+    .ui-badge[data-kind="danger"]{border-color:var(--danger);background:var(--danger);color:var(--on-ink)}
+    .ui-badge[data-kind="warning"]{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
+    .ui-badge[data-kind="quiet"]{border-color:var(--line);color:var(--ink-muted)}
+    .ui-badge[data-kind="missing"]{border-style:dashed;color:var(--ink-muted)}
+    .library-side .protocol-register{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-6) var(--space-4);border:var(--stroke-state) dashed var(--line-strong);background:var(--paper);text-align:center}
+    .library-side .protocol-register .control-label{color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:600;letter-spacing:0}
+    .library-side .custom-file-wrapper{flex-direction:column;gap:var(--space-2);max-width:100%}
+    .library-side .btn-file-select{height:auto;min-height:var(--target-run);padding:0 var(--space-6);border:1px solid var(--ink);background:var(--ink);color:var(--on-ink);font-size:1rem;font-weight:600}
+    .library-side .btn-file-select:hover{background:var(--blurple-hover);color:var(--on-ink)}
+    .library-side .selected-file-name{max-width:100%;color:var(--ink-muted);text-align:center}
+    .library-side .protocol-register small{max-width:100%;color:var(--ink);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
+    .protocol-queue{border:1px solid var(--line);background:var(--paper)}
+    .protocol-queue[hidden]{display:none}
+    .protocol-queue h3{margin:0;padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .protocol-queue-list{margin:0;padding:0;list-style:none}
+    .protocol-queue-list>li+li{border-top:1px solid var(--line)}
+    .queue-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"file badge" "line line";gap:var(--space-1) var(--space-3);align-items:center;min-height:var(--target-run);padding:var(--space-3) var(--space-4)}
+    .queue-row-file{grid-area:file;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .queue-row .ui-badge{grid-area:badge}
+    .library-main .protocol-review{margin:0;border:1px solid var(--line);background:var(--paper)}
+    .prestart{display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--space-4);min-width:0}
+    .prestart>.protocol-start-summary{flex:999 1 30rem;min-width:0;margin:0}
+    .prestart-side{flex:1 1 20rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-4);align-items:start;min-width:0}
+    body:not([data-view="during"]) .prestart-side .voice-console,.prestart-side .experiment-context-card{margin:0;border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    body:not([data-view="during"]) .prestart-side .voice-console{grid-template-columns:auto minmax(0,1fr)}
+    body:not([data-view="during"]) .prestart-side .controls{grid-column:1/-1}
+    body:not([data-view="during"]) .prestart-side .controls button{flex:1;min-height:var(--target-run)}
+    .mic-check{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:1px solid var(--line);background:var(--paper);color:var(--ink)}
+    .mic-check h3{margin:0;color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .mic-check p{margin:0}
+    .mic-check-state{font-size:1.25rem;line-height:1.75rem;font-weight:600}
+    .mic-check-line{color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .mic-check-line:empty{display:none}
+    .mic-check-settings{align-self:flex-start;min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
+    @media (min-width:720px){
+     .protocol-list-head{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 4.5rem 10rem;gap:var(--space-3);padding:var(--space-3) var(--space-4);border:1px solid var(--line);border-bottom:0;background:var(--paper);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+     .protocol-row{grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 4.5rem 10rem;grid-template-areas:"name badges steps date" "line line line line";align-items:center;min-height:56px}
+    }
+    @media (min-width:900px){.library-grid{grid-template-columns:minmax(0,1fr) 360px}}
+    body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
+    body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
 </head>
@@ -367,60 +447,126 @@
           <p class="lede">프로토콜과 원문의 안전 주의를 확인한 뒤, 단계 안내·관찰 기록·안전 확인을 말로 하세요.</p>
         </div>
         <div class="voice-actions">
-          <div class="voice-console" aria-live="polite">
-            <div class="pulse" aria-hidden="true">●</div>
-            <div class="voice-console-body">
-              <div id="state">준비</div>
-              <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
-              <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
-              <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
-              <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
-              <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
-                <span id="mic-recovery-text"></span>
-                <button id="mic-reconnect" type="button">마이크 다시 연결</button>
+          <!-- Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1 -- every protocol with its state in words, the upload box beside it and what is still being processed under it, and the picked protocol's analysis line and buttons right by the list. -->
+          <section id="protocol-library" class="protocol-library" aria-labelledby="protocol-library-title">
+            <div class="library-head">
+              <h2 id="protocol-library-title">프로토콜</h2>
+              <small id="protocol-library-count" class="library-count" role="status"></small>
+            </div>
+            <div class="library-grid">
+              <div class="library-main">
+                <div class="protocol-list-head" aria-hidden="true"><span>이름</span><span>상태</span><span>단계</span><span>올린 날짜</span></div>
+                <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
+                <details id="protocol-review-panel" class="protocol-review" hidden open>
+                  <summary>올린 PDF 분석 결과 · 원문 근거와 단계</summary>
+                  <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
+                  <div id="protocol-review-content" class="protocol-review-content"></div>
+                  <div id="protocol-blockers" class="protocol-review-content"></div>
+                  <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
+                  <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
+                  <div class="protocol-review-actions">
+                    <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
+                    <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
+                    <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
+                  </div>
+                </details>
               </div>
-              <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
-              <div id="voice-calibration" class="voice-calibration" role="status" hidden>
-                <div id="voice-calibration-title" class="voice-calibration-title">목소리 맞추기 · 아래 문장을 평소 목소리로 읽어 주세요</div>
-                <p id="voice-calibration-sentence" class="voice-calibration-sentence"></p>
-                <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
+              <div class="library-side">
+                <div class="setup-col-left">
+                  <div class="protocol-register">
+                    <span class="control-label">새 프로토콜 PDF 등록</span>
+                    <div class="custom-file-wrapper">
+                      <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
+                      <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
+                      <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
+                    </div>
+                    <small id="protocol-upload-status" role="status"></small>
+                    <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
+                  </div>
+                </div>
+                <section id="protocol-queue" class="protocol-queue" aria-labelledby="protocol-queue-title" hidden>
+                  <h3 id="protocol-queue-title">처리 중</h3>
+                  <ul id="protocol-queue-list" class="protocol-queue-list"></ul>
+                </section>
               </div>
             </div>
-            <div class="controls">
-              <button id="start" type="button" disabled>새 실험 시작</button>
-              <button id="stop" type="button" disabled>종료</button>
+          </section>
+          <!-- Lane UI2 decision 1: the drafts' M1 -- the check before the start beside the voice console, the protocol's basis card and the microphone, which is this browser's own. -->
+          <div class="prestart">
+            <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
+              <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
+              <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
+              <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
+              <div id="protocol-start-body">
+                <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
+                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
+                <p id="protocol-start-outdated" class="protocol-review-status" role="status" hidden></p>
+                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
+                <p id="protocol-start-cleared" class="protocol-review-status" hidden></p>
+                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
+                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons" hidden></div>
+                <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+                <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
+                <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
+                <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
+                <div class="protocol-review-actions">
+                  <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
+                </div>
+              </div>
+            </section>
+            <div class="prestart-side">
+              <div class="voice-console" aria-live="polite">
+                <div class="pulse" aria-hidden="true">●</div>
+                <div class="voice-console-body">
+                  <div id="state">준비</div>
+                  <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
+                  <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
+                  <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
+                  <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
+                  <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
+                    <span id="mic-recovery-text"></span>
+                    <button id="mic-reconnect" type="button">마이크 다시 연결</button>
+                  </div>
+                  <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
+                  <div id="voice-calibration" class="voice-calibration" role="status" hidden>
+                    <div id="voice-calibration-title" class="voice-calibration-title">목소리 맞추기 · 아래 문장을 평소 목소리로 읽어 주세요</div>
+                    <p id="voice-calibration-sentence" class="voice-calibration-sentence"></p>
+                    <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
+                  </div>
+                </div>
+                <div class="controls">
+                  <button id="start" type="button" disabled>새 실험 시작</button>
+                  <button id="stop" type="button" disabled>종료</button>
+                </div>
+              </div>
+              <section class="experiment-context-card" aria-labelledby="experiment-context-title">
+                <div class="experiment-context-head">
+                  <div>
+                    <span class="experiment-context-kicker">시작 전 확인</span>
+                    <h2 id="experiment-context-title">이 실험의 기준 정보</h2>
+                  </div>
+                  <span id="experiment-context-readiness" class="experiment-context-readiness">프로토콜 선택 필요</span>
+                </div>
+                <div class="experiment-context-grid">
+                  <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
+                  <div><span>분석 상태</span><strong id="experiment-context-version">—</strong></div>
+                  <div><span>실험자</span><strong id="experiment-context-experimenter">—</strong></div>
+                  <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
+                  <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">분석을 통과한 프로토콜 선택</strong></div>
+                </div>
+                <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
+              </section>
+              <section id="mic-check" class="mic-check" aria-labelledby="mic-check-title">
+                <h3 id="mic-check-title">마이크 확인</h3>
+                <p class="mic-check-state"><span id="mic-check-state">마이크 꺼짐</span></p>
+                <p id="mic-check-hint" class="mic-check-line">실험을 시작하면 켜집니다</p>
+                <p id="mic-check-device" class="mic-check-line">기본 마이크 (시스템 설정)</p>
+                <p id="mic-check-voice" class="mic-check-line"></p>
+                <button id="mic-check-settings" type="button" class="mic-check-settings" aria-controls="mic-device">마이크 설정</button>
+              </section>
             </div>
           </div>
-          <section class="experiment-context-card" aria-labelledby="experiment-context-title">
-            <div class="experiment-context-head">
-              <div>
-                <span class="experiment-context-kicker">시작 전 확인</span>
-                <h2 id="experiment-context-title">이 실험의 기준 정보</h2>
-              </div>
-              <span id="experiment-context-readiness" class="experiment-context-readiness">프로토콜 선택 필요</span>
-            </div>
-            <div class="experiment-context-grid">
-              <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
-              <div><span>분석 상태</span><strong id="experiment-context-version">—</strong></div>
-              <div><span>실험자</span><strong id="experiment-context-experimenter">—</strong></div>
-              <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
-              <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">분석을 통과한 프로토콜 선택</strong></div>
-            </div>
-            <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
-          </section>
           <div class="setup-grid">
-            <div class="setup-col-left">
-              <div class="protocol-register">
-                <span class="control-label">새 프로토콜 PDF 등록</span>
-                <div class="custom-file-wrapper">
-                  <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
-                  <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
-                  <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
-                </div>
-                <small id="protocol-upload-status" role="status"></small>
-                <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
-              </div>
-            </div>
             <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
             <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
               <div class="settings-sheet-head">
@@ -487,40 +633,6 @@
                 </fieldset>
               </div>
             </section>
-            <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
-              <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
-              <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
-              <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
-              <div id="protocol-start-body">
-                <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
-                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
-                <p id="protocol-start-outdated" class="protocol-review-status" role="status" hidden></p>
-                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
-                <p id="protocol-start-cleared" class="protocol-review-status" hidden></p>
-                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
-                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons" hidden></div>
-                <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
-                <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
-                <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
-                <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
-                <div class="protocol-review-actions">
-                  <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
-                </div>
-              </div>
-            </section>
-            <details id="protocol-review-panel" class="protocol-review" hidden open>
-              <summary>올린 PDF 분석 결과 · 원문 근거와 단계</summary>
-              <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
-              <div id="protocol-review-content" class="protocol-review-content"></div>
-              <div id="protocol-blockers" class="protocol-review-content"></div>
-              <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
-              <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
-              <div class="protocol-review-actions">
-                <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
-                <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
-                <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
-              </div>
-            </details>
             <details class="dev-diagnostics" style="grid-column:1/-1;margin-top:.35rem;">
               <summary>개발 상세 정보</summary>
               <div class="dev-chips">
@@ -910,6 +1022,7 @@ function renderExperimentContext(){
  setText("experiment-context-readiness",entry?catalogStatus(entry).label:"프로토콜 선택 필요");
  renderResumeDisclosure();
  foldStartSummary();
+ syncProtocolList();
  renderRunView();
 }
 // Lane UI0 decision 1 (2026-10-12): one page and three views -- 실험 전,
@@ -968,6 +1081,7 @@ function renderRunStatus(){
  const primary=$("procedure-primary"),length=String(primary?.textContent||"").length;
  if(primary?.dataset)primary.dataset.length=length>120?"long":length>60?"medium":"short";
  const voice=$("state");if(voice?.dataset)voice.dataset.voiceState=visibleState;
+ renderMicCheck();
 }
 // The server's step timer, read as the rail and the timer row read it:
 // 도는 중, 1분 남음 (the server's deadline a minute or less away), 끝남 · 지남,
@@ -1355,6 +1469,99 @@ function catalogStatus(entry){const status=catalogStatusWord(entry);const outdat
 function catalogStatusWord(entry){if(!entry)return{kind:"none",label:"프로토콜을 선택해 주세요."};if(entry.available_for_execution===true)return{kind:"ready",label:entry.development_only?"분석 통과 · 개발용 큐레이션 분석 · 실행 가능":"분석 통과 · 실행 가능"};if(entry.execution_blocked_reason==="usage_scope_not_development")return{kind:"review",label:"운영 범위에서는 개발용 절차 실행 불가"};if(entry.analysis_status==="ocr_required")return{kind:"ocr",label:"OCR 필요 · 실행 불가"};if(entry.analysis_status==="ocr_in_progress")return{kind:"ocr",label:"OCR 추출 중 · 실행 불가"};if(entry.analysis_status==="ocr_review_required")return{kind:"ocr",label:"OCR 글 확인 대기 · 실행 불가"};if(entry.analysis_status==="ocr_rejected")return{kind:"failed",label:"OCR 결과 거절됨 · 재추출 필요 · 실행 불가"};if(entry.analysis_status==="ocr_failed")return{kind:"failed",label:"OCR 추출 실패 · 실행 불가"};if(entry.lifecycle_state==="analysis_pending")return{kind:"analysis",label:"분석 대기 · 원문 보존됨"};if(entry.lifecycle_state==="analyzing")return{kind:"analysis",label:"문서 처리 중 · 실행 불가"};if(["analysis_failed","chunk_analysis_failed"].includes(entry.analysis_status))return{kind:"failed",label:"분석 실패 · 실행 불가"};if(entry.analysis_status==="merge_conflict")return{kind:"failed",label:"병합 충돌 · 실행 불가"};if(["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(entry.analysis_status))return{kind:"analysis",label:"대형 문서 분석 진행 중 · 실행 불가"};if(entry.analysis_status==="chunked_analysis_required")return{kind:"deferred",label:"대형 문서 분석 요청 대기 · 실행 불가"};if(entry.analysis_status==="structured_analysis_ready")return{kind:"analysis",label:"구조화 분석 요청 대기 · 실행 불가"};if(entry.lifecycle_state==="blocked"||(Array.isArray(entry.execution_blocker_codes)&&entry.execution_blocker_codes.length))return{kind:"failed",label:"실행을 막는 사유 있음 · 실행 불가"};return{kind:"review",label:"분석 전 · 실행 불가"};}
 function renderSelectedProtocolContext(){const entry=protocolCatalog.get($("protocol-id")?.value),status=catalogStatus(entry);$("protocol-readiness").textContent=status.label;$("protocol-revision").textContent=entry?.revision_id||"—";renderState(visibleState);}
 function renderCatalogAnalysisProgress(entries){const target=Array.isArray(entries)?entries.find(item=>item?.analysis_run&&Number.isInteger(item.analysis_run.total_chunks)&&item.analysis_run.total_chunks>0):null,output=$("protocol-analysis-progress");if(!output)return;if(!target){output.textContent="대형 문서 분석 상태 없음";return;}const run=target.analysis_run,total=run.total_chunks,completed=Number.isInteger(run.completed_chunks)?run.completed_chunks:0,failed=Number.isInteger(run.failed_chunks)?run.failed_chunks:0,pending=Number.isInteger(run.pending_chunks)?run.pending_chunks:Math.max(0,total-completed-failed),ranges=Array.isArray(run.chunks)?run.chunks.filter(chunk=>Number.isInteger(chunk?.source_page_start)&&Number.isInteger(chunk?.source_page_end)&&typeof chunk?.status==="string").map(chunk=>`p.${chunk.source_page_start}-${chunk.source_page_end} ${chunk.status}`).join(" · "):"";output.textContent=`대형 문서 분석 · ${run.state} · 전체 ${total} / 완료 ${completed} / 실패 ${failed} / 대기 ${pending}${ranges?` · ${ranges}`:""} · 분석이 끝나기 전 실행 불가`;}
+// Lane UI2 decision 1 (2026-10-13): the protocol list of the 실험 전 view
+// (the drafts' P1 table and M1 picks), drawn from the catalog the server
+// sent. Each row says its state in words -- 분석 통과, 분석 중, 분석 실패, the
+// server's own "다시 분석 권장" line, or the catalog's word for any other
+// state -- with a failure's reason; the row of the protocol the page watches
+// carries the same analysis line as its box, time taken included. A row is
+// picked through the select ("실행할 프로토콜"), the same path as before.
+const PROTOCOL_RUNNING_STATES=new Set(["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"]);
+const PROTOCOL_FAILED_ANALYSIS=new Set(["analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled"]);
+const protocolRowLines=new Map();
+function uiBadge(text,kind=""){const badge=document.createElement("span");badge.className="ui-badge";if(badge.dataset)badge.dataset.kind=kind;badge.textContent=text;return badge;}
+function protocolAnalysisRun(entry){return entry?.analysis_run&&typeof entry.analysis_run==="object"?entry.analysis_run:null;}
+function protocolListBadges(entry){
+ const badges=[],run=protocolAnalysisRun(entry),runGoing=PROTOCOL_RUNNING_STATES.has(run?.state);
+ if(entry?.available_for_execution===true){
+  badges.push({text:"분석 통과",kind:"done"});
+  if(entry.development_only===true)badges.push({text:"개발용 큐레이션 분석",kind:"quiet"});
+  if(run?.reanalysis===true&&runGoing)badges.push({text:"다시 분석 중",kind:"pending"});
+  else if(run?.reanalysis===true&&nonemptyText(run.failure_code))badges.push({text:"다시 분석 실패",kind:"danger"});
+ }else if(PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||runGoing)badges.push({text:"분석 중",kind:"pending"});
+ else if(PROTOCOL_FAILED_ANALYSIS.has(entry?.analysis_status))badges.push({text:"분석 실패",kind:"danger"});
+ else{const status=catalogStatusWord(entry);badges.push({text:status.label.split(" · ")[0],kind:status.kind==="failed"?"danger":"missing"});}
+ if(nonemptyText(entry?.analysis_outdated_ko))badges.push({text:entry.analysis_outdated_ko,kind:"warning"});
+ return badges;
+}
+function protocolRowLine(entry){
+ if(protocolAnalysisNotice?.protocolId===entry?.protocol_id&&nonemptyText(protocolAnalysisNotice.text))return protocolAnalysisBoxLine();
+ const run=protocolAnalysisRun(entry),code=nonemptyText(run?.failure_code)?run.failure_code:null;
+ if(!code||(entry?.available_for_execution===true&&run.reanalysis!==true))return "";
+ return `${run.reanalysis===true?"다시 분석 실패":"분석 실패"} · 이유: ${serverCodeLabel("analysis_failure",code)||protocolUploadErrorMessage(code)}`;
+}
+// What is still being processed, under the upload box: a run going, and a
+// run that failed or waits for a person (OCR to run, a failed analysis).
+function protocolQueueBadge(entry){const badges=protocolListBadges(entry);return badges.find(badge=>badge.kind==="pending"||badge.text==="다시 분석 실패")||(PROTOCOL_FAILED_ANALYSIS.has(entry?.analysis_status)||["ocr_required","ocr_failed","ocr_rejected"].includes(entry?.analysis_status)?badges[0]:null);}
+function protocolRowButton(entry,className){const row=document.createElement("button");row.type="button";row.className=className;if(row.dataset)row.dataset.protocolId=entry.protocol_id;row.addEventListener("click",()=>{pickProtocolFromList(entry.protocol_id);});return row;}
+function protocolRowText(className,text){const span=document.createElement("span");span.className=className;span.textContent=text;return span;}
+function renderProtocolList(){
+ const list=$("protocol-list");if(!list)return 0;
+ const entries=[...protocolCatalog.values()],active=globalThis.document?.activeElement,focused=active?.dataset?.protocolId?{id:active.dataset.protocolId,className:active.className}:null;
+ protocolRowLines.clear();list.replaceChildren();
+ if(!entries.length){const empty=document.createElement("li");empty.className="protocol-list-empty";empty.textContent=$("protocol-id")?.options?.[0]?.textContent==="카탈로그를 불러올 수 없음"?"프로토콜 카탈로그를 불러오지 못했습니다 · 잠시 뒤 새로고침해 주세요.":"아직 올린 프로토콜이 없습니다 · 원문 PDF 를 올리면 여기에 나옵니다.";list.appendChild(empty);}
+ for(const entry of entries){
+  const item=document.createElement("li"),row=protocolRowButton(entry,"protocol-row"),title=document.createElement("span"),badges=document.createElement("span"),line=protocolRowText("protocol-row-line",protocolRowLine(entry));
+  title.className="protocol-row-title";title.append(protocolRowText("protocol-row-name",entry.title),protocolRowText("protocol-row-file",`원문: ${nonemptyText(entry.source_filename)?entry.source_filename:"파일 이름 기록 없음"}`));
+  badges.className="protocol-row-badges";for(const badge of protocolListBadges(entry))badges.appendChild(uiBadge(badge.text,badge.kind));
+  row.append(title,badges,protocolRowText("protocol-row-steps",Number.isInteger(entry.step_count)&&entry.step_count>0?`${entry.step_count}단계`:"—"),protocolRowText("protocol-row-date",uploadedDay(entry.created_at)?`${uploadedDay(entry.created_at)} 올림`:"올린 날짜 기록 없음"),line);
+  item.appendChild(row);list.appendChild(item);protocolRowLines.set(entry.protocol_id,[line]);
+ }
+ const runnable=entries.filter(entry=>entry.available_for_execution===true).length;
+ setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 실행 가능 ${runnable}개`:"");
+ renderProtocolQueue();syncProtocolList();
+ if(focused)for(const host of [list,$("protocol-queue-list")])for(const item of host?.children||[])if(item.firstChild?.dataset?.protocolId===focused.id&&item.firstChild.className===focused.className){item.firstChild.focus?.();return entries.length;}
+ return entries.length;
+}
+function renderProtocolQueue(){
+ const host=$("protocol-queue"),list=$("protocol-queue-list");if(!host||!list)return 0;
+ list.replaceChildren();let shown=0;
+ for(const entry of protocolCatalog.values()){
+  const badge=protocolQueueBadge(entry);if(!badge)continue;
+  const item=document.createElement("li"),row=protocolRowButton(entry,"queue-row"),fallback=catalogStatus(entry).label,line=protocolRowText("queue-row-line",protocolRowLine(entry)||fallback);
+  if(line.dataset)line.dataset.fallback=fallback;
+  row.append(protocolRowText("queue-row-file",nonemptyText(entry.source_filename)?entry.source_filename:entry.title),uiBadge(badge.text,badge.kind),line);
+  item.appendChild(row);list.appendChild(item);shown++;
+  if(protocolRowLines.has(entry.protocol_id))protocolRowLines.get(entry.protocol_id).push(line);else protocolRowLines.set(entry.protocol_id,[line]);
+ }
+ host.hidden=!shown;return shown;
+}
+// The watched run's line changes every second; only its text is rewritten,
+// so a row in focus keeps the focus.
+function updateProtocolRowLines(protocolId){const entry=protocolCatalog.get(protocolId);if(!entry)return false;for(const line of protocolRowLines.get(protocolId)||[])line.textContent=protocolRowLine(entry)||line.dataset?.fallback||"";return true;}
+function syncProtocolList(){
+ const select=$("protocol-id"),picked=select?.value||"",locked=Boolean(select?.disabled);
+ for(const host of [$("protocol-list"),$("protocol-queue-list")])for(const item of host?.children||[]){const row=item.firstChild;if(!row?.dataset?.protocolId)continue;if(row.className==="protocol-row")row.setAttribute?.("aria-current",String(row.dataset.protocolId===picked));setDisabled(row,locked);}
+ return picked;
+}
+function pickProtocolFromList(protocolId){
+ const select=$("protocol-id");if(!select||select.disabled||!protocolCatalog.has(protocolId))return false;
+ if(select.value!==protocolId||currentProtocolReviewId!==protocolId){select.value=protocolId;onProtocolSelectionChanged();}
+ syncProtocolList();return true;
+}
+// Lane UI2 decision 1: the drafts' M1 microphone check, said in words. The
+// microphone is this browser's own and opens when the experiment starts; no
+// level is measured before that.
+function renderMicCheck(){
+ const state=$("mic-check-state");if(!state)return false;
+ const lost=$("mic-recovery")?.hidden===false;
+ state.textContent=lost?"마이크 끊김":micWorkletNode?"마이크 켜짐":"마이크 꺼짐";
+ setText("mic-check-hint",lost?"‘마이크 다시 연결’을 누르세요":micWorkletNode?"":"실험을 시작하면 켜집니다");
+ const select=$("mic-device"),chosen=[...(select?.options||[])].find(option=>option.value===select.value);
+ setText("mic-check-device",`마이크 · ${nonemptyText(chosen?.textContent)?chosen.textContent:"기본 마이크 (시스템 설정)"}`);
+ const voice=$("voice-calibration-setting-status")?.textContent||"";setText("mic-check-voice",nonemptyText(voice)?`목소리 맞추기 · ${voice}`:"");
+ return true;
+}
 
 function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["source_crop","full_source_page_preview"].includes(value.kind)||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||!Array.isArray(state?.source_page_refs)||!state.source_page_refs.includes(value.source_page)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.asset_id!=="string"||!/^(?:source-crop-[1-9][0-9]*-[1-9][0-9]*|source-page-[1-9][0-9]*)$/.test(value.asset_id)||typeof value.alt_text!=="string"||!value.alt_text||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/assets/${encodeURIComponent(value.asset_id)}`||!["image/png","image/jpeg"].includes(value.mime_type))return null;if(value.kind!=="full_source_page_preview"&&(typeof value.label!=="string"||typeof value.caption_primary!=="string"||typeof value.caption_source!=="string"||value.source_page_url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/source-pages/${value.source_page}`))return null;return value;}
 // Lane WV, decision 1: a figure the server cut from the uploaded PDF for the
@@ -2159,6 +2366,7 @@ async function renderMicDevices(inputs=null){
  list.forEach((item,index)=>{const option=document.createElement("option");option.value=item.deviceId;option.textContent=item.label||`마이크 ${index+1}`;select.appendChild(option);});
  if(stored&&!chosen){const missing=document.createElement("option");missing.value=stored.deviceId;missing.textContent=`${stored.label||"고른 마이크"} · 연결 안 됨, 기본 마이크 사용`;select.appendChild(missing);}
  select.value=stored?(chosen||stored.deviceId):"";
+ renderMicCheck();
 }
 function currentMicTrack(){return micStream?.getAudioTracks?.()[0]||micStream?.getTracks?.()[0]||null;}
 async function openMicStream(){
@@ -2365,9 +2573,9 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
   else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
   if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
-  renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();
+  renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();
  }catch(_){
-  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";renderState(visibleState);
+  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";renderState(visibleState);renderProtocolList();
  }finally{selector.setAttribute?.("aria-busy","false");}
 }
 
@@ -2441,7 +2649,7 @@ function confirmProtocolReanalysis(){const ask=globalThis.confirm;return typeof 
 function setProtocolAnalysisBusy(protocolId,busy){protocolAnalysisBusyFor=busy?protocolId:null;const retry=$("protocol-analysis-retry");if(retry&&(busy||currentProtocolReviewId===protocolId))retry.disabled=busy||isRegisteringProtocol;}
 function protocolAnalysisRunning(review){const running=["analysis_pending","analyzing"];return running.includes(review?.lifecycle_state)||running.includes(review?.reanalysis?.state)||["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(review?.analysis_status);}
 function automaticRetryCount(run,state){const retry=run?.automatic_retry;return retry&&typeof retry==="object"&&retry.state===state?`${Number.isInteger(retry.attempt)?retry.attempt:1}/${Number.isInteger(retry.limit)?retry.limit:1}`:"";}
-function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);}
+function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);updateProtocolRowLines(protocolId);}
 function restoreProtocolAnalysisNotice(){if(!currentProtocolReviewId)return;const status=$("protocol-upload-status"),output=$("protocol-analysis-progress");if(status&&protocolAnalysisNotice?.protocolId===currentProtocolReviewId)status.textContent=protocolAnalysisNotice.text;if(output&&protocolAnalysisProgressLine?.protocolId===currentProtocolReviewId)output.textContent=protocolAnalysisProgressLine.text;showProtocolAnalysisBoxLine(currentProtocolReviewId);}
 // Lane RN decision 4 (2026-10-11): the same notice stands in the box that
 // holds the button ("올린 PDF 분석 결과"), with the time taken from the progress
@@ -2488,6 +2696,12 @@ function renderExecutionReasons(review){
 }
 // Lane CF decision 5: "지금 기준: {파일 이름} · {올린 날짜}", the words the
 // server says when asked "어느 프로토콜 기준이야?".
+// The day a PDF was uploaded, in the basis line's words ("2026년 10월 5일").
+function uploadedDay(uploadedAt){
+ if(typeof uploadedAt!=="string"||!uploadedAt)return "";const moment=new Date(uploadedAt);if(Number.isNaN(moment.getTime()))return "";
+ const parts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",year:"numeric",month:"numeric",day:"numeric"}).formatToParts(moment).map(part=>[part.type,part.value]));
+ return `${parts.year}년 ${parts.month}월 ${parts.day}일`;
+}
 function basisWords(filename,uploadedAt){
  const name=typeof filename==="string"&&filename.trim()?filename.trim():"파일 이름 기록 없음";
  let when="올린 날짜 기록 없음";
@@ -2986,7 +3200,7 @@ async function onMessage(e,generation,current){
  if(m.type==="server.words"){
   const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof m.text!=="string")return;activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=`words-${m.turn_id}`;const labels={voice_calibration:"목소리 맞추기",ambient_suggestion:"제안"};if(node.children?.[0])node.children[0].textContent="서버 안내";node.querySelector(".transcript").textContent=labels[m.words_kind]||"서버 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="서버가 말함 · 음성으로 중단 가능";renderState("THINKING");
  }
- if(m.type==="speaker.calibration"){renderVoiceCalibration(m);}
+ if(m.type==="speaker.calibration"){renderVoiceCalibration(m);renderMicCheck();}
  // Lane VT decisions 1-2: the server tells the step timer before it is asked -- on the screen (a timer's end with a short sound) and, when the setting has it said, as a turn of its own like the greeting.
  if(m.type==="protocol.timer.notice"){
   const accepted=acceptedSessionConfiguration;if(!accepted||m.configuration_id!==accepted.configuration_id||typeof m.text!=="string")return;renderTimerNotice(m);
@@ -3108,7 +3322,8 @@ $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting(
 $("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("proactive_mode",event.target.value);});
 $("ambient-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("ambient_mode",event.target.value);});
 $("speaker-sensitivity")?.addEventListener("change",event=>{void saveExperimenterSetting("speaker_sensitivity",event.target.value);});
-$("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");});
+$("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");renderMicCheck();});
+$("mic-check-settings")?.addEventListener("click",()=>{const select=$("mic-device");select?.scrollIntoView?.({block:"center"});select?.focus?.();});
 $("voice-calibration-skip")?.addEventListener("click",()=>{requestVoiceCalibration("skip");});
 $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCalibrationAtStart(event.target.checked);});
 try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
