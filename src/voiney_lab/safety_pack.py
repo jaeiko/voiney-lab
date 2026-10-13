@@ -134,13 +134,16 @@ class SafetyPack:
     sds_documents: tuple[SafetyDocumentRef, ...]
     equipment_documents: tuple[SafetyDocumentRef, ...]
     applicable_topics: tuple[str, ...]
-    coverage_status: str  # "available", "partial", "unavailable", "disabled", "demo_only"
+    coverage_status: str  # "available", "partial", "unavailable", "disabled", "demo_only", "source_protocol_only"
     missing_coverage: tuple[str, ...]
     source_identities: tuple[str, ...]
     #: ``document_id:version`` of approved, in-scope documents left out
     #: because their ``review_due_at`` has passed. Only the fact is kept;
     #: none of their text reaches the pack or a card.
     review_overdue_documents: tuple[str, ...] = ()
+    #: The server's own sentence for a screen to show when no institution
+    #: safety document stands behind the pack (``None`` otherwise).
+    scope_notice: str | None = None
 
     @property
     def total_document_count(self) -> int:
@@ -172,6 +175,7 @@ class SafetyPack:
             "source_identities": list(self.source_identities),
             "total_document_count": self.total_document_count,
             "review_overdue_documents": list(self.review_overdue_documents),
+            "scope_notice": self.scope_notice,
         }
 
 
@@ -255,6 +259,17 @@ def source_excerpt(text: Any, limit: int = _EXCERPT_CHARS) -> str:
 
 #: Catalog usage scopes whose documents are demo material, never facility guidance.
 DEMO_USAGE_SCOPES = ("demo", "test_only")
+
+#: The runtime usage scope of a pilot that has no institution safety documents
+#: (human decision of 2026-10-13, "B안"): the uploaded protocol's own safety
+#: statements are all there is, and every place that shows or speaks about
+#: safety says so. It is a runtime scope only; no catalog document carries it.
+SOURCE_PROTOCOL_ONLY_SCOPE = "source_protocol_only"
+#: The one line the server shows, beside a safety answer and before the start,
+#: when the scope is :data:`SOURCE_PROTOCOL_ONLY_SCOPE`.
+NO_INSTITUTION_DOCUMENTS_NOTICE = "기관 안전 문서 없음 · 원문 안전 주의만"
+#: The ``coverage_status`` of a pack resolved under that scope.
+SOURCE_PROTOCOL_ONLY_COVERAGE = "source_protocol_only"
 
 
 def is_demo_document(usage_scope: Any, title: Any) -> bool:
@@ -552,6 +567,37 @@ def unavailable_safety_pack(
         coverage_status=status,
         missing_coverage=("all_safety_documents",),
         source_identities=(),
+        scope_notice=(
+            NO_INSTITUTION_DOCUMENTS_NOTICE
+            if status == SOURCE_PROTOCOL_ONLY_COVERAGE else None
+        ),
+    )
+
+
+def source_protocol_only_safety_pack(
+    protocol_id: str,
+    protocol_revision: str = "1",
+    facility_id: str | None = None,
+) -> SafetyPack:
+    """The pack of a run that has no institution safety documents.
+
+    Holds no document and reads no catalog: under
+    :data:`SOURCE_PROTOCOL_ONLY_SCOPE` the protocol's own safety statements
+    are all the panel keeps, and the pack says so in the server's words.
+    """
+    return SafetyPack(
+        protocol_id=protocol_id,
+        protocol_revision=protocol_revision,
+        facility_id=facility_id,
+        resolved_at=datetime.now(timezone.utc).isoformat(),
+        sop_documents=(),
+        sds_documents=(),
+        equipment_documents=(),
+        applicable_topics=(),
+        coverage_status=SOURCE_PROTOCOL_ONLY_COVERAGE,
+        missing_coverage=("institution_safety_documents",),
+        source_identities=(),
+        scope_notice=NO_INSTITUTION_DOCUMENTS_NOTICE,
     )
 
 
@@ -576,6 +622,15 @@ def resolve_safety_pack(
     now_iso = current.isoformat()
     subjects = collect_protocol_safety_subjects(protocol)
     protocol_id = subjects.protocol_id
+
+    if usage_scope == SOURCE_PROTOCOL_ONLY_SCOPE:
+        # No institution document, whatever file a path names: this scope is
+        # the statement that there are none, so no catalog is opened.
+        return source_protocol_only_safety_pack(
+            protocol_id=protocol_id,
+            protocol_revision=protocol_revision,
+            facility_id=facility_id,
+        )
 
     sop_docs: list[SafetyDocumentRef] = []
     sds_docs: list[SafetyDocumentRef] = []

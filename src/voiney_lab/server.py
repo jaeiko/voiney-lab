@@ -52,9 +52,11 @@ from voiney_lab.curated_protocol import (
     load_curated_protocol_fixture,
     photo_asked,
     plan_without_internal_names,
+    question_dimensions as _question_dimensions,
     spoken_korean,
     web_lookup_subject,
 )
+from voiney_lab.answer_checks import SAFETY_INSTRUCTION_TOPICS
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
 )
@@ -100,7 +102,14 @@ from voiney_lab.external_references import (
     supplemental_explanation_query,
     supplemental_knowledge_allowed,
 )
-from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
+from voiney_lab.safety_pack import (
+    NO_INSTITUTION_DOCUMENTS_NOTICE,
+    SOURCE_PROTOCOL_ONLY_COVERAGE,
+    SOURCE_PROTOCOL_ONLY_SCOPE,
+    SafetyPack,
+    resolve_safety_pack,
+    unavailable_safety_pack,
+)
 from voiney_lab.protocol_catalog import (
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
@@ -1129,7 +1138,7 @@ def normalize_session_language(value:str)->str:
 
 @dataclass(frozen=True)
 class ServerConfig:
-    catalog_path:Path
+    catalog_path:Path|None
     facility_id:str|None
     usage_scope:str
     allowed_languages:frozenset[str]
@@ -1507,27 +1516,33 @@ def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
     catalog=os.environ.get("VOINEY_LAB_SAFETY_CATALOG","").strip()
     scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
-    catalog_path=Path(catalog)
-    if not catalog:
-        raise ServerConfigurationError(
-            "VOINEY_LAB_SAFETY_CATALOG must not be empty",
-            "VOINEY_LAB_SAFETY_CATALOG",
-        )
-    if not catalog_path.is_absolute():
-        raise ServerConfigurationError(
-            "VOINEY_LAB_SAFETY_CATALOG must be an absolute path: "
-            f"{catalog!r}",
-            "VOINEY_LAB_SAFETY_CATALOG",
-        )
-    invalid_policy_fields=[]
-    if scope not in ("operational","demo","reference_only","test_only"):
-        invalid_policy_fields.append("VOINEY_LAB_USAGE_SCOPE")
-    if invalid_policy_fields:
-        raise ServerConfigurationError(
-            "safety catalog configuration is incomplete",
-            *invalid_policy_fields,
-        )
-    validate_approved_catalog(catalog_path,scope)
+    catalog_path:Path|None=Path(catalog)
+    if scope==SOURCE_PROTOCOL_ONLY_SCOPE:
+        # The statement that no institution safety document exists (human
+        # decision of 2026-10-13): there is no approved catalog to require,
+        # and one that is configured anyway is not read.
+        catalog_path=None
+    else:
+        if not catalog:
+            raise ServerConfigurationError(
+                "VOINEY_LAB_SAFETY_CATALOG must not be empty",
+                "VOINEY_LAB_SAFETY_CATALOG",
+            )
+        if not catalog_path.is_absolute():
+            raise ServerConfigurationError(
+                "VOINEY_LAB_SAFETY_CATALOG must be an absolute path: "
+                f"{catalog!r}",
+                "VOINEY_LAB_SAFETY_CATALOG",
+            )
+        invalid_policy_fields=[]
+        if scope not in ("operational","demo","reference_only","test_only"):
+            invalid_policy_fields.append("VOINEY_LAB_USAGE_SCOPE")
+        if invalid_policy_fields:
+            raise ServerConfigurationError(
+                "safety catalog configuration is incomplete",
+                *invalid_policy_fields,
+            )
+        validate_approved_catalog(catalog_path,scope)
     facility=os.environ.get("VOINEY_LAB_FACILITY_ID","").strip() or None
     raw_allowed=os.environ.get("VOINEY_LAB_ALLOWED_LANGUAGES","ko,en,vi")
     try:
@@ -1576,6 +1591,90 @@ def server_tool_context(
     if selected not in config.allowed_languages:
         raise ValueError("unsupported session language")
     return ToolContext(config.catalog_path,config.facility_id,selected,config.usage_scope)
+
+
+def _source_protocol_only(scope:str|None=None)->bool:
+    """Whether the run has no institution safety documents (decision of 2026-10-13)."""
+
+    return (_runtime_usage_scope() if scope is None else scope)==SOURCE_PROTOCOL_ONLY_SCOPE
+
+
+def _safety_scope_public()->dict[str,object]:
+    """What the start screen is told about the safety documents behind this run.
+
+    ``notice`` is the server's own sentence, shown as it is: a screen never
+    words it. None unless the run has only the protocol's own statements.
+    """
+
+    source_only=_source_protocol_only()
+    return {
+        "usage_scope":_runtime_usage_scope(),
+        "source_protocol_only":source_only,
+        "notice":NO_INSTITUTION_DOCUMENTS_NOTICE if source_only else None,
+    }
+
+
+#: The replies that tell the experimenter something and change nothing: an
+#: answer, a step read again, a question the server turned away. Moving, timing
+#: and recording are left out, so a "안전하게 다음으로" is not given the line.
+_SAFETY_NOTICE_ACTIONS=frozenset({
+    CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.RELATED_QUESTION,
+    CuratedProtocolAction.PROTOCOL_QUERY,
+    CuratedProtocolAction.LAB_DOMAIN_QA,
+    CuratedProtocolAction.UNSUPPORTED,
+    CuratedProtocolAction.OFF_TOPIC,
+    CuratedProtocolAction.CURRENT,
+    CuratedProtocolAction.REPEAT,
+    CuratedProtocolAction.FULL_DETAIL,
+    CuratedProtocolAction.NEXT_INFORMATION,
+    CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE,
+})
+
+
+def _asks_about_safety(plan,transcript:str)->bool:
+    """Whether a read-only answer is about safety: the rules say so, or the words do.
+
+    Display only: nothing here decides a state change. It reads what the
+    rules classified (kind, dimensions, intent) and, for a model's answer,
+    the words of the question: a safety dimension, or a topic the answer
+    checks name (gloves, ventilation, spill, ...).
+    """
+
+    if (
+        getattr(plan,"question_kind",None)=="safety"
+        or "safety" in (getattr(plan,"question_dimensions",()) or ())
+        or getattr(plan,"intent_kind",None) in {"current_step_warning","related_safety_question"}
+    ):
+        return True
+    if not isinstance(transcript,str) or not transcript.strip():
+        return False
+    return "safety" in _question_dimensions(transcript) or any(
+        said.search(transcript) for _name,said,_ground in SAFETY_INSTRUCTION_TOPICS)
+
+
+def _with_safety_scope_notice(plan,scope:str|None,transcript:str):
+    """A safety answer of a run with no institution safety document says so, once.
+
+    The line is the server's: "기관 안전 문서 없음 · 원문 안전 주의만". It is
+    added to what the screen shows, not to what is spoken or recorded as the
+    answer, and only to an answer that changes no state.
+    """
+
+    if (
+        not _source_protocol_only(scope)
+        or getattr(plan,"action",None) not in _SAFETY_NOTICE_ACTIONS
+        or getattr(plan,"state_changed",False)
+        or not _asks_about_safety(plan,transcript)
+    ):
+        return plan
+    shown=getattr(plan,"display_text",None)
+    if not isinstance(shown,str) or not shown.strip() or NO_INSTITUTION_DOCUMENTS_NOTICE in shown:
+        return plan
+    return replace(plan,display_text=f"{shown.rstrip()}\n\n{NO_INSTITUTION_DOCUMENTS_NOTICE}")
+
 
 def require_env(name:str)->str:
     value=os.environ.get(name,"").strip()
@@ -2033,6 +2132,17 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
     }
 
 
+def _candidate_row_blocked(row:dict[str,object],reason:str)->dict[str,object]:
+    """The development fixture's list row, taken out of the executable set."""
+
+    return {
+        **row,
+        "available_for_execution":False,
+        "lifecycle_state":"blocked",
+        "execution_blocked_reason":reason,
+    }
+
+
 def _catalog_entry_projection(
     catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
 )->dict[str,object]:
@@ -2052,7 +2162,17 @@ def _public_protocol_catalog_entries(
     """
 
     config=server_config()
-    candidate=_configured_candidate_fixture(config)
+    # A development fixture that does not fit takes only itself out of the
+    # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
+    # read is left out, one the catalog does not match is shown as not
+    # executable, and the protocols a person uploaded are listed either way.
+    try:
+        candidate=_configured_candidate_fixture(config)
+    except Exception as exc:  # noqa: BLE001 - the fixture alone is left out
+        log.warning(
+            "protocol.catalog.development_fixture_unavailable error=%s",
+            type(exc).__name__)
+        candidate=None
     candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
     if candidate is not None:
@@ -2064,11 +2184,21 @@ def _public_protocol_catalog_entries(
     try:
         for item in catalog.list_entries():
             if candidate is not None and item.protocol_id==candidate.protocol_id:
-                if catalog.development_fixture_is_materialized(candidate):
+                try:
+                    materialized=catalog.development_fixture_is_materialized(candidate)
+                except Exception as exc:  # noqa: BLE001 - unreadable is a no
+                    log.warning(
+                        "protocol.catalog.development_fixture_check_failed error=%s",
+                        type(exc).__name__)
+                    materialized=False
+                if materialized:
                     continue
-                raise ProtocolCatalogUnavailableError(
-                    "Configured development fixture conflicts with catalog state."
-                )
+                log.warning(
+                    "protocol.catalog.development_fixture_conflict "
+                    "fixture_not_executable=true")
+                entries[0]=_candidate_row_blocked(
+                    entries[0],"development_fixture_conflicts_with_catalog")
+                continue
             public=_catalog_entry_projection(catalog,item)
             public["analysis_run"]=catalog.analysis_run_status(
                 item.protocol_id).public_dict()
@@ -3312,6 +3442,7 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
             # (decision of 2026-10-08): the source's safety statements with
             # their stored Korean beside them, never collapsed.
             review["safety_notices"]=_review_safety_notices(catalog,protocol_id,review)
+            review["safety_scope"]=_safety_scope_public()
             review["pipeline"]=_pipeline_with_translation(catalog,protocol_id,review)
             return review
         finally:
@@ -6127,6 +6258,22 @@ async def _queue_curated_research(
         pass
 
 
+def _safety_scope_record(session:ListenerSession)->dict[str,object]:
+    """The start record's words about the institution safety documents.
+
+    Nothing for a run that has them; for one that has none, the scope and the
+    server's sentence, so the record says the experimenter started without them.
+    """
+
+    scope=getattr(getattr(session,"tool_context",None),"usage_scope",None)
+    if not _source_protocol_only(scope):
+        return {}
+    return {
+        "safety_scope":SOURCE_PROTOCOL_ONLY_SCOPE,
+        "institution_safety_notice":NO_INSTITUTION_DOCUMENTS_NOTICE,
+    }
+
+
 def _open_experiment_report(
     session:ListenerSession,
     curated:CuratedProtocolSession,
@@ -6179,6 +6326,7 @@ def _open_experiment_report(
                         for item in shown
                     ],
                     "confirmed_by":"experimenter_start",
+                    **_safety_scope_record(session),
                 },
             )
         basis=curated.source_basis() if callable(getattr(curated,"source_basis",None)) else None
@@ -9243,6 +9391,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # Lane VF, decision 9: whatever path wrote the sentences, no
             # internal identifier reaches the screen or the voice.
             plan=plan_without_internal_names(plan,turn_language)
+            # Decision of 2026-10-13: with no institution safety document, a
+            # safety answer carries one line that says so.
+            plan=_with_safety_scope_notice(
+                plan,getattr(session.tool_context,"usage_scope",None),transcript)
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -10398,7 +10550,10 @@ async def voice_socket(websocket:WebSocket):
                                 protocol_id=requested_protocol_id or "unknown_protocol",
                                 protocol_revision=selected_revision_id or "1",
                                 facility_id=trusted_config.facility_id,
-                                status="unavailable",
+                                status=(
+                                    SOURCE_PROTOCOL_ONLY_COVERAGE
+                                    if _source_protocol_only(trusted_config.usage_scope)
+                                    else "unavailable"),
                                 error_reason=str(exc),
                             )
 
