@@ -143,11 +143,13 @@ from voiney_lab.multi_brain import (
 from voiney_lab.tools import ToolContext
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voiney_lab.llm_router import (
+    FRAGMENT_JOIN_SECONDS,
     LlmRouterSettings,
     RouterTurnOutcome,
     front_history_turn,
     history_before,
     history_turn,
+    incomplete_fragment,
     route_turn_with_llm_router,
     screen_history_turn,
 )
@@ -4052,6 +4054,11 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     "deterministic_emergency",
     "language_clarification",
 })
+#: Lane RA, decision (d): how long a turn whose words end in an unfinished
+#: Korean ending waits for the words that follow before it is routed alone
+#: -- the join window, plus the time the endpoint and speech recognition
+#: take to deliver them.
+FRAGMENT_HOLD_SECONDS=FRAGMENT_JOIN_SECONDS+1.0
 TURN_PROGRESS_TRANSITIONS={
     "listening":frozenset({"transcribing","cancelled","error"}),
     "transcribing":frozenset({"routing","cancelled","error"}),
@@ -4150,6 +4157,8 @@ class ListenerSession:
         self.accepted_protocol_id:str|None=None
         self.accepted_revision_id:str|None=None
         self.turn_generations:dict[int,int]={}
+        #: Lane RA, decision (d): a turn's unfinished words, held for the next.
+        self._held_fragment:dict[str,Any]|None=None
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
         self.visual_tasks:set[asyncio.Task]=set()
         self.research_operations:set[tuple[int,int]]=set()
@@ -4800,6 +4809,38 @@ class ListenerSession:
             self.active_turn_id=None; self.framer=FrameBuffer()
             self._restore_primary_detector(TurnState.IDLE)
             self._reset_interrupt_input()
+    # --- Lane RA, decision (d): a fragment held for the words that follow ---------
+    def hold_fragment(self,turn_id:int,generation:int,text:str,*,ended_at:float)->None:
+        """Keep a turn's unfinished words for the turn that follows."""
+        self._held_fragment={
+            "turn_id":turn_id,"generation":generation,
+            "text":" ".join(text.split()),"ended_at":float(ended_at),
+        }
+    def held_fragment(self)->dict[str,Any]|None:
+        held=getattr(self,"_held_fragment",None)
+        return dict(held) if held else None
+    def release_fragment(self,turn_id:int,generation:int)->bool:
+        """Let the fragment's own turn route its words: True when it is still this turn's."""
+        held=getattr(self,"_held_fragment",None)
+        if held is None:
+            return True
+        if held["turn_id"]!=turn_id or held["generation"]!=generation:
+            return False
+        self._held_fragment=None
+        return True
+    def take_held_fragment(
+        self,turn_id:int,generation:int,*,speech_started_at:float|None,
+    )->str|None:
+        """The fragment a later turn joins, when its words started within the window."""
+        held=getattr(self,"_held_fragment",None)
+        if held is None:
+            return None
+        self._held_fragment=None
+        if turn_id<=held["turn_id"]:
+            return None
+        if speech_started_at is not None and speech_started_at-held["ended_at"]>FRAGMENT_JOIN_SECONDS:
+            return None
+        return str(held["text"])
     def reject_empty_transcript(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.active_turn_id=None; self.framer=FrameBuffer()
@@ -8140,6 +8181,39 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
+    if session.llm_router_settings.router_first:
+        # Lane RA, decision (d): words cut by the endpoint. A fragment held
+        # by the turn before this one is joined with these words when they
+        # started within the join window; a turn whose words end in an
+        # unfinished Korean ending waits for the words that follow and, when
+        # they come and supersede it, is not routed at all.
+        held=session.take_held_fragment(
+            turn_id,generation,
+            speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
+        )
+        if held is not None:
+            transcript=f"{held} {transcript}".strip()
+            await current_text(
+                "turn.fragment_joined",turn_id=turn_id,text=transcript,
+                fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
+        if (
+            committed_at is not None
+            and recognize_emergency(transcript) is None
+            and incomplete_fragment(transcript)
+        ):
+            session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
+            deadline=committed_at+FRAGMENT_HOLD_SECONDS
+            try:
+                while session.clock()<deadline:
+                    if not session.is_current(turn_id,generation):
+                        # The words that follow took the turn; they join this fragment.
+                        return
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                # Superseded: the fragment stays held for the turn that follows.
+                raise
+            if not session.release_fragment(turn_id,generation):
+                return
     input_decision=classify_input_event(
         transcription,
         keyterms=keyterm_dump_terms(stt_keyterms),

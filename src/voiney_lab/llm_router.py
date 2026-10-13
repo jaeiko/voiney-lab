@@ -520,6 +520,69 @@ def validate_read_only_proposal(
     return ProposalVerdict("execute", "accepted", None)
 
 
+# --- A fragment cut by the endpoint (lane RA, decision d) ---------------------------
+
+#: Words that follow within this many seconds of a fragment's end are joined
+#: with it and routed as one turn.
+FRAGMENT_JOIN_SECONDS = 2.0
+#: A word said on its own that holds the sentence open ("그러니까", "음").
+_FRAGMENT_FILLERS = frozenset({
+    "어", "음", "아", "저기", "그러니까", "그니까", "이제", "그", "뭐", "좀", "약간",
+    "일단", "그래서", "근데", "그런데", "그리고", "지금", "여기서", "이거", "그거",
+    "그게", "이게", "약", "한", "막",
+})
+#: A particle or a connective ending that leaves the sentence unfinished.
+_FRAGMENT_OPEN_ENDING = re.compile(
+    r"(?:은|는|을|를|에|에서|로|으로|의|와|과|도|만|부터|까지|한테|께|에게|처럼|보다|이랑|랑|하고|"
+    r"고|서|며|면|는데|은데|니까|다가|려고|러|지만|거나|든지|자마자|면서|느라|도록)$"
+)
+#: Subject and object particles count only when they stand alone or are
+#: attached to one syllable ("B 가", "물을"): longer words ending in these
+#: ("넘어가", "용액이") are too often a complete word.
+_FRAGMENT_SHORT_PARTICLE = re.compile(r"(?:이|가)$")
+#: A sentence-final ending: the words are complete whatever is before it.
+_FRAGMENT_CLOSED_ENDING = re.compile(
+    r"(?:요|다|죠|습니다|세요|줘|해|자|야|래|네|어|아|지|까|니)$"
+)
+#: A number with its unit ends a statement ("37도", "15 min").
+_FRAGMENT_VALUE_ENDING = re.compile(
+    r"\d\s*(?:도|분|초|시간|%|rpm|[µμu]?[lL]|m[lL]|mM|M|g|mg|°C|℃)$", re.I,
+)
+
+
+def incomplete_fragment(text: str) -> bool:
+    """Whether the words end in an unfinished Korean ending (decision d).
+
+    True when the last word is a filler, a particle or a connective ending:
+    "어 그러니까 음 지금 이 단계에서 쓰는", "젤 플러그를 37.2도에서 790 rpm 으로".
+    False for a sentence-final ending, a number with its unit, and the short
+    commands ("다음", "잠깐", "네").
+    """
+
+    words = " ".join(str(text or "").split()).rstrip(".!?。？！~,")
+    if not words:
+        return False
+    tokens = words.split()
+    last = tokens[-1]
+    if _FRAGMENT_VALUE_ENDING.search(words):
+        return False
+    if last in _FRAGMENT_FILLERS:
+        return True
+    if not re.search(r"[가-힣]$", last):
+        return False
+    if _FRAGMENT_SHORT_PARTICLE.search(last) and len(last) <= 2 and len(tokens) > 1:
+        return True
+    if _FRAGMENT_CLOSED_ENDING.search(last) and not _FRAGMENT_OPEN_ENDING.search(last):
+        return False
+    if _FRAGMENT_OPEN_ENDING.search(last):
+        # "에서", "으로", "하고" and the connectives are open wherever they
+        # stand; the one-syllable particles only on a short word.
+        ending = _FRAGMENT_OPEN_ENDING.search(last).group(0)
+        if len(ending) == 1 and ending in "은는을를에로의와과도만" and len(last) == 1:
+            return len(tokens) > 1
+        return True
+    return False
+
 #: Every reason a proposal can be refused, with what it means. A verdict
 #: carries one of these, or "accepted".
 REFUSAL_REASONS: Mapping[str, str] = {
