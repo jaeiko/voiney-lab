@@ -122,5 +122,29 @@ class ScriptAndSoftHyphenTests(unittest.TestCase):
         self.assertEqual(raised.exception.diagnostic.reason_code, "quote_not_found")
 
 
+class HangulSpacingTests(unittest.TestCase):
+    """(e) whitespace between Hangul letters is left out of the comparison."""
+
+    def test_a_text_layer_without_spaces_matches_a_spaced_quote(self):
+        source = extraction(f"{TITLE}\n1. 1.0 μm의유리섬유여과지로 거른다.")
+        parse(source, step("1", "1.0 μm의 유리섬유 여과지로 거른다.", "1. 1.0 μm의 유리섬유 여과지로 거른다."))
+
+    def test_and_a_spaced_text_layer_matches_a_quote_without_spaces(self):
+        source = extraction(f"{TITLE}\n1. 용존산소의 분석에 사용되는 시약을 준비한다.")
+        parse(source, step("1", "용존산소의분석에사용되는시약을준비한다.",
+                           "1. 용존산소의분석에사용되는시약을준비한다."))
+
+    def test_a_line_break_between_hangul_in_a_text_layer_still_counts(self):
+        # Lane PX: a Hangul line break is joined in comparison on OCR pages only.
+        source = extraction(f"{TITLE}\n1. 개봉한 날\n짜를 용기에 기록한다.")
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            parse(source, step("1", "개봉한 날짜를 용기에 기록한다.", "1. 개봉한 날짜를 용기에 기록한다."))
+
+    def test_spaces_between_digits_still_count(self):
+        source = extraction(f"{TITLE}\n1. 시료 1 0 mL 를 넣는다.")
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            parse(source, step("1", "시료 10 mL 를 넣는다.", "1. 시료 10 mL 를 넣는다."))
+
+
 if __name__ == "__main__":
     unittest.main()

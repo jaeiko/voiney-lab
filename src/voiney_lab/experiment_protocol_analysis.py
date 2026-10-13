@@ -1045,14 +1045,17 @@ def _normalized_text_with_bounds(
     forms above, so the page text, its hash and the evidence identities are
     untouched and anything the earlier forms accept is still accepted.
 
-    ``script_forms`` (lane AN, EV4 decision b; comparison only, tried after
-    every form above) is ``"joined"`` or ``"hyphen"``. In both, a subscript
-    or superscript digit written after a letter or a closing bracket reads
-    as the plain digit ("H₂O₂" as "H2O2", "cm²" as "cm2"); one after a digit
-    stays itself, so "10⁵" is never "105". A soft hyphen is a layout
-    control: with ``"joined"`` it is left out together with the line break
-    after it ("formu\u00ad" / "lated" reads "formulated"); with ``"hyphen"``
-    it reads as "-" ("DW-MEA").
+    ``script_forms`` (lane AN, EV4 decisions b and e; comparison only, tried
+    after every form above) is ``"joined"`` or ``"hyphen"``. In both, a
+    subscript or superscript digit written after a letter or a closing
+    bracket reads as the plain digit ("H₂O₂" as "H2O2", "cm²" as "cm2"); one
+    after a digit stays itself, so "10⁵" is never "105". Spaces between
+    two Hangul letters on one line are left out (a text layer that prints no
+    spaces between Korean words, or a quote that adds them); a line break
+    between them is joined on an OCR page only, as before. A soft hyphen is a
+    layout control: with ``"joined"`` it is left out together with the line
+    break after it ("formu\u00ad" / "lated" reads "formulated"); with
+    ``"hyphen"`` it reads as "-" ("DW-MEA").
     """
 
     normalized: list[str] = []
@@ -1083,6 +1086,16 @@ def _normalized_text_with_bounds(
                 and units
                 and units[-1][0] in _LINE_END_HYPHENS
                 and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                script_forms is not None
+                and units
+                and index < len(value)
+                and len(units[-1][0]) == 1
+                and _is_hangul(units[-1][0])
+                and _is_hangul(value[index])
+                and not any(character in "\n\r" for character in value[start:index])
             ):
                 continue
             if (
@@ -1170,7 +1183,7 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
         for joined in hangul
         for join in (False, True)
     ) + tuple(
-        # Lane AN, EV4 decision b: after every form above.
+        # Lane AN, EV4 decisions b and e: after every form above.
         {
             "join_line_end_hyphens": True,
             "join_hangul_line_breaks": ocr_derived,
