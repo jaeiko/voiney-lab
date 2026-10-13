@@ -5,9 +5,10 @@ without a break, so it never finds the endpoint silence and the utterance
 runs to the 15 s forced commit -- the wearer's command and the room's talk
 in one piece (lane SP1's bench, section 3-2). With the wearer's level
 measured (lane SP1, decision 1), the detector also ends an utterance by
-level: once a frame at the wearer's level was heard, a stretch as long as the
-endpoint time spent more than the margin below the wearer ends it while the
-VAD keeps hearing a voice there. What the room's voice said before the
+level: once the wearer's level was heard (as many frames over the line as a
+listening onset needs voiced), a stretch as long as the endpoint time spent
+more than the margin below the wearer ends it while the VAD keeps hearing a
+voice there. What the room's voice said before the
 wearer's first frame, beyond one prefix of lead-in, is dropped. The listener
 draws the line only while the room's noise floor sits well under it. A
 session that measured nothing ends utterances as before; so does a quiet
@@ -149,6 +150,18 @@ class DetectorTests(unittest.TestCase):
             [(i, r.utterance, r.endpoint) for i, r in before],
             [(i, r.utterance, r.endpoint) for i, r in after])
         self.assertEqual(after[0][1].endpoint, "silence")
+
+    def test_a_neighbours_louder_moments_are_not_the_wearers_level(self) -> None:
+        # A voice under the line with a frame over it now and then (a
+        # neighbour, a TV): the wearer's level needs as many frames over the
+        # line as a listening onset needs voiced, so nothing changes.
+        frames = QUIET[:3] + [LOUD[k] if k % 3 == 0 else QUIET[k] for k in range(30)] + [SILENT] * 8
+        before = run(detector(None), frames)
+        after = run(detector(THRESHOLD_DB), frames)
+        self.assertEqual(len(after), 1)
+        self.assertEqual(
+            [(i, r.utterance, r.endpoint, r.voiced_level_db) for i, r in before],
+            [(i, r.utterance, r.endpoint, r.voiced_level_db) for i, r in after])
 
     def test_a_soft_start_in_a_quiet_room_is_kept(self) -> None:
         # A soft start, a pause, then the wearer's level: the VAD heard

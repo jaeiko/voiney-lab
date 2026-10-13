@@ -4367,9 +4367,9 @@ class ListenerSession:
     def endpoint_threshold_db(self)->float|None:
         """The line an utterance's end is also found by (lane SP2, decision 1).
 
-        Once a frame at the wearer's level was heard, staying under the line
-        for the endpoint time while the VAD keeps hearing a voice -- babble,
-        a pump -- ends the utterance. Only while the room sits well under the
+        Once the wearer's level was heard, staying under the line for the
+        endpoint time while the VAD keeps hearing a voice -- babble, a pump --
+        ends the utterance. Only while the room sits well under the
         line (``room_near_the_line`` False): nearer, the level would cut the
         room's own voice into turns, so the VAD alone ends utterances, as
         before -- the same as without a reference, while the calibration
