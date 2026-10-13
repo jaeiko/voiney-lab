@@ -154,6 +154,7 @@ def parse(payload: dict):
 class AnalysisTimeLimitTests(unittest.TestCase):
     ENV = {
         "XAI_API_KEY": "fake-key",
+        "VOINEY_LAB_ANALYSIS_PROVIDER": "xai",
         "VOINEY_LAB_ANALYSIS_MODEL": "grok-4.6",
     }
 

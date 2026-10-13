@@ -224,22 +224,25 @@ def _router_call(client: Any, model: str) -> Any:
 # --- Settings -------------------------------------------------------------------------
 
 class RoleSettingsTests(unittest.TestCase):
-    def test_every_role_defaults_to_xai_and_the_model_it_called_before(self) -> None:
+    def test_every_role_is_unset_without_its_settings(self) -> None:
+        # Lane AN, decision 1 (2026-10-13): no role falls back to xAI and a
+        # grok model any more; an empty provider setting is "설정 필요".
         self.assertEqual(set(ROLES), set(ROLE_SETTINGS))
         for role in ROLES:
             with self.subTest(role=role):
                 setting = RoleModel.from_environment(role, {})
-                self.assertEqual(setting.provider, "xai")
-                self.assertEqual(setting.model, DEFAULT_MODELS[role])
+                self.assertIsNone(setting.provider)
+                self.assertIsNone(setting.model)
+                self.assertEqual(DEFAULT_MODELS[role], None)
                 self.assertIsNone(setting.reasoning)
-        self.assertEqual(DEFAULT_MODELS["router"], "grok-4.20-0309-non-reasoning")
-        self.assertEqual(DEFAULT_MODELS["translation"], "grok-4.6")
-        self.assertEqual(DEFAULT_MODELS["supplemental"], "grok-4.6")
-        # Lane RA, decision (g): the router settings keep no default of their
-        # own -- unset, the router is off and has no role model to call.
+        # Lane AN, decision 1, and lane RA, decision (g): the router settings
+        # keep no default of their own -- unset, the router is off and has
+        # no role model to call (lane RA's LlmRouterSettings.role_model
+        # refuses rather than hand out an empty one).
         unset = LlmRouterSettings.from_environment({})
         self.assertFalse(unset.enabled)
         self.assertIsNone(unset.model)
+        self.assertIsNone(unset.provider)
         with self.assertRaises(ValueError):
             unset.role_model
 
@@ -255,8 +258,8 @@ class RoleSettingsTests(unittest.TestCase):
                          ("anthropic", "claude-haiku-4-5-20251001", None))
         translation = RoleModel.from_environment("translation", environment)
         self.assertEqual((translation.provider, translation.model, translation.reasoning),
-                         ("google", "grok-4.6", "high"))
-        self.assertEqual(RoleModel.from_environment("answer", environment).provider, "xai")
+                         ("google", None, "high"))
+        self.assertIsNone(RoleModel.from_environment("answer", environment).provider)
         settings = LlmRouterSettings.from_environment(environment)
         self.assertEqual((settings.provider, settings.model),
                          ("anthropic", "claude-haiku-4-5-20251001"))

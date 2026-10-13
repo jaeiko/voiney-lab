@@ -95,7 +95,8 @@ class SettingsTests(unittest.TestCase):
             "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "3",
         })
         self.assertEqual((on.enabled, on.model, on.timeout_seconds), (True, "grok-4.6", 3.0))
-        # Lane RA, decision (g): no default model any more; unset, there is none.
+        # Lane AN, decision 1, and lane RA, decision (g): no default router
+        # model any more ("설정 필요"); unset, there is none.
         self.assertIsNone(LlmRouterSettings.from_environment({}).model)
 
     def test_bad_values_fail_closed(self) -> None:
@@ -322,6 +323,9 @@ class RouterVoiceTests(VoiceSessionHarness, unittest.TestCase):
     def _run(self, *said, enabled: bool, script=()):
         if enabled:
             self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
+            # Lane AN, decision 1: the router role is named; it no longer
+            # falls back to xAI by itself.
+            self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
             self.environment["XAI_API_KEY"] = "test-only-not-a-key"
             # Lane RA, decision (g): no default provider or model any more.
             self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"

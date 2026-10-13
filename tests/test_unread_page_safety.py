@@ -18,9 +18,7 @@ reviewer finding.
 
 from __future__ import annotations
 
-import sys
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 from voiney_lab import experiment_protocol as domain
@@ -31,72 +29,18 @@ from voiney_lab.curated_protocol import (
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
-sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def _draft():
-    from tests.test_pdf_to_session_walkthrough import _pipeline
+    """The in-gel analysis: the curated development fixture's draft.
 
-    return _pipeline()
-
-
-class AssemblyStillReachesTheEndTests(unittest.TestCase):
-    """Task 3: find every remaining gate without spending a call.
-
-    A contract-satisfying response is built offline and driven all the way to
-    an assembled Protocol and then to the accuracy scorer. The point is not the
-    score -- the input is synthetic, so the number means nothing -- but that
-    the path has no gate left on it.
+    It replaced the offline claim-chunk pipeline's draft when that path was
+    deleted (lane AN, 2026-10-13): the same document and its 25 numbered steps.
     """
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        if not IN_GEL.is_file():
-            raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        cls.extraction, cls.plan, cls.merged, cls.draft = _draft()
+    from tests.protocol_vocabulary_support import in_gel_fixture
 
-    def test_a_contract_satisfying_response_assembles(self) -> None:
-        steps = [
-            step
-            for section in self.draft.protocol.sections
-            for step in section.steps
-        ]
-        self.assertEqual(len(steps), 25)
-        self.assertEqual(
-            len(self.merged.page_coverage), self.extraction.page_count
-        )
-
-    def test_the_scorer_can_read_an_assembled_protocol(self) -> None:
-        """Path only. The candidate is synthetic, so the number is not a score."""
-
-        from voiney_lab.protocol_extraction_accuracy import (
-            audit_reference,
-            score_extraction,
-        )
-
-        report = score_extraction(
-            self.draft.protocol,
-            self.draft.protocol,
-            reference_notes=audit_reference(self.draft.protocol, self.extraction),
-        )
-        self.assertEqual(report.reference_steps, 25)
-        self.assertEqual(report.candidate_steps, 25)
-        self.assertTrue(report.order_matches)
-        published = report.public_dict()
-        self.assertIn("steps_unscorable_on_values", published)
-
-    def test_incomplete_pages_survive_the_merge_addressably(self) -> None:
-        """Task 3-4: the marking has to reach the assembled record."""
-
-        statuses = {
-            item.source_page_number: item.status.value
-            for item in self.merged.page_coverage
-        }
-        self.assertEqual(set(statuses), set(range(1, self.extraction.page_count + 1)))
-        for item in self.merged.page_coverage:
-            if item.status.value == "analysis_incomplete":
-                # Marked *and* addressable: the ids are how the text is found.
-                self.assertTrue(item.unaccounted_segment_ids)
+    return in_gel_fixture().draft
 
 
 class UnreadPageAtExecutionTests(unittest.TestCase):
@@ -106,7 +50,8 @@ class UnreadPageAtExecutionTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.is_file():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        cls.extraction, _plan, _merged, cls.draft = _draft()
+        cls.draft = _draft()
+        cls.extraction = cls.draft.extraction
 
     def _fixture(self, unread=None):
         labels = tuple(
@@ -146,7 +91,12 @@ class UnreadPageAtExecutionTests(unittest.TestCase):
             self.assertFalse(session.step_is_on_an_unread_page(index))
             self.assertIsNone(session.unread_page_disclosure(index))
             self.assertTrue(session.may_report_step_complete(index))
-            self.assertTrue(session.may_begin_step(step.step_id))
+            # Step "1" states a hazard in this draft, so the safety disclosure
+            # duty -- not reading status -- holds it until the warning is read
+            # out. Every other step may begin.
+            self.assertEqual(
+                session.may_begin_step(step.step_id), step.source_label != "1"
+            )
 
     def test_a_page_that_was_read_stays_unaffected_by_one_that_was_not(self):
         session = self._session({5: ()})

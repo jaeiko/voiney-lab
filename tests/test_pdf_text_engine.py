@@ -39,10 +39,10 @@ from voiney_lab.experiment_protocol_pdf import (
     extract_protocol_pdf,
     page_ocr_reason,
 )
+from voiney_lab.experiment_protocol_analysis import prepare_protocol_analysis_request
 from voiney_lab.experiment_protocol_store import _decode_domain, _encode_domain
-from voiney_lab.protocol_chunk_analysis import plan_protocol_chunks
 
-from tests.test_protocol_claim_analysis import write_lined_pages
+from tests.pdf_fixture_support import write_lined_pages
 
 PACKAGE_ROOT = Path(engine_module.__file__).parent
 IN_GEL = Path("data/runtime/candidate-a-source/in-gel-digestion.pdf")
@@ -242,8 +242,8 @@ class OcrRequiredPageTests(_TempDir):
             path,
             ("BT /F1 12 Tf 72 720 Td (1 Add 5 ml of buffer and mix.) Tj ET", None),
         )
-        plan = plan_protocol_chunks(extract_protocol_pdf(path), "p-1", "r-1")
-        self.assertTrue(plan.chunks)
+        request = prepare_protocol_analysis_request(extract_protocol_pdf(path))
+        self.assertTrue(request.pages)
 
     def test_a_stored_cross_check_verdict_no_longer_refuses_or_gates(self) -> None:
         """An analysis stored with the retired verdict decodes and is not blocked."""
@@ -257,7 +257,7 @@ class OcrRequiredPageTests(_TempDir):
                     _encode_domain(replace(extraction, text_verification=verdict))
                 )
                 self.assertIs(stored.text_verification, verdict)
-                self.assertTrue(plan_protocol_chunks(stored, "p-1", "r-1").chunks)
+                self.assertTrue(prepare_protocol_analysis_request(stored).pages)
 
     def test_a_control_code_written_in_a_string_is_layout_not_unreadable(self) -> None:
         path = self.root / "newline.pdf"
@@ -297,10 +297,8 @@ class StoredHandlesFromThePreviousEngineTests(_TempDir):
     """
 
     def test_a_previous_engine_handle_resolves_identically_or_is_refused(self) -> None:
-        from voiney_lab.experiment_protocol_analysis import ProtocolAnalysisEvidenceError
         from voiney_lab.protocol_claim_analysis import (
             generate_page_evidence_segments,
-            reopen_evidence_span,
         )
 
         path = self.root / "lined.pdf"
@@ -312,6 +310,16 @@ class StoredHandlesFromThePreviousEngineTests(_TempDir):
             current,
             pages=(replace(page, text=page.text.replace("\n", " \n")),),
         )
+        # A stored handle resolves by its id against the current reading's
+        # segments -- the lookup the timer manifest and the unread-page
+        # disclosure do. (reopen_evidence_span, which raised on a miss, went
+        # with the claim-chunk path in lane AN.)
+        resolvable = {
+            segment.segment_id: segment.text
+            for segment in generate_page_evidence_segments(
+                current, source_revision="pdf-1", page_number=1
+            )
+        }
         for reading, resolves in ((previous, False), (current, True)):
             for segment in generate_page_evidence_segments(
                 reading, source_revision="pdf-1", page_number=1
@@ -322,12 +330,16 @@ class StoredHandlesFromThePreviousEngineTests(_TempDir):
                 with self.subTest(resolves=resolves, index=segment.segment_index):
                     if resolves:
                         self.assertEqual(
-                            reopen_evidence_span(current, stored, source_revision="pdf-1"),
+                            "".join(
+                                resolvable[handle]
+                                for handle in stored.evidence_segment_ids
+                            ),
                             segment.text,
                         )
                     else:
-                        with self.assertRaises(ProtocolAnalysisEvidenceError):
-                            reopen_evidence_span(current, stored, source_revision="pdf-1")
+                        self.assertFalse(
+                            set(stored.evidence_segment_ids) & set(resolvable)
+                        )
 
 
 class ByteIdentityIsUnchangedTests(_TempDir):

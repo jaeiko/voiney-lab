@@ -48,11 +48,13 @@ def _with_ocr_page(protocol, page_number: int):
 
 class TheReadinessReasonTests(unittest.TestCase):
     def _protocol(self):
-        from tests.test_pdf_to_session_walkthrough import _pipeline
+        # The curated in-gel draft; the claim-chunk pipeline that used to
+        # build this Protocol was deleted (lane AN, 2026-10-13).
+        from tests.protocol_vocabulary_support import in_gel_fixture
 
         if not IN_GEL.is_file():
             self.skipTest(f"{IN_GEL} is not present.")
-        return _pipeline()[3].protocol
+        return in_gel_fixture().draft.protocol
 
     def test_no_ocr_page_raises_nothing(self) -> None:
         protocol = self._protocol()

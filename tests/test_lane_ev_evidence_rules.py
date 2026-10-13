@@ -455,19 +455,12 @@ class ClaimTokensTests(RefusalAssertions):
 
 
 class ChunkMergeRevalidationTests(unittest.TestCase):
-    """protocol_claim_analysis revalidates a merged Protocol with this same check.
+    """Revalidating a finished Protocol reads the same rules.
 
-    Its own segment check stays exact: a chunk claim's excerpt is the segment
-    text the server cut, and the claim must equal it.
+    The claim-chunk merge that used to call this check was deleted on
+    2026-10-13 (lane AN, decision 1); the check itself is the single-pass
+    analysis's own.
     """
-
-    def test_the_merge_revalidation_is_the_shared_check(self):
-        from voiney_lab import protocol_claim_analysis
-
-        self.assertIs(
-            protocol_claim_analysis.validate_protocol_analysis_evidence,
-            analysis_module.validate_protocol_analysis_evidence,
-        )
 
     def test_the_merge_revalidation_reads_the_rules(self):
         line = "8. Dimethyl sulfoxide (DMSO; Sigma-Aldrich)"

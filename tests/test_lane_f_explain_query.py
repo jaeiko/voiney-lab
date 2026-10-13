@@ -77,6 +77,9 @@ def _turn(session: ListenerSession, transcript: str, turn_id: int = 1, *, supple
         patch("voiney_lab.server.asyncio.to_thread", side_effect=immediate),
         patch("voiney_lab.server.AsyncOpenAI", return_value=SimpleNamespace()),
         patch("voiney_lab.server.require_env", return_value="offline"),
+        # Lane AN, decision 1: the supplemental role is named; an unset role
+        # no longer falls back to xAI.
+        patch.dict("os.environ", {"VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai"}),
     ]
     if supplement is not None:
         patches.append(patch("voiney_lab.server.XaiSupplementalKnowledge", supplement))

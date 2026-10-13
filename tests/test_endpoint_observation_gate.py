@@ -45,8 +45,6 @@ PROVENANCE = (
     ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 )
 IN_GEL = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
-HEADSPACE = ROOT / "usingdynamicheadspacecollections.pdf"
-INTRACELLULAR = ROOT / "intracellularmetaboliteextraction.pdf"
 CURATED_SOURCE = ROOT / "src/voiney_lab/curated_protocol.py"
 
 
@@ -408,35 +406,6 @@ class TheReleaseIsWrittenDownTests(unittest.TestCase):
         session = self._released("7", "젤이 완전히 탈색되어 투명해요")
         after = domain.assess_readiness(session.fixture.draft.protocol)
         self.assertEqual(before.reason_codes, after.reason_codes)
-
-
-class TheGateCountIsADocumentPropertyTests(unittest.TestCase):
-    """How many gates a source has is read out of the source."""
-
-    def _stated_repeats(self, path: Path) -> int:
-        from voiney_lab.experiment_protocol_pdf import (
-            extract_protocol_pdf,
-        )
-        from voiney_lab.protocol_claim_analysis import (
-            explicit_repeat_instructions,
-        )
-
-        extraction = extract_protocol_pdf(path)
-        return len(
-            explicit_repeat_instructions(extraction, source_revision="pdf-1")
-        )
-
-    def test_each_local_source_states_its_own_number_of_repeats(self) -> None:
-        expected = {IN_GEL: 3, HEADSPACE: 5, INTRACELLULAR: 0}
-        checked = 0
-        for path, count in expected.items():
-            if not path.is_file():
-                continue
-            with self.subTest(source=path.name):
-                self.assertEqual(self._stated_repeats(path), count)
-                checked += 1
-        if not checked:
-            self.skipTest("No local source document is present.")
 
 
 if __name__ == "__main__":  # pragma: no cover

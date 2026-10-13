@@ -34,17 +34,25 @@ _FORBIDDEN = (
 )
 
 
+#: The curated in-gel draft carries all three of the document's repeat
+#: intervals (2-7, 8-9, 17-18); the cached claim analysis these tests were
+#: written on carried only 2-7. These are the other two.
+_OTHER_INTERVALS = (
+    "candidate-a-repeat-steps-08-09",
+    "candidate-a-repeat-steps-17-18",
+)
+
+
 def _session():
-    from tests.test_merge_completes_on_real_chunks import _merge_from_cache
+    # The curated in-gel draft; the cached claim-chunk analysis that used to
+    # be merged here was deleted with that path (lane AN, 2026-10-13).
+    from tests.protocol_vocabulary_support import in_gel_fixture
     from voiney_lab.curated_protocol import (
         CuratedProtocolFixture,
         CuratedProtocolSession,
     )
 
-    built = _merge_from_cache()
-    if built is None:
-        return None
-    extraction, _plan, _merged, draft = built
+    draft = in_gel_fixture().draft
     labels = tuple(
         step.source_label
         for section in draft.protocol.sections
@@ -71,8 +79,6 @@ class TheIntervalIsHandedOverTests(unittest.TestCase):
         if not IN_GEL.is_file():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
         session = _session()
-        if session is None:
-            raise unittest.SkipTest("in-gel is not fully cached on this machine.")
         cls.session = session
         cls.index = next(
             (
@@ -143,8 +149,6 @@ class OnlyAPersonClosesItTests(unittest.TestCase):
 
     def setUp(self) -> None:
         session = _session()
-        if session is None:
-            self.skipTest("in-gel is not fully cached on this machine.")
         self.session = session
         self.index = next(
             index
@@ -164,7 +168,7 @@ class OnlyAPersonClosesItTests(unittest.TestCase):
         self.assertFalse(self.session.may_leave_repeat_interval(after))
         self.assertEqual(
             self.session.repeat_intervals_awaiting_completion(),
-            (self.identifier,),
+            (self.identifier, *_OTHER_INTERVALS),
         )
 
         self.session.declare_repeat_interval_complete(
@@ -174,7 +178,9 @@ class OnlyAPersonClosesItTests(unittest.TestCase):
             actor_role="researcher",
         )
         self.assertTrue(self.session.may_leave_repeat_interval(after))
-        self.assertEqual(self.session.repeat_intervals_awaiting_completion(), ())
+        self.assertEqual(
+            self.session.repeat_intervals_awaiting_completion(), _OTHER_INTERVALS
+        )
 
     def test_a_step_inside_the_interval_is_not_blocked_by_it(self) -> None:
         """The repeat is run, not withheld. Only leaving it needs a person."""
@@ -234,11 +240,13 @@ class OnlyAPersonClosesItTests(unittest.TestCase):
             actor_principal_id="operator-a",
             actor_role="researcher",
         )
-        self.assertEqual(self.session.repeat_intervals_awaiting_completion(), ())
+        self.assertEqual(
+            self.session.repeat_intervals_awaiting_completion(), _OTHER_INTERVALS
+        )
         self.session.reset()
         self.assertEqual(
             self.session.repeat_intervals_awaiting_completion(),
-            (self.identifier,),
+            (self.identifier, *_OTHER_INTERVALS),
         )
 
     def test_a_declaration_clears_no_readiness_gate(self) -> None:
@@ -253,47 +261,6 @@ class OnlyAPersonClosesItTests(unittest.TestCase):
         )
         after = domain.assess_readiness(self.session.fixture.draft.protocol)
         self.assertEqual(before.reason_codes, after.reason_codes)
-
-
-class AnUncapturedRepeatIsNotLedTests(unittest.TestCase):
-    """2-6: what the analysis never carried cannot be handed over."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        if not IN_GEL.is_file():
-            raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        session = _session()
-        if session is None:
-            raise unittest.SkipTest("in-gel is not fully cached on this machine.")
-        cls.session = session
-
-    def test_only_captured_repeats_have_intervals(self) -> None:
-        intervals = self.session._repeat_intervals_by_id()
-        labels = {
-            step.step_id: step.source_label for step in self.session.fixture.steps
-        }
-        ranges = {
-            (
-                labels[interval["repeated_step_ids"][0]],
-                labels[interval["repeated_step_ids"][-1]],
-            )
-            for interval in intervals.values()
-        }
-        self.assertIn(("2", "7"), ranges)
-        # in-gel states 8-9 and 17-18 and the analysis carried neither, so
-        # there is nothing to lead and the agent offers nothing.
-        self.assertNotIn(("8", "9"), ranges)
-        self.assertNotIn(("17", "18"), ranges)
-
-    def test_the_document_is_kept_out_of_execution_instead(self) -> None:
-        """The uncaptured ones are answered for by a readiness gate."""
-
-        from voiney_lab import experiment_protocol as domain
-
-        self.assertIn(
-            domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value,
-            self.session.fixture.draft.readiness.reason_codes,
-        )
 
 
 if __name__ == "__main__":  # pragma: no cover

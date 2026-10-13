@@ -144,6 +144,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(ExternalReferenceSettings.from_environment().enabled)
         with patch.dict(os.environ, {
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
             "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "osha.gov,cdc.gov",
             "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS": "2.5",
             **SUPPLEMENTAL_ROLE_ENV,
@@ -161,12 +162,14 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         # conflict is checked on the alias pair that still names two settings.
         with patch.dict(os.environ, {
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
             "VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS": "osha.gov",
             "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "cdc.gov",
         }, clear=True), self.assertRaisesRegex(ValueError, "conflicts"):
             ExternalReferenceSettings.from_environment()
         with patch.dict(os.environ, {
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
             "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE": "unknown-profile",
         }, clear=True), self.assertRaisesRegex(ValueError, "DOMAIN_PROFILE"):
             ExternalReferenceSettings.from_environment()
@@ -177,6 +180,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(name=name),patch.dict(os.environ, {
                 "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
+                "VOINEY_LAB_SUPPLEMENTAL_PROVIDER":"xai",
                 "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
                 **SUPPLEMENTAL_ROLE_ENV,
                 name:value,
@@ -184,6 +188,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
                 ExternalReferenceSettings.from_environment()
         with patch.dict(os.environ, {
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
+            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER":"xai",
             "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
             "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS":"5",
             "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS":"5",
