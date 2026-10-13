@@ -16,6 +16,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from voiney_lab.experiment_reports import ReportWriterSettings
 from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
@@ -94,6 +95,63 @@ class ExternalReferenceDefaultsTests(unittest.TestCase):
         self.assertFalse(external.enabled)
         self.assertFalse(supplemental.enabled)
         self.assertEqual((external.model, supplemental.model), ("", ""))
+
+
+REPORT_PROVIDER = "VOINEY_LAB_REPORT_PROVIDER"
+REPORT_MODEL = "VOINEY_LAB_REPORT_MODEL"
+
+
+class ReportWriterDefaultsTests(unittest.TestCase):
+    """The report's prose writer is on only for a role somebody set."""
+
+    def settings(self, environment: dict[str, str]) -> ReportWriterSettings:
+        with patch.dict(os.environ, environment, clear=True):
+            return ReportWriterSettings.from_environment()
+
+    def test_without_a_provider_and_a_model_the_writer_stays_off_and_says_why(self):
+        for given in (
+            {},
+            {REPORT_PROVIDER: "google"},
+            {REPORT_MODEL: "gemini-test"},
+            {MODEL: "gpt-test"},
+            {REPORT_PROVIDER: "google", REPORT_MODEL: "  "},
+        ):
+            with self.subTest(given=sorted(given)):
+                with self.assertLogs("voiney_lab.experiment_reports", "WARNING") as logged:
+                    settings = self.settings(given)
+                self.assertFalse(settings.enabled)
+                self.assertIn(REPORT_PROVIDER, logged.output[0])
+                self.assertIn(REPORT_MODEL, logged.output[0])
+                self.assertIn("설정 필요", logged.output[0])
+
+    def test_a_provider_and_a_model_turn_the_writer_on(self):
+        settings = self.settings({REPORT_PROVIDER: "google", REPORT_MODEL: "gemini-test"})
+        self.assertEqual((settings.enabled, settings.model), (True, "gemini-test"))
+
+    def test_the_report_model_still_falls_back_to_the_supplemental_model(self):
+        settings = self.settings({REPORT_PROVIDER: "openai", MODEL: "gpt-test"})
+        self.assertEqual((settings.enabled, settings.model), (True, "gpt-test"))
+
+    def test_switched_off_on_purpose_it_is_off_without_a_warning(self):
+        with self.assertNoLogs("voiney_lab.experiment_reports", "WARNING"):
+            settings = self.settings({"VOINEY_LAB_REPORT_WRITER_ENABLED": "false"})
+        self.assertFalse(settings.enabled)
+
+    def test_the_server_builds_no_writer_for_an_unset_report_role(self):
+        from voiney_lab.server import _report_writer_brain
+
+        # An xAI key alone no longer sends the report prose to xAI's grok.
+        for given in ({}, {"XAI_API_KEY": "fake-key"}):
+            with self.subTest(given=sorted(given)), patch.dict(
+                os.environ, given, clear=True,
+            ):
+                self.assertIsNone(_report_writer_brain())
+        with patch.dict(os.environ, {
+            REPORT_PROVIDER: "xai", REPORT_MODEL: "model-test", "XAI_API_KEY": "fake-key",
+        }, clear=True):
+            brain = _report_writer_brain()
+        self.assertIsNotNone(brain)
+        self.assertEqual(brain.model, "model-test")
 
 
 if __name__ == "__main__":
