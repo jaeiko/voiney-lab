@@ -1,0 +1,33 @@
+# Voiney Lab 파일럿 — Caddy 설정 예시 (HTTPS + 접속 비밀번호)
+#
+# scripts/pilot_https_setup.sh 가 아래 네 자리를 채워서 /etc/caddy/Caddyfile 로 쓴다.
+# 손으로 쓸 때는 직접 바꾼다. 순서와 확인 방법: docs/PILOT_HTTPS_SETUP.md
+#
+#   DOMAIN         파일럿 주소 (DNS A 레코드가 이 서버를 가리켜야 한다)
+#   USER           접속 아이디
+#   PASSWORD_HASH  `caddy hash-password` 가 만든 bcrypt 해시(길이 60, 달러 기호로 시작).
+#                  비밀번호 자체는 어디에도 적지 않는다.
+#   UPSTREAM       파일럿 서버 주소. scripts/run_pilot.sh 는 127.0.0.1:8080 에서만 듣는다.
+#
+# 웹소켓(/ws)은 reverse_proxy 가 따로 설정 없이 그대로 넘긴다. 접속 비밀번호는 /ws 에도
+# 걸린다(브라우저가 페이지를 열 때 받은 인증 정보를 /ws 연결에도 보내는지는 휴대폰
+# 브라우저에서 꼭 확인한다. docs/PILOT_HTTPS_SETUP.md 4-3절).
+#
+# 접속 기록(access log)은 켜지 않는다: Caddy 는 `log` 를 적지 않으면 요청 기록을 남기지 않는다.
+
+{{DOMAIN}} {
+	encode zstd gzip
+
+	basic_auth {
+		{{USER}} {{PASSWORD_HASH}}
+	}
+
+	reverse_proxy {{UPSTREAM}}
+
+	header {
+		Strict-Transport-Security "max-age=86400"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

@@ -247,7 +247,8 @@ SETTINGS: tuple[Setting, ...] = (
             "STT 진단 녹음 폴더 (data/runtime 아래만)"),
     # --- 그 밖 ----------------------------------------------------------------
     Setting("VOINEY_LAB_USAGE_SCOPE", OTHER, "(없음, 필수)",
-            "사용 범위: operational/demo/reference_only/test_only"),
+            "사용 범위: operational/demo/reference_only/test_only/source_protocol_only"
+            " (source_protocol_only: 기관 안전 문서 없음, 원문 안전 주의만 — 승인 카탈로그를 읽지 않음)"),
     Setting("VOINEY_LAB_SAFETY_USAGE_SCOPE", OTHER, _NONE,
             "USAGE_SCOPE 가 비었을 때 개발 활성화 판단에 쓰는 별칭"),
     Setting("VOINEY_LAB_FACILITY_ID", OTHER, _NONE, "시설 ID"),
