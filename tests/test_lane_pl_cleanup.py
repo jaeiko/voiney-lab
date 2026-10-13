@@ -50,6 +50,15 @@ class ModuleMossTests(unittest.TestCase):
         self.assertEqual(found, [])
 
 
+class SetupScriptTests(unittest.TestCase):
+    def test_the_moss_demo_catalog_script_is_gone_and_the_manifest_it_read_stays(self):
+        # The script built a catalog for the Moss retrieval demo. The manifest
+        # is not Moss's: CI builds its demo-scope safety catalog from it
+        # (.github/workflows/ci.yml, scripts/ingest_safety_documents.py).
+        self.assertFalse((ROOT / "scripts" / "setup_moss_demo.py").exists())
+        self.assertTrue((ROOT / "data" / "moss_demo" / "approved_documents.ko.json").is_file())
+
+
 class UnusedSearchTests(unittest.TestCase):
     def test_the_voice_search_nothing_calls_is_gone_and_the_audit_retrieval_stays(self):
         # Nothing in src called search_safety_documents once lane CL deleted the
