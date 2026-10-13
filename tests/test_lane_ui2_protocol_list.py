@@ -191,7 +191,9 @@ class MarkupTests(unittest.TestCase):
             return seen
 
         rules = dict(re.findall(r'\.ui-badge\[data-kind="([a-z]+)"\]\{([^}]*)\}', self.style))
-        self.assertEqual(sorted(rules), ["danger", "done", "missing", "pending", "quiet", "warning"])
+        # The list's kinds; any kind added later (the after view's
+        # "provisional", decision 4) is checked the same way.
+        self.assertLessEqual({"danger", "done", "missing", "pending", "quiet", "warning"}, set(rules))
         base = re.search(r"\n    \.ui-badge\{([^}]*)\}", self.style).group(1)
         for kind, rule in rules.items():
             colour = re.search(r"(?:^|;)color:var\((--[a-z-]+)\)", rule) or re.search(r"(?:^|;)color:var\((--[a-z-]+)\)", base)
