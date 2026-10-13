@@ -19,9 +19,7 @@ from openai import AsyncOpenAI, OpenAI
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     ConversationHistory,
-    SentenceSegment,
     answer_curated_protocol_question,
-    stream_brain_turn,
 )
 from voiney_lab.configuration import (
     CascadeSttSettings,
@@ -4053,6 +4051,9 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     "approved_information","brain","curated_protocol",
     "deterministic_emergency",
     "language_clarification",
+    # Lane RA, decision (g): a session without a protocol has no general
+    # brain any more; its turn is answered by rule.
+    "no_protocol",
 })
 #: Lane RA, decision (d): how long a turn whose words end in an unfinished
 #: Korean ending waits for the words that follow before it is routed alone
@@ -9799,89 +9800,41 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 {"role":"assistant","content":display_text},
             ])
         return
-    if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
-    turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
-                             turn_language,session.tool_context.usage_scope,
-                             session.tool_context.report_language)
-    queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
-    def mark_token():
-        nonlocal first_token
-        if not first_token: first_token=True; timings["first_grok_token_ms"]=round((clock()-endpoint)*1000)
-    async def sentence(segment:SentenceSegment):
-        nonlocal first_sentence
-        if not first_sentence:
-            first_sentence=True; timings["first_sentence_ms"]=round((clock()-endpoint)*1000)
-            timings["primary_text_ready_ms"]=timings["first_sentence_ms"]
-            await progress("composing",route="brain")
-        if not await current_text("reply.delta",turn_id=turn_id,segment_index=segment.segment_index,text=segment.text): return
-        await queue.put(segment)
-    async def consume():
-        nonlocal output_frames,segment_count,first_audio
-        while True:
-            segment=await queue.get()
-            if segment is None:return
-            if "first_tts_request_ms" not in timings:
-                timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-                await progress("synthesizing",route="brain")
-            pcm=await asyncio.to_thread(synthesize,said(segment.text),turn_language); frames=frame_complete_audio(pcm)
-            if not session.is_current(turn_id,generation):return
-            if not first_audio:
-                if filler is not None:await filler.primary_ready()
-                if not session.start_playback(turn_id):return
-                first_audio=True; timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-                await progress(
-                    "playing",route="brain",
-                    timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
-                if not await current_text("state.changed",state=session.state.value,turn_id=turn_id): return
-            if not session.is_current(turn_id,generation): return
-            await sender.segment(
-                turn_id,segment.segment_index,frames,generation)
-            output_frames+=len(frames); segment_count+=1
-    consumer=asyncio.create_task(consume())
-    try:
-        await current_text(
-            "turn.route_decision",turn_id=turn_id,
-            normalized_text=request_arbitration.normalized_text,
-            intent=request_arbitration.intent.value,
-            confidence=request_arbitration.confidence,
-            reason_code=request_arbitration.reason_code,
-            dimensions=list(request_arbitration.dimensions),
-            runtime_router="brain",
-            action="tool_or_grounded_response",
-            state_mutation=False,
-            answer_origin="pending",
-            fallback_reason=None,
-        )
-        await progress("composing",route="brain")
-        client=_role_client(RoleModel.from_environment("answer"),max_retries=_KEEP_SDK_RETRIES); client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
-        result=await stream_brain_turn(
-            client,session.history,transcript,sentence,mark_token,
-            tool_context=turn_context)
-        if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
-        await queue.put(None); await consumer
-        if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
-        if not await current_text("reply.complete",turn_id=turn_id,text=result.text): return
-        if not await current_text("audio.complete",turn_id=turn_id,segment_count=segment_count): return
-        timings["total_ms"]=round((clock()-endpoint)*1000)
-        if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used,route="brain"): return
-        _record_workspace_metric(
-            category="agent",metric_name="turn_route",
-            metric_value=float(timings.get("total_ms",0)),
-            dimensions={
-                "intent":request_arbitration.intent.value,
-                "route":"brain",
-                "answer_origin":"model_or_tool",
-                "reason_code":request_arbitration.reason_code or "none",
-                "status":"complete",
-            },
-        )
-        if not session.is_current(turn_id,generation): return
-        session.history.commit(result.messages,result.source_references)
-    finally:
-        if not consumer.done(): consumer.cancel()
-        while not queue.empty():
-            try: queue.get_nowait()
-            except asyncio.QueueEmpty: break
+    # Lane RA, decision (g): a session without a protocol has no general
+    # brain any more (session.start refuses cascade without a protocol, so
+    # this is reached only by a session built without one). Answered by
+    # rule, nothing called.
+    _record_workspace_metric(
+        category="agent",metric_name="turn_route",
+        dimensions={
+            "intent":request_arbitration.intent.value,
+            "route":"no_protocol","answer_origin":"server",
+            "reason_code":request_arbitration.reason_code or "none",
+            "status":"blocked",
+        },
+    )
+    await current_text(
+        "turn.route_decision",turn_id=turn_id,
+        normalized_text=request_arbitration.normalized_text,
+        intent=request_arbitration.intent.value,
+        confidence=request_arbitration.confidence,
+        reason_code=request_arbitration.reason_code,
+        dimensions=list(request_arbitration.dimensions),
+        runtime_router="no_protocol",
+        action="unsupported",
+        state_mutation=False,
+        answer_origin="server",
+        fallback_reason="no_protocol_session",
+    )
+    await finish_blocked_voice(
+        (
+            "이 세션에는 프로토콜이 없어 음성 안내를 할 수 없어요. 화면에서 프로토콜을 골라 시작해 주세요."
+            if turn_language=="ko" else
+            "This session has no protocol, so there is no voice guidance. Choose a protocol on the screen to start."
+        ),
+        "no_protocol",
+    )
+
 
 async def run_turn_safely(
     websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0,

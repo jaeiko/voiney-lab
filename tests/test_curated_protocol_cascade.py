@@ -16,8 +16,6 @@ from unittest.mock import patch
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.audio import FRAME_BYTES, pcm_to_wav
 from voiney_lab.brain import (
-    BrainResult,
-    SentenceSegment,
     answer_curated_protocol_question,
     select_curated_protocol_answer,
 )
@@ -3828,9 +3826,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ), patch(
-            "voiney_lab.server.stream_brain_turn",
-            side_effect=AssertionError("brain must not run"),
-        ) as brain, patch(
             "voiney_lab.server.require_env",
             side_effect=AssertionError("Provider configuration must not be read"),
         ), patch(
@@ -3846,7 +3841,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 asyncio.run(run_turn(socket, session, b"\0\0", turn_id, 1))
                 self.assertTrue(session.playback_ended(turn_id))
 
-        brain.assert_not_called()
         states = [
             item for item in socket.text
             if item["type"] == "protocol.fixture.state"
@@ -3985,9 +3979,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ) as tts, patch(
             "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not be constructed"),
-        ), patch(
-            "voiney_lab.server.stream_brain_turn",
-            side_effect=AssertionError("generic brain must not run"),
         ), patch(
             "voiney_lab.server.require_env",
             side_effect=AssertionError("Provider configuration must not be read"),

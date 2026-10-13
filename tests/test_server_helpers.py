@@ -1,13 +1,9 @@
 import asyncio, json, tempfile, unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from collections import deque
 import httpx
 from voiney_lab.audio import FRAME_BYTES
-from voiney_lab.brain import (
-    BrainResult,
-    SentenceSegment,
-)
 from voiney_lab.document_store import ingest_manifest
 from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
@@ -80,9 +76,11 @@ class ServerTests(unittest.TestCase):
         tts_patch=(patch("voiney_lab.server.synthesize",side_effect=tts_result)
                    if isinstance(tts_result,BaseException)
                    else patch("voiney_lab.server.synthesize",return_value=tts_result))
+        # The general brain is gone (lane RA, decision g); the stand-in keeps
+        # the callers' "never called" assertion meaningful for the LLM only.
+        brain=MagicMock()
         with patch("voiney_lab.server.transcribe",return_value=transcription), \
              tts_patch as tts, \
-             patch("voiney_lab.server.stream_brain_turn") as brain, \
              patch("voiney_lab.server.AsyncOpenAI") as llm:
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         return session,socket,tts,brain,llm
@@ -212,32 +210,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(socket.binary,[])
         self.assertEqual(session.state,TurnState.COOLDOWN)
 
-    def test_brain_turn_done_uses_server_authored_route(self):
-        session=self.emergency_session()
-        class Socket:
-            def __init__(self): self.text=[]; self.binary=[]
-            async def send_text(self,value): self.text.append(json.loads(value))
-            async def send_bytes(self,value): self.binary.append(value)
-        socket=Socket()
-        async def fake_brain(client,history,transcript,sentence,mark_token,
-                             tool_context):
-            mark_token()
-            await sentence(SentenceSegment(0,"Approved answer."))
-            return BrainResult(
-                [{"role":"user","content":transcript},
-                 {"role":"assistant","content":"Approved answer."}],
-                "Approved answer.",None,[],
-            )
-        with patch("voiney_lab.server.transcribe",
-                   return_value=Transcription("Approved information please.","en")), \
-             patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
-             patch("voiney_lab.server.stream_brain_turn",side_effect=fake_brain), \
-             patch("voiney_lab.server.AsyncOpenAI"), \
-             patch("voiney_lab.server.require_env",return_value="test"):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        done=next(item for item in socket.text if item["type"]=="turn.done")
-        self.assertEqual(done["route"],"brain")
-        self.assertIn("first_audio_ms",done["timings_ms"])
+    # test_brain_turn_done_uses_server_authored_route went with the general
+    # brain (lane RA, decision g): a session without a protocol is answered by rule.
 
     def test_server_owned_tool_context_and_language_normalization(self):
         self.assertEqual(normalize_session_language("ko-KR"), "ko")
@@ -677,7 +651,7 @@ class ServerTests(unittest.TestCase):
         session.history.commit([{"role":"user","content":"old"}],[{"document_id":"OLD"}])
         session.set_tool_context(ToolContext(Path("/trusted/catalog.sqlite"),None,"en","operational"))
         self.assertEqual(session.tool_context.language,"en")
-        self.assertEqual(len(session.history.messages()),1)
+        self.assertEqual(len(session.history.messages()),0)
         self.assertEqual(session.history.source_references,[])
 
     def test_auto_switch_preserves_state_and_reset_clears_it(self):
@@ -686,9 +660,9 @@ class ServerTests(unittest.TestCase):
         session.history.commit([{"role":"user","content":"safe history"}],[{"document_id":"OLD"}])
         session.set_language_mode("auto")
         session.last_confirmed_language="en"
-        self.assertEqual(len(session.history.messages()),2)
-        session.reset_sensitive_state()
         self.assertEqual(len(session.history.messages()),1)
+        session.reset_sensitive_state()
+        self.assertEqual(len(session.history.messages()),0)
         self.assertEqual(session.history.source_references,[])
         self.assertIsNone(session.last_confirmed_language)
 
@@ -720,10 +694,9 @@ class ServerTests(unittest.TestCase):
                 socket=Socket()
                 with patch("voiney_lab.server.transcribe",return_value=transcription), \
                      patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
-                     patch("voiney_lab.server.stream_brain_turn") as brain, \
                      patch("voiney_lab.server.AsyncOpenAI") as llm:
                     asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-                brain.assert_not_called(); llm.assert_not_called()
+                llm.assert_not_called()
                 self.assertEqual(session.history.source_references,references)
                 self.assertEqual(
                     tts.call_args.args[0],
@@ -1392,12 +1365,12 @@ class ServerTests(unittest.TestCase):
 
     def test_stop_clears_history(self):
         session=ListenerSession(); session.start(); session.active_turn_id=7; generation=session.generation; self.assertTrue(session.is_current(7,generation)); session.history.commit([{"role":"user","content":"x"}])
-        session.stop(); self.assertEqual(len(session.history.messages()),1); self.assertFalse(session.is_current(7,generation))
-        session.start(); self.assertEqual(len(session.history.messages()),1); self.assertTrue(session.active); session.stop()
+        session.stop(); self.assertEqual(len(session.history.messages()),0); self.assertFalse(session.is_current(7,generation))
+        session.start(); self.assertEqual(len(session.history.messages()),0); self.assertTrue(session.active); session.stop()
         generation=session.generation
-        session.stop(); self.assertEqual(len(session.history.messages()),1)
+        session.stop(); self.assertEqual(len(session.history.messages()),0)
         self.assertGreater(session.generation,generation)
-        session.stop(); self.assertEqual(len(session.history.messages()),1)
+        session.stop(); self.assertEqual(len(session.history.messages()),0)
 
     def test_disconnect_message_exits_without_second_receive_or_error_log(self):
         class Socket:
