@@ -80,6 +80,7 @@ from voiney_lab.experiment_protocol_pdf import (
     convert_source_to_pdf,
     extract_protocol_pdf,
     file_sha256,
+    find_office_converter,
     pdf_filename,
     source_media_type,
 )
@@ -372,7 +373,36 @@ async def lifespan(_: FastAPI):
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
+    _log_source_format_support()
     yield
+
+
+def _docx_conversion_available()->bool:
+    return find_office_converter() is not None
+
+
+def _heic_photos_available()->bool:
+    return importlib.util.find_spec("pillow_heif") is not None
+
+
+def _log_source_format_support()->None:
+    """Say at start-up what turns a .docx and a HEIC photo into a PDF (lane AN, FM).
+
+    LibreOffice must be installed on the server (human decision 2026-10-13);
+    without it every .docx upload is refused, so its absence is a warning.
+    HEIC is optional (``pip install -e '.[heic]'``).
+    """
+
+    if not _docx_conversion_available():
+        log.warning(
+            "protocol.source_formats docx=unavailable reason=libreoffice_not_found "
+            "setting=VOINEY_LAB_OFFICE_CONVERTER install='apt-get install "
+            "libreoffice-writer-nogui fonts-nanum'")
+    else:
+        log.info("protocol.source_formats docx=available")
+    log.info("protocol.source_formats heic=%s",
+             "available" if _heic_photos_available()
+             else "unavailable(optional: pip install -e '.[heic]')")
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
@@ -406,6 +436,11 @@ async def readyz()->JSONResponse:
         capabilities["workspace_enabled"]=workspace.enabled
         capabilities["protocol_catalog_enabled"]=protocol.enabled
         capabilities["experiment_reports_enabled"]=reports.enabled
+        # Lane AN, FM (human decision 2026-10-13): LibreOffice must be
+        # installed on the server for .docx sources; HEIC photos need the
+        # optional pillow-heif. Reported, not required for readiness.
+        capabilities["docx_conversion_available"]=_docx_conversion_available()
+        capabilities["heic_photos_available"]=_heic_photos_available()
     except Exception as exc:
         return JSONResponse(status_code=503,content={
             "status":"not_ready",

@@ -63,6 +63,7 @@ __all__ = [
     "BOTTOM_BAND_FRACTION",
     "DOCX_MEDIA_TYPE",
     "IMAGE_MEDIA_TYPES",
+    "OFFICE_CONVERTER_ENV",
     "MAX_PROTOCOL_PDF_BYTES",
     "OCR_REASON_DROPPED_GLYPHS",
     "OCR_REASON_NO_TEXT",
@@ -95,6 +96,7 @@ __all__ = [
     "convert_source_to_pdf",
     "extract_protocol_pdf",
     "file_sha256",
+    "find_office_converter",
     "pdf_filename",
     "page_ocr_reason",
     "unreadable_character_count",
@@ -664,7 +666,11 @@ MAX_SOURCE_IMAGE_PIXELS = 100_000_000
 #: person checks a handwritten value against, so it is kept close to as taken.
 IMAGE_PDF_JPEG_QUALITY = 95
 #: How long LibreOffice may take to turn one Word document into a PDF.
+#: Measured on the 15 corpus .docx with LibreOffice 26.2: 3.4-27.8 s.
 OFFICE_CONVERSION_TIMEOUT_SECONDS = 120
+#: LibreOffice's ``soffice`` (human decision 2026-10-13: it must be installed
+#: on the server). Empty: looked up on PATH and in its default install places.
+OFFICE_CONVERTER_ENV = "VOINEY_LAB_OFFICE_CONVERTER"
 #: Where LibreOffice is looked for besides PATH: its default install places.
 OFFICE_CONVERTER_PLACES = (
     "/usr/bin/soffice",
@@ -863,16 +869,77 @@ def _pillow_version() -> str:
     return __version__
 
 
-def find_office_converter() -> str | None:
-    """LibreOffice's ``soffice`` on this machine, or None."""
+def find_office_converter(environ: dict[str, str] | None = None) -> str | None:
+    """LibreOffice's ``soffice`` on this machine, or None.
+
+    ``VOINEY_LAB_OFFICE_CONVERTER`` names it; a name that is not a file is
+    None (the upload is refused by name) rather than some other LibreOffice.
+    """
 
     import shutil
 
+    env = os.environ if environ is None else environ
+    configured = (env.get(OFFICE_CONVERTER_ENV) or "").strip()
+    if configured:
+        return configured if Path(configured).is_file() else None
     for name in ("soffice", "libreoffice"):
         found = shutil.which(name)
         if found:
             return found
     return next((place for place in OFFICE_CONVERTER_PLACES if Path(place).is_file()), None)
+
+
+#: The fonts LibreOffice prints Korean in (lane AN, FM a). A Korean Word
+#: document names fonts a Linux server lacks ("맑은 고딕", "바탕", or a theme
+#: font LibreOffice does not resolve); LibreOffice then prints its Latin
+#: letters in DejaVu and its Hangul in another fallback (WenQuanYi), and the
+#: PDF text that mixes the two loses its word spaces and breaks its lines at
+#: every change of script ("시료2 g" / "을50 mL") -- quotes would no longer
+#: match. With the Korean names and the generic families pointed at Nanum,
+#: one font prints the whole line and the text reads as written (measured
+#: 2026-10-13 with LibreOffice 26.2 and fonts-nanum). Only a document that
+#: holds Hangul is printed so: LibreOffice's own fallback lists name Korean
+#: fonts, and an English document printed under these rules took Nanum and
+#: broke its lines and pages differently (7 of the 15 corpus .docx), so an
+#: English document is printed as LibreOffice prints it. Only the LibreOffice
+#: run sees this file; the system's own font set is included unchanged, and
+#: without the Nanum fonts installed the rules match nothing.
+_KOREAN_SANS = ("맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "굴림체", "GulimChe",
+                "돋움", "Dotum", "돋움체", "DotumChe", "함초롬돋움", "HCR Dotum",
+                "Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR")
+_KOREAN_SERIF = ("바탕", "Batang", "바탕체", "BatangChe", "궁서", "Gungsuh",
+                 "함초롬바탕", "HCR Batang", "신명조", "Noto Serif KR", "Noto Serif CJK KR")
+
+
+def _office_fontconfig(base: str) -> str:
+    def alias(families: tuple[str, ...], target: str) -> str:
+        return "".join(
+            f'  <alias binding="strong"><family>{family}</family>'
+            f"<prefer><family>{target}</family></prefer></alias>\n"
+            for family in families
+        )
+
+    return (
+        '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n'
+        f'<fontconfig>\n  <include ignore_missing="yes">{base}</include>\n'
+        + alias(_KOREAN_SANS + ("sans-serif",), "NanumGothic")
+        + alias(_KOREAN_SERIF + ("serif",), "NanumMyeongjo")
+        + "</fontconfig>\n"
+    )
+
+
+def _docx_holds_hangul(archive) -> bool:
+    """Whether the document's body, headers, footers or notes hold Hangul."""
+
+    parts = [
+        name for name in archive.namelist()
+        if name.startswith("word/") and name.endswith(".xml")
+        and name.split("/")[-1].startswith(("document", "header", "footer", "footnotes", "endnotes"))
+    ]
+    return any(
+        re.search("[\uac00-\ud7a3]", archive.read(name).decode("utf-8", "replace"))
+        for name in parts
+    )
 
 
 def docx_to_pdf(
@@ -884,10 +951,11 @@ def docx_to_pdf(
 ) -> SourceConversion:
     """A Word document as the PDF LibreOffice prints it.
 
-    LibreOffice is a system install this package does not bring. Without it
-    the upload is refused with ``docx_conversion_unavailable`` and the reader
-    is asked to save the document as a PDF; the document is never read some
-    other way that the evidence check was not built for.
+    LibreOffice must be installed on the server (human decision 2026-10-13;
+    with ``fonts-nanum`` for Korean documents, see ``_office_fontconfig``).
+    Without it the upload is refused with ``docx_conversion_unavailable`` and
+    the reader is asked to save the document as a PDF; the document is never
+    read some other way that the evidence check was not built for.
     """
 
     import subprocess
@@ -900,6 +968,7 @@ def docx_to_pdf(
     with zipfile.ZipFile(source) as archive:
         if "word/document.xml" not in archive.namelist():
             raise ProtocolSourceFormatError("The Word document is not a .docx file.")
+        korean = _docx_holds_hangul(archive)
     converter = converter or find_office_converter()
     if converter is None:
         raise ProtocolSourceConversionUnavailableError(
@@ -912,6 +981,14 @@ def docx_to_pdf(
         work = Path(root)
         copy = work / "source.docx"
         copy.write_bytes(source.read_bytes())
+        environment = dict(os.environ)
+        if korean:
+            fonts = work / "fonts.conf"
+            fonts.write_text(
+                _office_fontconfig(environment.get("FONTCONFIG_FILE") or "/etc/fonts/fonts.conf"),
+                encoding="utf-8",
+            )
+            environment["FONTCONFIG_FILE"] = str(fonts)
         try:
             completed = run(
                 [
@@ -928,6 +1005,7 @@ def docx_to_pdf(
                 capture_output=True,
                 timeout=OFFICE_CONVERSION_TIMEOUT_SECONDS,
                 check=False,
+                env=environment,
             )
         except subprocess.TimeoutExpired as exc:
             raise ProtocolSourceConversionError(

@@ -79,10 +79,18 @@ class FakeOffice:
 
     def __init__(self, *, returncode: int = 0, produce: bool = True, timeout: bool = False):
         self.calls: list[list[str]] = []
+        self.environments: list[dict] = []
         self.returncode, self.produce, self.timeout = returncode, produce, timeout
 
     def __call__(self, command, **kwargs):
         self.calls.append(list(command))
+        if kwargs.get("env") is not None:
+            fonts = kwargs["env"].get("FONTCONFIG_FILE")
+            self.environments.append({
+                "FONTCONFIG_FILE": fonts,
+                "fonts.conf": Path(fonts).read_text(encoding="utf-8")
+                if fonts and Path(fonts).is_file() else None,
+            })
         if command[1] == "--version":
             return subprocess.CompletedProcess(command, 0, b"LibreOffice 24.2.7.2 420(Build:2)\n", b"")
         if self.timeout:
@@ -219,6 +227,75 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(pdf_filename("bench notes.jpg"), "bench notes.pdf")
         self.assertEqual(pdf_filename("protocol.v2.docx"), "protocol.v2.pdf")
         self.assertEqual(pdf_filename("noext"), "noext.pdf")
+
+
+def _nanum_installed() -> bool:
+    try:
+        found = subprocess.run(["fc-match", "-f", "%{family}", "NanumGothic"],
+                               capture_output=True, timeout=10, check=False)
+    except OSError:
+        return False
+    return b"NanumGothic" in found.stdout
+
+
+class LibreOfficeOnTheServerTests(unittest.TestCase):
+    """LibreOffice must be installed on the server (human decision 2026-10-13)."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_the_setting_names_libreoffice_and_a_wrong_name_is_refused(self) -> None:
+        soffice = self.root / "soffice"
+        soffice.write_text("")
+        self.assertEqual(
+            pdf_module.find_office_converter({"VOINEY_LAB_OFFICE_CONVERTER": str(soffice)}), str(soffice))
+        self.assertIsNone(
+            pdf_module.find_office_converter({"VOINEY_LAB_OFFICE_CONVERTER": str(self.root / "none")}))
+
+    def test_a_korean_document_is_printed_in_a_korean_font(self) -> None:
+        office = FakeOffice()
+        source = self.root / "k.docx"
+        source.write_bytes(docx_bytes("1. 시료 2 g 을 50 mL 원심분리관에 취한다."))
+        docx_to_pdf(source, self.root / "k.pdf", converter="/usr/bin/soffice", run=office)
+        conf = office.environments[0]["fonts.conf"]
+        self.assertIn("/etc/fonts/fonts.conf", conf)
+        self.assertIn("<family>맑은 고딕</family><prefer><family>NanumGothic</family>", conf)
+        self.assertIn("<family>sans-serif</family><prefer><family>NanumGothic</family>", conf)
+        self.assertIn("<family>바탕</family><prefer><family>NanumMyeongjo</family>", conf)
+
+    def test_an_english_document_is_printed_as_libreoffice_prints_it(self) -> None:
+        office = FakeOffice()
+        source = self.root / "e.docx"
+        source.write_bytes(docx_bytes("1. Add 5 mL buffer."))
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FONTCONFIG_FILE", None)
+            docx_to_pdf(source, self.root / "e.pdf", converter="/usr/bin/soffice", run=office)
+        self.assertEqual(office.environments[0]["FONTCONFIG_FILE"], None)
+
+    @unittest.skipUnless(
+        pdf_module.find_office_converter() is not None and _nanum_installed(),
+        "LibreOffice and fonts-nanum are not installed here")
+    def test_a_korean_word_document_reads_as_written_with_libreoffice(self) -> None:
+        import docx as python_docx
+        from docx.oxml.ns import qn
+
+        document = python_docx.Document()
+        normal = document.styles["Normal"]
+        normal.font.name = "맑은 고딕"
+        normal.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
+        for line in ("시료 2 g 을 50 mL 원심분리관에 취한다.", "4 ℃ 에서 4,800 ×g 로 10분간 원심분리한다."):
+            document.add_paragraph(line, style="List Number")
+        source = self.root / "korean.docx"
+        document.save(source)
+        conversion = docx_to_pdf(source, self.root / "korean.pdf")
+        text = extract_protocol_pdf(self.root / "korean.pdf").pages[0].text
+        self.assertTrue(conversion.converter.startswith("libreoffice-"))
+        self.assertIn("1. 시료 2 g 을 50 mL 원심분리관에 취한다.", text)
+        self.assertIn("2. 4 ℃ 에서 4,800 ×g 로 10분간 원심분리한다.", text)
 
 
 class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
