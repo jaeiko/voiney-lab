@@ -236,6 +236,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
             os.environ,
             {
                 "XAI_API_KEY":"fake-key",
+                "VOINEY_LAB_ANALYSIS_PROVIDER":"xai",
                 "VOINEY_LAB_ANALYSIS_MODEL":"grok-4.6",
             },
             clear=True,
@@ -251,6 +252,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
             os.environ,
             {
                 "XAI_API_KEY":"fake-key",
+                "VOINEY_LAB_ANALYSIS_PROVIDER":"xai",
                 "VOINEY_LAB_ANALYSIS_MODEL":"grok-4.6",
                 "VOINEY_LAB_ANALYSIS_REASONING":"medium",
             },
@@ -264,6 +266,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
                 os.environ,
                 {
                     "XAI_API_KEY":"fake-key",
+                    "VOINEY_LAB_ANALYSIS_PROVIDER":"xai",
                     "VOINEY_LAB_ANALYSIS_MODEL":"grok-4.6",
                     "VOINEY_LAB_ANALYSIS_REASONING":invalid_effort,
                 },

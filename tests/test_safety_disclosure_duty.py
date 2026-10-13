@@ -21,7 +21,6 @@ no count of model-written warnings may open anything.
 
 from __future__ import annotations
 
-import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -34,7 +33,6 @@ from voiney_lab.curated_protocol import (
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
-sys.path.insert(0, str(ROOT / "scripts"))
 
 #: The hazard text is taken from the step's own evidence rather than invented.
 #: A warning has to resolve against the source like any other statement -- that
@@ -43,9 +41,43 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def _draft():
-    from tests.test_pdf_to_session_walkthrough import _pipeline
+    """The in-gel analysis: the curated development fixture's draft.
 
-    return _pipeline()
+    It replaced the offline claim-chunk pipeline's draft when that path was
+    deleted (lane AN, 2026-10-13).
+    """
+
+    from tests.protocol_vocabulary_support import in_gel_fixture
+
+    return in_gel_fixture().draft
+
+
+def _without_warnings(draft):
+    """The same draft with no step or action warning on it.
+
+    The claim-chunk draft these tests were written on declared no warning, and
+    the tests put one source-quoted hazard on one step themselves. The curated
+    draft declares one (on step "1"), so it is taken off to start from the
+    same place.
+    """
+
+    sections = tuple(
+        replace(
+            section,
+            steps=tuple(
+                replace(
+                    step,
+                    warnings=(),
+                    sub_actions=tuple(
+                        replace(action, warnings=()) for action in step.sub_actions
+                    ),
+                )
+                for step in section.steps
+            ),
+        )
+        for section in draft.protocol.sections
+    )
+    return replace(draft, protocol=replace(draft.protocol, sections=sections))
 
 
 class LineageDecidesTheGateTests(unittest.TestCase):
@@ -55,7 +87,8 @@ class LineageDecidesTheGateTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.is_file():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        cls.extraction, _plan, _merged, cls.draft = _draft()
+        cls.draft = _draft()
+        cls.extraction = cls.draft.extraction
 
     def _codes(self, lineage=None):
         arguments = {} if lineage is None else {"source_lineage": lineage}
@@ -95,9 +128,9 @@ class LineageDecidesTheGateTests(unittest.TestCase):
             domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
         )
         self.assertEqual(sorted(revision), sorted(original))
-        # And it does not make the document ready. Four ambiguities and two
-        # repeat-untils still stand in the way, which is the point: this
-        # removes an unanswerable question, not a real one.
+        # And it does not make the document ready. The source ambiguity still
+        # stands in the way, which is the point: this removes an unanswerable
+        # question, not a real one.
         self.assertEqual(
             domain.assess_readiness(
                 self.draft.protocol,
@@ -114,28 +147,42 @@ class TheWarningIsReadOutTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.is_file():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        cls.extraction, _plan, _merged, cls.draft = _draft()
+        cls.draft = _without_warnings(_draft())
+        cls.extraction = cls.draft.extraction
 
     def _session_with_a_warning_on_step(self, position=2):
         """Put a source-quoted hazard on one step and build a session on it."""
 
         sections = list(self.draft.protocol.sections)
-        steps = list(sections[0].steps)
-        target = steps[position]
+        # ``position`` counts steps across every section, in source order.
+        located = [
+            (section_index, step_index)
+            for section_index, section in enumerate(sections)
+            for step_index in range(len(section.steps))
+        ]
+        section_index, step_index = located[position]
+        steps = list(sections[section_index].steps)
+        target = steps[step_index]
         warning = domain.SourceStatement(
             statement_id=f"warning-{target.step_id}",
             source_text=target.evidence.source_excerpt,
             evidence=replace(target.evidence),
         )
         self.warning_text = target.evidence.source_excerpt
-        steps[position] = replace(target, warnings=(warning,))
-        sections[0] = replace(sections[0], steps=tuple(steps))
+        steps[step_index] = replace(target, warnings=(warning,))
+        sections[section_index] = replace(
+            sections[section_index], steps=tuple(steps)
+        )
         protocol = replace(self.draft.protocol, sections=tuple(sections))
         draft = replace(self.draft, protocol=protocol)
         fixture = CuratedProtocolFixture(
             draft=draft,
             status="fictional_non_operational",
-            ordered_step_labels=tuple(step.source_label for step in steps),
+            ordered_step_labels=tuple(
+                step.source_label
+                for section in protocol.sections
+                for step in section.steps
+            ),
             fixture_sha256="0" * 64,
             revision_id="safety-disclosure-test",
             development_only=True,
@@ -144,7 +191,7 @@ class TheWarningIsReadOutTests(unittest.TestCase):
         )
         session = CuratedProtocolSession(fixture)
         session.active = True
-        return session, position, steps[position].step_id
+        return session, position, target.step_id
 
     def test_the_step_will_not_begin_until_the_warning_has_been_read(self):
         session, index, step_id = self._session_with_a_warning_on_step()

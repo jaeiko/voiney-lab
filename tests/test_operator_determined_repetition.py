@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_protocol_claim_analysis import write_lined_pages
+from tests.pdf_fixture_support import write_lined_pages
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,

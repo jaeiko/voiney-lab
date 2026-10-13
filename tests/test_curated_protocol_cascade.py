@@ -1933,6 +1933,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI", return_value=client,
         ), patch(
             "voiney_lab.server.require_env", return_value="offline",
+        ), patch.dict(
+            # Lane AN, decision 1: the answer role is named; an unset role
+            # no longer falls back to xAI.
+            "os.environ", {"VOINEY_LAB_ANSWER_PROVIDER": "xai"},
         ), patch(
             "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
@@ -2615,6 +2619,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
         ),patch(
             "voiney_lab.server.require_env",return_value="offline",
+        ),patch.dict(
+            # Lane AN, decision 1: the supplemental role is named; an unset
+            # role no longer falls back to xAI.
+            "os.environ",{"VOINEY_LAB_SUPPLEMENTAL_PROVIDER":"xai"},
         ),patch(
             "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
         ):

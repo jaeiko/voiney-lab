@@ -376,13 +376,10 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        import sys
-
-        sys.path.insert(0, str(ROOT / "scripts"))
-        from tests.test_pdf_to_session_walkthrough import IN_GEL, _pipeline
-
-        if not IN_GEL.is_file():
-            self.skipTest(f"{IN_GEL} is not present.")
+        # The curated in-gel draft; the claim-chunk pipeline that used to
+        # build this analysis was deleted (lane AN, 2026-10-13).
+        if not IN_GEL_PDF.is_file():
+            self.skipTest(f"{IN_GEL_PDF} is not present.")
         from voiney_lab.experiment_protocol_store import (
             ProtocolPersistenceSettings,
             initialize_protocol_store,
@@ -391,14 +388,14 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
 
         self._temp = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp.cleanup)
-        _, _, _, self.draft = _pipeline()
+        self.draft = _curated_fixture().draft
         self.store = initialize_protocol_store(
             ProtocolPersistenceSettings(True, Path(self._temp.name) / "catalog")
         )
         self.addCleanup(self.store.close)
         self.catalog = ProtocolCatalog(self.store)
         registration = self.catalog.register(
-            IN_GEL, source_filename=IN_GEL.name, media_type="application/pdf"
+            IN_GEL_PDF, source_filename=IN_GEL_PDF.name, media_type="application/pdf"
         )
         self.protocol_id = registration.entry.protocol_id
         protocol = domain.validate_protocol(

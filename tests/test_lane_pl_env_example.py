@@ -48,8 +48,6 @@ NOT_LISTED = {
     "VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE": "the development launcher sets it; the pilot needs it empty",
     "VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF": "the development launcher sets it; the pilot needs it empty",
     "VOINEY_LAB_CANDIDATE_A_SOURCE_PDF": "read by scripts/run_dev.sh from the shell only",
-    # Development tools only.
-    "VOINEY_LAB_CHUNK_CACHE_DIR": "read by the development analysis tools, not the server",
 }
 SECRET_NAME = re.compile(r"(API_KEY|SECRET|TOKEN|PASSWORD)$")
 

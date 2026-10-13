@@ -123,6 +123,11 @@ def _turn(settings: MultiBrainSettings, transcript: str):
         "voiney_lab.server.AsyncOpenAI", model,
     ), patch(
         "voiney_lab.server.require_env", return_value="offline",
+    ), patch.dict(
+        # Lane AN, decision 1: the roles the turn calls are named; an unset
+        # role no longer falls back to xAI.
+        os.environ,
+        {"VOINEY_LAB_TRANSLATION_PROVIDER": "xai", "VOINEY_LAB_ANSWER_PROVIDER": "xai"},
     ):
         asyncio.run(run_turn(socket, session, b"\0\0", 1, session.generation))
     return model, spoken

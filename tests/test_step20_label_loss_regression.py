@@ -12,31 +12,19 @@ is an imperative carrying a temperature, a time or a piece of equipment:
     p8 34  Once the charcoal filters have cooled, turn off the nitrogen supply
 
 Had that response been accepted and approved, the protocol would have been
-missing six steps with nothing in the extraction saying so. These tests fix
-that input and assert the accident is no longer expressible.
+missing six steps with nothing in the extraction saying so. The tests that
+asserted the accident is no longer expressible went with the claim-chunk path
+(lane AN, 2026-10-13); what is left checks that the trigger still reads each of
+the six labels on its page.
 """
 
 from __future__ import annotations
 
-import json
 import unittest
 from pathlib import Path
 
-from voiney_lab.experiment_protocol_analysis import (
-    ProtocolAnalysisResponseError,
-)
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
-from voiney_lab.protocol_claim_analysis import (
-    CLAIM_SCHEMA_VERSION,
-    _numbered_step_labels,
-    parse_chunk_claim_response,
-    prepare_chunk_claim_request_context,
-)
-from voiney_lab.protocol_chunk_analysis import (
-    ChunkAnalysisLimits,
-    extraction_for_chunk,
-    plan_protocol_chunks,
-)
+from voiney_lab.protocol_claim_analysis import _numbered_action_matches
 
 HEADSPACE = Path("usingdynamicheadspacecollections.pdf")
 HEADSPACE_SHA256 = (
@@ -67,178 +55,17 @@ class TheLostLabelsAreRealStepsTests(unittest.TestCase):
     def test_every_lost_label_is_printed_on_its_page(self) -> None:
         extraction = _headspace()
         for page, labels in LOST_LABELS.items():
-            printed = _numbered_step_labels(extraction.pages[page - 1].text)
+            printed = tuple(
+                dict.fromkeys(
+                    match.group("label")
+                    for match in _numbered_action_matches(
+                        extraction.pages[page - 1].text
+                    )
+                )
+            )
             for label in labels:
                 with self.subTest(page=page, label=label):
                     self.assertIn(label, printed)
-
-    def test_they_are_six_distinct_labels(self) -> None:
-        self.assertEqual(
-            sum(len(labels) for labels in LOST_LABELS.values()), 6
-        )
-
-
-class TheAccidentIsNoLongerExpressibleTests(unittest.TestCase):
-    def _chunk_for_page(self, extraction, page):
-        plan = plan_protocol_chunks(
-            extraction,
-            f"protocol-{extraction.sha256[:32]}",
-            "pdf-1",
-            limits=ChunkAnalysisLimits(max_concurrency=1, max_retries=0),
-        )
-        return next(
-            chunk for chunk in plan.chunks if page in chunk.core_page_refs
-        )
-
-    def _response(self, extraction, chunk, *, dispose):
-        scoped = extraction_for_chunk(extraction, chunk)
-        request = prepare_chunk_claim_request_context(
-            scoped,
-            source_revision=chunk.candidate_revision_id,
-            chunk_id=chunk.chunk_id,
-            ordinal=chunk.ordinal,
-            core_page_refs=chunk.core_page_refs,
-            context_page_refs=chunk.overlap_page_refs,
-        )
-        handles = {
-            page.source_page_number: [
-                item.handle for item in page.evidence
-            ]
-            for page in request.pages
-        }
-        coverage = []
-        for page in chunk.core_page_refs:
-            record = {
-                "source_page_number": page,
-                "analysis_incomplete": False,
-                "declined_evidence_segment_ids": handles.get(page, []),
-            }
-            if dispose and page in LOST_LABELS:
-                record["non_step_labels"] = [
-                    {
-                        "source_label": label,
-                        "evidence_segment_ids": handles[page][:1],
-                    }
-                    for label in LOST_LABELS[page]
-                ]
-            coverage.append(record)
-        payload = {
-            "claim_schema_version": CLAIM_SCHEMA_VERSION,
-            "capability_policy_id": "p1-conservative",
-            "request_handle": request.request_handle,
-            "page_coverage": coverage,
-            "structure": [],
-            "claims": [],
-        }
-        return scoped, request, json.dumps(payload)
-
-    def _parse(self, extraction, chunk, raw, request, scoped):
-        return parse_chunk_claim_response(
-            raw,
-            extraction=scoped,
-            source_revision=chunk.candidate_revision_id,
-            chunk_id=chunk.chunk_id,
-            core_page_refs=chunk.core_page_refs,
-            request=request,
-        )
-
-    def test_a_response_disposing_of_them_is_refused_as_a_violation(
-        self,
-    ) -> None:
-        """Not ignored: a provider must not believe it was honoured."""
-
-        extraction = _headspace()
-        chunk = self._chunk_for_page(extraction, 6)
-        scoped, request, raw = self._response(
-            extraction, chunk, dispose=True
-        )
-        with self.assertRaises(ProtocolAnalysisResponseError) as caught:
-            self._parse(extraction, chunk, raw, request, scoped)
-        self.assertEqual(
-            caught.exception.diagnostic.reason_code,
-            "label_disposition_not_accepted",
-        )
-        self.assertEqual(
-            caught.exception.diagnostic.mismatch_class,
-            "semantic_contract_violation",
-        )
-
-    def test_the_same_response_without_dispositions_fails_differently(
-        self,
-    ) -> None:
-        """The obligation still catches the missing steps themselves.
-
-        With the disposition removed the response claims nothing at all, so it
-        is refused for omitting the numbered actions -- which is the guarantee
-        that must survive removing the disposition route.
-        """
-
-        extraction = _headspace()
-        chunk = self._chunk_for_page(extraction, 6)
-        scoped, request, raw = self._response(
-            extraction, chunk, dispose=False
-        )
-        with self.assertRaises(Exception) as caught:
-            self._parse(extraction, chunk, raw, request, scoped)
-        reason = getattr(
-            getattr(caught.exception, "diagnostic", None), "reason_code", None
-        )
-        self.assertNotEqual(reason, "label_disposition_not_accepted")
-        self.assertIsNotNone(reason)
-
-
-class TheNumberedObligationStillBitesTests(unittest.TestCase):
-    """Removing the disposition route must not weaken the obligation."""
-
-    def test_a_label_absent_from_the_claims_still_fails(self) -> None:
-        extraction = _headspace()
-        plan = plan_protocol_chunks(
-            extraction,
-            f"protocol-{extraction.sha256[:32]}",
-            "pdf-1",
-            limits=ChunkAnalysisLimits(max_concurrency=1, max_retries=0),
-        )
-        chunk = next(
-            chunk for chunk in plan.chunks if 6 in chunk.core_page_refs
-        )
-        scoped = extraction_for_chunk(extraction, chunk)
-        request = prepare_chunk_claim_request_context(
-            scoped,
-            source_revision=chunk.candidate_revision_id,
-            chunk_id=chunk.chunk_id,
-            ordinal=chunk.ordinal,
-            core_page_refs=chunk.core_page_refs,
-            context_page_refs=chunk.overlap_page_refs,
-        )
-        handles = {
-            page.source_page_number: [item.handle for item in page.evidence]
-            for page in request.pages
-        }
-        payload = {
-            "claim_schema_version": CLAIM_SCHEMA_VERSION,
-            "capability_policy_id": "p1-conservative",
-            "request_handle": request.request_handle,
-            "page_coverage": [
-                {
-                    "source_page_number": page,
-                    "analysis_incomplete": False,
-                    "declined_evidence_segment_ids": handles.get(page, []),
-                }
-                for page in chunk.core_page_refs
-            ],
-            "structure": [],
-            "claims": [],
-        }
-        with self.assertRaises(Exception) as caught:
-            parse_chunk_claim_response(
-                json.dumps(payload),
-                extraction=scoped,
-                source_revision=chunk.candidate_revision_id,
-                chunk_id=chunk.chunk_id,
-                core_page_refs=chunk.core_page_refs,
-                request=request,
-            )
-        self.assertIsNotNone(caught.exception)
 
 
 if __name__ == "__main__":

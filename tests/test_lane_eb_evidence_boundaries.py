@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import unittest
-from dataclasses import replace
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab import experiment_protocol_analysis as analysis_module
@@ -372,27 +371,6 @@ class EveryComparisonTests(unittest.TestCase):
         source = extraction(f"{TITLE}\n{STEP}", "Add 0.5 mL buffer.")
         self.assertEqual(analysis_module._matching_source_pages("5 mL buffer", source), ())
         self.assertEqual(analysis_module._matching_source_pages("0.5 mL buffer", source), (2,))
-
-    def test_the_chunk_merge_revalidation_reads_the_boundaries(self):
-        from voiney_lab import protocol_claim_analysis
-
-        self.assertIs(
-            protocol_claim_analysis.validate_protocol_analysis_evidence,
-            analysis_module.validate_protocol_analysis_evidence,
-        )
-        line = "Add 0.5 mL buffer."
-        source = page(line)
-        draft = parse(source, materials=[material("buffer", line, "0.5 mL buffer")])
-
-        def quantity(text: str):
-            return replace(draft.protocol, materials=(replace(
-                draft.protocol.materials[0], quantities=(domain.ScientificValue(text),),
-            ),))
-
-        verified, _ = analysis_module.validate_protocol_analysis_evidence(quantity("0.5 mL buffer"), source)
-        self.assertEqual(verified.materials[0].quantities[0].source_text, "0.5 mL buffer")
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            analysis_module.validate_protocol_analysis_evidence(quantity("5 mL buffer"), source)
 
 
 if __name__ == "__main__":

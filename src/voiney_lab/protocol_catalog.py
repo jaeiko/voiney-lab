@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
@@ -48,22 +47,6 @@ from voiney_lab.experiment_protocol_store import (
     ProtocolRevisionRecord,
     ProtocolStore,
     serialize_analysis,
-)
-from voiney_lab.protocol_chunk_analysis import (
-    ChunkAnalysisLimits,
-    ProtocolChunkAdmissionError,
-    ProtocolChunkMergeError,
-    ProtocolChunkPlan,
-    ValidatedChunkResult,
-    analyze_protocol_chunk,
-    assemble_validated_protocol_claims,
-    merge_validated_chunk_results,
-    plan_protocol_chunks,
-)
-from voiney_lab.protocol_claim_analysis import (
-    ProtocolChunkClaimAnalysis,
-    serialize_chunk_claim_analysis,
-    unaccounted_segments_by_page,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -127,12 +110,6 @@ _OCR_REQUESTED_EVENT = "protocol_ocr_requested"
 _OCR_COMPLETED_EVENT = "protocol_ocr_completed"
 _OCR_FAILED_EVENT = "protocol_ocr_failed"
 _OCR_REVIEWED_EVENT = "protocol_ocr_reviewed"
-_CHUNK_RUN_LOCKS = tuple(threading.Lock() for _ in range(64))
-CLAIM_CHUNK_ANALYSIS_ENABLED_ENV = (
-    "VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED"
-)
-_TRUE_FEATURE_VALUES = frozenset({"1", "true", "yes", "on"})
-_FALSE_FEATURE_VALUES = frozenset({"0", "false", "no", "off", ""})
 
 
 class ProtocolCatalogError(RuntimeError):
@@ -173,14 +150,6 @@ class ProtocolOcrReviewError(ProtocolCatalogError):
 
 class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
     code = "chunked_analysis_required"
-
-
-class ProtocolChunkAnalysisFailedError(ProtocolCatalogError):
-    code = "chunk_analysis_failed"
-
-
-class ProtocolChunkMergeConflictError(ProtocolCatalogError):
-    code = "merge_conflict"
 
 
 @dataclass(frozen=True)
@@ -951,12 +920,6 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     extracted_chars = sum(len(page.text.strip()) for page in extraction.pages)
     if extraction.non_empty_page_count == 0 or extracted_chars < 32:
         return "ocr_required"
-    if (
-        _claim_chunk_analysis_enabled()
-        and extraction.page_count
-        > ChunkAnalysisLimits().max_core_pages_per_chunk
-    ):
-        return "chunked_analysis_required"
     try:
         prepare_protocol_analysis_request(
             extraction, max_input_bytes=MAX_SINGLE_PASS_INPUT_BYTES
@@ -966,90 +929,16 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     return "structured_analysis_ready"
 
 
-def _claim_chunk_analysis_enabled() -> bool:
-    raw = os.environ.get(CLAIM_CHUNK_ANALYSIS_ENABLED_ENV, "false")
-    normalized = raw.strip().casefold()
-    if normalized in _TRUE_FEATURE_VALUES:
-        return True
-    if normalized in _FALSE_FEATURE_VALUES:
-        return False
-    raise ProtocolCatalogUnavailableError(
-        f"{CLAIM_CHUNK_ANALYSIS_ENABLED_ENV} must be a boolean."
-    )
-
-
-def _event_id(*values: object) -> str:
-    digest = hashlib.sha256(
-        "\x1f".join(str(value) for value in values).encode("utf-8")
-    ).hexdigest()
-    return f"chunk-event-{digest[:48]}"
-
-
-def _safe_failure_code(exc: BaseException) -> str:
-    value = getattr(exc, "code", "chunk_analysis_failed")
-    if not isinstance(value, str) or not re.fullmatch(
-        r"[a-z][a-z0-9_]{0,63}", value
-    ):
-        return "chunk_analysis_failed"
-    return value
-
-
 def _safe_evidence_failure(
     exc: BaseException,
     *,
     source_revision: str,
     source_hash: str,
-    chunk_id: str | None = None,
 ) -> dict[str, object] | None:
     if not isinstance(exc, ProtocolAnalysisEvidenceError):
         return None
-    del source_revision, source_hash, chunk_id
+    del source_revision, source_hash
     return exc.diagnostic.privacy_safe_dict()
-
-
-def _chunk_run_lock(analysis_run_id: str) -> threading.Lock:
-    stripe = int(
-        hashlib.sha256(analysis_run_id.encode("utf-8")).hexdigest()[:8],
-        16,
-    ) % len(_CHUNK_RUN_LOCKS)
-    return _CHUNK_RUN_LOCKS[stripe]
-
-
-def _worker_analyze_chunk(
-    extraction: ProtocolPdfExtraction,
-    chunk,
-    model: ProtocolAnalysisModel,
-    max_retries: int,
-) -> tuple[
-    ProtocolChunkClaimAnalysis | None,
-    int,
-    str | None,
-    dict[str, object] | None,
-]:
-    attempts = 0
-    while attempts <= max_retries:
-        attempts += 1
-        try:
-            return (
-                analyze_protocol_chunk(extraction, chunk, model),
-                attempts,
-                None,
-                None,
-            )
-        except Exception as exc:
-            if attempts > max_retries:
-                return (
-                    None,
-                    attempts,
-                    _safe_failure_code(exc),
-                    _safe_evidence_failure(
-                        exc,
-                        source_revision=chunk.candidate_revision_id,
-                        source_hash=chunk.document_id,
-                        chunk_id=chunk.chunk_id,
-                    ),
-                )
-    return None, attempts, "chunk_analysis_failed", None
 
 
 class ProtocolCatalog:
@@ -2629,347 +2518,12 @@ class ProtocolCatalog:
             deduplicated=False,
         )
 
-    def _append_chunk_event(
-        self,
-        revision: ProtocolRevisionRecord,
-        plan: ProtocolChunkPlan,
-        event_type: str,
-        payload: dict[str, object],
-        *identity: object,
-    ) -> None:
-        self.store.append_event(
-            _event_id(plan.analysis_run_id, event_type, *identity),
-            revision.experiment_id,
-            revision.revision_number,
-            event_type,
-            {
-                "analysis_run_id": plan.analysis_run_id,
-                "document_id": plan.document_id,
-                "candidate_revision_id": plan.candidate_revision_id,
-                "planner_version": plan.planner_version,
-                **payload,
-            },
-        )
-
-    def _chunk_run_is_current(
-        self,
-        revision: ProtocolRevisionRecord,
-        plan: ProtocolChunkPlan,
-    ) -> bool:
-        events = self._latest_chunk_events(revision)
-        return bool(
-            events
-            and isinstance(events[0].payload, dict)
-            and events[0].payload.get("analysis_run_id") == plan.analysis_run_id
-            and not any(
-                event.event_type == _RUN_CANCELLED_EVENT for event in events
-            )
-        )
-
-    def cancel_analysis_run(
-        self,
-        protocol_id: str,
-        analysis_run_id: str,
-    ) -> ProtocolAnalysisRunStatus:
-        """Explicitly fence one non-terminal run; never approve or resume it."""
-
-        revision = self._latest_protocol_revision(protocol_id)
-        events = self._latest_chunk_events(revision)
-        if not events or not isinstance(events[0].payload, dict):
-            raise ProtocolCatalogNotFoundError("Protocol analysis run is unknown.")
-        if events[0].payload.get("analysis_run_id") != analysis_run_id:
-            raise ProtocolCatalogNotFoundError("Protocol analysis run is unknown.")
-        status = self.analysis_run_status(protocol_id)
-        if status.state in {
-            "review_required",
-            "merge_conflict",
-            "chunk_analysis_failed",
-            "chunk_analysis_cancelled",
-        }:
-            return status
-        plan = ProtocolChunkPlan(
-            analysis_run_id=analysis_run_id,
-            document_id=str(events[0].payload.get("document_id")),
-            protocol_id=protocol_id,
-            candidate_revision_id=str(
-                events[0].payload.get("candidate_revision_id")
-            ),
-            planner_version=str(events[0].payload.get("planner_version")),
-            planner_configuration_sha256=str(
-                events[0].payload.get("planner_configuration_sha256")
-            ),
-            extracted_text_bytes=int(
-                events[0].payload.get("extracted_text_bytes", 0)
-            ),
-            chunks=(),
-        )
-        self._append_chunk_event(
-            revision,
-            plan,
-            _RUN_CANCELLED_EVENT,
-            {"status": "cancelled", "failure_code": "analysis_cancelled"},
-            "cancelled",
-        )
-        return self.analysis_run_status(protocol_id)
-
-    def _analyze_chunked(
-        self,
-        revision: ProtocolRevisionRecord,
-        extraction: ProtocolPdfExtraction,
-        model: ProtocolAnalysisModel,
-        *,
-        analysis_id: str,
-        limits: ChunkAnalysisLimits,
-    ) -> ProtocolCatalogEntry:
-        try:
-            plan = plan_protocol_chunks(
-                extraction,
-                revision.experiment_id,
-                _revision_id(revision.revision_number),
-                limits=limits,
-            )
-        except ProtocolChunkAdmissionError as exc:
-            raise ProtocolChunkAnalysisFailedError(
-                "Protocol exceeds a bounded chunk-analysis admission limit."
-            ) from exc
-        if len(plan.chunks) < 2:
-            raise ProtocolChunkedAnalysisRequiredError(
-                "Protocol does not produce multiple bounded source chunks."
-            )
-        with _chunk_run_lock(plan.analysis_run_id):
-            existing = self._latest_chunk_events(revision)
-            if existing:
-                payload = existing[0].payload
-                if (
-                    isinstance(payload, dict)
-                    and payload.get("analysis_run_id") == plan.analysis_run_id
-                ):
-                    # Status reads and repeated explicit requests never resume
-                    # or duplicate an interrupted/terminal run implicitly.
-                    return self.get_entry(revision.experiment_id)
-            self._append_chunk_event(
-                revision,
-                plan,
-                _CHUNK_PLAN_EVENT,
-                plan.public_dict(),
-                "plan",
-            )
-
-        results: list[ValidatedChunkResult] = []
-        executor = ThreadPoolExecutor(
-            max_workers=limits.max_concurrency,
-            thread_name_prefix="protocol-chunk-analysis",
-        )
-        deadline = time.monotonic() + limits.timeout_seconds
-        timed_out = False
-        try:
-            for offset in range(0, len(plan.chunks), limits.max_concurrency):
-                batch = plan.chunks[offset : offset + limits.max_concurrency]
-                futures = {}
-                for chunk in batch:
-                    self._append_chunk_event(
-                        revision,
-                        plan,
-                        _CHUNK_STARTED_EVENT,
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "ordinal": chunk.ordinal,
-                            "status": "in_progress",
-                        },
-                        chunk.chunk_id,
-                        "started",
-                    )
-                    futures[
-                        executor.submit(
-                            _worker_analyze_chunk,
-                            extraction,
-                            chunk,
-                            model,
-                            limits.max_retries,
-                        )
-                    ] = chunk
-                remaining_seconds = max(0.0, deadline - time.monotonic())
-                done, pending = wait(futures, timeout=remaining_seconds)
-                for future in pending:
-                    future.cancel()
-                    chunk = futures[future]
-                    self._append_chunk_event(
-                        revision,
-                        plan,
-                        _CHUNK_FAILED_EVENT,
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "ordinal": chunk.ordinal,
-                            "status": "failed",
-                            "failure_code": "chunk_timeout",
-                        },
-                        chunk.chunk_id,
-                        "failed",
-                    )
-                    timed_out = True
-                batch_results: list[ValidatedChunkResult] = []
-                failed = timed_out
-                for future in done:
-                    chunk = futures[future]
-                    (
-                        analysis,
-                        attempts,
-                        failure_code,
-                        evidence_failure,
-                    ) = future.result()
-                    if analysis is None:
-                        failure_payload: dict[str, object] = {
-                            "chunk_id": chunk.chunk_id,
-                            "ordinal": chunk.ordinal,
-                            "status": "failed",
-                            "attempts": attempts,
-                            "failure_code": failure_code
-                            or "chunk_analysis_failed",
-                        }
-                        if evidence_failure is not None:
-                            failure_payload["evidence_failure"] = (
-                                evidence_failure
-                            )
-                        self._append_chunk_event(
-                            revision,
-                            plan,
-                            _CHUNK_FAILED_EVENT,
-                            failure_payload,
-                            chunk.chunk_id,
-                            "failed",
-                        )
-                        failed = True
-                        continue
-                    result = ValidatedChunkResult(chunk, analysis, attempts)
-                    payload_json, payload_sha256 = serialize_chunk_claim_analysis(
-                        analysis,
-                    )
-                    if len(payload_json.encode("utf-8")) > limits.max_chunk_result_bytes:
-                        self._append_chunk_event(
-                            revision,
-                            plan,
-                            _CHUNK_FAILED_EVENT,
-                            {
-                                "chunk_id": chunk.chunk_id,
-                                "ordinal": chunk.ordinal,
-                                "status": "failed",
-                                "attempts": attempts,
-                                "failure_code": "chunk_result_too_large",
-                            },
-                            chunk.chunk_id,
-                            "failed",
-                        )
-                        failed = True
-                        continue
-                    batch_results.append(result)
-                    self._append_chunk_event(
-                        revision,
-                        plan,
-                        _CHUNK_COMPLETED_EVENT,
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "ordinal": chunk.ordinal,
-                            "status": "completed",
-                            "attempts": attempts,
-                            "claim_payload_sha256": payload_sha256,
-                            # This is a strictly decoded, evidence-validated
-                            # internal recovery record. Status APIs omit it.
-                            "claim_payload_json": payload_json,
-                        },
-                        chunk.chunk_id,
-                        "completed",
-                    )
-                results.extend(
-                    sorted(batch_results, key=lambda item: item.chunk.ordinal)
-                )
-                if failed:
-                    raise ProtocolChunkAnalysisFailedError(
-                        "One or more bounded Protocol chunks failed analysis."
-                    )
-                if not self._chunk_run_is_current(revision, plan):
-                    raise ProtocolChunkAnalysisFailedError(
-                        "A stale Protocol analysis run cannot accept results."
-                    )
-        finally:
-            executor.shutdown(wait=not timed_out, cancel_futures=True)
-
-        if not self._chunk_run_is_current(revision, plan):
-            raise ProtocolChunkAnalysisFailedError(
-                "A stale Protocol analysis run cannot enter merge."
-            )
-        self._append_chunk_event(
-            revision,
-            plan,
-            _MERGE_STARTED_EVENT,
-            {"status": "in_progress", "chunk_count": len(results)},
-            "merge",
-            "started",
-        )
-        try:
-            merged_claims = merge_validated_chunk_results(
-                extraction,
-                plan,
-                results,
-            )
-            merged = assemble_validated_protocol_claims(
-                extraction,
-                merged_claims,
-            )
-        except ProtocolChunkMergeError as exc:
-            self._append_chunk_event(
-                revision,
-                plan,
-                _MERGE_CONFLICT_EVENT,
-                {
-                    "status": "conflict",
-                    "failure_code": exc.code,
-                    "reason_code": exc.reason_code,
-                },
-                "merge",
-                "conflict",
-            )
-            raise ProtocolChunkMergeConflictError(
-                "Protocol chunk merge requires explicit review."
-            ) from exc
-        if not self._chunk_run_is_current(revision, plan):
-            raise ProtocolChunkAnalysisFailedError(
-                "A stale Protocol analysis run cannot publish a candidate."
-            )
-        analysis = self.store.append_analysis_revision(
-            revision.experiment_id,
-            revision.revision_number,
-            analysis_id,
-            merged.protocol,
-            merged.readiness,
-            merged.capability_policy_id,
-            # Carry the per-segment dispositions with the analysis. Without
-            # this a provider's explicit "no claim here" existed only during
-            # processing, which for a reviewer is the same as never existing.
-            tuple(item.public_dict() for item in merged_claims.page_coverage),
-        )
-        self._append_chunk_event(
-            revision,
-            plan,
-            _REVIEW_REQUIRED_EVENT,
-            {
-                "status": "review_required",
-                "analysis_revision_number": analysis.analysis_revision_number,
-                "analysis_payload_sha256": analysis.payload_sha256,
-            },
-            "review",
-            analysis.analysis_revision_number,
-        )
-        entry = self.get_entry(revision.experiment_id)
-        self._analysis_ready(entry)
-        return entry
-
     def analyze(
         self,
         protocol_id: str,
         model: ProtocolAnalysisModel,
         *,
         analysis_id: str,
-        chunk_limits: ChunkAnalysisLimits = ChunkAnalysisLimits(),
     ) -> ProtocolCatalogEntry:
         """Run analysis only at this explicit caller-owned boundary."""
 
@@ -3005,16 +2559,8 @@ class ProtocolCatalog:
             {"status": "analyzing", "analysis_id": analysis_id},
         )
         if status == "chunked_analysis_required":
-            if not _claim_chunk_analysis_enabled():
-                raise ProtocolChunkedAnalysisRequiredError(
-                    "Evidence-first claim chunk analysis is disabled."
-                )
-            return self._analyze_chunked(
-                revision,
-                extraction,
-                model,
-                analysis_id=analysis_id,
-                limits=chunk_limits,
+            raise ProtocolChunkedAnalysisRequiredError(
+                "Protocol text is larger than one analysis reads."
             )
         observed = _ObservedAnalysisModel.wrap(model)
         try:
@@ -3374,17 +2920,6 @@ class ProtocolCatalog:
             for section in draft.protocol.sections
             for step in section.steps
         )
-        # Which pages the analysis could not finish accounting for. STEP 28
-        # built the execution-time disclosure for exactly this and then left it
-        # unfed: until now the only assignment to unread_pages in the whole
-        # tree was in a test, so on a real Protocol the disclosure could never
-        # fire. The coverage records travel with the stored analysis, so the
-        # answer was already here and simply not being read.
-        unread = unaccounted_segments_by_page(
-            extraction,
-            analysis.page_coverage,
-            source_revision=entry.revision_id,
-        )
         timers = self._step_timer_table(revision, extraction, draft.protocol)
         return CuratedProtocolFixture(
             draft=draft,
@@ -3396,7 +2931,6 @@ class ProtocolCatalog:
             source_pdf_path=source,
             source_pdf_sha256=revision.pdf_checksum,
             source_filename=revision.original_filename,
-            unread_pages=unread or None,
             # The timers this analysis's own source supports (lane PT,
             # decision 1): the same step_id -> seconds shape the in-gel
             # sidecar loads into, plus the steps whose timer is a choice.
