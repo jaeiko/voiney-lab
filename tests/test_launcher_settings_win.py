@@ -38,10 +38,21 @@ NO_XAI_ROLES = {
     for role in ("ROUTER", "ANSWER", "TRANSLATION", "ANALYSIS", "REPORT", "SUPPLEMENTAL")
 }
 SERVE_MARKER = "stand-in python: the launcher tried to serve"
+#: scripts/run_dev.sh turns the general explanation on, and that needs the
+#: supplemental role's provider and model written down (lane PL: unset is
+#: "설정 필요", no longer xai and grok-4.6). Not an xAI role.
+SUPPLEMENTAL_ROLE = {
+    "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "openai",
+    "VOINEY_LAB_SUPPLEMENTAL_MODEL": "gpt-test",
+}
 
 
 def _clean_environment(**extra: str) -> dict[str, str]:
-    """This process's environment without xAI, feature or role settings."""
+    """This process's environment without xAI, feature or role settings.
+
+    The supplemental role is the one exception: it is written down (see
+    ``SUPPLEMENTAL_ROLE``); pass it as an empty value to leave it unset.
+    """
 
     env = {
         key: value for key, value in os.environ.items()
@@ -55,6 +66,7 @@ def _clean_environment(**extra: str) -> dict[str, str]:
         }
     }
     env.update({"PYTHONDONTWRITEBYTECODE": "1", "HOST": "127.0.0.1", "PORT": "0"})
+    env.update(SUPPLEMENTAL_ROLE)
     env.update(extra)
     return env
 
@@ -168,6 +180,19 @@ class DevLauncherTests(_LauncherCopy):
             self.assertIn(line, result.stdout)
         self.assertFalse((self.root / "data").exists(), "data/runtime was touched")
 
+    def test_with_the_supplemental_role_unset_it_is_refused_by_name(self) -> None:
+        # Lane PL: the launcher turns the general explanation on, and that
+        # needs the supplemental role's provider and model written down.
+        result = self._run(
+            "--check-only",
+            VOINEY_LAB_SUPPLEMENTAL_PROVIDER="", VOINEY_LAB_SUPPLEMENTAL_MODEL="",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("VOINEY_LAB_SUPPLEMENTAL_PROVIDER", result.stderr)
+        self.assertIn("VOINEY_LAB_SUPPLEMENTAL_MODEL", result.stderr)
+        self.assertIn("설정 필요", result.stderr)
+        self.assertNotIn("[OK] --check-only", result.stdout)
+
     def test_the_dotenv_and_the_shell_win(self) -> None:
         self._dotenv(
             "VOINEY_LAB_SUPPLEMENTAL_PROVIDER=openai\n"
@@ -185,18 +210,16 @@ class DevLauncherTests(_LauncherCopy):
         self.assertIn("hybrid_multi_brain: disabled", result.stdout)
 
     def test_an_xai_only_feature_in_the_dotenv_needs_the_key(self) -> None:
-        # Lane AN, decision 1: the supplemental role is named; it no longer
-        # falls back to xAI by itself.
-        self._dotenv(
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true\n"
-            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER=xai\n"
-        )
-        result = self._run("--check-only")
+        self._dotenv("VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true\n")
+        # The web search is xAI's: the role is written down as xai (lane PL),
+        # so the key is the one thing the launcher can refuse on.
+        xai_role = {"VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai"}
+        result = self._run("--check-only", **xai_role)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("authoritative_web_search: enabled", result.stdout)
         self.assertIn("외부 근거 웹 검색(VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED)", result.stderr)
         self.assertNotIn("[OK] --check-only", result.stdout)
-        result = self._run("--check-only", XAI_API_KEY="fake-key")
+        result = self._run("--check-only", XAI_API_KEY="fake-key", **xai_role)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

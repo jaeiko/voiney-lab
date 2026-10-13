@@ -250,8 +250,48 @@ nothing reads it.
 
 The setting table's default for each role's provider and model, and for the
 STT and TTS providers, is now "설정 필요" (human decision 2). The code's old
-xai/grok fallback is unchanged, so an environment that sets no role behaves
-as before; `.env.example` sets every role to the values in use.
+xai/grok fallback was left in place by lane CL, so an environment that set no
+role behaved as before; lane PL removed it from three files (next section).
+`.env.example` sets every role to the values in use.
+
+## Lane PL (2026-10-13), stage 1: an unset role no longer falls back to xAI
+
+No schema change and no migration. Lane CL's table said "설정 필요" for every
+role's provider and model, but `external_references.py`,
+`experiment_reports.py` and `voice_providers.py` still answered xai and
+`grok-4.6` for an unset one, so a role nobody set could reach a provider nobody
+chose. They now say what is missing:
+
+| Setting is unset | Before | Now |
+|---|---|---|
+| `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` without `VOINEY_LAB_SUPPLEMENTAL_PROVIDER` / `_MODEL` | provider xai, model `grok-4.6` | the WebSocket refuses with "invalid non-secret configuration" naming the unset setting(s); the provider must be `xai` (the search is xAI's tool) |
+| `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true` ("AI 일반 지식") without the same two | model `grok-4.6` | the same refusal |
+| `VOINEY_LAB_REPORT_PROVIDER` or the report model (`VOINEY_LAB_REPORT_MODEL`, else `VOINEY_LAB_SUPPLEMENTAL_MODEL`) | model `grok-4.6` on xai | the report's prose writer is off (one warning in the log naming both settings); the report keeps the server's own sentences |
+| `VOINEY_LAB_STT_PROVIDER` / `VOINEY_LAB_TTS_PROVIDER` | xai | no provider: a turn's transcription or speech refuses by the setting's name, which the existing STT/TTS failure path handles; the `ready` event's `voice_profile` reports provider and voice `""` |
+
+What a `.env` needs: nothing, if it was copied from `.env.example` (every role
+is written there). A `.env` that relied on the fallback has to write the role.
+`scripts/run_dev.sh` turns the general explanation on, so its "Non-secret
+capability check" now stops, with the same named refusal, when the
+supplemental role is not written down. `scripts/run_pilot.sh` keeps the
+explanation off unless the shell or `.env` turns it on (and then the server
+refuses at the first connection, as above).
+
+Removed in the same lane: `retrieval.search_safety_documents` (nothing in
+`src` called it; `retrieve_approved_lab_documents` and
+`scripts/audit_approved_catalog.py` stay), `scripts/setup_moss_demo.py`, and
+the `VOINEY_LAB_MOSS_ENABLED` export and the "moss_safety_documents" banner
+line in `run_pilot.sh`, `run_dev.sh` and `run_ci_server.sh`.
+`VOINEY_LAB_MOSS_ENABLED` is still in the setting table and in
+`scripts/collect_chunks.sh`; nothing reads it.
+
+Not changed by this lane (other lanes' files): the xai default and
+`DEFAULT_MODELS` in `model_providers.py`, the old defaults in `multi_brain.py`
+and `llm_router.py`, and the xAI-only web evidence search
+(`XaiAuthoritativeWebSearch`, `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`), which
+`server.py`'s research path still calls. The table's comment on `_SET_ME` in
+`setting_names.py` (and the README's provider section) still describe the
+fallback as present for all roles.
 
 ## Commercial workspace schema 7 → 8 (lane CF, 2026-10-08)
 

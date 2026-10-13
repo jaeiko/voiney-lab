@@ -66,7 +66,6 @@ export VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
 export VOINEY_LAB_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
 export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
 export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
-export VOINEY_LAB_MOSS_ENABLED="false"
 
 # --- Defaults: a value set in the shell or the .env wins ------------------------
 # Decision 1 of lane XO (2026-10-05). Each name below is exported only when a

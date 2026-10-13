@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from voiney_lab.model_providers import RoleModel
+from voiney_lab.model_providers import ROLE_SETTINGS, RoleModel
 
 
 log = logging.getLogger("voiney_lab.external_references")
@@ -92,11 +92,31 @@ def _aliased_enabled(canonical: str, legacy: str) -> tuple[bool, bool]:
     raise ValueError(f"{canonical} must be a boolean")
 
 
+def _require_role_settings(role: str, *, feature: str) -> None:
+    """Refuse a feature whose role's provider or model nobody set.
+
+    Lane CL made every role's provider and model "설정 필요" in the setting
+    table; this module used to fall back to xAI and ``grok-4.6`` when they
+    were unset, so a role nobody chose could still reach a provider. It now
+    names the missing setting instead (lane PL).
+    """
+
+    missing = [
+        name for name in ROLE_SETTINGS[role][:2]
+        if not os.environ.get(name, "").strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"{feature} is on, but {' and '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} not set (설정 필요)"
+        )
+
+
 @dataclass(frozen=True)
 class ExternalReferenceSettings:
     enabled: bool
     allowed_domains: tuple[str, ...] = ()
-    model: str = "grok-4.6"
+    model: str = ""
     timeout_seconds: float = 90.0
     max_citations: int = 5
     domain_profile: str | None = None
@@ -144,7 +164,11 @@ class ExternalReferenceSettings:
             )
         # The supplemental role's model (lane M1, decision 1). The search
         # is xAI's web_search tool, so it runs only on the xai provider: any
-        # other provider is refused here, visibly, not sent to xAI.
+        # other provider is refused here, visibly, not sent to xAI. The
+        # provider and the model must both be written down (lane PL): an
+        # unset one is no longer taken to be xai and grok-4.6.
+        _require_role_settings(
+            "supplemental", feature="VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED")
         role = RoleModel.from_environment("supplemental")
         if role.provider != "xai":
             raise ValueError(
@@ -152,12 +176,7 @@ class ExternalReferenceSettings:
                 "VOINEY_LAB_SUPPLEMENTAL_PROVIDER=xai: the web reference "
                 "search is xAI's web_search tool"
             )
-        # Set but empty is a mistake, as it was before the rename.
-        model = os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", "grok-4.6").strip()
-        if not model:
-            raise ValueError(
-                "VOINEY_LAB_SUPPLEMENTAL_MODEL is invalid"
-            )
+        model = os.environ["VOINEY_LAB_SUPPLEMENTAL_MODEL"].strip()
         default_timeout = "20" if profile == "candidate_a" else "90"
         timeout_raw = (_aliased_value(
             "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
@@ -269,19 +288,20 @@ class ExternalReferenceSettings:
 
 @dataclass(frozen=True)
 class SupplementalKnowledgeSettings:
-    """Explicitly non-authoritative, read-only Grok explanation capability."""
+    """Explicitly non-authoritative, read-only model explanation capability."""
 
     enabled: bool
-    model: str = "grok-4.6"
+    model: str = ""
     timeout_seconds: float = 8.0
 
     @classmethod
     def from_environment(cls) -> "SupplementalKnowledgeSettings":
         if not _enabled("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"):
             return cls(False)
-        model = os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", "grok-4.6").strip()
-        if not model:
-            raise ValueError("VOINEY_LAB_SUPPLEMENTAL_MODEL is invalid")
+        _require_role_settings(
+            "supplemental",
+            feature="VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED")
+        model = os.environ["VOINEY_LAB_SUPPLEMENTAL_MODEL"].strip()
         try:
             timeout = float(os.environ.get(
                 "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS", "8"

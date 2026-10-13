@@ -39,6 +39,15 @@ PROVIDER_SECRET_NAMES = (
 for _name in PROVIDER_SECRET_NAMES:
     os.environ.pop(_name, None)
 
+# --- The speech providers are written down (lane PL) -------------------------
+# VOINEY_LAB_STT_PROVIDER and VOINEY_LAB_TTS_PROVIDER are "설정 필요": unset,
+# the code refuses to transcribe or speak (voice_providers.require_provider)
+# instead of taking xai. The tests that drive a turn patch the HTTP request, so
+# the suite names xai here, once, the way a deployment names its provider; a
+# test of the unset case clears the environment itself.
+os.environ["VOINEY_LAB_STT_PROVIDER"] = "xai"
+os.environ["VOINEY_LAB_TTS_PROVIDER"] = "xai"
+
 
 class OutsideNetworkBlocked(ConnectionRefusedError):
     """A test tried to connect somewhere other than this machine."""

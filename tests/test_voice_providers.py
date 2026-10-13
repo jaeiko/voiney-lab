@@ -77,8 +77,12 @@ ELEVEN_KO = {
 
 
 class SettingsTests(unittest.TestCase):
-    def test_defaults_are_the_xai_path_that_ran_before(self):
-        with patch.dict("os.environ", {}, clear=True):
+    def test_the_xai_path_that_ran_before_is_what_xai_written_down_gives(self):
+        # Lane PL: it is no longer what an unset provider gives (the setting
+        # table's default is "설정 필요"; tests/test_lane_pl_old_defaults.py).
+        with patch.dict("os.environ", {
+            "VOINEY_LAB_STT_PROVIDER": "xai", "VOINEY_LAB_TTS_PROVIDER": "xai",
+        }, clear=True):
             stt = vp.SttProviderSettings.from_environment()
             tts = vp.TtsProviderSettings.from_environment()
             self.assertEqual(_tts_voice(), "leo")
@@ -112,8 +116,10 @@ class SettingsTests(unittest.TestCase):
 
 
 class DefaultPathTests(unittest.TestCase):
-    def test_default_settings_never_reach_the_new_adapters(self):
-        with patch.dict("os.environ", {"XAI_API_KEY": "x"}, clear=True), \
+    def test_xai_written_down_never_reaches_the_new_adapters(self):
+        with patch.dict("os.environ", {
+            "XAI_API_KEY": "x", "VOINEY_LAB_STT_PROVIDER": "xai",
+        }, clear=True), \
              patch("voiney_lab.voice_providers.requests.post") as adapter, \
              patch("voiney_lab.server.requests.post", return_value=FakeResponse(
                  {"text": "네", "language": "Korean", "duration": 0.4})) as original:

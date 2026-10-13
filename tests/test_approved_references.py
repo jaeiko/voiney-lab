@@ -27,7 +27,14 @@ from voiney_lab.external_references import (
 )
 from voiney_lab.retrieval import retrieve_approved_lab_documents
 
-from tests.test_retrieval import operational_document
+from tests.test_document_ingestion import operational_document
+
+#: The supplemental role written down the way a deployment does (lane PL: an
+#: unset provider or model is "설정 필요", no longer xai and grok-4.6).
+SUPPLEMENTAL_ROLE_ENV = {
+    "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
+    "VOINEY_LAB_SUPPLEMENTAL_MODEL": "grok-test",
+}
 
 
 def reference_document(**overrides):
@@ -140,6 +147,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
             "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "osha.gov,cdc.gov",
             "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS": "2.5",
+            **SUPPLEMENTAL_ROLE_ENV,
         }, clear=True):
             settings = ExternalReferenceSettings.from_environment()
         self.assertEqual(settings.allowed_domains, ("osha.gov", "cdc.gov"))
@@ -174,6 +182,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
                 "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
                 "VOINEY_LAB_SUPPLEMENTAL_PROVIDER":"xai",
                 "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
+                **SUPPLEMENTAL_ROLE_ENV,
                 name:value,
             },clear=True),self.assertRaises(ValueError):
                 ExternalReferenceSettings.from_environment()
@@ -183,6 +192,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
             "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS":"5",
             "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS":"5",
+            **SUPPLEMENTAL_ROLE_ENV,
         },clear=True),self.assertRaises(ValueError):
             ExternalReferenceSettings.from_environment()
 
@@ -193,6 +203,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             )
         with patch.dict(os.environ, {
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED": "true",
+            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "openai",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL": "grok-test",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS": "7",
         }, clear=True):
