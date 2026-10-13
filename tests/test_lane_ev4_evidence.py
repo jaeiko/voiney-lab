@@ -146,5 +146,63 @@ class HangulSpacingTests(unittest.TestCase):
             parse(source, step("1", "시료 10 mL 를 넣는다.", "1. 시료 10 mL 를 넣는다."))
 
 
+def _report_pages(*bodies: str) -> tuple[str, ...]:
+    """Pages that open with a header table: page cell, revision, date, title line."""
+
+    count = len(bodies)
+    return tuple(
+        f"{n} {count}\n01 \n15/08/24 \nR4ALL - SOP – {TITLE}  Page: {n}/{count} \n{body}"
+        for n, body in enumerate(bodies, start=1)
+    )
+
+
+class PageFurnitureTests(unittest.TestCase):
+    """(a) running lines anywhere on the page, header cells and reprinted headers."""
+
+    def test_header_table_number_cells_are_not_body_between_two_parts(self):
+        source = extraction(*_report_pages(
+            f"{TITLE}\n1. Seed the cells.\n2. Incubate for 24 h.\n3. Detection",
+            "Cells are fixed with 8 % formaldehyde.\n4. Read the plate.",
+            "5. Store the plate.",
+        ))
+        draft = parse(source, step(
+            "3", "Detection Cells are fixed with 8 % formaldehyde.", "3. Detection", page=1,
+            continued_on_page_number=2, continued_excerpt="Cells are fixed with 8 % formaldehyde."))
+        self.assertEqual(draft.protocol.sections[0].steps[0].evidence.continued_on_page_number, 2)
+
+    def test_a_running_line_printed_mid_sentence_is_left_out(self):
+        running = "Molinari and Talbot Current Protocols"
+        pages = [f"{running}\n{n}. Step {n} text.\n{running}" for n in range(1, 5)]
+        pages[0] = f"{running}\n{TITLE}\n1. Step 1 text.\n{running}"
+        pages[1] = (f"{running}\n2. Wash the pellet twice with\n{running}\n"
+                    "1 mL of cold PBS.\n")
+        source = extraction(*pages)
+        parse(source, step("2", "Wash the pellet twice with 1 mL of cold PBS.",
+                           "2. Wash the pellet twice with 1 mL of cold PBS.", page=2))
+
+    def test_a_table_header_reprinted_at_the_next_page_top_is_skipped(self):
+        source = extraction(
+            f"{TITLE}\nElectrophoresis Conditions\nStep Action\n1. Set the following:\nRun at 6 V/cm for",
+            "Electrophoresis Conditions\nStep Action\n18 h at 14 °C.\n2. Stain the gel.",
+        )
+        draft = parse(source, step(
+            "1", "Set the following: Run at 6 V/cm for 18 h at 14 °C.",
+            "1. Set the following:\nRun at 6 V/cm for", page=1,
+            continued_on_page_number=2, continued_excerpt="18 h at 14 °C."))
+        self.assertEqual(draft.protocol.sections[0].steps[0].evidence.continued_excerpt, "18 h at 14 °C.")
+
+    def test_a_repeated_sentence_is_never_skipped_as_a_header(self):
+        note = "NOTE: Alternatively, digest the samples in a microwave."
+        source = extraction(
+            f"{TITLE}\n{note}\n1. Heat the sample and cover it with",
+            f"{note}\n2. Cool the vessel.",
+        )
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            parse(source, step(
+                "1", "Heat the sample and cover it with 2. Cool the vessel.",
+                "1. Heat the sample and cover it with", page=1,
+                continued_on_page_number=2, continued_excerpt="2. Cool the vessel."))
+
+
 if __name__ == "__main__":
     unittest.main()
