@@ -11,10 +11,12 @@ and the utterance runs to the 15 s bound. With the wearer's level measured,
 the end is found by level as well: once the wearer's level has been heard
 (as many frames within half the margin of the reference as a listening
 onset needs voiced), a stretch as long as the endpoint silence spent more
-than the margin below the wearer and down at the room's noise floor, while
-the VAD keeps hearing a voice there, ends the utterance. The VAD's own silence still ends it as before, so in a quiet room
-nothing changes. The listener draws the line only while the room's noise
-floor (``NoiseFloor``, decision 2's measurement) sits well under it. A
+than the margin below the wearer, while the VAD keeps hearing a voice
+there, ends the utterance. The VAD's own silence still ends it as before, so in a quiet room
+nothing changes. The listener draws the line only in a room that keeps the
+VAD hearing a voice (babble, a pump, TV talk -- most of what it hears under
+the wearer's line is voiced) and whose noise floor (``NoiseFloor``,
+decision 2's measurement) sits well under the line. A
 session that measured nothing ends utterances as before.
 """
 
@@ -176,8 +178,10 @@ class NoiseFloor:
         self.window_frames = window_frames
         self.percentile = percentile
         self.minimum_frames = minimum_frames
-        self._window: deque[int] = deque()
+        self._window: deque[tuple[int, bool]] = deque()
         self._counts = [0] * _FLOOR_BINS
+        #: Of the frames in each bin, how many the VAD called a voice.
+        self._voiced_counts = [0] * _FLOOR_BINS
         self._since_refresh = 0
         self._level: float | None = None
 
@@ -188,15 +192,19 @@ class NoiseFloor:
     def clear(self) -> None:
         self._window.clear()
         self._counts = [0] * _FLOOR_BINS
+        self._voiced_counts = [0] * _FLOOR_BINS
         self._since_refresh = 0
         self._level = None
 
-    def add(self, level_db: float) -> None:
+    def add(self, level_db: float, voiced: bool = False) -> None:
         index = min(_FLOOR_BINS - 1, max(0, int((level_db - LEVEL_FLOOR_DB) / _FLOOR_BIN_DB)))
-        self._window.append(index)
+        self._window.append((index, voiced))
         self._counts[index] += 1
+        self._voiced_counts[index] += voiced
         if len(self._window) > self.window_frames:
-            self._counts[self._window.popleft()] -= 1
+            old, was_voiced = self._window.popleft()
+            self._counts[old] -= 1
+            self._voiced_counts[old] -= was_voiced
         self._since_refresh += 1
         if self._level is None or self._since_refresh >= _FLOOR_REFRESH_FRAMES:
             self._refresh()
@@ -205,6 +213,21 @@ class NoiseFloor:
         """The floor in dBFS, or None before ``minimum_frames`` were heard."""
 
         return self._level
+
+    def voiced_share_below(self, line_db: float) -> float | None:
+        """Of the frames heard under ``line_db`` in the window, the share the VAD called a voice.
+
+        Lane SP2, decision 1: how much the room itself -- what is under the
+        wearer's line -- keeps the VAD hearing a voice: babble or a pump most
+        of the time, TV talk more than half, a fan or a quiet room hardly at
+        all. None before ``minimum_frames`` were heard.
+        """
+
+        if len(self._window) < self.minimum_frames:
+            return None
+        top = min(_FLOOR_BINS, max(0, int((line_db - LEVEL_FLOOR_DB) / _FLOOR_BIN_DB)))
+        frames = sum(self._counts[:top])
+        return sum(self._voiced_counts[:top]) / frames if frames else 0.0
 
     def _refresh(self) -> None:
         self._since_refresh = 0
@@ -336,13 +359,6 @@ class EndpointResult:
 #: the VAD's own silence ends the words exactly as before, and a quiet filler
 #: ("음") between two pauses never ends them early (lane SP2 report).
 LEVEL_ENDPOINT_VOICED_SHARE = 0.6
-#: Lane SP2, decision 1: a frame ends the wearer's words by level only when
-#: it is under the line *and* within this many dB of the room's noise floor
-#: -- the level has fallen to the room. In a quiet room or beside a fan a
-#: quieter phrase of the wearer's own sits far above the floor and never
-#: ends the words; in babble the babble is the floor. Lead-in dropped before
-#: the wearer must sit as near the floor (lane SP2 report).
-LEVEL_ENDPOINT_NEAR_FLOOR_DB = 10.0
 
 
 class EndpointDetector:
@@ -361,10 +377,11 @@ class EndpointDetector:
             self.config.listening_onset_window_frames
             if self.listening_onset else self.config.onset_window_frames)
         self.state = TurnState.IDLE
-        #: Lane SP2: the level of the last frame processed (voiced or not),
-        #: for the listener's noise floor; None after a frame the detector did
-        #: not process.
+        #: Lane SP2: the level of the last frame processed (voiced or not)
+        #: and the VAD's verdict on it, for the listener's noise floor; None
+        #: after a frame the detector did not process.
         self.last_frame_level_db: float | None = None
+        self.last_frame_voiced = False
         self._prefix: deque[tuple[bytes, bool]] = deque(maxlen=self.config.prefix_frames)
         #: Lane SP1, decision 1: each voiced frame's level, measured as it
         #: arrives (about 25 µs a frame) so a commit only takes a median;
@@ -391,9 +408,6 @@ class EndpointDetector:
         #: neighbour or a TV between the two -- loud enough for the gate, not
         #: as loud as the wearer -- never starts the level's end.
         self.wearer_onset_db: float | None = None
-        #: The room's noise floor the listener measured when it gave the
-        #: lines; None leaves the floor out of the level's end.
-        self.room_floor_db: float | None = None
         #: Whether this utterance has had the wearer's level -- as many frames
         #: at it, of the last listening-onset window, as a listening onset
         #: needs voiced (8 of 12), so a louder moment is not taken for the
@@ -468,23 +482,9 @@ class EndpointDetector:
         self.level_quiet_frames = 0
         self._level_resume.clear()
         for level in reversed(self._utterance_levels):
-            if not self._room_quiet(level, level if level is not None else LEVEL_FLOOR_DB):
+            if self._loud(level):
                 break
             self.level_quiet_frames += 1
-
-    def _near_floor(self, level: float | None) -> bool:
-        """Whether a frame of ``level`` (None: unvoiced) sits at the room's floor."""
-
-        return (
-            level is None
-            or self.room_floor_db is None
-            or level < self.room_floor_db + LEVEL_ENDPOINT_NEAR_FLOOR_DB
-        )
-
-    def _room_quiet(self, level: float | None, frame_level: float) -> bool:
-        """Under the wearer's line and down at the room's floor: the level's silence."""
-
-        return not self._loud(level) and self._near_floor(frame_level)
 
     def _at_wearer_level(self, level: float | None) -> bool:
         line = self.wearer_onset_db if self.wearer_onset_db is not None else self.wearer_threshold_db
@@ -509,9 +509,7 @@ class EndpointDetector:
         first_loud = len(self._utterance) - len(self._loud_window) + self._loud_window.index(True)
         cut = max(0, first_loud - (self.config.prefix_frames - 1))
         lead = self._utterance[:cut]
-        lead_level = _median_level(self._utterance_levels[:cut])
-        if (lead and sum(flag for _, flag in lead) >= LEVEL_ENDPOINT_VOICED_SHARE * len(lead)
-                and self._near_floor(lead_level)):
+        if lead and sum(flag for _, flag in lead) >= LEVEL_ENDPOINT_VOICED_SHARE * len(lead):
             del self._utterance[:cut]
             del self._utterance_levels[:cut]
             self._prefix_frames_retained = first_loud - cut
@@ -535,6 +533,7 @@ class EndpointDetector:
         voiced = bool(self.classifier(frame))
         frame_level = frame_level_db(frame)
         self.last_frame_level_db = frame_level
+        self.last_frame_voiced = voiced
         level = frame_level if voiced else None
         if self.state == TurnState.IDLE:
             self._prefix.append((frame, voiced))
@@ -582,21 +581,20 @@ class EndpointDetector:
             self._resume.append(voiced)
             if voiced:
                 self._resume_voiced_frames += 1
-        quiet = self._room_quiet(level, frame_level)
+        loud = self._loud(level)
         if self._wearer_heard and self.wearer_threshold_db is not None:
-            self._track_level(not quiet)
+            self._track_level(loud)
         elif self.wearer_threshold_db is not None and self._wearer_level_reached(self._at_wearer_level(level)):
             self._hear_wearer()
 
         forced = len(self._utterance) >= self.config.maximum_utterance_frames
         endpoint = self.consecutive_silence_frames >= self.config.endpoint_silence_frames
         # Lane SP2, decision 1: the VAD still hears a voice, but it has been
-        # quieter than the wearer, down at the room's floor, for the whole
-        # endpoint time.
+        # quieter than the wearer for the whole endpoint time.
         by_level = (
             self._wearer_heard
             and self.wearer_threshold_db is not None
-            and quiet
+            and not loud
             and self.level_quiet_frames >= self.config.endpoint_silence_frames
             and self._vad_keeps_hearing_a_voice()
         )
@@ -616,7 +614,7 @@ class EndpointDetector:
         return EndpointResult()
 
     def _track_level(self, loud: bool) -> None:
-        """Count the level's quiet stretch; ``loud`` is a frame that is not the room's quiet."""
+        """Count the level's quiet stretch; ``loud`` is a frame over the wearer's line."""
 
         if not self.level_quiet_frames:
             if not loud:

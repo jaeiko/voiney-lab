@@ -4364,19 +4364,32 @@ class ListenerSession:
         if self.level_reference is None or self.calibration_pending or floor is None:
             return None
         return floor>self.level_reference.threshold_db-LEVEL_ENDPOINT_FLOOR_GAP_DB
+    def room_keeps_the_vad_on(self)->bool:
+        """Whether the room itself keeps the VAD hearing a voice (lane SP2, decision 1).
+
+        Of what was heard under the wearer's line in the floor's window, at
+        least ROOM_VOICED_SHARE voiced: babble, a pump, TV talk. A quiet room
+        or a fan is not -- there the VAD finds the silence itself, and a
+        quieter phrase of the wearer's own must not end the words.
+        """
+
+        share=(self.noise_floor.voiced_share_below(self.level_reference.threshold_db)
+               if self.level_reference is not None else None)
+        return share is not None and share>=ROOM_VOICED_SHARE
     def endpoint_threshold_db(self)->float|None:
         """The line an utterance's end is also found by (lane SP2, decision 1).
 
-        Once the wearer's level was heard, staying under the line and down at
-        the room's floor for the endpoint time while the VAD keeps hearing a
-        voice -- babble, a pump -- ends the utterance. Only while the room sits well under the
-        line (``room_near_the_line`` False): nearer, the level would cut the
-        room's own voice into turns, so the VAD alone ends utterances, as
-        before -- the same as without a reference, while the calibration
-        sentence is awaited, and before the room was heard.
+        Once the wearer's level was heard, staying under the line for the
+        endpoint time while the VAD keeps hearing a voice ends the utterance.
+        Only in a room that keeps the VAD on (``room_keeps_the_vad_on``) and
+        sits well under the line (``room_near_the_line`` False): nearer, the
+        level would cut the room's own voice into turns. Otherwise the VAD
+        alone ends utterances, as before -- the same as without a reference,
+        while the calibration sentence is awaited, and before the room was
+        heard.
         """
 
-        if self.room_near_the_line() is not False:
+        if self.room_near_the_line() is not False or not self.room_keeps_the_vad_on():
             return None
         assert self.level_reference is not None
         return self.level_reference.threshold_db
@@ -4398,7 +4411,6 @@ class ListenerSession:
         detector.wearer_onset_db=(
             self.level_reference.reference_db-self.level_reference.margin_db/2
             if threshold is not None and self.level_reference is not None else None)
-        detector.room_floor_db=self.noise_floor.level_db() if threshold is not None else None
         if (threshold is not None)!=self.level_endpoint_on:
             self.level_endpoint_on=threshold is not None
             floor=self.noise_floor.level_db()
@@ -4648,7 +4660,7 @@ class ListenerSession:
         for frame in self.framer.push(chunk):
             result=self.detector.process(frame)
             if self.detector.last_frame_level_db is not None:
-                self.noise_floor.add(self.detector.last_frame_level_db)
+                self.noise_floor.add(self.detector.last_frame_level_db,self.detector.last_frame_voiced)
             if result.speech_started:
                 self.active_turn_id=self.next_turn_id; self.next_turn_id+=1
                 self.turn_generations[self.active_turn_id]=self.generation
@@ -7770,6 +7782,13 @@ async def _suggest_noisy_mode(
 #: turns; at 6.5 dB or nearer it cut TV talk, babble and a pump into stray
 #: turns. Decision 2 says the room is loud from the same point.
 LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
+#: Lane SP2, decision 1: the level ends utterances only in a room where at
+#: least this share of what is heard under the wearer's line is voiced. On
+#: the synthetic bench the room alone gives babble 85 % or more, a pump
+#: 100 %, TV talk about 60 %, a fan, a centrifuge or a quiet room none (lane
+#: SP2 report); a quiet room with the wearer and a neighbour talking now and
+#: then stays well under half.
+ROOM_VOICED_SHARE=0.5
 #: Lane SP2, decision 2: said once the floor is that near (room_near_the_line).
 NOISE_FLOOR_SUGGESTION_WORDS="주변이 시끄러워요. 붐 마이크나 시끄러운 곳 모드를 권해요."
 

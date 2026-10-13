@@ -106,6 +106,19 @@ class NoiseFloorTests(unittest.TestCase):
         self.assertIsNone(floor.level_db())
         self.assertEqual(floor.frames, 0)
 
+    def test_the_voiced_share_under_a_line(self) -> None:
+        floor = NoiseFloor(window_frames=1000, percentile=50.0, minimum_frames=100)
+        self.assertIsNone(floor.voiced_share_below(-30.0))
+        for k in range(200):
+            floor.add(-45.0, k % 4 != 0)   # babble under the line, 3 of 4 voiced
+        for _ in range(100):
+            floor.add(-20.0, True)         # the wearer, over the line
+        self.assertAlmostEqual(floor.voiced_share_below(-30.0), 0.75)
+        self.assertAlmostEqual(floor.voiced_share_below(-10.0), 250 / 300)
+        self.assertEqual(floor.voiced_share_below(-60.0), 0.0, "nothing heard under it")
+        floor.clear()
+        self.assertIsNone(floor.voiced_share_below(-30.0))
+
     def test_out_of_range_levels_land_in_the_end_bins(self) -> None:
         floor = NoiseFloor(window_frames=100, percentile=50.0, minimum_frames=10)
         for _ in range(10):
@@ -135,6 +148,9 @@ class ListenerFloorTests(unittest.TestCase):
             session.accept_chunk(ROOM)
         self.assertEqual(session.state, TurnState.IDLE)
         self.assertAlmostEqual(session.noise_floor.level_db(), ROOM_DB, delta=0.5)
+        # The stand-in VAD never calls ROOM a voice: a room that does not
+        # keep the VAD on.
+        self.assertEqual(session.noise_floor.voiced_share_below(0.0), 0.0)
 
     def test_nothing_heard_while_the_agent_speaks_counts(self) -> None:
         session = self.session()

@@ -107,7 +107,7 @@ class SuggestionDueTests(unittest.TestCase):
             session.set_level_reference(reference_db)
         if floor_db is not None:
             for _ in range(NOISE_FLOOR_MINIMUM_FRAMES):
-                session.noise_floor.add(floor_db)
+                session.noise_floor.add(floor_db, True)
         return session
 
     def test_a_floor_near_the_wearer_makes_it_due(self) -> None:

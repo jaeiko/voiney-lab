@@ -75,10 +75,9 @@ CONFIG = VadConfig(
 )
 
 
-def detector(threshold_db: float | None, floor_db: float | None = None) -> EndpointDetector:
+def detector(threshold_db: float | None) -> EndpointDetector:
     found = EndpointDetector(CONFIG, classifier=voiced_if_loud, listening_onset=True)
     found.wearer_threshold_db = threshold_db
-    found.room_floor_db = floor_db
     return found
 
 
@@ -174,30 +173,6 @@ class DetectorTests(unittest.TestCase):
             [(i, r.utterance, r.endpoint, r.voiced_level_db) for i, r in before],
             [(i, r.utterance, r.endpoint, r.voiced_level_db) for i, r in after])
 
-    def test_a_quieter_phrase_of_the_wearers_in_a_quiet_room_does_not_end_the_words(self) -> None:
-        # Under the line but far above a quiet room's floor: the wearer's own
-        # quieter phrase, not the room -- only the VAD may end the words.
-        frames = LOUD[:6] + QUIET[:20] + LOUD[6:12] + [SILENT] * 8
-        before = run(detector(None), frames)
-        after = run(detector(THRESHOLD_DB, floor_db=-80.0), frames)
-        self.assertEqual(len(after), 1)
-        self.assertEqual(
-            [(i, r.utterance, r.endpoint) for i, r in before],
-            [(i, r.utterance, r.endpoint) for i, r in after])
-        # The same stretch down at a babbling room's floor does end them.
-        after = run(detector(THRESHOLD_DB, floor_db=-45.0), frames)
-        self.assertEqual(after[0][1].endpoint, "level")
-        self.assertEqual(after[0][1].utterance, b"".join(LOUD[:6]))
-
-    def test_a_lead_far_above_a_quiet_rooms_floor_is_kept(self) -> None:
-        # A neighbour talking before the wearer in a quiet room is not the
-        # room: nothing before the wearer is dropped.
-        frames = QUIET[:20] + LOUD[:6] + [SILENT] * 8
-        kept = run(detector(THRESHOLD_DB, floor_db=-80.0), frames)[0][1]
-        self.assertTrue(kept.utterance.startswith(QUIET[0]))
-        dropped = run(detector(THRESHOLD_DB, floor_db=-45.0), frames)[0][1]
-        self.assertTrue(dropped.utterance.startswith(QUIET[18]))
-
     def test_a_soft_start_in_a_quiet_room_is_kept(self) -> None:
         # A soft start, a pause, then the wearer's level: the VAD heard
         # mostly silence before it, so nothing is dropped.
@@ -229,25 +204,27 @@ class DetectorTests(unittest.TestCase):
         self.assertTrue(result.forced)
 
 
-def hear_room(session: ListenerSession, floor_db: float = -45.0) -> None:
+def hear_room(session: ListenerSession, floor_db: float = -45.0, *, voiced: bool = True) -> None:
     """The listener has heard enough of a room whose noise floor is ``floor_db``.
 
-    -45 dBFS: a babbling room, its voice (QUIET, -43) at the floor and well
-    under the wearer's line (-32).
+    By default a babbling room: its voice (QUIET, -43 dBFS) at the floor,
+    well under the wearer's line (-32), and voiced. ``voiced=False`` is a
+    quiet room or a fan: the VAD finds its silence itself.
     """
 
     for _ in range(NOISE_FLOOR_MINIMUM_FRAMES):
-        session.noise_floor.add(floor_db)
+        session.noise_floor.add(floor_db, voiced)
 
 
 class ListenerTests(unittest.TestCase):
-    def session(self, *, reference_db: float | None = REFERENCE_DB, floor_db: float | None = -45.0) -> ListenerSession:
+    def session(self, *, reference_db: float | None = REFERENCE_DB, floor_db: float | None = -45.0,
+                voiced_room: bool = True) -> ListenerSession:
         session = ListenerSession(EndpointDetector(CONFIG, classifier=voiced_if_loud, listening_onset=True))
         session.start()
         if reference_db is not None:
             session.set_level_reference(reference_db)
         if floor_db is not None:
-            hear_room(session, floor_db)
+            hear_room(session, floor_db, voiced=voiced_room)
         return session
 
     def feed(self, session: ListenerSession, frames: list[bytes]) -> list:
@@ -290,6 +267,22 @@ class ListenerTests(unittest.TestCase):
         events = self.feed(session, QUIET[:20] + middle + QUIET[:40])
         self.assertEqual([e.kind for e in events], ["speech.start", "speech.ignored"])
         self.assertTrue(events[-1].result.forced)
+
+    def test_a_room_that_does_not_keep_the_vad_on_ends_words_as_before(self) -> None:
+        # A quiet room or a fan: the VAD finds the silence itself, so the
+        # level never ends the wearer's words -- not even a quieter phrase
+        # of the wearer's own that the VAD hears as a voice.
+        session = self.session(floor_db=-80.0, voiced_room=False)
+        self.assertFalse(session.room_keeps_the_vad_on())
+        self.assertIsNone(session.endpoint_threshold_db())
+        events = self.feed(session, LOUD[:6] + QUIET[:8] + LOUD[6:12] + [SILENT] * 8)
+        self.assertEqual([e.kind for e in events], ["speech.start", "speech.end"])
+        self.assertEqual(events[-1].result.endpoint, "silence")
+        self.assertEqual(events[-1].result.utterance, b"".join(LOUD[:6] + QUIET[:8] + LOUD[6:12]))
+        # The same room voiced -- babble -- turns the level on.
+        session = self.session(floor_db=-80.0, voiced_room=True)
+        self.assertTrue(session.room_keeps_the_vad_on())
+        self.assertEqual(session.endpoint_threshold_db(), THRESHOLD_DB)
 
     def test_an_utterance_keeps_the_lines_it_began_with(self) -> None:
         # The floor rises past the guard while the wearer speaks: the
