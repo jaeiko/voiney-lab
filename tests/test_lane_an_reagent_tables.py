@@ -196,13 +196,16 @@ class AttachTests(unittest.IsolatedAsyncioTestCase):
                                  base_url="http://testserver")
 
     async def test_a_workbook_is_attached_once_and_read_back_cell_by_cell(self) -> None:
+        # One workbook's bytes, sent twice: openpyxl stamps the time it saves
+        # into the file, so two workbook_bytes() calls may differ.
+        data = workbook_bytes()
         async with self.client() as client:
-            first = await self.attach(client, workbook_bytes())
+            first = await self.attach(client, data)
             self.assertEqual(first.status_code, 201, first.text)
             summary = first.json()["reagent_table"]
             self.assertFalse(first.json()["deduplicated"])
             self.assertEqual(summary["sheets"], [{"name": "시약", "cells": 15}, {"name": "old", "cells": 1}])
-            again = await self.attach(client, workbook_bytes(), name="copy.xlsx")
+            again = await self.attach(client, data, name="copy.xlsx")
             self.assertTrue(again.json()["deduplicated"])
             listed = (await client.get(f"/api/protocols/{self.protocol_id}/reagent-tables")).json()
         (table,) = listed["reagent_tables"]
