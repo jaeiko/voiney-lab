@@ -4184,12 +4184,14 @@ class ListenerSession:
         #: session clock), for decision 3's "시끄러운 곳" suggestion.
         self.ignored_speech_at:collections.deque[float]=collections.deque(maxlen=64)
         self.ignored_speech_count:int=0
-        #: Lane SP1, decision 3: when "시끄러운 곳 모드로 바꿀까요?" was last said.
+        #: Lane SP1, decision 3: when "시끄러운 곳 모드로 바꿀까요?" was last said
+        #: -- or, since lane SP2, decision 2, the noise floor's suggestion: the
+        #: two share one gap of ten minutes.
         self.ambient_suggested_at:float|None=None
-        #: Lane SP2: the room's noise floor (decision 2's measurement), from
-        #: every frame heard while listening (never while the agent speaks),
-        #: this session only; decision 1 asks it whether the level may end
-        #: utterances.
+        #: Lane SP2, decisions 1 and 2: the room's noise floor, from every frame
+        #: heard while listening (never while the agent speaks), this session
+        #: only: whether the level may end utterances, and when to say the
+        #: room is loud.
         self.noise_floor=NoiseFloor()
         #: Whether the level ends utterances now; logged when it changes.
         self.level_endpoint_on=False
@@ -4439,6 +4441,28 @@ class ListenerSession:
         ):
             return False
         return True
+    def noise_floor_suggestion_due(self)->bool:
+        """Whether to say the room is too loud for the level line (lane SP2, decision 2).
+
+        The noise floor near the wearer's measured level -- the point where
+        the level stops ending utterances (``room_near_the_line``) -- the
+        room still "quiet", no suggestion open, and none, this one or lane
+        SP1's, in the last ten minutes. Only with a reference measured: a
+        session that measured nothing has no level to be near. Suggested
+        only; nothing changes.
+        """
+
+        curated=self.curated_protocol_session
+        if curated is None or getattr(curated,"ambient_mode","quiet")!="quiet":
+            return False
+        if getattr(curated,"ambient_suggestion_open",False):
+            return False
+        if (
+            self.ambient_suggested_at is not None
+            and self.clock()-self.ambient_suggested_at<AMBIENT_SUGGESTION_GAP_SECONDS
+        ):
+            return False
+        return self.room_near_the_line() is True
     def start(self,experiment_session_id:str|None=None):
         self.generation+=1
         self.greeting_emitted=False
@@ -7729,8 +7753,37 @@ async def _suggest_noisy_mode(
 #: bench (lane SP2 report) babble, a pump and TV talk 9.7 dB or more under
 #: the line let the level find the wearer's end without cutting the room into
 #: turns; at 6.5 dB or nearer it cut TV talk, babble and a pump into stray
-#: turns.
+#: turns. Decision 2 says the room is loud from the same point.
 LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
+#: Lane SP2, decision 2: said once the floor is that near (room_near_the_line).
+NOISE_FLOOR_SUGGESTION_WORDS="주변이 시끄러워요. 붐 마이크나 시끄러운 곳 모드를 권해요."
+
+
+async def _suggest_noise_floor(
+    sender:LockedSender,session:ListenerSession,*,
+    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
+)->bool:
+    """Say "주변이 시끄러워요 — 붐 마이크나 시끄러운 곳 모드를 권해요" once the session is quiet.
+
+    A suggestion only (lane SP2, decision 2): no question is opened and no
+    setting changes; the experimenter changes the mode by voice or on the
+    settings screen. Shares lane SP1's gap of ten minutes.
+    """
+
+    if not session.noise_floor_suggestion_due():
+        return False
+    session.ambient_suggested_at=session.clock()
+    floor=session.noise_floor.level_db()
+    reference=session.level_reference
+    turn_id=await _say_server_words(
+        session,sender,NOISE_FLOOR_SUGGESTION_WORDS,kind="ambient_suggestion",sleep=sleep)
+    if turn_id is None:
+        return False
+    log.info(
+        "noise floor suggestion said turn_id=%s floor_db=%s reference_db=%s",
+        turn_id,round(floor,1) if floor is not None else None,
+        round(reference.reference_db,1) if reference is not None else None)
+    return True
 
 
 async def _timer_notice_tick(
@@ -10303,6 +10356,10 @@ async def voice_socket(websocket:WebSocket):
                                 accepted_stt_context=(
                                     accepted["context"] if accepted else None),
                                 voiced_level_db=item.result.voiced_level_db))
+                if session.noise_floor_suggestion_due():
+                    # Lane SP2, decision 2: the room is near the wearer's level.
+                    session.track_visual_task(asyncio.create_task(
+                        _suggest_noise_floor(sender,session)))
                 continue
             if message.get("text") is None:continue
             control=parse_control(message["text"])
