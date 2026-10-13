@@ -391,6 +391,41 @@
      .protocol-row{grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 4.5rem 10rem;grid-template-areas:"name badges steps date" "line line line line";align-items:center;min-height:56px}
     }
     @media (min-width:900px){.library-grid{grid-template-columns:minmax(0,1fr) 360px}}
+    .ui-badge[hidden]{display:none}
+    /* Lane UI2 decision 2 (2026-10-13): the check before the start as one
+       card. The badges stand where the draft had its approved version: the
+       source PDF, the day it was uploaded and the analysis state, and the
+       server's "다시 분석 권장" line. The source's safety statements beside
+       their Korean come first and are never folded; the step timers, the
+       notices and the lines the server asks to check follow; the start is a
+       64px button. Once the experiment runs the card folds as before. */
+    .prestart>.protocol-start-summary{padding:var(--space-6);border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    .start-card-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
+    .protocol-start-summary .start-card-head h3{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    #protocol-start-body:not([hidden]){display:flex;flex-direction:column;gap:var(--space-4)}
+    #protocol-start-overview{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .protocol-start-summary .protocol-review-group{margin:0;padding:var(--space-3) var(--space-4);border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    .protocol-start-summary .protocol-review-group h4{margin:0 0 var(--space-2);color:var(--ink);font-size:.9375rem;line-height:1.375rem;font-weight:700}
+    .protocol-start-summary .protocol-review-group p{color:var(--ink);font-size:.875rem;line-height:1.375rem}
+    .protocol-start-summary .protocol-review-group .protocol-review-status{color:var(--ink-muted)}
+    .protocol-start-summary .protocol-safety-group{padding:var(--space-4);border:var(--stroke-state) solid var(--warning-ink);background:var(--warning-soft)}
+    .protocol-start-summary .protocol-safety-group h4{color:var(--warning-ink);font-size:1rem}
+    .protocol-start-summary .safety-notice-row{gap:var(--space-1) var(--space-4);padding:var(--space-3) 0;border-top-color:var(--line-strong)}
+    .protocol-start-summary .safety-notice-where{color:var(--warning-ink);font-size:.8125rem;font-weight:600}
+    .protocol-start-summary .safety-notice-source,.protocol-start-summary .safety-notice-korean{font-size:1rem;line-height:1.5rem}
+    .protocol-start-summary .safety-notice-korean{font-weight:600}
+    #protocol-execution-blockers .protocol-review-group{border:var(--stroke-state) solid var(--danger);background:var(--danger-soft)}
+    #protocol-execution-blockers .protocol-review-group h4{color:var(--danger)}
+    .start-check-line,.start-check-lines .protocol-review-status{margin:0;padding:var(--space-2) var(--space-3);border-left:var(--stroke-current) solid var(--ink);background:var(--bench);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .start-check-line[hidden],.start-check-lines[hidden]{display:none}
+    .protocol-start-summary .protocol-review-actions{margin-top:0}
+    .protocol-start-summary #protocol-start{min-height:var(--target-run);padding:0 var(--space-8);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:700}
+    .protocol-start-summary #protocol-start:hover:not(:disabled){background:var(--blurple-hover)}
+    @media (max-width:719px){
+     .protocol-start-summary .safety-notice-row{grid-template-columns:minmax(0,1fr)}
+     .protocol-start-summary #protocol-start{width:100%}
+     .prestart>.protocol-start-summary{padding:var(--space-4)}
+    }
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -494,21 +529,25 @@
           <!-- Lane UI2 decision 1: the drafts' M1 -- the check before the start beside the voice console, the protocol's basis card and the microphone, which is this browser's own. -->
           <div class="prestart">
             <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
-              <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
+              <!-- Lane UI2 decision 2 (2026-10-13): one card -- the badges in place of the draft's approved-version one (the source PDF, the day it was uploaded, the analysis state; the server's "다시 분석 권장" line), the safety statements first, then the step timers, the notices and the lines to check, and the start button. -->
+              <div class="start-card-head">
+                <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
+                <span id="protocol-start-basis" class="ui-badge" data-kind="done" hidden></span>
+                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
+                <span id="protocol-start-outdated" class="ui-badge" data-kind="warning" role="status" hidden></span>
+              </div>
               <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
               <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
               <div id="protocol-start-body">
                 <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
-                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
-                <p id="protocol-start-outdated" class="protocol-review-status" role="status" hidden></p>
-                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
-                <p id="protocol-start-cleared" class="protocol-review-status" hidden></p>
-                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
-                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons" hidden></div>
                 <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
                 <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
                 <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
                 <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
+                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
+                <p id="protocol-start-cleared" class="protocol-review-status start-check-line" hidden></p>
+                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
+                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
                 <div class="protocol-review-actions">
                   <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
                 </div>
@@ -2839,6 +2878,9 @@ function renderStartSummary(review){
  else if(blockers.length)parts.push(`실행 불가 · ${pipeline?.action||"아래 사유를 확인하세요."}`);
  else if(pipeline?.message)parts.push(`${pipeline.blocked===true?"막힘":"진행"} · ${pipeline.message}${pipeline.action?` · 할 일 · ${pipeline.action}`:""}`);
  overview.textContent=parts.join(" · ");
+ // Lane UI2 decision 2: the badge in place of the draft's approved version -- the source PDF, the day it was uploaded and the analysis state, from the server's catalog and review.
+ const basis=$("protocol-start-basis");
+ if(basis){const runnable=review.available_for_execution===true,day=uploadedDay(catalogEntry?.created_at||review.created_at),state=runnable?(review.development_only===true?"개발용 큐레이션 분석":"분석 통과"):catalogStatusWord(review).label.split(" · ")[0];basis.textContent=[`${catalogEntry?.source_filename||review.source?.filename||"파일 이름 기록 없음"}`,day?`${day} 올림`:"올린 날짜 기록 없음",state].join(" · ");if(basis.dataset)basis.dataset.kind=runnable?"done":"missing";basis.hidden=false;}
  const outdated=$("protocol-start-outdated");
  if(outdated){const line=typeof review.analysis_outdated_ko==="string"?review.analysis_outdated_ko:"";outdated.textContent=line;outdated.hidden=!line;}
  const cleared=$("protocol-start-cleared");
