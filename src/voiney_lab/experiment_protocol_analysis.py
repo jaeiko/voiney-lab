@@ -997,6 +997,15 @@ _DURATION_WIDGET_LINE = re.compile(r"(?m)^[ \t\u00a0]*\d{1,2}:\d{2}:\d{2}[ \t\u0
 _SPACE_BEFORE_PUNCTUATION = frozenset(".,;:)")
 
 
+#: Subscript and superscript digits, read as the digits they write in the
+#: script forms below (lane AN, EV4 decision b).
+_SCRIPT_DIGITS = {
+    **{chr(0x2080 + n): str(n) for n in range(10)},
+    "\u2070": "0", "\u00b9": "1", "\u00b2": "2", "\u00b3": "3",
+    **{chr(0x2074 + n - 4): str(n) for n in range(4, 10)},
+}
+
+
 def _normalized_text_with_bounds(
     value: str,
     *,
@@ -1004,6 +1013,7 @@ def _normalized_text_with_bounds(
     join_hangul_line_breaks: bool = False,
     skip_duration_widget_lines: bool = False,
     drop_space_before_punctuation: bool = False,
+    script_forms: str | None = None,
 ) -> tuple[str, list[int], list[int]]:
     """Canonicalize representation-only differences and retain source bounds.
 
@@ -1034,6 +1044,15 @@ def _normalized_text_with_bounds(
     7, from lane PA's (w) and (p)): comparison forms only, tried after the
     forms above, so the page text, its hash and the evidence identities are
     untouched and anything the earlier forms accept is still accepted.
+
+    ``script_forms`` (lane AN, EV4 decision b; comparison only, tried after
+    every form above) is ``"joined"`` or ``"hyphen"``. In both, a subscript
+    or superscript digit written after a letter or a closing bracket reads
+    as the plain digit ("H₂O₂" as "H2O2", "cm²" as "cm2"); one after a digit
+    stays itself, so "10⁵" is never "105". A soft hyphen is a layout
+    control: with ``"joined"`` it is left out together with the line break
+    after it ("formu\u00ad" / "lated" reads "formulated"); with ``"hyphen"``
+    it reads as "-" ("DW-MEA").
     """
 
     normalized: list[str] = []
@@ -1067,6 +1086,13 @@ def _normalized_text_with_bounds(
             ):
                 continue
             if (
+                script_forms == "joined"
+                and start > 0
+                and value[start - 1] == "\u00ad"
+                and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
                 join_hangul_line_breaks
                 and units
                 and index < len(value)
@@ -1087,6 +1113,8 @@ def _normalized_text_with_bounds(
             units.append((" ", start, index, True))
             continue
         if value[index] == "\u00ad":
+            if script_forms == "hyphen":
+                units.append(("-", index, index + 1, False))
             index += 1
             continue
         start = index
@@ -1094,6 +1122,14 @@ def _normalized_text_with_bounds(
         while index < len(value) and unicodedata.combining(value[index]):
             index += 1
         canonical = unicodedata.normalize("NFC", value[start:index])
+        if (
+            script_forms is not None
+            and canonical in _SCRIPT_DIGITS
+            and units
+            and not units[-1][3]
+            and (units[-1][0][-1:].isalpha() or units[-1][0][-1:] in ")]")
+        ):
+            canonical = _SCRIPT_DIGITS[canonical]
         if canonical:
             units.append((canonical, start, index, False))
     while units and units[0][3]:
@@ -1133,6 +1169,17 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
         for time_marks in (False, True)
         for joined in hangul
         for join in (False, True)
+    ) + tuple(
+        # Lane AN, EV4 decision b: after every form above.
+        {
+            "join_line_end_hyphens": True,
+            "join_hangul_line_breaks": ocr_derived,
+            "skip_duration_widget_lines": time_marks,
+            "drop_space_before_punctuation": time_marks,
+            "script_forms": script,
+        }
+        for time_marks in (False, True)
+        for script in ("joined", "hyphen")
     )
 
 

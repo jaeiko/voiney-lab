@@ -96,5 +96,31 @@ class ParenthesizedLabelTests(unittest.TestCase):
             parse(source, step("(1:100)", "Dilute the antibody.", "Dilute the antibody."))
 
 
+class ScriptAndSoftHyphenTests(unittest.TestCase):
+    """(b) soft hyphen, subscripts and superscripts compare as what they write."""
+
+    def test_a_soft_hyphen_at_a_line_end_joins_the_word(self):
+        source = extraction(f"{TITLE}\n1. Use the reagent formu­\nlated for lysis.")
+        draft = parse(source, step("1", "Use the reagent formulated for lysis.",
+                                   "1. Use the reagent formulated for lysis."))
+        self.assertEqual(draft.protocol.sections[0].steps[0].evidence.source_excerpt,
+                         "1. Use the reagent formu­\nlated for lysis.")
+
+    def test_a_soft_hyphen_may_be_quoted_as_a_hyphen(self):
+        source = extraction(f"{TITLE}\n1. Plate on DW­\nMEA agar.")
+        parse(source, step("1", "Plate on DW-MEA agar.", "1. Plate on DW-MEA agar."))
+
+    def test_subscripts_and_superscripts_after_a_letter_read_as_digits(self):
+        source = extraction(f"{TITLE}\n1. Add 1 mL of 30% H2O2 per cm2 of tissue.")
+        parse(source, step("1", "Add 1 mL of 30% H₂O₂ per cm² of tissue.",
+                           "1. Add 1 mL of 30% H₂O₂ per cm² of tissue."))
+
+    def test_a_superscript_after_a_digit_is_never_a_digit(self):
+        source = extraction(f"{TITLE}\n1. Seed 105 cells per well.")
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
+            parse(source, step("1", "Seed 10⁵ cells per well.", "1. Seed 10⁵ cells per well."))
+        self.assertEqual(raised.exception.diagnostic.reason_code, "quote_not_found")
+
+
 if __name__ == "__main__":
     unittest.main()
