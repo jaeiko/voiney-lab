@@ -94,9 +94,8 @@ class SettingsTests(unittest.TestCase):
             "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "3",
         })
         self.assertEqual((on.enabled, on.model, on.timeout_seconds), (True, "grok-4.6", 3.0))
-        self.assertEqual(
-            LlmRouterSettings.from_environment({}).model, "grok-4.20-0309-non-reasoning",
-        )
+        # Lane AN, decision 1: no default router model ("설정 필요").
+        self.assertIsNone(LlmRouterSettings.from_environment({}).model)
 
     def test_bad_values_fail_closed(self) -> None:
         for env in (
@@ -322,6 +321,9 @@ class RouterVoiceTests(VoiceSessionHarness, unittest.TestCase):
     def _run(self, *said, enabled: bool, script=()):
         if enabled:
             self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
+            # Lane AN, decision 1: the router role is named; it no longer
+            # falls back to xAI by itself.
+            self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
             self.environment["XAI_API_KEY"] = "test-only-not-a-key"
             # The key is the router's. Step translation follows its own role's key
             # (lane F, decision 1), so that role is left keyless here.

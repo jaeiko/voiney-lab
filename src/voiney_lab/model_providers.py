@@ -13,9 +13,11 @@ is set by three settings, ``VOINEY_LAB_<ROLE>_PROVIDER``, ``_MODEL`` and
 * report       -- the experiment report's prose
 * supplemental -- outside-the-PDF explanations and the web reference search
 
-Every default is what the code called before: xAI, and the same model, so an
-environment that sets none of these behaves exactly as before. Changing a
-default is decided by people from the evaluation.
+A role has no default (lane AN, decision 1, 2026-10-13; the setting table has
+said "설정 필요" since lane CL): with its provider setting empty the role is
+not configured -- ``has_key()`` is false and ``chat_client`` refuses it --
+whatever keys the environment holds. Before, an empty role fell back to xAI
+and a grok model, so it failed closed only when ``XAI_API_KEY`` was missing.
 
 The adapters only move a provider's request and reply to and from the shape
 the code already reads -- an OpenAI-style ``client.chat.completions.create``
@@ -79,19 +81,10 @@ ROLE_SETTINGS: Mapping[str, tuple[str, str, str]] = {
         "VOINEY_LAB_SUPPLEMENTAL_REASONING",
     ),
 }
-#: The model a role calls when its setting is empty -- what it called before
-#: lane M1. None: the role has no single default; each caller keeps its own
-#: (answer: the brain requires one, the worker uses grok-4 and the
-#: multi-brain roles grok-4.6; analysis requires one; report falls back to
-#: the supplemental model, then grok-4.6).
-DEFAULT_MODELS: Mapping[str, str | None] = {
-    "router": "grok-4.20-0309-non-reasoning",
-    "answer": None,
-    "translation": "grok-4.6",
-    "analysis": None,
-    "report": None,
-    "supplemental": "grok-4.6",
-}
+#: The model a role calls when its setting is empty: none ("설정 필요", lane
+#: AN, decision 1). The router, translation and supplemental roles used to
+#: fall back to grok models here.
+DEFAULT_MODELS: Mapping[str, str | None] = {role: None for role in ROLES}
 API_KEY_SETTINGS: Mapping[str, str] = {
     "xai": "XAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -131,6 +124,19 @@ GEMINI_THINKING_ALLOWANCE_TOKENS = {"low": 4096, "medium": 16384, "high": 32768}
 GEMINI_MAX_OUTPUT_TOKENS = 65536
 
 
+class RoleNotConfiguredError(RuntimeError):
+    """A role whose provider setting is empty was asked for a client.
+
+    The message names the setting to fill; it never carries a key.
+    """
+
+    def __init__(self, role: str) -> None:
+        setting = ROLE_SETTINGS[role][0] if role in ROLE_SETTINGS else role
+        super().__init__(f"{setting} 설정 필요")
+        self.role = role
+        self.setting = setting
+
+
 class ModelProviderError(RuntimeError):
     """A provider call failed. Carries the provider, the HTTP status, a kind.
 
@@ -149,10 +155,14 @@ class ModelProviderError(RuntimeError):
 
 @dataclass(frozen=True)
 class RoleModel:
-    """One role's provider, model and reasoning, as the settings give them."""
+    """One role's provider, model and reasoning, as the settings give them.
+
+    ``provider`` is None when its setting is empty: the role is not
+    configured and fails closed.
+    """
 
     role: str
-    provider: str = "xai"
+    provider: str | None = None
     model: str | None = None
     reasoning: str | None = None
 
@@ -164,8 +174,8 @@ class RoleModel:
             raise ValueError(f"unknown model role: {role}")
         env = os.environ if environment is None else environment
         provider_name, model_name, reasoning_name = ROLE_SETTINGS[role]
-        provider = env.get(provider_name, "").strip().casefold() or "xai"
-        if provider not in PROVIDERS:
+        provider = env.get(provider_name, "").strip().casefold() or None
+        if provider is not None and provider not in PROVIDERS:
             raise ValueError(
                 f"{provider_name} must be one of {', '.join(PROVIDERS)}"
             )
@@ -178,12 +188,23 @@ class RoleModel:
         return cls(role, provider, model, reasoning)
 
     @property
+    def configured(self) -> bool:
+        return self.provider is not None
+
+    @property
     def api_key_setting(self) -> str:
+        if self.provider is None:
+            raise RoleNotConfiguredError(self.role)
         return API_KEY_SETTINGS[self.provider]
 
     def has_key(self, environment: Mapping[str, str] | None = None) -> bool:
-        """Whether the role can authenticate (Vertex: a key, or a project for ADC)."""
+        """Whether the role can authenticate (Vertex: a key, or a project for ADC).
 
+        An unconfigured role never can, whatever keys are set.
+        """
+
+        if self.provider is None:
+            return False
         env = os.environ if environment is None else environment
         if self.provider == "google" and google_uses_vertex(env):
             return bool(
@@ -257,12 +278,14 @@ def chat_client(
     """A client for ``role_model`` with ``.chat.completions.create``.
 
     For xAI this is the OpenAI SDK client the code always built (same base
-    URL, key, retries and timeout), so a default role sends exactly the
-    request it sent before. ``sdk_client`` replaces the provider SDK's
-    client (contract tests pass a fake one).
+    URL, key, retries and timeout). A role whose provider setting is empty
+    is refused (``RoleNotConfiguredError``). ``sdk_client`` replaces the
+    provider SDK's client (contract tests pass a fake one).
     """
 
     provider = role_model.provider
+    if provider is None:
+        raise RoleNotConfiguredError(role_model.role)
     if provider == "xai":
         client = sdk_client
         if client is None:

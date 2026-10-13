@@ -651,7 +651,7 @@ only difference is cosmetic: the older review puts a failed re-analysis's
 code in `analysis_failure` beside `available_for_execution: true`, and the
 older screen then shows "분석 실패와 복구" over a protocol that still runs.
 
-## Lane AN (2026-10-13): the claim-chunk path deleted
+## Lane AN (2026-10-13): the claim-chunk path deleted; unset model roles
 
 No schema change and no stored row rewritten.
 
@@ -674,3 +674,14 @@ the run status still reads them as before (none exist in the development
 catalog of 2026-10-12). An analysis the path stored keeps its
 `page_coverage` records in its payload, and the payload still reads, but the
 catalog no longer derives the unread-page disclosure from them.
+
+### Model roles without settings
+
+`model_providers.RoleModel` no longer falls back to xAI and a grok model
+when a role's settings are empty: an empty `VOINEY_LAB_<ROLE>_PROVIDER`
+means the role is not configured ("설정 필요", as the setting table has said
+since lane CL), `has_key()` is false and a client for it is refused with
+`RoleNotConfiguredError` naming the setting. An environment that names every
+role it uses, as `.env.example` does, behaves as before; one that relied on
+the fallback must now set `VOINEY_LAB_<ROLE>_PROVIDER=xai` (and the model)
+for each such role, or the role stays off.

@@ -233,7 +233,10 @@ class ServerTests(unittest.TestCase):
              patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
              patch("voiney_lab.server.stream_brain_turn",side_effect=fake_brain), \
              patch("voiney_lab.server.AsyncOpenAI"), \
-             patch("voiney_lab.server.require_env",return_value="test"):
+             patch("voiney_lab.server.require_env",return_value="test"), \
+             patch.dict("os.environ",{"VOINEY_LAB_ANSWER_PROVIDER":"xai"}):
+            # Lane AN, decision 1: the answer role is named; an unset role
+            # no longer falls back to xAI.
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         done=next(item for item in socket.text if item["type"]=="turn.done")
         self.assertEqual(done["route"],"brain")

@@ -185,7 +185,12 @@ class DevLauncherTests(_LauncherCopy):
         self.assertIn("hybrid_multi_brain: disabled", result.stdout)
 
     def test_an_xai_only_feature_in_the_dotenv_needs_the_key(self) -> None:
-        self._dotenv("VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true\n")
+        # Lane AN, decision 1: the supplemental role is named; it no longer
+        # falls back to xAI by itself.
+        self._dotenv(
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true\n"
+            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER=xai\n"
+        )
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("authoritative_web_search: enabled", result.stdout)
