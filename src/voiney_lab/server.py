@@ -171,7 +171,7 @@ from voiney_lab.runtime_routing import (
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import (
     DEFAULT_SENSITIVITY, SENSITIVITY_MARGINS_DB, EndpointDetector, EndpointResult,
-    SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
+    NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
 )
 from voiney_lab import voice_providers
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
@@ -4186,6 +4186,13 @@ class ListenerSession:
         self.ignored_speech_count:int=0
         #: Lane SP1, decision 3: when "시끄러운 곳 모드로 바꿀까요?" was last said.
         self.ambient_suggested_at:float|None=None
+        #: Lane SP2: the room's noise floor (decision 2's measurement), from
+        #: every frame heard while listening (never while the agent speaks),
+        #: this session only; decision 1 asks it whether the level may end
+        #: utterances.
+        self.noise_floor=NoiseFloor()
+        #: Whether the level ends utterances now; logged when it changes.
+        self.level_endpoint_on=False
         #: Turns of the server's own words (a calibration prompt, a
         #: suggestion), numbered from _SERVER_WORDS_TURN_BASE.
         self.server_words_turns:int=0
@@ -4309,6 +4316,8 @@ class ListenerSession:
         self.ignored_speech_at.clear()
         self.ignored_speech_count=0
         self.ambient_suggested_at=None
+        self.noise_floor.clear()
+        self.level_endpoint_on=False
     def set_speaker_sensitivity(self,sensitivity:str)->str:
         """Take the "민감도" setting; a reference already measured keeps its level."""
 
@@ -4339,6 +4348,49 @@ class ListenerSession:
             and not self.calibration_pending
             and not self.level_reference.accepts(level_db)
         )
+    def room_near_the_line(self)->bool|None:
+        """Whether the room's noise floor is too near the wearer's line to part them (lane SP2).
+
+        The line is the gate's, reference minus margin. A floor less than
+        LEVEL_ENDPOINT_FLOOR_GAP_DB under it means the room's own voice
+        crosses it: the level can no longer tell where the wearer stopped.
+        None without a reference, while the calibration sentence is
+        awaited, and before enough of the room was heard.
+        """
+
+        floor=self.noise_floor.level_db()
+        if self.level_reference is None or self.calibration_pending or floor is None:
+            return None
+        return floor>self.level_reference.threshold_db-LEVEL_ENDPOINT_FLOOR_GAP_DB
+    def endpoint_threshold_db(self)->float|None:
+        """The line an utterance's end is also found by (lane SP2, decision 1).
+
+        Once a frame at the wearer's level was heard, staying under the line
+        for the endpoint time while the VAD keeps hearing a voice -- babble,
+        a pump -- ends the utterance. Only while the room sits well under the
+        line (``room_near_the_line`` False): nearer, the level would cut the
+        room's own voice into turns, so the VAD alone ends utterances, as
+        before -- the same as without a reference, while the calibration
+        sentence is awaited, and before the room was heard.
+        """
+
+        if self.room_near_the_line() is not False:
+            return None
+        assert self.level_reference is not None
+        return self.level_reference.threshold_db
+    def _apply_endpoint_threshold(self,detector:EndpointDetector)->None:
+        """Give ``detector`` the line, and log when the level starts or stops ending utterances."""
+
+        threshold=self.endpoint_threshold_db()
+        detector.wearer_threshold_db=threshold
+        if (threshold is not None)!=self.level_endpoint_on:
+            self.level_endpoint_on=threshold is not None
+            floor=self.noise_floor.level_db()
+            log.info(
+                "level endpoint %s threshold_db=%s floor_db=%s",
+                "on" if self.level_endpoint_on else "off",
+                round(threshold,1) if threshold is not None else None,
+                round(floor,1) if floor is not None else None)
     def _ignored_speech_event(
         self,kind:str,turn_id:int,result:EndpointResult,generation:int|None,
         *,during_playback:bool,
@@ -4553,8 +4605,11 @@ class ListenerSession:
             return self._accept_interrupt_chunk(chunk)
         if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):return []
         output=[]
+        self._apply_endpoint_threshold(self.detector)
         for frame in self.framer.push(chunk):
             result=self.detector.process(frame)
+            if self.detector.last_frame_level_db is not None:
+                self.noise_floor.add(self.detector.last_frame_level_db)
             if result.speech_started:
                 self.active_turn_id=self.next_turn_id; self.next_turn_id+=1
                 self.turn_generations[self.active_turn_id]=self.generation
@@ -4592,6 +4647,7 @@ class ListenerSession:
         output=[]
         detector=self._interrupt_detector
         framer=self._interrupt_framer
+        self._apply_endpoint_threshold(detector)
         for frame in framer.push(chunk):
             result=detector.process(frame)
             if result.speech_started:
@@ -7665,6 +7721,16 @@ async def _suggest_noisy_mode(
         "ambient suggestion said turn_id=%s ignored_in_window=%d",
         turn_id,session.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS))
     return True
+
+
+#: Lane SP2, decision 1: the level ends utterances only while the room's
+#: noise floor (vad.NoiseFloor, the median of what was heard) sits at least
+#: this far under the wearer's line, reference minus margin. On the synthetic
+#: bench (lane SP2 report) babble, a pump and TV talk 9.7 dB or more under
+#: the line let the level find the wearer's end without cutting the room into
+#: turns; at 6.5 dB or nearer it cut TV talk, babble and a pump into stray
+#: turns.
+LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
 
 
 async def _timer_notice_tick(
