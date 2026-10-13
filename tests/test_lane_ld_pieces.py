@@ -452,3 +452,25 @@ class CatalogPieceTests(_CatalogCase):
             hold.set()
             worker.join(30)
         self.assertEqual(outcome, ["passed"])
+
+
+class AnOldPageRefusalTests(_CatalogCase):
+    """A document lane EV2 refused for its 60+ pages may be asked again now."""
+
+    def test_the_old_refusal_is_said_as_such_and_may_be_retried(self):
+        protocol_id = self.register(page_texts(61))
+        self.catalog.request_analysis(protocol_id, self.ANALYSIS)
+        # The ledger of a refusal made before lane AN (no piece event).
+        self.store.append_event(
+            "analysis-failed-old", protocol_id, 1, "protocol_analysis_failed",
+            {"status": "failed", "failure_code": "protocol_analysis_too_many_pages"},
+        )
+        review = self.catalog.review(protocol_id)
+        self.assertTrue(review["analysis_failure"]["retryable"])
+        self.assertIn("조각으로 나눠", review["analysis_failure"]["action"])
+        self.assertIn("예전 한도(한 번에 60쪽)", review["pipeline"]["message"])
+        self.assertIn("분석 다시 시도", review["pipeline"]["action"])
+        # Asked again, it is read in pieces.
+        model = PieceModel(self.extraction)
+        self.assertIsNone(self.analyze(protocol_id, model))
+        self.assertEqual(self.catalog.get_entry(protocol_id).step_count, 122)

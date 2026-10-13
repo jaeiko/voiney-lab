@@ -1000,6 +1000,25 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     return "structured_analysis_ready"
 
 
+#: An analysis refused under lane EV2's 60-page bound, of a document the
+#: pieces read now (lane AN, decision 2): it may be asked again.
+_OLD_PAGE_BOUND_KO = (
+    "이 원문은 예전 한도(한 번에 60쪽)에 걸려 분석하지 않았어요. 이제 긴 문서는 조각으로 "
+    "나눠 분석합니다."
+)
+_OLD_PAGE_BOUND_ACTION = (
+    "'분석 다시 시도'를 누르면 조각으로 나눠 새로 분석합니다(조각 수만큼 분석 모델 호출 "
+    "비용이 듭니다). 원문은 바뀌지 않습니다."
+)
+
+
+def _refused_under_the_old_page_bound(failure_code: str | None, page_count: int) -> bool:
+    return (
+        failure_code == "protocol_analysis_too_many_pages"
+        and page_count <= MAX_PIECED_ANALYSIS_PAGES
+    )
+
+
 def _failed_pieces_ko(events: Sequence[Any]) -> str | None:
     """"41–59쪽, 97–115쪽": the pieces the latest failed analysis names (lane AN, 2)."""
 
@@ -2187,11 +2206,20 @@ class ProtocolCatalog:
                 {
                     "code": latest_failure,
                     "detail": latest_failure_detail,
-                    "retryable": latest_failure not in _NOT_RETRYABLE_FAILURE_CODES,
+                    "retryable": (
+                        latest_failure not in _NOT_RETRYABLE_FAILURE_CODES
+                        or _refused_under_the_old_page_bound(
+                            latest_failure, extraction.page_count)
+                    ),
                     # Lane PA decision 4 (2026-10-06): the recovery guidance
                     # is the server's, in Korean.
-                    "action": _ANALYSIS_RECOVERY_ACTIONS.get(
-                        latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
+                    "action": (
+                        _OLD_PAGE_BOUND_ACTION
+                        if _refused_under_the_old_page_bound(
+                            latest_failure, extraction.page_count)
+                        else _ANALYSIS_RECOVERY_ACTIONS.get(
+                            latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
+                        )
                     ),
                 }
                 if latest_failure is not None and reanalysis is None
@@ -2252,6 +2280,7 @@ class ProtocolCatalog:
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=reanalysis,
             events=revision_events,
+            page_count=extraction.page_count,
         )
         if analysis is None:
             return base
@@ -2403,6 +2432,7 @@ class ProtocolCatalog:
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=self._reanalysis_status(revision_events, analysis),
             events=revision_events,
+            page_count=extraction.page_count,
         )
 
     def _piece_progress_ko(self, revision: ProtocolRevisionRecord) -> str | None:
@@ -2481,6 +2511,7 @@ class ProtocolCatalog:
         automatic_retry: dict[str, object] | None = None,
         reanalysis: dict[str, object] | None = None,
         events: Sequence[Any] = (),
+        page_count: int | None = None,
     ) -> dict[str, object]:
         """One Korean line: the stage a document is at, whether it is stuck
         there, why, and what a person does (lane PX, decision 4).
@@ -2598,6 +2629,14 @@ class ProtocolCatalog:
                 stage = ("evidence" if failure_code == "protocol_analysis_invalid_evidence"
                          else "analysis")
                 message = _ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다.")
+                if page_count is not None and _refused_under_the_old_page_bound(
+                    failure_code, page_count
+                ):
+                    # Lane AN, decision 2: refused under lane EV2's 60-page
+                    # bound, which the pieces replaced.
+                    return result(
+                        "analysis", blocked=True, message=_OLD_PAGE_BOUND_KO,
+                        action=_OLD_PAGE_BOUND_ACTION, failure_code=failure_code)
                 failed_pieces = _failed_pieces_ko(events)
                 if failure_code == "protocol_analysis_piece_failed" and failed_pieces:
                     # Lane AN, decision 2: "일부 조각 분석 실패 · 41–59쪽".
