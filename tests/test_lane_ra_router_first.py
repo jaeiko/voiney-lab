@@ -195,6 +195,57 @@ class ReadOnlyToolTests(unittest.TestCase):
         self.assertEqual(plan.intent_kind, "llm_router_answer_with_visual")
         self.assertFalse(plan.state_changed)
 
+    def test_a_picture_asked_beside_the_question_is_shown_after_the_answer(self) -> None:
+        # The live model answered "AMBIC 설명해 주고 그림 보여 줘" with answer alone
+        # (RA0, 2026-10-13); the server completes the two-request turn itself.
+        session = session_at(agitation_fixture(), 0, router_first=True)
+        outcome = route(session, "solution A 설명해 주고 그림 보여 줘", FakeRouterClient(answer_call_reply(
+            "solution A는 1단계에서 밴드를 씻는 용액이에요.", evidence_ids=("S1.current_step",))))
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.read_only.tool, SHOW_VISUAL)
+        plan = outcome.plan
+        self.assertIs(plan.action, CuratedProtocolAction.VISUAL_REQUEST)
+        self.assertEqual(plan.intent_kind, "llm_router_answer_with_visual")
+        self.assertTrue(plan.speech_text.startswith("solution A는 1단계에서 밴드를 씻는 용액이에요."))
+        self.assertIn(NO_FIGURE_WORDS, plan.speech_text)
+        # A question with no picture word stays an answer.
+        session = session_at(agitation_fixture(), 0, router_first=True)
+        outcome = route(session, "solution A 설명해 줘", FakeRouterClient(answer_call_reply(
+            "solution A는 1단계에서 밴드를 씻는 용액이에요.", evidence_ids=("S1.current_step",))))
+        self.assertIsNone(outcome.read_only)
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.QUESTION)
+        # Off, the picture request is the front rule's turn, as before (lane WV).
+        session = session_at(agitation_fixture(), 0)
+        outcome = route(session, "solution A 설명해 주고 그림 보여 줘", FakeRouterClient(answer_call_reply(
+            "solution A는 1단계에서 밴드를 씻는 용액이에요.", evidence_ids=("S1.current_step",))), settings=ON)
+        self.assertEqual(outcome.handled_by, "front:visual_request")
+        self.assertIsNone(outcome.read_only)
+
+    def test_a_note_asked_for_in_words_but_typed_as_an_anomaly_is_a_note(self) -> None:
+        # The live model typed "메모 좀 해 줘 온도가 조금 높았어" as an anomaly
+        # (RA0 switch-on run); asked for in words, it is the note the rules read.
+        said = "어 저기 그 뭐냐 메모 좀 해 줘 온도가 조금 높았어"
+        session = session_at(agitation_fixture(), 0, router_first=True)
+        outcome = route(session, said, FakeRouterClient(tool_reply(("record_log", {
+            "type": "anomaly", "value": "온도가 조금 높았어", "evidence": "메모 좀 해 줘 온도가 조금 높았어",
+        }))))
+        self.assertEqual(outcome.handled_by, "llm+tool")
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.RECORD_OBSERVATION)
+        self.assertTrue(outcome.plan.reported_observation)
+        self.assertEqual(outcome.plan.note_record["category"], "note")
+        self.assertEqual(outcome.verdict.proposal.log_type, "memo")
+        # A problem said as one is still an anomaly; off, an anomaly is asked about as before.
+        session = session_at(agitation_fixture(), 0, router_first=True)
+        outcome = route(session, "튜브가 터졌어 메모해 줘", FakeRouterClient(tool_reply(("record_log", {
+            "type": "anomaly", "value": "튜브가 터졌어", "evidence": "튜브가 터졌어 메모해 줘",
+        }))))
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+        session = session_at(agitation_fixture(), 0)
+        outcome = route(session, said, FakeRouterClient(tool_reply(("record_log", {
+            "type": "anomaly", "value": "온도가 조금 높았어", "evidence": "메모 좀 해 줘 온도가 조금 높았어",
+        }))), settings=ON)
+        self.assertEqual(outcome.verdict.reason_code, "anomaly_needs_confirmation")
+
     def test_a_clarifying_question_is_asked_and_its_candidates_kept_for_the_screen(self) -> None:
         session = session_at(agitation_fixture(), 0, router_first=True)
         client = FakeRouterClient(tool_reply((CLARIFY, {

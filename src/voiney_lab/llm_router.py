@@ -615,7 +615,10 @@ REFUSAL_REASONS: Mapping[str, str] = {
     "value_not_in_utterance": "the recorded value is not the researcher's words",
     "no_record_word": "an observation without a request to record it (decision 1)",
     "handoff_not_by_voice": "an anomaly asked to be handed to someone: not by voice (D8, decision 1)",
-    # Lane RA (the router first): the read-only tools.
+}
+#: Lane RA (the router first): why a read-only call (show_visual, clarify,
+#: not_for_me) is refused, beside the fences above it shares.
+READ_ONLY_REFUSAL_REASONS: Mapping[str, str] = {
     "no_picture_word": "show_visual without a picture word in this turn's words",
     "clarify_rejected:server_question": "a clarifying question that is the server's to ask",
     "clarify_rejected:claims_state_change": "a clarifying question that says something was done",
@@ -673,6 +676,9 @@ class RouterTurnFacts:
     #: "멈춰도 돼?", "중지해야 돼", "종료할까": a question about a command.
     control_question: bool
     transcript_unreliable: bool
+    #: Lane RA: the router goes first this session (what a note asked for
+    #: in words is recorded as, see validate_tool_proposal).
+    router_first: bool = False
 
 
 @dataclass(frozen=True)
@@ -971,6 +977,21 @@ def validate_tool_proposal(
         if is_handoff_request(facts.utterance):
             # Problem words or not, a hand-off is not recorded by voice.
             return refuse("handoff_not_by_voice")
+        if (
+            facts.router_first
+            and _RECORD_WORD.search(utterance)
+            and not reports_a_problem(facts.utterance)
+        ):
+            # Lane RA (the router first): "메모해 줘 온도가 조금 높았어" typed
+            # as an anomaly by the model is still a note the researcher asked
+            # for in words -- recorded as the note the rules read in it
+            # (lane N, decision 1), never asked about as an anomaly.
+            from voiney_lab import curated_protocol as rules
+
+            kind = rules.note_kind(str(proposal.value))
+            return ProposalVerdict(
+                "execute", "accepted", replace(proposal, log_type=kind),
+            )
         if reports_a_problem(facts.utterance):
             return ProposalVerdict("execute", "accepted", proposal)
         # Not read as a problem: asked about once (decision 1).
@@ -2104,6 +2125,32 @@ async def route_turn_with_llm_router(
             answer=answer, reply=reply, safety_removed=removed,
             brain_outputs=brain_outputs, brain_statuses=brain_statuses,
         )
+    if read_only is None and first and _PICTURE_WORD.search(transcript):
+        # Decision (a): a picture asked beside the question ("AMBIC 설명해 주고
+        # 그림 보여 줘") is shown after the answer even when the model called
+        # answer alone -- the server's own completion of a two-request turn,
+        # read-only, ruled on like a show_visual call.
+        from voiney_lab import curated_protocol as rules
+
+        kind = (
+            "web_photo" if rules.photo_asked(transcript)
+            else "drawn_diagram" if re.search(r"그려|\bdraw\b", transcript, re.I)
+            else "source_figure"
+        )
+        match = _PICTURE_WORD.search(transcript)
+        picture = ReadOnlyProposal(
+            tool=SHOW_VISUAL, evidence=match.group(0) if match else "그림", kind=kind,
+        )
+        facts = session.router_turn_facts(
+            transcript, turn_id=turn_id, language=language,
+            transcript_quality=transcript_quality, configuration_id=configuration_id,
+            generation=generation,
+        )
+        picture_verdict = validate_read_only_proposal(
+            picture, facts, context=context, utterance=transcript,
+        )
+        if picture_verdict.accepted:
+            read_only, read_only_verdict = picture, picture_verdict
     if read_only is not None:
         # answer + show_visual: the answer is said, then the picture is shown.
         plan = session.apply_read_only_proposal(

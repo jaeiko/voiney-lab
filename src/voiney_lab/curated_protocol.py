@@ -22026,6 +22026,7 @@ class CuratedProtocolSession:
                 _CONTROL_QUESTION.search(" ".join(transcript.casefold().split()))
             ),
             transcript_unreliable=transcript_quality is not None,
+            router_first=bool(getattr(self, "router_first", False)),
         )
 
     def router_context(
