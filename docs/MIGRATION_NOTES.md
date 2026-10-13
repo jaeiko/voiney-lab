@@ -821,14 +821,21 @@ carries `converted_from`: the upload's `media_type`, `sha256`, `byte_size`,
 `exif_orientation_applied` and `pdf_dpi`. The same upload again is found by
 that checksum.
 
+The `protocol_ocr_completed` event's pages now carry `render_dpi` and
+`value_boxes` (each a value's `text` and its `box` in the pixels of the page
+rendered at `render_dpi`), so a value read from handwriting or a photo can be
+shown beside the piece of the image it was read from.
+
 ### Reading older data
 
-A registration without `converted_from` reads as before.
+A registration without `converted_from` and an OCR page without `render_dpi`
+or `value_boxes` read as before (no boxes).
 
 ### Going back
 
 Code from before this version reads every event above: it ignores
-`converted_from`. A protocol registered from a photo reads as the PDF it is.
+`converted_from`, `render_dpi` and `value_boxes`. A protocol registered from a
+photo reads as the PDF it is.
 
 ### New dependencies
 

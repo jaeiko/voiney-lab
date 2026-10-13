@@ -58,8 +58,10 @@ from voiney_lab.pdf_text_engine import (
     render_page_png,
 )
 from voiney_lab.protocol_ocr import (
+    MAX_OCR_VALUE_BOXES,
     OcrPage,
     OcrResult,
+    OcrValueBox,
     ProtocolOcrError,
     ProtocolOcrResultError,
 )
@@ -513,12 +515,57 @@ class PageSelection:
     warnings: tuple[str, ...]
 
 
+#: A unit printed after a value: what a value box takes in after the number
+#: (lane AN, FM). Only the crop it marks depends on it.
+_VALUE_UNIT = re.compile(
+    r"(?:[pnµμu]?[LlMgm]|m[LlMgm]|k[gD]a?|kDa|%|°C?|℃|[×xX]\s?g|rpm|h|hr|hrs|min|sec|s|"
+    r"분|시간|초|일|주|V|nm|cm|mm|[µμ]m|bp|kb|U|IU|rxns?|x|×|N)(?:/[A-Za-zµμ]+)?[.,;)]?"
+)
+#: The most words one value box joins: the number's own pieces and its unit.
+_VALUE_BOX_WORDS = 4
+#: A word that opens a value: a number, or a sign or bound before one
+#: ("-20", "~5", "<0.1"). "H2SO4" and "SOP_013" hold digits and are not.
+_VALUE_START = re.compile(r"[-+−~±<>≤≥(]?\.?[0-9]")
+
+
+def value_boxes_of(words: tuple[OcrWord, ...]) -> tuple[OcrValueBox, ...]:
+    """The values among an engine's words, each with its box (lane AN, FM).
+
+    A word that starts with a number opens a value; the words the engine
+    runs into it ("12" "," "000") and a unit printed after it on the same
+    line ("mL", "°C") are joined to it, the boxes made one.
+    """
+
+    boxes: list[OcrValueBox] = []
+    index = 0
+    while index < len(words) and len(boxes) < MAX_OCR_VALUE_BOXES:
+        word = words[index]
+        if not _VALUE_START.match(word.text):
+            index += 1
+            continue
+        text, x0, y0, x1, y1 = word.text, word.x0, word.y0, word.x1, word.y1
+        after, end = word.after, index + 1
+        while end < len(words) and end - index < _VALUE_BOX_WORDS and after != "\n":
+            following = words[end]
+            if after != "" and not _VALUE_UNIT.fullmatch(following.text.strip()):
+                break
+            text += after + following.text
+            x0, y0 = min(x0, following.x0), min(y0, following.y0)
+            x1, y1 = max(x1, following.x1), max(y1, following.y1)
+            after, end = following.after, end + 1
+        if 0 < len(text.strip()) <= 64:
+            boxes.append(OcrValueBox(text.strip(), x0, y0, x1, y1))
+        index = end
+    return tuple(boxes)
+
+
 def select_page_text(
     page_number: int,
     outcomes: tuple[_EngineOutcome, ...],
     *,
     threshold: float = HANGUL_SELECTION_THRESHOLD,
     region: NumericRegion | None = None,
+    dpi: int | None = None,
 ) -> PageSelection:
     """Pick one engine's text for one page, following the module's rules.
 
@@ -563,6 +610,8 @@ def select_page_text(
             provider=chosen.engine.name,
             provider_version=chosen.engine.version,
             numeric_review_required=numeric_review,
+            value_boxes=value_boxes_of(chosen.page.words),
+            render_dpi=dpi if chosen.page.words else None,
         ),
         warnings=tuple(warnings),
     )
@@ -630,6 +679,7 @@ class DualEngineOcrProvider:
                 region = NumericRegion.from_page(png, dpi=self._dpi, blocks=page.blocks)
                 selection = select_page_text(
                     number, outcomes, threshold=self._threshold, region=region,
+                    dpi=self._dpi,
                 )
                 pages.append(selection.page)
                 warnings.extend(selection.warnings)
