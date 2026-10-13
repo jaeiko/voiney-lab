@@ -4,7 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#ffffff">
-  <title>Voiney Lab · Lab Copilot</title>
+  <title>VoineyLab · Lab Copilot</title>
+  <!-- Lane UI2 decision 5 (2026-10-13): VoineyLab as a home-screen web app -- the manifest (name, icons, start address, either orientation) and the icons; no service worker, so nothing works offline. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="application-name" content="VoineyLab">
+  <meta name="apple-mobile-web-app-title" content="VoineyLab">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="stylesheet" href="/app.css">
   <style>
     /* The current step's text on the '지금 할 일' card: one size and one shape
@@ -530,6 +540,20 @@
      body[data-view="after"] .procedure-card{padding:var(--space-4)}
      .report-pending .report-review-actions button,body[data-view="after"] .report-actions a.report-make{flex:1 1 auto;justify-content:center}
     }
+    /* Lane UI2 decision 5 (2026-10-13): the guide to putting VoineyLab on the home screen, folded in the top bar. */
+    .topbar-side{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-3);min-width:0}
+    .install-guide{position:relative;color:var(--ink);font-size:.875rem}
+    .install-guide[hidden]{display:none}
+    .install-guide>summary{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);font-weight:600;cursor:pointer}
+    .install-guide-body{position:absolute;right:0;z-index:120;width:min(22rem,calc(100vw - 2rem));margin-top:var(--space-2);padding:var(--space-4);border:1px solid var(--line-strong);background:var(--paper);box-shadow:0 8px 24px rgba(28,28,26,.18);line-height:1.5}
+    .install-guide-body ul{margin:var(--space-2) 0;padding-left:1.1rem}
+    .install-guide-body li{margin:var(--space-1) 0}
+    .install-guide-body b{display:block}
+    .install-guide-body p{margin:var(--space-2) 0 0;color:var(--ink-muted)}
+    .install-guide-body .install-secure{color:var(--danger);font-weight:600}
+    .install-guide-body .install-secure[hidden],#install-app[hidden]{display:none}
+    #install-app{min-height:var(--target-desk);padding:0 var(--space-4);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font:inherit;font-weight:600;cursor:pointer}
+    @media (max-width:520px){.topbar{flex-wrap:wrap}.install-guide-body{right:auto;left:0}}
     body[data-view="during"] #protocol-compare{display:none}
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
@@ -572,10 +596,26 @@
 
   <header class="topbar">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">VW</div>
-      <div>Voiney Lab<small>Lab Copilot · 지능형 실험 보조</small></div>
+      <div class="brand-mark" aria-hidden="true">VL</div>
+      <div>VoineyLab<small>Lab Copilot · 지능형 실험 보조</small></div>
     </div>
-    <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
+    <div class="topbar-side">
+      <!-- Lane UI2 decision 5: how to put VoineyLab on the home screen. The browser's own install offer, where it gives one, is a button here; otherwise the steps for each kind of device. -->
+      <details id="install-guide" class="install-guide">
+        <summary>홈 화면에 추가</summary>
+        <div class="install-guide-body">
+          <button id="install-app" type="button" hidden>VoineyLab 설치</button>
+          <p id="install-secure" class="install-secure" role="status" hidden></p>
+          <ul>
+            <li><b>아이폰·아이패드 (Safari)</b> 공유 버튼 → “홈 화면에 추가”</li>
+            <li><b>안드로이드 (Chrome)</b> 메뉴(⋮) → “홈 화면에 추가” 또는 “앱 설치”</li>
+            <li><b>PC (Chrome·Edge)</b> 주소창 오른쪽의 설치 아이콘</li>
+          </ul>
+          <p>홈 화면에서 열면 주소창 없이 화면 전체를 씁니다. 가로·세로 모두 됩니다. 서버에 연결되어 있어야 쓸 수 있습니다(오프라인 없음).</p>
+        </div>
+      </details>
+      <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
+    </div>
   </header>
 
   <main id="researcher-workspace" class="shell">
@@ -3645,7 +3685,25 @@ $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCal
 try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
 $("agc-mode")?.addEventListener("change",event=>{storeAgcMode(event.target.value);const on=event.target.value==="on"||(event.target.value==="calibrated"&&!voiceReferenceMeasured);void applyAutoGainControl(on);});
 try{const agc=$("agc-mode"),stored=localStorage.getItem(AGC_MODE_STORAGE_KEY);if(agc&&["calibrated","on","off"].includes(stored))agc.value=stored;}catch(_){}
-globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
+// Lane UI2 decision 5 (2026-10-13): VoineyLab on the home screen. Where the
+// browser offers to install the page (it keeps the offer until asked), the
+// guide shows one button for it; otherwise the steps for each kind of device.
+// The guide goes away once the page runs from the home screen, and says when
+// the address is not a secure (https) one, where no browser installs a page.
+let installOffer=null;
+function runsFromHomeScreen(){try{return globalThis.matchMedia?.("(display-mode: standalone)")?.matches===true||globalThis.navigator?.standalone===true;}catch(_){return false;}}
+function renderInstallGuide(){
+ const guide=$("install-guide");if(!guide)return false;
+ guide.hidden=runsFromHomeScreen();
+ const button=$("install-app");if(button)button.hidden=!installOffer;
+ const secure=$("install-secure");if(secure){const text=globalThis.isSecureContext===false?"이 주소는 보안 연결(https)이 아니어서 홈 화면에 앱으로 추가할 수 없습니다. https 주소로 열어 주세요.":"";secure.textContent=text;secure.hidden=!text;}
+ return !guide.hidden;
+}
+async function installFromHomeScreenOffer(){const offer=installOffer;if(!offer||typeof offer.prompt!=="function")return false;installOffer=null;try{await offer.prompt();}catch(_){}renderInstallGuide();return true;}
+globalThis.addEventListener?.("beforeinstallprompt",event=>{event?.preventDefault?.();installOffer=event;renderInstallGuide();});
+globalThis.addEventListener?.("appinstalled",()=>{installOffer=null;renderInstallGuide();});
+$("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer();});
+globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();renderInstallGuide();},{once:true});
 </script>
 </body>
 </html>
