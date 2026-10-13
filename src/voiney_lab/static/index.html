@@ -479,6 +479,57 @@
      .compare-steps{max-height:32rem}
     }
     @media (max-width:479px){.compare-field{grid-template-columns:minmax(0,1fr) auto}.compare-field-key{grid-column:1/-1}}
+    /* Lane UI2 decision 4 (2026-10-13): the 실험 후 view after the drafts' P4
+       and M6. The record comes first: its head (how it ended, the source's
+       badge, who ran it), the counts of the values, the first value not yet
+       confirmed with 64px buttons, the values by step, and 보고서 만들기;
+       the conversation stands beside it on a wide screen (under it on a
+       phone) and the setup for the next experiment moves below. There is no
+       approval and no rejection. */
+    .ui-badge[data-kind="provisional"]{border:var(--stroke-state) dashed var(--pending);background:var(--paper);color:var(--pending)}
+    .after-head{display:none}
+    body[data-view="after"] .after-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
+    .after-title{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
+    .after-experimenter{color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    body[data-view="after"] .shell{grid-template-areas:"work chat" "setup setup"}
+    body[data-view="after"] #protocol-library,body[data-view="after"] #protocol-compare,body[data-view="after"] #protocol-start-summary,body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
+    body[data-view="after"] .procedure-card .run-left,body[data-view="after"] .spoken-summary,body[data-view="after"] .voice-command-hint,body[data-view="after"] .workflow-details-rows,body[data-view="after"] .task-body-right{display:none}
+    body[data-view="after"] .procedure-card{padding:var(--space-6)}
+    body[data-view="after"] .task-body-split{display:block;margin-top:0}
+    body[data-view="after"] .procedure-report{padding:0;border:0;background:none}
+    body[data-view="after"] .procedure-report #last-report-id{font-size:1.125rem;line-height:1.625rem}
+    .report-review-checklist{gap:var(--space-3)}
+    .report-review-checklist>b{color:var(--ink);font-size:1rem}
+    .report-review-summary{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-4);padding:var(--space-3) var(--space-4);border:1px solid var(--line);background:var(--paper);color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .report-review-count b{margin-left:var(--space-1);color:var(--ink);font-size:1.125rem}
+    .report-pending{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:var(--stroke-state) dashed var(--pending);background:var(--pending-soft)}
+    .report-pending-head{color:var(--pending);font-size:1rem}
+    .report-pending .report-review-row{border:0;padding:0;background:none}
+    .report-pending .report-review-text{color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
+    .report-pending .report-review-actions button{min-height:var(--target-run);padding:0 var(--space-6);font-size:1.125rem}
+    .report-pending .report-review-actions button:first-child{border-color:var(--ink);background:var(--ink);color:var(--on-ink)}
+    .report-review-step{display:flex;flex-direction:column;border:1px solid var(--line);background:var(--paper)}
+    .report-review-step h4{margin:0;padding:var(--space-3) var(--space-4) 0;color:var(--ink);font-size:1rem;line-height:1.5rem}
+    .report-review-checklist .report-review-row{display:grid;grid-template-columns:3.5rem minmax(0,1fr) auto;grid-template-areas:"time text tag" "time history history" "time actions actions";gap:var(--space-1) var(--space-3);align-items:start;padding:var(--space-3) var(--space-4)}
+    .report-review-step .report-review-row+.report-review-row{border-top:1px solid var(--line)}
+    .report-review-step .report-review-row[data-confirmed="false"]{outline:var(--stroke-state) dashed var(--pending);outline-offset:calc(-1 * var(--stroke-state))}
+    .report-review-time{grid-area:time;color:var(--ink-muted);font-size:.8125rem;line-height:1.5rem;font-weight:600;font-variant-numeric:tabular-nums}
+    .report-review-checklist .report-review-row span.report-review-text{grid-area:text;flex:none;color:var(--ink);font-size:.9375rem;line-height:1.5rem;font-weight:600}
+    .report-review-checklist .report-review-row[data-confirmed="true"] span.report-review-text{color:var(--ink)}
+    .report-review-checklist .report-review-row span.report-review-history{grid-area:history;flex:none;color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem}
+    .report-review-row>.ui-badge{grid-area:tag;flex:none}
+    .report-review-actions{grid-area:actions;display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+    .report-review-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
+    .report-review-actions input{min-height:var(--target-desk);min-width:0;flex:1 1 12rem;padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);font:inherit}
+    .report-actions:not(:has(a[aria-disabled="false"])){display:none}
+    .report-actions a.report-make{border-color:var(--ink);background:var(--ink);color:var(--on-ink);font-size:.9375rem}
+    body[data-view="after"] .report-actions{margin-top:var(--space-4)}
+    body[data-view="after"] .report-actions a.report-make{min-height:var(--target-run);padding:0 var(--space-8);font-size:1.125rem}
+    @media (max-width:980px){body[data-view="after"] .shell{grid-template-areas:"work" "chat" "setup"}}
+    @media (max-width:719px){
+     body[data-view="after"] .procedure-card{padding:var(--space-4)}
+     .report-pending .report-review-actions button,body[data-view="after"] .report-actions a.report-make{flex:1 1 auto;justify-content:center}
+    }
     body[data-view="during"] #protocol-compare{display:none}
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
@@ -819,6 +870,13 @@
               <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
             </div>
             <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
+              <!-- Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, after the drafts' P4 and M6 -- how the experiment ended (the server's experiment.ended), the badge of the source it followed and who ran it. -->
+              <div class="after-head">
+                <h2 class="after-title">실험 기록 검토</h2>
+                <span id="after-state" class="ui-badge" data-kind="done" hidden></span>
+                <span id="after-basis" class="ui-badge" data-kind="quiet" hidden></span>
+                <span id="after-experimenter" class="after-experimenter"></span>
+              </div>
               <div class="label" id="experiment-report-title">실험 기록</div>
               <strong id="last-report-id">아직 실험 기록 없음</strong>
               <span id="last-report-dev"></span>
@@ -826,16 +884,17 @@
               <div id="report-prose-state" role="status"></div>
               <button id="report-prose-again" type="button" hidden>보고서 문장 다시 만들기</button>
               <div id="report-review-checklist" class="report-review-checklist" aria-label="보고서에 넣을 값 확인" hidden></div>
+              <!-- Lane UI2 decision 4: 보고서 만들기 -- the Word report, as before -- out of the fold once a record exists; there is no approval. -->
+              <div class="report-actions">
+                <a id="export-report-docx" class="report-make" aria-disabled="true">보고서 만들기 (Word)</a>
+                <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
+                <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
+                <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
+              </div>
               <details id="procedure-report-details">
                 <summary>기록 보기 · 이상 사항 · 내보내기</summary>
                 <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
                 <div id="experiment-report-events" class="report-event-ledger" aria-label="이 세션의 실험 기록 이벤트"></div>
-                <div class="report-actions">
-                  <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
-                  <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
-                  <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
-                  <a id="export-report-docx" aria-disabled="true">보고서(Word) 받기</a>
-                </div>
                 <div id="pending-report" hidden></div>
               </details>
             </aside>
@@ -1048,8 +1107,22 @@ function showExperimentEnded(message){
  const status=message?.status==="completed"?"모든 단계를 마쳐 실험이 끝났습니다":"실험이 종료되었습니다";
  const report=message?.report==="saved"?" · 실험 기록 저장됨":message?.report==="failed"?" · 실험 기록을 저장하지 못했습니다":"";
  setText("procedure-status",`${status}${report}`);
+ renderAfterHead(message);
  renderScreenView();
 }
+// Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, set once at the
+// server's end and kept until a new session: how it ended, the badge of the
+// source the experiment followed (the server's basis and analysis state at
+// the end) and who ran it.
+function renderAfterHead(message){
+ const state=$("after-state");if(!state)return false;
+ state.textContent=message?.status==="completed"?"실험 완료":"실험 종료";state.hidden=false;
+ const basis=$("after-basis"),source=curatedScreenFields?.source_basis,attached=curatedProtocolState?.attached===true;
+ if(basis){const day=uploadedDay(source?.uploaded_at);basis.textContent=attached&&source&&typeof source==="object"?[nonemptyText(source.filename)?source.filename:"파일 이름 기록 없음",day?`${day} 올림`:"올린 날짜 기록 없음",curatedProtocolState.development_only?"개발용 큐레이션 분석":"분석 통과"].join(" · "):"";basis.hidden=!basis.textContent;}
+ setText("after-experimenter",`실험자 ${experimenterLabel()}`);
+ return true;
+}
+function clearAfterHead(){for(const id of ["after-state","after-basis"]){const badge=$(id);if(badge){badge.textContent="";badge.hidden=true;}}setText("after-experimenter","");}
 function showWorkflowControlRefused(message){
  const text=message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
  setText("status",text);appendDevCodeDetails($("status"),[["refused_action",typeof message?.action==="string"?message.action:null],["reason",typeof message?.reason==="string"?message.reason:null]]);
@@ -1407,7 +1480,9 @@ function startWorkflowTimer(){
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
 function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${experimentReportLabel(report,reports)} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status],["report_id",report.report_id]]);container.appendChild(row);}return true;}
-function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const amended=event.amended&&typeof event.amended==="object"?event.amended:null;const wording=amended&&typeof amended.text==="string"&&amended.text?amended.text:event.user_wording;const bits=[event.created_at,wording].filter(item=>typeof item==="string"&&item.trim());if(amended&&typeof amended.status==="string")bits.push(amended.status==="정정됨"&&typeof event.user_wording==="string"?`정정됨 (처음: ${event.user_wording})`:amended.status);if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
+// Lane UI2 decision 4: when each record was made, by its event key, for the values the review lists.
+const reportEventTimes=new Map();
+function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();reportEventTimes.clear();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;if(typeof event.event_key==="string"&&typeof event.created_at==="string")reportEventTimes.set(event.event_key,event.created_at);const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const amended=event.amended&&typeof event.amended==="object"?event.amended:null;const wording=amended&&typeof amended.text==="string"&&amended.text?amended.text:event.user_wording;const bits=[event.created_at,wording].filter(item=>typeof item==="string"&&item.trim());if(amended&&typeof amended.status==="string")bits.push(amended.status==="정정됨"&&typeof event.user_wording==="string"?`정정됨 (처음: ${event.user_wording})`:amended.status);if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 // Lane DI (2026-10-08): the page sends no identity of its own choosing; the server knows who is at the bench.
 function workspaceFetch(url,options={}){return fetch(url,options);}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
@@ -1538,7 +1613,42 @@ function stopReportProsePolling(){if(reportProseHandle)clearTimeout(reportProseH
 // Lane N, decision 3: the report's values once the experiment ended, each
 // confirmed (✓ 확인) or corrected and confirmed (고치기) on the screen; the
 // voice review fills the same list. Text only (textContent).
-function renderReportReview(reportId,items,status){const box=$("report-review-checklist");if(!box)return false;box.replaceChildren();const list=Array.isArray(items)?items.filter(item=>item&&typeof item.item_id==="string"):[];if(!list.length||typeof reportId!=="string"||status==="in_progress"){box.hidden=true;return false;}box.hidden=false;const open=list.filter(item=>!item.confirmed).length;const head=document.createElement("b");head.textContent=open?`보고서에 넣을 값 확인 · 남은 ${open}개`:`보고서에 넣을 값 ${list.length}개 · 모두 확인함`;box.appendChild(head);for(const item of list){const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";const text=document.createElement("span");text.textContent=`${item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}${item.corrected?` · 정정됨 (처음: ${typeof item.original==="string"?item.original:""})`:""}${item.confirmed?" · ✓ 실험자 확인":""}`;row.appendChild(text);if(!item.confirmed){const ok=document.createElement("button");ok.type="button";ok.textContent="✓ 확인";ok.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"confirm"});});row.appendChild(ok);}const fix=document.createElement("button");fix.type="button";fix.textContent="고치기";fix.addEventListener("click",()=>{const input=document.createElement("input");input.type="text";input.maxLength=800;input.value=typeof item.text==="string"?item.text:"";input.setAttribute("aria-label","고친 값");const save=document.createElement("button");save.type="button";save.textContent="고쳐서 확인";save.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"correct",text:input.value});});fix.replaceWith(input,save);input.focus();});row.appendChild(fix);box.appendChild(row);}return true;}
+// Lane UI2 decision 4 (2026-10-13): the values by step as the drafts' P4
+// draws them -- the time each was recorded, its words, a correction with the
+// first words, and whether the experimenter confirmed it -- with the counts
+// of this same list above them (the server sends no summary of its own) and
+// the first value not yet confirmed as the M6 card, its buttons 64px. Each
+// button asks the server, as before; there is no approval and no rejection.
+function renderReportReview(reportId,items,status){
+ const box=$("report-review-checklist");if(!box)return false;box.replaceChildren();
+ const list=Array.isArray(items)?items.filter(item=>item&&typeof item.item_id==="string"):[];
+ if(!list.length||typeof reportId!=="string"||status==="in_progress"){box.hidden=true;return false;}
+ box.hidden=false;const open=list.filter(item=>!item.confirmed).length;
+ const head=document.createElement("b");head.textContent=open?`보고서에 넣을 값 확인 · 남은 ${open}개`:`보고서에 넣을 값 ${list.length}개 · 모두 확인함`;box.appendChild(head);
+ box.appendChild(reportReviewSummary(list));
+ const pending=list.find(item=>!item.confirmed);
+ if(pending){const card=document.createElement("div");card.className="report-pending";const title=document.createElement("b");title.className="report-pending-head";title.textContent=`미확인 기록 ${open}건`;card.appendChild(title);card.appendChild(reportReviewRow(reportId,pending,{withStep:true}));box.appendChild(card);}
+ const steps=new Map();for(const item of list){const label=typeof item.step_label==="string"?item.step_label:"";if(!steps.has(label))steps.set(label,[]);steps.get(label).push(item);}
+ for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item));box.appendChild(group);}
+ return true;
+}
+function reportReviewSummary(list){
+ const summary=document.createElement("div");summary.className="report-review-summary";
+ for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length]]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
+ return summary;
+}
+function reportReviewRow(reportId,item,{withStep=false}={}){
+ const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
+ const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
+ const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
+ const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;row.appendChild(text);
+ if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
+ row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
+ const actions=document.createElement("span");actions.className="report-review-actions";
+ if(!item.confirmed){const ok=document.createElement("button");ok.type="button";ok.textContent="✓ 확인";ok.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"confirm"});});actions.appendChild(ok);}
+ const fix=document.createElement("button");fix.type="button";fix.textContent="고치기";fix.addEventListener("click",()=>{const input=document.createElement("input");input.type="text";input.maxLength=800;input.value=typeof item.text==="string"?item.text:"";input.setAttribute("aria-label","고친 값");const save=document.createElement("button");save.type="button";save.textContent="고쳐서 확인";save.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"correct",text:input.value});});fix.replaceWith(input,save);input.focus();});actions.appendChild(fix);
+ row.appendChild(actions);return row;
+}
 async function answerReportReview(reportId,itemId,body){try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/review/${encodeURIComponent(itemId)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error("report review");if(reportId!==lastReportId)return false;renderReportReview(reportId,data.items,lastReportStatus);void refreshReportProse(reportId);return true;}catch(_error){if(reportId===lastReportId&&$("report-prose-state"))$("report-prose-state").textContent="값 확인을 저장하지 못했습니다. 다시 시도해 주세요.";return false;}}
 async function refreshReportProse(reportId){stopReportProsePolling();const target=$("report-prose-state"),again=$("report-prose-again");if(!target||typeof reportId!=="string")return false;try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("report prose status");if(reportId!==lastReportId)return false;target.textContent=typeof data.label==="string"?data.label:"";if(again){again.hidden=data.state!=="ready";again.dataset.reportId=reportId;}if(data.state==="preparing")reportProseHandle=setTimeout(()=>{void refreshReportProse(reportId);},3000);return true;}catch(_error){if(reportId===lastReportId)target.textContent="보고서 준비 상태를 확인하지 못했습니다.";return false;}}
 async function regenerateReportProse(){const button=$("report-prose-again"),reportId=button?.dataset?.reportId;if(!reportId)return false;button.disabled=true;try{await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{method:"POST"});}catch(_error){}finally{button.disabled=false;}return refreshReportProse(reportId);}
@@ -1796,7 +1906,7 @@ function resetVoiceProcessing(){}
 function updateVoiceProcessing(_stage){}
 function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크에 “${text}”라고 말씀해 주세요.`;}
 function resetSessionUI(){
- experimentEndedOnScreen=false;workflowPaused=false;
+ experimentEndedOnScreen=false;workflowPaused=false;clearAfterHead();
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
