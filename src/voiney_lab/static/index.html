@@ -426,6 +426,60 @@
      .protocol-start-summary #protocol-start{width:100%}
      .prestart>.protocol-start-summary{padding:var(--space-4)}
     }
+    /* Lane UI2 decision 3 (2026-10-13): the picked protocol's box by the
+       list, always open, and 원문 대조 보기 -- the draft's P2 read only: the
+       steps, the source's lines by page with the step's own marked, and what
+       the analysis took from each part with its page; three columns on a
+       wide screen, one on a phone. */
+    .library-main .protocol-review{padding:var(--space-4)}
+    .library-main .protocol-review[hidden]{display:none}
+    .protocol-review-title{margin:0;color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .library-main .protocol-review .protocol-review-status{margin:var(--space-2) 0 0;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .protocol-compare{min-width:0;border:1px solid var(--line);background:var(--paper)}
+    .protocol-compare[hidden]{display:none}
+    .protocol-compare>summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2);min-height:var(--target-run);padding:var(--space-4);cursor:pointer;color:var(--ink);list-style-position:inside}
+    .protocol-compare-name{font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    .protocol-compare-summary{color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .protocol-compare-path{margin:0;padding:0 var(--space-4);color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .protocol-compare-strip{display:flex;flex-wrap:wrap;gap:var(--space-2);padding:var(--space-3) var(--space-4)}
+    .protocol-compare-strip:empty{display:none}
+    .protocol-compare-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);padding:0 var(--space-4) var(--space-4)}
+    .compare-col{min-width:0;border:1px solid var(--line);background:var(--paper)}
+    .compare-col h4{margin:0;padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .compare-steps{max-height:18rem;margin:0;padding:0;overflow:auto;list-style:none}
+    .compare-steps>li+li{border-top:1px solid var(--line)}
+    .compare-step{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-1) var(--space-2);width:100%;min-height:var(--target-desk);margin:0;padding:var(--space-3);border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+    .compare-step:hover{background:var(--bench)}
+    .compare-step[aria-current="true"]{box-shadow:inset 0 0 0 var(--stroke-current) var(--ink)}
+    .compare-step-label{color:var(--ink-muted);font-size:.8125rem;line-height:1.375rem;font-weight:600;white-space:nowrap}
+    .compare-step-text{display:-webkit-box;overflow:hidden;font-size:.9375rem;line-height:1.375rem;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+    .compare-step-badges{grid-column:2;display:flex;flex-wrap:wrap;gap:var(--space-1)}
+    .compare-step-badges:empty{display:none}
+    .compare-source,.compare-fields{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-3)}
+    .compare-page{display:flex;flex-direction:column;gap:var(--space-1)}
+    .compare-page-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-3);color:var(--ink-muted);font-size:.8125rem}
+    .compare-page-link{color:var(--ink);font-weight:600}
+    .compare-line{margin:0;padding:var(--space-1) var(--space-2);color:var(--ink);font-size:.9375rem;line-height:1.5rem;white-space:pre-wrap;overflow-wrap:anywhere}
+    .compare-line.is-linked{background:var(--bench);outline:var(--stroke-state) solid var(--ink);outline-offset:calc(-1 * var(--stroke-state))}
+    .compare-line-next{margin:0;padding:0 var(--space-2);color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .compare-fields-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2);color:var(--ink);font-size:1.125rem;line-height:1.625rem}
+    .compare-fields-head span{color:var(--ink-muted);font-size:.875rem}
+    .compare-action{display:flex;flex-direction:column;gap:var(--space-1);padding-top:var(--space-2);border-top:1px solid var(--line)}
+    .compare-field{display:grid;grid-template-columns:5.5rem minmax(0,1fr) auto;gap:var(--space-3);align-items:start;min-height:32px}
+    .compare-field-where{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-1)}
+    .compare-field-key{color:var(--ink-muted);font-size:.8125rem;line-height:1.5rem;font-weight:600}
+    .compare-field-value{color:var(--ink);font-size:.9375rem;line-height:1.5rem;font-weight:600;overflow-wrap:anywhere}
+    .compare-field.is-missing .compare-field-value{color:var(--ink-muted);font-weight:400}
+    .compare-empty{margin:0;padding:var(--space-3);color:var(--ink-muted);font-size:.9375rem;line-height:1.5rem}
+    .protocol-compare-more{margin:0;padding:var(--space-3) var(--space-4) var(--space-2);border-top:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;font-weight:600}
+    .protocol-compare>.protocol-review-content{max-height:none;padding:0 var(--space-4) var(--space-4)}
+    .protocol-compare>.protocol-review-content:empty{display:none}
+    @media (min-width:1024px){
+     .protocol-compare-grid{grid-template-columns:15rem minmax(0,1fr) minmax(0,1fr);align-items:start}
+     .compare-steps{max-height:32rem}
+    }
+    @media (max-width:479px){.compare-field{grid-template-columns:minmax(0,1fr) auto}.compare-field-key{grid-column:1/-1}}
+    body[data-view="during"] #protocol-compare{display:none}
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -492,11 +546,10 @@
               <div class="library-main">
                 <div class="protocol-list-head" aria-hidden="true"><span>이름</span><span>상태</span><span>단계</span><span>올린 날짜</span></div>
                 <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
-                <details id="protocol-review-panel" class="protocol-review" hidden open>
-                  <summary>올린 PDF 분석 결과 · 원문 근거와 단계</summary>
+                <!-- Lane UI2 decision 3 (2026-10-13): the picked protocol's box -- its analysis line and buttons, always open by the list; the long result moved to 원문 대조 보기 below. -->
+                <section id="protocol-review-panel" class="protocol-review" aria-labelledby="protocol-review-title" hidden>
+                  <h3 id="protocol-review-title" class="protocol-review-title">고른 프로토콜의 분석</h3>
                   <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
-                  <div id="protocol-review-content" class="protocol-review-content"></div>
-                  <div id="protocol-blockers" class="protocol-review-content"></div>
                   <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
                   <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
                   <div class="protocol-review-actions">
@@ -504,7 +557,7 @@
                     <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
                     <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
                   </div>
-                </details>
+                </section>
               </div>
               <div class="library-side">
                 <div class="setup-col-left">
@@ -605,6 +658,29 @@
               </section>
             </div>
           </div>
+          <!-- Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only -- the steps the analysis took from the source, the source's own lines it read them from, page by page, and what it took from each (amounts and conditions, timers, warnings, values the source does not give) with the page; under it the rest of the analysis result. Nothing here can be changed. -->
+          <details id="protocol-compare" class="protocol-compare" hidden>
+            <summary><span class="protocol-compare-name">원문 대조 보기</span><span id="protocol-compare-summary" class="protocol-compare-summary"></span></summary>
+            <p id="protocol-compare-path" class="protocol-compare-path"></p>
+            <div id="protocol-compare-strip" class="protocol-compare-strip"></div>
+            <div class="protocol-compare-grid">
+              <div class="compare-col compare-steps-col">
+                <h4 id="protocol-compare-steps-title">단계</h4>
+                <ol id="protocol-compare-steps" class="compare-steps" aria-labelledby="protocol-compare-steps-title"></ol>
+              </div>
+              <section class="compare-col" aria-labelledby="protocol-compare-source-title">
+                <h4 id="protocol-compare-source-title">원문</h4>
+                <div id="protocol-compare-source" class="compare-source"></div>
+              </section>
+              <section class="compare-col" aria-labelledby="protocol-compare-fields-title">
+                <h4 id="protocol-compare-fields-title">분석이 뽑은 단계 · 수치 · 출처</h4>
+                <div id="protocol-compare-fields" class="compare-fields"></div>
+              </section>
+            </div>
+            <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
+            <div id="protocol-review-content" class="protocol-review-content"></div>
+            <div id="protocol-blockers" class="protocol-review-content"></div>
+          </details>
           <div class="setup-grid">
             <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
             <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
@@ -2859,6 +2935,14 @@ function foldStartSummary(review=lastProtocolReview){
  if(start)start.hidden=review?.available_for_execution!==true||sessionActive||running;
  return running;
 }
+// Lane UI2 decision 2: the badge in place of the draft's approved version --
+// the source PDF, the day it was uploaded and the analysis state, from the
+// server's catalog and review.
+function reviewBasisBadge(review){
+ const entry=protocolCatalog.get(review?.protocol_id),runnable=review?.available_for_execution===true,day=uploadedDay(entry?.created_at||review?.created_at);
+ const state=runnable?(review.development_only===true?"개발용 큐레이션 분석":"분석 통과"):catalogStatusWord(review).label.split(" · ")[0];
+ return{text:[entry?.source_filename||review?.source?.filename||"파일 이름 기록 없음",day?`${day} 올림`:"올린 날짜 기록 없음",state].join(" · "),kind:runnable?"done":"missing"};
+}
 function renderStartSummary(review){
  const host=$("protocol-start-summary"),overview=$("protocol-start-overview"),start=$("protocol-start");
  if(!host||!overview)return false;
@@ -2878,9 +2962,8 @@ function renderStartSummary(review){
  else if(blockers.length)parts.push(`실행 불가 · ${pipeline?.action||"아래 사유를 확인하세요."}`);
  else if(pipeline?.message)parts.push(`${pipeline.blocked===true?"막힘":"진행"} · ${pipeline.message}${pipeline.action?` · 할 일 · ${pipeline.action}`:""}`);
  overview.textContent=parts.join(" · ");
- // Lane UI2 decision 2: the badge in place of the draft's approved version -- the source PDF, the day it was uploaded and the analysis state, from the server's catalog and review.
  const basis=$("protocol-start-basis");
- if(basis){const runnable=review.available_for_execution===true,day=uploadedDay(catalogEntry?.created_at||review.created_at),state=runnable?(review.development_only===true?"개발용 큐레이션 분석":"분석 통과"):catalogStatusWord(review).label.split(" · ")[0];basis.textContent=[`${catalogEntry?.source_filename||review.source?.filename||"파일 이름 기록 없음"}`,day?`${day} 올림`:"올린 날짜 기록 없음",state].join(" · ");if(basis.dataset)basis.dataset.kind=runnable?"done":"missing";basis.hidden=false;}
+ if(basis){const badge=reviewBasisBadge(review);basis.textContent=badge.text;if(basis.dataset)basis.dataset.kind=badge.kind;basis.hidden=false;}
  const outdated=$("protocol-start-outdated");
  if(outdated){const line=typeof review.analysis_outdated_ko==="string"?review.analysis_outdated_ko:"";outdated.textContent=line;outdated.hidden=!line;}
  const cleared=$("protocol-start-cleared");
@@ -2956,6 +3039,7 @@ function renderProtocolReview(review,options={}){
  const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),ocrRun=$("protocol-ocr-run");
  if(!panel||!content||!status)return false;
  panel.hidden=false;panel.open=options.open!==false;content.replaceChildren();
+ const compare=$("protocol-compare");if(compare){compare.hidden=false;compare.open=options.open!==false;}
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderExecutionReasons(review);renderStartSummary(review);
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
@@ -2999,21 +3083,8 @@ function renderProtocolReview(review,options={}){
  const materials=(Array.isArray(review?.materials)?review.materials:[]).map(item=>`${item.name_source_text||item.material_id}${reviewScientificValues(item.quantities)?` · ${reviewScientificValues(item.quantities)}`:""} · ${reviewEvidenceText(item.evidence)}`);
  const equipment=(Array.isArray(review?.equipment)?review.equipment:[]).map(item=>`${item.name_source_text||item.equipment_id}${reviewScientificValues(item.settings)?` · ${reviewScientificValues(item.settings)}`:""} · ${reviewEvidenceText(item.evidence)}`);
  if(materials.length||equipment.length)appendProtocolReviewGroup("재료·장비",[...materials,...equipment]);
- for(const section of Array.isArray(review?.sections)?review.sections:[]){
-  for(const step of Array.isArray(section?.steps)?section.steps:[]){
-   const lines=[step.instruction_source_text,reviewEvidenceText(step.evidence)];
-   for(const action of Array.isArray(step.sub_actions)?step.sub_actions:[]){
-    lines.push(`동작 · ${action.instruction_source_text||action.action_id}`);
-    const quantity=reviewScientificValues(action.quantities);if(quantity)lines.push(`수량·조건 · ${quantity}`);
-    if(action.process_timer?.duration?.source_text)lines.push(`타이머 · ${action.process_timer.duration.source_text}`);
-    for(const warning of Array.isArray(action.warnings)?action.warnings:[])lines.push(`주의 · ${warning.source_text} · ${reviewEvidenceText(warning.evidence)}`);
-    for(const missing of Array.isArray(action.missing_execution_values)?action.missing_execution_values:[])lines.push(`누락값 · ${missing.description} · ${reviewEvidenceText(missing.evidence)}`);
-    lines.push(reviewEvidenceText(action.evidence));
-   }
-   for(const warning of Array.isArray(step.warnings)?step.warnings:[])lines.push(`주의 · ${warning.source_text} · ${reviewEvidenceText(warning.evidence)}`);
-   appendProtocolReviewGroup(`${section.title_source_text||section.section_id||"섹션"} · ${step.source_label||step.step_id}단계`,lines);
-  }
- }
+ // Lane UI2 decision 3: the steps are read in 원문 대조 보기, step by step beside their source lines.
+ renderProtocolCompare(review);
  for(const construct of Array.isArray(review?.constructs)?review.constructs:[]){
   const description=construct.source_text||construct.condition_source_text||construct.range_source_text||construct.resolution_source_text||"구조화 워크플로 항목";
   appendProtocolReviewGroup(`분기·반복·모호성 · ${serverCodeText("construct_type",construct.construct_type,"구조화 워크플로 항목")}`,[description,construct.resolved===false?"해결되지 않음":"",reviewEvidenceText(construct.evidence)],[["construct_type",construct.construct_type]]);
@@ -3022,6 +3093,99 @@ function renderProtocolReview(review,options={}){
  if(retry){const failedState=["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status),passedState=review?.analysis_available===true&&review?.development_only!==true;retry.hidden=!(failedState||passedState);retry.dataset.reanalysis=String(passedState&&!failedState);retry.textContent=passedState&&!failedState?"다시 분석":"분석 다시 시도";retry.disabled=isRegisteringProtocol||protocolAnalysisBusyFor===review?.protocol_id||protocolAnalysisRunning(review);}
  if(ocrRun){ocrRun.hidden=!(ocr.state==="ocr_required"||ocr.state==="failed"||ocr.state==="rejected");ocrRun.disabled=isRegisteringProtocol;}
  return true;
+}
+// Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only.
+// Left, the steps the analysis took from the source; middle, the source's
+// own lines it read the picked step from, page by page (the excerpts the
+// server keeps as evidence; a runnable revision also offers its page
+// image); right, what it took from each part -- amounts and conditions,
+// timers, warnings, values the source does not give -- each with its page.
+// The words are the server's review; nothing here can be changed.
+let compareStepId=null,compareReview=null;
+function compareSteps(review){const steps=[];for(const section of Array.isArray(review?.sections)?review.sections:[])for(const step of Array.isArray(section?.steps)?section.steps:[])if(step&&typeof step==="object"&&typeof step.step_id==="string")steps.push({section,step});return steps;}
+function compareActions(step){return(Array.isArray(step?.sub_actions)?step.sub_actions:[]).filter(action=>action&&typeof action==="object");}
+function compareList(value){return Array.isArray(value)?value.filter(item=>item&&typeof item==="object"):[];}
+function compareMissingCount(step){return compareActions(step).reduce((sum,action)=>sum+compareList(action.missing_execution_values).length,0);}
+function compareWarningCount(step){return compareList(step?.warnings).length+compareActions(step).reduce((sum,action)=>sum+compareList(action.warnings).length,0);}
+function compareStepLabel(step,index){return `${nonemptyText(step.source_label)?step.source_label:String(index+1)}단계`;}
+function comparePage(evidence){return Number.isInteger(evidence?.source_page_number)?`원문 p.${evidence.source_page_number}`:"원문 쪽 없음";}
+function compareEl(tag,className,text){const element=document.createElement(tag);if(className)element.className=className;if(text!==undefined)element.textContent=text;return element;}
+function renderProtocolCompare(review=compareReview){
+ compareReview=review&&typeof review==="object"?review:null;
+ const list=$("protocol-compare-steps");if(!list)return 0;
+ const steps=compareSteps(compareReview),strip=$("protocol-compare-strip");
+ if(!steps.some(item=>item.step.step_id===compareStepId))compareStepId=steps[0]?.step.step_id||null;
+ const pages=Number.isInteger(compareReview?.source?.page_count)?compareReview.source.page_count:null;
+ setText("protocol-compare-summary",steps.length?` · 단계 ${steps.length}개${pages?` · 원문 ${pages}쪽`:""}`:" · 분석이 끝나면 단계가 나옵니다");
+ setText("protocol-compare-path",compareReview?[compareReview.title||compareReview.source?.filename||"올린 PDF","읽기 전용 · 분석이 원문에서 뽑은 그대로입니다"].join(" · "):"");
+ if(strip){
+  strip.replaceChildren();
+  if(compareReview){
+   const basis=reviewBasisBadge(compareReview),missing=steps.reduce((sum,item)=>sum+compareMissingCount(item.step),0),cleared=compareList(compareReview.cleared_fields).length,notices=compareList(compareReview.execution_notices).length,blockers=compareList(compareReview.execution_blockers).length;
+   strip.appendChild(uiBadge(basis.text,basis.kind));
+   if(missing)strip.appendChild(uiBadge(`원문에 없는 값 ${missing}건`,"missing"));
+   if(cleared)strip.appendChild(uiBadge(`비운 칸 ${cleared}건`,"missing"));
+   if(notices)strip.appendChild(uiBadge(`시작 전 알림 ${notices}건`,"quiet"));
+   if(blockers)strip.appendChild(uiBadge(`실행을 막는 사유 ${blockers}건`,"danger"));
+   if(nonemptyText(compareReview.analysis_outdated_ko))strip.appendChild(uiBadge(compareReview.analysis_outdated_ko,"warning"));
+  }
+ }
+ list.replaceChildren();
+ if(!steps.length)list.appendChild(compareEl("li","compare-empty",compareReview?.analysis_available===true?"원문에서 뽑은 실행 단계가 없습니다.":"분석이 끝나면 원문에서 뽑은 단계가 여기에 나옵니다."));
+ steps.forEach(({step},index)=>{
+  const item=document.createElement("li"),button=compareEl("button","compare-step");button.type="button";if(button.dataset)button.dataset.stepId=step.step_id;
+  button.setAttribute?.("aria-current",String(step.step_id===compareStepId));
+  const badges=compareEl("span","compare-step-badges"),missing=compareMissingCount(step),warnings=compareWarningCount(step);
+  if(missing)badges.appendChild(uiBadge(`원문에 없음 ${missing}`,"missing"));
+  if(warnings)badges.appendChild(uiBadge(`주의 ${warnings}`,"warning"));
+  if(compareActions(step).some(action=>action.process_timer))badges.appendChild(uiBadge("타이머","quiet"));
+  button.append(compareEl("span","compare-step-label",compareStepLabel(step,index)),compareEl("span","compare-step-text",String(step.instruction_source_text||"")),badges);
+  button.addEventListener("click",()=>{compareStepId=step.step_id;renderProtocolCompare();});
+  item.appendChild(button);list.appendChild(item);
+ });
+ renderCompareSource(steps);renderCompareFields(steps);
+ return steps.length;
+}
+// The middle: the source's lines the picked step was read from, by page; the
+// step's own line is marked. A page image is offered for a runnable revision.
+function renderCompareSource(steps){
+ const host=$("protocol-compare-source");if(!host)return 0;host.replaceChildren();
+ const found=steps.find(item=>item.step.step_id===compareStepId);if(!found)return 0;
+ const {step}=found,lines=[],seen=new Set(),add=(evidence,linked=false)=>{if(!Number.isInteger(evidence?.source_page_number)||!nonemptyText(evidence.source_excerpt))return;const key=`${evidence.source_page_number}|${evidence.source_excerpt}`;if(seen.has(key)){if(linked)lines.find(line=>line.key===key).linked=true;return;}seen.add(key);lines.push({key,page:evidence.source_page_number,text:evidence.source_excerpt,linked,next:Number.isInteger(evidence.continued_on_page_number)?{page:evidence.continued_on_page_number,text:typeof evidence.continued_excerpt==="string"?evidence.continued_excerpt:""}:null});};
+ add(step.evidence,true);
+ for(const action of compareActions(step)){add(action.evidence);for(const value of compareList(action.quantities))add(value.evidence);for(const condition of compareList(action.conditions))add(condition.evidence);add(action.process_timer?.evidence);for(const warning of compareList(action.warnings))add(warning.evidence);for(const missing of compareList(action.missing_execution_values))add(missing.evidence);}
+ for(const warning of compareList(step.warnings))add(warning.evidence);
+ if(!lines.length){host.appendChild(compareEl("p","compare-empty","이 단계의 원문 근거가 없습니다."));return 0;}
+ const runnable=compareReview?.available_for_execution===true&&typeof compareReview.protocol_id==="string"&&typeof compareReview.revision_id==="string";
+ for(const page of [...new Set(lines.map(line=>line.page))].sort((a,b)=>a-b)){
+  const block=compareEl("div","compare-page"),head=compareEl("div","compare-page-head");head.appendChild(compareEl("b","",`원문 p.${page}`));
+  if(runnable){const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(compareReview.protocol_id)}/revisions/${encodeURIComponent(compareReview.revision_id)}/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);}
+  block.appendChild(head);
+  for(const line of lines.filter(item=>item.page===page)){const row=compareEl("p",`compare-line${line.linked?" is-linked":""}`,line.text);if(line.linked)row.setAttribute?.("aria-label",`이 단계의 원문 · ${line.text}`);block.appendChild(row);if(line.next)block.appendChild(compareEl("p","compare-line-next",`p.${line.next.page} 에서 이어짐${nonemptyText(line.next.text)?` · ${line.next.text}`:""}`));}
+  host.appendChild(block);
+ }
+ return lines.length;
+}
+// The right: the picked step as the analysis read it, part by part.
+function renderCompareFields(steps){
+ const host=$("protocol-compare-fields");if(!host)return 0;host.replaceChildren();
+ const index=steps.findIndex(item=>item.step.step_id===compareStepId);if(index<0)return 0;
+ const {section,step}=steps[index];
+ const head=compareEl("div","compare-fields-head");head.append(compareEl("b","",compareStepLabel(step,index)),compareEl("span","",nonemptyText(section.title_source_text)?section.title_source_text:""));host.appendChild(head);
+ const field=(parent,key,value,evidence,kind="")=>{const row=compareEl("div",`compare-field${kind?` is-${kind}`:""}`);row.append(compareEl("span","compare-field-key",key),compareEl("span","compare-field-value",String(value||"")));const where=compareEl("span","compare-field-where");if(kind==="missing")where.appendChild(uiBadge("원문에 없음","missing"));where.appendChild(uiBadge(comparePage(evidence),"quiet"));row.appendChild(where);parent.appendChild(row);};
+ field(host,"단계",step.instruction_source_text,step.evidence);
+ for(const action of compareActions(step)){
+  const block=compareEl("div","compare-action");
+  field(block,"동작",action.instruction_source_text||action.action_id,action.evidence);
+  for(const value of compareList(action.quantities))field(block,"수량·조건",value.source_text,value.evidence||action.evidence);
+  for(const condition of compareList(action.conditions))field(block,"조건",condition.source_text,condition.evidence||action.evidence);
+  if(nonemptyText(action.process_timer?.duration?.source_text))field(block,"타이머",action.process_timer.duration.source_text,action.process_timer.evidence||action.evidence);
+  for(const warning of compareList(action.warnings))field(block,"주의",warning.source_text,warning.evidence);
+  for(const missing of compareList(action.missing_execution_values))field(block,"원문에 없는 값",missing.description,missing.evidence,"missing");
+  host.appendChild(block);
+ }
+ for(const warning of compareList(step.warnings))field(host,"주의",warning.source_text,warning.evidence);
+ return index+1;
 }
 async function loadProtocolReview(protocolId=currentProtocolReviewId,options={}){
  if(typeof protocolId!=="string"||!protocolId||typeof fetch!=="function")return null;
@@ -3041,7 +3205,7 @@ function onProtocolSelectionChanged(){
  const protocolId=$("protocol-id")?.value||"";
  if(protocolId!==currentProtocolReviewId){stopProtocolAnalysisPolling();stopProtocolOcrPolling();}
  if(protocolId){void loadProtocolReview(protocolId,{open:protocolCatalog.get(protocolId)?.available_for_execution!==true});return;}
- currentProtocolReviewId=null;const panel=$("protocol-review-panel"),summary=$("protocol-start-summary"),start=$("protocol-start");if(panel)panel.hidden=true;if(summary)summary.hidden=true;if(start)start.hidden=true;
+ currentProtocolReviewId=null;const panel=$("protocol-review-panel"),summary=$("protocol-start-summary"),start=$("protocol-start"),compare=$("protocol-compare");if(panel)panel.hidden=true;if(summary)summary.hidden=true;if(start)start.hidden=true;if(compare)compare.hidden=true;
 }
 async function pollProtocolAnalysisStatus(protocolId){
  if(protocolAnalysisPollBusy)return null;protocolAnalysisPollBusy=true;
