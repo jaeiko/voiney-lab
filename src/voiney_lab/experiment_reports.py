@@ -2823,7 +2823,7 @@ class ReportDraftState:
 @dataclass(frozen=True)
 class ReportWriterSettings:
     enabled: bool = True
-    model: str = "grok-4.6"
+    model: str = ""
     timeout_seconds: float = 25.0
 
     @classmethod
@@ -2834,8 +2834,19 @@ class ReportWriterSettings:
         enabled = enabled_val in _TRUE
         model = os.environ.get(
             "VOINEY_LAB_REPORT_MODEL",
-            os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", "grok-4.6"),
-        ).strip() or "grok-4.6"
+            os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", ""),
+        ).strip()
+        # A role nobody set is "설정 필요" (lane CL), not xai and grok-4.6
+        # (lane PL): without a provider and a model the writer stays off and
+        # the report keeps the server's own sentences.
+        if enabled and not (
+            os.environ.get("VOINEY_LAB_REPORT_PROVIDER", "").strip() and model
+        ):
+            log.warning(
+                "report writer off: VOINEY_LAB_REPORT_PROVIDER and "
+                "VOINEY_LAB_REPORT_MODEL (or VOINEY_LAB_SUPPLEMENTAL_MODEL) "
+                "must both be set (설정 필요)")
+            enabled = False
         try:
             timeout = float(os.environ.get(
                 "VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS", "25"
@@ -2955,7 +2966,7 @@ class ReportWriterBrain:
     def __init__(
         self,
         client: Any = None,
-        model: str = "grok-4.6",
+        model: str = "",
         timeout_seconds: float = 25.0,
     ) -> None:
         self.client = client

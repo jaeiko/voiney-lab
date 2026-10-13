@@ -33,6 +33,19 @@ def synthetic_document(**overrides):
     return document
 
 
+def operational_document(**overrides):
+    """Fictional operational-scope metadata used only inside a temporary test DB."""
+    base = synthetic_document(
+        document_id="FICTIONAL-OP-SDS-001", document_family_id="FICTIONAL-OP-SDS-FAMILY",
+        canonical_source_id="FICTIONAL-OP-SDS-SOURCE",
+        title="FICTIONAL OPERATIONAL-SCOPE TEST RECORD — NOT REAL GUIDANCE",
+        source_authority="supplier", usage_scope="operational", source_uri="test://fictional/operational",
+        source_path="tests/generated/fictional-operational-record.json",
+    )
+    base.update(overrides)
+    return base
+
+
 class DocumentIngestionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

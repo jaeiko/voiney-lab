@@ -96,10 +96,26 @@ class SpeechProviderError(RuntimeError):
 
 
 def _choice(env: Mapping[str, str], name: str) -> str:
-    raw = env.get(name, "").strip().casefold() or XAI
-    if raw not in PROVIDERS:
+    """The provider written down, or "" when nobody wrote one (lane PL).
+
+    The setting table has said "설정 필요" since lane CL; this used to answer
+    ``xai`` for an unset one. An unset provider is now refused where it would
+    be used (:func:`require_provider`), by the setting's name.
+    """
+
+    raw = env.get(name, "").strip().casefold()
+    if raw and raw not in PROVIDERS:
         raise ConfigurationError(f"{name} must be one of: {', '.join(PROVIDERS)}")
     return raw
+
+
+def require_provider(provider: str, name: str) -> str:
+    """``provider`` itself, or a refusal naming the setting that was not set."""
+
+    if not provider:
+        raise ConfigurationError(
+            f"{name} is not set (설정 필요): one of {', '.join(PROVIDERS)}")
+    return provider
 
 
 def _timeout(env: Mapping[str, str], name: str) -> float:
@@ -119,7 +135,7 @@ def _timeout(env: Mapping[str, str], name: str) -> float:
 class SttProviderSettings:
     """Which provider and model take the one batch STT request per utterance."""
 
-    provider: str = XAI
+    provider: str = ""
     model: str = ""
     #: Used when the session's input language is ``auto``. ``None`` lets the
     #: provider detect it; Google v1 cannot, so it falls back to Korean.
@@ -138,7 +154,7 @@ class SttProviderSettings:
                 f"{STT_LANGUAGE_ENV} must be one of: {', '.join(sorted(LANGUAGES))}")
         return cls(
             provider=provider,
-            model=env.get(STT_MODEL_ENV, "").strip() or DEFAULT_STT_MODELS[provider],
+            model=env.get(STT_MODEL_ENV, "").strip() or DEFAULT_STT_MODELS.get(provider, ""),
             language=language,
             timeout_seconds=_timeout(env, STT_TIMEOUT_ENV),
         )
@@ -148,9 +164,9 @@ class SttProviderSettings:
 class TtsProviderSettings:
     """Which provider, model and voice speak each reply segment."""
 
-    provider: str = XAI
+    provider: str = ""
     model: str = ""
-    voice: str = DEFAULT_TTS_VOICES[XAI]
+    voice: str = ""
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
     @classmethod
@@ -161,8 +177,8 @@ class TtsProviderSettings:
         provider = _choice(env, TTS_PROVIDER_ENV)
         return cls(
             provider=provider,
-            model=env.get(TTS_MODEL_ENV, "").strip() or DEFAULT_TTS_MODELS[provider],
-            voice=env.get(TTS_VOICE_ENV, "").strip() or DEFAULT_TTS_VOICES[provider],
+            model=env.get(TTS_MODEL_ENV, "").strip() or DEFAULT_TTS_MODELS.get(provider, ""),
+            voice=env.get(TTS_VOICE_ENV, "").strip() or DEFAULT_TTS_VOICES.get(provider, ""),
             timeout_seconds=_timeout(env, TTS_TIMEOUT_ENV),
         )
 
@@ -338,6 +354,7 @@ def transcribe(
 ) -> Transcription:
     """Send one utterance to the configured non-xAI STT provider."""
 
+    require_provider(settings.provider, STT_PROVIDER_ENV)
     if language not in {None, *LANGUAGES}:
         raise ValueError("STT language is invalid")
     if settings.provider == GOOGLE_CLOUD:
@@ -435,6 +452,7 @@ def synthesize_elevenlabs(text: str, language: str, settings: TtsProviderSetting
 def synthesize(text: str, language: str, settings: TtsProviderSettings) -> bytes:
     """Speak one cleaned reply segment with the configured non-xAI provider."""
 
+    require_provider(settings.provider, TTS_PROVIDER_ENV)
     if settings.provider == GOOGLE_CLOUD:
         return synthesize_google_cloud(text, language, settings)
     if settings.provider == ELEVENLABS:
