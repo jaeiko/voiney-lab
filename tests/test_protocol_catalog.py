@@ -900,9 +900,9 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         # Launcher defaults a .env may override; the xAI-only features are
         # off by default (lane XO, decision 1).
         self.assertIn('  VOINEY_LAB_PROTOCOL_ENABLED=true \\', launcher)
-        self.assertIn(
-            'export VOINEY_LAB_MOSS_ENABLED="false"', launcher
-        )
+        # Nothing reads VOINEY_LAB_MOSS_ENABLED since lane CL; lane PL took
+        # the launcher's export out.
+        self.assertNotIn("VOINEY_LAB_MOSS_ENABLED", launcher)
         self.assertIn('  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \\', launcher)
         self.assertIn(
             '  VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \\', launcher
@@ -921,8 +921,8 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
     def test_pilot_launcher_is_isolated_and_off_outside_the_source_document(self):
         """The pilot launcher owns its data root and opts out, not in.
 
-        The two out-of-source features and MOSS must each keep a value the
-        operator exported themselves, so turning one on is deliberate.
+        The two out-of-source features must each keep a value the operator
+        exported themselves, so turning one on is deliberate.
         """
 
         repository = Path(__file__).resolve().parents[1]
@@ -932,7 +932,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
         self.assertIn('PORT="${PORT:-8080}"', launcher)
         # The two keep a value set in the shell or the .env (lane XO,
-        # decision 1); MOSS keeps the shell's.
+        # decision 1).
         for name in (
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
@@ -942,10 +942,9 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
                 rf"\n  {name}=false(?: \\|\)\")",
                 f"{name} must default to false and stay operator-overridable",
             )
-        self.assertIn(
-            'export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"',
-            launcher,
-        )
+        # No MOSS flag: nothing reads it (lane CL), and the launcher no
+        # longer exports or prints one (lane PL).
+        self.assertNotIn("MOSS", launcher.upper())
         # Lane DI (2026-10-08): there is no test mode to force off.
         self.assertNotIn("TEST_MODE", launcher)
         self.assertIn("--check-only", launcher)
