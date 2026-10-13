@@ -11295,6 +11295,84 @@ class CuratedProtocolSession:
     def _count_question_open(self) -> bool:
         return self._open_count_interval() is not None
 
+    # --- Lane RA, decision (f): what the screen is told, from the session's own state --
+
+    def confirm_question(self) -> dict[str, Any] | None:
+        """The confirmation question open for the next words, with its kind.
+
+        The one-turn questions in the order plan() answers them -- completion
+        ("N단계 완료하셨나요?"), the endpoint, a value in the 바로 확인 way,
+        the 시끄러운 곳 mode, the end, a timer, an anomaly, a transcript, a
+        step move, a record fix -- then the questions open until answered
+        (the source condition, the count, the round, the pre-start ones).
+        """
+
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps) else None
+        )
+        label = step.source_label if step is not None else ""
+
+        def words(held: Any, *keys: str) -> str:
+            if not isinstance(held, dict):
+                return ""
+            for key in keys:
+                value = held.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+            return ""
+
+        if self._pending_completion_confirmation is not None:
+            return {"kind": "completion", "text": _completion_question(label)}
+        if self._pending_observation_confirmation is not None:
+            asked = self._replay.get(self._pending_observation_confirmation.requested_turn_id)
+            return {"kind": "observation", "text": (asked.speech_text if asked is not None else "") or ""}
+        if self._pending_note_confirmation is not None:
+            return {"kind": "value", "text": words(self._pending_note_confirmation, "question", "text")}
+        if self._pending_ambient_confirmation is not None:
+            return {"kind": "ambient", "text": words(self._pending_ambient_confirmation, "question", "text")}
+        if self._pending_stop_confirmation is not None:
+            return {"kind": "stop", "text": END_CONFIRMATION_QUESTION["ko"]}
+        if self._pending_timer_confirmation is not None:
+            return {"kind": "timer", "text": words(self._pending_timer_confirmation, "question")}
+        if self._pending_anomaly_confirmation is not None:
+            return {"kind": "anomaly", "text": words(self._pending_anomaly_confirmation, "question")}
+        if self._pending_transcript_confirmation is not None:
+            proposed = self._pending_transcript_confirmation.proposed_transcript
+            return {"kind": "transcript", "text": f"‘{proposed}’라고 말씀하신 건가요?"}
+        if self._pending_step_move is not None:
+            return {"kind": "step_move", "text": words(self._pending_step_move, "question")}
+        if self._pending_record_fix is not None:
+            return {"kind": "record_fix", "text": words(self._pending_record_fix, "question")}
+        return self.open_server_question()
+
+    def next_step_sentence(self, language: str = "ko") -> str | None:
+        """The next step's sentence -- its reviewed or stored Korean, else the source -- or None."""
+
+        steps = self.fixture.steps
+        if not self.active or not 0 <= self.current_index < len(steps) - 1:
+            return None
+        following = steps[self.current_index + 1]
+        reading = (
+            self._localized_fact(following.step_id, "current_step") if language == "ko" else None
+        )
+        return " ".join((reading or following.instruction_source_text).split())
+
+    def clarify_candidates(self) -> list[str]:
+        """The candidates the last reply asked back ("A요, B요?"), for the screen."""
+
+        return list(self._clarify_candidates)
+
+    def readback_values(self) -> list[str]:
+        """The values the last note read back, as said."""
+
+        return list(self._last_readback_values)
+
+    def record_deviation(self) -> dict[str, Any] | None:
+        """The deviation the last note recorded (decision c), or None."""
+
+        return dict(self._last_note_deviation) if self._last_note_deviation else None
+
     # --- Lane RA, decisions (a) and (e): the read-only proposals of the router first --
 
     def apply_read_only_proposal(
@@ -12727,6 +12805,8 @@ class CuratedProtocolSession:
                 "configuration_id": configuration_id,
                 "requested_generation": generation,
             }
+            # Lane RA, decision (f): the candidates asked back, for the screen.
+            self._clarify_candidates = list(names)
         self._replay[turn_id] = plan
         return plan
 

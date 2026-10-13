@@ -5159,6 +5159,15 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     open_question=getattr(curated,"open_server_question",None)
     # Lane CF, decision 5: "지금 기준: {파일 이름} · {올린 날짜}".
     basis=getattr(curated,"source_basis",None)
+    # Lane RA, decision (f): the next step's sentence, the kind of the open
+    # confirmation question, the candidates asked back, the values read
+    # back and the deviation a note recorded -- the session's own words, for
+    # lanes UI2 and RV to draw (the page is not changed here).
+    next_sentence=getattr(curated,"next_step_sentence",None)
+    confirm=getattr(curated,"confirm_question",None)
+    candidates=getattr(curated,"clarify_candidates",None)
+    readback=getattr(curated,"readback_values",None)
+    deviation=getattr(curated,"record_deviation",None)
     return {
         "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
@@ -5168,6 +5177,11 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
         # Lane WV, decision 1: the step's own figures, cut from the uploaded
         # PDF -- the list once its pages are cut, None while they are being.
         "source_figures":_screen_source_figures(curated),
+        "next_step_sentence":next_sentence("ko") if callable(next_sentence) else None,
+        "confirm_question":confirm() if callable(confirm) else None,
+        "clarify_candidates":candidates() if callable(candidates) else [],
+        "readback_values":readback() if callable(readback) else [],
+        "record_deviation":deviation() if callable(deviation) else None,
     }
 
 
