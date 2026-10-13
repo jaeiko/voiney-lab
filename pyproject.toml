@@ -60,9 +60,11 @@ test = [
   "pytest>=8",
   "httpx>=0.27",
 ]
-# HEIC photos (lane AN, FM). Optional: the pillow-heif wheels bundle libheif
-# and libde265 (LGPL) and libx265 (GPL); whether to ship them is a person's
-# call. Without it a HEIC upload is refused with heic_support_unavailable.
+# HEIC photos (lane AN, FM). Optional (human decision 2026-10-13): the
+# pillow-heif source is BSD-3-Clause, but its binary wheels bundle libheif and
+# libde265 (LGPLv3) and x265 (GPLv2) and are GPLv2 as a whole; whether to ship
+# them is the organisation's call. Without it a HEIC upload is refused with
+# heic_support_unavailable. docs/SOURCE_FORMATS.md says how to install it.
 heic = [
   "pillow-heif==1.8.1",
 ]

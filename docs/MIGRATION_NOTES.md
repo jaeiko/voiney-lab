@@ -927,6 +927,10 @@ reads as the PDF it is.
 ### New dependencies
 
 `Pillow` (photos) and `openpyxl` (reagent tables) are required; HEIC needs the
-optional extra `.[heic]` (`pillow-heif`). A Word document needs LibreOffice
-installed on the server (a system install, not a Python package); without it
-the upload is refused with `docx_conversion_unavailable`.
+optional extra `.[heic]` (`pillow-heif`). LibreOffice must be installed on the
+server, with the Korean fonts `fonts-nanum` (human decision 2026-10-13; a system
+install, not a Python package): `VOINEY_LAB_OFFICE_CONVERTER` names its
+`soffice` when it is not on `PATH` or in its default place, and without it a
+Word upload is refused with `docx_conversion_unavailable`. `GET /readyz` adds
+`docx_conversion_available` and `heic_photos_available` to its capabilities;
+neither makes the server not ready. See `docs/SOURCE_FORMATS.md`.
