@@ -155,4 +155,4 @@ systemctl reload caddy 2>/dev/null || systemctl restart caddy
 echo
 echo "[OK] https://$DOMAIN 설정을 적용했습니다."
 echo "다음: 방화벽·보안 그룹에서 80/443 열기, 파일럿 서버 시작(scripts/run_pilot.sh),"
-echo "      docs/PILOT_HTTPS_SETUP.md 5절의 확인(웹소켓 /ws, 휴대폰 마이크)."
+echo "      docs/PILOT_HTTPS_SETUP.md 4절의 확인(HTTPS, 웹소켓 /ws, 휴대폰 마이크)."

@@ -293,6 +293,60 @@ and `llm_router.py`, and the xAI-only web evidence search
 `setting_names.py` (and the README's provider section) still describe the
 fallback as present for all roles.
 
+## Lane PL (2026-10-13), stage 2: the pilot path
+
+No schema change and no migration; nothing already stored is read differently.
+
+- **A new runtime usage scope, `source_protocol_only`** (human decision of
+  2026-10-13, "B안"): `VOINEY_LAB_USAGE_SCOPE=source_protocol_only` needs no
+  approved safety catalog and reads none (`server_config()` returns
+  `catalog_path=None`; a configured catalog is ignored). Every scope that has a
+  catalog is checked exactly as before. No catalog document carries the new
+  value; `documents.usage_scope` is unchanged. A server, `.env` or script that
+  does not use it sees no difference.
+- **Additions, none of which an older reader needs** (a field it does not know
+  is ignored):
+  - `GET /api/protocols/{id}/review` has `safety_scope`:
+    `{"usage_scope", "source_protocol_only", "notice"}` (`notice` is the
+    sentence "기관 안전 문서 없음 · 원문 안전 주의만" under the new scope, else
+    null).
+  - `SafetyPack.public_dict()` (the `session.safety_pack` event) has
+    `scope_notice` (the same sentence or null); under the new scope
+    `coverage_status` is `"source_protocol_only"`, `missing_coverage` is
+    `["institution_safety_documents"]` and no document is held.
+  - A safety answer's `reply.complete` text ends with that sentence under the new
+    scope (display only, never spoken).
+  - The `safety_notices_acknowledged` ledger event's payload gains
+    `safety_scope` and `institution_safety_notice` under the new scope; under any
+    other scope the payload is what it was. Older events lack the two keys.
+- **`GET /api/protocols`**: a development fixture that cannot be loaded is left
+  out of the list, and one the catalog does not match is listed as not
+  executable (`execution_blocked_reason: "development_fixture_conflicts_with_catalog"`);
+  before, either failed the whole list with a 503. The uploaded protocols are
+  listed in both cases. The single-entry, figure and page endpoints still load
+  the fixture first and are unchanged.
+- **`scripts/run_pilot.sh`**: no catalog file at
+  `data/runtime/pilot/approved_safety_catalog.sqlite` now starts as
+  `source_protocol_only` instead of refusing (exit 0 for `--check-only`). A file
+  that is there keeps every check and is never taken for "no catalog". It also
+  pins `VOINEY_LAB_STT_DIAGNOSTIC_DIR` inside `data/runtime/pilot/` and writes
+  `.voiney-pilot-data` there when it really starts.
+  **A host that relied on the refusal** (a pilot that must not start without
+  institution documents) now has to put a check of its own in front, e.g.
+  `--check-only` output must show `USAGE_SCOPE    = reference_only`.
+- **New tools and documents**: `scripts/pilot_data_delete.py` (preview, confirm,
+  delete, record; appends to `data/runtime/pilot/deletion_log.jsonl`),
+  `scripts/pilot_https_setup.sh` with `scripts/pilot_https/Caddyfile.example`
+  (written, not run), `docs/PILOT_GUIDE.md`, `docs/PILOT_HTTPS_SETUP.md`.
+- `setting_names.py` lists the new scope on the `VOINEY_LAB_USAGE_SCOPE` row and
+  the generated comment in `.env.example` follows. No setting was added or
+  removed.
+
+Going back: code older than this stage rejects `source_protocol_only` as an
+invalid usage scope (`server_config()`); set a scope with a catalog or stay on
+this version. Nothing stored needs undoing; `deletion_log.jsonl` and
+`.voiney-pilot-data` are plain files an older version ignores.
+
 ## Commercial workspace schema 7 → 8 (lane CF, 2026-10-08)
 
 Lane DI left the schema at 7. The same day lane CF raised it to 8 (commit
