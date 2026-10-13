@@ -56,6 +56,15 @@ export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED="true"
 export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PILOT_DATA_DIR/experiment_reports.sqlite"
 export VOINEY_LAB_WORKSPACE_ENABLED="true"
 export VOINEY_LAB_WORKSPACE_DATA_DIR="$PILOT_DATA_DIR/workspace"
+# STT diagnostic recordings (off unless VOINEY_LAB_STT_DIAGNOSTICS_ENABLED) go
+# inside the pilot folder, never to the development default, so pilot audio and
+# transcripts are found -- and deleted -- with the rest of the pilot's data
+# (scripts/pilot_data_delete.py) and are not mixed with development data.
+if [[ -n "${VOINEY_LAB_STT_DIAGNOSTIC_DIR:-}" && "$VOINEY_LAB_STT_DIAGNOSTIC_DIR" != "$PILOT_DATA_DIR/stt-diagnostics" ]]; then
+  echo "[WARN] VOINEY_LAB_STT_DIAGNOSTIC_DIR was set in the environment. The pilot ignores it and"
+  echo "[WARN] uses $PILOT_DATA_DIR/stt-diagnostics."
+fi
+export VOINEY_LAB_STT_DIAGNOSTIC_DIR="$PILOT_DATA_DIR/stt-diagnostics"
 
 # --- Off unless a person asks for it -----------------------------------------
 # These four reach outside the approved source documents. Each keeps a value
@@ -159,6 +168,7 @@ echo "CATALOG    = $VOINEY_LAB_PROTOCOL_DATA_DIR/protocol_workspace.sqlite"
 echo "ASSET_ROOT = $VOINEY_LAB_PROTOCOL_DATA_DIR/objects/sha256"
 echo "REPORT_DB  = $VOINEY_LAB_EXPERIMENT_REPORT_DB"
 echo "WORKSPACE  = $VOINEY_LAB_WORKSPACE_DATA_DIR"
+echo "STT_DIAG   = $VOINEY_LAB_STT_DIAGNOSTIC_DIR  (recordings only when VOINEY_LAB_STT_DIAGNOSTICS_ENABLED)"
 echo
 echo "--- Approved safety documents (fixed by this launcher) ---"
 if [[ "$PILOT_USAGE_SCOPE" == "source_protocol_only" ]]; then
@@ -212,6 +222,9 @@ if [[ "$CHECK_ONLY" == "true" ]]; then
 fi
 
 mkdir -p "$PILOT_DATA_DIR"
+# Marks this folder as pilot data for scripts/pilot_data_delete.py, which
+# refuses every folder that is neither this one nor carries the mark.
+: > "$PILOT_DATA_DIR/.voiney-pilot-data"
 
 echo
 echo "=== Starting Voiney Lab ==="
