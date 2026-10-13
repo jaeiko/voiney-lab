@@ -18,6 +18,8 @@ import re
 import unittest
 from pathlib import Path
 
+from voiney_lab import retrieval
+
 from tests.test_launcher_settings_win import _LauncherCopy
 from tests.test_pilot_safety import _document
 from voiney_lab.document_store import ingest_manifest
@@ -33,6 +35,36 @@ class LauncherMossTests(unittest.TestCase):
             for number, line in enumerate(script.read_text(encoding="utf-8").splitlines(), 1):
                 if MOSS.search(line):
                     found.append(f"{script.name}:{number}: {line.strip()}")
+        self.assertEqual(found, [])
+
+
+class ModuleMossTests(unittest.TestCase):
+    def test_safety_pack_and_retrieval_name_no_moss(self):
+        found = []
+        for name in ("safety_pack.py", "retrieval.py"):
+            for number, line in enumerate(
+                (ROOT / "src" / "voiney_lab" / name).read_text(encoding="utf-8").splitlines(), 1,
+            ):
+                if MOSS.search(line):
+                    found.append(f"{name}:{number}: {line.strip()}")
+        self.assertEqual(found, [])
+
+
+class UnusedSearchTests(unittest.TestCase):
+    def test_the_voice_search_nothing_calls_is_gone_and_the_audit_retrieval_stays(self):
+        # Nothing in src called search_safety_documents once lane CL deleted the
+        # tools that did; scripts/audit_approved_catalog.py reads the catalog
+        # through retrieve_approved_lab_documents.
+        self.assertFalse(hasattr(retrieval, "search_safety_documents"))
+        self.assertTrue(callable(retrieval.retrieve_approved_lab_documents))
+
+    def test_no_source_file_still_names_it(self):
+        found = []
+        for folder in ("src", "scripts"):
+            for path in sorted((ROOT / folder).rglob("*")):
+                if path.is_file() and path.suffix in {".py", ".sh", ".html"} and "egg-info" not in str(path):
+                    if "search_safety_documents" in path.read_text(encoding="utf-8", errors="ignore"):
+                        found.append(str(path.relative_to(ROOT)))
         self.assertEqual(found, [])
 
 

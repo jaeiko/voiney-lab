@@ -27,7 +27,7 @@ from voiney_lab.external_references import (
 )
 from voiney_lab.retrieval import retrieve_approved_lab_documents
 
-from tests.test_retrieval import operational_document
+from tests.test_document_ingestion import operational_document
 
 #: The supplemental role written down the way a deployment does (lane PL: an
 #: unset provider or model is "설정 필요", no longer xai and grok-4.6).

@@ -345,7 +345,7 @@ def collect_protocol_safety_subjects(protocol: ExperimentProtocol | Any) -> Prot
 
 #: Section topics the card prefers for a document's one line, best first: the
 #: hazards section (an SDS's section 2), then handling, under its own name or
-#: voice search's ``handling_storage``.
+#: the catalog's ``handling_storage`` topic.
 _CARD_TOPIC_RANKS = {"hazards": 0, "handling": 1, "handling_storage": 1}
 
 
@@ -368,11 +368,10 @@ def _card_section_key(doc: SafetyDocumentRef) -> tuple[Any, ...]:
 
 
 def _review_overdue(review_due_at: Any, now: datetime) -> bool:
-    """Whether a document's review date has passed, as voice search decides it.
+    """Whether a document's review date has passed, as the catalog retrieval decides it.
 
-    The same comparison as ``retrieval._is_stale`` and
-    ``moss_retrieval._review_is_current``: a date without a zone is UTC, and
-    no date never falls due. An unreadable date counts as passed.
+    The same comparison as ``retrieval._is_stale``: a date without a zone is
+    UTC, and no date never falls due. An unreadable date counts as passed.
     """
     value = _clean_str(review_due_at)
     if not value:
@@ -568,7 +567,7 @@ def resolve_safety_pack(
     """Conservatively resolve approved safety documents matching the structured protocol.
 
     A catalog document whose ``review_due_at`` is before ``now`` (the current
-    time when omitted) is left out, as voice search leaves it out, and only
+    time when omitted) is left out, as the catalog retrieval leaves it out, and only
     its identity is kept in :attr:`SafetyPack.review_overdue_documents`.
     """
     current = now or datetime.now(timezone.utc)

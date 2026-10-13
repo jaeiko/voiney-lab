@@ -19,7 +19,7 @@ from voiney_lab.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RE
 from voiney_lab.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, app, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
-from tests.test_retrieval import operational_document
+from tests.test_document_ingestion import operational_document
 from tests.runnable_fixture import runnable_fixture_assumed
 
 #: The xAI speech path written down, as a deployment writes its provider
