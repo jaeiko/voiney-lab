@@ -2132,6 +2132,17 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
     }
 
 
+def _candidate_row_blocked(row:dict[str,object],reason:str)->dict[str,object]:
+    """The development fixture's list row, taken out of the executable set."""
+
+    return {
+        **row,
+        "available_for_execution":False,
+        "lifecycle_state":"blocked",
+        "execution_blocked_reason":reason,
+    }
+
+
 def _catalog_entry_projection(
     catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
 )->dict[str,object]:
@@ -2151,7 +2162,17 @@ def _public_protocol_catalog_entries(
     """
 
     config=server_config()
-    candidate=_configured_candidate_fixture(config)
+    # A development fixture that does not fit takes only itself out of the
+    # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
+    # read is left out, one the catalog does not match is shown as not
+    # executable, and the protocols a person uploaded are listed either way.
+    try:
+        candidate=_configured_candidate_fixture(config)
+    except Exception as exc:  # noqa: BLE001 - the fixture alone is left out
+        log.warning(
+            "protocol.catalog.development_fixture_unavailable error=%s",
+            type(exc).__name__)
+        candidate=None
     candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
     if candidate is not None:
@@ -2163,11 +2184,21 @@ def _public_protocol_catalog_entries(
     try:
         for item in catalog.list_entries():
             if candidate is not None and item.protocol_id==candidate.protocol_id:
-                if catalog.development_fixture_is_materialized(candidate):
+                try:
+                    materialized=catalog.development_fixture_is_materialized(candidate)
+                except Exception as exc:  # noqa: BLE001 - unreadable is a no
+                    log.warning(
+                        "protocol.catalog.development_fixture_check_failed error=%s",
+                        type(exc).__name__)
+                    materialized=False
+                if materialized:
                     continue
-                raise ProtocolCatalogUnavailableError(
-                    "Configured development fixture conflicts with catalog state."
-                )
+                log.warning(
+                    "protocol.catalog.development_fixture_conflict "
+                    "fixture_not_executable=true")
+                entries[0]=_candidate_row_blocked(
+                    entries[0],"development_fixture_conflicts_with_catalog")
+                continue
             public=_catalog_entry_projection(catalog,item)
             public["analysis_run"]=catalog.analysis_run_status(
                 item.protocol_id).public_dict()
