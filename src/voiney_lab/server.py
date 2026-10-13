@@ -118,6 +118,11 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    REAGENT_TABLE_MEDIA_TYPE,
+    MAX_REAGENT_TABLE_BYTES,
+    ReagentTableError,
+    ReagentTableTooLargeError,
+    reagent_table_summary,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -2163,6 +2168,10 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolRegistrationError):
         return HTTPException(status_code=400,detail=exc.code)
+    if isinstance(exc,ReagentTableTooLargeError):
+        return HTTPException(status_code=413,detail=exc.code)
+    if isinstance(exc,ReagentTableError):
+        return HTTPException(status_code=422,detail=exc.code)
     return HTTPException(
         status_code=409 if isinstance(exc,ProtocolCatalogError) else 500,
         detail=getattr(exc,"code","protocol_catalog_error"),
@@ -2860,6 +2869,65 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/reagent-tables",status_code=201)
+async def attach_protocol_reagent_table(
+    request:Request,protocol_id:str,filename:str,
+)->dict[str,object]:
+    """Attach an .xlsx workbook to a protocol as its reagent table (lane AN, FM).
+
+    Kept cell by cell where the workbook prints it; never analysed and never
+    a source of a step. Returns the table's summary.
+    """
+
+    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
+    if media_type!=REAGENT_TABLE_MEDIA_TYPE:
+        raise HTTPException(status_code=415,detail="unsupported_reagent_table_media_type")
+    with tempfile.TemporaryDirectory(prefix="protocol-reagent-table-") as root:
+        temporary=Path(root)/"table.xlsx"
+        try:
+            await _spool_protocol_pdf_upload(
+                request,temporary,max_bytes=MAX_REAGENT_TABLE_BYTES)
+        except HTTPException as exc:
+            # The spooler names a PDF; this upload is a workbook.
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={413:"reagent_table_too_large",422:"invalid_reagent_table"}.get(
+                    exc.status_code,exc.detail),
+            ) from exc
+        def attach()->tuple[dict[str,object],bool]:
+            # The catalog's connection belongs to the thread that opens it.
+            catalog,store=_open_protocol_catalog()
+            try:
+                return catalog.attach_reagent_table(
+                    protocol_id,temporary,filename=filename)
+            finally:
+                store.close()
+
+        try:
+            _scope_catalog_resource(protocol_id)
+            table,deduplicated=await asyncio.to_thread(attach)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _catalog_http_error(exc) from exc
+    return {"reagent_table":reagent_table_summary(table),"deduplicated":deduplicated}
+
+
+@app.get("/api/protocols/{protocol_id}/reagent-tables")
+def list_protocol_reagent_tables(protocol_id:str)->dict[str,object]:
+    """The reagent tables attached to a protocol, every cell where it prints."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return {"reagent_tables":catalog.reagent_tables(protocol_id)}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
 
 
 def _automatic_ocr_on_upload(

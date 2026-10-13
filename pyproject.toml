@@ -46,6 +46,9 @@ dependencies = [
   # Pillow: a photo of a protocol becomes the one-page image PDF that OCR
   # reads (lane AN, FM, 2026-10-13). MIT-CMU.
   "Pillow==12.3.0",
+  # openpyxl: an .xlsx attached to a protocol as its reagent table, read
+  # cell by cell (lane AN, FM, 2026-10-13). MIT.
+  "openpyxl==3.1.5",
 ]
 
 [project.scripts]

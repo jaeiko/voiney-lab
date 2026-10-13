@@ -806,7 +806,7 @@ Code from before this version reads all of the above: the new OCR reason is
 an extraction value, not stored, and two retry events on a revision read as
 the retry of the run on screen.
 
-## Lane AN (2026-10-13): Word documents and photos
+## Lane AN (2026-10-13): Word documents, photos and reagent tables
 
 No schema change and no stored row rewritten; protocol store (the catalog
 ledger) only.
@@ -824,6 +824,16 @@ source carries `converted_from`: the upload's `media_type`, `sha256`,
 `exif_orientation_applied` and `pdf_dpi`. The same upload again is found by
 that checksum.
 
+`POST /api/protocols/{protocol_id}/reagent-tables` attaches an .xlsx workbook
+to a protocol as its reagent table: one `protocol_reagent_table_attached`
+event per workbook (`table_id`, `filename`, `media_type`, `sha256`,
+`byte_size`, `authority` `person_upload`, `sheets` with each non-empty cell's
+`ref`, `row`, `column`, `value`, `display` and, where present, `number_format`
+and `formula`; `cell_count`; `warnings`). `GET
+/api/protocols/{protocol_id}/reagent-tables` reads them back. A reagent table
+is not a protocol source and changes nothing about the analysis or the
+protocol's readiness.
+
 The `protocol_ocr_completed` event's pages now carry `render_dpi` and
 `value_boxes` (each a value's `text` and its `box` in the pixels of the page
 rendered at `render_dpi`), so a value read from handwriting or a photo can be
@@ -831,18 +841,20 @@ shown beside the piece of the image it was read from.
 
 ### Reading older data
 
-A registration without `converted_from` and an OCR page without `render_dpi`
-or `value_boxes` read as before (no boxes).
+A registration without `converted_from`, an OCR page without `render_dpi` or
+`value_boxes`, and a protocol without reagent-table events read as before (no
+table, no boxes).
 
 ### Going back
 
 Code from before this version reads every event above: it ignores
-`converted_from`, `render_dpi` and `value_boxes`. A protocol registered from a
-photo or a Word document reads as the PDF it is.
+`converted_from`, `render_dpi` and `value_boxes`, and never reads the
+reagent-table events. A protocol registered from a photo or a Word document
+reads as the PDF it is.
 
 ### New dependencies
 
-`Pillow` (photos) is required; HEIC needs the optional extra `.[heic]`
-(`pillow-heif`). A Word document needs LibreOffice installed on the server (a
-system install, not a Python package); without it the upload is refused with
-`docx_conversion_unavailable`.
+`Pillow` (photos) and `openpyxl` (reagent tables) are required; HEIC needs the
+optional extra `.[heic]` (`pillow-heif`). A Word document needs LibreOffice
+installed on the server (a system install, not a Python package); without it
+the upload is refused with `docx_conversion_unavailable`.
