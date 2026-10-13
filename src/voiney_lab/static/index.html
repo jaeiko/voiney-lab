@@ -4,7 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#ffffff">
-  <title>Voiney Lab · Lab Copilot</title>
+  <title>VoineyLab · Lab Copilot</title>
+  <!-- Lane UI2 decision 5 (2026-10-13): VoineyLab as a home-screen web app -- the manifest (name, icons, start address, either orientation) and the icons; no service worker, so nothing works offline. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="application-name" content="VoineyLab">
+  <meta name="apple-mobile-web-app-title" content="VoineyLab">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="stylesheet" href="/app.css">
   <style>
     /* The current step's text on the '지금 할 일' card: one size and one shape
@@ -313,6 +323,257 @@
     .btn-modal-confirm:hover{background:#9e1b21}
     .step-visual a,.web-lookup-sources a,.experiment-evidence-download,.turn .turn-visual a,.source-figure-links a{text-decoration:underline;text-underline-offset:.18rem}
     .drawn-label{color:var(--warning-ink)}
+    /* Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1
+       and M1. The protocol list, each state in words, with the upload box
+       beside it (one column on a phone) and what is still being processed
+       under that box; the picked protocol's analysis line and its buttons
+       right under the list; then the check before the start beside the voice
+       console, the basis card and the microphone. The list is the catalog
+       the server sent; a row is picked through the same select as before. */
+    body:not([data-view="during"]) .voice-panel{display:block;padding:0;border:0;background:none;box-shadow:none;overflow:visible}
+    body:not([data-view="during"]) .voice-copy{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+    body:not([data-view="during"]) .voice-actions{display:flex;flex-direction:column;gap:var(--space-6)}
+    body:not([data-view="during"]) .setup-grid{margin-top:0}
+    body:not([data-view="during"]) .settings-sheet,body:not([data-view="during"]) .dev-diagnostics{padding:var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .protocol-library{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+    .library-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--space-1) var(--space-4)}
+    .library-head h2{margin:0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700;letter-spacing:-.01em}
+    .library-count{color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .library-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);align-items:start}
+    .library-main,.library-side{display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
+    .protocol-list{margin:0;padding:0;list-style:none;border:1px solid var(--line);background:var(--paper)}
+    .protocol-list>li+li{border-top:1px solid var(--line)}
+    .protocol-list-empty{padding:var(--space-4);color:var(--ink-muted);font-size:.9375rem;line-height:1.5rem}
+    .protocol-list-head{display:none}
+    .protocol-list-head+.protocol-list{margin-top:calc(-1 * var(--space-4))}
+    .protocol-row,.queue-row{display:grid;width:100%;margin:0;border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+    .protocol-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name steps" "badges badges" "date date" "line line";gap:var(--space-2) var(--space-3);align-items:start;min-height:var(--target-run);padding:var(--space-3) var(--space-4)}
+    .protocol-row:hover:not(:disabled),.queue-row:hover:not(:disabled){background:var(--bench)}
+    .protocol-row[aria-current="true"]{box-shadow:inset 0 0 0 var(--stroke-current) var(--ink)}
+    .protocol-row:disabled,.queue-row:disabled{cursor:not-allowed}
+    .protocol-row-title{grid-area:name;display:flex;flex-direction:column;gap:2px;min-width:0}
+    .protocol-row-name{font-size:1.125rem;line-height:1.625rem;font-weight:600;overflow-wrap:anywhere}
+    .protocol-row-file,.protocol-row-date,.protocol-row-steps,.queue-row-file{color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600;overflow-wrap:anywhere}
+    .protocol-row-steps{grid-area:steps;white-space:nowrap}
+    .protocol-row-date{grid-area:date}
+    .protocol-row-badges{grid-area:badges;display:flex;flex-wrap:wrap;gap:var(--space-2)}
+    .protocol-row-line,.queue-row-line{grid-area:line;color:var(--ink);font-size:.875rem;line-height:1.375rem;font-weight:400;white-space:pre-wrap;overflow-wrap:anywhere}
+    .protocol-row-line:empty,.queue-row-line:empty{display:none}
+    .ui-badge{display:inline-flex;align-items:center;gap:var(--space-1);min-height:24px;padding:0 var(--space-2);border:1px solid var(--line-strong);border-radius:2px;background:var(--paper);color:var(--ink);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .ui-badge[data-kind="done"]{border-color:var(--ink);background:var(--ink);color:var(--on-ink)}
+    .ui-badge[data-kind="pending"]{border:2px solid var(--pending);background:var(--pending-soft);color:var(--pending)}
+    .ui-badge[data-kind="danger"]{border-color:var(--danger);background:var(--danger);color:var(--on-ink)}
+    .ui-badge[data-kind="warning"]{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
+    .ui-badge[data-kind="quiet"]{border-color:var(--line);color:var(--ink-muted)}
+    .ui-badge[data-kind="missing"]{border-style:dashed;color:var(--ink-muted)}
+    .library-side .protocol-register{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-6) var(--space-4);border:var(--stroke-state) dashed var(--line-strong);background:var(--paper);text-align:center}
+    .library-side .protocol-register .control-label{color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:600;letter-spacing:0}
+    .library-side .custom-file-wrapper{flex-direction:column;gap:var(--space-2);max-width:100%}
+    .library-side .btn-file-select{height:auto;min-height:var(--target-run);padding:0 var(--space-6);border:1px solid var(--ink);background:var(--ink);color:var(--on-ink);font-size:1rem;font-weight:600}
+    .library-side .btn-file-select:hover{background:var(--blurple-hover);color:var(--on-ink)}
+    .library-side .selected-file-name{max-width:100%;color:var(--ink-muted);text-align:center}
+    .library-side .protocol-register small{max-width:100%;color:var(--ink);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
+    .protocol-queue{border:1px solid var(--line);background:var(--paper)}
+    .protocol-queue[hidden]{display:none}
+    .protocol-queue h3{margin:0;padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .protocol-queue-list{margin:0;padding:0;list-style:none}
+    .protocol-queue-list>li+li{border-top:1px solid var(--line)}
+    .queue-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"file badge" "line line";gap:var(--space-1) var(--space-3);align-items:center;min-height:var(--target-run);padding:var(--space-3) var(--space-4)}
+    .queue-row-file{grid-area:file;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .queue-row .ui-badge{grid-area:badge}
+    .library-main .protocol-review{margin:0;border:1px solid var(--line);background:var(--paper)}
+    .prestart{display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--space-4);min-width:0}
+    .prestart>.protocol-start-summary{flex:999 1 30rem;min-width:0;margin:0}
+    .prestart-side{flex:1 1 20rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-4);align-items:start;min-width:0}
+    body:not([data-view="during"]) .prestart-side .voice-console,.prestart-side .experiment-context-card{margin:0;border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    body:not([data-view="during"]) .prestart-side .voice-console{grid-template-columns:auto minmax(0,1fr)}
+    body:not([data-view="during"]) .prestart-side .controls{grid-column:1/-1}
+    body:not([data-view="during"]) .prestart-side .controls button{flex:1;min-height:var(--target-run)}
+    .mic-check{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:1px solid var(--line);background:var(--paper);color:var(--ink)}
+    .mic-check h3{margin:0;color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .mic-check p{margin:0}
+    .mic-check-state{font-size:1.25rem;line-height:1.75rem;font-weight:600}
+    .mic-check-line{color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .mic-check-line:empty{display:none}
+    .mic-check-settings{align-self:flex-start;min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
+    @media (min-width:720px){
+     .protocol-list-head{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 4.5rem 10rem;gap:var(--space-3);padding:var(--space-3) var(--space-4);border:1px solid var(--line);border-bottom:0;background:var(--paper);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+     .protocol-row{grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 4.5rem 10rem;grid-template-areas:"name badges steps date" "line line line line";align-items:center;min-height:56px}
+    }
+    @media (min-width:900px){.library-grid{grid-template-columns:minmax(0,1fr) 360px}}
+    .ui-badge[hidden]{display:none}
+    /* Lane UI2 decision 2 (2026-10-13): the check before the start as one
+       card. The badges stand where the draft had its approved version: the
+       source PDF, the day it was uploaded and the analysis state, and the
+       server's "다시 분석 권장" line. The source's safety statements beside
+       their Korean come first and are never folded; the step timers, the
+       notices and the lines the server asks to check follow; the start is a
+       64px button. Once the experiment runs the card folds as before. */
+    .prestart>.protocol-start-summary{padding:var(--space-6);border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    .start-card-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
+    .protocol-start-summary .start-card-head h3{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    #protocol-start-body:not([hidden]){display:flex;flex-direction:column;gap:var(--space-4)}
+    #protocol-start-overview{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .protocol-start-summary .protocol-review-group{margin:0;padding:var(--space-3) var(--space-4);border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    .protocol-start-summary .protocol-review-group h4{margin:0 0 var(--space-2);color:var(--ink);font-size:.9375rem;line-height:1.375rem;font-weight:700}
+    .protocol-start-summary .protocol-review-group p{color:var(--ink);font-size:.875rem;line-height:1.375rem}
+    .protocol-start-summary .protocol-review-group .protocol-review-status{color:var(--ink-muted)}
+    .protocol-start-summary .protocol-safety-group{padding:var(--space-4);border:var(--stroke-state) solid var(--warning-ink);background:var(--warning-soft)}
+    .protocol-start-summary .protocol-safety-group h4{color:var(--warning-ink);font-size:1rem}
+    .protocol-start-summary .safety-notice-row{gap:var(--space-1) var(--space-4);padding:var(--space-3) 0;border-top-color:var(--line-strong)}
+    .protocol-start-summary .safety-notice-where{color:var(--warning-ink);font-size:.8125rem;font-weight:600}
+    .protocol-start-summary .safety-notice-source,.protocol-start-summary .safety-notice-korean{font-size:1rem;line-height:1.5rem}
+    .protocol-start-summary .safety-notice-korean{font-weight:600}
+    #protocol-execution-blockers .protocol-review-group{border:var(--stroke-state) solid var(--danger);background:var(--danger-soft)}
+    #protocol-execution-blockers .protocol-review-group h4{color:var(--danger)}
+    .start-check-line,.start-check-lines .protocol-review-status{margin:0;padding:var(--space-2) var(--space-3);border-left:var(--stroke-current) solid var(--ink);background:var(--bench);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .start-check-line[hidden],.start-check-lines[hidden]{display:none}
+    .protocol-start-summary .protocol-review-actions{margin-top:0}
+    .protocol-start-summary #protocol-start{min-height:var(--target-run);padding:0 var(--space-8);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:700}
+    .protocol-start-summary #protocol-start:hover:not(:disabled){background:var(--blurple-hover)}
+    @media (max-width:719px){
+     .protocol-start-summary .safety-notice-row{grid-template-columns:minmax(0,1fr)}
+     .protocol-start-summary #protocol-start{width:100%}
+     .prestart>.protocol-start-summary{padding:var(--space-4)}
+    }
+    /* Lane UI2 decision 3 (2026-10-13): the picked protocol's box by the
+       list, always open, and 원문 대조 보기 -- the draft's P2 read only: the
+       steps, the source's lines by page with the step's own marked, and what
+       the analysis took from each part with its page; three columns on a
+       wide screen, one on a phone. */
+    .library-main .protocol-review{padding:var(--space-4)}
+    .library-main .protocol-review[hidden]{display:none}
+    .protocol-review-title{margin:0;color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .library-main .protocol-review .protocol-review-status{margin:var(--space-2) 0 0;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .protocol-compare{min-width:0;border:1px solid var(--line);background:var(--paper)}
+    .protocol-compare[hidden]{display:none}
+    .protocol-compare>summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2);min-height:var(--target-run);padding:var(--space-4);cursor:pointer;color:var(--ink);list-style-position:inside}
+    .protocol-compare-name{font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    .protocol-compare-summary{color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .protocol-compare-path{margin:0;padding:0 var(--space-4);color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .protocol-compare-strip{display:flex;flex-wrap:wrap;gap:var(--space-2);padding:var(--space-3) var(--space-4)}
+    .protocol-compare-strip:empty{display:none}
+    .protocol-compare-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);padding:0 var(--space-4) var(--space-4)}
+    .compare-col{min-width:0;border:1px solid var(--line);background:var(--paper)}
+    .compare-col h4{margin:0;padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
+    .compare-steps{max-height:18rem;margin:0;padding:0;overflow:auto;list-style:none}
+    .compare-steps>li+li{border-top:1px solid var(--line)}
+    .compare-step{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-1) var(--space-2);width:100%;min-height:var(--target-desk);margin:0;padding:var(--space-3);border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+    .compare-step:hover{background:var(--bench)}
+    .compare-step[aria-current="true"]{box-shadow:inset 0 0 0 var(--stroke-current) var(--ink)}
+    .compare-step-label{color:var(--ink-muted);font-size:.8125rem;line-height:1.375rem;font-weight:600;white-space:nowrap}
+    .compare-step-text{display:-webkit-box;overflow:hidden;font-size:.9375rem;line-height:1.375rem;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+    .compare-step-badges{grid-column:2;display:flex;flex-wrap:wrap;gap:var(--space-1)}
+    .compare-step-badges:empty{display:none}
+    .compare-source,.compare-fields{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-3)}
+    .compare-page{display:flex;flex-direction:column;gap:var(--space-1)}
+    .compare-page-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-3);color:var(--ink-muted);font-size:.8125rem}
+    .compare-page-link{color:var(--ink);font-weight:600}
+    .compare-line{margin:0;padding:var(--space-1) var(--space-2);color:var(--ink);font-size:.9375rem;line-height:1.5rem;white-space:pre-wrap;overflow-wrap:anywhere}
+    .compare-line.is-linked{background:var(--bench);outline:var(--stroke-state) solid var(--ink);outline-offset:calc(-1 * var(--stroke-state))}
+    .compare-line-next{margin:0;padding:0 var(--space-2);color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .compare-fields-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2);color:var(--ink);font-size:1.125rem;line-height:1.625rem}
+    .compare-fields-head span{color:var(--ink-muted);font-size:.875rem}
+    .compare-action{display:flex;flex-direction:column;gap:var(--space-1);padding-top:var(--space-2);border-top:1px solid var(--line)}
+    .compare-field{display:grid;grid-template-columns:5.5rem minmax(0,1fr) auto;gap:var(--space-3);align-items:start;min-height:32px}
+    .compare-field-where{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-1)}
+    .compare-field-key{color:var(--ink-muted);font-size:.8125rem;line-height:1.5rem;font-weight:600}
+    .compare-field-value{color:var(--ink);font-size:.9375rem;line-height:1.5rem;font-weight:600;overflow-wrap:anywhere}
+    .compare-field.is-missing .compare-field-value{color:var(--ink-muted);font-weight:400}
+    .compare-empty{margin:0;padding:var(--space-3);color:var(--ink-muted);font-size:.9375rem;line-height:1.5rem}
+    .protocol-compare-more{margin:0;padding:var(--space-3) var(--space-4) var(--space-2);border-top:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;font-weight:600}
+    .protocol-compare>.protocol-review-content{max-height:none;padding:0 var(--space-4) var(--space-4)}
+    .protocol-compare>.protocol-review-content:empty{display:none}
+    @media (min-width:1024px){
+     .protocol-compare-grid{grid-template-columns:15rem minmax(0,1fr) minmax(0,1fr);align-items:start}
+     .compare-steps{max-height:32rem}
+    }
+    @media (max-width:479px){.compare-field{grid-template-columns:minmax(0,1fr) auto}.compare-field-key{grid-column:1/-1}}
+    /* Lane UI2 decision 4 (2026-10-13): the 실험 후 view after the drafts' P4
+       and M6. The record comes first: its head (how it ended, the source's
+       badge, who ran it), the counts of the values, the first value not yet
+       confirmed with 64px buttons, the values by step, and 보고서 만들기;
+       the conversation stands beside it on a wide screen (under it on a
+       phone) and the setup for the next experiment moves below. There is no
+       approval and no rejection. */
+    .ui-badge[data-kind="provisional"]{border:var(--stroke-state) dashed var(--pending);background:var(--paper);color:var(--pending)}
+    .after-head{display:none}
+    body[data-view="after"] .after-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
+    .after-title{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
+    .after-experimenter{color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    body[data-view="after"] .shell{grid-template-areas:"work chat" "setup setup"}
+    body[data-view="after"] #protocol-library,body[data-view="after"] #protocol-compare,body[data-view="after"] #protocol-start-summary,body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
+    body[data-view="after"] .procedure-card .run-left,body[data-view="after"] .spoken-summary,body[data-view="after"] .voice-command-hint,body[data-view="after"] .workflow-details-rows,body[data-view="after"] .task-body-right{display:none}
+    body[data-view="after"] .procedure-card{padding:var(--space-6)}
+    body[data-view="after"] .task-body-split{display:block;margin-top:0}
+    body[data-view="after"] .procedure-report{padding:0;border:0;background:none}
+    body[data-view="after"] .procedure-report #last-report-id{font-size:1.125rem;line-height:1.625rem}
+    .report-review-checklist{gap:var(--space-3)}
+    .report-review-checklist>b{color:var(--ink);font-size:1rem}
+    .report-review-summary{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-4);padding:var(--space-3) var(--space-4);border:1px solid var(--line);background:var(--paper);color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .report-review-count b{margin-left:var(--space-1);color:var(--ink);font-size:1.125rem}
+    .report-pending{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:var(--stroke-state) dashed var(--pending);background:var(--pending-soft)}
+    .report-pending-head{color:var(--pending);font-size:1rem}
+    .report-pending .report-review-row{border:0;padding:0;background:none}
+    .report-pending .report-review-text{color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
+    .report-pending .report-review-actions button{min-height:var(--target-run);padding:0 var(--space-6);font-size:1.125rem}
+    .report-pending .report-review-actions button:first-child{border-color:var(--ink);background:var(--ink);color:var(--on-ink)}
+    .report-review-step{display:flex;flex-direction:column;border:1px solid var(--line);background:var(--paper)}
+    .report-review-step h4{margin:0;padding:var(--space-3) var(--space-4) 0;color:var(--ink);font-size:1rem;line-height:1.5rem}
+    .report-review-checklist .report-review-row{display:grid;grid-template-columns:3.5rem minmax(0,1fr) auto;grid-template-areas:"time text tag" "time history history" "time actions actions";gap:var(--space-1) var(--space-3);align-items:start;padding:var(--space-3) var(--space-4)}
+    .report-review-step .report-review-row+.report-review-row{border-top:1px solid var(--line)}
+    .report-review-step .report-review-row[data-confirmed="false"]{outline:var(--stroke-state) dashed var(--pending);outline-offset:calc(-1 * var(--stroke-state))}
+    .report-review-time{grid-area:time;color:var(--ink-muted);font-size:.8125rem;line-height:1.5rem;font-weight:600;font-variant-numeric:tabular-nums}
+    .report-review-checklist .report-review-row span.report-review-text{grid-area:text;flex:none;color:var(--ink);font-size:.9375rem;line-height:1.5rem;font-weight:600}
+    .report-review-checklist .report-review-row[data-confirmed="true"] span.report-review-text{color:var(--ink)}
+    .report-review-checklist .report-review-row span.report-review-history{grid-area:history;flex:none;color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem}
+    .report-review-row>.ui-badge{grid-area:tag;flex:none}
+    .report-review-actions{grid-area:actions;display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+    .report-review-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
+    .report-review-actions input{min-height:var(--target-desk);min-width:0;flex:1 1 12rem;padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);font:inherit}
+    .report-actions:not(:has(a[aria-disabled="false"])){display:none}
+    .report-actions a.report-make{border-color:var(--ink);background:var(--ink);color:var(--on-ink);font-size:.9375rem}
+    body[data-view="after"] .report-actions{margin-top:var(--space-4)}
+    body[data-view="after"] .report-actions a.report-make{min-height:var(--target-run);padding:0 var(--space-8);font-size:1.125rem}
+    @media (max-width:980px){body[data-view="after"] .shell{grid-template-areas:"work" "chat" "setup"}}
+    @media (max-width:719px){
+     body[data-view="after"] .procedure-card{padding:var(--space-4)}
+     .report-pending .report-review-actions button,body[data-view="after"] .report-actions a.report-make{flex:1 1 auto;justify-content:center}
+    }
+    /* Lane UI2 decision 5 (2026-10-13): the guide to putting VoineyLab on the home screen, folded in the top bar. */
+    .topbar-side{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-3);min-width:0}
+    .install-guide{position:relative;color:var(--ink);font-size:.875rem}
+    .install-guide[hidden]{display:none}
+    .install-guide>summary{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);font-weight:600;cursor:pointer}
+    .install-guide-body{position:absolute;right:0;z-index:120;width:min(22rem,calc(100vw - 2rem));margin-top:var(--space-2);padding:var(--space-4);border:1px solid var(--line-strong);background:var(--paper);box-shadow:0 8px 24px rgba(28,28,26,.18);line-height:1.5}
+    .install-guide-body ul{margin:var(--space-2) 0;padding-left:1.1rem}
+    .install-guide-body li{margin:var(--space-1) 0}
+    .install-guide-body b{display:block}
+    .install-guide-body p{margin:var(--space-2) 0 0;color:var(--ink-muted)}
+    .install-guide-body .install-secure{color:var(--danger);font-weight:600}
+    .install-guide-body .install-secure[hidden],#install-app[hidden]{display:none}
+    #install-app{min-height:var(--target-desk);padding:0 var(--space-4);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font:inherit;font-weight:600;cursor:pointer}
+    @media (max-width:520px){.topbar{flex-wrap:wrap}.install-guide-body{right:auto;left:0}}
+    /* Lane UI2 decision 6 (2026-10-13): two of lane UI0's open points the
+       screen settles alone. On the run screen a light line runs above the
+       dark bottom bar, so an ended timer's dark panel no longer melts into
+       it (UI0 9.6). Before and after the experiment a phone's top rail is one
+       line of words and one row of buttons: the run's step, timer and basis
+       placeholders wait for the run screen, and each button keeps its name
+       on one line (UI0 9.7). */
+    body[data-view="during"] .voice-console{box-shadow:0 -4px 0 var(--paper)}
+    @media (orientation:landscape){body[data-view="during"] .rail-right{box-shadow:0 -4px 0 var(--paper)}}
+    @media (max-width:720px){
+     body:not([data-view="during"]) .sticky-rail{flex-wrap:wrap;gap:var(--space-2);padding:var(--space-2) var(--space-4)}
+     body:not([data-view="during"]) .rail-left{flex:1 1 100%;gap:var(--space-1) var(--space-3)}
+     body:not([data-view="during"]) #rail-pdf-title{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+     body:not([data-view="during"]) .rail-divider,body:not([data-view="during"]) #rail-timer-badge,body:not([data-view="during"]) #rail-step-badge,body:not([data-view="during"]) .rail-basis-badge{display:none}
+     body:not([data-view="during"]) .rail-right{flex-wrap:nowrap;gap:var(--space-2)}
+     body:not([data-view="during"]) .rail-right button{flex:1 1 auto;min-width:0;min-height:44px;padding:0 var(--space-1);font-size:.8125rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    }
+    body[data-view="during"] #protocol-compare{display:none}
+    body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
+    body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
 </head>
@@ -352,10 +613,26 @@
 
   <header class="topbar">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">VW</div>
-      <div>Voiney Lab<small>Lab Copilot · 지능형 실험 보조</small></div>
+      <div class="brand-mark" aria-hidden="true">VL</div>
+      <div>VoineyLab<small>Lab Copilot · 지능형 실험 보조</small></div>
     </div>
-    <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
+    <div class="topbar-side">
+      <!-- Lane UI2 decision 5: how to put VoineyLab on the home screen. The browser's own install offer, where it gives one, is a button here; otherwise the steps for each kind of device. -->
+      <details id="install-guide" class="install-guide">
+        <summary>홈 화면에 추가</summary>
+        <div class="install-guide-body">
+          <button id="install-app" type="button" hidden>VoineyLab 설치</button>
+          <p id="install-secure" class="install-secure" role="status" hidden></p>
+          <ul>
+            <li><b>아이폰·아이패드 (Safari)</b> 공유 버튼 → “홈 화면에 추가”</li>
+            <li><b>안드로이드 (Chrome)</b> 메뉴(⋮) → “홈 화면에 추가” 또는 “앱 설치”</li>
+            <li><b>PC (Chrome·Edge)</b> 주소창 오른쪽의 설치 아이콘</li>
+          </ul>
+          <p>홈 화면에서 열면 주소창 없이 화면 전체를 씁니다. 가로·세로 모두 됩니다. 서버에 연결되어 있어야 쓸 수 있습니다(오프라인 없음).</p>
+        </div>
+      </details>
+      <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
+    </div>
   </header>
 
   <main id="researcher-workspace" class="shell">
@@ -367,60 +644,152 @@
           <p class="lede">프로토콜과 원문의 안전 주의를 확인한 뒤, 단계 안내·관찰 기록·안전 확인을 말로 하세요.</p>
         </div>
         <div class="voice-actions">
-          <div class="voice-console" aria-live="polite">
-            <div class="pulse" aria-hidden="true">●</div>
-            <div class="voice-console-body">
-              <div id="state">준비</div>
-              <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
-              <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
-              <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
-              <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
-              <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
-                <span id="mic-recovery-text"></span>
-                <button id="mic-reconnect" type="button">마이크 다시 연결</button>
+          <!-- Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1 -- every protocol with its state in words, the upload box beside it and what is still being processed under it, and the picked protocol's analysis line and buttons right by the list. -->
+          <section id="protocol-library" class="protocol-library" aria-labelledby="protocol-library-title">
+            <div class="library-head">
+              <h2 id="protocol-library-title">프로토콜</h2>
+              <small id="protocol-library-count" class="library-count" role="status"></small>
+            </div>
+            <div class="library-grid">
+              <div class="library-main">
+                <div class="protocol-list-head" aria-hidden="true"><span>이름</span><span>상태</span><span>단계</span><span>올린 날짜</span></div>
+                <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
+                <!-- Lane UI2 decision 3 (2026-10-13): the picked protocol's box -- its analysis line and buttons, always open by the list; the long result moved to 원문 대조 보기 below. -->
+                <section id="protocol-review-panel" class="protocol-review" aria-labelledby="protocol-review-title" hidden>
+                  <h3 id="protocol-review-title" class="protocol-review-title">고른 프로토콜의 분석</h3>
+                  <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
+                  <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
+                  <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
+                  <div class="protocol-review-actions">
+                    <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
+                    <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
+                    <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
+                  </div>
+                </section>
               </div>
-              <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
-              <div id="voice-calibration" class="voice-calibration" role="status" hidden>
-                <div id="voice-calibration-title" class="voice-calibration-title">목소리 맞추기 · 아래 문장을 평소 목소리로 읽어 주세요</div>
-                <p id="voice-calibration-sentence" class="voice-calibration-sentence"></p>
-                <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
+              <div class="library-side">
+                <div class="setup-col-left">
+                  <div class="protocol-register">
+                    <span class="control-label">새 프로토콜 PDF 등록</span>
+                    <div class="custom-file-wrapper">
+                      <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
+                      <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
+                      <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
+                    </div>
+                    <small id="protocol-upload-status" role="status"></small>
+                    <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
+                  </div>
+                </div>
+                <section id="protocol-queue" class="protocol-queue" aria-labelledby="protocol-queue-title" hidden>
+                  <h3 id="protocol-queue-title">처리 중</h3>
+                  <ul id="protocol-queue-list" class="protocol-queue-list"></ul>
+                </section>
               </div>
             </div>
-            <div class="controls">
-              <button id="start" type="button" disabled>새 실험 시작</button>
-              <button id="stop" type="button" disabled>종료</button>
+          </section>
+          <!-- Lane UI2 decision 1: the drafts' M1 -- the check before the start beside the voice console, the protocol's basis card and the microphone, which is this browser's own. -->
+          <div class="prestart">
+            <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
+              <!-- Lane UI2 decision 2 (2026-10-13): one card -- the badges in place of the draft's approved-version one (the source PDF, the day it was uploaded, the analysis state; the server's "다시 분석 권장" line), the safety statements first, then the step timers, the notices and the lines to check, and the start button. -->
+              <div class="start-card-head">
+                <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
+                <span id="protocol-start-basis" class="ui-badge" data-kind="done" hidden></span>
+                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
+                <span id="protocol-start-outdated" class="ui-badge" data-kind="warning" role="status" hidden></span>
+              </div>
+              <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
+              <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
+              <div id="protocol-start-body">
+                <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
+                <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+                <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
+                <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
+                <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
+                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
+                <p id="protocol-start-cleared" class="protocol-review-status start-check-line" hidden></p>
+                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
+                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
+                <div class="protocol-review-actions">
+                  <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
+                </div>
+              </div>
+            </section>
+            <div class="prestart-side">
+              <div class="voice-console" aria-live="polite">
+                <div class="pulse" aria-hidden="true">●</div>
+                <div class="voice-console-body">
+                  <div id="state">준비</div>
+                  <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
+                  <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
+                  <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
+                  <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
+                  <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
+                    <span id="mic-recovery-text"></span>
+                    <button id="mic-reconnect" type="button">마이크 다시 연결</button>
+                  </div>
+                  <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
+                  <div id="voice-calibration" class="voice-calibration" role="status" hidden>
+                    <div id="voice-calibration-title" class="voice-calibration-title">목소리 맞추기 · 아래 문장을 평소 목소리로 읽어 주세요</div>
+                    <p id="voice-calibration-sentence" class="voice-calibration-sentence"></p>
+                    <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
+                  </div>
+                </div>
+                <div class="controls">
+                  <button id="start" type="button" disabled>새 실험 시작</button>
+                  <button id="stop" type="button" disabled>종료</button>
+                </div>
+              </div>
+              <section class="experiment-context-card" aria-labelledby="experiment-context-title">
+                <div class="experiment-context-head">
+                  <div>
+                    <span class="experiment-context-kicker">시작 전 확인</span>
+                    <h2 id="experiment-context-title">이 실험의 기준 정보</h2>
+                  </div>
+                  <span id="experiment-context-readiness" class="experiment-context-readiness">프로토콜 선택 필요</span>
+                </div>
+                <div class="experiment-context-grid">
+                  <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
+                  <div><span>분석 상태</span><strong id="experiment-context-version">—</strong></div>
+                  <div><span>실험자</span><strong id="experiment-context-experimenter">—</strong></div>
+                  <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
+                  <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">분석을 통과한 프로토콜 선택</strong></div>
+                </div>
+                <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
+              </section>
+              <section id="mic-check" class="mic-check" aria-labelledby="mic-check-title">
+                <h3 id="mic-check-title">마이크 확인</h3>
+                <p class="mic-check-state"><span id="mic-check-state">마이크 꺼짐</span></p>
+                <p id="mic-check-hint" class="mic-check-line">실험을 시작하면 켜집니다</p>
+                <p id="mic-check-device" class="mic-check-line">기본 마이크 (시스템 설정)</p>
+                <p id="mic-check-voice" class="mic-check-line"></p>
+                <button id="mic-check-settings" type="button" class="mic-check-settings" aria-controls="mic-device">마이크 설정</button>
+              </section>
             </div>
           </div>
-          <section class="experiment-context-card" aria-labelledby="experiment-context-title">
-            <div class="experiment-context-head">
-              <div>
-                <span class="experiment-context-kicker">시작 전 확인</span>
-                <h2 id="experiment-context-title">이 실험의 기준 정보</h2>
+          <!-- Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only -- the steps the analysis took from the source, the source's own lines it read them from, page by page, and what it took from each (amounts and conditions, timers, warnings, values the source does not give) with the page; under it the rest of the analysis result. Nothing here can be changed. -->
+          <details id="protocol-compare" class="protocol-compare" hidden>
+            <summary><span class="protocol-compare-name">원문 대조 보기</span><span id="protocol-compare-summary" class="protocol-compare-summary"></span></summary>
+            <p id="protocol-compare-path" class="protocol-compare-path"></p>
+            <div id="protocol-compare-strip" class="protocol-compare-strip"></div>
+            <div class="protocol-compare-grid">
+              <div class="compare-col compare-steps-col">
+                <h4 id="protocol-compare-steps-title">단계</h4>
+                <ol id="protocol-compare-steps" class="compare-steps" aria-labelledby="protocol-compare-steps-title"></ol>
               </div>
-              <span id="experiment-context-readiness" class="experiment-context-readiness">프로토콜 선택 필요</span>
+              <section class="compare-col" aria-labelledby="protocol-compare-source-title">
+                <h4 id="protocol-compare-source-title">원문</h4>
+                <div id="protocol-compare-source" class="compare-source"></div>
+              </section>
+              <section class="compare-col" aria-labelledby="protocol-compare-fields-title">
+                <h4 id="protocol-compare-fields-title">분석이 뽑은 단계 · 수치 · 출처</h4>
+                <div id="protocol-compare-fields" class="compare-fields"></div>
+              </section>
             </div>
-            <div class="experiment-context-grid">
-              <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
-              <div><span>분석 상태</span><strong id="experiment-context-version">—</strong></div>
-              <div><span>실험자</span><strong id="experiment-context-experimenter">—</strong></div>
-              <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
-              <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">분석을 통과한 프로토콜 선택</strong></div>
-            </div>
-            <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
-          </section>
+            <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
+            <div id="protocol-review-content" class="protocol-review-content"></div>
+            <div id="protocol-blockers" class="protocol-review-content"></div>
+          </details>
           <div class="setup-grid">
-            <div class="setup-col-left">
-              <div class="protocol-register">
-                <span class="control-label">새 프로토콜 PDF 등록</span>
-                <div class="custom-file-wrapper">
-                  <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
-                  <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
-                  <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
-                </div>
-                <small id="protocol-upload-status" role="status"></small>
-                <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
-              </div>
-            </div>
             <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
             <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
               <div class="settings-sheet-head">
@@ -487,40 +856,6 @@
                 </fieldset>
               </div>
             </section>
-            <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
-              <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
-              <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
-              <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
-              <div id="protocol-start-body">
-                <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
-                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
-                <p id="protocol-start-outdated" class="protocol-review-status" role="status" hidden></p>
-                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
-                <p id="protocol-start-cleared" class="protocol-review-status" hidden></p>
-                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
-                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons" hidden></div>
-                <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
-                <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
-                <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
-                <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
-                <div class="protocol-review-actions">
-                  <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
-                </div>
-              </div>
-            </section>
-            <details id="protocol-review-panel" class="protocol-review" hidden open>
-              <summary>올린 PDF 분석 결과 · 원문 근거와 단계</summary>
-              <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
-              <div id="protocol-review-content" class="protocol-review-content"></div>
-              <div id="protocol-blockers" class="protocol-review-content"></div>
-              <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
-              <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
-              <div class="protocol-review-actions">
-                <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
-                <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
-                <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
-              </div>
-            </details>
             <details class="dev-diagnostics" style="grid-column:1/-1;margin-top:.35rem;">
               <summary>개발 상세 정보</summary>
               <div class="dev-chips">
@@ -592,6 +927,13 @@
               <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
             </div>
             <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
+              <!-- Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, after the drafts' P4 and M6 -- how the experiment ended (the server's experiment.ended), the badge of the source it followed and who ran it. -->
+              <div class="after-head">
+                <h2 class="after-title">실험 기록 검토</h2>
+                <span id="after-state" class="ui-badge" data-kind="done" hidden></span>
+                <span id="after-basis" class="ui-badge" data-kind="quiet" hidden></span>
+                <span id="after-experimenter" class="after-experimenter"></span>
+              </div>
               <div class="label" id="experiment-report-title">실험 기록</div>
               <strong id="last-report-id">아직 실험 기록 없음</strong>
               <span id="last-report-dev"></span>
@@ -599,16 +941,17 @@
               <div id="report-prose-state" role="status"></div>
               <button id="report-prose-again" type="button" hidden>보고서 문장 다시 만들기</button>
               <div id="report-review-checklist" class="report-review-checklist" aria-label="보고서에 넣을 값 확인" hidden></div>
+              <!-- Lane UI2 decision 4: 보고서 만들기 -- the Word report, as before -- out of the fold once a record exists; there is no approval. -->
+              <div class="report-actions">
+                <a id="export-report-docx" class="report-make" aria-disabled="true">보고서 만들기 (Word)</a>
+                <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
+                <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
+                <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
+              </div>
               <details id="procedure-report-details">
                 <summary>기록 보기 · 이상 사항 · 내보내기</summary>
                 <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
                 <div id="experiment-report-events" class="report-event-ledger" aria-label="이 세션의 실험 기록 이벤트"></div>
-                <div class="report-actions">
-                  <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
-                  <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
-                  <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
-                  <a id="export-report-docx" aria-disabled="true">보고서(Word) 받기</a>
-                </div>
                 <div id="pending-report" hidden></div>
               </details>
             </aside>
@@ -821,8 +1164,22 @@ function showExperimentEnded(message){
  const status=message?.status==="completed"?"모든 단계를 마쳐 실험이 끝났습니다":"실험이 종료되었습니다";
  const report=message?.report==="saved"?" · 실험 기록 저장됨":message?.report==="failed"?" · 실험 기록을 저장하지 못했습니다":"";
  setText("procedure-status",`${status}${report}`);
+ renderAfterHead(message);
  renderScreenView();
 }
+// Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, set once at the
+// server's end and kept until a new session: how it ended, the badge of the
+// source the experiment followed (the server's basis and analysis state at
+// the end) and who ran it.
+function renderAfterHead(message){
+ const state=$("after-state");if(!state)return false;
+ state.textContent=message?.status==="completed"?"실험 완료":"실험 종료";state.hidden=false;
+ const basis=$("after-basis"),source=curatedScreenFields?.source_basis,attached=curatedProtocolState?.attached===true;
+ if(basis){const day=uploadedDay(source?.uploaded_at);basis.textContent=attached&&source&&typeof source==="object"?[nonemptyText(source.filename)?source.filename:"파일 이름 기록 없음",day?`${day} 올림`:"올린 날짜 기록 없음",curatedProtocolState.development_only?"개발용 큐레이션 분석":"분석 통과"].join(" · "):"";basis.hidden=!basis.textContent;}
+ setText("after-experimenter",`실험자 ${experimenterLabel()}`);
+ return true;
+}
+function clearAfterHead(){for(const id of ["after-state","after-basis"]){const badge=$(id);if(badge){badge.textContent="";badge.hidden=true;}}setText("after-experimenter","");}
 function showWorkflowControlRefused(message){
  const text=message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
  setText("status",text);appendDevCodeDetails($("status"),[["refused_action",typeof message?.action==="string"?message.action:null],["reason",typeof message?.reason==="string"?message.reason:null]]);
@@ -910,6 +1267,7 @@ function renderExperimentContext(){
  setText("experiment-context-readiness",entry?catalogStatus(entry).label:"프로토콜 선택 필요");
  renderResumeDisclosure();
  foldStartSummary();
+ syncProtocolList();
  renderRunView();
 }
 // Lane UI0 decision 1 (2026-10-12): one page and three views -- 실험 전,
@@ -968,6 +1326,7 @@ function renderRunStatus(){
  const primary=$("procedure-primary"),length=String(primary?.textContent||"").length;
  if(primary?.dataset)primary.dataset.length=length>120?"long":length>60?"medium":"short";
  const voice=$("state");if(voice?.dataset)voice.dataset.voiceState=visibleState;
+ renderMicCheck();
 }
 // The server's step timer, read as the rail and the timer row read it:
 // 도는 중, 1분 남음 (the server's deadline a minute or less away), 끝남 · 지남,
@@ -1178,7 +1537,9 @@ function startWorkflowTimer(){
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
 function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${experimentReportLabel(report,reports)} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status],["report_id",report.report_id]]);container.appendChild(row);}return true;}
-function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const amended=event.amended&&typeof event.amended==="object"?event.amended:null;const wording=amended&&typeof amended.text==="string"&&amended.text?amended.text:event.user_wording;const bits=[event.created_at,wording].filter(item=>typeof item==="string"&&item.trim());if(amended&&typeof amended.status==="string")bits.push(amended.status==="정정됨"&&typeof event.user_wording==="string"?`정정됨 (처음: ${event.user_wording})`:amended.status);if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
+// Lane UI2 decision 4: when each record was made, by its event key, for the values the review lists.
+const reportEventTimes=new Map();
+function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();reportEventTimes.clear();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;if(typeof event.event_key==="string"&&typeof event.created_at==="string")reportEventTimes.set(event.event_key,event.created_at);const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const amended=event.amended&&typeof event.amended==="object"?event.amended:null;const wording=amended&&typeof amended.text==="string"&&amended.text?amended.text:event.user_wording;const bits=[event.created_at,wording].filter(item=>typeof item==="string"&&item.trim());if(amended&&typeof amended.status==="string")bits.push(amended.status==="정정됨"&&typeof event.user_wording==="string"?`정정됨 (처음: ${event.user_wording})`:amended.status);if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 // Lane DI (2026-10-08): the page sends no identity of its own choosing; the server knows who is at the bench.
 function workspaceFetch(url,options={}){return fetch(url,options);}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
@@ -1309,7 +1670,42 @@ function stopReportProsePolling(){if(reportProseHandle)clearTimeout(reportProseH
 // Lane N, decision 3: the report's values once the experiment ended, each
 // confirmed (✓ 확인) or corrected and confirmed (고치기) on the screen; the
 // voice review fills the same list. Text only (textContent).
-function renderReportReview(reportId,items,status){const box=$("report-review-checklist");if(!box)return false;box.replaceChildren();const list=Array.isArray(items)?items.filter(item=>item&&typeof item.item_id==="string"):[];if(!list.length||typeof reportId!=="string"||status==="in_progress"){box.hidden=true;return false;}box.hidden=false;const open=list.filter(item=>!item.confirmed).length;const head=document.createElement("b");head.textContent=open?`보고서에 넣을 값 확인 · 남은 ${open}개`:`보고서에 넣을 값 ${list.length}개 · 모두 확인함`;box.appendChild(head);for(const item of list){const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";const text=document.createElement("span");text.textContent=`${item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}${item.corrected?` · 정정됨 (처음: ${typeof item.original==="string"?item.original:""})`:""}${item.confirmed?" · ✓ 실험자 확인":""}`;row.appendChild(text);if(!item.confirmed){const ok=document.createElement("button");ok.type="button";ok.textContent="✓ 확인";ok.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"confirm"});});row.appendChild(ok);}const fix=document.createElement("button");fix.type="button";fix.textContent="고치기";fix.addEventListener("click",()=>{const input=document.createElement("input");input.type="text";input.maxLength=800;input.value=typeof item.text==="string"?item.text:"";input.setAttribute("aria-label","고친 값");const save=document.createElement("button");save.type="button";save.textContent="고쳐서 확인";save.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"correct",text:input.value});});fix.replaceWith(input,save);input.focus();});row.appendChild(fix);box.appendChild(row);}return true;}
+// Lane UI2 decision 4 (2026-10-13): the values by step as the drafts' P4
+// draws them -- the time each was recorded, its words, a correction with the
+// first words, and whether the experimenter confirmed it -- with the counts
+// of this same list above them (the server sends no summary of its own) and
+// the first value not yet confirmed as the M6 card, its buttons 64px. Each
+// button asks the server, as before; there is no approval and no rejection.
+function renderReportReview(reportId,items,status){
+ const box=$("report-review-checklist");if(!box)return false;box.replaceChildren();
+ const list=Array.isArray(items)?items.filter(item=>item&&typeof item.item_id==="string"):[];
+ if(!list.length||typeof reportId!=="string"||status==="in_progress"){box.hidden=true;return false;}
+ box.hidden=false;const open=list.filter(item=>!item.confirmed).length;
+ const head=document.createElement("b");head.textContent=open?`보고서에 넣을 값 확인 · 남은 ${open}개`:`보고서에 넣을 값 ${list.length}개 · 모두 확인함`;box.appendChild(head);
+ box.appendChild(reportReviewSummary(list));
+ const pending=list.find(item=>!item.confirmed);
+ if(pending){const card=document.createElement("div");card.className="report-pending";const title=document.createElement("b");title.className="report-pending-head";title.textContent=`미확인 기록 ${open}건`;card.appendChild(title);card.appendChild(reportReviewRow(reportId,pending,{withStep:true}));box.appendChild(card);}
+ const steps=new Map();for(const item of list){const label=typeof item.step_label==="string"?item.step_label:"";if(!steps.has(label))steps.set(label,[]);steps.get(label).push(item);}
+ for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item));box.appendChild(group);}
+ return true;
+}
+function reportReviewSummary(list){
+ const summary=document.createElement("div");summary.className="report-review-summary";
+ for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length]]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
+ return summary;
+}
+function reportReviewRow(reportId,item,{withStep=false}={}){
+ const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
+ const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
+ const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
+ const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;row.appendChild(text);
+ if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
+ row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
+ const actions=document.createElement("span");actions.className="report-review-actions";
+ if(!item.confirmed){const ok=document.createElement("button");ok.type="button";ok.textContent="✓ 확인";ok.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"confirm"});});actions.appendChild(ok);}
+ const fix=document.createElement("button");fix.type="button";fix.textContent="고치기";fix.addEventListener("click",()=>{const input=document.createElement("input");input.type="text";input.maxLength=800;input.value=typeof item.text==="string"?item.text:"";input.setAttribute("aria-label","고친 값");const save=document.createElement("button");save.type="button";save.textContent="고쳐서 확인";save.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"correct",text:input.value});});fix.replaceWith(input,save);input.focus();});actions.appendChild(fix);
+ row.appendChild(actions);return row;
+}
 async function answerReportReview(reportId,itemId,body){try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/review/${encodeURIComponent(itemId)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error("report review");if(reportId!==lastReportId)return false;renderReportReview(reportId,data.items,lastReportStatus);void refreshReportProse(reportId);return true;}catch(_error){if(reportId===lastReportId&&$("report-prose-state"))$("report-prose-state").textContent="값 확인을 저장하지 못했습니다. 다시 시도해 주세요.";return false;}}
 async function refreshReportProse(reportId){stopReportProsePolling();const target=$("report-prose-state"),again=$("report-prose-again");if(!target||typeof reportId!=="string")return false;try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("report prose status");if(reportId!==lastReportId)return false;target.textContent=typeof data.label==="string"?data.label:"";if(again){again.hidden=data.state!=="ready";again.dataset.reportId=reportId;}if(data.state==="preparing")reportProseHandle=setTimeout(()=>{void refreshReportProse(reportId);},3000);return true;}catch(_error){if(reportId===lastReportId)target.textContent="보고서 준비 상태를 확인하지 못했습니다.";return false;}}
 async function regenerateReportProse(){const button=$("report-prose-again"),reportId=button?.dataset?.reportId;if(!reportId)return false;button.disabled=true;try{await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{method:"POST"});}catch(_error){}finally{button.disabled=false;}return refreshReportProse(reportId);}
@@ -1355,6 +1751,99 @@ function catalogStatus(entry){const status=catalogStatusWord(entry);const outdat
 function catalogStatusWord(entry){if(!entry)return{kind:"none",label:"프로토콜을 선택해 주세요."};if(entry.available_for_execution===true)return{kind:"ready",label:entry.development_only?"분석 통과 · 개발용 큐레이션 분석 · 실행 가능":"분석 통과 · 실행 가능"};if(entry.execution_blocked_reason==="usage_scope_not_development")return{kind:"review",label:"운영 범위에서는 개발용 절차 실행 불가"};if(entry.analysis_status==="ocr_required")return{kind:"ocr",label:"OCR 필요 · 실행 불가"};if(entry.analysis_status==="ocr_in_progress")return{kind:"ocr",label:"OCR 추출 중 · 실행 불가"};if(entry.analysis_status==="ocr_review_required")return{kind:"ocr",label:"OCR 글 확인 대기 · 실행 불가"};if(entry.analysis_status==="ocr_rejected")return{kind:"failed",label:"OCR 결과 거절됨 · 재추출 필요 · 실행 불가"};if(entry.analysis_status==="ocr_failed")return{kind:"failed",label:"OCR 추출 실패 · 실행 불가"};if(entry.lifecycle_state==="analysis_pending")return{kind:"analysis",label:"분석 대기 · 원문 보존됨"};if(entry.lifecycle_state==="analyzing")return{kind:"analysis",label:"문서 처리 중 · 실행 불가"};if(["analysis_failed","chunk_analysis_failed"].includes(entry.analysis_status))return{kind:"failed",label:"분석 실패 · 실행 불가"};if(entry.analysis_status==="merge_conflict")return{kind:"failed",label:"병합 충돌 · 실행 불가"};if(["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(entry.analysis_status))return{kind:"analysis",label:"대형 문서 분석 진행 중 · 실행 불가"};if(entry.analysis_status==="chunked_analysis_required")return{kind:"deferred",label:"대형 문서 분석 요청 대기 · 실행 불가"};if(entry.analysis_status==="structured_analysis_ready")return{kind:"analysis",label:"구조화 분석 요청 대기 · 실행 불가"};if(entry.lifecycle_state==="blocked"||(Array.isArray(entry.execution_blocker_codes)&&entry.execution_blocker_codes.length))return{kind:"failed",label:"실행을 막는 사유 있음 · 실행 불가"};return{kind:"review",label:"분석 전 · 실행 불가"};}
 function renderSelectedProtocolContext(){const entry=protocolCatalog.get($("protocol-id")?.value),status=catalogStatus(entry);$("protocol-readiness").textContent=status.label;$("protocol-revision").textContent=entry?.revision_id||"—";renderState(visibleState);}
 function renderCatalogAnalysisProgress(entries){const target=Array.isArray(entries)?entries.find(item=>item?.analysis_run&&Number.isInteger(item.analysis_run.total_chunks)&&item.analysis_run.total_chunks>0):null,output=$("protocol-analysis-progress");if(!output)return;if(!target){output.textContent="대형 문서 분석 상태 없음";return;}const run=target.analysis_run,total=run.total_chunks,completed=Number.isInteger(run.completed_chunks)?run.completed_chunks:0,failed=Number.isInteger(run.failed_chunks)?run.failed_chunks:0,pending=Number.isInteger(run.pending_chunks)?run.pending_chunks:Math.max(0,total-completed-failed),ranges=Array.isArray(run.chunks)?run.chunks.filter(chunk=>Number.isInteger(chunk?.source_page_start)&&Number.isInteger(chunk?.source_page_end)&&typeof chunk?.status==="string").map(chunk=>`p.${chunk.source_page_start}-${chunk.source_page_end} ${chunk.status}`).join(" · "):"";output.textContent=`대형 문서 분석 · ${run.state} · 전체 ${total} / 완료 ${completed} / 실패 ${failed} / 대기 ${pending}${ranges?` · ${ranges}`:""} · 분석이 끝나기 전 실행 불가`;}
+// Lane UI2 decision 1 (2026-10-13): the protocol list of the 실험 전 view
+// (the drafts' P1 table and M1 picks), drawn from the catalog the server
+// sent. Each row says its state in words -- 분석 통과, 분석 중, 분석 실패, the
+// server's own "다시 분석 권장" line, or the catalog's word for any other
+// state -- with a failure's reason; the row of the protocol the page watches
+// carries the same analysis line as its box, time taken included. A row is
+// picked through the select ("실행할 프로토콜"), the same path as before.
+const PROTOCOL_RUNNING_STATES=new Set(["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"]);
+const PROTOCOL_FAILED_ANALYSIS=new Set(["analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled"]);
+const protocolRowLines=new Map();
+function uiBadge(text,kind=""){const badge=document.createElement("span");badge.className="ui-badge";if(badge.dataset)badge.dataset.kind=kind;badge.textContent=text;return badge;}
+function protocolAnalysisRun(entry){return entry?.analysis_run&&typeof entry.analysis_run==="object"?entry.analysis_run:null;}
+function protocolListBadges(entry){
+ const badges=[],run=protocolAnalysisRun(entry),runGoing=PROTOCOL_RUNNING_STATES.has(run?.state);
+ if(entry?.available_for_execution===true){
+  badges.push({text:"분석 통과",kind:"done"});
+  if(entry.development_only===true)badges.push({text:"개발용 큐레이션 분석",kind:"quiet"});
+  if(run?.reanalysis===true&&runGoing)badges.push({text:"다시 분석 중",kind:"pending"});
+  else if(run?.reanalysis===true&&nonemptyText(run.failure_code))badges.push({text:"다시 분석 실패",kind:"danger"});
+ }else if(PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||runGoing)badges.push({text:"분석 중",kind:"pending"});
+ else if(PROTOCOL_FAILED_ANALYSIS.has(entry?.analysis_status))badges.push({text:"분석 실패",kind:"danger"});
+ else{const status=catalogStatusWord(entry);badges.push({text:status.label.split(" · ")[0],kind:status.kind==="failed"?"danger":"missing"});}
+ if(nonemptyText(entry?.analysis_outdated_ko))badges.push({text:entry.analysis_outdated_ko,kind:"warning"});
+ return badges;
+}
+function protocolRowLine(entry){
+ if(protocolAnalysisNotice?.protocolId===entry?.protocol_id&&nonemptyText(protocolAnalysisNotice.text))return protocolAnalysisBoxLine();
+ const run=protocolAnalysisRun(entry),code=nonemptyText(run?.failure_code)?run.failure_code:null;
+ if(!code||(entry?.available_for_execution===true&&run.reanalysis!==true))return "";
+ return `${run.reanalysis===true?"다시 분석 실패":"분석 실패"} · 이유: ${serverCodeLabel("analysis_failure",code)||protocolUploadErrorMessage(code)}`;
+}
+// What is still being processed, under the upload box: a run going, and a
+// run that failed or waits for a person (OCR to run, a failed analysis).
+function protocolQueueBadge(entry){const badges=protocolListBadges(entry);return badges.find(badge=>badge.kind==="pending"||badge.text==="다시 분석 실패")||(PROTOCOL_FAILED_ANALYSIS.has(entry?.analysis_status)||["ocr_required","ocr_failed","ocr_rejected"].includes(entry?.analysis_status)?badges[0]:null);}
+function protocolRowButton(entry,className){const row=document.createElement("button");row.type="button";row.className=className;if(row.dataset)row.dataset.protocolId=entry.protocol_id;row.addEventListener("click",()=>{pickProtocolFromList(entry.protocol_id);});return row;}
+function protocolRowText(className,text){const span=document.createElement("span");span.className=className;span.textContent=text;return span;}
+function renderProtocolList(){
+ const list=$("protocol-list");if(!list)return 0;
+ const entries=[...protocolCatalog.values()],active=globalThis.document?.activeElement,focused=active?.dataset?.protocolId?{id:active.dataset.protocolId,className:active.className}:null;
+ protocolRowLines.clear();list.replaceChildren();
+ if(!entries.length){const empty=document.createElement("li");empty.className="protocol-list-empty";empty.textContent=$("protocol-id")?.options?.[0]?.textContent==="카탈로그를 불러올 수 없음"?"프로토콜 카탈로그를 불러오지 못했습니다 · 잠시 뒤 새로고침해 주세요.":"아직 올린 프로토콜이 없습니다 · 원문 PDF 를 올리면 여기에 나옵니다.";list.appendChild(empty);}
+ for(const entry of entries){
+  const item=document.createElement("li"),row=protocolRowButton(entry,"protocol-row"),title=document.createElement("span"),badges=document.createElement("span"),line=protocolRowText("protocol-row-line",protocolRowLine(entry));
+  title.className="protocol-row-title";title.append(protocolRowText("protocol-row-name",entry.title),protocolRowText("protocol-row-file",`원문: ${nonemptyText(entry.source_filename)?entry.source_filename:"파일 이름 기록 없음"}`));
+  badges.className="protocol-row-badges";for(const badge of protocolListBadges(entry))badges.appendChild(uiBadge(badge.text,badge.kind));
+  row.append(title,badges,protocolRowText("protocol-row-steps",Number.isInteger(entry.step_count)&&entry.step_count>0?`${entry.step_count}단계`:"—"),protocolRowText("protocol-row-date",uploadedDay(entry.created_at)?`${uploadedDay(entry.created_at)} 올림`:"올린 날짜 기록 없음"),line);
+  item.appendChild(row);list.appendChild(item);protocolRowLines.set(entry.protocol_id,[line]);
+ }
+ const runnable=entries.filter(entry=>entry.available_for_execution===true).length;
+ setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 실행 가능 ${runnable}개`:"");
+ renderProtocolQueue();syncProtocolList();
+ if(focused)for(const host of [list,$("protocol-queue-list")])for(const item of host?.children||[])if(item.firstChild?.dataset?.protocolId===focused.id&&item.firstChild.className===focused.className){item.firstChild.focus?.();return entries.length;}
+ return entries.length;
+}
+function renderProtocolQueue(){
+ const host=$("protocol-queue"),list=$("protocol-queue-list");if(!host||!list)return 0;
+ list.replaceChildren();let shown=0;
+ for(const entry of protocolCatalog.values()){
+  const badge=protocolQueueBadge(entry);if(!badge)continue;
+  const item=document.createElement("li"),row=protocolRowButton(entry,"queue-row"),fallback=catalogStatus(entry).label,line=protocolRowText("queue-row-line",protocolRowLine(entry)||fallback);
+  if(line.dataset)line.dataset.fallback=fallback;
+  row.append(protocolRowText("queue-row-file",nonemptyText(entry.source_filename)?entry.source_filename:entry.title),uiBadge(badge.text,badge.kind),line);
+  item.appendChild(row);list.appendChild(item);shown++;
+  if(protocolRowLines.has(entry.protocol_id))protocolRowLines.get(entry.protocol_id).push(line);else protocolRowLines.set(entry.protocol_id,[line]);
+ }
+ host.hidden=!shown;return shown;
+}
+// The watched run's line changes every second; only its text is rewritten,
+// so a row in focus keeps the focus.
+function updateProtocolRowLines(protocolId){const entry=protocolCatalog.get(protocolId);if(!entry)return false;for(const line of protocolRowLines.get(protocolId)||[])line.textContent=protocolRowLine(entry)||line.dataset?.fallback||"";return true;}
+function syncProtocolList(){
+ const select=$("protocol-id"),picked=select?.value||"",locked=Boolean(select?.disabled);
+ for(const host of [$("protocol-list"),$("protocol-queue-list")])for(const item of host?.children||[]){const row=item.firstChild;if(!row?.dataset?.protocolId)continue;if(row.className==="protocol-row")row.setAttribute?.("aria-current",String(row.dataset.protocolId===picked));setDisabled(row,locked);}
+ return picked;
+}
+function pickProtocolFromList(protocolId){
+ const select=$("protocol-id");if(!select||select.disabled||!protocolCatalog.has(protocolId))return false;
+ if(select.value!==protocolId||currentProtocolReviewId!==protocolId){select.value=protocolId;onProtocolSelectionChanged();}
+ syncProtocolList();return true;
+}
+// Lane UI2 decision 1: the drafts' M1 microphone check, said in words. The
+// microphone is this browser's own and opens when the experiment starts; no
+// level is measured before that.
+function renderMicCheck(){
+ const state=$("mic-check-state");if(!state)return false;
+ const lost=$("mic-recovery")?.hidden===false;
+ state.textContent=lost?"마이크 끊김":micWorkletNode?"마이크 켜짐":"마이크 꺼짐";
+ setText("mic-check-hint",lost?"‘마이크 다시 연결’을 누르세요":micWorkletNode?"":"실험을 시작하면 켜집니다");
+ const select=$("mic-device"),chosen=[...(select?.options||[])].find(option=>option.value===select.value);
+ setText("mic-check-device",`마이크 · ${nonemptyText(chosen?.textContent)?chosen.textContent:"기본 마이크 (시스템 설정)"}`);
+ const voice=$("voice-calibration-setting-status")?.textContent||"";setText("mic-check-voice",nonemptyText(voice)?`목소리 맞추기 · ${voice}`:"");
+ return true;
+}
 
 function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["source_crop","full_source_page_preview"].includes(value.kind)||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||!Array.isArray(state?.source_page_refs)||!state.source_page_refs.includes(value.source_page)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.asset_id!=="string"||!/^(?:source-crop-[1-9][0-9]*-[1-9][0-9]*|source-page-[1-9][0-9]*)$/.test(value.asset_id)||typeof value.alt_text!=="string"||!value.alt_text||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/assets/${encodeURIComponent(value.asset_id)}`||!["image/png","image/jpeg"].includes(value.mime_type))return null;if(value.kind!=="full_source_page_preview"&&(typeof value.label!=="string"||typeof value.caption_primary!=="string"||typeof value.caption_source!=="string"||value.source_page_url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/source-pages/${value.source_page}`))return null;return value;}
 // Lane WV, decision 1: a figure the server cut from the uploaded PDF for the
@@ -1474,7 +1963,7 @@ function resetVoiceProcessing(){}
 function updateVoiceProcessing(_stage){}
 function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크에 “${text}”라고 말씀해 주세요.`;}
 function resetSessionUI(){
- experimentEndedOnScreen=false;workflowPaused=false;
+ experimentEndedOnScreen=false;workflowPaused=false;clearAfterHead();
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
@@ -2159,6 +2648,7 @@ async function renderMicDevices(inputs=null){
  list.forEach((item,index)=>{const option=document.createElement("option");option.value=item.deviceId;option.textContent=item.label||`마이크 ${index+1}`;select.appendChild(option);});
  if(stored&&!chosen){const missing=document.createElement("option");missing.value=stored.deviceId;missing.textContent=`${stored.label||"고른 마이크"} · 연결 안 됨, 기본 마이크 사용`;select.appendChild(missing);}
  select.value=stored?(chosen||stored.deviceId):"";
+ renderMicCheck();
 }
 function currentMicTrack(){return micStream?.getAudioTracks?.()[0]||micStream?.getTracks?.()[0]||null;}
 async function openMicStream(){
@@ -2365,9 +2855,9 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
   else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
   if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
-  renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();
+  renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();
  }catch(_){
-  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";renderState(visibleState);
+  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";renderState(visibleState);renderProtocolList();
  }finally{selector.setAttribute?.("aria-busy","false");}
 }
 
@@ -2441,7 +2931,7 @@ function confirmProtocolReanalysis(){const ask=globalThis.confirm;return typeof 
 function setProtocolAnalysisBusy(protocolId,busy){protocolAnalysisBusyFor=busy?protocolId:null;const retry=$("protocol-analysis-retry");if(retry&&(busy||currentProtocolReviewId===protocolId))retry.disabled=busy||isRegisteringProtocol;}
 function protocolAnalysisRunning(review){const running=["analysis_pending","analyzing"];return running.includes(review?.lifecycle_state)||running.includes(review?.reanalysis?.state)||["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(review?.analysis_status);}
 function automaticRetryCount(run,state){const retry=run?.automatic_retry;return retry&&typeof retry==="object"&&retry.state===state?`${Number.isInteger(retry.attempt)?retry.attempt:1}/${Number.isInteger(retry.limit)?retry.limit:1}`:"";}
-function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);}
+function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);updateProtocolRowLines(protocolId);}
 function restoreProtocolAnalysisNotice(){if(!currentProtocolReviewId)return;const status=$("protocol-upload-status"),output=$("protocol-analysis-progress");if(status&&protocolAnalysisNotice?.protocolId===currentProtocolReviewId)status.textContent=protocolAnalysisNotice.text;if(output&&protocolAnalysisProgressLine?.protocolId===currentProtocolReviewId)output.textContent=protocolAnalysisProgressLine.text;showProtocolAnalysisBoxLine(currentProtocolReviewId);}
 // Lane RN decision 4 (2026-10-11): the same notice stands in the box that
 // holds the button ("올린 PDF 분석 결과"), with the time taken from the progress
@@ -2488,6 +2978,12 @@ function renderExecutionReasons(review){
 }
 // Lane CF decision 5: "지금 기준: {파일 이름} · {올린 날짜}", the words the
 // server says when asked "어느 프로토콜 기준이야?".
+// The day a PDF was uploaded, in the basis line's words ("2026년 10월 5일").
+function uploadedDay(uploadedAt){
+ if(typeof uploadedAt!=="string"||!uploadedAt)return "";const moment=new Date(uploadedAt);if(Number.isNaN(moment.getTime()))return "";
+ const parts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",year:"numeric",month:"numeric",day:"numeric"}).formatToParts(moment).map(part=>[part.type,part.value]));
+ return `${parts.year}년 ${parts.month}월 ${parts.day}일`;
+}
 function basisWords(filename,uploadedAt){
  const name=typeof filename==="string"&&filename.trim()?filename.trim():"파일 이름 기록 없음";
  let when="올린 날짜 기록 없음";
@@ -2606,6 +3102,14 @@ function foldStartSummary(review=lastProtocolReview){
  if(start)start.hidden=review?.available_for_execution!==true||sessionActive||running;
  return running;
 }
+// Lane UI2 decision 2: the badge in place of the draft's approved version --
+// the source PDF, the day it was uploaded and the analysis state, from the
+// server's catalog and review.
+function reviewBasisBadge(review){
+ const entry=protocolCatalog.get(review?.protocol_id),runnable=review?.available_for_execution===true,day=uploadedDay(entry?.created_at||review?.created_at);
+ const state=runnable?(review.development_only===true?"개발용 큐레이션 분석":"분석 통과"):catalogStatusWord(review).label.split(" · ")[0];
+ return{text:[entry?.source_filename||review?.source?.filename||"파일 이름 기록 없음",day?`${day} 올림`:"올린 날짜 기록 없음",state].join(" · "),kind:runnable?"done":"missing"};
+}
 function renderStartSummary(review){
  const host=$("protocol-start-summary"),overview=$("protocol-start-overview"),start=$("protocol-start");
  if(!host||!overview)return false;
@@ -2625,6 +3129,8 @@ function renderStartSummary(review){
  else if(blockers.length)parts.push(`실행 불가 · ${pipeline?.action||"아래 사유를 확인하세요."}`);
  else if(pipeline?.message)parts.push(`${pipeline.blocked===true?"막힘":"진행"} · ${pipeline.message}${pipeline.action?` · 할 일 · ${pipeline.action}`:""}`);
  overview.textContent=parts.join(" · ");
+ const basis=$("protocol-start-basis");
+ if(basis){const badge=reviewBasisBadge(review);basis.textContent=badge.text;if(basis.dataset)basis.dataset.kind=badge.kind;basis.hidden=false;}
  const outdated=$("protocol-start-outdated");
  if(outdated){const line=typeof review.analysis_outdated_ko==="string"?review.analysis_outdated_ko:"";outdated.textContent=line;outdated.hidden=!line;}
  const cleared=$("protocol-start-cleared");
@@ -2700,6 +3206,7 @@ function renderProtocolReview(review,options={}){
  const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),ocrRun=$("protocol-ocr-run");
  if(!panel||!content||!status)return false;
  panel.hidden=false;panel.open=options.open!==false;content.replaceChildren();
+ const compare=$("protocol-compare");if(compare){compare.hidden=false;compare.open=options.open!==false;}
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderExecutionReasons(review);renderStartSummary(review);
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
@@ -2743,21 +3250,8 @@ function renderProtocolReview(review,options={}){
  const materials=(Array.isArray(review?.materials)?review.materials:[]).map(item=>`${item.name_source_text||item.material_id}${reviewScientificValues(item.quantities)?` · ${reviewScientificValues(item.quantities)}`:""} · ${reviewEvidenceText(item.evidence)}`);
  const equipment=(Array.isArray(review?.equipment)?review.equipment:[]).map(item=>`${item.name_source_text||item.equipment_id}${reviewScientificValues(item.settings)?` · ${reviewScientificValues(item.settings)}`:""} · ${reviewEvidenceText(item.evidence)}`);
  if(materials.length||equipment.length)appendProtocolReviewGroup("재료·장비",[...materials,...equipment]);
- for(const section of Array.isArray(review?.sections)?review.sections:[]){
-  for(const step of Array.isArray(section?.steps)?section.steps:[]){
-   const lines=[step.instruction_source_text,reviewEvidenceText(step.evidence)];
-   for(const action of Array.isArray(step.sub_actions)?step.sub_actions:[]){
-    lines.push(`동작 · ${action.instruction_source_text||action.action_id}`);
-    const quantity=reviewScientificValues(action.quantities);if(quantity)lines.push(`수량·조건 · ${quantity}`);
-    if(action.process_timer?.duration?.source_text)lines.push(`타이머 · ${action.process_timer.duration.source_text}`);
-    for(const warning of Array.isArray(action.warnings)?action.warnings:[])lines.push(`주의 · ${warning.source_text} · ${reviewEvidenceText(warning.evidence)}`);
-    for(const missing of Array.isArray(action.missing_execution_values)?action.missing_execution_values:[])lines.push(`누락값 · ${missing.description} · ${reviewEvidenceText(missing.evidence)}`);
-    lines.push(reviewEvidenceText(action.evidence));
-   }
-   for(const warning of Array.isArray(step.warnings)?step.warnings:[])lines.push(`주의 · ${warning.source_text} · ${reviewEvidenceText(warning.evidence)}`);
-   appendProtocolReviewGroup(`${section.title_source_text||section.section_id||"섹션"} · ${step.source_label||step.step_id}단계`,lines);
-  }
- }
+ // Lane UI2 decision 3: the steps are read in 원문 대조 보기, step by step beside their source lines.
+ renderProtocolCompare(review);
  for(const construct of Array.isArray(review?.constructs)?review.constructs:[]){
   const description=construct.source_text||construct.condition_source_text||construct.range_source_text||construct.resolution_source_text||"구조화 워크플로 항목";
   appendProtocolReviewGroup(`분기·반복·모호성 · ${serverCodeText("construct_type",construct.construct_type,"구조화 워크플로 항목")}`,[description,construct.resolved===false?"해결되지 않음":"",reviewEvidenceText(construct.evidence)],[["construct_type",construct.construct_type]]);
@@ -2766,6 +3260,99 @@ function renderProtocolReview(review,options={}){
  if(retry){const failedState=["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status),passedState=review?.analysis_available===true&&review?.development_only!==true;retry.hidden=!(failedState||passedState);retry.dataset.reanalysis=String(passedState&&!failedState);retry.textContent=passedState&&!failedState?"다시 분석":"분석 다시 시도";retry.disabled=isRegisteringProtocol||protocolAnalysisBusyFor===review?.protocol_id||protocolAnalysisRunning(review);}
  if(ocrRun){ocrRun.hidden=!(ocr.state==="ocr_required"||ocr.state==="failed"||ocr.state==="rejected");ocrRun.disabled=isRegisteringProtocol;}
  return true;
+}
+// Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only.
+// Left, the steps the analysis took from the source; middle, the source's
+// own lines it read the picked step from, page by page (the excerpts the
+// server keeps as evidence; a runnable revision also offers its page
+// image); right, what it took from each part -- amounts and conditions,
+// timers, warnings, values the source does not give -- each with its page.
+// The words are the server's review; nothing here can be changed.
+let compareStepId=null,compareReview=null;
+function compareSteps(review){const steps=[];for(const section of Array.isArray(review?.sections)?review.sections:[])for(const step of Array.isArray(section?.steps)?section.steps:[])if(step&&typeof step==="object"&&typeof step.step_id==="string")steps.push({section,step});return steps;}
+function compareActions(step){return(Array.isArray(step?.sub_actions)?step.sub_actions:[]).filter(action=>action&&typeof action==="object");}
+function compareList(value){return Array.isArray(value)?value.filter(item=>item&&typeof item==="object"):[];}
+function compareMissingCount(step){return compareActions(step).reduce((sum,action)=>sum+compareList(action.missing_execution_values).length,0);}
+function compareWarningCount(step){return compareList(step?.warnings).length+compareActions(step).reduce((sum,action)=>sum+compareList(action.warnings).length,0);}
+function compareStepLabel(step,index){return `${nonemptyText(step.source_label)?step.source_label:String(index+1)}단계`;}
+function comparePage(evidence){return Number.isInteger(evidence?.source_page_number)?`원문 p.${evidence.source_page_number}`:"원문 쪽 없음";}
+function compareEl(tag,className,text){const element=document.createElement(tag);if(className)element.className=className;if(text!==undefined)element.textContent=text;return element;}
+function renderProtocolCompare(review=compareReview){
+ compareReview=review&&typeof review==="object"?review:null;
+ const list=$("protocol-compare-steps");if(!list)return 0;
+ const steps=compareSteps(compareReview),strip=$("protocol-compare-strip");
+ if(!steps.some(item=>item.step.step_id===compareStepId))compareStepId=steps[0]?.step.step_id||null;
+ const pages=Number.isInteger(compareReview?.source?.page_count)?compareReview.source.page_count:null;
+ setText("protocol-compare-summary",steps.length?` · 단계 ${steps.length}개${pages?` · 원문 ${pages}쪽`:""}`:" · 분석이 끝나면 단계가 나옵니다");
+ setText("protocol-compare-path",compareReview?[compareReview.title||compareReview.source?.filename||"올린 PDF","읽기 전용 · 분석이 원문에서 뽑은 그대로입니다"].join(" · "):"");
+ if(strip){
+  strip.replaceChildren();
+  if(compareReview){
+   const basis=reviewBasisBadge(compareReview),missing=steps.reduce((sum,item)=>sum+compareMissingCount(item.step),0),cleared=compareList(compareReview.cleared_fields).length,notices=compareList(compareReview.execution_notices).length,blockers=compareList(compareReview.execution_blockers).length;
+   strip.appendChild(uiBadge(basis.text,basis.kind));
+   if(missing)strip.appendChild(uiBadge(`원문에 없는 값 ${missing}건`,"missing"));
+   if(cleared)strip.appendChild(uiBadge(`비운 칸 ${cleared}건`,"missing"));
+   if(notices)strip.appendChild(uiBadge(`시작 전 알림 ${notices}건`,"quiet"));
+   if(blockers)strip.appendChild(uiBadge(`실행을 막는 사유 ${blockers}건`,"danger"));
+   if(nonemptyText(compareReview.analysis_outdated_ko))strip.appendChild(uiBadge(compareReview.analysis_outdated_ko,"warning"));
+  }
+ }
+ list.replaceChildren();
+ if(!steps.length)list.appendChild(compareEl("li","compare-empty",compareReview?.analysis_available===true?"원문에서 뽑은 실행 단계가 없습니다.":"분석이 끝나면 원문에서 뽑은 단계가 여기에 나옵니다."));
+ steps.forEach(({step},index)=>{
+  const item=document.createElement("li"),button=compareEl("button","compare-step");button.type="button";if(button.dataset)button.dataset.stepId=step.step_id;
+  button.setAttribute?.("aria-current",String(step.step_id===compareStepId));
+  const badges=compareEl("span","compare-step-badges"),missing=compareMissingCount(step),warnings=compareWarningCount(step);
+  if(missing)badges.appendChild(uiBadge(`원문에 없음 ${missing}`,"missing"));
+  if(warnings)badges.appendChild(uiBadge(`주의 ${warnings}`,"warning"));
+  if(compareActions(step).some(action=>action.process_timer))badges.appendChild(uiBadge("타이머","quiet"));
+  button.append(compareEl("span","compare-step-label",compareStepLabel(step,index)),compareEl("span","compare-step-text",String(step.instruction_source_text||"")),badges);
+  button.addEventListener("click",()=>{compareStepId=step.step_id;renderProtocolCompare();});
+  item.appendChild(button);list.appendChild(item);
+ });
+ renderCompareSource(steps);renderCompareFields(steps);
+ return steps.length;
+}
+// The middle: the source's lines the picked step was read from, by page; the
+// step's own line is marked. A page image is offered for a runnable revision.
+function renderCompareSource(steps){
+ const host=$("protocol-compare-source");if(!host)return 0;host.replaceChildren();
+ const found=steps.find(item=>item.step.step_id===compareStepId);if(!found)return 0;
+ const {step}=found,lines=[],seen=new Set(),add=(evidence,linked=false)=>{if(!Number.isInteger(evidence?.source_page_number)||!nonemptyText(evidence.source_excerpt))return;const key=`${evidence.source_page_number}|${evidence.source_excerpt}`;if(seen.has(key)){if(linked)lines.find(line=>line.key===key).linked=true;return;}seen.add(key);lines.push({key,page:evidence.source_page_number,text:evidence.source_excerpt,linked,next:Number.isInteger(evidence.continued_on_page_number)?{page:evidence.continued_on_page_number,text:typeof evidence.continued_excerpt==="string"?evidence.continued_excerpt:""}:null});};
+ add(step.evidence,true);
+ for(const action of compareActions(step)){add(action.evidence);for(const value of compareList(action.quantities))add(value.evidence);for(const condition of compareList(action.conditions))add(condition.evidence);add(action.process_timer?.evidence);for(const warning of compareList(action.warnings))add(warning.evidence);for(const missing of compareList(action.missing_execution_values))add(missing.evidence);}
+ for(const warning of compareList(step.warnings))add(warning.evidence);
+ if(!lines.length){host.appendChild(compareEl("p","compare-empty","이 단계의 원문 근거가 없습니다."));return 0;}
+ const runnable=compareReview?.available_for_execution===true&&typeof compareReview.protocol_id==="string"&&typeof compareReview.revision_id==="string";
+ for(const page of [...new Set(lines.map(line=>line.page))].sort((a,b)=>a-b)){
+  const block=compareEl("div","compare-page"),head=compareEl("div","compare-page-head");head.appendChild(compareEl("b","",`원문 p.${page}`));
+  if(runnable){const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(compareReview.protocol_id)}/revisions/${encodeURIComponent(compareReview.revision_id)}/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);}
+  block.appendChild(head);
+  for(const line of lines.filter(item=>item.page===page)){const row=compareEl("p",`compare-line${line.linked?" is-linked":""}`,line.text);if(line.linked)row.setAttribute?.("aria-label",`이 단계의 원문 · ${line.text}`);block.appendChild(row);if(line.next)block.appendChild(compareEl("p","compare-line-next",`p.${line.next.page} 에서 이어짐${nonemptyText(line.next.text)?` · ${line.next.text}`:""}`));}
+  host.appendChild(block);
+ }
+ return lines.length;
+}
+// The right: the picked step as the analysis read it, part by part.
+function renderCompareFields(steps){
+ const host=$("protocol-compare-fields");if(!host)return 0;host.replaceChildren();
+ const index=steps.findIndex(item=>item.step.step_id===compareStepId);if(index<0)return 0;
+ const {section,step}=steps[index];
+ const head=compareEl("div","compare-fields-head");head.append(compareEl("b","",compareStepLabel(step,index)),compareEl("span","",nonemptyText(section.title_source_text)?section.title_source_text:""));host.appendChild(head);
+ const field=(parent,key,value,evidence,kind="")=>{const row=compareEl("div",`compare-field${kind?` is-${kind}`:""}`);row.append(compareEl("span","compare-field-key",key),compareEl("span","compare-field-value",String(value||"")));const where=compareEl("span","compare-field-where");if(kind==="missing")where.appendChild(uiBadge("원문에 없음","missing"));where.appendChild(uiBadge(comparePage(evidence),"quiet"));row.appendChild(where);parent.appendChild(row);};
+ field(host,"단계",step.instruction_source_text,step.evidence);
+ for(const action of compareActions(step)){
+  const block=compareEl("div","compare-action");
+  field(block,"동작",action.instruction_source_text||action.action_id,action.evidence);
+  for(const value of compareList(action.quantities))field(block,"수량·조건",value.source_text,value.evidence||action.evidence);
+  for(const condition of compareList(action.conditions))field(block,"조건",condition.source_text,condition.evidence||action.evidence);
+  if(nonemptyText(action.process_timer?.duration?.source_text))field(block,"타이머",action.process_timer.duration.source_text,action.process_timer.evidence||action.evidence);
+  for(const warning of compareList(action.warnings))field(block,"주의",warning.source_text,warning.evidence);
+  for(const missing of compareList(action.missing_execution_values))field(block,"원문에 없는 값",missing.description,missing.evidence,"missing");
+  host.appendChild(block);
+ }
+ for(const warning of compareList(step.warnings))field(host,"주의",warning.source_text,warning.evidence);
+ return index+1;
 }
 async function loadProtocolReview(protocolId=currentProtocolReviewId,options={}){
  if(typeof protocolId!=="string"||!protocolId||typeof fetch!=="function")return null;
@@ -2785,7 +3372,7 @@ function onProtocolSelectionChanged(){
  const protocolId=$("protocol-id")?.value||"";
  if(protocolId!==currentProtocolReviewId){stopProtocolAnalysisPolling();stopProtocolOcrPolling();}
  if(protocolId){void loadProtocolReview(protocolId,{open:protocolCatalog.get(protocolId)?.available_for_execution!==true});return;}
- currentProtocolReviewId=null;const panel=$("protocol-review-panel"),summary=$("protocol-start-summary"),start=$("protocol-start");if(panel)panel.hidden=true;if(summary)summary.hidden=true;if(start)start.hidden=true;
+ currentProtocolReviewId=null;const panel=$("protocol-review-panel"),summary=$("protocol-start-summary"),start=$("protocol-start"),compare=$("protocol-compare");if(panel)panel.hidden=true;if(summary)summary.hidden=true;if(start)start.hidden=true;if(compare)compare.hidden=true;
 }
 async function pollProtocolAnalysisStatus(protocolId){
  if(protocolAnalysisPollBusy)return null;protocolAnalysisPollBusy=true;
@@ -2986,7 +3573,7 @@ async function onMessage(e,generation,current){
  if(m.type==="server.words"){
   const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof m.text!=="string")return;activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=`words-${m.turn_id}`;const labels={voice_calibration:"목소리 맞추기",ambient_suggestion:"제안"};if(node.children?.[0])node.children[0].textContent="서버 안내";node.querySelector(".transcript").textContent=labels[m.words_kind]||"서버 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="서버가 말함 · 음성으로 중단 가능";renderState("THINKING");
  }
- if(m.type==="speaker.calibration"){renderVoiceCalibration(m);}
+ if(m.type==="speaker.calibration"){renderVoiceCalibration(m);renderMicCheck();}
  // Lane VT decisions 1-2: the server tells the step timer before it is asked -- on the screen (a timer's end with a short sound) and, when the setting has it said, as a turn of its own like the greeting.
  if(m.type==="protocol.timer.notice"){
   const accepted=acceptedSessionConfiguration;if(!accepted||m.configuration_id!==accepted.configuration_id||typeof m.text!=="string")return;renderTimerNotice(m);
@@ -3108,13 +3695,32 @@ $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting(
 $("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("proactive_mode",event.target.value);});
 $("ambient-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("ambient_mode",event.target.value);});
 $("speaker-sensitivity")?.addEventListener("change",event=>{void saveExperimenterSetting("speaker_sensitivity",event.target.value);});
-$("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");});
+$("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");renderMicCheck();});
+$("mic-check-settings")?.addEventListener("click",()=>{const select=$("mic-device");select?.scrollIntoView?.({block:"center"});select?.focus?.();});
 $("voice-calibration-skip")?.addEventListener("click",()=>{requestVoiceCalibration("skip");});
 $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCalibrationAtStart(event.target.checked);});
 try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
 $("agc-mode")?.addEventListener("change",event=>{storeAgcMode(event.target.value);const on=event.target.value==="on"||(event.target.value==="calibrated"&&!voiceReferenceMeasured);void applyAutoGainControl(on);});
 try{const agc=$("agc-mode"),stored=localStorage.getItem(AGC_MODE_STORAGE_KEY);if(agc&&["calibrated","on","off"].includes(stored))agc.value=stored;}catch(_){}
-globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
+// Lane UI2 decision 5 (2026-10-13): VoineyLab on the home screen. Where the
+// browser offers to install the page (it keeps the offer until asked), the
+// guide shows one button for it; otherwise the steps for each kind of device.
+// The guide goes away once the page runs from the home screen, and says when
+// the address is not a secure (https) one, where no browser installs a page.
+let installOffer=null;
+function runsFromHomeScreen(){try{return globalThis.matchMedia?.("(display-mode: standalone)")?.matches===true||globalThis.navigator?.standalone===true;}catch(_){return false;}}
+function renderInstallGuide(){
+ const guide=$("install-guide");if(!guide)return false;
+ guide.hidden=runsFromHomeScreen();
+ const button=$("install-app");if(button)button.hidden=!installOffer;
+ const secure=$("install-secure");if(secure){const text=globalThis.isSecureContext===false?"이 주소는 보안 연결(https)이 아니어서 홈 화면에 앱으로 추가할 수 없습니다. https 주소로 열어 주세요.":"";secure.textContent=text;secure.hidden=!text;}
+ return !guide.hidden;
+}
+async function installFromHomeScreenOffer(){const offer=installOffer;if(!offer||typeof offer.prompt!=="function")return false;installOffer=null;try{await offer.prompt();}catch(_){}renderInstallGuide();return true;}
+globalThis.addEventListener?.("beforeinstallprompt",event=>{event?.preventDefault?.();installOffer=event;renderInstallGuide();});
+globalThis.addEventListener?.("appinstalled",()=>{installOffer=null;renderInstallGuide();});
+$("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer();});
+globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();renderInstallGuide();},{once:true});
 </script>
 </body>
 </html>
