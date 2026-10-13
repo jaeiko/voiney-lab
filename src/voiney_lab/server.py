@@ -11022,4 +11022,9 @@ async def voice_socket(websocket:WebSocket):
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
 
+# Lane UI2 decision 5 (2026-10-13): the web app manifest is served under its
+# registered type whatever the host's own type table says, so a browser
+# reads it as the manifest (VoineyLab on the home screen; no service worker).
+import mimetypes
+mimetypes.add_type("application/manifest+json",".webmanifest")
 app.mount("/",StaticFiles(directory=STATIC_DIR,html=True),name="static")

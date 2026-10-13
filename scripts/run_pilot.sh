@@ -67,10 +67,6 @@ eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
   VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false)"
 
-# --- Outside the pilot's scope -----------------------------------------------
-# MOSS (the org-governed approved-safety-document corpus) has its own flag.
-export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"
-
 # --- Approved safety documents: decided here, never by a .env ---------------
 # operational needs OIDC, which the pilot does not have yet: without it the
 # identity resolver refuses every /api and /ws request. demo and test_only
@@ -156,7 +152,6 @@ report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
 report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
-report_feature "moss_safety_documents:" "$VOINEY_LAB_MOSS_ENABLED"
 
 XAI_REFUSAL=""
 if ! python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env"; then
