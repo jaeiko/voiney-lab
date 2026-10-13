@@ -11,9 +11,10 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -23,16 +24,25 @@ from typing import Any, Callable, Sequence
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
+    ANALYSIS_PIECE_CONCURRENCY,
+    MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
+    AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisIncompleteError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolAnalysisModel,
+    ProtocolAnalysisPieceConflictError,
+    ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
+    analysis_pieces,
     analyze_protocol_extraction,
+    analyze_protocol_piece,
     check_analysis_page_count,
+    check_pieced_page_count,
+    join_piece_analyses,
     prepare_protocol_analysis_request,
     verify_step_timers,
 )
@@ -294,8 +304,50 @@ def _failures_not_superseded(events: Sequence[Any]) -> tuple[Any, ...]:
     )
     return tuple(
         event for index, event in enumerate(events)
-        if not (index < last_superseding and event.event_type == _ANALYSIS_FAILED_EVENT)
+        if not (
+            index < last_superseding
+            and event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+        )
     )
+
+
+#: The run state a piece run (lane AN, decision 2) ended in, by its failure
+#: code; any other failure is "analysis_failed".
+_PIECE_RUN_FAILED_STATES = {
+    "protocol_analysis_piece_failed": "chunk_analysis_failed",
+    "protocol_analysis_piece_conflict": "merge_conflict",
+}
+
+
+def _piece_run_end(
+    run_events: Sequence[Any], revision_events: Sequence[Any],
+) -> tuple[str, str | None] | None:
+    """How a piece run ended, from the lifecycle events after its plan.
+
+    (state, failure code) once the analysis passed or failed after the
+    plan; None while the run is still going. A piece run records its pieces
+    as chunk events and its end as the analysis' own ready or failed event.
+    """
+
+    if not run_events:
+        return None
+    planned_at = run_events[0].sequence_id
+    after = [
+        event for event in revision_events
+        if event.event_type in {
+            _ANALYSIS_FAILED_EVENT, _ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT,
+        }
+        and event.sequence_id > planned_at
+    ]
+    if not after:
+        return None
+    last = after[-1]
+    if last.event_type == _ANALYSIS_FAILED_EVENT:
+        payload = last.payload if isinstance(last.payload, dict) else {}
+        code = payload.get("failure_code")
+        code = code if isinstance(code, str) and code else "analysis_failed"
+        return _PIECE_RUN_FAILED_STATES.get(code, "analysis_failed"), code
+    return "review_required", None
 
 
 def _automatic_retry_status(events: Sequence[Any]) -> dict[str, object] | None:
@@ -480,9 +532,20 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "듭니다). 다시 해도 같으면 절차가 있는 쪽만 골라 PDF 로 만들어 올려 주세요."
     ),
     "protocol_analysis_too_many_pages": (
-        "한 번에 분석하는 문서는 60쪽까지입니다. 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 "
-        "만들어 다시 올려 주세요(쪽 범위를 고르는 화면은 아직 없습니다). 분석 모델은 "
-        "부르지 않았고 원문은 바뀌지 않습니다."
+        f"분석하는 문서는 {MAX_PIECED_ANALYSIS_PAGES}쪽까지입니다. 실험에 쓸 절차가 있는 쪽만 "
+        "골라 PDF 로 만들어 다시 올려 주세요(쪽 범위를 고르는 화면은 아직 없습니다). 분석 "
+        "모델은 부르지 않았고 원문은 바뀌지 않습니다."
+    ),
+    # Lane AN, decision 2: a long document read in pieces.
+    "protocol_analysis_piece_failed": (
+        "실패한 조각은 자동으로 한 번 다시 보냈지만 다시 실패해, 나머지 조각의 결과도 쓰지 "
+        "않았습니다(일부만 읽은 분석은 쓰지 않습니다). '분석 다시 시도'를 누르면 문서 전체를 "
+        "새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 바뀌지 않습니다."
+    ),
+    "protocol_analysis_piece_conflict": (
+        "두 조각이 함께 읽은 쪽을 서로 다르게 읽어 결과를 쓰지 않았습니다. '분석 다시 시도'를 "
+        "누르면 문서 전체를 새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 "
+        "바뀌지 않습니다."
     ),
 }
 _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
@@ -607,7 +670,11 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "protocol_pdf_too_large": "PDF 가 등록 한도보다 큽니다.",
     "protocol_analysis_incomplete": "분석이 원문 단계를 다 담지 못했어요.",
     "protocol_analysis_too_many_pages": (
-        "원문이 60쪽을 넘어 한 번에 분석하지 않았어요. 분석할 쪽 범위를 줄여야 합니다."),
+        f"원문이 {MAX_PIECED_ANALYSIS_PAGES}쪽을 넘어 분석하지 않았어요. 분석할 쪽 범위를 "
+        "줄여야 합니다."),
+    "protocol_analysis_piece_failed": "일부 조각 분석 실패",
+    "protocol_analysis_piece_conflict": (
+        "조각을 합치다 같은 쪽을 두 조각이 서로 다르게 읽은 곳이 있어 결과를 쓰지 않았습니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
     "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
     "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
@@ -920,6 +987,10 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     extracted_chars = sum(len(page.text.strip()) for page in extraction.pages)
     if extraction.non_empty_page_count == 0 or extracted_chars < 32:
         return "ocr_required"
+    if analysis_pieces(extraction):
+        # Read in pieces (lane AN, decision 2): "대형 문서 분석 요청 대기"
+        # until the analysis starts, as the screen says it.
+        return "chunked_analysis_required"
     try:
         prepare_protocol_analysis_request(
             extraction, max_input_bytes=MAX_SINGLE_PASS_INPUT_BYTES
@@ -927,6 +998,53 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     except ProtocolAnalysisInputTooLargeError:
         return "chunked_analysis_required"
     return "structured_analysis_ready"
+
+
+#: An analysis refused under lane EV2's 60-page bound, of a document the
+#: pieces read now (lane AN, decision 2): it may be asked again.
+_OLD_PAGE_BOUND_KO = (
+    "이 원문은 예전 한도(한 번에 60쪽)에 걸려 분석하지 않았어요. 이제 긴 문서는 조각으로 "
+    "나눠 분석합니다."
+)
+_OLD_PAGE_BOUND_ACTION = (
+    "'분석 다시 시도'를 누르면 조각으로 나눠 새로 분석합니다(조각 수만큼 분석 모델 호출 "
+    "비용이 듭니다). 원문은 바뀌지 않습니다."
+)
+
+
+def _refused_under_the_old_page_bound(failure_code: str | None, page_count: int) -> bool:
+    return (
+        failure_code == "protocol_analysis_too_many_pages"
+        and page_count <= MAX_PIECED_ANALYSIS_PAGES
+    )
+
+
+def _failed_pieces_ko(events: Sequence[Any]) -> str | None:
+    """"41–59쪽, 97–115쪽": the pieces the latest failed analysis names (lane AN, 2)."""
+
+    failed = next(
+        (
+            event.payload for event in reversed(events)
+            if event.event_type == _ANALYSIS_FAILED_EVENT and isinstance(event.payload, dict)
+        ),
+        None,
+    )
+    pieces = (failed or {}).get("failed_pieces")
+    if not isinstance(pieces, list):
+        return None
+    pages = [
+        f"{piece['first_page']}–{piece['last_page']}쪽" for piece in pieces
+        if isinstance(piece, dict) and isinstance(piece.get("first_page"), int)
+        and isinstance(piece.get("last_page"), int)
+    ]
+    return ", ".join(pages) or None
+
+
+def _piece_failure_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+        return code
+    return "protocol_analysis_error"
 
 
 def _safe_evidence_failure(
@@ -1444,6 +1562,14 @@ class ProtocolCatalog:
         )
         if not planned:
             return ()
+        if any(
+            event.event_type == _ANALYSIS_REQUESTED_EVENT
+            and event.sequence_id > planned[-1].sequence_id
+            for event in events
+        ):
+            # A later request opened a run of its own (lane AN, decision 2):
+            # the planned run is no longer the one on screen.
+            return ()
         payload = planned[-1].payload
         if not isinstance(payload, dict):
             return ()
@@ -1634,6 +1760,16 @@ class ProtocolCatalog:
             chunks.append(chunk_status)
         completed = sum(chunk["status"] == "completed" for chunk in chunks)
         failed = sum(chunk["status"] == "failed" for chunk in chunks)
+        end = _piece_run_end(events, tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        ))
+        if end is not None:
+            # A piece run (lane AN, decision 2) ends in the analysis' own
+            # ready or failed event, not in a chunk event.
+            state, end_code = end
+            failure_code = end_code or failure_code
+            merge_status = "complete" if state == "review_required" else merge_status
         return ProtocolAnalysisRunStatus(
             protocol_id=protocol_id,
             candidate_revision_id=candidate_revision_id,
@@ -1662,6 +1798,7 @@ class ProtocolCatalog:
                     "merge_conflict",
                     "chunk_analysis_failed",
                     "chunk_analysis_cancelled",
+                    "analysis_failed",
                 }
                 else "analyzing"
             ),
@@ -1731,6 +1868,13 @@ class ProtocolCatalog:
             )
             if failed is not None and not chunk_events:
                 analysis_status = "analysis_failed"
+            elif chunk_events:
+                end = _piece_run_end(chunk_events, tuple(
+                    event for event in self.store.list_events(revision.experiment_id)
+                    if event.protocol_revision_number == revision.revision_number
+                ))
+                if end is not None and end[0] != "review_required":
+                    analysis_status = end[0]
             lifecycle_events = tuple(
                 event
                 for event in self.store.list_events(revision.experiment_id)
@@ -2062,11 +2206,20 @@ class ProtocolCatalog:
                 {
                     "code": latest_failure,
                     "detail": latest_failure_detail,
-                    "retryable": latest_failure not in _NOT_RETRYABLE_FAILURE_CODES,
+                    "retryable": (
+                        latest_failure not in _NOT_RETRYABLE_FAILURE_CODES
+                        or _refused_under_the_old_page_bound(
+                            latest_failure, extraction.page_count)
+                    ),
                     # Lane PA decision 4 (2026-10-06): the recovery guidance
                     # is the server's, in Korean.
-                    "action": _ANALYSIS_RECOVERY_ACTIONS.get(
-                        latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
+                    "action": (
+                        _OLD_PAGE_BOUND_ACTION
+                        if _refused_under_the_old_page_bound(
+                            latest_failure, extraction.page_count)
+                        else _ANALYSIS_RECOVERY_ACTIONS.get(
+                            latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
+                        )
                     ),
                 }
                 if latest_failure is not None and reanalysis is None
@@ -2127,6 +2280,7 @@ class ProtocolCatalog:
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=reanalysis,
             events=revision_events,
+            page_count=extraction.page_count,
         )
         if analysis is None:
             return base
@@ -2278,7 +2432,73 @@ class ProtocolCatalog:
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=self._reanalysis_status(revision_events, analysis),
             events=revision_events,
+            page_count=extraction.page_count,
         )
+
+    def _piece_progress_ko(self, revision: ProtocolRevisionRecord) -> str | None:
+        """The progress line of a piece run still going, or None (lane AN, 2).
+
+        "긴 문서를 조각 11개로 나눠 분석 중입니다 · 조각 5·6·7·8/11 분석 중 · 끝난 조각
+        4/11", a retry beside the piece it is for, and the joining once
+        every piece has passed.
+        """
+
+        events = self._latest_chunk_events(revision)
+        if not events or _piece_run_end(events, tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        )) is not None:
+            return None
+        plan = events[0].payload if isinstance(events[0].payload, dict) else {}
+        chunks = plan.get("chunks") if isinstance(plan.get("chunks"), list) else []
+        count = len(chunks)
+        if not count:
+            return None
+        state: dict[str, str] = {}
+        retrying: set[str] = set()
+        joining = False
+        for event in events[1:]:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            chunk_id = str(payload.get("chunk_id"))
+            if event.event_type == _CHUNK_STARTED_EVENT:
+                state[chunk_id] = "in_progress"
+                if payload.get("attempt") == 2:
+                    retrying.add(chunk_id)
+            elif event.event_type == _CHUNK_COMPLETED_EVENT:
+                state[chunk_id] = "completed"
+                retrying.discard(chunk_id)
+            elif event.event_type == _CHUNK_FAILED_EVENT:
+                state[chunk_id] = "failed"
+                retrying.discard(chunk_id)
+            elif event.event_type == _MERGE_STARTED_EVENT:
+                joining = True
+        ordinal = {
+            str(chunk.get("chunk_id")): chunk.get("ordinal")
+            for chunk in chunks if isinstance(chunk, dict)
+        }
+        done = sum(1 for value in state.values() if value == "completed")
+        if joining:
+            return (
+                f"긴 문서를 조각 {count}개로 나눠 분석했습니다 · 조각 {count}개를 합쳐 원문 "
+                "전체와 다시 대조하고 있습니다."
+            )
+        running = sorted(
+            ordinal[chunk_id] for chunk_id, value in state.items()
+            if value == "in_progress" and isinstance(ordinal.get(chunk_id), int)
+        )
+        line = f"긴 문서를 조각 {count}개로 나눠 분석 중입니다"
+        if running:
+            line += f" · 조각 {'·'.join(str(index) for index in running)}/{count} 분석 중"
+        line += f" · 끝난 조각 {done}/{count}"
+        again = sorted(
+            ordinal[chunk_id] for chunk_id in retrying
+            if isinstance(ordinal.get(chunk_id), int)
+        )
+        if again:
+            line += (
+                f" · 조각 {'·'.join(str(index) for index in again)} 다시 시도 중(1/1)"
+            )
+        return line + "."
 
     def _pipeline(
         self,
@@ -2291,6 +2511,7 @@ class ProtocolCatalog:
         automatic_retry: dict[str, object] | None = None,
         reanalysis: dict[str, object] | None = None,
         events: Sequence[Any] = (),
+        page_count: int | None = None,
     ) -> dict[str, object]:
         """One Korean line: the stage a document is at, whether it is stuck
         there, why, and what a person does (lane PX, decision 4).
@@ -2408,6 +2629,18 @@ class ProtocolCatalog:
                 stage = ("evidence" if failure_code == "protocol_analysis_invalid_evidence"
                          else "analysis")
                 message = _ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다.")
+                if page_count is not None and _refused_under_the_old_page_bound(
+                    failure_code, page_count
+                ):
+                    # Lane AN, decision 2: refused under lane EV2's 60-page
+                    # bound, which the pieces replaced.
+                    return result(
+                        "analysis", blocked=True, message=_OLD_PAGE_BOUND_KO,
+                        action=_OLD_PAGE_BOUND_ACTION, failure_code=failure_code)
+                failed_pieces = _failed_pieces_ko(events)
+                if failure_code == "protocol_analysis_piece_failed" and failed_pieces:
+                    # Lane AN, decision 2: "일부 조각 분석 실패 · 41–59쪽".
+                    message += f" · {failed_pieces}"
                 if retry.get("state") == "failed" and truncated_how:
                     message += (f" {truncated_how} 자동으로 한 번 다시 보냈지만 "
                                 f"자동 재시도({retry_count})도 실패했습니다.")
@@ -2422,6 +2655,12 @@ class ProtocolCatalog:
                         failure_code, _DEFAULT_ANALYSIS_RECOVERY_ACTION),
                     failure_code=failure_code,
                     **({"response_repair": failed_repair} if failed_repair else {}))
+            pieces_line = self._piece_progress_ko(revision)
+            if pieces_line is not None and entry.lifecycle_state in {
+                "analysis_pending", "analyzing",
+            }:
+                # Lane AN, decision 2: "조각 k/n 분석 중".
+                return result("analysis", blocked=False, message=pieces_line)
             if entry.lifecycle_state in {"analysis_pending", "analyzing"} or (
                 entry.analysis_status in {
                     "chunk_planned", "chunk_analysis_in_progress", "merge_in_progress",
@@ -2538,11 +2777,15 @@ class ProtocolCatalog:
         )
         extraction = extract_protocol_pdf(source)
         extraction = self._extraction_for_analysis(revision, extraction)
+        pieces = analysis_pieces(extraction)
         try:
-            # Lane EV2, decision 4: a document longer than one analysis
-            # reads is refused here, before any model call, with the advice
-            # to upload the pages that hold the procedure.
-            check_analysis_page_count(extraction)
+            # Lane EV2, decision 4, changed by lane AN, decision 2: a document
+            # longer than one analysis reads is read in pieces; one longer
+            # than the pieces read is refused here, before any model call.
+            if pieces:
+                check_pieced_page_count(extraction)
+            else:
+                check_analysis_page_count(extraction)
         except ProtocolAnalysisTooManyPagesError as exc:
             self._record_analysis_failure(revision, analysis_id, exc)
             raise
@@ -2558,6 +2801,15 @@ class ProtocolCatalog:
             _ANALYSIS_STARTED_EVENT,
             {"status": "analyzing", "analysis_id": analysis_id},
         )
+        if pieces:
+            try:
+                draft = self._analyze_in_pieces(
+                    revision, extraction, model, pieces, analysis_id=analysis_id)
+            except Exception as exc:
+                self._record_analysis_failure(revision, analysis_id, exc)
+                raise
+            return self._store_passed_analysis(
+                revision, draft, analysis_id, pieces=pieces)
         if status == "chunked_analysis_required":
             raise ProtocolChunkedAnalysisRequiredError(
                 "Protocol text is larger than one analysis reads."
@@ -2611,6 +2863,139 @@ class ProtocolCatalog:
                 self._record_analysis_failure(
                     revision, analysis_id, retry_exc, truncated=observed.truncated)
                 raise
+        return self._store_passed_analysis(revision, draft, analysis_id)
+
+    def _analyze_in_pieces(
+        self,
+        revision: ProtocolRevisionRecord,
+        extraction: ProtocolPdfExtraction,
+        model: ProtocolAnalysisModel,
+        pieces: tuple[AnalysisPiece, ...],
+        *,
+        analysis_id: str,
+    ) -> ProtocolAnalysisDraft:
+        """Analyse a long document in pieces, ``ANALYSIS_PIECE_CONCURRENCY`` at once.
+
+        Lane AN, decision 2. The plan and each piece's start, pass and
+        failure are ledger events of this request's run (``analysis_id``),
+        which the run status and the pipeline line read ("조각 k/n 분석 중").
+        A piece that fails is sent once more by itself -- the same request,
+        or one reasoning level lower when its answer was cut at the output
+        limit (lane AQ) -- and a piece that fails again fails the document:
+        nothing passes on part of it. The pieces that passed are then joined
+        and the joined analysis is checked against the whole document.
+        """
+
+        protocol_id = revision.experiment_id
+        run = {"analysis_run_id": analysis_id}
+
+        def append(event_id: str, event_type: str, payload: dict[str, object]) -> None:
+            self.store.append_event(
+                event_id, protocol_id, revision.revision_number, event_type,
+                {**run, **payload},
+            )
+
+        append(f"pieces-planned-{analysis_id}", _CHUNK_PLAN_EVENT, {
+            "status": "planned",
+            "chunks": [
+                {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index,
+                 "source_page_start": piece.first_page,
+                 "source_page_end": piece.last_page}
+                for piece in pieces
+            ],
+        })
+        # The workers only call the model and check its answer. The ledger
+        # connection belongs to this thread, so their starts come back here
+        # through ``outbox`` and are written in order.
+        outbox: queue.SimpleQueue[tuple[str, str, dict[str, object]]] = queue.SimpleQueue()
+
+        def one(piece: AnalysisPiece) -> ProtocolAnalysisDraft:
+            chunk = {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index}
+            observed = _ObservedAnalysisModel.wrap(model)
+            outbox.put((f"piece-started-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT,
+                        {**chunk, "status": "in_progress", "attempt": 1}))
+            try:
+                return analyze_protocol_piece(extraction, piece, observed.model)
+            except Exception as exc:  # noqa: BLE001 - sent once more by itself
+                retry_model, retry_payload = observed.retry()
+                outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
+                    **chunk, "status": "in_progress", "attempt": 2,
+                    "retry_of_failure_code": _piece_failure_code(exc), **retry_payload,
+                }))
+            return analyze_protocol_piece(extraction, piece, retry_model)
+
+        def drain() -> None:
+            while True:
+                try:
+                    event_id, event_type, payload = outbox.get_nowait()
+                except queue.Empty:
+                    return
+                append(event_id, event_type, payload)
+
+        drafts: dict[int, ProtocolAnalysisDraft] = {}
+        failures: dict[int, BaseException] = {}
+        with ThreadPoolExecutor(
+            max_workers=ANALYSIS_PIECE_CONCURRENCY,
+            thread_name_prefix="protocol-piece-analysis",
+        ) as pool:
+            futures = {pool.submit(one, piece): piece for piece in pieces}
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                drain()
+                for future in sorted(done, key=lambda item: futures[item].index):
+                    piece = futures[future]
+                    chunk = {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index}
+                    try:
+                        draft = future.result()
+                    except Exception as exc:  # noqa: BLE001 - the piece's result
+                        failures[piece.index] = exc
+                        failure: dict[str, object] = {
+                            **chunk, "status": "failed", "attempt": 2,
+                            "failure_code": _piece_failure_code(exc),
+                        }
+                        if isinstance(exc, ProtocolAnalysisEvidenceError):
+                            failure["evidence_failure"] = exc.diagnostic.privacy_safe_dict()
+                        append(f"piece-failed-{analysis_id}-{piece.index}",
+                               _CHUNK_FAILED_EVENT, failure)
+                        continue
+                    drafts[piece.index] = draft
+                    append(f"piece-completed-{analysis_id}-{piece.index}",
+                           _CHUNK_COMPLETED_EVENT, {
+                               **chunk, "status": "completed",
+                               "steps": sum(
+                                   len(section.steps) for section in draft.protocol.sections),
+                           })
+        if failures:
+            failed = tuple(piece for piece in pieces if piece.index in failures)
+            raise ProtocolAnalysisPieceFailedError(
+                "A piece of the document failed analysis after its retry.",
+                pieces=failed,
+                failure_codes=tuple(
+                    _piece_failure_code(failures[piece.index]) for piece in failed),
+            )
+        append(f"pieces-joining-{analysis_id}", _MERGE_STARTED_EVENT, {"status": "in_progress"})
+        try:
+            return join_piece_analyses(
+                extraction, pieces, [drafts[piece.index] for piece in pieces])
+        except ProtocolAnalysisPieceConflictError as exc:
+            append(f"pieces-conflict-{analysis_id}", _MERGE_CONFLICT_EVENT, {
+                "status": "conflict", "failure_code": exc.code, "reason": exc.reason,
+                "source_page_start": exc.first_page, "source_page_end": exc.last_page,
+            })
+            raise
+
+    def _store_passed_analysis(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> ProtocolCatalogEntry:
+        """Store a passed analysis as the revision's next analysis, and say so."""
+
+        protocol_id = revision.experiment_id
         if draft.protocol.protocol_id != protocol_id:
             assigned_protocol = replace(draft.protocol, protocol_id=protocol_id)
             domain.validate_protocol(assigned_protocol)
@@ -2631,6 +3016,9 @@ class ProtocolCatalog:
             # Lane EV2, decision 2: the fields emptied because the source
             # did not confirm them, kept in the ledger beside the analysis.
             ready_payload["cleared_fields"] = list(draft.protocol.cleared_fields)
+        if pieces:
+            # Lane AN, decision 2: read in these pieces and joined.
+            ready_payload["pieces"] = [piece.public_dict() for piece in pieces]
         if draft.response_repair is not None:
             # Lane EV3, decision 1: the response was read after its brackets
             # were repaired in one of the two fixed shapes; every check above
@@ -2696,6 +3084,17 @@ class ProtocolCatalog:
             # Lane EV3, decision 1: this attempt was read after a repair of
             # its brackets and then failed a check.
             failure_payload["response_repaired"] = repair.public_dict()
+        if isinstance(exc, ProtocolAnalysisPieceFailedError):
+            # Lane AN, decision 2: the pieces that failed after their retry.
+            failure_payload["failed_pieces"] = [
+                {**piece.public_dict(), "failure_code": code}
+                for piece, code in zip(exc.pieces, exc.failure_codes)
+            ]
+        if isinstance(exc, ProtocolAnalysisPieceConflictError):
+            failure_payload["piece_conflict"] = {
+                "reason": exc.reason, "source_page_start": exc.first_page,
+                "source_page_end": exc.last_page,
+            }
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {
