@@ -338,9 +338,27 @@ No schema change and no migration; nothing already stored is read differently.
   delete, record; appends to `data/runtime/pilot/deletion_log.jsonl`),
   `scripts/pilot_https_setup.sh` with `scripts/pilot_https/Caddyfile.example`
   (written, not run), `docs/PILOT_GUIDE.md`, `docs/PILOT_HTTPS_SETUP.md`.
-- `setting_names.py` lists the new scope on the `VOINEY_LAB_USAGE_SCOPE` row and
-  the generated comment in `.env.example` follows. No setting was added or
-  removed.
+- `setting_names.py` lists the new scope on the `VOINEY_LAB_USAGE_SCOPE` row. No
+  setting was added or removed.
+- **`.env.example` rebuilt** (human instruction of 2026-10-13: it had not been
+  brought up to date at all). It now lists every setting in the table except the
+  ones whose reason is written in `tests/test_lane_pl_env_example.py` (shell/CI
+  names, aliases, switches that follow another switch, the development
+  launcher's fixture paths), 117 of the 136; its comments no longer describe
+  the removed xai fallback or the Moss setting; and a copy of it as it stands is
+  safe: the two keyed features (`VOINEY_LAB_WEB_EXPLANATIONS_ENABLED`,
+  `VOINEY_LAB_DRAWN_DIAGRAMS_ENABLED`) start off (a copy used to be refused at
+  the first connection without `OPENAI_API_KEY`), `VOINEY_LAB_ADMIN_TOKEN` is
+  empty (it was a guessable placeholder, which opened `GET /api/admin/metrics`
+  to anyone who knew it), `VOINEY_LAB_STT_DIAGNOSTIC_DIR` is empty (the
+  placeholder lay outside `data/runtime`, which the server refuses), the usage
+  scope is `demo` (the development fixture's scope; the comment says how to
+  build the fictional demo catalog the way CI does, and that
+  `source_protocol_only` needs no catalog), and `VOINEY_LAB_MOSS_ENABLED` is
+  gone. The role providers, models and timings in use are kept. **A `.env`
+  already copied from the old example is not touched**; compare it with the new
+  one, and in particular check that it does not still hold the old admin-token
+  placeholder.
 
 Going back: code older than this stage rejects `source_protocol_only` as an
 invalid usage scope (`server_config()`); set a scope with a catalog or stay on
