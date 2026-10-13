@@ -73,6 +73,8 @@ pip install -e '.[test]'
 cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 ```
 
+- 서버에는 **LibreOffice 와 한국어 글꼴**도 설치한다(Word 원문을 PDF 로 바꿈, 사람 결정 2026-10-13): Ubuntu 는 `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`. HEIC 사진은 선택(`pip install -e '.[heic]'`, 라이선스 주의). 받는 파일 형식과 확인 방법은 `docs/SOURCE_FORMATS.md`.
+
 ### 개발 서버
 
 ```bash

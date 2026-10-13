@@ -877,3 +877,60 @@ request) reads as two runs, each with its own retry.
 Code from before this version reads all of the above: the new OCR reason is
 an extraction value, not stored, and two retry events on a revision read as
 the retry of the run on screen.
+
+## Lane AN (2026-10-13): Word documents, photos and reagent tables
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+`POST /api/protocols` also takes a Word document
+(`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)
+and a JPG, PNG or HEIC photo (`image/jpeg`, `image/png`, `image/heic`,
+`image/heif`). Each is turned into the PDF that extraction, OCR and the
+analysis read -- a .docx by LibreOffice, a photo as one image page at 300 dpi
+-- and that PDF is registered as the source, under the upload's name with
+`.pdf` (`notes.jpg` -> `notes.pdf`). The `protocol_registered` event of such a
+source carries `converted_from`: the upload's `media_type`, `sha256`,
+`byte_size`, `filename` and `converter` (`pillow-12.3.0`,
+`libreoffice-24.2.7.2`), and for a photo its `pixels`,
+`exif_orientation_applied` and `pdf_dpi`. The same upload again is found by
+that checksum.
+
+`POST /api/protocols/{protocol_id}/reagent-tables` attaches an .xlsx workbook
+to a protocol as its reagent table: one `protocol_reagent_table_attached`
+event per workbook (`table_id`, `filename`, `media_type`, `sha256`,
+`byte_size`, `authority` `person_upload`, `sheets` with each non-empty cell's
+`ref`, `row`, `column`, `value`, `display` and, where present, `number_format`
+and `formula`; `cell_count`; `warnings`). `GET
+/api/protocols/{protocol_id}/reagent-tables` reads them back. A reagent table
+is not a protocol source and changes nothing about the analysis or the
+protocol's readiness.
+
+The `protocol_ocr_completed` event's pages now carry `render_dpi` and
+`value_boxes` (each a value's `text` and its `box` in the pixels of the page
+rendered at `render_dpi`), so a value read from handwriting or a photo can be
+shown beside the piece of the image it was read from.
+
+### Reading older data
+
+A registration without `converted_from`, an OCR page without `render_dpi` or
+`value_boxes`, and a protocol without reagent-table events read as before (no
+table, no boxes).
+
+### Going back
+
+Code from before this version reads every event above: it ignores
+`converted_from`, `render_dpi` and `value_boxes`, and never reads the
+reagent-table events. A protocol registered from a photo or a Word document
+reads as the PDF it is.
+
+### New dependencies
+
+`Pillow` (photos) and `openpyxl` (reagent tables) are required; HEIC needs the
+optional extra `.[heic]` (`pillow-heif`). LibreOffice must be installed on the
+server, with the Korean fonts `fonts-nanum` (human decision 2026-10-13; a system
+install, not a Python package): `VOINEY_LAB_OFFICE_CONVERTER` names its
+`soffice` when it is not on `PATH` or in its default place, and without it a
+Word upload is refused with `docx_conversion_unavailable`. `GET /readyz` adds
+`docx_conversion_available` and `heic_photos_available` to its capabilities;
+neither makes the server not ready. See `docs/SOURCE_FORMATS.md`.

@@ -9,6 +9,7 @@ may persist it for human review.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,28 @@ class ProtocolOcrResultError(ProtocolOcrError):
 
 
 @dataclass(frozen=True)
+class OcrValueBox:
+    """Where a value OCR read sits on its rendered page (lane AN, FM).
+
+    A number with the unit printed after it ("12,000 ×g", "0.5 mL"), and its
+    box in the pixels of the page rendered at ``OcrPage.render_dpi``. Kept so
+    that a value read from handwriting or a photo can be shown beside the
+    piece of the image it was read from, for a person to check (the review
+    tab is lane RV's).
+    """
+
+    text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+#: The most value boxes kept for one page.
+MAX_OCR_VALUE_BOXES = 2_000
+
+
+@dataclass(frozen=True)
 class OcrPage:
     source_page_number: int
     text: str
@@ -46,6 +69,10 @@ class OcrPage:
     #: True when two engines read this page and their numbers or units
     #: differ. A mark for the reviewer; it blocks nothing.
     numeric_review_required: bool = False
+    #: The values the chosen engine read, with their boxes, and the
+    #: resolution the page was rendered at for it (lane AN, FM).
+    value_boxes: tuple[OcrValueBox, ...] = ()
+    render_dpi: int | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +157,26 @@ def validate_ocr_result(
                 raise ProtocolOcrResultError("OCR page provider identity is invalid.")
         if not isinstance(page.numeric_review_required, bool):
             raise ProtocolOcrResultError("OCR page review mark is invalid.")
+        if page.render_dpi is not None and (
+            not isinstance(page.render_dpi, int)
+            or isinstance(page.render_dpi, bool)
+            or not 36 <= page.render_dpi <= 1200
+        ):
+            raise ProtocolOcrResultError("OCR page resolution is invalid.")
+        if len(page.value_boxes) > MAX_OCR_VALUE_BOXES or any(
+            not isinstance(box, OcrValueBox)
+            or not isinstance(box.text, str)
+            or not 0 < len(box.text) <= 64
+            or not all(
+                isinstance(edge, (int, float)) and not isinstance(edge, bool)
+                and math.isfinite(edge) and edge >= 0
+                for edge in (box.x0, box.y0, box.x1, box.y1)
+            )
+            or box.x1 < box.x0
+            or box.y1 < box.y0
+            for box in page.value_boxes
+        ):
+            raise ProtocolOcrResultError("OCR page value boxes are invalid.")
         canonical_pages.append(
             OcrPage(
                 source_page_number=page.source_page_number,
@@ -138,6 +185,8 @@ def validate_ocr_result(
                 provider=page.provider,
                 provider_version=page.provider_version,
                 numeric_review_required=page.numeric_review_required,
+                value_boxes=tuple(page.value_boxes),
+                render_dpi=page.render_dpi,
             )
         )
     if non_empty == 0:
@@ -177,6 +226,14 @@ def ocr_result_payload(result: OcrResult) -> dict[str, object]:
             "provider": page.provider,
             "provider_version": page.provider_version,
             "numeric_review_required": page.numeric_review_required,
+            # Lane AN, FM: the values with their boxes on the page rendered
+            # at render_dpi. Absent from OCR results stored before.
+            "render_dpi": page.render_dpi,
+            "value_boxes": [
+                {"text": box.text, "box": [round(box.x0, 1), round(box.y0, 1),
+                                           round(box.x1, 1), round(box.y1, 1)]}
+                for box in page.value_boxes
+            ],
         }
         for page in result.pages
     ]

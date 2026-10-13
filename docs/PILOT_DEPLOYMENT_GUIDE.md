@@ -39,6 +39,16 @@ python -m pip install -e '.[test]'
 cp .env.example .env
 ```
 
+Install LibreOffice and the Korean fonts on the host too: a Word protocol is
+converted to PDF by LibreOffice, which this package does not bring (human
+decision of 2026-10-13, lane AN). Then check `GET /readyz` reports
+`"docx_conversion_available": true`. HEIC photos are optional (`pip install
+-e '.[heic]'`, mind its licence). See `docs/SOURCE_FORMATS.md`.
+
+```bash
+sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum
+```
+
 Never commit `.env`, credentials, private protocols, evidence, raw audio,
 transcripts, user identifiers, or runtime databases.
 

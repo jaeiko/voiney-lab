@@ -1572,16 +1572,21 @@ class ServerTests(unittest.TestCase):
             "VOINEY_LAB_WORKSPACE_DATA_DIR": tempfile.mkdtemp(),
             "VOINEY_LAB_PROTOCOL_ENABLED": "false",
             "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "false",
-        }):
+        }), patch("voiney_lab.server._docx_conversion_available", return_value=True), \
+                patch("voiney_lab.server._heic_photos_available", return_value=False):
             response = asyncio.run(call())
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["status"], "ok")
+        # Lane AN, FM (human decision 2026-10-13): LibreOffice is a server
+        # requirement and HEIC an option; both are reported.
         self.assertEqual(body["capabilities"], {
             "identity_mode": "development",
             "workspace_enabled": True,
             "protocol_catalog_enabled": False,
             "experiment_reports_enabled": False,
+            "docx_conversion_available": True,
+            "heic_photos_available": False,
         })
         self.assertNotIn("key", json.dumps(body).lower())
         self.assertNotIn("secret", json.dumps(body).lower())

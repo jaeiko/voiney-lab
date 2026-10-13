@@ -51,8 +51,11 @@ committed file) for secrets, matching the "no fake external validation" and
   workspace, protocol-catalog, or report configuration fails to parse (for
   example, operational scope without complete OIDC settings); returns `200`
   with non-secret identity mode and capability flags (`workspace_enabled`,
-  `protocol_catalog_enabled`, `experiment_reports_enabled`; `moss_enabled`
-  left with the Moss connection on 2026-10-10, lane CL) otherwise. This does
+  `protocol_catalog_enabled`, `experiment_reports_enabled`,
+  `docx_conversion_available` -- LibreOffice found, required on the server --
+  and `heic_photos_available` -- the optional pillow-heif installed, lane AN
+  2026-10-13; `moss_enabled` left with the Moss connection on 2026-10-10,
+  lane CL) otherwise. Neither file-format flag makes the server not ready. This does
   **not** verify live reachability of any external provider — no local probe
   should make a billable provider call.
 
