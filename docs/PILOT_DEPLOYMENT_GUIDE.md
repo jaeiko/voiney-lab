@@ -1,6 +1,6 @@
 # Pilot Deployment Guide
 
-Date: 2026-08-24, revised 2026-10-10 (lane CL)\
+Date: 2026-08-24, revised 2026-10-13 (lane PL)\
 Audience: Technical owner and laboratory pilot owner
 
 VoineyLab is an MVP prototype, not field-validated.
@@ -58,25 +58,38 @@ At minimum, review the configuration groups in `.env.example`:
   shell or `.env` sets them.
 
 Start the pilot with `scripts/run_pilot.sh`, not by hand. It decides the usage
-scope and the approved safety catalog itself and ignores `.env` for both:
+scope and the approved safety catalog itself and ignores `.env` for both (a
+different `VOINEY_LAB_USAGE_SCOPE` or `VOINEY_LAB_SAFETY_CATALOG` exported in the
+shell is reported with `[WARN]` and ignored). Which of two runs it starts is
+told by one fact, whether `data/runtime/pilot/approved_safety_catalog.sqlite`
+is there (human decision of 2026-10-13, lane PL; `PILOT_GUIDE.md` §1):
 
-- The usage scope is `reference_only` and the approved safety catalog is
-  `data/runtime/pilot/approved_safety_catalog.sqlite`. A different value of
-  `VOINEY_LAB_USAGE_SCOPE` or `VOINEY_LAB_SAFETY_CATALOG`
-  exported in the shell is reported with `[WARN]` and ignored.
+- **Without that file** the scope is `source_protocol_only`: the pilot starts on
+  the safety statements of the uploaded PDF alone, no catalog is required or
+  read, and the start screen, the safety answers and the experiment record carry
+  the line "기관 안전 문서 없음 · 원문 안전 주의만".
+- **With it** the scope is `reference_only` and the data path is the one this
+  guide described before: development identity, approved non-demo documents, and
+  a model told the material is non-operational. The launcher refuses to start, and
+  `--check-only` exits 1, when that catalog is unreadable, holds any demo document
+  (scope `demo`/`test_only` or a title containing "fictional", in any approval
+  state), or has no approved, active `reference_only` document. Build it as
+  `APPROVED_DOCUMENT_OPERATIONS.md` §4 describes and require
+  `./scripts/run_pilot.sh --check-only` to exit 0 before the session. A file that
+  is there but unusable is never taken for "no catalog"; move it away to start
+  without institution documents.
 - The pilot does not run `operational` yet. That scope requires all OIDC
   values and refuses development identity; without an identity provider every
   `/api` and `/ws` request fails. `demo` and `test_only` are ruled out because
   every document of those scopes is demo material, which the launcher refuses.
   Once an identity provider is configured, moving the pilot to `operational`
-  means changing `PILOT_USAGE_SCOPE` in the launcher and placing at least one
-  approved, active `operational` document in the catalog.
-- The launcher refuses to start, and `--check-only` exits 1, when that catalog
-  is missing or unreadable, holds any demo document (scope `demo`/`test_only`
-  or a title containing "fictional", in any approval state), or has no
-  approved, active `reference_only` document. Build it as
-  `APPROVED_DOCUMENT_OPERATIONS.md` §4 describes and require
-  `./scripts/run_pilot.sh --check-only` to exit 0 before the session.
+  means changing the launcher's scope and placing at least one approved, active
+  `operational` document in the catalog.
+- The launcher also keeps the STT diagnostic recordings (when switched on) inside
+  `data/runtime/pilot/` and marks that folder, so the pilot's data is found, and
+  can be deleted, apart from development data (`PILOT_GUIDE.md` §3 and §5).
+- For a phone, put HTTPS and a password in front of the loopback server
+  (`PILOT_HTTPS_SETUP.md`); the pilot server has no login of its own.
 
 The launcher does not set the following, so `.env` still decides them. Check
 each one before the session:
@@ -170,7 +183,11 @@ Use a non-hazardous or fictional workflow to verify:
 2. Export the report formats the laboratory keeps (JSON, Markdown, CSV, DOCX).
 3. Stop the service and create/verify the post-session backup.
 4. Complete participant interviews and incident review.
-5. Do not advance beyond a supervised pilot until the remaining gates -- an
+5. Delete the collected data as the pilot notice promised, with
+   `scripts/pilot_data_delete.py` (preview, confirm, delete, record;
+   `PILOT_GUIDE.md` §5), and delete the backups and exports made in steps 2-3
+   once they are no longer needed.
+6. Do not advance beyond a supervised pilot until the remaining gates -- an
    identity provider, the field evaluation in `VOICE_FIELD_EVALUATION_PLAN.md`,
    and the providers' data-handling terms -- have owners and acceptance
    evidence.
