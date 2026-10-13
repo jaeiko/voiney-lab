@@ -2727,8 +2727,8 @@ class ProtocolCatalog:
     ) -> ProtocolRegistration:
         """Register one source PDF, or find the one already registered.
 
-        ``converted_from`` names the photo the PDF was made from (lane AN,
-        FM); it is kept in the registration event, where
+        ``converted_from`` names the Word document or photo the PDF was made
+        from (lane AN, FM); it is kept in the registration event, where
         ``find_converted_upload`` finds it.
         """
 
@@ -2772,10 +2772,11 @@ class ProtocolCatalog:
         )
 
     def find_converted_upload(self, sha256: str) -> ProtocolRegistration | None:
-        """The protocol a photo with this checksum made, if any (lane AN, FM).
+        """The protocol a Word document or photo with this checksum made, if any.
 
-        An upload of the same file again is found by its own checksum before
-        it is converted again.
+        Lane AN, FM: LibreOffice writes the time into each PDF it prints, so
+        the same .docx uploaded again gives other PDF bytes; it is found by
+        its own checksum before it is converted again.
         """
 
         revision = self._revision_converted_from(sha256)

@@ -61,6 +61,7 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 
 __all__ = [
     "BOTTOM_BAND_FRACTION",
+    "DOCX_MEDIA_TYPE",
     "IMAGE_MEDIA_TYPES",
     "MAX_PROTOCOL_PDF_BYTES",
     "OCR_REASON_DROPPED_GLYPHS",
@@ -83,6 +84,7 @@ __all__ = [
     "ProtocolPdfTypeError",
     "ProtocolPdfWorkerError",
     "ProtocolPdfWorkerTimeoutError",
+    "ProtocolSourceConversionError",
     "ProtocolSourceConversionUnavailableError",
     "ProtocolSourceFormatError",
     "ProtocolSourceTooLargeError",
@@ -633,13 +635,16 @@ def _extract_protocol_pdf_uncached(path: str | Path) -> ProtocolPdfExtraction:
 # Sources that are not PDFs (lane AN, FM; human decision 2026-10-13)
 # ---------------------------------------------------------------------------
 #
-# A photo of a protocol is read through the same evidence path as a PDF: it is
-# turned into the PDF that extraction, OCR and the analysis read, and that PDF
-# is the source every quote is checked against and the page a person is
-# shown. The upload's own bytes are named by their checksum in the
-# registration (``SourceConversion``); nothing about the evidence check
-# changes.
+# A Word document and a photo of a protocol are read through the same evidence
+# path as a PDF: each is turned into the PDF that extraction, OCR and the
+# analysis read, and that PDF is the source every quote is checked against
+# and the page a person is shown. The upload's own bytes are named by their
+# checksum in the registration (``SourceConversion``); nothing about the
+# evidence check changes.
 
+DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 #: The photo formats read, by upload media type: the Pillow format name the
 #: file must open as.
 IMAGE_MEDIA_TYPES = {
@@ -648,7 +653,7 @@ IMAGE_MEDIA_TYPES = {
     "image/heic": "HEIF",
     "image/heif": "HEIF",
 }
-SOURCE_MEDIA_TYPES = frozenset({PDF_MEDIA_TYPE, *IMAGE_MEDIA_TYPES})
+SOURCE_MEDIA_TYPES = frozenset({PDF_MEDIA_TYPE, DOCX_MEDIA_TYPE, *IMAGE_MEDIA_TYPES})
 #: A photo is placed on its page at the resolution OCR renders pages at, so
 #: OCR reads the photo's own pixels, neither enlarged nor shrunk.
 IMAGE_PDF_DPI = pdf_text_engine.OCR_RENDER_DPI
@@ -658,6 +663,17 @@ MAX_SOURCE_IMAGE_PIXELS = 100_000_000
 #: JPEG quality of the photo inside the PDF. The photo is the evidence a
 #: person checks a handwritten value against, so it is kept close to as taken.
 IMAGE_PDF_JPEG_QUALITY = 95
+#: How long LibreOffice may take to turn one Word document into a PDF.
+OFFICE_CONVERSION_TIMEOUT_SECONDS = 120
+#: Where LibreOffice is looked for besides PATH: its default install places.
+OFFICE_CONVERTER_PLACES = (
+    "/usr/bin/soffice",
+    "/usr/lib/libreoffice/program/soffice",
+    "/opt/libreoffice/program/soffice",
+    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+    r"C:\Program Files\LibreOffice\program\soffice.exe",
+    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+)
 #: The date written into a photo's PDF (with a fixed title), so the same photo
 #: gives the same PDF bytes.
 _FIXED_PDF_DATE = time.gmtime(946684800)  # 2000-01-01T00:00:00Z
@@ -681,6 +697,12 @@ class ProtocolSourceConversionUnavailableError(ProtocolPdfError):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class ProtocolSourceConversionError(ProtocolPdfError):
+    """The converter ran and did not give a PDF."""
+
+    code = "source_conversion_failed"
 
 
 @dataclass(frozen=True)
@@ -727,13 +749,21 @@ def convert_source_to_pdf(
     source: str | Path,
     media_type: str,
     destination: str | Path,
+    *,
+    office_converter: str | None = None,
 ) -> SourceConversion:
-    """Write the PDF an uploaded photo is read as."""
+    """Write the PDF an uploaded Word document or photo is read as.
+
+    ``office_converter`` names LibreOffice's ``soffice`` for a Word document;
+    by default it is looked up (``find_office_converter``).
+    """
 
     media_type = source_media_type(media_type)
     if media_type in IMAGE_MEDIA_TYPES:
         return image_to_pdf(source, media_type, destination)
-    raise ProtocolPdfTypeError("The upload is not a PDF or a photo.")
+    if media_type == DOCX_MEDIA_TYPE:
+        return docx_to_pdf(source, destination, converter=office_converter)
+    raise ProtocolPdfTypeError("The upload is not a PDF, a Word document or a photo.")
 
 
 def file_sha256(path: str | Path) -> str:
@@ -831,3 +861,102 @@ def _pillow_version() -> str:
     from PIL import __version__
 
     return __version__
+
+
+def find_office_converter() -> str | None:
+    """LibreOffice's ``soffice`` on this machine, or None."""
+
+    import shutil
+
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return next((place for place in OFFICE_CONVERTER_PLACES if Path(place).is_file()), None)
+
+
+def docx_to_pdf(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    converter: str | None = None,
+    run=None,
+) -> SourceConversion:
+    """A Word document as the PDF LibreOffice prints it.
+
+    LibreOffice is a system install this package does not bring. Without it
+    the upload is refused with ``docx_conversion_unavailable`` and the reader
+    is asked to save the document as a PDF; the document is never read some
+    other way that the evidence check was not built for.
+    """
+
+    import subprocess
+    import tempfile
+    import zipfile
+
+    source = Path(source)
+    if not zipfile.is_zipfile(source):
+        raise ProtocolSourceFormatError("The Word document is not a .docx file.")
+    with zipfile.ZipFile(source) as archive:
+        if "word/document.xml" not in archive.namelist():
+            raise ProtocolSourceFormatError("The Word document is not a .docx file.")
+    converter = converter or find_office_converter()
+    if converter is None:
+        raise ProtocolSourceConversionUnavailableError(
+            "LibreOffice is not installed on this server.",
+            code="docx_conversion_unavailable",
+        )
+    run = run or subprocess.run
+    sha256, byte_size = _file_identity(source)
+    with tempfile.TemporaryDirectory(prefix="protocol-docx-") as root:
+        work = Path(root)
+        copy = work / "source.docx"
+        copy.write_bytes(source.read_bytes())
+        try:
+            completed = run(
+                [
+                    converter,
+                    "--headless",
+                    "--norestore",
+                    f"-env:UserInstallation={(work / 'profile').as_uri()}",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(work / "out"),
+                    str(copy),
+                ],
+                capture_output=True,
+                timeout=OFFICE_CONVERSION_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ProtocolSourceConversionError(
+                "LibreOffice did not finish converting the Word document."
+            ) from exc
+        except OSError as exc:
+            raise ProtocolSourceConversionUnavailableError(
+                "LibreOffice could not be started.", code="docx_conversion_unavailable"
+            ) from exc
+        produced = work / "out" / "source.pdf"
+        if completed.returncode != 0 or not produced.is_file() or produced.stat().st_size == 0:
+            raise ProtocolSourceConversionError(
+                "LibreOffice did not produce a PDF from the Word document."
+            )
+        Path(destination).write_bytes(produced.read_bytes())
+    return SourceConversion(
+        media_type=DOCX_MEDIA_TYPE,
+        sha256=sha256,
+        byte_size=byte_size,
+        converter=_office_converter_name(converter, run),
+    )
+
+
+def _office_converter_name(converter: str, run) -> str:
+    """"libreoffice-24.2.7.2" from ``soffice --version``, or "libreoffice"."""
+
+    try:
+        completed = run([converter, "--version"], capture_output=True, timeout=30, check=False)
+        match = re.search(rb"LibreOffice\s+([0-9][0-9.]*)", completed.stdout or b"")
+    except Exception:  # noqa: BLE001 - the name is a label, not a check
+        match = None
+    return f"libreoffice-{match[1].decode()}" if match else "libreoffice"

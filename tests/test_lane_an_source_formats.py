@@ -1,20 +1,25 @@
-"""A photo read through the PDF evidence path (lane AN, FM c).
+"""A Word document and a photo read through the PDF evidence path (lane AN, FM).
 
-Human decision 2026-10-13: a JPG, PNG or HEIC photo becomes a one-page PDF of
-the photo, which OCR reads as it reads a scanned page. The PDF is the
-registered source; the upload's own checksum is kept with the registration,
-so the same file uploaded again finds the protocol it made. HEIC needs the
-optional pillow-heif package (``.[heic]``). Every OCR engine here is fake;
-Pillow is real.
+Human decision 2026-10-13: (a) a .docx becomes the PDF LibreOffice prints and
+is read as that PDF -- the same extraction, the same evidence check; (c) a JPG,
+PNG or HEIC photo becomes a one-page PDF of the photo, which OCR reads as it
+reads a scanned page. The PDF is the registered source; the upload's own
+checksum is kept with the registration, so the same file uploaded again finds
+the protocol it made. LibreOffice is a system install this package does not
+bring: without it a .docx is refused by name, never read some other way.
+HEIC needs the optional pillow-heif package (``.[heic]``). Every converter
+and OCR engine here is fake except Pillow itself.
 """
 
 from __future__ import annotations
 
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,11 +32,14 @@ from voiney_lab import experiment_protocol_pdf as pdf_module
 from voiney_lab import server as server_module
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
 from voiney_lab.experiment_protocol_pdf import (
+    DOCX_MEDIA_TYPE,
     IMAGE_PDF_DPI,
+    ProtocolSourceConversionError,
     ProtocolSourceConversionUnavailableError,
     ProtocolSourceFormatError,
     clear_protocol_pdf_cache,
     convert_source_to_pdf,
+    docx_to_pdf,
     extract_protocol_pdf,
     pdf_filename,
 )
@@ -53,6 +61,38 @@ def photo_bytes(size=(600, 300), *, fmt="JPEG", mode="RGB", orientation=None) ->
     else:
         image.save(out, fmt)
     return out.getvalue()
+
+
+def docx_bytes(text: str = "1. Add 5 mL buffer.") -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        for name, data in (
+            ("[Content_Types].xml", "<Types/>"),
+            ("word/document.xml", f"<w:document><w:t>{text}</w:t></w:document>"),
+        ):
+            archive.writestr(zipfile.ZipInfo(name, date_time=(2026, 10, 13, 0, 0, 0)), data)
+    return out.getvalue()
+
+
+class FakeOffice:
+    """Stands in for ``soffice``: prints a text PDF, a new time each run."""
+
+    def __init__(self, *, returncode: int = 0, produce: bool = True, timeout: bool = False):
+        self.calls: list[list[str]] = []
+        self.returncode, self.produce, self.timeout = returncode, produce, timeout
+
+    def __call__(self, command, **kwargs):
+        self.calls.append(list(command))
+        if command[1] == "--version":
+            return subprocess.CompletedProcess(command, 0, b"LibreOffice 24.2.7.2 420(Build:2)\n", b"")
+        if self.timeout:
+            raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+        if self.produce:
+            outdir = Path(command[command.index("--outdir") + 1])
+            outdir.mkdir(parents=True, exist_ok=True)
+            write_text_pdf(outdir / "source.pdf", "Fictional protocol. 1. Add 5 mL buffer.",
+                           title=f"run {len(self.calls)}")
+        return subprocess.CompletedProcess(command, self.returncode, b"", b"")
 
 
 class ConversionTests(unittest.TestCase):
@@ -137,9 +177,47 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(conversion.payload()["pixels"], [600, 300])
         self.assertTrue(extract_protocol_pdf(self.root / "a.pdf").pages[0].ocr_required)
 
+    def test_a_word_document_is_the_pdf_libreoffice_prints(self) -> None:
+        office = FakeOffice()
+        conversion = docx_to_pdf(self.write("p.docx", docx_bytes()), self.root / "p.pdf",
+                                 converter="/usr/bin/soffice", run=office)
+        self.assertIn("Add 5 mL buffer", extract_protocol_pdf(self.root / "p.pdf").pages[0].text)
+        self.assertEqual(conversion.converter, "libreoffice-24.2.7.2")
+        self.assertEqual(conversion.media_type, DOCX_MEDIA_TYPE)
+        command = office.calls[0]
+        self.assertEqual(command[:3], ["/usr/bin/soffice", "--headless", "--norestore"])
+        self.assertIn("--convert-to", command)
+
+    def test_without_libreoffice_a_word_document_is_refused_by_name(self) -> None:
+        with patch.object(pdf_module, "find_office_converter", return_value=None), \
+                self.assertRaises(ProtocolSourceConversionUnavailableError) as raised:
+            convert_source_to_pdf(self.write("p.docx", docx_bytes()), DOCX_MEDIA_TYPE, self.root / "p.pdf")
+        self.assertEqual(raised.exception.code, "docx_conversion_unavailable")
+
+    def test_a_conversion_that_gives_no_pdf_is_a_failure_not_an_empty_source(self) -> None:
+        for office in (FakeOffice(returncode=1), FakeOffice(produce=False), FakeOffice(timeout=True)):
+            with self.subTest(office=vars(office)), self.assertRaises(ProtocolSourceConversionError):
+                docx_to_pdf(self.write("p.docx", docx_bytes()), self.root / "p.pdf",
+                            converter="/usr/bin/soffice", run=office)
+        self.assertFalse((self.root / "p.pdf").exists())
+
+    def test_a_file_that_is_not_a_docx_is_refused_before_libreoffice_runs(self) -> None:
+        office = FakeOffice()
+        for data in (b"plain text", self._zip_without_document()):
+            with self.subTest(data=data[:10]), self.assertRaises(ProtocolSourceFormatError):
+                docx_to_pdf(self.write("p.docx", data), self.root / "p.pdf",
+                            converter="/usr/bin/soffice", run=office)
+        self.assertEqual(office.calls, [])
+
+    def _zip_without_document(self) -> bytes:
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as archive:
+            archive.writestr("xl/workbook.xml", "<workbook/>")
+        return out.getvalue()
+
     def test_the_pdf_name_of_a_converted_upload(self) -> None:
         self.assertEqual(pdf_filename("bench notes.jpg"), "bench notes.pdf")
-        self.assertEqual(pdf_filename("bench.v2.png"), "bench.v2.pdf")
+        self.assertEqual(pdf_filename("protocol.v2.docx"), "protocol.v2.pdf")
         self.assertEqual(pdf_filename("noext"), "noext.pdf")
 
 
@@ -156,12 +234,15 @@ class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
         })
         self.env.start()
         self.provider = MixedProvider()
+        self.office = FakeOffice()
         self.patches = (
             patch.object(server_module, "_open_protocol_catalog", self._open_catalog),
             patch.object(server_module, "_protocol_ocr_provider", lambda: self.provider),
             patch.object(server_module, "_begin_background_analysis", self._begin_analysis),
             patch("fastapi.routing.run_in_threadpool", side_effect=_dedicated_to_thread),
             patch.object(server_module.asyncio, "to_thread", side_effect=_dedicated_to_thread),
+            patch.object(pdf_module, "find_office_converter", return_value="/usr/bin/soffice"),
+            patch.object(pdf_module, "docx_to_pdf", self._docx_to_pdf),
         )
         for item in self.patches:
             item.start()
@@ -174,6 +255,11 @@ class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
         server_module._PROTOCOL_ANALYSIS_TASKS.clear()
         clear_protocol_pdf_cache()
         self.temp.cleanup()
+
+    _real_docx_to_pdf = staticmethod(docx_to_pdf)
+
+    def _docx_to_pdf(self, source, destination, *, converter=None, run=None):
+        return self._real_docx_to_pdf(source, destination, converter=converter, run=self.office)
 
     def _open_catalog(self):
         store = initialize_protocol_store(ProtocolPersistenceSettings(True, self.data_dir))
@@ -226,10 +312,27 @@ class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(again.json()["deduplicated"])
         self.assertEqual(again.json()["protocol"]["protocol_id"], first.json()["protocol"]["protocol_id"])
 
+    async def test_a_word_document_upload_is_read_as_its_pdf(self) -> None:
+        async with await self.client() as client:
+            response = await self.upload(client, docx_bytes(), "protocol.docx", DOCX_MEDIA_TYPE)
+            self.assertEqual(response.status_code, 201, response.text)
+            protocol_id = response.json()["protocol"]["protocol_id"]
+            self.assertEqual(response.json()["protocol"]["analysis_status"], "structured_analysis_ready")
+            # LibreOffice writes the time into each PDF: the same .docx again
+            # is found by its own checksum, and LibreOffice is not run again.
+            again = await self.upload(client, docx_bytes(), "protocol.docx", DOCX_MEDIA_TYPE)
+        self.assertTrue(again.json()["deduplicated"])
+        self.assertEqual(again.json()["protocol"]["protocol_id"], protocol_id)
+        self.assertEqual(sum(call[1] != "--version" for call in self.office.calls), 1)
+        origin = self.registered_event(protocol_id)["converted_from"]
+        self.assertEqual(origin["converter"], "libreoffice-24.2.7.2")
+        self.assertEqual(origin["media_type"], DOCX_MEDIA_TYPE)
+
     async def test_refusals_name_their_reason(self) -> None:
         cases = (
             (b"%PDF-1.7", "notes.txt", "text/plain", 415, "unsupported_pdf_media_type"),
             (photo_bytes(fmt="PNG"), "a.jpg", "image/jpeg", 422, "invalid_source_file"),
+            (b"plain", "p.docx", DOCX_MEDIA_TYPE, 422, "invalid_source_file"),
             (photo_bytes(), "../a.jpg", "image/jpeg", 400, "protocol_registration_invalid"),
         )
         async with await self.client() as client:
@@ -240,6 +343,10 @@ class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(sys.modules, {"pillow_heif": None}):
                 heic = await self.upload(client, b"....", "a.heic", "image/heic")
             self.assertEqual((heic.status_code, heic.json()["detail"]), (503, "heic_support_unavailable"))
+            with patch.object(pdf_module, "find_office_converter", return_value=None), \
+                    patch.object(pdf_module, "docx_to_pdf", self._real_docx_to_pdf):
+                docx = await self.upload(client, docx_bytes(), "p.docx", DOCX_MEDIA_TYPE)
+            self.assertEqual((docx.status_code, docx.json()["detail"]), (503, "docx_conversion_unavailable"))
         # Nothing was registered from a refused upload.
         catalog, store = self._open_catalog()
         try:

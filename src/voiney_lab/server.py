@@ -73,6 +73,7 @@ from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfTooLargeError,
     ProtocolPdfWorkerError,
     ProtocolPdfTypeError,
+    ProtocolSourceConversionError,
     ProtocolSourceConversionUnavailableError,
     ProtocolSourceFormatError,
     ProtocolSourceTooLargeError,
@@ -2120,14 +2121,14 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return _workspace_http_error(exc)
     if isinstance(exc,ProtocolPdfTooLargeError):
         return HTTPException(status_code=413,detail="protocol_pdf_too_large")
-    # Lane AN, FM: a photo that could not become its PDF.
+    # Lane AN, FM: a Word document or photo that could not become its PDF.
     # A converter this server lacks is the server's state (503), not the
     # file's; a file that is not what its type names is the file's (422).
     if isinstance(exc,ProtocolSourceConversionUnavailableError):
         return HTTPException(status_code=503,detail=exc.code)
     if isinstance(exc,ProtocolSourceTooLargeError):
         return HTTPException(status_code=413,detail=exc.code)
-    if isinstance(exc,ProtocolSourceFormatError):
+    if isinstance(exc,(ProtocolSourceFormatError,ProtocolSourceConversionError)):
         return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolPdfTypeError):
         return HTTPException(status_code=415,detail="unsupported_pdf_media_type")
@@ -2782,12 +2783,12 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols",status_code=201)
 async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
-    """Register one protocol source: a PDF or a photo.
+    """Register one protocol source: a PDF, a Word document or a photo.
 
-    Lane AN, FM (human decision 2026-10-13): a JPG, PNG or HEIC photo is
-    turned into the PDF that extraction, OCR and the analysis read -- one
-    evidence path -- and registered as it; the upload's own checksum is kept
-    with the registration.
+    Lane AN, FM (human decision 2026-10-13): a .docx (through LibreOffice)
+    and a JPG, PNG or HEIC photo are turned into the PDF that extraction, OCR
+    and the analysis read -- one evidence path -- and registered as it; the
+    upload's own checksum is kept with the registration.
     """
 
     media_type=source_media_type(request.headers.get("content-type",""))
@@ -2816,8 +2817,8 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             catalog,store=_open_protocol_catalog()
             try:
                 converted=None
-                # A photo uploaded before is found by its own checksum and not
-                # converted again.
+                # A Word document or photo uploaded before is found by its own
+                # checksum and not converted again.
                 result=(
                     catalog.find_converted_upload(file_sha256(original))
                     if original is not None else None
@@ -2841,7 +2842,9 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     category="protocol",metric_name="upload",
                     dimensions={
                         "source_kind":(
-                            "local_pdf" if converted is None else "local_photo"),
+                            "local_pdf" if converted is None
+                            else "local_docx" if converted.converter.startswith("libreoffice")
+                            else "local_photo"),
                         "status":"stored",
                     },
                 )
