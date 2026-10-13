@@ -22,6 +22,10 @@ from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfi
 from tests.test_retrieval import operational_document
 from tests.runnable_fixture import runnable_fixture_assumed
 
+#: The xAI speech path written down, as a deployment writes its provider
+#: (lane PL: an unset VOINEY_LAB_STT_PROVIDER is "설정 필요", not xai).
+XAI_STT={"XAI_API_KEY":"test","VOINEY_LAB_STT_PROVIDER":"xai"}
+
 class FakeResponse:
     def __init__(self,content=b"",status=200,content_type="audio/pcm"):
         self.content=content; self.status_code=status; self.ok=200<=status<300
@@ -54,8 +58,12 @@ class ServerTests(unittest.TestCase):
         return path
 
     def test_cascade_voice_has_one_canonical_default_and_override(self):
-        with patch.dict("os.environ", {}, clear=True):
+        # Lane PL: the provider's own default voice, once a provider is written
+        # down; with none written, no voice (not xai's "leo").
+        with patch.dict("os.environ", {"VOINEY_LAB_TTS_PROVIDER": "xai"}, clear=True):
             self.assertEqual(_tts_voice(), "leo")
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_tts_voice(), "")
         with patch.dict(
             "os.environ",
             {"VOINEY_LAB_TTS_VOICE": "custom-professor", "XAI_TTS_VOICE": "stale-alias"},
@@ -608,7 +616,7 @@ class ServerTests(unittest.TestCase):
 
     def test_rest_stt_preserves_optional_provider_quality_without_inventing_it(self):
         with patch("voiney_lab.server.requests.post",return_value=FakeResponse()) as post, \
-             patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
+             patch.dict("os.environ",XAI_STT,clear=True):
             result=transcribe(b"\0\0")
         self.assertEqual((result.text,result.detected_language),
                          ("short test utterance","ko"))
@@ -621,7 +629,7 @@ class ServerTests(unittest.TestCase):
             "voiney_lab.server.requests.post",
             return_value=FakeResponse(),
         ) as biased_post,patch.dict(
-            "os.environ",{"XAI_API_KEY":"test"},clear=True,
+            "os.environ",XAI_STT,clear=True,
         ):
             transcribe(
                 b"\0\0",language="ko",
@@ -646,7 +654,7 @@ class ServerTests(unittest.TestCase):
         with patch(
             "voiney_lab.server.requests.post",
             return_value=quality_response,
-        ),patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
+        ),patch.dict("os.environ",XAI_STT,clear=True):
             quality=transcribe(b"\0\0")
         self.assertIsNone(quality.confidence)
         self.assertIsNone(quality.no_speech_probability)

@@ -13,15 +13,20 @@ Nothing here calls a provider.
 from __future__ import annotations
 
 import os
+import re
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+from voiney_lab import voice_providers
+from voiney_lab.configuration import ConfigurationError
 from voiney_lab.experiment_reports import ReportWriterSettings
 from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
 
+SRC = Path(__file__).resolve().parents[1] / "src" / "voiney_lab"
 PROVIDER = "VOINEY_LAB_SUPPLEMENTAL_PROVIDER"
 MODEL = "VOINEY_LAB_SUPPLEMENTAL_MODEL"
 
@@ -152,6 +157,73 @@ class ReportWriterDefaultsTests(unittest.TestCase):
             brain = _report_writer_brain()
         self.assertIsNotNone(brain)
         self.assertEqual(brain.model, "model-test")
+
+
+STT_PROVIDER = "VOINEY_LAB_STT_PROVIDER"
+TTS_PROVIDER = "VOINEY_LAB_TTS_PROVIDER"
+PCM = b"\0\0" * 1600
+
+
+class VoiceProviderDefaultsTests(unittest.TestCase):
+    """An unset speech provider is "설정 필요", not xai."""
+
+    def test_an_unset_provider_is_no_provider(self):
+        stt = voice_providers.SttProviderSettings.from_environment({})
+        tts = voice_providers.TtsProviderSettings.from_environment({})
+        self.assertEqual((stt.provider, stt.model), ("", ""))
+        self.assertEqual((tts.provider, tts.model, tts.voice), ("", "", ""))
+        # The classes carry no xai default either.
+        self.assertEqual(voice_providers.SttProviderSettings().provider, "")
+        self.assertEqual(voice_providers.TtsProviderSettings().provider, "")
+
+    def test_a_written_provider_keeps_its_own_defaults(self):
+        stt = voice_providers.SttProviderSettings.from_environment({STT_PROVIDER: "xai"})
+        tts = voice_providers.TtsProviderSettings.from_environment({TTS_PROVIDER: "XAI"})
+        self.assertEqual((stt.provider, stt.model, stt.timeout_seconds), ("xai", "", 120.0))
+        self.assertEqual((tts.provider, tts.model, tts.voice), ("xai", "", "leo"))
+
+    def test_a_bad_provider_is_still_refused_by_name(self):
+        for name, settings_class in (
+            (STT_PROVIDER, voice_providers.SttProviderSettings),
+            (TTS_PROVIDER, voice_providers.TtsProviderSettings),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ConfigurationError, name):
+                settings_class.from_environment({name: "whisper"})
+
+    def test_the_adapters_refuse_an_unset_provider_by_name(self):
+        with self.assertRaisesRegex(ConfigurationError, rf"{STT_PROVIDER}.*설정 필요"):
+            voice_providers.transcribe(PCM, voice_providers.SttProviderSettings())
+        with self.assertRaisesRegex(ConfigurationError, rf"{TTS_PROVIDER}.*설정 필요"):
+            voice_providers.synthesize("안녕하세요", "ko", voice_providers.TtsProviderSettings())
+
+    def test_the_server_sends_no_request_for_an_unset_provider(self):
+        from voiney_lab.server import synthesize, transcribe
+
+        with patch.dict(os.environ, {"XAI_API_KEY": "fake-key"}, clear=True), patch(
+            "voiney_lab.server.requests.post"
+        ) as xai_request, patch("voiney_lab.voice_providers.requests.post") as other_request:
+            with self.assertRaisesRegex(ConfigurationError, STT_PROVIDER):
+                transcribe(PCM)
+            with self.assertRaisesRegex(ConfigurationError, TTS_PROVIDER):
+                synthesize("안녕하세요", "ko")
+        xai_request.assert_not_called()
+        other_request.assert_not_called()
+
+
+class NoOldModelDefaultTests(unittest.TestCase):
+    """The three files spell no xAI or grok model as a fallback value."""
+
+    OLD_DEFAULT = re.compile(r"""["']grok-[0-9][^"']*["']""")
+
+    def test_no_grok_model_name_is_left_as_a_default(self):
+        found = []
+        for name in ("external_references.py", "experiment_reports.py", "voice_providers.py"):
+            for number, line in enumerate(
+                (SRC / name).read_text(encoding="utf-8").splitlines(), 1,
+            ):
+                if self.OLD_DEFAULT.search(line):
+                    found.append(f"{name}:{number}: {line.strip()}")
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":
