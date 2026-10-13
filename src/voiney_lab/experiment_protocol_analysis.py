@@ -2920,6 +2920,37 @@ def _verify_clearing_unread_fields(
             protocol = _cleared(protocol, field)
 
 
+#: A step label written the way the page prints it, "3)" or "(2)" (lane AN,
+#: EV4 decision c): the step number and its parentheses.
+_PARENTHESIZED_STEP_LABEL = re.compile(r"\(?([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})\)")
+
+
+def _bare_step_labels(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
+    """A step label "3)" or "(2)" is the step number 3 or 2 (lane AN, EV4 c).
+
+    The prompt asks for the number alone; a model at "low" sometimes copies
+    the parentheses the page prints (mfds_lubricant "3) 표준원액…", FDA "(1)
+    Add …"). The label is then read as the bare number, and the source-label
+    check holds it to the page as before: under rule paren_label (lane EV)
+    the page must print "(3)", "3)", "3." or "3" opening the excerpt or its
+    line. Only the label changes; every quote stays as the model gave it.
+    """
+
+    def bare(step: domain.ProtocolSourceStep) -> domain.ProtocolSourceStep:
+        match = _PARENTHESIZED_STEP_LABEL.fullmatch(step.source_label.strip())
+        return replace(step, source_label=match[1]) if match else step
+
+    if not any(
+        _PARENTHESIZED_STEP_LABEL.fullmatch(step.source_label.strip())
+        for section in protocol.sections for step in section.steps
+    ):
+        return protocol
+    return replace(protocol, sections=tuple(
+        replace(section, steps=tuple(bare(step) for step in section.steps))
+        for section in protocol.sections
+    ))
+
+
 def _repeat_counts_as_totals(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
     """Every fixed repeat count as the total number of runs (lane EV2, decision 3).
 
@@ -3235,6 +3266,7 @@ def _draft_from_response(
                 source_hash=extraction.sha256,
             ),
         )
+    protocol = _bare_step_labels(protocol)
     protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
     protocol = _repeat_counts_as_totals(protocol)
     _reject_deferred_state(protocol)

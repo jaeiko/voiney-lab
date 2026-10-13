@@ -251,10 +251,13 @@ class ParenthesizedLabelTests(RefusalAssertions):
             with self.subTest(label=label):
                 parse(numbered_page(text), steps=[step(label, text)])
 
-    def test_a_label_that_holds_the_parentheses_is_still_refused(self):
+    def test_a_label_that_holds_the_parentheses_is_read_as_its_number(self):
         # fda_eam_4_13_iodine: the label "(1)" -- the prompt asks for the number.
+        # Refused here until lane AN's EV4 decision c (2026-10-13): a label
+        # written "(1)" or "1)" is stored as 1 and held to the page as before.
         text = "(1) Add water."
-        self.assert_refused(numbered_page(text), "source_label_not_found", steps=[step("(1)", text)])
+        draft = parse(numbered_page(text), steps=[{**step("(1)", text), "step_id": "step-1"}])
+        self.assertEqual(draft.protocol.sections[0].steps[0].source_label, "1")
 
     def test_a_figure_caption_step_is_still_refused(self):
         # PMC6093710: "Step 1: the tagged protein ..." is a figure legend.
