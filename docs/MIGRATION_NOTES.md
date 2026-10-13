@@ -768,7 +768,7 @@ Code from before this version reads a piece run's events as a claim-chunk run
 it ended, its status may stay at the last chunk event. The stored analysis
 itself reads and runs as any other.
 
-## Lane AN (2026-10-13): evidence past a page's layout
+## Lane AN (2026-10-13): evidence past a page's layout, and a person's retry retried
 
 No schema change and no stored row rewritten.
 
@@ -788,14 +788,20 @@ spaces and periods) now has each readable page marked for OCR with the new
 `unreadable_glyphs`. The reason is computed at extraction and not stored by
 itself; an OCR run's events record the pages read as before.
 
+A person's "분석 다시 시도" after a failed analysis now gets the one automatic
+retry a first analysis gets: `protocol_analysis_retry_started` may follow any
+`protocol_analysis_requested`, at most once per request.
+
 ### Reading older data
 
 A stored analysis is not checked again; one that passed before still reads.
 A document registered before whose text layer drops its Hangul shows its
 pages as needing OCR the next time it is read; its stored analysis, if any,
-stays as it is.
+stays as it is. A ledger with two automatic retries on one revision (one per
+request) reads as two runs, each with its own retry.
 
 ### Going back
 
 Code from before this version reads all of the above: the new OCR reason is
-an extraction value, not stored.
+an extraction value, not stored, and two retry events on a revision read as
+the retry of the run on screen.
