@@ -79,10 +79,11 @@ _ANALYSIS_FAILED_EVENT = "protocol_analysis_failed"
 _ANALYSIS_RETRY_EVENT = "protocol_analysis_retry_started"
 #: Lane AN, decision 1 (2026-10-07), changing lane PA's "no automatic
 #: retry": an analysis whose response broke the structure the domain
-#: validation demands -- and only that failure, only on the revision's first
-#: analysis request -- is sent once more, the same request, by itself. A
-#: failed source-evidence check, a time-out and a missing provider are not:
-#: sending them again costs a call and settles nothing a person need not see.
+#: validation demands -- and only that failure, once per analysis request
+#: (since lane AN's EV4 step, 2026-10-13, a person's "분석 다시 시도" too) --
+#: is sent once more, the same request, by itself. A failed source-evidence
+#: check, a time-out and a missing provider are not: sending them again costs
+#: a call and settles nothing a person need not see.
 #: Measured 2026-10-06 (lane PX): ANKOM ended so once and passed on other runs.
 AUTOMATIC_RETRY_FAILURE_CODES = frozenset({"protocol_analysis_invalid_response"})
 AUTOMATIC_RETRY_LIMIT = 1
@@ -3126,16 +3127,19 @@ class ProtocolCatalog:
     ) -> bool:
         """Whether this failure is sent again by itself (lane AN, decision 1).
 
-        Mechanical: the failure is a response that broke the structure, the
-        revision has had at most one analysis request (none when a caller
-        analyses without recording one), and no automatic retry was sent for
-        the revision before. A person's "분석 다시 시도" is a second request,
-        so it is never retried automatically.
+        Mechanical: the failure is a response that broke the structure and no
+        automatic retry was sent after the revision's latest analysis request
+        (after none, when a caller analyses without recording one).
 
         Lane EV3, decision 5 (human decision 2026-10-12): a person's "다시
         분석" over a passed analysis (lane RN) is a run of its own and gets
-        the same one retry -- when the latest request asked for a
-        re-analysis and no automatic retry was sent after it.
+        the same one retry.
+
+        Lane AN (2026-10-13), EV4: so does a person's "분석 다시 시도" after a
+        failed analysis -- each request is one run with one automatic retry.
+        Before, only the revision's first request was retried, and the
+        person's request whose first answer did not close as JSON had to be
+        pressed again by hand.
 
         Lane EV3, decision 1: an answer read only after its brackets were
         repaired (``repaired``) and then refused by any check is sent again
@@ -3149,22 +3153,13 @@ class ProtocolCatalog:
             event for event in self.store.list_events(revision.experiment_id)
             if event.protocol_revision_number == revision.revision_number
         ]
-        requests = [
-            index for index, event in enumerate(events)
-            if event.event_type == _ANALYSIS_REQUESTED_EVENT
-        ]
-        retried = any(event.event_type == _ANALYSIS_RETRY_EVENT for event in events)
-        if len(requests) <= 1 and not retried:
-            return True
-        latest = events[requests[-1]] if requests else None
-        return (
-            latest is not None
-            and isinstance(latest.payload, dict)
-            and latest.payload.get("reanalysis") is True
-            and not any(
-                event.event_type == _ANALYSIS_RETRY_EVENT
-                for event in events[requests[-1] + 1:]
-            )
+        latest = max(
+            (index for index, event in enumerate(events)
+             if event.event_type == _ANALYSIS_REQUESTED_EVENT),
+            default=-1,
+        )
+        return not any(
+            event.event_type == _ANALYSIS_RETRY_EVENT for event in events[latest + 1:]
         )
 
     def request_analysis(

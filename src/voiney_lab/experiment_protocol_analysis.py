@@ -997,6 +997,15 @@ _DURATION_WIDGET_LINE = re.compile(r"(?m)^[ \t\u00a0]*\d{1,2}:\d{2}:\d{2}[ \t\u0
 _SPACE_BEFORE_PUNCTUATION = frozenset(".,;:)")
 
 
+#: Subscript and superscript digits, read as the digits they write in the
+#: script forms below (lane AN, EV4 decision b).
+_SCRIPT_DIGITS = {
+    **{chr(0x2080 + n): str(n) for n in range(10)},
+    "\u2070": "0", "\u00b9": "1", "\u00b2": "2", "\u00b3": "3",
+    **{chr(0x2074 + n - 4): str(n) for n in range(4, 10)},
+}
+
+
 def _normalized_text_with_bounds(
     value: str,
     *,
@@ -1004,6 +1013,8 @@ def _normalized_text_with_bounds(
     join_hangul_line_breaks: bool = False,
     skip_duration_widget_lines: bool = False,
     drop_space_before_punctuation: bool = False,
+    script_forms: str | None = None,
+    skip_line: Callable[[str], bool] | None = None,
 ) -> tuple[str, list[int], list[int]]:
     """Canonicalize representation-only differences and retain source bounds.
 
@@ -1034,6 +1045,23 @@ def _normalized_text_with_bounds(
     7, from lane PA's (w) and (p)): comparison forms only, tried after the
     forms above, so the page text, its hash and the evidence identities are
     untouched and anything the earlier forms accept is still accepted.
+
+    ``script_forms`` (lane AN, EV4 decisions b and e; comparison only, tried
+    after every form above) is ``"joined"`` or ``"hyphen"``. In both, a
+    subscript or superscript digit written after a letter or a closing
+    bracket reads as the plain digit ("H₂O₂" as "H2O2", "cm²" as "cm2"); one
+    after a digit stays itself, so "10⁵" is never "105". Spaces between
+    two Hangul letters on one line are left out (a text layer that prints no
+    spaces between Korean words, or a quote that adds them); a line break
+    between them is joined on an OCR page only, as before. A soft hyphen is a
+    layout control: with ``"joined"`` it is left out together with the line
+    break after it ("formu\u00ad" / "lated" reads "formulated"); with
+    ``"hyphen"`` it reads as "-" ("DW-MEA").
+
+    ``skip_line`` (lane AN, EV4 decision a; comparison only, the last forms
+    tried) names the lines left out wherever they stand: a page's running
+    header, footer and page-number lines that a text layer or an OCR reading
+    prints in the middle of its body (``_furniture_line``).
     """
 
     normalized: list[str] = []
@@ -1044,6 +1072,14 @@ def _normalized_text_with_bounds(
         [match.span() for match in _DURATION_WIDGET_LINE.finditer(value)]
         if skip_duration_widget_lines else []
     )
+    if skip_line is not None:
+        position = 0
+        for line in value.splitlines(keepends=True):
+            content = line.rstrip("\r\n")
+            if content.strip() and skip_line(content):
+                skipped.append((position, position + len(content)))
+            position += len(line)
+        skipped = sorted(set(skipped))
     index = 0
     while index < len(value):
         if skipped and skipped[0][0] == index:
@@ -1063,6 +1099,23 @@ def _normalized_text_with_bounds(
                 join_line_end_hyphens
                 and units
                 and units[-1][0] in _LINE_END_HYPHENS
+                and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                script_forms is not None
+                and units
+                and index < len(value)
+                and len(units[-1][0]) == 1
+                and _is_hangul(units[-1][0])
+                and _is_hangul(value[index])
+                and not any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                script_forms == "joined"
+                and start > 0
+                and value[start - 1] == "\u00ad"
                 and any(character in "\n\r" for character in value[start:index])
             ):
                 continue
@@ -1087,6 +1140,8 @@ def _normalized_text_with_bounds(
             units.append((" ", start, index, True))
             continue
         if value[index] == "\u00ad":
+            if script_forms == "hyphen":
+                units.append(("-", index, index + 1, False))
             index += 1
             continue
         start = index
@@ -1094,6 +1149,14 @@ def _normalized_text_with_bounds(
         while index < len(value) and unicodedata.combining(value[index]):
             index += 1
         canonical = unicodedata.normalize("NFC", value[start:index])
+        if (
+            script_forms is not None
+            and canonical in _SCRIPT_DIGITS
+            and units
+            and not units[-1][3]
+            and (units[-1][0][-1:].isalpha() or units[-1][0][-1:] in ")]")
+        ):
+            canonical = _SCRIPT_DIGITS[canonical]
         if canonical:
             units.append((canonical, start, index, False))
     while units and units[0][3]:
@@ -1112,7 +1175,9 @@ def _normalized_text_with_bounds(
     return "".join(normalized), starts, ends
 
 
-def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
+def _comparison_forms(
+    ocr_derived: bool, skip_line: Callable[[str], bool] | None = None,
+) -> tuple[dict[str, Any], ...]:
     """The comparison forms a page is read in, plain form first.
 
     Every form is tried, so an excerpt accepted in an earlier form is still
@@ -1133,6 +1198,33 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
         for time_marks in (False, True)
         for joined in hangul
         for join in (False, True)
+    ) + tuple(
+        # Lane AN, EV4 decisions b and e: after every form above.
+        {
+            "join_line_end_hyphens": True,
+            "join_hangul_line_breaks": ocr_derived,
+            "skip_duration_widget_lines": time_marks,
+            "drop_space_before_punctuation": time_marks,
+            "script_forms": script,
+        }
+        for time_marks in (False, True)
+        for script in ("joined", "hyphen")
+    ) + (
+        # Lane AN, EV4 decision a: the page's running and page-number lines
+        # left out wherever they stand, after every form above.
+        tuple(
+            {
+                "join_line_end_hyphens": True,
+                "join_hangul_line_breaks": ocr_derived,
+                "skip_duration_widget_lines": time_marks,
+                "drop_space_before_punctuation": time_marks,
+                "script_forms": script,
+                "skip_line": skip_line,
+            }
+            for time_marks in (False, True)
+            for script in (None, "joined")
+        )
+        if skip_line is not None else ()
     )
 
 
@@ -1464,6 +1556,7 @@ def _canonical_match_spans(
     *,
     ocr_derived: bool = False,
     alone: bool = False,
+    skip_line: Callable[[str], bool] | None = None,
 ) -> tuple[tuple[int, int], ...]:
     """Every span of ``source_text`` that holds ``excerpt`` in a comparison form.
 
@@ -1474,7 +1567,7 @@ def _canonical_match_spans(
     """
 
     spans: list[tuple[int, int]] = []
-    for form in _comparison_forms(ocr_derived):
+    for form in _comparison_forms(ocr_derived, skip_line):
         canonical_source, starts, ends = _normalized_text_with_bounds(
             source_text, **form
         )
@@ -1527,6 +1620,7 @@ _WORDED_PAGE_NUMBER = re.compile(
     r"(?:page|p\.)\s*[0-9]{1,4}(?:\s*(?:of|/)\s*[0-9]{1,4})?", re.IGNORECASE
 )
 _PAGE_OF_PAGES = re.compile(r"([0-9]{1,4})\s*(?:of|/)\s*([0-9]{1,4})", re.IGNORECASE)
+_PAGE_AND_COUNT = re.compile(r"([0-9]{1,4})\s+([0-9]{1,4})")
 _BARE_PAGE_NUMBER = re.compile(r"[0-9]{1,4}")
 _NUMBER_RUN = re.compile(r"\d+")
 #: A numbered line: a number of one to three digits ("3.", "3)", "(3)",
@@ -1555,6 +1649,10 @@ class _PageEdges:
     #: The pages that print their own number alone on a line at an edge.
     numbered: frozenset[int]
     page_count: int
+    #: Lines of numbers and no letter printed identically at one edge place
+    #: of at least half the pages, and never between the edges: a header
+    #: table's revision and date cells ("01", "15/08/24"; lane AN, EV4 a).
+    running_exact: frozenset[str] = frozenset()
 
     def is_furniture(self, line: str, page_number: int) -> bool:
         """Whether a line is blank, a running line or this page's number.
@@ -1567,6 +1665,8 @@ class _PageEdges:
         text = " ".join(line.split())
         if not text:
             return True
+        if text in self.running_exact:
+            return True
         if _BARE_PAGE_NUMBER.fullmatch(text):
             return int(text) == page_number and bool(
                 {page_number - 1, page_number + 1} & self.numbered
@@ -1576,6 +1676,12 @@ class _PageEdges:
         of_pages = _PAGE_OF_PAGES.fullmatch(text)
         if of_pages is not None:
             return int(of_pages[1]) == page_number or int(of_pages[2]) == self.page_count
+        page_and_count = _PAGE_AND_COUNT.fullmatch(text)
+        if page_and_count is not None and self.page_count > 1:
+            # A header table's page cell beside its page-count cell, "3 9"
+            # on page 3 of 9 (lane AN, EV4 a).
+            return int(page_and_count[1]) == page_number and int(
+                page_and_count[2]) == self.page_count
         return _line_key(text) in self.running
 
 
@@ -1596,7 +1702,9 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
     """
 
     counts: dict[tuple[str, int, str], int] = {}
+    exact: dict[tuple[str, int, str], int] = {}
     inside: set[str] = set()
+    inside_exact: set[str] = set()
     numbered: set[int] = set()
     for number, text in enumerate(page_texts, start=1):
         lines = [line for line in (" ".join(item.split()) for item in text.splitlines()) if line]
@@ -1617,7 +1725,18 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         for place in places:
             if any(character.isalpha() for character in place[2]) or "#" not in place[2]:
                 counts[place] = counts.get(place, 0) + 1
+        for place in {
+            *(("top", index, line) for index, line in enumerate(lines[:_EDGE_LINES])),
+            *(("bottom", index, line) for index, line in enumerate(reversed(lines[-_EDGE_LINES:]))),
+        }:
+            if (
+                not any(character.isalpha() for character in place[2])
+                and sum(character.isdigit() for character in place[2]) >= 2
+                and not _NUMBERED_LINE.match(place[2])
+            ):
+                exact[place] = exact.get(place, 0) + 1
         inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
+        inside_exact.update(lines[_EDGE_LINES:-_EDGE_LINES])
     needed = max(3, -(-len(page_texts) // 2))
     return _PageEdges(
         running=(
@@ -1629,11 +1748,35 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         ),
         numbered=frozenset(numbered),
         page_count=len(page_texts),
+        running_exact=(
+            frozenset(
+                text for (_, _, text), count in exact.items()
+                if count >= needed and text not in inside_exact
+            )
+            if len(page_texts) > 1 else frozenset()
+        ),
     )
 
 
 def _page_edges(extraction: ProtocolPdfExtraction) -> _PageEdges:
     return _edges_of(tuple(page.text for page in extraction.pages))
+
+
+def _furniture_line(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction,
+) -> Callable[[str], bool]:
+    """Whether a line of this page is its running header or footer or its number.
+
+    Lane AN, EV4 decision a: the lines ``_PageEdges`` reads at a page's edges,
+    as the comparison leaves them out wherever the page text prints them --
+    an OCR reading that puts "BASIC PROTOCOL 2 … 5 of 22 Current Protocols"
+    or "- 106 -" in the middle of a sentence, a text layer that prints its
+    footer between two lines of a step.
+    """
+
+    edges = _page_edges(extraction)
+    number = page.source_page_number
+    return lambda line: edges.is_furniture(line, number)
 
 
 def _page_body_end(
@@ -1770,6 +1913,39 @@ def _page_end_span(
     return start, last_end
 
 
+#: The longest line read as a reprinted table header: a heading or a column
+#: header, never a sentence (lane AN, EV4 a).
+_REPRINTED_LINE_MAX = 60
+
+
+def _after_reprinted_lines(text: str, start: int, end: int, previous_page: str) -> int:
+    """Where a page's body opens past lines the page before printed already.
+
+    Lane AN, EV4 decision a: a table that runs onto the next page prints its
+    header again at the top ("Electrophoresis Conditions" / "Step Action" on
+    CDC's pages 5 and 6), between the two parts of a step the table holds.
+    A line counts only when it holds a letter, is short and ends no sentence
+    (a heading or a column header), and the page before prints the same line
+    whole; the first line that does not ends the skipping. It is tried only
+    after the statement was not found as the page opens.
+    """
+
+    printed = {" ".join(line.split()) for line in previous_page.splitlines()}
+    position = start
+    for line in text[start:end].splitlines(keepends=True):
+        content = " ".join(line.split())
+        if content and not (
+            any(character.isalpha() for character in content)
+            and content in printed
+            and len(content) <= _REPRINTED_LINE_MAX
+            and not content.endswith((".", ";", ","))
+        ):
+            break
+        position += len(line)
+    body = text[position:end]
+    return position + len(body) - len(body.lstrip())
+
+
 @dataclass(frozen=True)
 class _PageCut:
     """A statement found across a page end, as the two pages' own text."""
@@ -1813,39 +1989,48 @@ def _statement_across_page_end(
     if tail is None:
         return None
     next_end = _page_body_end(following, extraction)
-    next_start = _page_body_start(following, extraction, next_end)
-    head = following.text[next_start:next_end]
-    if not head.strip():
-        return None
+    body_start = _page_body_start(following, extraction, next_end)
     first = page.text[tail[0] : tail[1]]
-    joined = f"{first}\n{head}"
     junction = len(first)
-    crossing = [
-        (start, end)
-        for start, end in _canonical_match_spans(
-            joined,
-            statement,
-            ocr_derived=page.ocr_derived or following.ocr_derived,
-        )
-        if start < junction
-        and end > junction + 1
-        # Read beside the two pages' own text (lane EB), not only the
-        # joined block and head.
-        and _reads_alone(
-            page.text[: tail[0] + start],
-            joined[start:end],
-            following.text[next_start + end - junction - 1 :],
-        )
-    ]
-    if len(crossing) != 1:
-        return None
-    start, end = crossing[0]
-    return _PageCut(
-        first_start=tail[0] + start,
-        first_end=tail[1],
-        next_start=next_start,
-        next_end=next_start + end - junction - 1,
-    )
+    # Lane AN, EV4 decision a: when the statement is not found across the
+    # join as the next page opens, it is looked for once more past the
+    # header lines a table running onto that page prints again.
+    for next_start in dict.fromkeys((
+        body_start,
+        _after_reprinted_lines(following.text, body_start, next_end, page.text),
+    )):
+        head = following.text[next_start:next_end]
+        if not head.strip():
+            continue
+        joined = f"{first}\n{head}"
+        crossing = [
+            (start, end)
+            for start, end in _canonical_match_spans(
+                joined,
+                statement,
+                ocr_derived=page.ocr_derived or following.ocr_derived,
+            )
+            if start < junction
+            and end > junction + 1
+            # Read beside the two pages' own text (lane EB), not only the
+            # joined block and head.
+            and _reads_alone(
+                page.text[: tail[0] + start],
+                joined[start:end],
+                following.text[next_start + end - junction - 1 :],
+            )
+        ]
+        if len(crossing) == 1:
+            start, end = crossing[0]
+            return _PageCut(
+                first_start=tail[0] + start,
+                first_end=tail[1],
+                next_start=next_start,
+                next_end=next_start + end - junction - 1,
+            )
+        if crossing:
+            return None
+    return None
 
 
 def _with_continuation(
@@ -2006,7 +2191,8 @@ def _verified_evidence(
     if _occurs_alone_exactly(page_text, evidence.source_excerpt):
         return _verified_continuation(evidence, extraction)
     spans = _canonical_match_spans(
-        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True
+        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True,
+        skip_line=_furniture_line(page, extraction),
     )
     if not spans and evidence.continued_on_page_number is None:
         cut = _statement_across_page_end(
@@ -2235,7 +2421,10 @@ def _claim_occurs_on_evidence_page(
     extraction: ProtocolPdfExtraction,
 ) -> bool:
     page = extraction.pages[evidence.source_page_number - 1]
-    if _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived):
+    if _claim_occurs_in_text(
+        claim, page.text, ocr_derived=page.ocr_derived,
+        skip_line=_furniture_line(page, extraction),
+    ):
         return True
     # A statement cut at the page end is supported only where the evidence
     # records the next page, and only as found in the two pages joined.
@@ -2249,7 +2438,8 @@ def _claim_occurs_on_evidence_page(
 
 
 def _claim_occurs_in_text(
-    claim: str, source_text: str, *, ocr_derived: bool = False
+    claim: str, source_text: str, *, ocr_derived: bool = False,
+    skip_line: Callable[[str], bool] | None = None,
 ) -> bool:
     """Whether the text prints the claim, as it is or in a comparison form.
 
@@ -2259,7 +2449,7 @@ def _claim_occurs_in_text(
 
     if _occurs_alone_exactly(source_text, claim):
         return True
-    for form in _comparison_forms(ocr_derived):
+    for form in _comparison_forms(ocr_derived, skip_line):
         normalized_page, starts, ends = _normalized_text_with_bounds(source_text, **form)
         normalized_claim, _, _ = _normalized_text_with_bounds(claim, **form)
         if not normalized_claim:
@@ -2920,6 +3110,37 @@ def _verify_clearing_unread_fields(
             protocol = _cleared(protocol, field)
 
 
+#: A step label written the way the page prints it, "3)" or "(2)" (lane AN,
+#: EV4 decision c): the step number and its parentheses.
+_PARENTHESIZED_STEP_LABEL = re.compile(r"\(?([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})\)")
+
+
+def _bare_step_labels(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
+    """A step label "3)" or "(2)" is the step number 3 or 2 (lane AN, EV4 c).
+
+    The prompt asks for the number alone; a model at "low" sometimes copies
+    the parentheses the page prints (mfds_lubricant "3) 표준원액…", FDA "(1)
+    Add …"). The label is then read as the bare number, and the source-label
+    check holds it to the page as before: under rule paren_label (lane EV)
+    the page must print "(3)", "3)", "3." or "3" opening the excerpt or its
+    line. Only the label changes; every quote stays as the model gave it.
+    """
+
+    def bare(step: domain.ProtocolSourceStep) -> domain.ProtocolSourceStep:
+        match = _PARENTHESIZED_STEP_LABEL.fullmatch(step.source_label.strip())
+        return replace(step, source_label=match[1]) if match else step
+
+    if not any(
+        _PARENTHESIZED_STEP_LABEL.fullmatch(step.source_label.strip())
+        for section in protocol.sections for step in section.steps
+    ):
+        return protocol
+    return replace(protocol, sections=tuple(
+        replace(section, steps=tuple(bare(step) for step in section.steps))
+        for section in protocol.sections
+    ))
+
+
 def _repeat_counts_as_totals(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
     """Every fixed repeat count as the total number of runs (lane EV2, decision 3).
 
@@ -3235,6 +3456,7 @@ def _draft_from_response(
                 source_hash=extraction.sha256,
             ),
         )
+    protocol = _bare_step_labels(protocol)
     protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
     protocol = _repeat_counts_as_totals(protocol)
     _reject_deferred_state(protocol)

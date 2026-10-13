@@ -30,12 +30,13 @@ such a page out of execution until that OCR text has been accepted.
 from __future__ import annotations
 
 import hashlib
+import re
 import os
 import stat
 import threading
 import unicodedata
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import BinaryIO
@@ -60,6 +61,7 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 __all__ = [
     "BOTTOM_BAND_FRACTION",
     "MAX_PROTOCOL_PDF_BYTES",
+    "OCR_REASON_DROPPED_GLYPHS",
     "OCR_REASON_NO_TEXT",
     "OCR_REASON_UNREADABLE_GLYPHS",
     "PDF_MEDIA_TYPE",
@@ -152,6 +154,8 @@ class TextVerification(str, Enum):
 
 OCR_REASON_NO_TEXT = "no_text_layer"
 OCR_REASON_UNREADABLE_GLYPHS = "unreadable_glyphs"
+#: The text layer drops a Korean font's glyphs (lane AN, EV4 decision d).
+OCR_REASON_DROPPED_GLYPHS = "dropped_glyphs"
 #: Share of a page's non-space characters that are private use or unassigned,
 #: at or above which the page is treated as unreadable and needing OCR. A
 #: private-use character can be a font's own bullet, so one among many is a
@@ -372,6 +376,66 @@ def _pages_from_engine(
     return tuple(pages)
 
 
+#: A line that holds punctuation and nothing else: what a Korean sentence
+#: leaves when its Hangul glyphs carry no characters (" . ", "    ,").
+_PUNCTUATION_ONLY_LINE = re.compile(r"[\s.,:;()\[\]·\-–※~/%]+")
+#: Lane AN, EV4 decision d: a text layer is read as dropping its Hangul when
+#: at least this share of its lines is punctuation alone and at most this
+#: share of its visible characters is Hangul. Measured on the 203 corpus
+#: PDFs (lane AN report): mfds_tricaine_eugenol 0.19 and 0.05; every other
+#: Korean document 0.07 at most and 0.52 at least.
+DROPPED_HANGUL_PUNCTUATION_LINES = 0.15
+DROPPED_HANGUL_SHARE = 0.15
+
+
+def _hangul_count(text: str) -> int:
+    return sum(1 for character in text if "\uac00" <= character <= "\ud7a3")
+
+
+def _with_dropped_hangul_pages_marked(
+    pages: tuple[ProtocolPdfPage, ...],
+) -> tuple[ProtocolPdfPage, ...]:
+    """Mark for OCR the pages of a Korean text layer that drops its Hangul.
+
+    Lane AN, EV4 decision d (human decision 2026-10-13). A PDF whose Korean
+    font maps its glyphs to no character keeps its numbers, units and Latin
+    words and loses every Hangul syllable, leaving sentences that are only
+    their spaces and periods (mfds_tricaine_eugenol: "2 g 50 mL 0.1 M
+    Na2-EDTA 1 mL" / " . "). No U+FFFD marks them, so ``page_ocr_reason``
+    sees a usable page. Read across the document: a text layer that holds
+    some Hangul, where punctuation-only lines are common and Hangul rare, is
+    dropping it, and each of its pages is read by OCR (a page that keeps
+    some Hangul in another font may still drop the rest).
+    """
+
+    readable = [page for page in pages if not page.ocr_required and page.text.strip()]
+    lines = [line for page in readable for line in page.text.splitlines() if line.strip()]
+    visible = sum(1 for page in readable for character in page.text if not character.isspace())
+    hangul = sum(_hangul_count(page.text) for page in readable)
+    if not lines or not visible or not hangul:
+        return pages
+    bare = sum(
+        1 for line in lines
+        if _PUNCTUATION_ONLY_LINE.fullmatch(line) and any(mark in line for mark in ".,")
+    )
+    if bare / len(lines) < DROPPED_HANGUL_PUNCTUATION_LINES or hangul / visible > DROPPED_HANGUL_SHARE:
+        return pages
+    marked = []
+    for page in pages:
+        if page in readable:
+            page = replace(
+                page,
+                ocr_required=True,
+                ocr_reason=OCR_REASON_DROPPED_GLYPHS,
+                warning=(
+                    "The PDF text layer of this page drops its Hangul characters; "
+                    "the page needs OCR."
+                ),
+            )
+        marked.append(page)
+    return tuple(marked)
+
+
 # Extraction is a pure function of the file's bytes, and the catalog asks for
 # the same bytes many times in one request: listing the catalog extracts every
 # entry's source, and one reviewer diff extracts the same source twice (once
@@ -524,7 +588,7 @@ def _extract_protocol_pdf_uncached(path: str | Path) -> ProtocolPdfExtraction:
             "Protocol PDF changed during extraction.",
         )
 
-    pages = _pages_from_engine(document)
+    pages = _with_dropped_hangul_pages_marked(_pages_from_engine(document))
     warnings = list(document.warnings)
     warnings.extend(
         page.warning
