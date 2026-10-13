@@ -267,6 +267,9 @@ class RouterAnswerVoiceTests(VoiceSessionHarness, unittest.TestCase):
     def test_the_reply_carries_the_structure_and_the_marks(self) -> None:
         self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
         self.environment["XAI_API_KEY"] = "test-only-not-a-key"
+        # Lane RA, decision (g): no default provider or model any more.
+        self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
+        self.environment["VOINEY_LAB_ROUTER_MODEL"] = "fake-router-model"
         # The key is the router's. Step translation follows its own role's key
         # (lane F, decision 1), so that role is left keyless here.
         self.environment["VOINEY_LAB_TRANSLATION_PROVIDER"] = "anthropic"

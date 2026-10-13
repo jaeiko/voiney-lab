@@ -235,8 +235,13 @@ class RoleSettingsTests(unittest.TestCase):
         self.assertEqual(DEFAULT_MODELS["router"], "grok-4.20-0309-non-reasoning")
         self.assertEqual(DEFAULT_MODELS["translation"], "grok-4.6")
         self.assertEqual(DEFAULT_MODELS["supplemental"], "grok-4.6")
-        self.assertEqual(LlmRouterSettings.from_environment({}).role_model,
-                         RoleModel("router", "xai", "grok-4.20-0309-non-reasoning", None))
+        # Lane RA, decision (g): the router settings keep no default of their
+        # own -- unset, the router is off and has no role model to call.
+        unset = LlmRouterSettings.from_environment({})
+        self.assertFalse(unset.enabled)
+        self.assertIsNone(unset.model)
+        with self.assertRaises(ValueError):
+            unset.role_model
 
     def test_each_role_reads_its_own_three_settings(self) -> None:
         environment = {

@@ -4119,6 +4119,18 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
     # Lane WV, decision 4: a picture request is the rules' own turn.
     CuratedProtocolAction.VISUAL_REQUEST: "visual_request",
 }
+#: Lane RA (decision a, 2026-10-12/13): with the router first, the front
+#: rules keep system information (the timer, the steps, the settings, the
+#: server's values), the re-asking of an ambiguous reference, the short clear
+#: commands and the replies to the server's own questions. These three are
+#: handed to the model instead: a note with words (record_log, where a value
+#: is compared with the source), a read-only question that names "2단계" or
+#: "이 단계" (the model reads the step from the snapshot), and a picture
+#: asked for (show_visual, in any words). A bare "메모해 줘" with nothing to
+#: write stays the rules': it asks what to write. Off, nothing is handed on.
+ROUTER_FIRST_HANDED_ON: frozenset[str] = frozenset({
+    "note_record", "step_homophone", "visual_request",
+})
 #: The protocol-query scopes that are server values (decision 3); purpose,
 #: overview, materials and the like stay with the model.
 _SERVER_VALUE_SCOPES = frozenset({
@@ -9356,6 +9368,17 @@ class CuratedProtocolSession:
         #: Lane VT, decision 3: "A요, B요?" asked of a "그거"; only the next
         #: turn's words pick one.
         self._pending_value_choice: dict[str, Any] | None = None
+        #: Lane RA: whether the router goes first this session (the server
+        #: sets it from VOINEY_LAB_ROUTER_FIRST; the router line sets it each
+        #: turn). It decides what the front rules hand on and whether a note's
+        #: values are compared with the source (decision c).
+        self.router_first: bool = False
+        #: Lane RA, decision (f): what the screen is told about the last
+        #: reply -- the candidates asked back, the values read back, and the
+        #: deviation a note recorded. Each is this turn's; the next turn clears.
+        self._clarify_candidates: list[str] = []
+        self._last_readback_values: list[str] = []
+        self._last_note_deviation: dict[str, Any] | None = None
         #: Lane VT, decisions 1-2: (timer, kind) of the timer notices already
         #: given, so each is given once. Not part of a turn's checkpoint: a
         #: notice given stays given whatever a later turn rolls back.
@@ -11169,6 +11192,154 @@ class CuratedProtocolSession:
 
     def _count_question_open(self) -> bool:
         return self._open_count_interval() is not None
+
+    # --- Lane RA, decisions (a) and (e): the read-only proposals of the router first --
+
+    def apply_read_only_proposal(
+        self,
+        proposal: Any,
+        *,
+        transcript: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+        answer: Any = None,
+        context: Any = None,
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
+    ) -> CuratedProtocolTurnPlan:
+        """Carry out a read-only proposal the server accepted. Nothing moves.
+
+        ``show_visual`` runs the rules' own picture branch (lane WV: the
+        source figure, a web lookup, a drawing) -- with the checked answer
+        said first when one came beside it; ``clarify`` asks the model's
+        checked question and keeps its candidates for the screen;
+        ``not_for_me`` says nothing and records nothing. A one-turn question
+        left open lapses as it does when plan() reads any other reply.
+        """
+
+        if turn_id in self._replay:
+            return self._replay[turn_id]
+        self._last_front_rule = None
+        steps = self.fixture.steps
+        step = steps[self.current_index] if self.active else None
+        label = step.source_label if step is not None else None
+        final = bool(step is not None and self.current_index == len(steps) - 1)
+        tool = getattr(proposal, "tool", None)
+        if tool == "show_visual":
+            kind = {
+                "source_figure": "source_figure", "web_photo": "web_lookup",
+                "drawn_diagram": "drawn_diagram",
+            }[str(proposal.kind)]
+            entity = getattr(proposal, "entity", None) or (
+                web_lookup_subject(transcript) if kind == "web_lookup" else None
+            )
+            answered = (
+                self.apply_router_answer(answer, context, turn_id=turn_id, language=language)
+                if answer is not None and context is not None else None
+            )
+            self._replay.pop(turn_id, None)
+            intent = CuratedControlIntent(
+                intent_kind="visual_request",
+                action=CuratedProtocolAction.VISUAL_REQUEST,
+                target_step="authoritative_current_step",
+                visual_requested=True,
+                visual_kind=kind,
+                visual_intent={
+                    "source_figure": "source_figure", "web_lookup": "web_explanation",
+                    "drawn_diagram": "drawn_diagram",
+                }[kind],
+                requested_entity=entity,
+                requested_entities=(entity,) if entity else (),
+                language=language,
+                normalized_transcript=_utterance_key(transcript),
+                confidence_source="llm_tool_proposal",
+            )
+            plan = self._execute_turn_intent(
+                intent, transcript=transcript, command_key=_utterance_key(transcript),
+                turn_id=turn_id, language=language, configuration_id=configuration_id,
+                generation=generation, actor_principal_id=actor_principal_id,
+                actor_role=actor_role, open_question=None,
+            )
+            if answered is not None:
+                # The answer is said, then the picture's own words.
+                document = dict(answered.display_document or {})
+                sections = list(document.get("sections") or ())
+                sections.append({"kind": "section", "heading": "", "text": plan.speech_text or ""})
+                document["sections"] = sections
+                plan = replace(
+                    plan,
+                    display_text=f"{answered.display_text}\n\n{plan.speech_text or ''}".strip(),
+                    speech_text=f"{answered.speech_text} {plan.speech_text or ''}".strip(),
+                    speech_mode=answered.speech_mode,
+                    facts=answered.facts,
+                    primary_text=answered.primary_text,
+                    source_texts=answered.source_texts,
+                    source_pages=answered.source_pages,
+                    evidence_ids=answered.evidence_ids,
+                    translation_status=answered.translation_status,
+                    intent_kind="llm_router_answer_with_visual",
+                    answer_origin=answered.answer_origin,
+                    limitations=tuple(dict.fromkeys((*answered.limitations, *plan.limitations))),
+                    display_document=document,
+                )
+            self._replay[turn_id] = plan
+            return plan
+        self._pending_completion_confirmation = None
+        self._pending_transcript_confirmation = None
+        self._pending_note_capture = None
+        self._pending_stop_confirmation = None
+        self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
+        if tool == "clarify":
+            question = " ".join(str(getattr(proposal, "spoken", "") or "").split())
+            candidates = [str(item) for item in getattr(proposal, "candidates", ()) if str(item).strip()]
+            self._clarify_candidates = list(candidates)
+            shown = question
+            if candidates:
+                shown = question + "\n" + "\n".join(
+                    f"{number}. {name}" for number, name in enumerate(candidates, 1)
+                )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.CLARIFY_REFERENCE,
+                display_text=shown,
+                speech_text=question,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=label,
+                final_step=final,
+                state_changed=False,
+                primary_text=question,
+                intent_kind="llm_router_clarify",
+                target_step=label,
+                requested_entities=tuple(candidates),
+                coreference_status=CoreferenceStatus.AMBIGUOUS.value,
+                coreference_reason="llm_router_clarify",
+            )
+        else:
+            words = (
+                "실험과 관계없는 말로 보고 넘겼어요." if language == "ko"
+                else "Taken as not addressed to the assistant; nothing was done."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.OFF_TOPIC,
+                display_text=words,
+                speech_text=words,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=label,
+                final_step=final,
+                state_changed=False,
+                primary_text=words,
+                intent_kind="not_addressed",
+                target_step=label,
+                speech_policy="silent",
+            )
+        self._replay[turn_id] = plan
+        if len(self._replay) > 64:
+            self._replay.pop(next(iter(self._replay)))
+        return plan
 
     def open_server_question(self) -> dict[str, Any] | None:
         """The server question open at the current step, for the card (decision 4)."""
@@ -13049,8 +13220,13 @@ class CuratedProtocolSession:
         actor_principal_id: str | None,
         actor_role: str,
         observation_hold: PendingObservationConfirmation | None,
+        hand_on_notes: bool = False,
     ) -> CuratedProtocolTurnPlan | None:
         """A note or a correction asked for in words (lane N, decisions 1-2).
+
+        With ``hand_on_notes`` (lane RA, decision a: the router first) a note
+        that has words is left to the model's record_log; a bare "메모해 줘"
+        with nothing to write is still asked about here.
 
         "실험노트에 적어 줘, pH 7.2" records the words after (or before) the
         command at the current step, as the STT gave them, under the kind the
@@ -13089,6 +13265,8 @@ class CuratedProtocolSession:
             has_completion_evidence(content)
             or _spill_reading(_semantic_utterance_key(content), content) == "reported"
         ):
+            return None
+        if content is not None and hand_on_notes:
             return None
         if observation_hold is not None:
             # A note is not an answer to the endpoint question: it stays open,
@@ -16963,6 +17141,7 @@ class CuratedProtocolSession:
         arbitration: RequestArbitration | None = None,
         actor_principal_id: str | None = None,
         actor_role: str = "voice_operator",
+        router_first: bool = False,
     ) -> CuratedProtocolTurnPlan | None:
         """The turn as a front rule plans it, or None with nothing touched.
 
@@ -16982,6 +17161,8 @@ class CuratedProtocolSession:
         the open questions the reading cleared put back: the session is as it
         was, for plan() or a validated tool proposal to take the turn.
         A turn already planned is answered from the replay, as plan() does.
+        With ``router_first`` (lane RA, decision a) the rules of
+        ROUTER_FIRST_HANDED_ON are handed on too, untouched.
         """
 
         return self._plan(
@@ -16995,6 +17176,7 @@ class CuratedProtocolSession:
             actor_principal_id=actor_principal_id,
             actor_role=actor_role,
             front_only=True,
+            hand_on=ROUTER_FIRST_HANDED_ON if router_first else frozenset(),
         )
 
     #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
@@ -17140,9 +17322,15 @@ class CuratedProtocolSession:
         actor_principal_id: str | None = None,
         actor_role: str = "voice_operator",
         front_only: bool,
+        hand_on: frozenset[str] = frozenset(),
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        # Lane RA, decision (f): what the screen is told about the last reply
+        # belongs to this turn now.
+        self._clarify_candidates = []
+        self._last_readback_values = []
+        self._last_note_deviation = None
         if self._report_review is not None and not self.active:
             # Lane N, decision 3: the report's values, read one by one.
             return self._plan_report_review(
@@ -17153,6 +17341,10 @@ class CuratedProtocolSession:
             transcript, transcript_quality=transcript_quality,
             turn_id=turn_id, configuration_id=configuration_id, generation=generation,
         )
+        if homophone and "step_homophone" in hand_on:
+            # Lane RA, decision (a): the model reads the step from the snapshot.
+            self._last_front_rule = None
+            return None
         if homophone:
             return self._plan_step_homophone(
                 homophone, turn_id=turn_id, language=language,
@@ -18064,6 +18256,7 @@ class CuratedProtocolSession:
                     actor_principal_id=actor_principal_id,
                     actor_role=actor_role,
                     observation_hold=observation_hold,
+                    hand_on_notes="note_record" in hand_on,
                 )
                 if language == "ko" and transcript_quality is None else None
             )
@@ -18528,6 +18721,10 @@ class CuratedProtocolSession:
             )
         if front_rule is None:
             front_rule = self._front_rule_for(intent, classified)
+        if front_only and front_rule in hand_on:
+            # Lane RA, decision (a): with the router first this rule's turn is
+            # the model's, handed on untouched like any other.
+            front_rule = None
         self._last_front_rule = front_rule
         if front_only and front_rule is None:
             # No front rule owns this turn: it is handed on untouched.

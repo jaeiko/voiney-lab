@@ -122,6 +122,9 @@ class ServerHistoryTests(VoiceSessionHarness, unittest.TestCase):
     def _run(self, scenario_steps, script=()):
         self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
         self.environment["XAI_API_KEY"] = "test-only-not-a-key"
+        # Lane RA, decision (g): no default provider or model any more.
+        self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
+        self.environment["VOINEY_LAB_ROUTER_MODEL"] = "fake-router-model"
         self.environment["VOINEY_LAB_TRANSLATION_PROVIDER"] = "anthropic"
         self.environment["ANTHROPIC_API_KEY"] = ""
         client = FakeRouterClient(*script)

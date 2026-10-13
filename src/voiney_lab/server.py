@@ -7859,6 +7859,12 @@ def _router_route_fields(
                 outcome.verdict.reason_code if outcome.verdict is not None else None),
             "timings_ms":dict(outcome.timings_ms),
             "usage":usage,
+            # Lane RA: the router first -- the read-only call, who wrote the
+            # answer, and the roles' statuses.
+            "router_first":bool(settings.router_first),
+            "read_only":outcome.read_only.tool if outcome.read_only is not None else None,
+            "answered_by":outcome.answered_by,
+            "roles":dict(outcome.brain_statuses),
         },
     }
 
