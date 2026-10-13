@@ -123,18 +123,19 @@ class ARefusalSaysWhyAndDoesNothingElseTests(unittest.TestCase):
     """2-5 and 2-6: one sentence, no state change, no forced next move."""
 
     def _session(self, *, unread=True):
-        from tests.test_pdf_to_session_walkthrough import _pipeline
+        from tests.protocol_vocabulary_support import in_gel_fixture
         from voiney_lab.curated_protocol import (
             CuratedProtocolFixture,
             CuratedProtocolSession,
         )
 
-        _extraction, _plan, _merged, draft = _pipeline()
-        labels = tuple(
-            step.source_label
-            for section in draft.protocol.sections
-            for step in section.steps
-        )
+        # The curated in-gel draft; the claim-chunk pipeline that used to
+        # build this analysis was deleted (lane AN, 2026-10-13).
+        draft = in_gel_fixture().draft
+        steps = [
+            step for section in draft.protocol.sections for step in section.steps
+        ]
+        labels = tuple(step.source_label for step in steps)
         fixture = CuratedProtocolFixture(
             draft=draft,
             status="fictional_non_operational",
@@ -149,10 +150,7 @@ class ARefusalSaysWhyAndDoesNothingElseTests(unittest.TestCase):
             ),
             source_filename=draft.extraction.original_filename,
             unread_pages=(
-                {
-                    draft.protocol.sections[0].steps[1]
-                    .evidence.source_page_number: ()
-                }
+                {steps[1].evidence.source_page_number: ()}
                 if unread
                 else None
             ),

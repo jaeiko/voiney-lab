@@ -1,4 +1,4 @@
-"""End-of-line sentence boundaries, and the detector for when they find none."""
+"""End-of-line sentence boundaries in the page evidence segments."""
 
 from __future__ import annotations
 
@@ -6,15 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_protocol_claim_analysis import write_lined_pages, write_pages
+from tests.pdf_fixture_support import write_lined_pages, write_pages
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
 from voiney_lab.protocol_claim_analysis import (
     EVIDENCE_SEGMENT_VERSION,
-    MIN_LINES_FOR_SEGMENTATION,
     _MAX_PROVIDER_SEGMENT_CHARS,
     _numbered_action_matches,
     _bounded_action_block_boundaries,
-    degraded_segmentation_pages,
     generate_page_evidence_segments,
 )
 
@@ -297,74 +295,6 @@ class SentenceLineBoundaryTests(unittest.TestCase):
         self.assertGreater(len(segments), 1)
         for segment in segments:
             self.assertLessEqual(len(segment.text), _MAX_PROVIDER_SEGMENT_CHARS)
-
-
-class SegmentationDegradationDetectorTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._temp.cleanup)
-        self.root = Path(self._temp.name)
-
-    def _detect(self, pages):
-        path = self.root / "detect.pdf"
-        write_lined_pages(path, pages)
-        extraction = extract_protocol_pdf(path)
-        return degraded_segmentation_pages(extraction, source_revision=REVISION)
-
-    def test_a_page_with_no_sentence_punctuation_is_flagged(self) -> None:
-        """An equipment metadata list, the real ANKOM p17 shape."""
-
-        self.assertEqual(
-            self._detect(
-                (
-                    (
-                        "Oven NAME",
-                        "Oven forced-air convection TYPE",
-                        "Fisher Isotemp BRAND",
-                        "151030510 SKU",
-                        "Equipment",
-                        "LINK",
-                    ),
-                )
-            ),
-            (1,),
-        )
-
-    def test_a_bullet_list_without_terminators_is_flagged(self) -> None:
-        self.assertEqual(
-            self._detect(
-                (
-                    (
-                        "Materials",
-                        "- acetonitrile",
-                        "- ammonium bicarbonate",
-                        "- formic acid",
-                        "- trypsin",
-                    ),
-                )
-            ),
-            (1,),
-        )
-
-    def test_a_normally_segmented_page_is_not_flagged(self) -> None:
-        self.assertEqual(self._detect((_HAZARD_PAGE,)), ())
-
-    def test_a_short_page_is_not_flagged(self) -> None:
-        """Below the line threshold there is nothing to segment."""
-
-        self.assertLess(3, MIN_LINES_FOR_SEGMENTATION)
-        self.assertEqual(self._detect((("Title", "Author", "DOI"),)), ())
-
-    def test_only_the_degraded_page_is_reported(self) -> None:
-        self.assertEqual(
-            self._detect(
-                (
-                    _HAZARD_PAGE,
-                    ("Oven NAME", "TYPE", "BRAND", "SKU", "LINK", "Equipment"),
-                )
-            ),
-            (2,),
-        )
 
 
 if __name__ == "__main__":

@@ -215,8 +215,6 @@ SETTINGS: tuple[Setting, ...] = (
             "AI 가 그린 도식 (줄 WV 결정 3; 켜면 OPENAI_API_KEY 필수; '그림으로 그려 줘'에만)"),
     Setting("VOINEY_LAB_STT_DIAGNOSTICS_ENABLED", SWITCHES, "false",
             "실제 음성 STT 진단 녹음 보관"),
-    Setting("VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED", SWITCHES, "false",
-            "프로토콜 주장 조각 분석"),
     # --- 경로·저장소 --------------------------------------------------------------
     Setting("VOINEY_LAB_SAFETY_CATALOG", PATHS, "(없음, 필수)",
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),
@@ -237,8 +235,6 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_CANDIDATE_A_SOURCE_PDF", PATHS,
             "data/runtime/candidate-a-source/in-gel-digestion.pdf",
             "run_dev.sh 가 쓸 in-gel 원본 PDF (셸에서만 읽음)"),
-    Setting("VOINEY_LAB_CHUNK_CACHE_DIR", PATHS,
-            "data/development_cache/chunk_analysis", "조각 분석 캐시 폴더"),
     Setting("VOINEY_LAB_STT_DIAGNOSTIC_DIR", PATHS, "data/runtime/stt-diagnostics",
             "STT 진단 녹음 폴더 (data/runtime 아래만)"),
     # --- 그 밖 ----------------------------------------------------------------

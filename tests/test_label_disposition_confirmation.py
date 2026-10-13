@@ -30,28 +30,6 @@ _GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
 
 
 class TheModelCannotMakeThisJudgementTests(unittest.TestCase):
-    def test_the_response_schema_has_no_field_for_it(self) -> None:
-        from voiney_lab.protocol_claim_analysis import (
-            CLAIM_RESPONSE_SCHEMA,
-        )
-
-        coverage = CLAIM_RESPONSE_SCHEMA["properties"]["page_coverage"][
-            "items"
-        ]
-        self.assertNotIn("non_step_labels", coverage["properties"])
-        self.assertNotIn("non_step_labels", coverage["required"])
-
-    def test_the_prompt_no_longer_asks_for_it(self) -> None:
-        from voiney_lab.protocol_claim_analysis import (
-            CLAIM_ANALYSIS_SYSTEM_PROMPT,
-        )
-
-        prompt = " ".join(CLAIM_ANALYSIS_SYSTEM_PROMPT.split())
-        self.assertNotIn("non_step_labels", prompt)
-        self.assertIn(
-            "Every numbered label on a core page is an execution step", prompt
-        )
-
     def test_the_protocol_carries_no_disposition_collection(self) -> None:
         from dataclasses import fields
 

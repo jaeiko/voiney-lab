@@ -184,9 +184,8 @@ raw PDF stream
   → immutable source bytes + SHA-256 + extracted pages
   → text-empty branch: trusted OCR adapter, run by the upload itself
   → exact-source/page validation + append-only OCR evidence
-  → analysis job started by the upload (single-pass or page-bounded evidence claims)
-  → per-claim source-bound segment selection + server-owned exact-excerpt resolution
-  → complete-chunk deterministic merge + whole-document consistency gate
+  → analysis job started by the upload (one structured analysis)
+  → server-owned exact-excerpt and source-label verification
   → typed ExperimentProtocol validation
   → fail-closed readiness assessment
   → source-linked analysis result (the start screen's summary)
@@ -212,23 +211,11 @@ development activation.
 Structured protocol analysis requires the deployment-supplied
 `VOINEY_LAB_ANALYSIS_MODEL`; the values in use are google `gemini-3.8-flash`
 at reasoning `low` (lane AQ, 2026-10-10).
-When the default-off deployment gate
-`VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native
-documents over eight pages enter the evidence-claim path even when their
-extracted byte count is small. Its provider DTO is not ExperimentProtocol:
-it contains page coverage, source structure markers, and independently evidenced
-scientific/execution claims. Pages are exposed as deterministic, bounded
-numbered-action blocks with compact request-scoped handles. Established
-eight-core-page windows are subdivided at a deterministic 4 KiB core-source
-target to bound expected provider-output cardinality without splitting an atomic
-source page. An immutable
-server-side map binds each handle to the canonical segment identity, revision,
-document hash, page, page-text hash, segment order, and exact text. The provider
-selects only adjacent handles; the server reconstructs the exact excerpt and
-rejects unknown, stale, cross-request, cross-page, reversed, duplicated, or
-non-contiguous selections. Every required chunk must validate before merge,
-`analysis_incomplete` coverage is terminal for that run, the 120-second bound is
-one total-run deadline, and provider concurrency remains serial by default.
+The evidence-claim chunk path that sat behind a default-off setting (page
+coverage, claim DTOs, chunk planning and merge, the chunk cache and its
+audits) was deleted on 2026-10-13 (lane AN, decision 1); it lives in the git
+history only. What is left of it is the page evidence segment generator in
+`protocol_claim_analysis.py`, which the in-gel fixture's timer manifest cites.
 
 OCR is a source-preserving extraction boundary in `protocol_ocr.py`, not an
 execution authority. HTTP callers cannot choose a provider; the server accepts

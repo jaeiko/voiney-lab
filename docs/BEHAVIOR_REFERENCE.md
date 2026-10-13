@@ -1592,7 +1592,6 @@ parameter or else the file name. The image is never read.
 | `VOINEY_LAB_SAFETY_CATALOG` | Absolute approved safety-catalog path |
 | `VOINEY_LAB_PROTOCOL_ENABLED` | Enables immutable PDF catalog |
 | `VOINEY_LAB_PROTOCOL_DATA_DIR` | Absolute ignored protocol-store directory |
-| `VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` | Default-off gate for controlled evidence-first claim-chunk evaluation |
 | `VOINEY_LAB_WORKSPACE_ENABLED` | Enables tenant/RBAC/source workspace |
 | `VOINEY_LAB_WORKSPACE_DATA_DIR` | Absolute ignored workspace directory |
 | `VOINEY_LAB_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |

@@ -15,12 +15,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_protocol_claim_analysis import write_lined_pages
+from tests.pdf_fixture_support import write_lined_pages
 from voiney_lab import experiment_protocol as domain
-from voiney_lab.experiment_protocol_analysis import (
-    ANALYSIS_RESPONSE_SCHEMA,
-    ProtocolAnalysisEvidenceError,
-)
+from voiney_lab.experiment_protocol_analysis import ANALYSIS_RESPONSE_SCHEMA
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
 from voiney_lab.experiment_protocol_store import (
     deserialize_analysis,
@@ -28,7 +25,6 @@ from voiney_lab.experiment_protocol_store import (
 )
 from voiney_lab.protocol_claim_analysis import (
     generate_page_evidence_segments,
-    reopen_evidence_span,
 )
 
 _PAGE = (
@@ -62,24 +58,6 @@ class EvidenceHandleRoundTripTests(unittest.TestCase):
             ),
         )
 
-    def test_a_handle_reopens_the_exact_span(self) -> None:
-        evidence = self._evidence(1)
-        self.assertEqual(
-            reopen_evidence_span(
-                self.extraction, evidence, source_revision=_REVISION
-            ),
-            evidence.source_excerpt,
-        )
-
-    def test_several_adjacent_handles_reopen_in_order(self) -> None:
-        evidence = self._evidence(2)
-        self.assertEqual(
-            reopen_evidence_span(
-                self.extraction, evidence, source_revision=_REVISION
-            ),
-            evidence.source_excerpt,
-        )
-
     def test_the_round_trip_survives_storage(self) -> None:
         """Stored and read back, the handles still reopen the same text."""
 
@@ -95,56 +73,8 @@ class EvidenceHandleRoundTripTests(unittest.TestCase):
             stored.evidence_segment_ids, evidence.evidence_segment_ids
         )
         self.assertEqual(
-            reopen_evidence_span(
-                self.extraction, stored, source_revision=_REVISION
-            ),
-            evidence.source_excerpt,
+            _reopen(self.extraction, stored), evidence.source_excerpt
         )
-
-    def test_the_excerpt_is_not_what_gets_reopened(self) -> None:
-        """The text comes back from the source, not from what was saved."""
-
-        evidence = self._evidence(1)
-        tampered = domain.SourceEvidence(
-            source_page_number=1,
-            source_excerpt="something else entirely",
-            evidence_segment_ids=evidence.evidence_segment_ids,
-        )
-        self.assertEqual(
-            reopen_evidence_span(
-                self.extraction, tampered, source_revision=_REVISION
-            ),
-            evidence.source_excerpt,
-        )
-
-    def test_a_handle_that_no_longer_resolves_fails_closed(self) -> None:
-        """A changed source or segmentation must not silently return text."""
-
-        broken = domain.SourceEvidence(
-            source_page_number=1,
-            source_excerpt="x",
-            evidence_segment_ids=("s-not-a-real-handle",),
-        )
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            reopen_evidence_span(
-                self.extraction, broken, source_revision=_REVISION
-            )
-
-    def test_a_handle_from_a_different_revision_fails_closed(self) -> None:
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            reopen_evidence_span(
-                self.extraction,
-                self._evidence(1),
-                source_revision="pdf-2",
-            )
-
-    def test_evidence_with_no_handle_is_refused_not_guessed(self) -> None:
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            reopen_evidence_span(
-                self.extraction,
-                domain.SourceEvidence(1, "Wear gloves."),
-                source_revision=_REVISION,
-            )
 
 
 class HandlesAreNeverAskedOfTheProviderTests(unittest.TestCase):
@@ -173,6 +103,26 @@ class HandlesAreNeverAskedOfTheProviderTests(unittest.TestCase):
             ],
             [],
         )
+
+
+def _reopen(extraction, evidence: domain.SourceEvidence) -> str:
+    """The source text a stored statement's handles name, read from the source.
+
+    ``reopen_evidence_span`` went with the claim-chunk path (lane AN,
+    2026-10-13). A stored handle is now resolved the way the timer manifest and
+    the unread-page disclosure resolve theirs: by its id, against the segments
+    the surviving generator cuts from the page.
+    """
+
+    segments = {
+        segment.segment_id: segment.text
+        for segment in generate_page_evidence_segments(
+            extraction,
+            source_revision=_REVISION,
+            page_number=evidence.source_page_number,
+        )
+    }
+    return "".join(segments[handle] for handle in evidence.evidence_segment_ids)
 
 
 def _protocol(extraction, evidence: domain.SourceEvidence):

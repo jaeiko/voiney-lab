@@ -650,3 +650,27 @@ it already was for the development fixture (tests/test_aged_store.py). The
 only difference is cosmetic: the older review puts a failed re-analysis's
 code in `analysis_failure` beside `available_for_execution: true`, and the
 older screen then shows "분석 실패와 복구" over a protocol that still runs.
+
+## Lane AN (2026-10-13): the claim-chunk path deleted
+
+No schema change and no stored row rewritten.
+
+The evidence-first claim-chunk analysis path (lane AN, decision 1) is gone
+with its two settings, written here without their `VOINEY_LAB_` prefix:
+`PROTOCOL_CLAIM_CHUNKS_ENABLED` (default false; the only way into the path)
+and `CHUNK_CACHE_DIR` (its development cache folder). A `.env` that still
+sets one starts as before; the name is simply not read. Its modules
+(`protocol_chunk_analysis`, `chunk_analysis_cache`, `claim_contract_audit`,
+`protocol_claim_semantic_audit`, `protocol_claim_stream_telemetry`,
+`protocol_provider_diagnostics`) live in the git history only;
+`protocol_claim_analysis` keeps the page evidence segment generator, with
+unchanged segment ids, for the in-gel fixture's timer manifest. The scripts
+under `scripts/` that imported the deleted modules no longer run.
+
+### Reading older data
+
+A catalog ledger may hold `protocol_chunk_*` events from a run of that path;
+the run status still reads them as before (none exist in the development
+catalog of 2026-10-12). An analysis the path stored keeps its
+`page_coverage` records in its payload, and the payload still reads, but the
+catalog no longer derives the unread-page disclosure from them.

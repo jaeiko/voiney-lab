@@ -178,7 +178,7 @@ PDF 가 필요한 테스트는 임시 디렉터리에 합성 PDF 를 만들어 �
 | ANKOM 객체 경로 | `tests/test_extraction_cross_check.py:30`, `test_repeat_range_integrity.py:515`, `test_timer_manifest.py:37`, `test_numbered_label_trigger.py:19`, `test_claim_contract_audit.py:188`, `scripts/diagnose_hazard_claim_chunk.py:46`, `diagnose_protocol_claim_latency.py:63`, `prototype_claim_chunks.py:56`, `diagnose_full_document_run.py:50` | C / R |
 | 루트의 PDF 2개 | `tests/test_extraction_cross_check.py:632,636`, `test_numbered_label_trigger.py:22,23`, `test_step20_label_loss_regression.py:41`, `test_repeat_range_integrity.py:473,512,513`, `test_claim_contract_audit.py:185,186`, `test_timer_manifest.py:40,41`, `test_endpoint_observation_gate.py:48,49`, `scripts/diagnose_figure_label_chunk.py:55`, `.gitignore:20,21` | C / R |
 | `data/runtime` 전체 | `tests/test_stored_payloads_still_load.py:27` (C, 동적 수집), `server.py:1075,1089` (R, STT 진단 디렉터리 기본값이며 반드시 `data/runtime` 아래여야 함), `run_candidate_a.sh:9`, `run_ci_server.sh:15`, `test_protocol_catalog.py:977` (run_candidate_a.sh 의 한 줄을 그대로 고정), `.gitignore:11` | R / C |
-| `data/development_cache/*` | `chunk_analysis_cache.py:61` (C, `VOINEY_LAB_CHUNK_CACHE_DIR` 가 없을 때 기본값), `scripts/score_extraction.py:298` (C), `scripts/diagnose_provider_chunk.py:239` (C), `scripts/collect_chunks.sh:14,57`, `tests/test_chunk_analysis_cache.py:436` (이름 `development_cache` 를 고정), `tests/test_score_extraction_tool.py:87`, `.gitignore:22` | C / E |
+| `data/development_cache/*` | `chunk_analysis_cache.py:61` (C, `CHUNK_CACHE_DIR` 가 없을 때 기본값; 옛 설정, 줄 AN 2026-10-13 에 청크 경로와 함께 삭제), `scripts/score_extraction.py:298` (C), `scripts/diagnose_provider_chunk.py:239` (C), `scripts/collect_chunks.sh:14,57`, `tests/test_chunk_analysis_cache.py:436` (이름 `development_cache` 를 고정), `tests/test_score_extraction_tool.py:87`, `.gitignore:22` | C / E |
 | `data/moss_demo/approved_documents.ko.json` | `scripts/setup_moss_demo.py:26`, `tests/test_moss_retrieval.py:250` | R |
 | `data/procedure_demo/*.json` | `scripts/setup_procedure_demo.py:27`, `tests/test_procedure_demo.py:23`, `test_server_procedure_integration.py:28`, `test_curated_protocol_cascade.py:4377` | R |
 | `tests/fixtures/fictional_ingestion_manifest.json` | `tests/test_server_procedure_integration.py:497` | R |
@@ -531,7 +531,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 ### 판단 불가 (2~4단계에서 건드리지 않는다)
 
 - `data/development_cache/` → `data/cache/`. git 밖이라 `git mv` 를 쓸 수 없다. `.env` 의
-  `VOINEY_LAB_CHUNK_CACHE_DIR` 를 확인할 수 없다. 캐시 안 4개 파일이 자기 경로를 기록하고,
+  `CHUNK_CACHE_DIR`(옛 설정) 를 확인할 수 없다. 캐시 안 4개 파일이 자기 경로를 기록하고,
   `test_chunk_analysis_cache.py:436` 이 이름을 고정한다. 캐시를 못 찾으면 provider 비용이 다시 든다.
 - 루트의 라이선스 PDF 2개를 `data/runtime/` 아래로 옮기는 일. 파일이 없어서 테스트가 어느 쪽이든
   건너뛰므로, 이 트리에서는 맞게 고쳤는지 확인할 수 없다.
