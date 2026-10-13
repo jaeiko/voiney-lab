@@ -5,9 +5,14 @@ repository (`scripts/run_dev.sh` plus a directly-invoked `uvicorn`
 process), rather than introducing a new orchestration platform. It is scoped
 to a controlled research pilot, not a regulated GxP/clinical release — see
 `README.md` §3 ("하지 않는 것"). The product is an MVP prototype, not
-field-validated. The controlled pilot itself runs `scripts/run_pilot.sh`,
-which refuses to start without its approved safety catalog
-(`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4).
+field-validated. The controlled pilot itself runs `scripts/run_pilot.sh`: it
+starts as `source_protocol_only` (the uploaded PDF's own safety statements,
+no institution safety documents, and it says so) when there is no approved
+safety catalog at its fixed path, and checks the catalog, refusing to start on
+an unusable one, when there is (`docs/PILOT_GUIDE.md` §1,
+`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4). HTTPS for a phone is
+`docs/PILOT_HTTPS_SETUP.md`; deleting the pilot's data afterwards is
+`docs/PILOT_GUIDE.md` §5.
 
 ## Process model
 
