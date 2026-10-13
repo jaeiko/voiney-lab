@@ -4381,17 +4381,31 @@ class ListenerSession:
         assert self.level_reference is not None
         return self.level_reference.threshold_db
     def _apply_endpoint_threshold(self,detector:EndpointDetector)->None:
-        """Give ``detector`` the line, and log when the level starts or stops ending utterances."""
+        """Give ``detector`` the two lines, and log when the level starts or stops ending utterances.
 
+        The wearer's words begin at the wearer's own level, the reference
+        less half the margin, and end under the gate's line, the reference
+        less the margin: a voice between the two -- a neighbour, a TV --
+        never starts the level's end (lane SP2, decision 1). Only between
+        utterances: one already begun keeps the lines it began with, so a
+        floor wavering at the guard cannot change them in mid-sentence.
+        """
+
+        if detector.state is not TurnState.IDLE:
+            return
         threshold=self.endpoint_threshold_db()
         detector.wearer_threshold_db=threshold
+        detector.wearer_onset_db=(
+            self.level_reference.reference_db-self.level_reference.margin_db/2
+            if threshold is not None and self.level_reference is not None else None)
         if (threshold is not None)!=self.level_endpoint_on:
             self.level_endpoint_on=threshold is not None
             floor=self.noise_floor.level_db()
             log.info(
-                "level endpoint %s threshold_db=%s floor_db=%s",
+                "level endpoint %s threshold_db=%s onset_db=%s floor_db=%s",
                 "on" if self.level_endpoint_on else "off",
                 round(threshold,1) if threshold is not None else None,
+                round(detector.wearer_onset_db,1) if detector.wearer_onset_db is not None else None,
                 round(floor,1) if floor is not None else None)
     def _ignored_speech_event(
         self,kind:str,turn_id:int,result:EndpointResult,generation:int|None,

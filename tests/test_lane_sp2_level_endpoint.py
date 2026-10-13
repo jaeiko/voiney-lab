@@ -138,6 +138,16 @@ class DetectorTests(unittest.TestCase):
                     [(i, r.utterance, r.forced, r.endpoint, r.voiced_level_db) for i, r in after])
         self.assertEqual(run(detector(THRESHOLD_DB), QUIET[:6] + [SILENT] * 8)[0][1].endpoint, "silence")
 
+    def test_no_line_never_ends_the_words_by_level(self) -> None:
+        # The line taken away in mid-utterance: only the VAD may end it.
+        found = detector(THRESHOLD_DB)
+        commits = run(found, QUIET[:3] + LOUD[:6])
+        self.assertEqual(commits, [])
+        found.wearer_threshold_db = None
+        commits = run(found, QUIET[:60])
+        self.assertEqual(len(commits), 1)
+        self.assertEqual(commits[0][1].endpoint, "forced")
+
     def test_a_quiet_filler_between_pauses_does_not_end_the_words(self) -> None:
         # "... 음 ..." said softly between two short pauses: under the line
         # for longer than the endpoint time, but the VAD heard mostly silence
@@ -236,12 +246,38 @@ class ListenerTests(unittest.TestCase):
             session.accept_chunk(SILENT)
         said = "\n".join(logs.output)
         self.assertEqual(said.count("level endpoint on"), 1)
-        self.assertIn(f"threshold_db={THRESHOLD_DB} floor_db=", said)
+        self.assertIn(f"threshold_db={THRESHOLD_DB} onset_db={REFERENCE_DB - SENSITIVITY_MARGINS_DB['normal'] / 2} floor_db=", said)
         for _ in range(NOISE_FLOOR_MINIMUM_FRAMES * 2):
             session.noise_floor.add(THRESHOLD_DB)
         with self.assertLogs("voiney_lab", level="INFO") as logs:
             session.accept_chunk(SILENT)
-        self.assertIn("level endpoint off threshold_db=None floor_db=", "\n".join(logs.output))
+        self.assertIn("level endpoint off threshold_db=None onset_db=None floor_db=", "\n".join(logs.output))
+
+    def test_a_voice_between_the_lines_never_starts_the_levels_end(self) -> None:
+        # Loud enough for the gate, not as loud as the wearer (a neighbour at
+        # 1 m on an earbud, a TV): the utterance runs as before.
+        session = self.session()
+        middle = [tone_frame(0.05, i) for i in range(10)]
+        events = self.feed(session, QUIET[:20] + middle + QUIET[:40])
+        self.assertEqual([e.kind for e in events], ["speech.start", "speech.ignored"])
+        self.assertTrue(events[-1].result.forced)
+
+    def test_an_utterance_keeps_the_lines_it_began_with(self) -> None:
+        # The floor rises past the guard while the wearer speaks: the
+        # utterance keeps its line and ends by level; the next one has none.
+        session = self.session()
+        events = self.feed(session, QUIET[:20] + LOUD[:6])
+        self.assertEqual([e.kind for e in events], ["speech.start"])
+        for _ in range(NOISE_FLOOR_MINIMUM_FRAMES * 3):
+            session.noise_floor.add(THRESHOLD_DB)
+        self.assertIsNone(session.endpoint_threshold_db())
+        events = self.feed(session, QUIET[:10])
+        self.assertEqual([e.kind for e in events], ["speech.end"])
+        self.assertEqual(events[-1].result.endpoint, "level")
+        session.refresh_cooldown()
+        session.detector.reset()
+        session.accept_chunk(QUIET[0])
+        self.assertIsNone(session.detector.wearer_threshold_db, "the next utterance has no line")
 
     def test_a_room_near_the_line_ends_the_turn_as_before(self) -> None:
         # As before: the room's voice runs the utterance to the forced bound,

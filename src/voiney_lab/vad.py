@@ -9,9 +9,10 @@ Lane SP2 (2026-10-13), decision 1: in babble or beside a pulsing pump the
 VAD hears "a voice" without a break, so it never finds the 1 s of silence
 and the utterance runs to the 15 s bound. With the wearer's level measured,
 the end is found by level as well: once the wearer's level has been heard
-(as many frames over the line as a listening onset needs voiced), a stretch
-as long as the endpoint silence spent more than the margin below the wearer,
-while the VAD keeps hearing a voice there, ends the utterance. The VAD's own silence still ends it as before, so in a quiet room
+(as many frames within half the margin of the reference as a listening
+onset needs voiced), a stretch as long as the endpoint silence spent more
+than the margin below the wearer, while the VAD keeps hearing a voice there,
+ends the utterance. The VAD's own silence still ends it as before, so in a quiet room
 nothing changes. The listener draws the line only while the room's noise
 floor (``NoiseFloor``, decision 2's measurement) sits well under it. A
 session that measured nothing ends utterances as before.
@@ -377,11 +378,16 @@ class EndpointDetector:
         #: the listener sets while the level can part the wearer from the
         #: room; None ends utterances by the VAD alone, as before.
         self.wearer_threshold_db: float | None = None
+        #: The wearer's own level, the line the wearer's words must reach to
+        #: begin (the listener sets the reference minus half the margin; None
+        #: uses ``wearer_threshold_db``). Higher than the end line, so a
+        #: neighbour or a TV between the two -- loud enough for the gate, not
+        #: as loud as the wearer -- never starts the level's end.
+        self.wearer_onset_db: float | None = None
         #: Whether this utterance has had the wearer's level -- as many frames
-        #: over the line, of the last listening-onset window, as a listening
-        #: onset needs voiced (8 of 12), so a neighbour's or a TV's louder
-        #: moment is not taken for the wearer; only then is its end looked for
-        #: by level.
+        #: at it, of the last listening-onset window, as a listening onset
+        #: needs voiced (8 of 12), so a louder moment is not taken for the
+        #: wearer; only then is its end looked for by level.
         self._wearer_heard = False
         self._loud_window: deque[bool] = deque(maxlen=self.config.listening_onset_window_frames)
         #: The level's own quiet stretch beside the VAD's: frames under the
@@ -456,15 +462,19 @@ class EndpointDetector:
                 break
             self.level_quiet_frames += 1
 
-    def _wearer_level_reached(self, loud: bool) -> bool:
-        self._loud_window.append(loud)
+    def _at_wearer_level(self, level: float | None) -> bool:
+        line = self.wearer_onset_db if self.wearer_onset_db is not None else self.wearer_threshold_db
+        return line is not None and level is not None and level >= line
+
+    def _wearer_level_reached(self, at_level: bool) -> bool:
+        self._loud_window.append(at_level)
         return sum(self._loud_window) >= self.config.listening_onset_voiced_frames
 
     def _hear_wearer(self) -> None:
         """The wearer's level reached, in an utterance the room had begun.
 
         Lane SP2, decision 1. When the VAD had kept hearing a voice before
-        the window's first frame over the line -- babble, a pump, a neighbour
+        the window's first frame at the wearer's level -- babble, a pump, a neighbour
         -- what came before it, beyond one prefix of lead-in, was not the
         wearer and is dropped: the 15 s bound counts from the wearer's start,
         and the level the gate compares and the STT hear are the wearer's
@@ -516,7 +526,7 @@ class EndpointDetector:
                 for _, flag in self._utterance[-self.config.endpoint_silence_frames:]:
                     self._note_voiced(flag)
                 if self.wearer_threshold_db is not None and any(
-                        self._wearer_level_reached(self._loud(lv)) for lv in list(self._utterance_levels)):
+                        self._wearer_level_reached(self._at_wearer_level(lv)) for lv in list(self._utterance_levels)):
                     self._start_level_tracking()
                 self._prefix.clear()
                 self._prefix_levels.clear()
@@ -547,9 +557,9 @@ class EndpointDetector:
             if voiced:
                 self._resume_voiced_frames += 1
         loud = self._loud(level)
-        if self._wearer_heard:
+        if self._wearer_heard and self.wearer_threshold_db is not None:
             self._track_level(loud)
-        elif self.wearer_threshold_db is not None and self._wearer_level_reached(loud):
+        elif self.wearer_threshold_db is not None and self._wearer_level_reached(self._at_wearer_level(level)):
             self._hear_wearer()
 
         forced = len(self._utterance) >= self.config.maximum_utterance_frames
@@ -558,6 +568,7 @@ class EndpointDetector:
         # quieter than the wearer for the whole endpoint time.
         by_level = (
             self._wearer_heard
+            and self.wearer_threshold_db is not None
             and not loud
             and self.level_quiet_frames >= self.config.endpoint_silence_frames
             and self._vad_keeps_hearing_a_voice()
