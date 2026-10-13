@@ -554,6 +554,23 @@
     .install-guide-body .install-secure[hidden],#install-app[hidden]{display:none}
     #install-app{min-height:var(--target-desk);padding:0 var(--space-4);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font:inherit;font-weight:600;cursor:pointer}
     @media (max-width:520px){.topbar{flex-wrap:wrap}.install-guide-body{right:auto;left:0}}
+    /* Lane UI2 decision 6 (2026-10-13): two of lane UI0's open points the
+       screen settles alone. On the run screen a light line runs above the
+       dark bottom bar, so an ended timer's dark panel no longer melts into
+       it (UI0 9.6). Before and after the experiment a phone's top rail is one
+       line of words and one row of buttons: the run's step, timer and basis
+       placeholders wait for the run screen, and each button keeps its name
+       on one line (UI0 9.7). */
+    body[data-view="during"] .voice-console{box-shadow:0 -4px 0 var(--paper)}
+    @media (orientation:landscape){body[data-view="during"] .rail-right{box-shadow:0 -4px 0 var(--paper)}}
+    @media (max-width:720px){
+     body:not([data-view="during"]) .sticky-rail{flex-wrap:wrap;gap:var(--space-2);padding:var(--space-2) var(--space-4)}
+     body:not([data-view="during"]) .rail-left{flex:1 1 100%;gap:var(--space-1) var(--space-3)}
+     body:not([data-view="during"]) #rail-pdf-title{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+     body:not([data-view="during"]) .rail-divider,body:not([data-view="during"]) #rail-timer-badge,body:not([data-view="during"]) #rail-step-badge,body:not([data-view="during"]) .rail-basis-badge{display:none}
+     body:not([data-view="during"]) .rail-right{flex-wrap:nowrap;gap:var(--space-2)}
+     body:not([data-view="during"]) .rail-right button{flex:1 1 auto;min-width:0;min-height:44px;padding:0 var(--space-1);font-size:.8125rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    }
     body[data-view="during"] #protocol-compare{display:none}
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
