@@ -26,6 +26,7 @@ from voiney_lab.experiment_protocol_analysis import (
     HOLLOW_STEP_SHARE,
     MAX_ANALYSIS_PAGES,
     ProtocolAnalysisIncompleteError,
+    ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
     analyze_protocol_extraction,
     count_source_numbered_steps,
@@ -269,18 +270,21 @@ class CatalogTests(unittest.TestCase):
         self.assertFalse(review["available_for_execution"])
         self.assertTrue(review["analysis_failure"]["retryable"])
 
-    def test_a_document_over_sixty_pages_is_refused_with_the_scope_advice(self):
+    def test_a_document_over_sixty_pages_is_read_in_pieces_not_refused(self):
+        # Lane AN, decision 2 (2026-10-13) replaced this refusal: a document
+        # over 60 pages is read in pieces (tests/test_lane_ld_pieces.py), and
+        # only one over MAX_PIECED_ANALYSIS_PAGES is refused before any call.
         protocol_id = self.register([f"{TITLE} page {n}\n{n}. Add buffer." for n in range(1, 62)])
         model = _Model("{}")
         error = self.analyze(protocol_id, model)
-        self.assertIsInstance(error, ProtocolAnalysisTooManyPagesError)
-        self.assertEqual(model.calls, 0)
-        self.assertEqual(self.failure_payload(protocol_id)["failure_code"], "protocol_analysis_too_many_pages")
+        self.assertIsInstance(error, ProtocolAnalysisPieceFailedError)
+        self.assertEqual(model.calls, 10)  # five pieces, each sent once more
+        self.assertEqual(self.failure_payload(protocol_id)["failure_code"], "protocol_analysis_piece_failed")
         pipeline = self.catalog.pipeline_status(protocol_id)
         self.assertTrue(pipeline["blocked"])
-        self.assertIn("60쪽", pipeline["message"])
-        self.assertIn("절차가 있는 쪽만", pipeline["action"])
-        self.assertFalse(self.catalog.review(protocol_id)["analysis_failure"]["retryable"])
+        self.assertIn("일부 조각 분석 실패", pipeline["message"])
+        self.assertIn("분석 다시 시도", pipeline["action"])
+        self.assertTrue(self.catalog.review(protocol_id)["analysis_failure"]["retryable"])
 
 
 if __name__ == "__main__":

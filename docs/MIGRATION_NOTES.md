@@ -725,3 +725,45 @@ since lane CL), `has_key()` is false and a client for it is refused with
 role it uses, as `.env.example` does, behaves as before; one that relied on
 the fallback must now set `VOINEY_LAB_<ROLE>_PROVIDER=xai` (and the model)
 for each such role, or the role stays off.
+
+## Lane AN (2026-10-13): a long document analysed in pieces
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+A document of more than 60 pages, or one whose text is planned to need more
+output than one analysis call gives, is analysed in pieces of at most 15
+pages that share one page with the next (lane AN, decision 2). The run is the
+analysis request's own: its events carry `analysis_run_id` equal to the
+request's `analysis_id`. It writes, in this order, one
+`protocol_chunk_plan_created` event (`chunks`: `chunk_id` `piece-<n>`,
+`ordinal`, `source_page_start`, `source_page_end`), a
+`protocol_chunk_analysis_started` event per piece (`attempt` 1, and 2 with
+`retry_of_failure_code` when the piece is sent once more), a
+`protocol_chunk_analysis_completed` (`steps`) or
+`protocol_chunk_analysis_failed` (`failure_code`, `evidence_failure`) event
+per piece, `protocol_chunk_merge_started` when every piece passed, and
+`protocol_chunk_merge_conflict` (`reason`, `source_page_start`,
+`source_page_end`) when two pieces read their shared page differently. The
+run ends in the analysis' own `protocol_analysis_ready` event, which then
+carries `pieces` (index, count, first and last page of each), or
+`protocol_analysis_failed` with the new codes
+`protocol_analysis_piece_failed` (and `failed_pieces`: each piece's pages and
+last failure code) or `protocol_analysis_piece_conflict` (and
+`piece_conflict`). A passed run is stored like any analysis; its ids carry
+the piece they came from (`p2.step-14`). `protocol_analysis_too_many_pages`
+now means more than 400 pages.
+
+### Reading older data
+
+Nothing changes for an analysis stored before: a ledger without piece events
+reads as before. The run status reads chunk events only while their plan is
+the latest analysis request's run, and a chunk failure that a later passed
+analysis replaced is no longer shown as the current failure.
+
+### Going back
+
+Code from before this version reads a piece run's events as a claim-chunk run
+(the same event types): while the run is going it shows its progress; after
+it ended, its status may stay at the last chunk event. The stored analysis
+itself reads and runs as any other.
