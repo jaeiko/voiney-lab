@@ -5324,6 +5324,108 @@ def measured_values(content: str) -> tuple[MeasuredValue, ...]:
     return tuple(found)
 
 
+# --- Lane RA, decision (c): a note's values compared with the source ----------------
+
+#: The kind a unit measures, so "37.2도" is compared with the source's "37°C"
+#: and "790 rpm" with its "800 rpm", never a temperature with a speed.
+_VALUE_KIND_BY_UNIT: dict[str, str] = {
+    "°C": "temperature", "rpm": "speed",
+    "h": "time", "min": "time", "s": "time", "clock": "time",
+    "L": "volume", "mL": "volume", "µL": "volume",
+    "M": "concentration", "mM": "concentration", "µM": "concentration", "nM": "concentration",
+    "mg/mL": "concentration", "ng/µL": "concentration",
+    "%": "percent", "kg": "mass", "g": "mass", "mg": "mass", "µg": "mass", "ng": "mass",
+    "x g": "force", "times": "count", "nm": "wavelength",
+}
+#: How a unit scales to its kind's base (minutes, µL, mM, mg).
+_VALUE_BASE_SCALE: dict[str, float] = {
+    "h": 60.0, "min": 1.0, "s": 1 / 60, "clock": 1.0,
+    "L": 1_000_000.0, "mL": 1000.0, "µL": 1.0,
+    "M": 1000.0, "mM": 1.0, "µM": 0.001, "nM": 0.000001,
+    "kg": 1_000_000.0, "g": 1000.0, "mg": 1.0, "µg": 0.001, "ng": 0.000001,
+}
+#: A unit as a note says it -> the unit as the source's quantities are read.
+_SAID_UNIT_CANONICAL: dict[str, str] = {
+    "도": "°C", "°": "°C", "℃": "°C", "C": "°C",
+    "분": "min", "초": "s", "시간": "h", "sec": "s", "hr": "h", "hrs": "h", "mins": "min",
+    "uL": "µL", "ul": "µL", "ml": "mL", "RPM": "rpm", "분당 회전": "rpm",
+}
+#: Units written right after their number ("37°C", "5%").
+_SOURCE_ATTACHED_UNITS = frozenset({"°C", "%"})
+
+
+def _canonical_said_unit(unit: str) -> str | None:
+    unit = " ".join(unit.split())
+    if not unit:
+        return None
+    if unit in _SAID_UNIT_CANONICAL:
+        return _SAID_UNIT_CANONICAL[unit]
+    for form, canonical in _READER_UNIT_FORMS:
+        if re.fullmatch(form, unit):
+            return canonical
+    return unit
+
+
+def _value_in_base(number: str, unit: str) -> float | None:
+    if unit == "clock":
+        parts = [int(part) for part in number.split(":")]
+        if len(parts) == 2:
+            parts.append(0)
+        hours, minutes, seconds = parts
+        return hours * 60 + minutes + seconds / 60
+    try:
+        value = float(number.replace(",", ""))
+    except ValueError:
+        return None
+    return value * _VALUE_BASE_SCALE.get(unit, 1.0)
+
+
+def source_value_deviations(
+    values: Sequence[MeasuredValue], source_text: str,
+) -> list[dict[str, str]]:
+    """The values of a note that differ from the source's value of the same kind.
+
+    Lane RA, decision (c). Each value a note states with a unit is compared
+    with the quantities the step's source states of the same kind (a
+    temperature with temperatures, a speed with speeds, a time with times,
+    hours, minutes and clock times alike). A value that equals one of them,
+    or whose kind the source does not state, is no deviation. A deviation
+    names what was said and the source's value, as the source writes it.
+    """
+
+    stated: dict[str, list[tuple[float, str]]] = {}
+    pairs = _reader_quantities(source_text)
+    for number, unit in sorted(pairs, key=lambda item: item[1] == "clock"):
+        if unit is None:
+            continue
+        kind = _VALUE_KIND_BY_UNIT.get(unit)
+        base = _value_in_base(number, unit)
+        if kind is None or base is None:
+            continue
+        shown = f"{number}{unit}" if unit in _SOURCE_ATTACHED_UNITS else (
+            number if unit == "clock" else f"{number} {unit}"
+        )
+        entries = stated.setdefault(kind, [])
+        if all(abs(base - known) > 1e-9 * max(1.0, abs(known)) for known, _ in entries):
+            entries.append((base, shown))
+    found: list[dict[str, str]] = []
+    for value in values:
+        unit = _canonical_said_unit(value.unit)
+        if unit is None:
+            continue
+        kind = _VALUE_KIND_BY_UNIT.get(unit)
+        base = _value_in_base(value.number, unit)
+        if kind is None or base is None or kind not in stated:
+            continue
+        if any(abs(base - known) <= 1e-9 * max(1.0, abs(known)) for known, _ in stated[kind]):
+            continue
+        found.append({
+            "kind": kind, "said": value.said, "number": value.number, "unit": unit,
+            "source": " · ".join(shown for _, shown in stated[kind]),
+        })
+    return found
+
+
 _POINT_WITHOUT_DIGITS = re.compile(
     rf"(?:\d|(?<![가-힣])[{_KD}십백천]+)\s*점\s*(?:{_KOREAN_UNIT}|{_ASCII_UNIT})"
 )
@@ -19689,6 +19791,28 @@ class CuratedProtocolSession:
                     # ("영 점 오 밀리리터" is 0.5 mL), for the readback.
                     "values": [value.public_dict() for value in measured_values(content)],
                 }
+                if self.router_first:
+                    # Lane RA, decision (c): a value that differs from the
+                    # step's source value is a deviation, recorded with the
+                    # source's value beside it and shown to the screen.
+                    source_text = "\n".join((
+                        step.instruction_source_text,
+                        *(fact.text for fact in self.fixture.facts_for_step(self.current_index)),
+                    ))
+                    deviations = source_value_deviations(measured_values(content), source_text)
+                    note_record["deviations"] = deviations
+                    if deviations:
+                        category = "deviation"
+                        note_record["category"] = category
+                        note_record["label"] = NOTE_CATEGORY_LABELS[category]
+                        self._last_note_deviation = {
+                            "step_label": step.source_label, "content": content,
+                            "deviations": deviations,
+                        }
+                    self._last_readback_values = [
+                        str(value.get("said") or "") for value in note_record["values"]
+                        if value.get("said")
+                    ]
                 if intent.note_confirmed:
                     # Lane VX, decision 3: said "네" to in the 바로 확인 way, the
                     # value is the experimenter's confirmed one already; the

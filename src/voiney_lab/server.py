@@ -1075,10 +1075,24 @@ def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
     values=read or (
         [value for value in note.get("measurements") or () if value]
         if note.get("category")=="measurement" else [])
+    # Lane RA, decision (c): a value that differs from the source is read
+    # back as a deviation, with the source's value beside it.
+    deviations=[item for item in note.get("deviations") or () if isinstance(item,dict)]
     if language!="ko":
         display=speech=f"Recorded at step {note.get('step_label')}."
+        if deviations:
+            sources=", ".join(f"{item.get('said')} (source {item.get('source')})" for item in deviations)
+            display=speech=f"Recorded as a deviation at step {note.get('step_label')}: {sources}."
     elif confirm_mode=="quiet":
         display=speech="기록했어요."
+    elif deviations:
+        said=[str(item.get("said") or "") for item in deviations]
+        source=[str(item.get("source") or "") for item in deviations]
+        shown=", ".join(said)
+        spoken=", ".join(spoken_korean(value) for value in said)
+        particle=josa_ro(shown)[len(shown):]
+        display=f"편차로 기록했어요: {shown}{particle} 하셨고, 원문은 {' · '.join(source)}이에요."
+        speech=f"편차로 기록했어요. {spoken}{particle} 하셨고, 원문은 {', '.join(spoken_korean(value) for value in source)}이에요."
     elif values:
         shown=", ".join(values)
         spoken=", ".join(spoken_korean(value) for value in values)
