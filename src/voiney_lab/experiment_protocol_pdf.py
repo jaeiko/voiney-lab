@@ -34,6 +34,7 @@ import re
 import os
 import stat
 import threading
+import time
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, replace
@@ -60,6 +61,9 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 
 __all__ = [
     "BOTTOM_BAND_FRACTION",
+    "DOCX_MEDIA_TYPE",
+    "IMAGE_MEDIA_TYPES",
+    "OFFICE_CONVERTER_ENV",
     "MAX_PROTOCOL_PDF_BYTES",
     "OCR_REASON_DROPPED_GLYPHS",
     "OCR_REASON_NO_TEXT",
@@ -81,9 +85,19 @@ __all__ = [
     "ProtocolPdfTypeError",
     "ProtocolPdfWorkerError",
     "ProtocolPdfWorkerTimeoutError",
+    "ProtocolSourceConversionError",
+    "ProtocolSourceConversionUnavailableError",
+    "ProtocolSourceFormatError",
+    "ProtocolSourceTooLargeError",
+    "SOURCE_MEDIA_TYPES",
+    "SourceConversion",
     "TextVerification",
     "clear_protocol_pdf_cache",
+    "convert_source_to_pdf",
     "extract_protocol_pdf",
+    "file_sha256",
+    "find_office_converter",
+    "pdf_filename",
     "page_ocr_reason",
     "unreadable_character_count",
     "_worker_timeout_seconds",
@@ -617,3 +631,446 @@ def _extract_protocol_pdf_uncached(path: str | Path) -> ProtocolPdfExtraction:
         text_engine=pdf_text_engine.ENGINE_NAME,
         text_engine_version=pdf_text_engine.engine_version(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Sources that are not PDFs (lane AN, FM; human decision 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# A Word document and a photo of a protocol are read through the same evidence
+# path as a PDF: each is turned into the PDF that extraction, OCR and the
+# analysis read, and that PDF is the source every quote is checked against
+# and the page a person is shown. The upload's own bytes are named by their
+# checksum in the registration (``SourceConversion``); nothing about the
+# evidence check changes.
+
+DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+#: The photo formats read, by upload media type: the Pillow format name the
+#: file must open as.
+IMAGE_MEDIA_TYPES = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/heic": "HEIF",
+    "image/heif": "HEIF",
+}
+SOURCE_MEDIA_TYPES = frozenset({PDF_MEDIA_TYPE, DOCX_MEDIA_TYPE, *IMAGE_MEDIA_TYPES})
+#: A photo is placed on its page at the resolution OCR renders pages at, so
+#: OCR reads the photo's own pixels, neither enlarged nor shrunk.
+IMAGE_PDF_DPI = pdf_text_engine.OCR_RENDER_DPI
+#: The largest photo read, in pixels: a 48 MP phone photo fits; Pillow's own
+#: decompression-bomb guard refuses at 179 MP.
+MAX_SOURCE_IMAGE_PIXELS = 100_000_000
+#: JPEG quality of the photo inside the PDF. The photo is the evidence a
+#: person checks a handwritten value against, so it is kept close to as taken.
+IMAGE_PDF_JPEG_QUALITY = 95
+#: How long LibreOffice may take to turn one Word document into a PDF.
+#: Measured on the 15 corpus .docx with LibreOffice 26.2: 3.4-27.8 s.
+OFFICE_CONVERSION_TIMEOUT_SECONDS = 120
+#: LibreOffice's ``soffice`` (human decision 2026-10-13: it must be installed
+#: on the server). Empty: looked up on PATH and in its default install places.
+OFFICE_CONVERTER_ENV = "VOINEY_LAB_OFFICE_CONVERTER"
+#: Where LibreOffice is looked for besides PATH: its default install places.
+OFFICE_CONVERTER_PLACES = (
+    "/usr/bin/soffice",
+    "/usr/lib/libreoffice/program/soffice",
+    "/opt/libreoffice/program/soffice",
+    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+    r"C:\Program Files\LibreOffice\program\soffice.exe",
+    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+)
+#: The date written into a photo's PDF (with a fixed title), so the same photo
+#: gives the same PDF bytes.
+_FIXED_PDF_DATE = time.gmtime(946684800)  # 2000-01-01T00:00:00Z
+
+
+class ProtocolSourceFormatError(ProtocolPdfError):
+    """The upload is not the format its media type names."""
+
+    code = "invalid_source_file"
+
+
+class ProtocolSourceTooLargeError(ProtocolPdfError):
+    code = "protocol_image_too_large"
+
+
+class ProtocolSourceConversionUnavailableError(ProtocolPdfError):
+    """This server lacks what turns the upload into a PDF (a system install)."""
+
+    code = "source_conversion_unavailable"
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class ProtocolSourceConversionError(ProtocolPdfError):
+    """The converter ran and did not give a PDF."""
+
+    code = "source_conversion_failed"
+
+
+@dataclass(frozen=True)
+class SourceConversion:
+    """What a registered PDF was made from (lane AN, FM)."""
+
+    media_type: str
+    sha256: str
+    byte_size: int
+    converter: str
+    #: Format details a person may want: the photo's pixel size, whether its
+    #: EXIF orientation was applied.
+    detail: tuple[tuple[str, object], ...] = ()
+    #: The name the file was uploaded under; the PDF is registered as
+    #: ``pdf_filename``.
+    filename: str | None = None
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "media_type": self.media_type,
+            "sha256": self.sha256,
+            "byte_size": self.byte_size,
+            "converter": self.converter,
+            **({"filename": self.filename} if self.filename is not None else {}),
+            **dict(self.detail),
+        }
+
+
+def pdf_filename(filename: str) -> str:
+    """The name a converted upload's PDF is registered under: "notes.jpg" ->
+    "notes.pdf"."""
+
+    stem, dot, _ = filename.rpartition(".")
+    return f"{stem if dot and stem else filename}.pdf"
+
+
+def source_media_type(content_type: str) -> str:
+    """The media type of an upload's Content-Type header, parameters dropped."""
+
+    return content_type.casefold().split(";", 1)[0].strip()
+
+
+def convert_source_to_pdf(
+    source: str | Path,
+    media_type: str,
+    destination: str | Path,
+    *,
+    office_converter: str | None = None,
+) -> SourceConversion:
+    """Write the PDF an uploaded Word document or photo is read as.
+
+    ``office_converter`` names LibreOffice's ``soffice`` for a Word document;
+    by default it is looked up (``find_office_converter``).
+    """
+
+    media_type = source_media_type(media_type)
+    if media_type in IMAGE_MEDIA_TYPES:
+        return image_to_pdf(source, media_type, destination)
+    if media_type == DOCX_MEDIA_TYPE:
+        return docx_to_pdf(source, destination, converter=office_converter)
+    raise ProtocolPdfTypeError("The upload is not a PDF, a Word document or a photo.")
+
+
+def file_sha256(path: str | Path) -> str:
+    """The SHA-256 of a file, read in chunks."""
+
+    return _file_identity(Path(path))[0]
+
+
+def _file_identity(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(_HASH_CHUNK_BYTES), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def image_to_pdf(
+    source: str | Path, media_type: str, destination: str | Path
+) -> SourceConversion:
+    """One photo as a one-page PDF with no text layer, so OCR reads it.
+
+    The page is the photo at ``IMAGE_PDF_DPI``, turned upright by its EXIF
+    orientation; transparency is laid on white. A HEIC photo needs the
+    optional ``pillow-heif`` package (``pip install -e '.[heic]'``); without
+    it the upload is refused by name, never read in part.
+    """
+
+    source = Path(source)
+    expected = IMAGE_MEDIA_TYPES[source_media_type(media_type)]
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:  # pragma: no cover - Pillow is a dependency
+        raise ProtocolSourceConversionUnavailableError(
+            "Pillow is not installed.", code="image_support_unavailable"
+        ) from exc
+    if expected == "HEIF":
+        try:
+            import pillow_heif
+        except ImportError as exc:
+            raise ProtocolSourceConversionUnavailableError(
+                "HEIC photos need the optional pillow-heif package.",
+                code="heic_support_unavailable",
+            ) from exc
+        pillow_heif.register_heif_opener()
+    sha256, byte_size = _file_identity(source)
+    try:
+        with Image.open(source) as opened:
+            if opened.format != expected:
+                raise ProtocolSourceFormatError(
+                    "The photo is not the format its media type names."
+                )
+            width, height = opened.size
+            if width * height > MAX_SOURCE_IMAGE_PIXELS:
+                raise ProtocolSourceTooLargeError("The photo has too many pixels.")
+            orientation = opened.getexif().get(0x0112, 1)
+            image = ImageOps.exif_transpose(opened)
+            if image.mode in {"RGBA", "LA", "PA"} or (
+                image.mode == "P" and "transparency" in image.info
+            ):
+                image = image.convert("RGBA")
+                flat = Image.new("RGB", image.size, (255, 255, 255))
+                flat.paste(image, mask=image.getchannel("A"))
+                image = flat
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+            image.save(
+                Path(destination),
+                "PDF",
+                resolution=float(IMAGE_PDF_DPI),
+                quality=IMAGE_PDF_JPEG_QUALITY,
+                title="Protocol photo",
+                creationDate=_FIXED_PDF_DATE,
+                modDate=_FIXED_PDF_DATE,
+            )
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError) as exc:
+        if isinstance(exc, Image.DecompressionBombError):
+            raise ProtocolSourceTooLargeError("The photo has too many pixels.") from exc
+        raise ProtocolSourceFormatError("The photo could not be read.") from exc
+    return SourceConversion(
+        media_type=source_media_type(media_type),
+        sha256=sha256,
+        byte_size=byte_size,
+        converter=f"pillow-{_pillow_version()}",
+        detail=(
+            ("pixels", [width, height]),
+            ("exif_orientation_applied", orientation not in (None, 1)),
+            ("pdf_dpi", IMAGE_PDF_DPI),
+        ),
+    )
+
+
+def _pillow_version() -> str:
+    from PIL import __version__
+
+    return __version__
+
+
+def find_office_converter(environ: dict[str, str] | None = None) -> str | None:
+    """LibreOffice's ``soffice`` on this machine, or None.
+
+    ``VOINEY_LAB_OFFICE_CONVERTER`` names it; a name that is not a file is
+    None (the upload is refused by name) rather than some other LibreOffice.
+    """
+
+    import shutil
+
+    env = os.environ if environ is None else environ
+    configured = (env.get(OFFICE_CONVERTER_ENV) or "").strip()
+    if configured:
+        return configured if Path(configured).is_file() else None
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return next((place for place in OFFICE_CONVERTER_PLACES if Path(place).is_file()), None)
+
+
+#: The fonts LibreOffice prints Korean in (lane AN, FM a). A Korean Word
+#: document names fonts a Linux server lacks ("맑은 고딕", "바탕", or a theme
+#: font LibreOffice does not resolve); LibreOffice then prints its Latin
+#: letters in DejaVu and its Hangul in another fallback (WenQuanYi), and the
+#: PDF text that mixes the two loses its word spaces and breaks its lines at
+#: every change of script ("시료2 g" / "을50 mL") -- quotes would no longer
+#: match. With the Korean names and the generic families pointed at Nanum,
+#: one font prints the whole line and the text reads as written (measured
+#: 2026-10-13 with LibreOffice 26.2 and fonts-nanum). Only a document that
+#: holds Hangul is printed so: LibreOffice's own fallback lists name Korean
+#: fonts, and an English document printed under these rules took Nanum and
+#: broke its lines and pages differently (7 of the 15 corpus .docx), so an
+#: English document is printed as LibreOffice prints it. Only the LibreOffice
+#: run sees this file; the system's own font set is included unchanged, and
+#: without the Nanum fonts installed the rules match nothing.
+_KOREAN_SANS = ("맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "굴림체", "GulimChe",
+                "돋움", "Dotum", "돋움체", "DotumChe", "함초롬돋움", "HCR Dotum",
+                "Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR")
+_KOREAN_SERIF = ("바탕", "Batang", "바탕체", "BatangChe", "궁서", "Gungsuh",
+                 "함초롬바탕", "HCR Batang", "신명조", "Noto Serif KR", "Noto Serif CJK KR")
+
+
+def _office_fontconfig(base: str) -> str:
+    def alias(families: tuple[str, ...], target: str) -> str:
+        return "".join(
+            f'  <alias binding="strong"><family>{family}</family>'
+            f"<prefer><family>{target}</family></prefer></alias>\n"
+            for family in families
+        )
+
+    return (
+        '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n'
+        f'<fontconfig>\n  <include ignore_missing="yes">{base}</include>\n'
+        + alias(_KOREAN_SANS + ("sans-serif",), "NanumGothic")
+        + alias(_KOREAN_SERIF + ("serif",), "NanumMyeongjo")
+        + "</fontconfig>\n"
+    )
+
+
+def _docx_holds_hangul(archive) -> bool:
+    """Whether the document's body, headers, footers or notes hold Hangul."""
+
+    parts = [
+        name for name in archive.namelist()
+        if name.startswith("word/") and name.endswith(".xml")
+        and name.split("/")[-1].startswith(("document", "header", "footer", "footnotes", "endnotes"))
+    ]
+    return any(
+        re.search("[\uac00-\ud7a3]", archive.read(name).decode("utf-8", "replace"))
+        for name in parts
+    )
+
+
+#: A Word list level's suffix element, and a level as a whole.
+_LIST_SUFFIX_TAB = re.compile(r'<w:suff w:val="tab"\s*/>')
+_LIST_LEVEL = re.compile(r"<w:lvl\b[\s\S]*?</w:lvl>")
+
+
+def _with_list_numbers_followed_by_space(source: Path, destination: Path) -> None:
+    """A copy of a .docx whose list numbers are followed by a space, not a tab.
+
+    Lane AN, FM a (2026-10-13). Word follows a list number with a tab (its
+    default, or ``<w:suff w:val="tab"/>``); the PDF LibreOffice prints keeps no
+    character for that tab, so the page reads "10.Then identify ..." and the
+    step number is refused as glued to its text (2 of the 15 corpus .docx,
+    measured live; the rule that a number is separated from its text by
+    whitespace is a human decision of 2026-10-05). With the suffix set to a
+    space the page reads "10. Then identify ...". Only ``word/numbering.xml``
+    of the copy changes; the uploaded file and its checksum do not.
+    """
+
+    import zipfile
+
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(
+        destination, "w", zipfile.ZIP_DEFLATED
+    ) as copy:
+        for item in archive.infolist():
+            data = archive.read(item.filename)
+            if item.filename == "word/numbering.xml":
+                text = _LIST_SUFFIX_TAB.sub('<w:suff w:val="space"/>', data.decode("utf-8"))
+                text = _LIST_LEVEL.sub(
+                    lambda level: level[0] if "<w:suff " in level[0]
+                    else level[0].replace("</w:lvl>", '<w:suff w:val="space"/></w:lvl>'),
+                    text,
+                )
+                data = text.encode("utf-8")
+            copy.writestr(item, data)
+
+
+def docx_to_pdf(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    converter: str | None = None,
+    run=None,
+) -> SourceConversion:
+    """A Word document as the PDF LibreOffice prints it.
+
+    LibreOffice must be installed on the server (human decision 2026-10-13;
+    with ``fonts-nanum`` for Korean documents, see ``_office_fontconfig``).
+    Without it the upload is refused with ``docx_conversion_unavailable`` and
+    the reader is asked to save the document as a PDF; the document is never
+    read some other way that the evidence check was not built for.
+    """
+
+    import subprocess
+    import tempfile
+    import zipfile
+
+    source = Path(source)
+    if not zipfile.is_zipfile(source):
+        raise ProtocolSourceFormatError("The Word document is not a .docx file.")
+    with zipfile.ZipFile(source) as archive:
+        if "word/document.xml" not in archive.namelist():
+            raise ProtocolSourceFormatError("The Word document is not a .docx file.")
+        korean = _docx_holds_hangul(archive)
+    converter = converter or find_office_converter()
+    if converter is None:
+        raise ProtocolSourceConversionUnavailableError(
+            "LibreOffice is not installed on this server.",
+            code="docx_conversion_unavailable",
+        )
+    run = run or subprocess.run
+    sha256, byte_size = _file_identity(source)
+    with tempfile.TemporaryDirectory(prefix="protocol-docx-") as root:
+        work = Path(root)
+        copy = work / "source.docx"
+        _with_list_numbers_followed_by_space(source, copy)
+        environment = dict(os.environ)
+        if korean:
+            fonts = work / "fonts.conf"
+            fonts.write_text(
+                _office_fontconfig(environment.get("FONTCONFIG_FILE") or "/etc/fonts/fonts.conf"),
+                encoding="utf-8",
+            )
+            environment["FONTCONFIG_FILE"] = str(fonts)
+        try:
+            completed = run(
+                [
+                    converter,
+                    "--headless",
+                    "--norestore",
+                    f"-env:UserInstallation={(work / 'profile').as_uri()}",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(work / "out"),
+                    str(copy),
+                ],
+                capture_output=True,
+                timeout=OFFICE_CONVERSION_TIMEOUT_SECONDS,
+                check=False,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ProtocolSourceConversionError(
+                "LibreOffice did not finish converting the Word document."
+            ) from exc
+        except OSError as exc:
+            raise ProtocolSourceConversionUnavailableError(
+                "LibreOffice could not be started.", code="docx_conversion_unavailable"
+            ) from exc
+        produced = work / "out" / "source.pdf"
+        if completed.returncode != 0 or not produced.is_file() or produced.stat().st_size == 0:
+            raise ProtocolSourceConversionError(
+                "LibreOffice did not produce a PDF from the Word document."
+            )
+        Path(destination).write_bytes(produced.read_bytes())
+    return SourceConversion(
+        media_type=DOCX_MEDIA_TYPE,
+        sha256=sha256,
+        byte_size=byte_size,
+        converter=_office_converter_name(converter, run),
+    )
+
+
+def _office_converter_name(converter: str, run) -> str:
+    """"libreoffice-24.2.7.2" from ``soffice --version``, or "libreoffice"."""
+
+    try:
+        completed = run([converter, "--version"], capture_output=True, timeout=30, check=False)
+        match = re.search(rb"LibreOffice\s+([0-9][0-9.]*)", completed.stdout or b"")
+    except Exception:  # noqa: BLE001 - the name is a label, not a check
+        match = None
+    return f"libreoffice-{match[1].decode()}" if match else "libreoffice"

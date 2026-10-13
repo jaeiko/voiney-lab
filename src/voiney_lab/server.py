@@ -68,13 +68,23 @@ from voiney_lab.experiment_protocol_config import (
 from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     MAX_PROTOCOL_PDF_BYTES,
+    SOURCE_MEDIA_TYPES,
     ProtocolPdfEncryptedError,
     ProtocolPdfError,
     ProtocolPdfMalformedError,
     ProtocolPdfTooLargeError,
     ProtocolPdfWorkerError,
     ProtocolPdfTypeError,
+    ProtocolSourceConversionError,
+    ProtocolSourceConversionUnavailableError,
+    ProtocolSourceFormatError,
+    ProtocolSourceTooLargeError,
+    convert_source_to_pdf,
     extract_protocol_pdf,
+    file_sha256,
+    find_office_converter,
+    pdf_filename,
+    source_media_type,
 )
 from voiney_lab.experiment_protocol_store import (
     PROTOCOL_DATABASE_FILENAME,
@@ -118,6 +128,11 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    REAGENT_TABLE_MEDIA_TYPE,
+    MAX_REAGENT_TABLE_BYTES,
+    ReagentTableError,
+    ReagentTableTooLargeError,
+    reagent_table_summary,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -367,7 +382,36 @@ async def lifespan(_: FastAPI):
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
+    _log_source_format_support()
     yield
+
+
+def _docx_conversion_available()->bool:
+    return find_office_converter() is not None
+
+
+def _heic_photos_available()->bool:
+    return importlib.util.find_spec("pillow_heif") is not None
+
+
+def _log_source_format_support()->None:
+    """Say at start-up what turns a .docx and a HEIC photo into a PDF (lane AN, FM).
+
+    LibreOffice must be installed on the server (human decision 2026-10-13);
+    without it every .docx upload is refused, so its absence is a warning.
+    HEIC is optional (``pip install -e '.[heic]'``).
+    """
+
+    if not _docx_conversion_available():
+        log.warning(
+            "protocol.source_formats docx=unavailable reason=libreoffice_not_found "
+            "setting=VOINEY_LAB_OFFICE_CONVERTER install='apt-get install "
+            "libreoffice-writer-nogui fonts-nanum'")
+    else:
+        log.info("protocol.source_formats docx=available")
+    log.info("protocol.source_formats heic=%s",
+             "available" if _heic_photos_available()
+             else "unavailable(optional: pip install -e '.[heic]')")
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
@@ -401,6 +445,11 @@ async def readyz()->JSONResponse:
         capabilities["workspace_enabled"]=workspace.enabled
         capabilities["protocol_catalog_enabled"]=protocol.enabled
         capabilities["experiment_reports_enabled"]=reports.enabled
+        # Lane AN, FM (human decision 2026-10-13): LibreOffice must be
+        # installed on the server for .docx sources; HEIC photos need the
+        # optional pillow-heif. Reported, not required for readiness.
+        capabilities["docx_conversion_available"]=_docx_conversion_available()
+        capabilities["heic_photos_available"]=_heic_photos_available()
     except Exception as exc:
         return JSONResponse(status_code=503,content={
             "status":"not_ready",
@@ -2242,6 +2291,15 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return _workspace_http_error(exc)
     if isinstance(exc,ProtocolPdfTooLargeError):
         return HTTPException(status_code=413,detail="protocol_pdf_too_large")
+    # Lane AN, FM: a Word document or photo that could not become its PDF.
+    # A converter this server lacks is the server's state (503), not the
+    # file's; a file that is not what its type names is the file's (422).
+    if isinstance(exc,ProtocolSourceConversionUnavailableError):
+        return HTTPException(status_code=503,detail=exc.code)
+    if isinstance(exc,ProtocolSourceTooLargeError):
+        return HTTPException(status_code=413,detail=exc.code)
+    if isinstance(exc,(ProtocolSourceFormatError,ProtocolSourceConversionError)):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolPdfTypeError):
         return HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     if isinstance(exc,ProtocolPdfWorkerError):
@@ -2275,6 +2333,10 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolRegistrationError):
         return HTTPException(status_code=400,detail=exc.code)
+    if isinstance(exc,ReagentTableTooLargeError):
+        return HTTPException(status_code=413,detail=exc.code)
+    if isinstance(exc,ReagentTableError):
+        return HTTPException(status_code=422,detail=exc.code)
     return HTTPException(
         status_code=409 if isinstance(exc,ProtocolCatalogError) else 500,
         detail=getattr(exc,"code","protocol_catalog_error"),
@@ -2895,8 +2957,16 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols",status_code=201)
 async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
-    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
-    if media_type!=PDF_MEDIA_TYPE:
+    """Register one protocol source: a PDF, a Word document or a photo.
+
+    Lane AN, FM (human decision 2026-10-13): a .docx (through LibreOffice)
+    and a JPG, PNG or HEIC photo are turned into the PDF that extraction, OCR
+    and the analysis read -- one evidence path -- and registered as it; the
+    upload's own checksum is kept with the registration.
+    """
+
+    media_type=source_media_type(request.headers.get("content-type",""))
+    if media_type not in SOURCE_MEDIA_TYPES:
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     length=request.headers.get("content-length")
     if length is not None:
@@ -2911,19 +2981,46 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise HTTPException(status_code=400,detail="invalid_content_length") from exc
     with tempfile.TemporaryDirectory(prefix="protocol-registration-") as root:
         temporary=Path(root)/"upload.pdf"
-        await _spool_protocol_pdf_upload(request,temporary)
+        original=None
+        if media_type==PDF_MEDIA_TYPE:
+            await _spool_protocol_pdf_upload(request,temporary)
+        else:
+            original=Path(root)/"upload.source"
+            await _spool_protocol_pdf_upload(request,original)
         try:
             catalog,store=_open_protocol_catalog()
             try:
-                result=catalog.register(
-                    temporary,
-                    source_filename=filename,
-                    media_type=media_type,
+                converted=None
+                # A Word document or photo uploaded before is found by its own
+                # checksum and not converted again.
+                result=(
+                    catalog.find_converted_upload(file_sha256(original))
+                    if original is not None else None
                 )
+                if result is None:
+                    if original is not None:
+                        converted=replace(
+                            await asyncio.to_thread(
+                                convert_source_to_pdf,original,media_type,temporary),
+                            filename=filename,
+                        )
+                    result=catalog.register(
+                        temporary,
+                        source_filename=(
+                            filename if converted is None else pdf_filename(filename)),
+                        media_type=PDF_MEDIA_TYPE,
+                        converted_from=converted,
+                    )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 _record_workspace_metric(
                     category="protocol",metric_name="upload",
-                    dimensions={"source_kind":"local_pdf","status":"stored"},
+                    dimensions={
+                        "source_kind":(
+                            "local_pdf" if converted is None
+                            else "local_docx" if converted.converter.startswith("libreoffice")
+                            else "local_photo"),
+                        "status":"stored",
+                    },
                 )
                 ocr=_automatic_ocr_on_upload(catalog,result.entry)
                 return {
@@ -2937,6 +3034,65 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/reagent-tables",status_code=201)
+async def attach_protocol_reagent_table(
+    request:Request,protocol_id:str,filename:str,
+)->dict[str,object]:
+    """Attach an .xlsx workbook to a protocol as its reagent table (lane AN, FM).
+
+    Kept cell by cell where the workbook prints it; never analysed and never
+    a source of a step. Returns the table's summary.
+    """
+
+    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
+    if media_type!=REAGENT_TABLE_MEDIA_TYPE:
+        raise HTTPException(status_code=415,detail="unsupported_reagent_table_media_type")
+    with tempfile.TemporaryDirectory(prefix="protocol-reagent-table-") as root:
+        temporary=Path(root)/"table.xlsx"
+        try:
+            await _spool_protocol_pdf_upload(
+                request,temporary,max_bytes=MAX_REAGENT_TABLE_BYTES)
+        except HTTPException as exc:
+            # The spooler names a PDF; this upload is a workbook.
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={413:"reagent_table_too_large",422:"invalid_reagent_table"}.get(
+                    exc.status_code,exc.detail),
+            ) from exc
+        def attach()->tuple[dict[str,object],bool]:
+            # The catalog's connection belongs to the thread that opens it.
+            catalog,store=_open_protocol_catalog()
+            try:
+                return catalog.attach_reagent_table(
+                    protocol_id,temporary,filename=filename)
+            finally:
+                store.close()
+
+        try:
+            _scope_catalog_resource(protocol_id)
+            table,deduplicated=await asyncio.to_thread(attach)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _catalog_http_error(exc) from exc
+    return {"reagent_table":reagent_table_summary(table),"deduplicated":deduplicated}
+
+
+@app.get("/api/protocols/{protocol_id}/reagent-tables")
+def list_protocol_reagent_tables(protocol_id:str)->dict[str,object]:
+    """The reagent tables attached to a protocol, every cell where it prints."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return {"reagent_tables":catalog.reagent_tables(protocol_id)}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
 
 
 def _automatic_ocr_on_upload(

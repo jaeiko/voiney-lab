@@ -50,6 +50,7 @@ from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
     ProtocolPdfPage,
+    SourceConversion,
     extract_protocol_pdf,
 )
 from voiney_lab.experiment_protocol_store import (
@@ -2722,7 +2723,15 @@ class ProtocolCatalog:
         *,
         source_filename: str,
         media_type: str,
+        converted_from: SourceConversion | None = None,
     ) -> ProtocolRegistration:
+        """Register one source PDF, or find the one already registered.
+
+        ``converted_from`` names the Word document or photo the PDF was made
+        from (lane AN, FM); it is kept in the registration event, where
+        ``find_converted_upload`` finds it.
+        """
+
         filename = _display_filename(source_filename)
         if media_type.casefold().split(";", 1)[0].strip() != PDF_MEDIA_TYPE:
             raise ProtocolRegistrationError(
@@ -2751,12 +2760,91 @@ class ProtocolCatalog:
                 "source_filename": filename,
                 "source_sha256": extraction.sha256,
                 "analysis_status": status,
+                **(
+                    {"converted_from": converted_from.payload()}
+                    if converted_from is not None else {}
+                ),
             },
         )
         return ProtocolRegistration(
             self._entry_for_revision(creation.protocol_revision),
             deduplicated=False,
         )
+
+    def attach_reagent_table(
+        self, protocol_id: str, source: str | Path, *, filename: str,
+    ) -> tuple[dict[str, object], bool]:
+        """Attach an .xlsx workbook to a protocol as its reagent table (FM b).
+
+        Append-only: one event per workbook, named by its checksum; the same
+        workbook attached again returns the one already there. Returns the
+        table and whether it was already attached.
+        """
+
+        if not isinstance(filename, str) or not _SAFE_TABLE_FILENAME.fullmatch(filename):
+            raise ReagentTableError("Reagent table filename must be one plain .xlsx filename.")
+        revision = self._latest_protocol_revision(protocol_id)
+        digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        for table in self.reagent_tables(protocol_id):
+            if table.get("sha256") == digest:
+                return table, True
+        workbook = read_reagent_workbook(source)
+        table_id = f"reagent-table-{digest[:24]}"
+        payload = {
+            "table_id": table_id,
+            "filename": filename,
+            "media_type": REAGENT_TABLE_MEDIA_TYPE,
+            "sha256": digest,
+            "byte_size": Path(source).stat().st_size,
+            "authority": "person_upload",
+            **workbook,
+        }
+        self.store.append_event(
+            f"{table_id}-{revision.pdf_checksum[:16]}",
+            protocol_id,
+            revision.revision_number,
+            _REAGENT_TABLE_EVENT,
+            payload,
+        )
+        return payload, False
+
+    def reagent_tables(self, protocol_id: str) -> list[dict[str, object]]:
+        """The reagent tables attached to a protocol, oldest first."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        return [
+            event.payload for event in self.store.list_events(revision.experiment_id)
+            if event.event_type == _REAGENT_TABLE_EVENT and isinstance(event.payload, dict)
+        ]
+
+    def find_converted_upload(self, sha256: str) -> ProtocolRegistration | None:
+        """The protocol a Word document or photo with this checksum made, if any.
+
+        Lane AN, FM: LibreOffice writes the time into each PDF it prints, so
+        the same .docx uploaded again gives other PDF bytes; it is found by
+        its own checksum before it is converted again.
+        """
+
+        revision = self._revision_converted_from(sha256)
+        if revision is None:
+            return None
+        return ProtocolRegistration(self._entry_for_revision(revision), deduplicated=True)
+
+    def _revision_converted_from(self, sha256: str) -> ProtocolRevisionRecord | None:
+        """The revision registered from the upload with this checksum, if any."""
+
+        for experiment in self.store.list_experiments():
+            for event in self.store.list_events(experiment.experiment_id):
+                if event.event_type != "protocol_registered" or not isinstance(
+                    event.payload, dict
+                ):
+                    continue
+                origin = event.payload.get("converted_from")
+                if isinstance(origin, dict) and origin.get("sha256") == sha256:
+                    return self.store.get_protocol_revision(
+                        experiment.experiment_id, event.protocol_revision_number
+                    )
+        return None
 
     def analyze(
         self,
@@ -3378,3 +3466,215 @@ class ProtocolCatalog:
             sha256=fixture.source_pdf_sha256,
             source_page=matching[0].source_page,
         )
+
+
+# ---------------------------------------------------------------------------
+# Reagent tables (lane AN, FM b; human decision 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# An Excel workbook is attached to a protocol as its "시약 표": every sheet
+# and every non-empty cell kept where the workbook prints it (sheet name, cell
+# reference, value, number format), so a question about an amount can be
+# answered with the table position and the cell value. It is not a protocol
+# source: it is never analysed, never advances a step, and the protocol's
+# readiness does not depend on it. Connecting it to voice is a later lane.
+
+REAGENT_TABLE_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+_REAGENT_TABLE_EVENT = "protocol_reagent_table_attached"
+#: The largest workbook read: a reagent list is small, and openpyxl holds the
+#: whole workbook in memory to read its merged cells.
+MAX_REAGENT_TABLE_BYTES = 5 * 1024 * 1024
+#: The most non-empty cells kept; a larger workbook is refused, not cut.
+MAX_REAGENT_TABLE_CELLS = 20_000
+_SAFE_TABLE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.xlsx$", re.IGNORECASE)
+
+
+class ReagentTableError(ProtocolCatalogError):
+    code = "invalid_reagent_table"
+
+
+class ReagentTableTooLargeError(ReagentTableError):
+    code = "reagent_table_too_large"
+
+
+def _cell_value(value: object) -> object:
+    """A cell value as JSON keeps it: numbers and text as they are."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if value == value and value not in (float("inf"), float("-inf")) else str(value)
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
+
+
+def _cell_display(value: object, number_format: str | None) -> str:
+    """How the cell reads: the number format's percent and decimals applied.
+
+    Only those two; any other format reads as the plain value, and the
+    format itself is kept beside it.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "" if value is None else str(value)
+    fmt = (number_format or "General").split(";", 1)[0]
+    decimals_match = re.search(r"0\.(0+)", fmt)
+    decimals = len(decimals_match[1]) if decimals_match else None
+    if "%" in fmt:
+        return f"{value * 100:.{decimals or 0}f}%"
+    if decimals is not None:
+        return f"{value:.{decimals}f}"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def read_reagent_workbook(source: str | Path) -> dict[str, object]:
+    """Every sheet and non-empty cell of an .xlsx workbook, where it prints them.
+
+    A formula cell keeps the value the workbook saved for it; one saved
+    without a value (written by a program that does not calculate) is kept
+    with its formula and no value, and counted in ``warnings``.
+    """
+
+    try:
+        import openpyxl
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError as exc:  # pragma: no cover - openpyxl is a dependency
+        raise ReagentTableError("openpyxl is not installed.") from exc
+    import zipfile
+
+    path = Path(source)
+    if path.stat().st_size > MAX_REAGENT_TABLE_BYTES:
+        raise ReagentTableTooLargeError("The workbook is larger than a reagent table reads.")
+    try:
+        values = openpyxl.load_workbook(path, data_only=True)
+        formulas = openpyxl.load_workbook(path, data_only=False)
+    except (InvalidFileException, zipfile.BadZipFile, KeyError, ValueError, OSError) as exc:
+        raise ReagentTableError("The file is not an .xlsx workbook.") from exc
+    sheets: list[dict[str, object]] = []
+    count = 0
+    unsaved = 0
+    for sheet in values.worksheets:
+        written = formulas[sheet.title]
+        cells: list[dict[str, object]] = []
+        for row in sheet.iter_rows():
+            for cell in row:
+                formula = written[cell.coordinate].value
+                has_formula = isinstance(formula, str) and formula.startswith("=")
+                if cell.value is None and not has_formula:
+                    continue
+                count += 1
+                if count > MAX_REAGENT_TABLE_CELLS:
+                    raise ReagentTableTooLargeError(
+                        "The workbook has more cells than a reagent table keeps.")
+                value = _cell_value(cell.value)
+                item: dict[str, object] = {
+                    "ref": cell.coordinate,
+                    "row": cell.row,
+                    "column": cell.column,
+                    "value": value,
+                    "display": _cell_display(value, cell.number_format),
+                }
+                if cell.number_format and cell.number_format != "General":
+                    item["number_format"] = cell.number_format
+                if has_formula:
+                    item["formula"] = formula
+                    if cell.value is None:
+                        unsaved += 1
+                cells.append(item)
+        sheets.append({
+            "name": sheet.title,
+            "state": sheet.sheet_state,
+            "max_row": sheet.max_row,
+            "max_column": sheet.max_column,
+            "merged": sorted(str(merged) for merged in sheet.merged_cells.ranges),
+            "cells": cells,
+        })
+    warnings = []
+    if unsaved:
+        warnings.append(
+            f"계산값이 저장되지 않은 수식 셀 {unsaved}개 — 엑셀에서 열어 저장한 뒤 다시 올리면 값이 보입니다."
+        )
+    return {"sheets": sheets, "cell_count": count, "warnings": warnings}
+
+
+def _table_key(text: object) -> str:
+    """Text as a lookup compares it: NFKC, case and spacing/punctuation aside."""
+
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", str(text)).casefold()
+    return "".join(character for character in folded if character.isalnum())
+
+
+def find_reagent_cells(
+    tables: Sequence[dict[str, object]], query: str, *, limit: int = 20,
+) -> list[dict[str, object]]:
+    """The cells whose text holds ``query``, each with its row and header row.
+
+    Matching sets case, spacing and punctuation aside ("tris hcl" finds
+    "Tris-HCl"). The header row is the sheet's first row of two or more
+    cells -- a title line above the table ("S1 Table. Key resources") is
+    not it -- or its first row when no row has two. The answer carries
+    positions and values only -- what a person or the voice lane reads from
+    them is theirs.
+    """
+
+    wanted = _table_key(query)
+    if not wanted:
+        return []
+    found: list[dict[str, object]] = []
+    for table in tables:
+        for sheet in table.get("sheets", []) if isinstance(table, dict) else []:
+            cells = [cell for cell in sheet.get("cells", []) if isinstance(cell, dict)]
+            if not cells:
+                continue
+            by_row: dict[int, list[dict[str, object]]] = {}
+            for cell in cells:
+                by_row.setdefault(cell["row"], []).append(cell)
+            header_row = min(
+                (row for row, items in by_row.items() if len(items) >= 2),
+                default=min(by_row),
+            )
+            header = {cell["column"]: cell for cell in by_row.get(header_row, [])}
+            for cell in cells:
+                if wanted not in _table_key(cell.get("display") or cell.get("value") or ""):
+                    continue
+                found.append({
+                    "table_id": table.get("table_id"),
+                    "filename": table.get("filename"),
+                    "sheet": sheet.get("name"),
+                    "ref": cell["ref"],
+                    "value": cell.get("value"),
+                    "display": cell.get("display"),
+                    "row": [
+                        {
+                            "ref": item["ref"],
+                            "display": item.get("display"),
+                            "header": (
+                                header[item["column"]].get("display")
+                                if item["column"] in header and cell["row"] > header_row
+                                else None
+                            ),
+                        }
+                        for item in sorted(by_row[cell["row"]], key=lambda item: item["column"])
+                    ],
+                })
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+def reagent_table_summary(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: payload.get(key)
+        for key in ("table_id", "filename", "sha256", "byte_size", "cell_count", "warnings")
+    } | {
+        "sheets": [
+            {"name": sheet.get("name"), "cells": len(sheet.get("cells", []))}
+            for sheet in payload.get("sheets", []) if isinstance(sheet, dict)
+        ],
+    }

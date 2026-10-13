@@ -48,6 +48,8 @@ NOT_LISTED = {
     "VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE": "the development launcher sets it; the pilot needs it empty",
     "VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF": "the development launcher sets it; the pilot needs it empty",
     "VOINEY_LAB_CANDIDATE_A_SOURCE_PDF": "read by scripts/run_dev.sh from the shell only",
+    # Another program's own name (lane AN, FM).
+    "FONTCONFIG_FILE": "fontconfig's; the server sets it only for one LibreOffice run",
 }
 SECRET_NAME = re.compile(r"(API_KEY|SECRET|TOKEN|PASSWORD)$")
 
