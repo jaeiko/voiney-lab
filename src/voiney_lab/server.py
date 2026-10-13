@@ -131,6 +131,7 @@ from voiney_lab.runtime_metrics import RUNTIME_METRICS
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
+    BrainActivation,
     BrainFact,
     BrainSnapshot,
     HybridMultiBrain,
@@ -7883,6 +7884,62 @@ def _router_route_fields(
     }
 
 
+class _RouterRoles:
+    """Lane RA, decision (b): the Answer, Source and Visual roles beside the router.
+
+    Started by the router line together with its own model call, with the
+    router's context as their facts; never raced against the rules' answer.
+    The Answer role's answer goes out when it passes the same checks as the
+    router's; the Source and Visual roles' outputs go where they went before
+    (the research step, the picture's kind). Off, or with no role enabled,
+    nothing is started.
+    """
+
+    def __init__(
+        self,session:"ListenerSession",curated:CuratedProtocolSession,*,
+        turn_id:int,generation:int,language:str,clock:Callable[[],float],
+    )->None:
+        self.session=session
+        self.curated=curated
+        self.turn_id=turn_id
+        self.generation=generation
+        self.language=language
+        self.clock=clock
+
+    def start(self,context:Any,transcript:str)->Any:
+        settings=self.session.multi_brain_settings
+        curated=self.curated
+        activation=BrainActivation(
+            answer=bool(settings.answer_brain_enabled),
+            source=bool(settings.source_brain_enabled),
+            visual=bool(settings.visual_brain_enabled),
+        )
+        if not settings.enabled or not activation.roles or not curated.active:
+            return None
+        step=curated.fixture.steps[curated.current_index]
+        facts=tuple(
+            BrainFact(fact_id,"router_evidence",text,page)
+            for fact_id,(text,page) in list(context.evidence.items())[:24]
+        )
+        if not facts:
+            return None
+        snapshot=BrainSnapshot(
+            configuration_id=self.session.accepted_configuration_id,
+            session_id=self.session.session_id,
+            turn_id=self.turn_id,generation_id=self.generation,
+            workflow_revision=int(context.snapshot.get("workflow_revision") or 0),
+            protocol_id=curated.fixture.protocol_id,
+            document_sha256=curated.fixture.source_pdf_sha256 or "",
+            step_id=step.step_id,step_index=curated.current_index,
+            language=self.language,transcript=transcript,
+            intent_kind="llm_router_turn",question_kind=None,
+            requested_entities=(),question_dimensions=(),
+            facts=facts,claims=(),
+        )
+        client=_role_client(RoleModel.from_environment("answer"))
+        return HybridMultiBrain(client,settings,clock=self.clock).start(snapshot,activation)
+
+
 async def _route_with_llm_router(
     session:"ListenerSession",curated:CuratedProtocolSession,transcript:str,*,
     turn_id:int,language:str,generation:int,transcript_quality:str|None,
@@ -7903,6 +7960,13 @@ async def _route_with_llm_router(
             route=("brain" if state=="composing" else "curated_protocol"),
         )
 
+    roles=(
+        _RouterRoles(
+            session,curated,turn_id=turn_id,generation=generation,
+            language=language,clock=clock,
+        )
+        if settings.router_first and session.multi_brain_settings.enabled else None
+    )
     return await route_turn_with_llm_router(
         curated,transcript,turn_id=turn_id,language=language,
         settings=settings,client_factory=client,rule_route=rules_route,
@@ -7911,7 +7975,7 @@ async def _route_with_llm_router(
         configuration_id=session.accepted_configuration_id,
         generation=generation,arbitration=arbitration,
         actor_principal_id=actor_principal_id,actor_role=actor_role,
-        on_progress=said,clock=clock,
+        on_progress=said,clock=clock,roles=roles,
     )
 
 
@@ -9524,8 +9588,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "answer_origin":plan.answer_origin,
             },
         )
-        source_output=None
-        visual_output=None
+        # Lane RA, decision (b): with the router first the roles ran beside
+        # the router; their outputs go where they went before.
+        source_output=(
+            router_outcome.brain_outputs.get("source") if router_outcome is not None else None)
+        visual_output=(
+            router_outcome.brain_outputs.get("visual") if router_outcome is not None else None)
         if brain_run is not None and brain_snapshot is not None:
             late_answer_output=None
             roles_to_finish=[]
