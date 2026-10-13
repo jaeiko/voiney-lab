@@ -378,12 +378,11 @@ class PilotLauncherTests(unittest.TestCase):
                 self.assertNotIn("[OK]", result.stdout)
         self.assertEqual(sorted(p.name for p in self.pilot_dir.iterdir()), before)
 
-    def test_a_missing_catalog_or_one_without_the_pilot_scope_is_refused(self):
-        result = self._run("--check-only")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn(f"[ERROR] no approved safety catalog at {self.catalog}", result.stdout)
-        self.assertFalse(self.pilot_dir.exists())
-
+    def test_a_catalog_without_the_pilot_scope_is_refused(self):
+        # Human decision of 2026-10-13 ("B안"): a missing catalog is no longer a
+        # refusal -- the pilot starts as source_protocol_only (see
+        # tests/test_lane_pl_pilot_launcher.py). A catalog that is there but has
+        # no approved reference_only document still is one.
         self._write_catalog([_document(
             "OPS-SOP", "facility_sop", "Spill response", "Notify the lab manager.",
             topic="spill",
