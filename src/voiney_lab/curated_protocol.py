@@ -8,6 +8,7 @@ creates a store or treats the fixture as final protocol approval.
 
 from __future__ import annotations
 
+import collections
 import functools
 import hashlib
 import json
@@ -298,6 +299,11 @@ class CuratedProtocolFixture:
     #: mechanical check for this revision. Used only where ``localizations``
     #: (reviewed) has nothing; never presented as reviewed.
     machine_localizations: dict[str, str] | None = None
+    #: (source, Korean) pairs of the revision's translation glossary, put on
+    #: with its stored translations (lane FX2, decision 3): the Korean names
+    #: ``ProtocolVocabulary`` hears for the protocol's own terms ("진탕기"
+    #: for "shaker table"). Hearing only; no term, check or step reads them.
+    translation_glossary: tuple[tuple[str, str], ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -2255,6 +2261,86 @@ class ProtocolTerm:
         return total
 
 
+# --- The glossary's Korean names of the protocol's terms (lane FX2, decision 3)
+#: What may follow a Korean name and still leave it the name ("진탕기가",
+#: "히팅 블록은", "시약수로").
+_KOREAN_NAME_PARTICLES = (
+    r"(?:이|가|은|는|을|를|의|에|에서|에게|에는|에도|에서는|로|으로|로는|으로는|와|과"
+    r"|랑|이랑|하고|도|만|까지|부터|처럼|보다|이나|나|이야|야|이에요|예요|이요|요|이란|란"
+    r"|이라는|라는|이며|며|이고|고)?"
+)
+
+
+def _glossary_stem(text: str) -> str:
+    """A glossary source or a term, compared the same way: lower case, no
+    mark or parenthesis, each word in the singular ("Heating blocks" and
+    "heating block" alike; "Ringer's" is a possessive, not a plural)."""
+
+    text = re.sub(r"\([^()]*\)|[®™]", " ", text.casefold())
+
+    def singular(match: re.Match[str]) -> str:
+        word = match.group(0)
+        if word.endswith(("'s", "’s")):
+            return word
+        if word.endswith(("ches", "shes", "xes", "sses", "zes")):
+            return word[:-2]
+        if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+            return word[:-1]
+        return word
+
+    return " ".join(re.sub(r"[a-z][a-z'’-]*", singular, text).split())
+
+
+def _korean_name_forms(korean: str) -> tuple[str, ...]:
+    """The Korean names one glossary entry gives: its words and, written in
+    parentheses, another Korean name ("펠릿(침전물)"). A name holds at least
+    two Hangul syllables; a verb ("원심분리하다") is no name."""
+
+    parts = [re.sub(r"\([^()]*\)", " ", korean), *re.findall(r"\(([^()]*)\)", korean)]
+    forms = []
+    for part in parts:
+        name = " ".join(part.casefold().split())
+        if len(re.findall(r"[가-힣]", name)) < 2 or name.endswith("다"):
+            continue
+        forms.append(name)
+    return tuple(dict.fromkeys(forms))
+
+
+def _korean_name_pattern(name: str) -> re.Pattern[str]:
+    """A Korean name as said: whole, its spaces optional ("진탕 기",
+    "히팅블록"), followed by nothing or a particle (not part of the match)."""
+
+    letters = [re.escape(character) for character in name if not character.isspace()]
+    return re.compile(
+        r"(?<![가-힣a-z0-9])" + r"\s*".join(letters) + r"(?![a-z0-9])"
+        + r"(?=" + _KOREAN_NAME_PARTICLES + r"(?![가-힣]))"
+    )
+
+
+def _glossary_korean_names(
+    pairs: Sequence[tuple[str, str]], vocabulary: "ProtocolVocabulary",
+) -> tuple[tuple[str, str], ...]:
+    """(Korean name, entity) for each glossary entry whose source is a term of
+    the protocol -- its own terms first, then its lexicon words and the
+    other words of its prose. A source the vocabulary does not hold names
+    nothing: there is no term to hear it as."""
+
+    stems: dict[str, str] = {}
+    for term in (*vocabulary.terms, *vocabulary.lexicon_terms, *vocabulary.words):
+        stems.setdefault(_glossary_stem(term.text), term.entity)
+    names: dict[str, str] = {}
+    for source, korean in pairs:
+        candidates = (source, *re.findall(r"\(([^()]*)\)", source))
+        entity = next(
+            (stems[stem] for stem in map(_glossary_stem, candidates) if stem in stems), None,
+        )
+        if entity is None:
+            continue
+        for name in _korean_name_forms(korean):
+            names.setdefault(name, entity)
+    return tuple(names.items())
+
+
 @dataclass(frozen=True)
 class ProtocolVocabulary:
     """The technical terms one protocol's own text contains.
@@ -2277,6 +2363,11 @@ class ProtocolVocabulary:
     #: The lab-lexicon words the protocol writes, spelled as it writes them
     #: ("gel plug", "rpm", "keratin"): sent to STT after its own terms.
     lexicon_terms: tuple[ProtocolTerm, ...] = ()
+    #: (Korean name, entity): the names the revision's translation glossary
+    #: gives the terms above (lane FX2, decision 3), heard by ``hear`` as
+    #: that term. Never a term of their own, so neither the STT keyterms nor
+    #: the translation check's names change with them.
+    korean_names: tuple[tuple[str, str], ...] = ()
     #: What ``hear`` and ``lexicon_entities`` worked out, per vocabulary.
     _cache: dict = field(default_factory=dict, compare=False, repr=False, hash=False)
 
@@ -2378,7 +2469,14 @@ class ProtocolVocabulary:
         corrections: list[tuple[str, str]] = []
         index = 0
         terms = sorted((*self.terms, *self.words), key=lambda term: -len(term.words))
+        # The words that say a glossary Korean name ("삼각 플라스크가") are
+        # that name, not a sound to hear again as another term ("flask").
+        kept = self._korean_name_tokens(key)
         while index < len(tokens):
+            if index in kept:
+                rewritten.extend(tokens[index:kept[index]])
+                index = kept[index]
+                continue
             token = tokens[index]
             digits = re.search(r"\d", token) is not None
             chosen: tuple[int, int, str] | None = None  # (distance, span length, replacement)
@@ -2488,7 +2586,35 @@ class ProtocolVocabulary:
             for form in _LAB_LEXICON_KOREAN[entity]:
                 for match in re.finditer(re.escape(form), heard_key):
                     spans.append((match.start(), match.end(), entity))
+        # The glossary's Korean name of a term ("진탕기가"): named the same way.
+        for pattern, entity in self._korean_name_patterns():
+            for match in pattern.finditer(heard_key):
+                spans.append((match.start(), match.end(), entity))
         return heard_key, tuple(dict.fromkeys(spans)), tuple(dict.fromkeys(corrections))
+
+    def _korean_name_tokens(self, key: str) -> dict[int, int]:
+        """First token -> the token after it, for each glossary name said in ``key``."""
+
+        patterns = self._korean_name_patterns()
+        if not patterns:
+            return {}
+        spans = [(match.start(), match.end()) for match in re.finditer(r"\S+", key)]
+        kept: dict[int, int] = {}
+        for pattern, _entity in patterns:
+            for match in pattern.finditer(key):
+                first = next(i for i, (_, end) in enumerate(spans) if end > match.start())
+                after = next(i for i, (_, end) in enumerate(spans) if end >= match.end()) + 1
+                kept[first] = max(kept.get(first, after), after)
+        return kept
+
+    def _korean_name_patterns(self) -> tuple[tuple[re.Pattern[str], str], ...]:
+        found = self._cache.get("korean_names")
+        if found is None:
+            found = tuple(
+                (_korean_name_pattern(name), entity) for name, entity in self.korean_names
+            )
+            self._cache["korean_names"] = found
+        return found
 
     @classmethod
     def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
@@ -2643,13 +2769,17 @@ class ProtocolVocabulary:
                         ),
                         phonetic=False,
                     )
-        return cls(
-            terms=tuple(terms.values()),
-            corpus="\n".join(corpus).casefold(),
-            materials=tuple(name for name in materials if name),
-            words=tuple(words.values()),
-            lexicon_terms=tuple(lexicon_terms.values()),
-        )
+        built = {
+            "terms": tuple(terms.values()),
+            "corpus": "\n".join(corpus).casefold(),
+            "materials": tuple(name for name in materials if name),
+            "words": tuple(words.values()),
+            "lexicon_terms": tuple(lexicon_terms.values()),
+        }
+        glossary = getattr(fixture, "translation_glossary", None)
+        if not glossary:
+            return cls(**built)
+        return cls(**built, korean_names=_glossary_korean_names(glossary, cls(**built)))
 
     def keyterms_near(self, index: int | None) -> tuple[str, ...]:
         """Every term, the current step's neighbourhood first.
@@ -3463,6 +3593,10 @@ def _korean_name_said(
     for form in _LAB_LEXICON_KOREAN.get(entity, ()):
         if re.search(re.escape(form), said):
             return form
+    for name, named in (vocabulary.korean_names if vocabulary is not None else ()):
+        # The protocol's glossary name (lane FX2, decision 3).
+        if named == entity and _korean_name_pattern(name).search(said):
+            return name
     term = vocabulary.term_for(entity) if vocabulary is not None else None
     if term is None:
         return None
@@ -3847,7 +3981,10 @@ FRONT_RULES: dict[str, str] = {
     "pause": "F3 a pause word, or wanting to stop without saying 종료",
     "end_command": "F3 a command with 종료 in it, asked about once (D5)",
     "yes_no_open_question": "F4 a yes or no to an open completion, end, "
-                            "transcript or step move question",
+                            "transcript or step move question; a yes and a no "
+                            "said at once ('네 아니', '아니 맞아') to any server "
+                            "yes/no question is neither, and the question is "
+                            "asked again (lane FX2, decision 1)",
     "observation_reply": "F5 any reply while an endpoint question is open, an "
                          "endpoint stated at a repeat-until step with no "
                          "question open (D9), and the reply to a note or "
@@ -6142,6 +6279,9 @@ def branch_condition_reply(transcript: str) -> str | None:
         return "unknown"
     if _reply_withholds_assent(transcript):
         return None
+    if _branch_reply_is_mixed(transcript):
+        # "네 아니": the key would hear only "아니" (lane FX2, decision 1).
+        return None
     if _BRANCH_YES.fullmatch(key):
         return "yes"
     if _BRANCH_NO.fullmatch(key):
@@ -6180,7 +6320,78 @@ def round_reply(transcript: str) -> str | None:
     return None
 
 
-_NATIVE_COUNT_WORDS = {value: f"{word} 번" for word, value in _NATIVE_COUNTS.items()}
+# --- A yes and a no in one reply (lane FX2, decision 1) ----------------------
+#: Sounds said while finding words, which answer nothing. "네", "응" and
+#: "그래" are not among them: the utterance key drops them at the start of a
+#: command, but in a reply they are the yes itself -- reading "네 아니" by
+#: its key heard only "아니".
+_REPLY_FILLERS = frozenset({
+    "어", "어어", "음", "음음", "으음", "아", "저기", "그러니까", "그니까",
+    "um", "uh", "well", "so", "oh", "ah",
+})
+#: Longer than this, the words are no short reply.
+_REPLY_WORD_LIMIT = 12
+
+
+def _reply_word_list(transcript: str) -> list[str]:
+    """The reply's words as said: no filler taken off, no word said twice merged."""
+
+    key = _utterance_key(transcript)
+    key = re.sub(r"(?<!\d)\.(?!\d)|[,!?。！？;:~…]", " ", key)
+    return key.split()
+
+
+def mixed_reply(
+    transcript: str,
+    affirmative: Callable[[str], bool],
+    negative: Callable[[str], bool],
+) -> bool:
+    """Whether the words say yes and no to one question at once (decision 1).
+
+    The reply is cut into its answers: each part is one the question's own
+    readers take as a yes (``affirmative``) or a no (``negative``), or a
+    filler. When the parts hold a yes and a no -- "네 아니", "응 아니야",
+    "아니 맞아", "아니 완료했어" -- the reply answers neither way, however much
+    it sounds like a correction. Words beside the answers ("아니 다음 단계
+    뭐야?") make it no mere reply, and a question or a hedge is never one;
+    such words are left to the rules that read them.
+    """
+
+    if _reply_withholds_assent(transcript):
+        return False
+    words = _reply_word_list(transcript)
+    if len(words) < 2 or len(words) > _REPLY_WORD_LIMIT:
+        return False
+    # reach[i]: the sets of answers a cut of the first i words can hold.
+    reach: list[set[frozenset[str]]] = [set() for _ in range(len(words) + 1)]
+    reach[0].add(frozenset())
+    for start in range(len(words)):
+        if not reach[start]:
+            continue
+        for end in range(start + 1, len(words) + 1):
+            part = " ".join(words[start:end])
+            kinds: set[str] = set()
+            if end == start + 1 and part in _REPLY_FILLERS:
+                kinds.add("")
+            if affirmative(part):
+                kinds.add("yes")
+            if negative(part):
+                kinds.add("no")
+            for kind in kinds:
+                for held in reach[start]:
+                    reach[end].add(held | {kind} if kind else held)
+    return any({"yes", "no"} <= held for held in reach[-1])
+
+
+def _branch_reply_is_mixed(transcript: str) -> bool:
+    return mixed_reply(
+        transcript,
+        lambda part: bool(_BRANCH_YES.fullmatch(part)),
+        lambda part: bool(_BRANCH_NO.fullmatch(part)),
+    )
+
+
+_NATIVE_COUNT_WORDS ={value: f"{word} 번" for word, value in _NATIVE_COUNTS.items()}
 
 
 def count_words(count: int, *, spoken: bool) -> str:
@@ -6847,6 +7058,24 @@ def _observation_binary_reply(value: str) -> str | None:
     if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
         return "negative"
     return None
+
+
+def _confirmation_yes(part: str) -> bool:
+    """A yes the server's own yes/no questions take, read on one part of a reply."""
+
+    return bool(_AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(part)) or (
+        _binary_frame_reply(part) == "affirmative"
+    )
+
+
+def _confirmation_no(part: str) -> bool:
+    return bool(_NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(part))
+
+
+def _confirmation_is_mixed(transcript: str) -> bool:
+    """A yes and a no at once to a completion, end, timer, record or mode question."""
+
+    return mixed_reply(transcript, _confirmation_yes, _confirmation_no)
 
 
 def resolve_question_focus(
@@ -8802,6 +9031,95 @@ def _count_quantities(value: str) -> list[tuple[str, str | None]]:
     )
 
 
+#: Lane FX2, human decision 2 of 2026-10-12: words that rank or multiply,
+#: which the source writes in letters and a Korean reading writes with a
+#: number -- "primary antibody" is "1차 항체", "a second time" is "두
+#: 번째로", "double distilled" is "2차 증류수". The value each one stands for.
+_SOURCE_RANK_WORDS = {
+    "primary": "1", "secondary": "2", "tertiary": "3", "quaternary": "4",
+    "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
+    "sixth": "6", "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10",
+    "single": "1", "double": "2", "triple": "3", "quadruple": "4",
+}
+_SOURCE_RANK_WORD = re.compile(
+    r"\b(" + "|".join(_SOURCE_RANK_WORDS) + r")\b", re.IGNORECASE)
+#: "1 second", "one second", "per second" are the time, not a rank.
+_SECOND_AS_TIME = re.compile(r"(?:\d|\bone|\bper|\beach)\s*$", re.IGNORECASE)
+#: The Korean forms of a rank or a multiple, written with a number once the
+#: counts are digits (``_normalized_counts``): "1차", "2 번째", "2째",
+#: "1회차", "2중", "2배", "2겹" -- the counter ending the word or taking a
+#: particle ("2차로"), so "1차례" (once) and the 배 of "배양" are none.
+_KOREAN_RANK_FORM = re.compile(
+    r"(?<![0-9.:])(\d+)\s*(?:차|번\s*째|째|회\s*차|중|배|겹)"
+    r"(?=(?:이|가|은|는|을|를|의|에|로|으로|와|과|도|만|씩|까지|부터)?(?![가-힣]))")
+#: The Korean forms of a count written without a digit, which the quantity
+#: reading cannot see: "첫 번째" (1st); a Sino-Korean numeral before 차 or
+#: 색 -- "일차", "이색" (two-color), "삼색"; and a native count before a name
+#: kept in English -- "한 Falcon tube" (one falcon tube), "두 PVDF
+#: membrane" -- which ``_normalized_counts`` reads only before Korean.
+_KOREAN_LETTER_COUNTS = {
+    "일": "1", "이": "2", "삼": "3", "사": "4", "오": "5",
+    "한": "1", "두": "2", "세": "3", "네": "4", "다섯": "5", "여섯": "6",
+    "일곱": "7", "여덟": "8", "아홉": "9", "열": "10",
+}
+_KOREAN_LETTER_COUNT_FORM = re.compile(
+    r"(?<![가-힣])(?:(첫)\s*(?:번\s*)?째|([일이삼사오])(?:차(?!례)|색)"
+    r"|(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s+(?=[A-Za-z]))")
+
+
+def _source_rank_values(source: str) -> list[str]:
+    """The value of each rank or multiple word of the source (decision 2)."""
+
+    values = []
+    for match in _SOURCE_RANK_WORD.finditer(source):
+        word = match.group(1).casefold()
+        if word == "second" and _SECOND_AS_TIME.search(source[:match.start()]):
+            continue
+        values.append(_SOURCE_RANK_WORDS[word])
+    return values
+
+
+def _quantities_changed(source: str, reading: str) -> bool:
+    """Whether the reading states other numbers than the source (``reader_translation_issue``).
+
+    Each number with its own unit, counted by the same rules on both sides.
+    A rank or count word (lane FX2, decision 2) is the one difference let
+    through, word by word: a source word that ranks or multiplies
+    ("primary", "second", "double") lets one Korean form of the same number
+    ("1차", "두 번째", "2중") stand without a digit in the source, and a
+    count the source states ("two-color") is read by a Korean form with no
+    digit ("이색"). A form the source has no word for, a second form for one
+    word, and every number with a unit remain changes.
+    """
+
+    normalized_source = _normalized_counts(source)
+    normalized_reading = _normalized_counts(reading)
+    stated = collections.Counter(_count_quantities(normalized_source))
+    read = collections.Counter(_count_quantities(normalized_reading))
+    if stated == read:
+        return False
+    added = read - stated
+    dropped = stated - read
+    words = collections.Counter(_source_rank_values(source))
+    forms = collections.Counter(
+        match.group(1)
+        for match in _KOREAN_RANK_FORM.finditer(_READER_CLOCK.sub(" ", normalized_reading)))
+    for number, unit in list(added):
+        if unit is not None:
+            continue
+        let = min(added[(number, unit)], words[number], forms[number])
+        added[(number, unit)] -= let
+    letters = collections.Counter(
+        "1" if match.group(1) else _KOREAN_LETTER_COUNTS[match.group(2) or match.group(3)]
+        for match in _KOREAN_LETTER_COUNT_FORM.finditer(reading)
+    )
+    for number, unit in list(dropped):
+        if unit is not None:
+            continue
+        dropped[(number, unit)] -= min(dropped[(number, unit)], letters[number])
+    return bool(+added) or bool(+dropped)
+
+
 def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
     """The (number, unit) pairs a statement states, clock times as one each."""
 
@@ -8838,8 +9156,10 @@ def reader_translation_issue(
     Korean unit word only right after its number, counts written as words
     included, counted by the same rules on both sides ("Once" opening a
     sentence is a conjunction, not a count; a repeat count is a count) --
-    and no other; it must keep every reagent, material and equipment name
-    the statement uses in its original spelling (general nouns in
+    and no other, except that a rank or count word of the source may be
+    read in its Korean form ("primary" as "1차"; lane FX2, see
+    ``_quantities_changed``); it must keep every reagent, material and
+    equipment name the statement uses in its original spelling (general nouns in
     ``_TRANSLATABLE_TERMS`` may be Korean); and it must neither add nor
     drop a negation ("avoid" in any form pairs with "피하"). A leading
     "N단계:" for the statement's own label is allowed. ``None`` means the
@@ -8859,8 +9179,7 @@ def reader_translation_issue(
         reading = re.sub(
             rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
         source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
-    if _count_quantities(_normalized_counts(source)) != _count_quantities(
-            _normalized_counts(reading)):
+    if _quantities_changed(source, reading):
         return "quantities_changed"
     if bool(_SOURCE_NEGATION.search(source)) != bool(
             _KOREAN_NEGATION.search(_without_un_renderings(source, reading))):
@@ -9242,6 +9561,25 @@ class CuratedProtocolSession:
         self._pending_ambient_suggestion = False
         if transcript_quality is not None:
             return None
+        if (valid or suggestion) and _confirmation_is_mixed(transcript):
+            # "네 아니" (lane FX2, decision 1): neither, and asked again.
+            if valid and confirmation is not None:
+                self._pending_ambient_confirmation = {
+                    **confirmation, "requested_turn_id": turn_id,
+                    "requested_generation": generation,
+                }
+                question = str(confirmation.get("question") or "") or None
+            else:
+                self._pending_ambient_suggestion = True
+                question = "시끄러운 곳 모드로 바꿀까요?" if language == "ko" else None
+            self._last_front_rule = "yes_no_open_question"
+            plan = self._words_plan(
+                self._mixed_reply_words(question, language),
+                intent_kind="yes_no_reply_mixed",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+            self._replay[turn_id] = plan
+            return plan
         key = _semantic_utterance_key(transcript)
         withheld = _reply_withholds_assent(transcript)
         binary = _binary_frame_reply(transcript)
@@ -12632,6 +12970,15 @@ class CuratedProtocolSession:
             display, speech = self._review_question()
             again = "잘 듣지 못했어요. "
             return plan(f"{again}{display}", f"{again}{speech}", "report_review_unheard")
+        if _confirmation_is_mixed(transcript):
+            # "네 아니" (lane FX2, decision 1): no value confirmed or
+            # corrected; the same question, or the same fix, is asked again.
+            if state.get("fix") is not None:
+                words = self._mixed_reply_words(None, language)
+                return plan(words, words, "yes_no_reply_mixed")
+            display, speech = self._review_question()
+            lead = self._MIXED_REPLY_LEAD["ko"]
+            return plan(f"{lead} {display}", f"{lead} {speech}", "yes_no_reply_mixed")
         fix = state.get("fix")
         if fix is not None:
             state["fix"] = None
@@ -16650,6 +16997,136 @@ class CuratedProtocolSession:
             front_only=True,
         )
 
+    #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
+    _MIXED_REPLY_LEAD = {
+        "ko": "'네'와 '아니요'가 함께 들렸어요. 아무것도 바꾸지 않았어요.",
+        "en": "I heard both yes and no, so nothing changed.",
+    }
+    _MIXED_REPLY_ASK = {
+        "ko": "해당하면 '네', 아니면 '아니요'라고 말씀해 주세요.",
+        "en": "Please say 'yes' if it applies, or 'no' if it does not.",
+    }
+
+    def _mixed_reply_words(self, question: str | None, language: str) -> str:
+        lead = self._MIXED_REPLY_LEAD.get(language, self._MIXED_REPLY_LEAD["ko"])
+        ask = self._MIXED_REPLY_ASK.get(language, self._MIXED_REPLY_ASK["ko"])
+        return " ".join(part for part in (lead, question, ask) if part)
+
+    def _ask_mixed_reply_again(
+        self,
+        transcript: str,
+        open_questions: _OpenQuestions,
+        *,
+        turn_id: int,
+        language: str,
+        generation: int | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """A yes and a no said at once to the open question: nothing moves, it is asked again.
+
+        Lane FX2, decision 1 (2026-10-12). The open questions are read in the
+        order plan() answers them, each with its own replies, so the reply is
+        taken as mixed by the very readers that would otherwise have taken
+        one of its halves. The question stays open for the next words: a
+        one-turn question is asked again as of this turn, one open until
+        answered stays so.
+        """
+
+        move = self._pending_step_move
+        question: str | None = None
+        if open_questions.step_move and move is not None:
+            kind = str(move.get("kind"))
+            if kind == "repeat_round":
+                mixed = mixed_reply(
+                    transcript,
+                    lambda part: bool(_ROUND_YES.fullmatch(part)),
+                    lambda part: bool(_ROUND_NO.fullmatch(part)),
+                )
+                question = str(move.get("question") or "") or None
+            else:
+                said_back = _STEP_MOVE_AFFIRMATIVE.get(kind)
+                mixed = mixed_reply(
+                    transcript,
+                    lambda part: _confirmation_yes(part) or bool(
+                        said_back is not None and said_back.fullmatch(part)),
+                    _confirmation_no,
+                )
+        elif open_questions.record_fix or open_questions.note_confirm:
+            mixed = _confirmation_is_mixed(transcript)
+        elif open_questions.stop:
+            mixed = mixed_reply(
+                transcript,
+                lambda part: _confirmation_yes(part) or bool(_END_COMMAND.fullmatch(part)),
+                _confirmation_no,
+            )
+            question = "실험을 종료할까요?" if language == "ko" else "End the experiment?"
+        elif open_questions.timer and not (self._pending_timer_confirmation or {}).get("options"):
+            mixed = _confirmation_is_mixed(transcript)
+        elif open_questions.anomaly or open_questions.transcript:
+            mixed = _confirmation_is_mixed(transcript)
+        elif open_questions.completion:
+            mixed = _confirmation_is_mixed(transcript)
+            pending = self._pending_completion_confirmation
+            if pending is not None and language == "ko":
+                question = f"{self.fixture.steps[pending.step_index].source_label}단계 완료하셨나요?"
+        elif (
+            open_questions.observation
+            and self._pending_observation_confirmation is not None
+            and self._pending_observation_confirmation.accepts_yes_no
+        ):
+            mixed = mixed_reply(
+                transcript,
+                lambda part: bool(_OBSERVATION_AFFIRMATIVE.fullmatch(part)),
+                _confirmation_no,
+            )
+        elif language == "ko" and (open_questions.prestart or open_questions.branch):
+            if open_questions.prestart:
+                state = self._prestart or {}
+                item = (state.get("items") or [{}])[int(state.get("index") or 0)]
+                branch = (
+                    self._branch_by_id(item["id"]) if item.get("kind") == "branch" else None
+                )
+            else:
+                branch = self._open_branch()
+            if branch is None:
+                return None
+            mixed = _branch_reply_is_mixed(transcript)
+            question = f"원문 조건: “{self._condition_words(branch)}”."
+        else:
+            return None
+        if not mixed:
+            return None
+        # The one-turn questions open now are open on the next turn too.
+        asked = {"requested_turn_id": turn_id, "requested_generation": generation}
+        if open_questions.completion and self._pending_completion_confirmation is not None:
+            self._pending_completion_confirmation = replace(
+                self._pending_completion_confirmation, **asked)
+        if open_questions.observation and self._pending_observation_confirmation is not None:
+            self._pending_observation_confirmation = replace(
+                self._pending_observation_confirmation, **asked)
+        if open_questions.transcript and self._pending_transcript_confirmation is not None:
+            self._pending_transcript_confirmation = replace(
+                self._pending_transcript_confirmation, **asked)
+        for name, valid in (
+            ("_pending_note_capture", open_questions.note),
+            ("_pending_stop_confirmation", open_questions.stop),
+            ("_pending_timer_confirmation", open_questions.timer),
+            ("_pending_anomaly_confirmation", open_questions.anomaly),
+            ("_pending_step_move", open_questions.step_move),
+            ("_pending_record_fix", open_questions.record_fix),
+            ("_pending_note_confirmation", open_questions.note_confirm),
+        ):
+            held = getattr(self, name)
+            if valid and held is not None:
+                setattr(self, name, {**held, **asked})
+        self._last_front_rule = "yes_no_open_question"
+        plan = self._words_plan(
+            self._mixed_reply_words(question, language),
+            intent_kind="yes_no_reply_mixed",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+        )
+        self._replay[turn_id] = plan
+        return plan
+
     def _plan(
         self,
         transcript: str,
@@ -16815,6 +17292,15 @@ class CuratedProtocolSession:
         stale_observation_reply = (
             observation_pending is not None and not observation_pending_valid
         )
+        if transcript_quality is None:
+            # "네 아니", "아니 맞아" to any open yes/no question (lane FX2,
+            # decision 1): neither answer is taken; the question is asked again.
+            mixed = self._ask_mixed_reply_again(
+                transcript, open_questions, turn_id=turn_id, language=language,
+                generation=generation,
+            )
+            if mixed is not None:
+                return mixed
         stop_reply = (
             (
                 "affirmative"

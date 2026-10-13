@@ -963,12 +963,20 @@ def with_stored_translations(
     """The fixture carrying the stored translations that may be shown.
 
     Adds to what the fixture already carries, so it also takes one batch
-    at a time while a revision is being translated.
+    at a time while a revision is being translated. The glossary's source ↔
+    Korean pairs go with them (lane FX2, decision 3): the session's
+    vocabulary hears those Korean names as the protocol's terms.
     """
 
     reviewed, machine = stored_localizations(fixture, records, glossary)
+    names = tuple(
+        (entry.source, entry.korean) for entry in glossary
+        if entry.source.strip() and _HANGUL.search(entry.korean)
+    ) or getattr(fixture, "translation_glossary", None)
     if not reviewed and not machine:
-        return fixture
+        if names == getattr(fixture, "translation_glossary", None):
+            return fixture
+        return replace(fixture, translation_glossary=names)
     sidecar = dict(getattr(fixture, "localizations", None) or {})
     for key, text in reviewed.items():
         sidecar.setdefault(key, text)
@@ -980,6 +988,7 @@ def with_stored_translations(
         machine_localizations={
             key: text for key, text in merged.items() if key not in sidecar
         } or None,
+        translation_glossary=names,
     )
 
 
