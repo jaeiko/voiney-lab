@@ -995,14 +995,13 @@ def _is_hangul(character: str) -> bool:
 
 #: What makes a page's text layer "Korean written without word spaces" (lane
 #: AN2, decision 4; person's decision of 2026-10-14). Fitted on the 200-file
-#: corpus, 432 pages with Hangul: the 103 pages of NIFS and MFDS documents
+#: corpus, 432 pages with Hangul: the 104 pages of 13 NIFS and MFDS documents
 #: that print Korean with no word spaces have at most 0.027 spaces between
-#: two Hangul letters per Hangul letter and at least 46 Hangul letters (and
-#: Hangul half or more of their letters); every spaced page with at least 40
-#: Hangul letters has at least 0.07 (0.111 where Hangul is 30% of the
-#: letters). The bound sits in that gap; the minimum keeps a handful of
-#: Korean words in an English page from being judged, and the share keeps a
-#: reference list of Korean titles between English ones out.
+#: two Hangul letters per Hangul letter, at least 46 Hangul letters and Hangul
+#: at least 30% of their letters; every other page with at least 40 Hangul
+#: letters has at least 0.07. The bound sits in that gap. The minimum keeps a
+#: handful of Korean words in an English page from being judged, and the
+#: share keeps a reference list of Korean titles between English ones out.
 UNSPACED_KOREAN_MIN_HANGUL = 30
 UNSPACED_KOREAN_MIN_HANGUL_SHARE = 0.3
 UNSPACED_KOREAN_MAX_SPACES_PER_HANGUL = 0.05
