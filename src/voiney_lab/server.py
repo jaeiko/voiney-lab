@@ -3673,6 +3673,42 @@ def post_protocol_review_decision(
         raise _catalog_http_error(exc) from exc
 
 
+@app.post("/api/protocols/{protocol_id}/review-versions",status_code=201)
+def post_protocol_review_version(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """"검토 완료하고 등록" (lane RV, decision c): the reviewer's name is
+    required, every item that waited for a person must be decided, and the
+    review becomes version N -- the one that runs from now on -- beside the
+    analysis and the versions before it."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.register_review(protocol_id,body)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-versions/{version}")
+def get_protocol_review_version(protocol_id:str,version:int)->dict[str,object]:
+    """One registered review version with what it changed and from what
+    (lane RV, decision c): the review tab's version history."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_version(protocol_id,version)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}")
 def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,object]:
     """One source page as the review read it: every line with its number,

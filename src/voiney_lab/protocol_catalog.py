@@ -17,11 +17,13 @@ import secrets
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
+from zoneinfo import ZoneInfo
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
@@ -42,7 +44,9 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_ITEM_KINDS,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASONS_KO,
+    ReviewedChange,
     ReviewFlag,
+    ReviewVersionInfo,
     analysis_pieces,
     analyze_protocol_extraction,
     analyze_protocol_piece,
@@ -86,7 +90,7 @@ from voiney_lab.protocol_ocr import (
 
 _SAFE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.pdf$", re.IGNORECASE)
 _STABLE_PROTOCOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_REVISION_ID = re.compile(r"^pdf-(\d+)(?:-analysis-(\d+))?$")
+_REVISION_ID = re.compile(r"^pdf-(\d+)(?:-analysis-(\d+)|-review-(\d+))?$")
 
 
 _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
@@ -135,6 +139,12 @@ _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 #: a, human decision 2026-10-12): kept in this event, never as an analysis
 #: revision, so nothing that runs can read it.
 _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
+#: A person's review registered as a version that runs (lane RV, decision c):
+#: the version's protocol is one more analysis revision, named
+#: ``review-v<N>-...``, and this event beside it holds who registered it,
+#: what it was reviewed from and every change with its original value.
+_REVIEW_VERSION_EVENT = "protocol_review_version_registered"
+REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
 #: The authority an upload-time OCR acceptance is recorded under (lane PX,
 #: decision 3). A person's review carries ``human_review``.
 AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
@@ -229,6 +239,10 @@ class ProtocolCatalogEntry:
     #: decision a), when it is newer than any analysis that passed: how many
     #: items, why, and which pages of a long document failed. None otherwise.
     review_pending: dict[str, object] | None = None
+    #: The registered review versions, v1 first (lane RV, decisions c and
+    #: d): number, revision id, reviewer, date and how many changes. The
+    #: latest is the one that runs.
+    review_versions: tuple[dict[str, object], ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -248,6 +262,9 @@ class ProtocolCatalogEntry:
             "analysis_outdated_codes": list(self.analysis_outdated_codes),
             "analysis_outdated_ko": self.analysis_outdated_ko,
             "review_pending": self.review_pending,
+            "review_versions": list(self.review_versions),
+            "current_review_version": (
+                self.review_versions[-1] if self.review_versions else None),
         }
 
 
@@ -437,6 +454,38 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
         "by_reason": by_reason,
         "failed_pages": failed_pages,
         "message_ko": line,
+    }
+
+
+def _korean_date(timestamp: str) -> str:
+    """The date of a ledger time in Korea ("2026-10-14")."""
+
+    try:
+        moment = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError):
+        return str(timestamp)[:10]
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+
+
+def _review_version_summary(event: Any) -> dict[str, object]:
+    """One registered review version as the list shows it (lane RV, c, d)."""
+
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    changes = [item for item in payload.get("changes") or () if isinstance(item, dict)]
+    return {
+        "version": payload.get("version"),
+        "version_ko": f"검토본 v{payload.get('version')}",
+        "revision_id": payload.get("revision_id"),
+        "reviewer_name": payload.get("reviewer_name"),
+        "registered_at": event.recorded_at,
+        "registered_on": _korean_date(event.recorded_at),
+        "base": payload.get("base"),
+        "base_revision_id": payload.get("base_revision_id"),
+        "change_count": sum(
+            1 for item in changes if item.get("action") in {"fix", "enter", "clear"}),
+        "confirmed_count": sum(1 for item in changes if item.get("action") == "confirm"),
     }
 
 
@@ -1214,10 +1263,35 @@ class ProtocolCatalog:
     def _latest_analysis(
         self, revision: ProtocolRevisionRecord
     ) -> AnalysisRevisionRecord | None:
-        analyses = self.store.list_analysis_revisions(
-            revision.experiment_id, revision.revision_number
-        )
+        """The latest analysis the analyser made; a registered review version
+        (lane RV, decision c) is a person's, read by ``_review_versions``."""
+
+        analyses = [
+            analysis for analysis in self.store.list_analysis_revisions(
+                revision.experiment_id, revision.revision_number
+            )
+            if not analysis.analysis_id.startswith(REVIEW_VERSION_ANALYSIS_PREFIX)
+        ]
         return analyses[-1] if analyses else None
+
+    def _review_versions(
+        self, revision: ProtocolRevisionRecord,
+    ) -> list[tuple[Any, AnalysisRevisionRecord]]:
+        """Every registered review version of the revision, v1 first (lane RV, c)."""
+
+        versions = []
+        for event in self.store.list_events(revision.experiment_id):
+            if (
+                event.event_type != _REVIEW_VERSION_EVENT
+                or event.protocol_revision_number != revision.revision_number
+                or event.analysis_revision_number is None
+            ):
+                continue
+            versions.append((event, self.store.get_analysis_revision(
+                revision.experiment_id, revision.revision_number,
+                event.analysis_revision_number,
+            )))
+        return versions
 
     def _reanalysis_requested(self, revision: ProtocolRevisionRecord) -> bool:
         """Whether the run on screen was asked for over a passed analysis."""
@@ -2044,20 +2118,38 @@ class ProtocolCatalog:
             else extraction.metadata.title or Path(revision.original_filename).stem
         )
         pending = self._review_pending_event(revision)
+        revision_id = _revision_id(
+            revision.revision_number,
+            analysis.analysis_revision_number if analysis else None,
+        )
+        shown = analysis
+        versions = self._review_versions(revision)
+        if versions:
+            # Lane RV, decision c: the latest registered review version runs,
+            # whatever the analyser made after it; it was registered only
+            # without an execution blocker.
+            event, shown = versions[-1]
+            revision_id = str(event.payload["revision_id"])
+            readiness = shown.readiness_status
+            blocker_codes = ()
+            available = True
+            lifecycle_state = "ready"
+            outdated_codes = ()
+            if analysis_status == "review_pending" and pending is None:
+                analysis_status = "review_registered"
+            if shown.protocol.metadata.title:
+                title = shown.protocol.metadata.title
         return ProtocolCatalogEntry(
             protocol_id=revision.experiment_id,
             title=title,
             source_filename=revision.original_filename,
             source_sha256=revision.pdf_checksum,
-            revision_id=_revision_id(
-                revision.revision_number,
-                analysis.analysis_revision_number if analysis else None,
-            ),
+            revision_id=revision_id,
             readiness_status=readiness,
             analysis_status=analysis_status,
             step_count=(
-                sum(len(section.steps) for section in analysis.protocol.sections)
-                if analysis
+                sum(len(section.steps) for section in shown.protocol.sections)
+                if shown
                 else 0
             ),
             created_at=revision.created_at,
@@ -2069,10 +2161,13 @@ class ProtocolCatalog:
             analysis_outdated_ko=ANALYSIS_OUTDATED_KO if outdated_codes else None,
             review_pending=(
                 _review_pending_summary(pending) if pending is not None else None),
+            review_versions=tuple(
+                _review_version_summary(event) for event, _ in versions),
         )
 
     def _review_pending_event(self, revision: ProtocolRevisionRecord) -> Any | None:
-        """The latest review-pending analysis newer than any passed one, or None.
+        """The latest review-pending analysis newer than any passed one and
+        not yet registered as a review version, or None.
 
         Lane RV, decision a. A later failed or running request leaves it as
         it is: it is still the latest analysis a person can review.
@@ -2083,9 +2178,17 @@ class ProtocolCatalog:
             if event.protocol_revision_number == revision.revision_number
             and event.event_type in {_REVIEW_PENDING_EVENT, _ANALYSIS_READY_EVENT}
         ]
-        if events and events[-1].event_type == _REVIEW_PENDING_EVENT:
-            return events[-1]
-        return None
+        if not events or events[-1].event_type != _REVIEW_PENDING_EVENT:
+            return None
+        pending = events[-1]
+        key = {"kind": "review_pending", "event_id": pending.event_id}
+        if any(
+            event.event_type == _REVIEW_VERSION_EVENT
+            and isinstance(event.payload, dict) and event.payload.get("base") == key
+            for event in self.store.list_events(revision.experiment_id)
+        ):
+            return None
+        return pending
 
     def review_pending_analysis(
         self, protocol_id: str,
@@ -2470,6 +2573,15 @@ class ProtocolCatalog:
             events=revision_events,
             page_count=extraction.page_count,
         )
+        versions = self._review_versions(revision)
+        version_payload: dict[str, object] | None = None
+        if versions:
+            # Lane RV, decision c: the start screen shows the version that
+            # runs -- the latest registered review version.
+            version_event, analysis = versions[-1]
+            version_payload = version_event.payload
+            base["analysis_available"] = True
+            base["review_version"] = _review_version_summary(version_event)
         if analysis is None:
             return base
 
@@ -2534,6 +2646,7 @@ class ProtocolCatalog:
                     self._step_timer_table(
                         revision, extraction,
                         protocol_with_display_step_labels(protocol),
+                        version=version_payload,
                     )
                 ),
             }
@@ -3574,10 +3687,13 @@ class ProtocolCatalog:
         previous = self._latest_analysis(revision)
         if previous is not None and not reanalysis:
             return self.get_entry(protocol_id)
-        if not reanalysis and self._review_pending_event(revision) is not None:
-            # Lane RV, decision a: an analysis waiting for a person ended; a
-            # plain request (an upload of the same file) does not ask again.
-            # "다시 분석" does.
+        if not reanalysis and (
+            self._review_pending_event(revision) is not None
+            or self._review_versions(revision)
+        ):
+            # Lane RV, decisions a and d: an analysis waiting for a person, or
+            # a registered review version, is a result; a plain request (an
+            # upload of the same file) does not ask again. "다시 분석" does.
             return self.get_entry(protocol_id)
         if previous is not None and any(
             event.event_type == _DEVELOPMENT_FIXTURE_EVENT
@@ -3648,8 +3764,15 @@ class ProtocolCatalog:
         self, protocol_id: str
     ) -> CuratedProtocolFixture:
         revision = self._latest_protocol_revision(protocol_id)
-        analysis = self._latest_analysis(revision)
         entry = self._entry_for_revision(revision)
+        versions = self._review_versions(revision)
+        if versions:
+            # Lane RV, decision c: the latest registered review version runs.
+            event, analysis = versions[-1]
+            return self._fixture_for_analysis(
+                revision, analysis, entry, status="analysis_passed",
+                version=_version_payload(event))
+        analysis = self._latest_analysis(revision)
         if analysis is None or not entry.available_for_execution:
             raise ProtocolCatalogUnavailableError(
                 "Protocol analysis has not passed, or a page could not be read."
@@ -3670,6 +3793,13 @@ class ProtocolCatalog:
         """
 
         revision = self._latest_protocol_revision(protocol_id)
+        versions = self._review_versions(revision)
+        if versions:
+            # Lane RV, decision c: the version a session will run.
+            event, analysis = versions[-1]
+            return self._fixture_for_analysis(
+                revision, analysis, self._entry_for_revision(revision),
+                status="analysis_passed", version=_version_payload(event))
         analysis = self._latest_analysis(revision)
         if analysis is None:
             raise ProtocolCatalogUnavailableError(
@@ -3689,6 +3819,7 @@ class ProtocolCatalog:
         entry: ProtocolCatalogEntry,
         *,
         status: str,
+        version: dict[str, object] | None = None,
     ) -> CuratedProtocolFixture:
         protocol_id = revision.experiment_id
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
@@ -3707,19 +3838,22 @@ class ProtocolCatalog:
             capability_policy=domain.P1_CAPABILITY_POLICY,
             analysis_schema_version=analysis.analysis_schema_version,
             verified_evidence_count=0,
+            review_version=_review_version_info(version) if version else None,
         )
         labels = tuple(
             step.source_label
             for section in draft.protocol.sections
             for step in section.steps
         )
-        timers = self._step_timer_table(revision, extraction, draft.protocol)
+        timers = self._step_timer_table(
+            revision, extraction, draft.protocol, version=version)
         return CuratedProtocolFixture(
             draft=draft,
             status=status,
             ordered_step_labels=labels,
             fixture_sha256=analysis.payload_sha256,
-            revision_id=entry.revision_id,
+            revision_id=(
+                str(version["revision_id"]) if version else entry.revision_id),
             development_only=entry.development_only,
             source_pdf_path=source,
             source_pdf_sha256=revision.pdf_checksum,
@@ -3737,19 +3871,28 @@ class ProtocolCatalog:
         revision: ProtocolRevisionRecord,
         extraction: ProtocolPdfExtraction,
         protocol: domain.ExperimentProtocol,
+        *,
+        version: dict[str, object] | None = None,
     ) -> domain.StepTimerTable:
         """Every time the analysis attached to a step, verified or refused.
 
         Checked against the text the analysis itself was checked against --
         the accepted OCR for a page that had none -- so a scanned page's time
-        is found where its claims were found.
+        is found where its claims were found. A registered review version's
+        timers (lane RV, decision c) replace a step's own: a time a reviewer
+        entered or fixed runs as the reviewer's, and a step whose timer the
+        reviewer left out has none.
         """
 
         try:
             source = self._extraction_for_analysis(revision, extraction)
         except ProtocolOcrReviewError:
             source = extraction
-        return verify_step_timers(protocol, source)
+        table = verify_step_timers(protocol, source)
+        timers = (version or {}).get("timers")
+        if isinstance(timers, dict) and timers:
+            table = _with_reviewer_timers(table, protocol, timers)
+        return table
 
     # --- The review tab (lane RV, decision b) ---------------------------------
 
@@ -3767,10 +3910,29 @@ class ProtocolCatalog:
             return None
         latest = None
         for event in events:
-            if event.event_type in {_ANALYSIS_READY_EVENT, _REVIEW_PENDING_EVENT}:
+            if event.event_type in {
+                _ANALYSIS_READY_EVENT, _REVIEW_PENDING_EVENT, _REVIEW_VERSION_EVENT,
+            }:
                 latest = event
         if latest is None:
             return None
+        if latest.event_type == _REVIEW_VERSION_EVENT:
+            # Reviewed again: "다시 고치면 v2 가 되고 v1 기록은 남는다".
+            payload = latest.payload if isinstance(latest.payload, dict) else {}
+            analysis = self.store.get_analysis_revision(
+                revision.experiment_id, revision.revision_number,
+                latest.analysis_revision_number,
+            )
+            return _ReviewTarget(
+                kind="review_version",
+                key={"kind": "review_version", "version": payload.get("version")},
+                protocol=analysis.protocol, readiness=analysis.readiness, flags=(),
+                recorded_at=latest.recorded_at,
+                revision_id=str(payload.get("revision_id")),
+                analysis_id=analysis.analysis_id,
+                origins=dict(payload.get("origins") or {}),
+                timers=dict(payload.get("timers") or {}),
+            )
         if latest.event_type == _REVIEW_PENDING_EVENT:
             protocol, readiness, flags, event = self.review_pending_analysis(
                 revision.experiment_id)
@@ -3827,10 +3989,13 @@ class ProtocolCatalog:
     ) -> domain.StepTimerTable:
         extraction = target.protocol.metadata.pdf
         try:
-            return verify_step_timers(
+            table = verify_step_timers(
                 _safe_page_view(target.protocol, extraction), extraction)
         except (IndexError, ValueError):
             return domain.StepTimerTable()
+        if target.timers:
+            table = _with_reviewer_timers(table, target.protocol, target.timers)
+        return table
 
     def _review_items(
         self,
@@ -4259,6 +4424,121 @@ class ProtocolCatalog:
             "target": draft["target"],
         }
 
+    def register_review(
+        self, protocol_id: str, request: dict[str, object],
+    ) -> dict[str, object]:
+        """"검토 완료하고 등록": the review becomes version N (lane RV, decision c).
+
+        Human decision 2026-10-12: the reviewer's name is required; every
+        item that waited for a person must be decided; the version is one
+        more analysis revision -- the analysis it was reviewed from, the
+        versions before it and the source stay as they are -- and the
+        registration event beside it holds who registered it, what it was
+        reviewed from and every change with its original value. A version
+        whose protocol would carry an execution blocker is not registered.
+        The latest version is the one that runs (decision d).
+        """
+
+        if not isinstance(request, dict) or set(request) - {"reviewer_name", "target"}:
+            raise ProtocolReviewError("A registration names the reviewer and the target.")
+        name = reviewer_name(request.get("reviewer_name"))
+        revision = self._latest_protocol_revision(protocol_id)
+        target = self._review_target(revision)
+        if target is None:
+            raise ProtocolReviewNotReadyError("There is no analysis to review.")
+        if request.get("target") is not None and not _same_target(request["target"], target.key):
+            raise ProtocolReviewTargetChangedError(
+                "The analysis under review changed; read the review again.")
+        decisions, memos = self._review_decisions(revision, target)
+        items = self._review_items(revision, target, decisions, memos)
+        pending = [
+            item["item_id"] for item in items
+            if item["needs_review"] and item["item_id"] not in decisions
+        ]
+        if pending:
+            raise ProtocolReviewItemsPendingError(
+                "Every item that waits for a person must be decided first.",
+                item_ids=pending)
+        protocol, changes, timers, origins = _apply_review(target, items, decisions, name)
+        try:
+            domain.validate_protocol(protocol)
+        except domain.ProtocolValidationError as exc:
+            raise ProtocolReviewNotReadyError(
+                "The reviewed protocol does not hold against its source.") from exc
+        readiness = domain.assess_readiness(protocol, capability_policy=domain.P1_CAPABILITY_POLICY)
+        blockers = domain.execution_blocking_reasons(readiness)
+        if blockers:
+            raise ProtocolReviewBlockedError(
+                "The reviewed protocol would not run.",
+                codes=[reason.code.value for reason in blockers])
+        version = len(self._review_versions(revision)) + 1
+        analysis_id = f"{REVIEW_VERSION_ANALYSIS_PREFIX}{version}-{secrets.token_hex(12)}"
+        analysis = self.store.append_analysis_revision(
+            protocol_id, revision.revision_number, analysis_id, protocol, readiness,
+            domain.P1_CAPABILITY_POLICY.profile_id,
+        )
+        revision_id = f"pdf-{revision.revision_number}-review-{version}"
+        payload: dict[str, object] = {
+            "status": "review_registered",
+            "version": version,
+            "revision_id": revision_id,
+            "reviewer_name": name,
+            "base": target.key,
+            "base_revision_id": target.revision_id,
+            "base_analysis_id": target.analysis_id,
+            "analysis_id": analysis_id,
+            "analysis_payload_sha256": analysis.payload_sha256,
+            "changes": [change.public_dict() for change in changes],
+            "timers": timers,
+            "origins": origins,
+            "memos": {
+                item_id: memo.get("memo") for item_id, memo in memos.items()
+                if isinstance(memo.get("memo"), str)
+            },
+            "decision_event_ids": [str(decision["event_id"]) for decision in decisions.values()],
+        }
+        event = self.store.append_event(
+            f"review-version-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _REVIEW_VERSION_EVENT,
+            payload,
+            analysis_revision_number=analysis.analysis_revision_number,
+        )
+        logging.getLogger(__name__).info(
+            "protocol.review.registered protocol_id=%s version=%d changes=%d",
+            protocol_id, version, len(changes),
+        )
+        if self.on_analysis_ready is not None:
+            # The version's Korean, as for a passed analysis (lane PX, 1).
+            try:
+                self.on_analysis_ready(self, protocol_id)
+            except Exception as exc:  # noqa: BLE001 - see on_analysis_ready
+                logging.getLogger(__name__).warning(
+                    "protocol.review.translation_start_failed error=%s", type(exc).__name__)
+        return {
+            "protocol": self.get_entry(protocol_id).public_dict(),
+            "review_version": {
+                **_review_version_summary(event),
+                "changes": payload["changes"],
+            },
+        }
+
+    def review_version(self, protocol_id: str, version: int) -> dict[str, object]:
+        """One registered version with its changes against what it was
+        reviewed from (lane RV, decision c; the review tab's v1→v2)."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        for event, _ in self._review_versions(revision):
+            if event.payload.get("version") == version:
+                return {
+                    **_review_version_summary(event),
+                    "changes": list(event.payload.get("changes") or ()),
+                    "memos": dict(event.payload.get("memos") or {}),
+                    "timers": dict(event.payload.get("timers") or {}),
+                }
+        raise ProtocolCatalogNotFoundError("The protocol has no such review version.")
+
     def resolve_asset(
         self,
         protocol_id: str,
@@ -4651,6 +4931,8 @@ class _ReviewTarget:
     analysis_id: str | None = None
     #: Item id -> origin carried from the review version reviewed again.
     origins: dict[str, str] | None = None
+    #: Step id -> the reviewer's timer seconds (None: no timer) of that version.
+    timers: dict[str, int | None] | None = None
 
 
 def _safe_page_view(
@@ -4709,6 +4991,281 @@ def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
         isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
         and confidence < OCR_UNCLEAR_CONFIDENCE
     )
+
+
+def _with_reviewer_timers(
+    table: domain.StepTimerTable,
+    protocol: domain.ExperimentProtocol,
+    timers: dict[str, object],
+) -> domain.StepTimerTable:
+    """``table`` with a review version's timers in place of the steps' own.
+
+    A step a reviewer gave a time runs that time, said as the reviewer's
+    (``source="reviewer_input"``); a step whose timer the reviewer left out
+    has none. The source's refused times at those steps are dropped: the
+    reviewer has decided them.
+    """
+
+    steps = {step.step_id: step for section in protocol.sections for step in section.steps}
+    decided = {step_id for step_id in timers if step_id in steps}
+    verified = [timer for timer in table.verified if timer.step_id not in decided]
+    for step_id in decided:
+        seconds = timers[step_id]
+        if isinstance(seconds, int) and not isinstance(seconds, bool) and seconds > 0:
+            step = steps[step_id]
+            words = _duration_words(seconds)
+            verified.append(domain.VerifiedStepTimer(
+                step_id, step.source_label, None, f"검토자 입력: {words}", words,
+                (seconds,), step.evidence.source_page_number, source=REVIEW_ORIGIN_REVIEWER,
+            ))
+    order = {step_id: index for index, step_id in enumerate(steps)}
+    verified.sort(key=lambda timer: order.get(timer.step_id, len(order)))
+    return domain.StepTimerTable(
+        tuple(verified),
+        tuple(time for time in table.refused if time.step_id not in decided),
+    )
+
+
+def _version_payload(event: Any) -> dict[str, object]:
+    """A registration event's payload with the time it was recorded."""
+
+    return {
+        **(event.payload if isinstance(event.payload, dict) else {}),
+        "registered_at": event.recorded_at,
+        "registered_on": _korean_date(event.recorded_at),
+    }
+
+
+def _review_version_info(payload: dict[str, object]) -> ReviewVersionInfo:
+    return ReviewVersionInfo(
+        version=int(payload["version"]),
+        revision_id=str(payload["revision_id"]),
+        reviewer_name=str(payload["reviewer_name"]),
+        registered_at=str(payload.get("registered_at") or ""),
+        registered_on=str(payload.get("registered_on") or ""),
+        changes=tuple(
+            ReviewedChange.from_public(item) for item in payload.get("changes") or ()
+            if isinstance(item, dict)),
+        base_revision_id=(
+            str(payload["base_revision_id"]) if payload.get("base_revision_id") else None),
+    )
+
+
+def _path_depth(path: str) -> int:
+    return path.count(".") + path.count("[")
+
+
+def _removed_at(protocol: domain.ExperimentProtocol, path: str) -> domain.ExperimentProtocol:
+    """``protocol`` without the record at ``path``: out of its tuple, or None."""
+
+    match = re.fullmatch(r"(.+)\[([0-9]+)\]", path)
+    if match is not None:
+        parent, index = match[1], int(match[2])
+        items = _value_at_path(protocol, parent)
+        return replace_at_paths(protocol, {parent: items[:index] + items[index + 1:]})
+    return replace_at_paths(protocol, {path: None})
+
+
+def _value_at_path(protocol: domain.ExperimentProtocol, path: str) -> Any:
+    current: Any = protocol
+    for part in path.split(".")[1:]:
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[([0-9]+)\])?", part)
+        assert match is not None
+        current = getattr(current, match[1])
+        if match[2] is not None:
+            current = current[int(match[2])]
+    return current
+
+
+def _shifted_item_ids(
+    origins: dict[str, str], removed: Sequence[str],
+) -> dict[str, str]:
+    """Origins keyed by item id after values were taken out of their tuples.
+
+    A value is named by its place ("action:a1/quantities/2"); once the value
+    before it is left empty it is the second ("…/1").
+    """
+
+    gone: dict[str, set[int]] = {}
+    for item_id in removed:
+        head, _, index = item_id.rpartition("/")
+        if index.isdigit():
+            gone.setdefault(head, set()).add(int(index))
+    shifted: dict[str, str] = {}
+    for item_id, origin in origins.items():
+        head, _, index = item_id.rpartition("/")
+        if index.isdigit() and head in gone:
+            number = int(index)
+            if number in gone[head]:
+                continue
+            item_id = f"{head}/{number - sum(1 for value in gone[head] if value < number)}"
+        elif item_id in removed:
+            continue
+        shifted[item_id] = origin
+    return shifted
+
+
+#: A step sentence's own number ("3.", "(2)") before its words.
+_LEADING_LABEL = re.compile(r"^\s*\(?[0-9]+(?:\.[0-9]+)*[.)]\s+")
+#: A number with the unit printed after it, as a step sentence states a value.
+_STATED_VALUE = re.compile(
+    r"[0-9]+(?:[.,][0-9]+)*(?:\s*(?:°\s*[CF]|℃|C\b|%|[µμunm]?[LlMg]\b|rpm\b|[x×]\s*g\b|"
+    r"min\b|h\b|hr\b|hrs\b|s\b|sec\b|분|시간|초|회|번))?")
+
+
+def _numbers_of(text: str | None) -> list[str]:
+    """The values a sentence states, its own step number left out."""
+
+    return [" ".join(value.split()) for value in _STATED_VALUE.findall(
+        _LEADING_LABEL.sub("", text or "", count=1))]
+
+
+#: The kinds the analysis may not word for the run (human decision
+#: 2026-10-12): a safety statement and a completion criterion, confirmed,
+#: run in the source's own words.
+_SOURCE_WORDS_ONLY = frozenset({"warning", "expected_result", "observation"})
+
+
+class ProtocolReviewBlockedError(ProtocolReviewNotReadyError):
+    code = "review_version_blocked"
+
+    def __init__(self, message: str, *, codes: Sequence[str]) -> None:
+        super().__init__(message)
+        self.codes = tuple(codes)
+
+
+def _apply_review(
+    target: "_ReviewTarget",
+    items: list[dict[str, object]],
+    decisions: dict[str, dict[str, object]],
+    name: str,
+) -> tuple[domain.ExperimentProtocol, list[ReviewedChange], dict[str, int | None], dict[str, str]]:
+    """The protocol a review version holds, its changes, timers and origins.
+
+    Applied to the target's protocol, deepest record first so a record's
+    change and its value's change both hold: a fix writes the reviewer's
+    words, a confirmed or fixed item whose quote was not found takes the
+    lines a person pointed at as its quote, and an item left empty leaves
+    the protocol. Timers, a repeat count and a value the source does not
+    print are the reviewer's own values beside it.
+    """
+
+    protocol = target.protocol
+    by_id = {item["item_id"]: item for item in items}
+    records = {record.item_id: record for record in _review_records(protocol)}
+    edits: list[tuple[str, Callable[[Any], Any]]] = []
+    removals: list[tuple[str, str]] = []
+    changes: list[ReviewedChange] = []
+    timers: dict[str, int | None] = dict(target.timers or {})
+    origins: dict[str, str] = dict(target.origins or {})
+    confirmed_owners: set[str] = set()
+    for item_id, decision in decisions.items():
+        item = by_id.get(item_id)
+        if item is None:
+            continue
+        action = str(decision.get("action"))
+        kind = str(item["kind"])
+        value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+        original = item.get("text")
+        reviewed: object = original
+        spoken: str | None = None
+        if kind == "timer":
+            step_id = item_id[len("timer:"):]
+            timers[step_id] = int(value["seconds"]) if action in {"fix", "enter"} else None
+            reviewed = value.get("text") if action in {"fix", "enter"} else None
+            spoken = value.get("text") if action in {"fix", "enter"} else None
+        elif kind == "pages":
+            pass
+        elif kind == "missing_value" and action == "enter":
+            reviewed = spoken = value.get("text")
+        else:
+            record = records.get(item_id)
+            path = "protocol.metadata" if kind == "metadata" else record.path if record else None
+            if path is None:
+                continue
+            if action == "clear":
+                reviewed = None
+                if kind == "repeat_count":
+                    edits.append((path, lambda current: replace(current, repeat_count=None)))
+                else:
+                    removals.append((path, item_id))
+            elif action in {"fix", "enter"}:
+                if kind == "repeat_count":
+                    count = int(value["count"])
+                    edits.append((path, lambda current, count=count: replace(
+                        current, repeat_count=count,
+                        repeat_count_kind=domain.REPEAT_COUNT_TOTAL)))
+                    reviewed = spoken = value.get("text")
+                else:
+                    text = str(value["text"])
+                    reviewed = text
+
+                    def fixed(current, text=text):
+                        changed: dict[str, object] = {_REVIEW_TEXT_FIELD[type(current)]: text}
+                        if isinstance(current, domain.ScientificValue):
+                            changed.update(parsed_value=None, normalized_unit=None)
+                        if isinstance(current, domain.EstimatedDuration):
+                            changed["parsed_seconds"] = None
+                        return replace(current, **changed)
+
+                    edits.append((path, fixed))
+                    if kind in {"step", "sub_action"}:
+                        before = _numbers_of(str(original or ""))
+                        spoken = " · ".join(
+                            number for number in _numbers_of(text) if number not in before
+                        ) or None
+            lines = decision.get("source_lines")
+            if isinstance(lines, dict) and action in {"confirm", "fix"}:
+                quote = domain.SourceEvidence(
+                    source_page_number=int(lines["page"]),
+                    source_excerpt=str(lines["excerpt"]),
+                )
+                edits.append((path, lambda current, quote=quote: replace(current, evidence=quote)))
+                confirmed_owners.add(item_id)
+            if action == "confirm" and item["needs_review"] and kind in _SOURCE_WORDS_ONLY:
+                # "안전 주의와 완료 기준은 AI 가 새로 써 넣지 않는다": confirmed,
+                # a safety statement or a completion criterion the source
+                # did not print as read runs in the source's own words -- the
+                # lines a person pointed at, or the quote the server found.
+                words = (
+                    str(lines["excerpt"]) if isinstance(lines, dict)
+                    else str((item.get("source") or {}).get("excerpt") or original))
+                field = _REVIEW_TEXT_FIELD[type(record.record)] if record else None
+                if field is not None:
+                    edits.append((path, lambda current, field=field, words=words: replace(
+                        current, **{field: words})))
+                    reviewed = words
+        if action == "confirm" and not item["needs_review"]:
+            continue
+        origin = (
+            REVIEW_ORIGIN_REVIEWER if action in {"fix", "enter"}
+            else REVIEW_ORIGIN_SOURCE if kind in _SOURCE_WORDS_ONLY and action == "confirm"
+            else REVIEW_ORIGIN_AI if item["needs_review"] else str(item["origin"])
+        )
+        if action in {"fix", "enter"} or (action == "confirm" and item["needs_review"]):
+            origins[item_id] = origin
+        changes.append(ReviewedChange(
+            item_id=item_id, kind=kind, kind_ko=str(item["kind_ko"]),
+            step_id=item.get("step_id"), step_label=item.get("step_label"),
+            action=action,
+            original=None if original is None else str(original),
+            reviewed=None if reviewed is None else str(reviewed),
+            origin=origin, spoken=spoken,
+            decided_by=str(decision.get("reviewer_name") or name),
+            decided_at=str(decision.get("recorded_at") or ""),
+        ))
+    for item in items:
+        if item.get("covered_by") in confirmed_owners:
+            origins.setdefault(str(item["item_id"]), REVIEW_ORIGIN_AI)
+    for path, edit in sorted(edits, key=lambda pair: _path_depth(pair[0]), reverse=True):
+        protocol = replace_at_paths(protocol, {path: edit(_value_at_path(protocol, path))})
+    for path, _ in sorted(
+        removals, key=lambda pair: (_path_depth(pair[0]), pair[0]), reverse=True,
+    ):
+        protocol = _removed_at(protocol, path)
+    origins = _shifted_item_ids(origins, [item_id for _, item_id in removals])
+    changes.sort(key=lambda change: list(by_id).index(change.item_id))
+    return protocol, changes, timers, origins
 
 
 # ---------------------------------------------------------------------------
