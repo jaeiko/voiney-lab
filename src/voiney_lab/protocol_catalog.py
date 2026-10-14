@@ -457,6 +457,27 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
     }
 
 
+def review_version_suggestion(entry: "ProtocolCatalogEntry") -> dict[str, object] | None:
+    """What an upload of a file already registered says (lane RV, decision d).
+
+    Human decision 2026-10-12: the same protocol is not uploaded again; the
+    experimenter starts from its review version. None when it has none.
+    """
+
+    if not entry.review_versions:
+        return None
+    current = entry.review_versions[-1]
+    return {
+        **{key: current.get(key) for key in (
+            "version", "version_ko", "revision_id", "reviewer_name", "registered_at",
+            "registered_on")},
+        "message_ko": (
+            f"이미 올린 원문입니다. 다시 올리지 않고 {current.get('version_ko')}"
+            f"({current.get('registered_on')} · {current.get('reviewer_name')})로 바로 "
+            "시작할 수 있습니다."),
+    }
+
+
 def _korean_date(timestamp: str) -> str:
     """The date of a ledger time in Korea ("2026-10-14")."""
 

@@ -133,6 +133,7 @@ from voiney_lab.protocol_catalog import (
     ReagentTableError,
     ReagentTableTooLargeError,
     reagent_table_summary,
+    review_version_suggestion,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -3047,17 +3048,28 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     },
                 )
                 ocr=_automatic_ocr_on_upload(catalog,result.entry)
-                return {
-                    "protocol":result.entry.public_dict(),
-                    "deduplicated":result.deduplicated,
-                    "ocr":ocr,
-                }
+                return _registration_response(result,ocr)
             finally:
                 store.close()
         except HTTPException:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+def _registration_response(result:Any,ocr:dict[str,object])->dict[str,object]:
+    """The upload's answer; a file already registered with a review version
+    suggests starting from it instead (lane RV, decision d)."""
+
+    response:dict[str,object]={
+        "protocol":result.entry.public_dict(),
+        "deduplicated":result.deduplicated,
+        "ocr":ocr,
+    }
+    suggestion=review_version_suggestion(result.entry) if result.deduplicated else None
+    if suggestion is not None:
+        response["review_suggestion"]=suggestion
+    return response
 
 
 @app.post("/api/protocols/{protocol_id}/reagent-tables",status_code=201)
