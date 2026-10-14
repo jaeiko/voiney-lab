@@ -452,6 +452,28 @@
     .protocol-source-formats{color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem}
     .protocol-heic-hint{display:block;padding:var(--space-2) var(--space-3);border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:.875rem;line-height:1.375rem;font-weight:600}
     .protocol-heic-hint[hidden]{display:none}
+    /* Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables -- attach, the list, and a table opened cell by cell. */
+    .reagent-tables{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--line)}
+    .reagent-tables-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2)}
+    .reagent-tables-head h4{margin:0;color:var(--ink);font-size:1rem}
+    .reagent-tables .btn-file-select{display:inline-flex;align-items:center;width:auto;min-height:44px;height:auto;padding:0 var(--space-4)}
+    .reagent-table-list{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none;color:var(--ink-muted);font-size:.875rem}
+    .reagent-table-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-1) var(--space-3);align-items:center;padding:var(--space-2) var(--space-3);border:1px solid var(--line);background:var(--paper);color:var(--ink)}
+    .reagent-table-name,.reagent-table-meta,.reagent-table-warning{grid-column:1;min-width:0;overflow-wrap:anywhere}
+    .reagent-table-meta{color:var(--ink-muted);font-size:.8125rem}
+    .reagent-table-warning{color:var(--warning-ink);font-size:.8125rem}
+    .reagent-table-row button{grid-column:2;grid-row:1 / span 3;min-height:44px;padding:0 var(--space-4)}
+    .reagent-table-view{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+    .reagent-table-view[hidden]{display:none}
+    .reagent-table-view-head{margin:0;color:var(--ink-muted);font-size:.8125rem}
+    .reagent-sheet{min-width:0}
+    .reagent-sheet h5{margin:0 0 var(--space-1);color:var(--ink);font-size:.875rem}
+    .reagent-sheet-scroll{max-width:100%;max-height:20rem;overflow:auto;border:1px solid var(--line);background:var(--paper)}
+    .reagent-grid{border-collapse:collapse;font-size:.8125rem;font-variant-numeric:tabular-nums}
+    .reagent-grid th,.reagent-grid td{padding:var(--space-1) var(--space-2);border:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap;color:var(--ink)}
+    .reagent-grid th{position:sticky;top:0;background:var(--bench);color:var(--ink-muted);font-weight:600}
+    .reagent-grid tbody th{left:0}
+    .reagent-grid td.reagent-formula{color:var(--ink-muted);font-style:italic}
     .step-warning .safety-scope{margin:0 0 .35rem;color:var(--warning-ink);font-size:.875rem;line-height:1.25rem;font-weight:700}
     .protocol-start-summary .protocol-review-actions{margin-top:0}
     .protocol-start-summary #protocol-start{min-height:var(--target-run);padding:0 var(--space-8);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:700}
@@ -690,6 +712,17 @@
                     <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
                     <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
                   </div>
+                  <!-- Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables (lane AN) -- attach an .xlsx, the tables attached with their sheets and cell counts, and one opened cell by cell as the server keeps it. Never analysed and never a step's source. -->
+                  <section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">
+                    <div class="reagent-tables-head">
+                      <h4 id="reagent-tables-title">시약 표</h4>
+                      <input id="reagent-table-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">
+                      <label id="reagent-table-pick" for="reagent-table-file" class="btn-file-select" role="button" tabindex="0">시약 표(.xlsx) 붙이기</label>
+                    </div>
+                    <small id="reagent-table-status" role="status"></small>
+                    <ul id="reagent-table-list" class="reagent-table-list" aria-label="붙인 시약 표"></ul>
+                    <div id="reagent-table-view" class="reagent-table-view" hidden></div>
+                  </section>
                 </section>
               </div>
               <div class="library-side">
@@ -3310,6 +3343,107 @@ function renderSafetyNotices(items,runnable){
  }
  host.appendChild(group);
 }
+// Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables
+// (lane AN): an .xlsx attached as it is, listed with its sheets and cells,
+// and opened cell by cell as the server keeps it -- the value the workbook
+// prints, and a formula saved without a value as its formula. The server
+// never analyses a table and never takes a step from one.
+const REAGENT_TABLE_MEDIA_TYPE="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const REAGENT_TABLE_ERROR_MESSAGES=Object.freeze({
+ unsupported_reagent_table_media_type:"시약 표는 엑셀 .xlsx 파일만 붙일 수 있습니다.",
+ reagent_table_too_large:"시약 표가 너무 큽니다 · 파일 크기나 값이 든 셀 수가 서버가 읽는 한도를 넘었습니다. 표를 나눠 붙여 주세요.",
+ invalid_reagent_table:"엑셀 .xlsx 통합 문서로 읽을 수 없습니다. 엑셀에서 .xlsx로 다시 저장해 붙여 주세요.",
+ protocol_catalog_unavailable:"시약 표를 붙이는 기능을 사용할 수 없습니다. 서버 관리자에게 문의해 주세요.",
+ network_error:"서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+ unexpected_server_error:"시약 표를 붙이는 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+});
+let reagentTablesProtocolId=null,reagentTablesShown=[],reagentTableOpenId=null,isAttachingReagentTable=false;
+const reagentOpenButtons=new Map();
+function reagentTableErrorMessage(code){return REAGENT_TABLE_ERROR_MESSAGES[code]||REAGENT_TABLE_ERROR_MESSAGES.unexpected_server_error;}
+function reagentTableMediaType(file){const type=typeof file?.type==="string"?file.type.trim().toLowerCase():"";if(type)return type;return String(file?.name||"").toLowerCase().endsWith(".xlsx")?REAGENT_TABLE_MEDIA_TYPE:"";}
+function reagentSheetCells(sheet){return Array.isArray(sheet?.cells)?sheet.cells.length:Number.isInteger(sheet?.cells)?sheet.cells:0;}
+function reagentSheetName(sheet){return nonemptyText(sheet?.name)?String(sheet.name):"이름 없는 시트";}
+function reagentTableLine(table){const sheets=Array.isArray(table?.sheets)?table.sheets.filter(sheet=>sheet&&typeof sheet==="object"):[];const count=Number.isInteger(table?.cell_count)?table.cell_count:sheets.reduce((sum,sheet)=>sum+reagentSheetCells(sheet),0);return [`시트 ${sheets.length}개 · 셀 ${count}개`,...sheets.map(sheet=>`${reagentSheetName(sheet)} 셀 ${reagentSheetCells(sheet)}개${sheet.state&&sheet.state!=="visible"?" (숨긴 시트)":""}`)].join(" · ");}
+function reagentColumnName(number){let name="",left=number;while(left>0){const rest=(left-1)%26;name=String.fromCharCode(65+rest)+name;left=Math.floor((left-1)/26);}return name;}
+async function loadReagentTables(protocolId){
+ const list=$("reagent-table-list");if(!list||typeof protocolId!=="string"||!protocolId)return null;
+ if(reagentTablesProtocolId!==protocolId)reagentTableOpenId=null;
+ reagentTablesProtocolId=protocolId;
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(reagentTablesProtocolId!==protocolId)return null;const tables=response.ok&&Array.isArray(payload?.reagent_tables)?payload.reagent_tables.filter(table=>table&&typeof table==="object"):null;renderReagentTables(tables);return tables;}
+ catch(_){if(reagentTablesProtocolId===protocolId)renderReagentTables(null);return null;}
+}
+function renderReagentTables(tables){
+ const list=$("reagent-table-list");if(!list)return false;list.replaceChildren();reagentOpenButtons.clear();
+ reagentTablesShown=Array.isArray(tables)?tables:[];
+ if(!Array.isArray(tables)){list.textContent="시약 표 목록을 불러오지 못했습니다.";renderReagentTableView(null);return false;}
+ if(!tables.length){list.textContent="붙인 시약 표 없음";renderReagentTableView(null);return true;}
+ for(const table of tables){
+  const row=document.createElement("li");row.className="reagent-table-row";
+  const name=document.createElement("b");name.className="reagent-table-name";name.textContent=nonemptyText(table.filename)?String(table.filename):"이름 없는 표";row.appendChild(name);
+  const meta=document.createElement("span");meta.className="reagent-table-meta";meta.textContent=reagentTableLine(table);row.appendChild(meta);
+  for(const warning of Array.isArray(table.warnings)?table.warnings:[]){if(!nonemptyText(warning))continue;const line=document.createElement("small");line.className="reagent-table-warning";line.textContent=warning;row.appendChild(line);}
+  const open=document.createElement("button");open.type="button";open.setAttribute("aria-controls","reagent-table-view");
+  open.addEventListener("click",()=>{reagentTableOpenId=reagentTableOpenId===table.table_id?null:table.table_id;syncReagentOpenButtons();renderReagentTableView(reagentTablesShown.find(item=>item.table_id===reagentTableOpenId)||null);});
+  reagentOpenButtons.set(table.table_id,open);row.appendChild(open);list.appendChild(row);
+ }
+ syncReagentOpenButtons();
+ renderReagentTableView(reagentTablesShown.find(table=>table.table_id===reagentTableOpenId)||null);
+ return true;
+}
+function syncReagentOpenButtons(){for(const [id,button] of reagentOpenButtons){const shown=id===reagentTableOpenId;button.textContent=shown?"닫기":"열어 보기";button.setAttribute("aria-expanded",String(shown));}}
+function renderReagentTableView(table){
+ const view=$("reagent-table-view");if(!view)return false;view.replaceChildren();
+ if(!table){view.hidden=true;return false;}
+ const head=document.createElement("p");head.className="reagent-table-view-head";head.textContent=`${nonemptyText(table.filename)?table.filename:"이름 없는 표"} · 엑셀에 보이는 값 그대로 · 분석에 쓰지 않음`;view.appendChild(head);
+ for(const sheet of Array.isArray(table.sheets)?table.sheets:[]){
+  if(!sheet||typeof sheet!=="object")continue;
+  const section=document.createElement("section");section.className="reagent-sheet";
+  const title=document.createElement("h5");title.textContent=`${reagentSheetName(sheet)} · 셀 ${reagentSheetCells(sheet)}개${sheet.state&&sheet.state!=="visible"?" · 숨긴 시트":""}`;section.appendChild(title);
+  const cells=(Array.isArray(sheet.cells)?sheet.cells:[]).filter(cell=>cell&&Number.isInteger(cell.row)&&Number.isInteger(cell.column)&&cell.row>0&&cell.column>0);
+  if(!cells.length){const empty=document.createElement("p");empty.className="reagent-table-view-head";empty.textContent="값이 든 셀 없음";section.appendChild(empty);view.appendChild(section);continue;}
+  const rows=[...new Set(cells.map(cell=>cell.row))].sort((a,b)=>a-b),columns=Math.max(...cells.map(cell=>cell.column)),at=new Map(cells.map(cell=>[`${cell.row}:${cell.column}`,cell]));
+  const scroll=document.createElement("div");scroll.className="reagent-sheet-scroll";scroll.setAttribute("tabindex","0");scroll.setAttribute("role","region");scroll.setAttribute("aria-label",`${reagentSheetName(sheet)} 시트의 셀`);
+  const grid=document.createElement("table");grid.className="reagent-grid";
+  const thead=document.createElement("thead"),headRow=document.createElement("tr");headRow.appendChild(document.createElement("th"));
+  for(let column=1;column<=columns;column++){const th=document.createElement("th");th.setAttribute("scope","col");th.textContent=reagentColumnName(column);headRow.appendChild(th);}
+  thead.appendChild(headRow);grid.appendChild(thead);
+  const tbody=document.createElement("tbody");
+  for(const number of rows){
+   const tr=document.createElement("tr"),th=document.createElement("th");th.setAttribute("scope","row");th.textContent=String(number);tr.appendChild(th);
+   for(let column=1;column<=columns;column++){
+    const cell=at.get(`${number}:${column}`),td=document.createElement("td");
+    if(cell){const shown=typeof cell.display==="string"?cell.display:(cell.value===null||cell.value===undefined?"":String(cell.value));if(!shown&&nonemptyText(cell.formula)){td.className="reagent-formula";td.textContent=cell.formula;}else td.textContent=shown;}
+    tr.appendChild(td);
+   }
+   tbody.appendChild(tr);
+  }
+  grid.appendChild(tbody);scroll.appendChild(grid);section.appendChild(scroll);view.appendChild(section);
+ }
+ view.hidden=false;return true;
+}
+async function attachReagentTable(){
+ const input=$("reagent-table-file"),status=$("reagent-table-status"),file=input?.files?.[0],protocolId=currentProtocolReviewId;
+ const say=text=>{if(status)status.textContent=text;};
+ if(typeof protocolId!=="string"||!protocolId){say("먼저 프로토콜을 고르세요.");if(input)input.value="";return null;}
+ if(!file){say("붙일 시약 표(.xlsx)를 골라 주세요.");return null;}
+ const mediaType=reagentTableMediaType(file);
+ if(mediaType!==REAGENT_TABLE_MEDIA_TYPE||!String(file.name||"").toLowerCase().endsWith(".xlsx")){say(reagentTableErrorMessage("unsupported_reagent_table_media_type"));if(input)input.value="";return null;}
+ if(isAttachingReagentTable)return null;
+ isAttachingReagentTable=true;input?.setAttribute?.("aria-busy","true");say("시약 표를 읽어 붙이는 중…");
+ try{
+  let response;
+  try{response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  catch(_){say(reagentTableErrorMessage("network_error"));return null;}
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){say(reagentTableErrorMessage(typeof payload?.detail==="string"?payload.detail:"unexpected_server_error"));return null;}
+  const table=payload?.reagent_table&&typeof payload.reagent_table==="object"?payload.reagent_table:null;
+  if(!table){say(reagentTableErrorMessage("unexpected_server_error"));return null;}
+  const name=nonemptyText(table.filename)?table.filename:file.name;
+  say(payload.deduplicated===true?`이미 붙인 같은 표입니다 · ${name}`:`시약 표를 붙였습니다 · ${name} · 셀 ${Number.isInteger(table.cell_count)?table.cell_count:0}개`);
+  if(currentProtocolReviewId===protocolId)await loadReagentTables(protocolId);
+  return table;
+ }finally{isAttachingReagentTable=false;input?.removeAttribute?.("aria-busy");if(input)input.value="";}
+}
 function renderProtocolReview(review,options={}){
  const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),ocrRun=$("protocol-ocr-run");
  if(!panel||!content||!status)return false;
@@ -3317,6 +3451,8 @@ function renderProtocolReview(review,options={}){
  const compare=$("protocol-compare");if(compare){compare.hidden=false;compare.open=options.open!==false;}
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderExecutionReasons(review);renderStartSummary(review);
+ // Lane UI3 decision 4: the picked protocol's reagent tables, read once per protocol.
+ if(typeof review?.protocol_id==="string"&&review.protocol_id&&review.protocol_id!==reagentTablesProtocolId){const said=$("reagent-table-status");if(said)said.textContent="";void loadReagentTables(review.protocol_id);}
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
  status.textContent=`${review?.title||source.filename||"업로드 프로토콜"} · ${catalogStatus(review).label}`;
  // Lane PX decision 4: one line says where the document stands on its way
@@ -3800,6 +3936,8 @@ $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-upda
 // Lane UI3 decision 3: the file buttons are labels; Enter or Space on one opens its chooser.
 function openFileChooserFromKey(event,inputId){if(event?.key!=="Enter"&&event?.key!==" ")return false;event.preventDefault?.();$(inputId)?.click?.();return true;}
 $("protocol-pdf-pick")?.addEventListener("keydown",event=>{openFileChooserFromKey(event,"protocol-pdf");});
+$("reagent-table-pick")?.addEventListener("keydown",event=>{openFileChooserFromKey(event,"reagent-table-file");});
+$("reagent-table-file")?.addEventListener("change",()=>{void attachReagentTable();});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
