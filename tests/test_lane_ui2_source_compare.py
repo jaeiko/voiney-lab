@@ -103,6 +103,9 @@ assert(compare.hidden===true&&node("protocol-review-panel").hidden===true,"clear
         result = run_page_script(SETUP + r"""
 const calls=[];globalThis.fetch=async url=>{calls.push(String(url));throw new Error("no call expected");};
 renderProtocolReview(review());
+// Lane UI3 decision 4 (2026-10-14): drawing the picked protocol reads its reagent tables, once.
+assert(calls.join("|")==="/api/protocols/p-1/reagent-tables",`calls: ${calls}`);
+calls.length=0;
 for(const step of steps())step.dispatch("click");
 assert(calls.length===0,`calls: ${calls}`);
 """)
