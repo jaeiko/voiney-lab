@@ -216,10 +216,11 @@ lane U). It only changes what is shown; every state it shows is the server's.
   `reply.delta` for the `reply.complete` render, which carries the text
   alone; a `reply.complete` that carries `display_document` itself is drawn
   from its own value. On a protocol turn it now carries the same
-  `display_document` as its `reply.delta` (lane F, decision 3). With web references off
-  (`research_capabilities.external_text` not `enabled`), a reference check
+  `display_document` as its `reply.delta` (lane F, decision 3). A reference check
   that ends without an answer is not shown to the researcher; it is a line in
-  the turn's developer details.
+  the turn's developer details. (`research_capabilities.external_text` is
+  always `disabled` since the xAI web reference search was deleted in lane
+  DOC3; the screen still reads the entry.)
 - **Server values on the screen (lane U3).** The screen reads the values lane
   R6 added for it and shows them, never changing what the server decided.
   - *Record names.* An experiment record is "실험 기록 · {protocol_title} ·
@@ -463,9 +464,9 @@ Decisions of 2026-10-06, from two voice tests:
   1단계입니다. 1단계를 완료하셨다는 뜻인가요?".
 - **A term answer reads as a sentence**: "탈색(destained)은 원문 7단계에
   나와요." (the Korean word the researcher used, then the source's spelling).
-- **Web references off** (`VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false`): no
-  research step is announced unless it has something to show, so nothing ends
-  in "웹 참고 자료 확인 제한".
+- **No web reference search** (it was off by default and was deleted in lane
+  DOC3, 2026-10-14): no research step is announced unless it has something to
+  show, so nothing ends in "웹 참고 자료 확인 제한".
 
 ## Spills, going back within a repeat, and a later start (lane R7)
 
@@ -1102,7 +1103,7 @@ On, a turn goes:
   as "AI 일반 지식". Its request now carries the source text of
   the step the rules answered (`Step N source text: …`, at most 500
   characters), as the spoken path does, so the model knows which step is
-  meant. The web search query is unchanged. D4's 120-character rule stays
+  meant. The research query is unchanged. D4's 120-character rule stays
   with the spoken path only.
 - **Fallback** — when the model is late, fails, says nothing usable, is
   refused, or its answer fails a check, the turn takes the rules' own path,
@@ -1330,20 +1331,19 @@ once more by itself, recorded as `protocol_analysis_retry_started` with
 authority `automatic_invalid_response_retry`, and the progress line says
 "다시 시도 중(1/1)". A failed source-evidence check, a time-out or a missing
 provider is never sent again by itself, nor is a person's own retry; if the
-second answer fails too, a person presses "분석 다시 시도". The one feature only xAI provides -- external reference search -- defaults to
-off. There is no test mode any more (lane DI,
+second answer fails too, a person presses "분석 다시 시도". No feature only xAI provides is left (the external reference search was
+deleted in lane DOC3). There is no test mode any more (lane DI,
 2026-10-08): an analysed protocol runs under the one execution rule in every
 scope. `scripts/run_candidate_a.sh` is the former name and now forwards to
 it.
 
 `scripts/run_pilot.sh` loads no fixture, keeps its state under
 `data/runtime/pilot/`, and turns every feature that reaches outside the
-approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
-`VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED` —
-along with `VOINEY_LAB_MOSS_ENABLED`, which nothing reads since the Moss
-connection was deleted (lane CL, 2026-10-10). Each keeps a value the operator
-set in the shell (and, but for MOSS, wrote in the `.env`), so enabling one is
-a deliberate act taken before startup. The outside-PDF explanation ("AI 일반
+approved source documents off — `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`
+(the xAI web reference search was the other one until lane DOC3 deleted it;
+the Moss connection went in lane CL, 2026-10-10, and its setting
+with it). It keeps a value the operator set in the shell or wrote in the
+`.env`, so enabling it is a deliberate act taken before startup. The outside-PDF explanation ("AI 일반
 지식") therefore stays off in the pilot unless it is set.
 
 The pilot's approved safety documents are fixed by the launcher, never by a
@@ -1415,7 +1415,7 @@ An unset role is closed whatever keys are set.
 | `TRANSLATION` | a revision's Korean and the reader translation of a step | `google` · `gemini-3.8-flash` · `low` | the call is refused by the setting's name |
 | `ANALYSIS` | the structured PDF protocol analysis | `google` · `gemini-3.8-flash` · `low` (lane AQ) | "Protocol analysis provider is not configured." — no analysis runs; reasoning default `high` |
 | `REPORT` | the experiment report's prose | `google` · `gemini-3.8-flash` | the prose writer is off; the report keeps the server's own sentences |
-| `SUPPLEMENTAL` | outside-the-PDF explanations and the web reference search | `openai` · `gpt-6-luna` | the explanation is refused by name; reasoning default `low` |
+| `SUPPLEMENTAL` | outside-the-PDF explanations | `openai` · `gpt-6-luna` | the explanation is refused by name; reasoning default `low` |
 
 **Answer role in the voice turn, and step translation (lane F, decision 1,
 2026-10-06).** The voice turn's multi-brain Answer role is used only when its
@@ -1451,9 +1451,7 @@ nulls it forces dropped from the reply), Anthropic's and Gemini's grammar with
 optional, 16 union-typed properties) or over 100 properties on Gemini (the
 PDF analysis schema on both), the schema as a system instruction instead,
 with the reply validated by the server as always.
-The web reference search is xAI's `web_search` tool, so
-`VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` with any other
-`VOINEY_LAB_SUPPLEMENTAL_PROVIDER` is refused at start-up. The adapters are
+The adapters are
 contract-tested against fake SDK clients (`tests/test_model_providers.py`,
 `tests/test_structured_output_providers.py`), not live-tested by the suite. The
 analysis role was live-tested on 2026-10-05 (lane P3) through these adapters
@@ -1584,7 +1582,7 @@ parameter or else the file name. The image is never read.
 
 | Variable | Purpose |
 |---|---|
-| `XAI_API_KEY` | Server-only xAI credential (no role falls back to xAI any more). Needed only when a role, STT or TTS names `xai`, or the xAI-only external reference search is on: the server and both launchers refuse to start, naming the feature, when it is on without the key |
+| `XAI_API_KEY` | Server-only xAI credential (no role falls back to xAI any more). Needed only when a role, STT or TTS names `xai` (an xAI-only feature switched on without it is refused at start-up by name; none exists today) |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` | Credentials of the other providers, read only when a role names them |
 | `VOINEY_LAB_<ROLE>_PROVIDER`, `_MODEL`, `_REASONING` | The model behind each role; see [Model providers by role](#model-providers-by-role) |
 | `VOINEY_LAB_ANALYSIS_MODEL` | Required structured protocol analysis model; in use: `gemini-3.8-flash` (google, reasoning `low`, lane AQ) |

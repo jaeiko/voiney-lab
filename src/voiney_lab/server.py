@@ -102,9 +102,7 @@ from voiney_lab.experiment_reports import (
     new_session_id,
 )
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
-    XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
     plan_research_query,
     supplemental_explanation_query,
@@ -4384,7 +4382,6 @@ class ListenerSession:
                  tool_context:ToolContext|None=None,
                  curated_protocol_session:CuratedProtocolSession|None=None,
                  experiment_report_store:ExperimentReportStore|None=None,
-                 external_reference_settings:ExternalReferenceSettings|None=None,
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
                  llm_router_settings:LlmRouterSettings|None=None,
@@ -4402,8 +4399,6 @@ class ListenerSession:
         self.playback_completion_metrics:dict[int,int]={}
         self.curated_protocol_session=curated_protocol_session
         self.experiment_report_store=experiment_report_store
-        self.external_reference_settings=(
-            external_reference_settings or ExternalReferenceSettings(False))
         self.supplemental_knowledge_settings=(
             supplemental_knowledge_settings or SupplementalKnowledgeSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
@@ -6130,9 +6125,6 @@ async def _queue_curated_research(
         research_budget=min(120.0,max(
             10.0,
             (
-                session.external_reference_settings.timeout_seconds
-                if session.external_reference_settings.enabled else 0.0
-            ) + (
                 session.supplemental_knowledge_settings.timeout_seconds
                 if session.supplemental_knowledge_settings.enabled else 0.0
             ),
@@ -6141,12 +6133,11 @@ async def _queue_curated_research(
         def research_remaining(cap:float)->float:
             return max(0.05,min(cap,research_deadline-clock()))
 
-        # Lane R6, decision 8: with web references off, a step is announced
-        # only once it has something to show, so nothing on the screen waits
-        # for an answer that can only end in "웹 참고 자료 확인 제한".
-        web_enabled=session.external_reference_settings.enabled
-        # The turn itself announced "pending" when web references are on.
-        announced=web_enabled and not ctx.get("explain_only")
+        # Lane R6, decision 8: a step is announced only once it has something
+        # to show, so nothing on the screen waits for an answer that can only
+        # end in "웹 참고 자료 확인 제한". (The xAI web reference search that
+        # once announced "pending" up front was deleted in lane DOC3.)
+        announced=False
         async def announce(phase:str)->None:
             nonlocal announced
             announced=True
@@ -6154,133 +6145,6 @@ async def _queue_curated_research(
                 "research.state",turn_id=turn_id,status="running",phase=phase,
                 correlation_id=f"research-{generation}-{turn_id}",
             )
-
-        # 2. External Web Search (Grok 4.6)
-        result=None
-        if (
-            research_plan is None and session.external_reference_settings.enabled
-            and not ctx.get("explain_only")
-        ):
-            await sender.text(
-                "research.state",turn_id=turn_id,status="running",
-                phase="authoritative_web",
-                correlation_id=f"research-{generation}-{turn_id}",
-            )
-            await sender.text(
-                "tool.call",turn_id=turn_id,
-                tool="search_authoritative_web",round=1)
-            external_started=clock()
-            include_images=bool(
-                getattr(plan,"visual_requested",False)
-                or getattr(plan,"action",None) is CuratedProtocolAction.VISUAL_REQUEST
-            )
-            log.info(
-                "external_search.request_config model=%s open_mode=%s total_timeout=%s connect_timeout=%s read_timeout=%s image_search_enabled=%s",
-                session.external_reference_settings.model,
-                bool(session.external_reference_settings.domain_profile=="open" or not session.external_reference_settings.allowed_domains),
-                session.external_reference_settings.timeout_seconds,
-                session.external_reference_settings.connect_timeout_seconds,
-                session.external_reference_settings.read_timeout_seconds,
-                include_images,
-            )
-            # The query carries the user's question, so only its size and a
-            # short digest are logged (AGENTS.md rule 6), as turn.route_decision does.
-            reference_query=str(ctx["reference_query"])
-            log.info(
-                "external_search.provider_started turn_id=%s generation=%s "
-                "query_chars=%d query_sha256=%s",
-                turn_id,generation,len(reference_query),
-                hashlib.sha256(reference_query.encode("utf-8")).hexdigest()[:16],
-            )
-            async def _on_partial_sources(srcs: list[dict[str, Any]]) -> None:
-                if session.owns_research_result(turn_id, generation, configuration_id):
-                    await sender.text(
-                        "research.state",
-                        turn_id=turn_id,
-                        generation=generation,
-                        status="running",
-                        phase="authoritative_web",
-                        correlation_id=f"research-{generation}-{turn_id}",
-                        sources_found=len(srcs),
-                        message=f"웹에서 참고 자료 {len(srcs)}개를 찾았어요.",
-                    )
-
-            try:
-                external_client=AsyncOpenAI(
-                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                    max_retries=0)
-                external_searcher=XaiAuthoritativeWebSearch(
-                    external_client,session.external_reference_settings,
-                )
-                try:
-                    search_call=external_searcher.search(
-                        ctx["reference_query"],
-                        language=turn_language,
-                        include_images=include_images,
-                        on_partial_sources=_on_partial_sources,
-                    )
-                except TypeError:
-                    search_call=external_searcher.search(
-                        ctx["reference_query"],language=turn_language)
-                result=await asyncio.wait_for(
-                    search_call,
-                    timeout=research_remaining(
-                        session.external_reference_settings.timeout_seconds),
-                )
-            except asyncio.CancelledError:
-                raise
-            except asyncio.TimeoutError:
-                log.warning("external_search.timeout turn_id=%s layer=server_research_remaining", turn_id)
-                result={"status":"timeout_total","matches":[],"images":[]}
-            except Exception as exc:
-                log.warning(
-                    "external_search.error turn_id=%s class=%s",
-                    turn_id,type(exc).__name__)
-                result={"status":"connect_error","matches":[],"images":[]}
-            if not session.owns_research_result(turn_id,generation,configuration_id):
-                return
-            external_elapsed=round((clock()-external_started)*1000)
-            log.info(
-                "external_search.provider_completed turn_id=%s elapsed_ms=%s status=%s web_search_count=%s image_search_count=%s source_count=%s markdown_image_count=%s",
-                turn_id,external_elapsed,result.get("status"),
-                result.get("web_search_count",result.get("tool_usage_count",0)),
-                result.get("image_search_count",0),
-                len(result.get("matches",[])),
-                len(result.get("images",[])),
-            )
-            log.info(
-                "external_search.result_admission citation_count=%s image_candidate_count=%s turn_id=%s generation=%s",
-                len(result.get("matches",[])),
-                len(result.get("images",[])),
-                turn_id,generation,
-            )
-            await sender.text(
-                "tool.result",turn_id=turn_id,
-                tool="search_authoritative_web",round=1,
-                status=result.get("status","response_schema_error"),
-                elapsed_ms=external_elapsed,
-                retrieval_backend=result.get("backend"),
-                match_count=len(result.get("matches",[])),
-                provider_request_id=result.get("provider_request_id"),
-                streaming=bool(result.get("streaming",False)),
-                provider_event_count=result.get("event_count",0),
-                provider_tool_event_count=result.get("tool_event_count",0),
-                first_provider_event_ms=result.get("first_event_ms"),
-                first_provider_text_ms=result.get("first_text_ms"),
-                provider_tool_started_ms=result.get("tool_started_ms"),
-                provider_tool_ended_ms=result.get("tool_ended_ms"),
-            )
-            if result.get("status")=="success" and result.get("matches"):
-                research_plan=curated.apply_reference_answer(
-                    turn_id=turn_id,language=turn_language,
-                    primary_text=result["answer"],
-                    origin="external_authoritative_reference",
-                    citations=tuple(result["matches"]),
-                    retrieval_backend=result["backend"],
-                    limitations=(
-                        "External guidance cannot modify the active protocol.",
-                    ),
-                )
 
         # 3a. A short outside-PDF explanation, said after the rules' answer
         # (lane R6, decision 6, restoring D4).
@@ -6360,8 +6224,6 @@ async def _queue_curated_research(
             and supplemental_knowledge_allowed(
                 ctx["query"],plan.question_dimensions)
         ):
-            if web_enabled:
-                await announce("supplemental_model")
             supplemental_started=clock()
             try:
                 supplemental_client=_role_client(
@@ -6430,8 +6292,6 @@ async def _queue_curated_research(
                 await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
         elif session.owns_research_result(turn_id,generation,configuration_id):
             status=(
-                result.get("status","disabled")
-                if isinstance(result,dict) else
                 supplemental_result.get("status","disabled")
                 if isinstance(supplemental_result,dict) else "disabled"
             )
@@ -6440,7 +6300,7 @@ async def _queue_curated_research(
                 and status not in {"disabled","not_found","no_allowed_citation"}
                 # An outside-PDF explanation left unsaid is not a research
                 # failure: the rules' answer was the answer (decision 6).
-                and not (ctx.get("outside_pdf") is not None and result is None)
+                and ctx.get("outside_pdf") is None
             ):
                 report=_open_experiment_report(session,curated)
                 store=session.experiment_report_store
@@ -9135,44 +8995,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "explain_only":True,
                 }
                 session.begin_research(turn_id,generation)
-            if (
-                research_context is not None
-                and not research_context.get("explain_only")
-                # Lane R6, decision 8: with web references off, nothing is
-                # announced that can only end in "웹 참고 자료 확인 제한".
-                and session.external_reference_settings.enabled
-            ):
-                await current_text(
-                    "research.state",turn_id=turn_id,status="pending",
-                    phase="approved_references",
-                    correlation_id=f"research-{generation}-{turn_id}",
-                )
-                async def enrichment_budget_notice()->None:
-                    budget=(
-                        session.external_reference_settings.user_visible_enrichment_budget_seconds
-                        if session.external_reference_settings.enabled else 4.0
-                    )
-                    await asyncio.sleep(budget)
-                    if (
-                        (turn_id,generation) in session.research_operations
-                        and session.is_current(turn_id,generation)
-                    ):
-                        await current_text(
-                            "research.state",turn_id=turn_id,
-                            status="background_bounded",
-                            phase="optional_enrichment",
-                            user_visible_budget_ms=round(budget*1000),
-                            total_deadline_ms=round(min(30.0,max(
-                                10.0,
-                                (session.external_reference_settings.timeout_seconds
-                                 if session.external_reference_settings.enabled else 0.0)
-                                +(session.supplemental_knowledge_settings.timeout_seconds
-                                  if session.supplemental_knowledge_settings.enabled else 0.0),
-                            ))*1000),
-                            correlation_id=f"research-{generation}-{turn_id}",
-                        )
-                session.track_visual_task(asyncio.create_task(
-                    enrichment_budget_notice()))
             if plan.action in {
                 CuratedProtocolAction.REPORT_ANOMALY,
                 CuratedProtocolAction.SHOW_REPORT,
@@ -10431,7 +10253,6 @@ async def voice_socket(websocket:WebSocket):
         vad_settings=VoiceVadSettings.from_environment()
         config=VadConfig.from_settings(vad_settings.cascade)
         report_settings=ExperimentReportSettings.from_environment()
-        external_settings=ExternalReferenceSettings.from_environment()
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
@@ -10443,7 +10264,9 @@ async def voice_socket(websocket:WebSocket):
         await websocket.close(code=1008,reason="invalid configuration")
         return
     research_capabilities={
-        "external_text":external_settings.public_capability(),
+        # The xAI web reference search is gone (lane DOC3); the screen still
+        # reads this entry, so it says, always, that the capability is off.
+        "external_text":{"status":"disabled"},
         "supplemental_model":supplemental_settings.public_capability(),
         "multi_brain":multi_brain_settings.public_capability(),
         "web_explanation":web_explanation_settings.public_capability(),
@@ -10459,7 +10282,6 @@ async def voice_socket(websocket:WebSocket):
     session=ListenerSession(
         EndpointDetector(config,listening_onset=True),
         experiment_report_store=report_store,
-        external_reference_settings=external_settings,
         supplemental_knowledge_settings=supplemental_settings,
         multi_brain_settings=multi_brain_settings,
         llm_router_settings=llm_router_settings,

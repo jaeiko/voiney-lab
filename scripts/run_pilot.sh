@@ -67,13 +67,13 @@ fi
 export VOINEY_LAB_STT_DIAGNOSTIC_DIR="$PILOT_DATA_DIR/stt-diagnostics"
 
 # --- Off unless a person asks for it -----------------------------------------
-# These four reach outside the approved source documents. Each keeps a value
-# the operator set in the shell or wrote in the repository .env (decision 1 of
-# lane XO, 2026-10-05), so turning one on is a deliberate act. Three of them,
-# and semantic intent, are features only xAI provides: one switched on without
-# XAI_API_KEY is refused below, by name.
+# The general explanation ("AI 일반 지식") reaches outside the approved source
+# documents. It keeps a value the operator set in the shell or wrote in the
+# repository .env (decision 1 of lane XO, 2026-10-05), so turning it on is a
+# deliberate act. (The xAI web reference search that used to sit beside it was
+# deleted in lane DOC3; a feature only xAI provides, switched on without
+# XAI_API_KEY, would still be refused below, by name.)
 eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
-  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
   VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false)"
 
 # --- Approved safety documents: decided here, never by a .env ---------------
@@ -189,7 +189,6 @@ report_feature() { printf '%-30s %s\n' "$1" "$(feature_state "${2:-}")"; }
 report_feature "protocol_catalog:" "$VOINEY_LAB_PROTOCOL_ENABLED"
 report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
-report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
 
 XAI_REFUSAL=""

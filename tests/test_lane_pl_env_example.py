@@ -32,13 +32,10 @@ NOT_LISTED = {
     "RUNNER_TEMP": "set by GitHub Actions",
     "PYTEST_VERSION": "set by pytest",
     "VOINEY_LAB_PLAYWRIGHT_APP_PORT": "read by the Playwright config from the shell",
-    # Nothing reads it.
-    "VOINEY_LAB_MOSS_ENABLED": "nothing reads it since lane CL; only the table and one script still spell it",
     # An alias or an older name of a setting that is listed.
     "VOINEY_LAB_EXPERIMENT_REPORTS_DATABASE": "alias of VOINEY_LAB_EXPERIMENT_REPORT_DB",
     "VOINEY_LAB_SAFETY_USAGE_SCOPE": "alias of VOINEY_LAB_USAGE_SCOPE",
     "GOOGLE_GENAI_USE_VERTEXAI": "older name of GOOGLE_GENAI_USE_ENTERPRISE",
-    "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "alias of VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS",
     # Follow another setting unless set; writing a value would stop following it.
     "VOINEY_LAB_ANSWER_BRAIN_ENABLED": "follows VOINEY_LAB_MULTI_BRAIN_ENABLED; an empty value would turn it off",
     "VOINEY_LAB_SOURCE_BRAIN_ENABLED": "follows VOINEY_LAB_MULTI_BRAIN_ENABLED; an empty value would turn it off",
@@ -104,10 +101,7 @@ class SafeToCopyTests(unittest.TestCase):
         from voiney_lab.configuration import VoiceVadSettings
         from voiney_lab.drawn_diagrams import DrawnDiagramSettings
         from voiney_lab.experiment_reports import ExperimentReportSettings, ReportWriterSettings
-        from voiney_lab.external_references import (
-            ExternalReferenceSettings,
-            SupplementalKnowledgeSettings,
-        )
+        from voiney_lab.external_references import SupplementalKnowledgeSettings
         from voiney_lab.identity import OidcSettings
         from voiney_lab.llm_router import LlmRouterSettings
         from voiney_lab.model_providers import ROLES, RoleModel
@@ -119,7 +113,6 @@ class SafeToCopyTests(unittest.TestCase):
             "VoiceVadSettings": VoiceVadSettings.from_environment,
             "ExperimentReportSettings": ExperimentReportSettings.from_environment,
             "ReportWriterSettings": ReportWriterSettings.from_environment,
-            "ExternalReferenceSettings": ExternalReferenceSettings.from_environment,
             "SupplementalKnowledgeSettings": SupplementalKnowledgeSettings.from_environment,
             "MultiBrainSettings": MultiBrainSettings.from_environment,
             "LlmRouterSettings": LlmRouterSettings.from_environment,
@@ -147,7 +140,7 @@ class SafeToCopyTests(unittest.TestCase):
         self.assertEqual(values["VOINEY_LAB_ADMIN_TOKEN"], "")
         for name in (
             "VOINEY_LAB_WEB_EXPLANATIONS_ENABLED", "VOINEY_LAB_DRAWN_DIAGRAMS_ENABLED",
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED", "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
             "VOINEY_LAB_MULTI_BRAIN_ENABLED", "VOINEY_LAB_LLM_ROUTER_ENABLED",
             "VOINEY_LAB_STT_DIAGNOSTICS_ENABLED",
         ):
@@ -172,6 +165,8 @@ class NoStaleWordsTests(unittest.TestCase):
         for stale in (
             "old xai default", "old fallback", "code's old", "MOSS", "Moss", "moss_retrieval",
             "코드가 읽지 않음",
+            # The web reference search was deleted in lane DOC3.
+            "외부 근거", "EXTERNAL_REFERENCE", "web reference",
         ):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, text)

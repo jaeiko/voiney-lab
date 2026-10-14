@@ -264,7 +264,7 @@ chose. They now say what is missing:
 
 | Setting is unset | Before | Now |
 |---|---|---|
-| `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` without `VOINEY_LAB_SUPPLEMENTAL_PROVIDER` / `_MODEL` | provider xai, model `grok-4.6` | the WebSocket refuses with "invalid non-secret configuration" naming the unset setting(s); the provider must be `xai` (the search is xAI's tool) |
+| `EXTERNAL_REFERENCES_ENABLED=true` without `VOINEY_LAB_SUPPLEMENTAL_PROVIDER` / `_MODEL` | provider xai, model `grok-4.6` | the WebSocket refuses with "invalid non-secret configuration" naming the unset setting(s); the provider must be `xai` (the search is xAI's tool) |
 | `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true` ("AI 일반 지식") without the same two | model `grok-4.6` | the same refusal |
 | `VOINEY_LAB_REPORT_PROVIDER` or the report model (`VOINEY_LAB_REPORT_MODEL`, else `VOINEY_LAB_SUPPLEMENTAL_MODEL`) | model `grok-4.6` on xai | the report's prose writer is off (one warning in the log naming both settings); the report keeps the server's own sentences |
 | `VOINEY_LAB_STT_PROVIDER` / `VOINEY_LAB_TTS_PROVIDER` | xai | no provider: a turn's transcription or speech refuses by the setting's name, which the existing STT/TTS failure path handles; the `ready` event's `voice_profile` reports provider and voice `""` |
@@ -288,7 +288,7 @@ line in `run_pilot.sh`, `run_dev.sh` and `run_ci_server.sh`.
 Not changed by this lane (other lanes' files): the xai default and
 `DEFAULT_MODELS` in `model_providers.py`, the old defaults in `multi_brain.py`
 and `llm_router.py`, and the xAI-only web evidence search
-(`XaiAuthoritativeWebSearch`, `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`), which
+(`XaiAuthoritativeWebSearch`, `EXTERNAL_REFERENCES_ENABLED`), which
 `server.py`'s research path still calls. The table's comment on `_SET_ME` in
 `setting_names.py` (and the README's provider section) still describe the
 fallback as present for all roles.
@@ -591,12 +591,12 @@ under `data/` is rewritten.
   venv and GitHub Actions set. Names that only other software reads (the
   `openai` SDK's `OPENAI_*`, proxy and certificate variables, and so on) are
   listed in `EXTERNAL_NAMES` and are never renamed.
-- Three old pairs became one name each: `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
+- Three old pairs became one name each: `EXTERNAL_REFERENCES_ENABLED`,
   `VOINEY_LAB_SUPPLEMENTAL_MODEL` and
-  `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS`. The conflict check between
+  `EXTERNAL_REFERENCE_TIMEOUT_SECONDS`. The conflict check between
   two names of one setting now applies only to
-  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` and its alias
-  `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
+  `EXTERNAL_REFERENCE_DOMAINS` and its alias
+  `EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
 - There is no transition period. Instead the server (after it loads the
   repository `.env`), the handoff worker (deleted on 2026-10-10, lane CL),
   `scripts/run_dev.sh`,
@@ -934,3 +934,51 @@ install, not a Python package): `VOINEY_LAB_OFFICE_CONVERTER` names its
 Word upload is refused with `docx_conversion_unavailable`. `GET /readyz` adds
 `docx_conversion_available` and `heic_photos_available` to its capabilities;
 neither makes the server not ready. See `docs/SOURCE_FORMATS.md`.
+
+## Lane DOC3 (2026-10-14): the xAI web reference search deleted
+
+No schema change and no migration; nothing already stored is read differently.
+The web reference search was off by default and no launcher turned it on, so a
+server that never switched it on behaves exactly as before. Human decision of
+2026-10-14 (lane PL's report, section 7, listed the footprint).
+
+Deleted:
+
+| What | Where |
+|---|---|
+| `XaiAuthoritativeWebSearch` (the Responses `web_search` adapter, its cache, citation checks and answer clean-up), `ExternalReferenceSettings`, and the helpers only they used | `external_references.py` |
+| The research path's second step, `search_authoritative_web` (its `tool.call` / `tool.result` events and the "authoritative_web" `research.state` phase), the "pending" announcement that went with it, and `ListenerSession.external_reference_settings` | `server.py` |
+| Thirteen setting-table rows: the switch `EXTERNAL_REFERENCES_ENABLED`, the six time and turn limits (`EXTERNAL_REFERENCE_TIMEOUT_SECONDS`, `_CONNECT_`, `_READ_`, `_ENRICHMENT_BUDGET_`, `_SERVICE_TIER`, `_MAX_TURNS`), and `EXTERNAL_REFERENCE_DOMAIN_PROFILE`, `_DOMAINS`, `_ALLOWED_DOMAINS`, `_MAX_CITATIONS`, `_CACHE_TTL_SECONDS`, `EXTERNAL_SEARCH_DISPLAY_MODE` (all with the `VOINEY_LAB_` prefix) | `setting_names.py`, `.env.example` |
+| The `VOINEY_LAB_MOSS_ENABLED` row (nothing has read it since lane CL) and the one `export` left in `scripts/collect_chunks.sh` | `setting_names.py`, `scripts/collect_chunks.sh` |
+| The old-name entries whose new name is a deleted row (4 prefixed, 12 unprefixed) | `setting_renames.py` |
+| The diagnostic script for the search | `scripts/diagnose_candidate_a_research.py` |
+| The launchers' references: `run_dev.sh`'s eight defaults, its capability printout and import; `run_pilot.sh`'s default and banner line `external_references:`; `run_ci_server.sh`'s export | `scripts/` |
+| The one entry of `XAI_ONLY_FEATURES` (the guard stays, empty, for the next xAI-only feature) | `configuration.py` |
+
+Kept: the "AI 일반 지식" explanation (`XaiSupplementalKnowledge.explain` and
+`explain_outside_pdf`, `SupplementalKnowledgeSettings`, the
+supplemental role's settings), the query planners and the
+`apply_reference_answer` method of `curated_protocol.py` (no longer called;
+that file was outside this lane).
+
+What changes for someone:
+
+- `research_capabilities.external_text` in `session.ready` is now always
+  `{"status": "disabled"}`. The screen still requires the entry; it used to
+  carry the profile and the domain count.
+- A `.env` that still sets one of the thirteen names is read by nothing. The
+  start-up guard does not refuse them (they were never old names); delete the
+  lines. `scripts/migrate_env.py` lists them under "코드가 읽지 않는 이름".
+- `VOINEY_LAB_SUPPLEMENTAL_REASONING` stays (the supplemental role reads its
+  reasoning setting through `model_providers`); its table default is now
+  "(공급자 기본)" and its meaning "PDF 밖 설명 추론", where it said "low" and
+  "외부 근거 검색 추론".
+- `docs/APPROVED_DOCUMENT_OPERATIONS.md` §6 no longer describes the search.
+  Documents that have to spell a deleted setting write it without the
+  `VOINEY_LAB_` prefix (as earlier lanes did); the standard test command's
+  `VOINEY_LAB_MOSS_ENABLED` (in `CLAUDE.md`, README and `docs/GIT_WORKFLOW.md`)
+  is the one prefixed name documents may still spell
+  (`tests/test_setting_names.py`).
+
+Going back: code from before this version reads the same data; the deleted
+settings were read only by the deleted code.

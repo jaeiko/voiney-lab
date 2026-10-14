@@ -34,7 +34,6 @@ if [ ${#CHUNKS[@]} -eq 0 ]; then CHUNKS=(0 1 2 3 4); fi
 # The repo .env sets flags that change behaviour under test; forcing them off
 # here keeps a collection run comparable with the documented baseline. It does
 # not read or print .env itself.
-export VOINEY_LAB_MOSS_ENABLED=false
 export VOINEY_LAB_WORKSPACE_ENABLED=false
 export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false
 

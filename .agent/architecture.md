@@ -232,10 +232,12 @@ its own: the analysis and the execution rule still decide.
 Authority order is the active protocol's source first. The approved safety
 catalog feeds the step safety card; the voice answer from it (the research
 path's step 1, `search_approved_lab_references`) was deleted on 2026-10-10
-(lane CL). Optional external text research (xAI only, off by default), the
-short outside-PDF explanation ("AI 일반 지식", `external_references.py`
-`explain_outside_pdf`) and supplemental model knowledge are marked as
-reference context and cannot mutate workflow state.
+(lane CL), and the xAI web reference search (the research path's step 2,
+`search_authoritative_web`) on 2026-10-14 (lane DOC3). What is left of the
+research path is the short outside-PDF explanation ("AI 일반 지식",
+`external_references.py` `explain_outside_pdf`) and supplemental model
+knowledge; both are marked as reference context and cannot mutate workflow
+state.
 
 A picture request ("그림 보여줘", "사진 보여줘") is recognised by the rules
 (`_WEB_VISUAL_REQUEST_PATTERNS`). The xAI web-image search and image

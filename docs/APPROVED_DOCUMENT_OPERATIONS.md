@@ -181,59 +181,41 @@ The optional Moss reranker was deleted on 2026-10-10 (lane CL), with its
 settings and index sync script; it returns later for searching past records
 and manuals. The record is `docs/archive/MOSS_RETRIEVAL.md`.
 
-## 6. Optional authoritative web references
+## 6. Web references (deleted) and what is left
 
-External reference search is disabled by default. Enabling it requires both the
-feature flag and an explicit authoritative-domain allowlist. External results are
-labelled non-protocol, cannot alter Candidate A state, cannot resolve Steps 7, 9,
-or 20, and must retain their canonical URL and retrieval time.
+The optional xAI web reference search -- `XaiAuthoritativeWebSearch`, its
+domain allow-list and the thirteen `EXTERNAL_REFERENCE*` / `EXTERNAL_SEARCH_*`
+settings -- was deleted in lane DOC3 (human decision of 2026-10-14). It was
+off by default and no launcher turned it on; the research path's second step,
+`search_authoritative_web`, is gone with it, and
+`research_capabilities.external_text` now always says `disabled`. A `.env`
+that still sets one of those names is read by nothing (delete the line). The
+git history has the code. Google Custom Search and YouTube discovery were
+never part of this catalog or answer path.
 
-The live xAI Responses adapter additionally requires:
-
-- `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true`;
-- a reviewed domain profile such as
-  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=candidate_a`, or one
-  to five comma-separated authority domains in
-  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` (or its alias
-  `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`; set one, or both to the
-  same value);
-- a non-empty `VOINEY_LAB_SUPPLEMENTAL_MODEL` (default
-  `grok-4.6`);
-- a bounded `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
-  1 and 30 seconds (the Candidate A launcher uses a 20-second total deadline);
-- optional 3-second connect and 15-second read deadlines through
-  `VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS` and
-  `VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS`;
-- an optional validated-result TTL through
-  `VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS` (900 seconds in the Candidate A
-  launcher). Only cited, allowlisted success is cached.
-
-Each Turn is limited to one web-search request with SDK retries disabled. The
-adapter consumes Responses streaming events so tool start/end and first-event
-timings remain observable, but its overall deadline is still hard-bounded and a
-newer Turn cancels or rejects the old result. Returned URLs are independently
-required to be HTTPS and inside the configured domains. Search is successful
-only when the response reports a completed web-search tool and the admitted
-citations support the returned claims.
-Google Custom Search and YouTube discovery are not part of this catalog or answer
-path.
+What the research path still does, in this order: the rules answer from the
+protocol's source; a short outside-PDF explanation may follow (lane R6,
+decision 6); and, only if enabled, supplemental model knowledge answers a
+narrow conceptual gap. None of them cites a document or a URL, and none can
+change workflow state.
 
 ### Supplemental model knowledge is not a retrieval backend
 
 `SUPPLEMENTAL_MODEL_KNOWLEDGE` is a separately gated last resort for a narrow
-conceptual dimension after the protocol, original source, and enabled
-authoritative web tier do not answer it. It is never indexed into the
+conceptual dimension after the protocol and its original source do not
+answer it. It is never indexed into the
 approved catalog and never gains document or URL citations.
 
 ```bash
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false
-export VOINEY_LAB_SUPPLEMENTAL_MODEL='grok-4.6'
+export VOINEY_LAB_SUPPLEMENTAL_PROVIDER=openai   # written down: an unset role is refused
+export VOINEY_LAB_SUPPLEMENTAL_MODEL=gpt-6-luna
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
 ```
 
 The Candidate A development launcher enables this option so the live demo can
-provide explicitly qualified general definitions when ordinary xAI text is
-available but web search is not terminally useful. It remains ineligible for
+provide explicitly qualified general definitions the source does not give.
+It remains ineligible for
 safety controls, preparation instructions, substitutions, numerical operating
 values, completion criteria, or any state mutation. The UI label is “일반 모델
 설명 · 확인된 권위 근거 없음”; there is no citation list and no claim of
@@ -246,12 +228,6 @@ Research status is Turn/generation owned. Once a result reaches `success`,
 server nor browser accepts another result for that identity. A newer accepted
 Turn and session stop terminally close any older in-flight research operation.
 
-The provider total deadline and visible enrichment budget are intentionally
-different. Configure `VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS` below the
-total timeout (the Candidate A launcher uses 4 and 20 seconds). Crossing the
-shorter budget removes the primary spinner and reports bounded background work;
-it creates neither a second request nor a second terminal result.
-
 ### Optional read-only multi-brain planning
 
 The Candidate A launcher can enable the project-specific typed Answer, Source,
@@ -262,7 +238,8 @@ in an evidence-only run:
 
 ```bash
 export VOINEY_LAB_MULTI_BRAIN_ENABLED=false
-export VOINEY_LAB_ANSWER_MODEL='grok-4.6'
+export VOINEY_LAB_ANSWER_PROVIDER=openai   # written down: an unset role keeps these closed
+export VOINEY_LAB_ANSWER_MODEL=gpt-6-luna
 export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
 export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS=8
 export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS=6

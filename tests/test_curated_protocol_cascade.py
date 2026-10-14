@@ -38,7 +38,6 @@ from voiney_lab.experiment_protocol_analysis import (
 )
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.language import InputLanguagePreference, Transcription
@@ -1809,9 +1808,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("provider must not be constructed"),
         ), patch(
-            "voiney_lab.server.XaiAuthoritativeWebSearch",
-            side_effect=AssertionError("web search must not run"),
-        ), patch(
             "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
@@ -2444,139 +2440,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 "stopped_by_user",
             )
 
-    def test_internal_miss_escalates_once_to_authoritative_web_without_mutation(self):
-        session=self.make_session(index=1)
-        session.external_reference_settings=ExternalReferenceSettings(
-            True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
-            "candidate_a",
-        )
-        socket=Socket();opening=session.curated_protocol_session.current_index
-        async def immediate(function,*args,**kwargs):
-            return function(*args,**kwargs)
-        async def unsupported(*args,**kwargs):
-            return SimpleNamespace(
-                intent="unsupported",primary_text="",evidence_ids=(),
-                inference_labels=(),unsupported_parts=("definition",),
-            )
-        class Web:
-            calls=0
-            def __init__(self,*args): pass
-            async def search(self,query,*,language):
-                Web.calls+=1
-                return {
-                    "status":"success","answer":"HPLC water는 분석용 고순도 물입니다.",
-                    "matches":[{
-                        "title":"PubChem","canonical_url":"https://pubchem.ncbi.nlm.nih.gov/",
-                        "domain":"pubchem.ncbi.nlm.nih.gov","retrieved_at":"2026-08-11T00:00:00+00:00",
-                        "source_kind":"external_authoritative_reference",
-                        "relevant_excerpt":"HPLC grade water reference",
-                    }],"backend":"xai_responses_web_search",
-                }
-        with patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription("H PLC water가 뭐야?","ko"),
-        ),patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ),patch(
-            "voiney_lab.server.answer_curated_protocol_question",
-            side_effect=unsupported,
-        ),patch(
-            "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
-        ),patch(
-            "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
-        ),patch(
-            "voiney_lab.server.require_env",return_value="offline",
-        ),patch(
-            "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
-        ):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        self.assertEqual(Web.calls,1)
-        self.assertEqual(session.curated_protocol_session.current_index,opening)
-        tools=[item for item in socket.text if item["type"]=="tool.call"]
-        self.assertEqual(
-            [item["tool"] for item in tools],
-            ["search_authoritative_web"],
-        )
-        reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertEqual(reply["answer_origin"],"current_protocol")
-        self.assertEqual(reply["question_dimensions"],["definition"])
-        self.assertIn("HPLC",reply["transcript_correction_note"])
-        supplement=next(
-            item for item in socket.text if item["type"]=="research.result")
-        self.assertEqual(
-            supplement["answer_origin"],"external_authoritative_reference")
-        self.assertEqual(supplement["terminal_status"], "success")
-        self.assertEqual(
-            len([item for item in socket.text
-                 if item["type"] == "research.result"]),
-            1,
-        )
-
-    def test_web_failure_preserves_local_facts_and_returns_specific_limitation(self):
-        session=self.make_session(index=1)
-        session.external_reference_settings=ExternalReferenceSettings(
-            True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
-            "candidate_a",
-        )
-        socket=Socket();opening=session.curated_protocol_session.current_index
-        async def immediate(function,*args,**kwargs):
-            return function(*args,**kwargs)
-        async def unsupported(*args,**kwargs):
-            return SimpleNamespace(
-                intent="unsupported",primary_text="",evidence_ids=(),
-                inference_labels=(),unsupported_parts=("definition",),
-            )
-        class Web:
-            calls=0
-            def __init__(self,*args): pass
-            async def search(self,query,*,language):
-                Web.calls+=1
-                return {"status":"error","matches":[]}
-        with patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription("HPLC water가 뭐야?","ko"),
-        ),patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ),patch(
-            "voiney_lab.server.answer_curated_protocol_question",
-            side_effect=unsupported,
-        ),patch(
-            "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
-        ),patch(
-            "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
-        ),patch(
-            "voiney_lab.server.require_env",return_value="offline",
-        ),patch(
-            "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
-        ):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        self.assertEqual(Web.calls,1)
-        self.assertEqual(session.curated_protocol_session.current_index,opening)
-        result=next(
-            item for item in socket.text
-            if item["type"]=="tool.result"
-            and item["tool"]=="search_authoritative_web"
-        )
-        self.assertEqual(result["status"],"error")
-        reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertIn("HPLC water",reply["text"])
-        self.assertIn("HPLC water",reply["primary_text"])
-        self.assertNotIn("Catalog #",reply["text"])
-        supplement=next(
-            item for item in socket.text if item["type"]=="research.result")
-        self.assertEqual(supplement["status"],"error")
-        self.assertEqual(supplement["terminal_status"], "failed")
-        self.assertEqual(
-            len([item for item in socket.text
-                 if item["type"] == "research.result"]),
-            1,
-        )
-        self.assertIn("추가 차원",supplement["limitation"])
-        self.assertNotIn("fixture",reply["text"].casefold())
-
     def test_model_only_supplement_is_labelled_citation_free_and_read_only(self):
         session=self.make_session(index=1)
-        session.external_reference_settings=ExternalReferenceSettings(False)
         session.supplemental_knowledge_settings=SupplementalKnowledgeSettings(
             True,"offline-supplement",2.0,
         )
@@ -2642,7 +2507,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
     def test_operational_substitution_never_uses_model_only_supplement(self):
         session=self.make_session(index=1)
-        session.external_reference_settings=ExternalReferenceSettings(False)
         session.supplemental_knowledge_settings=SupplementalKnowledgeSettings(
             True,"offline-supplement",2.0,
         )

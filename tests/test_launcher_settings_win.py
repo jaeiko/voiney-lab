@@ -2,10 +2,12 @@
 
 Decision 1 of 2026-10-05: scripts/run_dev.sh and scripts/run_pilot.sh keep
 a value a person set in the shell or wrote in the repository .env; they name
-no model, and the four features only xAI provides default to off.
+no model, and the features only xAI provides default to off.
 Decision 2: one of those features switched on without XAI_API_KEY is refused
-at start-up, by name; with all four off, and no role on xAI, the server and
-both launchers start without an xAI key.
+at start-up, by name; with none on, and no role on xAI, the server and both
+launchers start without an xAI key. Since lane DOC3 (2026-10-14) no such
+feature is left -- the web reference search was deleted -- so the refusal is
+tested with a stand-in entry in the table.
 
 The launchers run from a temporary copy whose ROOT is a temp dir, with a
 stand-in .venv that refuses to serve (as tests/test_pilot_safety.py does), so
@@ -22,6 +24,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.test_pilot_safety import _document
 from voiney_lab.configuration import (
@@ -91,17 +94,20 @@ class LauncherDefaultsTests(unittest.TestCase):
 
 
 class XaiOnlyFeatureRefusalTests(unittest.TestCase):
-    def test_each_feature_on_without_the_key_is_refused_by_name(self) -> None:
-        self.assertEqual(set(XAI_ONLY_FEATURES), {
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
-        })
-        for name, label in XAI_ONLY_FEATURES.items():
-            with self.subTest(name=name):
-                with self.assertRaises(XaiKeyRequiredError) as caught:
-                    refuse_xai_only_features_without_key({name: "true"})
-                self.assertIn(name, str(caught.exception))
-                self.assertIn(label, str(caught.exception))
-                refuse_xai_only_features_without_key({name: "true", "XAI_API_KEY": "fake"})
+    STAND_IN = {"STAND_IN_XAI_ONLY_FEATURE": "xAI 에만 있는 가짜 기능"}
+
+    def test_no_feature_only_xai_provides_is_left(self) -> None:
+        self.assertEqual(dict(XAI_ONLY_FEATURES), {})
+
+    def test_a_feature_on_without_the_key_is_refused_by_name(self) -> None:
+        with patch.dict(XAI_ONLY_FEATURES, self.STAND_IN):
+            for name, label in XAI_ONLY_FEATURES.items():
+                with self.subTest(name=name):
+                    with self.assertRaises(XaiKeyRequiredError) as caught:
+                        refuse_xai_only_features_without_key({name: "true"})
+                    self.assertIn(name, str(caught.exception))
+                    self.assertIn(label, str(caught.exception))
+                    refuse_xai_only_features_without_key({name: "true", "XAI_API_KEY": "fake"})
 
     def test_all_off_starts_without_the_key(self) -> None:
         refuse_xai_only_features_without_key({})
@@ -118,11 +124,12 @@ class XaiOnlyFeatureRefusalTests(unittest.TestCase):
         result = self._import_server()
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
-    def test_the_server_refuses_an_xai_only_feature_without_the_key(self) -> None:
-        result = self._import_server(VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("XaiKeyRequiredError", result.stderr)
-        self.assertIn("외부 근거 웹 검색(VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED)", result.stderr)
+    def test_a_leftover_web_search_switch_in_the_environment_changes_nothing(self) -> None:
+        # The web reference search was deleted in lane DOC3; nothing reads its
+        # switch, so a .env that still has it starts the server as before.
+        leftover = "VOINEY_LAB_" + "EXTERNAL_REFERENCES_ENABLED"
+        result = self._import_server(**{leftover: "true"})
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
 
 class _LauncherCopy(unittest.TestCase):
@@ -173,11 +180,8 @@ class DevLauncherTests(_LauncherCopy):
     def test_with_nothing_set_it_starts_without_an_xai_key(self) -> None:
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for line in (
-            "authoritative_web_search: disabled",
-            "[OK] --check-only",
-        ):
-            self.assertIn(line, result.stdout)
+        self.assertIn("[OK] --check-only", result.stdout)
+        self.assertNotIn("authoritative_web_search", result.stdout)
         self.assertFalse((self.root / "data").exists(), "data/runtime was touched")
 
     def test_with_the_supplemental_role_unset_it_is_refused_by_name(self) -> None:
@@ -209,19 +213,6 @@ class DevLauncherTests(_LauncherCopy):
         self.assertIn("supplemental_model_knowledge: disabled", result.stdout)
         self.assertIn("hybrid_multi_brain: disabled", result.stdout)
 
-    def test_an_xai_only_feature_in_the_dotenv_needs_the_key(self) -> None:
-        self._dotenv("VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true\n")
-        # The web search is xAI's: the role is written down as xai (lane PL),
-        # so the key is the one thing the launcher can refuse on.
-        xai_role = {"VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai"}
-        result = self._run("--check-only", **xai_role)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("authoritative_web_search: enabled", result.stdout)
-        self.assertIn("외부 근거 웹 검색(VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED)", result.stderr)
-        self.assertNotIn("[OK] --check-only", result.stdout)
-        result = self._run("--check-only", XAI_API_KEY="fake-key", **xai_role)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
 
 class PilotLauncherSettingsTests(_LauncherCopy):
     SCRIPT = "run_pilot.sh"
@@ -241,20 +232,12 @@ class PilotLauncherSettingsTests(_LauncherCopy):
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"supplemental_model_knowledge:\s+enabled")
-        self.assertRegex(result.stdout, r"external_references:\s+disabled")
-
-    def test_an_xai_only_feature_without_the_key_is_refused_by_name(self) -> None:
-        self._dotenv("VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true\n")
-        result = self._run("--check-only")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED", result.stderr)
-        self.assertIn("[ERROR] Refusing to start the pilot.", result.stdout)
-        self.assertNotIn(SERVE_MARKER, result.stderr)
+        self.assertNotIn("external_references", result.stdout)
 
     def test_with_nothing_set_it_starts_without_an_xai_key(self) -> None:
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r"external_references:\s+disabled")
+        self.assertNotIn("external_references", result.stdout)
 
 
 if __name__ == "__main__":

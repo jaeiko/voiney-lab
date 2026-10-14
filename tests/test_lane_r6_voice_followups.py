@@ -40,7 +40,6 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSpeechMode,
 )
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.language import Transcription
@@ -392,7 +391,6 @@ class ServerOutsidePdfExplanationTests(unittest.TestCase):
         session.turn_generations[1] = session.generation
         session.accept_configuration(41, "cascade", "ko", workflow.fixture.protocol_id)
         session.detector.state = TurnState.PROCESSING
-        session.external_reference_settings = ExternalReferenceSettings(False)
         session.supplemental_knowledge_settings = SupplementalKnowledgeSettings(
             supplemental, "offline-supplement", 2.0,
         )

@@ -25,7 +25,6 @@ from unittest.mock import patch
 from tests.protocol_vocabulary_support import build_fixture
 from voiney_lab.curated_protocol import CuratedProtocolSession
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.language import Transcription
@@ -90,7 +89,6 @@ def _session() -> ListenerSession:
     session.turn_generations[1] = session.generation
     session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
     session.detector.state = TurnState.PROCESSING
-    session.external_reference_settings = ExternalReferenceSettings(False)
     session.supplemental_knowledge_settings = SupplementalKnowledgeSettings(
         True, "offline-supplement", 2.0,
     )
