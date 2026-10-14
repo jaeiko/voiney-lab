@@ -445,6 +445,10 @@
     #protocol-execution-blockers .protocol-review-group h4{color:var(--danger)}
     .start-check-line,.start-check-lines .protocol-review-status{margin:0;padding:var(--space-2) var(--space-3);border-left:var(--stroke-current) solid var(--ink);background:var(--bench);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
     .start-check-line[hidden],.start-check-lines[hidden]{display:none}
+    /* Lane UI3 decision 2 (2026-10-14): the server's safety scope line, in the start card and the run's safety box. */
+    .safety-scope-line{margin:0;padding:var(--space-2) var(--space-3);border:var(--stroke-state) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:.9375rem;line-height:1.5rem;font-weight:700}
+    .safety-scope-line[hidden]{display:none}
+    .step-warning .safety-scope{margin:0 0 .35rem;color:var(--warning-ink);font-size:.875rem;line-height:1.25rem;font-weight:700}
     .protocol-start-summary .protocol-review-actions{margin-top:0}
     .protocol-start-summary #protocol-start{min-height:var(--target-run);padding:0 var(--space-8);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:700}
     .protocol-start-summary #protocol-start:hover:not(:disabled){background:var(--blurple-hover)}
@@ -719,6 +723,8 @@
               <div id="protocol-start-body">
                 <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
                 <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+                <!-- Lane UI3 decision 2 (2026-10-14): the server's line on the safety documents behind the run (review.safety_scope.notice, lane PL) -- "기관 안전 문서 없음 · 원문 안전 주의만" -- above the source's statements; nothing when it sends none. -->
+                <p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>
                 <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
                 <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
                 <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
@@ -2117,17 +2123,23 @@ function currentSafetyItems(){
  if(guidance){for(const text of guidance.warnings||[])add("PDF",text);for(const doc of guidance.applicable_documents||[])if(doc&&typeof doc==="object")add("안전 문서",doc.summary_text);}
  return items;
 }
+// Lane UI3 decision 2 (2026-10-14): the run's safety pack says, in the
+// server's words, when the run has no institution safety document and only
+// the source's statements (lane PL, scope_notice); the box carries the line.
+function safetyScopeNotice(){const notice=activeSafetyPack?.scope_notice;return typeof notice==="string"?normalizePresentationText(notice).trim():"";}
 function updateStepSafetyGuidance(){
  const box=$("procedure-warning");if(!box)return;
  const items=currentSafetyItems();
  if(!items.length){box.textContent="";box.hidden=true;return;}
  box.hidden=false;
+ const scope=safetyScopeNotice();
  if(!Array.isArray(curatedScreenFields?.safety_items)){
   // No checked list arrived: the sources themselves, all of them.
-  box.textContent=normalizePresentationText(items.map(item=>`${item.origin} · ${item.source_text}`).join("\n"));return;
+  box.textContent=normalizePresentationText([...(scope?[scope]:[]),...items.map(item=>`${item.origin} · ${item.source_text}`)].join("\n"));return;
  }
  box.replaceChildren();
  const head=document.createElement("div");head.className="safety-box-head";head.textContent="안전";box.appendChild(head);
+ if(scope){const line=document.createElement("p");line.className="safety-scope";line.textContent=scope;box.appendChild(line);}
  const korean=koreanIsBody();
  for(const item of items){
   const row=document.createElement("div");row.className="safety-item";
@@ -3193,6 +3205,10 @@ function renderStartSummary(review){
  if(basis){const badge=reviewBasisBadge(review);basis.textContent=badge.text;if(basis.dataset)basis.dataset.kind=badge.kind;basis.hidden=false;}
  const outdated=$("protocol-start-outdated");
  if(outdated){const line=typeof review.analysis_outdated_ko==="string"?review.analysis_outdated_ko:"";outdated.textContent=line;outdated.hidden=!line;}
+ // Lane UI3 decision 2 (2026-10-14): the server's own sentence on the safety
+ // documents behind the run (lane PL), shown as it is; none when not sent.
+ const scope=$("protocol-safety-scope");
+ if(scope){const line=typeof review.safety_scope?.notice==="string"?normalizePresentationText(review.safety_scope.notice).trim():"";scope.textContent=line;scope.hidden=!line;}
  const cleared=$("protocol-start-cleared");
  if(cleared){const line=typeof review.cleared_fields_ko==="string"?review.cleared_fields_ko:"";cleared.textContent=line;cleared.hidden=!line;}
  const repeatChecks=$("protocol-start-repeat-checks");
