@@ -26,6 +26,7 @@ from typing import Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
 from voiney_lab import experiment_protocol as domain
+from voiney_lab import pdf_text_engine
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
     ANALYSIS_PIECE_CONCURRENCY,
@@ -4339,6 +4340,44 @@ class ProtocolCatalog:
                 if isinstance(box, dict)
             ],
         }
+
+    def review_value_box_image(
+        self, protocol_id: str, page_number: int, box_index: int,
+    ) -> bytes:
+        """The piece of the page image an OCR value was read from (lane RV, e).
+
+        Lane AN kept, for a photo or handwriting read by OCR, each value it
+        read with its box on the page rendered at ``render_dpi``. The review
+        shows that piece of the original image beside the value, a little
+        wider than the box, rendered from the stored source by the one PDF
+        engine and kept in memory only.
+        """
+
+        revision = self._latest_protocol_revision(protocol_id)
+        ocr = self._ocr_pages(revision).get(page_number)
+        if not isinstance(ocr, dict) or ocr.get("provider") == OCR_TEXT_LAYER_PROVIDER:
+            raise ProtocolCatalogNotFoundError("The page has no OCR value boxes.")
+        boxes = ocr.get("value_boxes")
+        dpi = ocr.get("render_dpi")
+        if (
+            not isinstance(boxes, list) or not isinstance(dpi, int) or isinstance(dpi, bool)
+            or dpi <= 0 or not isinstance(box_index, int) or not 0 <= box_index < len(boxes)
+        ):
+            raise ProtocolCatalogNotFoundError("The page has no such value box.")
+        box = boxes[box_index].get("box") if isinstance(boxes[box_index], dict) else None
+        if not isinstance(box, list) or len(box) != 4 or not all(
+            isinstance(edge, (int, float)) and not isinstance(edge, bool) for edge in box
+        ):
+            raise ProtocolCatalogNotFoundError("The value box is unreadable.")
+        x0, y0, x1, y1 = (float(edge) * 72.0 / dpi for edge in box)
+        margin = max(6.0, (y1 - y0) * 0.6)
+        path, _ = self.source_pdf(protocol_id)
+        (png,) = pdf_text_engine.render_clips_png(
+            path, [(page_number, (max(0.0, x0 - margin * 2), max(0.0, y0 - margin),
+                                  x1 + margin * 2, y1 + margin))],
+            max_side_px=640,
+        )
+        return png
 
     def record_review_decision(
         self, protocol_id: str, request: dict[str, object],

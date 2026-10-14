@@ -3738,6 +3738,36 @@ def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,o
         raise _catalog_http_error(exc) from exc
 
 
+@app.get(
+    "/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}"
+    "/value-boxes/{box_index}/image"
+)
+def get_protocol_review_value_box_image(protocol_id:str,source_page:int,box_index:int):
+    """The piece of a photo or handwritten page an OCR value was read from,
+    for the review screen to show beside the value (lane RV, decision e)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            png=catalog.review_value_box_image(protocol_id,source_page,box_index)
+        finally:
+            store.close()
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":(
+                    f'inline; filename="value-box-{source_page}-{box_index}.png"'),
+                "X-Protocol-Source-Page":str(source_page),
+            })
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}/image")
 def get_protocol_review_source_page_image(protocol_id:str,source_page:int):
     """The source page itself for the review screen (lane RV, decision b).
