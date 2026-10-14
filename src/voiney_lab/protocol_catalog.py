@@ -1976,6 +1976,10 @@ class ProtocolCatalog:
             state, end_code = end
             failure_code = end_code or failure_code
             merge_status = "complete" if state == "review_required" else merge_status
+            if state == "review_pending":
+                # Lane RV, decision a: the failed pieces are items for a
+                # person, not the run's failure.
+                failure_code, failure_detail, merge_status = None, None, "complete"
         return ProtocolAnalysisRunStatus(
             protocol_id=protocol_id,
             candidate_revision_id=candidate_revision_id,
