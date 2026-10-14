@@ -3803,6 +3803,49 @@ class ProtocolCatalog:
             revision, analysis, entry, status="analysis_passed"
         )
 
+    def load_fixture_for_revision(
+        self, protocol_id: str, revision_id: str,
+    ) -> CuratedProtocolFixture:
+        """The fixture of the exact revision an experiment started on (lane RV, f).
+
+        Lane RN found that after an analysis passed again, continuing an
+        experiment started on the older one was refused: the session loaded
+        the latest fixture and the experiment named the older revision. An
+        experiment is continued on the revision it started on -- an analysis
+        that passed with no execution blocker, or a registered review
+        version -- never on one that waits for review or did not pass.
+        """
+
+        revision = self._latest_protocol_revision(protocol_id)
+        match = _REVISION_ID.fullmatch(revision_id) if isinstance(revision_id, str) else None
+        if match is None or int(match[1]) != revision.revision_number:
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        entry = self._entry_for_revision(revision)
+        if match[3] is not None:
+            for event, analysis in self._review_versions(revision):
+                if event.payload.get("revision_id") == revision_id:
+                    return self._fixture_for_analysis(
+                        revision, analysis, entry, status="analysis_passed",
+                        version=_version_payload(event))
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        if match[2] is None:
+            raise ProtocolCatalogUnavailableError("This revision has no analysis that runs.")
+        analysis = next(
+            (
+                item for item in self.store.list_analysis_revisions(
+                    protocol_id, revision.revision_number)
+                if item.analysis_revision_number == int(match[2])
+                and not item.analysis_id.startswith(REVIEW_VERSION_ANALYSIS_PREFIX)
+            ),
+            None,
+        )
+        if analysis is None:
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        if domain.execution_blocking_reasons(analysis.readiness):
+            raise ProtocolCatalogUnavailableError("This revision's analysis does not run.")
+        return self._fixture_for_analysis(
+            revision, analysis, entry, status="analysis_passed", revision_id=revision_id)
+
     def load_analysis_fixture(self, protocol_id: str) -> CuratedProtocolFixture:
         """The fixture a session *would* run for the latest passed analysis.
 
@@ -3842,6 +3885,7 @@ class ProtocolCatalog:
         *,
         status: str,
         version: dict[str, object] | None = None,
+        revision_id: str | None = None,
     ) -> CuratedProtocolFixture:
         protocol_id = revision.experiment_id
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
@@ -3875,7 +3919,8 @@ class ProtocolCatalog:
             ordered_step_labels=labels,
             fixture_sha256=analysis.payload_sha256,
             revision_id=(
-                str(version["revision_id"]) if version else entry.revision_id),
+                str(version["revision_id"]) if version
+                else revision_id or entry.revision_id),
             development_only=entry.development_only,
             source_pdf_path=source,
             source_pdf_sha256=revision.pdf_checksum,
