@@ -3543,7 +3543,9 @@ async def _begin_background_analysis(
     try:
         public=await asyncio.to_thread(prepare_analysis)
         state=(public.get("analysis_run") or {}).get("state")
-        if state in {"review_required","approved","revoked"}:
+        # Lane RV, decision a: an analysis waiting for a person's review
+        # ended too; a plain request starts nothing over it.
+        if state in {"review_required","approved","revoked","review_pending"}:
             public["analysis_request_deduplicated"]=True
             return public
         task=asyncio.create_task(background_worker())

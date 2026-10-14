@@ -37,6 +37,9 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisPieceConflictError,
     ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
+    REVIEW_REASON_PIECE_FAILED,
+    REVIEW_REASONS_KO,
+    ReviewFlag,
     analysis_pieces,
     analyze_protocol_extraction,
     analyze_protocol_piece,
@@ -58,6 +61,14 @@ from voiney_lab.experiment_protocol_store import (
     ProtocolRevisionRecord,
     ProtocolStore,
     serialize_analysis,
+)
+# The store's own canonical encoding of domain records: a review-pending
+# analysis (lane RV, decision a) is kept in a ledger event, because its
+# refused quotes keep it out of the analysis table the domain validation
+# guards.
+from voiney_lab.experiment_protocol_store import (  # noqa: E402
+    _decode_domain as _decode_stored_record,
+    _encode_domain as _encode_stored_record,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -115,6 +126,10 @@ _REVIEW_REQUIRED_EVENT = "protocol_chunk_review_required"
 _SINGLE_REVIEW_REQUIRED_EVENT = "protocol_review_required"
 _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
+#: An analysis that ended with items a person must check (lane RV, decision
+#: a, human decision 2026-10-12): kept in this event, never as an analysis
+#: revision, so nothing that runs can read it.
+_REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
 #: The authority an upload-time OCR acceptance is recorded under (lane PX,
 #: decision 3). A person's review carries ``human_review``.
 AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
@@ -164,6 +179,21 @@ class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
     code = "chunked_analysis_required"
 
 
+class _RepairedAnswerWithItems(ProtocolAnalysisEvidenceError):
+    """A response read after its brackets were repaired, with items the source
+    does not hold (lane RV, decision a, keeping lane EV3's decision 1).
+
+    "고쳐도 안 되면 지금처럼 자동 재시도한다": such an answer is recorded as the
+    evidence failure it used to be and sent again once; should the retry not
+    come back, the answer is kept for a person's review.
+    """
+
+    def __init__(self, draft: ProtocolAnalysisDraft) -> None:
+        super().__init__("A repaired response holds items the source does not.")
+        self.draft = draft
+        self.response_repair = draft.response_repair
+
+
 @dataclass(frozen=True)
 class ProtocolCatalogEntry:
     protocol_id: str
@@ -190,6 +220,10 @@ class ProtocolCatalogEntry:
     #: Korean line is advice ("다시 분석 권장"); the analysis still runs.
     analysis_outdated_codes: tuple[str, ...] = ()
     analysis_outdated_ko: str | None = None
+    #: The latest analysis that ended with items for a person (lane RV,
+    #: decision a), when it is newer than any analysis that passed: how many
+    #: items, why, and which pages of a long document failed. None otherwise.
+    review_pending: dict[str, object] | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -208,6 +242,7 @@ class ProtocolCatalogEntry:
             "lifecycle_state": self.lifecycle_state,
             "analysis_outdated_codes": list(self.analysis_outdated_codes),
             "analysis_outdated_ko": self.analysis_outdated_ko,
+            "review_pending": self.review_pending,
         }
 
 
@@ -301,6 +336,7 @@ def _failures_not_superseded(events: Sequence[Any]) -> tuple[Any, ...]:
         (index for index, event in enumerate(events)
          if event.event_type in {
              _ANALYSIS_RETRY_EVENT, _ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT,
+             _REVIEW_PENDING_EVENT,
          }),
         default=-1,
     )
@@ -338,18 +374,65 @@ def _piece_run_end(
         event for event in revision_events
         if event.event_type in {
             _ANALYSIS_FAILED_EVENT, _ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT,
+            _REVIEW_PENDING_EVENT,
         }
         and event.sequence_id > planned_at
     ]
     if not after:
         return None
     last = after[-1]
+    if last.event_type == _REVIEW_PENDING_EVENT:
+        # Lane RV, decision a: the passed pieces kept, the rest for a person.
+        return "review_pending", None
     if last.event_type == _ANALYSIS_FAILED_EVENT:
         payload = last.payload if isinstance(last.payload, dict) else {}
         code = payload.get("failure_code")
         code = code if isinstance(code, str) and code else "analysis_failed"
         return _PIECE_RUN_FAILED_STATES.get(code, "analysis_failed"), code
     return "review_required", None
+
+
+def _review_pending_summary(event: Any) -> dict[str, object]:
+    """What the screen says of a review-pending analysis (lane RV, decision a).
+
+    ``needs_review_count`` items, by reason, with one Korean line: "검토 대기 ·
+    확인 필요 12건(근거를 못 찾음 9 · OCR 흐림 3)", and "41–59쪽 분석 실패" for
+    each failed piece of a long document.
+    """
+
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    flags = [
+        ReviewFlag.from_public(item) for item in payload.get("flags") or ()
+        if isinstance(item, dict)
+    ]
+    items = list(dict.fromkeys(flag.item_id for flag in flags))
+    by_reason: dict[str, int] = {}
+    for item in items:
+        reason = next(flag.reason for flag in flags if flag.item_id == item)
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    failed_pages = [
+        {"first_page": flag.first_page, "last_page": flag.last_page,
+         "failure_code": flag.reason_code}
+        for flag in flags if flag.first_page is not None
+    ]
+    words = " · ".join(
+        f"{REVIEW_REASONS_KO.get(reason, reason)} {count}"
+        for reason, count in by_reason.items()
+        if reason != REVIEW_REASON_PIECE_FAILED
+    )
+    line = f"검토 대기 · 확인 필요 {len(items)}건"
+    if words:
+        line += f"({words})"
+    for pages in failed_pages:
+        line += f" · {pages['first_page']}–{pages['last_page']}쪽 분석 실패"
+    return {
+        "analysis_id": payload.get("analysis_id"),
+        "recorded_at": event.recorded_at,
+        "needs_review_count": len(items),
+        "by_reason": by_reason,
+        "failed_pages": failed_pages,
+        "message_ko": line,
+    }
 
 
 def _automatic_retry_status(events: Sequence[Any]) -> dict[str, object] | None:
@@ -377,6 +460,8 @@ def _automatic_retry_status(events: Sequence[Any]) -> dict[str, object] | None:
             state = "failed"
         elif event.event_type in {_ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT}:
             state = "passed"
+        elif event.event_type == _REVIEW_PENDING_EVENT:
+            state = "review_pending"
     status: dict[str, object] = {
         "attempt": payload.get("attempt", 1),
         "limit": payload.get("limit", AUTOMATIC_RETRY_LIMIT),
@@ -550,6 +635,11 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "바뀌지 않습니다."
     ),
 }
+#: What a person does with an analysis waiting for review (lane RV, a).
+REVIEW_PENDING_ACTION_KO = (
+    "검토 화면에서 확인 필요 항목을 확인·고침·비움 중 하나로 정하고, 검토자 이름을 적어 "
+    "'검토 완료하고 등록'을 누르세요. 원문이 바뀌었다면 '다시 분석'을 누르세요."
+)
 _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
     "실패 원인을 확인한 뒤 '분석 다시 시도'를 누르세요. 다시 시도해도 원문은 "
     "바뀌지 않습니다."
@@ -656,6 +746,8 @@ PIPELINE_STAGE_KO: dict[str, str] = {
     "ocr": "OCR",
     "analysis": "분석",
     "evidence": "근거 대조",
+    # Lane RV, decision a: an analysis with items a person must check.
+    "review": "검토",
     "readiness": "실행 준비",
     "translation": "번역",
     "ready": "실행 가능",
@@ -873,6 +965,10 @@ def _with_korean_reasons(readiness: dict[str, object]) -> dict[str, object]:
                 reason["message_ko"] = readiness_reason_korean(
                     str(reason.get("code") or ""), str(reason.get("message") or ""))
     return readiness
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _protocol_id(checksum: str) -> str:
@@ -1163,6 +1259,7 @@ class ProtocolCatalog:
             if event.event_type in {
                 _ANALYSIS_REQUESTED_EVENT, _ANALYSIS_STARTED_EVENT,
                 _ANALYSIS_FAILED_EVENT, _ANALYSIS_RETRY_EVENT,
+                _REVIEW_PENDING_EVENT,
             }
         )
         if not after:
@@ -1172,6 +1269,9 @@ class ProtocolCatalog:
             _ANALYSIS_STARTED_EVENT: "analyzing",
             _ANALYSIS_FAILED_EVENT: "analysis_failed",
             _ANALYSIS_RETRY_EVENT: "analyzing",
+            # Lane RV, decision a: the run ended with items for a person;
+            # the analysis that passed before still runs.
+            _REVIEW_PENDING_EVENT: "review_pending",
         }[after[-1].event_type]
         failure: dict[str, object] | None = None
         if state == "analysis_failed":
@@ -1189,7 +1289,7 @@ class ProtocolCatalog:
             if repair is not None:
                 # Lane EV3, decision 1.
                 failure["response_repaired"] = repair
-        return {
+        status: dict[str, object] = {
             "state": state,
             "requested_at": next(
                 (event.recorded_at for event in reversed(after)
@@ -1199,6 +1299,9 @@ class ProtocolCatalog:
             "failure": failure,
             "automatic_retry": _automatic_retry_status(after),
         }
+        if state == "review_pending":
+            status["review_pending"] = _review_pending_summary(after[-1])
+        return status
 
     def _latest_ocr_events(
         self, revision: ProtocolRevisionRecord
@@ -1605,6 +1708,7 @@ class ProtocolCatalog:
                     _ANALYSIS_RETRY_EVENT,
                     _ANALYSIS_READY_EVENT,
                     _SINGLE_REVIEW_REQUIRED_EVENT,
+                    _REVIEW_PENDING_EVENT,
                 }
             )
             current_events = _failures_not_superseded(lifecycle_events)
@@ -1656,6 +1760,7 @@ class ProtocolCatalog:
                     _ANALYSIS_RETRY_EVENT: "analyzing",
                     _ANALYSIS_READY_EVENT: "analysis_ready",
                     _SINGLE_REVIEW_REQUIRED_EVENT: "review_required",
+                    _REVIEW_PENDING_EVENT: "review_pending",
                 }[lifecycle_events[-1].event_type]
             return ProtocolAnalysisRunStatus(
                 protocol_id=protocol_id,
@@ -1787,14 +1892,14 @@ class ProtocolCatalog:
             merge_status=merge_status,
             restart_behavior=(
                 "terminal_review_required"
-                if state == "review_required"
+                if state in {"review_required", "review_pending"}
                 else "explicit_new_run_required_after_interruption"
                 if state in {"chunk_planned", "chunk_analysis_in_progress", "merge_in_progress"}
                 else "explicit_analysis_request_only"
             ),
             lifecycle_state=(
-                "review_required"
-                if state == "review_required"
+                state
+                if state in {"review_required", "review_pending"}
                 else "blocked"
                 if state in {
                     "merge_conflict",
@@ -1886,6 +1991,7 @@ class ProtocolCatalog:
                     _ANALYSIS_STARTED_EVENT,
                     _ANALYSIS_FAILED_EVENT,
                     _ANALYSIS_RETRY_EVENT,
+                    _REVIEW_PENDING_EVENT,
                 }
             )
             if lifecycle_events:
@@ -1894,7 +2000,12 @@ class ProtocolCatalog:
                     _ANALYSIS_STARTED_EVENT: "analyzing",
                     _ANALYSIS_FAILED_EVENT: "blocked",
                     _ANALYSIS_RETRY_EVENT: "analyzing",
+                    # Lane RV, decision a: waiting for a person's review;
+                    # it never runs as it is.
+                    _REVIEW_PENDING_EVENT: "review_pending",
                 }[lifecycle_events[-1].event_type]
+                if lifecycle_events[-1].event_type == _REVIEW_PENDING_EVENT:
+                    analysis_status = "review_pending"
             elif analysis_status == "ocr_required":
                 lifecycle_state = "blocked"
         development_only = any(
@@ -1927,6 +2038,7 @@ class ProtocolCatalog:
             if analysis is not None and analysis.protocol.metadata.title
             else extraction.metadata.title or Path(revision.original_filename).stem
         )
+        pending = self._review_pending_event(revision)
         return ProtocolCatalogEntry(
             protocol_id=revision.experiment_id,
             title=title,
@@ -1950,7 +2062,74 @@ class ProtocolCatalog:
             development_only=development_only,
             analysis_outdated_codes=outdated_codes,
             analysis_outdated_ko=ANALYSIS_OUTDATED_KO if outdated_codes else None,
+            review_pending=(
+                _review_pending_summary(pending) if pending is not None else None),
         )
+
+    def _review_pending_event(self, revision: ProtocolRevisionRecord) -> Any | None:
+        """The latest review-pending analysis newer than any passed one, or None.
+
+        Lane RV, decision a. A later failed or running request leaves it as
+        it is: it is still the latest analysis a person can review.
+        """
+
+        events = [
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+            and event.event_type in {_REVIEW_PENDING_EVENT, _ANALYSIS_READY_EVENT}
+        ]
+        if events and events[-1].event_type == _REVIEW_PENDING_EVENT:
+            return events[-1]
+        return None
+
+    def review_pending_analysis(
+        self, protocol_id: str,
+    ) -> tuple[domain.ExperimentProtocol, domain.ReadinessAssessment, tuple[ReviewFlag, ...], Any]:
+        """The latest review-pending analysis, read back (lane RV, decision a).
+
+        The protocol is given its source pages again from the stored source
+        and its accepted OCR; when those are not the pages the analysis read
+        (an OCR read again since), it is refused: the items cannot be shown
+        against pages they were not read from.
+        """
+
+        revision = self._latest_protocol_revision(protocol_id)
+        event = self._review_pending_event(revision)
+        if event is None:
+            raise ProtocolCatalogNotFoundError("No analysis is waiting for review.")
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        protocol = _decode_stored_record(payload.get("protocol"))
+        readiness = _decode_stored_record(payload.get("readiness"))
+        if not isinstance(protocol, domain.ExperimentProtocol) or not isinstance(
+            readiness, domain.ReadinessAssessment
+        ):
+            raise ProtocolCatalogUnavailableError("The review-pending analysis is unreadable.")
+        extraction = self._extraction_for_analysis(
+            revision, self._source_extraction(revision))
+        if (
+            extraction.sha256 != protocol.metadata.pdf.sha256
+            or [_text_sha256(page.text) for page in extraction.pages]
+            != payload.get("source_pages")
+        ):
+            raise ProtocolCatalogUnavailableError(
+                "The pages this analysis read are no longer the source's pages."
+            )
+        protocol = replace(protocol, metadata=replace(protocol.metadata, pdf=extraction))
+        flags = tuple(
+            ReviewFlag.from_public(item) for item in payload.get("flags") or ()
+            if isinstance(item, dict)
+        )
+        return protocol, readiness, flags, event
+
+    def _source_extraction(self, revision: ProtocolRevisionRecord) -> ProtocolPdfExtraction:
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        return extract_protocol_pdf(self.store.file_store.object_path(
+            revision.pdf_checksum, expected_size=pdf_object.byte_size
+        ))
 
     def list_entries(self) -> tuple[ProtocolCatalogEntry, ...]:
         entries = []
@@ -2228,6 +2407,8 @@ class ProtocolCatalog:
                 else None
             ),
             "reanalysis": reanalysis,
+            # Lane RV, decision a: the latest analysis waiting for a person.
+            "review_pending": entry.review_pending,
             "source": {
                 "filename": revision.original_filename,
                 "sha256": revision.pdf_checksum,
@@ -2560,7 +2741,15 @@ class ProtocolCatalog:
             again.get("automatic_retry"), dict) else {}
         again_retry_count = (f"{again_retry.get('attempt', 1)}/"
                              f"{again_retry.get('limit', AUTOMATIC_RETRY_LIMIT)}")
-        if again.get("state") in {"analysis_pending", "analyzing"}:
+        if again.get("state") == "review_pending":
+            # Lane RV, decision a: the run over a passed analysis ended with
+            # items for a person; the passed analysis still runs.
+            summary = again.get("review_pending") if isinstance(
+                again.get("review_pending"), dict) else {}
+            again_clause = (
+                f" 다시 분석은 {summary.get('message_ko') or '검토 대기'}입니다 · "
+                "지금 분석으로 계속 실행할 수 있습니다.")
+        elif again.get("state") in {"analysis_pending", "analyzing"}:
             again_clause = (
                 (f" 다시 분석 중입니다 · 다시 시도 중({again_retry_count}) · 첫 응답이 정해진 "
                  "형식에 맞지 않아 같은 요청을 자동으로 한 번 다시 보냈습니다 · "
@@ -2606,6 +2795,18 @@ class ProtocolCatalog:
                         else "시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요."),
                 ocr_page_numbers=ocr_pages, **again_extra, **passed_extra)
         if analysis is None:
+            if entry.analysis_status == "review_pending" and entry.review_pending:
+                # Lane RV, decision a (human decision 2026-10-12): kept for a
+                # person instead of thrown away; it does not run as it is.
+                return result(
+                    "review", blocked=True,
+                    message=(
+                        f"{entry.review_pending['message_ko']}. 분석은 끝났지만 원문에서 "
+                        "확인하지 못한 항목이 있어 이대로는 실행하지 않습니다."
+                        + passed_clause),
+                    action=REVIEW_PENDING_ACTION_KO,
+                    review_pending=entry.review_pending,
+                    ocr_page_numbers=ocr_pages)
             if ocr_state in {"queued", "in_progress"}:
                 return result(
                     "ocr", blocked=False,
@@ -2897,22 +3098,32 @@ class ProtocolCatalog:
             except Exception as exc:
                 self._record_analysis_failure(revision, analysis_id, exc)
                 raise
-            return self._store_passed_analysis(
+            return self._store_analysis_result(
                 revision, draft, analysis_id, pieces=pieces)
         if status == "chunked_analysis_required":
             raise ProtocolChunkedAnalysisRequiredError(
                 "Protocol text is larger than one analysis reads."
             )
         observed = _ObservedAnalysisModel.wrap(model)
+        # A repaired answer with items for a person, kept should its retry
+        # not come back better (lane RV, decision a).
+        kept: ProtocolAnalysisDraft | None = None
         try:
-            draft = analyze_protocol_extraction(extraction, observed.model)
+            draft = analyze_protocol_extraction(
+                extraction, observed.model, review_unverified=True)
+            if draft.review_flags and draft.response_repair is not None:
+                raise _RepairedAnswerWithItems(draft)
         except Exception as exc:
+            if isinstance(exc, _RepairedAnswerWithItems):
+                kept = exc.draft
             failure_code = self._record_analysis_failure(
                 revision, analysis_id, exc, truncated=observed.truncated)
             repair = getattr(exc, "response_repair", None)
             if not self._automatic_retry_allowed(
                 revision, failure_code, repaired=repair is not None
             ):
+                if kept is not None:
+                    return self._store_review_pending(revision, kept, analysis_id)
                 raise
             # The same request again: the same extraction to the same model,
             # nothing about the failure added (lane AN, decision 1) -- except
@@ -2947,12 +3158,89 @@ class ProtocolCatalog:
                 bool(retry_payload.get("truncated")), retry_payload.get("reasoning_effort"),
             )
             try:
-                draft = analyze_protocol_extraction(extraction, retry_model)
+                draft = analyze_protocol_extraction(
+                    extraction, retry_model, review_unverified=True)
             except Exception as retry_exc:
                 self._record_analysis_failure(
                     revision, analysis_id, retry_exc, truncated=observed.truncated)
+                if kept is not None:
+                    # Lane RV, decision a: the first answer's items wait for a
+                    # person rather than the analysis being thrown away.
+                    return self._store_review_pending(revision, kept, retry_of)
                 raise
-        return self._store_passed_analysis(revision, draft, analysis_id)
+        return self._store_analysis_result(revision, draft, analysis_id)
+
+    def _store_analysis_result(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> ProtocolCatalogEntry:
+        """A passed analysis as the next analysis revision; one with items a
+        person must check as a review-pending ledger event (lane RV, a)."""
+
+        if draft.review_flags:
+            return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
+        return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
+
+    def _store_review_pending(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> ProtocolCatalogEntry:
+        """Keep an analysis with items for a person, and say so (lane RV, a).
+
+        Human decision 2026-10-12/14: the analysis is kept as the model read
+        it -- the source and this record are never changed afterwards -- with
+        each item the server could not find in the source flagged and why. It
+        is not an analysis revision, so nothing that runs a protocol can read
+        it; a person's review and registration make the version that runs.
+        The source's pages are not copied into the record: their checksums
+        are, and the pages are read again from the stored source.
+        """
+
+        protocol_id = revision.experiment_id
+        protocol = draft.protocol
+        if protocol.protocol_id != protocol_id:
+            protocol = replace(protocol, protocol_id=protocol_id)
+        pdf = protocol.metadata.pdf
+        stored = replace(protocol, metadata=replace(
+            protocol.metadata, pdf=replace(pdf, pages=())))
+        flags = draft.review_flags
+        payload: dict[str, object] = {
+            "status": "review_pending",
+            "analysis_id": analysis_id,
+            "flags": [flag.public_dict() for flag in flags],
+            "needs_review_count": len({flag.item_id for flag in flags}),
+            "verified_evidence_count": draft.verified_evidence_count,
+            "capability_policy_id": draft.capability_policy_id,
+            "source_pages": [_text_sha256(page.text) for page in pdf.pages],
+            "protocol": _encode_stored_record(stored),
+            "readiness": _encode_stored_record(draft.readiness),
+        }
+        if protocol.cleared_fields:
+            payload["cleared_fields"] = list(protocol.cleared_fields)
+        if pieces:
+            payload["pieces"] = [piece.public_dict() for piece in pieces]
+        if draft.response_repair is not None:
+            payload["response_repaired"] = draft.response_repair.public_dict()
+        self.store.append_event(
+            f"analysis-review-pending-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _REVIEW_PENDING_EVENT,
+            payload,
+        )
+        logging.getLogger(__name__).info(
+            "protocol.analysis.review_pending protocol_id=%s items=%d flags=%d",
+            protocol_id, payload["needs_review_count"], len(flags),
+        )
+        return self.get_entry(protocol_id)
 
     def _analyze_in_pieces(
         self,
@@ -2970,9 +3258,13 @@ class ProtocolCatalog:
         which the run status and the pipeline line read ("조각 k/n 분석 중").
         A piece that fails is sent once more by itself -- the same request,
         or one reasoning level lower when its answer was cut at the output
-        limit (lane AQ) -- and a piece that fails again fails the document:
-        nothing passes on part of it. The pieces that passed are then joined
-        and the joined analysis is checked against the whole document.
+        limit (lane AQ). Lane RV, decision a (human decision 2026-10-12,
+        changing lane AN's "nothing passes on part of it"): a piece that fails
+        again no longer fails the document. The pieces that passed are joined
+        and the joined analysis is checked against the whole document; each
+        failed piece's pages become an item a person checks, so the analysis
+        is one waiting for review and does not run as it is. Only when every
+        piece failed does the document fail.
         """
 
         protocol_id = revision.experiment_id
@@ -3004,14 +3296,16 @@ class ProtocolCatalog:
             outbox.put((f"piece-started-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT,
                         {**chunk, "status": "in_progress", "attempt": 1}))
             try:
-                return analyze_protocol_piece(extraction, piece, observed.model)
+                return analyze_protocol_piece(
+                    extraction, piece, observed.model, review_unverified=True)
             except Exception as exc:  # noqa: BLE001 - sent once more by itself
                 retry_model, retry_payload = observed.retry()
                 outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
                     **chunk, "status": "in_progress", "attempt": 2,
                     "retry_of_failure_code": _piece_failure_code(exc), **retry_payload,
                 }))
-            return analyze_protocol_piece(extraction, piece, retry_model)
+            return analyze_protocol_piece(
+                extraction, piece, retry_model, review_unverified=True)
 
         def drain() -> None:
             while True:
@@ -3055,18 +3349,25 @@ class ProtocolCatalog:
                                "steps": sum(
                                    len(section.steps) for section in draft.protocol.sections),
                            })
-        if failures:
-            failed = tuple(piece for piece in pieces if piece.index in failures)
+        failed = tuple(piece for piece in pieces if piece.index in failures)
+        if len(failed) == len(pieces):
             raise ProtocolAnalysisPieceFailedError(
                 "A piece of the document failed analysis after its retry.",
                 pieces=failed,
                 failure_codes=tuple(
                     _piece_failure_code(failures[piece.index]) for piece in failed),
             )
+        # Lane RV, decision a: the pieces that passed are kept and joined;
+        # each failed piece's pages wait for a person ("41–59쪽 분석 실패").
+        passed = tuple(piece for piece in pieces if piece.index in drafts)
         append(f"pieces-joining-{analysis_id}", _MERGE_STARTED_EVENT, {"status": "in_progress"})
         try:
             return join_piece_analyses(
-                extraction, pieces, [drafts[piece.index] for piece in pieces])
+                extraction, passed, [drafts[piece.index] for piece in passed],
+                review_unverified=True,
+                failed_pieces=tuple(
+                    (piece, _piece_failure_code(failures[piece.index])) for piece in failed),
+            )
         except ProtocolAnalysisPieceConflictError as exc:
             append(f"pieces-conflict-{analysis_id}", _MERGE_CONFLICT_EVENT, {
                 "status": "conflict", "failure_code": exc.code, "reason": exc.reason,
@@ -3267,6 +3568,11 @@ class ProtocolCatalog:
         revision = self._latest_protocol_revision(protocol_id)
         previous = self._latest_analysis(revision)
         if previous is not None and not reanalysis:
+            return self.get_entry(protocol_id)
+        if not reanalysis and self._review_pending_event(revision) is not None:
+            # Lane RV, decision a: an analysis waiting for a person ended; a
+            # plain request (an upload of the same file) does not ask again.
+            # "다시 분석" does.
             return self.get_entry(protocol_id)
         if previous is not None and any(
             event.event_type == _DEVELOPMENT_FIXTURE_EVENT
