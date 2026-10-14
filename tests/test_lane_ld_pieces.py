@@ -370,30 +370,34 @@ class CatalogPieceTests(_CatalogCase):
         self.assertEqual(retries[0]["retry_of_failure_code"], "protocol_analysis_invalid_response")
         self.assertEqual(self.catalog.get_entry(protocol_id).step_count, 122)
 
-    def test_a_piece_that_fails_again_fails_the_whole_document_and_names_its_pages(self):
+    def test_a_piece_that_fails_again_leaves_its_pages_for_review_and_names_them(self):
+        # Lane RV, decision a (human decision 2026-10-12) changed this from
+        # "fails the whole document": the pieces that passed are kept, and
+        # the failed piece's pages wait for a person -- the analysis is one
+        # waiting for review, which does not run.
         protocol_id = self.register(page_texts(61))
         model = PieceModel(self.extraction, broken={25: 2})
         error = self.analyze(protocol_id, model)
-        self.assertIsInstance(error, ProtocolAnalysisPieceFailedError)
-        self.assertEqual(error.pages_ko, "25–37쪽")
+        self.assertIsNone(error)
         self.assertEqual(model.calls.count((25, 37)), 2)
         self.assertEqual(self.catalog.get_entry(protocol_id).revision_id, "pdf-1")  # nothing stored
         self.assertFalse(self.catalog.get_entry(protocol_id).available_for_execution)
-        (failed,) = self.events(protocol_id, "protocol_analysis_failed")
-        self.assertEqual(failed.payload["failure_code"], "protocol_analysis_piece_failed")
-        self.assertEqual(failed.payload["failed_pieces"], [{
-            "index": 3, "count": 5, "first_page": 25, "last_page": 37,
-            "failure_code": "protocol_analysis_invalid_response"}])
+        self.assertEqual(self.events(protocol_id, "protocol_analysis_failed"), [])
+        (pending,) = self.events(protocol_id, "protocol_analysis_review_pending")
+        (flag,) = [item for item in pending.payload["flags"] if item["reason"] == "piece_failed"]
+        self.assertEqual(
+            (flag["item_id"], flag["reason_ko"], flag["reason_code"]),
+            ("pages:25-37", "25–37쪽 분석 실패", "protocol_analysis_invalid_response"))
         pipeline = self.catalog.pipeline_status(protocol_id)
         self.assertTrue(pipeline["blocked"])
-        self.assertTrue(pipeline["message"].startswith("일부 조각 분석 실패 · 25–37쪽"))
-        self.assertIn("분석 다시 시도", pipeline["action"])
+        self.assertIn("25–37쪽 분석 실패", pipeline["message"])
+        self.assertIn("검토 완료하고 등록", pipeline["action"])
         status = self.catalog.analysis_run_status(protocol_id).public_dict()
-        self.assertEqual(status["state"], "chunk_analysis_failed")
-        self.assertEqual(status["failure_code"], "protocol_analysis_piece_failed")
+        self.assertEqual(status["state"], "review_pending")
+        self.assertIsNone(status["failure_code"])
         self.assertEqual(status["failed_chunks"], 1)
-        self.assertEqual(self.catalog.get_entry(protocol_id).analysis_status, "chunk_analysis_failed")
-        self.assertTrue(self.catalog.review(protocol_id)["analysis_failure"]["retryable"])
+        self.assertEqual(self.catalog.get_entry(protocol_id).analysis_status, "review_pending")
+        self.assertIsNone(self.catalog.review(protocol_id)["analysis_failure"])
 
     def test_two_pieces_reading_the_shared_page_differently_fail_the_document(self):
         protocol_id = self.register(page_texts(61))

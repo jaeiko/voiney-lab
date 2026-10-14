@@ -126,11 +126,14 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    ProtocolReviewError,
+    ProtocolReviewTargetChangedError,
     REAGENT_TABLE_MEDIA_TYPE,
     MAX_REAGENT_TABLE_BYTES,
     ReagentTableError,
     ReagentTableTooLargeError,
     reagent_table_summary,
+    review_version_suggestion,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -717,6 +720,56 @@ def _start_or_resume_workspace_experiment(
         return state
     finally:
         store.close()
+
+
+def _recovery_revision_id(session_id:object,protocol_id:str)->str|None:
+    """The exact revision a durable experiment started on, or None.
+
+    Lane RV, decision f: continuing an experiment loads the revision it
+    started on, not the latest one. None when the workspace is off or the
+    experiment is not this caller's on this protocol -- the recovery itself
+    then refuses as before.
+    """
+
+    if not isinstance(session_id,str) or not _workspace_settings().enabled:
+        return None
+    try:
+        principal,store=_commercial_workspace()
+    except Exception:  # noqa: BLE001 - the recovery itself reports it
+        return None
+    try:
+        state=store.get_experiment(principal,session_id)
+    except Exception:  # noqa: BLE001 - the recovery itself reports it
+        return None
+    finally:
+        store.close()
+    if state.get("protocol_id")!=protocol_id:
+        return None
+    revision=state.get("protocol_revision_id")
+    return revision if isinstance(revision,str) else None
+
+
+def _recovery_fixture(
+    catalog:ProtocolCatalog,protocol_id:str,entry:Any,recovery_session_id:object,
+)->tuple[CuratedProtocolFixture|None,str|None,str|None]|None:
+    """(fixture, revision id, refusal) of a recovery onto an older revision, or None.
+
+    Lane RV, decision f: a recovery gets the revision its experiment started
+    on -- an analysis analysed again since, or an earlier review version --
+    when that is not what the catalog runs now. None for a new run and for a
+    recovery onto the current revision: the session start then loads what
+    runs now (the latest review version, or the analysis that passed).
+    """
+
+    if recovery_session_id is None:
+        return None
+    started_on=_recovery_revision_id(recovery_session_id,protocol_id)
+    if started_on is None or started_on==entry.revision_id:
+        return None
+    try:
+        return catalog.load_fixture_for_revision(protocol_id,started_on),started_on,None
+    except ProtocolCatalogError:
+        return None,None,"protocol_selection_unavailable"
 
 
 def _workspace_skipped_step_ids(state:Any)->tuple[str,...]:
@@ -2350,6 +2403,13 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=400,detail=exc.code)
     if isinstance(exc,ReagentTableTooLargeError):
         return HTTPException(status_code=413,detail=exc.code)
+    # Lane RV, decision b: a review decision the server does not take is the
+    # request's (422); a review read against an analysis that has since
+    # changed is a conflict (409).
+    if isinstance(exc,ProtocolReviewTargetChangedError):
+        return HTTPException(status_code=409,detail=exc.code)
+    if isinstance(exc,ProtocolReviewError):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ReagentTableError):
         return HTTPException(status_code=422,detail=exc.code)
     return HTTPException(
@@ -3038,17 +3098,28 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     },
                 )
                 ocr=_automatic_ocr_on_upload(catalog,result.entry)
-                return {
-                    "protocol":result.entry.public_dict(),
-                    "deduplicated":result.deduplicated,
-                    "ocr":ocr,
-                }
+                return _registration_response(result,ocr)
             finally:
                 store.close()
         except HTTPException:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+def _registration_response(result:Any,ocr:dict[str,object])->dict[str,object]:
+    """The upload's answer; a file already registered with a review version
+    suggests starting from it instead (lane RV, decision d)."""
+
+    response:dict[str,object]={
+        "protocol":result.entry.public_dict(),
+        "deduplicated":result.deduplicated,
+        "ocr":ocr,
+    }
+    suggestion=review_version_suggestion(result.entry) if result.deduplicated else None
+    if suggestion is not None:
+        response["review_suggestion"]=suggestion
+    return response
 
 
 @app.post("/api/protocols/{protocol_id}/reagent-tables",status_code=201)
@@ -3543,7 +3614,9 @@ async def _begin_background_analysis(
     try:
         public=await asyncio.to_thread(prepare_analysis)
         state=(public.get("analysis_run") or {}).get("state")
-        if state in {"review_required","approved","revoked"}:
+        # Lane RV, decision a: an analysis waiting for a person's review
+        # ended too; a plain request starts nothing over it.
+        if state in {"review_required","approved","revoked","review_pending"}:
             public["analysis_request_deduplicated"]=True
             return public
         task=asyncio.create_task(background_worker())
@@ -3618,6 +3691,162 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
             return review
         finally:
             store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft")
+def get_protocol_review_draft(protocol_id:str)->dict[str,object]:
+    """The review tab's items, source lines and draft decisions (lane RV, b).
+
+    The analysis a person reviews now -- one waiting for review, one that
+    passed, or the latest review version -- item by item, with where each
+    stands in the source, whether it waits for a person and why, its origin
+    (원문 · AI 제안 · 검토자 입력) and the draft decision on it.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_draft(protocol_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/review-decisions")
+def post_protocol_review_decision(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """One decision on one item (lane RV, decision b): confirm, fix, leave
+    empty (원문에 없음), enter, a memo or taking a decision back. One more
+    ledger event; nothing runs differently until a version is registered."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.record_review_decision(protocol_id,body)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/review-versions",status_code=201)
+def post_protocol_review_version(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """"검토 완료하고 등록" (lane RV, decision c): the reviewer's name is
+    required, every item that waited for a person must be decided, and the
+    review becomes version N -- the one that runs from now on -- beside the
+    analysis and the versions before it."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.register_review(protocol_id,body)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-versions/{version}")
+def get_protocol_review_version(protocol_id:str,version:int)->dict[str,object]:
+    """One registered review version with what it changed and from what
+    (lane RV, decision c): the review tab's version history."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_version(protocol_id,version)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}")
+def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,object]:
+    """One source page as the review read it: every line with its number,
+    the lines holding a value and those an unclear OCR reading holds, and
+    the OCR's value boxes (lane RV, decision b)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_source_page(protocol_id,source_page)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get(
+    "/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}"
+    "/value-boxes/{box_index}/image"
+)
+def get_protocol_review_value_box_image(protocol_id:str,source_page:int,box_index:int):
+    """The piece of a photo or handwritten page an OCR value was read from,
+    for the review screen to show beside the value (lane RV, decision e)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            png=catalog.review_value_box_image(protocol_id,source_page,box_index)
+        finally:
+            store.close()
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":(
+                    f'inline; filename="value-box-{source_page}-{box_index}.png"'),
+                "X-Protocol-Source-Page":str(source_page),
+            })
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}/image")
+def get_protocol_review_source_page_image(protocol_id:str,source_page:int):
+    """The source page itself for the review screen (lane RV, decision b).
+
+    The same rendering as "원본 쪽 보기", for any protocol the caller may see
+    -- the review is of an analysis that may not run yet.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            path,sha256=catalog.source_pdf(protocol_id)
+        finally:
+            store.close()
+        png=source_figures.page_image(path,sha256,source_page)
+        if png is None:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":f'inline; filename="source-page-{source_page}.png"',
+                "X-Protocol-Source-SHA256":sha256,
+                "X-Protocol-Source-Page":str(source_page),
+            })
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
@@ -10739,21 +10968,31 @@ async def voice_socket(websocket:WebSocket):
                                             entry=catalog.get_entry(requested_protocol_id)
                                         except ProtocolCatalogNotFoundError:
                                             entry=None
-                                        if entry is not None:
+                                        recovered=(
+                                            _recovery_fixture(
+                                                catalog,requested_protocol_id,entry,
+                                                control.get("experiment_session_id"))
+                                            if entry is not None else None)
+                                        if recovered is not None:
+                                            (selected_curated_fixture,
+                                             selected_revision_id,
+                                             selection_failure)=recovered
+                                        elif entry is not None:
                                             if entry.available_for_execution:
                                                 selected_curated_fixture=(
                                                     catalog.load_executable_fixture(
                                                         requested_protocol_id))
                                                 selected_revision_id=entry.revision_id
-                                                selected_basis_entry={
-                                                    "source_filename":getattr(
-                                                        entry,"source_filename",None),
-                                                    "created_at":getattr(
-                                                        entry,"created_at",None),
-                                                }
                                             else:
                                                 selection_failure=(
                                                     "protocol_selection_unavailable")
+                                        if selected_curated_fixture is not None:
+                                            selected_basis_entry={
+                                                "source_filename":getattr(
+                                                    entry,"source_filename",None),
+                                                "created_at":getattr(
+                                                    entry,"created_at",None),
+                                            }
                                     finally:
                                         protocol_store.close()
                             if selected_curated_fixture is None:

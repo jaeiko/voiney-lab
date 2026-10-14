@@ -279,7 +279,9 @@ class CatalogConcurrencyTests(_CatalogCase):
         protocol_id = self.register(page_texts(61))
         model = _Probe(self.extraction, on_call=lambda first: (
             model_providers._notify(_rate_limit()) if first == 25 else None), broken={25: 2})
-        self.assertIsNotNone(self.analyze(protocol_id, model))
+        # Lane RV (decision a): one failed piece no longer fails the document; its
+        # pages wait for a person. What matters here is what the failed event holds.
+        self.analyze(protocol_id, model)
         (failed,) = self.events(protocol_id, "protocol_chunk_analysis_failed")
         self.assertEqual(failed.payload["chunk_id"], "piece-3")
         self.assertEqual(len(failed.payload["provider_retries"]), 2)  # one per send of the piece

@@ -189,8 +189,10 @@ assert(node("run-connection").textContent==="연결 안 됨",`no session: ${node
         self.assertIn("@media (orientation:portrait){", style)
         self.assertIn("@media (min-width:768px) and (min-height:700px){", style)
         self.assertIn('body[data-view="during"] .rail-right button{width:var(--run-action-w);height:var(--target-run)', style)
-        # Not drawn: the next step's words, which the server does not send.
-        self.assertNotIn('id="run-next-step"', html)
+        # Lane UI3 decision 1 (2026-10-14): the server now sends the next
+        # step's words (screen.next_step_sentence), so the line exists, hidden
+        # until the server's sentence fills it (tests/test_lane_ui3_run_fields.py).
+        self.assertIn('<p id="run-next-step" class="run-next-step" hidden></p>', html)
 
 
 if __name__ == "__main__":
