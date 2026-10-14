@@ -52,15 +52,19 @@ that:
   and is **off**; whether to turn it on is decided by a person after a voice
   test.
 - **A pilot data deletion tool** (`scripts/pilot_data_delete.py`, lane PL).
+- **The review tab** (lane RV): an analysis the source-evidence check cannot
+  fully confirm waits as "검토 대기" with its "확인 필요" items (it does not
+  run); a person confirms, corrects or leaves out each item against the
+  source lines, enters the reviewer's name and registers review version
+  v1, v2, ...; the latest review version runs. A value is shown as "원문",
+  "AI 제안" or "검토자 입력", and only a person's confirmation makes it a run
+  value. Safety statements cannot be edited and steps cannot be left out.
 
 Still planned, in this order of lanes (none of it is built):
 
-- **Review tab (lane RV, in progress)** — upload → automatic analysis (about
-  one minute) → review (by the uploader or anyone; the reviewer's name is
-  required to register) → "검토 완료하고 등록" → the reviewed version is saved
-  (reused, recorded as v1/v2) → start check → voice guidance. A value changed
-  in review is shown as "검토자 입력" and a value the AI proposes as "AI
-  제안"; either becomes a run value only once a person confirms it.
+- **Making review mandatory** — the review tab exists (above) but review is
+  optional: a passed analysis can start without it. Whether to require it is
+  for a person to decide (lane RV report, §5).
 - **Telling speakers apart** — filtering today is by loudness only.
 - **Understanding led by the LLM router** — turning the router-first switch
   on, behind the front rules (AGENTS rule 3).
@@ -95,7 +99,7 @@ Laboratory jobs:
 - Upload the laboratory's own protocol (PDF; Word or photo through the server)
   without code changes and see why it cannot start, if it cannot.
 - Review the analysis and register a reviewed version with the reviewer's
-  name (planned, lane RV).
+  name (lane RV, merged 2026-10-14).
 - Export a traceable record (.docx, Markdown, JSON, CSV) into the existing
   notebook or informatics stack.
 - See aggregate adoption, completion, latency and blocked-step counts without
@@ -117,8 +121,9 @@ Laboratory jobs:
 
 ## Success measures
 
-- Time from PDF upload to a protocol that can start (the review tab's target
-  for the analysis is about one minute).
+- Time from PDF upload to a protocol that can start (analysis time is
+  measured in README §4; the review tab's old target of about one minute
+  has not been measured).
 - Percent of required steps/quantities/timers/observations preserved.
 - Zero unauthorized state transitions.
 - First-playable-audio and total-turn p50/p95.

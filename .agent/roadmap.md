@@ -24,21 +24,23 @@ says otherwise.
 - **AN, 2026-10-13** — a long document read in pieces (up to 400 pages); Word,
   photo (HEIC optional) and reagent-table sources (server side); the
   remaining evidence-check failures (EV4).
+- **RV, 2026-10-14** — analyses with items the source does not hold wait
+  for review ("검토 대기"); review decisions, the reviewer's name and review
+  versions v1, v2, ... (the latest runs); the review view on the screen; the
+  voice and the report say what a reviewer entered.
 - **RA, 2026-10-14** — the router-first switch `VOINEY_LAB_ROUTER_FIRST`,
   built and **off**.
 
 ## Next lanes
 
-- **RV — review tab (in progress).** Upload → automatic analysis (about one minute) →
-  review (by the uploader or anyone; the reviewer's name is required to
-  register) → "검토 완료하고 등록" → the reviewed version saved (reused,
-  recorded as v1/v2) → start check → voice guidance. Values changed in review
-  are shown as "검토자 입력", values the AI proposes as "AI 제안"; a person
-  confirms either before it becomes a run value. Values and safety come only
-  from the source or a person's confirmation; an unfriendly term may get a
-  labelled general explanation; the AI never writes safety precautions or
-  completion criteria. This replaces the PI/administrator approval, which is
-  gone (2026-10-08) and does not come back.
+- **Review: what is left after lane RV.** Making review mandatory (OCR pages,
+  repaired answers and long documents are about a third of today's passes,
+  lane RV report §5); turning a long document's disagreeing overlap page into
+  a review item instead of a failed document; a way to start a new experiment
+  on an older review version inside the same revision; `--target-desk` in
+  `index.html` is used by five rules and defined nowhere. The review tab
+  itself is built (above). It replaces the PI/administrator approval, which
+  is gone (2026-10-08) and does not come back.
 - **Filtering other people's speech, step 2** — telling speakers apart; step 1
   (loudness) is built.
 - **Mobile web on a real phone** over HTTPS (`docs/PILOT_HTTPS_SETUP.md`); a

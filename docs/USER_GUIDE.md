@@ -54,6 +54,34 @@ is in. An analysis made before the analyser was improved is marked "분석기 �
 전 분석 · 다시 분석 권장". Pressing the button again while an analysis runs
 does not start a second one ("이미 분석 중").
 
+### Review an analysis
+
+When the source-evidence check cannot confirm a value -- a quotation it cannot
+find, a claim, a step number -- the server no longer throws the analysis away:
+it keeps the value as an item "확인 필요" and the protocol shows "검토 대기 ·
+확인 필요 n". Such an analysis does **not** run. (An analysis whose evidence
+fails everywhere still just fails.) Review is optional for an analysis that
+passed.
+
+1. Open the protocol: the review view lists the items first, and beside them
+   the numbered lines of the source page. A dashed line is the server's
+   guess ("AI 제안"); a "?" marks a line the OCR read poorly. You can turn the
+   page, and for a photo the piece of the picture a value was read from is shown.
+2. For an item, only the buttons the server allows appear: confirm, correct,
+   enter a value, "원문에 없음으로 비움" (leave it out), note, undo. An item
+   whose quotation was not found needs the source line **you** point at before
+   it can be confirmed or corrected. A safety statement cannot be edited (a
+   note can be added); a step cannot be left out -- analyse again instead.
+3. Write the reviewer's name and press **검토 완료하고 등록**. It is refused
+   while an item is undecided. The result is review version v1 (then v2, ...),
+   kept beside the analysis; the latest review version is the one that runs,
+   even after a later re-analysis. Uploading the same PDF again offers the
+   existing review version.
+4. A value marked "검토자 입력" came from you or a colleague, "AI 제안" from
+   the AI, "원문" from the source. In the experiment the voice says "검토자가
+   넣은 값이에요: …" once, when the step first comes; the report lists "원문
+   대비 검토자 수정 n건".
+
 ### Start an experiment
 
 1. Read the safety statements. Pressing **이 프로토콜로 시작** is the one
@@ -178,6 +206,5 @@ made.
 The reviewer and laboratory-administrator screens, protocol approval, lab
 adaptations and the eLabFTW export were removed on 2026-10-08 (lane DI). The
 voice answer from approved lab references and the voice safety report were
-removed on 2026-10-10 (lane CL). A review tab, where a person reviews the
-analysis before it is registered, is planned (lane RV); it is not in this
-build.
+removed on 2026-10-10 (lane CL). The review tab (lane RV, merged 2026-10-14) is described under "Review an
+analysis" above.
