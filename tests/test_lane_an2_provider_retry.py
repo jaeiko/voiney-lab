@@ -22,6 +22,16 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+from tests.lane_an2_support import (
+    ENV,
+    MESSAGES,
+    Clock as _Clock,
+    SequencedGemini as _SequencedGemini,
+    StatusError as _StatusError,
+    call as _call,
+    client as _client,
+    gemini_reply as _gemini_reply,
+)
 from voiney_lab import model_providers
 from voiney_lab.model_providers import (
     ModelProviderError,
@@ -31,108 +41,11 @@ from voiney_lab.model_providers import (
     observe_provider_retries,
 )
 
-MESSAGES = [
-    {"role": "system", "content": "STANDING INSTRUCTIONS"},
-    {"role": "user", "content": "PRIVATE PAGE TEXT"},
-]
-
-
-class _StatusError(Exception):
-    """An SDK error: a status, and optionally the response headers and details."""
-
-    def __init__(self, status: int, *, headers: dict | None = None, details: Any = None) -> None:
-        super().__init__(f"status {status}")
-        self.status_code = status
-        self.code = status
-        if headers is not None:
-            self.response = SimpleNamespace(headers=headers)
-        if details is not None:
-            self.details = details
-
-
-def _gemini_reply(text: str = '{"ok": true}') -> SimpleNamespace:
-    part = SimpleNamespace(thought=False, text=text, function_call=None)
-    return SimpleNamespace(
-        model_version="gemini-test",
-        candidates=[SimpleNamespace(
-            content=SimpleNamespace(parts=[part]),
-            finish_reason=SimpleNamespace(name="STOP"))],
-        usage_metadata=SimpleNamespace(
-            prompt_token_count=10, candidates_token_count=5, thoughts_token_count=0,
-            cached_content_token_count=0),
-    )
-
-
-class _SequencedGemini:
-    """A fake google-genai client that plays one outcome per call, in order."""
-
-    def __init__(self, *outcomes: Any) -> None:
-        self.outcomes = list(outcomes)
-        self.requests: list[dict[str, Any]] = []
-        self.models = SimpleNamespace(generate_content=self._generate)
-        self.aio = SimpleNamespace(models=SimpleNamespace(generate_content=self._agenerate))
-
-    def _next(self, params: dict[str, Any]) -> Any:
-        self.requests.append(params)
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
-
-    def _generate(self, **params: Any) -> Any:
-        return self._next(params)
-
-    async def _agenerate(self, **params: Any) -> Any:
-        return self._next(params)
-
-
-def _client(fake: Any, role: str = "analysis", *, asynchronous: bool = False,
-            policy: ProviderRetryPolicy | None = None, environment: dict | None = None) -> Any:
-    return chat_client(
-        RoleModel(role, "google", "gemini-3.8-flash", "low"),
-        asynchronous=asynchronous, sdk_client=fake,
-        retry_policy=policy, environment=environment,
-    )
-
-
-class _Clock:
-    """Replaces the adapter's sleep and jitter; remembers every wait."""
-
-    def __init__(self, jitter: float = 1.0) -> None:
-        self.waits: list[float] = []
-        self._jitter = jitter
-
-    def __enter__(self) -> "_Clock":
-        async def asleep(seconds: float) -> None:
-            self.waits.append(seconds)
-
-        self._patches = [
-            mock.patch.object(model_providers, "_sleep", self.waits.append),
-            mock.patch.object(model_providers, "_async_sleep", asleep),
-            mock.patch.object(model_providers, "_jitter", lambda: self._jitter),
-        ]
-        for patch in self._patches:
-            patch.start()
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        for patch in self._patches:
-            patch.stop()
-
-
-def _policy() -> ProviderRetryPolicy:
-    return ProviderRetryPolicy(max_retries=3, base_seconds=2.0, max_wait_seconds=30.0)
-
-
-def _call(client: Any) -> Any:
-    return client.chat.completions.create(model="gemini-3.8-flash", messages=MESSAGES)
-
-
 class RateLimitRetryTests(unittest.TestCase):
     def test_a_429_is_sent_again_and_the_second_answer_is_the_reply(self) -> None:
         fake = _SequencedGemini(_StatusError(429), _gemini_reply())
         with _Clock() as clock:
-            reply = _call(_client(fake, policy=_policy()))
+            reply = _call(_client(fake))
         self.assertEqual(reply.choices[0].message.content, '{"ok": true}')
         self.assertEqual(len(fake.requests), 2)
         self.assertEqual(fake.requests[0], fake.requests[1])
@@ -141,21 +54,21 @@ class RateLimitRetryTests(unittest.TestCase):
     def test_the_same_request_is_sent_each_time(self) -> None:
         fake = _SequencedGemini(_StatusError(429), _StatusError(429), _gemini_reply())
         with _Clock():
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(fake.requests[0], fake.requests[2])
 
     def test_a_retry_after_header_is_waited_exactly(self) -> None:
         error = _StatusError(429, headers={"Retry-After": "7"})
         fake = _SequencedGemini(error, _gemini_reply())
         with _Clock() as clock:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(clock.waits, [7.0])
 
     def test_a_retry_after_header_in_any_letter_case(self) -> None:
         error = _StatusError(429, headers={"retry-after": "4.5"})
         fake = _SequencedGemini(error, _gemini_reply())
         with _Clock() as clock:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(clock.waits, [4.5])
 
     def test_googles_retry_info_in_the_error_details_is_read_like_the_header(self) -> None:
@@ -164,34 +77,34 @@ class RateLimitRetryTests(unittest.TestCase):
         ]}}
         fake = _SequencedGemini(_StatusError(429, details=details), _gemini_reply())
         with _Clock() as clock:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(clock.waits, [3.5])
 
     def test_without_retry_after_the_wait_doubles_up_to_the_cap(self) -> None:
-        policy = ProviderRetryPolicy(max_retries=5, base_seconds=2.0, max_wait_seconds=10.0)
+        env = {"VOINEY_LAB_PROVIDER_RETRY_MAX": "5", "VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS": "10"}
         fake = _SequencedGemini(*[_StatusError(429)] * 5, _gemini_reply())
         with _Clock(jitter=1.0) as clock:
-            _call(_client(fake, policy=policy))
+            _call(_client(fake, environment=env))
         self.assertEqual(clock.waits, [2.0, 4.0, 8.0, 10.0, 10.0])
 
     def test_the_wait_is_jittered_between_half_and_all_of_the_step(self) -> None:
         fake = _SequencedGemini(_StatusError(429), _gemini_reply())
         with _Clock(jitter=0.0) as clock:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(clock.waits, [1.0])
 
     def test_it_gives_up_after_max_retries_with_the_providers_own_error(self) -> None:
         fake = _SequencedGemini(*[_StatusError(429)] * 4)
         with _Clock(), self.assertRaises(ModelProviderError) as caught:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual((caught.exception.kind, caught.exception.status_code), ("rate_limited", 429))
-        self.assertEqual(len(fake.requests), 1 + _policy().max_retries)
+        self.assertEqual(len(fake.requests), 1 + 3)
 
     def test_a_retry_after_longer_than_the_cap_is_not_waited_for(self) -> None:
         error = _StatusError(429, headers={"Retry-After": "120"})
         fake = _SequencedGemini(error, _gemini_reply())
         with _Clock() as clock, self.assertRaises(ModelProviderError) as caught:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(caught.exception.kind, "rate_limited")
         self.assertEqual(len(fake.requests), 1)
         self.assertEqual(clock.waits, [])
@@ -199,7 +112,7 @@ class RateLimitRetryTests(unittest.TestCase):
     def test_the_error_carries_the_retry_after_it_was_given(self) -> None:
         error = _StatusError(429, headers={"Retry-After": "120"})
         with _Clock(), self.assertRaises(ModelProviderError) as caught:
-            _call(_client(_SequencedGemini(error), policy=_policy()))
+            _call(_client(_SequencedGemini(error)))
         self.assertEqual(caught.exception.retry_after, 120.0)
 
 
@@ -209,7 +122,7 @@ class TransientServerErrorTests(unittest.TestCase):
             with self.subTest(status=status):
                 fake = _SequencedGemini(_StatusError(status), _gemini_reply())
                 with _Clock() as clock:
-                    reply = _call(_client(fake, policy=_policy()))
+                    reply = _call(_client(fake))
                 self.assertEqual(reply.choices[0].message.content, '{"ok": true}')
                 self.assertEqual(len(clock.waits), 1)
 
@@ -218,7 +131,7 @@ class TransientServerErrorTests(unittest.TestCase):
             with self.subTest(status=status):
                 fake = _SequencedGemini(_StatusError(status), _gemini_reply())
                 with _Clock() as clock, self.assertRaises(ModelProviderError):
-                    _call(_client(fake, policy=_policy()))
+                    _call(_client(fake))
                 self.assertEqual(len(fake.requests), 1)
                 self.assertEqual(clock.waits, [])
 
@@ -228,7 +141,7 @@ class TransientServerErrorTests(unittest.TestCase):
 
         fake = _SequencedGemini(APITimeoutError("slow"), _gemini_reply())
         with _Clock(), self.assertRaises(ModelProviderError) as caught:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual(caught.exception.kind, "timeout")
         self.assertEqual(len(fake.requests), 1)
 
@@ -239,7 +152,7 @@ class RoleBoundaryTests(unittest.TestCase):
             with self.subTest(role=role):
                 fake = _SequencedGemini(_StatusError(429), _gemini_reply())
                 with _Clock():
-                    _call(_client(fake, role=role, policy=_policy()))
+                    _call(_client(fake, role=role))
                 self.assertEqual(len(fake.requests), 2)
 
     def test_a_voice_turn_role_is_never_made_to_wait(self) -> None:
@@ -247,7 +160,7 @@ class RoleBoundaryTests(unittest.TestCase):
             with self.subTest(role=role):
                 fake = _SequencedGemini(_StatusError(429), _gemini_reply())
                 with _Clock() as clock, self.assertRaises(ModelProviderError):
-                    _call(_client(fake, role=role, policy=_policy()))
+                    _call(_client(fake, role=role))
                 self.assertEqual(len(fake.requests), 1)
                 self.assertEqual(clock.waits, [])
 
@@ -256,21 +169,21 @@ class AsynchronousClientTests(unittest.TestCase):
     def test_the_asynchronous_client_waits_without_blocking_and_sends_again(self) -> None:
         fake = _SequencedGemini(_StatusError(429, headers={"Retry-After": "3"}), _gemini_reply())
         with _Clock() as clock:
-            reply = asyncio.run(_call(_client(fake, asynchronous=True, policy=_policy())))
+            reply = asyncio.run(_call(_client(fake, asynchronous=True)))
         self.assertEqual(reply.choices[0].message.content, '{"ok": true}')
         self.assertEqual(clock.waits, [3.0])
 
     def test_the_asynchronous_client_gives_up_too(self) -> None:
         fake = _SequencedGemini(*[_StatusError(503)] * 4)
         with _Clock(), self.assertRaises(ModelProviderError):
-            asyncio.run(_call(_client(fake, asynchronous=True, policy=_policy())))
+            asyncio.run(_call(_client(fake, asynchronous=True)))
         self.assertEqual(len(fake.requests), 4)
 
     def test_a_cancelled_wait_sends_nothing_more(self) -> None:
         fake = _SequencedGemini(_StatusError(429), _gemini_reply())
 
         async def run() -> None:
-            await asyncio.wait_for(_call(_client(fake, asynchronous=True, policy=_policy())), 0.05)
+            await asyncio.wait_for(_call(_client(fake, asynchronous=True)), 0.05)
 
         # The real async sleep: a 2 s wait is cut by the caller's 50 ms deadline.
         with mock.patch.object(model_providers, "_jitter", lambda: 1.0):
@@ -309,7 +222,7 @@ class OtherProvidersTests(unittest.TestCase):
 
                 client = chat_client(
                     RoleModel("analysis", provider, model, "low"), asynchronous=False,
-                    sdk_client=build(create), retry_policy=_policy())
+                    sdk_client=build(create), environment=ENV)
                 with _Clock() as clock:
                     answer = client.chat.completions.create(model=model, messages=MESSAGES)
                 self.assertEqual(answer.choices[0].message.content, "ok")
@@ -323,7 +236,7 @@ class RecordTests(unittest.TestCase):
             _StatusError(429, headers={"Retry-After": "5"}), _StatusError(503), _gemini_reply())
         events = []
         with _Clock(), observe_provider_retries(events.append):
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual([(e.reason, e.status_code, e.attempt, e.wait_seconds, e.will_retry)
                           for e in events],
                          [("rate_limited", 429, 1, 5.0, True), ("server", 503, 2, 4.0, True)])
@@ -336,7 +249,7 @@ class RecordTests(unittest.TestCase):
         fake = _SequencedGemini(*[_StatusError(429)] * 4)
         events = []
         with _Clock(), observe_provider_retries(events.append), self.assertRaises(ModelProviderError):
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         self.assertEqual([e.will_retry for e in events], [True, True, True, False])
         self.assertEqual(events[-1].wait_seconds, 0.0)
 
@@ -345,7 +258,7 @@ class RecordTests(unittest.TestCase):
         with _Clock():
             with observe_provider_retries(events.append):
                 pass
-            _call(_client(_SequencedGemini(_StatusError(429), _gemini_reply()), policy=_policy()))
+            _call(_client(_SequencedGemini(_StatusError(429), _gemini_reply())))
         self.assertEqual(events, [])
 
     def test_an_observer_that_raises_does_not_break_the_call(self) -> None:
@@ -353,13 +266,13 @@ class RecordTests(unittest.TestCase):
             raise RuntimeError("observer bug")
 
         with _Clock(), observe_provider_retries(broken):
-            reply = _call(_client(_SequencedGemini(_StatusError(429), _gemini_reply()), policy=_policy()))
+            reply = _call(_client(_SequencedGemini(_StatusError(429), _gemini_reply())))
         self.assertEqual(reply.choices[0].message.content, '{"ok": true}')
 
     def test_the_server_log_names_the_retry_without_the_prompt(self) -> None:
         fake = _SequencedGemini(_StatusError(429), _gemini_reply())
         with _Clock(), self.assertLogs("voiney_lab.model_providers", level=logging.INFO) as logs:
-            _call(_client(fake, policy=_policy()))
+            _call(_client(fake))
         text = "\n".join(logs.output)
         self.assertIn("provider.retry", text)
         for word in ("provider=google", "role=analysis", "reason=rate_limited", "status=429", "attempt=1"):
@@ -399,6 +312,16 @@ class PolicySettingsTests(unittest.TestCase):
         })
         self.assertLessEqual(clamped.max_retries, 10)
         self.assertLessEqual(clamped.max_wait_seconds, 600.0)
+
+    def test_a_policy_given_to_the_client_wins_over_the_environment(self) -> None:
+        fake = _SequencedGemini(*[_StatusError(429)] * 2, _gemini_reply())
+        client = chat_client(
+            RoleModel("analysis", "google", "gemini-3.8-flash", "low"), asynchronous=False,
+            sdk_client=fake, environment={"VOINEY_LAB_PROVIDER_RETRY_MAX": "0"},
+            retry_policy=ProviderRetryPolicy(max_retries=2))
+        with _Clock():
+            _call(client)
+        self.assertEqual(len(fake.requests), 3)
 
     def test_the_client_reads_the_environment_when_no_policy_is_given(self) -> None:
         fake = _SequencedGemini(*[_StatusError(429)] * 3)

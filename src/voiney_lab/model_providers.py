@@ -383,7 +383,7 @@ def _tool_call(index: int, call_id: str, name: str, arguments: str) -> SimpleNam
 
 def _completion(
     *, content: str, tool_calls: Sequence[SimpleNamespace], usage: Any, model: str,
-    finish_reason: str = "stop",
+    finish_reason: str = "stop", provider_finish_reason: str | None = None,
 ) -> SimpleNamespace:
     message = SimpleNamespace(
         role="assistant", content=content, tool_calls=list(tool_calls) or None,
@@ -391,6 +391,9 @@ def _completion(
     return SimpleNamespace(
         model=model, usage=usage,
         choices=[SimpleNamespace(index=0, message=message, finish_reason=finish_reason)],
+        # The provider's own ending, where an adapter keeps it (Gemini's
+        # "STOP", "MAX_TOKENS", "SAFETY"...); the empty-answer resend reads it.
+        provider_finish_reason=provider_finish_reason,
         # What a Responses-API reader (the supplemental explanation) reads.
         output_text=content,
         output=[SimpleNamespace(
@@ -1003,12 +1006,29 @@ def _retry_after(exc: BaseException) -> float | None:
     return seconds
 
 
+#: An empty answer that ended with STOP is sent again this many times.
+EMPTY_STOP_RESENDS = 1
+
+
+def _empty_stop(reply: Any) -> bool:
+    """A reply that ended with STOP and holds no text and no function call."""
+
+    if getattr(reply, "provider_finish_reason", None) != "STOP":
+        return False
+    choices = getattr(reply, "choices", None) or ()
+    message = getattr(choices[0], "message", None) if choices else None
+    if message is None:
+        return False
+    return not (getattr(message, "content", None) or "").strip() and not getattr(message, "tool_calls", None)
+
+
 class _Retrying:
     """Sends a background role's request again after a transient refusal.
 
     The request is the same bytes each time and the reply goes through the
-    same checks as any other (nothing here judges a reply). Streams are not
-    sent again: their errors come while the caller already reads them.
+    same checks as any other (nothing here judges a reply). An empty answer
+    that ended with STOP is sent once more. Streams are not sent again: their
+    errors come while the caller already reads them.
     """
 
     def __init__(self, role_model: RoleModel, provider: str, policy: ProviderRetryPolicy) -> None:
@@ -1041,20 +1061,40 @@ class _Retrying:
         self._event(exc.kind, exc.status_code, attempt, wait or 0.0, exc.retry_after, wait is not None)
         return wait
 
+    def after_reply(self, reply: Any, empties: int) -> bool:
+        """Whether an empty STOP answer is to be sent once more.
+
+        ``empties`` counts the empty answers before this one. Gemini ended
+        the request with STOP and wrote no text and no function call
+        (lane AN2, decision 2: 7 of 36 pieces of a 315-page document, each
+        answered normally when sent again). One resend, and no wait: the
+        provider refused nothing.
+        """
+
+        if not _empty_stop(reply):
+            return False
+        resend = empties < EMPTY_STOP_RESENDS
+        self._event("empty_stop", None, empties + 1, 0.0, None, resend)
+        return resend
+
     def sync(self, create: Callable[..., Any]) -> Callable[..., Any]:
         def run(**kwargs: Any) -> Any:
             if kwargs.get("stream"):
                 return create(**kwargs)
-            failures = 0
+            failures = empties = 0
             while True:
                 try:
-                    return create(**kwargs)
+                    reply = create(**kwargs)
                 except ModelProviderError as exc:
                     wait = self.after_error(exc, failures)
                     if wait is None:
                         raise
-                failures += 1
-                _sleep(wait)
+                    failures += 1
+                    _sleep(wait)
+                    continue
+                if not self.after_reply(reply, empties):
+                    return reply
+                empties += 1
 
         return run
 
@@ -1062,16 +1102,20 @@ class _Retrying:
         async def run(**kwargs: Any) -> Any:
             if kwargs.get("stream"):
                 return await create(**kwargs)
-            failures = 0
+            failures = empties = 0
             while True:
                 try:
-                    return await create(**kwargs)
+                    reply = await create(**kwargs)
                 except ModelProviderError as exc:
                     wait = self.after_error(exc, failures)
                     if wait is None:
                         raise
-                failures += 1
-                await _async_sleep(wait)
+                    failures += 1
+                    await _async_sleep(wait)
+                    continue
+                if not self.after_reply(reply, empties):
+                    return reply
+                empties += 1
 
         return run
 
@@ -1677,7 +1721,20 @@ class _GeminiBackend:
         return list(getattr(content, "parts", None) or ())
 
     @staticmethod
-    def _finish_reason(response: Any, calls: bool) -> str:
+    def _finish_name(response: Any) -> str:
+        """Gemini's own finish reason, upper case ("STOP", "MAX_TOKENS",
+        "SAFETY"...; an enum, its name or a dotted name), or "" when the
+        reply has none."""
+
+        candidates = getattr(response, "candidates", None) or ()
+        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        name = getattr(reason, "name", None)
+        if not isinstance(name, str):
+            name = reason if isinstance(reason, str) else ""
+        return name.rsplit(".", 1)[-1].upper()
+
+    @classmethod
+    def _finish_reason(cls, response: Any, calls: bool) -> str:
         """The OpenAI-style finish reason of a Gemini reply.
 
         "length" when the model stopped at max_output_tokens (Gemini's
@@ -1689,12 +1746,7 @@ class _GeminiBackend:
 
         if calls:
             return "tool_calls"
-        candidates = getattr(response, "candidates", None) or ()
-        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
-        name = getattr(reason, "name", None)
-        if not isinstance(name, str):
-            name = reason if isinstance(reason, str) else ""
-        return "length" if name.rsplit(".", 1)[-1].upper() == "MAX_TOKENS" else "stop"
+        return "length" if cls._finish_name(response) == "MAX_TOKENS" else "stop"
 
     @classmethod
     def _reply(cls, response: Any, model: str) -> SimpleNamespace:
@@ -1717,6 +1769,7 @@ class _GeminiBackend:
             usage=cls._usage(getattr(response, "usage_metadata", None)),
             model=str(getattr(response, "model_version", None) or model),
             finish_reason=cls._finish_reason(response, bool(calls)),
+            provider_finish_reason=cls._finish_name(response) or None,
         )
 
     def create(self, **kwargs: Any) -> Any:
