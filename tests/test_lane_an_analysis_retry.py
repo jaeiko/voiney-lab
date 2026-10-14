@@ -7,7 +7,8 @@ revision's first analysis request, the same request is sent once more,
 automatically. A failed source-evidence check, a time-out and a missing
 provider are not sent again. While the retry runs the progress line says
 "다시 시도 중(1/1)"; if the second answer fails too, a person presses
-"분석 다시 시도" as before.
+"분석 다시 시도" as before -- and since lane AN's EV4 step (2026-10-13) that
+request is retried once in the same way.
 
 Measured 2026-10-06 (lane PX): ANKOM's first analysis after the change ended
 in ``protocol_analysis_invalid_response``; the same document passed on other
@@ -156,25 +157,40 @@ class RetryOnceTests(_Case):
         self.assertEqual(self.status()["failure_code"], "protocol_analysis_invalid_evidence")
         self.assertEqual(self.catalog.pipeline_status(self.protocol_id)["stage"], "evidence")
 
-    def test_a_person_pressing_retry_after_that_sends_one_request(self) -> None:
+    def test_a_person_pressing_retry_after_that_gets_its_own_one_retry(self) -> None:
+        # Lane AN (2026-10-13), EV4: each request is one run with one retry.
         self.request_and_analyze([invalid_response(), invalid_response()])
         analyze, error = self.request_and_analyze(
             [invalid_response(), self.draft], analysis_id="analysis-" + "b" * 32)
+        self.assertIsNone(error)
+        self.assertEqual(analyze.call_count, 2)
+        self.assertEqual(self.event_types().count("protocol_analysis_retry_started"), 2)
+        self.assertEqual(self.status()["automatic_retry"]["state"], "passed")
+
+    def test_a_person_s_retry_is_sent_again_once_not_twice(self) -> None:
+        self.request_and_analyze([invalid_response(), invalid_response()])
+        analyze, error = self.request_and_analyze(
+            [invalid_response(), invalid_response(), self.draft],
+            analysis_id="analysis-" + "b" * 32)
         self.assertIsInstance(error, ProtocolAnalysisResponseError)
-        self.assertEqual(analyze.call_count, 1)
-        self.assertEqual(self.event_types().count("protocol_analysis_retry_started"), 1)
+        self.assertEqual(analyze.call_count, 2)
+        self.assertEqual(self.event_types().count("protocol_analysis_retry_started"), 2)
         self.assertEqual(self.status()["failure_code"], "protocol_analysis_invalid_response")
+        self.assertEqual(self.status()["automatic_retry"]["state"], "failed")
 
 
 class NotRetriedTests(_Case):
-    def test_only_the_first_request_of_the_revision_is_retried(self) -> None:
-        # A person's "분석 다시 시도" after an earlier failure of another kind.
+    def test_a_person_s_retry_after_another_failure_is_retried_as_its_own_run(self) -> None:
+        # A person's "분석 다시 시도" after an earlier failure of another kind:
+        # the time-out was not sent again, the person's request is (lane AN,
+        # 2026-10-13, EV4).
         self.request_and_analyze([ProtocolAnalysisTimeoutError("timed out")])
+        self.assertNotIn("protocol_analysis_retry_started", self.event_types())
         analyze, error = self.request_and_analyze(
             [invalid_response(), self.draft], analysis_id="analysis-" + "c" * 32)
-        self.assertIsInstance(error, ProtocolAnalysisResponseError)
-        self.assertEqual(analyze.call_count, 1)
-        self.assertNotIn("protocol_analysis_retry_started", self.event_types())
+        self.assertIsNone(error)
+        self.assertEqual(analyze.call_count, 2)
+        self.assertEqual(self.event_types().count("protocol_analysis_retry_started"), 1)
 
     def test_other_failures_are_not_sent_again(self) -> None:
         failures = (

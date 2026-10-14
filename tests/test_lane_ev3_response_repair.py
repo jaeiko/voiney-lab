@@ -332,15 +332,17 @@ class TheCatalogRecordsTheRepairTests(unittest.TestCase):
         self.assertEqual(model.calls, 1)
         self.assertEqual(self.events("protocol_analysis_retry_started"), [])
 
-    def test_a_person_s_second_request_is_still_one_request(self) -> None:
+    def test_a_person_s_second_request_gets_its_own_retry_too(self) -> None:
+        # One request here until lane AN's EV4 step (2026-10-13): a person's
+        # "분석 다시 시도" now gets the one retry a first request gets, a
+        # repaired answer refused by a check included.
         broken = self.raw().replace('"warnings":', 'warnings":', 1)
         self.analyze(broken, broken)
         analysis_id = "analysis-" + "9" * 32
         self.catalog.request_analysis(self.protocol_id, analysis_id)
         model = _RawModel(one_short(self.raw(instruction="1. Add the solution.")), self.raw())
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            self.catalog.analyze(self.protocol_id, model, analysis_id=analysis_id)
-        self.assertEqual(model.calls, 1)
+        self.catalog.analyze(self.protocol_id, model, analysis_id=analysis_id)
+        self.assertEqual(model.calls, 2)
 
     def test_another_broken_answer_is_still_retried_once(self) -> None:
         broken = self.raw().replace('"warnings":', 'warnings":', 1)

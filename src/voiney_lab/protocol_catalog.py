@@ -11,9 +11,10 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -23,16 +24,25 @@ from typing import Any, Callable, Sequence
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
+    ANALYSIS_PIECE_CONCURRENCY,
+    MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
+    AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisIncompleteError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolAnalysisModel,
+    ProtocolAnalysisPieceConflictError,
+    ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
+    analysis_pieces,
     analyze_protocol_extraction,
+    analyze_protocol_piece,
     check_analysis_page_count,
+    check_pieced_page_count,
+    join_piece_analyses,
     prepare_protocol_analysis_request,
     verify_step_timers,
 )
@@ -40,6 +50,7 @@ from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
     ProtocolPdfPage,
+    SourceConversion,
     extract_protocol_pdf,
 )
 from voiney_lab.experiment_protocol_store import (
@@ -69,10 +80,11 @@ _ANALYSIS_FAILED_EVENT = "protocol_analysis_failed"
 _ANALYSIS_RETRY_EVENT = "protocol_analysis_retry_started"
 #: Lane AN, decision 1 (2026-10-07), changing lane PA's "no automatic
 #: retry": an analysis whose response broke the structure the domain
-#: validation demands -- and only that failure, only on the revision's first
-#: analysis request -- is sent once more, the same request, by itself. A
-#: failed source-evidence check, a time-out and a missing provider are not:
-#: sending them again costs a call and settles nothing a person need not see.
+#: validation demands -- and only that failure, once per analysis request
+#: (since lane AN's EV4 step, 2026-10-13, a person's "분석 다시 시도" too) --
+#: is sent once more, the same request, by itself. A failed source-evidence
+#: check, a time-out and a missing provider are not: sending them again costs
+#: a call and settles nothing a person need not see.
 #: Measured 2026-10-06 (lane PX): ANKOM ended so once and passed on other runs.
 AUTOMATIC_RETRY_FAILURE_CODES = frozenset({"protocol_analysis_invalid_response"})
 AUTOMATIC_RETRY_LIMIT = 1
@@ -294,8 +306,50 @@ def _failures_not_superseded(events: Sequence[Any]) -> tuple[Any, ...]:
     )
     return tuple(
         event for index, event in enumerate(events)
-        if not (index < last_superseding and event.event_type == _ANALYSIS_FAILED_EVENT)
+        if not (
+            index < last_superseding
+            and event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+        )
     )
+
+
+#: The run state a piece run (lane AN, decision 2) ended in, by its failure
+#: code; any other failure is "analysis_failed".
+_PIECE_RUN_FAILED_STATES = {
+    "protocol_analysis_piece_failed": "chunk_analysis_failed",
+    "protocol_analysis_piece_conflict": "merge_conflict",
+}
+
+
+def _piece_run_end(
+    run_events: Sequence[Any], revision_events: Sequence[Any],
+) -> tuple[str, str | None] | None:
+    """How a piece run ended, from the lifecycle events after its plan.
+
+    (state, failure code) once the analysis passed or failed after the
+    plan; None while the run is still going. A piece run records its pieces
+    as chunk events and its end as the analysis' own ready or failed event.
+    """
+
+    if not run_events:
+        return None
+    planned_at = run_events[0].sequence_id
+    after = [
+        event for event in revision_events
+        if event.event_type in {
+            _ANALYSIS_FAILED_EVENT, _ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT,
+        }
+        and event.sequence_id > planned_at
+    ]
+    if not after:
+        return None
+    last = after[-1]
+    if last.event_type == _ANALYSIS_FAILED_EVENT:
+        payload = last.payload if isinstance(last.payload, dict) else {}
+        code = payload.get("failure_code")
+        code = code if isinstance(code, str) and code else "analysis_failed"
+        return _PIECE_RUN_FAILED_STATES.get(code, "analysis_failed"), code
+    return "review_required", None
 
 
 def _automatic_retry_status(events: Sequence[Any]) -> dict[str, object] | None:
@@ -480,9 +534,20 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "듭니다). 다시 해도 같으면 절차가 있는 쪽만 골라 PDF 로 만들어 올려 주세요."
     ),
     "protocol_analysis_too_many_pages": (
-        "한 번에 분석하는 문서는 60쪽까지입니다. 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 "
-        "만들어 다시 올려 주세요(쪽 범위를 고르는 화면은 아직 없습니다). 분석 모델은 "
-        "부르지 않았고 원문은 바뀌지 않습니다."
+        f"분석하는 문서는 {MAX_PIECED_ANALYSIS_PAGES}쪽까지입니다. 실험에 쓸 절차가 있는 쪽만 "
+        "골라 PDF 로 만들어 다시 올려 주세요(쪽 범위를 고르는 화면은 아직 없습니다). 분석 "
+        "모델은 부르지 않았고 원문은 바뀌지 않습니다."
+    ),
+    # Lane AN, decision 2: a long document read in pieces.
+    "protocol_analysis_piece_failed": (
+        "실패한 조각은 자동으로 한 번 다시 보냈지만 다시 실패해, 나머지 조각의 결과도 쓰지 "
+        "않았습니다(일부만 읽은 분석은 쓰지 않습니다). '분석 다시 시도'를 누르면 문서 전체를 "
+        "새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 바뀌지 않습니다."
+    ),
+    "protocol_analysis_piece_conflict": (
+        "두 조각이 함께 읽은 쪽을 서로 다르게 읽어 결과를 쓰지 않았습니다. '분석 다시 시도'를 "
+        "누르면 문서 전체를 새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 "
+        "바뀌지 않습니다."
     ),
 }
 _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
@@ -607,7 +672,11 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "protocol_pdf_too_large": "PDF 가 등록 한도보다 큽니다.",
     "protocol_analysis_incomplete": "분석이 원문 단계를 다 담지 못했어요.",
     "protocol_analysis_too_many_pages": (
-        "원문이 60쪽을 넘어 한 번에 분석하지 않았어요. 분석할 쪽 범위를 줄여야 합니다."),
+        f"원문이 {MAX_PIECED_ANALYSIS_PAGES}쪽을 넘어 분석하지 않았어요. 분석할 쪽 범위를 "
+        "줄여야 합니다."),
+    "protocol_analysis_piece_failed": "일부 조각 분석 실패",
+    "protocol_analysis_piece_conflict": (
+        "조각을 합치다 같은 쪽을 두 조각이 서로 다르게 읽은 곳이 있어 결과를 쓰지 않았습니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
     "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
     "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
@@ -920,6 +989,10 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     extracted_chars = sum(len(page.text.strip()) for page in extraction.pages)
     if extraction.non_empty_page_count == 0 or extracted_chars < 32:
         return "ocr_required"
+    if analysis_pieces(extraction):
+        # Read in pieces (lane AN, decision 2): "대형 문서 분석 요청 대기"
+        # until the analysis starts, as the screen says it.
+        return "chunked_analysis_required"
     try:
         prepare_protocol_analysis_request(
             extraction, max_input_bytes=MAX_SINGLE_PASS_INPUT_BYTES
@@ -927,6 +1000,53 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     except ProtocolAnalysisInputTooLargeError:
         return "chunked_analysis_required"
     return "structured_analysis_ready"
+
+
+#: An analysis refused under lane EV2's 60-page bound, of a document the
+#: pieces read now (lane AN, decision 2): it may be asked again.
+_OLD_PAGE_BOUND_KO = (
+    "이 원문은 예전 한도(한 번에 60쪽)에 걸려 분석하지 않았어요. 이제 긴 문서는 조각으로 "
+    "나눠 분석합니다."
+)
+_OLD_PAGE_BOUND_ACTION = (
+    "'분석 다시 시도'를 누르면 조각으로 나눠 새로 분석합니다(조각 수만큼 분석 모델 호출 "
+    "비용이 듭니다). 원문은 바뀌지 않습니다."
+)
+
+
+def _refused_under_the_old_page_bound(failure_code: str | None, page_count: int) -> bool:
+    return (
+        failure_code == "protocol_analysis_too_many_pages"
+        and page_count <= MAX_PIECED_ANALYSIS_PAGES
+    )
+
+
+def _failed_pieces_ko(events: Sequence[Any]) -> str | None:
+    """"41–59쪽, 97–115쪽": the pieces the latest failed analysis names (lane AN, 2)."""
+
+    failed = next(
+        (
+            event.payload for event in reversed(events)
+            if event.event_type == _ANALYSIS_FAILED_EVENT and isinstance(event.payload, dict)
+        ),
+        None,
+    )
+    pieces = (failed or {}).get("failed_pieces")
+    if not isinstance(pieces, list):
+        return None
+    pages = [
+        f"{piece['first_page']}–{piece['last_page']}쪽" for piece in pieces
+        if isinstance(piece, dict) and isinstance(piece.get("first_page"), int)
+        and isinstance(piece.get("last_page"), int)
+    ]
+    return ", ".join(pages) or None
+
+
+def _piece_failure_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+        return code
+    return "protocol_analysis_error"
 
 
 def _safe_evidence_failure(
@@ -1444,6 +1564,14 @@ class ProtocolCatalog:
         )
         if not planned:
             return ()
+        if any(
+            event.event_type == _ANALYSIS_REQUESTED_EVENT
+            and event.sequence_id > planned[-1].sequence_id
+            for event in events
+        ):
+            # A later request opened a run of its own (lane AN, decision 2):
+            # the planned run is no longer the one on screen.
+            return ()
         payload = planned[-1].payload
         if not isinstance(payload, dict):
             return ()
@@ -1634,6 +1762,16 @@ class ProtocolCatalog:
             chunks.append(chunk_status)
         completed = sum(chunk["status"] == "completed" for chunk in chunks)
         failed = sum(chunk["status"] == "failed" for chunk in chunks)
+        end = _piece_run_end(events, tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        ))
+        if end is not None:
+            # A piece run (lane AN, decision 2) ends in the analysis' own
+            # ready or failed event, not in a chunk event.
+            state, end_code = end
+            failure_code = end_code or failure_code
+            merge_status = "complete" if state == "review_required" else merge_status
         return ProtocolAnalysisRunStatus(
             protocol_id=protocol_id,
             candidate_revision_id=candidate_revision_id,
@@ -1662,6 +1800,7 @@ class ProtocolCatalog:
                     "merge_conflict",
                     "chunk_analysis_failed",
                     "chunk_analysis_cancelled",
+                    "analysis_failed",
                 }
                 else "analyzing"
             ),
@@ -1731,6 +1870,13 @@ class ProtocolCatalog:
             )
             if failed is not None and not chunk_events:
                 analysis_status = "analysis_failed"
+            elif chunk_events:
+                end = _piece_run_end(chunk_events, tuple(
+                    event for event in self.store.list_events(revision.experiment_id)
+                    if event.protocol_revision_number == revision.revision_number
+                ))
+                if end is not None and end[0] != "review_required":
+                    analysis_status = end[0]
             lifecycle_events = tuple(
                 event
                 for event in self.store.list_events(revision.experiment_id)
@@ -2062,11 +2208,20 @@ class ProtocolCatalog:
                 {
                     "code": latest_failure,
                     "detail": latest_failure_detail,
-                    "retryable": latest_failure not in _NOT_RETRYABLE_FAILURE_CODES,
+                    "retryable": (
+                        latest_failure not in _NOT_RETRYABLE_FAILURE_CODES
+                        or _refused_under_the_old_page_bound(
+                            latest_failure, extraction.page_count)
+                    ),
                     # Lane PA decision 4 (2026-10-06): the recovery guidance
                     # is the server's, in Korean.
-                    "action": _ANALYSIS_RECOVERY_ACTIONS.get(
-                        latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
+                    "action": (
+                        _OLD_PAGE_BOUND_ACTION
+                        if _refused_under_the_old_page_bound(
+                            latest_failure, extraction.page_count)
+                        else _ANALYSIS_RECOVERY_ACTIONS.get(
+                            latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
+                        )
                     ),
                 }
                 if latest_failure is not None and reanalysis is None
@@ -2127,6 +2282,7 @@ class ProtocolCatalog:
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=reanalysis,
             events=revision_events,
+            page_count=extraction.page_count,
         )
         if analysis is None:
             return base
@@ -2278,7 +2434,73 @@ class ProtocolCatalog:
             automatic_retry=_automatic_retry_status(revision_events),
             reanalysis=self._reanalysis_status(revision_events, analysis),
             events=revision_events,
+            page_count=extraction.page_count,
         )
+
+    def _piece_progress_ko(self, revision: ProtocolRevisionRecord) -> str | None:
+        """The progress line of a piece run still going, or None (lane AN, 2).
+
+        "긴 문서를 조각 11개로 나눠 분석 중입니다 · 조각 5·6·7·8/11 분석 중 · 끝난 조각
+        4/11", a retry beside the piece it is for, and the joining once
+        every piece has passed.
+        """
+
+        events = self._latest_chunk_events(revision)
+        if not events or _piece_run_end(events, tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        )) is not None:
+            return None
+        plan = events[0].payload if isinstance(events[0].payload, dict) else {}
+        chunks = plan.get("chunks") if isinstance(plan.get("chunks"), list) else []
+        count = len(chunks)
+        if not count:
+            return None
+        state: dict[str, str] = {}
+        retrying: set[str] = set()
+        joining = False
+        for event in events[1:]:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            chunk_id = str(payload.get("chunk_id"))
+            if event.event_type == _CHUNK_STARTED_EVENT:
+                state[chunk_id] = "in_progress"
+                if payload.get("attempt") == 2:
+                    retrying.add(chunk_id)
+            elif event.event_type == _CHUNK_COMPLETED_EVENT:
+                state[chunk_id] = "completed"
+                retrying.discard(chunk_id)
+            elif event.event_type == _CHUNK_FAILED_EVENT:
+                state[chunk_id] = "failed"
+                retrying.discard(chunk_id)
+            elif event.event_type == _MERGE_STARTED_EVENT:
+                joining = True
+        ordinal = {
+            str(chunk.get("chunk_id")): chunk.get("ordinal")
+            for chunk in chunks if isinstance(chunk, dict)
+        }
+        done = sum(1 for value in state.values() if value == "completed")
+        if joining:
+            return (
+                f"긴 문서를 조각 {count}개로 나눠 분석했습니다 · 조각 {count}개를 합쳐 원문 "
+                "전체와 다시 대조하고 있습니다."
+            )
+        running = sorted(
+            ordinal[chunk_id] for chunk_id, value in state.items()
+            if value == "in_progress" and isinstance(ordinal.get(chunk_id), int)
+        )
+        line = f"긴 문서를 조각 {count}개로 나눠 분석 중입니다"
+        if running:
+            line += f" · 조각 {'·'.join(str(index) for index in running)}/{count} 분석 중"
+        line += f" · 끝난 조각 {done}/{count}"
+        again = sorted(
+            ordinal[chunk_id] for chunk_id in retrying
+            if isinstance(ordinal.get(chunk_id), int)
+        )
+        if again:
+            line += (
+                f" · 조각 {'·'.join(str(index) for index in again)} 다시 시도 중(1/1)"
+            )
+        return line + "."
 
     def _pipeline(
         self,
@@ -2291,6 +2513,7 @@ class ProtocolCatalog:
         automatic_retry: dict[str, object] | None = None,
         reanalysis: dict[str, object] | None = None,
         events: Sequence[Any] = (),
+        page_count: int | None = None,
     ) -> dict[str, object]:
         """One Korean line: the stage a document is at, whether it is stuck
         there, why, and what a person does (lane PX, decision 4).
@@ -2408,6 +2631,18 @@ class ProtocolCatalog:
                 stage = ("evidence" if failure_code == "protocol_analysis_invalid_evidence"
                          else "analysis")
                 message = _ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다.")
+                if page_count is not None and _refused_under_the_old_page_bound(
+                    failure_code, page_count
+                ):
+                    # Lane AN, decision 2: refused under lane EV2's 60-page
+                    # bound, which the pieces replaced.
+                    return result(
+                        "analysis", blocked=True, message=_OLD_PAGE_BOUND_KO,
+                        action=_OLD_PAGE_BOUND_ACTION, failure_code=failure_code)
+                failed_pieces = _failed_pieces_ko(events)
+                if failure_code == "protocol_analysis_piece_failed" and failed_pieces:
+                    # Lane AN, decision 2: "일부 조각 분석 실패 · 41–59쪽".
+                    message += f" · {failed_pieces}"
                 if retry.get("state") == "failed" and truncated_how:
                     message += (f" {truncated_how} 자동으로 한 번 다시 보냈지만 "
                                 f"자동 재시도({retry_count})도 실패했습니다.")
@@ -2422,6 +2657,12 @@ class ProtocolCatalog:
                         failure_code, _DEFAULT_ANALYSIS_RECOVERY_ACTION),
                     failure_code=failure_code,
                     **({"response_repair": failed_repair} if failed_repair else {}))
+            pieces_line = self._piece_progress_ko(revision)
+            if pieces_line is not None and entry.lifecycle_state in {
+                "analysis_pending", "analyzing",
+            }:
+                # Lane AN, decision 2: "조각 k/n 분석 중".
+                return result("analysis", blocked=False, message=pieces_line)
             if entry.lifecycle_state in {"analysis_pending", "analyzing"} or (
                 entry.analysis_status in {
                     "chunk_planned", "chunk_analysis_in_progress", "merge_in_progress",
@@ -2482,7 +2723,15 @@ class ProtocolCatalog:
         *,
         source_filename: str,
         media_type: str,
+        converted_from: SourceConversion | None = None,
     ) -> ProtocolRegistration:
+        """Register one source PDF, or find the one already registered.
+
+        ``converted_from`` names the Word document or photo the PDF was made
+        from (lane AN, FM); it is kept in the registration event, where
+        ``find_converted_upload`` finds it.
+        """
+
         filename = _display_filename(source_filename)
         if media_type.casefold().split(";", 1)[0].strip() != PDF_MEDIA_TYPE:
             raise ProtocolRegistrationError(
@@ -2511,12 +2760,91 @@ class ProtocolCatalog:
                 "source_filename": filename,
                 "source_sha256": extraction.sha256,
                 "analysis_status": status,
+                **(
+                    {"converted_from": converted_from.payload()}
+                    if converted_from is not None else {}
+                ),
             },
         )
         return ProtocolRegistration(
             self._entry_for_revision(creation.protocol_revision),
             deduplicated=False,
         )
+
+    def attach_reagent_table(
+        self, protocol_id: str, source: str | Path, *, filename: str,
+    ) -> tuple[dict[str, object], bool]:
+        """Attach an .xlsx workbook to a protocol as its reagent table (FM b).
+
+        Append-only: one event per workbook, named by its checksum; the same
+        workbook attached again returns the one already there. Returns the
+        table and whether it was already attached.
+        """
+
+        if not isinstance(filename, str) or not _SAFE_TABLE_FILENAME.fullmatch(filename):
+            raise ReagentTableError("Reagent table filename must be one plain .xlsx filename.")
+        revision = self._latest_protocol_revision(protocol_id)
+        digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        for table in self.reagent_tables(protocol_id):
+            if table.get("sha256") == digest:
+                return table, True
+        workbook = read_reagent_workbook(source)
+        table_id = f"reagent-table-{digest[:24]}"
+        payload = {
+            "table_id": table_id,
+            "filename": filename,
+            "media_type": REAGENT_TABLE_MEDIA_TYPE,
+            "sha256": digest,
+            "byte_size": Path(source).stat().st_size,
+            "authority": "person_upload",
+            **workbook,
+        }
+        self.store.append_event(
+            f"{table_id}-{revision.pdf_checksum[:16]}",
+            protocol_id,
+            revision.revision_number,
+            _REAGENT_TABLE_EVENT,
+            payload,
+        )
+        return payload, False
+
+    def reagent_tables(self, protocol_id: str) -> list[dict[str, object]]:
+        """The reagent tables attached to a protocol, oldest first."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        return [
+            event.payload for event in self.store.list_events(revision.experiment_id)
+            if event.event_type == _REAGENT_TABLE_EVENT and isinstance(event.payload, dict)
+        ]
+
+    def find_converted_upload(self, sha256: str) -> ProtocolRegistration | None:
+        """The protocol a Word document or photo with this checksum made, if any.
+
+        Lane AN, FM: LibreOffice writes the time into each PDF it prints, so
+        the same .docx uploaded again gives other PDF bytes; it is found by
+        its own checksum before it is converted again.
+        """
+
+        revision = self._revision_converted_from(sha256)
+        if revision is None:
+            return None
+        return ProtocolRegistration(self._entry_for_revision(revision), deduplicated=True)
+
+    def _revision_converted_from(self, sha256: str) -> ProtocolRevisionRecord | None:
+        """The revision registered from the upload with this checksum, if any."""
+
+        for experiment in self.store.list_experiments():
+            for event in self.store.list_events(experiment.experiment_id):
+                if event.event_type != "protocol_registered" or not isinstance(
+                    event.payload, dict
+                ):
+                    continue
+                origin = event.payload.get("converted_from")
+                if isinstance(origin, dict) and origin.get("sha256") == sha256:
+                    return self.store.get_protocol_revision(
+                        experiment.experiment_id, event.protocol_revision_number
+                    )
+        return None
 
     def analyze(
         self,
@@ -2538,11 +2866,15 @@ class ProtocolCatalog:
         )
         extraction = extract_protocol_pdf(source)
         extraction = self._extraction_for_analysis(revision, extraction)
+        pieces = analysis_pieces(extraction)
         try:
-            # Lane EV2, decision 4: a document longer than one analysis
-            # reads is refused here, before any model call, with the advice
-            # to upload the pages that hold the procedure.
-            check_analysis_page_count(extraction)
+            # Lane EV2, decision 4, changed by lane AN, decision 2: a document
+            # longer than one analysis reads is read in pieces; one longer
+            # than the pieces read is refused here, before any model call.
+            if pieces:
+                check_pieced_page_count(extraction)
+            else:
+                check_analysis_page_count(extraction)
         except ProtocolAnalysisTooManyPagesError as exc:
             self._record_analysis_failure(revision, analysis_id, exc)
             raise
@@ -2558,6 +2890,15 @@ class ProtocolCatalog:
             _ANALYSIS_STARTED_EVENT,
             {"status": "analyzing", "analysis_id": analysis_id},
         )
+        if pieces:
+            try:
+                draft = self._analyze_in_pieces(
+                    revision, extraction, model, pieces, analysis_id=analysis_id)
+            except Exception as exc:
+                self._record_analysis_failure(revision, analysis_id, exc)
+                raise
+            return self._store_passed_analysis(
+                revision, draft, analysis_id, pieces=pieces)
         if status == "chunked_analysis_required":
             raise ProtocolChunkedAnalysisRequiredError(
                 "Protocol text is larger than one analysis reads."
@@ -2611,6 +2952,139 @@ class ProtocolCatalog:
                 self._record_analysis_failure(
                     revision, analysis_id, retry_exc, truncated=observed.truncated)
                 raise
+        return self._store_passed_analysis(revision, draft, analysis_id)
+
+    def _analyze_in_pieces(
+        self,
+        revision: ProtocolRevisionRecord,
+        extraction: ProtocolPdfExtraction,
+        model: ProtocolAnalysisModel,
+        pieces: tuple[AnalysisPiece, ...],
+        *,
+        analysis_id: str,
+    ) -> ProtocolAnalysisDraft:
+        """Analyse a long document in pieces, ``ANALYSIS_PIECE_CONCURRENCY`` at once.
+
+        Lane AN, decision 2. The plan and each piece's start, pass and
+        failure are ledger events of this request's run (``analysis_id``),
+        which the run status and the pipeline line read ("조각 k/n 분석 중").
+        A piece that fails is sent once more by itself -- the same request,
+        or one reasoning level lower when its answer was cut at the output
+        limit (lane AQ) -- and a piece that fails again fails the document:
+        nothing passes on part of it. The pieces that passed are then joined
+        and the joined analysis is checked against the whole document.
+        """
+
+        protocol_id = revision.experiment_id
+        run = {"analysis_run_id": analysis_id}
+
+        def append(event_id: str, event_type: str, payload: dict[str, object]) -> None:
+            self.store.append_event(
+                event_id, protocol_id, revision.revision_number, event_type,
+                {**run, **payload},
+            )
+
+        append(f"pieces-planned-{analysis_id}", _CHUNK_PLAN_EVENT, {
+            "status": "planned",
+            "chunks": [
+                {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index,
+                 "source_page_start": piece.first_page,
+                 "source_page_end": piece.last_page}
+                for piece in pieces
+            ],
+        })
+        # The workers only call the model and check its answer. The ledger
+        # connection belongs to this thread, so their starts come back here
+        # through ``outbox`` and are written in order.
+        outbox: queue.SimpleQueue[tuple[str, str, dict[str, object]]] = queue.SimpleQueue()
+
+        def one(piece: AnalysisPiece) -> ProtocolAnalysisDraft:
+            chunk = {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index}
+            observed = _ObservedAnalysisModel.wrap(model)
+            outbox.put((f"piece-started-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT,
+                        {**chunk, "status": "in_progress", "attempt": 1}))
+            try:
+                return analyze_protocol_piece(extraction, piece, observed.model)
+            except Exception as exc:  # noqa: BLE001 - sent once more by itself
+                retry_model, retry_payload = observed.retry()
+                outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
+                    **chunk, "status": "in_progress", "attempt": 2,
+                    "retry_of_failure_code": _piece_failure_code(exc), **retry_payload,
+                }))
+            return analyze_protocol_piece(extraction, piece, retry_model)
+
+        def drain() -> None:
+            while True:
+                try:
+                    event_id, event_type, payload = outbox.get_nowait()
+                except queue.Empty:
+                    return
+                append(event_id, event_type, payload)
+
+        drafts: dict[int, ProtocolAnalysisDraft] = {}
+        failures: dict[int, BaseException] = {}
+        with ThreadPoolExecutor(
+            max_workers=ANALYSIS_PIECE_CONCURRENCY,
+            thread_name_prefix="protocol-piece-analysis",
+        ) as pool:
+            futures = {pool.submit(one, piece): piece for piece in pieces}
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                drain()
+                for future in sorted(done, key=lambda item: futures[item].index):
+                    piece = futures[future]
+                    chunk = {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index}
+                    try:
+                        draft = future.result()
+                    except Exception as exc:  # noqa: BLE001 - the piece's result
+                        failures[piece.index] = exc
+                        failure: dict[str, object] = {
+                            **chunk, "status": "failed", "attempt": 2,
+                            "failure_code": _piece_failure_code(exc),
+                        }
+                        if isinstance(exc, ProtocolAnalysisEvidenceError):
+                            failure["evidence_failure"] = exc.diagnostic.privacy_safe_dict()
+                        append(f"piece-failed-{analysis_id}-{piece.index}",
+                               _CHUNK_FAILED_EVENT, failure)
+                        continue
+                    drafts[piece.index] = draft
+                    append(f"piece-completed-{analysis_id}-{piece.index}",
+                           _CHUNK_COMPLETED_EVENT, {
+                               **chunk, "status": "completed",
+                               "steps": sum(
+                                   len(section.steps) for section in draft.protocol.sections),
+                           })
+        if failures:
+            failed = tuple(piece for piece in pieces if piece.index in failures)
+            raise ProtocolAnalysisPieceFailedError(
+                "A piece of the document failed analysis after its retry.",
+                pieces=failed,
+                failure_codes=tuple(
+                    _piece_failure_code(failures[piece.index]) for piece in failed),
+            )
+        append(f"pieces-joining-{analysis_id}", _MERGE_STARTED_EVENT, {"status": "in_progress"})
+        try:
+            return join_piece_analyses(
+                extraction, pieces, [drafts[piece.index] for piece in pieces])
+        except ProtocolAnalysisPieceConflictError as exc:
+            append(f"pieces-conflict-{analysis_id}", _MERGE_CONFLICT_EVENT, {
+                "status": "conflict", "failure_code": exc.code, "reason": exc.reason,
+                "source_page_start": exc.first_page, "source_page_end": exc.last_page,
+            })
+            raise
+
+    def _store_passed_analysis(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> ProtocolCatalogEntry:
+        """Store a passed analysis as the revision's next analysis, and say so."""
+
+        protocol_id = revision.experiment_id
         if draft.protocol.protocol_id != protocol_id:
             assigned_protocol = replace(draft.protocol, protocol_id=protocol_id)
             domain.validate_protocol(assigned_protocol)
@@ -2631,6 +3105,9 @@ class ProtocolCatalog:
             # Lane EV2, decision 2: the fields emptied because the source
             # did not confirm them, kept in the ledger beside the analysis.
             ready_payload["cleared_fields"] = list(draft.protocol.cleared_fields)
+        if pieces:
+            # Lane AN, decision 2: read in these pieces and joined.
+            ready_payload["pieces"] = [piece.public_dict() for piece in pieces]
         if draft.response_repair is not None:
             # Lane EV3, decision 1: the response was read after its brackets
             # were repaired in one of the two fixed shapes; every check above
@@ -2696,6 +3173,17 @@ class ProtocolCatalog:
             # Lane EV3, decision 1: this attempt was read after a repair of
             # its brackets and then failed a check.
             failure_payload["response_repaired"] = repair.public_dict()
+        if isinstance(exc, ProtocolAnalysisPieceFailedError):
+            # Lane AN, decision 2: the pieces that failed after their retry.
+            failure_payload["failed_pieces"] = [
+                {**piece.public_dict(), "failure_code": code}
+                for piece, code in zip(exc.pieces, exc.failure_codes)
+            ]
+        if isinstance(exc, ProtocolAnalysisPieceConflictError):
+            failure_payload["piece_conflict"] = {
+                "reason": exc.reason, "source_page_start": exc.first_page,
+                "source_page_end": exc.last_page,
+            }
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {
@@ -2727,16 +3215,19 @@ class ProtocolCatalog:
     ) -> bool:
         """Whether this failure is sent again by itself (lane AN, decision 1).
 
-        Mechanical: the failure is a response that broke the structure, the
-        revision has had at most one analysis request (none when a caller
-        analyses without recording one), and no automatic retry was sent for
-        the revision before. A person's "분석 다시 시도" is a second request,
-        so it is never retried automatically.
+        Mechanical: the failure is a response that broke the structure and no
+        automatic retry was sent after the revision's latest analysis request
+        (after none, when a caller analyses without recording one).
 
         Lane EV3, decision 5 (human decision 2026-10-12): a person's "다시
         분석" over a passed analysis (lane RN) is a run of its own and gets
-        the same one retry -- when the latest request asked for a
-        re-analysis and no automatic retry was sent after it.
+        the same one retry.
+
+        Lane AN (2026-10-13), EV4: so does a person's "분석 다시 시도" after a
+        failed analysis -- each request is one run with one automatic retry.
+        Before, only the revision's first request was retried, and the
+        person's request whose first answer did not close as JSON had to be
+        pressed again by hand.
 
         Lane EV3, decision 1: an answer read only after its brackets were
         repaired (``repaired``) and then refused by any check is sent again
@@ -2750,22 +3241,13 @@ class ProtocolCatalog:
             event for event in self.store.list_events(revision.experiment_id)
             if event.protocol_revision_number == revision.revision_number
         ]
-        requests = [
-            index for index, event in enumerate(events)
-            if event.event_type == _ANALYSIS_REQUESTED_EVENT
-        ]
-        retried = any(event.event_type == _ANALYSIS_RETRY_EVENT for event in events)
-        if len(requests) <= 1 and not retried:
-            return True
-        latest = events[requests[-1]] if requests else None
-        return (
-            latest is not None
-            and isinstance(latest.payload, dict)
-            and latest.payload.get("reanalysis") is True
-            and not any(
-                event.event_type == _ANALYSIS_RETRY_EVENT
-                for event in events[requests[-1] + 1:]
-            )
+        latest = max(
+            (index for index, event in enumerate(events)
+             if event.event_type == _ANALYSIS_REQUESTED_EVENT),
+            default=-1,
+        )
+        return not any(
+            event.event_type == _ANALYSIS_RETRY_EVENT for event in events[latest + 1:]
         )
 
     def request_analysis(
@@ -2984,3 +3466,215 @@ class ProtocolCatalog:
             sha256=fixture.source_pdf_sha256,
             source_page=matching[0].source_page,
         )
+
+
+# ---------------------------------------------------------------------------
+# Reagent tables (lane AN, FM b; human decision 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# An Excel workbook is attached to a protocol as its "시약 표": every sheet
+# and every non-empty cell kept where the workbook prints it (sheet name, cell
+# reference, value, number format), so a question about an amount can be
+# answered with the table position and the cell value. It is not a protocol
+# source: it is never analysed, never advances a step, and the protocol's
+# readiness does not depend on it. Connecting it to voice is a later lane.
+
+REAGENT_TABLE_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+_REAGENT_TABLE_EVENT = "protocol_reagent_table_attached"
+#: The largest workbook read: a reagent list is small, and openpyxl holds the
+#: whole workbook in memory to read its merged cells.
+MAX_REAGENT_TABLE_BYTES = 5 * 1024 * 1024
+#: The most non-empty cells kept; a larger workbook is refused, not cut.
+MAX_REAGENT_TABLE_CELLS = 20_000
+_SAFE_TABLE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.xlsx$", re.IGNORECASE)
+
+
+class ReagentTableError(ProtocolCatalogError):
+    code = "invalid_reagent_table"
+
+
+class ReagentTableTooLargeError(ReagentTableError):
+    code = "reagent_table_too_large"
+
+
+def _cell_value(value: object) -> object:
+    """A cell value as JSON keeps it: numbers and text as they are."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if value == value and value not in (float("inf"), float("-inf")) else str(value)
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
+
+
+def _cell_display(value: object, number_format: str | None) -> str:
+    """How the cell reads: the number format's percent and decimals applied.
+
+    Only those two; any other format reads as the plain value, and the
+    format itself is kept beside it.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "" if value is None else str(value)
+    fmt = (number_format or "General").split(";", 1)[0]
+    decimals_match = re.search(r"0\.(0+)", fmt)
+    decimals = len(decimals_match[1]) if decimals_match else None
+    if "%" in fmt:
+        return f"{value * 100:.{decimals or 0}f}%"
+    if decimals is not None:
+        return f"{value:.{decimals}f}"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def read_reagent_workbook(source: str | Path) -> dict[str, object]:
+    """Every sheet and non-empty cell of an .xlsx workbook, where it prints them.
+
+    A formula cell keeps the value the workbook saved for it; one saved
+    without a value (written by a program that does not calculate) is kept
+    with its formula and no value, and counted in ``warnings``.
+    """
+
+    try:
+        import openpyxl
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError as exc:  # pragma: no cover - openpyxl is a dependency
+        raise ReagentTableError("openpyxl is not installed.") from exc
+    import zipfile
+
+    path = Path(source)
+    if path.stat().st_size > MAX_REAGENT_TABLE_BYTES:
+        raise ReagentTableTooLargeError("The workbook is larger than a reagent table reads.")
+    try:
+        values = openpyxl.load_workbook(path, data_only=True)
+        formulas = openpyxl.load_workbook(path, data_only=False)
+    except (InvalidFileException, zipfile.BadZipFile, KeyError, ValueError, OSError) as exc:
+        raise ReagentTableError("The file is not an .xlsx workbook.") from exc
+    sheets: list[dict[str, object]] = []
+    count = 0
+    unsaved = 0
+    for sheet in values.worksheets:
+        written = formulas[sheet.title]
+        cells: list[dict[str, object]] = []
+        for row in sheet.iter_rows():
+            for cell in row:
+                formula = written[cell.coordinate].value
+                has_formula = isinstance(formula, str) and formula.startswith("=")
+                if cell.value is None and not has_formula:
+                    continue
+                count += 1
+                if count > MAX_REAGENT_TABLE_CELLS:
+                    raise ReagentTableTooLargeError(
+                        "The workbook has more cells than a reagent table keeps.")
+                value = _cell_value(cell.value)
+                item: dict[str, object] = {
+                    "ref": cell.coordinate,
+                    "row": cell.row,
+                    "column": cell.column,
+                    "value": value,
+                    "display": _cell_display(value, cell.number_format),
+                }
+                if cell.number_format and cell.number_format != "General":
+                    item["number_format"] = cell.number_format
+                if has_formula:
+                    item["formula"] = formula
+                    if cell.value is None:
+                        unsaved += 1
+                cells.append(item)
+        sheets.append({
+            "name": sheet.title,
+            "state": sheet.sheet_state,
+            "max_row": sheet.max_row,
+            "max_column": sheet.max_column,
+            "merged": sorted(str(merged) for merged in sheet.merged_cells.ranges),
+            "cells": cells,
+        })
+    warnings = []
+    if unsaved:
+        warnings.append(
+            f"계산값이 저장되지 않은 수식 셀 {unsaved}개 — 엑셀에서 열어 저장한 뒤 다시 올리면 값이 보입니다."
+        )
+    return {"sheets": sheets, "cell_count": count, "warnings": warnings}
+
+
+def _table_key(text: object) -> str:
+    """Text as a lookup compares it: NFKC, case and spacing/punctuation aside."""
+
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", str(text)).casefold()
+    return "".join(character for character in folded if character.isalnum())
+
+
+def find_reagent_cells(
+    tables: Sequence[dict[str, object]], query: str, *, limit: int = 20,
+) -> list[dict[str, object]]:
+    """The cells whose text holds ``query``, each with its row and header row.
+
+    Matching sets case, spacing and punctuation aside ("tris hcl" finds
+    "Tris-HCl"). The header row is the sheet's first row of two or more
+    cells -- a title line above the table ("S1 Table. Key resources") is
+    not it -- or its first row when no row has two. The answer carries
+    positions and values only -- what a person or the voice lane reads from
+    them is theirs.
+    """
+
+    wanted = _table_key(query)
+    if not wanted:
+        return []
+    found: list[dict[str, object]] = []
+    for table in tables:
+        for sheet in table.get("sheets", []) if isinstance(table, dict) else []:
+            cells = [cell for cell in sheet.get("cells", []) if isinstance(cell, dict)]
+            if not cells:
+                continue
+            by_row: dict[int, list[dict[str, object]]] = {}
+            for cell in cells:
+                by_row.setdefault(cell["row"], []).append(cell)
+            header_row = min(
+                (row for row, items in by_row.items() if len(items) >= 2),
+                default=min(by_row),
+            )
+            header = {cell["column"]: cell for cell in by_row.get(header_row, [])}
+            for cell in cells:
+                if wanted not in _table_key(cell.get("display") or cell.get("value") or ""):
+                    continue
+                found.append({
+                    "table_id": table.get("table_id"),
+                    "filename": table.get("filename"),
+                    "sheet": sheet.get("name"),
+                    "ref": cell["ref"],
+                    "value": cell.get("value"),
+                    "display": cell.get("display"),
+                    "row": [
+                        {
+                            "ref": item["ref"],
+                            "display": item.get("display"),
+                            "header": (
+                                header[item["column"]].get("display")
+                                if item["column"] in header and cell["row"] > header_row
+                                else None
+                            ),
+                        }
+                        for item in sorted(by_row[cell["row"]], key=lambda item: item["column"])
+                    ],
+                })
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+def reagent_table_summary(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: payload.get(key)
+        for key in ("table_id", "filename", "sha256", "byte_size", "cell_count", "warnings")
+    } | {
+        "sheets": [
+            {"name": sheet.get("name"), "cells": len(sheet.get("cells", []))}
+            for sheet in payload.get("sheets", []) if isinstance(sheet, dict)
+        ],
+    }

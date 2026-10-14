@@ -8,9 +8,10 @@ hand (the development server's headspace re-analysis ended so on 10/12 after
 ``protocol_analysis_invalid_response`` is sent once more by the same rule as a
 first analysis (lane AN, decision 1): once, the same request, one reasoning
 level lower when the answer was cut at the output limit (lane AQ, decision 4).
-Other failures are not sent again, a person's "분석 다시 시도" after a failed
-first analysis is still one request, and the pass before the re-analysis
-stays executable whatever its run does.
+Other failures are not sent again, and the pass before the re-analysis stays
+executable whatever its run does. (A person's "분석 다시 시도" after a failed
+first analysis was one request here; since lane AN's EV4 step, 2026-10-13, it
+gets the same one retry.)
 """
 
 from __future__ import annotations
@@ -125,12 +126,13 @@ class ReanalysisRetryTests(_Case):
 
 
 class AFirstAnalysisIsAsBeforeTests(_Case):
-    def test_a_person_s_retry_after_a_failed_first_analysis_is_still_one_request(self) -> None:
+    def test_a_person_s_retry_after_a_failed_first_analysis_gets_its_own_retry(self) -> None:
+        # Lane AN (2026-10-13), EV4: "분석 다시 시도" is retried like "다시 분석".
         self.analyze([invalid_response(), invalid_response()], FIRST)
         analyze, error = self.analyze([invalid_response(), self.draft], SECOND)
-        self.assertIsInstance(error, ProtocolAnalysisResponseError)
-        self.assertEqual(analyze.call_count, 1)
-        self.assertEqual(len(self.retries()), 1)
+        self.assertIsNone(error)
+        self.assertEqual(analyze.call_count, 2)
+        self.assertEqual(len(self.retries()), 2)
 
     def test_a_re_analysis_request_before_any_pass_is_a_first_request(self) -> None:
         # Asked with reanalysis=True before anything passed: a plain request,

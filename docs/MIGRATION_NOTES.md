@@ -797,3 +797,140 @@ since lane CL), `has_key()` is false and a client for it is refused with
 role it uses, as `.env.example` does, behaves as before; one that relied on
 the fallback must now set `VOINEY_LAB_<ROLE>_PROVIDER=xai` (and the model)
 for each such role, or the role stays off.
+
+## Lane AN (2026-10-13): a long document analysed in pieces
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+A document of more than 60 pages, or one whose text is planned to need more
+output than one analysis call gives, is analysed in pieces of at most 15
+pages that share one page with the next (lane AN, decision 2). The run is the
+analysis request's own: its events carry `analysis_run_id` equal to the
+request's `analysis_id`. It writes, in this order, one
+`protocol_chunk_plan_created` event (`chunks`: `chunk_id` `piece-<n>`,
+`ordinal`, `source_page_start`, `source_page_end`), a
+`protocol_chunk_analysis_started` event per piece (`attempt` 1, and 2 with
+`retry_of_failure_code` when the piece is sent once more), a
+`protocol_chunk_analysis_completed` (`steps`) or
+`protocol_chunk_analysis_failed` (`failure_code`, `evidence_failure`) event
+per piece, `protocol_chunk_merge_started` when every piece passed, and
+`protocol_chunk_merge_conflict` (`reason`, `source_page_start`,
+`source_page_end`) when two pieces read their shared page differently. The
+run ends in the analysis' own `protocol_analysis_ready` event, which then
+carries `pieces` (index, count, first and last page of each), or
+`protocol_analysis_failed` with the new codes
+`protocol_analysis_piece_failed` (and `failed_pieces`: each piece's pages and
+last failure code) or `protocol_analysis_piece_conflict` (and
+`piece_conflict`). A passed run is stored like any analysis; its ids carry
+the piece they came from (`p2.step-14`). `protocol_analysis_too_many_pages`
+now means more than 400 pages.
+
+### Reading older data
+
+Nothing changes for an analysis stored before: a ledger without piece events
+reads as before. The run status reads chunk events only while their plan is
+the latest analysis request's run, and a chunk failure that a later passed
+analysis replaced is no longer shown as the current failure.
+
+### Going back
+
+Code from before this version reads a piece run's events as a claim-chunk run
+(the same event types): while the run is going it shows its progress; after
+it ended, its status may stay at the last chunk event. The stored analysis
+itself reads and runs as any other.
+
+## Lane AN (2026-10-13): evidence past a page's layout, and a person's retry retried
+
+No schema change and no stored row rewritten.
+
+The source-evidence check reads past five layouts the stored DS-2, M3 and EV3
+answers showed (lane AN, EV4): a running header, footer or page number a page
+prints in the middle of its body, a table header reprinted at the top of the
+next page and a header table's number-only cells are left out of the
+comparison; a soft hyphen, a subscript or superscript after a letter, and the
+spaces between two Hangul letters on one line compare as the characters they
+stand for (a superscript after a digit stays itself); a step label written
+"3)" or "(2)" is stored as the bare number. Quotes are stored as the model
+gave them.
+
+A PDF whose text layer drops its Hangul glyphs (lines left holding only their
+spaces and periods) now has each readable page marked for OCR with the new
+`ocr_reason` value `dropped_glyphs`, beside `no_text_layer` and
+`unreadable_glyphs`. The reason is computed at extraction and not stored by
+itself; an OCR run's events record the pages read as before.
+
+A person's "분석 다시 시도" after a failed analysis now gets the one automatic
+retry a first analysis gets: `protocol_analysis_retry_started` may follow any
+`protocol_analysis_requested`, at most once per request.
+
+### Reading older data
+
+A stored analysis is not checked again; one that passed before still reads.
+A document registered before whose text layer drops its Hangul shows its
+pages as needing OCR the next time it is read; its stored analysis, if any,
+stays as it is. A ledger with two automatic retries on one revision (one per
+request) reads as two runs, each with its own retry.
+
+### Going back
+
+Code from before this version reads all of the above: the new OCR reason is
+an extraction value, not stored, and two retry events on a revision read as
+the retry of the run on screen.
+
+## Lane AN (2026-10-13): Word documents, photos and reagent tables
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+`POST /api/protocols` also takes a Word document
+(`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)
+and a JPG, PNG or HEIC photo (`image/jpeg`, `image/png`, `image/heic`,
+`image/heif`). Each is turned into the PDF that extraction, OCR and the
+analysis read -- a .docx by LibreOffice, a photo as one image page at 300 dpi
+-- and that PDF is registered as the source, under the upload's name with
+`.pdf` (`notes.jpg` -> `notes.pdf`). The `protocol_registered` event of such a
+source carries `converted_from`: the upload's `media_type`, `sha256`,
+`byte_size`, `filename` and `converter` (`pillow-12.3.0`,
+`libreoffice-24.2.7.2`), and for a photo its `pixels`,
+`exif_orientation_applied` and `pdf_dpi`. The same upload again is found by
+that checksum.
+
+`POST /api/protocols/{protocol_id}/reagent-tables` attaches an .xlsx workbook
+to a protocol as its reagent table: one `protocol_reagent_table_attached`
+event per workbook (`table_id`, `filename`, `media_type`, `sha256`,
+`byte_size`, `authority` `person_upload`, `sheets` with each non-empty cell's
+`ref`, `row`, `column`, `value`, `display` and, where present, `number_format`
+and `formula`; `cell_count`; `warnings`). `GET
+/api/protocols/{protocol_id}/reagent-tables` reads them back. A reagent table
+is not a protocol source and changes nothing about the analysis or the
+protocol's readiness.
+
+The `protocol_ocr_completed` event's pages now carry `render_dpi` and
+`value_boxes` (each a value's `text` and its `box` in the pixels of the page
+rendered at `render_dpi`), so a value read from handwriting or a photo can be
+shown beside the piece of the image it was read from.
+
+### Reading older data
+
+A registration without `converted_from`, an OCR page without `render_dpi` or
+`value_boxes`, and a protocol without reagent-table events read as before (no
+table, no boxes).
+
+### Going back
+
+Code from before this version reads every event above: it ignores
+`converted_from`, `render_dpi` and `value_boxes`, and never reads the
+reagent-table events. A protocol registered from a photo or a Word document
+reads as the PDF it is.
+
+### New dependencies
+
+`Pillow` (photos) and `openpyxl` (reagent tables) are required; HEIC needs the
+optional extra `.[heic]` (`pillow-heif`). LibreOffice must be installed on the
+server, with the Korean fonts `fonts-nanum` (human decision 2026-10-13; a system
+install, not a Python package): `VOINEY_LAB_OFFICE_CONVERTER` names its
+`soffice` when it is not on `PATH` or in its default place, and without it a
+Word upload is refused with `docx_conversion_unavailable`. `GET /readyz` adds
+`docx_conversion_available` and `heic_photos_available` to its capabilities;
+neither makes the server not ready. See `docs/SOURCE_FORMATS.md`.

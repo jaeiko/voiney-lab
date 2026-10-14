@@ -12,9 +12,11 @@ import datetime
 import functools
 import json
 import hashlib
+import math
 import re
 import types
 import unicodedata
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -600,9 +602,12 @@ class ProtocolAnalysisRequest:
     extraction_warnings: tuple[str, ...]
     analysis_schema_version: int
     capability_policy_id: str
+    #: The piece of a long document these pages are (lane AN, decision 2);
+    #: None for an analysis of the whole document, whose input is unchanged.
+    piece: "AnalysisPiece | None" = None
 
     def as_json(self) -> str:
-        payload = {
+        payload: dict[str, Any] = {
             "analysis_schema_version": self.analysis_schema_version,
             "capability_policy_id": self.capability_policy_id,
             "pdf": {
@@ -626,6 +631,8 @@ class ProtocolAnalysisRequest:
                 for page in self.pages
             ],
         }
+        if self.piece is not None:
+            payload["document_part"] = self.piece.public_dict()
         return json.dumps(
             payload,
             ensure_ascii=False,
@@ -795,7 +802,22 @@ def prepare_protocol_analysis_request(
         raise ProtocolAnalysisInputError(
             "Protocol PDF has no extractable text; reviewed OCR is required."
         )
-    request = ProtocolAnalysisRequest(
+    request = _analysis_request(extraction, extraction.pages, capability_policy)
+    if len(request.as_json().encode("utf-8")) > max_input_bytes:
+        raise ProtocolAnalysisInputTooLargeError(
+            "Protocol exceeds the single-pass analysis limit and requires "
+            "a later chunked-analysis capability."
+        )
+    return request
+
+
+def _analysis_request(
+    extraction: ProtocolPdfExtraction,
+    pages: Sequence[ProtocolPdfPage],
+    capability_policy: domain.CapabilityPolicy,
+    piece: "AnalysisPiece | None" = None,
+) -> ProtocolAnalysisRequest:
+    return ProtocolAnalysisRequest(
         pdf_sha256=extraction.sha256,
         pdf_byte_size=extraction.byte_size,
         page_count=extraction.page_count,
@@ -806,7 +828,7 @@ def prepare_protocol_analysis_request(
                 text=page.text,
                 text_empty=page.text_empty,
             )
-            for page in extraction.pages
+            for page in pages
         ),
         all_pages_inspected=extraction.all_pages_inspected,
         media_type=extraction.media_type,
@@ -814,13 +836,8 @@ def prepare_protocol_analysis_request(
         extraction_warnings=extraction.warnings,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
         capability_policy_id=capability_policy.profile_id,
+        piece=piece,
     )
-    if len(request.as_json().encode("utf-8")) > max_input_bytes:
-        raise ProtocolAnalysisInputTooLargeError(
-            "Protocol exceeds the single-pass analysis limit and requires "
-            "a later chunked-analysis capability."
-        )
-    return request
 
 
 class _DomainDecoder:
@@ -980,6 +997,15 @@ _DURATION_WIDGET_LINE = re.compile(r"(?m)^[ \t\u00a0]*\d{1,2}:\d{2}:\d{2}[ \t\u0
 _SPACE_BEFORE_PUNCTUATION = frozenset(".,;:)")
 
 
+#: Subscript and superscript digits, read as the digits they write in the
+#: script forms below (lane AN, EV4 decision b).
+_SCRIPT_DIGITS = {
+    **{chr(0x2080 + n): str(n) for n in range(10)},
+    "\u2070": "0", "\u00b9": "1", "\u00b2": "2", "\u00b3": "3",
+    **{chr(0x2074 + n - 4): str(n) for n in range(4, 10)},
+}
+
+
 def _normalized_text_with_bounds(
     value: str,
     *,
@@ -987,6 +1013,8 @@ def _normalized_text_with_bounds(
     join_hangul_line_breaks: bool = False,
     skip_duration_widget_lines: bool = False,
     drop_space_before_punctuation: bool = False,
+    script_forms: str | None = None,
+    skip_line: Callable[[str], bool] | None = None,
 ) -> tuple[str, list[int], list[int]]:
     """Canonicalize representation-only differences and retain source bounds.
 
@@ -1017,6 +1045,23 @@ def _normalized_text_with_bounds(
     7, from lane PA's (w) and (p)): comparison forms only, tried after the
     forms above, so the page text, its hash and the evidence identities are
     untouched and anything the earlier forms accept is still accepted.
+
+    ``script_forms`` (lane AN, EV4 decisions b and e; comparison only, tried
+    after every form above) is ``"joined"`` or ``"hyphen"``. In both, a
+    subscript or superscript digit written after a letter or a closing
+    bracket reads as the plain digit ("H₂O₂" as "H2O2", "cm²" as "cm2"); one
+    after a digit stays itself, so "10⁵" is never "105". Spaces between
+    two Hangul letters on one line are left out (a text layer that prints no
+    spaces between Korean words, or a quote that adds them); a line break
+    between them is joined on an OCR page only, as before. A soft hyphen is a
+    layout control: with ``"joined"`` it is left out together with the line
+    break after it ("formu\u00ad" / "lated" reads "formulated"); with
+    ``"hyphen"`` it reads as "-" ("DW-MEA").
+
+    ``skip_line`` (lane AN, EV4 decision a; comparison only, the last forms
+    tried) names the lines left out wherever they stand: a page's running
+    header, footer and page-number lines that a text layer or an OCR reading
+    prints in the middle of its body (``_furniture_line``).
     """
 
     normalized: list[str] = []
@@ -1027,6 +1072,14 @@ def _normalized_text_with_bounds(
         [match.span() for match in _DURATION_WIDGET_LINE.finditer(value)]
         if skip_duration_widget_lines else []
     )
+    if skip_line is not None:
+        position = 0
+        for line in value.splitlines(keepends=True):
+            content = line.rstrip("\r\n")
+            if content.strip() and skip_line(content):
+                skipped.append((position, position + len(content)))
+            position += len(line)
+        skipped = sorted(set(skipped))
     index = 0
     while index < len(value):
         if skipped and skipped[0][0] == index:
@@ -1046,6 +1099,23 @@ def _normalized_text_with_bounds(
                 join_line_end_hyphens
                 and units
                 and units[-1][0] in _LINE_END_HYPHENS
+                and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                script_forms is not None
+                and units
+                and index < len(value)
+                and len(units[-1][0]) == 1
+                and _is_hangul(units[-1][0])
+                and _is_hangul(value[index])
+                and not any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                script_forms == "joined"
+                and start > 0
+                and value[start - 1] == "\u00ad"
                 and any(character in "\n\r" for character in value[start:index])
             ):
                 continue
@@ -1070,6 +1140,8 @@ def _normalized_text_with_bounds(
             units.append((" ", start, index, True))
             continue
         if value[index] == "\u00ad":
+            if script_forms == "hyphen":
+                units.append(("-", index, index + 1, False))
             index += 1
             continue
         start = index
@@ -1077,6 +1149,14 @@ def _normalized_text_with_bounds(
         while index < len(value) and unicodedata.combining(value[index]):
             index += 1
         canonical = unicodedata.normalize("NFC", value[start:index])
+        if (
+            script_forms is not None
+            and canonical in _SCRIPT_DIGITS
+            and units
+            and not units[-1][3]
+            and (units[-1][0][-1:].isalpha() or units[-1][0][-1:] in ")]")
+        ):
+            canonical = _SCRIPT_DIGITS[canonical]
         if canonical:
             units.append((canonical, start, index, False))
     while units and units[0][3]:
@@ -1095,7 +1175,9 @@ def _normalized_text_with_bounds(
     return "".join(normalized), starts, ends
 
 
-def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
+def _comparison_forms(
+    ocr_derived: bool, skip_line: Callable[[str], bool] | None = None,
+) -> tuple[dict[str, Any], ...]:
     """The comparison forms a page is read in, plain form first.
 
     Every form is tried, so an excerpt accepted in an earlier form is still
@@ -1116,6 +1198,33 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
         for time_marks in (False, True)
         for joined in hangul
         for join in (False, True)
+    ) + tuple(
+        # Lane AN, EV4 decisions b and e: after every form above.
+        {
+            "join_line_end_hyphens": True,
+            "join_hangul_line_breaks": ocr_derived,
+            "skip_duration_widget_lines": time_marks,
+            "drop_space_before_punctuation": time_marks,
+            "script_forms": script,
+        }
+        for time_marks in (False, True)
+        for script in ("joined", "hyphen")
+    ) + (
+        # Lane AN, EV4 decision a: the page's running and page-number lines
+        # left out wherever they stand, after every form above.
+        tuple(
+            {
+                "join_line_end_hyphens": True,
+                "join_hangul_line_breaks": ocr_derived,
+                "skip_duration_widget_lines": time_marks,
+                "drop_space_before_punctuation": time_marks,
+                "script_forms": script,
+                "skip_line": skip_line,
+            }
+            for time_marks in (False, True)
+            for script in (None, "joined")
+        )
+        if skip_line is not None else ()
     )
 
 
@@ -1447,6 +1556,7 @@ def _canonical_match_spans(
     *,
     ocr_derived: bool = False,
     alone: bool = False,
+    skip_line: Callable[[str], bool] | None = None,
 ) -> tuple[tuple[int, int], ...]:
     """Every span of ``source_text`` that holds ``excerpt`` in a comparison form.
 
@@ -1457,7 +1567,7 @@ def _canonical_match_spans(
     """
 
     spans: list[tuple[int, int]] = []
-    for form in _comparison_forms(ocr_derived):
+    for form in _comparison_forms(ocr_derived, skip_line):
         canonical_source, starts, ends = _normalized_text_with_bounds(
             source_text, **form
         )
@@ -1510,6 +1620,7 @@ _WORDED_PAGE_NUMBER = re.compile(
     r"(?:page|p\.)\s*[0-9]{1,4}(?:\s*(?:of|/)\s*[0-9]{1,4})?", re.IGNORECASE
 )
 _PAGE_OF_PAGES = re.compile(r"([0-9]{1,4})\s*(?:of|/)\s*([0-9]{1,4})", re.IGNORECASE)
+_PAGE_AND_COUNT = re.compile(r"([0-9]{1,4})\s+([0-9]{1,4})")
 _BARE_PAGE_NUMBER = re.compile(r"[0-9]{1,4}")
 _NUMBER_RUN = re.compile(r"\d+")
 #: A numbered line: a number of one to three digits ("3.", "3)", "(3)",
@@ -1538,6 +1649,10 @@ class _PageEdges:
     #: The pages that print their own number alone on a line at an edge.
     numbered: frozenset[int]
     page_count: int
+    #: Lines of numbers and no letter printed identically at one edge place
+    #: of at least half the pages, and never between the edges: a header
+    #: table's revision and date cells ("01", "15/08/24"; lane AN, EV4 a).
+    running_exact: frozenset[str] = frozenset()
 
     def is_furniture(self, line: str, page_number: int) -> bool:
         """Whether a line is blank, a running line or this page's number.
@@ -1550,6 +1665,8 @@ class _PageEdges:
         text = " ".join(line.split())
         if not text:
             return True
+        if text in self.running_exact:
+            return True
         if _BARE_PAGE_NUMBER.fullmatch(text):
             return int(text) == page_number and bool(
                 {page_number - 1, page_number + 1} & self.numbered
@@ -1559,6 +1676,12 @@ class _PageEdges:
         of_pages = _PAGE_OF_PAGES.fullmatch(text)
         if of_pages is not None:
             return int(of_pages[1]) == page_number or int(of_pages[2]) == self.page_count
+        page_and_count = _PAGE_AND_COUNT.fullmatch(text)
+        if page_and_count is not None and self.page_count > 1:
+            # A header table's page cell beside its page-count cell, "3 9"
+            # on page 3 of 9 (lane AN, EV4 a).
+            return int(page_and_count[1]) == page_number and int(
+                page_and_count[2]) == self.page_count
         return _line_key(text) in self.running
 
 
@@ -1579,7 +1702,9 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
     """
 
     counts: dict[tuple[str, int, str], int] = {}
+    exact: dict[tuple[str, int, str], int] = {}
     inside: set[str] = set()
+    inside_exact: set[str] = set()
     numbered: set[int] = set()
     for number, text in enumerate(page_texts, start=1):
         lines = [line for line in (" ".join(item.split()) for item in text.splitlines()) if line]
@@ -1600,7 +1725,18 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         for place in places:
             if any(character.isalpha() for character in place[2]) or "#" not in place[2]:
                 counts[place] = counts.get(place, 0) + 1
+        for place in {
+            *(("top", index, line) for index, line in enumerate(lines[:_EDGE_LINES])),
+            *(("bottom", index, line) for index, line in enumerate(reversed(lines[-_EDGE_LINES:]))),
+        }:
+            if (
+                not any(character.isalpha() for character in place[2])
+                and sum(character.isdigit() for character in place[2]) >= 2
+                and not _NUMBERED_LINE.match(place[2])
+            ):
+                exact[place] = exact.get(place, 0) + 1
         inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
+        inside_exact.update(lines[_EDGE_LINES:-_EDGE_LINES])
     needed = max(3, -(-len(page_texts) // 2))
     return _PageEdges(
         running=(
@@ -1612,11 +1748,35 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         ),
         numbered=frozenset(numbered),
         page_count=len(page_texts),
+        running_exact=(
+            frozenset(
+                text for (_, _, text), count in exact.items()
+                if count >= needed and text not in inside_exact
+            )
+            if len(page_texts) > 1 else frozenset()
+        ),
     )
 
 
 def _page_edges(extraction: ProtocolPdfExtraction) -> _PageEdges:
     return _edges_of(tuple(page.text for page in extraction.pages))
+
+
+def _furniture_line(
+    page: ProtocolPdfPage, extraction: ProtocolPdfExtraction,
+) -> Callable[[str], bool]:
+    """Whether a line of this page is its running header or footer or its number.
+
+    Lane AN, EV4 decision a: the lines ``_PageEdges`` reads at a page's edges,
+    as the comparison leaves them out wherever the page text prints them --
+    an OCR reading that puts "BASIC PROTOCOL 2 … 5 of 22 Current Protocols"
+    or "- 106 -" in the middle of a sentence, a text layer that prints its
+    footer between two lines of a step.
+    """
+
+    edges = _page_edges(extraction)
+    number = page.source_page_number
+    return lambda line: edges.is_furniture(line, number)
 
 
 def _page_body_end(
@@ -1753,6 +1913,39 @@ def _page_end_span(
     return start, last_end
 
 
+#: The longest line read as a reprinted table header: a heading or a column
+#: header, never a sentence (lane AN, EV4 a).
+_REPRINTED_LINE_MAX = 60
+
+
+def _after_reprinted_lines(text: str, start: int, end: int, previous_page: str) -> int:
+    """Where a page's body opens past lines the page before printed already.
+
+    Lane AN, EV4 decision a: a table that runs onto the next page prints its
+    header again at the top ("Electrophoresis Conditions" / "Step Action" on
+    CDC's pages 5 and 6), between the two parts of a step the table holds.
+    A line counts only when it holds a letter, is short and ends no sentence
+    (a heading or a column header), and the page before prints the same line
+    whole; the first line that does not ends the skipping. It is tried only
+    after the statement was not found as the page opens.
+    """
+
+    printed = {" ".join(line.split()) for line in previous_page.splitlines()}
+    position = start
+    for line in text[start:end].splitlines(keepends=True):
+        content = " ".join(line.split())
+        if content and not (
+            any(character.isalpha() for character in content)
+            and content in printed
+            and len(content) <= _REPRINTED_LINE_MAX
+            and not content.endswith((".", ";", ","))
+        ):
+            break
+        position += len(line)
+    body = text[position:end]
+    return position + len(body) - len(body.lstrip())
+
+
 @dataclass(frozen=True)
 class _PageCut:
     """A statement found across a page end, as the two pages' own text."""
@@ -1796,39 +1989,48 @@ def _statement_across_page_end(
     if tail is None:
         return None
     next_end = _page_body_end(following, extraction)
-    next_start = _page_body_start(following, extraction, next_end)
-    head = following.text[next_start:next_end]
-    if not head.strip():
-        return None
+    body_start = _page_body_start(following, extraction, next_end)
     first = page.text[tail[0] : tail[1]]
-    joined = f"{first}\n{head}"
     junction = len(first)
-    crossing = [
-        (start, end)
-        for start, end in _canonical_match_spans(
-            joined,
-            statement,
-            ocr_derived=page.ocr_derived or following.ocr_derived,
-        )
-        if start < junction
-        and end > junction + 1
-        # Read beside the two pages' own text (lane EB), not only the
-        # joined block and head.
-        and _reads_alone(
-            page.text[: tail[0] + start],
-            joined[start:end],
-            following.text[next_start + end - junction - 1 :],
-        )
-    ]
-    if len(crossing) != 1:
-        return None
-    start, end = crossing[0]
-    return _PageCut(
-        first_start=tail[0] + start,
-        first_end=tail[1],
-        next_start=next_start,
-        next_end=next_start + end - junction - 1,
-    )
+    # Lane AN, EV4 decision a: when the statement is not found across the
+    # join as the next page opens, it is looked for once more past the
+    # header lines a table running onto that page prints again.
+    for next_start in dict.fromkeys((
+        body_start,
+        _after_reprinted_lines(following.text, body_start, next_end, page.text),
+    )):
+        head = following.text[next_start:next_end]
+        if not head.strip():
+            continue
+        joined = f"{first}\n{head}"
+        crossing = [
+            (start, end)
+            for start, end in _canonical_match_spans(
+                joined,
+                statement,
+                ocr_derived=page.ocr_derived or following.ocr_derived,
+            )
+            if start < junction
+            and end > junction + 1
+            # Read beside the two pages' own text (lane EB), not only the
+            # joined block and head.
+            and _reads_alone(
+                page.text[: tail[0] + start],
+                joined[start:end],
+                following.text[next_start + end - junction - 1 :],
+            )
+        ]
+        if len(crossing) == 1:
+            start, end = crossing[0]
+            return _PageCut(
+                first_start=tail[0] + start,
+                first_end=tail[1],
+                next_start=next_start,
+                next_end=next_start + end - junction - 1,
+            )
+        if crossing:
+            return None
+    return None
 
 
 def _with_continuation(
@@ -1989,7 +2191,8 @@ def _verified_evidence(
     if _occurs_alone_exactly(page_text, evidence.source_excerpt):
         return _verified_continuation(evidence, extraction)
     spans = _canonical_match_spans(
-        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True
+        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True,
+        skip_line=_furniture_line(page, extraction),
     )
     if not spans and evidence.continued_on_page_number is None:
         cut = _statement_across_page_end(
@@ -2218,7 +2421,10 @@ def _claim_occurs_on_evidence_page(
     extraction: ProtocolPdfExtraction,
 ) -> bool:
     page = extraction.pages[evidence.source_page_number - 1]
-    if _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived):
+    if _claim_occurs_in_text(
+        claim, page.text, ocr_derived=page.ocr_derived,
+        skip_line=_furniture_line(page, extraction),
+    ):
         return True
     # A statement cut at the page end is supported only where the evidence
     # records the next page, and only as found in the two pages joined.
@@ -2232,7 +2438,8 @@ def _claim_occurs_on_evidence_page(
 
 
 def _claim_occurs_in_text(
-    claim: str, source_text: str, *, ocr_derived: bool = False
+    claim: str, source_text: str, *, ocr_derived: bool = False,
+    skip_line: Callable[[str], bool] | None = None,
 ) -> bool:
     """Whether the text prints the claim, as it is or in a comparison form.
 
@@ -2242,7 +2449,7 @@ def _claim_occurs_in_text(
 
     if _occurs_alone_exactly(source_text, claim):
         return True
-    for form in _comparison_forms(ocr_derived):
+    for form in _comparison_forms(ocr_derived, skip_line):
         normalized_page, starts, ends = _normalized_text_with_bounds(source_text, **form)
         normalized_claim, _, _ = _normalized_text_with_bounds(claim, **form)
         if not normalized_claim:
@@ -2903,6 +3110,37 @@ def _verify_clearing_unread_fields(
             protocol = _cleared(protocol, field)
 
 
+#: A step label written the way the page prints it, "3)" or "(2)" (lane AN,
+#: EV4 decision c): the step number and its parentheses.
+_PARENTHESIZED_STEP_LABEL = re.compile(r"\(?([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})\)")
+
+
+def _bare_step_labels(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
+    """A step label "3)" or "(2)" is the step number 3 or 2 (lane AN, EV4 c).
+
+    The prompt asks for the number alone; a model at "low" sometimes copies
+    the parentheses the page prints (mfds_lubricant "3) 표준원액…", FDA "(1)
+    Add …"). The label is then read as the bare number, and the source-label
+    check holds it to the page as before: under rule paren_label (lane EV)
+    the page must print "(3)", "3)", "3." or "3" opening the excerpt or its
+    line. Only the label changes; every quote stays as the model gave it.
+    """
+
+    def bare(step: domain.ProtocolSourceStep) -> domain.ProtocolSourceStep:
+        match = _PARENTHESIZED_STEP_LABEL.fullmatch(step.source_label.strip())
+        return replace(step, source_label=match[1]) if match else step
+
+    if not any(
+        _PARENTHESIZED_STEP_LABEL.fullmatch(step.source_label.strip())
+        for section in protocol.sections for step in section.steps
+    ):
+        return protocol
+    return replace(protocol, sections=tuple(
+        replace(section, steps=tuple(bare(step) for step in section.steps))
+        for section in protocol.sections
+    ))
+
+
 def _repeat_counts_as_totals(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
     """Every fixed repeat count as the total number of runs (lane EV2, decision 3).
 
@@ -3218,6 +3456,7 @@ def _draft_from_response(
                 source_hash=extraction.sha256,
             ),
         )
+    protocol = _bare_step_labels(protocol)
     protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
     protocol = _repeat_counts_as_totals(protocol)
     _reject_deferred_state(protocol)
@@ -3265,10 +3504,11 @@ def validate_protocol_analysis_evidence(
 ) -> tuple[domain.ExperimentProtocol, int]:
     """Revalidate one decoded Protocol against one exact PDF extraction.
 
-    Chunk merging uses this same production evidence, claim, deferred-state,
-    and domain boundary after restoring the full source extraction.  It is an
-    additive entry point over the existing fail-closed validators; it does not
-    relax response decoding or evidence normalization.
+    A long document's joined pieces (``join_piece_analyses``, lane AN) go
+    through this same production evidence, claim, deferred-state and domain
+    boundary against the whole document's extraction. It is an additive entry
+    point over the existing fail-closed validators; it does not relax
+    response decoding or evidence normalization.
     """
 
     verified_protocol, evidence_count = _verify_evidence_tree(
@@ -3308,7 +3548,8 @@ def validate_protocol_analysis_evidence(
 
 #: The longest document one analysis reads (human decision 2026-10-10). Lane
 #: AQ passed a 197-page document with 13 steps; nothing told the experimenter
-#: that most of it was never read.
+#: that most of it was never read. A longer document is read in pieces
+#: (``analysis_pieces``, lane AN, decision 2); lane EV2 refused it.
 MAX_ANALYSIS_PAGES = 60
 #: A source with at least this many numbered steps, and an analysis with
 #: fewer than this share of them, is a hollow pass. Measured on the stored
@@ -3398,7 +3639,11 @@ def hollow_analysis_check(
 
 
 def check_analysis_page_count(extraction: ProtocolPdfExtraction) -> None:
-    """Refuse a document longer than one analysis reads, before any model call."""
+    """Refuse a document longer than one analysis reads, before any model call.
+
+    The single analysis's own bound; the catalog sends a longer document to
+    the pieces (``analysis_pieces``) before it gets here.
+    """
 
     if extraction.page_count > MAX_ANALYSIS_PAGES:
         raise ProtocolAnalysisTooManyPagesError(
@@ -3463,6 +3708,571 @@ def analyze_protocol_pdf(
         model,
         capability_policy=capability_policy,
         max_input_bytes=max_input_bytes,
+    )
+
+
+
+# --- A long document read in pieces (lane AN, decision 2: LD) ---------------
+#
+# Human decision 2026-10-11/13: a long document is analysed whole, in pieces
+# of 15-20 pages that share one page with the next, each piece with the
+# analysis prompt as it is and every check a single analysis gets; the pieces
+# are joined in page order and the joined analysis is checked again against
+# the whole document. Nothing passes on part of a document: a piece that
+# fails again after its one automatic retry fails the document.
+
+#: The pages one piece may hold, the page it shares with the next piece
+#: included (human decision: 15-20 pages, one page of overlap). Measured on
+#: the 197-page zenodo_17672266 at "low" (lane AN report, LD): pieces of 15
+#: pages passed 8 of 14, of 20 pages 2 and 4 of 11 (two runs), and took
+#: about half the time.
+ANALYSIS_PIECE_MAX_PAGES = 15
+ANALYSIS_PIECE_OVERLAP_PAGES = 1
+#: The longest document read in pieces; a longer one is refused before any
+#: call (``check_pieced_page_count``). Its text must first be extracted within
+#: the PDF worker's bound, which may be set up to 600 s; the slowest measured
+#: document (usgs_twri_5a3_organic) took about 1.4 s a page, so 400 pages fit
+#: (lane AN report, LD).
+MAX_PIECED_ANALYSIS_PAGES = 400
+#: Pieces analysed at the same time. Measured on the 197-page document: 8 at
+#: once ended no later than 4 at once with no rate refusal (lane AN report).
+ANALYSIS_PIECE_CONCURRENCY = 8
+#: The output one analysis call is planned to need at most: 80% of what the
+#: request allows (``ANALYSIS_MAX_OUTPUT_TOKENS``), the rest is room for the
+#: estimate below to be wrong.
+ANALYSIS_OUTPUT_BUDGET_TOKENS = 48_000
+#: Input tokens per character of page text, fitted on lane M3's low requests
+#: (prompt tokens = about 5,300 + these per character): Latin text, Hangul
+#: and other CJK.
+_TOKENS_PER_CHARACTER = 0.29
+_TOKENS_PER_CJK_CHARACTER = 1.2
+#: Output tokens per input token of page text: the highest lane M3 measured
+#: at "low" on a document of 10,000 input tokens or more was 1.7 (CDC); 2
+#: keeps a margin.
+_OUTPUT_PER_INPUT_TOKEN = 2.0
+
+
+def _is_cjk(character: str) -> bool:
+    code = ord(character)
+    return (
+        _is_hangul(character)
+        or 0x3040 <= code <= 0x30FF
+        or 0x3400 <= code <= 0x9FFF
+    )
+
+
+def estimated_output_tokens(pages: Sequence[ProtocolPdfPage]) -> int:
+    """The output an analysis of these pages is planned to need (an estimate)."""
+
+    tokens = 0.0
+    for page in pages:
+        cjk = sum(1 for character in page.text if _is_cjk(character))
+        tokens += (len(page.text) - cjk) * _TOKENS_PER_CHARACTER
+        tokens += cjk * _TOKENS_PER_CJK_CHARACTER
+    return int(tokens * _OUTPUT_PER_INPUT_TOKEN)
+
+
+@dataclass(frozen=True)
+class AnalysisPiece:
+    """One piece of a long document: its place and its pages (both ends included)."""
+
+    index: int
+    count: int
+    first_page: int
+    last_page: int
+
+    @property
+    def page_numbers(self) -> range:
+        return range(self.first_page, self.last_page + 1)
+
+    @property
+    def pages_ko(self) -> str:
+        return f"{self.first_page}–{self.last_page}쪽"
+
+    def public_dict(self) -> dict[str, int]:
+        return {
+            "index": self.index, "count": self.count,
+            "first_page": self.first_page, "last_page": self.last_page,
+        }
+
+
+def _piece_bounds(page_count: int, most_pages: int) -> list[tuple[int, int]]:
+    """Pieces of at most ``most_pages`` pages, one page shared with the next.
+
+    The pages are spread evenly, so no piece is left with a few pages at the
+    end: 197 pages at 15 are 14 pieces of 15 pages, 61 pages 5 of 13.
+    """
+
+    step = most_pages - ANALYSIS_PIECE_OVERLAP_PAGES
+    count = max(1, math.ceil((page_count - ANALYSIS_PIECE_OVERLAP_PAGES) / step))
+    span = page_count - ANALYSIS_PIECE_OVERLAP_PAGES
+    edges = [1 + round(index * span / count) for index in range(count + 1)]
+    return [(edges[index], edges[index + 1]) for index in range(count)]
+
+
+def analysis_pieces(extraction: ProtocolPdfExtraction) -> tuple[AnalysisPiece, ...]:
+    """The pieces this document is analysed in; empty when one analysis reads it.
+
+    A document is read in pieces when it has more than ``MAX_ANALYSIS_PAGES``
+    pages, or when its text is planned to need more output than one call
+    gives (``estimated_output_tokens``). Pieces hold at most
+    ``ANALYSIS_PIECE_MAX_PAGES`` pages; where a piece that long is planned
+    past the output budget, fewer pages, down to two.
+    """
+
+    if (
+        extraction.page_count <= MAX_ANALYSIS_PAGES
+        and estimated_output_tokens(extraction.pages) <= ANALYSIS_OUTPUT_BUDGET_TOKENS
+    ):
+        return ()
+    for most_pages in range(ANALYSIS_PIECE_MAX_PAGES, ANALYSIS_PIECE_OVERLAP_PAGES, -1):
+        bounds = _piece_bounds(extraction.page_count, most_pages)
+        if len(bounds) > 1 and all(
+            estimated_output_tokens(extraction.pages[first - 1:last])
+            <= ANALYSIS_OUTPUT_BUDGET_TOKENS
+            for first, last in bounds
+        ):
+            break
+    if len(bounds) < 2:
+        return ()
+    return tuple(
+        AnalysisPiece(index, len(bounds), first, last)
+        for index, (first, last) in enumerate(bounds, start=1)
+    )
+
+
+def prepare_protocol_piece_request(
+    extraction: ProtocolPdfExtraction,
+    piece: AnalysisPiece,
+    *,
+    capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
+) -> ProtocolAnalysisRequest:
+    """One piece's input: the document's identity, the piece's pages, and the piece.
+
+    The pages keep their own numbers, so every quote is cited by the page it
+    is printed on in the whole document.
+    """
+
+    if (
+        not extraction.all_pages_inspected
+        or len(extraction.pages) != extraction.page_count
+        or not 1 <= piece.first_page <= piece.last_page <= extraction.page_count
+    ):
+        raise ProtocolAnalysisInputError("Protocol piece is outside the extraction.")
+    pages = extraction.pages[piece.first_page - 1:piece.last_page]
+    if not any(not page.text_empty for page in pages):
+        raise ProtocolAnalysisInputError(
+            "Protocol piece has no extractable text; reviewed OCR is required."
+        )
+    request = _analysis_request(extraction, pages, capability_policy, piece)
+    if len(request.as_json().encode("utf-8")) > MAX_SINGLE_PASS_INPUT_BYTES:
+        raise ProtocolAnalysisInputTooLargeError(
+            "Protocol piece exceeds the single-pass analysis limit."
+        )
+    return request
+
+
+def _evidence_pages(value: Any) -> Iterator[tuple[int, int | None]]:
+    if isinstance(value, domain.SourceEvidence):
+        yield value.source_page_number, value.continued_on_page_number
+        return
+    if isinstance(value, (ProtocolPdfExtraction, Enum, str)) or value is None:
+        return
+    if isinstance(value, tuple):
+        for item in value:
+            yield from _evidence_pages(item)
+        return
+    if is_dataclass(value):
+        for field in fields(value):
+            yield from _evidence_pages(getattr(value, field.name))
+
+
+def analyze_protocol_piece(
+    extraction: ProtocolPdfExtraction,
+    piece: AnalysisPiece,
+    model: ProtocolAnalysisModel,
+    *,
+    capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
+) -> ProtocolAnalysisDraft:
+    """Analyse one piece with every check a single analysis gets.
+
+    The response is read against the whole document's pages, as a single
+    analysis is; a quote must stand on one of the piece's pages (its second
+    part may open the page after the piece, by lane EV2's page-end rule),
+    and the piece is held to the hollow-pass bound on its own pages.
+    """
+
+    request = prepare_protocol_piece_request(
+        extraction, piece, capability_policy=capability_policy)
+    try:
+        raw_response = model.analyze(
+            system_prompt=ANALYSIS_SYSTEM_PROMPT,
+            input_json=request.as_json(),
+            response_schema=ANALYSIS_PROVIDER_RESPONSE_SCHEMA,
+        )
+    except ProtocolAnalysisError:
+        raise
+    except Exception as exc:
+        raise ProtocolAnalysisModelError(
+            "Protocol analysis model request failed."
+        ) from exc
+    draft = parse_protocol_analysis_response(
+        raw_response, extraction, capability_policy=capability_policy)
+    for page, continued in _evidence_pages(draft.protocol):
+        if page not in piece.page_numbers or (
+            continued is not None and continued not in range(
+                piece.first_page, piece.last_page + 2)
+        ):
+            error = ProtocolAnalysisEvidenceError(
+                "Protocol piece evidence cites a page outside the piece.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="piece_page_validation",
+                    reason_code="page_outside_piece",
+                    mismatch_class="page_identity_mismatch",
+                    source_hash=extraction.sha256,
+                    page_number=page,
+                ),
+            )
+            error.response_repair = draft.response_repair
+            raise error
+    own_pages = replace(
+        extraction,
+        page_count=len(piece.page_numbers),
+        pages=extraction.pages[piece.first_page - 1:piece.last_page],
+    )
+    hollow = hollow_analysis_check(draft.protocol, own_pages)
+    if hollow["hollow"]:
+        incomplete = ProtocolAnalysisIncompleteError(
+            "Protocol piece analysis holds far fewer steps than its pages number.",
+            source_numbered_steps=int(hollow["source_numbered_steps"]),
+            analysis_steps=int(hollow["analysis_steps"]),
+        )
+        incomplete.response_repair = draft.response_repair
+        raise incomplete
+    return draft
+
+
+def check_pieced_page_count(extraction: ProtocolPdfExtraction) -> None:
+    """Refuse a document longer than the pieces read, before any model call."""
+
+    if extraction.page_count > MAX_PIECED_ANALYSIS_PAGES:
+        raise ProtocolAnalysisTooManyPagesError(
+            f"Protocol has {extraction.page_count} pages; an analysis in pieces "
+            f"reads at most {MAX_PIECED_ANALYSIS_PAGES}."
+        )
+
+
+class ProtocolAnalysisPieceFailedError(ProtocolAnalysisError):
+    """A piece failed again after its automatic retry: the document fails.
+
+    ``pieces`` are the pieces that failed, ``failure_codes`` their last
+    failures, in the same order.
+    """
+
+    code = "protocol_analysis_piece_failed"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pieces: Sequence[AnalysisPiece],
+        failure_codes: Sequence[str],
+    ) -> None:
+        super().__init__(message)
+        self.pieces = tuple(pieces)
+        self.failure_codes = tuple(failure_codes)
+
+    @property
+    def pages_ko(self) -> str:
+        """The failed pieces' pages, "41–59쪽, 97–115쪽"."""
+
+        return ", ".join(piece.pages_ko for piece in self.pieces)
+
+
+class ProtocolAnalysisPieceConflictError(ProtocolAnalysisError):
+    """Two pieces read the page they share differently, or the joined analysis fails.
+
+    ``reason`` is ``overlap_step_differs`` (one step of the shared page read
+    two ways), ``step_labelling_differs`` (one piece numbers its steps, the
+    other does not) or ``joined_analysis_invalid``; ``pages`` are the pages
+    of the two pieces (or the whole document).
+    """
+
+    code = "protocol_analysis_piece_conflict"
+
+    def __init__(self, message: str, *, reason: str, first_page: int, last_page: int) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.first_page = first_page
+        self.last_page = last_page
+
+
+#: Ids a piece's analysis names (``*_id`` and ``*_ids`` fields) that are not
+#: its own: the protocol's, which the catalog assigns, and the server's
+#: evidence segment handles.
+_UNPREFIXED_ID_FIELDS = frozenset({"protocol_id", "evidence_segment_ids"})
+
+
+def _renamed_ids(value: Any, rename: Callable[[str], str]) -> Any:
+    """``value`` with every id it names passed through ``rename``."""
+
+    if isinstance(value, tuple):
+        return tuple(_renamed_ids(item, rename) for item in value)
+    if not is_dataclass(value) or isinstance(value, (ProtocolPdfExtraction, type)):
+        return value
+    changes: dict[str, Any] = {}
+    for field in fields(value):
+        current = getattr(value, field.name)
+        if field.name in _UNPREFIXED_ID_FIELDS:
+            continue
+        if field.name.endswith("_id") and isinstance(current, str):
+            changes[field.name] = rename(current)
+        elif field.name.endswith("_ids") and isinstance(current, tuple):
+            changes[field.name] = tuple(
+                rename(item) if isinstance(item, str) else item for item in current)
+        elif isinstance(current, tuple) or (
+            is_dataclass(current) and not isinstance(current, ProtocolPdfExtraction)
+        ):
+            changes[field.name] = _renamed_ids(current, rename)
+    return replace(value, **changes) if changes else value
+
+
+def _excerpt_span(text: str, excerpt: str, ocr_derived: bool) -> tuple[int, int] | None:
+    start = text.find(excerpt)
+    if start >= 0:
+        return start, start + len(excerpt)
+    spans = _canonical_match_spans(text, excerpt, ocr_derived=ocr_derived)
+    return min(spans) if spans else None
+
+
+def _source_extent(
+    evidence: domain.SourceEvidence, extraction: ProtocolPdfExtraction,
+) -> tuple[tuple[int, int, int], ...]:
+    """Where a verified quote stands: (page, start, end) for each of its parts."""
+
+    parts = [(evidence.source_page_number, evidence.source_excerpt)]
+    if evidence.continued_on_page_number is not None and evidence.continued_excerpt:
+        parts.append((evidence.continued_on_page_number, evidence.continued_excerpt))
+    extent: list[tuple[int, int, int]] = []
+    for page_number, excerpt in parts:
+        page = extraction.pages[page_number - 1]
+        span = _excerpt_span(page.text, excerpt, page.ocr_derived)
+        if span is not None:
+            extent.append((page_number, *span))
+    return tuple(extent)
+
+
+def _overlaps(a: tuple[tuple[int, int, int], ...], b: tuple[tuple[int, int, int], ...]) -> bool:
+    return any(
+        pa == pb and sa < eb and sb < ea
+        for pa, sa, ea in a for pb, sb, eb in b
+    )
+
+
+def _covers(a: tuple[tuple[int, int, int], ...], b: tuple[tuple[int, int, int], ...]) -> bool:
+    return bool(b) and all(
+        any(pa == pb and sa <= sb and eb <= ea for pa, sa, ea in a) for pb, sb, eb in b
+    )
+
+
+def _piece_prefix(piece: AnalysisPiece) -> str:
+    return f"p{piece.index}."
+
+
+def _join_section_lists(
+    joined: list[domain.ProtocolSection],
+    incoming: Sequence[domain.ProtocolSection],
+    *,
+    extraction: ProtocolPdfExtraction,
+    shared_page: int,
+    piece: AnalysisPiece,
+    renamed: dict[str, str],
+) -> None:
+    """Add one piece's sections after the ones joined so far, in place.
+
+    On the page the two pieces share, a step both read is kept once: the
+    reading whose quote covers the other's (the earlier piece's when they are
+    the same). Steps whose quotes overlap without one covering the other are
+    two readings of one passage, and the join is refused. The piece's first
+    section continues the last one joined when both quote the same heading.
+    ``renamed`` collects the ids of steps and sections dropped this way,
+    mapped to the ids they were joined into.
+    """
+
+    earlier = [
+        (section_index, step_index, step, _source_extent(step.evidence, extraction))
+        for section_index, section in enumerate(joined)
+        for step_index, step in enumerate(section.steps)
+    ]
+    earlier = [item for item in earlier if any(page == shared_page for page, _, _ in item[3])]
+    replaced: dict[tuple[int, int], domain.ProtocolSourceStep] = {}
+    sections: list[domain.ProtocolSection] = []
+    for section in incoming:
+        kept: list[domain.ProtocolSourceStep] = []
+        for step in section.steps:
+            extent = _source_extent(step.evidence, extraction)
+            same = [item for item in earlier if _overlaps(item[3], extent)]
+            if not same:
+                kept.append(step)
+                continue
+            if len(same) > 1:
+                raise ProtocolAnalysisPieceConflictError(
+                    "One step of the shared page overlaps several steps of the earlier piece.",
+                    reason="overlap_step_differs",
+                    first_page=piece.first_page, last_page=piece.first_page,
+                )
+            section_index, step_index, previous, previous_extent = same[0]
+            labels = {previous.source_label.strip(), step.source_label.strip()} - {""}
+            if len(labels) > 1:
+                raise ProtocolAnalysisPieceConflictError(
+                    "The shared page's step carries two different numbers.",
+                    reason="overlap_step_differs",
+                    first_page=piece.first_page, last_page=piece.first_page,
+                )
+            if _covers(previous_extent, extent):
+                renamed[step.step_id] = previous.step_id
+            elif _covers(extent, previous_extent):
+                # The later piece read the step whole (it saw the next page).
+                replaced[(section_index, step_index)] = replace(step, step_id=previous.step_id)
+                renamed[step.step_id] = previous.step_id
+            else:
+                raise ProtocolAnalysisPieceConflictError(
+                    "Two pieces quote the shared page's step differently.",
+                    reason="overlap_step_differs",
+                    first_page=piece.first_page, last_page=piece.first_page,
+                )
+        sections.append(replace(section, steps=tuple(kept)))
+    for (section_index, step_index), step in replaced.items():
+        steps = list(joined[section_index].steps)
+        steps[step_index] = step
+        joined[section_index] = replace(joined[section_index], steps=tuple(steps))
+    for position, section in enumerate(sections):
+        if position == 0 and joined and _overlaps(
+            _source_extent(joined[-1].evidence, extraction),
+            _source_extent(section.evidence, extraction),
+        ):
+            renamed[section.section_id] = joined[-1].section_id
+            joined[-1] = replace(joined[-1], steps=joined[-1].steps + section.steps)
+            continue
+        if not section.steps and any(
+            _overlaps(_source_extent(other.evidence, extraction),
+                      _source_extent(section.evidence, extraction))
+            for other in joined
+        ):
+            # A heading both pieces read with no step of its own here.
+            continue
+        joined.append(section)
+
+
+def _join_items(
+    joined: list[Any], incoming: Sequence[Any], extraction: ProtocolPdfExtraction,
+) -> None:
+    """Add a piece's materials, equipment, prerequisites or constructs, in place.
+
+    An item whose quote another item of the same kind already covers is the
+    same item read twice on the shared page and is left out.
+    """
+
+    for item in incoming:
+        extent = _source_extent(item.evidence, extraction)
+        if any(
+            type(other) is type(item)
+            and _covers(_source_extent(other.evidence, extraction), extent)
+            for other in joined
+        ):
+            continue
+        joined.append(item)
+
+
+def join_piece_analyses(
+    extraction: ProtocolPdfExtraction,
+    pieces: Sequence[AnalysisPiece],
+    drafts: Sequence[ProtocolAnalysisDraft],
+    *,
+    capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
+) -> ProtocolAnalysisDraft:
+    """Join the pieces' analyses in page order and check the result as a whole.
+
+    Every id a piece named is prefixed with its piece ("p2.step-14"), so two
+    pieces never name the same thing. The protocol's title, dates and
+    description are the first piece's (the document's first pages). The
+    joined protocol then goes through the whole document's checks again:
+    the source-evidence check, the domain validation, the hollow-pass bound
+    over every numbered step the document prints, and the readiness
+    assessment.
+    """
+
+    if len(pieces) != len(drafts) or not pieces:
+        raise ProtocolAnalysisError("Protocol pieces and their analyses do not match.")
+    renamed: dict[str, str] = {}
+    sections: list[domain.ProtocolSection] = []
+    before: list[Any] = []
+    materials: list[Any] = []
+    equipment: list[Any] = []
+    constructs: list[Any] = []
+    cleared: list[str] = []
+    for piece, draft in zip(pieces, drafts):
+        prefix = _piece_prefix(piece)
+        protocol = _renamed_ids(draft.protocol, lambda value, prefix=prefix: prefix + value)
+        if piece.index == 1:
+            first = protocol
+            cleared.extend(protocol.cleared_fields)
+        else:
+            cleared.extend(
+                field for field in protocol.cleared_fields if field.startswith("sections.")
+            )
+        if piece.index == 1:
+            sections.extend(protocol.sections)
+        else:
+            _join_section_lists(
+                sections, protocol.sections, extraction=extraction,
+                shared_page=piece.first_page, piece=piece, renamed=renamed,
+            )
+        _join_items(before, protocol.before_start, extraction)
+        _join_items(materials, protocol.materials, extraction)
+        _join_items(equipment, protocol.equipment, extraction)
+        _join_items(constructs, protocol.constructs, extraction)
+    joined = replace(
+        first,
+        before_start=tuple(before),
+        materials=tuple(materials),
+        equipment=tuple(equipment),
+        sections=tuple(sections),
+        constructs=tuple(constructs),
+        cleared_fields=tuple(dict.fromkeys(cleared)),
+    )
+    if renamed:
+        joined = _renamed_ids(joined, lambda value: renamed.get(value, value))
+        joined = replace(joined, cleared_fields=tuple(
+            next((f"sections.{renamed[old]}.title_source_text"
+                  for old in renamed if field == f"sections.{old}.title_source_text"), field)
+            for field in joined.cleared_fields
+        ))
+    try:
+        verified, evidence_count = validate_protocol_analysis_evidence(joined, extraction)
+    except ProtocolAnalysisEvidenceError:
+        raise
+    except ProtocolAnalysisError as exc:
+        raise ProtocolAnalysisPieceConflictError(
+            "The joined analysis fails the whole document's validation.",
+            reason="joined_analysis_invalid",
+            first_page=1, last_page=extraction.page_count,
+        ) from exc
+    hollow = hollow_analysis_check(verified, extraction)
+    if hollow["hollow"]:
+        raise ProtocolAnalysisIncompleteError(
+            "Protocol analysis holds far fewer steps than the source numbers.",
+            source_numbered_steps=int(hollow["source_numbered_steps"]),
+            analysis_steps=int(hollow["analysis_steps"]),
+        )
+    readiness = domain.assess_readiness(verified, capability_policy=capability_policy)
+    return ProtocolAnalysisDraft(
+        extraction=extraction,
+        protocol=verified,
+        readiness=readiness,
+        capability_policy=capability_policy,
+        analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
+        verified_evidence_count=evidence_count,
     )
 
 
