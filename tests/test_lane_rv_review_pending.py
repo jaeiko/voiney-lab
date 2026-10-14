@@ -144,6 +144,25 @@ class ItemsForAPersonTests(unittest.TestCase):
         with self.assertRaises(ProtocolAnalysisResponseError):
             parse_protocol_analysis_response(broken, source(), review_unverified=True)
 
+    def test_an_answer_whose_shape_fails_beside_its_items_is_refused_as_before(self) -> None:
+        # Decision a: an analysis a person could not review fails as before.
+        # The answer that resolves an ambiguity itself (a shape every analysis
+        # is refused for) beside a made-up step was refused for the step's
+        # quote, which is not sent again; reading on for review must not turn
+        # it into a broken-response failure that is.
+        payload = response(step("1", THAW, THAW), step("2", MADE_UP, MADE_UP))
+        payload["protocol"]["constructs"] = [{
+            "type": "source_ambiguity", "ambiguity_id": "which-tube",
+            "source_text": THAW, "evidence": evidence(THAW),
+            "resolved": True, "resolution_source_text": "The model decided.",
+        }]
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as plain:
+            parse_protocol_analysis_response(json.dumps(payload), source())
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as kept:
+            parse_for_review(payload)
+        self.assertEqual(kept.exception.diagnostic.reason_code, plain.exception.diagnostic.reason_code)
+        self.assertEqual(kept.exception.diagnostic.field_path, plain.exception.diagnostic.field_path)
+
     def test_values_are_named_by_their_record_field_and_place(self) -> None:
         payload = response(step("1", THAW, THAW))
         payload["protocol"]["sections"][0]["steps"][0]["sub_actions"] = [{
@@ -361,6 +380,22 @@ class TheCatalogKeepsItForReviewTests(_CatalogCase):
         self.assertEqual(model.calls, 2)
         self.assertEqual(self.catalog.get_entry(self.protocol_id).analysis_status, "analysis_failed")
         self.assertIsNone(self.catalog.get_entry(self.protocol_id).review_pending)
+
+    def test_an_answer_whose_shape_fails_beside_its_items_fails_as_before_without_a_retry(self) -> None:
+        answer = json.loads(self.answer(step_two=MADE_UP))
+        answer["protocol"]["constructs"] = [{
+            "type": "source_ambiguity", "ambiguity_id": "which-gloves",
+            "source_text": "Wear gloves.",
+            "evidence": {"source_page_number": 1, "source_excerpt": "Wear gloves."},
+            "resolved": True, "resolution_source_text": "The model decided.",
+        }]
+        error, model = self.analyze(json.dumps(answer), json.dumps(answer))
+        self.assertIsInstance(error, ProtocolAnalysisEvidenceError)
+        self.assertEqual(model.calls, 1)
+        self.assertEqual(self.catalog.get_entry(self.protocol_id).analysis_status, "analysis_failed")
+        (failed,) = self.events("protocol_analysis_failed")
+        self.assertEqual(failed["failure_code"], "protocol_analysis_invalid_evidence")
+        self.assertEqual(self.events("protocol_analysis_review_pending"), [])
 
     def test_a_plain_request_does_not_ask_again_over_a_review_pending_analysis(self) -> None:
         self.analyze(self.answer(step_two=MADE_UP))

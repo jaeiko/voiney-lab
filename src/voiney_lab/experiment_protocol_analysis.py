@@ -3927,17 +3927,26 @@ def _draft_from_response(
             protocol, extraction, allowed_pages=allowed_pages)
     else:
         protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
-    protocol = _repeat_counts_as_totals(protocol)
-    _reject_deferred_state(protocol)
-    if refused:
-        readiness = validated_with_refused_quotes(
-            protocol, extraction, tuple(refused), capability_policy=capability_policy)
-    else:
-        _validate_domain(protocol, extraction)
-        readiness = domain.assess_readiness(
-            protocol,
-            capability_policy=capability_policy,
-        )
+    try:
+        protocol = _repeat_counts_as_totals(protocol)
+        _reject_deferred_state(protocol)
+        if refused:
+            readiness = validated_with_refused_quotes(
+                protocol, extraction, tuple(refused), capability_policy=capability_policy)
+        else:
+            _validate_domain(protocol, extraction)
+            readiness = domain.assess_readiness(
+                protocol,
+                capability_policy=capability_policy,
+            )
+    except ProtocolAnalysisError as exc:
+        if not refused:
+            raise
+        # Decision a: an answer a person could not review fails as before.
+        # Its first refusal is what the plain path stopped at -- an evidence
+        # failure, not sent again -- not the shape reading on for review
+        # reaches after it.
+        raise next(iter(refused.values())) from exc
     return ProtocolAnalysisDraft(
         extraction=extraction,
         protocol=protocol,
