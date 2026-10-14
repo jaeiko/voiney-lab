@@ -79,7 +79,7 @@ pip install -e '.[test]'
 cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 ```
 
-- 서버에는 **LibreOffice 와 한국어 글꼴**도 설치한다(Word 원문을 PDF 로 바꿈, 사람 결정 2026-10-13): Ubuntu 는 `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`. HEIC 사진은 선택(`pip install -e '.[heic]'`, pillow-heif 바퀴가 GPLv2 라서 선택으로 둔다 — 사람 결정 2026-10-14). 받는 파일 형식과 확인 방법은 `docs/SOURCE_FORMATS.md`. LibreOffice 가 없어도 서버는 시작하고, Word 를 올릴 때만 `docx_conversion_unavailable`(503)로 거절한다(`GET /readyz` 의 `docx_conversion_available`).
+- 서버에는 **LibreOffice 와 한국어 글꼴**도 설치한다(Word 원문을 PDF 로 바꿈, 사람 결정 2026-10-13): Ubuntu 는 `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`. HEIC 사진은 선택(`pip install -e '.[heic]'`, pillow-heif 바퀴가 GPLv2 라서 선택으로 둔다 — 사람 결정 2026-10-14). 받는 파일 형식과 확인 방법은 `docs/SOURCE_FORMATS.md`. LibreOffice 가 없어도 서버는 시작하고, Word 를 올릴 때만 `docx_conversion_unavailable`(503)로 거절한다(`GET /readyz` 의 `docx_conversion_available`). **파일럿 실행기도 LibreOffice 가 없으면 `[WARN]` 몇 줄만 찍고 시작을 막지 않는다**(사람 결정 2026-10-14): PDF 만 올리는 파일럿은 필요 없다.
 
 ### 개발 서버
 
@@ -101,6 +101,7 @@ cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 
 - 상태는 `data/runtime/pilot/` 에 둔다. 승인 안전 카탈로그는 실행기가 `data/runtime/pilot/approved_safety_catalog.sqlite`, 범위는 `reference_only` 로 고정한다.
 - **승인 안전 카탈로그 파일이 없어도 파일럿 실행기는 시작한다**(2026-10-13 결정, "B안"). 사용 범위는 `source_protocol_only` 가 되고, 업로드한 PDF 의 원문 안전 주의만 쓴다. 화면·기록·시작 점검 배너가 "기관 안전 문서 없음 · 원문 안전 주의만" 이라고 말한다.
+- 시작 점검(`--check-only`)은 `--- Source formats ---` 아래에 `word_sources(libreoffice): available (<경로>)` 또는 `unavailable` 과 `[WARN]` 을 보여 준다. 서버와 같은 방법(`VOINEY_LAB_OFFICE_CONVERTER`, `PATH`, 기본 설치 위치)으로 찾는다.
 - 카탈로그 파일이 **있으면** 범위는 `reference_only` 이고 실행기가 점검한다. 그 파일이 읽을 수 없거나, demo 문서가 섞였거나, 승인된 `reference_only` 문서가 하나도 없으면 "없음"으로 치지 않고 시작을 거부한다(종료 코드 1). 기관 문서 없이 열려면 그 파일을 치운다. 자세한 것은 `docs/PILOT_GUIDE.md` 1절.
 
 ## 6. 테스트 기준 (Verification)

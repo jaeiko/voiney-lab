@@ -68,6 +68,10 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
    ```
    카탈로그가 있으면 `SAFETY_CATALOG = <경로>`, `USAGE_SCOPE = reference_only`, `demo documents = 0`,
    `approved active reference_only documents = N` 이 나온다.
+
+   **LibreOffice 가 없으면** 점검이 `--- Source formats ---` 아래에 `word_sources(libreoffice): unavailable` 과 `[WARN]` 몇 줄(설치 명령
+   포함)을 찍지만 **종료 코드는 0 이고 시작도 막지 않는다**(사람 결정 2026-10-14). Word(.docx) 원문을 올릴 때만 `docx_conversion_unavailable`
+   (503)로 거절된다. PDF 만 올리는 파일럿이면 그대로 쓰고, Word 가 필요하면 `docs/SOURCE_FORMATS.md` 1절대로 설치한다.
 3. **시작** — `./scripts/run_pilot.sh` (`127.0.0.1:8080`, `HOST`·`PORT` 로 바꾼다). 실제로 시작할 때만
    `data/runtime/pilot/` 을 만들고 그 폴더에 파일럿 표시 파일(`.voiney-pilot-data`)을 둔다. 확인:
    ```bash

@@ -191,6 +191,38 @@ report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
 
+# --- Word sources need LibreOffice: warn, never refuse -------------------------
+# A Word (.docx) source is turned into a PDF by LibreOffice (docs/SOURCE_FORMATS.md).
+# Human decision of 2026-10-14: a pilot without it still starts -- a pilot that
+# uploads only PDFs does not need it -- and says so here; the server answers a
+# .docx upload with docx_conversion_unavailable (503) and GET /readyz reports
+# docx_conversion_available. The same finder the server uses, and the .env the
+# server will load (without overriding the shell), so the banner is accurate.
+# Nothing in this block can stop the start: a failure to look is not a refusal.
+OFFICE_CONVERTER_FOUND="$(python -B - "$ROOT/.env" <<'PY' 2>/dev/null || true
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(sys.argv[1]), override=False)
+from voiney_lab.experiment_protocol_pdf import find_office_converter
+
+print(find_office_converter() or "")
+PY
+)"
+echo
+echo "--- Source formats ---"
+if [[ -n "$OFFICE_CONVERTER_FOUND" ]]; then
+  echo "word_sources(libreoffice):     available ($OFFICE_CONVERTER_FOUND)"
+else
+  echo "word_sources(libreoffice):     unavailable"
+  echo "[WARN] LibreOffice (soffice) was not found. The pilot starts anyway; a Word (.docx)"
+  echo "[WARN] upload is refused with docx_conversion_unavailable until it is installed:"
+  echo "[WARN]   sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum"
+  echo "[WARN] (or set VOINEY_LAB_OFFICE_CONVERTER to its soffice; see docs/SOURCE_FORMATS.md)."
+fi
+
 XAI_REFUSAL=""
 if ! python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env"; then
   XAI_REFUSAL="an xAI-only feature is on without XAI_API_KEY (see the line above)"

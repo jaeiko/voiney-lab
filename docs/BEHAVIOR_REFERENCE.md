@@ -1346,6 +1346,14 @@ with it). It keeps a value the operator set in the shell or wrote in the
 `.env`, so enabling it is a deliberate act taken before startup. The outside-PDF explanation ("AI 일반
 지식") therefore stays off in the pilot unless it is set.
 
+The pilot launcher's start check also looks for LibreOffice the way the server
+does (`VOINEY_LAB_OFFICE_CONVERTER`, `PATH`, the default places; the `.env` the
+server will load counts, the shell wins) and prints `--- Source formats ---`
+with `word_sources(libreoffice): available (<path>)`, or `unavailable` and a
+`[WARN]` with the install command. It never refuses: without LibreOffice the
+pilot starts and only a Word upload is refused (`docx_conversion_unavailable`,
+human decision of 2026-10-14).
+
 The pilot's approved safety documents are fixed by the launcher, never by a
 `.env`. It exports `VOINEY_LAB_SAFETY_CATALOG` as the absolute path
 of `data/runtime/pilot/approved_safety_catalog.sqlite` and
