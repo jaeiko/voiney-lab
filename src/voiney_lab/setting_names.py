@@ -121,6 +121,9 @@ SETTINGS: tuple[Setting, ...] = (
             "(0–10, 0 이면 끔; 줄 AN2 결정 1)"),
     Setting("VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS", MODELS, "60",
             "다시 보내기 전 기다림의 상한 (초). 공급자가 이보다 오래 기다리라고 하면 다시 보내지 않음"),
+    Setting("VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY", MODELS, "8",
+            "긴 문서를 조각으로 나눠 분석할 때 한 번에 분석하는 조각 수 (1–16). 조각 분석 중 "
+            "공급자가 429 를 돌려주면 그 문서의 남은 조각은 절반으로 줄여 시작 (줄 AN2 결정 3)"),
     Setting("VOINEY_LAB_REPORT_PROVIDER", MODELS, _SET_ME, "실험 보고서 서술 공급자"),
     Setting("VOINEY_LAB_REPORT_MODEL", MODELS, _SET_ME, "실험 보고서 서술 모델"),
     Setting("VOINEY_LAB_REPORT_REASONING", MODELS, "(공급자 기본)", "보고서 서술 추론"),
