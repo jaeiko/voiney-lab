@@ -126,6 +126,8 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    ProtocolReviewError,
+    ProtocolReviewTargetChangedError,
     REAGENT_TABLE_MEDIA_TYPE,
     MAX_REAGENT_TABLE_BYTES,
     ReagentTableError,
@@ -2350,6 +2352,13 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=400,detail=exc.code)
     if isinstance(exc,ReagentTableTooLargeError):
         return HTTPException(status_code=413,detail=exc.code)
+    # Lane RV, decision b: a review decision the server does not take is the
+    # request's (422); a review read against an analysis that has since
+    # changed is a conflict (409).
+    if isinstance(exc,ProtocolReviewTargetChangedError):
+        return HTTPException(status_code=409,detail=exc.code)
+    if isinstance(exc,ProtocolReviewError):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ReagentTableError):
         return HTTPException(status_code=422,detail=exc.code)
     return HTTPException(
@@ -3620,6 +3629,96 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
             return review
         finally:
             store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft")
+def get_protocol_review_draft(protocol_id:str)->dict[str,object]:
+    """The review tab's items, source lines and draft decisions (lane RV, b).
+
+    The analysis a person reviews now -- one waiting for review, one that
+    passed, or the latest review version -- item by item, with where each
+    stands in the source, whether it waits for a person and why, its origin
+    (원문 · AI 제안 · 검토자 입력) and the draft decision on it.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_draft(protocol_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/review-decisions")
+def post_protocol_review_decision(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """One decision on one item (lane RV, decision b): confirm, fix, leave
+    empty (원문에 없음), enter, a memo or taking a decision back. One more
+    ledger event; nothing runs differently until a version is registered."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.record_review_decision(protocol_id,body)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}")
+def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,object]:
+    """One source page as the review read it: every line with its number,
+    the lines holding a value and those an unclear OCR reading holds, and
+    the OCR's value boxes (lane RV, decision b)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_source_page(protocol_id,source_page)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}/image")
+def get_protocol_review_source_page_image(protocol_id:str,source_page:int):
+    """The source page itself for the review screen (lane RV, decision b).
+
+    The same rendering as "원본 쪽 보기", for any protocol the caller may see
+    -- the review is of an analysis that may not run yet.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            path,sha256=catalog.source_pdf(protocol_id)
+        finally:
+            store.close()
+        png=source_figures.page_image(path,sha256,source_page)
+        if png is None:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":f'inline; filename="source-page-{source_page}.png"',
+                "X-Protocol-Source-SHA256":sha256,
+                "X-Protocol-Source-Page":str(source_page),
+            })
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 

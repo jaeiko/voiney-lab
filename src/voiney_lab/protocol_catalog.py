@@ -13,9 +13,11 @@ import logging
 import os
 import queue
 import re
+import secrets
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
+from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +39,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisPieceConflictError,
     ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
+    REVIEW_ITEM_KINDS,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASONS_KO,
     ReviewFlag,
@@ -47,6 +50,8 @@ from voiney_lab.experiment_protocol_analysis import (
     check_pieced_page_count,
     join_piece_analyses,
     prepare_protocol_analysis_request,
+    replace_at_paths,
+    review_item_id,
     verify_step_timers,
 )
 from voiney_lab.experiment_protocol_pdf import (
@@ -3746,6 +3751,514 @@ class ProtocolCatalog:
             source = extraction
         return verify_step_timers(protocol, source)
 
+    # --- The review tab (lane RV, decision b) ---------------------------------
+
+    def _review_target(self, revision: ProtocolRevisionRecord) -> _ReviewTarget | None:
+        """The analysis a person reviews now: the latest of the analysis that
+        passed, the one waiting for review, and (decision c) the latest
+        registered review version. None before any, and for the curated
+        development fixture, which is never reviewed."""
+
+        events = tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        )
+        if any(event.event_type == _DEVELOPMENT_FIXTURE_EVENT for event in events):
+            return None
+        latest = None
+        for event in events:
+            if event.event_type in {_ANALYSIS_READY_EVENT, _REVIEW_PENDING_EVENT}:
+                latest = event
+        if latest is None:
+            return None
+        if latest.event_type == _REVIEW_PENDING_EVENT:
+            protocol, readiness, flags, event = self.review_pending_analysis(
+                revision.experiment_id)
+            return _ReviewTarget(
+                kind="review_pending",
+                key={"kind": "review_pending", "event_id": event.event_id},
+                protocol=protocol, readiness=readiness, flags=flags,
+                recorded_at=event.recorded_at,
+                analysis_id=str((event.payload or {}).get("analysis_id") or ""),
+            )
+        analysis = self.store.get_analysis_revision(
+            revision.experiment_id, revision.revision_number,
+            latest.analysis_revision_number,
+        )
+        return _ReviewTarget(
+            kind="analysis",
+            key={"kind": "analysis",
+                 "analysis_revision_number": analysis.analysis_revision_number},
+            protocol=analysis.protocol, readiness=analysis.readiness, flags=(),
+            recorded_at=latest.recorded_at,
+            revision_id=_revision_id(
+                revision.revision_number, analysis.analysis_revision_number),
+            analysis_id=analysis.analysis_id,
+        )
+
+    def _review_decisions(
+        self, revision: ProtocolRevisionRecord, target: _ReviewTarget,
+    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+        """The draft decisions on the target, latest per item, and the memos."""
+
+        decisions: dict[str, dict[str, object]] = {}
+        memos: dict[str, dict[str, object]] = {}
+        for event in self.store.list_events(revision.experiment_id):
+            if (
+                event.event_type != _REVIEW_DECISION_EVENT
+                or event.protocol_revision_number != revision.revision_number
+                or not isinstance(event.payload, dict)
+                or event.payload.get("target") != target.key
+            ):
+                continue
+            decision = {**event.payload, "recorded_at": event.recorded_at,
+                        "event_id": event.event_id}
+            item_id = str(decision.get("item_id"))
+            if decision.get("action") == "memo":
+                memos[item_id] = decision
+            elif decision.get("action") == "reset":
+                decisions.pop(item_id, None)
+            else:
+                decisions[item_id] = decision
+        return decisions, memos
+
+    def _review_timer_table(
+        self, revision: ProtocolRevisionRecord, target: _ReviewTarget,
+    ) -> domain.StepTimerTable:
+        extraction = target.protocol.metadata.pdf
+        try:
+            return verify_step_timers(
+                _safe_page_view(target.protocol, extraction), extraction)
+        except (IndexError, ValueError):
+            return domain.StepTimerTable()
+
+    def _review_items(
+        self,
+        revision: ProtocolRevisionRecord,
+        target: _ReviewTarget,
+        decisions: dict[str, dict[str, object]],
+        memos: dict[str, dict[str, object]],
+        *,
+        timer_steps: Sequence[str] = (),
+    ) -> list[dict[str, object]]:
+        """Every item of the target as the review screen shows it.
+
+        A step's timer is an item where the step has a time (verified or
+        refused) or a decision; ``timer_steps`` adds more steps' timers, so a
+        reviewer may enter one where the source prints none.
+        """
+
+        protocol = target.protocol
+        extraction = protocol.metadata.pdf
+        flags_by_item: dict[str, list[ReviewFlag]] = {}
+        for flag in target.flags:
+            flags_by_item.setdefault(flag.item_id, []).append(flag)
+        origins = target.origins or {}
+        items: list[dict[str, object]] = []
+
+        def view(item_id: str, kind: str, text: object, *, step=None, section=None,
+                 evidence: domain.SourceEvidence | None = None,
+                 evidence_item: str | None = None, extra: dict[str, object] | None = None,
+                 ) -> dict[str, object]:
+            own = flags_by_item.get(item_id, [])
+            quote_refused = evidence_item is not None and any(
+                flag.field == "evidence" for flag in flags_by_item.get(evidence_item, []))
+            needs_review = bool(own)
+            covered_by = (
+                evidence_item if quote_refused and not needs_review and evidence_item != item_id
+                else None)
+            origin = origins.get(item_id) or (
+                REVIEW_ORIGIN_AI if needs_review or covered_by else REVIEW_ORIGIN_SOURCE)
+            source: dict[str, object] | None = None
+            if evidence is not None:
+                lines = None if quote_refused else _quote_lines(evidence, extraction)
+                source = {
+                    "page": evidence.source_page_number,
+                    "excerpt": evidence.source_excerpt,
+                    "continued_page": evidence.continued_on_page_number,
+                    "continued_excerpt": evidence.continued_excerpt,
+                    "verified": not quote_refused,
+                    "lines": (
+                        {"page": evidence.source_page_number, "first_line": lines[0],
+                         "last_line": lines[1]} if lines else None),
+                    "suggested_lines": (
+                        _suggested_lines(
+                            evidence.source_excerpt or str(text or ""), extraction,
+                            (evidence.source_page_number,
+                             *(page for flag in own for page in flag.matching_source_pages)))
+                        if quote_refused and evidence_item == item_id else None),
+                }
+            allowed = ["memo", "reset"]
+            if kind in _FIXABLE_KINDS:
+                allowed[:0] = ["confirm", "fix"]
+            elif kind in {"warning", "section", "metadata", "construct", "reminder",
+                          "timer_spec", "pages"}:
+                allowed[:0] = ["confirm"]
+            elif kind == "repeat_count":
+                allowed[:0] = (["confirm", "fix", "clear"] if text is not None
+                               else ["enter"])
+            elif kind == "missing_value":
+                allowed[:0] = ["confirm", "enter"] if needs_review else ["enter"]
+            elif kind == "timer":
+                allowed[:0] = ["fix", "clear"] if text is not None else ["enter"]
+            if needs_review and kind in _CLEARABLE_KINDS:
+                allowed.insert(allowed.index("memo"), "clear")
+            decision = decisions.get(item_id)
+            current: object = text
+            origin_after = origin
+            if decision is not None:
+                action = decision.get("action")
+                value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+                if action in {"fix", "enter"}:
+                    current = value.get("text")
+                    origin_after = REVIEW_ORIGIN_REVIEWER
+                elif action == "clear":
+                    current = None
+            return {
+                "item_id": item_id,
+                "kind": kind,
+                "kind_ko": REVIEW_ITEM_KIND_KO.get(kind, kind),
+                "step_id": step.step_id if step is not None else None,
+                "step_label": step.source_label if step is not None else None,
+                "section_id": section.section_id if section is not None else None,
+                "text": text,
+                "value_kind_ko": (
+                    value_kind_ko(str(text)) if kind in {"value", "duration", "timer"}
+                    and text is not None else None),
+                "source": source,
+                "origin": origin,
+                "origin_ko": REVIEW_ORIGIN_KO[origin],
+                "needs_review": needs_review,
+                "covered_by": covered_by,
+                "reasons": [flag.public_dict() for flag in own],
+                "allowed_actions": allowed,
+                "decision": (
+                    {key: decision.get(key) for key in (
+                        "action", "value", "source_lines", "reviewer_name", "recorded_at")}
+                    if decision is not None else None),
+                "memo": memos[item_id].get("memo") if item_id in memos else None,
+                "current": current,
+                "origin_after": origin_after,
+                "origin_after_ko": REVIEW_ORIGIN_KO[origin_after],
+                "differs_from_original": bool(
+                    decision is not None and decision.get("action") in {"fix", "enter", "clear"}),
+                **(extra or {}),
+            }
+
+        listed: set[str] = set()
+        if "metadata" in flags_by_item:
+            items.append(view(
+                "metadata", "metadata", protocol.metadata.title,
+                evidence=protocol.metadata.evidence, evidence_item="metadata"))
+            listed.add("metadata")
+        for record in _review_records(protocol):
+            value = record.record
+            if record.kind == "repeat_count":
+                text: object = value.repeat_count
+            elif record.kind == "timer_spec":
+                text = value.duration.source_text if value.duration is not None else None
+            else:
+                text = getattr(value, _REVIEW_TEXT_FIELD[type(value)])
+            items.append(view(
+                record.item_id, record.kind, text, step=record.step, section=record.section,
+                evidence=record.evidence, evidence_item=record.evidence_item_id))
+            listed.add(record.item_id)
+        steps = {step.step_id: step for section in protocol.sections for step in section.steps}
+        table = self._review_timer_table(revision, target)
+        timer_steps = list(dict.fromkeys(
+            [timer.step_id for timer in table.verified]
+            + [time.step_id for time in table.refused if time.step_id]
+            + [str(item_id)[len("timer:"):] for item_id in decisions
+               if str(item_id).startswith("timer:")]
+            + list(timer_steps)
+        ))
+        for step_id in timer_steps:
+            step = steps.get(step_id)
+            if step is None:
+                continue
+            verified = table.for_step(step_id)
+            seconds = sorted({value for timer in verified for value in timer.seconds})
+            items.append(view(
+                f"timer:{step_id}", "timer",
+                " · ".join(dict.fromkeys(timer.literal for timer in verified)) or None,
+                step=step, evidence=step.evidence, evidence_item=None,
+                extra={
+                    "seconds": seconds,
+                    "candidates": [
+                        {"literal": time.literal, "excerpt": time.excerpt,
+                         "reason": time.reason, "reason_ko": time.reason_ko,
+                         "page": time.page_number}
+                        for time in table.refused if time.step_id == step_id
+                    ],
+                }))
+            listed.add(f"timer:{step_id}")
+        for item_id, flags in flags_by_item.items():
+            if item_id in listed:
+                continue
+            flag = flags[0]
+            items.append(view(
+                item_id, "pages" if flag.field == "pages" else "construct",
+                flag.reason_ko,
+                extra={"first_page": flag.first_page, "last_page": flag.last_page}))
+        return items
+
+    def review_draft(self, protocol_id: str) -> dict[str, object]:
+        """What the review screen shows (lane RV, decision b): the target, its
+        items with their source lines, origins and draft decisions, and
+        whether it can be registered now."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        entry = self._entry_for_revision(revision)
+        base: dict[str, object] = {
+            "protocol_id": protocol_id,
+            "title": entry.title,
+            "source_filename": entry.source_filename,
+            "analysis_status": entry.analysis_status,
+            "lifecycle_state": entry.lifecycle_state,
+            "available_for_execution": entry.available_for_execution,
+            "review_pending": entry.review_pending,
+            "target": None,
+            "items": [],
+            "needs_review": [],
+            "counts": {"items": 0, "needs_review": 0, "decided": 0, "undecided": 0,
+                       "changed": 0},
+            "pages": [],
+            "registrable": False,
+            "registration_blockers": [],
+        }
+        target = self._review_target(revision)
+        if target is None:
+            base["message_ko"] = (
+                "개발용 고정 프로토콜은 검토하지 않습니다."
+                if entry.development_only else "검토할 분석이 아직 없습니다.")
+            return base
+        decisions, memos = self._review_decisions(revision, target)
+        items = self._review_items(revision, target, decisions, memos)
+        pending = [
+            item["item_id"] for item in items
+            if item["needs_review"] and item["item_id"] not in decisions
+        ]
+        base.update({
+            "target": {
+                **target.key, "recorded_at": target.recorded_at,
+                "revision_id": target.revision_id, "analysis_id": target.analysis_id,
+            },
+            "items": items,
+            "needs_review": [item["item_id"] for item in items if item["needs_review"]],
+            "counts": {
+                "items": len(items),
+                "needs_review": sum(1 for item in items if item["needs_review"]),
+                "decided": len(decisions),
+                "undecided": len(pending),
+                "changed": sum(1 for item in items if item["differs_from_original"]),
+            },
+            "pages": self._review_pages(revision, target),
+            "registration_blockers": [
+                {"item_id": item_id, "message_ko": "확인 필요 항목을 정하지 않았습니다."}
+                for item_id in pending
+            ],
+            "registrable": not pending,
+        })
+        return base
+
+    def _review_pages(
+        self, revision: ProtocolRevisionRecord, target: _ReviewTarget,
+    ) -> list[dict[str, object]]:
+        extraction = target.protocol.metadata.pdf
+        ocr_pages = self._ocr_pages(revision)
+        pages = []
+        for page in extraction.pages:
+            ocr = ocr_pages.get(page.source_page_number) or {}
+            lines = self._line_views(page, ocr)
+            pages.append({
+                "page": page.source_page_number,
+                "ocr": page.ocr_derived,
+                "ocr_unclear": _ocr_page_unclear(page, ocr),
+                "confidence": ocr.get("confidence") if page.ocr_derived else None,
+                "line_count": len(lines),
+                "value_line_count": sum(1 for line in lines if line["has_value"]),
+                "unclear_line_count": sum(1 for line in lines if line["unclear"]),
+                "value_box_count": len(ocr.get("value_boxes") or ()) if page.ocr_derived else 0,
+            })
+        return pages
+
+    def _ocr_pages(self, revision: ProtocolRevisionRecord) -> dict[int, dict[str, object]]:
+        projection = self._ocr_projection(
+            revision, self._source_extraction(revision), include_text=True)
+        if projection.get("accepted_for_analysis") is not True:
+            return {}
+        return {
+            page["source_page_number"]: page for page in projection.get("pages") or ()
+            if isinstance(page, dict) and isinstance(page.get("source_page_number"), int)
+        }
+
+    @staticmethod
+    def _line_views(page: ProtocolPdfPage, ocr: dict[str, object]) -> list[dict[str, object]]:
+        unclear_page = _ocr_page_unclear(page, ocr)
+        views = []
+        for number, (_, _, text) in enumerate(_page_lines(page.text), start=1):
+            has_value = bool(re.search(r"[0-9]", text))
+            views.append({
+                "number": number, "text": text, "has_value": has_value,
+                "unclear": unclear_page and has_value,
+            })
+        return views
+
+    def source_pdf(self, protocol_id: str) -> tuple[Path, str]:
+        """The stored source PDF of the latest protocol revision and its checksum."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError("Protocol source object is unavailable.")
+        return (
+            self.store.file_store.object_path(
+                revision.pdf_checksum, expected_size=pdf_object.byte_size),
+            revision.pdf_checksum,
+        )
+
+    def review_source_page(self, protocol_id: str, page_number: int) -> dict[str, object]:
+        """One page of the source the target was read from, line by line, with
+        line numbers, and the OCR's value boxes (lane RV, decision b; UI2's
+        "원문 쪽 전체 줄과 줄 번호", "OCR 흐린 줄 수")."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        target = self._review_target(revision)
+        if target is not None:
+            extraction = target.protocol.metadata.pdf
+        else:
+            extraction = self._extraction_for_analysis(
+                revision, self._source_extraction(revision))
+        if not isinstance(page_number, int) or not 1 <= page_number <= extraction.page_count:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        page = extraction.pages[page_number - 1]
+        ocr = self._ocr_pages(revision).get(page_number) or {}
+        lines = self._line_views(page, ocr)
+        boxes = ocr.get("value_boxes") if page.ocr_derived else None
+        return {
+            "protocol_id": protocol_id,
+            "page": page_number,
+            "page_count": extraction.page_count,
+            "ocr": page.ocr_derived,
+            "ocr_unclear": _ocr_page_unclear(page, ocr),
+            "confidence": ocr.get("confidence") if page.ocr_derived else None,
+            "numeric_review_required": bool(ocr.get("numeric_review_required"))
+            if page.ocr_derived else False,
+            "lines": lines,
+            "unclear_line_count": sum(1 for line in lines if line["unclear"]),
+            "render_dpi": ocr.get("render_dpi") if page.ocr_derived else None,
+            "value_boxes": [
+                {"index": index, "text": box.get("text"), "box": box.get("box")}
+                for index, box in enumerate(boxes or ())
+                if isinstance(box, dict)
+            ],
+        }
+
+    def record_review_decision(
+        self, protocol_id: str, request: dict[str, object],
+    ) -> dict[str, object]:
+        """Record one decision on one item of the target (lane RV, decision b).
+
+        One more ledger event: the item, the action, the value, the source
+        lines a person pointed at, the original value and origin, and the
+        reviewer's name when given. Nothing is changed but the draft; the
+        registration (decision c) makes the version that runs.
+        """
+
+        if not isinstance(request, dict):
+            raise ProtocolReviewError("A review decision must be an object.")
+        allowed_keys = {"item_id", "action", "text", "seconds", "count", "source_lines",
+                        "memo", "reviewer_name", "target"}
+        if set(request) - allowed_keys:
+            raise ProtocolReviewError("A review decision holds an unknown field.")
+        revision = self._latest_protocol_revision(protocol_id)
+        target = self._review_target(revision)
+        if target is None:
+            raise ProtocolReviewNotReadyError("There is no analysis to review.")
+        if request.get("target") is not None and not _same_target(request["target"], target.key):
+            raise ProtocolReviewTargetChangedError(
+                "The analysis under review changed; read the review again.")
+        decisions, memos = self._review_decisions(revision, target)
+        item_id = request.get("item_id")
+        items = {item["item_id"]: item for item in self._review_items(
+            revision, target, decisions, memos,
+            timer_steps=(
+                (item_id[len("timer:"):],)
+                if isinstance(item_id, str) and item_id.startswith("timer:") else ()),
+        )}
+        if not isinstance(item_id, str) or item_id not in items:
+            raise ProtocolReviewError("The review has no such item.")
+        item = items[item_id]
+        action = request.get("action")
+        if action not in REVIEW_ACTIONS or action not in item["allowed_actions"]:
+            raise ProtocolReviewError("This action is not allowed on this item.")
+        value: dict[str, object] = {}
+        if action in {"fix", "enter"}:
+            if item["kind"] == "timer":
+                seconds = request.get("seconds")
+                if (not isinstance(seconds, int) or isinstance(seconds, bool)
+                        or not 1 <= seconds <= _MAX_TIMER_SECONDS):
+                    raise ProtocolReviewError("A timer needs whole seconds.")
+                value = {"seconds": seconds, "text": _duration_words(seconds)}
+            elif item["kind"] == "repeat_count":
+                count = request.get("count")
+                if (not isinstance(count, int) or isinstance(count, bool)
+                        or not 1 <= count <= _MAX_REPEAT_COUNT):
+                    raise ProtocolReviewError("A repeat count needs a whole number.")
+                value = {"count": count, "text": f"{count}회"}
+            else:
+                limit = (_MAX_REVIEW_VALUE if item["kind"] in {"value", "duration", "missing_value"}
+                         else _MAX_REVIEW_TEXT)
+                value = {"text": _clean_review_text(request.get("text"), limit=limit,
+                                                    label="Reviewed text")}
+                if action == "fix" and value["text"] == item["text"]:
+                    raise ProtocolReviewError("A fix must change the text; confirm it instead.")
+        source_lines = None
+        source = item.get("source") if isinstance(item.get("source"), dict) else None
+        if action in {"confirm", "fix"} and item["needs_review"] and source is not None \
+                and source.get("verified") is False:
+            # The quote was not found: a person points at where the item is.
+            evidence = source_lines_excerpt(target.protocol.metadata.pdf,
+                                            request.get("source_lines"))
+            source_lines = {**request["source_lines"], "excerpt": evidence.source_excerpt}
+        elif request.get("source_lines") is not None:
+            raise ProtocolReviewError("Source lines are asked only for an item whose quote was not found.")
+        memo = None
+        if action == "memo":
+            memo = _clean_review_text(request.get("memo"), limit=_MAX_REVIEW_MEMO, label="Memo")
+        elif request.get("memo") is not None:
+            raise ProtocolReviewError("A memo is its own action.")
+        name = request.get("reviewer_name")
+        payload: dict[str, object] = {
+            "target": target.key,
+            "item_id": item_id,
+            "kind": item["kind"],
+            "action": action,
+            "value": value or None,
+            "source_lines": source_lines,
+            "memo": memo,
+            "reviewer_name": reviewer_name(name) if name is not None else None,
+            "original": {
+                "text": item["text"],
+                "origin": item["origin"],
+                **({"seconds": item.get("seconds")} if item["kind"] == "timer" else {}),
+            },
+        }
+        self.store.append_event(
+            f"review-decision-{secrets.token_hex(16)}",
+            protocol_id,
+            revision.revision_number,
+            _REVIEW_DECISION_EVENT,
+            payload,
+        )
+        draft = self.review_draft(protocol_id)
+        return {
+            "item": next(entry for entry in draft["items"] if entry["item_id"] == item_id),
+            "counts": draft["counts"],
+            "registrable": draft["registrable"],
+            "target": draft["target"],
+        }
+
     def resolve_asset(
         self,
         protocol_id: str,
@@ -3772,6 +4285,430 @@ class ProtocolCatalog:
             sha256=fixture.source_pdf_sha256,
             source_page=matching[0].source_page,
         )
+
+
+# ---------------------------------------------------------------------------
+# The review tab (lane RV, decisions b-d; human decisions 2026-10-12 and the
+# review scope recommended 2026-10-14)
+# ---------------------------------------------------------------------------
+#
+# A person reviews one analysis -- one waiting for review, one that passed, or
+# the latest registered review version -- item by item: confirm it, fix it (a
+# value, a unit, a typo), leave it empty because the source does not hold it,
+# or enter a value the source does not print. Steps are not added or removed
+# and a safety statement's words are not changed (a memo is); a value a
+# person wrote is shown as "검토자 입력", one the analysis or the OCR's second
+# reading produced as "AI 제안", and an AI suggestion becomes something that
+# runs only when a person confirms it. Every decision is one more ledger
+# event; the source and the analysis are never changed.
+
+REVIEW_ORIGIN_SOURCE = "source"
+REVIEW_ORIGIN_AI = "ai_suggestion"
+REVIEW_ORIGIN_REVIEWER = "reviewer_input"
+REVIEW_ORIGIN_KO: dict[str, str] = {
+    REVIEW_ORIGIN_SOURCE: "원문",
+    REVIEW_ORIGIN_AI: "AI 제안",
+    REVIEW_ORIGIN_REVIEWER: "검토자 입력",
+}
+REVIEW_ITEM_KIND_KO: dict[str, str] = {
+    "metadata": "문서 정보",
+    "section": "절 제목",
+    "step": "단계",
+    "sub_action": "세부 동작",
+    "warning": "안전 주의",
+    "note": "참고",
+    "tip": "팁",
+    "expected_result": "완료 기준",
+    "observation": "완료 기준(관찰)",
+    "condition": "조건",
+    "material": "재료",
+    "equipment": "장비",
+    "prerequisite": "시작 전 준비",
+    "value": "값",
+    "duration": "시간",
+    "timer_spec": "타이머 정보",
+    "reminder": "알림",
+    "missing_value": "원문에 없는 값",
+    "construct": "구조",
+    "repeat_count": "반복 횟수",
+    "timer": "단계 타이머",
+    "pages": "분석 실패 쪽",
+}
+#: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
+#: the source does not print, a memo beside an item, and taking a draft
+#: decision back.
+REVIEW_ACTIONS: tuple[str, ...] = ("confirm", "fix", "clear", "enter", "memo", "reset")
+REVIEW_ACTION_KO: dict[str, str] = {
+    "confirm": "확인", "fix": "고침", "clear": "원문에 없음으로 비워 둠",
+    "enter": "입력", "memo": "메모", "reset": "되돌리기",
+}
+_STATEMENT_KINDS = {
+    "warnings": "warning", "notes": "note", "tips": "tip",
+    "expected_results": "expected_result", "conditions": "condition",
+}
+#: The text field a person reads (and may fix) on each record.
+_REVIEW_TEXT_FIELD: dict[type, str] = {
+    domain.ProtocolSection: "title_source_text",
+    domain.ProtocolSourceStep: "instruction_source_text",
+    domain.ProtocolSubAction: "instruction_source_text",
+    domain.SourceStatement: "source_text",
+    domain.RequiredObservation: "source_text",
+    domain.Material: "name_source_text",
+    domain.Equipment: "name_source_text",
+    domain.BeforeStartPrerequisite: "source_text",
+    domain.ScientificValue: "source_text",
+    domain.EstimatedDuration: "source_text",
+    domain.MissingExecutionValue: "description",
+    domain.ProcessTimerSpecification: "timer_id",
+    domain.OneTimeReminder: "message_source_text",
+    domain.RecurringReminder: "message_source_text",
+    domain.ConditionalBranch: "condition_source_text",
+    domain.FixedRangeRepetition: "range_source_text",
+    domain.OperatorDeterminedRepetition: "range_source_text",
+    domain.RepeatUntil: "condition_source_text",
+    domain.ParallelWork: "source_text",
+    domain.RecurringAction: "source_text",
+    domain.ReusableSubprocedure: "source_text",
+    domain.SourceAmbiguity: "source_text",
+    domain.ProtocolConflict: "source_text",
+}
+#: The kinds whose words a person may fix: values, units and typos in the
+#: step sentences and the statements beside them (review scope, 2026-10-14).
+#: A safety statement's words are not changed, nor a structure's.
+_FIXABLE_KINDS = frozenset({
+    "step", "sub_action", "note", "tip", "expected_result", "observation",
+    "condition", "material", "equipment", "prerequisite", "value", "duration",
+})
+#: The kinds a person may leave empty because the source does not hold them --
+#: only while flagged: a quote the server found is the source's own.
+_CLEARABLE_KINDS = frozenset({
+    "warning", "note", "tip", "expected_result", "observation", "condition",
+    "material", "equipment", "prerequisite", "value", "duration", "reminder",
+})
+_MAX_REVIEW_TEXT = 2000
+_MAX_REVIEW_VALUE = 200
+_MAX_REVIEW_MEMO = 1000
+_MAX_REVIEWER_NAME = 80
+_MAX_TIMER_SECONDS = 7 * 24 * 3600
+_MAX_REPEAT_COUNT = 999
+
+#: What kind of quantity a value is, read from its unit (UI2's "수치 종류 이름").
+_VALUE_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("온도", re.compile(r"°\s*[CF]\b|℃|(?<![A-Za-z])[0-9.]+\s*C\b|도\b", re.I)),
+    ("원심·회전", re.compile(r"\brpm\b|[x×]\s*g\b|\bRCF\b", re.I)),
+    ("시간", re.compile(
+        r"\b(?:h|hr|hrs|hours?|min|mins|minutes?|s|sec|secs|seconds?|days?|overnight)\b"
+        r"|분|시간|초|일\b|밤새|[0-9]{1,2}:[0-9]{2}", re.I)),
+    ("부피", re.compile(r"(?:[µμu]|m|n)?L\b|(?:[µμu]|m)l\b|ml\b", re.I)),
+    ("농도", re.compile(r"(?<![A-Za-z])(?:[µμunm]?M)\b|%|\bw/v\b|\bv/v\b|/\s*m?L\b|\bU/", re.I)),
+    ("질량", re.compile(r"(?<![A-Za-z])(?:[µμunmk]?g)\b|\bkDa\b", re.I)),
+    ("횟수", re.compile(r"\b(?:times?|cycles?|rounds?|washes)\b|회\b|번\b|[0-9]\s*[x×]\b", re.I)),
+    ("길이", re.compile(r"(?<![A-Za-z])(?:[µμn]?m|mm|cm)\b", re.I)),
+    ("전압·전류", re.compile(r"(?<![A-Za-z])(?:[mk]?V|[mµμ]?A)\b")),
+)
+
+
+def value_kind_ko(text: str | None) -> str | None:
+    """"온도", "시간", "부피", ... for a value's words, or None when there is no number."""
+
+    if not isinstance(text, str) or not re.search(r"[0-9]", text):
+        return None
+    for name, pattern in _VALUE_KINDS:
+        if pattern.search(text):
+            return name
+    return "수치"
+
+
+def _clean_review_text(value: object, *, limit: int, label: str) -> str:
+    if not isinstance(value, str):
+        raise ProtocolReviewError(f"{label} must be text.")
+    cleaned = " ".join(value.split()) if "\n" not in value else "\n".join(
+        " ".join(line.split()) for line in value.splitlines()).strip()
+    if not cleaned or len(cleaned) > limit or any(
+        ord(character) < 32 and character != "\n" for character in cleaned
+    ):
+        raise ProtocolReviewError(f"{label} is empty, too long or holds control characters.")
+    return cleaned
+
+
+def reviewer_name(value: object) -> str:
+    """The reviewer's name as written, required (human decision 2026-10-12)."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ProtocolReviewNameRequiredError("A reviewer name is required.")
+    return _clean_review_text(value, limit=_MAX_REVIEWER_NAME, label="Reviewer name")
+
+
+def _duration_words(seconds: int) -> str:
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}시간")
+    if minutes:
+        parts.append(f"{minutes}분")
+    if secs or not parts:
+        parts.append(f"{secs}초")
+    return " ".join(parts)
+
+
+@dataclass(frozen=True)
+class _ReviewRecord:
+    """One reviewable record found walking a protocol."""
+
+    item_id: str
+    kind: str
+    record: Any
+    path: str
+    step: domain.ProtocolSourceStep | None
+    section: domain.ProtocolSection | None
+    evidence: domain.SourceEvidence | None
+    evidence_item_id: str | None
+
+
+def _review_records(protocol: domain.ExperimentProtocol) -> list[_ReviewRecord]:
+    """Every record a person reviews, in document order."""
+
+    found: list[_ReviewRecord] = []
+    item_ids: dict[int, str] = {}
+
+    def visit(value: Any, path: str, *, field_name: str, step, section, evidence, evidence_item):
+        if isinstance(value, tuple):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]", field_name=field_name, step=step,
+                      section=section, evidence=evidence, evidence_item=evidence_item)
+            return
+        if not is_dataclass(value) or isinstance(
+            value, (domain.SourceEvidence, ProtocolPdfExtraction, domain.DependencyTarget,
+                    domain.ActualElapsedTime)
+        ):
+            return
+        kind_name = REVIEW_ITEM_KINDS.get(type(value))
+        if type(value) in _REVIEW_TEXT_FIELD:
+            item_id = review_item_id(protocol, f"{path}.x")
+            if isinstance(value, domain.ProtocolSourceStep):
+                step = value
+                kind = "step"
+            elif isinstance(value, domain.ProtocolSection):
+                section = value
+                kind = "section"
+            elif isinstance(value, domain.ProtocolSubAction):
+                kind = "sub_action"
+            elif isinstance(value, domain.SourceStatement):
+                kind = _STATEMENT_KINDS.get(field_name, "note")
+            elif isinstance(value, domain.ScientificValue):
+                kind = "value"
+            elif isinstance(value, domain.EstimatedDuration):
+                kind = "duration"
+            else:
+                kind = kind_name[0] if kind_name else "construct"
+            own = getattr(value, "evidence", None)
+            if isinstance(own, domain.SourceEvidence):
+                evidence, evidence_item = own, item_id
+            found.append(_ReviewRecord(
+                item_id, kind, value, path, step, section, evidence, evidence_item))
+            if isinstance(value, domain.FixedRangeRepetition):
+                found.append(_ReviewRecord(
+                    f"{item_id}/repeat_count", "repeat_count", value, path, step, section,
+                    evidence, evidence_item))
+        for field in fields(value):
+            visit(getattr(value, field.name), f"{path}.{field.name}", field_name=field.name,
+                  step=step, section=section, evidence=evidence, evidence_item=evidence_item)
+
+    for name in ("before_start", "materials", "equipment", "sections", "constructs"):
+        visit(getattr(protocol, name), f"protocol.{name}", field_name=name, step=None,
+              section=None, evidence=None, evidence_item=None)
+    del item_ids
+    return found
+
+
+def _page_lines(text: str) -> list[tuple[int, int, str]]:
+    """(start, end, text) of each line of a page, numbered from 1 by position."""
+
+    lines: list[tuple[int, int, str]] = []
+    start = 0
+    for line in text.split("\n"):
+        lines.append((start, start + len(line), line))
+        start += len(line) + 1
+    return lines
+
+
+def _lines_of_span(text: str, start: int, end: int) -> tuple[int, int]:
+    lines = _page_lines(text)
+    first = next(index for index, (s, e, _) in enumerate(lines, 1) if e >= start)
+    last = next(index for index, (s, e, _) in enumerate(lines, 1) if e >= max(start, end - 1))
+    return first, last
+
+
+def _quote_lines(evidence: domain.SourceEvidence, extraction: ProtocolPdfExtraction) -> tuple[int, int] | None:
+    page_number = evidence.source_page_number
+    if not isinstance(page_number, int) or not 1 <= page_number <= extraction.page_count:
+        return None
+    text = extraction.pages[page_number - 1].text
+    found = text.find(evidence.source_excerpt)
+    if found < 0:
+        return None
+    return _lines_of_span(text, found, found + len(evidence.source_excerpt))
+
+
+def _suggested_lines(
+    words: str, extraction: ProtocolPdfExtraction, pages: Sequence[int],
+) -> dict[str, object] | None:
+    """The source lines most like ``words`` on these pages: an AI suggestion
+    of where an item comes from, for a person to accept or change."""
+
+    target = " ".join(words.split()).casefold()
+    if not target:
+        return None
+    best: tuple[float, int, int, int] | None = None
+    for page_number in dict.fromkeys(pages):
+        if not isinstance(page_number, int) or not 1 <= page_number <= extraction.page_count:
+            continue
+        lines = _page_lines(extraction.pages[page_number - 1].text)
+        for first in range(len(lines)):
+            joined = ""
+            for last in range(first, min(first + 4, len(lines))):
+                joined = f"{joined} {lines[last][2]}".strip()
+                if not joined:
+                    continue
+                ratio = SequenceMatcher(None, target, " ".join(joined.split()).casefold(),
+                                        autojunk=False).ratio()
+                if best is None or ratio > best[0]:
+                    best = (ratio, page_number, first + 1, last + 1)
+    if best is None or best[0] < 0.6:
+        return None
+    return {"page": best[1], "first_line": best[2], "last_line": best[3],
+            "similarity": round(best[0], 2)}
+
+
+def source_lines_excerpt(
+    extraction: ProtocolPdfExtraction, source_lines: object,
+) -> domain.SourceEvidence:
+    """The quote a person pointed at: page and lines, as the page prints them."""
+
+    if not isinstance(source_lines, dict):
+        raise ProtocolReviewError("Source lines must name a page and its lines.")
+    page = source_lines.get("page")
+    first = source_lines.get("first_line")
+    last = source_lines.get("last_line", first)
+    if not all(isinstance(value, int) and not isinstance(value, bool)
+               for value in (page, first, last)):
+        raise ProtocolReviewError("Source lines must be numbers.")
+    if not 1 <= page <= extraction.page_count:
+        raise ProtocolReviewError("The source has no such page.")
+    text = extraction.pages[page - 1].text
+    lines = _page_lines(text)
+    if not 1 <= first <= last <= len(lines) or last - first > 20:
+        raise ProtocolReviewError("The page has no such lines.")
+    start, end = lines[first - 1][0], lines[last - 1][1]
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    if start >= end:
+        raise ProtocolReviewError("The lines pointed at hold no text.")
+    return domain.SourceEvidence(source_page_number=page, source_excerpt=text[start:end])
+
+
+class ProtocolReviewError(ProtocolCatalogError):
+    """A review decision the server does not take (lane RV, decision b)."""
+
+    code = "review_decision_invalid"
+
+
+class ProtocolReviewNameRequiredError(ProtocolReviewError):
+    code = "reviewer_name_required"
+
+
+class ProtocolReviewNotReadyError(ProtocolCatalogError):
+    """Nothing to review yet, or the items are not all decided (lane RV, c)."""
+
+    code = "review_not_ready"
+
+
+class ProtocolReviewItemsPendingError(ProtocolReviewNotReadyError):
+    code = "review_items_pending"
+
+    def __init__(self, message: str, *, item_ids: Sequence[str]) -> None:
+        super().__init__(message)
+        self.item_ids = tuple(item_ids)
+
+
+_REVIEW_DECISION_EVENT = "protocol_review_decision_recorded"
+
+
+@dataclass(frozen=True)
+class _ReviewTarget:
+    """The analysis a person reviews now (lane RV, decision b)."""
+
+    kind: str
+    key: dict[str, object]
+    protocol: domain.ExperimentProtocol
+    readiness: domain.ReadinessAssessment
+    flags: tuple[ReviewFlag, ...]
+    recorded_at: str
+    revision_id: str | None = None
+    analysis_id: str | None = None
+    #: Item id -> origin carried from the review version reviewed again.
+    origins: dict[str, str] | None = None
+
+
+def _safe_page_view(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction,
+) -> domain.ExperimentProtocol:
+    """``protocol`` with each quote that cites no page of the source pointed
+    at page 1, so a step's timers can be read; for reading only."""
+
+    replacements = {
+        path: replace(evidence, source_page_number=1, continued_on_page_number=None,
+                      continued_excerpt=None)
+        for path, evidence in _evidence_paths(protocol)
+        if not isinstance(evidence.source_page_number, int)
+        or not 1 <= evidence.source_page_number <= extraction.page_count
+        or (evidence.continued_on_page_number is not None
+            and not 1 <= evidence.continued_on_page_number <= extraction.page_count)
+    }
+    return replace_at_paths(protocol, replacements) if replacements else protocol
+
+
+def _evidence_paths(value: Any, path: str = "protocol"):
+    if isinstance(value, domain.SourceEvidence):
+        yield path, value
+        return
+    if isinstance(value, (ProtocolPdfExtraction, Enum, str)) or value is None:
+        return
+    if isinstance(value, tuple):
+        for index, item in enumerate(value):
+            yield from _evidence_paths(item, f"{path}[{index}]")
+        return
+    if is_dataclass(value):
+        for field in fields(value):
+            yield from _evidence_paths(getattr(value, field.name), f"{path}.{field.name}")
+
+
+class ProtocolReviewTargetChangedError(ProtocolReviewError):
+    code = "review_target_changed"
+
+
+def _same_target(seen: object, key: dict[str, object]) -> bool:
+    """Whether the target a screen read is the one under review now."""
+
+    return isinstance(seen, dict) and all(seen.get(name) == value for name, value in key.items())
+
+
+#: An OCR page whose reading a person should look at: the two engines read
+#: different numbers or units, or the engine was not sure of the page.
+OCR_UNCLEAR_CONFIDENCE = 0.8
+
+
+def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
+    if not page.ocr_derived:
+        return False
+    confidence = ocr.get("confidence")
+    return bool(ocr.get("numeric_review_required")) or (
+        isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+        and confidence < OCR_UNCLEAR_CONFIDENCE
+    )
 
 
 # ---------------------------------------------------------------------------
