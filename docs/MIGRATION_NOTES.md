@@ -291,7 +291,9 @@ and `llm_router.py`, and the xAI-only web evidence search
 (`XaiAuthoritativeWebSearch`, `EXTERNAL_REFERENCES_ENABLED`), which
 `server.py`'s research path still calls. The table's comment on `_SET_ME` in
 `setting_names.py` (and the README's provider section) still describe the
-fallback as present for all roles.
+fallback as present for all roles. (Lanes AN and RA then removed the old
+defaults, and lane DOC3, 2026-10-14, fixed those two descriptions and deleted
+the web evidence search and the `MOSS_ENABLED` row: see "Lane DOC3" at the end.)
 
 ## Lane PL (2026-10-13), stage 2: the pilot path
 
