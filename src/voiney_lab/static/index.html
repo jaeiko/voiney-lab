@@ -144,6 +144,25 @@
     .procedure-card .run-card-question,.procedure-card .run-card-notice{margin:0;color:var(--muted);font-size:1rem;line-height:1.5rem}
     .procedure-card .run-card-body{display:-webkit-box;margin:0;overflow:hidden;color:var(--ink);font-size:1.25rem;line-height:1.75rem;font-weight:600;white-space:pre-line;-webkit-line-clamp:6;-webkit-box-orient:vertical}
     .run-card-more{display:flex;flex-direction:column;align-items:flex-start;gap:.35rem;padding-top:.5rem;border-top:1px dashed var(--border-accent)}
+    /* Lane UI3 decision 1 (2026-10-14): what the server tells the screen about the last turn -- the next step (M2), the values a note read back in large type (M3a), a value set against the source's (M3b, a record the server kept as a deviation), and the candidates asked back (M5b). The candidates are said, not tapped: the server takes no typed turn, so they are a list, not buttons. */
+    .run-next-step{display:none}
+    body[data-view="during"] .run-next-step:not([hidden]){display:block;margin:0;color:var(--muted);font-size:1.125rem;line-height:1.625rem;font-weight:600}
+    .run-card-values{display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin:0}
+    .procedure-card .run-card-value{color:var(--ink);font-size:2.5rem;line-height:3rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+    .procedure-card .run-card-value[data-deviation="true"]{color:var(--warning-ink);text-decoration:underline dashed var(--warning-ink) 2px;text-underline-offset:.3rem}
+    .run-card[data-deviation="true"]{border:2px solid var(--warning-ink)!important}
+    .procedure-card .run-card-deviation{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:0;padding:.5rem .75rem;border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    .procedure-card .run-card-deviation .run-tag{border-color:var(--warning-ink);color:var(--warning-ink)}
+    .run-card-choices-label{margin:0;color:var(--muted);font-size:1rem;line-height:1.5rem;font-weight:600}
+    .run-card-choices{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:0;list-style:none}
+    .run-card-choices li{display:inline-flex;align-items:center;min-height:48px;padding:0 1rem;border:2px solid var(--ink);border-radius:2px;background:var(--paper);color:var(--ink);font-size:1.25rem;line-height:1.5rem;font-weight:700}
+    @media (orientation:landscape) and (max-height:480px){
+     .procedure-card .run-card-value{font-size:2rem;line-height:2.5rem}
+     body[data-view="during"] .run-next-step:not([hidden]){font-size:1rem;line-height:1.375rem}
+     /* A phone on its side has no room for both: while a card answers the last turn, the next step waits. */
+     body[data-view="during"] .run-left:has(> .run-card:not([hidden])) .run-next-step{display:none}
+     .run-card-choices li{min-height:40px;font-size:1.125rem}
+    }
     /* The timer: 도는 중, 1분 남음 (a heavier frame and bar), 끝남 · 지남 (inverted), 없음 (muted). */
     body[data-view="during"] .run-timer{grid-area:timer;display:flex;flex-direction:column;justify-content:center;gap:.75rem;min-width:0;padding:1rem;border-left:1px solid var(--border);outline:4px solid transparent;outline-offset:-4px;color:var(--ink);container-type:inline-size}
     .run-timer-head{display:flex;align-items:center;gap:.5rem;font-size:1rem;line-height:1.5rem;font-weight:600}
@@ -428,6 +447,36 @@
     #protocol-execution-blockers .protocol-review-group h4{color:var(--danger)}
     .start-check-line,.start-check-lines .protocol-review-status{margin:0;padding:var(--space-2) var(--space-3);border-left:var(--stroke-current) solid var(--ink);background:var(--bench);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
     .start-check-line[hidden],.start-check-lines[hidden]{display:none}
+    /* Lane UI3 decision 2 (2026-10-14): the server's safety scope line, in the start card and the run's safety box. */
+    .safety-scope-line{margin:0;padding:var(--space-2) var(--space-3);border:var(--stroke-state) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:.9375rem;line-height:1.5rem;font-weight:700}
+    .safety-scope-line[hidden]{display:none}
+    /* Lane UI3 decision 3 (2026-10-14): the formats the upload takes, and the iPhone setting where the server reads no HEIC. */
+    .protocol-source-formats{color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem}
+    .protocol-heic-hint{display:block;padding:var(--space-2) var(--space-3);border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:.875rem;line-height:1.375rem;font-weight:600}
+    .protocol-heic-hint[hidden]{display:none}
+    /* Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables -- attach, the list, and a table opened cell by cell. */
+    .reagent-tables{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--line)}
+    .reagent-tables-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2)}
+    .reagent-tables-head h4{margin:0;color:var(--ink);font-size:1rem}
+    .reagent-tables .btn-file-select{display:inline-flex;align-items:center;width:auto;min-height:44px;height:auto;padding:0 var(--space-4)}
+    .reagent-table-list{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none;color:var(--ink-muted);font-size:.875rem}
+    .reagent-table-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-1) var(--space-3);align-items:center;padding:var(--space-2) var(--space-3);border:1px solid var(--line);background:var(--paper);color:var(--ink)}
+    .reagent-table-name,.reagent-table-meta,.reagent-table-warning{grid-column:1;min-width:0;overflow-wrap:anywhere}
+    .reagent-table-meta{color:var(--ink-muted);font-size:.8125rem}
+    .reagent-table-warning{color:var(--warning-ink);font-size:.8125rem}
+    .reagent-table-row button{grid-column:2;grid-row:1 / span 3;min-height:44px;padding:0 var(--space-4)}
+    .reagent-table-view{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+    .reagent-table-view[hidden]{display:none}
+    .reagent-table-view-head{margin:0;color:var(--ink-muted);font-size:.8125rem}
+    .reagent-sheet{min-width:0}
+    .reagent-sheet h5{margin:0 0 var(--space-1);color:var(--ink);font-size:.875rem}
+    .reagent-sheet-scroll{max-width:100%;max-height:20rem;overflow:auto;border:1px solid var(--line);background:var(--paper)}
+    .reagent-grid{border-collapse:collapse;font-size:.8125rem;font-variant-numeric:tabular-nums}
+    .reagent-grid th,.reagent-grid td{padding:var(--space-1) var(--space-2);border:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap;color:var(--ink)}
+    .reagent-grid th{position:sticky;top:0;background:var(--bench);color:var(--ink-muted);font-weight:600}
+    .reagent-grid tbody th{left:0}
+    .reagent-grid td.reagent-formula{color:var(--ink-muted);font-style:italic}
+    .step-warning .safety-scope{margin:0 0 .35rem;color:var(--warning-ink);font-size:.875rem;line-height:1.25rem;font-weight:700}
     .protocol-start-summary .protocol-review-actions{margin-top:0}
     .protocol-start-summary #protocol-start{min-height:var(--target-run);padding:0 var(--space-8);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:700}
     .protocol-start-summary #protocol-start:hover:not(:disabled){background:var(--blurple-hover)}
@@ -528,6 +577,9 @@
     .report-review-checklist .report-review-row[data-confirmed="true"] span.report-review-text{color:var(--ink)}
     .report-review-checklist .report-review-row span.report-review-history{grid-area:history;flex:none;color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem}
     .report-review-row>.ui-badge{grid-area:tag;flex:none}
+    /* Lane UI3 decision 5 (2026-10-14): a deviation's tag sits with its words. */
+    .report-review-text>.ui-badge{margin-left:var(--space-1);vertical-align:middle}
+    .report-review-checklist .report-review-row[data-deviation="true"]{border-left:var(--stroke-current) solid var(--warning-ink)}
     .report-review-actions{grid-area:actions;display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
     .report-review-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
     .report-review-actions input{min-height:var(--target-desk);min-width:0;flex:1 1 12rem;padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);font:inherit}
@@ -665,18 +717,32 @@
                     <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
                     <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
                   </div>
+                  <!-- Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables (lane AN) -- attach an .xlsx, the tables attached with their sheets and cell counts, and one opened cell by cell as the server keeps it. Never analysed and never a step's source. -->
+                  <section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">
+                    <div class="reagent-tables-head">
+                      <h4 id="reagent-tables-title">시약 표</h4>
+                      <input id="reagent-table-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">
+                      <label id="reagent-table-pick" for="reagent-table-file" class="btn-file-select" role="button" tabindex="0">시약 표(.xlsx) 붙이기</label>
+                    </div>
+                    <small id="reagent-table-status" role="status"></small>
+                    <ul id="reagent-table-list" class="reagent-table-list" aria-label="붙인 시약 표"></ul>
+                    <div id="reagent-table-view" class="reagent-table-view" hidden></div>
+                  </section>
                 </section>
               </div>
               <div class="library-side">
                 <div class="setup-col-left">
+                  <!-- Lane UI3 decision 3 (2026-10-14): the server turns a Word document or a photo into the PDF it analyses (lane AN), so the input offers them and each file goes with its own type. -->
                   <div class="protocol-register">
-                    <span class="control-label">새 프로토콜 PDF 등록</span>
+                    <span class="control-label">새 프로토콜 원문 등록</span>
+                    <small id="protocol-source-formats" class="protocol-source-formats">PDF · Word(.docx) · 사진(JPG·PNG·HEIC)</small>
                     <div class="custom-file-wrapper">
-                      <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
-                      <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
+                      <input id="protocol-pdf" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,image/jpeg,.jpg,.jpeg,image/png,.png,image/heic,.heic" class="visually-hidden-file-input" aria-label="프로토콜 원문 등록 (PDF, Word, 사진)" aria-describedby="protocol-upload-status">
+                      <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
                       <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
                     </div>
                     <small id="protocol-upload-status" role="status"></small>
+                    <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
                     <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
                   </div>
                 </div>
@@ -702,6 +768,8 @@
               <div id="protocol-start-body">
                 <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
                 <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+                <!-- Lane UI3 decision 2 (2026-10-14): the server's line on the safety documents behind the run (review.safety_scope.notice, lane PL) -- "기관 안전 문서 없음 · 원문 안전 주의만" -- above the source's statements; nothing when it sends none. -->
+                <p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>
                 <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
                 <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
                 <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
@@ -897,6 +965,8 @@
         <div id="procedure-progress"></div>
         <p id="procedure-step-title"></p>
         <p id="procedure-primary" class="step-body"></p>
+        <!-- Lane UI3 decision 1 (2026-10-14): the draft M2's "다음 단계: …" -- the next step's sentence as the server sends it (screen.next_step_sentence); nothing when it sends none. -->
+        <p id="run-next-step" class="run-next-step" hidden></p>
         <div id="procedure-open-question" class="open-question" role="status" hidden></div>
         <!-- Lane UI0 decision 2: the server's answer to the last turn -- 확인 대기, 되묻기, 답변 with its source, 기록 -- as the server named it (server.operation). -->
         <div id="run-card" class="run-card" role="status" hidden></div>
@@ -1081,7 +1151,7 @@ const turnProgress=new Map(),turnServerGenerations=new Map();
 let acknowledgedLanguageMode="manual",acknowledgedLanguage="ko";
 let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfiguration=null;
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
-let curatedScreenFields=null,autoTranslationShown=false,workspaceDisplayName="";
+let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="";
 const protocolCatalog=new Map();
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
@@ -1315,7 +1385,7 @@ function renderScreenView(){
 // card under the step -- redrawn wherever the page redraws its context. Each
 // is read from what the server sent; the connection and the microphone are
 // this browser's own.
-function renderRunView(){renderScreenView();renderRunStatus();renderRunTimer();renderRunCard();renderRunFigureFlag();}
+function renderRunView(){renderScreenView();renderRunStatus();renderRunTimer();renderRunCard();renderRunNextStep();renderRunFigureFlag();}
 function renderRunStatus(){
  const state=curatedProtocolState,attached=state?.attached===true,analysis=$("run-analysis-state");
  if(analysis){const text=attached?(state.development_only?"개발용 큐레이션 분석":"분석 통과"):"";analysis.textContent=text;analysis.hidden=!text;}
@@ -1360,14 +1430,20 @@ function runReplyText(m){
 function renderRunCaption(text,who="server"){const node=$("run-caption-text");if(!node)return;const clean=normalizePresentationText(String(text??"")).replace(/\s+/g," ").trim();node.textContent=who==="heard"&&clean?`“${clean}”`:clean;if(node.dataset)node.dataset.who=who;}
 // The card under the step: the server's answer to the last turn, drawn by
 // the name the server gave the turn (server.operation) and what its reply
-// carried. Two things the draft shows are not sent, so not drawn: a value
-// set against the source's own (기준치와 다름) and a clarification's
-// candidates as a list (the question is drawn in the server's words).
+// carried. Lane UI3 decision 1 (2026-10-14): with it, what the server's
+// screen fields say about that same turn (lane RA, decision f) -- a
+// confirmation's kind in its head, the values a note read back, a value the
+// server recorded as differing from the source's (기준치와 다름), and the
+// candidates a clarification asked back.
 const RUN_CARD_KINDS=Object.freeze({completion_confirmation_required:"confirm",learning_next_preview_confirmation:"confirm",reference_clarification_required:"clarify",parameter_clarification_required:"clarify",transcript_retry_required:"clarify",experiment_observation_recorded:"record",experiment_anomaly_recorded:"record",experiment_record_corrected:"record",branch_repeat_recorded:"record",protocol_start:null,current_step_read:null,current_step_repeat:null,next_step_transition:null,completion_and_next_transition:null,completion_confirmation_declined:null,workflow_paused:null,workflow_resumed:null,step_timer_started:null,protocol_stop:null,audio_replay_request:null,readonly_operation_cancelled:null,inactive_session_guard:null});
 const RUN_CARD_HEADS=Object.freeze({answer:"답변",confirm:"확인 대기",clarify:"되묻기"});
+// Lane UI3 decision 1: the confirmation's kind the server names
+// (screen.confirm_question.kind), for the three the decision words; any other
+// kind keeps "확인 대기".
+const RUN_CARD_CONFIRM_HEADS=Object.freeze({completion:"완료 확인",value:"값 기록 확인",ambient:"시끄러운 곳 확인"});
 const runTurns=new Map();let runCardKey=null;
 function runCardKind(operation){if(typeof operation!=="string"||!operation)return null;return Object.prototype.hasOwnProperty.call(RUN_CARD_KINDS,operation)?RUN_CARD_KINDS[operation]:"answer";}
-function runTurn(turnId,browserGeneration){const key=turnBrowserKey(turnId,browserGeneration);if(!runTurns.has(key))runTurns.set(key,{key,operation:null,kind:null,stepId:null,transcript:"",text:"",streamed:"",complete:false,origin:null,pages:[],notice:null,research:null});return runTurns.get(key);}
+function runTurn(turnId,browserGeneration){const key=turnBrowserKey(turnId,browserGeneration);if(!runTurns.has(key))runTurns.set(key,{key,turnId,operation:null,kind:null,stepId:null,transcript:"",text:"",streamed:"",complete:false,origin:null,pages:[],notice:null,research:null});return runTurns.get(key);}
 // Where an answer's words come from, in the badge: the source's page, a
 // general explanation from outside the PDF, the web, another reference.
 function runAnswerBadge(entry){
@@ -1380,22 +1456,57 @@ function runAnswerBadge(entry){
 }
 function runResearchBadge(message){if(researchOutsidePdf(message))return "일반 설명";if(message?.answer_origin==="external_authoritative_reference")return "웹 참고 자료";if(message?.answer_origin==="supplemental_model_knowledge")return SUPPLEMENTAL_LABEL;return "추가 참고 자료";}
 function runBadge(text,className=""){const badge=document.createElement("span");badge.className=`run-badge${className?` ${className}`:""}`;badge.textContent=text;return badge;}
+// Lane UI3 decision 1: the screen fields that belong to the card's own
+// turn. The server empties the candidates, the read-back values and the
+// deviation at each turn and sends them with that turn's state (turn_id), so
+// they are drawn on that turn's card only; a state without a turn (a pause, a
+// translation landing) keeps the turn they belong to (curatedScreenTurnId).
+function runCardScreen(entry){
+ const screen=curatedScreenFields,told={confirmKind:null,values:[],deviation:null,candidates:[]};
+ if(!entry||!Number.isInteger(entry.turnId)||entry.turnId!==curatedScreenTurnId||!screen||typeof screen!=="object")return told;
+ const confirm=screen.confirm_question;if(confirm&&typeof confirm==="object"&&typeof confirm.kind==="string")told.confirmKind=confirm.kind;
+ const words=list=>Array.isArray(list)?list.filter(nonemptyText).map(text=>normalizePresentationText(text).replace(/\s+/g," ").trim()):[];
+ if(entry.kind==="record"){
+  told.values=words(screen.readback_values);
+  const found=screen.record_deviation&&typeof screen.record_deviation==="object"&&Array.isArray(screen.record_deviation.deviations)?screen.record_deviation.deviations.filter(item=>item&&typeof item==="object"&&nonemptyText(item.source)):[];
+  if(found.length)told.deviation={said:words(found.map(item=>item.said)),sources:[...new Set(words(found.map(item=>item.source)))]};
+ }
+ if(entry.kind==="clarify")told.candidates=words(screen.clarify_candidates);
+ return told;
+}
+// The server's question lists its candidates under it ("1. TBST"); drawn as
+// the list below, they are not repeated in the question.
+function runCardTextWithoutChoices(text,candidates){const body=String(text??"");if(!candidates.length)return body;const listed=candidates.map((name,index)=>`${index+1}. ${name}`).join("\n");return body.endsWith(`\n${listed}`)?body.slice(0,-listed.length-1).trim():body;}
+// Lane UI3 decision 1: "다음 단계: …" under the step while the experiment
+// runs -- the server's sentence for the next step; none at the last step or
+// when the server sends none.
+function renderRunNextStep(){
+ const line=$("run-next-step");if(!line)return null;
+ const sentence=curatedProtocolState?.attached===true&&curatedProtocolState.active===true?curatedScreenFields?.next_step_sentence:null;
+ const text=nonemptyText(sentence)?`다음 단계: ${normalizePresentationText(sentence).replace(/\s+/g," ").trim()}`:"";
+ line.textContent=text;line.hidden=!text;return text||null;
+}
 function renderRunCard(){
  const card=$("run-card");if(!card)return null;
  const state=curatedProtocolState,entry=runCardKey?runTurns.get(runCardKey):null;
  const shown=Boolean(entry&&entry.kind&&state?.attached===true&&entry.stepId===state.current_step_id&&(nonemptyText(entry.text)||entry.research));
  card.replaceChildren();
- if(!shown){card.hidden=true;if(card.dataset)card.dataset.kind="";return null;}
- if(card.dataset)card.dataset.kind=entry.kind;
+ if(!shown){card.hidden=true;if(card.dataset){card.dataset.kind="";card.dataset.deviation="";}return null;}
+ const told=runCardScreen(entry);
+ if(card.dataset){card.dataset.kind=entry.kind;card.dataset.deviation=told.deviation?"true":"";}
  const head=document.createElement("div");head.className="run-card-head";
- const title=document.createElement("b");title.className="run-card-kind";title.textContent=RUN_CARD_HEADS[entry.kind]||SERVER_OPERATION_LABELS[entry.operation]||"기록";head.appendChild(title);
+ const title=document.createElement("b");title.className="run-card-kind";title.textContent=(entry.kind==="confirm"&&RUN_CARD_CONFIRM_HEADS[told.confirmKind])||RUN_CARD_HEADS[entry.kind]||SERVER_OPERATION_LABELS[entry.operation]||"기록";head.appendChild(title);
  if(entry.kind==="answer"){const badge=runAnswerBadge(entry);if(badge)head.appendChild(runBadge(badge,entry.notice!==null&&entry.notice!==undefined?"is-general":""));}
  const timer=state.timers?.step;
  if(entry.kind==="confirm"&&timer?.state==="running"&&(timer.step_id===undefined||timer.step_id===state.current_step_id))head.appendChild(runBadge("타이머 도는 중","is-timer"));
  card.appendChild(head);
  if(entry.kind==="answer"&&nonemptyText(entry.transcript)){const question=document.createElement("p");question.className="run-card-question";question.textContent=`질문 · ${entry.transcript}`;card.appendChild(question);}
  if(entry.kind==="answer"&&nonemptyText(entry.notice)){const notice=document.createElement("p");notice.className="run-card-notice";notice.textContent=normalizePresentationText(entry.notice);card.appendChild(notice);}
- if(nonemptyText(entry.text)){const body=document.createElement("p");body.className="run-card-body";body.textContent=entry.text;card.appendChild(body);}
+ if(told.values.length){const values=document.createElement("p");values.className="run-card-values";values.setAttribute?.("aria-label","기록한 값");for(const said of told.values){const value=document.createElement("span");value.className="run-card-value";if(value.dataset)value.dataset.deviation=String(Boolean(told.deviation?.said.includes(said)));value.textContent=said;values.appendChild(value);}card.appendChild(values);}
+ if(told.deviation){const line=document.createElement("p");line.className="run-card-deviation";line.setAttribute?.("role","status");const tag=document.createElement("span");tag.className="run-tag";tag.textContent="기준치와 다름";line.appendChild(tag);line.append(`원문 ${told.deviation.sources.join(" · ")}`);card.appendChild(line);}
+ const bodyText=runCardTextWithoutChoices(entry.text,told.candidates);
+ if(nonemptyText(bodyText)){const body=document.createElement("p");body.className="run-card-body";body.textContent=bodyText;card.appendChild(body);}
+ if(told.candidates.length){const label=document.createElement("p");label.className="run-card-choices-label";label.textContent="후보 · 말로 고르기";card.appendChild(label);const list=document.createElement("ul");list.className="run-card-choices";list.setAttribute?.("aria-label","되묻기 후보 · 말로 고르기");for(const name of told.candidates){const item=document.createElement("li");item.textContent=name;list.appendChild(item);}card.appendChild(list);}
  if(entry.research&&nonemptyText(entry.research.text)){const more=document.createElement("div");more.className="run-card-more";more.appendChild(runBadge(entry.research.label,entry.research.label==="일반 설명"?"is-general":""));const text=document.createElement("p");text.className="run-card-body";text.textContent=entry.research.text;more.appendChild(text);card.appendChild(more);}
  if(entry.text.length+(entry.research?.text?.length||0)>RUN_CARD_LONG){const again=document.createElement("button");again.type="button";again.className="run-card-again";again.textContent="대화 보기에서 전부 읽기";again.addEventListener?.("click",()=>{openRunSheet("conversation");});card.appendChild(again);}
  card.hidden=false;return entry.kind;
@@ -1689,16 +1800,22 @@ function renderReportReview(reportId,items,status){
  for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item));box.appendChild(group);}
  return true;
 }
+// Lane UI3 decision 5 (2026-10-14): a value the server lists as a deviation
+// ("편차" -- a note called one, or with the router first one whose value
+// differs from the source's) is tagged where it is listed and counted when
+// there is one. The source's value is not in the list, so it is not drawn.
+const REPORT_REVIEW_DEVIATION_KIND="편차";
 function reportReviewSummary(list){
  const summary=document.createElement("div");summary.className="report-review-summary";
- for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length]]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
+ const deviations=list.filter(item=>item.kind===REPORT_REVIEW_DEVIATION_KIND).length;
+ for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length],...(deviations?[["편차",deviations]]:[])]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
  return summary;
 }
 function reportReviewRow(reportId,item,{withStep=false}={}){
  const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
  const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
  const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
- const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;row.appendChild(text);
+ const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;if(item.kind===REPORT_REVIEW_DEVIATION_KIND){text.append(" ");text.appendChild(uiBadge("기준치와 다름","warning"));row.dataset.deviation="true";}row.appendChild(text);
  if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
  row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
  const actions=document.createElement("span");actions.className="report-review-actions";
@@ -1743,7 +1860,7 @@ function resetProcedureCard(){
  $("procedure-audit").textContent="—";renderStepVisual($("procedure-visual"),null);
  renderExperimentContext();
 }
-function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;curatedScreenFields=null;autoTranslationShown=false;resetProcedureCard();}
+function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;curatedScreenFields=null;curatedScreenTurnId=null;autoTranslationShown=false;resetProcedureCard();renderRunNextStep();}
 // Lane RN decision 3 (2026-10-11): an analysis stored before the analyser
 // improved carries the server's one line of advice ("분석기 개선 전 분석 · 다시
 // 분석 권장") after its status; it still runs.
@@ -2057,17 +2174,23 @@ function currentSafetyItems(){
  if(guidance){for(const text of guidance.warnings||[])add("PDF",text);for(const doc of guidance.applicable_documents||[])if(doc&&typeof doc==="object")add("안전 문서",doc.summary_text);}
  return items;
 }
+// Lane UI3 decision 2 (2026-10-14): the run's safety pack says, in the
+// server's words, when the run has no institution safety document and only
+// the source's statements (lane PL, scope_notice); the box carries the line.
+function safetyScopeNotice(){const notice=activeSafetyPack?.scope_notice;return typeof notice==="string"?normalizePresentationText(notice).trim():"";}
 function updateStepSafetyGuidance(){
  const box=$("procedure-warning");if(!box)return;
  const items=currentSafetyItems();
  if(!items.length){box.textContent="";box.hidden=true;return;}
  box.hidden=false;
+ const scope=safetyScopeNotice();
  if(!Array.isArray(curatedScreenFields?.safety_items)){
   // No checked list arrived: the sources themselves, all of them.
-  box.textContent=normalizePresentationText(items.map(item=>`${item.origin} · ${item.source_text}`).join("\n"));return;
+  box.textContent=normalizePresentationText([...(scope?[scope]:[]),...items.map(item=>`${item.origin} · ${item.source_text}`)].join("\n"));return;
  }
  box.replaceChildren();
  const head=document.createElement("div");head.className="safety-box-head";head.textContent="안전";box.appendChild(head);
+ if(scope){const line=document.createElement("p");line.className="safety-scope";line.textContent=scope;box.appendChild(line);}
  const korean=koreanIsBody();
  for(const item of items){
   const row=document.createElement("div");row.className="safety-item";
@@ -2092,7 +2215,7 @@ function renderCuratedProtocolState(message){
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
  const previousBlockReason=curatedProtocolState?.attached===true?curatedProtocolState.block_reason:null;
  if(Number.isInteger(message.turn_id)&&Number.isInteger(message.generation))turnHold(turnProgressKey(message.turn_id,message.generation)).observationGateSet=value.block_reason===OBSERVATION_HOLD_REASON&&previousBlockReason!==OBSERVATION_HOLD_REASON;
- curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;renderSourceBasis(curatedScreenFields?.source_basis);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
+ curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;if(Number.isInteger(message.turn_id))curatedScreenTurnId=message.turn_id;renderSourceBasis(curatedScreenFields?.source_basis);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?"개발용 큐레이션 분석(원문 PDF 기준)":"분석 통과한 프로토콜";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id],["readiness_status",value.readiness_status],["development_only",String(value.development_only)]]);
@@ -2104,7 +2227,7 @@ function renderCuratedProtocolState(message){
  // Lane CB decision 4: the round beside the step ("12단계 · 전체 62단계 · 2/3회차"), the server's words.
  const roundWords=curatedScreenFields?.repeat_round&&typeof curatedScreenFields.repeat_round==="object"?curatedScreenFields.repeat_round.words:null;
  $("procedure-progress").textContent=(value.active||previewValid)?`${value.current_step_label}단계 · 전체 ${value.total_steps}단계${nonempty(roundWords)?` · ${roundWords}`:""}`:`비활성 · 총 ${value.total_steps}단계`;
- renderOpenQuestion();
+ renderOpenQuestion();renderRunNextStep();
  if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`${value.current_step_label}단계 / ${value.total_steps}`:"대기";
  $("procedure-step-title").textContent="";
  // Korean body with the source folded under it; with no Korean, or for an
@@ -2864,7 +2987,7 @@ async function loadProtocolCatalog(preferredProtocolId=null){
 const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  invalid_pdf:"PDF 파일이 손상되었거나 다운로드가 완료되지 않았습니다. 원본 파일을 다시 내려받아 선택해 주세요.",
  encrypted_pdf:"암호화된 PDF는 등록할 수 없습니다. 암호가 없는 원본 PDF를 선택해 주세요.",
- unsupported_pdf_media_type:"PDF 파일만 등록할 수 있습니다.",
+ unsupported_pdf_media_type:"PDF, Word(.docx), 사진(JPG·PNG·HEIC)만 등록할 수 있습니다.",
  protocol_pdf_invalid_type:"PDF 파일만 등록할 수 있습니다.",
  protocol_pdf_too_large:"PDF 파일 크기가 등록 한도를 초과했습니다. 더 작은 파일을 선택해 주세요.",
  pdf_too_large:"PDF 파일 크기가 등록 한도를 초과했습니다. 더 작은 파일을 선택해 주세요.",
@@ -2880,10 +3003,38 @@ const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  chunk_analysis_failed:"대형 문서 일부 분석에 실패했습니다. 실패 상태를 검토한 뒤 새 분석을 요청해 주세요.",
  merge_conflict:"대형 문서 분석 결과에 병합 충돌이 있습니다. 사람의 검토가 필요합니다.",
  reanalysis_not_allowed:"개발용 큐레이션 분석은 다시 분석하지 않습니다.",
+ // Lane UI3 decision 3 (2026-10-14): a Word document or photo that could
+ // not become its PDF (lane AN). The server sends the code alone.
+ docx_conversion_unavailable:"이 서버에는 Word(.docx)를 PDF로 바꾸는 프로그램(LibreOffice)이 없습니다. Word에서 PDF로 저장해 올리거나 관리자에게 문의해 주세요.",
+ heic_support_unavailable:"이 서버는 HEIC 사진을 읽지 못합니다. 아이폰 설정 → 카메라 → 포맷 → 높은 호환성으로 바꾸고 다시 찍은 사진(JPG)을 올려 주세요.",
+ image_support_unavailable:"이 서버는 사진을 PDF로 바꾸지 못합니다(사진 처리 모듈 없음). PDF로 올리거나 관리자에게 문의해 주세요.",
+ source_conversion_unavailable:"이 서버는 이 파일을 PDF로 바꾸지 못합니다. PDF로 올리거나 관리자에게 문의해 주세요.",
+ invalid_source_file:"파일이 이름의 형식과 맞지 않거나 읽을 수 없습니다. 원본 파일을 다시 선택해 주세요.",
+ protocol_image_too_large:"사진의 화소 수가 서버가 읽는 한도를 넘었습니다. 해상도를 낮춰 다시 올려 주세요.",
+ source_conversion_failed:"Word 문서를 PDF로 바꾸지 못했습니다. Word에서 PDF로 저장해 올려 주세요.",
  network_error:"서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
  unexpected_server_error:"PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 });
 function protocolUploadErrorMessage(code){return PROTOCOL_UPLOAD_ERROR_MESSAGES[code]||PROTOCOL_UPLOAD_ERROR_MESSAGES.unexpected_server_error;}
+// Lane UI3 decision 3 (2026-10-14): what the server takes as a protocol's
+// source (lane AN): each file goes with the type the browser gives it, or
+// with its name's extension's type when the browser gives none.
+const PROTOCOL_SOURCE_EXTENSION_TYPES=Object.freeze({".pdf":"application/pdf",".docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",".heic":"image/heic"});
+const PROTOCOL_SOURCE_MEDIA_TYPES=new Set([...Object.values(PROTOCOL_SOURCE_EXTENSION_TYPES),"image/heif"]);
+function protocolSourceMediaType(file){const type=typeof file?.type==="string"?file.type.trim().toLowerCase():"";if(type)return type;const name=String(file?.name||"").toLowerCase(),dot=name.lastIndexOf(".");return dot>=0?PROTOCOL_SOURCE_EXTENSION_TYPES[name.slice(dot)]||"":"";}
+function protocolSourceRegisteringLine(mediaType){if(mediaType==="application/pdf")return "원문 PDF를 검증하고 등록하는 중…";if(mediaType==="application/vnd.openxmlformats-officedocument.wordprocessingml.document")return "Word 문서를 PDF로 바꿔 등록하는 중…";return "사진을 PDF로 바꿔 등록하는 중…";}
+// A server without HEIC support (pillow-heif is optional, human decision of
+// 2026-10-13) is told before the upload when /readyz says so; a HEIC photo it
+// refuses is answered on the status line. Both name the iPhone setting that
+// takes JPEG photos.
+const HEIC_UNAVAILABLE_HINT="이 서버는 HEIC 사진을 받지 않습니다 · 아이폰 설정 → 카메라 → 포맷 → 높은 호환성으로 바꾸고 찍은 사진(JPG)을 올려 주세요.";
+// With the hint already on screen, the refusal points to it instead of repeating it.
+const HEIC_REFUSED_BESIDE_HINT="이 서버는 HEIC 사진을 읽지 못합니다 · 아래 안내대로 JPG 사진을 올려 주세요.";
+function showHeicHint(shown){const hint=$("protocol-heic-hint");if(!hint)return false;hint.textContent=shown?HEIC_UNAVAILABLE_HINT:"";hint.hidden=!shown;return shown;}
+async function loadSourceFormats(){
+ try{const response=await fetch("/readyz",{cache:"no-store"});const payload=await safeProtocolUploadPayload(response);const heic=response.ok?payload?.capabilities?.heic_photos_available:undefined;if(typeof heic!=="boolean"){showHeicHint(false);return null;}showHeicHint(heic===false);return heic;}
+ catch(_){showHeicHint(false);return null;}
+}
 async function safeProtocolUploadPayload(response){
  const contentType=response?.headers?.get?.("content-type")||"";
  if(contentType&&!contentType.toLowerCase().includes("application/json"))return null;
@@ -3133,6 +3284,10 @@ function renderStartSummary(review){
  if(basis){const badge=reviewBasisBadge(review);basis.textContent=badge.text;if(basis.dataset)basis.dataset.kind=badge.kind;basis.hidden=false;}
  const outdated=$("protocol-start-outdated");
  if(outdated){const line=typeof review.analysis_outdated_ko==="string"?review.analysis_outdated_ko:"";outdated.textContent=line;outdated.hidden=!line;}
+ // Lane UI3 decision 2 (2026-10-14): the server's own sentence on the safety
+ // documents behind the run (lane PL), shown as it is; none when not sent.
+ const scope=$("protocol-safety-scope");
+ if(scope){const line=typeof review.safety_scope?.notice==="string"?normalizePresentationText(review.safety_scope.notice).trim():"";scope.textContent=line;scope.hidden=!line;}
  const cleared=$("protocol-start-cleared");
  if(cleared){const line=typeof review.cleared_fields_ko==="string"?review.cleared_fields_ko:"";cleared.textContent=line;cleared.hidden=!line;}
  const repeatChecks=$("protocol-start-repeat-checks");
@@ -3202,6 +3357,107 @@ function renderSafetyNotices(items,runnable){
  }
  host.appendChild(group);
 }
+// Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables
+// (lane AN): an .xlsx attached as it is, listed with its sheets and cells,
+// and opened cell by cell as the server keeps it -- the value the workbook
+// prints, and a formula saved without a value as its formula. The server
+// never analyses a table and never takes a step from one.
+const REAGENT_TABLE_MEDIA_TYPE="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const REAGENT_TABLE_ERROR_MESSAGES=Object.freeze({
+ unsupported_reagent_table_media_type:"시약 표는 엑셀 .xlsx 파일만 붙일 수 있습니다.",
+ reagent_table_too_large:"시약 표가 너무 큽니다 · 파일 크기나 값이 든 셀 수가 서버가 읽는 한도를 넘었습니다. 표를 나눠 붙여 주세요.",
+ invalid_reagent_table:"엑셀 .xlsx 통합 문서로 읽을 수 없습니다. 엑셀에서 .xlsx로 다시 저장해 붙여 주세요.",
+ protocol_catalog_unavailable:"시약 표를 붙이는 기능을 사용할 수 없습니다. 서버 관리자에게 문의해 주세요.",
+ network_error:"서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+ unexpected_server_error:"시약 표를 붙이는 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+});
+let reagentTablesProtocolId=null,reagentTablesShown=[],reagentTableOpenId=null,isAttachingReagentTable=false;
+const reagentOpenButtons=new Map();
+function reagentTableErrorMessage(code){return REAGENT_TABLE_ERROR_MESSAGES[code]||REAGENT_TABLE_ERROR_MESSAGES.unexpected_server_error;}
+function reagentTableMediaType(file){const type=typeof file?.type==="string"?file.type.trim().toLowerCase():"";if(type)return type;return String(file?.name||"").toLowerCase().endsWith(".xlsx")?REAGENT_TABLE_MEDIA_TYPE:"";}
+function reagentSheetCells(sheet){return Array.isArray(sheet?.cells)?sheet.cells.length:Number.isInteger(sheet?.cells)?sheet.cells:0;}
+function reagentSheetName(sheet){return nonemptyText(sheet?.name)?String(sheet.name):"이름 없는 시트";}
+function reagentTableLine(table){const sheets=Array.isArray(table?.sheets)?table.sheets.filter(sheet=>sheet&&typeof sheet==="object"):[];const count=Number.isInteger(table?.cell_count)?table.cell_count:sheets.reduce((sum,sheet)=>sum+reagentSheetCells(sheet),0);return [`시트 ${sheets.length}개 · 셀 ${count}개`,...sheets.map(sheet=>`${reagentSheetName(sheet)} 셀 ${reagentSheetCells(sheet)}개${sheet.state&&sheet.state!=="visible"?" (숨긴 시트)":""}`)].join(" · ");}
+function reagentColumnName(number){let name="",left=number;while(left>0){const rest=(left-1)%26;name=String.fromCharCode(65+rest)+name;left=Math.floor((left-1)/26);}return name;}
+async function loadReagentTables(protocolId){
+ const list=$("reagent-table-list");if(!list||typeof protocolId!=="string"||!protocolId)return null;
+ if(reagentTablesProtocolId!==protocolId)reagentTableOpenId=null;
+ reagentTablesProtocolId=protocolId;
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(reagentTablesProtocolId!==protocolId)return null;const tables=response.ok&&Array.isArray(payload?.reagent_tables)?payload.reagent_tables.filter(table=>table&&typeof table==="object"):null;renderReagentTables(tables);return tables;}
+ catch(_){if(reagentTablesProtocolId===protocolId)renderReagentTables(null);return null;}
+}
+function renderReagentTables(tables){
+ const list=$("reagent-table-list");if(!list)return false;list.replaceChildren();reagentOpenButtons.clear();
+ reagentTablesShown=Array.isArray(tables)?tables:[];
+ if(!Array.isArray(tables)){list.textContent="시약 표 목록을 불러오지 못했습니다.";renderReagentTableView(null);return false;}
+ if(!tables.length){list.textContent="붙인 시약 표 없음";renderReagentTableView(null);return true;}
+ for(const table of tables){
+  const row=document.createElement("li");row.className="reagent-table-row";
+  const name=document.createElement("b");name.className="reagent-table-name";name.textContent=nonemptyText(table.filename)?String(table.filename):"이름 없는 표";row.appendChild(name);
+  const meta=document.createElement("span");meta.className="reagent-table-meta";meta.textContent=reagentTableLine(table);row.appendChild(meta);
+  for(const warning of Array.isArray(table.warnings)?table.warnings:[]){if(!nonemptyText(warning))continue;const line=document.createElement("small");line.className="reagent-table-warning";line.textContent=warning;row.appendChild(line);}
+  const open=document.createElement("button");open.type="button";open.setAttribute("aria-controls","reagent-table-view");
+  open.addEventListener("click",()=>{reagentTableOpenId=reagentTableOpenId===table.table_id?null:table.table_id;syncReagentOpenButtons();renderReagentTableView(reagentTablesShown.find(item=>item.table_id===reagentTableOpenId)||null);});
+  reagentOpenButtons.set(table.table_id,open);row.appendChild(open);list.appendChild(row);
+ }
+ syncReagentOpenButtons();
+ renderReagentTableView(reagentTablesShown.find(table=>table.table_id===reagentTableOpenId)||null);
+ return true;
+}
+function syncReagentOpenButtons(){for(const [id,button] of reagentOpenButtons){const shown=id===reagentTableOpenId;button.textContent=shown?"닫기":"열어 보기";button.setAttribute("aria-expanded",String(shown));}}
+function renderReagentTableView(table){
+ const view=$("reagent-table-view");if(!view)return false;view.replaceChildren();
+ if(!table){view.hidden=true;return false;}
+ const head=document.createElement("p");head.className="reagent-table-view-head";head.textContent=`${nonemptyText(table.filename)?table.filename:"이름 없는 표"} · 엑셀에 보이는 값 그대로 · 분석에 쓰지 않음`;view.appendChild(head);
+ for(const sheet of Array.isArray(table.sheets)?table.sheets:[]){
+  if(!sheet||typeof sheet!=="object")continue;
+  const section=document.createElement("section");section.className="reagent-sheet";
+  const title=document.createElement("h5");title.textContent=`${reagentSheetName(sheet)} · 셀 ${reagentSheetCells(sheet)}개${sheet.state&&sheet.state!=="visible"?" · 숨긴 시트":""}`;section.appendChild(title);
+  const cells=(Array.isArray(sheet.cells)?sheet.cells:[]).filter(cell=>cell&&Number.isInteger(cell.row)&&Number.isInteger(cell.column)&&cell.row>0&&cell.column>0);
+  if(!cells.length){const empty=document.createElement("p");empty.className="reagent-table-view-head";empty.textContent="값이 든 셀 없음";section.appendChild(empty);view.appendChild(section);continue;}
+  const rows=[...new Set(cells.map(cell=>cell.row))].sort((a,b)=>a-b),columns=Math.max(...cells.map(cell=>cell.column)),at=new Map(cells.map(cell=>[`${cell.row}:${cell.column}`,cell]));
+  const scroll=document.createElement("div");scroll.className="reagent-sheet-scroll";scroll.setAttribute("tabindex","0");scroll.setAttribute("role","region");scroll.setAttribute("aria-label",`${reagentSheetName(sheet)} 시트의 셀`);
+  const grid=document.createElement("table");grid.className="reagent-grid";
+  const thead=document.createElement("thead"),headRow=document.createElement("tr");headRow.appendChild(document.createElement("th"));
+  for(let column=1;column<=columns;column++){const th=document.createElement("th");th.setAttribute("scope","col");th.textContent=reagentColumnName(column);headRow.appendChild(th);}
+  thead.appendChild(headRow);grid.appendChild(thead);
+  const tbody=document.createElement("tbody");
+  for(const number of rows){
+   const tr=document.createElement("tr"),th=document.createElement("th");th.setAttribute("scope","row");th.textContent=String(number);tr.appendChild(th);
+   for(let column=1;column<=columns;column++){
+    const cell=at.get(`${number}:${column}`),td=document.createElement("td");
+    if(cell){const shown=typeof cell.display==="string"?cell.display:(cell.value===null||cell.value===undefined?"":String(cell.value));if(!shown&&nonemptyText(cell.formula)){td.className="reagent-formula";td.textContent=cell.formula;}else td.textContent=shown;}
+    tr.appendChild(td);
+   }
+   tbody.appendChild(tr);
+  }
+  grid.appendChild(tbody);scroll.appendChild(grid);section.appendChild(scroll);view.appendChild(section);
+ }
+ view.hidden=false;return true;
+}
+async function attachReagentTable(){
+ const input=$("reagent-table-file"),status=$("reagent-table-status"),file=input?.files?.[0],protocolId=currentProtocolReviewId;
+ const say=text=>{if(status)status.textContent=text;};
+ if(typeof protocolId!=="string"||!protocolId){say("먼저 프로토콜을 고르세요.");if(input)input.value="";return null;}
+ if(!file){say("붙일 시약 표(.xlsx)를 골라 주세요.");return null;}
+ const mediaType=reagentTableMediaType(file);
+ if(mediaType!==REAGENT_TABLE_MEDIA_TYPE||!String(file.name||"").toLowerCase().endsWith(".xlsx")){say(reagentTableErrorMessage("unsupported_reagent_table_media_type"));if(input)input.value="";return null;}
+ if(isAttachingReagentTable)return null;
+ isAttachingReagentTable=true;input?.setAttribute?.("aria-busy","true");say("시약 표를 읽어 붙이는 중…");
+ try{
+  let response;
+  try{response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  catch(_){say(reagentTableErrorMessage("network_error"));return null;}
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){say(reagentTableErrorMessage(typeof payload?.detail==="string"?payload.detail:"unexpected_server_error"));return null;}
+  const table=payload?.reagent_table&&typeof payload.reagent_table==="object"?payload.reagent_table:null;
+  if(!table){say(reagentTableErrorMessage("unexpected_server_error"));return null;}
+  const name=nonemptyText(table.filename)?table.filename:file.name;
+  say(payload.deduplicated===true?`이미 붙인 같은 표입니다 · ${name}`:`시약 표를 붙였습니다 · ${name} · 셀 ${Number.isInteger(table.cell_count)?table.cell_count:0}개`);
+  if(currentProtocolReviewId===protocolId)await loadReagentTables(protocolId);
+  return table;
+ }finally{isAttachingReagentTable=false;input?.removeAttribute?.("aria-busy");if(input)input.value="";}
+}
 function renderProtocolReview(review,options={}){
  const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),ocrRun=$("protocol-ocr-run");
  if(!panel||!content||!status)return false;
@@ -3209,6 +3465,8 @@ function renderProtocolReview(review,options={}){
  const compare=$("protocol-compare");if(compare){compare.hidden=false;compare.open=options.open!==false;}
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderExecutionReasons(review);renderStartSummary(review);
+ // Lane UI3 decision 4: the picked protocol's reagent tables, read once per protocol.
+ if(typeof review?.protocol_id==="string"&&review.protocol_id&&review.protocol_id!==reagentTablesProtocolId){const said=$("reagent-table-status");if(said)said.textContent="";void loadReagentTables(review.protocol_id);}
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
  status.textContent=`${review?.title||source.filename||"업로드 프로토콜"} · ${catalogStatus(review).label}`;
  // Lane PX decision 4: one line says where the document stands on its way
@@ -3448,19 +3706,20 @@ async function startReviewedProtocol(){
 }
 async function registerSelectedProtocol(){
  const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
- if(!file){if(status)status.textContent="등록할 PDF를 선택해 주세요.";return;}
- if(file.type!=="application/pdf"||!file.name.toLowerCase().endsWith(".pdf")){if(status)status.textContent="PDF 파일만 등록할 수 있습니다.";if(input)input.value="";return;}
+ if(!file){if(status)status.textContent="등록할 원문 파일(PDF, Word, 사진)을 선택해 주세요.";return;}
+ const mediaType=protocolSourceMediaType(file);
+ if(!PROTOCOL_SOURCE_MEDIA_TYPES.has(mediaType)){if(status)status.textContent=protocolUploadErrorMessage("unsupported_pdf_media_type");if(input)input.value="";return;}
  if(isRegisteringProtocol)return;
  const duplicate=$("protocol-duplicate-notice");if(duplicate){duplicate.hidden=true;duplicate.textContent="";}
  isRegisteringProtocol=true;
  if(input)input.setAttribute?.("aria-busy","true");
- if(status)status.textContent="원문 PDF를 검증하고 등록하는 중…";
+ if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
  try{
   let response;
-  try{response=await fetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":"application/pdf"},body:file,redirect:"error"});}
+  try{response=await fetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
-  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);if(input)input.value="";return;}
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
   const registered=payload.protocol&&typeof payload.protocol==="object"?payload.protocol:null,protocolId=typeof registered?.protocol_id==="string"?registered.protocol_id:null;
   if(!protocolId){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}
@@ -3688,6 +3947,11 @@ globalThis.document?.addEventListener?.("keydown",event=>{onRunSheetKey(event);}
 globalThis.document?.addEventListener?.("visibilitychange",()=>{void onScreenVisibilityChange();});
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
+// Lane UI3 decision 3: the file buttons are labels; Enter or Space on one opens its chooser.
+function openFileChooserFromKey(event,inputId){if(event?.key!=="Enter"&&event?.key!==" ")return false;event.preventDefault?.();$(inputId)?.click?.();return true;}
+$("protocol-pdf-pick")?.addEventListener("keydown",event=>{openFileChooserFromKey(event,"protocol-pdf");});
+$("reagent-table-pick")?.addEventListener("keydown",event=>{openFileChooserFromKey(event,"reagent-table-file");});
+$("reagent-table-file")?.addEventListener("change",()=>{void attachReagentTable();});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
@@ -3720,7 +3984,7 @@ async function installFromHomeScreenOffer(){const offer=installOffer;if(!offer||
 globalThis.addEventListener?.("beforeinstallprompt",event=>{event?.preventDefault?.();installOffer=event;renderInstallGuide();});
 globalThis.addEventListener?.("appinstalled",()=>{installOffer=null;renderInstallGuide();});
 $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer();});
-globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();renderInstallGuide();},{once:true});
+globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();},{once:true});
 </script>
 </body>
 </html>
