@@ -833,7 +833,11 @@ RETRYABLE_STATUSES = frozenset({429, 500, 502, 503})
 
 PROVIDER_RETRY_MAX_SETTING = "VOINEY_LAB_PROVIDER_RETRY_MAX"
 PROVIDER_RETRY_MAX_WAIT_SETTING = "VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS"
-DEFAULT_PROVIDER_RETRY_MAX = 4
+#: Measured (lane AN2): alone, one piece drew 4 consecutive HTTP 429 over about
+#: 14 s (no Retry-After) and the fifth request went through; lane AN's runs beside
+#: others drew up to 6 within 3 s. 5 keeps one retry of margin over the longest run
+#: seen, and the waits (about 1+2+4+8+16 s at the least) bound a piece's delay.
+DEFAULT_PROVIDER_RETRY_MAX = 5
 DEFAULT_PROVIDER_RETRY_BASE_SECONDS = 2.0
 DEFAULT_PROVIDER_RETRY_MAX_WAIT_SECONDS = 60.0
 _PROVIDER_RETRY_MAX_LIMIT = 10

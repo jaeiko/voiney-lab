@@ -3024,8 +3024,8 @@ class ProtocolCatalog:
                 if cut is not None:
                     lowered.append(cut)
                     logging.getLogger(__name__).info(
-                        "protocol.analysis.piece_concurrency_lowered protocol_id=%s piece=%d "
-                        "from=%d to=%d", protocol_id, piece.index, cut * 2, cut,
+                        "protocol.analysis.piece_concurrency_lowered protocol_id=%s piece=%d to=%d",
+                        protocol_id, piece.index, cut,
                     )
 
             try:

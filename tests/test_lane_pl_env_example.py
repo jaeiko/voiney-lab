@@ -52,7 +52,7 @@ NOT_LISTED = {
     "FONTCONFIG_FILE": "fontconfig's; the server sets it only for one LibreOffice run",
     # Tuning knobs with a safe default (lane AN2). .env.example belonged to
     # lane DOC3 while this lane ran; list them there and drop these rows.
-    "VOINEY_LAB_PROVIDER_RETRY_MAX": "tuning knob, default 4; .env.example was another lane's file (AN2)",
+    "VOINEY_LAB_PROVIDER_RETRY_MAX": "tuning knob, default 5; .env.example was another lane's file (AN2)",
     "VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS": "tuning knob, default 60; .env.example was another lane's file (AN2)",
     "VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY": "tuning knob, default 8; .env.example was another lane's file (AN2)",
 }
