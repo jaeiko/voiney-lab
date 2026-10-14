@@ -538,6 +538,68 @@
      .compare-steps{max-height:32rem}
     }
     @media (max-width:479px){.compare-field{grid-template-columns:minmax(0,1fr) auto}.compare-field-key{grid-column:1/-1}}
+    /* Lane RV (2026-10-14): 검토, 원문 대조 보기 that a person can decide in.
+       Items waiting for a person first; the source's numbered lines (and an
+       OCR value's piece of the page) beside the picked item; its decision --
+       확인, 고침, 원문에 없음으로 비움, 입력, 메모 -- and where each value comes
+       from (원문 · AI 제안 · 검토자 입력); under them the reviewer's name, "검토
+       완료하고 등록" and the review versions. Three columns on a wide screen,
+       one on a phone. There is no approval. */
+    .review-editor{min-width:0;border:1px solid var(--line);background:var(--paper)}
+    .review-editor[hidden]{display:none}
+    .review-editor>summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2);min-height:var(--target-run);padding:var(--space-4);cursor:pointer;color:var(--ink);list-style-position:inside}
+    .review-editor-name{font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    .review-editor-summary{color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .review-editor-status{margin:0;padding:0 var(--space-4);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .review-editor-strip{display:flex;flex-wrap:wrap;gap:var(--space-2);padding:var(--space-3) var(--space-4)}
+    .review-editor-strip:empty{display:none}
+    .review-editor-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);padding:0 var(--space-4) var(--space-4)}
+    .review-items{max-height:20rem;margin:0;padding:0;overflow:auto;list-style:none}
+    .review-items>li+li{border-top:1px solid var(--line)}
+    .review-row{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-1);width:100%;min-height:var(--target-desk,44px);margin:0;padding:var(--space-3);border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+    .review-row:hover{background:var(--bench)}
+    .review-row[aria-current="true"]{box-shadow:inset 0 0 0 var(--stroke-current) var(--ink)}
+    .review-row-label{color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem;font-weight:600}
+    .review-row-text{display:-webkit-box;overflow:hidden;font-size:.9375rem;line-height:1.375rem;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+    .review-row-badges{display:flex;flex-wrap:wrap;gap:var(--space-1)}
+    .review-row-badges:empty{display:none}
+    .review-source,.review-item{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3)}
+    .review-lines{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+    .review-line{display:grid;grid-template-columns:2.25rem minmax(0,1fr);gap:var(--space-2);min-height:32px;margin:0;padding:var(--space-1) var(--space-2);border:0;background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;line-height:1.5rem;text-align:left;cursor:pointer;white-space:pre-wrap;overflow-wrap:anywhere}
+    .review-line-number{color:var(--ink-muted);font-size:.8125rem;text-align:right;font-variant-numeric:tabular-nums}
+    .review-line.is-linked{background:var(--bench)}
+    .review-line.is-suggested{outline:var(--stroke-state) dashed var(--pending);outline-offset:calc(-1 * var(--stroke-state))}
+    .review-line.is-picked{outline:var(--stroke-state) solid var(--ink);outline-offset:calc(-1 * var(--stroke-state))}
+    .review-line.is-unclear .review-line-number::after{content:" ?";color:var(--warning-ink)}
+    .review-source .compare-page-head{flex-wrap:wrap;align-items:center}
+    .review-page-turn{display:inline-flex;gap:var(--space-1)}
+    .review-page-turn button{min-height:var(--target-desk,44px);padding:0 var(--space-2);font-size:.8125rem}
+    .review-boxes{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+    .review-box{display:flex;flex-direction:column;gap:var(--space-1);margin:0;font-size:.8125rem;color:var(--ink-muted)}
+    .review-box img{max-width:12rem;max-height:4rem;width:auto;height:auto;object-fit:contain;border:1px solid var(--line);background:var(--paper)}
+    .review-value{margin:0;font-size:1.0625rem;line-height:1.625rem;font-weight:600;overflow-wrap:anywhere}
+    .review-was{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
+    .review-note{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
+    .review-input{box-sizing:border-box;min-height:var(--target-desk,44px);width:100%;max-width:100%;padding:var(--space-2) var(--space-3);border:1px solid var(--line);font:inherit}
+    .review-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+    .review-actions button{min-height:var(--target-desk,44px)}
+    .review-register{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--space-3);padding:var(--space-4);border-top:1px solid var(--line)}
+    .review-register label{display:flex;flex-direction:column;gap:var(--space-1);flex:1 1 16rem;max-width:24rem;color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .review-register button{min-height:var(--target-run);font-weight:700}
+    .review-register-status{flex-basis:100%;margin:0;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
+    .review-history{padding:0 var(--space-4) var(--space-4)}
+    .review-history h4{margin:0 0 var(--space-2);color:var(--ink-muted);font-size:.8125rem;font-weight:600}
+    .review-history-list{display:flex;flex-wrap:wrap;gap:var(--space-2);margin:0;padding:0;list-style:none}
+    .review-history-list button{min-height:var(--target-desk,44px)}
+    .review-history-changes{display:flex;flex-direction:column;gap:var(--space-1);margin:var(--space-2) 0 0;padding:0;list-style:none}
+    .review-history-changes li{padding:var(--space-2) 0;border-top:1px solid var(--line);font-size:.9375rem;line-height:1.375rem;overflow-wrap:anywhere}
+    .ui-badge[data-kind="origin-source"]{border-color:var(--ink);color:var(--ink)}
+    .ui-badge[data-kind="origin-ai"]{border:var(--stroke-state) dashed var(--pending);background:var(--paper);color:var(--pending)}
+    .ui-badge[data-kind="origin-reviewer"]{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
+    @media (min-width:1024px){
+     .review-editor-grid{grid-template-columns:18rem minmax(0,1fr) minmax(0,1fr);align-items:start}
+     .review-items{max-height:36rem}
+    }
     /* Lane UI2 decision 4 (2026-10-13): the 실험 후 view after the drafts' P4
        and M6. The record comes first: its head (how it ended, the source's
        badge, who ran it), the counts of the values, the first value not yet
@@ -856,6 +918,36 @@
             <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
             <div id="protocol-review-content" class="protocol-review-content"></div>
             <div id="protocol-blockers" class="protocol-review-content"></div>
+          </details>
+          <!-- Lane RV (2026-10-14): 검토 -- the compare view a person decides in. Items waiting for a person first; the source's numbered lines and an OCR value's piece of the page beside the picked item; 확인 · 고침 · 원문에 없음으로 비움 · 입력 · 메모; where each value comes from (원문 · AI 제안 · 검토자 입력); the reviewer's name and "검토 완료하고 등록"; the review versions. No approval. -->
+          <details id="protocol-review-editor" class="review-editor" hidden>
+            <summary><span class="review-editor-name">검토</span><span id="review-editor-summary" class="review-editor-summary"></span></summary>
+            <p id="review-editor-status" class="review-editor-status" role="status" aria-live="polite"></p>
+            <div id="review-editor-strip" class="review-editor-strip"></div>
+            <div class="review-editor-grid">
+              <section class="compare-col" aria-labelledby="review-items-title">
+                <h4 id="review-items-title">항목 · 확인 필요가 먼저</h4>
+                <ol id="review-items" class="review-items" aria-labelledby="review-items-title"></ol>
+              </section>
+              <section class="compare-col" aria-labelledby="review-source-title">
+                <h4 id="review-source-title">원문 · 줄을 눌러 고르기</h4>
+                <div id="review-source" class="review-source"></div>
+              </section>
+              <section class="compare-col" aria-labelledby="review-item-title">
+                <h4 id="review-item-title">이 항목</h4>
+                <div id="review-item" class="review-item"></div>
+              </section>
+            </div>
+            <div class="review-register">
+              <label for="reviewer-name">검토자 이름<input id="reviewer-name" class="review-input" type="text" maxlength="80" autocomplete="name"></label>
+              <button id="review-register" type="button" disabled>검토 완료하고 등록</button>
+              <p id="review-register-status" class="review-register-status" role="status" aria-live="polite"></p>
+            </div>
+            <section class="review-history" aria-labelledby="review-history-title">
+              <h4 id="review-history-title">검토본 기록</h4>
+              <ol id="review-history" class="review-history-list"></ol>
+              <div id="review-history-changes"></div>
+            </section>
           </details>
           <div class="setup-grid">
             <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
@@ -3620,7 +3712,7 @@ async function loadProtocolReview(protocolId=currentProtocolReviewId,options={})
  currentProtocolReviewId=protocolId;const panel=$("protocol-review-panel"),status=$("protocol-review-status"),start=$("protocol-start");if(panel){panel.hidden=false;panel.open=options.open!==false;}if(start)start.hidden=true;if(status)status.textContent="원문 근거와 구조 분석 결과를 불러오는 중…";
  // The start button acts on currentProtocolReviewId, so an answer that
  // arrives after the person picked another protocol must not be rendered.
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);showReviewEditor(protocolId,payload);
   // Lane RN decision 1: a run that goes is watched again when its protocol is picked.
   if(protocolAnalysisRunning(payload)&&protocolAnalysisPollHandle===null){startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);}
   return payload;}catch(_){if(currentProtocolReviewId===protocolId&&status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
@@ -3633,7 +3725,306 @@ function onProtocolSelectionChanged(){
  const protocolId=$("protocol-id")?.value||"";
  if(protocolId!==currentProtocolReviewId){stopProtocolAnalysisPolling();stopProtocolOcrPolling();}
  if(protocolId){void loadProtocolReview(protocolId,{open:protocolCatalog.get(protocolId)?.available_for_execution!==true});return;}
- currentProtocolReviewId=null;const panel=$("protocol-review-panel"),summary=$("protocol-start-summary"),start=$("protocol-start"),compare=$("protocol-compare");if(panel)panel.hidden=true;if(summary)summary.hidden=true;if(start)start.hidden=true;if(compare)compare.hidden=true;
+ currentProtocolReviewId=null;const panel=$("protocol-review-panel"),summary=$("protocol-start-summary"),start=$("protocol-start"),compare=$("protocol-compare"),editor=$("protocol-review-editor");if(panel)panel.hidden=true;if(summary)summary.hidden=true;if(start)start.hidden=true;if(compare)compare.hidden=true;if(editor)editor.hidden=true;reviewProtocolId=null;reviewDraft=null;
+}
+// Lane RV (2026-10-14): 검토 -- the compare view a person decides in.
+// The server's review draft lists every item of the analysis under review
+// (one waiting for review, one that passed, or the latest review version),
+// the ones waiting for a person first; picking one shows the source page's
+// numbered lines (its own lines marked, the server's guess dashed as an AI
+// suggestion, an OCR value's piece of the image beside it) and what may be
+// done with it. A decision is one request; the screen then reads the draft
+// again -- it never decides what an item holds. The reviewer's name and
+// "검토 완료하고 등록" make a review version, the one that runs.
+let reviewDraft=null,reviewProtocolId=null,reviewItemId=null,reviewPicked=null,reviewViewPage=null,reviewBusy=false;
+const reviewPages=new Map();
+const REVIEW_ORIGIN_BADGES={source:{text:"원문",kind:"origin-source"},ai_suggestion:{text:"AI 제안",kind:"origin-ai"},reviewer_input:{text:"검토자 입력",kind:"origin-reviewer"}};
+const REVIEW_ACTION_WORDS={confirm:"확인",fix:"고침",clear:"원문에 없음으로 비움",enter:"입력",memo:"메모",reset:"되돌리기"};
+const REVIEW_DONE_WORDS={confirm:"확인함",fix:"고침",clear:"비움",enter:"입력함"};
+const REVIEW_ERROR_WORDS={
+ review_decision_invalid:"이 항목에는 그렇게 할 수 없습니다. 고를 수 있는 단추만 쓰세요.",
+ reviewer_name_required:"검토자 이름을 적어 주세요.",
+ review_target_changed:"그 사이 분석이 바뀌었습니다. 검토 화면을 다시 불러왔습니다.",
+ review_items_pending:"확인 필요 항목을 모두 정해야 등록할 수 있습니다.",
+ review_version_blocked:"이 검토본은 실행을 막는 사유가 남아 등록하지 않았습니다.",
+ review_not_ready:"검토할 분석이 아직 없습니다.",
+};
+function reviewItems(){return Array.isArray(reviewDraft?.items)?reviewDraft.items.filter(item=>item&&typeof item==="object"&&typeof item.item_id==="string"):[];}
+// Waiting and not decided first, then waiting and decided, then the rest, each in document order.
+function reviewItemsInOrder(items=reviewItems()){
+ const rank=item=>item.needs_review===true?(item.decision?1:0):2;
+ return items.map((item,index)=>({item,index})).sort((a,b)=>rank(a.item)-rank(b.item)||a.index-b.index).map(entry=>entry.item);
+}
+function reviewOriginBadge(origin){return REVIEW_ORIGIN_BADGES[origin]||REVIEW_ORIGIN_BADGES.source;}
+function reviewItemLabel(item){return `${nonemptyText(item.step_label)?`${item.step_label}단계 · `:""}${item.kind_ko||item.kind}`;}
+function reviewItemText(value){return value===null||value===undefined?"(비어 있음)":String(value);}
+// Whether confirming or fixing this item needs the source lines a person points at:
+// its own quote was not found in the source.
+function reviewNeedsLines(item){return item?.needs_review===true&&item?.source?.verified===false&&item?.covered_by==null;}
+function reviewItemPage(item){
+ const lines=item?.decision?.source_lines||item?.source?.lines||item?.source?.suggested_lines;
+ if(Number.isInteger(lines?.page))return lines.page;
+ if(Number.isInteger(item?.source?.page)&&item.source.page>0)return item.source.page;
+ if(Number.isInteger(item?.first_page))return item.first_page;
+ return null;
+}
+// The request one decision makes: the item, the action, its value, the lines picked
+// when the item needs them, the reviewer's name when written, and the analysis the
+// screen read (so a decision on an analysis that changed meanwhile is refused).
+function reviewDecisionBody(item,action,fields={}){
+ const body={item_id:item.item_id,action};
+ if(reviewDraft?.target&&typeof reviewDraft.target==="object")body.target=reviewDraft.target;
+ const name=($("reviewer-name")?.value||"").trim();if(name)body.reviewer_name=name;
+ if(action==="fix"||action==="enter"){
+  if(item.kind==="timer"){const minutes=Number(fields.minutes);if(!Number.isFinite(minutes)||minutes<=0)return{error:"타이머는 분으로 적어 주세요."};body.seconds=Math.round(minutes*60);}
+  else if(item.kind==="repeat_count"){const count=Number(fields.count);if(!Number.isInteger(count)||count<1)return{error:"반복 횟수는 1 이상의 정수로 적어 주세요."};body.count=count;}
+  else{const text=String(fields.text||"").trim();if(!text)return{error:"고친 값을 적어 주세요."};body.text=text;}
+ }
+ if(action==="memo"){const memo=String(fields.memo||"").trim();if(!memo)return{error:"메모를 적어 주세요."};body.memo=memo;}
+ if((action==="confirm"||action==="fix")&&reviewNeedsLines(item)){
+  if(!reviewPicked||reviewPicked.itemId!==item.item_id)return{error:"원문에서 이 항목이 있는 줄을 눌러 골라 주세요."};
+  body.source_lines={page:reviewPicked.page,first_line:reviewPicked.first,last_line:reviewPicked.last};
+ }
+ return{body};
+}
+async function loadReviewDraft(protocolId=reviewProtocolId,options={}){
+ if(typeof protocolId!=="string"||!protocolId||typeof fetch!=="function")return null;
+ if(protocolId!==reviewProtocolId){reviewItemId=null;reviewPicked=null;reviewViewPage=null;reviewPages.clear();}
+ reviewProtocolId=protocolId;
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);if(reviewProtocolId!==protocolId)return null;
+  if(!response.ok||!payload)throw new Error("review draft unavailable");
+  renderReviewEditor(payload,options);return payload;
+ }catch(_){if(reviewProtocolId===protocolId)setText("review-editor-status","검토 정보를 불러오지 못했습니다.");return null;}
+}
+// The editor under the compare view: read at once when the analysis waits for a
+// person; for an analysis that passed (or a review version), shown closed and read
+// only when a person opens it -- reviewing it is a choice.
+function showReviewEditor(protocolId,review){
+ const editor=$("protocol-review-editor");if(!editor||typeof protocolId!=="string"||!protocolId)return false;
+ if(protocolId!==reviewProtocolId){reviewItemId=null;reviewPicked=null;reviewViewPage=null;reviewPages.clear();}
+ reviewProtocolId=protocolId;reviewDraft=null;
+ if(review?.review_pending!=null){void loadReviewDraft(protocolId,{open:true});return true;}
+ editor.open=false;editor.hidden=review?.analysis_available!==true;
+ setText("review-editor-summary",editor.hidden?"":" · 열면 이 분석의 항목을 원문과 맞춰 볼 수 있습니다(선택)");
+ return !editor.hidden;
+}
+function renderReviewEditor(draft,options={}){
+ const editor=$("protocol-review-editor");
+ reviewDraft=draft&&typeof draft==="object"?draft:null;
+ if(!editor)return 0;
+ const target=reviewDraft?.target&&typeof reviewDraft.target==="object"?reviewDraft.target:null;
+ editor.hidden=!target;
+ if(!target){reviewItemId=null;return 0;}
+ const counts=reviewDraft.counts||{},waiting=Number(counts.undecided)||0;
+ if(options.open===true||waiting>0)editor.open=true;
+ setText("review-editor-summary",` · 확인 필요 ${Number(counts.needs_review)||0}건${waiting?` · 남은 ${waiting}건`:" · 모두 정함"}`);
+ const what=target.kind==="review_pending"?"검토 대기 분석":target.kind==="review_version"?`검토본 v${target.version}`:"통과한 분석";
+ setText("review-editor-status",`${what}을 검토합니다 · 원문과 다른 값은 고치고, 원문에 없는 값은 비우고, 맞으면 확인을 누르세요. 안전 주의 글은 고칠 수 없습니다(메모는 가능).`);
+ const strip=$("review-editor-strip");
+ if(strip){
+  strip.replaceChildren();
+  strip.appendChild(uiBadge(what,target.kind==="review_pending"?"warning":"quiet"));
+  if(Number(counts.needs_review))strip.appendChild(uiBadge(`확인 필요 ${counts.needs_review}건`,waiting?"danger":"done"));
+  if(Number(counts.changed))strip.appendChild(uiBadge(`바꾼 값 ${counts.changed}건`,"origin-reviewer"));
+  const unclear=(Array.isArray(reviewDraft.pages)?reviewDraft.pages:[]).reduce((sum,page)=>sum+(Number(page?.unclear_line_count)||0),0);
+  if(unclear)strip.appendChild(uiBadge(`OCR 흐린 줄 ${unclear}개`,"warning"));
+ }
+ const items=reviewItemsInOrder();
+ if(!items.some(item=>item.item_id===reviewItemId))reviewItemId=items[0]?.item_id||null;
+ renderReviewItems(items);renderReviewSource();renderReviewItem();renderReviewRegister();renderReviewHistory();
+ return items.length;
+}
+function renderReviewItems(items=reviewItemsInOrder()){
+ const list=$("review-items");if(!list)return 0;list.replaceChildren();
+ if(!items.length){list.appendChild(compareEl("li","compare-empty","검토할 항목이 없습니다."));return 0;}
+ for(const item of items){
+  const row=document.createElement("li"),button=compareEl("button","review-row");button.type="button";
+  if(button.dataset)button.dataset.itemId=item.item_id;
+  button.setAttribute?.("aria-current",String(item.item_id===reviewItemId));
+  const badges=compareEl("span","review-row-badges"),origin=reviewOriginBadge(item.origin_after||item.origin);
+  badges.appendChild(uiBadge(origin.text,origin.kind));
+  if(item.needs_review===true&&!item.decision)for(const reason of Array.isArray(item.reasons)?item.reasons:[])if(nonemptyText(reason?.reason_ko))badges.appendChild(uiBadge(`확인 필요 · ${reason.reason_ko}`,"danger"));
+  if(item.decision&&REVIEW_DONE_WORDS[item.decision.action])badges.appendChild(uiBadge(REVIEW_DONE_WORDS[item.decision.action],"done"));
+  if(nonemptyText(item.memo))badges.appendChild(uiBadge("메모","quiet"));
+  button.append(compareEl("span","review-row-label",reviewItemLabel(item)),compareEl("span","review-row-text",reviewItemText(item.current)),badges);
+  button.addEventListener("click",()=>{reviewItemId=item.item_id;renderReviewItems();renderReviewSource();renderReviewItem();});
+  row.appendChild(button);list.appendChild(row);
+ }
+ return items.length;
+}
+async function reviewSourcePage(page){
+ const key=`${reviewProtocolId}|${page}`;
+ if(reviewPages.has(key))return reviewPages.get(key);
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;
+  reviewPages.set(key,payload);return payload;
+ }catch(_){return null;}
+}
+function reviewLineSpan(lines){return lines&&Number.isInteger(lines.first_line)?[lines.first_line,Number.isInteger(lines.last_line)?lines.last_line:lines.first_line]:null;}
+async function renderReviewSource(){
+ const host=$("review-source");if(!host)return 0;
+ // The item's own page, or the page a person turned to for it (its lines may be elsewhere).
+ const item=reviewItems().find(entry=>entry.item_id===reviewItemId),page=reviewViewPage?.itemId===item?.item_id?reviewViewPage.page:reviewItemPage(item);
+ host.replaceChildren();
+ if(!item||!Number.isInteger(page)){host.appendChild(compareEl("p","compare-empty","이 항목의 원문 쪽이 없습니다."));return 0;}
+ host.appendChild(compareEl("p","review-note",`원문 p.${page} 을 불러오는 중입니다.`));
+ const protocolId=reviewProtocolId,wanted=item.item_id,payload=await reviewSourcePage(page);
+ if(reviewProtocolId!==protocolId||reviewItemId!==wanted)return 0;
+ host.replaceChildren();
+ if(!payload){host.appendChild(compareEl("p","compare-empty",`원문 p.${page} 을 불러오지 못했습니다.`));return 0;}
+ const head=compareEl("div","compare-page-head");head.appendChild(compareEl("b","",`원문 p.${page}${payload.ocr?` · OCR${payload.ocr_unclear?` · 흐린 줄 ${payload.unclear_line_count||0}개`:""}`:""}`));
+ // Turning the page: the item's lines may stand on another page than the one it named.
+ const count=Number.isInteger(payload.page_count)?payload.page_count:page;
+ if(count>1){
+  const turn=compareEl("span","review-page-turn");
+  for(const [label,to] of [["앞 쪽",page-1],["다음 쪽",page+1]]){const button=compareEl("button","",label);button.type="button";if(button.dataset)button.dataset.page=String(to);button.disabled=to<1||to>count;button.addEventListener("click",()=>{reviewViewPage={itemId:item.item_id,page:to};void renderReviewSource();});turn.appendChild(button);}
+  head.appendChild(turn);
+ }
+ const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);
+ host.appendChild(head);
+ const linked=item.source?.lines?.page===page?reviewLineSpan(item.source.lines):null,suggested=item.source?.suggested_lines?.page===page?reviewLineSpan(item.source.suggested_lines):null;
+ const picked=reviewPicked?.itemId===item.item_id&&reviewPicked.page===page?[reviewPicked.first,reviewPicked.last]:null,chosen=item.decision?.source_lines?.page===page?reviewLineSpan(item.decision.source_lines):null;
+ const within=(span,number)=>span&&number>=span[0]&&number<=span[1];
+ const list=compareEl("ol","review-lines");
+ for(const line of Array.isArray(payload.lines)?payload.lines:[]){
+  if(!Number.isInteger(line?.number))continue;
+  const row=document.createElement("li"),button=compareEl("button","review-line");button.type="button";
+  const classes=["review-line"];if(within(linked,line.number)||within(chosen,line.number))classes.push("is-linked");if(within(suggested,line.number)&&!picked)classes.push("is-suggested");if(within(picked,line.number))classes.push("is-picked");if(line.unclear===true)classes.push("is-unclear");
+  button.className=classes.join(" ");if(button.dataset)button.dataset.line=String(line.number);
+  button.append(compareEl("span","review-line-number",String(line.number)),compareEl("span","review-line-text",String(line.text||"")));
+  button.addEventListener("click",event=>{
+   const extend=event?.shiftKey===true&&reviewPicked?.itemId===item.item_id&&reviewPicked.page===page;
+   const first=extend?Math.min(reviewPicked.first,line.number):line.number,last=extend?Math.max(reviewPicked.last,line.number):line.number;
+   reviewPicked={itemId:item.item_id,page,first,last};renderReviewSource();renderReviewItem();
+  });
+  row.appendChild(button);list.appendChild(row);
+ }
+ host.appendChild(list);
+ // An OCR value read from a photo or handwriting, beside the piece of the image it was read from.
+ const digits=String(item.current??item.text??"").replace(/[^0-9.]/g," ").split(" ").filter(token=>/[0-9]/.test(token));
+ const boxes=(Array.isArray(payload.value_boxes)?payload.value_boxes:[]).filter(box=>Number.isInteger(box?.index)&&digits.some(number=>String(box.text||"").includes(number)));
+ if(boxes.length){
+  const strip=compareEl("div","review-boxes");
+  for(const box of boxes.slice(0,6)){const figure=compareEl("figure","review-box"),image=document.createElement("img");image.src=`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/value-boxes/${box.index}/image`;image.alt=`원본 그림 조각 · ${box.text}`;image.loading="lazy";figure.append(image,compareEl("figcaption","",`OCR 이 읽은 값 · ${box.text}`));strip.appendChild(figure);}
+  host.appendChild(strip);
+ }
+ return list.children.length;
+}
+function renderReviewItem(){
+ const host=$("review-item");if(!host)return 0;host.replaceChildren();
+ const item=reviewItems().find(entry=>entry.item_id===reviewItemId);
+ if(!item){host.appendChild(compareEl("p","compare-empty","왼쪽에서 항목을 고르세요."));return 0;}
+ const head=compareEl("div","compare-fields-head");head.appendChild(compareEl("b","",reviewItemLabel(item)));if(nonemptyText(item.value_kind_ko))head.appendChild(compareEl("span","",`· ${item.value_kind_ko}`));host.appendChild(head);
+ const badges=compareEl("div","review-row-badges"),origin=reviewOriginBadge(item.origin_after||item.origin);badges.appendChild(uiBadge(origin.text,origin.kind));
+ for(const reason of Array.isArray(item.reasons)?item.reasons:[])if(nonemptyText(reason?.reason_ko))badges.appendChild(uiBadge(`확인 필요 · ${reason.reason_ko}`,"danger"));
+ host.appendChild(badges);
+ host.appendChild(compareEl("p","review-value",reviewItemText(item.current)));
+ if(item.differs_from_original===true)host.appendChild(compareEl("p","review-was",`원래 값(${(REVIEW_ORIGIN_BADGES[item.origin]||REVIEW_ORIGIN_BADGES.source).text}) · ${reviewItemText(item.text)}`));
+ for(const reason of Array.isArray(item.reasons)?item.reasons:[]){
+  const pages=Array.isArray(reason?.matching_source_pages)?reason.matching_source_pages.filter(Number.isInteger):[];
+  if(pages.length)host.appendChild(compareEl("p","review-note",`같은 글이 원문 ${pages.map(page=>`p.${page}`).join("·")} 에 있습니다.`));
+ }
+ if(Array.isArray(item.candidates)&&item.candidates.length)host.appendChild(compareEl("p","review-note",`원문에서 타이머로 만들지 않은 시간 · ${item.candidates.map(candidate=>`${candidate.literal} (${candidate.reason_ko||candidate.reason})`).join(" · ")}`));
+ if(reviewNeedsLines(item))host.appendChild(compareEl("p","review-note",reviewPicked?.itemId===item.item_id?`고른 줄 · 원문 p.${reviewPicked.page} ${reviewPicked.first}${reviewPicked.last!==reviewPicked.first?`–${reviewPicked.last}`:""}줄`:"근거를 원문에서 찾지 못했습니다. 가운데 원문에서 이 항목이 있는 줄을 눌러 고른 뒤 확인하거나 고치세요(여러 줄은 Shift 를 누른 채)."));
+ if(item.covered_by)host.appendChild(compareEl("p","review-note","이 값은 위 항목을 확인하면 함께 확인됩니다."));
+ if(nonemptyText(item.memo))host.appendChild(compareEl("p","review-note",`메모 · ${item.memo}`));
+ const allowed=Array.isArray(item.allowed_actions)?item.allowed_actions:[];
+ let input=null,memo=null;
+ if(allowed.includes("fix")||allowed.includes("enter")){
+  input=document.createElement("input");input.className="review-input";input.id="review-item-value";
+  if(item.kind==="timer"){input.type="number";input.min="0";input.step="0.5";input.setAttribute?.("aria-label","타이머(분)");input.placeholder="분";if(Array.isArray(item.seconds)&&item.seconds.length)input.value=String(item.seconds[0]/60);}
+  else if(item.kind==="repeat_count"){input.type="number";input.min="1";input.step="1";input.setAttribute?.("aria-label","반복 횟수");input.placeholder="회";if(Number.isInteger(item.current))input.value=String(item.current);}
+  else{input.type="text";input.setAttribute?.("aria-label","고친 값");input.value=item.current===null||item.current===undefined?"":String(item.current);}
+  host.appendChild(input);
+ }
+ if(allowed.includes("memo")){memo=document.createElement("input");memo.className="review-input";memo.id="review-item-memo";memo.type="text";memo.setAttribute?.("aria-label","메모");memo.placeholder="메모";host.appendChild(memo);}
+ const actions=compareEl("div","review-actions");
+ for(const action of ["confirm","fix","enter","clear","memo","reset"]){
+  if(!allowed.includes(action))continue;
+  if(action==="reset"&&!item.decision)continue;
+  const button=compareEl("button","",REVIEW_ACTION_WORDS[action]);button.type="button";if(button.dataset)button.dataset.action=action;button.disabled=reviewBusy;
+  button.addEventListener("click",()=>{void submitReviewDecision(item,action,{text:input?.value,minutes:input?.value,count:Number(input?.value),memo:memo?.value});});
+  actions.appendChild(button);
+ }
+ host.appendChild(actions);
+ host.appendChild(compareEl("p","review-note",""));
+ return actions.children.length;
+}
+function reviewErrorWords(code){return REVIEW_ERROR_WORDS[code]||"요청을 처리하지 못했습니다. 다시 시도해 주세요.";}
+async function submitReviewDecision(item,action,fields={}){
+ const host=$("review-item"),note=host?.children?.[host.children.length-1],say=text=>{if(note)note.textContent=text;};
+ const built=reviewDecisionBody(item,action,fields);
+ if(built.error){say(built.error);return null;}
+ if(reviewBusy||typeof fetch!=="function")return null;
+ reviewBusy=true;const protocolId=reviewProtocolId;
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(built.body),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){say(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""));if(payload?.detail==="review_target_changed")await loadReviewDraft(protocolId);return null;}
+  if(action==="confirm"||action==="fix")reviewPicked=null;
+  await loadReviewDraft(protocolId);return payload;
+ }catch(_){say(reviewErrorWords(""));return null;}
+ finally{reviewBusy=false;}
+}
+function renderReviewRegister(){
+ const button=$("review-register"),status=$("review-register-status");if(!button)return false;
+ const name=($("reviewer-name")?.value||"").trim(),ready=reviewDraft?.registrable===true;
+ button.disabled=reviewBusy||!ready||!name;
+ if(status&&!status.dataset?.result)status.textContent=!ready?`확인 필요 항목 ${Number(reviewDraft?.counts?.undecided)||0}건을 정하면 등록할 수 있습니다.`:!name?"검토자 이름을 적으면 등록할 수 있습니다.":"검토 완료하고 등록하면 이 검토본으로 실행합니다(이전 기록은 남습니다).";
+ return !button.disabled;
+}
+async function registerReview(){
+ const name=($("reviewer-name")?.value||"").trim(),status=$("review-register-status");
+ if(!name){if(status)status.textContent=reviewErrorWords("reviewer_name_required");return null;}
+ if(reviewBusy||typeof fetch!=="function"||!reviewProtocolId)return null;
+ reviewBusy=true;const protocolId=reviewProtocolId;renderReviewRegister();
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,target:reviewDraft?.target}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){if(status){status.textContent=reviewErrorWords(typeof payload?.detail==="string"?payload.detail:"");if(status.dataset)status.dataset.result="refused";}if(payload?.detail==="review_target_changed")await loadReviewDraft(protocolId);return null;}
+  const version=payload?.review_version||{};
+  if(status){status.textContent=`${version.version_ko||"검토본"}을 등록했습니다 · 검토자 ${version.reviewer_name||name} · 이제 이 검토본으로 실행합니다.`;if(status.dataset)status.dataset.result="registered";}
+  // The list, the start card and the editor read again; the editor stays open on the version just made.
+  await loadProtocolCatalog(protocolId);await loadProtocolReview(protocolId);await loadReviewDraft(protocolId,{open:true});
+  return payload;
+ }catch(_){if(status)status.textContent=reviewErrorWords("");return null;}
+ finally{reviewBusy=false;renderReviewRegister();}
+}
+function renderReviewHistory(){
+ const list=$("review-history"),host=$("review-history-changes");if(!list)return 0;list.replaceChildren();
+ const versions=Array.isArray(protocolCatalog.get(reviewProtocolId)?.review_versions)?protocolCatalog.get(reviewProtocolId).review_versions:[];
+ if(!versions.length){list.appendChild(compareEl("li","review-note","등록한 검토본이 아직 없습니다."));if(host)host.replaceChildren();return 0;}
+ for(const version of versions){
+  const row=document.createElement("li"),button=compareEl("button","",`${version.version_ko||`검토본 v${version.version}`} · ${version.registered_on||""} · ${version.reviewer_name||""} · 바꾼 값 ${Number(version.change_count)||0}`);button.type="button";
+  button.addEventListener("click",()=>{void showReviewVersion(version.version);});
+  row.appendChild(button);list.appendChild(row);
+ }
+ return versions.length;
+}
+// One version's changes against what it was reviewed from: v1→v2 when it was a
+// version reviewed again, 분석→v1 otherwise.
+async function showReviewVersion(number){
+ const host=$("review-history-changes");if(!host||typeof fetch!=="function"||!reviewProtocolId)return null;
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-versions/${number}`,{headers:{Accept:"application/json"},redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;
+  renderReviewVersionChanges(payload);return payload;
+ }catch(_){return null;}
+}
+function renderReviewVersionChanges(version){
+ const host=$("review-history-changes");if(!host)return 0;host.replaceChildren();
+ const from=version?.base?.kind==="review_version"?`v${version.base.version}`:"분석";
+ host.appendChild(compareEl("p","review-note",`${from} → v${version?.version} · ${version?.registered_on||""} · ${version?.reviewer_name||""}`));
+ const list=compareEl("ol","review-history-changes"),changes=Array.isArray(version?.changes)?version.changes:[];
+ if(!changes.length)list.appendChild(compareEl("li","","바꾼 값 없이 등록했습니다."));
+ for(const change of changes){
+  const origin=(REVIEW_ORIGIN_BADGES[change.origin]||REVIEW_ORIGIN_BADGES.source).text,where=nonemptyText(change.step_label)?`${change.step_label}단계 · `:"";
+  list.appendChild(compareEl("li","",`${where}${change.kind_ko||change.kind} · ${reviewItemText(change.original)} → ${change.action==="clear"?"(비움 · 원문에 없음)":reviewItemText(change.reviewed)} · ${origin} · ${change.decided_by||""}`));
+ }
+ host.appendChild(list);return changes.length;
 }
 async function pollProtocolAnalysisStatus(protocolId){
  if(protocolAnalysisPollBusy)return null;protocolAnalysisPollBusy=true;
@@ -3939,6 +4330,10 @@ $("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolRev
 $("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
 $("protocol-analysis-retry")?.addEventListener("click",async()=>{const protocolId=currentProtocolReviewId;if(!protocolId)return;const reanalysis=$("protocol-analysis-retry")?.dataset?.reanalysis==="true";if(reanalysis&&!confirmProtocolReanalysis())return;await analyzeRegisteredProtocol(protocolId,{reanalysis});await loadProtocolCatalog(protocolId);restoreProtocolAnalysisNotice();});
 $("protocol-start")?.addEventListener("click",()=>{void startReviewedProtocol();});
+// Lane RV: the review's name field and its register button.
+$("reviewer-name")?.addEventListener("input",()=>{const status=$("review-register-status");if(status?.dataset)delete status.dataset.result;renderReviewRegister();});
+$("review-register")?.addEventListener("click",()=>{void registerReview();});
+$("protocol-review-editor")?.addEventListener("toggle",()=>{if($("protocol-review-editor")?.open===true&&!reviewDraft&&reviewProtocolId)void loadReviewDraft(reviewProtocolId);});
 $("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!startSummaryOpened;foldStartSummary();});
 $("report-prose-again")?.addEventListener("click",()=>{void regenerateReportProse();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
