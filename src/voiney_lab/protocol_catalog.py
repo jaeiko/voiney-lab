@@ -45,9 +45,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_ITEM_KINDS,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASONS_KO,
-    ReviewedChange,
     ReviewFlag,
-    ReviewVersionInfo,
     analysis_pieces,
     analyze_protocol_extraction,
     analyze_protocol_piece,
@@ -3897,15 +3895,17 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         )
         extraction = extract_protocol_pdf(source)
-        draft = ProtocolAnalysisDraft(
+        draft_fields = dict(
             extraction=extraction,
             protocol=protocol_with_display_step_labels(analysis.protocol),
             readiness=analysis.readiness,
             capability_policy=domain.P1_CAPABILITY_POLICY,
             analysis_schema_version=analysis.analysis_schema_version,
             verified_evidence_count=0,
-            review_version=_review_version_info(version) if version else None,
         )
+        draft = (
+            ReviewedAnalysisDraft(**draft_fields, review_version=_review_version_info(version))
+            if version else ProtocolAnalysisDraft(**draft_fields))
         labels = tuple(
             step.source_label
             for section in draft.protocol.sections
@@ -5096,6 +5096,87 @@ def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
         isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
         and confidence < OCR_UNCLEAR_CONFIDENCE
     )
+
+
+@dataclass(frozen=True)
+class ReviewedChange:
+    """One item a reviewer changed or confirmed in a review version (lane RV, c).
+
+    ``action`` is ``fix``, ``enter``, ``clear`` or ``confirm`` (an item that
+    waited for a person, confirmed); ``original`` is the value before -- the
+    source's or the AI's reading -- and ``reviewed`` the value the version
+    holds (None when left empty). ``origin`` is what the version shows the
+    value as: ``reviewer_input`` ("검토자 입력") or ``ai_suggestion`` ("AI 제안",
+    confirmed by a person). ``spoken`` is the value words said at the step the
+    first time it is read (decision g), None for a change nothing speaks.
+    """
+
+    item_id: str
+    kind: str
+    kind_ko: str
+    step_id: str | None
+    step_label: str | None
+    action: str
+    original: str | None
+    reviewed: str | None
+    origin: str
+    spoken: str | None = None
+    decided_by: str | None = None
+    decided_at: str | None = None
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "item_id": self.item_id, "kind": self.kind, "kind_ko": self.kind_ko,
+            "step_id": self.step_id, "step_label": self.step_label,
+            "action": self.action, "original": self.original, "reviewed": self.reviewed,
+            "origin": self.origin, "spoken": self.spoken,
+            "decided_by": self.decided_by, "decided_at": self.decided_at,
+        }
+
+    @classmethod
+    def from_public(cls, payload: dict[str, object]) -> "ReviewedChange":
+        text = lambda key: payload.get(key) if isinstance(payload.get(key), str) else None
+        return cls(
+            item_id=str(payload["item_id"]), kind=str(payload["kind"]),
+            kind_ko=str(payload.get("kind_ko") or payload["kind"]),
+            step_id=text("step_id"), step_label=text("step_label"),
+            action=str(payload["action"]), original=text("original"),
+            reviewed=text("reviewed"), origin=str(payload["origin"]),
+            spoken=text("spoken"), decided_by=text("decided_by"),
+            decided_at=text("decided_at"),
+        )
+
+
+@dataclass(frozen=True)
+class ReviewVersionInfo:
+    """A registered review version, as the run and its report read it (lane RV, c)."""
+
+    version: int
+    revision_id: str
+    reviewer_name: str
+    registered_at: str
+    changes: tuple[ReviewedChange, ...] = ()
+    base_revision_id: str | None = None
+    #: The registration's date in Korea ("2026-10-14").
+    registered_on: str = ""
+
+    def spoken_for_step(self, step_id: str) -> tuple[str, ...]:
+        """The reviewer's values said at this step, in the order they were decided."""
+
+        return tuple(dict.fromkeys(
+            change.spoken for change in self.changes
+            if change.step_id == step_id and change.spoken
+            and change.origin == "reviewer_input"
+        ))
+
+
+@dataclass(frozen=True)
+class ReviewedAnalysisDraft(ProtocolAnalysisDraft):
+    """The draft of a registered review version (lane RV, decision c): the
+    analysis draft with the version it is and what its reviewer changed, for
+    the run (decision g's notice) and its report to read."""
+
+    review_version: ReviewVersionInfo | None = None
 
 
 def _with_reviewer_timers(

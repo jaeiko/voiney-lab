@@ -67,7 +67,7 @@ class TheRunSaysItOnceTests(_ReviewedCase):
                        if not item.analysis_id.startswith("review-v")]
         plain = self.catalog.load_fixture_for_revision(
             self.protocol_id, f"pdf-1-analysis-{analysis.analysis_revision_number}")
-        self.assertIsNone(plain.draft.review_version)
+        self.assertIsNone(getattr(plain.draft, "review_version", None))
         session = CuratedProtocolSession(plain)
         session.activate_configured()
         for index in range(len(plain.steps)):
