@@ -40,8 +40,8 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 | 실험 기록(장부)의 시작 확인 `safety_notices_acknowledged` | 원문 안전 주의 목록은 그대로, `safety_scope` 와 `institution_safety_notice` 가 더해진다 |
 
 - 같은 범위가 아닌 실행(카탈로그가 있는 범위)은 위 값에 문장이 없다(`notice: null`, `scope_notice: null`).
-- **화면은 줄 UI2 의 몫이다.** 서버는 문장을 보내고 화면은 그대로 그린다(화면이 말을 바꾸지 않는다). 시작 전 화면과 안전 상자가
-  `notice`·`scope_notice` 를 그리는지는 UI2 가 확인한다. 그 전에도 안전 질문의 답 끝 한 줄은 화면에 보인다.
+- 서버는 문장을 보내고 화면은 그대로 그린다(화면이 말을 바꾸지 않는다). 시작 전 확인 카드의 안전 주의 위(`safety_scope.notice`)와
+  실험 중 안전 상자(`safety_pack.scope_notice`)가 그 문장을 그린다(줄 UI3, 2026-10-14 병합). 안전 질문의 답 끝 한 줄도 화면에 보인다.
 - 안전 관련 질문인지는 서버가 정한다: 규칙이 안전 질문으로 가른 답, 또는 질문에 안전 낱말(주의·위험·장갑·후드·환기 …)이
   든 답. 알아듣지 못하고 비켜 간 답에도 붙는다. 단계를 넘기거나 기록하는 턴에는 붙이지 않는다.
 - 아직 없는 것: Word·Markdown 보고서의 시작 문장은 이 한 줄을 적지 않는다(보고서 생성 코드가 이 줄의 허용 밖이었다).
@@ -68,6 +68,10 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
    ```
    카탈로그가 있으면 `SAFETY_CATALOG = <경로>`, `USAGE_SCOPE = reference_only`, `demo documents = 0`,
    `approved active reference_only documents = N` 이 나온다.
+
+   **LibreOffice 가 없으면** 점검이 `--- Source formats ---` 아래에 `word_sources(libreoffice): unavailable` 과 `[WARN]` 몇 줄(설치 명령
+   포함)을 찍지만 **종료 코드는 0 이고 시작도 막지 않는다**(사람 결정 2026-10-14). Word(.docx) 원문을 올릴 때만 `docx_conversion_unavailable`
+   (503)로 거절된다. PDF 만 올리는 파일럿이면 그대로 쓰고, Word 가 필요하면 `docs/SOURCE_FORMATS.md` 1절대로 설치한다.
 3. **시작** — `./scripts/run_pilot.sh` (`127.0.0.1:8080`, `HOST`·`PORT` 로 바꾼다). 실제로 시작할 때만
    `data/runtime/pilot/` 을 만들고 그 폴더에 파일럿 표시 파일(`.voiney-pilot-data`)을 둔다. 확인:
    ```bash
@@ -183,9 +187,6 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 
 1. 4절의 고지 문안 확정(윤리·법무 검토, 업체 약관 확인). 이 저장소는 외부 서비스의 보관을 보증하지 않는다.
 2. 도메인 결정과 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 실행(줄 PL 은 실행하지 않았다).
-3. 화면(줄 UI2): 시작 전 화면·안전 상자가 `safety_scope.notice`·`safety_pack.scope_notice` 를 그리는지.
-4. 보고서 문서(Word)의 시작 문장에 `institution_safety_notice` 를 적는 일(보고서 생성 코드 담당).
-5. README 5절의 "카탈로그가 없으면 파일럿 실행기가 시작을 거부한다" 문장은 이 결정 뒤 맞지 않는다. `docs/APPROVED_DOCUMENT_OPERATIONS.md`
-   4절과 `docs/TROUBLESHOOTING_GUIDE.md` 의 같은 문장도 같다(줄 PL 허용 문서 밖이라 고치지 않았다).
-6. 삭제 도구의 "파일을 열고 있는 프로세스" 확인은 Linux(`/proc`)에서만 하고, 다른 사용자가 연 파일은 볼 수 없다. 서버를 멈추는 것이 첫 단계다.
-7. 이 줄은 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).
+3. 보고서 문서(Word)의 시작 문장에 `institution_safety_notice` 를 적는 일(보고서 생성 코드 담당).
+4. 삭제 도구의 "파일을 열고 있는 프로세스" 확인은 Linux(`/proc`)에서만 하고, 다른 사용자가 연 파일은 볼 수 없다. 서버를 멈추는 것이 첫 단계다.
+5. 이 줄은 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).

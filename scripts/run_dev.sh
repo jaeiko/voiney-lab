@@ -71,10 +71,9 @@ export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
 # Decision 1 of lane XO (2026-10-05). Each name below is exported only when a
 # person has not set it already, in the shell or in the repository .env. The
 # launcher names no model: every role keeps model_providers' default unless
-# the .env chooses one. The four features only xAI provides (external
-# reference web search, web image search, generated images, and semantic
-# intent, which is off unless set) default to off, so the server starts
-# without XAI_API_KEY; turning one on in the .env needs the key.
+# the .env chooses one. No feature only xAI provides is left (the external
+# reference web search was deleted in lane DOC3), so the server starts without
+# XAI_API_KEY unless a role, STT or TTS names xai.
 # PROJECT-ENGINEERING: three bounded read-only planning/answering roles are
 # available conditionally; course-explicit state/tool guardrails remain server
 # enforced. Report Brain is a separate async derivation path and is not part of
@@ -89,14 +88,6 @@ eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_PROTOCOL_ENABLED=true \
   VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=true \
   VOINEY_LAB_WORKSPACE_ENABLED=true \
-  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
-  VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \
-  VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=90 \
-  VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=5 \
-  VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=90 \
-  VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900 \
-  VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS=5 \
-  VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS=4 \
   VOINEY_LAB_MULTI_BRAIN_ENABLED=true \
   VOINEY_LAB_ANSWER_BRAIN_ENABLED=false \
   VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25 \
@@ -117,33 +108,18 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from voiney_lab.external_references import (
-    ExternalReferenceSettings,
-    SupplementalKnowledgeSettings,
-)
+from voiney_lab.external_references import SupplementalKnowledgeSettings
 from voiney_lab.model_providers import ROLES, RoleModel
 from voiney_lab.multi_brain import MultiBrainSettings
 
 load_dotenv(Path.cwd() / ".env", override=False)
-references = ExternalReferenceSettings.from_environment()
 supplemental = SupplementalKnowledgeSettings.from_environment()
 multi_brain = MultiBrainSettings.from_environment()
-print("authoritative_web_search:", "enabled" if references.enabled else "disabled")
-print("external_search_model:", references.model if references.enabled else "disabled")
-print("external_search_profile:", references.domain_profile or "custom")
-print("external_search_open_mode:", "true" if (references.domain_profile == "open" or not references.allowed_domains) else "false")
-print("external_search_allowed_domain_count:", len(references.allowed_domains))
-print("external_search_timeout_seconds:", references.timeout_seconds)
-print("external_search_connect_timeout_seconds:", references.connect_timeout_seconds)
-print("external_search_read_timeout_seconds:", references.read_timeout_seconds)
-print("external_search_image_search_policy:", "on_visual_request")
 print("supplemental_model_knowledge:", "enabled" if supplemental.enabled else "disabled")
 print("hybrid_multi_brain:", "enabled" if multi_brain.enabled else "disabled")
 print("answer_brain:", "enabled" if multi_brain.answer_brain_enabled else "disabled")
 print("step_translation:", "enabled" if multi_brain.translation_enabled else "disabled")
 print("primary_answer_budget_seconds:", multi_brain.primary_answer_budget_seconds)
-print("authority_profile:", references.domain_profile or "custom")
-print("allowed_domain_count:", len(references.allowed_domains))
 print("experiment_reports:", os.environ.get("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", "false"))
 print("barge_in_prefix_ms:", os.environ.get("VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS", "800"))
 for role in ROLES:

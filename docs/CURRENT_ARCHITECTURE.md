@@ -162,5 +162,6 @@ constrained by credential/scope/origin rules. The values in use are in the
 README's provider section, with the provider calls that were live-tested and
 when. The protocols.io, Google Drive, GitHub and eLabFTW adapters were removed
 on 2026-10-08 (lane DI); the approved-reference search, the safety report
-hand-off worker and the Moss reranker on 2026-10-10 (lane CL). Contract
+hand-off worker and the Moss reranker on 2026-10-10 (lane CL); the xAI web
+reference search on 2026-10-14 (lane DOC3). Contract
 coverage must never be described as provider success.

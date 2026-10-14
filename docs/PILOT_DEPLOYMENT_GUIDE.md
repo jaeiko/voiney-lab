@@ -63,9 +63,9 @@ At minimum, review the configuration groups in `.env.example`:
   필요", so write each one as `.env.example` does -- and the keys they need
   (OpenAI, Gemini, ElevenLabs, Google Cloud speech);
 - the Cascade voice options;
-- the features that reach outside the source (external web references, the
-  outside-PDF explanation), which the pilot launcher keeps off unless the
-  shell or `.env` sets them.
+- the feature that reaches outside the source (the outside-PDF explanation),
+  which the pilot launcher keeps off unless the shell or `.env` sets it. (The
+  xAI web reference search was deleted in lane DOC3, 2026-10-14.)
 
 Start the pilot with `scripts/run_pilot.sh`, not by hand. It decides the usage
 scope and the approved safety catalog itself and ignores `.env` for both (a

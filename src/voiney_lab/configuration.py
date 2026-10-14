@@ -19,10 +19,10 @@ class ConfigurationError(ValueError):
 
 # --- What only xAI provides (lane XO, decision 2 of 2026-10-05) ----------------
 #: The features no other provider stands in for yet, by the setting that turns
-#: each on, with the name a refusal gives it.
-XAI_ONLY_FEATURES: Mapping[str, str] = {
-    "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "외부 근거 웹 검색",
-}
+#: each on, with the name a refusal gives it. There is none today: the one it
+#: had, the web reference search, was deleted in lane DOC3 (2026-10-14). The
+#: guard stays, empty, for the next feature only xAI provides.
+XAI_ONLY_FEATURES: Mapping[str, str] = {}
 _ON = frozenset({"1", "true", "yes", "on"})
 
 
@@ -48,8 +48,8 @@ def refuse_xai_only_features_without_key(
     """Refuse to start when an xAI-only feature is on without XAI_API_KEY.
 
     Fail closed, naming each feature: such a feature would otherwise start
-    and then fail on every turn that reaches it. With all four off the server
-    starts without an xAI key.
+    and then fail on every turn that reaches it. With none on (and none exists
+    today) the server starts without an xAI key.
     """
 
     env = os.environ if environment is None else environment
