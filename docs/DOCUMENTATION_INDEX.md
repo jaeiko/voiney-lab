@@ -28,7 +28,7 @@
 
 | 문서 | 무엇이 들어 있나 |
 |---|---|
-| [`USER_GUIDE.md`](USER_GUIDE.md) | 실험자 화면 쓰는 법 |
+| [`USER_GUIDE.md`](USER_GUIDE.md) | 실험자 화면 쓰는 법 — 올리기·긴 문서·다시 분석, 목소리 맞추기·시끄러운 곳, 휴대폰 (영어) |
 | [`PILOT_GUIDE.md`](PILOT_GUIDE.md) | 파일럿을 여는 순서 — 기관 안전 문서가 있을 때와 없을 때(`source_protocol_only`), 실행, 데이터 처리, 외부 AI 고지 초안, 데이터 삭제 도구, 사람이 할 일 |
 | [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) | 휴대폰에서 마이크를 쓰려면 필요한 HTTPS 준비(도메인을 정한 뒤 사람이 실행. 실제 서버에서는 아직 실행하지 않음) |
 | [`SOURCE_FORMATS.md`](SOURCE_FORMATS.md) | 올릴 수 있는 원문 형식 — PDF · Word · 사진 · 시약 표(엑셀), 서버에 필요한 것(LibreOffice·나눔 글꼴·선택 HEIC)과 없을 때의 오류 |

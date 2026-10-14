@@ -1,7 +1,8 @@
 # User Guide — Controlled Pilot
 
-Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen) and
-2026-10-10 (lane CL: what the 10/10 voice test used)
+Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen),
+2026-10-10 (lane CL: what the 10/10 voice test used) and 2026-10-14 (lane
+DOC3: long documents, re-analysis, voice level and noisy mode, phone use)
 
 VoineyLab is an MVP prototype, not field-validated.
 
@@ -26,6 +27,32 @@ physical situation differ.
 3. A blocked analysis (an unreadable page, a failed source-evidence check, no
    executable step, a safety-critical conflict) has to be fixed at the
    source. Do not work around the block.
+
+What the upload box takes: the screen's upload box chooses a **PDF**. The
+server itself also takes a Word file (.docx), a photo (JPG, PNG, HEIC) and an
+Excel reagent table (.xlsx) -- see `SOURCE_FORMATS.md` -- but the screen has no
+box for them yet, so they go through the server's API today. A Word file needs
+LibreOffice on the server (without it the server answers
+`docx_conversion_unavailable`); a HEIC photo needs an optional package
+(`heic_support_unavailable`; on an iPhone, "Settings → Camera → Formats → Most
+Compatible" takes JPEG instead). A photo is read by OCR; a number read from
+handwriting is not trusted until a person checks it against the picture.
+
+A long document: the server reads a document too long for one analysis call
+in pieces of 15 pages, joins them and checks the whole again, up to 400 pages.
+The progress line says "긴 문서를 조각 … 로 나눠 분석 중입니다". If any piece
+fails, the whole analysis fails and the line says which pages ("일부 조각 분석
+실패 · n–m쪽"); nothing starts on a partly analysed document. In the lane AN
+measurement of 2026-10-13 all three documents over 60 pages (88, 197 and 315)
+ended that way, so expect a long document to need a retry or a shorter
+source. Extracting the text of such a document can take two minutes or more.
+
+Analyse again: a finished analysis can be analysed afresh with **다시 분석**.
+Until the new one passes, the experiment can still start on the current one;
+"다시 분석 통과 · 다음 실험부터 새 분석으로 실행합니다" says when the new one
+is in. An analysis made before the analyser was improved is marked "분석기 개선
+전 분석 · 다시 분석 권장". Pressing the button again while an analysis runs
+does not start a second one ("이미 분석 중").
 
 ### Start an experiment
 
@@ -71,6 +98,34 @@ What the 2026-10-10 voice test used, as it works now:
 - **Notes** — "침전물 안 보임 남겨 줘" records what you said; a sentence with a
   negation is kept whole.
 
+**Your own voice level and a noisy room (lane SP1)**
+
+- When a session opens, the server asks you to read the sentence on the screen
+  in your usual voice ("목소리를 맞출게요 …"). Its level becomes the reference
+  for this session only (it is not saved). Say "건너뛰기" to skip, or "목소리
+  다시 맞춰 줘" to set it again; the settings' "세션 시작 때 한 번" turns the
+  request off. While it is set, a speaker clearly quieter than you -- someone
+  at the next bench -- is not sent to speech recognition, is not recorded, and
+  appears only as a line in the folded list "다른 사람 말로 보여 듣지 않은 말
+  N개" (no words, a time only). A quiet voice does not interrupt an answer
+  either.
+- "목소리 민감도" (높음 / 보통 / 낮음) says how much quieter than the
+  reference counts as someone else; a higher setting filters more, and earbuds
+  suit the higher one.
+- Settings → "주변 소리: 시끄러움" makes the server ask once before it acts on
+  a state change: "3단계 완료하고 4단계로 갈까요?" or "3단계 타이머를 시작할까요?".
+  Only "응/네" on the next turn does it; "아니" leaves things as they are. Notes
+  are read back too ("'밴드가 흐릿해' 이렇게 기록할까요?"). In a room set to
+  quiet, after three or more voices were taken for other people's within a
+  minute, the server asks once "주변이 시끄러워 보여요. 시끄러운 곳 모드로
+  바꿀까요?" (at most every ten minutes); it only asks, and your answer is what
+  changes the mode.
+- Limits: this filters by loudness only. If the room's noise is nearly as
+  loud as speech, loudness cannot tell your voice from the next person's --
+  use the noisy mode there. The only tests are synthetic voices and noise
+  (lane SP1, 2026-10-11); nothing has been measured in a working laboratory.
+- Sounds that are only fillers ("음", "어 어") are ignored without an answer.
+
 A completion request may ask for explicit confirmation. Confirm only after the
 physical work is actually complete. Explanations, warnings, protocol audits,
 history, and previews must not change the step.
@@ -89,6 +144,16 @@ step before retrying any state-changing command.
   not-interpreted evidence.
 - Use **Download original evidence** in the timeline. A missing, changed, or
   invalid stored object is refused rather than returned unchecked.
+
+### On a phone
+
+The screen fits a phone's width and can be added to the home screen ("홈 화면에
+추가", or "VoineyLab 설치" when the browser offers it; the guide is in the bar
+at the top). Installing it, keeping the screen awake and using the microphone
+all need an **HTTPS** address (or localhost) -- on a plain `http://` address
+the guide only says "https 필요", and the microphone does not open (see
+`PILOT_HTTPS_SETUP.md`, not yet carried out). No test on a real phone has been
+made.
 
 ### Pause, refresh, and resume
 

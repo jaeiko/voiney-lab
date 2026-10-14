@@ -1,6 +1,7 @@
 # Product context
 
-Revised 2026-10-10 (lane CL) to the human decisions of that day.
+Revised 2026-10-10 (lane CL) to the human decisions of that day, and
+2026-10-14 (lane DOC3) to what the lanes since then built.
 
 ## Product promise
 
@@ -25,28 +26,46 @@ compliance.
 
 ## What exists now and what is planned
 
-Now: PDF upload → automatic OCR of pages without a text layer → structured
-analysis → source-evidence check → the start screen (the experimenter's
-"이 프로토콜로 시작" is the one human confirmation; there is no PI or
-administrator approval and no revision approval, rejection or revocation,
-decision of 2026-10-08) → voice guidance with timer notices, questions and
-pictures → the record → the report (.docx and others).
+Now: PDF upload (the server also takes Word, photo and an Excel reagent
+table; the screen's upload box still chooses a PDF) → automatic OCR of pages
+without a text layer → structured analysis (a long document, up to 400 pages,
+in pieces; "다시 분석" to analyse afresh) → source-evidence check → the start
+screen (the experimenter's "이 프로토콜로 시작" is the one human confirmation;
+there is no PI or administrator approval and no revision approval, rejection
+or revocation, decision of 2026-10-08) → voice guidance with timer notices,
+questions and pictures → the record → the report (.docx and others). Around
+that:
 
-Planned, in this order of lanes (none of it is built):
+- **The pilot launcher** starts without an approved safety catalog, as
+  `source_protocol_only`: the uploaded PDF's own safety statements only, and
+  the screen, the safety answers and the record say "기관 안전 문서 없음 ·
+  원문 안전 주의만" (human decision of 2026-10-13). A catalog file that is
+  there is checked and an unusable one stops the start.
+- **Your own voice level** is set by reading a sentence; a clearly quieter
+  voice is ignored and listed ("다른 사람 말로 보여 듣지 않은 말"), and a
+  "noisy room" setting asks before a state change (lane SP1, synthetic tests
+  only).
+- **Mobile web**: the screen fits a phone and can be added to the home screen
+  (lane UI2); it needs HTTPS, which is not set up yet, and no real phone has
+  been tried.
+- **An LLM-router-first switch** (`VOINEY_LAB_ROUTER_FIRST`, lane RA) exists
+  and is **off**; whether to turn it on is decided by a person after a voice
+  test.
+- **A pilot data deletion tool** (`scripts/pilot_data_delete.py`, lane PL).
 
-- **Review tab (lane RV)** — upload → automatic analysis (about one minute) →
-  review (by the uploader or anyone; the reviewer's name is required to
-  register) → "검토 완료하고 등록" → the reviewed version is saved (reused,
-  recorded as v1/v2) → start check → voice guidance. A value changed in
-  review is shown as "검토자 입력" and a value the AI proposes as "AI 제안";
-  either becomes a run value only once a person confirms it.
-- **Filtering other people's speech** (lane SP1).
-- **Mobile web (PWA)** for the screen; an app comes later.
-- **Understanding led by the LLM router**, behind the front rules (AGENTS
-  rule 3).
-- The Answer, Source and Visual roles of `multi_brain.py` come back (lane RA);
-  Moss returns for searching past records and manuals; the approved safety
-  catalog and the pilot launcher are decided in lane PL.
+Still planned, in this order of lanes (none of it is built):
+
+- **Review tab (lane RV, in progress)** — upload → automatic analysis (about
+  one minute) → review (by the uploader or anyone; the reviewer's name is
+  required to register) → "검토 완료하고 등록" → the reviewed version is saved
+  (reused, recorded as v1/v2) → start check → voice guidance. A value changed
+  in review is shown as "검토자 입력" and a value the AI proposes as "AI
+  제안"; either becomes a run value only once a person confirms it.
+- **Telling speakers apart** — filtering today is by loudness only.
+- **Understanding led by the LLM router** — turning the router-first switch
+  on, behind the front rules (AGENTS rule 3).
+- **Choosing Word, photo and reagent-table files on the screen.**
+- Moss returns for searching past records and manuals.
 
 ## Values and explanations
 
@@ -74,8 +93,8 @@ Primary user jobs:
 
 Laboratory jobs:
 
-- Upload the laboratory's own protocol without code changes and see why it
-  cannot start, if it cannot.
+- Upload the laboratory's own protocol (PDF; Word or photo through the server)
+  without code changes and see why it cannot start, if it cannot.
 - Review the analysis and register a reviewed version with the reviewer's
   name (planned, lane RV).
 - Export a traceable record (.docx, Markdown, JSON, CSV) into the existing
