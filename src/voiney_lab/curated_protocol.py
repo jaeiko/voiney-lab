@@ -11694,6 +11694,9 @@ class CuratedProtocolSession:
         notice = self._no_guidance_notice()
         if notice:
             parts.append(notice)
+        reviewer = self._reviewer_value_notice()
+        if reviewer:
+            parts.append(reviewer)
         branch = self._open_branch()
         if branch is not None:
             parts.append(self._branch_question_words(branch))
@@ -11702,6 +11705,30 @@ class CuratedProtocolSession:
             if interval is not None:
                 parts.append(self._count_question_words(interval))
         return " ".join(parts)
+
+    def _reviewer_value_notice(self) -> str:
+        """Once per step per run: the values a reviewer wrote that this step says.
+
+        Lane RV, decision g (human decision 2026-10-12): a value in a
+        registered review version that a person entered or fixed -- a timer,
+        a repeat count, a number in the step's sentence, a value the source
+        does not print -- is said to be the reviewer's the first time the run
+        comes to its step: "검토자가 넣은 값이에요: 15분." Kept in the same
+        once-per-step record as the notice above, under its own key.
+        """
+
+        version = getattr(self.fixture.draft, "review_version", None)
+        if version is None or not 0 <= self.current_index < len(self.fixture.steps):
+            return ""
+        step = self.fixture.steps[self.current_index]
+        key = f"reviewer-input:{step.step_id}"
+        if key in self._no_guidance_notices_said:
+            return ""
+        values = version.spoken_for_step(step.step_id)
+        if not values:
+            return ""
+        self._no_guidance_notices_said.add(key)
+        return f"검토자가 넣은 값이에요: {' · '.join(values)}."
 
     #: What each construct without guidance is called in the one-time notice.
     _NO_GUIDANCE_WORDS: dict[str, str] = {
