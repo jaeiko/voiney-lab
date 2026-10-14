@@ -290,7 +290,7 @@ SETTINGS: tuple[Setting, ...] = (
             "글꼴 설정 파일 — 한국어 .docx 를 바꿀 때 이 파일을 포함한 설정을 LibreOffice 에 줌",
             kept_because="fontconfig 의 표준 이름 (다른 소프트웨어, 줄 AN FM)"),
     Setting("VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS", OTHER, "30",
-            "PDF 읽기 하위 프로세스 제한 시간 (초, 1–600)"),
+            "PDF 읽기 하위 프로세스 제한 시간 (초, 1–600; 긴 문서를 받는 서버는 300 권고, docs/DEPLOYMENT_RUNBOOK.md)"),
     Setting("VOINEY_LAB_PLAYWRIGHT_APP_PORT", OTHER, "8000",
             "로컬 Playwright 가 붙을 서버 포트 (playwright.config.ts)"),
     Setting("HOST", OTHER, "127.0.0.1", "실행 스크립트의 듣기 주소",

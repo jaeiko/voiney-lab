@@ -33,7 +33,7 @@
 | [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) | 휴대폰에서 마이크를 쓰려면 필요한 HTTPS 준비(도메인을 정한 뒤 사람이 실행. 실제 서버에서는 아직 실행하지 않음) |
 | [`SOURCE_FORMATS.md`](SOURCE_FORMATS.md) | 올릴 수 있는 원문 형식 — PDF · Word · 사진 · 시약 표(엑셀), 서버에 필요한 것(LibreOffice·나눔 글꼴·선택 HEIC)과 없을 때의 오류 |
 | [`PILOT_DEPLOYMENT_GUIDE.md`](PILOT_DEPLOYMENT_GUIDE.md) | 파일럿 준비, 실행, 마무리의 점검 목록 (영어) |
-| [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | 프로세스, 점검(`/healthz`·`/readyz`), 백업·복구, 모니터링 (영어) |
+| [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | 서버에 설치할 것(LibreOffice·나눔 글꼴·선택 HEIC)과 PDF 읽기 시간 권고, 프로세스, 점검(`/healthz`·`/readyz`), 백업·복구, 모니터링 (영어) |
 | [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | 증상별로 상태를 지키며 복구하는 법 (영어) |
 | [`APPROVED_DOCUMENT_OPERATIONS.md`](APPROVED_DOCUMENT_OPERATIONS.md) | 승인 안전 문서 카탈로그 만들기 — **선택**이다. 파일럿 실행기는 카탈로그가 없으면 `source_protocol_only` 로 시작하고, 있으면 점검한다. 단계 안전 카드도 이 카탈로그를 읽는다 (영어) |
 | [`PILOT_READINESS_PACKAGE.md`](PILOT_READINESS_PACKAGE.md) | 파일럿 점검표, KPI 정의, 참여자 안내, 중단 기준 (영어, 숫자는 날짜가 적힌 기록) |
