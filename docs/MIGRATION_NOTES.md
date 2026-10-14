@@ -937,6 +937,79 @@ Word upload is refused with `docx_conversion_unavailable`. `GET /readyz` adds
 `docx_conversion_available` and `heic_photos_available` to its capabilities;
 neither makes the server not ready. See `docs/SOURCE_FORMATS.md`.
 
+## Lane RV (2026-10-14): analyses that wait for review, review decisions and review versions
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) and the workspace's experiment rows.
+
+Human decisions of 2026-10-12 (and the review scope of 2026-10-14) change
+what an analysis whose quotes or claims are not all found in the source
+becomes, and add a person's review that makes a version which runs. Three new
+event types and one new kind of analysis revision record it, all append-only:
+
+- `protocol_analysis_review_pending` -- an analysis kept for a person instead
+  of failed: `analysis_id`, `flags` (each item that waits, by its id --
+  `step:<step_id>`, `action:<action_id>/quantities/0`, `pages:41-59` for a
+  long document's failed piece -- with the reason `evidence_not_found`,
+  `ocr_unclear`, `ambiguous_repeat`, `not_in_source` or `piece_failed`, the
+  refused field, the check's own reason code and the pages that print the
+  quote when the cited one does not), `needs_review_count`,
+  `verified_evidence_count`, `capability_policy_id`, `protocol` and
+  `readiness` in the store's own tagged encoding, `source_pages` (the SHA-256
+  of each page's text; the pages themselves are not copied and are read again
+  from the stored source and its accepted OCR, and a page that no longer
+  matches refuses the record) and, when present, `cleared_fields`, `pieces`,
+  `response_repaired`. It is never an analysis revision: nothing that runs a
+  protocol reads it.
+- `protocol_review_decision_recorded` -- one decision on one item: `target`
+  (the analysis, review-pending event or review version reviewed), `item_id`,
+  `kind`, `action` (`confirm`, `fix`, `clear`, `enter`, `memo`, `reset`),
+  `value` (`text`, `seconds` for a step timer, `count` for a repeat count),
+  `source_lines` (page, first and last line and the excerpt they print, when a
+  person pointed at where an item whose quote was not found stands), `memo`,
+  `reviewer_name` when given, and `original` (the value before and its origin,
+  `source` or `ai_suggestion`). A later decision on the same item is the draft;
+  every decision stays.
+- An analysis revision whose `analysis_id` starts `review-v<N>-` -- the
+  protocol of review version N, stored and validated like any analysis (every
+  quote is the page's own text: a quote that was not found is replaced by the
+  lines a person pointed at). It is a person's version, not the analyser's: the
+  catalog's latest analysis skips it.
+- `protocol_review_version_registered` -- beside that revision
+  (`analysis_revision_number` set): `version`, `revision_id`
+  (`pdf-<n>-review-<N>`, the id a session and the workspace's experiment row
+  bind to), `reviewer_name` (required), `base` and `base_revision_id` (what was
+  reviewed), `changes` (each item changed or confirmed: original and reviewed
+  value, origin `reviewer_input` or `ai_suggestion`, the words the run says for
+  it, who decided it and when), `timers` (step id -> the reviewer's seconds, or
+  `null` for no timer), `origins`, `memos`, `decision_event_ids`.
+
+The latest registered review version is what a protocol runs from then on,
+whatever the analyser makes after it; without one, the analysis that passed
+runs as before (the review is optional). A recovered experiment loads the
+revision it started on (`load_fixture_for_revision`), so a re-analysis or a
+new version no longer refuses it.
+
+### Reading older data
+
+A store without these events reads as before: no analysis waits for review,
+no protocol has a review version, and every protocol's revision id is
+`pdf-<n>` or `pdf-<n>-analysis-<m>`. Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (lane RV report, decision h): the
+catalog listing, the review, the review tab's draft and the pipeline line of
+all seven protocols read, `/api/protocols` lists them, a review version
+registered on the copy runs, and the analysis it was reviewed from still loads
+by its revision id.
+
+### Going back
+
+Code from before this version ignores the three event types. It reads a
+review version's analysis revision as one more analysis (`pdf-<n>-analysis-<m>`
+with the version's protocol), which it then runs; an analysis that waits for
+review reads as an analysis still running (its start event has no end it
+knows), and "분석 다시 시도" asks again. Checked on the same copy with the code
+of `297d69d`.
+
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 
 No schema change and no migration; nothing already stored is read differently.

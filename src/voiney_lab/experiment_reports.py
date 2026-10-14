@@ -1270,6 +1270,24 @@ class ReportRepetition:
 
 
 @dataclass(frozen=True)
+class ReportReviewChange:
+    """One item a reviewer changed or confirmed in the review version the run
+    followed (lane RV, decision g)."""
+
+    step_label: str
+    kind: str  # the item's kind in Korean ("단계", "단계 타이머", ...)
+    original: str  # the source's or the AI's reading; "—" when none
+    reviewed: str  # the version's value; "(비움 · 원문에 없음)" when left empty
+    origin: str  # "검토자 입력" or "AI 제안 · 검토자 확인"
+    reviewer: str
+    changed: bool  # fixed, entered or left empty (not only confirmed)
+
+
+#: The review version table's heading row (lane RV, decision g).
+REVIEW_CHANGE_HEADER = ("단계", "항목", "원문 · AI 제안", "검토본", "출처", "검토자")
+
+
+@dataclass(frozen=True)
 class ReportItem:
     """A material or a piece of equipment, as the protocol lists it."""
 
@@ -1349,10 +1367,43 @@ class ReportFacts:
     #: person gave, each with where its value came from.
     branch_answers: tuple[ReportBranchAnswer, ...] = ()
     repetitions: tuple[ReportRepetition, ...] = ()
+    #: Lane RV, decision g: the review version the run followed ("검토본 v2 ·
+    #: 김재준 · 2026-10-14"; empty for an analysis as it came) and every item
+    #: its reviewer changed or confirmed, against the source.
+    review_version_words: str = ""
+    review_changes: tuple[ReportReviewChange, ...] = ()
 
     @property
     def record_texts(self) -> tuple[str, ...]:
         return tuple(record.text for record in self.records)
+
+
+def _review_version_facts(fixture: Any) -> tuple[str, tuple[ReportReviewChange, ...]]:
+    """The review version a run followed and its changes, or ("", ()) (lane RV, g)."""
+
+    version = getattr(getattr(fixture, "draft", None), "review_version", None)
+    if version is None:
+        return "", ()
+    when = str(getattr(version, "registered_on", "") or version.registered_at or "")[:10]
+    words = f"검토본 v{version.version} · {version.reviewer_name}" + (f" · {when}" if when else "")
+    rows = []
+    for change in version.changes:
+        if change.action == "confirm" and change.origin != "ai_suggestion":
+            continue
+        reviewed = (
+            "(비움 · 원문에 없음)" if change.action == "clear" and change.kind != "timer"
+            else "(타이머 없음)" if change.action == "clear"
+            else change.reviewed or "—")
+        rows.append(ReportReviewChange(
+            step_label=change.step_label or "",
+            kind=change.kind_ko,
+            original=change.original or "—",
+            reviewed=reviewed,
+            origin="검토자 입력" if change.origin == "reviewer_input" else "AI 제안 · 검토자 확인",
+            reviewer=change.decided_by or version.reviewer_name,
+            changed=change.action in {"fix", "enter", "clear"},
+        ))
+    return words, tuple(rows)
 
 
 def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
@@ -1431,7 +1482,13 @@ def report_protocol_fixture(report_data: Mapping[str, Any]) -> tuple[Any, str]:
         else:
             catalog, store = _open_protocol_catalog()
             try:
-                fixture = catalog.load_executable_fixture(protocol_id)
+                # Lane RV, decision g: the revision the session ran -- an
+                # earlier review version or an analysis analysed again since
+                # is still read -- else what runs now.
+                fixture = (
+                    catalog.load_fixture_for_revision(protocol_id, revision)
+                    if revision and not revision.startswith("fixture-")
+                    else catalog.load_executable_fixture(protocol_id))
             finally:
                 store.close()
     except Exception as exc:  # noqa: BLE001 -- reported on the report, never raised
@@ -2203,6 +2260,9 @@ def build_report_facts(
         if safety_notices_acknowledged is not None else ()
     )
 
+    review_version_words, review_changes = _review_version_facts(fixture)
+    if review_version_words:
+        run_rows += (("검토본", review_version_words),)
     purpose, keywords, doi, author = _pdf_front_matter(fixture) if fixture is not None else ("", "", "", "")
     protocol = getattr(getattr(fixture, "draft", None), "protocol", None)
     materials = tuple(" ".join(m.name_source_text.split()) for m in getattr(protocol, "materials", ()) or ())
@@ -2234,6 +2294,7 @@ def build_report_facts(
         review=tuple(review) if review_offered else (),
         unconfirmed_texts=tuple(dict.fromkeys(unconfirmed_texts)),
         branch_answers=tuple(branch_answers), repetitions=tuple(repetitions),
+        review_version_words=review_version_words, review_changes=review_changes,
         item_step_texts=tuple(
             (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
             for step in source_steps if any(step["label"] in item.steps for item in items)
@@ -3359,6 +3420,22 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks += [("h2", "3-3. 방법 요약"), ("p", narrative.methods_summary),
                ("h2", "3-4. 원문과 다르게 한 점 (기록에서)")]
     blocks.append(("list", facts.deviations) if facts.deviations else ("note", "기록에서 원문과 다르게 한 점을 찾지 못했다."))
+    if facts.review_version_words:
+        # Lane RV, decision g: what the review version the run followed holds
+        # apart from the source, item by item.
+        changed = [change for change in facts.review_changes if change.changed]
+        blocks.append(("h2", f"3-5. 원문 대비 검토자 수정 {len(changed)}건"))
+        blocks.append(("note", f"이 실험은 {facts.review_version_words}을 따랐다."))
+        if facts.review_changes:
+            blocks.append(_table(REVIEW_CHANGE_HEADER, tuple(
+                (change.step_label or "—", change.kind, change.original, change.reviewed,
+                 change.origin, change.reviewer)
+                for change in facts.review_changes)))
+            confirmed = len(facts.review_changes) - len(changed)
+            if confirmed:
+                blocks.append(("note", f"AI 제안을 검토자가 원문과 대조해 확인한 항목 {confirmed}건이 표에 함께 있다."))
+        else:
+            blocks.append(("note", "검토자가 원문에서 바꾼 값이 없다."))
 
     blocks.append(("h1", "4. 결과"))
     if facts.records:
@@ -3440,6 +3517,7 @@ TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     ITEM_USE_HEADER: (0.38, 0.44, 0.18),
     ("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"): (0.07, 0.59, 0.12, 0.22),
     ("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"): (0.07, 0.09, 0.73, 0.11),
+    REVIEW_CHANGE_HEADER: (0.07, 0.13, 0.28, 0.28, 0.13, 0.11),
 }
 
 

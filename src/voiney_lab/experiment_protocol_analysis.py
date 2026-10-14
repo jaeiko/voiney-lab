@@ -659,6 +659,11 @@ class ProtocolAnalysisDraft:
     #: The structural characters the server changed to read the response as
     #: JSON (lane EV3, decision 1); None for a response read as it came.
     response_repair: "ResponseStructureRepair | None" = None
+    #: The items a person must check before this analysis may run (lane RV,
+    #: decision a): each quote or claim the server could not find in the
+    #: source, kept as the model read it, and each failed piece's pages.
+    #: Empty for an analysis that passed every check.
+    review_flags: tuple["ReviewFlag", ...] = ()
 
     @property
     def capability_policy_id(self) -> str:
@@ -2287,7 +2292,12 @@ def _verify_evidence_tree(
     _state: _EvidenceTraversalState | None = None,
     _path: str = "protocol",
     _owner_type: str | None = None,
+    _refused: dict[str, ProtocolAnalysisEvidenceError] | None = None,
 ) -> tuple[Any, int]:
+    """Verify every quote; with ``_refused``, keep a refused quote as the
+    model wrote it and record its refusal by path instead of raising (lane
+    RV, decision a)."""
+
     state = _state or _EvidenceTraversalState()
     if isinstance(value, domain.SourceEvidence):
         evidence_index = state.next_index
@@ -2300,7 +2310,10 @@ def _verify_evidence_tree(
                 evidence_type=_owner_type or type(value).__name__,
                 field_path=_path,
             )
-            raise
+            if _refused is None:
+                raise
+            _refused[_path] = exc
+            return value, 1
     if isinstance(value, ProtocolPdfExtraction) or isinstance(value, Enum):
         return value, 0
     if isinstance(value, tuple):
@@ -2313,6 +2326,7 @@ def _verify_evidence_tree(
                 _state=state,
                 _path=f"{_path}[{index}]",
                 _owner_type=_owner_type,
+                _refused=_refused,
             )
             items.append(verified)
             count += item_count
@@ -2327,6 +2341,7 @@ def _verify_evidence_tree(
                 _state=state,
                 _path=f"{_path}.{field.name}",
                 _owner_type=type(value).__name__,
+                _refused=_refused,
             )
             changes[field.name] = verified
             count += item_count
@@ -2335,6 +2350,7 @@ def _verify_evidence_tree(
             isinstance(evidence, domain.SourceEvidence)
             and type(value) in _CLAIM_FIELDS
             and not isinstance(value, domain.ProtocolMetadata)
+            and (_refused is None or f"{_path}.evidence" not in _refused)
         ):
             changes["evidence"] = _evidence_for_cut_statements(
                 evidence, value, extraction
@@ -2887,7 +2903,17 @@ def _verify_claim_tree(
     *,
     _state: _ClaimTraversalState | None = None,
     _path: str = "protocol",
+    _refused: dict[str, ProtocolAnalysisEvidenceError] | None = None,
+    _inherited_path: str | None = None,
 ) -> None:
+    """Verify every label and claim against its quote's page.
+
+    With ``_refused`` (lane RV, decision a) a refusal is recorded by its
+    field path and the walk goes on, and the claims of a record whose quote
+    was itself refused are not read against it: that record is already one
+    a person must check.
+    """
+
     state = _state or _ClaimTraversalState()
     if (
         isinstance(value, (ProtocolPdfExtraction, domain.SourceEvidence, Enum))
@@ -2902,13 +2928,39 @@ def _verify_claim_tree(
                 inherited_evidence,
                 _state=state,
                 _path=f"{_path}[{index}]",
+                _refused=_refused,
+                _inherited_path=_inherited_path,
             )
         return
     if not is_dataclass(value):
         return
     local_evidence = getattr(value, "evidence", None)
-    if not isinstance(local_evidence, domain.SourceEvidence):
+    evidence_path = _inherited_path
+    if isinstance(local_evidence, domain.SourceEvidence):
+        evidence_path = f"{_path}.evidence"
+    else:
         local_evidence = inherited_evidence
+
+    def refuse(error: ProtocolAnalysisEvidenceError) -> None:
+        if _refused is None:
+            raise error
+        _refused.setdefault(error.diagnostic.field_path or _path, error)
+
+    if _refused is not None and evidence_path in _refused:
+        # The quote itself was refused: its record waits for a person, and
+        # nothing is read against it. Its children with quotes of their own
+        # are still read.
+        for field in fields(value):
+            _verify_claim_tree(
+                getattr(value, field.name),
+                extraction,
+                local_evidence,
+                _state=state,
+                _path=f"{_path}.{field.name}",
+                _refused=_refused,
+                _inherited_path=evidence_path,
+            )
+        return
     if (
         isinstance(value, domain.ProtocolSourceStep)
         and value.source_label
@@ -2927,7 +2979,7 @@ def _verify_claim_tree(
             )
         )
     ):
-        raise ProtocolAnalysisEvidenceError(
+        refuse(ProtocolAnalysisEvidenceError(
             "A Protocol source-step label is unsupported by its evidence excerpt.",
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="structured_claim_verification",
@@ -2943,15 +2995,15 @@ def _verify_claim_tree(
                 ),
                 source_hash=extraction.sha256,
             ),
-        )
-    if (
+        ))
+    elif (
         isinstance(value, domain.ProtocolSourceStep)
         and isinstance(value.source_label, str)
         and not value.source_label.strip()
         and local_evidence is not None
         and _printed_number_is_dropped(local_evidence, extraction)
     ):
-        raise ProtocolAnalysisEvidenceError(
+        refuse(ProtocolAnalysisEvidenceError(
             "A Protocol source step that the source numbers has no label.",
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="structured_claim_verification",
@@ -2965,7 +3017,7 @@ def _verify_claim_tree(
                 page_number=local_evidence.source_page_number,
                 source_hash=extraction.sha256,
             ),
-        )
+        ))
     for field_name in _CLAIM_FIELDS.get(type(value), ()):
         field_value = getattr(value, field_name)
         claims = field_value if isinstance(field_value, tuple) else (field_value,)
@@ -2975,6 +3027,12 @@ def _verify_claim_tree(
                 getattr(value, domain.METADATA_FIELD_EVIDENCE[field_name])
                 or local_evidence
             )
+            own = getattr(value, domain.METADATA_FIELD_EVIDENCE[field_name])
+            if _refused is not None and (
+                f"{_path}.{domain.METADATA_FIELD_EVIDENCE[field_name]}" in _refused
+                if own is not None else evidence_path in _refused
+            ):
+                continue
         for claim in claims:
             if claim is None:
                 continue
@@ -2991,7 +3049,7 @@ def _verify_claim_tree(
                     extraction,
                 )
             ):
-                raise ProtocolAnalysisEvidenceError(
+                refuse(ProtocolAnalysisEvidenceError(
                     "A structured Protocol claim is unsupported by its "
                     "referenced source page.",
                     diagnostic=ProtocolEvidenceDiagnostic(
@@ -3013,7 +3071,7 @@ def _verify_claim_tree(
                         ),
                         source_hash=extraction.sha256,
                     ),
-                )
+                ))
     for field in fields(value):
         _verify_claim_tree(
             getattr(value, field.name),
@@ -3021,6 +3079,8 @@ def _verify_claim_tree(
             local_evidence,
             _state=state,
             _path=f"{_path}.{field.name}",
+            _refused=_refused,
+            _inherited_path=evidence_path,
         )
 
 
@@ -3108,6 +3168,401 @@ def _verify_clearing_unread_fields(
             if field is None or field in protocol.cleared_fields:
                 raise
             protocol = _cleared(protocol, field)
+
+
+# --- Items a person checks instead of a refused analysis (lane RV, decision a)
+#
+# Human decision 2026-10-12/14: a quote or claim the server cannot find in the
+# source no longer throws the whole analysis away. The item is kept as the
+# model read it, marked "확인 필요" with the reason, and the analysis is kept
+# as one waiting for a person's review ("검토 대기"), which never runs. A
+# response that breaks the structure, and an analysis with far fewer steps
+# than the source numbers, still fail as before.
+
+#: Why an item waits for a person (the decision's five reasons).
+REVIEW_REASON_EVIDENCE_NOT_FOUND = "evidence_not_found"
+REVIEW_REASON_OCR_UNCLEAR = "ocr_unclear"
+REVIEW_REASON_AMBIGUOUS_REPEAT = "ambiguous_repeat"
+REVIEW_REASON_NOT_IN_SOURCE = "not_in_source"
+REVIEW_REASON_PIECE_FAILED = "piece_failed"
+REVIEW_REASONS_KO: dict[str, str] = {
+    REVIEW_REASON_EVIDENCE_NOT_FOUND: "근거를 못 찾음",
+    REVIEW_REASON_OCR_UNCLEAR: "OCR 흐림",
+    REVIEW_REASON_AMBIGUOUS_REPEAT: "애매한 반복",
+    REVIEW_REASON_NOT_IN_SOURCE: "원문에 없음",
+    REVIEW_REASON_PIECE_FAILED: "조각 실패 쪽",
+}
+
+#: The records a person reviews one by one, by what names them: kind and the
+#: field holding the record's own id. A value, a duration and the like have
+#: no id; they are named by their record, field and place
+#: ("action:a2/quantities/0").
+REVIEW_ITEM_KINDS: dict[type, tuple[str, str | None]] = {
+    domain.ProtocolMetadata: ("metadata", None),
+    domain.ProtocolSection: ("section", "section_id"),
+    domain.ProtocolSourceStep: ("step", "step_id"),
+    domain.ProtocolSubAction: ("action", "action_id"),
+    domain.SourceStatement: ("statement", "statement_id"),
+    domain.Material: ("material", "material_id"),
+    domain.Equipment: ("equipment", "equipment_id"),
+    domain.BeforeStartPrerequisite: ("prerequisite", "prerequisite_id"),
+    domain.RequiredObservation: ("observation", "observation_id"),
+    domain.MissingExecutionValue: ("missing_value", "value_id"),
+    domain.ProcessTimerSpecification: ("timer_spec", "timer_id"),
+    domain.OneTimeReminder: ("reminder", "reminder_id"),
+    domain.RecurringReminder: ("reminder", "reminder_id"),
+    domain.ConditionalBranch: ("construct", "branch_id"),
+    domain.FixedRangeRepetition: ("construct", "repetition_id"),
+    domain.OperatorDeterminedRepetition: ("construct", "repetition_id"),
+    domain.RepeatUntil: ("construct", "repetition_id"),
+    domain.ParallelWork: ("construct", "parallel_id"),
+    domain.RecurringAction: ("construct", "recurring_action_id"),
+    domain.ReusableSubprocedure: ("construct", "subprocedure_id"),
+    domain.SourceAmbiguity: ("construct", "ambiguity_id"),
+    domain.ProtocolConflict: ("construct", "conflict_id"),
+}
+_PATH_PART = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[([0-9]+)\])?")
+
+
+@dataclass(frozen=True)
+class ReviewFlag:
+    """One item of a review-pending analysis and why it waits (lane RV, a).
+
+    ``item_id`` names the record ("step:s4", "action:a2/quantities/0") or, for
+    a piece of a long document that failed, its pages ("pages:41-59").
+    ``field`` is the refused field ("evidence", "instruction_source_text",
+    "source_label", ...), ``reason_code`` the check's own reason
+    (``quote_not_found``, ``claim_not_found``, ``ambiguous_source_match``,
+    ...), and ``matching_source_pages`` the pages that print the quote or
+    claim when the cited one does not.
+    """
+
+    item_id: str
+    reason: str
+    field: str
+    reason_code: str
+    page_number: int | None = None
+    matching_source_pages: tuple[int, ...] = ()
+    first_page: int | None = None
+    last_page: int | None = None
+
+    @property
+    def reason_ko(self) -> str:
+        if self.reason == REVIEW_REASON_PIECE_FAILED and self.first_page is not None:
+            return f"{self.first_page}–{self.last_page}쪽 분석 실패"
+        return REVIEW_REASONS_KO.get(self.reason, self.reason)
+
+    def public_dict(self) -> dict[str, object]:
+        values: dict[str, object] = {
+            "item_id": self.item_id,
+            "reason": self.reason,
+            "reason_ko": self.reason_ko,
+            "field": self.field,
+            "reason_code": self.reason_code,
+            "page_number": self.page_number,
+            "matching_source_pages": list(self.matching_source_pages),
+        }
+        if self.first_page is not None:
+            values["first_page"] = self.first_page
+            values["last_page"] = self.last_page
+        return values
+
+    @classmethod
+    def from_public(cls, payload: dict[str, object]) -> "ReviewFlag":
+        pages = payload.get("matching_source_pages") or ()
+        return cls(
+            item_id=str(payload["item_id"]),
+            reason=str(payload["reason"]),
+            field=str(payload.get("field") or ""),
+            reason_code=str(payload.get("reason_code") or ""),
+            page_number=payload.get("page_number")
+            if isinstance(payload.get("page_number"), int) else None,
+            matching_source_pages=tuple(
+                int(page) for page in pages if isinstance(page, int)),
+            first_page=payload.get("first_page")
+            if isinstance(payload.get("first_page"), int) else None,
+            last_page=payload.get("last_page")
+            if isinstance(payload.get("last_page"), int) else None,
+        )
+
+
+def _path_parts(path: str) -> list[tuple[str, int | None]]:
+    parts = path.split(".")
+    if not parts or parts[0] != "protocol":
+        raise ValueError(f"Not a protocol path: {path}")
+    found: list[tuple[str, int | None]] = []
+    for part in parts[1:]:
+        match = _PATH_PART.fullmatch(part)
+        if match is None:
+            raise ValueError(f"Not a protocol path: {path}")
+        found.append((match[1], int(match[2]) if match[2] is not None else None))
+    return found
+
+
+def review_item_id(protocol: domain.ExperimentProtocol, path: str) -> str:
+    """The review item a refused field belongs to: its nearest named record.
+
+    ``path`` is the refused field's path as the checks write it
+    ("protocol.sections[0].steps[2].sub_actions[0].quantities[1].source_text").
+    """
+
+    current: Any = protocol
+    item = "protocol"
+    trail: list[str] = []
+    for name, index in _path_parts(path)[:-1]:
+        current = getattr(current, name)
+        if index is not None:
+            current = current[index]
+        kind = REVIEW_ITEM_KINDS.get(type(current))
+        if kind is not None:
+            item = kind[0] if kind[1] is None else f"{kind[0]}:{getattr(current, kind[1])}"
+            trail = []
+        else:
+            trail.append(name if index is None else f"{name}/{index}")
+    return item + "".join(f"/{part}" for part in trail)
+
+
+def _review_reason(
+    error: ProtocolAnalysisEvidenceError, extraction: ProtocolPdfExtraction,
+) -> str:
+    diagnostic = error.diagnostic
+    if diagnostic.reason_code == "ambiguous_source_match":
+        return REVIEW_REASON_AMBIGUOUS_REPEAT
+    page = diagnostic.page_number
+    if (
+        isinstance(page, int) and 1 <= page <= extraction.page_count
+        and extraction.pages[page - 1].ocr_derived
+    ):
+        return REVIEW_REASON_OCR_UNCLEAR
+    if (
+        diagnostic.reason_code in {"quote_not_found", "claim_not_found"}
+        and not diagnostic.matching_source_pages
+    ):
+        return REVIEW_REASON_NOT_IN_SOURCE
+    return REVIEW_REASON_EVIDENCE_NOT_FOUND
+
+
+def review_flags_for(
+    protocol: domain.ExperimentProtocol,
+    extraction: ProtocolPdfExtraction,
+    refused: dict[str, ProtocolAnalysisEvidenceError],
+) -> tuple[ReviewFlag, ...]:
+    """One flag per refused field, named by its item, in the refusals' order."""
+
+    flags: list[ReviewFlag] = []
+    seen: set[tuple[str, str]] = set()
+    for path, error in refused.items():
+        item_id = review_item_id(protocol, path)
+        field = path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if (item_id, field) in seen:
+            continue
+        seen.add((item_id, field))
+        diagnostic = error.diagnostic
+        flags.append(ReviewFlag(
+            item_id=item_id,
+            reason=_review_reason(error, extraction),
+            field=field,
+            reason_code=diagnostic.reason_code,
+            page_number=diagnostic.page_number,
+            matching_source_pages=tuple(diagnostic.matching_source_pages),
+        ))
+    return tuple(flags)
+
+
+def piece_review_flag(piece: "AnalysisPiece", failure_code: str) -> ReviewFlag:
+    """The flag of a long document's piece that failed: its pages (lane RV, a)."""
+
+    return ReviewFlag(
+        item_id=f"pages:{piece.first_page}-{piece.last_page}",
+        reason=REVIEW_REASON_PIECE_FAILED,
+        field="pages",
+        reason_code=failure_code,
+        first_page=piece.first_page,
+        last_page=piece.last_page,
+    )
+
+
+def _verify_for_review(
+    protocol: domain.ExperimentProtocol,
+    extraction: ProtocolPdfExtraction,
+    *,
+    allowed_pages: range | None = None,
+) -> tuple[domain.ExperimentProtocol, int, dict[str, ProtocolAnalysisEvidenceError]]:
+    """Verify every quote and claim, keeping what is refused for a person.
+
+    A refusal in a field execution never reads empties the field, as lane
+    EV2 decided; every other refusal is returned by its path with the item
+    left as the model wrote it. ``allowed_pages`` are a piece's pages: a quote
+    on a page outside them is refused the same way. Nothing verified at all
+    is no analysis to review: the first refusal is raised.
+    """
+
+    while True:
+        refused: dict[str, ProtocolAnalysisEvidenceError] = {}
+        verified, count = _verify_evidence_tree(protocol, extraction, _refused=refused)
+        _verify_claim_tree(verified, extraction, _refused=refused)
+        unread = [
+            field for error in refused.values()
+            if (field := _unread_field(error, protocol)) is not None
+            and field not in protocol.cleared_fields
+        ]
+        if not unread:
+            break
+        for field in dict.fromkeys(unread):
+            protocol = _cleared(protocol, field)
+    if allowed_pages is not None:
+        for path, evidence in _evidence_with_paths(verified):
+            if path in refused:
+                continue
+            continued = evidence.continued_on_page_number
+            if evidence.source_page_number not in allowed_pages or (
+                continued is not None
+                and continued not in range(allowed_pages.start, allowed_pages.stop + 1)
+            ):
+                refused[path] = ProtocolAnalysisEvidenceError(
+                    "Protocol piece evidence cites a page outside the piece.",
+                    diagnostic=ProtocolEvidenceDiagnostic(
+                        validation_stage="piece_page_validation",
+                        reason_code="page_outside_piece",
+                        mismatch_class="page_identity_mismatch",
+                        source_hash=extraction.sha256,
+                        page_number=evidence.source_page_number,
+                        field_path=path,
+                    ),
+                )
+    refused_quotes = sum(1 for path in refused if path.rsplit(".", 1)[-1].endswith("evidence"))
+    if refused and refused_quotes >= count:
+        raise next(iter(refused.values()))
+    return verified, count - refused_quotes, refused
+
+
+def _evidence_with_paths(
+    value: Any, path: str = "protocol",
+) -> Iterator[tuple[str, domain.SourceEvidence]]:
+    if isinstance(value, domain.SourceEvidence):
+        yield path, value
+        return
+    if isinstance(value, (ProtocolPdfExtraction, Enum, str)) or value is None:
+        return
+    if isinstance(value, tuple):
+        for index, item in enumerate(value):
+            yield from _evidence_with_paths(item, f"{path}[{index}]")
+        return
+    if is_dataclass(value):
+        for field in fields(value):
+            yield from _evidence_with_paths(getattr(value, field.name), f"{path}.{field.name}")
+
+
+def replace_at_paths(value: Any, replacements: dict[str, Any], path: str = "protocol") -> Any:
+    """``value`` with the values at the given paths replaced (lane RV)."""
+
+    if path in replacements:
+        return replacements[path]
+    if not any(key.startswith(path + ".") or key.startswith(path + "[") for key in replacements):
+        return value
+    if isinstance(value, tuple):
+        return tuple(
+            replace_at_paths(item, replacements, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+    if is_dataclass(value) and not isinstance(value, type):
+        changes = {
+            field.name: replace_at_paths(
+                getattr(value, field.name), replacements, f"{path}.{field.name}")
+            for field in fields(value)
+        }
+        return replace(value, **changes)
+    return value
+
+
+#: Marks a stand-in quote of the validation view; never stored or shown.
+_STAND_IN_DETAIL = "lane-rv-stand-in-"
+
+
+def _stand_in_evidence(extraction: ProtocolPdfExtraction, index: int) -> domain.SourceEvidence:
+    for page in extraction.pages:
+        text = page.text.strip()
+        if text:
+            return domain.SourceEvidence(
+                source_page_number=page.source_page_number,
+                source_excerpt=text[0],
+                location_detail=f"{_STAND_IN_DETAIL}{index}",
+            )
+    raise ProtocolAnalysisInputError("Protocol source has no text to stand a quote in for.")
+
+
+def validated_with_refused_quotes(
+    protocol: domain.ExperimentProtocol,
+    extraction: ProtocolPdfExtraction,
+    refused_paths: Sequence[str],
+    *,
+    capability_policy: domain.CapabilityPolicy,
+) -> domain.ReadinessAssessment:
+    """Validate a protocol whose refused quotes stand as the model wrote them.
+
+    The domain validation reads every quote on its page, so each refused one
+    is stood in for, only here, by a one-character quote of the source; every
+    identity, reference, time value and dependency is still checked. The
+    readiness is assessed on the same view and any stand-in quote in it is
+    given back as the refused quote it stood for.
+    """
+
+    originals: dict[str, domain.SourceEvidence] = {}
+    replacements: dict[str, Any] = {}
+    for index, path in enumerate(
+        path for path in refused_paths if path.rsplit(".", 1)[-1].endswith("evidence")
+    ):
+        stand_in = _stand_in_evidence(extraction, index)
+        replacements[path] = stand_in
+        originals[str(stand_in.location_detail)] = _value_at(protocol, path)
+    view = replace_at_paths(protocol, replacements)
+    _validate_domain(view, extraction)
+    readiness = domain.assess_readiness(view, capability_policy=capability_policy)
+    return replace(readiness, reasons=tuple(
+        replace(reason, evidence=originals[reason.evidence.location_detail])
+        if reason.evidence is not None
+        and str(reason.evidence.location_detail or "").startswith(_STAND_IN_DETAIL)
+        else reason
+        for reason in readiness.reasons
+    ))
+
+
+def _value_at(protocol: domain.ExperimentProtocol, path: str) -> Any:
+    current: Any = protocol
+    for name, index in _path_parts(path):
+        current = getattr(current, name)
+        if index is not None:
+            current = current[index]
+    return current
+
+
+def _validate_domain(protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction) -> None:
+    """The domain validation, its evidence failures reported as such."""
+
+    try:
+        domain.validate_protocol(protocol)
+    except domain.ProtocolValidationError as exc:
+        if exc.code in {
+            domain.ProtocolValidationCode.INVALID_SOURCE_PAGE,
+            domain.ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
+        }:
+            raise ProtocolAnalysisEvidenceError(
+                "Structured Protocol evidence failed source verification.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="domain_evidence_validation",
+                    reason_code=(
+                        "page_not_found"
+                        if exc.code
+                        is domain.ProtocolValidationCode.INVALID_SOURCE_PAGE
+                        else "quote_not_found"
+                    ),
+                    mismatch_class="domain_source_identity_mismatch",
+                    source_hash=extraction.sha256,
+                ),
+            ) from exc
+        raise ProtocolAnalysisResponseError(
+            "Structured Protocol failed deterministic domain validation."
+        ) from exc
 
 
 #: A step label written the way the page prints it, "3)" or "(2)" (lane AN,
@@ -3368,6 +3823,8 @@ def parse_protocol_analysis_response(
     extraction: ProtocolPdfExtraction,
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
+    review_unverified: bool = False,
+    allowed_pages: range | None = None,
 ) -> ProtocolAnalysisDraft:
     """Strictly parse, evidence-check, and assess an untrusted model response.
 
@@ -3375,6 +3832,10 @@ def parse_protocol_analysis_response(
     repaired shapes of lane EV3, decision 1; the repaired response then
     passes every check below like any other, and the draft (or the failure)
     carries the repair.
+
+    ``review_unverified`` (lane RV, decision a): a quote or claim the source
+    does not hold leaves its item for a person (``review_flags``) instead of
+    refusing the response; ``allowed_pages`` then names a piece's pages.
     """
 
     if not isinstance(raw_response, str) or not raw_response.strip():
@@ -3393,7 +3854,8 @@ def parse_protocol_analysis_response(
         response, repair = json.loads(repaired[0]), repaired[1]
     try:
         draft = _draft_from_response(
-            response, extraction, capability_policy=capability_policy)
+            response, extraction, capability_policy=capability_policy,
+            review_unverified=review_unverified, allowed_pages=allowed_pages)
     except ProtocolAnalysisError as exc:
         exc.response_repair = repair
         raise
@@ -3405,6 +3867,8 @@ def _draft_from_response(
     extraction: ProtocolPdfExtraction,
     *,
     capability_policy: domain.CapabilityPolicy,
+    review_unverified: bool = False,
+    allowed_pages: range | None = None,
 ) -> ProtocolAnalysisDraft:
     expected_fields = {
         "analysis_schema_version",
@@ -3457,37 +3921,32 @@ def _draft_from_response(
             ),
         )
     protocol = _bare_step_labels(protocol)
-    protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
-    protocol = _repeat_counts_as_totals(protocol)
-    _reject_deferred_state(protocol)
+    refused: dict[str, ProtocolAnalysisEvidenceError] = {}
+    if review_unverified:
+        protocol, evidence_count, refused = _verify_for_review(
+            protocol, extraction, allowed_pages=allowed_pages)
+    else:
+        protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
     try:
-        domain.validate_protocol(protocol)
-    except domain.ProtocolValidationError as exc:
-        if exc.code in {
-            domain.ProtocolValidationCode.INVALID_SOURCE_PAGE,
-            domain.ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
-        }:
-            raise ProtocolAnalysisEvidenceError(
-                "Structured Protocol evidence failed source verification.",
-                diagnostic=ProtocolEvidenceDiagnostic(
-                    validation_stage="domain_evidence_validation",
-                    reason_code=(
-                        "page_not_found"
-                        if exc.code
-                        is domain.ProtocolValidationCode.INVALID_SOURCE_PAGE
-                        else "quote_not_found"
-                    ),
-                    mismatch_class="domain_source_identity_mismatch",
-                    source_hash=extraction.sha256,
-                ),
-            ) from exc
-        raise ProtocolAnalysisResponseError(
-            "Structured Protocol failed deterministic domain validation."
-        ) from exc
-    readiness = domain.assess_readiness(
-        protocol,
-        capability_policy=capability_policy,
-    )
+        protocol = _repeat_counts_as_totals(protocol)
+        _reject_deferred_state(protocol)
+        if refused:
+            readiness = validated_with_refused_quotes(
+                protocol, extraction, tuple(refused), capability_policy=capability_policy)
+        else:
+            _validate_domain(protocol, extraction)
+            readiness = domain.assess_readiness(
+                protocol,
+                capability_policy=capability_policy,
+            )
+    except ProtocolAnalysisError as exc:
+        if not refused:
+            raise
+        # Decision a: an answer a person could not review fails as before.
+        # Its first refusal is what the plain path stopped at -- an evidence
+        # failure, not sent again -- not the shape reading on for review
+        # reaches after it.
+        raise next(iter(refused.values())) from exc
     return ProtocolAnalysisDraft(
         extraction=extraction,
         protocol=protocol,
@@ -3495,6 +3954,7 @@ def _draft_from_response(
         capability_policy=capability_policy,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
         verified_evidence_count=evidence_count,
+        review_flags=review_flags_for(protocol, extraction, refused),
     )
 
 
@@ -3658,6 +4118,7 @@ def analyze_protocol_extraction(
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     max_input_bytes: int = MAX_SINGLE_PASS_INPUT_BYTES,
+    review_unverified: bool = False,
 ) -> ProtocolAnalysisDraft:
     check_analysis_page_count(extraction)
     request = prepare_protocol_analysis_request(
@@ -3682,6 +4143,7 @@ def analyze_protocol_extraction(
         raw_response,
         extraction,
         capability_policy=capability_policy,
+        review_unverified=review_unverified,
     )
     hollow = hollow_analysis_check(draft.protocol, extraction)
     if hollow["hollow"]:
@@ -3893,13 +4355,16 @@ def analyze_protocol_piece(
     model: ProtocolAnalysisModel,
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
+    review_unverified: bool = False,
 ) -> ProtocolAnalysisDraft:
     """Analyse one piece with every check a single analysis gets.
 
     The response is read against the whole document's pages, as a single
     analysis is; a quote must stand on one of the piece's pages (its second
     part may open the page after the piece, by lane EV2's page-end rule),
-    and the piece is held to the hollow-pass bound on its own pages.
+    and the piece is held to the hollow-pass bound on its own pages. With
+    ``review_unverified`` (lane RV, decision a) a quote off the piece's pages
+    is one more item for a person, like any quote the source does not hold.
     """
 
     request = prepare_protocol_piece_request(
@@ -3917,8 +4382,10 @@ def analyze_protocol_piece(
             "Protocol analysis model request failed."
         ) from exc
     draft = parse_protocol_analysis_response(
-        raw_response, extraction, capability_policy=capability_policy)
-    for page, continued in _evidence_pages(draft.protocol):
+        raw_response, extraction, capability_policy=capability_policy,
+        review_unverified=review_unverified,
+        allowed_pages=piece.page_numbers if review_unverified else None)
+    for page, continued in () if review_unverified else _evidence_pages(draft.protocol):
         if page not in piece.page_numbers or (
             continued is not None and continued not in range(
                 piece.first_page, piece.last_page + 2)
@@ -4190,6 +4657,8 @@ def join_piece_analyses(
     drafts: Sequence[ProtocolAnalysisDraft],
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
+    review_unverified: bool = False,
+    failed_pieces: Sequence[tuple[AnalysisPiece, str]] = (),
 ) -> ProtocolAnalysisDraft:
     """Join the pieces' analyses in page order and check the result as a whole.
 
@@ -4200,6 +4669,13 @@ def join_piece_analyses(
     the source-evidence check, the domain validation, the hollow-pass bound
     over every numbered step the document prints, and the readiness
     assessment.
+
+    Lane RV, decision a: with ``review_unverified`` the pieces given are the
+    ones that passed, ``failed_pieces`` the ones that failed after their
+    retry with their failure codes. The passed pieces are joined as before;
+    each failed piece's pages become one item for a person ("확인 필요 ·
+    41–59쪽 분석 실패"), and the hollow-pass bound reads the passed pieces'
+    pages only. A quote the whole document does not hold is an item too.
     """
 
     if len(pieces) != len(drafts) or not pieces:
@@ -4211,19 +4687,18 @@ def join_piece_analyses(
     equipment: list[Any] = []
     constructs: list[Any] = []
     cleared: list[str] = []
+    first: domain.ExperimentProtocol | None = None
     for piece, draft in zip(pieces, drafts):
         prefix = _piece_prefix(piece)
         protocol = _renamed_ids(draft.protocol, lambda value, prefix=prefix: prefix + value)
-        if piece.index == 1:
+        if first is None:
             first = protocol
             cleared.extend(protocol.cleared_fields)
+            sections.extend(protocol.sections)
         else:
             cleared.extend(
                 field for field in protocol.cleared_fields if field.startswith("sections.")
             )
-        if piece.index == 1:
-            sections.extend(protocol.sections)
-        else:
             _join_section_lists(
                 sections, protocol.sections, extraction=extraction,
                 shared_page=piece.first_page, piece=piece, renamed=renamed,
@@ -4232,6 +4707,7 @@ def join_piece_analyses(
         _join_items(materials, protocol.materials, extraction)
         _join_items(equipment, protocol.equipment, extraction)
         _join_items(constructs, protocol.constructs, extraction)
+    assert first is not None
     joined = replace(
         first,
         before_start=tuple(before),
@@ -4248,8 +4724,18 @@ def join_piece_analyses(
                   for old in renamed if field == f"sections.{old}.title_source_text"), field)
             for field in joined.cleared_fields
         ))
+    refused: dict[str, ProtocolAnalysisEvidenceError] = {}
     try:
-        verified, evidence_count = validate_protocol_analysis_evidence(joined, extraction)
+        if review_unverified:
+            verified, evidence_count, refused = _verify_for_review(joined, extraction)
+            _reject_deferred_state(verified)
+            if refused:
+                readiness = validated_with_refused_quotes(
+                    verified, extraction, tuple(refused), capability_policy=capability_policy)
+            else:
+                _validate_domain(verified, extraction)
+        else:
+            verified, evidence_count = validate_protocol_analysis_evidence(joined, extraction)
     except ProtocolAnalysisEvidenceError:
         raise
     except ProtocolAnalysisError as exc:
@@ -4258,14 +4744,22 @@ def join_piece_analyses(
             reason="joined_analysis_invalid",
             first_page=1, last_page=extraction.page_count,
         ) from exc
-    hollow = hollow_analysis_check(verified, extraction)
+    read_pages = extraction
+    if failed_pieces:
+        passed_pages = sorted({page for piece in pieces for page in piece.page_numbers})
+        read_pages = replace(
+            extraction, page_count=len(passed_pages),
+            pages=tuple(extraction.pages[page - 1] for page in passed_pages),
+        )
+    hollow = hollow_analysis_check(verified, read_pages)
     if hollow["hollow"]:
         raise ProtocolAnalysisIncompleteError(
             "Protocol analysis holds far fewer steps than the source numbers.",
             source_numbered_steps=int(hollow["source_numbered_steps"]),
             analysis_steps=int(hollow["analysis_steps"]),
         )
-    readiness = domain.assess_readiness(verified, capability_policy=capability_policy)
+    if not refused:
+        readiness = domain.assess_readiness(verified, capability_policy=capability_policy)
     return ProtocolAnalysisDraft(
         extraction=extraction,
         protocol=verified,
@@ -4273,6 +4767,10 @@ def join_piece_analyses(
         capability_policy=capability_policy,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
         verified_evidence_count=evidence_count,
+        review_flags=(
+            *review_flags_for(verified, extraction, refused),
+            *(piece_review_flag(piece, code) for piece, code in failed_pieces),
+        ),
     )
 
 
