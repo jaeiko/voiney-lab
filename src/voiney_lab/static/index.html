@@ -144,6 +144,23 @@
     .procedure-card .run-card-question,.procedure-card .run-card-notice{margin:0;color:var(--muted);font-size:1rem;line-height:1.5rem}
     .procedure-card .run-card-body{display:-webkit-box;margin:0;overflow:hidden;color:var(--ink);font-size:1.25rem;line-height:1.75rem;font-weight:600;white-space:pre-line;-webkit-line-clamp:6;-webkit-box-orient:vertical}
     .run-card-more{display:flex;flex-direction:column;align-items:flex-start;gap:.35rem;padding-top:.5rem;border-top:1px dashed var(--border-accent)}
+    /* Lane UI3 decision 1 (2026-10-14): what the server tells the screen about the last turn -- the next step (M2), the values a note read back in large type (M3a), a value set against the source's (M3b, a record the server kept as a deviation), and the candidates asked back (M5b). The candidates are said, not tapped: the server takes no typed turn, so they are a list, not buttons. */
+    .run-next-step{display:none}
+    body[data-view="during"] .run-next-step:not([hidden]){display:block;margin:0;color:var(--muted);font-size:1.125rem;line-height:1.625rem;font-weight:600}
+    .run-card-values{display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin:0}
+    .procedure-card .run-card-value{color:var(--ink);font-size:2.5rem;line-height:3rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+    .procedure-card .run-card-value[data-deviation="true"]{color:var(--warning-ink);text-decoration:underline dashed var(--warning-ink) 2px;text-underline-offset:.3rem}
+    .run-card[data-deviation="true"]{border:2px solid var(--warning-ink)!important}
+    .procedure-card .run-card-deviation{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:0;padding:.5rem .75rem;border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:1.125rem;line-height:1.625rem;font-weight:700}
+    .procedure-card .run-card-deviation .run-tag{border-color:var(--warning-ink);color:var(--warning-ink)}
+    .run-card-choices-label{margin:0;color:var(--muted);font-size:1rem;line-height:1.5rem;font-weight:600}
+    .run-card-choices{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:0;list-style:none}
+    .run-card-choices li{display:inline-flex;align-items:center;min-height:48px;padding:0 1rem;border:2px solid var(--ink);border-radius:2px;background:var(--paper);color:var(--ink);font-size:1.25rem;line-height:1.5rem;font-weight:700}
+    @media (orientation:landscape) and (max-height:480px){
+     .procedure-card .run-card-value{font-size:2rem;line-height:2.5rem}
+     body[data-view="during"] .run-next-step:not([hidden]){font-size:1rem;line-height:1.375rem}
+     .run-card-choices li{min-height:40px;font-size:1.125rem}
+    }
     /* The timer: 도는 중, 1분 남음 (a heavier frame and bar), 끝남 · 지남 (inverted), 없음 (muted). */
     body[data-view="during"] .run-timer{grid-area:timer;display:flex;flex-direction:column;justify-content:center;gap:.75rem;min-width:0;padding:1rem;border-left:1px solid var(--border);outline:4px solid transparent;outline-offset:-4px;color:var(--ink);container-type:inline-size}
     .run-timer-head{display:flex;align-items:center;gap:.5rem;font-size:1rem;line-height:1.5rem;font-weight:600}
@@ -897,6 +914,8 @@
         <div id="procedure-progress"></div>
         <p id="procedure-step-title"></p>
         <p id="procedure-primary" class="step-body"></p>
+        <!-- Lane UI3 decision 1 (2026-10-14): the draft M2's "다음 단계: …" -- the next step's sentence as the server sends it (screen.next_step_sentence); nothing when it sends none. -->
+        <p id="run-next-step" class="run-next-step" hidden></p>
         <div id="procedure-open-question" class="open-question" role="status" hidden></div>
         <!-- Lane UI0 decision 2: the server's answer to the last turn -- 확인 대기, 되묻기, 답변 with its source, 기록 -- as the server named it (server.operation). -->
         <div id="run-card" class="run-card" role="status" hidden></div>
@@ -1081,7 +1100,7 @@ const turnProgress=new Map(),turnServerGenerations=new Map();
 let acknowledgedLanguageMode="manual",acknowledgedLanguage="ko";
 let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfiguration=null;
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
-let curatedScreenFields=null,autoTranslationShown=false,workspaceDisplayName="";
+let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="";
 const protocolCatalog=new Map();
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
@@ -1315,7 +1334,7 @@ function renderScreenView(){
 // card under the step -- redrawn wherever the page redraws its context. Each
 // is read from what the server sent; the connection and the microphone are
 // this browser's own.
-function renderRunView(){renderScreenView();renderRunStatus();renderRunTimer();renderRunCard();renderRunFigureFlag();}
+function renderRunView(){renderScreenView();renderRunStatus();renderRunTimer();renderRunCard();renderRunNextStep();renderRunFigureFlag();}
 function renderRunStatus(){
  const state=curatedProtocolState,attached=state?.attached===true,analysis=$("run-analysis-state");
  if(analysis){const text=attached?(state.development_only?"개발용 큐레이션 분석":"분석 통과"):"";analysis.textContent=text;analysis.hidden=!text;}
@@ -1360,14 +1379,20 @@ function runReplyText(m){
 function renderRunCaption(text,who="server"){const node=$("run-caption-text");if(!node)return;const clean=normalizePresentationText(String(text??"")).replace(/\s+/g," ").trim();node.textContent=who==="heard"&&clean?`“${clean}”`:clean;if(node.dataset)node.dataset.who=who;}
 // The card under the step: the server's answer to the last turn, drawn by
 // the name the server gave the turn (server.operation) and what its reply
-// carried. Two things the draft shows are not sent, so not drawn: a value
-// set against the source's own (기준치와 다름) and a clarification's
-// candidates as a list (the question is drawn in the server's words).
+// carried. Lane UI3 decision 1 (2026-10-14): with it, what the server's
+// screen fields say about that same turn (lane RA, decision f) -- a
+// confirmation's kind in its head, the values a note read back, a value the
+// server recorded as differing from the source's (기준치와 다름), and the
+// candidates a clarification asked back.
 const RUN_CARD_KINDS=Object.freeze({completion_confirmation_required:"confirm",learning_next_preview_confirmation:"confirm",reference_clarification_required:"clarify",parameter_clarification_required:"clarify",transcript_retry_required:"clarify",experiment_observation_recorded:"record",experiment_anomaly_recorded:"record",experiment_record_corrected:"record",branch_repeat_recorded:"record",protocol_start:null,current_step_read:null,current_step_repeat:null,next_step_transition:null,completion_and_next_transition:null,completion_confirmation_declined:null,workflow_paused:null,workflow_resumed:null,step_timer_started:null,protocol_stop:null,audio_replay_request:null,readonly_operation_cancelled:null,inactive_session_guard:null});
 const RUN_CARD_HEADS=Object.freeze({answer:"답변",confirm:"확인 대기",clarify:"되묻기"});
+// Lane UI3 decision 1: the confirmation's kind the server names
+// (screen.confirm_question.kind), for the three the decision words; any other
+// kind keeps "확인 대기".
+const RUN_CARD_CONFIRM_HEADS=Object.freeze({completion:"완료 확인",value:"값 기록 확인",ambient:"시끄러운 곳 확인"});
 const runTurns=new Map();let runCardKey=null;
 function runCardKind(operation){if(typeof operation!=="string"||!operation)return null;return Object.prototype.hasOwnProperty.call(RUN_CARD_KINDS,operation)?RUN_CARD_KINDS[operation]:"answer";}
-function runTurn(turnId,browserGeneration){const key=turnBrowserKey(turnId,browserGeneration);if(!runTurns.has(key))runTurns.set(key,{key,operation:null,kind:null,stepId:null,transcript:"",text:"",streamed:"",complete:false,origin:null,pages:[],notice:null,research:null});return runTurns.get(key);}
+function runTurn(turnId,browserGeneration){const key=turnBrowserKey(turnId,browserGeneration);if(!runTurns.has(key))runTurns.set(key,{key,turnId,operation:null,kind:null,stepId:null,transcript:"",text:"",streamed:"",complete:false,origin:null,pages:[],notice:null,research:null});return runTurns.get(key);}
 // Where an answer's words come from, in the badge: the source's page, a
 // general explanation from outside the PDF, the web, another reference.
 function runAnswerBadge(entry){
@@ -1380,22 +1405,57 @@ function runAnswerBadge(entry){
 }
 function runResearchBadge(message){if(researchOutsidePdf(message))return "일반 설명";if(message?.answer_origin==="external_authoritative_reference")return "웹 참고 자료";if(message?.answer_origin==="supplemental_model_knowledge")return SUPPLEMENTAL_LABEL;return "추가 참고 자료";}
 function runBadge(text,className=""){const badge=document.createElement("span");badge.className=`run-badge${className?` ${className}`:""}`;badge.textContent=text;return badge;}
+// Lane UI3 decision 1: the screen fields that belong to the card's own
+// turn. The server empties the candidates, the read-back values and the
+// deviation at each turn and sends them with that turn's state (turn_id), so
+// they are drawn on that turn's card only; a state without a turn (a pause, a
+// translation landing) keeps the turn they belong to (curatedScreenTurnId).
+function runCardScreen(entry){
+ const screen=curatedScreenFields,told={confirmKind:null,values:[],deviation:null,candidates:[]};
+ if(!entry||!Number.isInteger(entry.turnId)||entry.turnId!==curatedScreenTurnId||!screen||typeof screen!=="object")return told;
+ const confirm=screen.confirm_question;if(confirm&&typeof confirm==="object"&&typeof confirm.kind==="string")told.confirmKind=confirm.kind;
+ const words=list=>Array.isArray(list)?list.filter(nonemptyText).map(text=>normalizePresentationText(text).replace(/\s+/g," ").trim()):[];
+ if(entry.kind==="record"){
+  told.values=words(screen.readback_values);
+  const found=screen.record_deviation&&typeof screen.record_deviation==="object"&&Array.isArray(screen.record_deviation.deviations)?screen.record_deviation.deviations.filter(item=>item&&typeof item==="object"&&nonemptyText(item.source)):[];
+  if(found.length)told.deviation={said:words(found.map(item=>item.said)),sources:[...new Set(words(found.map(item=>item.source)))]};
+ }
+ if(entry.kind==="clarify")told.candidates=words(screen.clarify_candidates);
+ return told;
+}
+// The server's question lists its candidates under it ("1. TBST"); drawn as
+// the list below, they are not repeated in the question.
+function runCardTextWithoutChoices(text,candidates){const body=String(text??"");if(!candidates.length)return body;const listed=candidates.map((name,index)=>`${index+1}. ${name}`).join("\n");return body.endsWith(`\n${listed}`)?body.slice(0,-listed.length-1).trim():body;}
+// Lane UI3 decision 1: "다음 단계: …" under the step while the experiment
+// runs -- the server's sentence for the next step; none at the last step or
+// when the server sends none.
+function renderRunNextStep(){
+ const line=$("run-next-step");if(!line)return null;
+ const sentence=curatedProtocolState?.attached===true&&curatedProtocolState.active===true?curatedScreenFields?.next_step_sentence:null;
+ const text=nonemptyText(sentence)?`다음 단계: ${normalizePresentationText(sentence).replace(/\s+/g," ").trim()}`:"";
+ line.textContent=text;line.hidden=!text;return text||null;
+}
 function renderRunCard(){
  const card=$("run-card");if(!card)return null;
  const state=curatedProtocolState,entry=runCardKey?runTurns.get(runCardKey):null;
  const shown=Boolean(entry&&entry.kind&&state?.attached===true&&entry.stepId===state.current_step_id&&(nonemptyText(entry.text)||entry.research));
  card.replaceChildren();
- if(!shown){card.hidden=true;if(card.dataset)card.dataset.kind="";return null;}
- if(card.dataset)card.dataset.kind=entry.kind;
+ if(!shown){card.hidden=true;if(card.dataset){card.dataset.kind="";card.dataset.deviation="";}return null;}
+ const told=runCardScreen(entry);
+ if(card.dataset){card.dataset.kind=entry.kind;card.dataset.deviation=told.deviation?"true":"";}
  const head=document.createElement("div");head.className="run-card-head";
- const title=document.createElement("b");title.className="run-card-kind";title.textContent=RUN_CARD_HEADS[entry.kind]||SERVER_OPERATION_LABELS[entry.operation]||"기록";head.appendChild(title);
+ const title=document.createElement("b");title.className="run-card-kind";title.textContent=(entry.kind==="confirm"&&RUN_CARD_CONFIRM_HEADS[told.confirmKind])||RUN_CARD_HEADS[entry.kind]||SERVER_OPERATION_LABELS[entry.operation]||"기록";head.appendChild(title);
  if(entry.kind==="answer"){const badge=runAnswerBadge(entry);if(badge)head.appendChild(runBadge(badge,entry.notice!==null&&entry.notice!==undefined?"is-general":""));}
  const timer=state.timers?.step;
  if(entry.kind==="confirm"&&timer?.state==="running"&&(timer.step_id===undefined||timer.step_id===state.current_step_id))head.appendChild(runBadge("타이머 도는 중","is-timer"));
  card.appendChild(head);
  if(entry.kind==="answer"&&nonemptyText(entry.transcript)){const question=document.createElement("p");question.className="run-card-question";question.textContent=`질문 · ${entry.transcript}`;card.appendChild(question);}
  if(entry.kind==="answer"&&nonemptyText(entry.notice)){const notice=document.createElement("p");notice.className="run-card-notice";notice.textContent=normalizePresentationText(entry.notice);card.appendChild(notice);}
- if(nonemptyText(entry.text)){const body=document.createElement("p");body.className="run-card-body";body.textContent=entry.text;card.appendChild(body);}
+ if(told.values.length){const values=document.createElement("p");values.className="run-card-values";values.setAttribute?.("aria-label","기록한 값");for(const said of told.values){const value=document.createElement("span");value.className="run-card-value";if(value.dataset)value.dataset.deviation=String(Boolean(told.deviation?.said.includes(said)));value.textContent=said;values.appendChild(value);}card.appendChild(values);}
+ if(told.deviation){const line=document.createElement("p");line.className="run-card-deviation";line.setAttribute?.("role","status");const tag=document.createElement("span");tag.className="run-tag";tag.textContent="기준치와 다름";line.appendChild(tag);line.append(`원문 ${told.deviation.sources.join(" · ")}`);card.appendChild(line);}
+ const bodyText=runCardTextWithoutChoices(entry.text,told.candidates);
+ if(nonemptyText(bodyText)){const body=document.createElement("p");body.className="run-card-body";body.textContent=bodyText;card.appendChild(body);}
+ if(told.candidates.length){const label=document.createElement("p");label.className="run-card-choices-label";label.textContent="후보 · 말로 고르기";card.appendChild(label);const list=document.createElement("ul");list.className="run-card-choices";list.setAttribute?.("aria-label","되묻기 후보 · 말로 고르기");for(const name of told.candidates){const item=document.createElement("li");item.textContent=name;list.appendChild(item);}card.appendChild(list);}
  if(entry.research&&nonemptyText(entry.research.text)){const more=document.createElement("div");more.className="run-card-more";more.appendChild(runBadge(entry.research.label,entry.research.label==="일반 설명"?"is-general":""));const text=document.createElement("p");text.className="run-card-body";text.textContent=entry.research.text;more.appendChild(text);card.appendChild(more);}
  if(entry.text.length+(entry.research?.text?.length||0)>RUN_CARD_LONG){const again=document.createElement("button");again.type="button";again.className="run-card-again";again.textContent="대화 보기에서 전부 읽기";again.addEventListener?.("click",()=>{openRunSheet("conversation");});card.appendChild(again);}
  card.hidden=false;return entry.kind;
@@ -1743,7 +1803,7 @@ function resetProcedureCard(){
  $("procedure-audit").textContent="—";renderStepVisual($("procedure-visual"),null);
  renderExperimentContext();
 }
-function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;curatedScreenFields=null;autoTranslationShown=false;resetProcedureCard();}
+function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;curatedScreenFields=null;curatedScreenTurnId=null;autoTranslationShown=false;resetProcedureCard();renderRunNextStep();}
 // Lane RN decision 3 (2026-10-11): an analysis stored before the analyser
 // improved carries the server's one line of advice ("분석기 개선 전 분석 · 다시
 // 분석 권장") after its status; it still runs.
@@ -2092,7 +2152,7 @@ function renderCuratedProtocolState(message){
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
  const previousBlockReason=curatedProtocolState?.attached===true?curatedProtocolState.block_reason:null;
  if(Number.isInteger(message.turn_id)&&Number.isInteger(message.generation))turnHold(turnProgressKey(message.turn_id,message.generation)).observationGateSet=value.block_reason===OBSERVATION_HOLD_REASON&&previousBlockReason!==OBSERVATION_HOLD_REASON;
- curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;renderSourceBasis(curatedScreenFields?.source_basis);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
+ curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;if(Number.isInteger(message.turn_id))curatedScreenTurnId=message.turn_id;renderSourceBasis(curatedScreenFields?.source_basis);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?"개발용 큐레이션 분석(원문 PDF 기준)":"분석 통과한 프로토콜";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id],["readiness_status",value.readiness_status],["development_only",String(value.development_only)]]);
@@ -2104,7 +2164,7 @@ function renderCuratedProtocolState(message){
  // Lane CB decision 4: the round beside the step ("12단계 · 전체 62단계 · 2/3회차"), the server's words.
  const roundWords=curatedScreenFields?.repeat_round&&typeof curatedScreenFields.repeat_round==="object"?curatedScreenFields.repeat_round.words:null;
  $("procedure-progress").textContent=(value.active||previewValid)?`${value.current_step_label}단계 · 전체 ${value.total_steps}단계${nonempty(roundWords)?` · ${roundWords}`:""}`:`비활성 · 총 ${value.total_steps}단계`;
- renderOpenQuestion();
+ renderOpenQuestion();renderRunNextStep();
  if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`${value.current_step_label}단계 / ${value.total_steps}`:"대기";
  $("procedure-step-title").textContent="";
  // Korean body with the source folded under it; with no Korean, or for an
