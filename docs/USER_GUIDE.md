@@ -28,10 +28,10 @@ physical situation differ.
    executable step, a safety-critical conflict) has to be fixed at the
    source. Do not work around the block.
 
-What the upload box takes: the screen's upload box chooses a **PDF**. The
-server itself also takes a Word file (.docx), a photo (JPG, PNG, HEIC) and an
-Excel reagent table (.xlsx) -- see `SOURCE_FORMATS.md` -- but the screen has no
-box for them yet, so they go through the server's API today. A Word file needs
+What the upload box takes: a **PDF**, a Word file (.docx) or a photo (JPG,
+PNG, HEIC); an Excel reagent table (.xlsx) is attached to the picked protocol
+in its box and can be opened there (lane UI3) -- see `SOURCE_FORMATS.md`. A
+reagent table is kept beside the protocol and is not used by the analysis. A Word file needs
 LibreOffice on the server (without it the server answers
 `docx_conversion_unavailable`); a HEIC photo needs an optional package
 (`heic_support_unavailable`; on an iPhone, "Settings → Camera → Formats → Most

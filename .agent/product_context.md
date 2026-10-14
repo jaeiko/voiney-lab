@@ -26,8 +26,8 @@ compliance.
 
 ## What exists now and what is planned
 
-Now: PDF upload (the server also takes Word, photo and an Excel reagent
-table; the screen's upload box still chooses a PDF) → automatic OCR of pages
+Now: PDF upload (also Word, photo and an Excel reagent table, which the
+screen's upload box and the picked protocol's box take, lane UI3) → automatic OCR of pages
 without a text layer → structured analysis (a long document, up to 400 pages,
 in pieces; "다시 분석" to analyse afresh) → source-evidence check → the start
 screen (the experimenter's "이 프로토콜로 시작" is the one human confirmation;
@@ -64,7 +64,6 @@ Still planned, in this order of lanes (none of it is built):
 - **Telling speakers apart** — filtering today is by loudness only.
 - **Understanding led by the LLM router** — turning the router-first switch
   on, behind the front rules (AGENTS rule 3).
-- **Choosing Word, photo and reagent-table files on the screen.**
 - Moss returns for searching past records and manuals.
 
 ## Values and explanations

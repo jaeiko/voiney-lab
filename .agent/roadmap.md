@@ -15,9 +15,12 @@ says otherwise.
 - **SP1, 2026-10-11** — voice level setting, noisy mode, ignored-speech list
   (synthetic tests only).
 - **RN, 2026-10-12** — "다시 분석"; the retry button's no-reaction cause.
-- **UI0 / UI2, 2026-10-12–13** — the screen's before / during / after views,
-  the protocol list, the start check and source comparison, the after-review,
-  mobile layout and "add to home screen".
+- **UI0 / UI2 / UI3, 2026-10-12–14** — the screen's before / during / after
+  views, the protocol list, the start check and source comparison, the
+  after-review, mobile layout and "add to home screen"; lane UI3 added the
+  upload of Word and photos, the reagent-table box, the `source_protocol_only`
+  notice on the start card and the safety box, and lane RA's fields on the
+  run view.
 - **AN, 2026-10-13** — a long document read in pieces (up to 400 pages); Word,
   photo (HEIC optional) and reagent-table sources (server side); the
   remaining evidence-check failures (EV4).
@@ -43,8 +46,6 @@ says otherwise.
 - **Understanding led by the LLM router** — decide whether to turn
   `VOINEY_LAB_ROUTER_FIRST` on, after a person's voice test; the front rules
   stay, within the one routing line of AGENTS rule 3.
-- **Screen: choosing Word, photo and reagent-table files**, and drawing the
-  `source_protocol_only` notice on the start screen and the safety box.
 - **Long documents** — the three documents over 60 pages measured on
   2026-10-13 all ended as "일부 조각 분석 실패"; waiting before a piece's
   retry or lowering the number of pieces in flight (HTTP 429 under load) is
