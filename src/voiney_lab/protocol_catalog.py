@@ -29,11 +29,11 @@ from voiney_lab import experiment_protocol as domain
 from voiney_lab import pdf_text_engine
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
-    ANALYSIS_PIECE_CONCURRENCY,
     MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
+    PieceConcurrencyGate,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisIncompleteError,
@@ -46,6 +46,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASONS_KO,
     ReviewFlag,
+    analysis_piece_concurrency,
     analysis_pieces,
     analyze_protocol_extraction,
     analyze_protocol_piece,
@@ -64,6 +65,7 @@ from voiney_lab.experiment_protocol_pdf import (
     SourceConversion,
     extract_protocol_pdf,
 )
+from voiney_lab.model_providers import ProviderRetryEvent, observe_provider_retries
 from voiney_lab.experiment_protocol_store import (
     AnalysisRevisionRecord,
     ProtocolRevisionRecord,
@@ -3393,7 +3395,7 @@ class ProtocolCatalog:
         *,
         analysis_id: str,
     ) -> ProtocolAnalysisDraft:
-        """Analyse a long document in pieces, ``ANALYSIS_PIECE_CONCURRENCY`` at once.
+        """Analyse a long document in pieces, ``analysis_piece_concurrency()`` at once.
 
         Lane AN, decision 2. The plan and each piece's start, pass and
         failure are ledger events of this request's run (``analysis_id``),
@@ -3407,6 +3409,11 @@ class ProtocolCatalog:
         failed piece's pages become an item a person checks, so the analysis
         is one waiting for review and does not run as it is. Only when every
         piece failed does the document fail.
+
+        Lane AN2, decision 3: a 429 the provider answered a piece (the
+        adapter may have sent it again and got through) halves the number of
+        pieces still to start, for this document only; the 429s and the cut
+        are written into the piece's event.
         """
 
         protocol_id = revision.experiment_id
@@ -3432,22 +3439,51 @@ class ProtocolCatalog:
         # through ``outbox`` and are written in order.
         outbox: queue.SimpleQueue[tuple[str, str, dict[str, object]]] = queue.SimpleQueue()
 
+        concurrency = analysis_piece_concurrency()
+        gate = PieceConcurrencyGate(concurrency)
+        #: What the provider answered each piece besides an answer, kept for
+        #: its completed or failed event (written by the worker, read here).
+        notes: dict[int, dict[str, object]] = {}
+
         def one(piece: AnalysisPiece) -> ProtocolAnalysisDraft:
             chunk = {"chunk_id": f"piece-{piece.index}", "ordinal": piece.index}
-            observed = _ObservedAnalysisModel.wrap(model)
-            outbox.put((f"piece-started-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT,
-                        {**chunk, "status": "in_progress", "attempt": 1}))
+            retries: list[dict[str, object]] = []
+            lowered: list[int] = []
+
+            def seen(event: ProviderRetryEvent) -> None:
+                retries.append(event.public_dict())
+                if event.reason != "rate_limited":
+                    return
+                cut = gate.rate_limited()
+                if cut is not None:
+                    lowered.append(cut)
+                    logging.getLogger(__name__).info(
+                        "protocol.analysis.piece_concurrency_lowered protocol_id=%s piece=%d to=%d",
+                        protocol_id, piece.index, cut,
+                    )
+
             try:
-                return analyze_protocol_piece(
-                    extraction, piece, observed.model, review_unverified=True)
-            except Exception as exc:  # noqa: BLE001 - sent once more by itself
-                retry_model, retry_payload = observed.retry()
-                outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
-                    **chunk, "status": "in_progress", "attempt": 2,
-                    "retry_of_failure_code": _piece_failure_code(exc), **retry_payload,
-                }))
-            return analyze_protocol_piece(
-                extraction, piece, retry_model, review_unverified=True)
+                with gate, observe_provider_retries(seen):
+                    observed = _ObservedAnalysisModel.wrap(model)
+                    outbox.put((f"piece-started-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT,
+                                {**chunk, "status": "in_progress", "attempt": 1}))
+                    try:
+                        return analyze_protocol_piece(
+                            extraction, piece, observed.model, review_unverified=True)
+                    except Exception as exc:  # noqa: BLE001 - sent once more by itself
+                        retry_model, retry_payload = observed.retry()
+                        outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
+                            **chunk, "status": "in_progress", "attempt": 2,
+                            "retry_of_failure_code": _piece_failure_code(exc), **retry_payload,
+                        }))
+                    return analyze_protocol_piece(
+                        extraction, piece, retry_model, review_unverified=True)
+            finally:
+                if retries:
+                    notes[piece.index] = {
+                        "provider_retries": retries,
+                        **({"concurrency_lowered_to": lowered[-1]} if lowered else {}),
+                    }
 
         def drain() -> None:
             while True:
@@ -3460,7 +3496,7 @@ class ProtocolCatalog:
         drafts: dict[int, ProtocolAnalysisDraft] = {}
         failures: dict[int, BaseException] = {}
         with ThreadPoolExecutor(
-            max_workers=ANALYSIS_PIECE_CONCURRENCY,
+            max_workers=concurrency,
             thread_name_prefix="protocol-piece-analysis",
         ) as pool:
             futures = {pool.submit(one, piece): piece for piece in pieces}
@@ -3481,6 +3517,7 @@ class ProtocolCatalog:
                         }
                         if isinstance(exc, ProtocolAnalysisEvidenceError):
                             failure["evidence_failure"] = exc.diagnostic.privacy_safe_dict()
+                        failure.update(notes.get(piece.index, {}))
                         append(f"piece-failed-{analysis_id}-{piece.index}",
                                _CHUNK_FAILED_EVENT, failure)
                         continue
@@ -3490,6 +3527,7 @@ class ProtocolCatalog:
                                **chunk, "status": "completed",
                                "steps": sum(
                                    len(section.steps) for section in draft.protocol.sections),
+                               **notes.get(piece.index, {}),
                            })
         failed = tuple(piece for piece in pieces if piece.index in failures)
         if len(failed) == len(pieces):
