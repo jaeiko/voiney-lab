@@ -993,6 +993,53 @@ def _is_hangul(character: str) -> bool:
     )
 
 
+#: What makes a page's text layer "Korean written without word spaces" (lane
+#: AN2, decision 4; person's decision of 2026-10-14). Fitted on the 200-file
+#: corpus, 432 pages with Hangul: the 103 pages of NIFS and MFDS documents
+#: that print Korean with no word spaces have at most 0.027 spaces between
+#: two Hangul letters per Hangul letter and at least 46 Hangul letters (and
+#: Hangul half or more of their letters); every spaced page with at least 40
+#: Hangul letters has at least 0.07 (0.111 where Hangul is 30% of the
+#: letters). The bound sits in that gap; the minimum keeps a handful of
+#: Korean words in an English page from being judged, and the share keeps a
+#: reference list of Korean titles between English ones out.
+UNSPACED_KOREAN_MIN_HANGUL = 30
+UNSPACED_KOREAN_MIN_HANGUL_SHARE = 0.3
+UNSPACED_KOREAN_MAX_SPACES_PER_HANGUL = 0.05
+_HANGUL_WORD_SPACE = re.compile("(?<=[\uac00-\ud7a3])[ \t\u00a0]+(?=[\uac00-\ud7a3])")
+
+
+@functools.lru_cache(maxsize=1024)
+def unspaced_korean_text_layer(text: str) -> bool:
+    """Whether a page's text is Korean written without spaces between words.
+
+    Deterministic, from the text alone: at least ``UNSPACED_KOREAN_MIN_HANGUL``
+    Hangul letters; Hangul at least ``UNSPACED_KOREAN_MIN_HANGUL_SHARE`` of the
+    page's letters (Hangul and ASCII); and at most
+    ``UNSPACED_KOREAN_MAX_SPACES_PER_HANGUL`` blanks between two Hangul
+    letters on one line per Hangul letter. A line break between Hangul letters
+    is what such a layer does and is not counted.
+    """
+
+    hangul = sum(1 for character in text if _is_hangul(character))
+    if hangul < UNSPACED_KOREAN_MIN_HANGUL:
+        return False
+    latin = sum(1 for character in text if character.isascii() and character.isalpha())
+    if hangul / (hangul + latin) < UNSPACED_KOREAN_MIN_HANGUL_SHARE:
+        return False
+    spaces = len(_HANGUL_WORD_SPACE.findall(text))
+    return spaces / hangul <= UNSPACED_KOREAN_MAX_SPACES_PER_HANGUL
+
+
+def _hangul_breaks_joined(page: ProtocolPdfPage) -> bool:
+    """Whether a line break between two Hangul letters of this page is
+    ignored in comparison: an OCR page (lane P3, 2026-10-05), or a text layer
+    judged Korean without word spaces (lane AN2, decision 4). Digits and
+    other letters are never joined."""
+
+    return page.ocr_derived or unspaced_korean_text_layer(page.text)
+
+
 #: A protocols.io duration widget standing alone on its line ("03:00:00"):
 #: the time the step states again, drawn as its own text block.
 _DURATION_WIDGET_LINE = re.compile(r"(?m)^[ \t\u00a0]*\d{1,2}:\d{2}:\d{2}[ \t\u00a0]*$")
@@ -1035,8 +1082,10 @@ def _normalized_text_with_bounds(
     With ``join_hangul_line_breaks`` a whitespace run that holds a line break
     between two Hangul letters is dropped, so an OCR line "개봉한 날" before
     "짜를" compares as "개봉한 날짜를" (human decision 2026-10-05, lane P3).
-    Only for a page whose text came from OCR, and in comparison only, like
-    the hyphen rule. A break between digits or other letters is kept.
+    Only for a page whose text came from OCR or whose text layer is Korean
+    written without word spaces (``_hangul_breaks_joined``; lane AN2,
+    decision 4), and in comparison only, like the hyphen rule. A break
+    between digits or other letters is kept.
 
     With ``skip_duration_widget_lines`` a line holding nothing but a
     duration ("03:00:00") is left out, so a protocols.io step whose text
@@ -1056,7 +1105,8 @@ def _normalized_text_with_bounds(
     after a digit stays itself, so "10⁵" is never "105". Spaces between
     two Hangul letters on one line are left out (a text layer that prints no
     spaces between Korean words, or a quote that adds them); a line break
-    between them is joined on an OCR page only, as before. A soft hyphen is a
+    between them is joined on an OCR page, or on a text layer judged Korean
+    written without word spaces, as above. A soft hyphen is a
     layout control: with ``"joined"`` it is left out together with the line
     break after it ("formu\u00ad" / "lated" reads "formulated"); with
     ``"hyphen"`` it reads as "-" ("DW-MEA").
@@ -1606,7 +1656,7 @@ def _matching_source_pages(
         for page in extraction.pages
         if _occurs_alone_exactly(page.text, excerpt)
         or _canonical_match_spans(
-            page.text, excerpt, ocr_derived=page.ocr_derived, alone=True
+            page.text, excerpt, ocr_derived=_hangul_breaks_joined(page), alone=True
         )
     )
 
@@ -1891,7 +1941,7 @@ def _page_end_span(
         return start, len(body.rstrip())
     located: list[tuple[Any, tuple[int, int]]] = []
     for block in page.blocks:
-        spans = _canonical_match_spans(body, block.text, ocr_derived=page.ocr_derived)
+        spans = _canonical_match_spans(body, block.text, ocr_derived=_hangul_breaks_joined(page))
         if len(spans) == 1 and not _is_furniture_block(block, page, extraction, spans[0]):
             located.append((block, spans[0]))
     if not located:
@@ -2011,7 +2061,7 @@ def _statement_across_page_end(
             for start, end in _canonical_match_spans(
                 joined,
                 statement,
-                ocr_derived=page.ocr_derived or following.ocr_derived,
+                ocr_derived=_hangul_breaks_joined(page) or _hangul_breaks_joined(following),
             )
             if start < junction
             and end > junction + 1
@@ -2194,7 +2244,7 @@ def _verified_evidence(
     if _occurs_alone_exactly(page_text, evidence.source_excerpt):
         return _verified_continuation(evidence, extraction)
     spans = _canonical_match_spans(
-        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived, alone=True,
+        page_text, evidence.source_excerpt, ocr_derived=_hangul_breaks_joined(page), alone=True,
         skip_line=_furniture_line(page, extraction),
     )
     if not spans and evidence.continued_on_page_number is None:
@@ -2370,7 +2420,7 @@ def _evidence_for_cut_statements(
 
     page = extraction.pages[evidence.source_page_number - 1]
     for claim in _record_claims(record):
-        if _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived):
+        if _claim_occurs_in_text(claim, page.text, ocr_derived=_hangul_breaks_joined(page)):
             continue
         cut = _statement_across_page_end(
             claim, extraction, evidence.source_page_number
@@ -2425,7 +2475,7 @@ def _claim_occurs_on_evidence_page(
 ) -> bool:
     page = extraction.pages[evidence.source_page_number - 1]
     if _claim_occurs_in_text(
-        claim, page.text, ocr_derived=page.ocr_derived,
+        claim, page.text, ocr_derived=_hangul_breaks_joined(page),
         skip_line=_furniture_line(page, extraction),
     ):
         return True
@@ -2717,7 +2767,7 @@ def _author_name_on_page(claim: str, page: ProtocolPdfPage) -> bool:
 
     spans = (
         *((start, start + len(claim)) for start in _exact_starts(page.text, claim)),
-        *_canonical_match_spans(page.text, claim, ocr_derived=page.ocr_derived),
+        *_canonical_match_spans(page.text, claim, ocr_derived=_hangul_breaks_joined(page)),
     )
     for start, end in spans:
         after = page.text[end : end + _BESIDE]
@@ -2764,7 +2814,7 @@ def _claim_is_supported(
     ):
         return True
     return (
-        _claim_token_span(claim, page.text, ocr_derived=page.ocr_derived)
+        _claim_token_span(claim, page.text, ocr_derived=_hangul_breaks_joined(page))
         is not None
     )
 
@@ -2833,7 +2883,7 @@ def _source_label_precedes_excerpt(
     page = extraction.pages[evidence.source_page_number - 1]
     page_text = page.text
     spans = _canonical_match_spans(
-        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+        page_text, evidence.source_excerpt, ocr_derived=_hangul_breaks_joined(page)
     )
     markers = _source_label_markers(source_label)
 
@@ -2869,7 +2919,7 @@ def _printed_number_is_dropped(
         return True
     page = extraction.pages[evidence.source_page_number - 1]
     spans = _canonical_match_spans(
-        page.text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+        page.text, evidence.source_excerpt, ocr_derived=_hangul_breaks_joined(page)
     )
     return any(
         _LINE_HEAD_STEP_NUMBER.search(page.text[:start].rstrip()) is not None
@@ -4137,7 +4187,7 @@ def _source_extent(
     extent: list[tuple[int, int, int]] = []
     for page_number, excerpt in parts:
         page = extraction.pages[page_number - 1]
-        span = _excerpt_span(page.text, excerpt, page.ocr_derived)
+        span = _excerpt_span(page.text, excerpt, _hangul_breaks_joined(page))
         if span is not None:
             extent.append((page_number, *span))
     return tuple(extent)
@@ -4631,9 +4681,9 @@ def verify_step_timers(
                 page_number = evidence.source_page_number
                 reading = domain.read_source_durations(excerpt)
                 if not _claim_occurs_in_text(
-                    excerpt, step_text, ocr_derived=page.ocr_derived
+                    excerpt, step_text, ocr_derived=_hangul_breaks_joined(page)
                 ) and not _claim_occurs_in_text(
-                    excerpt, regions[position], ocr_derived=page.ocr_derived
+                    excerpt, regions[position], ocr_derived=_hangul_breaks_joined(page)
                 ):
                     refuse(action.action_id, excerpt, excerpt, "not_in_step_text", page_number)
                     continue
