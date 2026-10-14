@@ -575,6 +575,9 @@
     .report-review-checklist .report-review-row[data-confirmed="true"] span.report-review-text{color:var(--ink)}
     .report-review-checklist .report-review-row span.report-review-history{grid-area:history;flex:none;color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem}
     .report-review-row>.ui-badge{grid-area:tag;flex:none}
+    /* Lane UI3 decision 5 (2026-10-14): a deviation's tag sits with its words. */
+    .report-review-text>.ui-badge{margin-left:var(--space-1);vertical-align:middle}
+    .report-review-checklist .report-review-row[data-deviation="true"]{border-left:var(--stroke-current) solid var(--warning-ink)}
     .report-review-actions{grid-area:actions;display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
     .report-review-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
     .report-review-actions input{min-height:var(--target-desk);min-width:0;flex:1 1 12rem;padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);font:inherit}
@@ -1795,16 +1798,22 @@ function renderReportReview(reportId,items,status){
  for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item));box.appendChild(group);}
  return true;
 }
+// Lane UI3 decision 5 (2026-10-14): a value the server lists as a deviation
+// ("편차" -- a note called one, or with the router first one whose value
+// differs from the source's) is tagged where it is listed and counted when
+// there is one. The source's value is not in the list, so it is not drawn.
+const REPORT_REVIEW_DEVIATION_KIND="편차";
 function reportReviewSummary(list){
  const summary=document.createElement("div");summary.className="report-review-summary";
- for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length]]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
+ const deviations=list.filter(item=>item.kind===REPORT_REVIEW_DEVIATION_KIND).length;
+ for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length],...(deviations?[["편차",deviations]]:[])]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
  return summary;
 }
 function reportReviewRow(reportId,item,{withStep=false}={}){
  const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
  const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
  const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
- const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;row.appendChild(text);
+ const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;if(item.kind===REPORT_REVIEW_DEVIATION_KIND){text.append(" ");text.appendChild(uiBadge("기준치와 다름","warning"));row.dataset.deviation="true";}row.appendChild(text);
  if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
  row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
  const actions=document.createElement("span");actions.className="report-review-actions";
