@@ -284,6 +284,15 @@ class ListenerTests(unittest.TestCase):
         self.assertTrue(session.room_keeps_the_vad_on())
         self.assertEqual(session.endpoint_threshold_db(), THRESHOLD_DB)
 
+    def test_a_room_voiced_a_third_of_the_time_keeps_the_vad_on_and_one_voiced_a_tenth_does_not(self) -> None:
+        # Between babble (0.3-0.9) and a fan or a quiet room (0.1 at most)
+        # the line is a quarter of what is heard under the wearer's line.
+        for voiced_share, expected in ((0.34, True), (0.27, True), (0.1, False), (0.0, False)):
+            session = self.session(floor_db=None)
+            for k in range(NOISE_FLOOR_MINIMUM_FRAMES):
+                session.noise_floor.add(-80.0 if k % 2 else -45.0, (k % 100) < voiced_share * 100)
+            self.assertEqual(session.room_keeps_the_vad_on(), expected, voiced_share)
+
     def test_an_utterance_keeps_the_lines_it_began_with(self) -> None:
         # The floor rises past the guard while the wearer speaks: the
         # utterance keeps its line and ends by level; the next one has none.

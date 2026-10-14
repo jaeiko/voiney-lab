@@ -7783,12 +7783,12 @@ async def _suggest_noisy_mode(
 #: turns. Decision 2 says the room is loud from the same point.
 LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
 #: Lane SP2, decision 1: the level ends utterances only in a room where at
-#: least this share of what is heard under the wearer's line is voiced. On
-#: the synthetic bench the room alone gives babble 85 % or more, a pump
-#: 100 %, TV talk about 60 %, a fan, a centrifuge or a quiet room none (lane
-#: SP2 report); a quiet room with the wearer and a neighbour talking now and
-#: then stays well under half.
-ROOM_VOICED_SHARE=0.5
+#: least this share of what is heard under the wearer's line is voiced. In
+#: the synthetic bench's 150 s sessions (the wearer and a neighbour at 1 m
+#: talking now and then) babble gave 0.32-0.91, a pump 1.0 and TV talk
+#: 0.47-0.70, while a fan, a centrifuge or a quiet room gave 0.02-0.09 (lane
+#: SP2 report): the line sits in the empty gap between them, a quarter.
+ROOM_VOICED_SHARE=0.25
 #: Lane SP2, decision 2: said once the floor is that near (room_near_the_line).
 NOISE_FLOOR_SUGGESTION_WORDS="주변이 시끄러워요. 붐 마이크나 시끄러운 곳 모드를 권해요."
 
