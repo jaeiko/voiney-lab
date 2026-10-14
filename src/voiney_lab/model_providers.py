@@ -41,10 +41,18 @@ ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import contextvars
+import email.utils
 import json
+import logging
+import math
 import os
+import random
 import re
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -143,14 +151,19 @@ class ModelProviderError(RuntimeError):
     ``kind`` is one of "payment_required" (a prepaid balance is spent:
     Gemini answers 402), "rate_limited", "timeout", "authentication",
     "invalid_request", "server", "connection" or "other". The message never
-    carries a key or the prompt.
+    carries a key or the prompt. ``retry_after`` is the seconds the provider
+    asked to wait (Retry-After, or Google's RetryInfo), when it said.
     """
 
-    def __init__(self, provider: str, kind: str, status_code: int | None = None) -> None:
+    def __init__(
+        self, provider: str, kind: str, status_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(f"{provider} {kind}" + (f" (HTTP {status_code})" if status_code else ""))
         self.provider = provider
         self.kind = kind
         self.status_code = status_code
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -274,6 +287,7 @@ def chat_client(
     max_retries: int = 0,
     environment: Mapping[str, str] | None = None,
     sdk_client: Any = None,
+    retry_policy: ProviderRetryPolicy | None = None,
 ) -> Any:
     """A client for ``role_model`` with ``.chat.completions.create``.
 
@@ -281,11 +295,17 @@ def chat_client(
     URL, key, retries and timeout). A role whose provider setting is empty
     is refused (``RoleNotConfiguredError``). ``sdk_client`` replaces the
     provider SDK's client (contract tests pass a fake one).
+
+    The OpenAI, Anthropic and Google adapters of a background role (analysis,
+    translation, report) send the same request again after a 429 or a
+    transient 5xx (``retry_policy``, else the settings; lane AN2, decision 1).
+    ``max_retries`` is the SDK's own count and stays 0 for them.
     """
 
     provider = role_model.provider
     if provider is None:
         raise RoleNotConfiguredError(role_model.role)
+    policy = retry_policy or ProviderRetryPolicy.from_environment(environment)
     if provider == "xai":
         client = sdk_client
         if client is None:
@@ -311,7 +331,7 @@ def chat_client(
             if timeout is not None:
                 options["timeout"] = timeout
             client = (AsyncOpenAI if asynchronous else OpenAI)(**options)
-        return _Facade(_OpenAIResponsesBackend(client, role_model), asynchronous)
+        return _Facade(_OpenAIResponsesBackend(client, role_model), asynchronous, policy)
     if provider == "anthropic":
         client = sdk_client
         if client is None:
@@ -321,7 +341,7 @@ def chat_client(
             if timeout is not None:
                 options["timeout"] = timeout
             client = (anthropic.AsyncAnthropic if asynchronous else anthropic.Anthropic)(**options)
-        return _Facade(_AnthropicBackend(client, role_model), asynchronous)
+        return _Facade(_AnthropicBackend(client, role_model), asynchronous, policy)
     if provider == "google":
         client = sdk_client
         if client is None:
@@ -332,7 +352,7 @@ def chat_client(
             if timeout is not None and isinstance(timeout, (int, float)):
                 options["http_options"] = genai_types.HttpOptions(timeout=int(timeout * 1000))
             client = genai.Client(**google_client_options(environment), **options)
-        return _Facade(_GeminiBackend(client, role_model), asynchronous)
+        return _Facade(_GeminiBackend(client, role_model), asynchronous, policy)
     raise ValueError(f"unknown provider: {provider}")
 
 
@@ -792,15 +812,283 @@ def _arguments(raw: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# --- Sending a request again after a provider's transient refusal ------------------
+
+_logger = logging.getLogger(__name__)
+
+#: The roles that are background work: nobody is waiting on a spoken turn, so
+#: a wait before the same request goes again costs time, not a lost turn.
+#: The voice-turn roles (router, answer, supplemental) have their own
+#: deadlines and fall back to the rules' path; a wait there would outlive the
+#: turn and could spend a call after it was abandoned (stale-turn fences).
+RETRY_ROLES = frozenset({"analysis", "translation", "report"})
+#: Statuses a second send can change: the rate limit, and the server errors
+#: that mean "try again" (500 internal, 502 bad gateway, 503 unavailable).
+#: Not 504: that is the provider's own deadline, a timeout, which the
+#: analysis never sends again by itself.
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503})
+
+PROVIDER_RETRY_MAX_SETTING = "VOINEY_LAB_PROVIDER_RETRY_MAX"
+PROVIDER_RETRY_MAX_WAIT_SETTING = "VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS"
+DEFAULT_PROVIDER_RETRY_MAX = 4
+DEFAULT_PROVIDER_RETRY_BASE_SECONDS = 2.0
+DEFAULT_PROVIDER_RETRY_MAX_WAIT_SECONDS = 60.0
+_PROVIDER_RETRY_MAX_LIMIT = 10
+_PROVIDER_RETRY_WAIT_LIMIT = 600.0
+
+_sleep = time.sleep
+_async_sleep = asyncio.sleep
+_jitter = random.random
+
+
+@dataclass(frozen=True)
+class ProviderRetryPolicy:
+    """How often, and after how long, the same request is sent again.
+
+    ``max_retries`` sends after the first one (0 turns every resend off, the
+    empty-answer resend included); a wait is the provider's Retry-After when
+    it gave one, and a refusal that asks for longer than ``max_wait_seconds``
+    is not waited for. Without one, the wait doubles from ``base_seconds``
+    up to ``max_wait_seconds``, jittered between half and all of the step.
+    """
+
+    max_retries: int = DEFAULT_PROVIDER_RETRY_MAX
+    base_seconds: float = DEFAULT_PROVIDER_RETRY_BASE_SECONDS
+    max_wait_seconds: float = DEFAULT_PROVIDER_RETRY_MAX_WAIT_SECONDS
+
+    @classmethod
+    def from_environment(cls, environment: Mapping[str, str] | None = None) -> "ProviderRetryPolicy":
+        env = os.environ if environment is None else environment
+        retries = DEFAULT_PROVIDER_RETRY_MAX
+        raw = env.get(PROVIDER_RETRY_MAX_SETTING, "").strip()
+        if re.fullmatch(r"\d+", raw):
+            retries = min(int(raw), _PROVIDER_RETRY_MAX_LIMIT)
+        wait = DEFAULT_PROVIDER_RETRY_MAX_WAIT_SECONDS
+        try:
+            parsed = float(env.get(PROVIDER_RETRY_MAX_WAIT_SETTING, "").strip())
+        except ValueError:
+            parsed = math.nan
+        if math.isfinite(parsed) and parsed > 0:
+            wait = min(parsed, _PROVIDER_RETRY_WAIT_LIMIT)
+        return cls(max_retries=retries, max_wait_seconds=wait)
+
+    def applies_to(self, role: str) -> bool:
+        return self.max_retries > 0 and role in RETRY_ROLES
+
+    def wait_seconds(self, retry_number: int, retry_after: float | None) -> float | None:
+        """The wait before retry ``retry_number`` (1 = the first), or None
+        when the provider asked for longer than this policy waits."""
+
+        if retry_after is not None:
+            return retry_after if retry_after <= self.max_wait_seconds else None
+        step = min(self.max_wait_seconds, self.base_seconds * 2 ** (retry_number - 1))
+        return step / 2 + step / 2 * _jitter()
+
+
+@dataclass(frozen=True)
+class ProviderRetryEvent:
+    """One refusal (or empty answer) of a call, as the observer and the log
+    see it. Never carries the prompt, the reply or a key.
+
+    ``attempt`` counts the calls of this request that went wrong so far (the
+    one that just failed included); ``will_retry`` is false for the last one.
+    """
+
+    provider: str
+    role: str
+    model: str
+    reason: str
+    status_code: int | None
+    attempt: int
+    wait_seconds: float
+    retry_after: float | None
+    will_retry: bool
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "reason": self.reason, "status_code": self.status_code,
+            "attempt": self.attempt, "wait_seconds": round(self.wait_seconds, 1),
+            "retry_after": self.retry_after, "will_retry": self.will_retry,
+        }
+
+
+_RETRY_OBSERVER: contextvars.ContextVar[Callable[[ProviderRetryEvent], None] | None] = (
+    contextvars.ContextVar("provider_retry_observer", default=None)
+)
+
+
+@contextlib.contextmanager
+def observe_provider_retries(observer: Callable[[ProviderRetryEvent], None]) -> Iterator[None]:
+    """Report every refusal of the calls made inside this block (this thread
+    or task) to ``observer``: the ledger of a measurement, the analysis's
+    piece events, the piece concurrency (lane AN2, decisions 1 and 3)."""
+
+    token = _RETRY_OBSERVER.set(observer)
+    try:
+        yield
+    finally:
+        _RETRY_OBSERVER.reset(token)
+
+
+def _notify(event: ProviderRetryEvent) -> None:
+    _logger.log(
+        logging.INFO if event.will_retry else logging.WARNING,
+        "provider.retry provider=%s role=%s model=%s reason=%s status=%s attempt=%d "
+        "wait=%.1f retry_after=%s will_retry=%s",
+        event.provider, event.role, event.model, event.reason, event.status_code,
+        event.attempt, event.wait_seconds, event.retry_after, event.will_retry,
+    )
+    observer = _RETRY_OBSERVER.get()
+    if observer is None:
+        return
+    try:
+        observer(event)
+    except Exception:  # noqa: BLE001 -- an observer's bug never breaks a call
+        _logger.exception("provider.retry observer failed")
+
+
+def _header_seconds(headers: Any) -> float | None:
+    try:
+        items = {str(key).casefold(): value for key, value in headers.items()}
+    except Exception:  # noqa: BLE001 -- not a mapping of headers
+        return None
+    for name, scale in (("retry-after-ms", 0.001), ("retry-after", 1.0)):
+        raw = items.get(name)
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        try:
+            seconds = float(text) * scale
+        except ValueError:
+            try:
+                moment = email.utils.parsedate_to_datetime(text)
+            except (TypeError, ValueError):
+                continue
+            seconds = moment.timestamp() - time.time()
+        if math.isfinite(seconds):
+            return max(seconds, 0.0)
+    return None
+
+
+def _retry_info_seconds(details: Any) -> float | None:
+    """Google's ``google.rpc.RetryInfo`` in an error body (retryDelay "3.5s")."""
+
+    if not isinstance(details, Mapping):
+        return None
+    body = details.get("error", details)
+    entries = body.get("details") if isinstance(body, Mapping) else None
+    for entry in entries if isinstance(entries, list) else ():
+        if not isinstance(entry, Mapping) or not str(entry.get("@type", "")).endswith("RetryInfo"):
+            continue
+        delay = entry.get("retryDelay")
+        if isinstance(delay, Mapping):
+            try:
+                return max(float(delay.get("seconds", 0)) + float(delay.get("nanos", 0)) / 1e9, 0.0)
+            except (TypeError, ValueError):
+                continue
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)s\s*", str(delay or ""))
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _retry_after(exc: BaseException) -> float | None:
+    """The seconds a provider's error asked to wait: its Retry-After header,
+    else Google's RetryInfo, else None."""
+
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    seconds = _header_seconds(headers) if headers is not None else None
+    if seconds is None:
+        seconds = _retry_info_seconds(getattr(exc, "details", None))
+    return seconds
+
+
+class _Retrying:
+    """Sends a background role's request again after a transient refusal.
+
+    The request is the same bytes each time and the reply goes through the
+    same checks as any other (nothing here judges a reply). Streams are not
+    sent again: their errors come while the caller already reads them.
+    """
+
+    def __init__(self, role_model: RoleModel, provider: str, policy: ProviderRetryPolicy) -> None:
+        self.role_model = role_model
+        self.provider = provider
+        self.policy = policy
+
+    def _event(
+        self, reason: str, status: int | None, attempt: int, wait: float,
+        retry_after: float | None, will_retry: bool,
+    ) -> None:
+        _notify(ProviderRetryEvent(
+            self.provider, self.role_model.role, str(self.role_model.model), reason,
+            status, attempt, wait, retry_after, will_retry,
+        ))
+
+    def after_error(self, exc: ModelProviderError, failures: int) -> float | None:
+        """The wait before the next send, or None to raise ``exc``.
+
+        ``failures`` counts the calls that failed before this one.
+        """
+
+        if exc.status_code not in RETRYABLE_STATUSES or exc.kind not in ("rate_limited", "server"):
+            return None
+        attempt = failures + 1
+        wait = (
+            self.policy.wait_seconds(attempt, exc.retry_after)
+            if failures < self.policy.max_retries else None
+        )
+        self._event(exc.kind, exc.status_code, attempt, wait or 0.0, exc.retry_after, wait is not None)
+        return wait
+
+    def sync(self, create: Callable[..., Any]) -> Callable[..., Any]:
+        def run(**kwargs: Any) -> Any:
+            if kwargs.get("stream"):
+                return create(**kwargs)
+            failures = 0
+            while True:
+                try:
+                    return create(**kwargs)
+                except ModelProviderError as exc:
+                    wait = self.after_error(exc, failures)
+                    if wait is None:
+                        raise
+                failures += 1
+                _sleep(wait)
+
+        return run
+
+    def asynchronous(self, create: Callable[..., Any]) -> Callable[..., Any]:
+        async def run(**kwargs: Any) -> Any:
+            if kwargs.get("stream"):
+                return await create(**kwargs)
+            failures = 0
+            while True:
+                try:
+                    return await create(**kwargs)
+                except ModelProviderError as exc:
+                    wait = self.after_error(exc, failures)
+                    if wait is None:
+                        raise
+                failures += 1
+                await _async_sleep(wait)
+
+        return run
+
+
 class _Facade:
     """``client.chat.completions.create`` and ``client.responses.create``."""
 
-    def __init__(self, backend: Any, asynchronous: bool) -> None:
+    def __init__(
+        self, backend: Any, asynchronous: bool, retry_policy: ProviderRetryPolicy | None = None,
+    ) -> None:
         self._backend = backend
         self.model = backend.role_model.model
-        completions = SimpleNamespace(
-            create=backend.acreate if asynchronous else backend.create,
-        )
+        create = backend.acreate if asynchronous else backend.create
+        if retry_policy is not None and retry_policy.applies_to(backend.role_model.role):
+            retrying = _Retrying(backend.role_model, backend.provider, retry_policy)
+            create = retrying.asynchronous(create) if asynchronous else retrying.sync(create)
+        completions = SimpleNamespace(create=create)
         self.chat = SimpleNamespace(completions=completions)
         self.responses = SimpleNamespace(
             create=self._aresponses if asynchronous else self._responses,
@@ -1059,7 +1347,7 @@ def _openai_error(exc: Exception) -> ModelProviderError:
         return ModelProviderError("openai", "timeout", status)
     if "Connection" in name:
         return ModelProviderError("openai", "connection", status)
-    return ModelProviderError("openai", _status_kind(status), status)
+    return ModelProviderError("openai", _status_kind(status), status, _retry_after(exc))
 
 
 # --- Anthropic: the Messages API -----------------------------------------------------
@@ -1285,7 +1573,7 @@ def _anthropic_error(exc: Exception) -> ModelProviderError:
         return ModelProviderError("anthropic", "timeout", status)
     if "Connection" in name:
         return ModelProviderError("anthropic", "connection", status)
-    return ModelProviderError("anthropic", _status_kind(status), status)
+    return ModelProviderError("anthropic", _status_kind(status), status, _retry_after(exc))
 
 
 # --- Google: the Gemini API --------------------------------------------------------
@@ -1491,4 +1779,4 @@ def _gemini_error(exc: Exception) -> ModelProviderError:
         return ModelProviderError("google", "timeout", status)
     if "Connect" in name:
         return ModelProviderError("google", "connection", status)
-    return ModelProviderError("google", _status_kind(status), status)
+    return ModelProviderError("google", _status_kind(status), status, _retry_after(exc))

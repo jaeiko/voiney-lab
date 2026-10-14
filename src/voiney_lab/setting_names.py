@@ -116,6 +116,11 @@ SETTINGS: tuple[Setting, ...] = (
             "프로토콜 분석 추론 (low/medium/high/xhigh)"),
     Setting("VOINEY_LAB_ANALYSIS_RESPONSE_GRAMMAR", MODELS, "false",
             "실험: 분석 공급자가 google 일 때 분석 JSON 스키마를 응답 문법(response_json_schema)으로 보냄 (줄 EV3 결정 2)"),
+    Setting("VOINEY_LAB_PROVIDER_RETRY_MAX", MODELS, "4",
+            "분석·번역·보고서 호출이 429·일시적 5xx 를 받으면 같은 요청을 다시 보내는 최대 횟수 "
+            "(0–10, 0 이면 끔; 줄 AN2 결정 1)"),
+    Setting("VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS", MODELS, "60",
+            "다시 보내기 전 기다림의 상한 (초). 공급자가 이보다 오래 기다리라고 하면 다시 보내지 않음"),
     Setting("VOINEY_LAB_REPORT_PROVIDER", MODELS, _SET_ME, "실험 보고서 서술 공급자"),
     Setting("VOINEY_LAB_REPORT_MODEL", MODELS, _SET_ME, "실험 보고서 서술 모델"),
     Setting("VOINEY_LAB_REPORT_REASONING", MODELS, "(공급자 기본)", "보고서 서술 추론"),
