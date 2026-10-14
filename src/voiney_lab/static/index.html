@@ -159,6 +159,8 @@
     @media (orientation:landscape) and (max-height:480px){
      .procedure-card .run-card-value{font-size:2rem;line-height:2.5rem}
      body[data-view="during"] .run-next-step:not([hidden]){font-size:1rem;line-height:1.375rem}
+     /* A phone on its side has no room for both: while a card answers the last turn, the next step waits. */
+     body[data-view="during"] .run-left:has(> .run-card:not([hidden])) .run-next-step{display:none}
      .run-card-choices li{min-height:40px;font-size:1.125rem}
     }
     /* The timer: 도는 중, 1분 남음 (a heavier frame and bar), 끝남 · 지남 (inverted), 없음 (muted). */
@@ -3022,9 +3024,12 @@ const PROTOCOL_SOURCE_MEDIA_TYPES=new Set([...Object.values(PROTOCOL_SOURCE_EXTE
 function protocolSourceMediaType(file){const type=typeof file?.type==="string"?file.type.trim().toLowerCase():"";if(type)return type;const name=String(file?.name||"").toLowerCase(),dot=name.lastIndexOf(".");return dot>=0?PROTOCOL_SOURCE_EXTENSION_TYPES[name.slice(dot)]||"":"";}
 function protocolSourceRegisteringLine(mediaType){if(mediaType==="application/pdf")return "원문 PDF를 검증하고 등록하는 중…";if(mediaType==="application/vnd.openxmlformats-officedocument.wordprocessingml.document")return "Word 문서를 PDF로 바꿔 등록하는 중…";return "사진을 PDF로 바꿔 등록하는 중…";}
 // A server without HEIC support (pillow-heif is optional, human decision of
-// 2026-10-13) is told before the upload when /readyz says so, and after a
-// HEIC photo is refused: the iPhone setting that takes JPEG photos.
+// 2026-10-13) is told before the upload when /readyz says so; a HEIC photo it
+// refuses is answered on the status line. Both name the iPhone setting that
+// takes JPEG photos.
 const HEIC_UNAVAILABLE_HINT="이 서버는 HEIC 사진을 받지 않습니다 · 아이폰 설정 → 카메라 → 포맷 → 높은 호환성으로 바꾸고 찍은 사진(JPG)을 올려 주세요.";
+// With the hint already on screen, the refusal points to it instead of repeating it.
+const HEIC_REFUSED_BESIDE_HINT="이 서버는 HEIC 사진을 읽지 못합니다 · 아래 안내대로 JPG 사진을 올려 주세요.";
 function showHeicHint(shown){const hint=$("protocol-heic-hint");if(!hint)return false;hint.textContent=shown?HEIC_UNAVAILABLE_HINT:"";hint.hidden=!shown;return shown;}
 async function loadSourceFormats(){
  try{const response=await fetch("/readyz",{cache:"no-store"});const payload=await safeProtocolUploadPayload(response);const heic=response.ok?payload?.capabilities?.heic_photos_available:undefined;if(typeof heic!=="boolean"){showHeicHint(false);return null;}showHeicHint(heic===false);return heic;}
@@ -3714,7 +3719,7 @@ async function registerSelectedProtocol(){
   try{response=await fetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
-  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);if(code==="heic_support_unavailable")showHeicHint(true);if(input)input.value="";return;}
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
   const registered=payload.protocol&&typeof payload.protocol==="object"?payload.protocol:null,protocolId=typeof registered?.protocol_id==="string"?registered.protocol_id:null;
   if(!protocolId){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}

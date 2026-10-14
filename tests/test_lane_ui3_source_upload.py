@@ -83,6 +83,7 @@ class ErrorWordTests(unittest.TestCase):
 
     def test_the_new_codes_read_in_korean(self) -> None:
         result = run_page_script(UPLOAD + r"""
+node("protocol-heic-hint").hidden=true;  // as the markup has it; the fake DOM starts shown
 const unexpected=protocolUploadErrorMessage("unexpected_server_error");
 const cases=[
  ["docx_conversion_unavailable",503,"Word(.docx)"],
@@ -109,11 +110,14 @@ const hint=node("protocol-heic-hint");hint.hidden=true;
 serve(()=>refused("heic_support_unavailable"));
 await pick("IMG_0412.HEIC","image/heic");
 assert(status().includes("아이폰 설정 → 카메라 → 포맷 → 높은 호환성"),status());
-assert(hint.hidden===false&&hint.textContent.includes("아이폰 설정 → 카메라 → 포맷 → 높은 호환성"),`hint after the refusal: ${hint.hidden} ${hint.textContent}`);
+assert(hint.hidden===true,"the refusal repeated the guidance in a second line");
 serve(url=>{assert(url==="/readyz",`asked ${url}`);return {ok:true,status:200,headers:{get:()=>"application/json"},json:async()=>({status:"ok",capabilities:{docx_conversion_available:true,heic_photos_available:true}})};});
 assert(await loadSourceFormats()===true&&hint.hidden===true,"a server with HEIC kept the hint");
 serve(()=>({ok:true,status:200,headers:{get:()=>"application/json"},json:async()=>({status:"ok",capabilities:{docx_conversion_available:true,heic_photos_available:false}})}));
 assert(await loadSourceFormats()===false&&hint.hidden===false,"a server without HEIC did not say so before the upload");
+serve(()=>refused("heic_support_unavailable"));
+await pick("IMG_0413.HEIC","image/heic");
+assert(status()==="이 서버는 HEIC 사진을 읽지 못합니다 · 아래 안내대로 JPG 사진을 올려 주세요."&&hint.hidden===false,`refused beside the hint: ${status()}`);
 serve(()=>({ok:false,status:503,headers:{get:()=>"application/json"},json:async()=>({status:"not_ready",reason:"ValueError"})}));
 assert(await loadSourceFormats()===null&&hint.hidden===true,"a hint was drawn from no answer");
 serve(()=>{throw new TypeError("offline")});

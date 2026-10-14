@@ -148,6 +148,10 @@ assert(cls("run-card-choices").length===0,"an answer card drew candidates");
         self.assertIn(".run-card-choices li{display:inline-flex;align-items:center;min-height:48px;", style)
         self.assertIn(".procedure-card .run-card-value{color:var(--ink);font-size:2.5rem;", style)
         self.assertIn(".procedure-card .run-card-deviation{", style)
+        landscape = style[style.index(".run-card-choices li{display:inline-flex"):]
+        landscape = landscape[landscape.index("@media (orientation:landscape) and (max-height:480px){"):]
+        landscape = landscape[:landscape.index("\n    }")]
+        self.assertIn('body[data-view="during"] .run-left:has(> .run-card:not([hidden])) .run-next-step{display:none}', landscape)
 
 
 if __name__ == "__main__":
