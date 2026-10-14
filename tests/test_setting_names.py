@@ -23,6 +23,11 @@ TABLE_FILES = {
     "src/voiney_lab/setting_names.py",
     "src/voiney_lab/setting_renames.py",
 }
+#: Names no code reads and the table no longer lists, which a document must
+#: still spell: the flag the standard test command (CLAUDE.md, README,
+#: docs/GIT_WORKFLOW.md) switches off so that a stray .env cannot change a
+#: result. The table row was deleted in lane DOC3; the command is unchanged.
+SPELLED_IN_TEST_COMMANDS = {"VOINEY_LAB_MOSS_ENABLED"}
 NAME = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 PREFIXED = re.compile(re.escape(NEW_PREFIX) + r"[A-Z0-9_]*[A-Z0-9]")
 
@@ -202,7 +207,7 @@ class SettingTableTests(unittest.TestCase):
             if is_code(path) or path in TABLE_FILES:
                 continue
             for name in set(PREFIXED.findall(text_of(path) or "")):
-                if name not in BY_NAME:
+                if name not in BY_NAME and name not in SPELLED_IN_TEST_COMMANDS:
                     stray.append(f"{path}: {name}")
         self.assertEqual(sorted(stray), [])
 

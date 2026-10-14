@@ -1,8 +1,10 @@
-"""Offline tests for approved-document and authoritative-web reference tiers."""
+"""Offline tests for the approved-document tier and the supplemental ("AI 일반 지식") explanation.
+
+The xAI web reference search these tests used to cover was deleted in lane DOC3.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import socket
@@ -19,23 +21,12 @@ import httpx
 
 from voiney_lab.document_store import ingest_manifest
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
-    XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
-    sanitize_external_search_answer,
 )
 from voiney_lab.retrieval import retrieve_approved_lab_documents
 
 from tests.test_document_ingestion import operational_document
-
-#: The supplemental role written down the way a deployment does (lane PL: an
-#: unset provider or model is "설정 필요", no longer xai and grok-4.6).
-SUPPLEMENTAL_ROLE_ENV = {
-    "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
-    "VOINEY_LAB_SUPPLEMENTAL_MODEL": "grok-test",
-}
-
 
 def reference_document(**overrides):
     base = operational_document(
@@ -139,63 +130,6 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("chunk_id=", result.stdout)
         self.assertNotIn("FICTIONAL TEST REFERENCE", result.stdout)
 
-    def test_external_settings_are_disabled_or_strictly_allowlisted(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(ExternalReferenceSettings.from_environment().enabled)
-        with patch.dict(os.environ, {
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
-            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "osha.gov,cdc.gov",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS": "2.5",
-            **SUPPLEMENTAL_ROLE_ENV,
-        }, clear=True):
-            settings = ExternalReferenceSettings.from_environment()
-        self.assertEqual(settings.allowed_domains, ("osha.gov", "cdc.gov"))
-        self.assertEqual(settings.user_visible_enrichment_budget_seconds, 2.5)
-        self.assertLess(
-            settings.user_visible_enrichment_budget_seconds,
-            settings.timeout_seconds,
-        )
-
-    def test_external_setting_alias_conflict_and_invalid_profile_fail_loudly(self):
-        # The enabled pair became one name in the VOINEY_LAB_ rename, so the
-        # conflict is checked on the alias pair that still names two settings.
-        with patch.dict(os.environ, {
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
-            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS": "osha.gov",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "cdc.gov",
-        }, clear=True), self.assertRaisesRegex(ValueError, "conflicts"):
-            ExternalReferenceSettings.from_environment()
-        with patch.dict(os.environ, {
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
-            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE": "unknown-profile",
-        }, clear=True), self.assertRaisesRegex(ValueError, "DOMAIN_PROFILE"):
-            ExternalReferenceSettings.from_environment()
-        for name,value in (
-            ("VOINEY_LAB_SUPPLEMENTAL_MODEL",""),
-            ("VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS","31"),
-            ("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS","6"),
-        ):
-            with self.subTest(name=name),patch.dict(os.environ, {
-                "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
-                "VOINEY_LAB_SUPPLEMENTAL_PROVIDER":"xai",
-                "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
-                **SUPPLEMENTAL_ROLE_ENV,
-                name:value,
-            },clear=True),self.assertRaises(ValueError):
-                ExternalReferenceSettings.from_environment()
-        with patch.dict(os.environ, {
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
-            "VOINEY_LAB_SUPPLEMENTAL_PROVIDER":"xai",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS":"5",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS":"5",
-            **SUPPLEMENTAL_ROLE_ENV,
-        },clear=True),self.assertRaises(ValueError):
-            ExternalReferenceSettings.from_environment()
-
     def test_supplemental_settings_are_separate_and_explicit(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(
@@ -254,211 +188,9 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         ).explain("Explain the background.", language="en")
         self.assertEqual(result["status"], "response_rejected")
 
-    async def test_external_adapter_accepts_documented_inline_citation_shape(self):
-        url = "https://pubchem.ncbi.nlm.nih.gov/compound/Ammonium-bicarbonate"
-        response = {
-            "output": [
-                {"type": "web_search_call"},
-                {"type": "message", "content": [{
-                    "type": "output_text",
-                    "text": f"AMBIC is ammonium bicarbonate [[1]]({url}).",
-                    "annotations": [],
-                }]},
-            ],
-            "citations": [url],
-        }
-        endpoint = SimpleNamespace()
-        async def create(**kwargs):
-            endpoint.kwargs = kwargs
-            return response
-        endpoint.create = create
-        result = await XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=endpoint),
-            ExternalReferenceSettings(True, ("pubchem.ncbi.nlm.nih.gov",), "fake"),
-        ).search("AMBIC", language="ko")
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["matches"][0]["canonical_url"], url)
+    async def test_supplemental_failure_taxonomy_is_stable(self):
+        """The failure categories the explanation reports (kept from the web search's test)."""
 
-    async def test_external_adapter_rejects_non_allowlisted_citations(self):
-        response = SimpleNamespace(
-            output_text="Use the cited official reference.",
-            output=[
-                SimpleNamespace(type="web_search_call"),
-                SimpleNamespace(type="message", content=[SimpleNamespace(
-                    annotations=[
-                        SimpleNamespace(url_citation=SimpleNamespace(
-                            url="https://www.osha.gov/laboratory", title="OSHA",
-                            start_index=8, end_index=22,
-                        )),
-                        SimpleNamespace(url_citation=SimpleNamespace(
-                            url="https://example.com/blog", title="Blog",
-                            start_index=0, end_index=3,
-                        )),
-                    ]
-                )]),
-            ],
-        )
-        endpoint = SimpleNamespace(create=lambda **kwargs: None)
-
-        async def create(**kwargs):
-            endpoint.kwargs = kwargs
-            return response
-
-        endpoint.create = create
-        client = SimpleNamespace(responses=endpoint)
-        result = await XaiAuthoritativeWebSearch(
-            client, ExternalReferenceSettings(True, ("osha.gov",), "fake")
-        ).search("lab precaution", language="ko")
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(len(result["matches"]), 1)
-        self.assertEqual(result["matches"][0]["domain"], "www.osha.gov")
-        self.assertEqual(
-            endpoint.kwargs["tools"][0]["filters"]["allowed_domains"],
-            ["osha.gov"],
-        )
-
-    async def test_external_adapter_has_one_bounded_request(self):
-        class Responses:
-            def __init__(self):
-                self.calls = 0
-
-            async def create(self, **_kwargs):
-                self.calls += 1
-                await asyncio.sleep(0.02)
-                return SimpleNamespace(output_text="", output=[])
-
-        responses = Responses()
-        client = SimpleNamespace(responses=responses)
-        result = await XaiAuthoritativeWebSearch(
-            client,
-            ExternalReferenceSettings(
-                True, ("osha.gov",), "fake", timeout_seconds=0.001
-            ),
-        ).search("laboratory safety", language="ko")
-        self.assertEqual(result["status"], "timeout_total")
-        self.assertEqual(responses.calls, 1)
-
-    async def test_stream_cleanup_cannot_defeat_the_terminal_budget(self):
-        class Stream:
-            def __aiter__(self): return self
-            async def __anext__(self):
-                await asyncio.sleep(10)
-            async def close(self):
-                await asyncio.sleep(10)
-        class Responses:
-            calls = 0
-            async def create(self, **_kwargs):
-                self.calls += 1
-                return Stream()
-        responses=Responses();started=asyncio.get_running_loop().time()
-        result=await XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=responses),
-            ExternalReferenceSettings(
-                True,("osha.gov",),"stream-timeout",
-                timeout_seconds=0.01,
-            ),
-        ).search("bounded stream cleanup",language="en")
-        elapsed=asyncio.get_running_loop().time()-started
-        self.assertEqual(result["status"],"timeout_total")
-        self.assertEqual(responses.calls,1)
-        self.assertLess(elapsed,0.5)
-
-    async def test_external_adapter_accepts_server_usage_and_included_sources(self):
-        url = "https://pubchem.ncbi.nlm.nih.gov/compound/7739"
-        response = {
-            "id": "response-safe-1",
-            "output_text": "AMBIC means ammonium bicarbonate.",
-            "output": [{"type": "message", "content": []}],
-            "citations": [{"url": url}],
-            "server_side_tool_usage": {"WEB_SEARCH": 1},
-            "included": [{
-                "type": "web_search_call",
-                "action": {"sources": [{
-                    "url": url, "title": "PubChem",
-                    "snippet": "Ammonium bicarbonate compound record.",
-                }]},
-            }],
-        }
-        class Responses:
-            calls = 0
-            async def create(self, **kwargs):
-                self.calls += 1
-                self.kwargs = kwargs
-                return response
-        endpoint = Responses()
-        adapter = XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=endpoint),
-            ExternalReferenceSettings(
-                True, ("pubchem.ncbi.nlm.nih.gov",), "fake",
-                cache_ttl_seconds=60,
-            ),
-        )
-        first = await adapter.search("unique included-source query", language="ko")
-        second = await adapter.search("unique included-source query", language="ko")
-        self.assertEqual(first["status"], "success")
-        self.assertEqual(first["tool_usage_count"], 1)
-        self.assertEqual(first["provider_request_id"], "response-safe-1")
-        self.assertEqual(first["matches"][0]["canonical_url"], url)
-        self.assertTrue(second["cache_hit"])
-        self.assertEqual(endpoint.calls, 1)
-        self.assertEqual(
-            endpoint.kwargs["timeout"].connect,
-            adapter.settings.connect_timeout_seconds,
-        )
-
-    async def test_external_adapter_consumes_stream_and_retains_safe_tool_timings(self):
-        url = "https://pubchem.ncbi.nlm.nih.gov/compound/7739"
-        final = {
-            "id": "stream-response-1",
-            "output_text": f"AMBIC is ammonium bicarbonate [[1]]({url}).",
-            "output": [
-                {"type": "web_search_call", "status": "completed"},
-                {"type": "message", "content": []},
-            ],
-            "citations": [url],
-            "usage": {"server_side_tool_usage": {"WEB_SEARCH": 1}},
-        }
-        endpoint = SimpleNamespace()
-        async def create(**kwargs):
-            endpoint.kwargs = kwargs
-            return final
-        endpoint.create = create
-        result = await XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=endpoint),
-            ExternalReferenceSettings(
-                True, ("pubchem.ncbi.nlm.nih.gov",), "stream-fake"
-            ),
-        ).search("unique streaming AMBIC query", language="ko")
-        self.assertEqual(result["status"], "success")
-        self.assertFalse(result["streaming"])
-        self.assertEqual(result["event_count"], 0)
-        self.assertEqual(result["tool_event_count"], 0)
-        self.assertTrue(endpoint.kwargs["stream"])
-        self.assertEqual(endpoint.kwargs["max_output_tokens"], 350)
-
-    async def test_external_adapter_distinguishes_tool_and_schema_failures(self):
-        url = "https://www.osha.gov/laboratory"
-        cases = (
-            ({"id": "a", "output_text": f"See [[1]]({url}).",
-              "output": [], "citations": [url]}, "tool_not_executed"),
-            ({"id": "b", "output_text": "No evidence", "output": [{
-                "type": "web_search_call", "status": "failed",
-            }]}, "response_schema_error"),
-            ({"id": "c", "output_text": "No cited evidence", "output": [{
-                "type": "web_search_call", "status": "completed",
-            }]}, "no_allowed_citation"),
-        )
-        for index, (response, expected) in enumerate(cases):
-            with self.subTest(expected=expected):
-                async def create(**_kwargs):
-                    return response
-                result = await XaiAuthoritativeWebSearch(
-                    SimpleNamespace(responses=SimpleNamespace(create=create)),
-                    ExternalReferenceSettings(True, ("osha.gov",), f"fake-{index}"),
-                ).search(f"schema case {index}", language="en")
-                self.assertEqual(result["status"], expected)
-
-    async def test_external_failure_taxonomy_is_stable(self):
         class StatusError(RuntimeError):
             def __init__(self, status, message="failure"):
                 super().__init__(message)
@@ -481,119 +213,16 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             (ConnectionError("connection reset"), "connect_error"),
             (RuntimeError("unknown schema"), "response_schema_error"),
         )
-        for index, (failure, expected) in enumerate(failures):
+        for failure, expected in failures:
             with self.subTest(expected=expected):
                 async def create(**_kwargs):
                     raise failure
-                result = await XaiAuthoritativeWebSearch(
+                result = await XaiSupplementalKnowledge(
                     SimpleNamespace(responses=SimpleNamespace(create=create)),
-                    ExternalReferenceSettings(True, ("osha.gov",), f"fault-{index}"),
-                ).search(f"fault query {index}", language="en")
+                    SupplementalKnowledgeSettings(True, "grok-test", 2.0),
+                ).explain("Explain the background.", language="en")
                 self.assertEqual(result["status"], expected)
-                self.assertEqual(result["attempt_count"], 1)
                 self.assertNotIn("failure", str(result))
-
-    def test_candidate_a_launcher_script_resolves_to_open_mode_and_90s_timeouts(self):
-        script = Path(__file__).resolve().parent.parent / "scripts" / "run_dev.sh"
-        self.assertTrue(script.is_file())
-        text = script.read_text(encoding="utf-8")
-        # Launcher defaults a .env may override (lane XO, decision 1); the
-        # launcher names no model.
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \\', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=90 \\', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=90 \\', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=5 \\', text)
-        self.assertNotIn('VOINEY_LAB_SUPPLEMENTAL_MODEL=', text)
-        self.assertIn('external_search_model', text)
-        self.assertIn('external_search_open_mode', text)
-
-    async def test_web_search_request_tool_spec_omits_image_search_by_default(self):
-        captured_kwargs = {}
-        async def create(**kwargs):
-            nonlocal captured_kwargs
-            captured_kwargs = kwargs
-            return {
-                "output_text": "Ammonium bicarbonate is a buffer.",
-                "citations": ["https://en.wikipedia.org/wiki/Ammonium_bicarbonate"],
-                "output": [{"type": "web_search_call", "status": "completed"}],
-            }
-        searcher = XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=SimpleNamespace(create=create)),
-            ExternalReferenceSettings(True, (), "grok-4.6", 90.0, 5, "open"),
-        )
-        res = await searcher.search("AMBIC buffer", language="en", include_images=False)
-        self.assertEqual(res["status"], "success")
-        tools = captured_kwargs.get("tools", [])
-        self.assertEqual(len(tools), 1)
-        self.assertEqual(tools[0]["type"], "web_search")
-        self.assertNotIn("enable_image_search", tools[0])
-        self.assertNotIn("filters", tools[0])
-
-    async def test_web_search_request_tool_spec_includes_image_search_when_requested(self):
-        captured_kwargs = {}
-        async def create(**kwargs):
-            nonlocal captured_kwargs
-            captured_kwargs = kwargs
-            return {
-                "output_text": "![AMBIC](https://example.com/ambic.jpg)",
-                "citations": ["https://example.com/ambic"],
-                "output": [{"type": "web_search_call", "status": "completed"}],
-            }
-        searcher = XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=SimpleNamespace(create=create)),
-            ExternalReferenceSettings(True, (), "grok-4.6", 90.0, 5, "open"),
-        )
-        res = await searcher.search("AMBIC image", language="en", include_images=True)
-        self.assertEqual(res["status"], "success")
-        tools = captured_kwargs.get("tools", [])
-        self.assertEqual(len(tools), 1)
-        self.assertTrue(tools[0].get("enable_image_search"))
-
-    def test_external_search_answer_sanitization_patterns(self):
-        # Case 1: inline marker + url parenthetical
-        raw1 = "AMBIC is ammonium bicarbonate [[1]](https://en.wikipedia.org/wiki/Ammonium_bicarbonate) used for in-gel digestion."
-        self.assertEqual(
-            sanitize_external_search_answer(raw1),
-            "AMBIC is ammonium bicarbonate used for in-gel digestion.",
-        )
-
-        # Case 2: inline marker + whitespace + url parenthetical + provider EOS
-        raw2 = "AMBIC provides a basic pH [[1]] (https://pubchem.ncbi.nlm.nih.gov/compound/14013) for trypsin cleavage.</eos>"
-        self.assertEqual(
-            sanitize_external_search_answer(raw2),
-            "AMBIC provides a basic pH for trypsin cleavage.",
-        )
-
-        # Case 3: raw HTTP/HTTPS URL
-        raw3 = "Refer to https://pubchem.ncbi.nlm.nih.gov/compound/14013 for buffer properties."
-        self.assertEqual(
-            sanitize_external_search_answer(raw3),
-            "Refer to for buffer properties.",
-        )
-
-        # Case 4: preserve scientific notation, units, bracketed slices, and pH
-        raw4 = "AMBIC is ammonium bicarbonate (pH ~8.0, 25–50 mM) used on [1-2 mm³] gel slices incubated for [15 min]."
-        self.assertEqual(
-            sanitize_external_search_answer(raw4),
-            "AMBIC is ammonium bicarbonate (pH ~8.0, 25–50 mM) used on [1-2 mm³] gel slices incubated for [15 min].",
-        )
-
-    async def test_web_search_sanitizes_provider_raw_output_cleanly(self):
-        async def create(**kwargs):
-            return {
-                "output_text": "AMBIC buffer maintains pH 8.0 [[1]](https://en.wikipedia.org/wiki/Ammonium_bicarbonate) for trypsin.</eos>",
-                "citations": ["https://en.wikipedia.org/wiki/Ammonium_bicarbonate"],
-                "output": [{"type": "web_search_call", "status": "completed"}],
-            }
-        searcher = XaiAuthoritativeWebSearch(
-            SimpleNamespace(responses=SimpleNamespace(create=create)),
-            ExternalReferenceSettings(True, ("en.wikipedia.org",), "grok-4.6", 90.0, 5, "open"),
-        )
-        res = await searcher.search("AMBIC buffer", language="en")
-        self.assertEqual(res["status"], "success")
-        self.assertEqual(res["answer"], "AMBIC buffer maintains pH 8.0 for trypsin.")
-        self.assertEqual(len(res["matches"]), 1)
-        self.assertEqual(res["matches"][0]["canonical_url"], "https://en.wikipedia.org/wiki/Ammonium_bicarbonate")
 
 
 if __name__ == "__main__":

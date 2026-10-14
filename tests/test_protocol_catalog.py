@@ -897,16 +897,14 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             'PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"',
             launcher,
         )
-        # Launcher defaults a .env may override; the xAI-only features are
-        # off by default (lane XO, decision 1).
+        # Launcher defaults a .env may override (lane XO, decision 1).
         self.assertIn('  VOINEY_LAB_PROTOCOL_ENABLED=true \\', launcher)
         # Nothing reads VOINEY_LAB_MOSS_ENABLED since lane CL; lane PL took
         # the launcher's export out.
         self.assertNotIn("VOINEY_LAB_MOSS_ENABLED", launcher)
-        self.assertIn('  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \\', launcher)
-        self.assertIn(
-            '  VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \\', launcher
-        )
+        # The xAI web reference search and its settings were deleted in lane
+        # DOC3; the launcher names none of them.
+        self.assertNotIn("EXTERNAL_REFERENCE", launcher)
         self.assertIn('  VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS=800)"', launcher)
         self.assertIn("Non-secret capability check", launcher)
         self.assertIn("bootstrap_development_fixture(fixture)", launcher)
@@ -921,8 +919,10 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
     def test_pilot_launcher_is_isolated_and_off_outside_the_source_document(self):
         """The pilot launcher owns its data root and opts out, not in.
 
-        The two out-of-source features must each keep a value the operator
-        exported themselves, so turning one on is deliberate.
+        The out-of-source feature that is left (the general explanation) must
+        keep a value the operator exported themselves, so turning it on is
+        deliberate. (The xAI web reference search that was the other one was
+        deleted in lane DOC3.)
         """
 
         repository = Path(__file__).resolve().parents[1]
@@ -931,10 +931,8 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertNotIn("candidate-a-live-acceptance", launcher)
         self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
         self.assertIn('PORT="${PORT:-8080}"', launcher)
-        # The two keep a value set in the shell or the .env (lane XO,
-        # decision 1).
+        # It keeps a value set in the shell or the .env (lane XO, decision 1).
         for name in (
-            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
         ):
             self.assertRegex(

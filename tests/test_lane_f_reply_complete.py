@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from voiney_lab.curated_protocol import CuratedProtocolSession
-from voiney_lab.external_references import ExternalReferenceSettings
 from voiney_lab.language import Transcription
 from voiney_lab.multi_brain import MultiBrainSettings
 from voiney_lab.server import ListenerSession, run_turn
@@ -48,7 +47,6 @@ def _listener(index: int) -> ListenerSession:
     )
     session.active = True
     session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
-    session.external_reference_settings = ExternalReferenceSettings(False)
     return session
 
 

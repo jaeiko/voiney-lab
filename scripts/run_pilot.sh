@@ -67,13 +67,13 @@ fi
 export VOINEY_LAB_STT_DIAGNOSTIC_DIR="$PILOT_DATA_DIR/stt-diagnostics"
 
 # --- Off unless a person asks for it -----------------------------------------
-# These four reach outside the approved source documents. Each keeps a value
-# the operator set in the shell or wrote in the repository .env (decision 1 of
-# lane XO, 2026-10-05), so turning one on is a deliberate act. Three of them,
-# and semantic intent, are features only xAI provides: one switched on without
-# XAI_API_KEY is refused below, by name.
+# The general explanation ("AI 일반 지식") reaches outside the approved source
+# documents. It keeps a value the operator set in the shell or wrote in the
+# repository .env (decision 1 of lane XO, 2026-10-05), so turning it on is a
+# deliberate act. (The xAI web reference search that used to sit beside it was
+# deleted in lane DOC3; a feature only xAI provides, switched on without
+# XAI_API_KEY, would still be refused below, by name.)
 eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
-  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
   VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false)"
 
 # --- Approved safety documents: decided here, never by a .env ---------------
@@ -189,8 +189,39 @@ report_feature() { printf '%-30s %s\n' "$1" "$(feature_state "${2:-}")"; }
 report_feature "protocol_catalog:" "$VOINEY_LAB_PROTOCOL_ENABLED"
 report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
-report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
+
+# --- Word sources need LibreOffice: warn, never refuse -------------------------
+# A Word (.docx) source is turned into a PDF by LibreOffice (docs/SOURCE_FORMATS.md).
+# Human decision of 2026-10-14: a pilot without it still starts -- a pilot that
+# uploads only PDFs does not need it -- and says so here; the server answers a
+# .docx upload with docx_conversion_unavailable (503) and GET /readyz reports
+# docx_conversion_available. The same finder the server uses, and the .env the
+# server will load (without overriding the shell), so the banner is accurate.
+# Nothing in this block can stop the start: a failure to look is not a refusal.
+OFFICE_CONVERTER_FOUND="$(python -B - "$ROOT/.env" <<'PY' 2>/dev/null || true
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(sys.argv[1]), override=False)
+from voiney_lab.experiment_protocol_pdf import find_office_converter
+
+print(find_office_converter() or "")
+PY
+)"
+echo
+echo "--- Source formats ---"
+if [[ -n "$OFFICE_CONVERTER_FOUND" ]]; then
+  echo "word_sources(libreoffice):     available ($OFFICE_CONVERTER_FOUND)"
+else
+  echo "word_sources(libreoffice):     unavailable"
+  echo "[WARN] LibreOffice (soffice) was not found. The pilot starts anyway; a Word (.docx)"
+  echo "[WARN] upload is refused with docx_conversion_unavailable until it is installed:"
+  echo "[WARN]   sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum"
+  echo "[WARN] (or set VOINEY_LAB_OFFICE_CONVERTER to its soffice; see docs/SOURCE_FORMATS.md)."
+fi
 
 XAI_REFUSAL=""
 if ! python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env"; then

@@ -1,12 +1,15 @@
 # Approved laboratory reference operations
 
-Revised 2026-10-10 (lane CL). This guide builds the approved safety-document
-catalog: the file `scripts/run_pilot.sh` requires before it serves (§4) and
-that the step safety card reads. The voice answer from approved lab
-references and the Moss reranker were deleted on 2026-10-10; what the catalog
-is for next (and the pilot launcher's check) is decided in lane PL. The
-catalog never changes a protocol: the protocol's source remains the authority
-for its own quantities, ordering, and transitions.
+Revised 2026-10-10 (lane CL) and 2026-10-14 (lane DOC3). This guide builds
+the approved safety-document catalog: the optional file that
+`scripts/run_pilot.sh` checks when it is there (§4) and that the step safety
+card reads. The pilot does **not** need it: with no catalog file the launcher
+starts in the `source_protocol_only` scope, on the uploaded PDF's own safety
+statements alone (human decision of 2026-10-13, "B안"; `docs/PILOT_GUIDE.md`
+§1). The voice answer from approved lab references and the Moss reranker were
+deleted on 2026-10-10. The catalog never changes a protocol: the protocol's
+source remains the authority for its own quantities, ordering, and
+transitions.
 
 ## 1. Prepare a reviewed manifest
 
@@ -67,9 +70,10 @@ answer as approval evidence.
 
 ## 4. Runtime configuration and health check
 
-The normal server configuration requires an absolute
-`VOINEY_LAB_SAFETY_CATALOG`, an exact
-`VOINEY_LAB_USAGE_SCOPE`, and (when policy requires it) a facility ID.
+The normal server configuration requires an exact
+`VOINEY_LAB_USAGE_SCOPE`, an absolute `VOINEY_LAB_SAFETY_CATALOG` (except in
+the `source_protocol_only` scope, which reads no catalog), and (when policy
+requires it) a facility ID.
 Configuration belongs in the existing operator environment; this guide does not
 modify `.env`.
 
@@ -85,16 +89,27 @@ Korean `demo` records (`FICTIONAL-MOSS-DEMO-SDS-KO` and
 `FICTIONAL-MOSS-DEMO-SOP-KO`, version 1.0). It is suitable only for a fictional
 demo (CI builds the same records for its browser tests). It cannot support operational Candidate A precautions until an
 appropriate laboratory reference is separately reviewed and configured, and the
-pilot launcher refuses it because both records are demo documents.
+pilot launcher refuses it as a pilot catalog because both records are demo
+documents (it refuses a catalog that holds one; with no catalog at all the
+pilot starts as `source_protocol_only`).
 
 ### The controlled pilot's catalog
 
-`scripts/run_pilot.sh` does not read either variable from `.env`. It fixes the
-catalog at `data/runtime/pilot/approved_safety_catalog.sqlite` (an absolute
-path under the checkout) and the scope at `reference_only`, the one scope a
-pilot without OIDC can run; `docs/BEHAVIOR_REFERENCE.md` ("Launchers") gives the reasons. Build
-the catalog from a reviewed manifest in a staging path as in §2, audit it with
-`--scope reference_only`, and copy it into place between server runs:
+`scripts/run_pilot.sh` does not read either variable from `.env`. It looks for
+the catalog at one fixed path, `data/runtime/pilot/approved_safety_catalog.sqlite`
+(an absolute path under the checkout), and decides the scope from whether a
+file is there:
+
+| At that path | Scope | What happens |
+|---|---|---|
+| nothing | `source_protocol_only` | the pilot starts; no catalog is read; the screen, the safety answers and the record say "기관 안전 문서 없음 · 원문 안전 주의만" |
+| a file (or a link) | `reference_only` | the launcher checks it (below) and refuses to start if it fails |
+
+`reference_only` is the one catalog scope a pilot without OIDC can run;
+`docs/BEHAVIOR_REFERENCE.md` ("Launchers") gives the reasons. To run the pilot
+**with** institution documents, build the catalog from a reviewed manifest in a
+staging path as in §2, audit it with `--scope reference_only`, and copy it into
+place between server runs:
 
 ```bash
 .venv/bin/python -B scripts/audit_approved_catalog.py \
@@ -104,10 +119,13 @@ cp "$candidate_catalog" data/runtime/pilot/approved_safety_catalog.sqlite
 ./scripts/run_pilot.sh --check-only   # must exit 0
 ```
 
-The launcher refuses to start, and `--check-only` exits 1, when the file is
-missing or unreadable, holds any demo document (scope `demo` or `test_only`,
-or a title containing "fictional", counted in any approval state), or has no
-approved, active `reference_only` document. Every pilot document therefore
+A catalog file that is there is never taken for "no catalog". The launcher
+refuses to start, and `--check-only` exits 1, when that file is unreadable
+(not a catalog, or a folder or a broken link in its place), holds any demo
+document (scope `demo` or `test_only`, or a title containing "fictional",
+counted in any approval state), or has no approved, active `reference_only`
+document. To start without institution documents instead, move the file away.
+Every document in a pilot catalog therefore
 needs `usage_scope: reference_only`, `approval_status: approved`,
 `active: true`, a non-`test_fixture` authority, and a title without
 "fictional". Voice safety search returns only documents whose scope equals
@@ -163,59 +181,41 @@ The optional Moss reranker was deleted on 2026-10-10 (lane CL), with its
 settings and index sync script; it returns later for searching past records
 and manuals. The record is `docs/archive/MOSS_RETRIEVAL.md`.
 
-## 6. Optional authoritative web references
+## 6. Web references (deleted) and what is left
 
-External reference search is disabled by default. Enabling it requires both the
-feature flag and an explicit authoritative-domain allowlist. External results are
-labelled non-protocol, cannot alter Candidate A state, cannot resolve Steps 7, 9,
-or 20, and must retain their canonical URL and retrieval time.
+The optional xAI web reference search -- `XaiAuthoritativeWebSearch`, its
+domain allow-list and the thirteen `EXTERNAL_REFERENCE*` / `EXTERNAL_SEARCH_*`
+settings -- was deleted in lane DOC3 (human decision of 2026-10-14). It was
+off by default and no launcher turned it on; the research path's second step,
+`search_authoritative_web`, is gone with it, and
+`research_capabilities.external_text` now always says `disabled`. A `.env`
+that still sets one of those names is read by nothing (delete the line). The
+git history has the code. Google Custom Search and YouTube discovery were
+never part of this catalog or answer path.
 
-The live xAI Responses adapter additionally requires:
-
-- `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true`;
-- a reviewed domain profile such as
-  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=candidate_a`, or one
-  to five comma-separated authority domains in
-  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` (or its alias
-  `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`; set one, or both to the
-  same value);
-- a non-empty `VOINEY_LAB_SUPPLEMENTAL_MODEL` (default
-  `grok-4.6`);
-- a bounded `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
-  1 and 30 seconds (the Candidate A launcher uses a 20-second total deadline);
-- optional 3-second connect and 15-second read deadlines through
-  `VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS` and
-  `VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS`;
-- an optional validated-result TTL through
-  `VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS` (900 seconds in the Candidate A
-  launcher). Only cited, allowlisted success is cached.
-
-Each Turn is limited to one web-search request with SDK retries disabled. The
-adapter consumes Responses streaming events so tool start/end and first-event
-timings remain observable, but its overall deadline is still hard-bounded and a
-newer Turn cancels or rejects the old result. Returned URLs are independently
-required to be HTTPS and inside the configured domains. Search is successful
-only when the response reports a completed web-search tool and the admitted
-citations support the returned claims.
-Google Custom Search and YouTube discovery are not part of this catalog or answer
-path.
+What the research path still does, in this order: the rules answer from the
+protocol's source; a short outside-PDF explanation may follow (lane R6,
+decision 6); and, only if enabled, supplemental model knowledge answers a
+narrow conceptual gap. None of them cites a document or a URL, and none can
+change workflow state.
 
 ### Supplemental model knowledge is not a retrieval backend
 
 `SUPPLEMENTAL_MODEL_KNOWLEDGE` is a separately gated last resort for a narrow
-conceptual dimension after the protocol, original source, and enabled
-authoritative web tier do not answer it. It is never indexed into the
+conceptual dimension after the protocol and its original source do not
+answer it. It is never indexed into the
 approved catalog and never gains document or URL citations.
 
 ```bash
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false
-export VOINEY_LAB_SUPPLEMENTAL_MODEL='grok-4.6'
+export VOINEY_LAB_SUPPLEMENTAL_PROVIDER=openai   # written down: an unset role is refused
+export VOINEY_LAB_SUPPLEMENTAL_MODEL=gpt-6-luna
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
 ```
 
 The Candidate A development launcher enables this option so the live demo can
-provide explicitly qualified general definitions when ordinary xAI text is
-available but web search is not terminally useful. It remains ineligible for
+provide explicitly qualified general definitions the source does not give.
+It remains ineligible for
 safety controls, preparation instructions, substitutions, numerical operating
 values, completion criteria, or any state mutation. The UI label is “일반 모델
 설명 · 확인된 권위 근거 없음”; there is no citation list and no claim of
@@ -228,12 +228,6 @@ Research status is Turn/generation owned. Once a result reaches `success`,
 server nor browser accepts another result for that identity. A newer accepted
 Turn and session stop terminally close any older in-flight research operation.
 
-The provider total deadline and visible enrichment budget are intentionally
-different. Configure `VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS` below the
-total timeout (the Candidate A launcher uses 4 and 20 seconds). Crossing the
-shorter budget removes the primary spinner and reports bounded background work;
-it creates neither a second request nor a second terminal result.
-
 ### Optional read-only multi-brain planning
 
 The Candidate A launcher can enable the project-specific typed Answer, Source,
@@ -244,7 +238,8 @@ in an evidence-only run:
 
 ```bash
 export VOINEY_LAB_MULTI_BRAIN_ENABLED=false
-export VOINEY_LAB_ANSWER_MODEL='grok-4.6'
+export VOINEY_LAB_ANSWER_PROVIDER=openai   # written down: an unset role keeps these closed
+export VOINEY_LAB_ANSWER_MODEL=gpt-6-luna
 export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
 export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS=8
 export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS=6

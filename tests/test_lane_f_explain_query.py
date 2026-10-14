@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 from voiney_lab.curated_protocol import CuratedProtocolSession
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
     plan_research_query,
     supplemental_explanation_query,
@@ -53,7 +52,6 @@ def _listener(index: int, *, supplemental: bool = False) -> ListenerSession:
     )
     session.active = True
     session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
-    session.external_reference_settings = ExternalReferenceSettings(False)
     if supplemental:
         session.supplemental_knowledge_settings = SupplementalKnowledgeSettings(
             True, "offline-supplement", 2.0,

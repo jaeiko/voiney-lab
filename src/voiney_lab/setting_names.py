@@ -43,19 +43,18 @@ class Setting:
 
 _NONE = "(없음)"
 #: Lane CL (2026-10-10, human decision 2): a role's provider and model have no
-#: default here -- a role nobody set should fail closed rather than reach a
-#: provider no one chose. The code still falls back to the old defaults
-#: (provider xai; the router grok-4.20-0309-non-reasoning, translation and
-#: supplemental grok-4.6) in model_providers.py, multi_brain.py,
-#: external_references.py, experiment_reports.py and voice_providers.py, so an
-#: unset role fails closed only while XAI_API_KEY is absent. Removing those
-#: fallbacks is outside lane CL's files; .env.example sets every role.
+#: default here -- a role nobody set fails closed rather than reach a provider
+#: no one chose. The code agrees: lanes PL, AN and RA removed the old defaults
+#: (provider xai; grok models) from model_providers.py, voice_providers.py,
+#: experiment_reports.py, external_references.py, multi_brain.py and
+#: llm_router.py, so an unset role is refused by the name of the missing
+#: setting whatever keys are set. .env.example sets every role.
 _SET_ME = "설정 필요"
 
 SETTINGS: tuple[Setting, ...] = (
     # --- 공급자 키 --------------------------------------------------------------
     Setting("XAI_API_KEY", KEYS, _NONE,
-            "xAI API 키 (공급자를 xai 로 둔 역할·STT·TTS, 외부 근거 웹 검색)",
+            "xAI API 키 (공급자를 xai 로 둔 역할·STT·TTS)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
     Setting("ANTHROPIC_API_KEY", KEYS, _NONE, "Anthropic API 키 (공급자가 anthropic 인 역할)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
@@ -128,11 +127,11 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_REPORT_MODEL", MODELS, _SET_ME, "실험 보고서 서술 모델"),
     Setting("VOINEY_LAB_REPORT_REASONING", MODELS, "(공급자 기본)", "보고서 서술 추론"),
     Setting("VOINEY_LAB_SUPPLEMENTAL_PROVIDER", MODELS, _SET_ME,
-            "PDF 밖 설명 공급자: 보조 모델 지식, 외부 근거 웹 검색(xai 만)"),
+            "PDF 밖 설명 공급자: 보조 모델 지식"),
     Setting("VOINEY_LAB_SUPPLEMENTAL_MODEL", MODELS, _SET_ME,
-            "PDF 밖 설명·외부 근거 검색 모델"),
-    Setting("VOINEY_LAB_SUPPLEMENTAL_REASONING", MODELS, "low",
-            "외부 근거 검색 추론 (low/medium/high)"),
+            "PDF 밖 설명 모델"),
+    Setting("VOINEY_LAB_SUPPLEMENTAL_REASONING", MODELS, "(공급자 기본)",
+            "PDF 밖 설명 추론"),
     Setting("VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS", MODELS, "600",
             "프로토콜 분석 호출 제한 시간 (초, 30–3600, 백그라운드 작업)"),
     Setting("VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS", MODELS, "2.5",
@@ -145,18 +144,6 @@ SETTINGS: tuple[Setting, ...] = (
             "Planner 역할 제한 시간 (초)"),
     Setting("VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS", MODELS, "25",
             "보고서 서술 제한 시간 (초)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS", MODELS,
-            "90 (candidate_a 프로필 20)", "외부 근거 검색 전체 제한 시간 (초)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS", MODELS, "5",
-            "외부 근거 검색 연결 제한 (초)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS", MODELS, "90",
-            "외부 근거 검색 읽기 제한 (초)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS", MODELS, "4",
-            "답에 외부 근거를 기다리는 예산 (초, 전체 제한보다 짧게)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_SERVICE_TIER", MODELS, "default",
-            "외부 근거 검색 서비스 등급 (default/priority)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_TURNS", MODELS, "1",
-            "외부 근거 검색 최대 턴 수 (1–5)"),
     Setting("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS", MODELS, "8",
             "보조 모델 지식 제한 시간 (초, 1–15)"),
     # --- 줄 WV (2026-10-09): 웹 설명·사진, AI 가 그린 도식 --------------------------
@@ -198,8 +185,6 @@ SETTINGS: tuple[Setting, ...] = (
             "작업공간 (조직·권한·연동)"),
     Setting("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", SWITCHES, "false (빈 값)",
             "실험 기록 장부"),
-    Setting("VOINEY_LAB_MOSS_ENABLED", SWITCHES, "false",
-            "코드가 읽지 않음 — Moss 연결은 줄 CL(2026-10-10)에서 지움. 실행기와 테스트 기준 명령만 false 로 둠"),
     Setting("VOINEY_LAB_LLM_ROUTER_ENABLED", SWITCHES, "false", "LLM 라우터"),
     Setting("VOINEY_LAB_ROUTER_FIRST", SWITCHES, "false",
             "라우터 먼저 (줄 RA): 앞 규칙은 시스템 정보·모호한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고, "
@@ -215,8 +200,6 @@ SETTINGS: tuple[Setting, ...] = (
             "VOINEY_LAB_MULTI_BRAIN_ENABLED", "Visual 역할"),
     Setting("VOINEY_LAB_REPORT_WRITER_ENABLED", SWITCHES, "true",
             "실험 보고서 서술 모델"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED", SWITCHES, "false",
-            "외부 근거 검색"),
     Setting("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED", SWITCHES, "false",
             "보조 모델 지식 설명"),
     Setting("VOINEY_LAB_WEB_EXPLANATIONS_ENABLED", SWITCHES, "false",
@@ -270,18 +253,6 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_OIDC_NAME_CLAIM", OTHER, "name", "OIDC 이름 클레임"),
     Setting("VOINEY_LAB_ANALYTICS_RETENTION_DAYS", OTHER, "90",
             "작업공간 분석 보관 일수 (1–3650)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE", OTHER, _NONE,
-            "외부 근거 도메인 프로필 (open/candidate_a/government_safety)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS", OTHER, _NONE,
-            "외부 근거 허용 도메인 1–5개 (쉼표로)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS", OTHER, _NONE,
-            "EXTERNAL_REFERENCE_DOMAINS 의 별칭 (값이 다르면 시작 거부)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS", OTHER, "5",
-            "외부 근거 최대 인용 수 (1–5)"),
-    Setting("VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS", OTHER, "900",
-            "외부 근거 검증 결과 캐시 시간 (초)"),
-    Setting("VOINEY_LAB_EXTERNAL_SEARCH_DISPLAY_MODE", OTHER, _NONE,
-            "open 이면 도메인 제한 없이 검색"),
     Setting("VOINEY_LAB_CASCADE_VAD_MODE", OTHER, "3", "음성 감지 민감도 (0–3)"),
     Setting("VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES", OTHER, "4",
             "말 시작 판정: 유성 프레임 수"),
@@ -327,7 +298,7 @@ SETTINGS: tuple[Setting, ...] = (
             "글꼴 설정 파일 — 한국어 .docx 를 바꿀 때 이 파일을 포함한 설정을 LibreOffice 에 줌",
             kept_because="fontconfig 의 표준 이름 (다른 소프트웨어, 줄 AN FM)"),
     Setting("VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS", OTHER, "30",
-            "PDF 읽기 하위 프로세스 제한 시간 (초, 1–600)"),
+            "PDF 읽기 하위 프로세스 제한 시간 (초, 1–600; 긴 문서를 받는 서버는 300 권고, docs/DEPLOYMENT_RUNBOOK.md)"),
     Setting("VOINEY_LAB_PLAYWRIGHT_APP_PORT", OTHER, "8000",
             "로컬 Playwright 가 붙을 서버 포트 (playwright.config.ts)"),
     Setting("HOST", OTHER, "127.0.0.1", "실행 스크립트의 듣기 주소",

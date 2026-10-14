@@ -45,7 +45,7 @@ def old_unprefixed(new: str) -> str:
     )
 
 
-OLD_MOSS = OLD_PREFIX + "MOSS_ENABLED"
+OLD_SWITCH = OLD_PREFIX + "LLM_ROUTER_ENABLED"
 OLD_CATALOG = OLD_PREFIX + "SAFETY_CATALOG"
 OLD_FACILITY = OLD_PREFIX + "FACILITY_ID"
 OLD_OCR = OLD_PREFIX + "OCR_PROVIDERS"
@@ -56,7 +56,7 @@ OLD_VOICE = old_unprefixed("VOINEY_LAB_TTS_VOICE")
 FAKE_ENV = (
     "# xAI 키 메모\n"
     f"XAI_API_KEY=sk-{SECRET}-1\n"
-    f"{OLD_MOSS}=false\n"
+    f"{OLD_SWITCH}=false\n"
     f'{OLD_CHAT}="grok 4 {SECRET}-2"  # inline note\n'
     f"export {OLD_VOICE}=leo\n"
     "\n"
@@ -102,7 +102,7 @@ class CheckTests(MigrateEnvCase):
         original = self.given(FAKE_ENV)
         code, output = self.run_tool("--check")
         self.assertEqual(code, 1)
-        for old in (OLD_MOSS, OLD_CHAT, OLD_VOICE, OLD_CATALOG, OLD_FACILITY, OLD_OCR):
+        for old in (OLD_SWITCH, OLD_CHAT, OLD_VOICE, OLD_CATALOG, OLD_FACILITY, OLD_OCR):
             self.assertIn(f"  {old} → {renamed(old)}\n", output)
         stays = output.split("그대로인 이름")[1].split("코드가 읽지 않는 이름")[0]
         self.assertIn("  XAI_API_KEY\n", stays)
@@ -130,7 +130,7 @@ class CheckTests(MigrateEnvCase):
             capture_output=True, text=True, timeout=60, check=False,
         )
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn(f"{OLD_MOSS} → VOINEY_LAB_MOSS_ENABLED", result.stdout)
+        self.assertIn(f"{OLD_SWITCH} → VOINEY_LAB_LLM_ROUTER_ENABLED", result.stdout)
         self.assertNotIn(SECRET, result.stdout + result.stderr)
         missing = subprocess.run(
             [sys.executable, str(SCRIPT), "--check", str(self.folder / "absent.env")],
@@ -245,12 +245,12 @@ class StopTests(MigrateEnvCase):
 
     def test_an_old_and_a_new_name_for_one_setting_stop(self):
         self.assert_stops_without_writing(
-            f"{OLD_MOSS}=false\nVOINEY_LAB_MOSS_ENABLED={SECRET}\n",
-            "VOINEY_LAB_MOSS_ENABLED", OLD_MOSS,
+            f"{OLD_SWITCH}=false\nVOINEY_LAB_LLM_ROUTER_ENABLED={SECRET}\n",
+            "VOINEY_LAB_LLM_ROUTER_ENABLED", OLD_SWITCH,
         )
 
     def test_two_old_names_that_became_one_stop(self):
-        new = "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
+        new = "VOINEY_LAB_STT_FILLER_WORDS"
         olds = sorted(old for old, target in RENAMED.items() if target == new)
         self.assertEqual(len(olds), 2)
         self.assert_stops_without_writing(
