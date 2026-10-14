@@ -185,7 +185,5 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 2. 도메인 결정과 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 실행(줄 PL 은 실행하지 않았다).
 3. 화면(줄 UI2): 시작 전 화면·안전 상자가 `safety_scope.notice`·`safety_pack.scope_notice` 를 그리는지.
 4. 보고서 문서(Word)의 시작 문장에 `institution_safety_notice` 를 적는 일(보고서 생성 코드 담당).
-5. README 5절의 "카탈로그가 없으면 파일럿 실행기가 시작을 거부한다" 문장은 이 결정 뒤 맞지 않는다. `docs/APPROVED_DOCUMENT_OPERATIONS.md`
-   4절과 `docs/TROUBLESHOOTING_GUIDE.md` 의 같은 문장도 같다(줄 PL 허용 문서 밖이라 고치지 않았다).
-6. 삭제 도구의 "파일을 열고 있는 프로세스" 확인은 Linux(`/proc`)에서만 하고, 다른 사용자가 연 파일은 볼 수 없다. 서버를 멈추는 것이 첫 단계다.
-7. 이 줄은 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).
+5. 삭제 도구의 "파일을 열고 있는 프로세스" 확인은 Linux(`/proc`)에서만 하고, 다른 사용자가 연 파일은 볼 수 없다. 서버를 멈추는 것이 첫 단계다.
+6. 이 줄은 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).

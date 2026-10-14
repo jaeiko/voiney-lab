@@ -1,7 +1,8 @@
 # Troubleshooting Guide
 
-Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen) and
-2026-10-10 (lane CL: role settings, the pilot launcher's catalog check)
+Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen),
+2026-10-10 (lane CL: role settings, the pilot launcher's catalog check) and
+2026-10-14 (lane DOC3: no role fallback, a pilot without a catalog)
 
 The safe default is always to preserve the last server-confirmed state. Do not
 repeat a state-changing command until the experiment timeline shows whether the
@@ -28,8 +29,8 @@ first attempt committed. Do not repair production state by editing SQLite.
 | `/readyz` returns 503 | Required local configuration did not parse | Read the non-secret exception class, inspect service configuration locally, correct it, and restart; do not add secrets to incident logs |
 | Operational identity configuration invalid | OIDC issuer/audience/JWKS is incomplete or malformed | Configure all OIDC values with HTTPS metadata; operational mode must not fall back to development identity |
 | OCR never finishes | The injected OCR provider is missing or failed | Check the provider configuration; the protocol stays blocked (`source_page_requires_ocr`) until the pages are read |
-| A model feature never answers (analysis, translation, the router, the "AI 일반 지식" explanation, report prose) | That role's provider or model is not set. The setting table says "설정 필요"; an unset role still falls back to the code's old xai default and fails without `XAI_API_KEY` | Set `VOINEY_LAB_<ROLE>_PROVIDER` and `_MODEL` in `.env` as in `.env.example` and restart; `./scripts/run_dev.sh --check-only` prints each role's provider and model |
-| `./scripts/run_pilot.sh` exits 1 before serving | No approved safety catalog at `data/runtime/pilot/approved_safety_catalog.sqlite`, an unreadable one, a demo document in it, or no approved active `reference_only` document | Build and audit the catalog as in `docs/APPROVED_DOCUMENT_OPERATIONS.md` §4; `--check-only` must exit 0 before the pilot starts |
+| A model feature never answers (analysis, translation, the router, the "AI 일반 지식" explanation, report prose) | That role's provider or model is not set. The setting table says "설정 필요", and the code has no fallback (the old xai default was removed in lanes PL, AN and RA): an unset role fails closed, by the name of the missing setting | Set `VOINEY_LAB_<ROLE>_PROVIDER` and `_MODEL` in `.env` as in `.env.example` and restart; `./scripts/run_dev.sh --check-only` prints each role's provider and model |
+| `./scripts/run_pilot.sh` exits 1 before serving | A file is at `data/runtime/pilot/approved_safety_catalog.sqlite` but cannot serve as a pilot catalog: unreadable (not a catalog, or a folder or broken link there), a demo document in it, or no approved active `reference_only` document. (With **no** file there the launcher does not exit: it starts as `source_protocol_only`, "기관 안전 문서 없음 · 원문 안전 주의만", human decision of 2026-10-13.) Another cause is an old setting name set in the environment or `.env`, which the start-up guard refuses by name | Either build and audit the catalog as in `docs/APPROVED_DOCUMENT_OPERATIONS.md` §4, or move the file away to start without institution documents; read the `[ERROR]` line the launcher prints. `--check-only` must exit 0 before the pilot starts |
 
 The reviewer and administrator screens were removed on 2026-10-08 (lane DI);
 there is no inbox, approval, connector or pilot-metrics symptom any more.

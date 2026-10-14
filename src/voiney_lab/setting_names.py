@@ -43,13 +43,12 @@ class Setting:
 
 _NONE = "(없음)"
 #: Lane CL (2026-10-10, human decision 2): a role's provider and model have no
-#: default here -- a role nobody set should fail closed rather than reach a
-#: provider no one chose. The code still falls back to the old defaults
-#: (provider xai; the router grok-4.20-0309-non-reasoning, translation and
-#: supplemental grok-4.6) in model_providers.py, multi_brain.py,
-#: external_references.py, experiment_reports.py and voice_providers.py, so an
-#: unset role fails closed only while XAI_API_KEY is absent. Removing those
-#: fallbacks is outside lane CL's files; .env.example sets every role.
+#: default here -- a role nobody set fails closed rather than reach a provider
+#: no one chose. The code agrees: lanes PL, AN and RA removed the old defaults
+#: (provider xai; grok models) from model_providers.py, voice_providers.py,
+#: experiment_reports.py, external_references.py, multi_brain.py and
+#: llm_router.py, so an unset role is refused by the name of the missing
+#: setting whatever keys are set. .env.example sets every role.
 _SET_ME = "설정 필요"
 
 SETTINGS: tuple[Setting, ...] = (

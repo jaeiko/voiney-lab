@@ -373,18 +373,19 @@ utterance (16 kHz mono PCM16) to one batch STT request; replies are spoken one
 sentence segment at a time, each segment one TTS request for 16 kHz PCM16.
 `src/voiney_lab/voice_providers.py` lets each of those two calls use a
 different provider. The setting table's default for both providers is
-"설정 필요" (lane CL, human decision 2); the code still falls back to xAI
-when a provider is unset. `.env.example` sets ElevenLabs `scribe_v2` for STT
+"설정 필요" (lane CL, human decision 2); the code no longer falls back to
+xAI (lane PL, 2026-10-13): an unset provider is refused by the setting's name
+where it would be used. `.env.example` sets ElevenLabs `scribe_v2` for STT
 and `google_cloud` (Chirp 3 HD) for TTS.
 
 | Setting | Values | Default |
 |---|---|---|
-| `VOINEY_LAB_STT_PROVIDER` | `xai`, `google_cloud`, `elevenlabs` | 설정 필요 (code fallback `xai`) |
+| `VOINEY_LAB_STT_PROVIDER` | `xai`, `google_cloud`, `elevenlabs` | 설정 필요 (no fallback: refused by name) |
 | `VOINEY_LAB_STT_MODEL` | provider model id | xai: not sent; google_cloud: `latest_long`; elevenlabs: `scribe_v2` |
 | `VOINEY_LAB_STT_LANGUAGE` | `ko`, `en`, `vi` — used when the session input language is `auto` | empty (provider detects; google_cloud then uses `ko`) |
 | `VOINEY_LAB_STT_TIMEOUT_SECONDS` | 1–300 | `120` |
 | `VOINEY_LAB_STT_VAD_THRESHOLD`, `VOINEY_LAB_STT_FILLER_WORDS` | xAI-only request fields (lane SV moved them from xAI-only names; `setting_renames.py` maps the old ones) | `0.5`, `0` |
-| `VOINEY_LAB_TTS_PROVIDER` | `xai`, `google_cloud`, `elevenlabs` | 설정 필요 (code fallback `xai`) |
+| `VOINEY_LAB_TTS_PROVIDER` | `xai`, `google_cloud`, `elevenlabs` | 설정 필요 (no fallback: refused by name) |
 | `VOINEY_LAB_TTS_MODEL` | provider model id | xai, google_cloud: not sent; elevenlabs: `eleven_v4_turbo` |
 | `VOINEY_LAB_TTS_VOICE` | a voice of the selected provider | xai: `leo`; google_cloud: `ko-KR-Chirp3-HD-Charon`; elevenlabs: `JBFqnCBsd6RMkjVDRZzb` |
 | `VOINEY_LAB_TTS_TIMEOUT_SECONDS` | 1–300 | `120` |
@@ -1034,8 +1035,8 @@ that the server validates and carries out. **It is off unless
 it on in development or the pilot is decided by the people running it, from
 the lane R evaluation). Off, the voice path is exactly the one described
 above. The router role's `VOINEY_LAB_ROUTER_PROVIDER` and
-`VOINEY_LAB_ROUTER_MODEL` (setting table: "설정 필요"; code fallback `xai` ·
-`grok-4.20-0309-non-reasoning`; `.env.example`: `openai` · `gpt-6-luna`) and
+`VOINEY_LAB_ROUTER_MODEL` (setting table: "설정 필요", no code fallback since
+lane RA; `.env.example`: `openai` · `gpt-6-luna`) and
 `VOINEY_LAB_ROUTER_REASONING` choose the model (see [Model providers by
 role](#model-providers-by-role)), and `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`
 (default 2.5) how long a turn waits for it; it needs that provider's key.
@@ -1400,18 +1401,21 @@ Decision of 2026-10-04 (lane M1): each role names its provider, model and
 reasoning, and the people running the pilot choose them from our evaluation
 sets -- performance first, cost second. Since lane CL (2026-10-10, human
 decision 2) the setting table gives every role's provider and model as "설정
-필요": set each one. The code still falls back to the provider and model it
-called before lane M1 (below), so an unset role fails closed only while
-`XAI_API_KEY` is absent.
+필요": set each one. The code no longer falls back to the provider and model
+it called before lane M1: `model_providers.DEFAULT_MODELS` is empty for every
+role (lane AN, 2026-10-13), and `multi_brain.py`, `llm_router.py`,
+`voice_providers.py`, `experiment_reports.py` and `external_references.py`
+refuse an unset role by the name of the missing setting (lanes PL, AN and RA).
+An unset role is closed whatever keys are set.
 
-| Role | Used by | In use (`.env.example`) | Code fallback when unset |
+| Role | Used by | In use (`.env.example`) | When unset |
 |---|---|---|---|
-| `ROUTER` | the LLM router's one call per voice turn (tools) | `openai` · `gpt-6-luna` | `xai` · `grok-4.20-0309-non-reasoning` |
-| `ANSWER` | the brain's answers and the multi-brain roles | `openai` · `gpt-6-luna` | `xai` · none: the brain requires it, the multi-brain roles `grok-4.6` |
-| `TRANSLATION` | a revision's Korean and the reader translation of a step | `google` · `gemini-3.8-flash` · `low` | `xai` · `grok-4.6` |
-| `ANALYSIS` | the structured PDF protocol analysis | `google` · `gemini-3.8-flash` · `low` (lane AQ) | `xai` · none (required), reasoning `high` |
-| `REPORT` | the experiment report's prose | `google` · `gemini-3.8-flash` | `xai` · `VOINEY_LAB_SUPPLEMENTAL_MODEL`, then `grok-4.6` |
-| `SUPPLEMENTAL` | outside-the-PDF explanations and the web reference search | `openai` · `gpt-6-luna` | `xai` · `grok-4.6`, reasoning `low` |
+| `ROUTER` | the LLM router's one call per voice turn (tools) | `openai` · `gpt-6-luna` | the router stays closed ("VOINEY_LAB_ROUTER_PROVIDER 와 VOINEY_LAB_ROUTER_MODEL 설정 필요"); the rules' path answers |
+| `ANSWER` | the brain's answers and the multi-brain roles | `openai` · `gpt-6-luna` | the multi-brain roles stay closed, by name |
+| `TRANSLATION` | a revision's Korean and the reader translation of a step | `google` · `gemini-3.8-flash` · `low` | the call is refused by the setting's name |
+| `ANALYSIS` | the structured PDF protocol analysis | `google` · `gemini-3.8-flash` · `low` (lane AQ) | "Protocol analysis provider is not configured." — no analysis runs; reasoning default `high` |
+| `REPORT` | the experiment report's prose | `google` · `gemini-3.8-flash` | the prose writer is off; the report keeps the server's own sentences |
+| `SUPPLEMENTAL` | outside-the-PDF explanations and the web reference search | `openai` · `gpt-6-luna` | the explanation is refused by name; reasoning default `low` |
 
 **Answer role in the voice turn, and step translation (lane F, decision 1,
 2026-10-06).** The voice turn's multi-brain Answer role is used only when its
@@ -1580,7 +1584,7 @@ parameter or else the file name. The image is never read.
 
 | Variable | Purpose |
 |---|---|
-| `XAI_API_KEY` | Server-only xAI credential (the code's fallback provider of every role). Needed only when a role, STT or TTS names `xai` (or is unset), or the xAI-only external reference search is on: the server and both launchers refuse to start, naming the feature, when it is on without the key |
+| `XAI_API_KEY` | Server-only xAI credential (no role falls back to xAI any more). Needed only when a role, STT or TTS names `xai`, or the xAI-only external reference search is on: the server and both launchers refuse to start, naming the feature, when it is on without the key |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` | Credentials of the other providers, read only when a role names them |
 | `VOINEY_LAB_<ROLE>_PROVIDER`, `_MODEL`, `_REASONING` | The model behind each role; see [Model providers by role](#model-providers-by-role) |
 | `VOINEY_LAB_ANALYSIS_MODEL` | Required structured protocol analysis model; in use: `gemini-3.8-flash` (google, reasoning `low`, lane AQ) |

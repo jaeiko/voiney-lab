@@ -1,12 +1,15 @@
 # Approved laboratory reference operations
 
-Revised 2026-10-10 (lane CL). This guide builds the approved safety-document
-catalog: the file `scripts/run_pilot.sh` requires before it serves (§4) and
-that the step safety card reads. The voice answer from approved lab
-references and the Moss reranker were deleted on 2026-10-10; what the catalog
-is for next (and the pilot launcher's check) is decided in lane PL. The
-catalog never changes a protocol: the protocol's source remains the authority
-for its own quantities, ordering, and transitions.
+Revised 2026-10-10 (lane CL) and 2026-10-14 (lane DOC3). This guide builds
+the approved safety-document catalog: the optional file that
+`scripts/run_pilot.sh` checks when it is there (§4) and that the step safety
+card reads. The pilot does **not** need it: with no catalog file the launcher
+starts in the `source_protocol_only` scope, on the uploaded PDF's own safety
+statements alone (human decision of 2026-10-13, "B안"; `docs/PILOT_GUIDE.md`
+§1). The voice answer from approved lab references and the Moss reranker were
+deleted on 2026-10-10. The catalog never changes a protocol: the protocol's
+source remains the authority for its own quantities, ordering, and
+transitions.
 
 ## 1. Prepare a reviewed manifest
 
@@ -67,9 +70,10 @@ answer as approval evidence.
 
 ## 4. Runtime configuration and health check
 
-The normal server configuration requires an absolute
-`VOINEY_LAB_SAFETY_CATALOG`, an exact
-`VOINEY_LAB_USAGE_SCOPE`, and (when policy requires it) a facility ID.
+The normal server configuration requires an exact
+`VOINEY_LAB_USAGE_SCOPE`, an absolute `VOINEY_LAB_SAFETY_CATALOG` (except in
+the `source_protocol_only` scope, which reads no catalog), and (when policy
+requires it) a facility ID.
 Configuration belongs in the existing operator environment; this guide does not
 modify `.env`.
 
@@ -85,16 +89,27 @@ Korean `demo` records (`FICTIONAL-MOSS-DEMO-SDS-KO` and
 `FICTIONAL-MOSS-DEMO-SOP-KO`, version 1.0). It is suitable only for a fictional
 demo (CI builds the same records for its browser tests). It cannot support operational Candidate A precautions until an
 appropriate laboratory reference is separately reviewed and configured, and the
-pilot launcher refuses it because both records are demo documents.
+pilot launcher refuses it as a pilot catalog because both records are demo
+documents (it refuses a catalog that holds one; with no catalog at all the
+pilot starts as `source_protocol_only`).
 
 ### The controlled pilot's catalog
 
-`scripts/run_pilot.sh` does not read either variable from `.env`. It fixes the
-catalog at `data/runtime/pilot/approved_safety_catalog.sqlite` (an absolute
-path under the checkout) and the scope at `reference_only`, the one scope a
-pilot without OIDC can run; `docs/BEHAVIOR_REFERENCE.md` ("Launchers") gives the reasons. Build
-the catalog from a reviewed manifest in a staging path as in §2, audit it with
-`--scope reference_only`, and copy it into place between server runs:
+`scripts/run_pilot.sh` does not read either variable from `.env`. It looks for
+the catalog at one fixed path, `data/runtime/pilot/approved_safety_catalog.sqlite`
+(an absolute path under the checkout), and decides the scope from whether a
+file is there:
+
+| At that path | Scope | What happens |
+|---|---|---|
+| nothing | `source_protocol_only` | the pilot starts; no catalog is read; the screen, the safety answers and the record say "기관 안전 문서 없음 · 원문 안전 주의만" |
+| a file (or a link) | `reference_only` | the launcher checks it (below) and refuses to start if it fails |
+
+`reference_only` is the one catalog scope a pilot without OIDC can run;
+`docs/BEHAVIOR_REFERENCE.md` ("Launchers") gives the reasons. To run the pilot
+**with** institution documents, build the catalog from a reviewed manifest in a
+staging path as in §2, audit it with `--scope reference_only`, and copy it into
+place between server runs:
 
 ```bash
 .venv/bin/python -B scripts/audit_approved_catalog.py \
@@ -104,10 +119,13 @@ cp "$candidate_catalog" data/runtime/pilot/approved_safety_catalog.sqlite
 ./scripts/run_pilot.sh --check-only   # must exit 0
 ```
 
-The launcher refuses to start, and `--check-only` exits 1, when the file is
-missing or unreadable, holds any demo document (scope `demo` or `test_only`,
-or a title containing "fictional", counted in any approval state), or has no
-approved, active `reference_only` document. Every pilot document therefore
+A catalog file that is there is never taken for "no catalog". The launcher
+refuses to start, and `--check-only` exits 1, when that file is unreadable
+(not a catalog, or a folder or a broken link in its place), holds any demo
+document (scope `demo` or `test_only`, or a title containing "fictional",
+counted in any approval state), or has no approved, active `reference_only`
+document. To start without institution documents instead, move the file away.
+Every document in a pilot catalog therefore
 needs `usage_scope: reference_only`, `approval_status: approved`,
 `active: true`, a non-`test_fixture` authority, and a title without
 "fictional". Voice safety search returns only documents whose scope equals

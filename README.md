@@ -59,7 +59,7 @@
 | 음성 인식 (STT) | 말 → 글 | ElevenLabs `scribe_v2` |
 | 음성 합성 (TTS) | 글 → 말 | Google Cloud Chirp 3 HD (`ko-KR-Chirp3-HD-Charon`) |
 
-- 역할별 공급자·모델의 기본값은 **"설정 필요"** 다(`src/voiney_lab/setting_names.py`). 다만 코드에는 옛 기본(공급자 `xai`)이 남아 있어서, 비워 두면 `XAI_API_KEY` 가 없을 때만 그 역할이 실패로 닫힌다. 모든 역할을 `.env` 에 적는다.
+- 역할별 공급자·모델의 기본값은 **"설정 필요"** 다(`src/voiney_lab/setting_names.py`). 코드에도 옛 기본(공급자 `xai`, `grok` 모델)은 없다 — 줄 PL(2026-10-13)·줄 AN·줄 RA 가 `model_providers.py`·`voice_providers.py`·`multi_brain.py`·`llm_router.py` 에서 없앴다. 비워 둔 역할(음성 인식·합성 포함)은 다른 공급자로 가지 않고, 그 설정의 이름을 적은 오류로 닫힌다. 모든 역할을 `.env` 에 적는다.
 - 실제 호출 기록(줄 보고서 기준): OpenAI `gpt-6-luna` 로 라우터 평가 줄을 22회 호출(줄 XO, 2026-10-05), Google Gemini 로 분석·번역 222회 호출(줄 AQ, 2026-10-10). 분석 시간은 추론 `low` 에서 p50 39 s, p90 112 s(25개 문서, 줄 AQ, 2026-10-10). 이 저장소의 테스트는 공급자를 가짜 SDK 로만 부른다(contract-tested); 그 밖의 실제 호출 기록은 각 줄 보고서에 있다(예: 음성 공급자는 줄 SV).
 - 설정 이름 표 전체는 `src/voiney_lab/setting_names.py`, 옛 이름 바꾸기는 `python scripts/migrate_env.py --check` / `--write`.
 
@@ -84,7 +84,7 @@ cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 
 - in-gel 개발 프로토콜과 그 원본 PDF(`data/runtime/candidate-a-source/in-gel-digestion.pdf`, 외부 라이선스라 커밋하지 않음)를 SHA-256 으로 확인하고 올린다.
 - 상태는 `data/runtime/candidate-a-live-acceptance/` 에 둔다.
-- 승인 안전 문서 카탈로그(`VOINEY_LAB_SAFETY_CATALOG`)와 사용 범위(`VOINEY_LAB_USAGE_SCOPE`)는 `.env` 에서 읽는다. 카탈로그가 없으면 서버가 프로토콜 목록에 답하지 않는다.
+- 승인 안전 문서 카탈로그(`VOINEY_LAB_SAFETY_CATALOG`)와 사용 범위(`VOINEY_LAB_USAGE_SCOPE`)는 `.env` 에서 읽는다. 카탈로그를 읽는 범위(`operational`·`demo`·`reference_only`·`test_only`)에서 카탈로그가 없으면 서버가 프로토콜 목록에 답하지 않는다. `source_protocol_only` 는 카탈로그를 읽지 않는다.
 
 ### 파일럿
 
@@ -94,7 +94,8 @@ cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 ```
 
 - 상태는 `data/runtime/pilot/` 에 둔다. 승인 안전 카탈로그는 실행기가 `data/runtime/pilot/approved_safety_catalog.sqlite`, 범위는 `reference_only` 로 고정한다.
-- **지금 파일럿 실행기는 승인 안전 카탈로그가 없으면 시작을 거부한다(종료 코드 1).** 파일이 없거나, 카탈로그로 읽을 수 없거나, demo 문서가 섞여 있거나, 승인된 `reference_only` 문서가 하나도 없을 때도 거부한다. 이 카탈로그를 어떻게 할지는 줄 PL 에서 정한다.
+- **승인 안전 카탈로그 파일이 없어도 파일럿 실행기는 시작한다**(2026-10-13 결정, "B안"). 사용 범위는 `source_protocol_only` 가 되고, 업로드한 PDF 의 원문 안전 주의만 쓴다. 화면·기록·시작 점검 배너가 "기관 안전 문서 없음 · 원문 안전 주의만" 이라고 말한다.
+- 카탈로그 파일이 **있으면** 범위는 `reference_only` 이고 실행기가 점검한다. 그 파일이 읽을 수 없거나, demo 문서가 섞였거나, 승인된 `reference_only` 문서가 하나도 없으면 "없음"으로 치지 않고 시작을 거부한다(종료 코드 1). 기관 문서 없이 열려면 그 파일을 치운다. 자세한 것은 `docs/PILOT_GUIDE.md` 1절.
 
 ## 6. 테스트 기준 (Verification)
 
