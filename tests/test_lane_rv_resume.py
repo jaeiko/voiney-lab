@@ -91,13 +91,15 @@ class SessionStartTests(_CatalogCase):
         # Analysed again since the experiment started.
         self.analyze(self.answer(), analysis_id="analysis-" + "c" * 32, reanalysis=True)
 
-    def start(self, **recovery):
+    def start(self, recovery_session_id=None):
+        """What the session start reads for a recovery, and the entry it reads."""
+
         token = server._REQUEST_PRINCIPAL.set(self.principal)
         try:
             with patch.dict("os.environ", self.environment, clear=False):
                 entry = self.catalog.get_entry(self.protocol_id)
-                return server._catalog_fixture_for_start(
-                    self.catalog, self.protocol_id, entry, **recovery)
+                return server._recovery_fixture(
+                    self.catalog, self.protocol_id, entry, recovery_session_id), entry
         finally:
             server._REQUEST_PRINCIPAL.reset(token)
 
@@ -112,11 +114,13 @@ class SessionStartTests(_CatalogCase):
             store.close()
 
     def test_a_new_run_gets_the_latest_and_a_recovery_the_one_it_started_on(self) -> None:
-        fixture, revision_id, failure = self.start()
-        self.assertEqual((fixture.revision_id, revision_id, failure),
-                         ("pdf-1-analysis-2", "pdf-1-analysis-2", None))
-        fixture, revision_id, failure = self.start(
-            recovery_session_id=self.experiment["session_id"])
+        # A new run is no recovery: the session start loads what runs now.
+        recovered, entry = self.start()
+        self.assertIsNone(recovered)
+        self.assertEqual(entry.revision_id, "pdf-1-analysis-2")
+        self.assertEqual(
+            self.catalog.load_executable_fixture(self.protocol_id).revision_id, "pdf-1-analysis-2")
+        (fixture, revision_id, failure), _ = self.start(self.experiment["session_id"])
         self.assertEqual((fixture.revision_id, revision_id, failure),
                          ("pdf-1-analysis-1", "pdf-1-analysis-1", None))
         # The durable experiment accepts it: the gap lane RN found is closed.
@@ -128,8 +132,8 @@ class SessionStartTests(_CatalogCase):
             self.resume("pdf-1-analysis-2")
 
     def test_an_unknown_experiment_leaves_the_start_as_it_was(self) -> None:
-        fixture, revision_id, failure = self.start(recovery_session_id="experiment-unknown")
-        self.assertEqual((revision_id, failure), ("pdf-1-analysis-2", None))
+        recovered, _ = self.start("experiment-unknown")
+        self.assertIsNone(recovered)
         self.assertIsNone(server._recovery_revision_id("experiment-unknown", self.protocol_id))
 
 

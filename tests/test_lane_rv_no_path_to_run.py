@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from tests.test_lane_rv_review_api import STEP_TWO
 from tests.test_lane_rv_review_pending import MADE_UP, _CatalogCase
@@ -54,10 +55,14 @@ class NoPathToRunTests(_CatalogCase):
         for revision_id in ("pdf-1", "pdf-1-analysis-1", "pdf-1-review-1"):
             with self.subTest(revision_id=revision_id), self.assertRaises(ProtocolCatalogError):
                 self.catalog.load_fixture_for_revision(self.protocol_id, revision_id)
-        fixture, revision_id, refusal = server._catalog_fixture_for_start(
-            self.catalog, self.protocol_id, entry)
-        self.assertEqual((fixture, revision_id, refusal),
-                         (None, None, "protocol_selection_unavailable"))
+        # A new run: no recovery, so the session start reads the entry, which
+        # does not run. A recovery naming the revision without an analysis is
+        # refused the same way.
+        self.assertIsNone(server._recovery_fixture(self.catalog, self.protocol_id, entry, None))
+        with patch.object(server, "_recovery_revision_id", return_value="pdf-1-review-1"):
+            self.assertEqual(
+                server._recovery_fixture(self.catalog, self.protocol_id, entry, "experiment-1"),
+                (None, None, "protocol_selection_unavailable"))
         start_screen = self.catalog.review(self.protocol_id)
         self.assertNotIn(MADE_UP, json.dumps(start_screen, ensure_ascii=False))
 
@@ -98,7 +103,7 @@ class NoPathToRunTests(_CatalogCase):
 
 class NoPathForAFailedPieceTests(_CatalogCase):
     def test_a_failed_piece_s_pages_must_be_confirmed_before_a_version(self) -> None:
-        from unittest.mock import Mock, patch
+        from unittest.mock import Mock
         from voiney_lab.experiment_protocol_analysis import AnalysisPiece
 
         pieces = (AnalysisPiece(1, 2, 1, 2), AnalysisPiece(2, 2, 2, 3))

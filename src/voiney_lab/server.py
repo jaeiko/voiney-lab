@@ -749,29 +749,27 @@ def _recovery_revision_id(session_id:object,protocol_id:str)->str|None:
     return revision if isinstance(revision,str) else None
 
 
-def _catalog_fixture_for_start(
-    catalog:ProtocolCatalog,protocol_id:str,entry:Any,*,
-    recovery_session_id:object=None,
-)->tuple[CuratedProtocolFixture|None,str|None,str|None]:
-    """(fixture, revision id, refusal) for a session start on a catalog protocol.
+def _recovery_fixture(
+    catalog:ProtocolCatalog,protocol_id:str,entry:Any,recovery_session_id:object,
+)->tuple[CuratedProtocolFixture|None,str|None,str|None]|None:
+    """(fixture, revision id, refusal) of a recovery onto an older revision, or None.
 
-    A new run gets what the catalog runs now -- the latest review version,
-    or the analysis that passed (lane RV, decision c). A recovery gets the
-    revision its experiment started on (lane RV, decision f), which may be
-    older: an analysis analysed again since, or an earlier review version.
+    Lane RV, decision f: a recovery gets the revision its experiment started
+    on -- an analysis analysed again since, or an earlier review version --
+    when that is not what the catalog runs now. None for a new run and for a
+    recovery onto the current revision: the session start then loads what
+    runs now (the latest review version, or the analysis that passed).
     """
 
-    started_on=(
-        _recovery_revision_id(recovery_session_id,protocol_id)
-        if recovery_session_id is not None else None)
-    if started_on is not None and started_on!=entry.revision_id:
-        try:
-            return catalog.load_fixture_for_revision(protocol_id,started_on),started_on,None
-        except ProtocolCatalogError:
-            return None,None,"protocol_selection_unavailable"
-    if not entry.available_for_execution:
+    if recovery_session_id is None:
+        return None
+    started_on=_recovery_revision_id(recovery_session_id,protocol_id)
+    if started_on is None or started_on==entry.revision_id:
+        return None
+    try:
+        return catalog.load_fixture_for_revision(protocol_id,started_on),started_on,None
+    except ProtocolCatalogError:
         return None,None,"protocol_selection_unavailable"
-    return catalog.load_executable_fixture(protocol_id),entry.revision_id,None
 
 
 def _workspace_skipped_step_ids(state:Any)->tuple[str,...]:
@@ -10970,20 +10968,31 @@ async def voice_socket(websocket:WebSocket):
                                             entry=catalog.get_entry(requested_protocol_id)
                                         except ProtocolCatalogNotFoundError:
                                             entry=None
-                                        if entry is not None:
+                                        recovered=(
+                                            _recovery_fixture(
+                                                catalog,requested_protocol_id,entry,
+                                                control.get("experiment_session_id"))
+                                            if entry is not None else None)
+                                        if recovered is not None:
                                             (selected_curated_fixture,
                                              selected_revision_id,
-                                             selection_failure)=_catalog_fixture_for_start(
-                                                catalog,requested_protocol_id,entry,
-                                                recovery_session_id=control.get(
-                                                    "experiment_session_id"))
-                                            if selected_curated_fixture is not None:
-                                                selected_basis_entry={
-                                                    "source_filename":getattr(
-                                                        entry,"source_filename",None),
-                                                    "created_at":getattr(
-                                                        entry,"created_at",None),
-                                                }
+                                             selection_failure)=recovered
+                                        elif entry is not None:
+                                            if entry.available_for_execution:
+                                                selected_curated_fixture=(
+                                                    catalog.load_executable_fixture(
+                                                        requested_protocol_id))
+                                                selected_revision_id=entry.revision_id
+                                            else:
+                                                selection_failure=(
+                                                    "protocol_selection_unavailable")
+                                        if selected_curated_fixture is not None:
+                                            selected_basis_entry={
+                                                "source_filename":getattr(
+                                                    entry,"source_filename",None),
+                                                "created_at":getattr(
+                                                    entry,"created_at",None),
+                                            }
                                     finally:
                                         protocol_store.close()
                             if selected_curated_fixture is None:
