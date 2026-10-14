@@ -193,6 +193,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_MOSS_ENABLED", SWITCHES, "false",
             "코드가 읽지 않음 — Moss 연결은 줄 CL(2026-10-10)에서 지움. 실행기와 테스트 기준 명령만 false 로 둠"),
     Setting("VOINEY_LAB_LLM_ROUTER_ENABLED", SWITCHES, "false", "LLM 라우터"),
+    Setting("VOINEY_LAB_ROUTER_FIRST", SWITCHES, "false",
+            "라우터 먼저 (줄 RA): 앞 규칙은 시스템 정보·모호한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고, "
+            "나머지는 LLM 라우터가 answer/change_state/record_log/show_visual/clarify/not_for_me 중 고름 "
+            "(서버 검사). VOINEY_LAB_LLM_ROUTER_ENABLED=true 가 필요하며, 켜는 것은 사람 음성 시험 뒤 사람이 정함"),
     Setting("VOINEY_LAB_MULTI_BRAIN_ENABLED", SWITCHES, "false",
             "Answer/Source/Visual 모델 역할"),
     Setting("VOINEY_LAB_ANSWER_BRAIN_ENABLED", SWITCHES,

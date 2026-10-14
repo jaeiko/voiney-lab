@@ -270,6 +270,9 @@ class RouterAnswerVoiceTests(VoiceSessionHarness, unittest.TestCase):
         # back to xAI by itself.
         self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
         self.environment["XAI_API_KEY"] = "test-only-not-a-key"
+        # Lane RA, decision (g): no default provider or model any more.
+        self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
+        self.environment["VOINEY_LAB_ROUTER_MODEL"] = "fake-router-model"
         # The key is the router's. Step translation follows its own role's key
         # (lane F, decision 1), so that role is left keyless here.
         self.environment["VOINEY_LAB_TRANSLATION_PROVIDER"] = "anthropic"

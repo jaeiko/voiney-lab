@@ -90,11 +90,13 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(LlmRouterSettings().enabled)
         on = LlmRouterSettings.from_environment({
             "VOINEY_LAB_LLM_ROUTER_ENABLED": "true",
+            "VOINEY_LAB_ROUTER_PROVIDER": "xai",
             "VOINEY_LAB_ROUTER_MODEL": "grok-4.6",
             "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "3",
         })
         self.assertEqual((on.enabled, on.model, on.timeout_seconds), (True, "grok-4.6", 3.0))
-        # Lane AN, decision 1: no default router model ("설정 필요").
+        # Lane AN, decision 1, and lane RA, decision (g): no default router
+        # model any more ("설정 필요"); unset, there is none.
         self.assertIsNone(LlmRouterSettings.from_environment({}).model)
 
     def test_bad_values_fail_closed(self) -> None:
@@ -325,6 +327,9 @@ class RouterVoiceTests(VoiceSessionHarness, unittest.TestCase):
             # falls back to xAI by itself.
             self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
             self.environment["XAI_API_KEY"] = "test-only-not-a-key"
+            # Lane RA, decision (g): no default provider or model any more.
+            self.environment["VOINEY_LAB_ROUTER_PROVIDER"] = "xai"
+            self.environment["VOINEY_LAB_ROUTER_MODEL"] = "fake-router-model"
             # The key is the router's. Step translation follows its own role's key
             # (lane F, decision 1), so that role is left keyless here.
             self.environment["VOINEY_LAB_TRANSLATION_PROVIDER"] = "anthropic"

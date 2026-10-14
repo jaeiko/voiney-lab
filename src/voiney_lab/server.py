@@ -19,9 +19,7 @@ from openai import AsyncOpenAI, OpenAI
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     ConversationHistory,
-    SentenceSegment,
     answer_curated_protocol_question,
-    stream_brain_turn,
 )
 from voiney_lab.configuration import (
     CascadeSttSettings,
@@ -155,6 +153,7 @@ from voiney_lab.runtime_metrics import RUNTIME_METRICS
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
+    BrainActivation,
     BrainFact,
     BrainSnapshot,
     HybridMultiBrain,
@@ -166,11 +165,13 @@ from voiney_lab.multi_brain import (
 from voiney_lab.tools import ToolContext
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voiney_lab.llm_router import (
+    FRAGMENT_JOIN_SECONDS,
     LlmRouterSettings,
     RouterTurnOutcome,
     front_history_turn,
     history_before,
     history_turn,
+    incomplete_fragment,
     route_turn_with_llm_router,
     screen_history_turn,
 )
@@ -1133,10 +1134,24 @@ def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
     values=read or (
         [value for value in note.get("measurements") or () if value]
         if note.get("category")=="measurement" else [])
+    # Lane RA, decision (c): a value that differs from the source is read
+    # back as a deviation, with the source's value beside it.
+    deviations=[item for item in note.get("deviations") or () if isinstance(item,dict)]
     if language!="ko":
         display=speech=f"Recorded at step {note.get('step_label')}."
+        if deviations:
+            sources=", ".join(f"{item.get('said')} (source {item.get('source')})" for item in deviations)
+            display=speech=f"Recorded as a deviation at step {note.get('step_label')}: {sources}."
     elif confirm_mode=="quiet":
         display=speech="기록했어요."
+    elif deviations:
+        said=[str(item.get("said") or "") for item in deviations]
+        source=[str(item.get("source") or "") for item in deviations]
+        shown=", ".join(said)
+        spoken=", ".join(spoken_korean(value) for value in said)
+        particle=josa_ro(shown)[len(shown):]
+        display=f"편차로 기록했어요: {shown}{particle} 하셨고, 원문은 {' · '.join(source)}이에요."
+        speech=f"편차로 기록했어요. {spoken}{particle} 하셨고, 원문은 {', '.join(spoken_korean(value) for value in source)}이에요."
     elif values:
         shown=", ".join(values)
         spoken=", ".join(spoken_korean(value) for value in values)
@@ -4323,7 +4338,15 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     "approved_information","brain","curated_protocol",
     "deterministic_emergency",
     "language_clarification",
+    # Lane RA, decision (g): a session without a protocol has no general
+    # brain any more; its turn is answered by rule.
+    "no_protocol",
 })
+#: Lane RA, decision (d): how long a turn whose words end in an unfinished
+#: Korean ending waits for the words that follow before it is routed alone
+#: -- the join window, plus the time the endpoint and speech recognition
+#: take to deliver them.
+FRAGMENT_HOLD_SECONDS=FRAGMENT_JOIN_SECONDS+1.0
 TURN_PROGRESS_TRANSITIONS={
     "listening":frozenset({"transcribing","cancelled","error"}),
     "transcribing":frozenset({"routing","cancelled","error"}),
@@ -4422,6 +4445,8 @@ class ListenerSession:
         self.accepted_protocol_id:str|None=None
         self.accepted_revision_id:str|None=None
         self.turn_generations:dict[int,int]={}
+        #: Lane RA, decision (d): a turn's unfinished words, held for the next.
+        self._held_fragment:dict[str,Any]|None=None
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
         self.visual_tasks:set[asyncio.Task]=set()
         self.research_operations:set[tuple[int,int]]=set()
@@ -5072,6 +5097,38 @@ class ListenerSession:
             self.active_turn_id=None; self.framer=FrameBuffer()
             self._restore_primary_detector(TurnState.IDLE)
             self._reset_interrupt_input()
+    # --- Lane RA, decision (d): a fragment held for the words that follow ---------
+    def hold_fragment(self,turn_id:int,generation:int,text:str,*,ended_at:float)->None:
+        """Keep a turn's unfinished words for the turn that follows."""
+        self._held_fragment={
+            "turn_id":turn_id,"generation":generation,
+            "text":" ".join(text.split()),"ended_at":float(ended_at),
+        }
+    def held_fragment(self)->dict[str,Any]|None:
+        held=getattr(self,"_held_fragment",None)
+        return dict(held) if held else None
+    def release_fragment(self,turn_id:int,generation:int)->bool:
+        """Let the fragment's own turn route its words: True when it is still this turn's."""
+        held=getattr(self,"_held_fragment",None)
+        if held is None:
+            return True
+        if held["turn_id"]!=turn_id or held["generation"]!=generation:
+            return False
+        self._held_fragment=None
+        return True
+    def take_held_fragment(
+        self,turn_id:int,generation:int,*,speech_started_at:float|None,
+    )->str|None:
+        """The fragment a later turn joins, when its words started within the window."""
+        held=getattr(self,"_held_fragment",None)
+        if held is None:
+            return None
+        self._held_fragment=None
+        if turn_id<=held["turn_id"]:
+            return None
+        if speech_started_at is not None and speech_started_at-held["ended_at"]>FRAGMENT_JOIN_SECONDS:
+            return None
+        return str(held["text"])
     def reject_empty_transcript(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.active_turn_id=None; self.framer=FrameBuffer()
@@ -5390,6 +5447,15 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     open_question=getattr(curated,"open_server_question",None)
     # Lane CF, decision 5: "지금 기준: {파일 이름} · {올린 날짜}".
     basis=getattr(curated,"source_basis",None)
+    # Lane RA, decision (f): the next step's sentence, the kind of the open
+    # confirmation question, the candidates asked back, the values read
+    # back and the deviation a note recorded -- the session's own words, for
+    # lanes UI2 and RV to draw (the page is not changed here).
+    next_sentence=getattr(curated,"next_step_sentence",None)
+    confirm=getattr(curated,"confirm_question",None)
+    candidates=getattr(curated,"clarify_candidates",None)
+    readback=getattr(curated,"readback_values",None)
+    deviation=getattr(curated,"record_deviation",None)
     return {
         "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
@@ -5399,6 +5465,11 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
         # Lane WV, decision 1: the step's own figures, cut from the uploaded
         # PDF -- the list once its pages are cut, None while they are being.
         "source_figures":_screen_source_figures(curated),
+        "next_step_sentence":next_sentence("ko") if callable(next_sentence) else None,
+        "confirm_question":confirm() if callable(confirm) else None,
+        "clarify_candidates":candidates() if callable(candidates) else [],
+        "readback_values":readback() if callable(readback) else [],
+        "record_deviation":deviation() if callable(deviation) else None,
     }
 
 
@@ -8163,8 +8234,70 @@ def _router_route_fields(
                 outcome.verdict.reason_code if outcome.verdict is not None else None),
             "timings_ms":dict(outcome.timings_ms),
             "usage":usage,
+            # Lane RA: the router first -- the read-only call, who wrote the
+            # answer, and the roles' statuses.
+            "router_first":bool(settings.router_first),
+            "read_only":outcome.read_only.tool if outcome.read_only is not None else None,
+            "answered_by":outcome.answered_by,
+            "roles":dict(outcome.brain_statuses),
         },
     }
+
+
+class _RouterRoles:
+    """Lane RA, decision (b): the Answer, Source and Visual roles beside the router.
+
+    Started by the router line together with its own model call, with the
+    router's context as their facts; never raced against the rules' answer.
+    The Answer role's answer goes out when it passes the same checks as the
+    router's; the Source and Visual roles' outputs go where they went before
+    (the research step, the picture's kind). Off, or with no role enabled,
+    nothing is started.
+    """
+
+    def __init__(
+        self,session:"ListenerSession",curated:CuratedProtocolSession,*,
+        turn_id:int,generation:int,language:str,clock:Callable[[],float],
+    )->None:
+        self.session=session
+        self.curated=curated
+        self.turn_id=turn_id
+        self.generation=generation
+        self.language=language
+        self.clock=clock
+
+    def start(self,context:Any,transcript:str)->Any:
+        settings=self.session.multi_brain_settings
+        curated=self.curated
+        activation=BrainActivation(
+            answer=bool(settings.answer_brain_enabled),
+            source=bool(settings.source_brain_enabled),
+            visual=bool(settings.visual_brain_enabled),
+        )
+        if not settings.enabled or not activation.roles or not curated.active:
+            return None
+        step=curated.fixture.steps[curated.current_index]
+        facts=tuple(
+            BrainFact(fact_id,"router_evidence",text,page)
+            for fact_id,(text,page) in list(context.evidence.items())[:24]
+        )
+        if not facts:
+            return None
+        snapshot=BrainSnapshot(
+            configuration_id=self.session.accepted_configuration_id,
+            session_id=self.session.session_id,
+            turn_id=self.turn_id,generation_id=self.generation,
+            workflow_revision=int(context.snapshot.get("workflow_revision") or 0),
+            protocol_id=curated.fixture.protocol_id,
+            document_sha256=curated.fixture.source_pdf_sha256 or "",
+            step_id=step.step_id,step_index=curated.current_index,
+            language=self.language,transcript=transcript,
+            intent_kind="llm_router_turn",question_kind=None,
+            requested_entities=(),question_dimensions=(),
+            facts=facts,claims=(),
+        )
+        client=_role_client(RoleModel.from_environment("answer"))
+        return HybridMultiBrain(client,settings,clock=self.clock).start(snapshot,activation)
 
 
 async def _route_with_llm_router(
@@ -8187,6 +8320,13 @@ async def _route_with_llm_router(
             route=("brain" if state=="composing" else "curated_protocol"),
         )
 
+    roles=(
+        _RouterRoles(
+            session,curated,turn_id=turn_id,generation=generation,
+            language=language,clock=clock,
+        )
+        if settings.router_first and session.multi_brain_settings.enabled else None
+    )
     return await route_turn_with_llm_router(
         curated,transcript,turn_id=turn_id,language=language,
         settings=settings,client_factory=client,rule_route=rules_route,
@@ -8195,7 +8335,7 @@ async def _route_with_llm_router(
         configuration_id=session.accepted_configuration_id,
         generation=generation,arbitration=arbitration,
         actor_principal_id=actor_principal_id,actor_role=actor_role,
-        on_progress=said,clock=clock,
+        on_progress=said,clock=clock,roles=roles,
     )
 
 
@@ -8360,6 +8500,39 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
+    if session.llm_router_settings.router_first:
+        # Lane RA, decision (d): words cut by the endpoint. A fragment held
+        # by the turn before this one is joined with these words when they
+        # started within the join window; a turn whose words end in an
+        # unfinished Korean ending waits for the words that follow and, when
+        # they come and supersede it, is not routed at all.
+        held=session.take_held_fragment(
+            turn_id,generation,
+            speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
+        )
+        if held is not None:
+            transcript=f"{held} {transcript}".strip()
+            await current_text(
+                "turn.fragment_joined",turn_id=turn_id,text=transcript,
+                fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
+        if (
+            committed_at is not None
+            and recognize_emergency(transcript) is None
+            and incomplete_fragment(transcript)
+        ):
+            session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
+            deadline=committed_at+FRAGMENT_HOLD_SECONDS
+            try:
+                while session.clock()<deadline:
+                    if not session.is_current(turn_id,generation):
+                        # The words that follow took the turn; they join this fragment.
+                        return
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                # Superseded: the fragment stays held for the turn that follows.
+                raise
+            if not session.release_fragment(turn_id,generation):
+                return
     input_decision=classify_input_event(
         transcription,
         keyterms=keyterm_dump_terms(stt_keyterms),
@@ -9812,8 +9985,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "answer_origin":plan.answer_origin,
             },
         )
-        source_output=None
-        visual_output=None
+        # Lane RA, decision (b): with the router first the roles ran beside
+        # the router; their outputs go where they went before.
+        source_output=(
+            router_outcome.brain_outputs.get("source") if router_outcome is not None else None)
+        visual_output=(
+            router_outcome.brain_outputs.get("visual") if router_outcome is not None else None)
         if brain_run is not None and brain_snapshot is not None:
             late_answer_output=None
             roles_to_finish=[]
@@ -9931,89 +10108,41 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 {"role":"assistant","content":display_text},
             ])
         return
-    if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
-    turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
-                             turn_language,session.tool_context.usage_scope,
-                             session.tool_context.report_language)
-    queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
-    def mark_token():
-        nonlocal first_token
-        if not first_token: first_token=True; timings["first_grok_token_ms"]=round((clock()-endpoint)*1000)
-    async def sentence(segment:SentenceSegment):
-        nonlocal first_sentence
-        if not first_sentence:
-            first_sentence=True; timings["first_sentence_ms"]=round((clock()-endpoint)*1000)
-            timings["primary_text_ready_ms"]=timings["first_sentence_ms"]
-            await progress("composing",route="brain")
-        if not await current_text("reply.delta",turn_id=turn_id,segment_index=segment.segment_index,text=segment.text): return
-        await queue.put(segment)
-    async def consume():
-        nonlocal output_frames,segment_count,first_audio
-        while True:
-            segment=await queue.get()
-            if segment is None:return
-            if "first_tts_request_ms" not in timings:
-                timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-                await progress("synthesizing",route="brain")
-            pcm=await asyncio.to_thread(synthesize,said(segment.text),turn_language); frames=frame_complete_audio(pcm)
-            if not session.is_current(turn_id,generation):return
-            if not first_audio:
-                if filler is not None:await filler.primary_ready()
-                if not session.start_playback(turn_id):return
-                first_audio=True; timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-                await progress(
-                    "playing",route="brain",
-                    timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
-                if not await current_text("state.changed",state=session.state.value,turn_id=turn_id): return
-            if not session.is_current(turn_id,generation): return
-            await sender.segment(
-                turn_id,segment.segment_index,frames,generation)
-            output_frames+=len(frames); segment_count+=1
-    consumer=asyncio.create_task(consume())
-    try:
-        await current_text(
-            "turn.route_decision",turn_id=turn_id,
-            normalized_text=request_arbitration.normalized_text,
-            intent=request_arbitration.intent.value,
-            confidence=request_arbitration.confidence,
-            reason_code=request_arbitration.reason_code,
-            dimensions=list(request_arbitration.dimensions),
-            runtime_router="brain",
-            action="tool_or_grounded_response",
-            state_mutation=False,
-            answer_origin="pending",
-            fallback_reason=None,
-        )
-        await progress("composing",route="brain")
-        client=_role_client(RoleModel.from_environment("answer"),max_retries=_KEEP_SDK_RETRIES); client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
-        result=await stream_brain_turn(
-            client,session.history,transcript,sentence,mark_token,
-            tool_context=turn_context)
-        if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
-        await queue.put(None); await consumer
-        if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
-        if not await current_text("reply.complete",turn_id=turn_id,text=result.text): return
-        if not await current_text("audio.complete",turn_id=turn_id,segment_count=segment_count): return
-        timings["total_ms"]=round((clock()-endpoint)*1000)
-        if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used,route="brain"): return
-        _record_workspace_metric(
-            category="agent",metric_name="turn_route",
-            metric_value=float(timings.get("total_ms",0)),
-            dimensions={
-                "intent":request_arbitration.intent.value,
-                "route":"brain",
-                "answer_origin":"model_or_tool",
-                "reason_code":request_arbitration.reason_code or "none",
-                "status":"complete",
-            },
-        )
-        if not session.is_current(turn_id,generation): return
-        session.history.commit(result.messages,result.source_references)
-    finally:
-        if not consumer.done(): consumer.cancel()
-        while not queue.empty():
-            try: queue.get_nowait()
-            except asyncio.QueueEmpty: break
+    # Lane RA, decision (g): a session without a protocol has no general
+    # brain any more (session.start refuses cascade without a protocol, so
+    # this is reached only by a session built without one). Answered by
+    # rule, nothing called.
+    _record_workspace_metric(
+        category="agent",metric_name="turn_route",
+        dimensions={
+            "intent":request_arbitration.intent.value,
+            "route":"no_protocol","answer_origin":"server",
+            "reason_code":request_arbitration.reason_code or "none",
+            "status":"blocked",
+        },
+    )
+    await current_text(
+        "turn.route_decision",turn_id=turn_id,
+        normalized_text=request_arbitration.normalized_text,
+        intent=request_arbitration.intent.value,
+        confidence=request_arbitration.confidence,
+        reason_code=request_arbitration.reason_code,
+        dimensions=list(request_arbitration.dimensions),
+        runtime_router="no_protocol",
+        action="unsupported",
+        state_mutation=False,
+        answer_origin="server",
+        fallback_reason="no_protocol_session",
+    )
+    await finish_blocked_voice(
+        (
+            "이 세션에는 프로토콜이 없어 음성 안내를 할 수 없어요. 화면에서 프로토콜을 골라 시작해 주세요."
+            if turn_language=="ko" else
+            "This session has no protocol, so there is no voice guidance. Choose a protocol on the screen to start."
+        ),
+        "no_protocol",
+    )
+
 
 async def run_turn_safely(
     websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0,

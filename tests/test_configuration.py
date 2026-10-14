@@ -221,8 +221,12 @@ class DeploymentConfigurationTests(unittest.TestCase):
     def test_local_development_environment_precedes_documented_default(self):
         with tempfile.TemporaryDirectory() as temporary:
             environment_file=Path(temporary)/".env"
+            # Lane RA, decision (g): an enabled router needs its provider and
+            # model set, or it is closed.
             environment_file.write_text(
-                "VOINEY_LAB_LLM_ROUTER_ENABLED=true\n",
+                "VOINEY_LAB_LLM_ROUTER_ENABLED=true\n"
+                "VOINEY_LAB_ROUTER_PROVIDER=openai\n"
+                "VOINEY_LAB_ROUTER_MODEL=gpt-6-luna\n",
                 encoding="utf-8",
             )
             with patch.dict(os.environ,{},clear=True):

@@ -235,8 +235,16 @@ class RoleSettingsTests(unittest.TestCase):
                 self.assertIsNone(setting.model)
                 self.assertEqual(DEFAULT_MODELS[role], None)
                 self.assertIsNone(setting.reasoning)
-        self.assertEqual(LlmRouterSettings.from_environment({}).role_model,
-                         RoleModel("router", None, None, None))
+        # Lane AN, decision 1, and lane RA, decision (g): the router settings
+        # keep no default of their own -- unset, the router is off and has
+        # no role model to call (lane RA's LlmRouterSettings.role_model
+        # refuses rather than hand out an empty one).
+        unset = LlmRouterSettings.from_environment({})
+        self.assertFalse(unset.enabled)
+        self.assertIsNone(unset.model)
+        self.assertIsNone(unset.provider)
+        with self.assertRaises(ValueError):
+            unset.role_model
 
     def test_each_role_reads_its_own_three_settings(self) -> None:
         environment = {
