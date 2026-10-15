@@ -13,7 +13,6 @@ from voiney_lab.curated_protocol import (
     classify_curated_control_intent,
     resolve_question_focus,
 )
-from voiney_lab.external_references import _canonical_url
 from voiney_lab.language import (
     Transcription,
     classify_input_event,
@@ -202,12 +201,6 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         plan_pos = self.session.plan("젤이 완전히 탈색되어 투명해요", turn_id=23, language="ko")
         self.assertTrue(plan_pos.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "8")
-
-    def test_open_external_search_canonical_url_admission(self) -> None:
-        """In open mode (empty allowed_domains), any valid HTTPS URL is admitted."""
-        open_domains: tuple[str, ...] = ()
-        url1 = _canonical_url("https://en.wikipedia.org/wiki/Ammonium_bicarbonate", open_domains)
-        self.assertEqual(url1, "https://en.wikipedia.org/wiki/Ammonium_bicarbonate")
 
     def test_agent_meta_intent_works_in_all_states_including_compound_queries(self) -> None:
         """Agent meta questions must work before protocol start and during active workflow without mutation."""

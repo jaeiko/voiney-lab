@@ -313,34 +313,43 @@ class TheCatalogRecordsTheRepairTests(unittest.TestCase):
         self.assertEqual(line["stage"], "ready")
         self.assertNotIn("고쳐 읽음", line["message"])
 
-    def test_a_repaired_retry_that_fails_too_is_the_run_s_failure(self) -> None:
+    def test_a_repaired_retry_with_an_item_too_waits_for_review(self) -> None:
+        # Lane RV, decision a (human decision 2026-10-12) changed this from
+        # "the run's failure": the retry's answer keeps an item the source
+        # does not hold, so the analysis waits for a person's review; both
+        # repairs stay recorded.
         model, error = self.analyze(
             one_short(self.raw(instruction="1. Add the solution.")),
             extra_closers(self.raw(instruction="1. Add the solution.")))
-        self.assertIsInstance(error, ProtocolAnalysisEvidenceError)
+        self.assertIsNone(error)
         self.assertEqual(model.calls, 2)
         failed = self.events("protocol_analysis_failed")
-        self.assertEqual([f["response_repaired"]["bracket_count"] for f in failed], [1, 2])
+        self.assertEqual([f["response_repaired"]["bracket_count"] for f in failed], [1])
+        (pending,) = self.events("protocol_analysis_review_pending")
+        self.assertEqual(pending["response_repaired"]["bracket_count"], 2)
         line = self.catalog.pipeline_status(self.protocol_id)
-        self.assertEqual(line["stage"], "evidence")
-        self.assertIn("자동 재시도(1/1)도 실패했습니다", line["message"])
-        self.assertIn("응답 형식을 고쳐 읽음(괄호 2개)", line["message"])
+        self.assertEqual(line["stage"], "review")
 
     def test_a_whole_answer_that_fails_its_evidence_is_still_not_sent_again(self) -> None:
         model, error = self.analyze(self.raw(instruction="1. Add the solution."), self.raw())
-        self.assertIsInstance(error, ProtocolAnalysisEvidenceError)
+        # Lane RV, decision a: kept for a person's review rather than failed.
+        self.assertIsNone(error)
+        self.assertEqual(
+            self.catalog.get_entry(self.protocol_id).analysis_status, "review_pending")
         self.assertEqual(model.calls, 1)
         self.assertEqual(self.events("protocol_analysis_retry_started"), [])
 
-    def test_a_person_s_second_request_is_still_one_request(self) -> None:
+    def test_a_person_s_second_request_gets_its_own_retry_too(self) -> None:
+        # One request here until lane AN's EV4 step (2026-10-13): a person's
+        # "분석 다시 시도" now gets the one retry a first request gets, a
+        # repaired answer refused by a check included.
         broken = self.raw().replace('"warnings":', 'warnings":', 1)
         self.analyze(broken, broken)
         analysis_id = "analysis-" + "9" * 32
         self.catalog.request_analysis(self.protocol_id, analysis_id)
         model = _RawModel(one_short(self.raw(instruction="1. Add the solution.")), self.raw())
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            self.catalog.analyze(self.protocol_id, model, analysis_id=analysis_id)
-        self.assertEqual(model.calls, 1)
+        self.catalog.analyze(self.protocol_id, model, analysis_id=analysis_id)
+        self.assertEqual(model.calls, 2)
 
     def test_another_broken_answer_is_still_retried_once(self) -> None:
         broken = self.raw().replace('"warnings":', 'warnings":', 1)
@@ -353,22 +362,25 @@ class TheCatalogRecordsTheRepairTests(unittest.TestCase):
         (ready,) = self.events("protocol_analysis_ready")
         self.assertEqual(ready["response_repaired"]["bracket_count"], 1)
 
-    def test_a_repaired_re_analysis_that_fails_says_so_beside_the_pass(self) -> None:
+    def test_a_repaired_re_analysis_with_an_item_waits_for_review_beside_the_pass(self) -> None:
+        # Lane RV, decision a changed this from "fails": the re-analysis's
+        # retry keeps an item the source does not hold and waits for a
+        # person's review, beside the pass that still runs.
         self.analyze(self.raw())
         analysis_id = "analysis-" + "f" * 32
         self.catalog.request_analysis(self.protocol_id, analysis_id, reanalysis=True)
         bad = self.raw(instruction="1. Add the solution.")
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            self.catalog.analyze(
-                self.protocol_id, _RawModel(one_short(bad), one_short(bad)),
-                analysis_id=analysis_id)
+        self.catalog.analyze(
+            self.protocol_id, _RawModel(one_short(bad), one_short(bad)),
+            analysis_id=analysis_id)
         again = self.catalog.review(self.protocol_id)["reanalysis"]
-        self.assertEqual(again["failure"]["response_repaired"]["bracket_count"], 1)
-        self.assertEqual(again["automatic_retry"]["state"], "failed")
+        self.assertEqual(again["state"], "review_pending")
+        self.assertEqual(again["automatic_retry"]["state"], "review_pending")
+        (pending,) = self.events("protocol_analysis_review_pending")
+        self.assertEqual(pending["response_repaired"]["bracket_count"], 1)
         line = self.catalog.pipeline_status(self.protocol_id)
         self.assertEqual(line["stage"], "ready")
-        self.assertIn("다시 분석이 실패했습니다", line["message"])
-        self.assertIn("응답 형식을 고쳐 읽음(괄호 1개)", line["message"])
+        self.assertIn("다시 분석은 검토 대기 · 확인 필요 1건", line["message"])
         # The pass that still runs was read whole.
         self.assertNotIn("response_repair", line)
 

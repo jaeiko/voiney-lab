@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_protocol_claim_analysis import write_lined_pages, write_pages
+from tests.pdf_fixture_support import write_lined_pages, write_pages
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
 
 _PAGE = (

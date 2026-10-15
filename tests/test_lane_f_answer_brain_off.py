@@ -35,13 +35,19 @@ from tests.test_launcher_settings_win import _LauncherCopy
 GOOD_READING = "1단계: 세포 덩어리를 Tris-HCl buffer로 만든 Buffer 1 250 µL에 다시 풀어 줍니다."
 
 #: A run_dev.sh run: the multi-brain on, the answer brain at the launcher's
-#: default, a translation key present. Nothing else about models is set.
+#: default, a translation key present, and the answer role's model set --
+#: lane RA, decision (g): with no model the roles are closed, so a dev run
+#: sets one (as .env.example does).
 DEV_ENV = {
     "VOINEY_LAB_MULTI_BRAIN_ENABLED": "true",
     "VOINEY_LAB_ANSWER_BRAIN_ENABLED": "false",
+    "VOINEY_LAB_ANSWER_PROVIDER": "xai",
+    "VOINEY_LAB_ANSWER_MODEL": "grok-4.6",
     "VOINEY_LAB_TRANSLATION_PROVIDER": "xai",
     "XAI_API_KEY": "offline",
 }
+#: The answer role's model, for the launcher runs (decision g).
+ANSWER_ROLE = {"VOINEY_LAB_ANSWER_PROVIDER": "xai", "VOINEY_LAB_ANSWER_MODEL": "grok-4.6"}
 #: The same with no key for the translation role.
 NO_TRANSLATION_KEY = {
     "VOINEY_LAB_TRANSLATION_PROVIDER": "xai",
@@ -123,6 +129,11 @@ def _turn(settings: MultiBrainSettings, transcript: str):
         "voiney_lab.server.AsyncOpenAI", model,
     ), patch(
         "voiney_lab.server.require_env", return_value="offline",
+    ), patch.dict(
+        # Lane AN, decision 1: the roles the turn calls are named; an unset
+        # role no longer falls back to xAI.
+        os.environ,
+        {"VOINEY_LAB_TRANSLATION_PROVIDER": "xai", "VOINEY_LAB_ANSWER_PROVIDER": "xai"},
     ):
         asyncio.run(run_turn(socket, session, b"\0\0", 1, session.generation))
     return model, spoken
@@ -210,17 +221,17 @@ class DevLauncherDefaultTests(_LauncherCopy):
     SCRIPT = "run_dev.sh"
 
     def test_the_answer_brain_is_off_by_default(self) -> None:
-        result = self._run("--check-only")
+        result = self._run("--check-only", **ANSWER_ROLE)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("hybrid_multi_brain: enabled", result.stdout)
         self.assertIn("answer_brain: disabled", result.stdout)
 
     def test_a_person_value_wins(self) -> None:
-        result = self._run("--check-only", VOINEY_LAB_ANSWER_BRAIN_ENABLED="true")
+        result = self._run("--check-only", VOINEY_LAB_ANSWER_BRAIN_ENABLED="true", **ANSWER_ROLE)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("answer_brain: enabled", result.stdout)
         self._dotenv("VOINEY_LAB_ANSWER_BRAIN_ENABLED=true\n")
-        result = self._run("--check-only")
+        result = self._run("--check-only", **ANSWER_ROLE)
         self.assertIn("answer_brain: enabled", result.stdout)
 
 

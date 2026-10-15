@@ -4119,6 +4119,18 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
     # Lane WV, decision 4: a picture request is the rules' own turn.
     CuratedProtocolAction.VISUAL_REQUEST: "visual_request",
 }
+#: Lane RA (decision a, 2026-10-12/13): with the router first, the front
+#: rules keep system information (the timer, the steps, the settings, the
+#: server's values), the re-asking of an ambiguous reference, the short clear
+#: commands and the replies to the server's own questions. These three are
+#: handed to the model instead: a note with words (record_log, where a value
+#: is compared with the source), a read-only question that names "2단계" or
+#: "이 단계" (the model reads the step from the snapshot), and a picture
+#: asked for (show_visual, in any words). A bare "메모해 줘" with nothing to
+#: write stays the rules': it asks what to write. Off, nothing is handed on.
+ROUTER_FIRST_HANDED_ON: frozenset[str] = frozenset({
+    "note_record", "step_homophone", "visual_request",
+})
 #: The protocol-query scopes that are server values (decision 3); purpose,
 #: overview, materials and the like stay with the model.
 _SERVER_VALUE_SCOPES = frozenset({
@@ -5310,6 +5322,108 @@ def measured_values(content: str) -> tuple[MeasuredValue, ...]:
             name=name, text=text,
         ))
     return tuple(found)
+
+
+# --- Lane RA, decision (c): a note's values compared with the source ----------------
+
+#: The kind a unit measures, so "37.2도" is compared with the source's "37°C"
+#: and "790 rpm" with its "800 rpm", never a temperature with a speed.
+_VALUE_KIND_BY_UNIT: dict[str, str] = {
+    "°C": "temperature", "rpm": "speed",
+    "h": "time", "min": "time", "s": "time", "clock": "time",
+    "L": "volume", "mL": "volume", "µL": "volume",
+    "M": "concentration", "mM": "concentration", "µM": "concentration", "nM": "concentration",
+    "mg/mL": "concentration", "ng/µL": "concentration",
+    "%": "percent", "kg": "mass", "g": "mass", "mg": "mass", "µg": "mass", "ng": "mass",
+    "x g": "force", "times": "count", "nm": "wavelength",
+}
+#: How a unit scales to its kind's base (minutes, µL, mM, mg).
+_VALUE_BASE_SCALE: dict[str, float] = {
+    "h": 60.0, "min": 1.0, "s": 1 / 60, "clock": 1.0,
+    "L": 1_000_000.0, "mL": 1000.0, "µL": 1.0,
+    "M": 1000.0, "mM": 1.0, "µM": 0.001, "nM": 0.000001,
+    "kg": 1_000_000.0, "g": 1000.0, "mg": 1.0, "µg": 0.001, "ng": 0.000001,
+}
+#: A unit as a note says it -> the unit as the source's quantities are read.
+_SAID_UNIT_CANONICAL: dict[str, str] = {
+    "도": "°C", "°": "°C", "℃": "°C", "C": "°C",
+    "분": "min", "초": "s", "시간": "h", "sec": "s", "hr": "h", "hrs": "h", "mins": "min",
+    "uL": "µL", "ul": "µL", "ml": "mL", "RPM": "rpm", "분당 회전": "rpm",
+}
+#: Units written right after their number ("37°C", "5%").
+_SOURCE_ATTACHED_UNITS = frozenset({"°C", "%"})
+
+
+def _canonical_said_unit(unit: str) -> str | None:
+    unit = " ".join(unit.split())
+    if not unit:
+        return None
+    if unit in _SAID_UNIT_CANONICAL:
+        return _SAID_UNIT_CANONICAL[unit]
+    for form, canonical in _READER_UNIT_FORMS:
+        if re.fullmatch(form, unit):
+            return canonical
+    return unit
+
+
+def _value_in_base(number: str, unit: str) -> float | None:
+    if unit == "clock":
+        parts = [int(part) for part in number.split(":")]
+        if len(parts) == 2:
+            parts.append(0)
+        hours, minutes, seconds = parts
+        return hours * 60 + minutes + seconds / 60
+    try:
+        value = float(number.replace(",", ""))
+    except ValueError:
+        return None
+    return value * _VALUE_BASE_SCALE.get(unit, 1.0)
+
+
+def source_value_deviations(
+    values: Sequence[MeasuredValue], source_text: str,
+) -> list[dict[str, str]]:
+    """The values of a note that differ from the source's value of the same kind.
+
+    Lane RA, decision (c). Each value a note states with a unit is compared
+    with the quantities the step's source states of the same kind (a
+    temperature with temperatures, a speed with speeds, a time with times,
+    hours, minutes and clock times alike). A value that equals one of them,
+    or whose kind the source does not state, is no deviation. A deviation
+    names what was said and the source's value, as the source writes it.
+    """
+
+    stated: dict[str, list[tuple[float, str]]] = {}
+    pairs = _reader_quantities(source_text)
+    for number, unit in sorted(pairs, key=lambda item: item[1] == "clock"):
+        if unit is None:
+            continue
+        kind = _VALUE_KIND_BY_UNIT.get(unit)
+        base = _value_in_base(number, unit)
+        if kind is None or base is None:
+            continue
+        shown = f"{number}{unit}" if unit in _SOURCE_ATTACHED_UNITS else (
+            number if unit == "clock" else f"{number} {unit}"
+        )
+        entries = stated.setdefault(kind, [])
+        if all(abs(base - known) > 1e-9 * max(1.0, abs(known)) for known, _ in entries):
+            entries.append((base, shown))
+    found: list[dict[str, str]] = []
+    for value in values:
+        unit = _canonical_said_unit(value.unit)
+        if unit is None:
+            continue
+        kind = _VALUE_KIND_BY_UNIT.get(unit)
+        base = _value_in_base(value.number, unit)
+        if kind is None or base is None or kind not in stated:
+            continue
+        if any(abs(base - known) <= 1e-9 * max(1.0, abs(known)) for known, _ in stated[kind]):
+            continue
+        found.append({
+            "kind": kind, "said": value.said, "number": value.number, "unit": unit,
+            "source": " · ".join(shown for _, shown in stated[kind]),
+        })
+    return found
 
 
 _POINT_WITHOUT_DIGITS = re.compile(
@@ -9356,6 +9470,17 @@ class CuratedProtocolSession:
         #: Lane VT, decision 3: "A요, B요?" asked of a "그거"; only the next
         #: turn's words pick one.
         self._pending_value_choice: dict[str, Any] | None = None
+        #: Lane RA: whether the router goes first this session (the server
+        #: sets it from VOINEY_LAB_ROUTER_FIRST; the router line sets it each
+        #: turn). It decides what the front rules hand on and whether a note's
+        #: values are compared with the source (decision c).
+        self.router_first: bool = False
+        #: Lane RA, decision (f): what the screen is told about the last
+        #: reply -- the candidates asked back, the values read back, and the
+        #: deviation a note recorded. Each is this turn's; the next turn clears.
+        self._clarify_candidates: list[str] = []
+        self._last_readback_values: list[str] = []
+        self._last_note_deviation: dict[str, Any] | None = None
         #: Lane VT, decisions 1-2: (timer, kind) of the timer notices already
         #: given, so each is given once. Not part of a turn's checkpoint: a
         #: notice given stays given whatever a later turn rolls back.
@@ -11170,6 +11295,232 @@ class CuratedProtocolSession:
     def _count_question_open(self) -> bool:
         return self._open_count_interval() is not None
 
+    # --- Lane RA, decision (f): what the screen is told, from the session's own state --
+
+    def confirm_question(self) -> dict[str, Any] | None:
+        """The confirmation question open for the next words, with its kind.
+
+        The one-turn questions in the order plan() answers them -- completion
+        ("N단계 완료하셨나요?"), the endpoint, a value in the 바로 확인 way,
+        the 시끄러운 곳 mode, the end, a timer, an anomaly, a transcript, a
+        step move, a record fix -- then the questions open until answered
+        (the source condition, the count, the round, the pre-start ones).
+        """
+
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps) else None
+        )
+        label = step.source_label if step is not None else ""
+
+        def words(held: Any, *keys: str) -> str:
+            if not isinstance(held, dict):
+                return ""
+            for key in keys:
+                value = held.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+            return ""
+
+        if self._pending_completion_confirmation is not None:
+            return {"kind": "completion", "text": _completion_question(label)}
+        if self._pending_observation_confirmation is not None:
+            asked = self._replay.get(self._pending_observation_confirmation.requested_turn_id)
+            return {"kind": "observation", "text": (asked.speech_text if asked is not None else "") or ""}
+        if self._pending_note_confirmation is not None:
+            return {"kind": "value", "text": words(self._pending_note_confirmation, "question", "text")}
+        if self._pending_ambient_confirmation is not None:
+            return {"kind": "ambient", "text": words(self._pending_ambient_confirmation, "question", "text")}
+        if self._pending_stop_confirmation is not None:
+            return {"kind": "stop", "text": END_CONFIRMATION_QUESTION["ko"]}
+        if self._pending_timer_confirmation is not None:
+            return {"kind": "timer", "text": words(self._pending_timer_confirmation, "question")}
+        if self._pending_anomaly_confirmation is not None:
+            return {"kind": "anomaly", "text": words(self._pending_anomaly_confirmation, "question")}
+        if self._pending_transcript_confirmation is not None:
+            proposed = self._pending_transcript_confirmation.proposed_transcript
+            return {"kind": "transcript", "text": f"‘{proposed}’라고 말씀하신 건가요?"}
+        if self._pending_step_move is not None:
+            return {"kind": "step_move", "text": words(self._pending_step_move, "question")}
+        if self._pending_record_fix is not None:
+            return {"kind": "record_fix", "text": words(self._pending_record_fix, "question")}
+        return self.open_server_question()
+
+    def next_step_sentence(self, language: str = "ko") -> str | None:
+        """The next step's sentence -- its reviewed or stored Korean, else the source -- or None."""
+
+        steps = self.fixture.steps
+        if not self.active or not 0 <= self.current_index < len(steps) - 1:
+            return None
+        following = steps[self.current_index + 1]
+        reading = (
+            self._localized_fact(following.step_id, "current_step") if language == "ko" else None
+        )
+        return " ".join((reading or following.instruction_source_text).split())
+
+    def clarify_candidates(self) -> list[str]:
+        """The candidates the last reply asked back ("A요, B요?"), for the screen."""
+
+        return list(self._clarify_candidates)
+
+    def readback_values(self) -> list[str]:
+        """The values the last note read back, as said."""
+
+        return list(self._last_readback_values)
+
+    def record_deviation(self) -> dict[str, Any] | None:
+        """The deviation the last note recorded (decision c), or None."""
+
+        return dict(self._last_note_deviation) if self._last_note_deviation else None
+
+    # --- Lane RA, decisions (a) and (e): the read-only proposals of the router first --
+
+    def apply_read_only_proposal(
+        self,
+        proposal: Any,
+        *,
+        transcript: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+        answer: Any = None,
+        context: Any = None,
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
+    ) -> CuratedProtocolTurnPlan:
+        """Carry out a read-only proposal the server accepted. Nothing moves.
+
+        ``show_visual`` runs the rules' own picture branch (lane WV: the
+        source figure, a web lookup, a drawing) -- with the checked answer
+        said first when one came beside it; ``clarify`` asks the model's
+        checked question and keeps its candidates for the screen;
+        ``not_for_me`` says nothing and records nothing. A one-turn question
+        left open lapses as it does when plan() reads any other reply.
+        """
+
+        if turn_id in self._replay:
+            return self._replay[turn_id]
+        self._last_front_rule = None
+        steps = self.fixture.steps
+        step = steps[self.current_index] if self.active else None
+        label = step.source_label if step is not None else None
+        final = bool(step is not None and self.current_index == len(steps) - 1)
+        tool = getattr(proposal, "tool", None)
+        if tool == "show_visual":
+            kind = {
+                "source_figure": "source_figure", "web_photo": "web_lookup",
+                "drawn_diagram": "drawn_diagram",
+            }[str(proposal.kind)]
+            entity = getattr(proposal, "entity", None) or (
+                web_lookup_subject(transcript) if kind == "web_lookup" else None
+            )
+            answered = (
+                self.apply_router_answer(answer, context, turn_id=turn_id, language=language)
+                if answer is not None and context is not None else None
+            )
+            self._replay.pop(turn_id, None)
+            intent = CuratedControlIntent(
+                intent_kind="visual_request",
+                action=CuratedProtocolAction.VISUAL_REQUEST,
+                target_step="authoritative_current_step",
+                visual_requested=True,
+                visual_kind=kind,
+                visual_intent={
+                    "source_figure": "source_figure", "web_lookup": "web_explanation",
+                    "drawn_diagram": "drawn_diagram",
+                }[kind],
+                requested_entity=entity,
+                requested_entities=(entity,) if entity else (),
+                language=language,
+                normalized_transcript=_utterance_key(transcript),
+                confidence_source="llm_tool_proposal",
+            )
+            plan = self._execute_turn_intent(
+                intent, transcript=transcript, command_key=_utterance_key(transcript),
+                turn_id=turn_id, language=language, configuration_id=configuration_id,
+                generation=generation, actor_principal_id=actor_principal_id,
+                actor_role=actor_role, open_question=None,
+            )
+            if answered is not None:
+                # The answer is said, then the picture's own words.
+                document = dict(answered.display_document or {})
+                sections = list(document.get("sections") or ())
+                sections.append({"kind": "section", "heading": "", "text": plan.speech_text or ""})
+                document["sections"] = sections
+                plan = replace(
+                    plan,
+                    display_text=f"{answered.display_text}\n\n{plan.speech_text or ''}".strip(),
+                    speech_text=f"{answered.speech_text} {plan.speech_text or ''}".strip(),
+                    speech_mode=answered.speech_mode,
+                    facts=answered.facts,
+                    primary_text=answered.primary_text,
+                    source_texts=answered.source_texts,
+                    source_pages=answered.source_pages,
+                    evidence_ids=answered.evidence_ids,
+                    translation_status=answered.translation_status,
+                    intent_kind="llm_router_answer_with_visual",
+                    answer_origin=answered.answer_origin,
+                    limitations=tuple(dict.fromkeys((*answered.limitations, *plan.limitations))),
+                    display_document=document,
+                )
+            self._replay[turn_id] = plan
+            return plan
+        self._pending_completion_confirmation = None
+        self._pending_transcript_confirmation = None
+        self._pending_note_capture = None
+        self._pending_stop_confirmation = None
+        self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
+        if tool == "clarify":
+            question = " ".join(str(getattr(proposal, "spoken", "") or "").split())
+            candidates = [str(item) for item in getattr(proposal, "candidates", ()) if str(item).strip()]
+            self._clarify_candidates = list(candidates)
+            shown = question
+            if candidates:
+                shown = question + "\n" + "\n".join(
+                    f"{number}. {name}" for number, name in enumerate(candidates, 1)
+                )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.CLARIFY_REFERENCE,
+                display_text=shown,
+                speech_text=question,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=label,
+                final_step=final,
+                state_changed=False,
+                primary_text=question,
+                intent_kind="llm_router_clarify",
+                target_step=label,
+                requested_entities=tuple(candidates),
+                coreference_status=CoreferenceStatus.AMBIGUOUS.value,
+                coreference_reason="llm_router_clarify",
+            )
+        else:
+            words = (
+                "실험과 관계없는 말로 보고 넘겼어요." if language == "ko"
+                else "Taken as not addressed to the assistant; nothing was done."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.OFF_TOPIC,
+                display_text=words,
+                speech_text=words,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=label,
+                final_step=final,
+                state_changed=False,
+                primary_text=words,
+                intent_kind="not_addressed",
+                target_step=label,
+                speech_policy="silent",
+            )
+        self._replay[turn_id] = plan
+        if len(self._replay) > 64:
+            self._replay.pop(next(iter(self._replay)))
+        return plan
+
     def open_server_question(self) -> dict[str, Any] | None:
         """The server question open at the current step, for the card (decision 4)."""
 
@@ -11343,6 +11694,9 @@ class CuratedProtocolSession:
         notice = self._no_guidance_notice()
         if notice:
             parts.append(notice)
+        reviewer = self._reviewer_value_notice()
+        if reviewer:
+            parts.append(reviewer)
         branch = self._open_branch()
         if branch is not None:
             parts.append(self._branch_question_words(branch))
@@ -11351,6 +11705,30 @@ class CuratedProtocolSession:
             if interval is not None:
                 parts.append(self._count_question_words(interval))
         return " ".join(parts)
+
+    def _reviewer_value_notice(self) -> str:
+        """Once per step per run: the values a reviewer wrote that this step says.
+
+        Lane RV, decision g (human decision 2026-10-12): a value in a
+        registered review version that a person entered or fixed -- a timer,
+        a repeat count, a number in the step's sentence, a value the source
+        does not print -- is said to be the reviewer's the first time the run
+        comes to its step: "검토자가 넣은 값이에요: 15분." Kept in the same
+        once-per-step record as the notice above, under its own key.
+        """
+
+        version = getattr(self.fixture.draft, "review_version", None)
+        if version is None or not 0 <= self.current_index < len(self.fixture.steps):
+            return ""
+        step = self.fixture.steps[self.current_index]
+        key = f"reviewer-input:{step.step_id}"
+        if key in self._no_guidance_notices_said:
+            return ""
+        values = version.spoken_for_step(step.step_id)
+        if not values:
+            return ""
+        self._no_guidance_notices_said.add(key)
+        return f"검토자가 넣은 값이에요: {' · '.join(values)}."
 
     #: What each construct without guidance is called in the one-time notice.
     _NO_GUIDANCE_WORDS: dict[str, str] = {
@@ -12454,6 +12832,8 @@ class CuratedProtocolSession:
                 "configuration_id": configuration_id,
                 "requested_generation": generation,
             }
+            # Lane RA, decision (f): the candidates asked back, for the screen.
+            self._clarify_candidates = list(names)
         self._replay[turn_id] = plan
         return plan
 
@@ -13049,8 +13429,13 @@ class CuratedProtocolSession:
         actor_principal_id: str | None,
         actor_role: str,
         observation_hold: PendingObservationConfirmation | None,
+        hand_on_notes: bool = False,
     ) -> CuratedProtocolTurnPlan | None:
         """A note or a correction asked for in words (lane N, decisions 1-2).
+
+        With ``hand_on_notes`` (lane RA, decision a: the router first) a note
+        that has words is left to the model's record_log; a bare "메모해 줘"
+        with nothing to write is still asked about here.
 
         "실험노트에 적어 줘, pH 7.2" records the words after (or before) the
         command at the current step, as the STT gave them, under the kind the
@@ -13089,6 +13474,8 @@ class CuratedProtocolSession:
             has_completion_evidence(content)
             or _spill_reading(_semantic_utterance_key(content), content) == "reported"
         ):
+            return None
+        if content is not None and hand_on_notes:
             return None
         if observation_hold is not None:
             # A note is not an answer to the endpoint question: it stays open,
@@ -16963,6 +17350,7 @@ class CuratedProtocolSession:
         arbitration: RequestArbitration | None = None,
         actor_principal_id: str | None = None,
         actor_role: str = "voice_operator",
+        router_first: bool = False,
     ) -> CuratedProtocolTurnPlan | None:
         """The turn as a front rule plans it, or None with nothing touched.
 
@@ -16982,6 +17370,8 @@ class CuratedProtocolSession:
         the open questions the reading cleared put back: the session is as it
         was, for plan() or a validated tool proposal to take the turn.
         A turn already planned is answered from the replay, as plan() does.
+        With ``router_first`` (lane RA, decision a) the rules of
+        ROUTER_FIRST_HANDED_ON are handed on too, untouched.
         """
 
         return self._plan(
@@ -16995,6 +17385,7 @@ class CuratedProtocolSession:
             actor_principal_id=actor_principal_id,
             actor_role=actor_role,
             front_only=True,
+            hand_on=ROUTER_FIRST_HANDED_ON if router_first else frozenset(),
         )
 
     #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
@@ -17140,9 +17531,15 @@ class CuratedProtocolSession:
         actor_principal_id: str | None = None,
         actor_role: str = "voice_operator",
         front_only: bool,
+        hand_on: frozenset[str] = frozenset(),
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        # Lane RA, decision (f): what the screen is told about the last reply
+        # belongs to this turn now.
+        self._clarify_candidates = []
+        self._last_readback_values = []
+        self._last_note_deviation = None
         if self._report_review is not None and not self.active:
             # Lane N, decision 3: the report's values, read one by one.
             return self._plan_report_review(
@@ -17153,6 +17550,10 @@ class CuratedProtocolSession:
             transcript, transcript_quality=transcript_quality,
             turn_id=turn_id, configuration_id=configuration_id, generation=generation,
         )
+        if homophone and "step_homophone" in hand_on:
+            # Lane RA, decision (a): the model reads the step from the snapshot.
+            self._last_front_rule = None
+            return None
         if homophone:
             return self._plan_step_homophone(
                 homophone, turn_id=turn_id, language=language,
@@ -18064,6 +18465,7 @@ class CuratedProtocolSession:
                     actor_principal_id=actor_principal_id,
                     actor_role=actor_role,
                     observation_hold=observation_hold,
+                    hand_on_notes="note_record" in hand_on,
                 )
                 if language == "ko" and transcript_quality is None else None
             )
@@ -18528,6 +18930,10 @@ class CuratedProtocolSession:
             )
         if front_rule is None:
             front_rule = self._front_rule_for(intent, classified)
+        if front_only and front_rule in hand_on:
+            # Lane RA, decision (a): with the router first this rule's turn is
+            # the model's, handed on untouched like any other.
+            front_rule = None
         self._last_front_rule = front_rule
         if front_only and front_rule is None:
             # No front rule owns this turn: it is handed on untouched.
@@ -19492,6 +19898,28 @@ class CuratedProtocolSession:
                     # ("영 점 오 밀리리터" is 0.5 mL), for the readback.
                     "values": [value.public_dict() for value in measured_values(content)],
                 }
+                if self.router_first:
+                    # Lane RA, decision (c): a value that differs from the
+                    # step's source value is a deviation, recorded with the
+                    # source's value beside it and shown to the screen.
+                    source_text = "\n".join((
+                        step.instruction_source_text,
+                        *(fact.text for fact in self.fixture.facts_for_step(self.current_index)),
+                    ))
+                    deviations = source_value_deviations(measured_values(content), source_text)
+                    note_record["deviations"] = deviations
+                    if deviations:
+                        category = "deviation"
+                        note_record["category"] = category
+                        note_record["label"] = NOTE_CATEGORY_LABELS[category]
+                        self._last_note_deviation = {
+                            "step_label": step.source_label, "content": content,
+                            "deviations": deviations,
+                        }
+                    self._last_readback_values = [
+                        str(value.get("said") or "") for value in note_record["values"]
+                        if value.get("said")
+                    ]
                 if intent.note_confirmed:
                     # Lane VX, decision 3: said "네" to in the 바로 확인 way, the
                     # value is the experimenter's confirmed one already; the
@@ -21625,6 +22053,7 @@ class CuratedProtocolSession:
                 _CONTROL_QUESTION.search(" ".join(transcript.casefold().split()))
             ),
             transcript_unreliable=transcript_quality is not None,
+            router_first=bool(getattr(self, "router_first", False)),
         )
 
     def router_context(

@@ -246,10 +246,10 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
         ), patch(
             "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
-        ), patch(
-            "voiney_lab.server.stream_brain_turn",
-            side_effect=AssertionError("curated production routing must win"),
         ):
+            # The general brain this once patched was deleted (lane RA,
+            # decision g); runtime_router below still says the curated
+            # production route won.
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
 
         decision = next(

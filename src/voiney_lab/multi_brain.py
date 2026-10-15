@@ -52,8 +52,11 @@ def _content(response: Any) -> str:
 
 @dataclass(frozen=True)
 class MultiBrainSettings:
+    #: Lane RA, decision (g): no default model. The roles' model is the
+    #: answer role's (VOINEY_LAB_ANSWER_PROVIDER / VOINEY_LAB_ANSWER_MODEL);
+    #: enabled with none set, the roles are closed (``unavailable_reason``).
     enabled: bool = False
-    model: str = "grok-4.6"
+    model: str | None = None
     answer_timeout_seconds: float = 8.0
     planner_timeout_seconds: float = 6.0
     primary_answer_budget_seconds: float = 1.25
@@ -68,6 +71,9 @@ class MultiBrainSettings:
     #: environment it follows the translation role's own settings only (lane
     #: F, decision 1); made in code with no value, it keeps its old default.
     translation_enabled: bool | None = None
+    #: Why enabled roles were closed: "설정 필요" when the answer role's model
+    #: is unset (lane RA, decision g); None otherwise.
+    unavailable_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.answer_brain_enabled is None:
@@ -89,8 +95,9 @@ class MultiBrainSettings:
     def from_environment(cls) -> "MultiBrainSettings":
         enabled = os.environ.get("VOINEY_LAB_MULTI_BRAIN_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}
         # One answer-role model for every read-only role (lane M1, decision
-        # 1); unset, they keep grok-4.6 as before.
-        model = RoleModel.from_environment("answer").model or "grok-4.6"
+        # 1). Lane RA, decision (g): unset, there is no model -- the roles
+        # fail closed below rather than reach a provider no one chose.
+        model = RoleModel.from_environment("answer").model or None
         answer_enabled = os.environ.get("VOINEY_LAB_ANSWER_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
         answer_model = model
         source_enabled = os.environ.get("VOINEY_LAB_SOURCE_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
@@ -102,14 +109,17 @@ class MultiBrainSettings:
         answer = float(os.environ.get("VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS", "8"))
         planner = float(os.environ.get("VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS", "6"))
         primary = float(os.environ.get("VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS", "1.25"))
-        if overall_enabled and not model and not (answer_model or source_model or visual_model):
-            raise ValueError("multi-brain model is required when enabled")
+        unavailable = None
+        if overall_enabled and not model:
+            # Lane RA, decision (g): closed, never the old grok default.
+            unavailable = "VOINEY_LAB_ANSWER_PROVIDER 와 VOINEY_LAB_ANSWER_MODEL 설정 필요"
+            overall_enabled = answer_enabled = source_enabled = visual_enabled = False
         if not 1 <= answer <= 15 or not 1 <= planner <= 12:
             raise ValueError("multi-brain timeouts are outside bounded limits")
         if not 0.1 <= primary < answer:
             raise ValueError("primary answer budget must be shorter than the answer timeout")
         return cls(
-            overall_enabled, model or "grok-4.6", answer, planner, primary,
+            overall_enabled, model, answer, planner, primary,
             answer_brain_enabled=answer_enabled,
             answer_brain_model=answer_model,
             source_brain_enabled=source_enabled,
@@ -119,11 +129,13 @@ class MultiBrainSettings:
             # Lane F, decision 1: translation is on with a translation-role
             # key, whatever the answer brain is.
             translation_enabled=RoleModel.from_environment("translation").has_key(),
+            unavailable_reason=unavailable,
         )
 
     def public_capability(self) -> dict[str, object]:
         return {
             "status": "enabled" if self.enabled else "disabled",
+            **({"reason": self.unavailable_reason} if self.unavailable_reason else {}),
             "model": self.model if self.enabled else None,
             "answer_timeout_seconds": self.answer_timeout_seconds if self.enabled else None,
             "planner_timeout_seconds": self.planner_timeout_seconds if self.enabled else None,

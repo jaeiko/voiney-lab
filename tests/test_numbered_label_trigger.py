@@ -1,19 +1,26 @@
-"""The numbered-action trigger, and the count that keeps it honest."""
+"""The numbered-action trigger that cuts the page evidence segments."""
 
 from __future__ import annotations
 
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
-from voiney_lab.protocol_claim_analysis import (
-    _numbered_step_labels,
-    mid_line_numbered_labels,
-)
+from voiney_lab.protocol_claim_analysis import _numbered_action_matches
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+def _numbered_step_labels(page_text: str) -> tuple[str, ...]:
+    """The step labels the trigger reads on a page, each once, in order.
+
+    The body of the helper of this name that went with the claim-chunk path
+    (lane AN, 2026-10-13); the trigger it reads still cuts the segments.
+    """
+
+    return tuple(
+        dict.fromkeys(
+            match.group("label") for match in _numbered_action_matches(page_text)
+        )
+    )
 
 ANKOM = Path(
     "data/runtime/candidate-a-live-acceptance/objects/sha256/53"
@@ -97,54 +104,12 @@ class LineAnchoredTriggerTests(unittest.TestCase):
         )
 
 
-class DroppedLabelCountTests(unittest.TestCase):
-    """A trigger that silently drops candidates is a blocklist.
-
-    The count has to be available per page, or nobody can tell how much a
-    document depends on the narrowing.
-    """
-
-    def test_a_dropped_label_is_counted(self) -> None:
-        self.assertEqual(
-            mid_line_numbered_labels("Figure 18. Example of bad peaks.\n"),
-            ("18",),
-        )
-
-    def test_an_anchored_label_is_not_counted_as_dropped(self) -> None:
-        self.assertEqual(
-            mid_line_numbered_labels("18. Wash the pellet twice.\n"), ()
-        )
-
-    def test_a_number_followed_by_a_unit_was_never_a_candidate(self) -> None:
-        self.assertEqual(mid_line_numbered_labels("volume 5. mL added\n"), ())
-
-
 class LocalSourceTriggerTests(unittest.TestCase):
-    def test_the_properly_numbered_source_loses_nothing(self) -> None:
-        """ANKOM: every label already began its own line."""
-
-        extraction = _ankom()
-        self.assertEqual(
-            sum(len(mid_line_numbered_labels(p.text)) for p in extraction.pages),
-            0,
-        )
-        self.assertEqual(
-            sum(len(_numbered_step_labels(p.text)) for p in extraction.pages),
-            67,
-        )
-
     def test_the_guarantee_still_fires_where_it_caught_a_real_miss(self) -> None:
         """Page 32 is where the whole-document run caught a genuine omission."""
 
         extraction = _ankom()
         self.assertTrue(_numbered_step_labels(extraction.pages[31].text))
-
-    def test_the_near_unnumbered_source_drops_every_false_trigger(self) -> None:
-        extraction = _intracellular()
-        dropped = sum(
-            len(mid_line_numbered_labels(p.text)) for p in extraction.pages
-        )
-        self.assertEqual(dropped, 24)
 
     def test_the_hierarchically_numbered_procedure_is_now_visible(self) -> None:
         """What this document actually numbers, once "3.2" counts as a label.
@@ -237,108 +202,6 @@ class LocalSourceTriggerTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(labels), expected)
                 self.assertFalse([label for label in labels if "." in label])
-
-
-class FixtureScopeTests(unittest.TestCase):
-    """The offline scorer must not manufacture execution steps.
-
-    It asserts an ACTION claim for every numbered line it matches, so it
-    satisfies the numbered-action obligation by construction and cannot
-    measure it. On a document whose numbered lines are section headings or a
-    table of contents it invents steps that a real model does not, and
-    validation cannot tell the two apart.
-    """
-
-    def test_a_properly_numbered_source_is_in_scope(self) -> None:
-        from prototype_claim_chunks import fixture_scope
-
-        scope = fixture_scope(_ankom())
-        self.assertTrue(scope["in_scope"])
-        self.assertEqual(scope["duplicate_labels"], 0)
-        self.assertEqual(scope["descents"], [])
-
-    def test_a_near_unnumbered_source_is_out_of_scope(self) -> None:
-        from prototype_claim_chunks import fixture_scope
-
-        scope = fixture_scope(_intracellular())
-        self.assertFalse(scope["in_scope"])
-        self.assertEqual(scope["duplicate_labels"], 7)
-        self.assertEqual(len(scope["descents"]), 4)
-
-    def test_out_of_scope_yields_no_score_at_all(self) -> None:
-        """Not a score with a caveat: a number gets quoted without its note."""
-
-        from prototype_claim_chunks import run_source
-
-        result = run_source(INTRACELLULAR, 1) if INTRACELLULAR.is_file() else None
-        if result is None:
-            self.skipTest(
-                f"{INTRACELLULAR.name} is not present; expected sha256 "
-                f"{INTRACELLULAR_SHA256}."
-            )
-        self.assertFalse(result["scored"])
-        self.assertEqual(result["status"], "fixture out of scope")
-        for key in ("action_count", "marker_count", "chunk_count"):
-            self.assertNotIn(key, result)
-
-
-class FixtureScopeKnownLimitationTests(unittest.TestCase):
-    """The hole in the scope check, kept as a failing-shape record.
-
-    Monotonicity catches interleaving. It cannot catch a single clean ascending
-    run that is not a procedure, so a document whose steps are all prose and
-    whose reference list is numbered 1. 2. 3. is scored, and the fake execution
-    steps built from the bibliography go into the score.
-
-    This is asserted as the *current* behaviour, not as desired behaviour. It
-    is here so the limitation cannot be forgotten, and so that a future rule
-    which closes it makes this test fail loudly rather than passing silently.
-    """
-
-    def setUp(self) -> None:
-        self._temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._temp.cleanup)
-        self.root = Path(self._temp.name)
-
-    def test_a_prose_body_with_numbered_references_is_wrongly_in_scope(self):
-        from prototype_claim_chunks import fixture_scope
-        from tests.test_protocol_claim_analysis import write_lined_pages
-
-        path = self.root / "prose-with-references.pdf"
-        write_lined_pages(
-            path,
-            (
-                ("Protocol Prose", "Abstract", "This protocol is described in"),
-                (
-                    "We resuspend the pellet in cold solvent and vortex until",
-                    "no visible particles remain, then transfer the supernatant",
-                    "to a clean tube and dry it under nitrogen.",
-                ),
-                (
-                    "References",
-                    "1. Ayotte P and Laliberte C. Analytical chemistry review.",
-                    "2. Bennett B D and Rabinowitz J D. Metabolite profiling.",
-                    "3. Sharma B D and Hon S. Fermentation titers and yields.",
-                ),
-            ),
-        )
-        scope = fixture_scope(extract_protocol_pdf(path))
-        self.assertEqual(scope["duplicate_labels"], 0)
-        self.assertEqual(scope["descents"], [])
-        # Wrongly in scope: these three labels are a bibliography.
-        self.assertTrue(scope["in_scope"])
-        self.assertEqual(scope["fixture_action_labels"], 3)
-
-    def test_the_four_local_sources_do_not_show_that_shape(self):
-        """Labels are spread through the body, not confined to the tail."""
-
-        extraction = _ankom()
-        from prototype_claim_chunks import fixture_step_labels
-
-        pages = {page for page, _ in fixture_step_labels(extraction)}
-        tail_start = extraction.page_count - extraction.page_count // 3 + 1
-        self.assertLess(min(pages), tail_start)
-        self.assertGreater(len(pages), extraction.page_count // 2)
 
 
 if __name__ == "__main__":

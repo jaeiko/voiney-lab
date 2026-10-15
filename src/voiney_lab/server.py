@@ -19,9 +19,7 @@ from openai import AsyncOpenAI, OpenAI
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     ConversationHistory,
-    SentenceSegment,
     answer_curated_protocol_question,
-    stream_brain_turn,
 )
 from voiney_lab.configuration import (
     CascadeSttSettings,
@@ -52,9 +50,11 @@ from voiney_lab.curated_protocol import (
     load_curated_protocol_fixture,
     photo_asked,
     plan_without_internal_names,
+    question_dimensions as _question_dimensions,
     spoken_korean,
     web_lookup_subject,
 )
+from voiney_lab.answer_checks import SAFETY_INSTRUCTION_TOPICS
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
 )
@@ -66,13 +66,23 @@ from voiney_lab.experiment_protocol_config import (
 from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     MAX_PROTOCOL_PDF_BYTES,
+    SOURCE_MEDIA_TYPES,
     ProtocolPdfEncryptedError,
     ProtocolPdfError,
     ProtocolPdfMalformedError,
     ProtocolPdfTooLargeError,
     ProtocolPdfWorkerError,
     ProtocolPdfTypeError,
+    ProtocolSourceConversionError,
+    ProtocolSourceConversionUnavailableError,
+    ProtocolSourceFormatError,
+    ProtocolSourceTooLargeError,
+    convert_source_to_pdf,
     extract_protocol_pdf,
+    file_sha256,
+    find_office_converter,
+    pdf_filename,
+    source_media_type,
 )
 from voiney_lab.experiment_protocol_store import (
     PROTOCOL_DATABASE_FILENAME,
@@ -92,15 +102,20 @@ from voiney_lab.experiment_reports import (
     new_session_id,
 )
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
-    XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
     plan_research_query,
     supplemental_explanation_query,
     supplemental_knowledge_allowed,
 )
-from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
+from voiney_lab.safety_pack import (
+    NO_INSTITUTION_DOCUMENTS_NOTICE,
+    SOURCE_PROTOCOL_ONLY_COVERAGE,
+    SOURCE_PROTOCOL_ONLY_SCOPE,
+    SafetyPack,
+    resolve_safety_pack,
+    unavailable_safety_pack,
+)
 from voiney_lab.protocol_catalog import (
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
@@ -109,6 +124,14 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    ProtocolReviewError,
+    ProtocolReviewTargetChangedError,
+    REAGENT_TABLE_MEDIA_TYPE,
+    MAX_REAGENT_TABLE_BYTES,
+    ReagentTableError,
+    ReagentTableTooLargeError,
+    reagent_table_summary,
+    review_version_suggestion,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -131,6 +154,7 @@ from voiney_lab.runtime_metrics import RUNTIME_METRICS
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
+    BrainActivation,
     BrainFact,
     BrainSnapshot,
     HybridMultiBrain,
@@ -142,11 +166,13 @@ from voiney_lab.multi_brain import (
 from voiney_lab.tools import ToolContext
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voiney_lab.llm_router import (
+    FRAGMENT_JOIN_SECONDS,
     LlmRouterSettings,
     RouterTurnOutcome,
     front_history_turn,
     history_before,
     history_turn,
+    incomplete_fragment,
     route_turn_with_llm_router,
     screen_history_turn,
 )
@@ -358,7 +384,36 @@ async def lifespan(_: FastAPI):
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
+    _log_source_format_support()
     yield
+
+
+def _docx_conversion_available()->bool:
+    return find_office_converter() is not None
+
+
+def _heic_photos_available()->bool:
+    return importlib.util.find_spec("pillow_heif") is not None
+
+
+def _log_source_format_support()->None:
+    """Say at start-up what turns a .docx and a HEIC photo into a PDF (lane AN, FM).
+
+    LibreOffice must be installed on the server (human decision 2026-10-13);
+    without it every .docx upload is refused, so its absence is a warning.
+    HEIC is optional (``pip install -e '.[heic]'``).
+    """
+
+    if not _docx_conversion_available():
+        log.warning(
+            "protocol.source_formats docx=unavailable reason=libreoffice_not_found "
+            "setting=VOINEY_LAB_OFFICE_CONVERTER install='apt-get install "
+            "libreoffice-writer-nogui fonts-nanum'")
+    else:
+        log.info("protocol.source_formats docx=available")
+    log.info("protocol.source_formats heic=%s",
+             "available" if _heic_photos_available()
+             else "unavailable(optional: pip install -e '.[heic]')")
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
@@ -392,6 +447,11 @@ async def readyz()->JSONResponse:
         capabilities["workspace_enabled"]=workspace.enabled
         capabilities["protocol_catalog_enabled"]=protocol.enabled
         capabilities["experiment_reports_enabled"]=reports.enabled
+        # Lane AN, FM (human decision 2026-10-13): LibreOffice must be
+        # installed on the server for .docx sources; HEIC photos need the
+        # optional pillow-heif. Reported, not required for readiness.
+        capabilities["docx_conversion_available"]=_docx_conversion_available()
+        capabilities["heic_photos_available"]=_heic_photos_available()
     except Exception as exc:
         return JSONResponse(status_code=503,content={
             "status":"not_ready",
@@ -658,6 +718,56 @@ def _start_or_resume_workspace_experiment(
         return state
     finally:
         store.close()
+
+
+def _recovery_revision_id(session_id:object,protocol_id:str)->str|None:
+    """The exact revision a durable experiment started on, or None.
+
+    Lane RV, decision f: continuing an experiment loads the revision it
+    started on, not the latest one. None when the workspace is off or the
+    experiment is not this caller's on this protocol -- the recovery itself
+    then refuses as before.
+    """
+
+    if not isinstance(session_id,str) or not _workspace_settings().enabled:
+        return None
+    try:
+        principal,store=_commercial_workspace()
+    except Exception:  # noqa: BLE001 - the recovery itself reports it
+        return None
+    try:
+        state=store.get_experiment(principal,session_id)
+    except Exception:  # noqa: BLE001 - the recovery itself reports it
+        return None
+    finally:
+        store.close()
+    if state.get("protocol_id")!=protocol_id:
+        return None
+    revision=state.get("protocol_revision_id")
+    return revision if isinstance(revision,str) else None
+
+
+def _recovery_fixture(
+    catalog:ProtocolCatalog,protocol_id:str,entry:Any,recovery_session_id:object,
+)->tuple[CuratedProtocolFixture|None,str|None,str|None]|None:
+    """(fixture, revision id, refusal) of a recovery onto an older revision, or None.
+
+    Lane RV, decision f: a recovery gets the revision its experiment started
+    on -- an analysis analysed again since, or an earlier review version --
+    when that is not what the catalog runs now. None for a new run and for a
+    recovery onto the current revision: the session start then loads what
+    runs now (the latest review version, or the analysis that passed).
+    """
+
+    if recovery_session_id is None:
+        return None
+    started_on=_recovery_revision_id(recovery_session_id,protocol_id)
+    if started_on is None or started_on==entry.revision_id:
+        return None
+    try:
+        return catalog.load_fixture_for_revision(protocol_id,started_on),started_on,None
+    except ProtocolCatalogError:
+        return None,None,"protocol_selection_unavailable"
 
 
 def _workspace_skipped_step_ids(state:Any)->tuple[str,...]:
@@ -1075,10 +1185,24 @@ def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
     values=read or (
         [value for value in note.get("measurements") or () if value]
         if note.get("category")=="measurement" else [])
+    # Lane RA, decision (c): a value that differs from the source is read
+    # back as a deviation, with the source's value beside it.
+    deviations=[item for item in note.get("deviations") or () if isinstance(item,dict)]
     if language!="ko":
         display=speech=f"Recorded at step {note.get('step_label')}."
+        if deviations:
+            sources=", ".join(f"{item.get('said')} (source {item.get('source')})" for item in deviations)
+            display=speech=f"Recorded as a deviation at step {note.get('step_label')}: {sources}."
     elif confirm_mode=="quiet":
         display=speech="기록했어요."
+    elif deviations:
+        said=[str(item.get("said") or "") for item in deviations]
+        source=[str(item.get("source") or "") for item in deviations]
+        shown=", ".join(said)
+        spoken=", ".join(spoken_korean(value) for value in said)
+        particle=josa_ro(shown)[len(shown):]
+        display=f"편차로 기록했어요: {shown}{particle} 하셨고, 원문은 {' · '.join(source)}이에요."
+        speech=f"편차로 기록했어요. {spoken}{particle} 하셨고, 원문은 {', '.join(spoken_korean(value) for value in source)}이에요."
     elif values:
         shown=", ".join(values)
         spoken=", ".join(spoken_korean(value) for value in values)
@@ -1129,7 +1253,7 @@ def normalize_session_language(value:str)->str:
 
 @dataclass(frozen=True)
 class ServerConfig:
-    catalog_path:Path
+    catalog_path:Path|None
     facility_id:str|None
     usage_scope:str
     allowed_languages:frozenset[str]
@@ -1507,27 +1631,33 @@ def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
     catalog=os.environ.get("VOINEY_LAB_SAFETY_CATALOG","").strip()
     scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
-    catalog_path=Path(catalog)
-    if not catalog:
-        raise ServerConfigurationError(
-            "VOINEY_LAB_SAFETY_CATALOG must not be empty",
-            "VOINEY_LAB_SAFETY_CATALOG",
-        )
-    if not catalog_path.is_absolute():
-        raise ServerConfigurationError(
-            "VOINEY_LAB_SAFETY_CATALOG must be an absolute path: "
-            f"{catalog!r}",
-            "VOINEY_LAB_SAFETY_CATALOG",
-        )
-    invalid_policy_fields=[]
-    if scope not in ("operational","demo","reference_only","test_only"):
-        invalid_policy_fields.append("VOINEY_LAB_USAGE_SCOPE")
-    if invalid_policy_fields:
-        raise ServerConfigurationError(
-            "safety catalog configuration is incomplete",
-            *invalid_policy_fields,
-        )
-    validate_approved_catalog(catalog_path,scope)
+    catalog_path:Path|None=Path(catalog)
+    if scope==SOURCE_PROTOCOL_ONLY_SCOPE:
+        # The statement that no institution safety document exists (human
+        # decision of 2026-10-13): there is no approved catalog to require,
+        # and one that is configured anyway is not read.
+        catalog_path=None
+    else:
+        if not catalog:
+            raise ServerConfigurationError(
+                "VOINEY_LAB_SAFETY_CATALOG must not be empty",
+                "VOINEY_LAB_SAFETY_CATALOG",
+            )
+        if not catalog_path.is_absolute():
+            raise ServerConfigurationError(
+                "VOINEY_LAB_SAFETY_CATALOG must be an absolute path: "
+                f"{catalog!r}",
+                "VOINEY_LAB_SAFETY_CATALOG",
+            )
+        invalid_policy_fields=[]
+        if scope not in ("operational","demo","reference_only","test_only"):
+            invalid_policy_fields.append("VOINEY_LAB_USAGE_SCOPE")
+        if invalid_policy_fields:
+            raise ServerConfigurationError(
+                "safety catalog configuration is incomplete",
+                *invalid_policy_fields,
+            )
+        validate_approved_catalog(catalog_path,scope)
     facility=os.environ.get("VOINEY_LAB_FACILITY_ID","").strip() or None
     raw_allowed=os.environ.get("VOINEY_LAB_ALLOWED_LANGUAGES","ko,en,vi")
     try:
@@ -1576,6 +1706,90 @@ def server_tool_context(
     if selected not in config.allowed_languages:
         raise ValueError("unsupported session language")
     return ToolContext(config.catalog_path,config.facility_id,selected,config.usage_scope)
+
+
+def _source_protocol_only(scope:str|None=None)->bool:
+    """Whether the run has no institution safety documents (decision of 2026-10-13)."""
+
+    return (_runtime_usage_scope() if scope is None else scope)==SOURCE_PROTOCOL_ONLY_SCOPE
+
+
+def _safety_scope_public()->dict[str,object]:
+    """What the start screen is told about the safety documents behind this run.
+
+    ``notice`` is the server's own sentence, shown as it is: a screen never
+    words it. None unless the run has only the protocol's own statements.
+    """
+
+    source_only=_source_protocol_only()
+    return {
+        "usage_scope":_runtime_usage_scope(),
+        "source_protocol_only":source_only,
+        "notice":NO_INSTITUTION_DOCUMENTS_NOTICE if source_only else None,
+    }
+
+
+#: The replies that tell the experimenter something and change nothing: an
+#: answer, a step read again, a question the server turned away. Moving, timing
+#: and recording are left out, so a "안전하게 다음으로" is not given the line.
+_SAFETY_NOTICE_ACTIONS=frozenset({
+    CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.RELATED_QUESTION,
+    CuratedProtocolAction.PROTOCOL_QUERY,
+    CuratedProtocolAction.LAB_DOMAIN_QA,
+    CuratedProtocolAction.UNSUPPORTED,
+    CuratedProtocolAction.OFF_TOPIC,
+    CuratedProtocolAction.CURRENT,
+    CuratedProtocolAction.REPEAT,
+    CuratedProtocolAction.FULL_DETAIL,
+    CuratedProtocolAction.NEXT_INFORMATION,
+    CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE,
+})
+
+
+def _asks_about_safety(plan,transcript:str)->bool:
+    """Whether a read-only answer is about safety: the rules say so, or the words do.
+
+    Display only: nothing here decides a state change. It reads what the
+    rules classified (kind, dimensions, intent) and, for a model's answer,
+    the words of the question: a safety dimension, or a topic the answer
+    checks name (gloves, ventilation, spill, ...).
+    """
+
+    if (
+        getattr(plan,"question_kind",None)=="safety"
+        or "safety" in (getattr(plan,"question_dimensions",()) or ())
+        or getattr(plan,"intent_kind",None) in {"current_step_warning","related_safety_question"}
+    ):
+        return True
+    if not isinstance(transcript,str) or not transcript.strip():
+        return False
+    return "safety" in _question_dimensions(transcript) or any(
+        said.search(transcript) for _name,said,_ground in SAFETY_INSTRUCTION_TOPICS)
+
+
+def _with_safety_scope_notice(plan,scope:str|None,transcript:str):
+    """A safety answer of a run with no institution safety document says so, once.
+
+    The line is the server's: "기관 안전 문서 없음 · 원문 안전 주의만". It is
+    added to what the screen shows, not to what is spoken or recorded as the
+    answer, and only to an answer that changes no state.
+    """
+
+    if (
+        not _source_protocol_only(scope)
+        or getattr(plan,"action",None) not in _SAFETY_NOTICE_ACTIONS
+        or getattr(plan,"state_changed",False)
+        or not _asks_about_safety(plan,transcript)
+    ):
+        return plan
+    shown=getattr(plan,"display_text",None)
+    if not isinstance(shown,str) or not shown.strip() or NO_INSTITUTION_DOCUMENTS_NOTICE in shown:
+        return plan
+    return replace(plan,display_text=f"{shown.rstrip()}\n\n{NO_INSTITUTION_DOCUMENTS_NOTICE}")
+
 
 def require_env(name:str)->str:
     value=os.environ.get(name,"").strip()
@@ -2033,6 +2247,17 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
     }
 
 
+def _candidate_row_blocked(row:dict[str,object],reason:str)->dict[str,object]:
+    """The development fixture's list row, taken out of the executable set."""
+
+    return {
+        **row,
+        "available_for_execution":False,
+        "lifecycle_state":"blocked",
+        "execution_blocked_reason":reason,
+    }
+
+
 def _catalog_entry_projection(
     catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
 )->dict[str,object]:
@@ -2052,7 +2277,17 @@ def _public_protocol_catalog_entries(
     """
 
     config=server_config()
-    candidate=_configured_candidate_fixture(config)
+    # A development fixture that does not fit takes only itself out of the
+    # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
+    # read is left out, one the catalog does not match is shown as not
+    # executable, and the protocols a person uploaded are listed either way.
+    try:
+        candidate=_configured_candidate_fixture(config)
+    except Exception as exc:  # noqa: BLE001 - the fixture alone is left out
+        log.warning(
+            "protocol.catalog.development_fixture_unavailable error=%s",
+            type(exc).__name__)
+        candidate=None
     candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
     if candidate is not None:
@@ -2064,11 +2299,21 @@ def _public_protocol_catalog_entries(
     try:
         for item in catalog.list_entries():
             if candidate is not None and item.protocol_id==candidate.protocol_id:
-                if catalog.development_fixture_is_materialized(candidate):
+                try:
+                    materialized=catalog.development_fixture_is_materialized(candidate)
+                except Exception as exc:  # noqa: BLE001 - unreadable is a no
+                    log.warning(
+                        "protocol.catalog.development_fixture_check_failed error=%s",
+                        type(exc).__name__)
+                    materialized=False
+                if materialized:
                     continue
-                raise ProtocolCatalogUnavailableError(
-                    "Configured development fixture conflicts with catalog state."
-                )
+                log.warning(
+                    "protocol.catalog.development_fixture_conflict "
+                    "fixture_not_executable=true")
+                entries[0]=_candidate_row_blocked(
+                    entries[0],"development_fixture_conflicts_with_catalog")
+                continue
             public=_catalog_entry_projection(catalog,item)
             public["analysis_run"]=catalog.analysis_run_status(
                 item.protocol_id).public_dict()
@@ -2112,6 +2357,15 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return _workspace_http_error(exc)
     if isinstance(exc,ProtocolPdfTooLargeError):
         return HTTPException(status_code=413,detail="protocol_pdf_too_large")
+    # Lane AN, FM: a Word document or photo that could not become its PDF.
+    # A converter this server lacks is the server's state (503), not the
+    # file's; a file that is not what its type names is the file's (422).
+    if isinstance(exc,ProtocolSourceConversionUnavailableError):
+        return HTTPException(status_code=503,detail=exc.code)
+    if isinstance(exc,ProtocolSourceTooLargeError):
+        return HTTPException(status_code=413,detail=exc.code)
+    if isinstance(exc,(ProtocolSourceFormatError,ProtocolSourceConversionError)):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolPdfTypeError):
         return HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     if isinstance(exc,ProtocolPdfWorkerError):
@@ -2145,6 +2399,17 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolRegistrationError):
         return HTTPException(status_code=400,detail=exc.code)
+    if isinstance(exc,ReagentTableTooLargeError):
+        return HTTPException(status_code=413,detail=exc.code)
+    # Lane RV, decision b: a review decision the server does not take is the
+    # request's (422); a review read against an analysis that has since
+    # changed is a conflict (409).
+    if isinstance(exc,ProtocolReviewTargetChangedError):
+        return HTTPException(status_code=409,detail=exc.code)
+    if isinstance(exc,ProtocolReviewError):
+        return HTTPException(status_code=422,detail=exc.code)
+    if isinstance(exc,ReagentTableError):
+        return HTTPException(status_code=422,detail=exc.code)
     return HTTPException(
         status_code=409 if isinstance(exc,ProtocolCatalogError) else 500,
         detail=getattr(exc,"code","protocol_catalog_error"),
@@ -2765,8 +3030,16 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols",status_code=201)
 async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
-    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
-    if media_type!=PDF_MEDIA_TYPE:
+    """Register one protocol source: a PDF, a Word document or a photo.
+
+    Lane AN, FM (human decision 2026-10-13): a .docx (through LibreOffice)
+    and a JPG, PNG or HEIC photo are turned into the PDF that extraction, OCR
+    and the analysis read -- one evidence path -- and registered as it; the
+    upload's own checksum is kept with the registration.
+    """
+
+    media_type=source_media_type(request.headers.get("content-type",""))
+    if media_type not in SOURCE_MEDIA_TYPES:
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     length=request.headers.get("content-length")
     if length is not None:
@@ -2781,32 +3054,129 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise HTTPException(status_code=400,detail="invalid_content_length") from exc
     with tempfile.TemporaryDirectory(prefix="protocol-registration-") as root:
         temporary=Path(root)/"upload.pdf"
-        await _spool_protocol_pdf_upload(request,temporary)
+        original=None
+        if media_type==PDF_MEDIA_TYPE:
+            await _spool_protocol_pdf_upload(request,temporary)
+        else:
+            original=Path(root)/"upload.source"
+            await _spool_protocol_pdf_upload(request,original)
         try:
             catalog,store=_open_protocol_catalog()
             try:
-                result=catalog.register(
-                    temporary,
-                    source_filename=filename,
-                    media_type=media_type,
+                converted=None
+                # A Word document or photo uploaded before is found by its own
+                # checksum and not converted again.
+                result=(
+                    catalog.find_converted_upload(file_sha256(original))
+                    if original is not None else None
                 )
+                if result is None:
+                    if original is not None:
+                        converted=replace(
+                            await asyncio.to_thread(
+                                convert_source_to_pdf,original,media_type,temporary),
+                            filename=filename,
+                        )
+                    result=catalog.register(
+                        temporary,
+                        source_filename=(
+                            filename if converted is None else pdf_filename(filename)),
+                        media_type=PDF_MEDIA_TYPE,
+                        converted_from=converted,
+                    )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 _record_workspace_metric(
                     category="protocol",metric_name="upload",
-                    dimensions={"source_kind":"local_pdf","status":"stored"},
+                    dimensions={
+                        "source_kind":(
+                            "local_pdf" if converted is None
+                            else "local_docx" if converted.converter.startswith("libreoffice")
+                            else "local_photo"),
+                        "status":"stored",
+                    },
                 )
                 ocr=_automatic_ocr_on_upload(catalog,result.entry)
-                return {
-                    "protocol":result.entry.public_dict(),
-                    "deduplicated":result.deduplicated,
-                    "ocr":ocr,
-                }
+                return _registration_response(result,ocr)
             finally:
                 store.close()
         except HTTPException:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+def _registration_response(result:Any,ocr:dict[str,object])->dict[str,object]:
+    """The upload's answer; a file already registered with a review version
+    suggests starting from it instead (lane RV, decision d)."""
+
+    response:dict[str,object]={
+        "protocol":result.entry.public_dict(),
+        "deduplicated":result.deduplicated,
+        "ocr":ocr,
+    }
+    suggestion=review_version_suggestion(result.entry) if result.deduplicated else None
+    if suggestion is not None:
+        response["review_suggestion"]=suggestion
+    return response
+
+
+@app.post("/api/protocols/{protocol_id}/reagent-tables",status_code=201)
+async def attach_protocol_reagent_table(
+    request:Request,protocol_id:str,filename:str,
+)->dict[str,object]:
+    """Attach an .xlsx workbook to a protocol as its reagent table (lane AN, FM).
+
+    Kept cell by cell where the workbook prints it; never analysed and never
+    a source of a step. Returns the table's summary.
+    """
+
+    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
+    if media_type!=REAGENT_TABLE_MEDIA_TYPE:
+        raise HTTPException(status_code=415,detail="unsupported_reagent_table_media_type")
+    with tempfile.TemporaryDirectory(prefix="protocol-reagent-table-") as root:
+        temporary=Path(root)/"table.xlsx"
+        try:
+            await _spool_protocol_pdf_upload(
+                request,temporary,max_bytes=MAX_REAGENT_TABLE_BYTES)
+        except HTTPException as exc:
+            # The spooler names a PDF; this upload is a workbook.
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={413:"reagent_table_too_large",422:"invalid_reagent_table"}.get(
+                    exc.status_code,exc.detail),
+            ) from exc
+        def attach()->tuple[dict[str,object],bool]:
+            # The catalog's connection belongs to the thread that opens it.
+            catalog,store=_open_protocol_catalog()
+            try:
+                return catalog.attach_reagent_table(
+                    protocol_id,temporary,filename=filename)
+            finally:
+                store.close()
+
+        try:
+            _scope_catalog_resource(protocol_id)
+            table,deduplicated=await asyncio.to_thread(attach)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _catalog_http_error(exc) from exc
+    return {"reagent_table":reagent_table_summary(table),"deduplicated":deduplicated}
+
+
+@app.get("/api/protocols/{protocol_id}/reagent-tables")
+def list_protocol_reagent_tables(protocol_id:str)->dict[str,object]:
+    """The reagent tables attached to a protocol, every cell where it prints."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return {"reagent_tables":catalog.reagent_tables(protocol_id)}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
 
 
 def _automatic_ocr_on_upload(
@@ -3242,7 +3612,9 @@ async def _begin_background_analysis(
     try:
         public=await asyncio.to_thread(prepare_analysis)
         state=(public.get("analysis_run") or {}).get("state")
-        if state in {"review_required","approved","revoked"}:
+        # Lane RV, decision a: an analysis waiting for a person's review
+        # ended too; a plain request starts nothing over it.
+        if state in {"review_required","approved","revoked","review_pending"}:
             public["analysis_request_deduplicated"]=True
             return public
         task=asyncio.create_task(background_worker())
@@ -3312,10 +3684,167 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
             # (decision of 2026-10-08): the source's safety statements with
             # their stored Korean beside them, never collapsed.
             review["safety_notices"]=_review_safety_notices(catalog,protocol_id,review)
+            review["safety_scope"]=_safety_scope_public()
             review["pipeline"]=_pipeline_with_translation(catalog,protocol_id,review)
             return review
         finally:
             store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft")
+def get_protocol_review_draft(protocol_id:str)->dict[str,object]:
+    """The review tab's items, source lines and draft decisions (lane RV, b).
+
+    The analysis a person reviews now -- one waiting for review, one that
+    passed, or the latest review version -- item by item, with where each
+    stands in the source, whether it waits for a person and why, its origin
+    (원문 · AI 제안 · 검토자 입력) and the draft decision on it.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_draft(protocol_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/review-decisions")
+def post_protocol_review_decision(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """One decision on one item (lane RV, decision b): confirm, fix, leave
+    empty (원문에 없음), enter, a memo or taking a decision back. One more
+    ledger event; nothing runs differently until a version is registered."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.record_review_decision(protocol_id,body)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/review-versions",status_code=201)
+def post_protocol_review_version(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """"검토 완료하고 등록" (lane RV, decision c): the reviewer's name is
+    required, every item that waited for a person must be decided, and the
+    review becomes version N -- the one that runs from now on -- beside the
+    analysis and the versions before it."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.register_review(protocol_id,body)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-versions/{version}")
+def get_protocol_review_version(protocol_id:str,version:int)->dict[str,object]:
+    """One registered review version with what it changed and from what
+    (lane RV, decision c): the review tab's version history."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_version(protocol_id,version)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}")
+def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,object]:
+    """One source page as the review read it: every line with its number,
+    the lines holding a value and those an unclear OCR reading holds, and
+    the OCR's value boxes (lane RV, decision b)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.review_source_page(protocol_id,source_page)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get(
+    "/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}"
+    "/value-boxes/{box_index}/image"
+)
+def get_protocol_review_value_box_image(protocol_id:str,source_page:int,box_index:int):
+    """The piece of a photo or handwritten page an OCR value was read from,
+    for the review screen to show beside the value (lane RV, decision e)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            png=catalog.review_value_box_image(protocol_id,source_page,box_index)
+        finally:
+            store.close()
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":(
+                    f'inline; filename="value-box-{source_page}-{box_index}.png"'),
+                "X-Protocol-Source-Page":str(source_page),
+            })
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}/image")
+def get_protocol_review_source_page_image(protocol_id:str,source_page:int):
+    """The source page itself for the review screen (lane RV, decision b).
+
+    The same rendering as "원본 쪽 보기", for any protocol the caller may see
+    -- the review is of an analysis that may not run yet.
+    """
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            path,sha256=catalog.source_pdf(protocol_id)
+        finally:
+            store.close()
+        png=source_figures.page_image(path,sha256,source_page)
+        if png is None:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        return Response(
+            content=png,media_type="image/png",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":f'inline; filename="source-page-{source_page}.png"',
+                "X-Protocol-Source-SHA256":sha256,
+                "X-Protocol-Source-Page":str(source_page),
+            })
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
@@ -4036,7 +4565,15 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     "approved_information","brain","curated_protocol",
     "deterministic_emergency",
     "language_clarification",
+    # Lane RA, decision (g): a session without a protocol has no general
+    # brain any more; its turn is answered by rule.
+    "no_protocol",
 })
+#: Lane RA, decision (d): how long a turn whose words end in an unfinished
+#: Korean ending waits for the words that follow before it is routed alone
+#: -- the join window, plus the time the endpoint and speech recognition
+#: take to deliver them.
+FRAGMENT_HOLD_SECONDS=FRAGMENT_JOIN_SECONDS+1.0
 TURN_PROGRESS_TRANSITIONS={
     "listening":frozenset({"transcribing","cancelled","error"}),
     "transcribing":frozenset({"routing","cancelled","error"}),
@@ -4074,7 +4611,6 @@ class ListenerSession:
                  tool_context:ToolContext|None=None,
                  curated_protocol_session:CuratedProtocolSession|None=None,
                  experiment_report_store:ExperimentReportStore|None=None,
-                 external_reference_settings:ExternalReferenceSettings|None=None,
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
                  llm_router_settings:LlmRouterSettings|None=None,
@@ -4092,8 +4628,6 @@ class ListenerSession:
         self.playback_completion_metrics:dict[int,int]={}
         self.curated_protocol_session=curated_protocol_session
         self.experiment_report_store=experiment_report_store
-        self.external_reference_settings=(
-            external_reference_settings or ExternalReferenceSettings(False))
         self.supplemental_knowledge_settings=(
             supplemental_knowledge_settings or SupplementalKnowledgeSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
@@ -4135,6 +4669,8 @@ class ListenerSession:
         self.accepted_protocol_id:str|None=None
         self.accepted_revision_id:str|None=None
         self.turn_generations:dict[int,int]={}
+        #: Lane RA, decision (d): a turn's unfinished words, held for the next.
+        self._held_fragment:dict[str,Any]|None=None
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
         self.visual_tasks:set[asyncio.Task]=set()
         self.research_operations:set[tuple[int,int]]=set()
@@ -4892,6 +5428,38 @@ class ListenerSession:
             self.active_turn_id=None; self.framer=FrameBuffer()
             self._restore_primary_detector(TurnState.IDLE)
             self._reset_interrupt_input()
+    # --- Lane RA, decision (d): a fragment held for the words that follow ---------
+    def hold_fragment(self,turn_id:int,generation:int,text:str,*,ended_at:float)->None:
+        """Keep a turn's unfinished words for the turn that follows."""
+        self._held_fragment={
+            "turn_id":turn_id,"generation":generation,
+            "text":" ".join(text.split()),"ended_at":float(ended_at),
+        }
+    def held_fragment(self)->dict[str,Any]|None:
+        held=getattr(self,"_held_fragment",None)
+        return dict(held) if held else None
+    def release_fragment(self,turn_id:int,generation:int)->bool:
+        """Let the fragment's own turn route its words: True when it is still this turn's."""
+        held=getattr(self,"_held_fragment",None)
+        if held is None:
+            return True
+        if held["turn_id"]!=turn_id or held["generation"]!=generation:
+            return False
+        self._held_fragment=None
+        return True
+    def take_held_fragment(
+        self,turn_id:int,generation:int,*,speech_started_at:float|None,
+    )->str|None:
+        """The fragment a later turn joins, when its words started within the window."""
+        held=getattr(self,"_held_fragment",None)
+        if held is None:
+            return None
+        self._held_fragment=None
+        if turn_id<=held["turn_id"]:
+            return None
+        if speech_started_at is not None and speech_started_at-held["ended_at"]>FRAGMENT_JOIN_SECONDS:
+            return None
+        return str(held["text"])
     def reject_empty_transcript(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.active_turn_id=None; self.framer=FrameBuffer()
@@ -5210,6 +5778,15 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     open_question=getattr(curated,"open_server_question",None)
     # Lane CF, decision 5: "지금 기준: {파일 이름} · {올린 날짜}".
     basis=getattr(curated,"source_basis",None)
+    # Lane RA, decision (f): the next step's sentence, the kind of the open
+    # confirmation question, the candidates asked back, the values read
+    # back and the deviation a note recorded -- the session's own words, for
+    # lanes UI2 and RV to draw (the page is not changed here).
+    next_sentence=getattr(curated,"next_step_sentence",None)
+    confirm=getattr(curated,"confirm_question",None)
+    candidates=getattr(curated,"clarify_candidates",None)
+    readback=getattr(curated,"readback_values",None)
+    deviation=getattr(curated,"record_deviation",None)
     return {
         "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
@@ -5219,6 +5796,11 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
         # Lane WV, decision 1: the step's own figures, cut from the uploaded
         # PDF -- the list once its pages are cut, None while they are being.
         "source_figures":_screen_source_figures(curated),
+        "next_step_sentence":next_sentence("ko") if callable(next_sentence) else None,
+        "confirm_question":confirm() if callable(confirm) else None,
+        "clarify_candidates":candidates() if callable(candidates) else [],
+        "readback_values":readback() if callable(readback) else [],
+        "record_deviation":deviation() if callable(deviation) else None,
     }
 
 
@@ -5879,9 +6461,6 @@ async def _queue_curated_research(
         research_budget=min(120.0,max(
             10.0,
             (
-                session.external_reference_settings.timeout_seconds
-                if session.external_reference_settings.enabled else 0.0
-            ) + (
                 session.supplemental_knowledge_settings.timeout_seconds
                 if session.supplemental_knowledge_settings.enabled else 0.0
             ),
@@ -5890,12 +6469,11 @@ async def _queue_curated_research(
         def research_remaining(cap:float)->float:
             return max(0.05,min(cap,research_deadline-clock()))
 
-        # Lane R6, decision 8: with web references off, a step is announced
-        # only once it has something to show, so nothing on the screen waits
-        # for an answer that can only end in "웹 참고 자료 확인 제한".
-        web_enabled=session.external_reference_settings.enabled
-        # The turn itself announced "pending" when web references are on.
-        announced=web_enabled and not ctx.get("explain_only")
+        # Lane R6, decision 8: a step is announced only once it has something
+        # to show, so nothing on the screen waits for an answer that can only
+        # end in "웹 참고 자료 확인 제한". (The xAI web reference search that
+        # once announced "pending" up front was deleted in lane DOC3.)
+        announced=False
         async def announce(phase:str)->None:
             nonlocal announced
             announced=True
@@ -5903,133 +6481,6 @@ async def _queue_curated_research(
                 "research.state",turn_id=turn_id,status="running",phase=phase,
                 correlation_id=f"research-{generation}-{turn_id}",
             )
-
-        # 2. External Web Search (Grok 4.6)
-        result=None
-        if (
-            research_plan is None and session.external_reference_settings.enabled
-            and not ctx.get("explain_only")
-        ):
-            await sender.text(
-                "research.state",turn_id=turn_id,status="running",
-                phase="authoritative_web",
-                correlation_id=f"research-{generation}-{turn_id}",
-            )
-            await sender.text(
-                "tool.call",turn_id=turn_id,
-                tool="search_authoritative_web",round=1)
-            external_started=clock()
-            include_images=bool(
-                getattr(plan,"visual_requested",False)
-                or getattr(plan,"action",None) is CuratedProtocolAction.VISUAL_REQUEST
-            )
-            log.info(
-                "external_search.request_config model=%s open_mode=%s total_timeout=%s connect_timeout=%s read_timeout=%s image_search_enabled=%s",
-                session.external_reference_settings.model,
-                bool(session.external_reference_settings.domain_profile=="open" or not session.external_reference_settings.allowed_domains),
-                session.external_reference_settings.timeout_seconds,
-                session.external_reference_settings.connect_timeout_seconds,
-                session.external_reference_settings.read_timeout_seconds,
-                include_images,
-            )
-            # The query carries the user's question, so only its size and a
-            # short digest are logged (AGENTS.md rule 6), as turn.route_decision does.
-            reference_query=str(ctx["reference_query"])
-            log.info(
-                "external_search.provider_started turn_id=%s generation=%s "
-                "query_chars=%d query_sha256=%s",
-                turn_id,generation,len(reference_query),
-                hashlib.sha256(reference_query.encode("utf-8")).hexdigest()[:16],
-            )
-            async def _on_partial_sources(srcs: list[dict[str, Any]]) -> None:
-                if session.owns_research_result(turn_id, generation, configuration_id):
-                    await sender.text(
-                        "research.state",
-                        turn_id=turn_id,
-                        generation=generation,
-                        status="running",
-                        phase="authoritative_web",
-                        correlation_id=f"research-{generation}-{turn_id}",
-                        sources_found=len(srcs),
-                        message=f"웹에서 참고 자료 {len(srcs)}개를 찾았어요.",
-                    )
-
-            try:
-                external_client=AsyncOpenAI(
-                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                    max_retries=0)
-                external_searcher=XaiAuthoritativeWebSearch(
-                    external_client,session.external_reference_settings,
-                )
-                try:
-                    search_call=external_searcher.search(
-                        ctx["reference_query"],
-                        language=turn_language,
-                        include_images=include_images,
-                        on_partial_sources=_on_partial_sources,
-                    )
-                except TypeError:
-                    search_call=external_searcher.search(
-                        ctx["reference_query"],language=turn_language)
-                result=await asyncio.wait_for(
-                    search_call,
-                    timeout=research_remaining(
-                        session.external_reference_settings.timeout_seconds),
-                )
-            except asyncio.CancelledError:
-                raise
-            except asyncio.TimeoutError:
-                log.warning("external_search.timeout turn_id=%s layer=server_research_remaining", turn_id)
-                result={"status":"timeout_total","matches":[],"images":[]}
-            except Exception as exc:
-                log.warning(
-                    "external_search.error turn_id=%s class=%s",
-                    turn_id,type(exc).__name__)
-                result={"status":"connect_error","matches":[],"images":[]}
-            if not session.owns_research_result(turn_id,generation,configuration_id):
-                return
-            external_elapsed=round((clock()-external_started)*1000)
-            log.info(
-                "external_search.provider_completed turn_id=%s elapsed_ms=%s status=%s web_search_count=%s image_search_count=%s source_count=%s markdown_image_count=%s",
-                turn_id,external_elapsed,result.get("status"),
-                result.get("web_search_count",result.get("tool_usage_count",0)),
-                result.get("image_search_count",0),
-                len(result.get("matches",[])),
-                len(result.get("images",[])),
-            )
-            log.info(
-                "external_search.result_admission citation_count=%s image_candidate_count=%s turn_id=%s generation=%s",
-                len(result.get("matches",[])),
-                len(result.get("images",[])),
-                turn_id,generation,
-            )
-            await sender.text(
-                "tool.result",turn_id=turn_id,
-                tool="search_authoritative_web",round=1,
-                status=result.get("status","response_schema_error"),
-                elapsed_ms=external_elapsed,
-                retrieval_backend=result.get("backend"),
-                match_count=len(result.get("matches",[])),
-                provider_request_id=result.get("provider_request_id"),
-                streaming=bool(result.get("streaming",False)),
-                provider_event_count=result.get("event_count",0),
-                provider_tool_event_count=result.get("tool_event_count",0),
-                first_provider_event_ms=result.get("first_event_ms"),
-                first_provider_text_ms=result.get("first_text_ms"),
-                provider_tool_started_ms=result.get("tool_started_ms"),
-                provider_tool_ended_ms=result.get("tool_ended_ms"),
-            )
-            if result.get("status")=="success" and result.get("matches"):
-                research_plan=curated.apply_reference_answer(
-                    turn_id=turn_id,language=turn_language,
-                    primary_text=result["answer"],
-                    origin="external_authoritative_reference",
-                    citations=tuple(result["matches"]),
-                    retrieval_backend=result["backend"],
-                    limitations=(
-                        "External guidance cannot modify the active protocol.",
-                    ),
-                )
 
         # 3a. A short outside-PDF explanation, said after the rules' answer
         # (lane R6, decision 6, restoring D4).
@@ -6109,8 +6560,6 @@ async def _queue_curated_research(
             and supplemental_knowledge_allowed(
                 ctx["query"],plan.question_dimensions)
         ):
-            if web_enabled:
-                await announce("supplemental_model")
             supplemental_started=clock()
             try:
                 supplemental_client=_role_client(
@@ -6179,8 +6628,6 @@ async def _queue_curated_research(
                 await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
         elif session.owns_research_result(turn_id,generation,configuration_id):
             status=(
-                result.get("status","disabled")
-                if isinstance(result,dict) else
                 supplemental_result.get("status","disabled")
                 if isinstance(supplemental_result,dict) else "disabled"
             )
@@ -6189,7 +6636,7 @@ async def _queue_curated_research(
                 and status not in {"disabled","not_found","no_allowed_citation"}
                 # An outside-PDF explanation left unsaid is not a research
                 # failure: the rules' answer was the answer (decision 6).
-                and not (ctx.get("outside_pdf") is not None and result is None)
+                and ctx.get("outside_pdf") is None
             ):
                 report=_open_experiment_report(session,curated)
                 store=session.experiment_report_store
@@ -6232,6 +6679,22 @@ async def _queue_curated_research(
         await asyncio.shield(task)
     except asyncio.CancelledError:
         pass
+
+
+def _safety_scope_record(session:ListenerSession)->dict[str,object]:
+    """The start record's words about the institution safety documents.
+
+    Nothing for a run that has them; for one that has none, the scope and the
+    server's sentence, so the record says the experimenter started without them.
+    """
+
+    scope=getattr(getattr(session,"tool_context",None),"usage_scope",None)
+    if not _source_protocol_only(scope):
+        return {}
+    return {
+        "safety_scope":SOURCE_PROTOCOL_ONLY_SCOPE,
+        "institution_safety_notice":NO_INSTITUTION_DOCUMENTS_NOTICE,
+    }
 
 
 def _open_experiment_report(
@@ -6286,6 +6749,7 @@ def _open_experiment_report(
                         for item in shown
                     ],
                     "confirmed_by":"experimenter_start",
+                    **_safety_scope_record(session),
                 },
             )
         basis=curated.source_basis() if callable(getattr(curated,"source_basis",None)) else None
@@ -8012,8 +8476,70 @@ def _router_route_fields(
                 outcome.verdict.reason_code if outcome.verdict is not None else None),
             "timings_ms":dict(outcome.timings_ms),
             "usage":usage,
+            # Lane RA: the router first -- the read-only call, who wrote the
+            # answer, and the roles' statuses.
+            "router_first":bool(settings.router_first),
+            "read_only":outcome.read_only.tool if outcome.read_only is not None else None,
+            "answered_by":outcome.answered_by,
+            "roles":dict(outcome.brain_statuses),
         },
     }
+
+
+class _RouterRoles:
+    """Lane RA, decision (b): the Answer, Source and Visual roles beside the router.
+
+    Started by the router line together with its own model call, with the
+    router's context as their facts; never raced against the rules' answer.
+    The Answer role's answer goes out when it passes the same checks as the
+    router's; the Source and Visual roles' outputs go where they went before
+    (the research step, the picture's kind). Off, or with no role enabled,
+    nothing is started.
+    """
+
+    def __init__(
+        self,session:"ListenerSession",curated:CuratedProtocolSession,*,
+        turn_id:int,generation:int,language:str,clock:Callable[[],float],
+    )->None:
+        self.session=session
+        self.curated=curated
+        self.turn_id=turn_id
+        self.generation=generation
+        self.language=language
+        self.clock=clock
+
+    def start(self,context:Any,transcript:str)->Any:
+        settings=self.session.multi_brain_settings
+        curated=self.curated
+        activation=BrainActivation(
+            answer=bool(settings.answer_brain_enabled),
+            source=bool(settings.source_brain_enabled),
+            visual=bool(settings.visual_brain_enabled),
+        )
+        if not settings.enabled or not activation.roles or not curated.active:
+            return None
+        step=curated.fixture.steps[curated.current_index]
+        facts=tuple(
+            BrainFact(fact_id,"router_evidence",text,page)
+            for fact_id,(text,page) in list(context.evidence.items())[:24]
+        )
+        if not facts:
+            return None
+        snapshot=BrainSnapshot(
+            configuration_id=self.session.accepted_configuration_id,
+            session_id=self.session.session_id,
+            turn_id=self.turn_id,generation_id=self.generation,
+            workflow_revision=int(context.snapshot.get("workflow_revision") or 0),
+            protocol_id=curated.fixture.protocol_id,
+            document_sha256=curated.fixture.source_pdf_sha256 or "",
+            step_id=step.step_id,step_index=curated.current_index,
+            language=self.language,transcript=transcript,
+            intent_kind="llm_router_turn",question_kind=None,
+            requested_entities=(),question_dimensions=(),
+            facts=facts,claims=(),
+        )
+        client=_role_client(RoleModel.from_environment("answer"))
+        return HybridMultiBrain(client,settings,clock=self.clock).start(snapshot,activation)
 
 
 async def _route_with_llm_router(
@@ -8036,6 +8562,13 @@ async def _route_with_llm_router(
             route=("brain" if state=="composing" else "curated_protocol"),
         )
 
+    roles=(
+        _RouterRoles(
+            session,curated,turn_id=turn_id,generation=generation,
+            language=language,clock=clock,
+        )
+        if settings.router_first and session.multi_brain_settings.enabled else None
+    )
     return await route_turn_with_llm_router(
         curated,transcript,turn_id=turn_id,language=language,
         settings=settings,client_factory=client,rule_route=rules_route,
@@ -8044,7 +8577,7 @@ async def _route_with_llm_router(
         configuration_id=session.accepted_configuration_id,
         generation=generation,arbitration=arbitration,
         actor_principal_id=actor_principal_id,actor_role=actor_role,
-        on_progress=said,clock=clock,
+        on_progress=said,clock=clock,roles=roles,
     )
 
 
@@ -8209,6 +8742,39 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
+    if session.llm_router_settings.router_first:
+        # Lane RA, decision (d): words cut by the endpoint. A fragment held
+        # by the turn before this one is joined with these words when they
+        # started within the join window; a turn whose words end in an
+        # unfinished Korean ending waits for the words that follow and, when
+        # they come and supersede it, is not routed at all.
+        held=session.take_held_fragment(
+            turn_id,generation,
+            speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
+        )
+        if held is not None:
+            transcript=f"{held} {transcript}".strip()
+            await current_text(
+                "turn.fragment_joined",turn_id=turn_id,text=transcript,
+                fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
+        if (
+            committed_at is not None
+            and recognize_emergency(transcript) is None
+            and incomplete_fragment(transcript)
+        ):
+            session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
+            deadline=committed_at+FRAGMENT_HOLD_SECONDS
+            try:
+                while session.clock()<deadline:
+                    if not session.is_current(turn_id,generation):
+                        # The words that follow took the turn; they join this fragment.
+                        return
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                # Superseded: the fragment stays held for the turn that follows.
+                raise
+            if not session.release_fragment(turn_id,generation):
+                return
     input_decision=classify_input_event(
         transcription,
         keyterms=keyterm_dump_terms(stt_keyterms),
@@ -8811,44 +9377,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "explain_only":True,
                 }
                 session.begin_research(turn_id,generation)
-            if (
-                research_context is not None
-                and not research_context.get("explain_only")
-                # Lane R6, decision 8: with web references off, nothing is
-                # announced that can only end in "웹 참고 자료 확인 제한".
-                and session.external_reference_settings.enabled
-            ):
-                await current_text(
-                    "research.state",turn_id=turn_id,status="pending",
-                    phase="approved_references",
-                    correlation_id=f"research-{generation}-{turn_id}",
-                )
-                async def enrichment_budget_notice()->None:
-                    budget=(
-                        session.external_reference_settings.user_visible_enrichment_budget_seconds
-                        if session.external_reference_settings.enabled else 4.0
-                    )
-                    await asyncio.sleep(budget)
-                    if (
-                        (turn_id,generation) in session.research_operations
-                        and session.is_current(turn_id,generation)
-                    ):
-                        await current_text(
-                            "research.state",turn_id=turn_id,
-                            status="background_bounded",
-                            phase="optional_enrichment",
-                            user_visible_budget_ms=round(budget*1000),
-                            total_deadline_ms=round(min(30.0,max(
-                                10.0,
-                                (session.external_reference_settings.timeout_seconds
-                                 if session.external_reference_settings.enabled else 0.0)
-                                +(session.supplemental_knowledge_settings.timeout_seconds
-                                  if session.supplemental_knowledge_settings.enabled else 0.0),
-                            ))*1000),
-                            correlation_id=f"research-{generation}-{turn_id}",
-                        )
-                session.track_visual_task(asyncio.create_task(
-                    enrichment_budget_notice()))
             if plan.action in {
                 CuratedProtocolAction.REPORT_ANOMALY,
                 CuratedProtocolAction.SHOW_REPORT,
@@ -9396,6 +9924,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # Lane VF, decision 9: whatever path wrote the sentences, no
             # internal identifier reaches the screen or the voice.
             plan=plan_without_internal_names(plan,turn_language)
+            # Decision of 2026-10-13: with no institution safety document, a
+            # safety answer carries one line that says so.
+            plan=_with_safety_scope_notice(
+                plan,getattr(session.tool_context,"usage_scope",None),transcript)
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -9657,8 +10189,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "answer_origin":plan.answer_origin,
             },
         )
-        source_output=None
-        visual_output=None
+        # Lane RA, decision (b): with the router first the roles ran beside
+        # the router; their outputs go where they went before.
+        source_output=(
+            router_outcome.brain_outputs.get("source") if router_outcome is not None else None)
+        visual_output=(
+            router_outcome.brain_outputs.get("visual") if router_outcome is not None else None)
         if brain_run is not None and brain_snapshot is not None:
             late_answer_output=None
             roles_to_finish=[]
@@ -9776,89 +10312,41 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 {"role":"assistant","content":display_text},
             ])
         return
-    if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
-    turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
-                             turn_language,session.tool_context.usage_scope,
-                             session.tool_context.report_language)
-    queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
-    def mark_token():
-        nonlocal first_token
-        if not first_token: first_token=True; timings["first_grok_token_ms"]=round((clock()-endpoint)*1000)
-    async def sentence(segment:SentenceSegment):
-        nonlocal first_sentence
-        if not first_sentence:
-            first_sentence=True; timings["first_sentence_ms"]=round((clock()-endpoint)*1000)
-            timings["primary_text_ready_ms"]=timings["first_sentence_ms"]
-            await progress("composing",route="brain")
-        if not await current_text("reply.delta",turn_id=turn_id,segment_index=segment.segment_index,text=segment.text): return
-        await queue.put(segment)
-    async def consume():
-        nonlocal output_frames,segment_count,first_audio
-        while True:
-            segment=await queue.get()
-            if segment is None:return
-            if "first_tts_request_ms" not in timings:
-                timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-                await progress("synthesizing",route="brain")
-            pcm=await asyncio.to_thread(synthesize,said(segment.text),turn_language); frames=frame_complete_audio(pcm)
-            if not session.is_current(turn_id,generation):return
-            if not first_audio:
-                if filler is not None:await filler.primary_ready()
-                if not session.start_playback(turn_id):return
-                first_audio=True; timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-                await progress(
-                    "playing",route="brain",
-                    timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
-                if not await current_text("state.changed",state=session.state.value,turn_id=turn_id): return
-            if not session.is_current(turn_id,generation): return
-            await sender.segment(
-                turn_id,segment.segment_index,frames,generation)
-            output_frames+=len(frames); segment_count+=1
-    consumer=asyncio.create_task(consume())
-    try:
-        await current_text(
-            "turn.route_decision",turn_id=turn_id,
-            normalized_text=request_arbitration.normalized_text,
-            intent=request_arbitration.intent.value,
-            confidence=request_arbitration.confidence,
-            reason_code=request_arbitration.reason_code,
-            dimensions=list(request_arbitration.dimensions),
-            runtime_router="brain",
-            action="tool_or_grounded_response",
-            state_mutation=False,
-            answer_origin="pending",
-            fallback_reason=None,
-        )
-        await progress("composing",route="brain")
-        client=_role_client(RoleModel.from_environment("answer"),max_retries=_KEEP_SDK_RETRIES); client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
-        result=await stream_brain_turn(
-            client,session.history,transcript,sentence,mark_token,
-            tool_context=turn_context)
-        if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
-        await queue.put(None); await consumer
-        if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
-        if not await current_text("reply.complete",turn_id=turn_id,text=result.text): return
-        if not await current_text("audio.complete",turn_id=turn_id,segment_count=segment_count): return
-        timings["total_ms"]=round((clock()-endpoint)*1000)
-        if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used,route="brain"): return
-        _record_workspace_metric(
-            category="agent",metric_name="turn_route",
-            metric_value=float(timings.get("total_ms",0)),
-            dimensions={
-                "intent":request_arbitration.intent.value,
-                "route":"brain",
-                "answer_origin":"model_or_tool",
-                "reason_code":request_arbitration.reason_code or "none",
-                "status":"complete",
-            },
-        )
-        if not session.is_current(turn_id,generation): return
-        session.history.commit(result.messages,result.source_references)
-    finally:
-        if not consumer.done(): consumer.cancel()
-        while not queue.empty():
-            try: queue.get_nowait()
-            except asyncio.QueueEmpty: break
+    # Lane RA, decision (g): a session without a protocol has no general
+    # brain any more (session.start refuses cascade without a protocol, so
+    # this is reached only by a session built without one). Answered by
+    # rule, nothing called.
+    _record_workspace_metric(
+        category="agent",metric_name="turn_route",
+        dimensions={
+            "intent":request_arbitration.intent.value,
+            "route":"no_protocol","answer_origin":"server",
+            "reason_code":request_arbitration.reason_code or "none",
+            "status":"blocked",
+        },
+    )
+    await current_text(
+        "turn.route_decision",turn_id=turn_id,
+        normalized_text=request_arbitration.normalized_text,
+        intent=request_arbitration.intent.value,
+        confidence=request_arbitration.confidence,
+        reason_code=request_arbitration.reason_code,
+        dimensions=list(request_arbitration.dimensions),
+        runtime_router="no_protocol",
+        action="unsupported",
+        state_mutation=False,
+        answer_origin="server",
+        fallback_reason="no_protocol_session",
+    )
+    await finish_blocked_voice(
+        (
+            "이 세션에는 프로토콜이 없어 음성 안내를 할 수 없어요. 화면에서 프로토콜을 골라 시작해 주세요."
+            if turn_language=="ko" else
+            "This session has no protocol, so there is no voice guidance. Choose a protocol on the screen to start."
+        ),
+        "no_protocol",
+    )
+
 
 async def run_turn_safely(
     websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0,
@@ -10147,7 +10635,6 @@ async def voice_socket(websocket:WebSocket):
         vad_settings=VoiceVadSettings.from_environment()
         config=VadConfig.from_settings(vad_settings.cascade)
         report_settings=ExperimentReportSettings.from_environment()
-        external_settings=ExternalReferenceSettings.from_environment()
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
@@ -10159,7 +10646,9 @@ async def voice_socket(websocket:WebSocket):
         await websocket.close(code=1008,reason="invalid configuration")
         return
     research_capabilities={
-        "external_text":external_settings.public_capability(),
+        # The xAI web reference search is gone (lane DOC3); the screen still
+        # reads this entry, so it says, always, that the capability is off.
+        "external_text":{"status":"disabled"},
         "supplemental_model":supplemental_settings.public_capability(),
         "multi_brain":multi_brain_settings.public_capability(),
         "web_explanation":web_explanation_settings.public_capability(),
@@ -10175,7 +10664,6 @@ async def voice_socket(websocket:WebSocket):
     session=ListenerSession(
         EndpointDetector(config,listening_onset=True),
         experiment_report_store=report_store,
-        external_reference_settings=external_settings,
         supplemental_knowledge_settings=supplemental_settings,
         multi_brain_settings=multi_brain_settings,
         llm_router_settings=llm_router_settings,
@@ -10459,21 +10947,31 @@ async def voice_socket(websocket:WebSocket):
                                             entry=catalog.get_entry(requested_protocol_id)
                                         except ProtocolCatalogNotFoundError:
                                             entry=None
-                                        if entry is not None:
+                                        recovered=(
+                                            _recovery_fixture(
+                                                catalog,requested_protocol_id,entry,
+                                                control.get("experiment_session_id"))
+                                            if entry is not None else None)
+                                        if recovered is not None:
+                                            (selected_curated_fixture,
+                                             selected_revision_id,
+                                             selection_failure)=recovered
+                                        elif entry is not None:
                                             if entry.available_for_execution:
                                                 selected_curated_fixture=(
                                                     catalog.load_executable_fixture(
                                                         requested_protocol_id))
                                                 selected_revision_id=entry.revision_id
-                                                selected_basis_entry={
-                                                    "source_filename":getattr(
-                                                        entry,"source_filename",None),
-                                                    "created_at":getattr(
-                                                        entry,"created_at",None),
-                                                }
                                             else:
                                                 selection_failure=(
                                                     "protocol_selection_unavailable")
+                                        if selected_curated_fixture is not None:
+                                            selected_basis_entry={
+                                                "source_filename":getattr(
+                                                    entry,"source_filename",None),
+                                                "created_at":getattr(
+                                                    entry,"created_at",None),
+                                            }
                                     finally:
                                         protocol_store.close()
                             if selected_curated_fixture is None:
@@ -10555,7 +11053,10 @@ async def voice_socket(websocket:WebSocket):
                                 protocol_id=requested_protocol_id or "unknown_protocol",
                                 protocol_revision=selected_revision_id or "1",
                                 facility_id=trusted_config.facility_id,
-                                status="unavailable",
+                                status=(
+                                    SOURCE_PROTOCOL_ONLY_COVERAGE
+                                    if _source_protocol_only(trusted_config.usage_scope)
+                                    else "unavailable"),
                                 error_reason=str(exc),
                             )
 

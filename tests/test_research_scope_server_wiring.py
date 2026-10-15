@@ -8,9 +8,10 @@ research query -- now pass it.
 
 These tests run the server's own code: a related question goes through
 ``run_turn``, and a Source Brain query through ``_queue_curated_research``.
-They read the query where the server uses it, the web-reference search
-(the approved lab-reference search that read it before was deleted on
-2026-10-10, lane CL).
+They read the query where the server builds it, the call to
+``plan_research_query``. (They used to read it a second time where the xAI web
+reference search received it; that search was deleted in lane DOC3, after the
+approved lab-reference search had been deleted on 2026-10-10, lane CL.)
 For in-gel the query is the same, character for character, as the one built
 without the scope (which ``test_protocol_scoped_research_query`` shows is the
 query sent before); for another protocol it names that protocol's material.
@@ -26,7 +27,7 @@ from unittest.mock import patch
 
 from voiney_lab import server as server_module
 from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
-from voiney_lab.external_references import ExternalReferenceSettings, plan_research_query
+from voiney_lab.external_references import plan_research_query
 from voiney_lab.language import Transcription
 from voiney_lab.multi_brain import SourceBrainOutput
 from voiney_lab.runtime_routing import route_curated_runtime_turn
@@ -86,34 +87,19 @@ def _listener(fixture, index: int) -> ListenerSession:
     session.turn_generations[1] = session.generation
     session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
     session.detector.state = TurnState.PROCESSING
-    # The web-reference search is where the query is read.
-    session.external_reference_settings = ExternalReferenceSettings(
-        True, ("pubchem.ncbi.nlm.nih.gov",), "offline-web", 2.0, 3, "candidate_a",
-    )
     return session
 
 
 class _Recorder:
-    """Spy on plan_research_query and on the search that receives its query."""
+    """Spy on plan_research_query: the question, the scope arguments, the query."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict, str]] = []
-        self.searched: list[str] = []
 
     def plan(self, question, **kwargs):
         query = plan_research_query(question, **kwargs)
         self.calls.append((question, kwargs, query))
         return query
-
-    def web(self, *args):
-        recorder = self
-
-        class _Web:
-            async def search(self, query, *, language, **kwargs):
-                recorder.searched.append(query)
-                return {"status": "no_results", "matches": [], "images": []}
-
-        return _Web()
 
 
 async def _immediate(function, *args, **kwargs):
@@ -148,12 +134,6 @@ def _related_turn(session: ListenerSession, transcript: str) -> _Recorder:
         "voiney_lab.server.synthesize", return_value=b"\0\0",
     ), patch(
         "voiney_lab.server.plan_research_query", side_effect=recorder.plan,
-    ), patch(
-        "voiney_lab.server.XaiAuthoritativeWebSearch", recorder.web,
-    ), patch(
-        "voiney_lab.server.AsyncOpenAI", return_value=object(),
-    ), patch(
-        "voiney_lab.server.require_env", return_value="offline",
     ), patch(
         "voiney_lab.server.asyncio.to_thread", side_effect=_immediate,
     ):
@@ -200,12 +180,6 @@ def _source_brain_research(
     with patch(
         "voiney_lab.server.plan_research_query", side_effect=recorder.plan,
     ), patch(
-        "voiney_lab.server.XaiAuthoritativeWebSearch", recorder.web,
-    ), patch(
-        "voiney_lab.server.AsyncOpenAI", return_value=object(),
-    ), patch(
-        "voiney_lab.server.require_env", return_value="offline",
-    ), patch(
         "voiney_lab.server.asyncio.to_thread", side_effect=_immediate,
     ):
         asyncio.run(scenario())
@@ -223,8 +197,6 @@ class ResearchScopeWiringTests(unittest.TestCase):
         scope = session.curated_protocol_session.research_scope()
         for key in _SCOPE_KEYS:
             self.assertEqual(kwargs[key], scope[key])
-        # The query the server built is the one the search received.
-        self.assertEqual(recorder.searched, [query])
         return query
 
     @unittest.skipUnless(
@@ -277,9 +249,9 @@ class ResearchScopeWiringTests(unittest.TestCase):
     def test_another_protocol_related_question_names_its_material(self) -> None:
         session = _listener(miniprep_fixture(), 0)
         recorder = _related_turn(session, "Tris-HCl buffer는 왜 넣어?")
-        self.assertEqual(len(recorder.searched), 1)
-        query = recorder.searched[0]
-        # Without the scope the server searched "laboratory protocol role in ...".
+        self.assertEqual(len(recorder.calls), 1)
+        query = recorder.calls[0][2]
+        # Without the scope the server built "laboratory protocol role in ...".
         self.assertTrue(
             query.startswith("Tris-HCl buffer role in fictional plasmid miniprep."),
             query,
@@ -291,8 +263,8 @@ class ResearchScopeWiringTests(unittest.TestCase):
         session = _listener(miniprep_fixture(), 0)
         recorder = _source_brain_research(
             session, "Tris-HCl buffer는 왜 넣어?", "Tris-HCl buffer purpose")
-        self.assertEqual(len(recorder.searched), 1)
-        query = recorder.searched[0]
+        self.assertEqual(len(recorder.calls), 1)
+        query = recorder.calls[0][2]
         self.assertTrue(
             query.startswith("Tris-HCl buffer role in fictional plasmid miniprep."),
             query,

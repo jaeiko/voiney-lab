@@ -25,7 +25,6 @@ from unittest.mock import patch
 from tests.protocol_vocabulary_support import build_fixture
 from voiney_lab.curated_protocol import CuratedProtocolSession
 from voiney_lab.external_references import (
-    ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.language import Transcription
@@ -90,7 +89,6 @@ def _session() -> ListenerSession:
     session.turn_generations[1] = session.generation
     session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
     session.detector.state = TurnState.PROCESSING
-    session.external_reference_settings = ExternalReferenceSettings(False)
     session.supplemental_knowledge_settings = SupplementalKnowledgeSettings(
         True, "offline-supplement", 2.0,
     )
@@ -135,6 +133,10 @@ class GeneralExplanationTests(unittest.TestCase):
             "voiney_lab.server.AsyncOpenAI", return_value=SimpleNamespace(),
         ), patch(
             "voiney_lab.server.require_env", return_value="offline",
+        ), patch.dict(
+            # Lane AN, decision 1: the supplemental role is named; an unset
+            # role no longer falls back to xAI.
+            "os.environ", {"VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai"},
         ), patch(
             "voiney_lab.server.asyncio.to_thread", side_effect=immediate,
         ):

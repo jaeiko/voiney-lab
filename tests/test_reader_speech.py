@@ -122,6 +122,10 @@ def _turn(session: ListenerSession, transcript: str, turn_id: int, model=None):
         model if model is not None else _FakeModel(error=AssertionError("no model call")),
     ), patch(
         "voiney_lab.server.require_env", return_value="offline",
+    ), patch.dict(
+        # Lane AN, decision 1: the translation role is named; an unset role
+        # no longer falls back to xAI.
+        "os.environ", {"VOINEY_LAB_TRANSLATION_PROVIDER": "xai"},
     ):
         asyncio.run(run_turn(socket, session, b"\0\0", turn_id, session.generation))
     reply = next(item for item in socket.text if item["type"] == "reply.delta")

@@ -387,7 +387,7 @@ const errorCases=[
  ["invalid_pdf","PDF 파일이 손상되었거나 다운로드가 완료되지 않았습니다. 원본 파일을 다시 내려받아 선택해 주세요."],
  ["protocol_pdf_too_large","PDF 파일 크기가 등록 한도를 초과했습니다. 더 작은 파일을 선택해 주세요."],
  ["protocol_catalog_unavailable","프로토콜 등록 기능을 사용할 수 없습니다. 서버 관리자에게 문의해 주세요."],
- ["unsupported_pdf_media_type","PDF 파일만 등록할 수 있습니다."]
+ ["unsupported_pdf_media_type","PDF, Word(.docx), 사진(JPG·PNG·HEIC)만 등록할 수 있습니다."]
 ];
 for(const [code,message] of errorCases){let calls=0;fetch=async(url,options)=>{calls++;assert(url.includes("filename=selected.pdf")&&options.method==="POST"&&options.headers["Content-Type"]==="application/pdf"&&options.body===selectedPdf&&options.redirect==="error","production raw upload contract changed");return{ok:false,headers:{get:()=>"application/json"},json:async()=>({detail:code})}};await registerSelectedProtocol();assert(calls===1,`failed ${code} refreshed catalog`);assert(ids["protocol-upload-status"].textContent===message,`safe upload message missing for ${code}`);assert(ids["protocol-pdf"].files[0]===selectedPdf,"recoverable failure lost selection");assert(ids["protocol-analysis-progress"].textContent===unchangedProgress,"failed registration displayed analysis progress");}
 let nonJsonCalls=0;fetch=async()=>{nonJsonCalls++;return{ok:false,headers:{get:()=>"text/html"},json:async()=>{throw new Error("must not parse HTML")}}};await registerSelectedProtocol();assert(nonJsonCalls===1&&ids["protocol-upload-status"].textContent==="PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.","non-JSON upload failure was not sanitized");

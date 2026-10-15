@@ -93,7 +93,11 @@ class TimeMarkRulesTests(_Pages):
 
     def test_the_rules_are_tried_after_the_forms_that_do_not_discount(self) -> None:
         forms = analysis_module._comparison_forms(ocr_derived=False)
-        self.assertEqual([form["skip_duration_widget_lines"] for form in forms], [False, False, True, True])
+        # Lane AN, EV4 decisions b and e (2026-10-13) add script forms after
+        # these four; the four come first and in this order, as before.
+        self.assertEqual([form["skip_duration_widget_lines"] for form in forms[:4]],
+                         [False, False, True, True])
+        self.assertTrue(all(form.get("script_forms") for form in forms[4:]))
         self.assertEqual(forms[0], {
             "join_line_end_hyphens": False, "join_hangul_line_breaks": False,
             "skip_duration_widget_lines": False, "drop_space_before_punctuation": False})

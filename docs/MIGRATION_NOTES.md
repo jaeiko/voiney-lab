@@ -264,7 +264,7 @@ chose. They now say what is missing:
 
 | Setting is unset | Before | Now |
 |---|---|---|
-| `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` without `VOINEY_LAB_SUPPLEMENTAL_PROVIDER` / `_MODEL` | provider xai, model `grok-4.6` | the WebSocket refuses with "invalid non-secret configuration" naming the unset setting(s); the provider must be `xai` (the search is xAI's tool) |
+| `EXTERNAL_REFERENCES_ENABLED=true` without `VOINEY_LAB_SUPPLEMENTAL_PROVIDER` / `_MODEL` | provider xai, model `grok-4.6` | the WebSocket refuses with "invalid non-secret configuration" naming the unset setting(s); the provider must be `xai` (the search is xAI's tool) |
 | `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true` ("AI 일반 지식") without the same two | model `grok-4.6` | the same refusal |
 | `VOINEY_LAB_REPORT_PROVIDER` or the report model (`VOINEY_LAB_REPORT_MODEL`, else `VOINEY_LAB_SUPPLEMENTAL_MODEL`) | model `grok-4.6` on xai | the report's prose writer is off (one warning in the log naming both settings); the report keeps the server's own sentences |
 | `VOINEY_LAB_STT_PROVIDER` / `VOINEY_LAB_TTS_PROVIDER` | xai | no provider: a turn's transcription or speech refuses by the setting's name, which the existing STT/TTS failure path handles; the `ready` event's `voice_profile` reports provider and voice `""` |
@@ -288,10 +288,84 @@ line in `run_pilot.sh`, `run_dev.sh` and `run_ci_server.sh`.
 Not changed by this lane (other lanes' files): the xai default and
 `DEFAULT_MODELS` in `model_providers.py`, the old defaults in `multi_brain.py`
 and `llm_router.py`, and the xAI-only web evidence search
-(`XaiAuthoritativeWebSearch`, `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`), which
+(`XaiAuthoritativeWebSearch`, `EXTERNAL_REFERENCES_ENABLED`), which
 `server.py`'s research path still calls. The table's comment on `_SET_ME` in
 `setting_names.py` (and the README's provider section) still describe the
-fallback as present for all roles.
+fallback as present for all roles. (Lanes AN and RA then removed the old
+defaults, and lane DOC3, 2026-10-14, fixed those two descriptions and deleted
+the web evidence search and the `MOSS_ENABLED` row: see "Lane DOC3" at the end.)
+
+## Lane PL (2026-10-13), stage 2: the pilot path
+
+No schema change and no migration; nothing already stored is read differently.
+
+- **A new runtime usage scope, `source_protocol_only`** (human decision of
+  2026-10-13, "B안"): `VOINEY_LAB_USAGE_SCOPE=source_protocol_only` needs no
+  approved safety catalog and reads none (`server_config()` returns
+  `catalog_path=None`; a configured catalog is ignored). Every scope that has a
+  catalog is checked exactly as before. No catalog document carries the new
+  value; `documents.usage_scope` is unchanged. A server, `.env` or script that
+  does not use it sees no difference.
+- **Additions, none of which an older reader needs** (a field it does not know
+  is ignored):
+  - `GET /api/protocols/{id}/review` has `safety_scope`:
+    `{"usage_scope", "source_protocol_only", "notice"}` (`notice` is the
+    sentence "기관 안전 문서 없음 · 원문 안전 주의만" under the new scope, else
+    null).
+  - `SafetyPack.public_dict()` (the `session.safety_pack` event) has
+    `scope_notice` (the same sentence or null); under the new scope
+    `coverage_status` is `"source_protocol_only"`, `missing_coverage` is
+    `["institution_safety_documents"]` and no document is held.
+  - A safety answer's `reply.complete` text ends with that sentence under the new
+    scope (display only, never spoken).
+  - The `safety_notices_acknowledged` ledger event's payload gains
+    `safety_scope` and `institution_safety_notice` under the new scope; under any
+    other scope the payload is what it was. Older events lack the two keys.
+- **`GET /api/protocols`**: a development fixture that cannot be loaded is left
+  out of the list, and one the catalog does not match is listed as not
+  executable (`execution_blocked_reason: "development_fixture_conflicts_with_catalog"`);
+  before, either failed the whole list with a 503. The uploaded protocols are
+  listed in both cases. The single-entry, figure and page endpoints still load
+  the fixture first and are unchanged.
+- **`scripts/run_pilot.sh`**: no catalog file at
+  `data/runtime/pilot/approved_safety_catalog.sqlite` now starts as
+  `source_protocol_only` instead of refusing (exit 0 for `--check-only`). A file
+  that is there keeps every check and is never taken for "no catalog". It also
+  pins `VOINEY_LAB_STT_DIAGNOSTIC_DIR` inside `data/runtime/pilot/` and writes
+  `.voiney-pilot-data` there when it really starts.
+  **A host that relied on the refusal** (a pilot that must not start without
+  institution documents) now has to put a check of its own in front, e.g.
+  `--check-only` output must show `USAGE_SCOPE    = reference_only`.
+- **New tools and documents**: `scripts/pilot_data_delete.py` (preview, confirm,
+  delete, record; appends to `data/runtime/pilot/deletion_log.jsonl`),
+  `scripts/pilot_https_setup.sh` with `scripts/pilot_https/Caddyfile.example`
+  (written, not run), `docs/PILOT_GUIDE.md`, `docs/PILOT_HTTPS_SETUP.md`.
+- `setting_names.py` lists the new scope on the `VOINEY_LAB_USAGE_SCOPE` row. No
+  setting was added or removed.
+- **`.env.example` rebuilt** (human instruction of 2026-10-13: it had not been
+  brought up to date at all). It now lists every setting in the table except the
+  ones whose reason is written in `tests/test_lane_pl_env_example.py` (shell/CI
+  names, aliases, switches that follow another switch, the development
+  launcher's fixture paths), 117 of the 136; its comments no longer describe
+  the removed xai fallback or the Moss setting; and a copy of it as it stands is
+  safe: the two keyed features (`VOINEY_LAB_WEB_EXPLANATIONS_ENABLED`,
+  `VOINEY_LAB_DRAWN_DIAGRAMS_ENABLED`) start off (a copy used to be refused at
+  the first connection without `OPENAI_API_KEY`), `VOINEY_LAB_ADMIN_TOKEN` is
+  empty (it was a guessable placeholder, which opened `GET /api/admin/metrics`
+  to anyone who knew it), `VOINEY_LAB_STT_DIAGNOSTIC_DIR` is empty (the
+  placeholder lay outside `data/runtime`, which the server refuses), the usage
+  scope is `demo` (the development fixture's scope; the comment says how to
+  build the fictional demo catalog the way CI does, and that
+  `source_protocol_only` needs no catalog), and `VOINEY_LAB_MOSS_ENABLED` is
+  gone. The role providers, models and timings in use are kept. **A `.env`
+  already copied from the old example is not touched**; compare it with the new
+  one, and in particular check that it does not still hold the old admin-token
+  placeholder.
+
+Going back: code older than this stage rejects `source_protocol_only` as an
+invalid usage scope (`server_config()`); set a scope with a catalog or stay on
+this version. Nothing stored needs undoing; `deletion_log.jsonl` and
+`.voiney-pilot-data` are plain files an older version ignores.
 
 ## Commercial workspace schema 7 → 8 (lane CF, 2026-10-08)
 
@@ -519,12 +593,12 @@ under `data/` is rewritten.
   venv and GitHub Actions set. Names that only other software reads (the
   `openai` SDK's `OPENAI_*`, proxy and certificate variables, and so on) are
   listed in `EXTERNAL_NAMES` and are never renamed.
-- Three old pairs became one name each: `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
+- Three old pairs became one name each: `EXTERNAL_REFERENCES_ENABLED`,
   `VOINEY_LAB_SUPPLEMENTAL_MODEL` and
-  `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS`. The conflict check between
+  `EXTERNAL_REFERENCE_TIMEOUT_SECONDS`. The conflict check between
   two names of one setting now applies only to
-  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` and its alias
-  `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
+  `EXTERNAL_REFERENCE_DOMAINS` and its alias
+  `EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
 - There is no transition period. Instead the server (after it loads the
   repository `.env`), the handoff worker (deleted on 2026-10-10, lane CL),
   `scripts/run_dev.sh`,
@@ -690,3 +764,296 @@ it already was for the development fixture (tests/test_aged_store.py). The
 only difference is cosmetic: the older review puts a failed re-analysis's
 code in `analysis_failure` beside `available_for_execution: true`, and the
 older screen then shows "분석 실패와 복구" over a protocol that still runs.
+
+## Lane AN (2026-10-13): the claim-chunk path deleted; unset model roles
+
+No schema change and no stored row rewritten.
+
+The evidence-first claim-chunk analysis path (lane AN, decision 1) is gone
+with its two settings, written here without their `VOINEY_LAB_` prefix:
+`PROTOCOL_CLAIM_CHUNKS_ENABLED` (default false; the only way into the path)
+and `CHUNK_CACHE_DIR` (its development cache folder). A `.env` that still
+sets one starts as before; the name is simply not read. Its modules
+(`protocol_chunk_analysis`, `chunk_analysis_cache`, `claim_contract_audit`,
+`protocol_claim_semantic_audit`, `protocol_claim_stream_telemetry`,
+`protocol_provider_diagnostics`) live in the git history only;
+`protocol_claim_analysis` keeps the page evidence segment generator, with
+unchanged segment ids, for the in-gel fixture's timer manifest. The scripts
+under `scripts/` that imported the deleted modules no longer run.
+
+### Reading older data
+
+A catalog ledger may hold `protocol_chunk_*` events from a run of that path;
+the run status still reads them as before (none exist in the development
+catalog of 2026-10-12). An analysis the path stored keeps its
+`page_coverage` records in its payload, and the payload still reads, but the
+catalog no longer derives the unread-page disclosure from them.
+
+### Model roles without settings
+
+`model_providers.RoleModel` no longer falls back to xAI and a grok model
+when a role's settings are empty: an empty `VOINEY_LAB_<ROLE>_PROVIDER`
+means the role is not configured ("설정 필요", as the setting table has said
+since lane CL), `has_key()` is false and a client for it is refused with
+`RoleNotConfiguredError` naming the setting. An environment that names every
+role it uses, as `.env.example` does, behaves as before; one that relied on
+the fallback must now set `VOINEY_LAB_<ROLE>_PROVIDER=xai` (and the model)
+for each such role, or the role stays off.
+
+## Lane AN (2026-10-13): a long document analysed in pieces
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+A document of more than 60 pages, or one whose text is planned to need more
+output than one analysis call gives, is analysed in pieces of at most 15
+pages that share one page with the next (lane AN, decision 2). The run is the
+analysis request's own: its events carry `analysis_run_id` equal to the
+request's `analysis_id`. It writes, in this order, one
+`protocol_chunk_plan_created` event (`chunks`: `chunk_id` `piece-<n>`,
+`ordinal`, `source_page_start`, `source_page_end`), a
+`protocol_chunk_analysis_started` event per piece (`attempt` 1, and 2 with
+`retry_of_failure_code` when the piece is sent once more), a
+`protocol_chunk_analysis_completed` (`steps`) or
+`protocol_chunk_analysis_failed` (`failure_code`, `evidence_failure`) event
+per piece, `protocol_chunk_merge_started` when every piece passed, and
+`protocol_chunk_merge_conflict` (`reason`, `source_page_start`,
+`source_page_end`) when two pieces read their shared page differently. The
+run ends in the analysis' own `protocol_analysis_ready` event, which then
+carries `pieces` (index, count, first and last page of each), or
+`protocol_analysis_failed` with the new codes
+`protocol_analysis_piece_failed` (and `failed_pieces`: each piece's pages and
+last failure code) or `protocol_analysis_piece_conflict` (and
+`piece_conflict`). A passed run is stored like any analysis; its ids carry
+the piece they came from (`p2.step-14`). `protocol_analysis_too_many_pages`
+now means more than 400 pages.
+
+### Reading older data
+
+Nothing changes for an analysis stored before: a ledger without piece events
+reads as before. The run status reads chunk events only while their plan is
+the latest analysis request's run, and a chunk failure that a later passed
+analysis replaced is no longer shown as the current failure.
+
+### Going back
+
+Code from before this version reads a piece run's events as a claim-chunk run
+(the same event types): while the run is going it shows its progress; after
+it ended, its status may stay at the last chunk event. The stored analysis
+itself reads and runs as any other.
+
+## Lane AN (2026-10-13): evidence past a page's layout, and a person's retry retried
+
+No schema change and no stored row rewritten.
+
+The source-evidence check reads past five layouts the stored DS-2, M3 and EV3
+answers showed (lane AN, EV4): a running header, footer or page number a page
+prints in the middle of its body, a table header reprinted at the top of the
+next page and a header table's number-only cells are left out of the
+comparison; a soft hyphen, a subscript or superscript after a letter, and the
+spaces between two Hangul letters on one line compare as the characters they
+stand for (a superscript after a digit stays itself); a step label written
+"3)" or "(2)" is stored as the bare number. Quotes are stored as the model
+gave them.
+
+A PDF whose text layer drops its Hangul glyphs (lines left holding only their
+spaces and periods) now has each readable page marked for OCR with the new
+`ocr_reason` value `dropped_glyphs`, beside `no_text_layer` and
+`unreadable_glyphs`. The reason is computed at extraction and not stored by
+itself; an OCR run's events record the pages read as before.
+
+A person's "분석 다시 시도" after a failed analysis now gets the one automatic
+retry a first analysis gets: `protocol_analysis_retry_started` may follow any
+`protocol_analysis_requested`, at most once per request.
+
+### Reading older data
+
+A stored analysis is not checked again; one that passed before still reads.
+A document registered before whose text layer drops its Hangul shows its
+pages as needing OCR the next time it is read; its stored analysis, if any,
+stays as it is. A ledger with two automatic retries on one revision (one per
+request) reads as two runs, each with its own retry.
+
+### Going back
+
+Code from before this version reads all of the above: the new OCR reason is
+an extraction value, not stored, and two retry events on a revision read as
+the retry of the run on screen.
+
+## Lane AN (2026-10-13): Word documents, photos and reagent tables
+
+No schema change and no stored row rewritten; protocol store (the catalog
+ledger) only.
+
+`POST /api/protocols` also takes a Word document
+(`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)
+and a JPG, PNG or HEIC photo (`image/jpeg`, `image/png`, `image/heic`,
+`image/heif`). Each is turned into the PDF that extraction, OCR and the
+analysis read -- a .docx by LibreOffice, a photo as one image page at 300 dpi
+-- and that PDF is registered as the source, under the upload's name with
+`.pdf` (`notes.jpg` -> `notes.pdf`). The `protocol_registered` event of such a
+source carries `converted_from`: the upload's `media_type`, `sha256`,
+`byte_size`, `filename` and `converter` (`pillow-12.3.0`,
+`libreoffice-24.2.7.2`), and for a photo its `pixels`,
+`exif_orientation_applied` and `pdf_dpi`. The same upload again is found by
+that checksum.
+
+`POST /api/protocols/{protocol_id}/reagent-tables` attaches an .xlsx workbook
+to a protocol as its reagent table: one `protocol_reagent_table_attached`
+event per workbook (`table_id`, `filename`, `media_type`, `sha256`,
+`byte_size`, `authority` `person_upload`, `sheets` with each non-empty cell's
+`ref`, `row`, `column`, `value`, `display` and, where present, `number_format`
+and `formula`; `cell_count`; `warnings`). `GET
+/api/protocols/{protocol_id}/reagent-tables` reads them back. A reagent table
+is not a protocol source and changes nothing about the analysis or the
+protocol's readiness.
+
+The `protocol_ocr_completed` event's pages now carry `render_dpi` and
+`value_boxes` (each a value's `text` and its `box` in the pixels of the page
+rendered at `render_dpi`), so a value read from handwriting or a photo can be
+shown beside the piece of the image it was read from.
+
+### Reading older data
+
+A registration without `converted_from`, an OCR page without `render_dpi` or
+`value_boxes`, and a protocol without reagent-table events read as before (no
+table, no boxes).
+
+### Going back
+
+Code from before this version reads every event above: it ignores
+`converted_from`, `render_dpi` and `value_boxes`, and never reads the
+reagent-table events. A protocol registered from a photo or a Word document
+reads as the PDF it is.
+
+### New dependencies
+
+`Pillow` (photos) and `openpyxl` (reagent tables) are required; HEIC needs the
+optional extra `.[heic]` (`pillow-heif`). LibreOffice must be installed on the
+server, with the Korean fonts `fonts-nanum` (human decision 2026-10-13; a system
+install, not a Python package): `VOINEY_LAB_OFFICE_CONVERTER` names its
+`soffice` when it is not on `PATH` or in its default place, and without it a
+Word upload is refused with `docx_conversion_unavailable`. `GET /readyz` adds
+`docx_conversion_available` and `heic_photos_available` to its capabilities;
+neither makes the server not ready. See `docs/SOURCE_FORMATS.md`.
+
+## Lane RV (2026-10-14): analyses that wait for review, review decisions and review versions
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) and the workspace's experiment rows.
+
+Human decisions of 2026-10-12 (and the review scope of 2026-10-14) change
+what an analysis whose quotes or claims are not all found in the source
+becomes, and add a person's review that makes a version which runs. Three new
+event types and one new kind of analysis revision record it, all append-only:
+
+- `protocol_analysis_review_pending` -- an analysis kept for a person instead
+  of failed: `analysis_id`, `flags` (each item that waits, by its id --
+  `step:<step_id>`, `action:<action_id>/quantities/0`, `pages:41-59` for a
+  long document's failed piece -- with the reason `evidence_not_found`,
+  `ocr_unclear`, `ambiguous_repeat`, `not_in_source` or `piece_failed`, the
+  refused field, the check's own reason code and the pages that print the
+  quote when the cited one does not), `needs_review_count`,
+  `verified_evidence_count`, `capability_policy_id`, `protocol` and
+  `readiness` in the store's own tagged encoding, `source_pages` (the SHA-256
+  of each page's text; the pages themselves are not copied and are read again
+  from the stored source and its accepted OCR, and a page that no longer
+  matches refuses the record) and, when present, `cleared_fields`, `pieces`,
+  `response_repaired`. It is never an analysis revision: nothing that runs a
+  protocol reads it.
+- `protocol_review_decision_recorded` -- one decision on one item: `target`
+  (the analysis, review-pending event or review version reviewed), `item_id`,
+  `kind`, `action` (`confirm`, `fix`, `clear`, `enter`, `memo`, `reset`),
+  `value` (`text`, `seconds` for a step timer, `count` for a repeat count),
+  `source_lines` (page, first and last line and the excerpt they print, when a
+  person pointed at where an item whose quote was not found stands), `memo`,
+  `reviewer_name` when given, and `original` (the value before and its origin,
+  `source` or `ai_suggestion`). A later decision on the same item is the draft;
+  every decision stays.
+- An analysis revision whose `analysis_id` starts `review-v<N>-` -- the
+  protocol of review version N, stored and validated like any analysis (every
+  quote is the page's own text: a quote that was not found is replaced by the
+  lines a person pointed at). It is a person's version, not the analyser's: the
+  catalog's latest analysis skips it.
+- `protocol_review_version_registered` -- beside that revision
+  (`analysis_revision_number` set): `version`, `revision_id`
+  (`pdf-<n>-review-<N>`, the id a session and the workspace's experiment row
+  bind to), `reviewer_name` (required), `base` and `base_revision_id` (what was
+  reviewed), `changes` (each item changed or confirmed: original and reviewed
+  value, origin `reviewer_input` or `ai_suggestion`, the words the run says for
+  it, who decided it and when), `timers` (step id -> the reviewer's seconds, or
+  `null` for no timer), `origins`, `memos`, `decision_event_ids`.
+
+The latest registered review version is what a protocol runs from then on,
+whatever the analyser makes after it; without one, the analysis that passed
+runs as before (the review is optional). A recovered experiment loads the
+revision it started on (`load_fixture_for_revision`), so a re-analysis or a
+new version no longer refuses it.
+
+### Reading older data
+
+A store without these events reads as before: no analysis waits for review,
+no protocol has a review version, and every protocol's revision id is
+`pdf-<n>` or `pdf-<n>-analysis-<m>`. Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (lane RV report, decision h): the
+catalog listing, the review, the review tab's draft and the pipeline line of
+all seven protocols read, `/api/protocols` lists them, a review version
+registered on the copy runs, and the analysis it was reviewed from still loads
+by its revision id.
+
+### Going back
+
+Code from before this version ignores the three event types. It reads a
+review version's analysis revision as one more analysis (`pdf-<n>-analysis-<m>`
+with the version's protocol), which it then runs; an analysis that waits for
+review reads as an analysis still running (its start event has no end it
+knows), and "분석 다시 시도" asks again. Checked on the same copy with the code
+of `297d69d`.
+
+## Lane DOC3 (2026-10-14): the xAI web reference search deleted
+
+No schema change and no migration; nothing already stored is read differently.
+The web reference search was off by default and no launcher turned it on, so a
+server that never switched it on behaves exactly as before. Human decision of
+2026-10-14 (lane PL's report, section 7, listed the footprint).
+
+Deleted:
+
+| What | Where |
+|---|---|
+| `XaiAuthoritativeWebSearch` (the Responses `web_search` adapter, its cache, citation checks and answer clean-up), `ExternalReferenceSettings`, and the helpers only they used | `external_references.py` |
+| The research path's second step, `search_authoritative_web` (its `tool.call` / `tool.result` events and the "authoritative_web" `research.state` phase), the "pending" announcement that went with it, and `ListenerSession.external_reference_settings` | `server.py` |
+| Thirteen setting-table rows: the switch `EXTERNAL_REFERENCES_ENABLED`, the six time and turn limits (`EXTERNAL_REFERENCE_TIMEOUT_SECONDS`, `_CONNECT_`, `_READ_`, `_ENRICHMENT_BUDGET_`, `_SERVICE_TIER`, `_MAX_TURNS`), and `EXTERNAL_REFERENCE_DOMAIN_PROFILE`, `_DOMAINS`, `_ALLOWED_DOMAINS`, `_MAX_CITATIONS`, `_CACHE_TTL_SECONDS`, `EXTERNAL_SEARCH_DISPLAY_MODE` (all with the `VOINEY_LAB_` prefix) | `setting_names.py`, `.env.example` |
+| The `VOINEY_LAB_MOSS_ENABLED` row (nothing has read it since lane CL) and the one `export` left in `scripts/collect_chunks.sh` | `setting_names.py`, `scripts/collect_chunks.sh` |
+| The old-name entries whose new name is a deleted row (4 prefixed, 12 unprefixed) | `setting_renames.py` |
+| The diagnostic script for the search | `scripts/diagnose_candidate_a_research.py` |
+| The launchers' references: `run_dev.sh`'s eight defaults, its capability printout and import; `run_pilot.sh`'s default and banner line `external_references:`; `run_ci_server.sh`'s export | `scripts/` |
+| The one entry of `XAI_ONLY_FEATURES` (the guard stays, empty, for the next xAI-only feature) | `configuration.py` |
+
+Kept: the "AI 일반 지식" explanation (`XaiSupplementalKnowledge.explain` and
+`explain_outside_pdf`, `SupplementalKnowledgeSettings`, the
+supplemental role's settings), the query planners and the
+`apply_reference_answer` method of `curated_protocol.py` (no longer called;
+that file was outside this lane).
+
+What changes for someone:
+
+- `research_capabilities.external_text` in `session.ready` is now always
+  `{"status": "disabled"}`. The screen still requires the entry; it used to
+  carry the profile and the domain count.
+- A `.env` that still sets one of the thirteen names is read by nothing. The
+  start-up guard does not refuse them (they were never old names); delete the
+  lines. `scripts/migrate_env.py` lists them under "코드가 읽지 않는 이름".
+- `VOINEY_LAB_SUPPLEMENTAL_REASONING` stays (the supplemental role reads its
+  reasoning setting through `model_providers`); its table default is now
+  "(공급자 기본)" and its meaning "PDF 밖 설명 추론", where it said "low" and
+  "외부 근거 검색 추론".
+- `docs/APPROVED_DOCUMENT_OPERATIONS.md` §6 no longer describes the search.
+  Documents that have to spell a deleted setting write it without the
+  `VOINEY_LAB_` prefix (as earlier lanes did); the standard test command's
+  `VOINEY_LAB_MOSS_ENABLED` (in `CLAUDE.md`, README and `docs/GIT_WORKFLOW.md`)
+  is the one prefixed name documents may still spell
+  (`tests/test_setting_names.py`).
+
+Going back: code from before this version reads the same data; the deleted
+settings were read only by the deleted code.

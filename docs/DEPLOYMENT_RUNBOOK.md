@@ -5,9 +5,35 @@ repository (`scripts/run_dev.sh` plus a directly-invoked `uvicorn`
 process), rather than introducing a new orchestration platform. It is scoped
 to a controlled research pilot, not a regulated GxP/clinical release — see
 `README.md` §3 ("하지 않는 것"). The product is an MVP prototype, not
-field-validated. The controlled pilot itself runs `scripts/run_pilot.sh`,
-which refuses to start without its approved safety catalog
-(`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4).
+field-validated. The controlled pilot itself runs `scripts/run_pilot.sh`: it
+starts as `source_protocol_only` (the uploaded PDF's own safety statements,
+no institution safety documents, and it says so) when there is no approved
+safety catalog at its fixed path, and checks the catalog, refusing to start on
+an unusable one, when there is (`docs/PILOT_GUIDE.md` §1,
+`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4); it also warns, and still starts,
+when LibreOffice is missing (below). HTTPS for a phone is
+`docs/PILOT_HTTPS_SETUP.md`; deleting the pilot's data afterwards is
+`docs/PILOT_GUIDE.md` §5.
+
+## What the server needs installed (system packages, set-up values)
+
+Human decisions of 2026-10-13 and 2026-10-14 (lane AN's measurements,
+2026-10-13). These are not Python packages: `pip install -e .` does not bring
+them, so they are part of preparing every server.
+
+| What | Why | How | If it is missing |
+|---|---|---|---|
+| **LibreOffice** (`libreoffice-writer-nogui`) and the Korean fonts **`fonts-nanum`** | a Word (.docx) source is turned into a PDF by LibreOffice; without the Korean fonts a Korean document's text layer loses its spaces and fails the source-evidence check | `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`; check `soffice --version`, `fc-match NanumGothic`, and `GET /readyz` → `capabilities.docx_conversion_available: true`. A `soffice` elsewhere: `VOINEY_LAB_OFFICE_CONVERTER=/path/to/soffice` | the server still starts (a warning in its log, `protocol.source_formats docx=unavailable`); a .docx upload is refused with `docx_conversion_unavailable` (503). `scripts/run_pilot.sh` prints a `[WARN]` and starts too |
+| **HEIC support** (optional) | iPhone photos in HEIC | `pip install -e '.[heic]'` (pillow-heif), restart, check `capabilities.heic_photos_available`. The wheel carries GPLv2 code, so the organisation's licence owner decides; the repository does not install it by default (human decision of 2026-10-14) | a HEIC upload is refused with `heic_support_unavailable` (503); JPEG and PNG still work |
+| **A longer PDF-reading time**, `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` | reading the text of a long document runs in a child process with a time limit (default 30 s, allowed 1–600). The 88-page `usgs_twri_5a3_organic` took 121 s for the extraction alone (lane AN, 2026-10-13), so with the default its upload timed out | write it in the service's `EnvironmentFile` (`.env`) and restart | a long document's upload is refused as a time-out; the measured slowest document (about 1.4 s a page) fits 400 pages inside 600 s |
+
+The staging server that `.github/workflows/deploy-staging.yml` reaches over
+ssh (it runs the host's own `deploy` command after a green CI on `dev`) is a
+server like any other: the same `apt-get install` has to be run on it by a
+person. Nothing in this repository installs system packages, and this lane did
+not log in to that host, so whether it has them is not known from here. The
+Python side (Pillow for photos, openpyxl for reagent tables) comes with
+`pip install -e .`. Details and the error codes: `docs/SOURCE_FORMATS.md`.
 
 ## Process model
 
@@ -46,8 +72,11 @@ committed file) for secrets, matching the "no fake external validation" and
   workspace, protocol-catalog, or report configuration fails to parse (for
   example, operational scope without complete OIDC settings); returns `200`
   with non-secret identity mode and capability flags (`workspace_enabled`,
-  `protocol_catalog_enabled`, `experiment_reports_enabled`; `moss_enabled`
-  left with the Moss connection on 2026-10-10, lane CL) otherwise. This does
+  `protocol_catalog_enabled`, `experiment_reports_enabled`,
+  `docx_conversion_available` -- LibreOffice found, required on the server --
+  and `heic_photos_available` -- the optional pillow-heif installed, lane AN
+  2026-10-13; `moss_enabled` left with the Moss connection on 2026-10-10,
+  lane CL) otherwise. Neither file-format flag makes the server not ready. This does
   **not** verify live reachability of any external provider — no local probe
   should make a billable provider call.
 
