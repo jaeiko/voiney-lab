@@ -137,6 +137,19 @@ class TooManyItemsTests(_ManyCase):
         (failed,) = self.events("protocol_analysis_failed")
         self.assertIsNone(failed["review_items"]["items_after"])
 
+    def test_a_kept_repaired_answer_with_too_many_items_ends_in_the_guidance(self) -> None:
+        # Found in the replay (augmented/epa_3050b__lowq): a repaired answer
+        # with items whose retry broke is kept under the first attempt's id,
+        # whose failure is already in the ledger; the guidance is its own event.
+        many = with_made_up_notes(self.answer(), 13)
+        broken = self.answer().replace('"steps":', '"stepz":', 1)
+        error, model = self.analyze(many[:-1], broken, many)
+        self.assertIsInstance(error, ProtocolAnalysisTooManyItemsError)
+        self.assertEqual(model.calls, 3)
+        codes = [failed["failure_code"] for failed in self.events("protocol_analysis_failed")]
+        self.assertEqual(codes[-1], "protocol_analysis_too_many_review_items")
+        self.assertIn("확인할 항목이 13건이라", self.catalog.pipeline_status(self.protocol_id)["message"])
+
     def test_the_setting_moves_the_bound(self) -> None:
         client = _Client(with_made_up_notes(self.answer(), 13))
         entry = self.analyze_with(client, env={"VOINEY_LAB_REVIEW_MAX_ITEMS": "20"})

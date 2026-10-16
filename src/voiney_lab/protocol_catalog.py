@@ -3626,7 +3626,9 @@ class ProtocolCatalog:
             "The analysis asks a person about too many items.",
             items=count, limit=limit, items_after=None if after is None else after[0],
             by_reason=by_reason)
-        self._record_analysis_failure(revision, analysis_id, too_many)
+        # Its own id: a kept repaired answer is stored under the first
+        # attempt's id, whose failure the ledger already holds.
+        self._record_analysis_failure(revision, f"{analysis_id}-too-many-items", too_many)
         raise too_many
 
     def _store_review_pending(
