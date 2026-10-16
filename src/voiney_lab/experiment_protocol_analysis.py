@@ -4973,12 +4973,14 @@ def _reading(step: domain.ProtocolSourceStep) -> dict[str, object]:
 
 def _two_readings_flags(
     protocol: domain.ExperimentProtocol, readings: dict[str, dict[str, object]],
+    renamed: dict[str, str],
 ) -> tuple[ReviewFlag, ...]:
     """One item per passage two pieces read differently (lane RV2, decision e).
 
     The earlier piece's reading stands in the analysis; the later piece's
-    rides with the item (its steps in the store's encoding) so that a
-    person's "저쪽으로 읽기" can put it in place.
+    rides with the item (its steps in the store's encoding, the ids it names
+    renamed as the join renamed them) so that a person's "저쪽으로 읽기" can
+    put it in place.
     """
 
     steps = {step.step_id: step for section in protocol.sections for step in section.steps}
@@ -4987,7 +4989,8 @@ def _two_readings_flags(
         kept = [steps[step_id] for step_id in entry["kept"] if step_id in steps]
         if not kept:
             continue
-        others = list(entry["others"])
+        others = [_renamed_ids(step, lambda value: renamed.get(value, value))
+                  for step in entry["others"]]
         flags.append(ReviewFlag(
             item_id=f"step:{kept[0].step_id}",
             reason=REVIEW_REASON_READ_TWO_WAYS,
@@ -5135,7 +5138,7 @@ def join_piece_analyses(
         review_flags=(
             *review_flags_for(verified, extraction, refused),
             *(piece_review_flag(*failed) for failed in failed_pieces),
-            *_two_readings_flags(verified, readings or {}),
+            *_two_readings_flags(verified, readings or {}, renamed),
         ),
         auto_resolved=tuple(
             {**entry, "kept": renamed.get(str(entry["kept"]), entry["kept"])}

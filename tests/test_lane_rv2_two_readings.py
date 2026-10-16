@@ -124,6 +124,21 @@ class TwoQuotesOfOneStepTests(_TwoPiecesCase):
                 self.catalog.record_review_decision(self.protocol_id, request)
 
 
+class TheOtherReadingNamesWhatTheJoinRenamedTests(_TwoPiecesCase):
+    def test_a_step_it_depends_on_is_the_one_the_join_kept(self) -> None:
+        def depends_on_three(protocol: dict) -> None:
+            other_step_four(protocol)
+            self.step(protocol, "s4")["dependencies"] = [{"step_id": "s3", "action_id": None}]
+
+        self.run_two(self.piece_answer((1, 2), partial_step_four),
+                     self.piece_answer((2, 3), depends_on_three))
+        card = self.catalog.review_draft(self.protocol_id)["cards"][0]
+        fixture = self.register(card, "choose_b")
+        step = fixture.steps[3]
+        self.assertEqual(step.instruction_source_text, "Spin at 500 x g for 5 min.")
+        self.assertEqual([target.step_id for target in step.dependencies], ["p1.s3"])
+
+
 class OneStepOverSeveralTests(_TwoPiecesCase):
     def test_the_other_reading_replaces_the_steps_it_reads_as_one(self) -> None:
         def three_and_four(protocol: dict) -> None:

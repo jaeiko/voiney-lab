@@ -4898,6 +4898,7 @@ class ProtocolCatalog:
         flagged = {flag.item_id for flag in draft.review_flags}
         quote_refused = {flag.item_id for flag in draft.review_flags if flag.field == "evidence"}
         values: dict[tuple[int, str], dict[str, object]] = {}
+        page_tokens: dict[int, object] = {}
         for record in _review_records(draft.protocol):
             evidence = record.evidence
             if (
@@ -4917,7 +4918,8 @@ class ProtocolCatalog:
             for token, words in ocr_value_tokens(text, label=label):
                 page = next(
                     (number for number in quoted if 1 <= number <= extraction.page_count
-                     and token in numeric_tokens(extraction.pages[number - 1].text)),
+                     and token in page_tokens.setdefault(
+                         number, numeric_tokens(extraction.pages[number - 1].text))),
                     quoted[0])
                 if page not in states:
                     continue
