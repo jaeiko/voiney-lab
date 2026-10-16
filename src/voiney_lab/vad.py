@@ -39,12 +39,7 @@ from voiney_lab.configuration import (
     milliseconds_to_frames,
 )
 
-#: How long a silence ends the words. Lane FX3 (2026-10-16), decision 6:
-#: 1200 ms, up from 1000 -- on lane SP2's bench a long sentence with fillers
-#: was cut in two by any pause longer than this, and 1200 ms removed almost
-#: every cut under a 1.0 s pause for +0.2 s on each turn. The setting
-#: VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS takes 1000 back.
-VAD_END_SILENCE_MS = 1200
+VAD_END_SILENCE_MS = 1000
 log = logging.getLogger("voiney_lab.vad")
 
 #: The level of a frame with no signal at all, and of one that is all zeros.

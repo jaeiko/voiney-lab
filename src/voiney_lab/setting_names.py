@@ -262,7 +262,7 @@ SETTINGS: tuple[Setting, ...] = (
             "말 앞부분 보존 (ms)"),
     Setting("VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS", OTHER, "800",
             "끼어들기 때 말 앞부분 보존 (ms)"),
-    Setting("VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS", OTHER, "1200",
+    Setting("VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS", OTHER, "1000",
             "말 끝 판정 침묵 (ms)"),
     Setting("VOINEY_LAB_CASCADE_VAD_MIN_SPEECH_MS", OTHER, "240",
             "최소 발화 길이 (ms)"),

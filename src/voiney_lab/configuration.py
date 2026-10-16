@@ -187,8 +187,7 @@ class CascadeVadSettings:
     onset_window_frames: int=6
     prefix_ms: int=300
     barge_in_prefix_ms: int=800
-    #: Lane FX3, decision 6: 1200 ms (was 1000); see vad.VAD_END_SILENCE_MS.
-    endpoint_silence_ms: int=1200
+    endpoint_silence_ms: int=1000
     minimum_speech_ms: int=240
     maximum_utterance_ms: int=15000
     cooldown_ms: int=300
@@ -214,7 +213,7 @@ class CascadeVadSettings:
             barge_in_prefix_ms=_integer(
                 env,"VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS",800,300,5000),
             endpoint_silence_ms=_integer(
-                env,"VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS",1200,20,10000),
+                env,"VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS",1000,20,10000),
             minimum_speech_ms=_integer(
                 env,"VOINEY_LAB_CASCADE_VAD_MIN_SPEECH_MS",240,20,10000),
             maximum_utterance_ms=_integer(

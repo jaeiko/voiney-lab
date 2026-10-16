@@ -4,9 +4,6 @@ from collections import deque
 from voiney_lab.audio import FRAME_BYTES
 from voiney_lab.vad import EndpointDetector, TurnState, VadConfig, WebRtcVadClassifier
 
-#: The default endpoint silence in frames (lane FX3, decision 6: 60, was 50).
-SILENCE = VadConfig().endpoint_silence_frames
-
 
 def frame(number):
     return bytes([number % 256]) * FRAME_BYTES
@@ -86,7 +83,7 @@ class EndpointDetectorTests(unittest.TestCase):
         self.assertEqual(detector.state, TurnState.IDLE)
 
     def test_prefix_order_and_onset_frames_are_not_duplicated(self):
-        decisions = [False] * 9 + [False, True, True, True, True, False] + [True] * 8 + [False] * SILENCE
+        decisions = [False] * 9 + [False, True, True, True, True, False] + [True] * 8 + [False] * 50
         detector = EndpointDetector(classifier=Decisions(decisions))
         results = feed(detector, [frame(i) for i in range(len(decisions))])
         utterance = next(result.utterance for result in results if result.utterance is not None)
@@ -191,9 +188,8 @@ class EndpointDetectorTests(unittest.TestCase):
             frame(len(first) + index) for index in range(6)
         ])
 
-    def test_the_default_silence_ends_once_and_is_trimmed(self):
-        # Lane FX3, decision 6: the default is 60 silent frames (1200 ms), was 50.
-        decisions = [False, True, True, True, True, False] + [True] * 8 + [False] * (SILENCE + 1)
+    def test_fifty_silent_frames_end_once_and_are_trimmed(self):
+        decisions = [False, True, True, True, True, False] + [True] * 8 + [False] * 51
         detector = EndpointDetector(classifier=Decisions(decisions))
         results = feed(detector, [frame(i) for i in range(len(decisions))])
         commits = [result for result in results if result.utterance is not None]
@@ -204,7 +200,7 @@ class EndpointDetectorTests(unittest.TestCase):
         self.assertEqual(detector.state, TurnState.PROCESSING)
 
     def test_too_short_burst_is_rejected(self):
-        decisions = [False, True, True, True, True, False] + [True] * 7 + [False] * SILENCE
+        decisions = [False, True, True, True, True, False] + [True] * 7 + [False] * 50
         detector = EndpointDetector(classifier=Decisions(decisions))
         results = feed(detector, [frame(i) for i in range(len(decisions))])
         self.assertEqual(sum(result.rejected for result in results), 1)

@@ -1,13 +1,16 @@
-"""Lane FX3, decision 6: the end of the words waits 1.2 s of silence, not 1.0 s.
+"""Lane FX3, decision 6: the end of the words still waits 1.0 s of silence; 1.2 s is a setting.
 
-Lane SP2 measured that a long sentence with fillers is cut in two when one
-of its pauses outlasts the endpoint time, and that 1200 ms removes almost
-every cut under a 1.0 s pause for +0.2 s on every turn (its report, section
-5). The person chose 1.2 s (2026-10-16). The default moves in the four places
-that state it -- the setting's default, the VAD's own default, the settings
-table and the example file -- the setting still takes 1000 back, and lane
-SP2's level endpoint (the end found by loudness while the VAD keeps hearing
-a voice) waits the same time, from the same setting.
+The person chose to try 1.2 s (2026-10-16) after lane SP2's pause bench. The
+default moved to 1200 ms and lane SP2's bench, run before and after, agreed
+with that report: a long sentence with fillers split in two 61 % -> 46 % of
+the time, every turn ended about 0.2 s later. A wider run of the same bench
+then showed what the pause bench had no room for: with TV talk in the room,
+the short pauses between the TV's sentences (1.0-1.2 s) no longer ended the
+wearer's words, and up to two thirds of the commands ran to the 15 s bound.
+The person decided the same day to keep 1000 ms (lane FX3 report, section on
+decision 6). These tests pin the default, and that both ends of the words --
+the VAD's silence and lane SP2's level endpoint -- wait the one setting, so
+VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS=1200 tries 1.2 s whole.
 """
 
 from __future__ import annotations
@@ -36,24 +39,20 @@ def _commit_index(config: VadConfig, frames: list[bytes], *, line: float | None 
 
 
 class DefaultTests(unittest.TestCase):
-    def test_every_place_that_states_the_default_says_1200(self) -> None:
-        self.assertEqual(VAD_END_SILENCE_MS, 1200)
-        self.assertEqual(CascadeVadSettings().endpoint_silence_ms, 1200)
-        self.assertEqual(CascadeVadSettings.from_environment({}).endpoint_silence_ms, 1200)
-        self.assertEqual(BY_NAME[NAME].default, "1200")
+    def test_every_place_that_states_the_default_says_1000(self) -> None:
+        self.assertEqual(VAD_END_SILENCE_MS, 1000)
+        self.assertEqual(CascadeVadSettings().endpoint_silence_ms, 1000)
+        self.assertEqual(CascadeVadSettings.from_environment({}).endpoint_silence_ms, 1000)
+        self.assertEqual(BY_NAME[NAME].default, "1000")
         example = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
-        self.assertIn(f"{NAME}=1200", example)
+        self.assertIn(f"{NAME}=1000", example)
+        self.assertEqual(VadConfig().endpoint_silence_frames, 50)
+        self.assertEqual(ListenerSession().detector.config.endpoint_silence_frames, 50)
 
-    def test_the_server_and_a_bare_session_listen_for_60_frames(self) -> None:
-        self.assertEqual(VadConfig().endpoint_silence_frames, 60)
-        self.assertEqual(
-            VadConfig.from_settings(CascadeVadSettings.from_environment({})).endpoint_silence_frames, 60)
-        self.assertEqual(ListenerSession().detector.config.endpoint_silence_frames, 60)
-
-    def test_the_setting_takes_the_old_value_back(self) -> None:
-        settings = CascadeVadSettings.from_environment({NAME: "1000"})
-        self.assertEqual(settings.endpoint_silence_ms, 1000)
-        self.assertEqual(VadConfig.from_settings(settings).endpoint_silence_frames, 50)
+    def test_the_setting_takes_1200(self) -> None:
+        settings = CascadeVadSettings.from_environment({NAME: "1200"})
+        self.assertEqual(settings.endpoint_silence_ms, 1200)
+        self.assertEqual(VadConfig.from_settings(settings).endpoint_silence_frames, 60)
 
 
 class SameTimeForBothEndsTests(unittest.TestCase):

@@ -31,8 +31,7 @@ class FakeResponse:
 class Decisions:
     def __init__(self,values): self.values=deque(values)
     def __call__(self,frame): return self.values.popleft()
-# The default endpoint silence (60 frames since lane FX3, decision 6) ends it.
-TURN=[False,True,True,True,True,False]+[True]*8+[False]*VadConfig().endpoint_silence_frames
+TURN=[False,True,True,True,True,False]+[True]*8+[False]*50
 def frame(n=1): return bytes([n%256])*FRAME_BYTES
 
 class ServerTests(unittest.TestCase):
