@@ -1010,6 +1010,78 @@ review reads as an analysis still running (its start event has no end it
 knows), and "분석 다시 시도" asks again. Checked on the same copy with the code
 of `297d69d`.
 
+## Lane RV2 (2026-10-16): review by item -- settled items, cards and their records
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) only. Human decision of 2026-10-16: a person is
+asked about items, one card at a time, and the server settles on
+deterministic grounds what needs no person. New fields and one new event type,
+all append-only:
+
+- `protocol_ocr_completed` gains `engines` (the OCR engines the provider
+  called: `clova`, `google`) and `pages_read_by_both` (the OCR pages both
+  engines read -- neither failed on them). An OCR page both read with the same
+  numbers and units (`numeric_review_required` false) settles the values
+  executed items state there; any other OCR page makes each such value an item.
+- `protocol_analysis_review_pending` and `protocol_analysis_ready` gain
+  `auto_resolved`: what the server settled itself, each with its reason --
+  `{"kind": "ocr_value", "page", "token", "value", "items", "reason":
+  "ocr_two_engines_agree"}` and, for a long document, `{"kind": "same_step",
+  "page", "kept", "joined", "same_words", "reason":
+  "pieces_read_the_same_words"}`.
+- A review-pending flag may carry `extra` and three new reasons:
+  `ocr_value` (item id `ocr_value:<page>:<token>`, `extra` = the value as
+  written, its token, the items that state it, the page's value-box indexes;
+  `reason_code` `ocr_engines_differ` or `ocr_one_engine`), `read_two_ways`
+  (on the kept step, `extra` = both pieces' readings and the other piece's
+  steps in the store's tagged encoding) and `blocked_pages` (item id
+  `pages:<first>-<last>`, `reason_code` `protocol_analysis_blocked`, `extra` =
+  the provider).
+- `protocol_review_decision_recorded` may hold the action `choose` with
+  `value.reading` `a` or `b` (one of two pieces' readings), and
+  `source_lines.suggested_by_server: true` when a person pressed [맞아요] on the
+  line the server narrowed an item to.
+- `protocol_analysis_auto_reanalysis` (new): an analysis with more items than
+  `VOINEY_LAB_REVIEW_MAX_ITEMS` read once more, one reasoning level up --
+  `analysis_id` (`<id>-more-1`), `reanalysis_of`, `reason`
+  (`too_many_review_items`), `items`, `limit`, `by_reason`, `planned_calls`,
+  `call_cap`, `reasoning_effort`, `previous_reasoning_effort` and `status`
+  (`analyzing`, then `completed` with `items_after`/`by_reason_after` or
+  `failed` with `failure_code`; `skipped_over_call_cap` when the calls it would
+  take exceed `VOINEY_LAB_REVIEW_REANALYSIS_MAX_CALLS`).
+- `protocol_analysis_failed` has two new failure codes:
+  `protocol_analysis_too_many_review_items` (with `review_items`: `items`,
+  `limit`, `items_after`) and `protocol_analysis_blocked` (with `blocked`:
+  `provider`). A piece conflict may say `step_labelling_differs` with
+  `unlabelled_pieces` and `labelled_pieces`.
+
+### Reading older data
+
+An OCR result stored before this version has no `engines`: its OCR pages read
+as read by one engine, so the next analysis of such a document asks about the
+values on them (an analysis already stored, passed or waiting, is read as
+before). Flags without `extra`, decisions without `choose` and stores without
+the new event read as before. Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (sqlite through the backup API,
+objects hard-linked; the original only read): the catalog listing, the review,
+the review draft with its cards and the pipeline line of all seven protocols
+read and `/api/protocols` lists them; on the copy, with fake models and fake
+OCR, a document whose OCR engines differed was reviewed by its OCR value
+cards (one value fixed, the sentence it stands in confirmed) and registered as
+`pdf-1-review-1`, which runs; a document with 20 items ended with the
+automatic re-analysis event and the guidance; a blocked document says "구글
+안전 필터에 막혀 1–4쪽을 분석하지 못했어요." (lane RV2 report).
+
+### Going back
+
+Code from before this version ignores the new fields and the new event type.
+A review version registered with the new decisions is an analysis revision as
+before and runs; an analysis that ended with the guidance or a safety block
+reads as a failed analysis with the default failure line ("분석 다시 시도"
+asks again); an analysis waiting for review shows its items without the new
+cards. Checked on the same copy with the code of `91b84c6`: all ten protocols
+listed and reviewed, the registered version loads.
+
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 
 No schema change and no migration; nothing already stored is read differently.
