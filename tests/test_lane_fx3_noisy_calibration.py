@@ -126,12 +126,16 @@ class PageTests(unittest.TestCase):
         result = run_page_script(PAGE + r"""
 await say({type:"speaker.calibration",turn_id:2,state:"measured",sentence:"s",sensitivity:"normal",level_db:-25,margin_db:12,threshold_db:-37,notice:WORDS});
 const notice=node("voice-calibration-notice");
-assert(notice.hidden===false&&notice.textContent===WORDS,`notice: ${notice.hidden} ${notice.textContent}`);
+assert(notice.hidden===false&&node("voice-calibration-notice-text").textContent===WORDS,`notice: ${notice.hidden} ${node("voice-calibration-notice-text").textContent}`);
 assert(node("mic-check-voice").textContent.endsWith(WORDS),node("mic-check-voice").textContent);
 await say({type:"speaker.calibration",turn_id:3,state:"prompting",sentence:"s",sensitivity:"normal"});
 assert(notice.hidden===true,"the notice stayed while measuring again");
 await say({type:"speaker.calibration",turn_id:4,state:"measured",sentence:"s",sensitivity:"normal",level_db:-20,margin_db:12,threshold_db:-32});
 assert(notice.hidden===true&&!node("mic-check-voice").textContent.includes("시끄러워"),"a quiet measurement shows the notice");
+await say({type:"speaker.calibration",turn_id:5,state:"measured",sentence:"s",sensitivity:"normal",level_db:-25,margin_db:12,threshold_db:-37,notice:WORDS});
+assert(notice.hidden===false,"the notice did not come back with the next noisy measurement");
+node("voice-calibration-notice-close").dispatch("click");
+assert(notice.hidden===true,"the close button did not put the notice away");
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 

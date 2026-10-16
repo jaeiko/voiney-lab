@@ -57,7 +57,9 @@
        is asked to read it, and the setting that asks for it again. */
     .voice-calibration{margin:.45rem 0 0;padding:.6rem .8rem;border:1px solid var(--border-accent);border-radius:var(--radius-sm);color:var(--ink);font-size:.84rem}
     .voice-calibration[hidden]{display:none}
-    .voice-calibration-notice{margin:.45rem 0 0;padding:.5rem .75rem;border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:.95rem;font-weight:700;line-height:1.45}
+    .voice-calibration-notice{display:flex;align-items:center;gap:.75rem;margin:.45rem 0 0;padding:.5rem .75rem;border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-size:.95rem;font-weight:700;line-height:1.45}
+    .voice-calibration-notice span{flex:1 1 auto;min-width:0}
+    .voice-calibration-notice button{flex:none;min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--warning-ink);border-radius:var(--radius-md);background:var(--paper);color:var(--warning-ink);font:inherit;cursor:pointer}
     .voice-calibration-notice[hidden]{display:none}
     .voice-calibration-title{font-weight:750}
     .voice-calibration-sentence{margin:.4rem 0;font-size:1.15rem;font-weight:800;line-height:1.5}
@@ -876,7 +878,7 @@
                     <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
                   </div>
                   <!-- Lane FX3 decision 7 (2026-10-16): the server's sentence when the voice was measured in a noisy room. -->
-                  <p id="voice-calibration-notice" class="voice-calibration-notice" role="status" hidden></p>
+                  <div id="voice-calibration-notice" class="voice-calibration-notice" role="status" hidden><span id="voice-calibration-notice-text"></span><button id="voice-calibration-notice-close" type="button">닫기</button></div>
                 </div>
                 <div class="controls">
                   <button id="start" type="button" disabled>새 실험 시작</button>
@@ -2090,7 +2092,7 @@ function renderMicCheck(){
  setText("mic-check-hint",lost?"‘마이크 다시 연결’을 누르세요":micWorkletNode?"":"실험을 시작하면 켜집니다");
  const select=$("mic-device"),chosen=[...(select?.options||[])].find(option=>option.value===select.value);
  setText("mic-check-device",`마이크 · ${nonemptyText(chosen?.textContent)?chosen.textContent:"기본 마이크 (시스템 설정)"}`);
- const voice=$("voice-calibration-setting-status")?.textContent||"",noisy=$("voice-calibration-notice"),warned=noisy&&noisy.hidden===false&&nonemptyText(noisy.textContent)?` · ${noisy.textContent}`:"";setText("mic-check-voice",nonemptyText(voice)?`목소리 맞추기 · ${voice}${warned}`:"");
+ const voice=$("voice-calibration-setting-status")?.textContent||"",noisy=$("voice-calibration-notice"),noisyText=$("voice-calibration-notice-text")?.textContent||"",warned=noisy&&noisy.hidden===false&&nonemptyText(noisyText)?` · ${noisyText}`:"";setText("mic-check-voice",nonemptyText(voice)?`목소리 맞추기 · ${voice}${warned}`:"");
  return true;
 }
 
@@ -3302,7 +3304,7 @@ function renderVoiceCalibration(m){
  // Lane FX3 decision 7: the server's sentence when the room was too loud to
  // measure well; it stays until the voice is measured again or skipped.
  const notice=$("voice-calibration-notice"),told=m.state==="measured"&&nonemptyText(m.notice)?normalizePresentationText(m.notice):"";
- if(notice&&["prompting","prompted","measured","skipped"].includes(m.state)){notice.textContent=told;notice.hidden=!told;}
+ if(notice&&["prompting","prompted","measured","skipped"].includes(m.state)){setText("voice-calibration-notice-text",told);notice.hidden=!told;}
  if(m.state==="prompting"||m.state==="prompted"){
   if(sentence)sentence.textContent=normalizePresentationText(m.sentence||"");
   if(box)box.hidden=false;
@@ -4368,6 +4370,8 @@ $("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!st
 $("report-prose-again")?.addEventListener("click",()=>{void regenerateReportProse();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
 $("experiment-timeline-refresh")?.addEventListener("click",()=>{void loadExperimentSessions(currentExperimentSessionId);});
+// Lane FX3 decision 7: the experimenter may put the noisy-room notice away (the screen only).
+$("voice-calibration-notice-close")?.addEventListener("click",()=>{const notice=$("voice-calibration-notice");if(notice)notice.hidden=true;renderMicCheck();});
 $("experiment-checkpoint-restart")?.addEventListener("click",()=>{void restartExperimentFromCheckpoint();});
 $("manual-observation-save")?.addEventListener("click",()=>{void saveManualObservation();});
 $("experiment-evidence-upload")?.addEventListener("click",()=>{void uploadExperimentEvidence();});
