@@ -8060,6 +8060,11 @@ VOICE_CALIBRATION_PROMPT=(
 VOICE_CALIBRATION_DONE="목소리를 맞췄어요. 이제 이보다 많이 작은 말은 다른 사람 말로 보고 듣지 않아요."
 VOICE_CALIBRATION_SKIPPED="알겠어요. 목소리 맞추기는 건너뛸게요."
 VOICE_CALIBRATION_RETRY="목소리를 재지 못했어요. 화면의 문장을 한 번 더 읽어 주세요."
+#: Lane FX3 (2026-10-16), decision 7: said, and shown, when the room's noise
+#: floor is near the line just measured -- the sentence was read where the
+#: room's own sound is heard as loud as the wearer. A suggestion only.
+NOISY_CALIBRATION_WORDS="방이 시끄러워 맞추기가 정확하지 않아요. 조용한 곳에서 다시 맞추거나 시끄러운 곳 모드를 쓰세요."
+VOICE_CALIBRATION_DONE_NOISY=f"목소리를 맞췄어요. {NOISY_CALIBRATION_WORDS}"
 _VOICE_CALIBRATION_REQUEST=re.compile(
     r"^(?:내\s*)?목소리(?:를|도)?\s*(?:다시\s*|또\s*|한\s*번\s*더\s*)?"
     r"(?:맞춰|맞추|재|재어|측정해|등록해)(?:\s*(?:줘|줘요|주세요|줄래|보자|볼게|줄래요))?$"
@@ -8112,6 +8117,7 @@ async def _finish_voice_calibration(
 )->None:
     """Take the sentence read as the wearer's level, or the skip said instead."""
 
+    notice:str|None=None
     if voice_calibration_skipped(transcript):
         session.calibration_pending=False
         state,words="skipped",VOICE_CALIBRATION_SKIPPED
@@ -8125,6 +8131,19 @@ async def _finish_voice_calibration(
         log.info(
             "voice calibration measured level_db=%.1f margin_db=%.1f sensitivity=%s turn_id=%s",
             reference.reference_db,reference.margin_db,reference.sensitivity,turn_id)
+        if session.room_near_the_line() is True:
+            # Lane FX3, decision 7: lane SP2's noise floor already within
+            # LEVEL_ENDPOINT_FLOOR_GAP_DB of the line just measured. Said
+            # once, with the measurement; nothing is changed. It is the
+            # room's suggestion of the ten minutes (shared with lanes SP1
+            # and SP2), so the noise floor's own does not follow at once.
+            notice=NOISY_CALIBRATION_WORDS
+            words=VOICE_CALIBRATION_DONE_NOISY
+            session.ambient_suggested_at=session.clock()
+            floor=session.noise_floor.level_db()
+            log.info(
+                "voice calibration noisy room floor_db=%s reference_db=%.1f turn_id=%s",
+                round(floor,1) if floor is not None else None,reference.reference_db,turn_id)
     await current_text("transcript",turn_id=turn_id,text=transcript)
     reference=session.level_reference
     fields:dict[str,Any]={
@@ -8136,6 +8155,8 @@ async def _finish_voice_calibration(
             level_db=round(reference.reference_db,1),
             margin_db=round(reference.margin_db,1),
             threshold_db=round(reference.threshold_db,1))
+        if notice is not None:
+            fields["notice"]=notice
     await current_text("speaker.calibration",turn_id=turn_id,**fields)
     await finish(words,"voice_calibration",outcome="complete")
 
