@@ -23,7 +23,7 @@ from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from voiney_lab import experiment_protocol as domain
@@ -167,6 +167,28 @@ _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
 #: what it was reviewed from and every change with its original value.
 _REVIEW_VERSION_EVENT = "protocol_review_version_registered"
 REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
+#: Lane RV2, decision c (human decision 2026-10-16): an analysis with more
+#: items for a person than ``review_max_items()`` makes no cards; it is
+#: analysed once more by itself, one reasoning level up, within
+#: ``review_reanalysis_max_calls()`` model calls -- this event records why,
+#: at what level and what came of it. Still too many: the guidance alone.
+_AUTO_REANALYSIS_EVENT = "protocol_analysis_auto_reanalysis"
+TOO_MANY_REVIEW_ITEMS_CODE = "protocol_analysis_too_many_review_items"
+REVIEW_MAX_ITEMS_SETTING = "VOINEY_LAB_REVIEW_MAX_ITEMS"
+REVIEW_MAX_ITEMS = 12
+REVIEW_REANALYSIS_MAX_CALLS_SETTING = "VOINEY_LAB_REVIEW_REANALYSIS_MAX_CALLS"
+#: The default bound of the one automatic re-analysis, in model calls, for
+#: one document: a single analysis is one call; a long document counts two
+#: per piece (each piece may be sent once more). 16 is a document of up to
+#: eight pieces (about 110 pages). Basis: lane AN2's ledger, USD 6.09 for 247
+#: Gemini 3.8 Flash analysis calls at "low" (about 0.025 a call); one level
+#: up spends more on thinking -- at three times that, 16 calls stay under
+#: about USD 1.2 for one document.
+REVIEW_REANALYSIS_MAX_CALLS = 16
+#: One reasoning level up (decision c); the top level stays where it is.
+ESCALATED_REASONING: dict[str, str] = {
+    "none": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh",
+}
 #: The authority an upload-time OCR acceptance is recorded under (lane PX,
 #: decision 3). A person's review carries ``human_review``.
 AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
@@ -210,6 +232,19 @@ class ProtocolOcrReviewError(ProtocolCatalogError):
     """An OCR result that does not hold against the source (evidence, not a person's review)."""
 
     code = "protocol_ocr_review_invalid"
+
+
+class ProtocolAnalysisTooManyItemsError(ProtocolCatalogError):
+    """More items for a person than cards are made for, even after the one
+    automatic re-analysis (lane RV2, decision c): the guidance alone."""
+
+    code = TOO_MANY_REVIEW_ITEMS_CODE
+
+    def __init__(self, message: str, *, items: int, limit: int, items_after: int | None) -> None:
+        super().__init__(message)
+        self.items = items
+        self.limit = limit
+        self.items_after = items_after
 
 
 class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
@@ -502,6 +537,58 @@ def review_version_suggestion(entry: "ProtocolCatalogEntry") -> dict[str, object
     }
 
 
+def review_max_items(environment: Mapping[str, str] | None = None) -> int:
+    """The most items an analysis may ask a person about by cards (lane RV2, c)."""
+
+    env = os.environ if environment is None else environment
+    raw = env.get(REVIEW_MAX_ITEMS_SETTING, "").strip()
+    if re.fullmatch(r"\d+", raw) and 1 <= int(raw) <= 500:
+        return int(raw)
+    return REVIEW_MAX_ITEMS
+
+
+def review_reanalysis_max_calls(environment: Mapping[str, str] | None = None) -> int:
+    """The model calls the one automatic re-analysis may make for one document
+    (lane RV2, c); 0 turns it off."""
+
+    env = os.environ if environment is None else environment
+    raw = env.get(REVIEW_REANALYSIS_MAX_CALLS_SETTING, "").strip()
+    if re.fullmatch(r"\d+", raw) and int(raw) <= 200:
+        return int(raw)
+    return REVIEW_REANALYSIS_MAX_CALLS
+
+
+def escalated_analysis_model(
+    model: ProtocolAnalysisModel,
+) -> tuple[ProtocolAnalysisModel, dict[str, object]]:
+    """The analysis model one reasoning level up, and what the event records.
+
+    Only the server's adapter has a level to raise; any other model is used
+    as it is (lane RV2, decision c).
+    """
+
+    if not isinstance(model, OpenAICompatibleProtocolAnalysisModel):
+        return model, {"reasoning_effort": None}
+    current = model.reasoning_effort
+    raised = ESCALATED_REASONING.get(current) if isinstance(current, str) else None
+    if raised is None:
+        return model, {"reasoning_effort": None, "previous_reasoning_effort": current}
+    return (model if raised == current else replace(model, reasoning_effort=raised)), {
+        "reasoning_effort": raised, "previous_reasoning_effort": current}
+
+
+def _items_by_reason(draft: ProtocolAnalysisDraft) -> tuple[int, dict[str, int]]:
+    """How many items the draft asks a person about, and by first reason."""
+
+    reasons: dict[str, str] = {}
+    for flag in draft.review_flags:
+        reasons.setdefault(flag.item_id, flag.reason)
+    by_reason: dict[str, int] = {}
+    for reason in reasons.values():
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    return len(reasons), by_reason
+
+
 def _korean_date(timestamp: str) -> str:
     """The date of a ledger time in Korea ("2026-10-14")."""
 
@@ -733,6 +820,11 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "누르면 문서 전체를 새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 "
         "바뀌지 않습니다."
     ),
+    # Lane RV2, decision c.
+    TOO_MANY_REVIEW_ITEMS_CODE: (
+        "'다시 분석'을 누르거나, 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 만들어 다시 올려 "
+        "주세요. 원문은 바뀌지 않습니다."
+    ),
     # Lane RV2, decision f.
     BLOCKED_FAILURE_CODE: (
         "모델 공급자의 안전 필터가 이 원문을 읽지 못하게 막았습니다(같은 요청은 다시 보내도 "
@@ -873,6 +965,9 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
         "줄여야 합니다."),
     "protocol_analysis_piece_failed": "일부 조각 분석 실패",
     BLOCKED_FAILURE_CODE: "모델 공급자의 안전 필터에 막혀 분석하지 못했어요.",
+    TOO_MANY_REVIEW_ITEMS_CODE: (
+        "확인할 항목이 너무 많아 검토 카드를 만들지 않았어요. 이 문서는 다시 분석하거나 "
+        "절차가 있는 쪽만 올리는 편이 나아요."),
     "protocol_analysis_piece_conflict": (
         "조각을 합치다 같은 쪽을 두 조각이 서로 다르게 읽은 곳이 있어 결과를 쓰지 않았습니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
@@ -3075,6 +3170,16 @@ class ProtocolCatalog:
                 if failure_code == BLOCKED_FAILURE_CODE and page_count is not None:
                     # Lane RV2, decision f: "구글 안전 필터에 막혀 1–12쪽을 분석하지 못했어요."
                     message = blocked_pages_ko(1, page_count, _blocked_provider(events)) + "."
+                too_many = _latest_failure_payload(events).get("review_items")
+                if failure_code == TOO_MANY_REVIEW_ITEMS_CODE and isinstance(too_many, dict):
+                    # Lane RV2, decision c: the counts behind the guidance.
+                    after = too_many.get("items_after")
+                    message = (
+                        f"확인할 항목이 {too_many.get('items')}건이라(카드는 "
+                        f"{too_many.get('limit')}건까지) 검토 카드를 만들지 않았어요"
+                        + (f". 한 번 더 분석해도 {after}건이었어요" if isinstance(after, int)
+                           else "")
+                        + ". 이 문서는 다시 분석하거나 절차가 있는 쪽만 올리는 편이 나아요.")
                 unlabelled = _unlabelled_pieces_ko(events)
                 if failure_code == "protocol_analysis_piece_conflict" and unlabelled:
                     message = (
@@ -3336,7 +3441,7 @@ class ProtocolCatalog:
                 self._record_analysis_failure(revision, analysis_id, exc)
                 raise
             return self._store_analysis_result(
-                revision, draft, analysis_id, pieces=pieces)
+                revision, draft, analysis_id, pieces=pieces, model=model)
         if status == "chunked_analysis_required":
             raise ProtocolChunkedAnalysisRequiredError(
                 "Protocol text is larger than one analysis reads."
@@ -3360,7 +3465,8 @@ class ProtocolCatalog:
                 revision, failure_code, repaired=repair is not None
             ):
                 if kept is not None:
-                    return self._store_analysis_result(revision, kept, analysis_id)
+                    return self._store_analysis_result(
+                        revision, kept, analysis_id, model=model)
                 raise
             # The same request again: the same extraction to the same model,
             # nothing about the failure added (lane AN, decision 1) -- except
@@ -3403,9 +3509,9 @@ class ProtocolCatalog:
                 if kept is not None:
                     # Lane RV, decision a: the first answer's items wait for a
                     # person rather than the analysis being thrown away.
-                    return self._store_analysis_result(revision, kept, retry_of)
+                    return self._store_analysis_result(revision, kept, retry_of, model=model)
                 raise
-        return self._store_analysis_result(revision, draft, analysis_id)
+        return self._store_analysis_result(revision, draft, analysis_id, model=model)
 
     def _store_analysis_result(
         self,
@@ -3414,18 +3520,99 @@ class ProtocolCatalog:
         analysis_id: str,
         *,
         pieces: tuple[AnalysisPiece, ...] = (),
+        model: ProtocolAnalysisModel | None = None,
     ) -> ProtocolCatalogEntry:
         """A passed analysis as the next analysis revision; one with items a
         person must check as a review-pending ledger event (lane RV, a).
 
         Lane RV2, decision b: the values read by OCR are settled or made
         items first, so an analysis whose OCR values are not confirmed does
-        not run as it is."""
+        not run as it is. Decision c: with ``model``, an analysis with more
+        items than ``review_max_items()`` is analysed once more instead."""
 
         draft = self._with_ocr_value_flags(revision, draft)
+        if model is not None and _items_by_reason(draft)[0] > review_max_items():
+            draft, analysis_id = self._fewer_items(
+                revision, draft, analysis_id, model=model, pieces=pieces)
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
+
+    def _fewer_items(
+        self,
+        revision: ProtocolRevisionRecord,
+        first: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        model: ProtocolAnalysisModel,
+        pieces: tuple[AnalysisPiece, ...],
+    ) -> tuple[ProtocolAnalysisDraft, str]:
+        """Too many items for cards: one more analysis, or the guidance alone.
+
+        Lane RV2, decision c (human decision 2026-10-16). The documents with
+        the most items are mostly steps the model rewrote rather than quoted
+        (lane RV replay: 64 items, nearly all "원문에 없음"), where reading
+        again does better than a person checking each. The same extraction
+        is analysed once more, one reasoning level up, provided the calls it
+        may take fit ``review_reanalysis_max_calls()``; the event says why,
+        at what level and what came of it. A result within the bound is
+        kept (with cards or none); otherwise the analysis fails with the
+        guidance and makes no cards. Returns the draft to keep and its id.
+        """
+
+        protocol_id = revision.experiment_id
+        limit = review_max_items()
+        count, by_reason = _items_by_reason(first)
+        planned = 2 * len(pieces) if pieces else 1
+        cap = review_reanalysis_max_calls()
+        escalated, reasoning = escalated_analysis_model(model)
+        again_id = f"{analysis_id}-more-1"
+        event: dict[str, object] = {
+            "analysis_id": again_id, "reanalysis_of": analysis_id,
+            "reason": "too_many_review_items", "items": count, "limit": limit,
+            "by_reason": by_reason, "planned_calls": planned, "call_cap": cap, **reasoning,
+        }
+        after: tuple[int, dict[str, int]] | None = None
+        failure_code: str | None = None
+        if planned > cap:
+            self.store.append_event(
+                f"auto-reanalysis-{again_id}", protocol_id, revision.revision_number,
+                _AUTO_REANALYSIS_EVENT, {**event, "status": "skipped_over_call_cap"})
+        else:
+            self.store.append_event(
+                f"auto-reanalysis-{again_id}", protocol_id, revision.revision_number,
+                _AUTO_REANALYSIS_EVENT, {**event, "status": "analyzing"})
+            logging.getLogger(__name__).info(
+                "protocol.analysis.auto_reanalysis protocol_id=%s items=%d limit=%d "
+                "reasoning_effort=%s planned_calls=%d",
+                protocol_id, count, limit, reasoning.get("reasoning_effort"), planned,
+            )
+            try:
+                extraction = first.extraction
+                if pieces:
+                    again = self._analyze_in_pieces(
+                        revision, extraction, escalated, pieces, analysis_id=again_id)
+                else:
+                    again = analyze_protocol_extraction(
+                        extraction, escalated, review_unverified=True)
+                again = self._with_ocr_value_flags(revision, again)
+                after = _items_by_reason(again)
+            except Exception as exc:  # noqa: BLE001 - the first result's guidance stands
+                failure_code = _piece_failure_code(exc)
+            self.store.append_event(
+                f"auto-reanalysis-ended-{again_id}", protocol_id, revision.revision_number,
+                _AUTO_REANALYSIS_EVENT, {
+                    **event, "status": "failed" if after is None else "completed",
+                    **({"failure_code": failure_code} if failure_code else {}),
+                    **({"items_after": after[0], "by_reason_after": after[1]} if after else {}),
+                })
+            if after is not None and after[0] <= limit:
+                return again, again_id
+        too_many = ProtocolAnalysisTooManyItemsError(
+            "The analysis asks a person about too many items.",
+            items=count, limit=limit, items_after=None if after is None else after[0])
+        self._record_analysis_failure(revision, analysis_id, too_many)
+        raise too_many
 
     def _store_review_pending(
         self,
@@ -3788,6 +3975,10 @@ class ProtocolCatalog:
                     piece.public_dict() for piece in exc.unlabelled_pieces]
                 failure_payload["piece_conflict"]["labelled_pieces"] = [
                     piece.public_dict() for piece in exc.labelled_pieces]
+        if isinstance(exc, ProtocolAnalysisTooManyItemsError):
+            # Lane RV2, decision c: the counts the guidance rests on.
+            failure_payload["review_items"] = {
+                "items": exc.items, "limit": exc.limit, "items_after": exc.items_after}
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {
