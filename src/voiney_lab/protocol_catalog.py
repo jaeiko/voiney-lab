@@ -4293,6 +4293,8 @@ class ProtocolCatalog:
             "review_pending": entry.review_pending,
             "target": None,
             "items": [],
+            "cards": [],
+            "next_card": None,
             "needs_review": [],
             "counts": {"items": 0, "needs_review": 0, "decided": 0, "undecided": 0,
                        "changed": 0},
@@ -4312,12 +4314,18 @@ class ProtocolCatalog:
             item["item_id"] for item in items
             if item["needs_review"] and item["item_id"] not in decisions
         ]
+        cards = review_cards(items)
         base.update({
             "target": {
                 **target.key, "recorded_at": target.recorded_at,
                 "revision_id": target.revision_id, "analysis_id": target.analysis_id,
             },
             "items": items,
+            # Lane RV2, decision a: one card per item that waits for a person,
+            # with the only choices the screen may offer for it.
+            "cards": cards,
+            "next_card": next(
+                (index for index, card in enumerate(cards) if not card["decided"]), None),
             "needs_review": [item["item_id"] for item in items if item["needs_review"]],
             "counts": {
                 "items": len(items),
@@ -4569,6 +4577,10 @@ class ProtocolCatalog:
             "counts": draft["counts"],
             "registrable": draft["registrable"],
             "target": draft["target"],
+            # Lane RV2, decision a: the cards after this one, so a button
+            # moves straight on to the next card.
+            "cards": draft["cards"],
+            "next_card": draft["next_card"],
         }
 
     def register_review(
@@ -5138,6 +5150,115 @@ def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
         isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
         and confidence < OCR_UNCLEAR_CONFIDENCE
     )
+
+
+# --- Cards (lane RV2, decision a; human decision 2026-10-16) ----------------
+#
+# A person is asked item by item, one card at a time, by buttons: the
+# server builds each card's question and the only choices the screen may
+# draw for it (each a review decision the server takes, or "다시 분석"),
+# so the screen decides nothing. An analysis whose every executed item
+# passed has no card and runs as before.
+
+
+def _choice(choice_id: str, label_ko: str, request: dict[str, object] | None, *,
+            needs: str | None = None, route: str | None = None,
+            primary: bool = False) -> dict[str, object]:
+    """One button of a card: the decision it sends, and what it still needs
+    from the person (lines pointed at, a text, seconds)."""
+
+    return {"choice_id": choice_id, "label_ko": label_ko, "request": request,
+            "needs": needs, "route": route, "primary": primary}
+
+
+def _subject(word: object) -> str:
+    """``word`` with the subject particle its last syllable takes: "단계가", "값이"."""
+
+    text = str(word)
+    last = text[-1] if text else ""
+    if "가" <= last <= "힣" and (ord(last) - ord("가")) % 28:
+        return f"{text}이"
+    return f"{text}가"
+
+
+def _card_choices(item: dict[str, object]) -> tuple[str, str, list[dict[str, object]]]:
+    """The card's type, its question and its choices for one item."""
+
+    item_id = str(item["item_id"])
+    kind = str(item["kind"])
+    allowed = list(item["allowed_actions"])
+    source = item.get("source") if isinstance(item.get("source"), dict) else None
+    reasons = [reason for reason in item.get("reasons") or () if isinstance(reason, dict)]
+    request = lambda action, **extra: {"item_id": item_id, "action": action, **extra}
+    choices: list[dict[str, object]] = []
+    if kind == "pages":
+        return "failed_pages", (
+            f"{reasons[0].get('reason_ko') if reasons else '분석하지 못한 쪽'}. "
+            "이 쪽에 실험할 단계가 없나요?"), [
+            _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),
+            _choice("reanalysis", "다시 분석", None, route="reanalysis"),
+        ]
+    quote_refused = source is not None and source.get("verified") is False
+    if quote_refused:
+        choices.append(_choice(
+            "confirm_lines", "고른 줄이 맞아요", request("confirm"), needs="source_lines",
+            primary=True))
+        question = f"이 {item['kind_ko']}의 근거를 원문에서 찾지 못했어요. 원문의 어느 줄인가요?"
+        card_type = "evidence"
+    else:
+        if "confirm" in allowed:
+            choices.append(_choice("confirm", "맞아요", request("confirm"), primary=True))
+        question = f"이 {_subject(item['kind_ko'])} 원문과 같나요?"
+        card_type = "claim"
+    if "fix" in allowed:
+        choices.append(_choice(
+            "fix", "직접 고칠게요", request("fix"),
+            needs="source_lines_and_text" if quote_refused else "text"))
+    if "clear" in allowed:
+        choices.append(_choice("clear", "원문에 없어요", request("clear")))
+    elif kind == "step":
+        # A step is never left empty (lane RV): one the source does not hold
+        # is read again.
+        choices.append(_choice("reanalysis", "다시 분석", None, route="reanalysis"))
+    return card_type, question, choices
+
+
+def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """One card per item waiting for a person, in document order.
+
+    Each card says what is asked, shows the item as the analysis read it
+    and where it stands in the source, and lists the buttons the screen may
+    draw -- each the review decision it sends. Decided cards stay in place
+    (marked), so "← 이전" can go back to them.
+    """
+
+    asked = [item for item in items if item.get("needs_review")]
+    cards = []
+    for position, item in enumerate(asked, start=1):
+        card_type, question, choices = _card_choices(item)
+        source = item.get("source") if isinstance(item.get("source"), dict) else None
+        cards.append({
+            "card_id": item["item_id"],
+            "item_id": item["item_id"],
+            "position": position,
+            "total": len(asked),
+            "progress_ko": f"{position} / {len(asked)}",
+            "type": card_type,
+            "kind": item["kind"],
+            "kind_ko": item["kind_ko"],
+            "step_label": item.get("step_label"),
+            "question_ko": question,
+            "reasons_ko": [reason.get("reason_ko") for reason in item.get("reasons") or ()
+                           if isinstance(reason, dict)],
+            "shown": item.get("text"),
+            "source": source,
+            "choices": choices,
+            "memo_allowed": "memo" in item["allowed_actions"],
+            "decided": item.get("decision") is not None,
+            "decision": item.get("decision"),
+            "current": item.get("current"),
+        })
+    return cards
 
 
 @dataclass(frozen=True)
