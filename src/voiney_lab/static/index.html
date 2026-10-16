@@ -293,6 +293,11 @@
       --focus-ring:var(--ink);
       --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-6:24px;--space-8:32px;--space-12:48px;
       --radius-none:0;--radius-md:4px;
+      /* Lane FX3 decision 2: the desk's touch target -- 44px, the height the
+         page already gives its desk-side buttons by hand (the reagent tables,
+         the install guide, the status line) and the usual minimum for a
+         fingertip; the run view's gloved-hand target is --target-run (64px). */
+      --target-desk:44px;
       --stroke-hairline:1px;--stroke-state:2px;--stroke-focus:3px;--stroke-current:4px;
       --font-sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,-apple-system,"Segoe UI",sans-serif;
       --canvas:var(--bench);--surface-raised:var(--paper);--surface-card:var(--paper);--surface-onyx:var(--bench);--surface-onyx-raised:#e4e4e0;
@@ -556,7 +561,7 @@
     .review-editor-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);padding:0 var(--space-4) var(--space-4)}
     .review-items{max-height:20rem;margin:0;padding:0;overflow:auto;list-style:none}
     .review-items>li+li{border-top:1px solid var(--line)}
-    .review-row{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-1);width:100%;min-height:var(--target-desk,44px);margin:0;padding:var(--space-3);border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+    .review-row{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-1);width:100%;min-height:var(--target-desk);margin:0;padding:var(--space-3);border:0;border-radius:0;background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
     .review-row:hover{background:var(--bench)}
     .review-row[aria-current="true"]{box-shadow:inset 0 0 0 var(--stroke-current) var(--ink)}
     .review-row-label{color:var(--ink-muted);font-size:.8125rem;line-height:1.25rem;font-weight:600}
@@ -573,16 +578,16 @@
     .review-line.is-unclear .review-line-number::after{content:" ?";color:var(--warning-ink)}
     .review-source .compare-page-head{flex-wrap:wrap;align-items:center}
     .review-page-turn{display:inline-flex;gap:var(--space-1)}
-    .review-page-turn button{min-height:var(--target-desk,44px);padding:0 var(--space-2);font-size:.8125rem}
+    .review-page-turn button{min-height:var(--target-desk);padding:0 var(--space-2);font-size:.8125rem}
     .review-boxes{display:flex;flex-wrap:wrap;gap:var(--space-2)}
     .review-box{display:flex;flex-direction:column;gap:var(--space-1);margin:0;font-size:.8125rem;color:var(--ink-muted)}
     .review-box img{max-width:12rem;max-height:4rem;width:auto;height:auto;object-fit:contain;border:1px solid var(--line);background:var(--paper)}
     .review-value{margin:0;font-size:1.0625rem;line-height:1.625rem;font-weight:600;overflow-wrap:anywhere}
     .review-was{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
     .review-note{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.375rem}
-    .review-input{box-sizing:border-box;min-height:var(--target-desk,44px);width:100%;max-width:100%;padding:var(--space-2) var(--space-3);border:1px solid var(--line);font:inherit}
+    .review-input{box-sizing:border-box;min-height:var(--target-desk);width:100%;max-width:100%;padding:var(--space-2) var(--space-3);border:1px solid var(--line);font:inherit}
     .review-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
-    .review-actions button{min-height:var(--target-desk,44px)}
+    .review-actions button{min-height:var(--target-desk)}
     .review-register{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--space-3);padding:var(--space-4);border-top:1px solid var(--line)}
     .review-register label{display:flex;flex-direction:column;gap:var(--space-1);flex:1 1 16rem;max-width:24rem;color:var(--ink-muted);font-size:.875rem;font-weight:600}
     .review-register button{min-height:var(--target-run);font-weight:700}
@@ -590,7 +595,7 @@
     .review-history{padding:0 var(--space-4) var(--space-4)}
     .review-history h4{margin:0 0 var(--space-2);color:var(--ink-muted);font-size:.8125rem;font-weight:600}
     .review-history-list{display:flex;flex-wrap:wrap;gap:var(--space-2);margin:0;padding:0;list-style:none}
-    .review-history-list button{min-height:var(--target-desk,44px)}
+    .review-history-list button{min-height:var(--target-desk)}
     .review-history-changes{display:flex;flex-direction:column;gap:var(--space-1);margin:var(--space-2) 0 0;padding:0;list-style:none}
     .review-history-changes li{padding:var(--space-2) 0;border-top:1px solid var(--line);font-size:.9375rem;line-height:1.375rem;overflow-wrap:anywhere}
     .ui-badge[data-kind="origin-source"]{border-color:var(--ink);color:var(--ink)}
