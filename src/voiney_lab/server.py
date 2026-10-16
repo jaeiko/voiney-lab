@@ -4568,6 +4568,8 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     # Lane RA, decision (g): a session without a protocol has no general
     # brain any more; its turn is answered by rule.
     "no_protocol",
+    # Lane FX3, decision 8: the router's model was at its limit, late or down.
+    "model_unavailable",
 })
 #: Lane RA, decision (d): how long a turn whose words end in an unfinished
 #: Korean ending waits for the words that follow before it is routed alone
@@ -8255,6 +8257,11 @@ async def _prompt_voice_calibration(
     return True
 
 
+#: Lane FX3, decision 8: said once when the router's model could not answer
+#: the turn (llm_router.ROUTER_MODEL_UNAVAILABLE_KINDS); nothing changes.
+ROUTER_UNAVAILABLE_WORDS="지금 답하지 못했어요. 다시 말씀해 주세요."
+
+
 #: Lane FX3, decision 4: what the screen shows when a tapped candidate is
 #: not taken -- the session changed, it is not one the last reply asked
 #: back, or something is under way.
@@ -9140,6 +9147,20 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     actor_principal_id=turn_actor_principal_id,
                     actor_role=turn_actor_role,rules_route=rules_route,
                     progress=progress,clock=clock)
+                if router_outcome.handled_by=="model_unavailable":
+                    # Lane FX3, decision 8: the router's model was at its
+                    # request limit, late or briefly down. Nothing was sent
+                    # again and nothing was routed; the turn says so once and
+                    # changes nothing.
+                    log.info(
+                        "router model unavailable turn_id=%s reason=%s",
+                        turn_id,router_outcome.fallback_reason)
+                    _record_workspace_metric(
+                        category="voice",metric_name="command_failure",
+                        dimensions={"status":"stopped","reason_code":str(router_outcome.fallback_reason)[:100]},
+                    )
+                    await finish_blocked_voice(ROUTER_UNAVAILABLE_WORDS,"model_unavailable")
+                    return
                 routed_turn=(
                     replace(router_outcome.rule_route,plan=router_outcome.plan)
                     if router_outcome.rule_route is not None else
