@@ -15,6 +15,7 @@ import queue
 import re
 import secrets
 import time
+import unicodedata
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
@@ -22,15 +23,19 @@ from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab import pdf_text_engine
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
+    AUTO_RESOLVED_OCR_TWO_ENGINES,
+    BLOCKED_FAILURE_CODE,
     MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
+    OCR_VALUE_ENGINES_DIFFER,
+    OCR_VALUE_ONE_ENGINE,
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
     PieceConcurrencyGate,
@@ -43,19 +48,25 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
     REVIEW_ITEM_KINDS,
+    REVIEW_REASON_BLOCKED,
+    REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
+    REVIEW_REASON_READ_TWO_WAYS,
+    REVIEW_REASON_VALUE_CHANGED,
     REVIEW_REASONS_KO,
     ReviewFlag,
     analysis_piece_concurrency,
     analysis_pieces,
     analyze_protocol_extraction,
     analyze_protocol_piece,
+    blocked_pages_ko,
     check_analysis_page_count,
     check_pieced_page_count,
     join_piece_analyses,
     prepare_protocol_analysis_request,
     replace_at_paths,
     review_item_id,
+    safety_block_provider,
     verify_step_timers,
 )
 from voiney_lab.experiment_protocol_pdf import (
@@ -81,6 +92,16 @@ from voiney_lab.experiment_protocol_store import (  # noqa: E402
     _encode_domain as _encode_stored_record,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
+# The number-and-unit tokens the two OCR engines' readings were compared by
+# (lane P2/P3): an OCR value item (lane RV2, decision b) is named by the same
+# token, so "both engines read it alike" means the comparison's own sense.
+from voiney_lab.protocol_ocr_providers import (  # noqa: E402
+    _NUMBER_WITH_UNIT as _OCR_NUMBER_WITH_UNIT,
+    _UNIT_SPELLINGS as _OCR_UNIT_SPELLINGS,
+    CLOVA as OCR_CLOVA,
+    GOOGLE as OCR_GOOGLE,
+    numeric_tokens,
+)
 from voiney_lab.protocol_ocr import (
     OcrResult,
     ProtocolOcrProvider,
@@ -146,6 +167,28 @@ _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
 #: what it was reviewed from and every change with its original value.
 _REVIEW_VERSION_EVENT = "protocol_review_version_registered"
 REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
+#: Lane RV2, decision c (human decision 2026-10-16): an analysis with more
+#: items for a person than ``review_max_items()`` makes no cards; it is
+#: analysed once more by itself, one reasoning level up, within
+#: ``review_reanalysis_max_calls()`` model calls -- this event records why,
+#: at what level and what came of it. Still too many: the guidance alone.
+_AUTO_REANALYSIS_EVENT = "protocol_analysis_auto_reanalysis"
+TOO_MANY_REVIEW_ITEMS_CODE = "protocol_analysis_too_many_review_items"
+REVIEW_MAX_ITEMS_SETTING = "VOINEY_LAB_REVIEW_MAX_ITEMS"
+REVIEW_MAX_ITEMS = 12
+REVIEW_REANALYSIS_MAX_CALLS_SETTING = "VOINEY_LAB_REVIEW_REANALYSIS_MAX_CALLS"
+#: The default bound of the one automatic re-analysis, in model calls, for
+#: one document: a single analysis is one call; a long document counts two
+#: per piece (each piece may be sent once more). 16 is a document of up to
+#: eight pieces (about 110 pages). Basis: lane AN2's ledger, USD 6.09 for 247
+#: Gemini 3.8 Flash analysis calls at "low" (about 0.025 a call); one level
+#: up spends more on thinking -- at three times that, 16 calls stay under
+#: about USD 1.2 for one document.
+REVIEW_REANALYSIS_MAX_CALLS = 16
+#: One reasoning level up (decision c); the top level stays where it is.
+ESCALATED_REASONING: dict[str, str] = {
+    "none": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh",
+}
 #: The authority an upload-time OCR acceptance is recorded under (lane PX,
 #: decision 3). A person's review carries ``human_review``.
 AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
@@ -189,6 +232,23 @@ class ProtocolOcrReviewError(ProtocolCatalogError):
     """An OCR result that does not hold against the source (evidence, not a person's review)."""
 
     code = "protocol_ocr_review_invalid"
+
+
+class ProtocolAnalysisTooManyItemsError(ProtocolCatalogError):
+    """More items for a person than cards are made for, even after the one
+    automatic re-analysis (lane RV2, decision c): the guidance alone."""
+
+    code = TOO_MANY_REVIEW_ITEMS_CODE
+
+    def __init__(
+        self, message: str, *, items: int, limit: int, items_after: int | None,
+        by_reason: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.items = items
+        self.limit = limit
+        self.items_after = items_after
+        self.by_reason = dict(by_reason or {})
 
 
 class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
@@ -441,13 +501,15 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
     words = " · ".join(
         f"{REVIEW_REASONS_KO.get(reason, reason)} {count}"
         for reason, count in by_reason.items()
-        if reason != REVIEW_REASON_PIECE_FAILED
+        if reason not in {REVIEW_REASON_PIECE_FAILED, REVIEW_REASON_BLOCKED}
     )
     line = f"검토 대기 · 확인 필요 {len(items)}건"
     if words:
         line += f"({words})"
-    for pages in failed_pages:
-        line += f" · {pages['first_page']}–{pages['last_page']}쪽 분석 실패"
+    for flag in flags:
+        if flag.first_page is not None:
+            # "41–59쪽 분석 실패", or lane RV2 decision f's "구글 안전 필터에 막혀 …".
+            line += f" · {flag.reason_ko}"
     return {
         "analysis_id": payload.get("analysis_id"),
         "recorded_at": event.recorded_at,
@@ -477,6 +539,58 @@ def review_version_suggestion(entry: "ProtocolCatalogEntry") -> dict[str, object
             f"({current.get('registered_on')} · {current.get('reviewer_name')})로 바로 "
             "시작할 수 있습니다."),
     }
+
+
+def review_max_items(environment: Mapping[str, str] | None = None) -> int:
+    """The most items an analysis may ask a person about by cards (lane RV2, c)."""
+
+    env = os.environ if environment is None else environment
+    raw = env.get(REVIEW_MAX_ITEMS_SETTING, "").strip()
+    if re.fullmatch(r"\d+", raw) and 1 <= int(raw) <= 500:
+        return int(raw)
+    return REVIEW_MAX_ITEMS
+
+
+def review_reanalysis_max_calls(environment: Mapping[str, str] | None = None) -> int:
+    """The model calls the one automatic re-analysis may make for one document
+    (lane RV2, c); 0 turns it off."""
+
+    env = os.environ if environment is None else environment
+    raw = env.get(REVIEW_REANALYSIS_MAX_CALLS_SETTING, "").strip()
+    if re.fullmatch(r"\d+", raw) and int(raw) <= 200:
+        return int(raw)
+    return REVIEW_REANALYSIS_MAX_CALLS
+
+
+def escalated_analysis_model(
+    model: ProtocolAnalysisModel,
+) -> tuple[ProtocolAnalysisModel, dict[str, object]]:
+    """The analysis model one reasoning level up, and what the event records.
+
+    Only the server's adapter has a level to raise; any other model is used
+    as it is (lane RV2, decision c).
+    """
+
+    if not isinstance(model, OpenAICompatibleProtocolAnalysisModel):
+        return model, {"reasoning_effort": None}
+    current = model.reasoning_effort
+    raised = ESCALATED_REASONING.get(current) if isinstance(current, str) else None
+    if raised is None:
+        return model, {"reasoning_effort": None, "previous_reasoning_effort": current}
+    return (model if raised == current else replace(model, reasoning_effort=raised)), {
+        "reasoning_effort": raised, "previous_reasoning_effort": current}
+
+
+def _items_by_reason(draft: ProtocolAnalysisDraft) -> tuple[int, dict[str, int]]:
+    """How many items the draft asks a person about, and by first reason."""
+
+    reasons: dict[str, str] = {}
+    for flag in draft.review_flags:
+        reasons.setdefault(flag.item_id, flag.reason)
+    by_reason: dict[str, int] = {}
+    for reason in reasons.values():
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    return len(reasons), by_reason
 
 
 def _korean_date(timestamp: str) -> str:
@@ -710,6 +824,17 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "누르면 문서 전체를 새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 "
         "바뀌지 않습니다."
     ),
+    # Lane RV2, decision c.
+    TOO_MANY_REVIEW_ITEMS_CODE: (
+        "'다시 분석'을 누르거나, 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 만들어 다시 올려 "
+        "주세요. 원문은 바뀌지 않습니다."
+    ),
+    # Lane RV2, decision f.
+    BLOCKED_FAILURE_CODE: (
+        "모델 공급자의 안전 필터가 이 원문을 읽지 못하게 막았습니다(같은 요청은 다시 보내도 "
+        "같게 막힙니다). 막힌 쪽을 빼고 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 만들어 다시 "
+        "올리거나, 안전 필터 설정이 바뀐 뒤 '분석 다시 시도'를 누르세요. 원문은 바뀌지 않습니다."
+    ),
 }
 #: What a person does with an analysis waiting for review (lane RV, a).
 REVIEW_PENDING_ACTION_KO = (
@@ -843,6 +968,10 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
         f"원문이 {MAX_PIECED_ANALYSIS_PAGES}쪽을 넘어 분석하지 않았어요. 분석할 쪽 범위를 "
         "줄여야 합니다."),
     "protocol_analysis_piece_failed": "일부 조각 분석 실패",
+    BLOCKED_FAILURE_CODE: "모델 공급자의 안전 필터에 막혀 분석하지 못했어요.",
+    TOO_MANY_REVIEW_ITEMS_CODE: (
+        "확인할 항목이 너무 많아 검토 카드를 만들지 않았어요. 이 문서는 다시 분석하거나 "
+        "절차가 있는 쪽만 올리는 편이 나아요."),
     "protocol_analysis_piece_conflict": (
         "조각을 합치다 같은 쪽을 두 조각이 서로 다르게 읽은 곳이 있어 결과를 쓰지 않았습니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
@@ -1214,7 +1343,50 @@ def _failed_pieces_ko(events: Sequence[Any]) -> str | None:
     return ", ".join(pages) or None
 
 
+def _latest_failure_payload(events: Sequence[Any]) -> dict[str, object]:
+    return next(
+        (event.payload for event in reversed(events)
+         if event.event_type == _ANALYSIS_FAILED_EVENT and isinstance(event.payload, dict)),
+        {},
+    )
+
+
+def _unlabelled_pieces_ko(events: Sequence[Any]) -> str | None:
+    """"15–29쪽·141–155쪽": pieces that read their steps without numbers while
+    others numbered them (lane RV2), from the latest failure."""
+
+    conflict = _latest_failure_payload(events).get("piece_conflict")
+    pieces = conflict.get("unlabelled_pieces") if isinstance(conflict, dict) else None
+    if not isinstance(pieces, list):
+        return None
+    return "·".join(
+        f"{piece['first_page']}–{piece['last_page']}쪽" for piece in pieces
+        if isinstance(piece, dict) and isinstance(piece.get("first_page"), int)
+    ) or None
+
+
+def _blocked_provider(events: Sequence[Any]) -> str | None:
+    blocked = _latest_failure_payload(events).get("blocked")
+    return str(blocked.get("provider")) if isinstance(blocked, dict) else None
+
+
+def _blocked_pieces_ko(events: Sequence[Any]) -> str | None:
+    """The failed pieces the safety filter blocked, said as such (lane RV2, f)."""
+
+    pieces = _latest_failure_payload(events).get("failed_pieces")
+    words = [
+        blocked_pages_ko(piece["first_page"], piece["last_page"])
+        for piece in pieces or () if isinstance(piece, dict)
+        and piece.get("failure_code") == BLOCKED_FAILURE_CODE
+        and isinstance(piece.get("first_page"), int)
+    ] if isinstance(pieces, list) else []
+    return " · ".join(words) or None
+
+
 def _piece_failure_code(exc: BaseException) -> str:
+    if safety_block_provider(exc) is not None:
+        # Lane RV2, decision f: the provider's safety filter, by name.
+        return BLOCKED_FAILURE_CODE
     code = getattr(exc, "code", None)
     if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
         return code
@@ -1517,6 +1689,8 @@ class ProtocolCatalog:
                     "languages": completed.get("languages", []),
                     "warnings": completed.get("warnings", []),
                     "page_count": completed.get("page_count"),
+                    "engines": completed.get("engines"),
+                    "pages_read_by_both": completed.get("pages_read_by_both"),
                     "pages": (
                         pages
                         if include_text
@@ -1698,6 +1872,12 @@ class ProtocolCatalog:
                 expected_page_count=extraction.page_count,
             )
             payload = {"ocr_id": ocr_id, **ocr_result_payload(validated)}
+            # Lane RV2, decision b: which engines read the document and which
+            # pages both of them read, so an OCR value both read alike can be
+            # settled without a person. Absent from results stored before.
+            engines = ocr_engine_names(provider)
+            payload["engines"] = list(engines)
+            payload["pages_read_by_both"] = pages_read_by_both(validated, engines)
             self.store.append_event(
                 f"ocr-completed-{ocr_id}",
                 protocol_id,
@@ -2988,6 +3168,38 @@ class ProtocolCatalog:
                 if failure_code == "protocol_analysis_piece_failed" and failed_pieces:
                     # Lane AN, decision 2: "일부 조각 분석 실패 · 41–59쪽".
                     message += f" · {failed_pieces}"
+                    blocked = _blocked_pieces_ko(events)
+                    if blocked:
+                        message += f" · {blocked}"
+                if failure_code == BLOCKED_FAILURE_CODE and page_count is not None:
+                    # Lane RV2, decision f: "구글 안전 필터에 막혀 1–12쪽을 분석하지 못했어요."
+                    message = blocked_pages_ko(1, page_count, _blocked_provider(events)) + "."
+                too_many = _latest_failure_payload(events).get("review_items")
+                if failure_code == TOO_MANY_REVIEW_ITEMS_CODE and isinstance(too_many, dict):
+                    # Lane RV2, decision c: the counts behind the guidance.
+                    after = too_many.get("items_after")
+                    message = (
+                        f"확인할 항목이 {too_many.get('items')}건이라(카드는 "
+                        f"{too_many.get('limit')}건까지) 검토 카드를 만들지 않았어요"
+                        + (f". 한 번 더 분석해도 {after}건이었어요" if isinstance(after, int)
+                           else "")
+                        + ". 이 문서는 다시 분석하거나 절차가 있는 쪽만 올리는 편이 나아요.")
+                    by_reason = too_many.get("by_reason")
+                    ocr_values = (by_reason or {}).get(REVIEW_REASON_OCR_VALUE, 0) \
+                        if isinstance(by_reason, dict) else 0
+                    if isinstance(ocr_values, int) and ocr_values * 2 >= int(too_many.get("items") or 0) > 0:
+                        # Most of them are OCR values no second engine confirmed:
+                        # reading again does not change those; say what does.
+                        message += (
+                            f" 그중 {ocr_values}건은 OCR 엔진 하나만 읽었거나 두 엔진이 다르게 읽은 "
+                            "쪽의 숫자예요 — 두 OCR 엔진(VOINEY_LAB_OCR_PROVIDERS=clova,google)이 "
+                            "모두 읽거나 절차가 있는 쪽만 올리면 줄어요.")
+                unlabelled = _unlabelled_pieces_ko(events)
+                if failure_code == "protocol_analysis_piece_conflict" and unlabelled:
+                    message = (
+                        f"조각마다 단계 번호를 다르게 읽어 합치지 못했어요({unlabelled}은 "
+                        "번호 없이, 나머지는 번호를 붙여 읽음). 원문이 부분마다 번호를 다르게 "
+                        "붙였다면 한 문서에서 둘을 함께 쓸지는 사람이 정할 일이에요.")
                 if retry.get("state") == "failed" and truncated_how:
                     message += (f" {truncated_how} 자동으로 한 번 다시 보냈지만 "
                                 f"자동 재시도({retry_count})도 실패했습니다.")
@@ -3243,7 +3455,7 @@ class ProtocolCatalog:
                 self._record_analysis_failure(revision, analysis_id, exc)
                 raise
             return self._store_analysis_result(
-                revision, draft, analysis_id, pieces=pieces)
+                revision, draft, analysis_id, pieces=pieces, model=model)
         if status == "chunked_analysis_required":
             raise ProtocolChunkedAnalysisRequiredError(
                 "Protocol text is larger than one analysis reads."
@@ -3267,7 +3479,8 @@ class ProtocolCatalog:
                 revision, failure_code, repaired=repair is not None
             ):
                 if kept is not None:
-                    return self._store_review_pending(revision, kept, analysis_id)
+                    return self._store_analysis_result(
+                        revision, kept, analysis_id, model=model)
                 raise
             # The same request again: the same extraction to the same model,
             # nothing about the failure added (lane AN, decision 1) -- except
@@ -3310,9 +3523,9 @@ class ProtocolCatalog:
                 if kept is not None:
                     # Lane RV, decision a: the first answer's items wait for a
                     # person rather than the analysis being thrown away.
-                    return self._store_review_pending(revision, kept, retry_of)
+                    return self._store_analysis_result(revision, kept, retry_of, model=model)
                 raise
-        return self._store_analysis_result(revision, draft, analysis_id)
+        return self._store_analysis_result(revision, draft, analysis_id, model=model)
 
     def _store_analysis_result(
         self,
@@ -3321,13 +3534,102 @@ class ProtocolCatalog:
         analysis_id: str,
         *,
         pieces: tuple[AnalysisPiece, ...] = (),
+        model: ProtocolAnalysisModel | None = None,
     ) -> ProtocolCatalogEntry:
         """A passed analysis as the next analysis revision; one with items a
-        person must check as a review-pending ledger event (lane RV, a)."""
+        person must check as a review-pending ledger event (lane RV, a).
 
+        Lane RV2, decision b: the values read by OCR are settled or made
+        items first, so an analysis whose OCR values are not confirmed does
+        not run as it is. Decision c: with ``model``, an analysis with more
+        items than ``review_max_items()`` is analysed once more instead."""
+
+        draft = self._with_ocr_value_flags(revision, draft)
+        if model is not None and _items_by_reason(draft)[0] > review_max_items():
+            draft, analysis_id = self._fewer_items(
+                revision, draft, analysis_id, model=model, pieces=pieces)
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
+
+    def _fewer_items(
+        self,
+        revision: ProtocolRevisionRecord,
+        first: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        model: ProtocolAnalysisModel,
+        pieces: tuple[AnalysisPiece, ...],
+    ) -> tuple[ProtocolAnalysisDraft, str]:
+        """Too many items for cards: one more analysis, or the guidance alone.
+
+        Lane RV2, decision c (human decision 2026-10-16). The documents with
+        the most items are mostly steps the model rewrote rather than quoted
+        (lane RV replay: 64 items, nearly all "원문에 없음"), where reading
+        again does better than a person checking each. The same extraction
+        is analysed once more, one reasoning level up, provided the calls it
+        may take fit ``review_reanalysis_max_calls()``; the event says why,
+        at what level and what came of it. A result within the bound is
+        kept (with cards or none); otherwise the analysis fails with the
+        guidance and makes no cards. Returns the draft to keep and its id.
+        """
+
+        protocol_id = revision.experiment_id
+        limit = review_max_items()
+        count, by_reason = _items_by_reason(first)
+        planned = 2 * len(pieces) if pieces else 1
+        cap = review_reanalysis_max_calls()
+        escalated, reasoning = escalated_analysis_model(model)
+        again_id = f"{analysis_id}-more-1"
+        event: dict[str, object] = {
+            "analysis_id": again_id, "reanalysis_of": analysis_id,
+            "reason": "too_many_review_items", "items": count, "limit": limit,
+            "by_reason": by_reason, "planned_calls": planned, "call_cap": cap, **reasoning,
+        }
+        after: tuple[int, dict[str, int]] | None = None
+        failure_code: str | None = None
+        if planned > cap:
+            self.store.append_event(
+                f"auto-reanalysis-{again_id}", protocol_id, revision.revision_number,
+                _AUTO_REANALYSIS_EVENT, {**event, "status": "skipped_over_call_cap"})
+        else:
+            self.store.append_event(
+                f"auto-reanalysis-{again_id}", protocol_id, revision.revision_number,
+                _AUTO_REANALYSIS_EVENT, {**event, "status": "analyzing"})
+            logging.getLogger(__name__).info(
+                "protocol.analysis.auto_reanalysis protocol_id=%s items=%d limit=%d "
+                "reasoning_effort=%s planned_calls=%d",
+                protocol_id, count, limit, reasoning.get("reasoning_effort"), planned,
+            )
+            try:
+                extraction = first.extraction
+                if pieces:
+                    again = self._analyze_in_pieces(
+                        revision, extraction, escalated, pieces, analysis_id=again_id)
+                else:
+                    again = analyze_protocol_extraction(
+                        extraction, escalated, review_unverified=True)
+                again = self._with_ocr_value_flags(revision, again)
+                after = _items_by_reason(again)
+            except Exception as exc:  # noqa: BLE001 - the first result's guidance stands
+                failure_code = _piece_failure_code(exc)
+            self.store.append_event(
+                f"auto-reanalysis-ended-{again_id}", protocol_id, revision.revision_number,
+                _AUTO_REANALYSIS_EVENT, {
+                    **event, "status": "failed" if after is None else "completed",
+                    **({"failure_code": failure_code} if failure_code else {}),
+                    **({"items_after": after[0], "by_reason_after": after[1]} if after else {}),
+                })
+            if after is not None and after[0] <= limit:
+                return again, again_id
+        too_many = ProtocolAnalysisTooManyItemsError(
+            "The analysis asks a person about too many items.",
+            items=count, limit=limit, items_after=None if after is None else after[0],
+            by_reason=by_reason)
+        # Its own id: a kept repaired answer is stored under the first
+        # attempt's id, whose failure the ledger already holds.
+        self._record_analysis_failure(revision, f"{analysis_id}-too-many-items", too_many)
+        raise too_many
 
     def _store_review_pending(
         self,
@@ -3373,6 +3675,9 @@ class ProtocolCatalog:
             payload["pieces"] = [piece.public_dict() for piece in pieces]
         if draft.response_repair is not None:
             payload["response_repaired"] = draft.response_repair.public_dict()
+        if draft.auto_resolved:
+            # Lane RV2, decision b: what the server settled itself, and why.
+            payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
         self.store.append_event(
             f"analysis-review-pending-{analysis_id}",
             protocol_id,
@@ -3471,6 +3776,11 @@ class ProtocolCatalog:
                         return analyze_protocol_piece(
                             extraction, piece, observed.model, review_unverified=True)
                     except Exception as exc:  # noqa: BLE001 - sent once more by itself
+                        if safety_block_provider(exc) is not None:
+                            # Lane RV2, decision f: a prompt the safety filter
+                            # blocks is blocked again the same way (lane AN2
+                            # measured it three times); it is not sent again.
+                            raise
                         retry_model, retry_payload = observed.retry()
                         outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
                             **chunk, "status": "in_progress", "attempt": 2,
@@ -3546,7 +3856,9 @@ class ProtocolCatalog:
                 extraction, passed, [drafts[piece.index] for piece in passed],
                 review_unverified=True,
                 failed_pieces=tuple(
-                    (piece, _piece_failure_code(failures[piece.index])) for piece in failed),
+                    (piece, _piece_failure_code(failures[piece.index]),
+                     safety_block_provider(failures[piece.index]))
+                    for piece in failed),
             )
         except ProtocolAnalysisPieceConflictError as exc:
             append(f"pieces-conflict-{analysis_id}", _MERGE_CONFLICT_EVENT, {
@@ -3589,6 +3901,9 @@ class ProtocolCatalog:
         if pieces:
             # Lane AN, decision 2: read in these pieces and joined.
             ready_payload["pieces"] = [piece.public_dict() for piece in pieces]
+        if draft.auto_resolved:
+            # Lane RV2, decision b: what the server settled itself, and why.
+            ready_payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
         if draft.response_repair is not None:
             # Lane EV3, decision 1: the response was read after its brackets
             # were repaired in one of the two fixed shapes; every check above
@@ -3640,6 +3955,10 @@ class ProtocolCatalog:
         failure_code = getattr(exc, "code", "analysis_failed")
         if not isinstance(failure_code, str) or not failure_code:
             failure_code = "analysis_failed"
+        blocked_by = safety_block_provider(exc)
+        if blocked_by is not None:
+            # Lane RV2, decision f: named for what it is.
+            failure_code = BLOCKED_FAILURE_CODE
         failure_digest = hashlib.sha256(
             analysis_id.encode("utf-8")
         ).hexdigest()[:24]
@@ -3649,6 +3968,8 @@ class ProtocolCatalog:
         }
         if truncated:
             failure_payload["truncated"] = True
+        if blocked_by is not None:
+            failure_payload["blocked"] = {"provider": blocked_by}
         repair = getattr(exc, "response_repair", None)
         if repair is not None:
             # Lane EV3, decision 1: this attempt was read after a repair of
@@ -3665,6 +3986,17 @@ class ProtocolCatalog:
                 "reason": exc.reason, "source_page_start": exc.first_page,
                 "source_page_end": exc.last_page,
             }
+            if exc.unlabelled_pieces:
+                # Lane RV2: the pieces that read their steps without numbers.
+                failure_payload["piece_conflict"]["unlabelled_pieces"] = [
+                    piece.public_dict() for piece in exc.unlabelled_pieces]
+                failure_payload["piece_conflict"]["labelled_pieces"] = [
+                    piece.public_dict() for piece in exc.labelled_pieces]
+        if isinstance(exc, ProtocolAnalysisTooManyItemsError):
+            # Lane RV2, decision c: the counts the guidance rests on.
+            failure_payload["review_items"] = {
+                "items": exc.items, "limit": exc.limit, "items_after": exc.items_after,
+                "by_reason": exc.by_reason}
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {
@@ -4083,7 +4415,7 @@ class ProtocolCatalog:
             ):
                 continue
             decision = {**event.payload, "recorded_at": event.recorded_at,
-                        "event_id": event.event_id}
+                        "event_id": event.event_id, "sequence_id": event.sequence_id}
             item_id = str(decision.get("item_id"))
             if decision.get("action") == "memo":
                 memos[item_id] = decision
@@ -4092,6 +4424,101 @@ class ProtocolCatalog:
             else:
                 decisions[item_id] = decision
         return decisions, memos
+
+    def _value_change_links(
+        self,
+        revision: ProtocolRevisionRecord,
+        target: _ReviewTarget,
+        decisions: dict[str, dict[str, object]],
+    ) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+        """The items a fixed value makes wait for a person again (lane RV2, d).
+
+        Human decision 2026-10-16: a value a person fixed is said by the
+        step sentence, not by the value record (lane RV judgement 11), so
+        every item that states the old value -- the step sentence, its
+        sub-actions, and the step's timer; for an OCR value, every item on
+        its page that states it -- is asked again, with the sentence the
+        server makes by putting the new value in the old one's place when
+        the old value stands in it exactly once (otherwise a person writes
+        it). A decision on such an item made before the fix no longer
+        counts. Returns the links by item and the decisions that still
+        count. A safety statement is never linked: its words never change.
+        """
+
+        records = _review_records(target.protocol)
+        by_id = {record.item_id: record for record in records}
+        ocr_flags = {flag.item_id: flag for flag in target.flags
+                     if flag.reason == REVIEW_REASON_OCR_VALUE}
+        table = self._review_timer_table(revision, target)
+        links: dict[str, list[dict[str, object]]] = {}
+        for item_id, decision in decisions.items():
+            value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+            original = decision.get("original") if isinstance(decision.get("original"), dict) else {}
+            new, old = value.get("text"), original.get("text")
+            if decision.get("action") != "fix" or not isinstance(new, str) or not isinstance(old, str):
+                continue
+            if item_id in ocr_flags:
+                extra = ocr_flags[item_id].extra or {}
+                linked = [
+                    other for other in extra.get("items") or ()
+                    if other in by_id and by_id[other].kind in _FIXABLE_KINDS]
+            elif item_id in by_id and by_id[item_id].kind in {"value", "duration"}:
+                record = by_id[item_id]
+                linked = [
+                    other.item_id for other in records
+                    if other.item_id != item_id
+                    and other.kind in _FIXABLE_KINDS - {"value", "duration"}
+                    and _same_scope(other, record)]
+            else:
+                continue
+            old_tokens = [token for token, _ in ocr_value_tokens(old)]
+            new_values = ocr_value_tokens(new)
+            removed = [token for token in old_tokens
+                       if token not in {token for token, _ in new_values}]
+            added = [words for token, words in new_values if token not in old_tokens]
+            if not removed:
+                continue
+            sequence = decision.get("sequence_id")
+            stated: list[tuple[str, str, int | None]] = []
+            for other in linked:
+                record = by_id[other]
+                text = _record_words(record) or ""
+                spans = [span for span in _ocr_value_spans(text) if span[0] in removed]
+                if not spans:
+                    continue
+                candidate = None
+                if len(spans) == 1 and len(removed) == 1 and len(added) == 1:
+                    _, start, end = spans[0]
+                    candidate = text[:start] + added[0] + text[end:]
+                stated.append((other, candidate, None))
+                step = record.step
+                if step is not None and record.kind in {"step", "sub_action"}:
+                    timers = table.for_step(step.step_id)
+                    if any(token in removed for timer in timers
+                           for token, _ in ocr_value_tokens(timer.literal)):
+                        stated.append((
+                            f"timer:{step.step_id}", None,
+                            _duration_seconds(added[0]) if len(added) == 1 else None))
+            for other, candidate, seconds in stated:
+                link = {"source_item": item_id, "from": old, "to": new,
+                        "candidate": candidate, "candidate_seconds": seconds}
+                if link not in links.setdefault(other, []):
+                    links[other].append(link)
+                earlier = decisions.get(other)
+                if (
+                    earlier is not None and isinstance(sequence, int)
+                    and isinstance(earlier.get("sequence_id"), int)
+                    and earlier["sequence_id"] < sequence
+                ):
+                    earlier["stale"] = True
+        for item_links in links.values():
+            if len(item_links) > 1:
+                for link in item_links:
+                    link["candidate"] = None
+        return links, {
+            item_id: decision for item_id, decision in decisions.items()
+            if not decision.get("stale")
+        }
 
     def _review_timer_table(
         self, revision: ProtocolRevisionRecord, target: _ReviewTarget,
@@ -4114,6 +4541,7 @@ class ProtocolCatalog:
         memos: dict[str, dict[str, object]],
         *,
         timer_steps: Sequence[str] = (),
+        links: dict[str, list[dict[str, object]]] | None = None,
     ) -> list[dict[str, object]]:
         """Every item of the target as the review screen shows it.
 
@@ -4127,6 +4555,13 @@ class ProtocolCatalog:
         flags_by_item: dict[str, list[ReviewFlag]] = {}
         for flag in target.flags:
             flags_by_item.setdefault(flag.item_id, []).append(flag)
+        for item_id, item_links in (links or {}).items():
+            # Lane RV2, decision d: an item that states a value a person
+            # fixed waits for a person again.
+            for link in item_links:
+                flags_by_item.setdefault(item_id, []).append(ReviewFlag(
+                    item_id=item_id, reason=REVIEW_REASON_VALUE_CHANGED,
+                    field="text", reason_code=REVIEW_REASON_VALUE_CHANGED, extra=link))
         origins = target.origins or {}
         items: list[dict[str, object]] = []
 
@@ -4175,6 +4610,12 @@ class ProtocolCatalog:
                 allowed[:0] = ["confirm", "enter"] if needs_review else ["enter"]
             elif kind == "timer":
                 allowed[:0] = ["fix", "clear"] if text is not None else ["enter"]
+            elif kind == "ocr_value":
+                # Lane RV2, decision b: the value as read, or as the image shows it.
+                allowed[:0] = ["confirm", "fix"]
+            if any(flag.reason == REVIEW_REASON_READ_TWO_WAYS for flag in own):
+                # Lane RV2, decision e: this reading or the other piece's.
+                allowed = ["choose", *(action for action in allowed if action != "confirm")]
             if needs_review and kind in _CLEARABLE_KINDS:
                 allowed.insert(allowed.index("memo"), "clear")
             decision = decisions.get(item_id)
@@ -4188,6 +4629,17 @@ class ProtocolCatalog:
                     origin_after = REVIEW_ORIGIN_REVIEWER
                 elif action == "clear":
                     current = None
+                elif action == "choose":
+                    current = value.get("text")
+            reading_flag = next(
+                (flag for flag in own if flag.reason == REVIEW_REASON_READ_TWO_WAYS), None)
+            if reading_flag is not None:
+                # Lane RV2, decision e: both pieces' readings, each with the
+                # source lines its quotes stand on.
+                readings = (reading_flag.extra or {}).get("readings") or []
+                extra = {**(extra or {}), "readings": [
+                    [{**step, "lines": _reading_lines(step, extraction)} for step in group]
+                    for group in readings]}
             return {
                 "item_id": item_id,
                 "kind": kind,
@@ -4270,11 +4722,48 @@ class ProtocolCatalog:
             if item_id in listed:
                 continue
             flag = flags[0]
+            if flag.reason == REVIEW_REASON_OCR_VALUE:
+                items.append(self._ocr_value_view(view, flag, extraction))
+                continue
             items.append(view(
                 item_id, "pages" if flag.field == "pages" else "construct",
                 flag.reason_ko,
                 extra={"first_page": flag.first_page, "last_page": flag.last_page}))
         return items
+
+    @staticmethod
+    def _ocr_value_view(
+        view: Callable[..., dict[str, object]], flag: ReviewFlag,
+        extraction: ProtocolPdfExtraction,
+    ) -> dict[str, object]:
+        """An OCR value item (lane RV2, decision b): the value as read, the
+        items that state it, its page's lines that print it and the OCR
+        value boxes to show it beside its piece of the image."""
+
+        extra = flag.extra or {}
+        page = flag.page_number
+        token = str(extra.get("token") or "")
+        lines: list[int] = []
+        if isinstance(page, int) and 1 <= page <= extraction.page_count:
+            lines = [
+                number for number, (_, _, line) in enumerate(
+                    _page_lines(extraction.pages[page - 1].text), start=1)
+                if token in {key for key, _ in ocr_value_tokens(line)}
+            ]
+        item = view(flag.item_id, "ocr_value", extra.get("value"), extra={
+            "page": page, "token": token, "linked_items": list(extra.get("items") or ()),
+            "ocr_state": flag.reason_code,
+        })
+        item["source"] = {
+            "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
+            "verified": True,
+            "lines": ({"page": page, "first_line": lines[0], "last_line": lines[0]}
+                      if lines else None),
+            "value_lines": lines,
+            "value_boxes": list(extra.get("value_boxes") or ()),
+            "suggested_lines": None,
+        }
+        return item
 
     def review_draft(self, protocol_id: str) -> dict[str, object]:
         """What the review screen shows (lane RV, decision b): the target, its
@@ -4293,6 +4782,8 @@ class ProtocolCatalog:
             "review_pending": entry.review_pending,
             "target": None,
             "items": [],
+            "cards": [],
+            "next_card": None,
             "needs_review": [],
             "counts": {"items": 0, "needs_review": 0, "decided": 0, "undecided": 0,
                        "changed": 0},
@@ -4307,17 +4798,24 @@ class ProtocolCatalog:
                 if entry.development_only else "검토할 분석이 아직 없습니다.")
             return base
         decisions, memos = self._review_decisions(revision, target)
-        items = self._review_items(revision, target, decisions, memos)
+        links, decisions = self._value_change_links(revision, target, decisions)
+        items = self._review_items(revision, target, decisions, memos, links=links)
         pending = [
             item["item_id"] for item in items
             if item["needs_review"] and item["item_id"] not in decisions
         ]
+        cards = review_cards(items)
         base.update({
             "target": {
                 **target.key, "recorded_at": target.recorded_at,
                 "revision_id": target.revision_id, "analysis_id": target.analysis_id,
             },
             "items": items,
+            # Lane RV2, decision a: one card per item that waits for a person,
+            # with the only choices the screen may offer for it.
+            "cards": cards,
+            "next_card": next(
+                (index for index, card in enumerate(cards) if not card["decided"]), None),
             "needs_review": [item["item_id"] for item in items if item["needs_review"]],
             "counts": {
                 "items": len(items),
@@ -4365,6 +4863,121 @@ class ProtocolCatalog:
             page["source_page_number"]: page for page in projection.get("pages") or ()
             if isinstance(page, dict) and isinstance(page.get("source_page_number"), int)
         }
+
+    def _ocr_page_states(
+        self, revision: ProtocolRevisionRecord, extraction: ProtocolPdfExtraction,
+    ) -> tuple[dict[int, str], dict[int, dict[str, object]]]:
+        """Each OCR page's state for its values, and the OCR pages (lane RV2, b).
+
+        ``agree``: both engines read the page and their numbers and units
+        were the same; ``differ``: both read it and they were not;
+        ``one_engine``: one engine read it -- one configured, the other
+        failed on the page, or an OCR result stored before the engines were
+        recorded.
+        """
+
+        ocr_numbers = [page.source_page_number for page in extraction.pages if page.ocr_derived]
+        if not ocr_numbers:
+            return {}, {}
+        projection = self._ocr_projection(
+            revision, self._source_extraction(revision), include_text=True)
+        pages = {
+            page["source_page_number"]: page for page in projection.get("pages") or ()
+            if isinstance(page, dict) and isinstance(page.get("source_page_number"), int)
+        }
+        both = projection.get("pages_read_by_both")
+        both = {page for page in both if isinstance(page, int)} if isinstance(both, list) else set()
+        states = {}
+        for number in ocr_numbers:
+            if (pages.get(number) or {}).get("numeric_review_required"):
+                states[number] = OCR_PAGE_DIFFER
+            elif number in both:
+                states[number] = OCR_PAGE_AGREE
+            else:
+                states[number] = OCR_PAGE_ONE_ENGINE
+        return states, pages
+
+    def _with_ocr_value_flags(
+        self, revision: ProtocolRevisionRecord, draft: ProtocolAnalysisDraft,
+    ) -> ProtocolAnalysisDraft:
+        """The draft with its OCR values settled or made items (lane RV2, b).
+
+        Every value an executed item states on an OCR page is named by its
+        page and token. Where both engines read the page alike and the
+        item's quote passed, it is settled and recorded with that reason;
+        otherwise it is one item a person checks, naming the items that
+        state it. Items already waiting for a person are left to their card.
+        """
+
+        extraction = draft.extraction
+        states, pages = self._ocr_page_states(revision, extraction)
+        if not states:
+            return draft
+        flagged = {flag.item_id for flag in draft.review_flags}
+        quote_refused = {flag.item_id for flag in draft.review_flags if flag.field == "evidence"}
+        values: dict[tuple[int, str], dict[str, object]] = {}
+        page_tokens: dict[int, object] = {}
+        for record in _review_records(draft.protocol):
+            evidence = record.evidence
+            if (
+                record.kind in _OCR_VALUE_SKIPPED_KINDS or evidence is None
+                or record.item_id in flagged or record.evidence_item_id in quote_refused
+            ):
+                continue
+            quoted = [evidence.source_page_number]
+            if evidence.continued_on_page_number is not None:
+                quoted.append(evidence.continued_on_page_number)
+            if not any(page in states for page in quoted):
+                continue
+            text = _record_words(record)
+            if not text:
+                continue
+            label = record.step.source_label if record.kind == "step" and record.step else None
+            for token, words in ocr_value_tokens(text, label=label):
+                page = next(
+                    (number for number in quoted if 1 <= number <= extraction.page_count
+                     and token in page_tokens.setdefault(
+                         number, numeric_tokens(extraction.pages[number - 1].text))),
+                    quoted[0])
+                if page not in states:
+                    continue
+                entry = values.setdefault((page, token), {"value": words, "items": []})
+                if record.item_id not in entry["items"]:
+                    entry["items"].append(record.item_id)
+        flags: list[ReviewFlag] = []
+        settled: list[dict[str, object]] = []
+        for (page, token), entry in values.items():
+            if states[page] == OCR_PAGE_AGREE:
+                settled.append({
+                    "kind": "ocr_value", "page": page, "token": token,
+                    "value": entry["value"], "items": list(entry["items"]),
+                    "reason": AUTO_RESOLVED_OCR_TWO_ENGINES,
+                })
+                continue
+            boxes = (pages.get(page) or {}).get("value_boxes") or ()
+            flags.append(ReviewFlag(
+                item_id=f"ocr_value:{page}:{token}",
+                reason=REVIEW_REASON_OCR_VALUE,
+                field="value",
+                reason_code=(OCR_VALUE_ENGINES_DIFFER if states[page] == OCR_PAGE_DIFFER
+                             else OCR_VALUE_ONE_ENGINE),
+                page_number=page,
+                extra={
+                    "value": entry["value"], "token": token, "items": list(entry["items"]),
+                    "value_boxes": [
+                        index for index, box in enumerate(boxes)
+                        if isinstance(box, dict) and token in {
+                            key for key, _ in ocr_value_tokens(str(box.get("text") or ""))}
+                    ],
+                },
+            ))
+        if not flags and not settled:
+            return draft
+        return replace(
+            draft,
+            review_flags=(*draft.review_flags, *flags),
+            auto_resolved=(*draft.auto_resolved, *settled),
+        )
 
     @staticmethod
     def _line_views(page: ProtocolPdfPage, ocr: dict[str, object]) -> list[dict[str, object]]:
@@ -4480,7 +5093,7 @@ class ProtocolCatalog:
         if not isinstance(request, dict):
             raise ProtocolReviewError("A review decision must be an object.")
         allowed_keys = {"item_id", "action", "text", "seconds", "count", "source_lines",
-                        "memo", "reviewer_name", "target"}
+                        "memo", "reviewer_name", "target", "reading"}
         if set(request) - allowed_keys:
             raise ProtocolReviewError("A review decision holds an unknown field.")
         revision = self._latest_protocol_revision(protocol_id)
@@ -4491,9 +5104,10 @@ class ProtocolCatalog:
             raise ProtocolReviewTargetChangedError(
                 "The analysis under review changed; read the review again.")
         decisions, memos = self._review_decisions(revision, target)
+        links, decisions = self._value_change_links(revision, target, decisions)
         item_id = request.get("item_id")
         items = {item["item_id"]: item for item in self._review_items(
-            revision, target, decisions, memos,
+            revision, target, decisions, memos, links=links,
             timer_steps=(
                 (item_id[len("timer:"):],)
                 if isinstance(item_id, str) and item_id.startswith("timer:") else ()),
@@ -4505,6 +5119,16 @@ class ProtocolCatalog:
         if action not in REVIEW_ACTIONS or action not in item["allowed_actions"]:
             raise ProtocolReviewError("This action is not allowed on this item.")
         value: dict[str, object] = {}
+        if action == "choose":
+            reading = request.get("reading")
+            readings = item.get("readings") if isinstance(item.get("readings"), list) else []
+            if reading not in {"a", "b"} or len(readings) != 2:
+                raise ProtocolReviewError("A choice names reading a or b.")
+            chosen = readings[0 if reading == "a" else 1]
+            value = {"reading": reading,
+                     "text": " / ".join(str(step.get("text")) for step in chosen)}
+        elif request.get("reading") is not None:
+            raise ProtocolReviewError("A reading is named only by a choice.")
         if action in {"fix", "enter"}:
             if item["kind"] == "timer":
                 seconds = request.get("seconds")
@@ -4519,7 +5143,8 @@ class ProtocolCatalog:
                     raise ProtocolReviewError("A repeat count needs a whole number.")
                 value = {"count": count, "text": f"{count}회"}
             else:
-                limit = (_MAX_REVIEW_VALUE if item["kind"] in {"value", "duration", "missing_value"}
+                limit = (_MAX_REVIEW_VALUE
+                         if item["kind"] in {"value", "duration", "missing_value", "ocr_value"}
                          else _MAX_REVIEW_TEXT)
                 value = {"text": _clean_review_text(request.get("text"), limit=limit,
                                                     label="Reviewed text")}
@@ -4533,6 +5158,14 @@ class ProtocolCatalog:
             evidence = source_lines_excerpt(target.protocol.metadata.pdf,
                                             request.get("source_lines"))
             source_lines = {**request["source_lines"], "excerpt": evidence.source_excerpt}
+            suggested = source.get("suggested_lines")
+            if isinstance(suggested, dict) and suggested.get("unique") and all(
+                source_lines.get(key, source_lines.get("first_line")) == suggested.get(key)
+                for key in ("page", "first_line", "last_line")
+            ):
+                # Lane RV2, decision b: the lines the server narrowed it to,
+                # which a person said are right -- recorded as such.
+                source_lines["suggested_by_server"] = True
         elif request.get("source_lines") is not None:
             raise ProtocolReviewError("Source lines are asked only for an item whose quote was not found.")
         memo = None
@@ -4569,6 +5202,10 @@ class ProtocolCatalog:
             "counts": draft["counts"],
             "registrable": draft["registrable"],
             "target": draft["target"],
+            # Lane RV2, decision a: the cards after this one, so a button
+            # moves straight on to the next card.
+            "cards": draft["cards"],
+            "next_card": draft["next_card"],
         }
 
     def register_review(
@@ -4597,7 +5234,8 @@ class ProtocolCatalog:
             raise ProtocolReviewTargetChangedError(
                 "The analysis under review changed; read the review again.")
         decisions, memos = self._review_decisions(revision, target)
-        items = self._review_items(revision, target, decisions, memos)
+        links, decisions = self._value_change_links(revision, target, decisions)
+        items = self._review_items(revision, target, decisions, memos, links=links)
         pending = [
             item["item_id"] for item in items
             if item["needs_review"] and item["item_id"] not in decisions
@@ -4760,14 +5398,18 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
     "repeat_count": "반복 횟수",
     "timer": "단계 타이머",
     "pages": "분석 실패 쪽",
+    "ocr_value": "OCR 값",
 }
 #: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
 #: the source does not print, a memo beside an item, and taking a draft
 #: decision back.
-REVIEW_ACTIONS: tuple[str, ...] = ("confirm", "fix", "clear", "enter", "memo", "reset")
+REVIEW_ACTIONS: tuple[str, ...] = (
+    "confirm", "fix", "clear", "enter", "memo", "reset", "choose")
 REVIEW_ACTION_KO: dict[str, str] = {
     "confirm": "확인", "fix": "고침", "clear": "원문에 없음으로 비워 둠",
     "enter": "입력", "memo": "메모", "reset": "되돌리기",
+    # Lane RV2, decision e: one of two pieces' readings of a passage.
+    "choose": "두 읽기 중 고름",
 }
 _STATEMENT_KINDS = {
     "warnings": "warning", "notes": "note", "tips": "tip",
@@ -4978,16 +5620,28 @@ def _quote_lines(evidence: domain.SourceEvidence, extraction: ProtocolPdfExtract
     return _lines_of_span(text, found, found + len(evidence.source_excerpt))
 
 
+#: Lane RV2, decision b: a suggested source line is the only candidate when
+#: it is this alike to the item's words and no other place on the pages
+#: looked at is within the margin of it. A person still presses [맞아요].
+SUGGESTION_UNIQUE_MIN = 0.8
+SUGGESTION_UNIQUE_MARGIN = 0.1
+
+
 def _suggested_lines(
     words: str, extraction: ProtocolPdfExtraction, pages: Sequence[int],
 ) -> dict[str, object] | None:
     """The source lines most like ``words`` on these pages: an AI suggestion
-    of where an item comes from, for a person to accept or change."""
+    of where an item comes from, for a person to accept or change.
+
+    ``unique`` (lane RV2, decision b) says the lines narrow to this one
+    place: at least ``SUGGESTION_UNIQUE_MIN`` alike, and no place that does
+    not overlap them within ``SUGGESTION_UNIQUE_MARGIN`` of it.
+    """
 
     target = " ".join(words.split()).casefold()
     if not target:
         return None
-    best: tuple[float, int, int, int] | None = None
+    candidates: list[tuple[float, int, int, int]] = []
     for page_number in dict.fromkeys(pages):
         if not isinstance(page_number, int) or not 1 <= page_number <= extraction.page_count:
             continue
@@ -5000,12 +5654,20 @@ def _suggested_lines(
                     continue
                 ratio = SequenceMatcher(None, target, " ".join(joined.split()).casefold(),
                                         autojunk=False).ratio()
-                if best is None or ratio > best[0]:
-                    best = (ratio, page_number, first + 1, last + 1)
-    if best is None or best[0] < 0.6:
+                candidates.append((ratio, page_number, first + 1, last + 1))
+    if not candidates:
         return None
+    best = max(candidates, key=lambda candidate: candidate[0])
+    if best[0] < 0.6:
+        return None
+    rivals = [
+        candidate for candidate in candidates
+        if candidate[0] >= best[0] - SUGGESTION_UNIQUE_MARGIN
+        and (candidate[1] != best[1] or candidate[3] < best[2] or candidate[2] > best[3])
+    ]
     return {"page": best[1], "first_line": best[2], "last_line": best[3],
-            "similarity": round(best[0], 2)}
+            "similarity": round(best[0], 2),
+            "unique": best[0] >= SUGGESTION_UNIQUE_MIN and not rivals}
 
 
 def source_lines_excerpt(
@@ -5138,6 +5800,318 @@ def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
         isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
         and confidence < OCR_UNCLEAR_CONFIDENCE
     )
+
+
+# --- OCR values (lane RV2, decision b; human decision 2026-10-16) -----------
+#
+# A number OCR read is executed only when it is confirmed: both engines read
+# the page and their numbers and units were the same (the comparison lane P2
+# and P3 made, footer band and picture text left out), and the item's quote
+# passed the source check -- then it is settled without a person, the reason
+# recorded. Otherwise -- the engines' numbers differed on the page, or only
+# one engine read it -- each value an executed item states on that page is a
+# card. The comparison is kept per page, not per value, so on a page whose
+# numbers differ anywhere every value is asked.
+
+#: Page states an OCR page can be in for its values.
+OCR_PAGE_AGREE = "agree"
+OCR_PAGE_DIFFER = "differ"
+OCR_PAGE_ONE_ENGINE = "one_engine"
+#: The kinds whose words never run as values (their numbers are named by
+#: other records): a section heading, the document's metadata, a value the
+#: source leaves out, a timer spec (its duration is a value record) and a
+#: repeat count (its construct's words are).
+_OCR_VALUE_SKIPPED_KINDS = frozenset({
+    "section", "metadata", "missing_value", "timer_spec", "repeat_count",
+})
+_ENGINE_FAILED_WARNING = re.compile(r"^Page ([0-9]+): .+ failed;")
+
+
+def _record_words(record: "_ReviewRecord") -> str | None:
+    """The words of a reviewable record a person reads (and the run says)."""
+
+    field = _REVIEW_TEXT_FIELD.get(type(record.record))
+    words = getattr(record.record, field, None) if field else None
+    return words if isinstance(words, str) else None
+
+
+def _reading_lines(step: dict[str, object], extraction: ProtocolPdfExtraction) -> dict[str, int] | None:
+    """The source lines one piece's reading of a step quotes (lane RV2, e)."""
+
+    page, excerpt = step.get("page"), step.get("excerpt")
+    if not isinstance(page, int) or not isinstance(excerpt, str):
+        return None
+    lines = _quote_lines(
+        domain.SourceEvidence(source_page_number=page, source_excerpt=excerpt), extraction)
+    return {"page": page, "first_line": lines[0], "last_line": lines[1]} if lines else None
+
+
+def _same_scope(record: "_ReviewRecord", value: "_ReviewRecord") -> bool:
+    """Whether ``record`` is one of the records a value's sentence lives in:
+    its step's records, or, for a value outside any step, its owner."""
+
+    if value.step is not None:
+        return record.step is not None and record.step.step_id == value.step.step_id
+    return value.path.startswith(record.path + ".")
+
+
+def _ocr_value_spans(text: str) -> list[tuple[str, int, int]]:
+    """Each value ``text`` states as (token, start, end) in ``text``; empty
+    when the comparison form does not keep the text's positions."""
+
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("μ", "µ")
+    if len(normalized) != len(text):
+        return []
+    return [
+        (match[1] + _OCR_UNIT_SPELLINGS.get(match[2] or "", match[2] or ""),
+         match.start(), match.end())
+        for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized)
+    ]
+
+
+_DURATION_WORDS = re.compile(
+    r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(s|sec|secs|seconds?|min|mins|minutes?|h|hr|hrs|hours?"
+    r"|초|분|시간)\s*$", re.IGNORECASE)
+_DURATION_UNIT_SECONDS = {"s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1, "초": 1,
+                          "min": 60, "mins": 60, "minute": 60, "minutes": 60, "분": 60,
+                          "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+                          "시간": 3600}
+
+
+def _duration_seconds(words: str) -> int | None:
+    """Whole seconds of a value that is one duration ("10 min", "90 s"), or None."""
+
+    match = _DURATION_WORDS.match(words)
+    if match is None:
+        return None
+    seconds = float(match[1]) * _DURATION_UNIT_SECONDS[match[2].casefold()]
+    return int(seconds) if seconds.is_integer() and 1 <= seconds <= _MAX_TIMER_SECONDS else None
+
+
+def ocr_engine_names(provider: object) -> tuple[str, ...]:
+    """The OCR engines a provider calls, as far as it says (lane RV2, b)."""
+
+    names = getattr(provider, "engine_names", ())
+    if not isinstance(names, (tuple, list)):
+        return ()
+    return tuple(name for name in names if name in {OCR_CLOVA, OCR_GOOGLE})
+
+
+def pages_read_by_both(result: OcrResult, engines: Sequence[str]) -> list[int]:
+    """The pages both engines read: OCR pages, with two engines configured,
+    on which neither engine failed (the provider warns of each failure)."""
+
+    if set(engines) != {OCR_CLOVA, OCR_GOOGLE}:
+        return []
+    failed = {
+        int(match[1]) for warning in result.warnings
+        if (match := _ENGINE_FAILED_WARNING.match(warning)) is not None
+    }
+    return [
+        page.source_page_number for page in result.pages
+        if page.provider in {OCR_CLOVA, OCR_GOOGLE}
+        and page.source_page_number not in failed
+    ]
+
+
+def ocr_value_tokens(text: str, *, label: str | None = None) -> list[tuple[str, str]]:
+    """The values ``text`` states, as (token, words): the token the two OCR
+    engines were compared by ("4000rpm", "37°c"), and the words as written.
+
+    A step's own number opening its sentence ("3.", "(2)", or its label) is
+    not a value.
+    """
+
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("μ", "µ")
+    shown = text if len(normalized) == len(text) else normalized
+    start = 0
+    opening = _LEADING_LABEL.match(normalized)
+    if opening is not None:
+        start = opening.end()
+    elif label and label.strip():
+        own = re.match(rf"\s*\(?{re.escape(label.strip().casefold())}[.)]?\s+", normalized)
+        if own is not None:
+            start = own.end()
+    found: list[tuple[str, str]] = []
+    for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized, start):
+        unit = match[2] or ""
+        found.append((match[1] + _OCR_UNIT_SPELLINGS.get(unit, unit),
+                      shown[match.start():match.end()]))
+    return found
+
+
+# --- Cards (lane RV2, decision a; human decision 2026-10-16) ----------------
+#
+# A person is asked item by item, one card at a time, by buttons: the
+# server builds each card's question and the only choices the screen may
+# draw for it (each a review decision the server takes, or "다시 분석"),
+# so the screen decides nothing. An analysis whose every executed item
+# passed has no card and runs as before.
+
+
+def _choice(choice_id: str, label_ko: str, request: dict[str, object] | None, *,
+            needs: str | None = None, route: str | None = None,
+            primary: bool = False) -> dict[str, object]:
+    """One button of a card: the decision it sends, and what it still needs
+    from the person (lines pointed at, a text, seconds)."""
+
+    return {"choice_id": choice_id, "label_ko": label_ko, "request": request,
+            "needs": needs, "route": route, "primary": primary}
+
+
+def _subject(word: object) -> str:
+    """``word`` with the subject particle its last syllable takes: "단계가", "값이"."""
+
+    text = str(word)
+    last = text[-1] if text else ""
+    if "가" <= last <= "힣" and (ord(last) - ord("가")) % 28:
+        return f"{text}이"
+    return f"{text}가"
+
+
+def _card_choices(
+    item: dict[str, object],
+) -> tuple[str, str, list[dict[str, object]], dict[str, object]]:
+    """The card's type, its question, its choices and what else it shows."""
+
+    item_id = str(item["item_id"])
+    kind = str(item["kind"])
+    allowed = list(item["allowed_actions"])
+    source = item.get("source") if isinstance(item.get("source"), dict) else None
+    reasons = [reason for reason in item.get("reasons") or () if isinstance(reason, dict)]
+    request = lambda action, **extra: {"item_id": item_id, "action": action, **extra}
+    choices: list[dict[str, object]] = []
+    changed = [
+        reason["extra"] for reason in reasons
+        if reason.get("reason") == REVIEW_REASON_VALUE_CHANGED and isinstance(reason.get("extra"), dict)
+    ]
+    if changed:
+        # Decision d: a value a person fixed is stated here too; the server's
+        # sentence with the new value, or a person writes it.
+        link = changed[0]
+        candidate, seconds = link.get("candidate"), link.get("candidate_seconds")
+        lines = source is not None and source.get("verified") is False
+        change = {"from": link.get("from"), "to": link.get("to"), "source_item": link.get("source_item")}
+        question = (f"{link.get('from')} → {link.get('to')}(으)로 고쳤어요. "
+                    f"이 {item['kind_ko']}에도 그 값이 있어요. 이렇게 바꿀까요?")
+        if kind == "timer":
+            if isinstance(seconds, int):
+                choices.append(_choice("fix_proposed", "이렇게 바꿔요",
+                                       request("fix", seconds=seconds), primary=True))
+            choices.append(_choice("fix", "다시 고칠게요", request("fix"), needs="seconds"))
+            return "value_changed", question, choices, {
+                "change": change, "proposal": seconds and _duration_words(seconds)}
+        if isinstance(candidate, str):
+            choices.append(_choice("fix_proposed", "이렇게 바꿔요", request("fix", text=candidate),
+                                   needs="source_lines" if lines else None, primary=True))
+        choices.append(_choice("fix", "다시 고칠게요", request("fix"),
+                               needs="source_lines_and_text" if lines else "text"))
+        return "value_changed", question, choices, {"change": change, "proposal": candidate}
+    two_ways = next((reason for reason in reasons
+                     if reason.get("reason") == REVIEW_REASON_READ_TWO_WAYS), None)
+    if two_ways is not None:
+        # Decision e: two pieces read this passage differently; a person
+        # picks one reading, with the page's lines beside both.
+        page = two_ways.get("page_number")
+        return "two_readings", f"두 조각이 {page}쪽을 다르게 읽었어요. 어느 쪽이 맞나요?", [
+            _choice("choose_a", "이쪽으로 읽기", request("choose", reading="a"), primary=True),
+            _choice("choose_b", "저쪽으로 읽기", request("choose", reading="b")),
+            _choice("fix", "직접 고칠게요", request("fix"), needs="text"),
+        ], {"readings": item.get("readings")}
+    if kind == "pages":
+        blocked = any(reason.get("reason") == REVIEW_REASON_BLOCKED for reason in reasons)
+        return "blocked_pages" if blocked else "failed_pages", (
+            f"{reasons[0].get('reason_ko') if reasons else '분석하지 못한 쪽'}. "
+            "이 쪽에 실험할 단계가 없나요?"), [
+            _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),
+            _choice("reanalysis", "다시 분석", None, route="reanalysis"),
+        ], {}
+    if kind == "ocr_value":
+        # Decision b: a number OCR read that the two engines did not both
+        # read alike; the image piece is beside it on the card.
+        value = item.get("text")
+        return "ocr_value", f"원문 그림에서 이 값이 {value} 맞나요?", [
+            _choice("confirm", f"{value} 맞아요", request("confirm"), primary=True),
+            _choice("fix", "직접 입력", request("fix"), needs="text"),
+        ], {"proposal": value}
+    quote_refused = source is not None and source.get("verified") is False
+    suggested = source.get("suggested_lines") if source is not None else None
+    if quote_refused and isinstance(suggested, dict) and suggested.get("unique"):
+        # Decision b: the lines narrow to one place; the server proposes it
+        # and a person only says it is right.
+        lines = {key: suggested[key] for key in ("page", "first_line", "last_line")}
+        choices.append(_choice(
+            "confirm_suggested", "맞아요", request("confirm", source_lines=lines), primary=True))
+        choices.append(_choice(
+            "confirm_lines", "다른 줄이에요", request("confirm"), needs="source_lines"))
+        question = (f"이 {item['kind_ko']}의 근거는 원문 {lines['page']}쪽 "
+                    f"{lines['first_line']}번째 줄"
+                    + (f"부터 {lines['last_line']}번째 줄" if lines["last_line"] != lines["first_line"]
+                       else "") + "인가요?")
+        card_type = "evidence_suggested"
+    elif quote_refused:
+        choices.append(_choice(
+            "confirm_lines", "고른 줄이 맞아요", request("confirm"), needs="source_lines",
+            primary=True))
+        question = f"이 {item['kind_ko']}의 근거를 원문에서 찾지 못했어요. 원문의 어느 줄인가요?"
+        card_type = "evidence"
+    else:
+        if "confirm" in allowed:
+            choices.append(_choice("confirm", "맞아요", request("confirm"), primary=True))
+        question = f"이 {_subject(item['kind_ko'])} 원문과 같나요?"
+        card_type = "claim"
+    if "fix" in allowed and card_type != "evidence_suggested":
+        choices.append(_choice(
+            "fix", "직접 고칠게요", request("fix"),
+            needs="source_lines_and_text" if quote_refused else "text"))
+    if "clear" in allowed:
+        choices.append(_choice("clear", "원문에 없어요", request("clear")))
+    elif kind == "step":
+        # A step is never left empty (lane RV): one the source does not hold
+        # is read again.
+        choices.append(_choice("reanalysis", "다시 분석", None, route="reanalysis"))
+    return card_type, question, choices, {}
+
+
+def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """One card per item waiting for a person, in document order.
+
+    Each card says what is asked, shows the item as the analysis read it
+    and where it stands in the source, and lists the buttons the screen may
+    draw -- each the review decision it sends. Decided cards stay in place
+    (marked), so "← 이전" can go back to them.
+    """
+
+    asked = [item for item in items if item.get("needs_review")]
+    cards = []
+    for position, item in enumerate(asked, start=1):
+        card_type, question, choices, shown = _card_choices(item)
+        source = item.get("source") if isinstance(item.get("source"), dict) else None
+        cards.append({
+            "card_id": item["item_id"],
+            "item_id": item["item_id"],
+            "position": position,
+            "total": len(asked),
+            "progress_ko": f"{position} / {len(asked)}",
+            "type": card_type,
+            "kind": item["kind"],
+            "kind_ko": item["kind_ko"],
+            "step_label": item.get("step_label"),
+            "question_ko": question,
+            "reasons_ko": [reason.get("reason_ko") for reason in item.get("reasons") or ()
+                           if isinstance(reason, dict)],
+            "shown": item.get("text"),
+            "source": source,
+            "choices": choices,
+            "proposal": shown.get("proposal"),
+            "change": shown.get("change"),
+            "readings": shown.get("readings"),
+            "memo_allowed": "memo" in item["allowed_actions"],
+            "decided": item.get("decision") is not None,
+            "decision": item.get("decision"),
+            "current": item.get("current"),
+        })
+    return cards
 
 
 @dataclass(frozen=True)
@@ -5333,6 +6307,35 @@ def _shifted_item_ids(
     return shifted
 
 
+def _other_reading(
+    protocol: domain.ExperimentProtocol, item: dict[str, object],
+) -> domain.ExperimentProtocol:
+    """``protocol`` with the later piece's reading in place of the kept one
+    (lane RV2, decision e): the kept steps are replaced, where the first of
+    them stood, by the other piece's steps, the first taking its id."""
+
+    flag = next((reason for reason in item.get("reasons") or ()
+                 if isinstance(reason, dict)
+                 and reason.get("reason") == REVIEW_REASON_READ_TWO_WAYS), None)
+    extra = (flag or {}).get("extra") or {}
+    kept = [str(step_id) for step_id in extra.get("kept") or ()]
+    others = [_decode_stored_record(step) for step in extra.get("other_steps") or ()]
+    if not kept or not others or not all(
+            isinstance(step, domain.ProtocolSourceStep) for step in others):
+        raise ProtocolReviewNotReadyError("The other reading of this passage is unreadable.")
+    others[0] = replace(others[0], step_id=kept[0])
+    sections = []
+    for section in protocol.sections:
+        steps: list[domain.ProtocolSourceStep] = []
+        for step in section.steps:
+            if step.step_id == kept[0]:
+                steps.extend(others)
+            elif step.step_id not in kept:
+                steps.append(step)
+        sections.append(replace(section, steps=tuple(steps)))
+    return replace(protocol, sections=tuple(sections))
+
+
 #: A step sentence's own number ("3.", "(2)") before its words.
 _LEADING_LABEL = re.compile(r"^\s*\(?[0-9]+(?:\.[0-9]+)*[.)]\s+")
 #: A number with the unit printed after it, as a step sentence states a value.
@@ -5402,7 +6405,9 @@ def _apply_review(
             timers[step_id] = int(value["seconds"]) if action in {"fix", "enter"} else None
             reviewed = value.get("text") if action in {"fix", "enter"} else None
             spoken = value.get("text") if action in {"fix", "enter"} else None
-        elif kind == "pages":
+        elif kind in {"pages", "ocr_value"}:
+            # A check, not a record: a fixed OCR value changes the items that
+            # state it through their own decisions (decision d).
             pass
         elif kind == "missing_value" and action == "enter":
             reviewed = spoken = value.get("text")
@@ -5463,6 +6468,9 @@ def _apply_review(
                     edits.append((path, lambda current, field=field, words=words: replace(
                         current, **{field: words})))
                     reviewed = words
+        if action == "choose":
+            # Lane RV2, decision e: the reading a person chose.
+            reviewed = value.get("text")
         if action == "confirm" and not item["needs_review"]:
             continue
         origin = (
@@ -5470,7 +6478,8 @@ def _apply_review(
             else REVIEW_ORIGIN_SOURCE if kind in _SOURCE_WORDS_ONLY and action == "confirm"
             else REVIEW_ORIGIN_AI if item["needs_review"] else str(item["origin"])
         )
-        if action in {"fix", "enter"} or (action == "confirm" and item["needs_review"]):
+        if action in {"fix", "enter", "choose"} or (
+                action == "confirm" and item["needs_review"]):
             origins[item_id] = origin
         changes.append(ReviewedChange(
             item_id=item_id, kind=kind, kind_ko=str(item["kind_ko"]),
@@ -5491,6 +6500,10 @@ def _apply_review(
         removals, key=lambda pair: (_path_depth(pair[0]), pair[0]), reverse=True,
     ):
         protocol = _removed_at(protocol, path)
+    for item_id, decision in decisions.items():
+        value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+        if decision.get("action") == "choose" and value.get("reading") == "b" and item_id in by_id:
+            protocol = _other_reading(protocol, by_id[item_id])
     origins = _shifted_item_ids(origins, [item_id for _, item_id in removals])
     changes.sort(key=lambda change: list(by_id).index(change.item_id))
     return protocol, changes, timers, origins
