@@ -649,6 +649,8 @@
     /* Lane UI3 decision 5 (2026-10-14): a deviation's tag sits with its words. */
     .report-review-text>.ui-badge{margin-left:var(--space-1);vertical-align:middle}
     .report-review-checklist .report-review-row[data-deviation="true"]{border-left:var(--stroke-current) solid var(--warning-ink)}
+    /* Lane FX3 decision 5: the source's value beside a deviation's tag. */
+    .report-review-source{color:var(--warning-ink);font-weight:700}
     .report-review-actions{grid-area:actions;display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
     .report-review-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
     .report-review-actions input{min-height:var(--target-desk);min-width:0;flex:1 1 12rem;padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);font:inherit}
@@ -1930,11 +1932,14 @@ function reportReviewSummary(list){
  for(const [label,count] of [["실험자 확인",list.filter(item=>item.confirmed).length],["미확인",list.filter(item=>!item.confirmed).length],["정정",list.filter(item=>item.corrected).length],["이상",list.filter(item=>item.kind==="이상").length],...(deviations?[["편차",deviations]]:[])]){const cell=document.createElement("span");cell.className="report-review-count";const number=document.createElement("b");number.textContent=String(count);cell.append(`${label} `,number);summary.appendChild(cell);}
  return summary;
 }
+// Lane FX3 decision 5: the source values a deviation differs from, as the
+// server recorded them with the note (none for a deviation said as such).
+function reportReviewSources(item){return Array.isArray(item?.deviations)?[...new Set(item.deviations.filter(found=>found&&typeof found==="object"&&nonemptyText(found.source)).map(found=>normalizePresentationText(found.source).replace(/\s+/g," ").trim()))]:[];}
 function reportReviewRow(reportId,item,{withStep=false}={}){
  const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
  const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
  const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
- const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;if(item.kind===REPORT_REVIEW_DEVIATION_KIND){text.append(" ");text.appendChild(uiBadge("기준치와 다름","warning"));row.dataset.deviation="true";}row.appendChild(text);
+ const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;if(item.kind===REPORT_REVIEW_DEVIATION_KIND){text.append(" ");text.appendChild(uiBadge("기준치와 다름","warning"));row.dataset.deviation="true";const sources=reportReviewSources(item);if(sources.length){const source=document.createElement("span");source.className="report-review-source";source.textContent=` · 원문 ${sources.join(" · ")}`;text.appendChild(source);}}row.appendChild(text);
  if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
  row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
  const actions=document.createElement("span");actions.className="report-review-actions";

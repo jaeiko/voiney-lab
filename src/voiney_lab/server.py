@@ -6962,6 +6962,15 @@ def _record_experiment_report_plan(
             # Lane VX, decision 3: the value was said "네" to in the 바로
             # 확인 way; the end-of-experiment review does not ask it again.
             payload["experimenter_confirmed"]=True
+        deviations=[
+            dict(item) for item in plan.note_record.get("deviations") or ()
+            if isinstance(item,dict)
+        ]
+        if deviations:
+            # Lane FX3, decision 5: the values that differ from the source's
+            # (said, number, unit, the source's value), for the record after
+            # the run as the run card showed them.
+            payload["deviations"]=deviations
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,

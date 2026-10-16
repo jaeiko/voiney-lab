@@ -1154,7 +1154,14 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
             if category == "measurement":
                 add("r", event, "측정", wording, **extra)
             elif category == "deviation":
-                add("r", event, "편차", wording, **extra)
+                # Lane FX3, decision 5: the source values the note differs
+                # from, as the event recorded them (none for a note the
+                # experimenter called a deviation without a source value).
+                deviations = [
+                    dict(item) for item in payload.get("deviations") or ()
+                    if isinstance(item, Mapping)
+                ]
+                add("r", event, "편차", wording, deviations=deviations, **extra)
             elif category != "note" and _NUMBER_IN_TEXT.search(
                 amended.get(str(event.get("event_key") or ""), {}).get("text") or wording
             ):
