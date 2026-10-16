@@ -240,11 +240,15 @@ class ProtocolAnalysisTooManyItemsError(ProtocolCatalogError):
 
     code = TOO_MANY_REVIEW_ITEMS_CODE
 
-    def __init__(self, message: str, *, items: int, limit: int, items_after: int | None) -> None:
+    def __init__(
+        self, message: str, *, items: int, limit: int, items_after: int | None,
+        by_reason: dict[str, int] | None = None,
+    ) -> None:
         super().__init__(message)
         self.items = items
         self.limit = limit
         self.items_after = items_after
+        self.by_reason = dict(by_reason or {})
 
 
 class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
@@ -3180,6 +3184,16 @@ class ProtocolCatalog:
                         + (f". 한 번 더 분석해도 {after}건이었어요" if isinstance(after, int)
                            else "")
                         + ". 이 문서는 다시 분석하거나 절차가 있는 쪽만 올리는 편이 나아요.")
+                    by_reason = too_many.get("by_reason")
+                    ocr_values = (by_reason or {}).get(REVIEW_REASON_OCR_VALUE, 0) \
+                        if isinstance(by_reason, dict) else 0
+                    if isinstance(ocr_values, int) and ocr_values * 2 >= int(too_many.get("items") or 0) > 0:
+                        # Most of them are OCR values no second engine confirmed:
+                        # reading again does not change those; say what does.
+                        message += (
+                            f" 그중 {ocr_values}건은 OCR 엔진 하나만 읽었거나 두 엔진이 다르게 읽은 "
+                            "쪽의 숫자예요 — 두 OCR 엔진(VOINEY_LAB_OCR_PROVIDERS=clova,google)이 "
+                            "모두 읽거나 절차가 있는 쪽만 올리면 줄어요.")
                 unlabelled = _unlabelled_pieces_ko(events)
                 if failure_code == "protocol_analysis_piece_conflict" and unlabelled:
                     message = (
@@ -3610,7 +3624,8 @@ class ProtocolCatalog:
                 return again, again_id
         too_many = ProtocolAnalysisTooManyItemsError(
             "The analysis asks a person about too many items.",
-            items=count, limit=limit, items_after=None if after is None else after[0])
+            items=count, limit=limit, items_after=None if after is None else after[0],
+            by_reason=by_reason)
         self._record_analysis_failure(revision, analysis_id, too_many)
         raise too_many
 
@@ -3978,7 +3993,8 @@ class ProtocolCatalog:
         if isinstance(exc, ProtocolAnalysisTooManyItemsError):
             # Lane RV2, decision c: the counts the guidance rests on.
             failure_payload["review_items"] = {
-                "items": exc.items, "limit": exc.limit, "items_after": exc.items_after}
+                "items": exc.items, "limit": exc.limit, "items_after": exc.items_after,
+                "by_reason": exc.by_reason}
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {

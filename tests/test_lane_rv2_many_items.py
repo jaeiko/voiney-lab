@@ -19,7 +19,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tests.test_lane_rv_review_pending import _CatalogCase
+from tests.test_lane_rv2_auto_resolve import SCAN_TEXT, _OcrCase, _TwoEngineOcr, delta_answer
+from tests.test_lane_rv_review_pending import _CatalogCase, _RawModel
 from voiney_lab.experiment_protocol_analysis import (
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
@@ -115,7 +116,8 @@ class TooManyItemsTests(_ManyCase):
         self.assertEqual(self.events("protocol_analysis_review_pending"), [])
         (failed,) = self.events("protocol_analysis_failed")
         self.assertEqual(failed["failure_code"], "protocol_analysis_too_many_review_items")
-        self.assertEqual(failed["review_items"], {"items": 30, "limit": 12, "items_after": 14})
+        self.assertEqual(failed["review_items"], {
+            "items": 30, "limit": 12, "items_after": 14, "by_reason": {"not_in_source": 30}})
         draft = self.catalog.review_draft(self.protocol_id)
         self.assertEqual(draft["cards"], [])
         line = self.catalog.pipeline_status(self.protocol_id)
@@ -149,6 +151,25 @@ class TooManyItemsTests(_ManyCase):
         (skipped,) = self.events("protocol_analysis_auto_reanalysis")
         self.assertEqual((skipped["status"], skipped["planned_calls"], skipped["call_cap"]),
                          ("skipped_over_call_cap", 1, 0))
+
+
+class ManyOcrValuesTests(_OcrCase):
+    def test_the_guidance_names_the_ocr_when_its_values_are_most_of_the_items(self) -> None:
+        values = ", ".join(f"{index} mL" for index in range(1, 15))
+        step = f"2. Add {values}."
+        scan = SCAN_TEXT.replace("2. Spin the tube at 4000 rpm for 5 min.", step)
+        answer = delta_answer(self.sha256, step_two=step)
+        self.catalog.run_ocr(self.protocol_id, _TwoEngineOcr(engines=("google",), text=scan),
+                             ocr_id="ocr-" + "a" * 32)
+        self.catalog.request_analysis(self.protocol_id, "analysis-" + "a" * 32)
+        with self.assertRaises(ProtocolAnalysisTooManyItemsError):
+            self.catalog.analyze(self.protocol_id, _RawModel(answer, answer),
+                                 analysis_id="analysis-" + "a" * 32)
+        (failed,) = self.events("protocol_analysis_failed")
+        self.assertEqual(failed["review_items"]["by_reason"], {"ocr_value": 15})
+        message = self.catalog.pipeline_status(self.protocol_id)["message"]
+        self.assertIn("그중 15건은 OCR 엔진 하나만 읽었거나 두 엔진이 다르게 읽은 쪽의 숫자예요", message)
+        self.assertIn("VOINEY_LAB_OCR_PROVIDERS=clova,google", message)
 
 
 class LongDocumentTests(_CatalogCase):
