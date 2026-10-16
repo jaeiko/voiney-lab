@@ -31,6 +31,7 @@ from voiney_lab import pdf_text_engine
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
     AUTO_RESOLVED_OCR_TWO_ENGINES,
+    BLOCKED_FAILURE_CODE,
     MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
     OCR_VALUE_ENGINES_DIFFER,
@@ -47,6 +48,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
     REVIEW_ITEM_KINDS,
+    REVIEW_REASON_BLOCKED,
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASON_VALUE_CHANGED,
@@ -56,12 +58,14 @@ from voiney_lab.experiment_protocol_analysis import (
     analysis_pieces,
     analyze_protocol_extraction,
     analyze_protocol_piece,
+    blocked_pages_ko,
     check_analysis_page_count,
     check_pieced_page_count,
     join_piece_analyses,
     prepare_protocol_analysis_request,
     replace_at_paths,
     review_item_id,
+    safety_block_provider,
     verify_step_timers,
 )
 from voiney_lab.experiment_protocol_pdf import (
@@ -457,13 +461,15 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
     words = " · ".join(
         f"{REVIEW_REASONS_KO.get(reason, reason)} {count}"
         for reason, count in by_reason.items()
-        if reason != REVIEW_REASON_PIECE_FAILED
+        if reason not in {REVIEW_REASON_PIECE_FAILED, REVIEW_REASON_BLOCKED}
     )
     line = f"검토 대기 · 확인 필요 {len(items)}건"
     if words:
         line += f"({words})"
-    for pages in failed_pages:
-        line += f" · {pages['first_page']}–{pages['last_page']}쪽 분석 실패"
+    for flag in flags:
+        if flag.first_page is not None:
+            # "41–59쪽 분석 실패", or lane RV2 decision f's "구글 안전 필터에 막혀 …".
+            line += f" · {flag.reason_ko}"
     return {
         "analysis_id": payload.get("analysis_id"),
         "recorded_at": event.recorded_at,
@@ -726,6 +732,12 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "누르면 문서 전체를 새로 분석합니다(조각 수만큼 분석 모델 호출 비용이 듭니다). 원문은 "
         "바뀌지 않습니다."
     ),
+    # Lane RV2, decision f.
+    BLOCKED_FAILURE_CODE: (
+        "모델 공급자의 안전 필터가 이 원문을 읽지 못하게 막았습니다(같은 요청은 다시 보내도 "
+        "같게 막힙니다). 막힌 쪽을 빼고 실험에 쓸 절차가 있는 쪽만 골라 PDF 로 만들어 다시 "
+        "올리거나, 안전 필터 설정이 바뀐 뒤 '분석 다시 시도'를 누르세요. 원문은 바뀌지 않습니다."
+    ),
 }
 #: What a person does with an analysis waiting for review (lane RV, a).
 REVIEW_PENDING_ACTION_KO = (
@@ -859,6 +871,7 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
         f"원문이 {MAX_PIECED_ANALYSIS_PAGES}쪽을 넘어 분석하지 않았어요. 분석할 쪽 범위를 "
         "줄여야 합니다."),
     "protocol_analysis_piece_failed": "일부 조각 분석 실패",
+    BLOCKED_FAILURE_CODE: "모델 공급자의 안전 필터에 막혀 분석하지 못했어요.",
     "protocol_analysis_piece_conflict": (
         "조각을 합치다 같은 쪽을 두 조각이 서로 다르게 읽은 곳이 있어 결과를 쓰지 않았습니다."),
     "analysis_cancelled": "분석이 취소되었습니다.",
@@ -1230,7 +1243,36 @@ def _failed_pieces_ko(events: Sequence[Any]) -> str | None:
     return ", ".join(pages) or None
 
 
+def _latest_failure_payload(events: Sequence[Any]) -> dict[str, object]:
+    return next(
+        (event.payload for event in reversed(events)
+         if event.event_type == _ANALYSIS_FAILED_EVENT and isinstance(event.payload, dict)),
+        {},
+    )
+
+
+def _blocked_provider(events: Sequence[Any]) -> str | None:
+    blocked = _latest_failure_payload(events).get("blocked")
+    return str(blocked.get("provider")) if isinstance(blocked, dict) else None
+
+
+def _blocked_pieces_ko(events: Sequence[Any]) -> str | None:
+    """The failed pieces the safety filter blocked, said as such (lane RV2, f)."""
+
+    pieces = _latest_failure_payload(events).get("failed_pieces")
+    words = [
+        blocked_pages_ko(piece["first_page"], piece["last_page"])
+        for piece in pieces or () if isinstance(piece, dict)
+        and piece.get("failure_code") == BLOCKED_FAILURE_CODE
+        and isinstance(piece.get("first_page"), int)
+    ] if isinstance(pieces, list) else []
+    return " · ".join(words) or None
+
+
 def _piece_failure_code(exc: BaseException) -> str:
+    if safety_block_provider(exc) is not None:
+        # Lane RV2, decision f: the provider's safety filter, by name.
+        return BLOCKED_FAILURE_CODE
     code = getattr(exc, "code", None)
     if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
         return code
@@ -3012,6 +3054,12 @@ class ProtocolCatalog:
                 if failure_code == "protocol_analysis_piece_failed" and failed_pieces:
                     # Lane AN, decision 2: "일부 조각 분석 실패 · 41–59쪽".
                     message += f" · {failed_pieces}"
+                    blocked = _blocked_pieces_ko(events)
+                    if blocked:
+                        message += f" · {blocked}"
+                if failure_code == BLOCKED_FAILURE_CODE and page_count is not None:
+                    # Lane RV2, decision f: "구글 안전 필터에 막혀 1–12쪽을 분석하지 못했어요."
+                    message = blocked_pages_ko(1, page_count, _blocked_provider(events)) + "."
                 if retry.get("state") == "failed" and truncated_how:
                     message += (f" {truncated_how} 자동으로 한 번 다시 보냈지만 "
                                 f"자동 재시도({retry_count})도 실패했습니다.")
@@ -3503,6 +3551,11 @@ class ProtocolCatalog:
                         return analyze_protocol_piece(
                             extraction, piece, observed.model, review_unverified=True)
                     except Exception as exc:  # noqa: BLE001 - sent once more by itself
+                        if safety_block_provider(exc) is not None:
+                            # Lane RV2, decision f: a prompt the safety filter
+                            # blocks is blocked again the same way (lane AN2
+                            # measured it three times); it is not sent again.
+                            raise
                         retry_model, retry_payload = observed.retry()
                         outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
                             **chunk, "status": "in_progress", "attempt": 2,
@@ -3578,7 +3631,9 @@ class ProtocolCatalog:
                 extraction, passed, [drafts[piece.index] for piece in passed],
                 review_unverified=True,
                 failed_pieces=tuple(
-                    (piece, _piece_failure_code(failures[piece.index])) for piece in failed),
+                    (piece, _piece_failure_code(failures[piece.index]),
+                     safety_block_provider(failures[piece.index]))
+                    for piece in failed),
             )
         except ProtocolAnalysisPieceConflictError as exc:
             append(f"pieces-conflict-{analysis_id}", _MERGE_CONFLICT_EVENT, {
@@ -3675,6 +3730,10 @@ class ProtocolCatalog:
         failure_code = getattr(exc, "code", "analysis_failed")
         if not isinstance(failure_code, str) or not failure_code:
             failure_code = "analysis_failed"
+        blocked_by = safety_block_provider(exc)
+        if blocked_by is not None:
+            # Lane RV2, decision f: named for what it is.
+            failure_code = BLOCKED_FAILURE_CODE
         failure_digest = hashlib.sha256(
             analysis_id.encode("utf-8")
         ).hexdigest()[:24]
@@ -3684,6 +3743,8 @@ class ProtocolCatalog:
         }
         if truncated:
             failure_payload["truncated"] = True
+        if blocked_by is not None:
+            failure_payload["blocked"] = {"provider": blocked_by}
         repair = getattr(exc, "response_repair", None)
         if repair is not None:
             # Lane EV3, decision 1: this attempt was read after a repair of
@@ -5671,7 +5732,8 @@ def _card_choices(
                                needs="source_lines_and_text" if lines else "text"))
         return "value_changed", question, choices, {"change": change, "proposal": candidate}
     if kind == "pages":
-        return "failed_pages", (
+        blocked = any(reason.get("reason") == REVIEW_REASON_BLOCKED for reason in reasons)
+        return "blocked_pages" if blocked else "failed_pages", (
             f"{reasons[0].get('reason_ko') if reasons else '분석하지 못한 쪽'}. "
             "이 쪽에 실험할 단계가 없나요?"), [
             _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),

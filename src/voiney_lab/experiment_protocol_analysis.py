@@ -3243,8 +3243,12 @@ REVIEW_REASON_AMBIGUOUS_REPEAT = "ambiguous_repeat"
 REVIEW_REASON_NOT_IN_SOURCE = "not_in_source"
 REVIEW_REASON_PIECE_FAILED = "piece_failed"
 #: Lane RV2 (human decision 2026-10-16). A value read by OCR that the two
-#: engines did not both read alike (decision b).
+#: engines did not both read alike (decision b); pages the provider's safety
+#: filter would not let the model read (decision f).
 REVIEW_REASON_OCR_VALUE = "ocr_value"
+REVIEW_REASON_BLOCKED = "blocked_pages"
+#: The failure code of an analysis or a piece the provider blocked (f).
+BLOCKED_FAILURE_CODE = "protocol_analysis_blocked"
 #: An item that states a value a person fixed (lane RV2, decision d): it is
 #: asked again during the review; never stored with an analysis.
 REVIEW_REASON_VALUE_CHANGED = "value_changed"
@@ -3256,6 +3260,7 @@ REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_PIECE_FAILED: "조각 실패 쪽",
     REVIEW_REASON_OCR_VALUE: "OCR 값 확인",
     REVIEW_REASON_VALUE_CHANGED: "고친 값이 들어 있음",
+    REVIEW_REASON_BLOCKED: "분석 못 한 쪽",
 }
 #: Why an OCR value waits (decision b): the two engines read the page's
 #: numbers differently, or only one engine read the page.
@@ -3322,8 +3327,8 @@ class ReviewFlag:
     first_page: int | None = None
     last_page: int | None = None
     #: What the card needs besides the reason (lane RV2): an OCR value's
-    #: words and the items that state it (b), the value a person fixed (d).
-    #: JSON values only.
+    #: words and the items that state it (b), the value a person fixed (d),
+    #: the provider that blocked a piece (f). JSON values only.
     extra: dict[str, object] | None = dataclass_field(
         default=None, compare=False, hash=False)
 
@@ -3331,6 +3336,9 @@ class ReviewFlag:
     def reason_ko(self) -> str:
         if self.reason == REVIEW_REASON_PIECE_FAILED and self.first_page is not None:
             return f"{self.first_page}–{self.last_page}쪽 분석 실패"
+        if self.reason == REVIEW_REASON_BLOCKED and self.first_page is not None:
+            return blocked_pages_ko(
+                self.first_page, self.last_page, (self.extra or {}).get("provider"))
         if self.reason == REVIEW_REASON_OCR_VALUE:
             return OCR_VALUE_REASONS_KO.get(self.reason_code, REVIEW_REASONS_KO[self.reason])
         return REVIEW_REASONS_KO.get(self.reason, self.reason)
@@ -3370,6 +3378,35 @@ class ReviewFlag:
             if isinstance(payload.get("last_page"), int) else None,
             extra=dict(payload["extra"]) if isinstance(payload.get("extra"), dict) else None,
         )
+
+
+def blocked_pages_ko(first_page: int, last_page: int | None, provider: object = None) -> str:
+    """"구글 안전 필터에 막혀 41–59쪽을 분석하지 못했어요" (lane RV2, decision f)."""
+
+    who = "구글" if str(provider or "google").casefold() in {
+        "google", "gemini", "vertex", "vertexai"} else "모델 공급자의"
+    pages = (f"{first_page}쪽" if last_page in (None, first_page)
+             else f"{first_page}–{last_page}쪽")
+    return f"{who} 안전 필터에 막혀 {pages}을 분석하지 못했어요"
+
+
+def safety_block_provider(error: BaseException | None) -> str | None:
+    """The provider whose safety filter blocked this call, or None (lane RV2, f).
+
+    Lane AN2 found the 315-page document's empty answers were Gemini prompt
+    blocks (``block_reason`` SAFETY), the same on every resend; lane GM's
+    adapter raises them as a ``ModelProviderError`` of kind ``blocked``. The
+    analysis model wraps it, so the cause chain is read.
+    """
+
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if getattr(error, "kind", None) == "blocked":
+            provider = getattr(error, "provider", None)
+            return str(provider) if provider else "unknown"
+        error = error.__cause__ or error.__context__
+    return None
 
 
 def _path_parts(path: str) -> list[tuple[str, int | None]]:
@@ -3455,16 +3492,24 @@ def review_flags_for(
     return tuple(flags)
 
 
-def piece_review_flag(piece: "AnalysisPiece", failure_code: str) -> ReviewFlag:
-    """The flag of a long document's piece that failed: its pages (lane RV, a)."""
+def piece_review_flag(
+    piece: "AnalysisPiece", failure_code: str, provider: str | None = None,
+) -> ReviewFlag:
+    """The flag of a long document's piece that failed: its pages (lane RV, a).
 
+    A piece the provider's safety filter blocked (lane RV2, decision f) is
+    "분석 못 한 쪽" and names the filter.
+    """
+
+    blocked = failure_code == BLOCKED_FAILURE_CODE
     return ReviewFlag(
         item_id=f"pages:{piece.first_page}-{piece.last_page}",
-        reason=REVIEW_REASON_PIECE_FAILED,
+        reason=REVIEW_REASON_BLOCKED if blocked else REVIEW_REASON_PIECE_FAILED,
         field="pages",
         reason_code=failure_code,
         first_page=piece.first_page,
         last_page=piece.last_page,
+        extra={"provider": provider} if blocked else None,
     )
 
 
@@ -4833,7 +4878,7 @@ def join_piece_analyses(
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     review_unverified: bool = False,
-    failed_pieces: Sequence[tuple[AnalysisPiece, str]] = (),
+    failed_pieces: Sequence[tuple[AnalysisPiece, str] | tuple[AnalysisPiece, str, str | None]] = (),
 ) -> ProtocolAnalysisDraft:
     """Join the pieces' analyses in page order and check the result as a whole.
 
@@ -4946,7 +4991,7 @@ def join_piece_analyses(
         verified_evidence_count=evidence_count,
         review_flags=(
             *review_flags_for(verified, extraction, refused),
-            *(piece_review_flag(piece, code) for piece, code in failed_pieces),
+            *(piece_review_flag(*failed) for failed in failed_pieces),
         ),
         auto_resolved=tuple(
             {**entry, "kept": renamed.get(str(entry["kept"]), entry["kept"])}
