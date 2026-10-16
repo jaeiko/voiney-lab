@@ -1828,8 +1828,13 @@ async function restartExperimentFromCheckpoint(){
   return true;
  }catch(error){if(status)status.textContent=researcherErrorMessage(error?.message,fallback);setDisabled(button,false);return false;}
 }
+// Lane FX3 decision 1: the experiment list and timeline answer in any
+// order. Each load takes the next number; an answer whose load is no longer
+// the latest is dropped, so the startup list (no experiment chosen) coming
+// back after the server named the running experiment cannot clear it.
+let experimentLoadSeq=0;
 async function loadExperimentTimeline(sessionId=currentExperimentSessionId){
- const target=$("experiment-event-timeline");
+ const target=$("experiment-event-timeline"),seq=++experimentLoadSeq;
  if(!sessionId){
   if(target){target.replaceChildren();target.appendChild(workspaceRow("진행 중인 실험 없음","분석을 통과한 프로토콜을 선택해 새 실험을 시작하세요."));}
   currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;currentExperimentProtocolRevision=null;currentExperimentStepLabel=null;currentExperimentCompletedStepCount=0;currentExperimentRecovery=null;
@@ -1837,9 +1842,11 @@ async function loadExperimentTimeline(sessionId=currentExperimentSessionId){
  }
  try{
   const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(sessionId)}/timeline`,{cache:"no-store"}),data=await response.json();
+  if(seq!==experimentLoadSeq)return false;
   if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"타임라인을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));
   return renderExperimentTimeline(data);
  }catch(error){
+  if(seq!==experimentLoadSeq)return false;
   if(target){target.replaceChildren();target.appendChild(workspaceRow("타임라인 오류",researcherErrorMessage(error?.message,"타임라인을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요.")));}
   setText("experiment-resume-disclosure","실험 상태를 복구하지 못했습니다. 서버 상태가 변경되었다고 가정하지 말고 타임라인을 새로고침해 주세요.");
   if($("experiment-resume-disclosure"))$("experiment-resume-disclosure").hidden=false;
@@ -1848,8 +1855,10 @@ async function loadExperimentTimeline(sessionId=currentExperimentSessionId){
 }
 async function loadExperimentSessions(preferredId=currentExperimentSessionId){
  const select=$("experiment-session-select");if(!select)return false;
+ const seq=++experimentLoadSeq;
  try{
   const response=await workspaceFetch("/api/workspace/experiments",{cache:"no-store"}),data=await response.json();
+  if(seq!==experimentLoadSeq)return false;
   if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));
   const experiments=Array.isArray(data.experiments)?data.experiments:[];select.replaceChildren();
   const empty=document.createElement("option");empty.value="";empty.textContent=experiments.length?"실험 고르기":"진행 중인 실험 없음";select.appendChild(empty);
@@ -1859,6 +1868,7 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
   }
   const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";return selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
  }catch(error){
+  if(seq!==experimentLoadSeq)return false;
   select.replaceChildren();const option=document.createElement("option");option.value="";option.textContent="실험 세션 로드 실패";select.appendChild(option);setText("experiment-capture-status",researcherErrorMessage(error?.message,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));return false;
  }
 }
