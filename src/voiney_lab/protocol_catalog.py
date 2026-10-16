@@ -49,6 +49,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_ITEM_KINDS,
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
+    REVIEW_REASON_VALUE_CHANGED,
     REVIEW_REASONS_KO,
     ReviewFlag,
     analysis_piece_concurrency,
@@ -4117,7 +4118,7 @@ class ProtocolCatalog:
             ):
                 continue
             decision = {**event.payload, "recorded_at": event.recorded_at,
-                        "event_id": event.event_id}
+                        "event_id": event.event_id, "sequence_id": event.sequence_id}
             item_id = str(decision.get("item_id"))
             if decision.get("action") == "memo":
                 memos[item_id] = decision
@@ -4126,6 +4127,101 @@ class ProtocolCatalog:
             else:
                 decisions[item_id] = decision
         return decisions, memos
+
+    def _value_change_links(
+        self,
+        revision: ProtocolRevisionRecord,
+        target: _ReviewTarget,
+        decisions: dict[str, dict[str, object]],
+    ) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+        """The items a fixed value makes wait for a person again (lane RV2, d).
+
+        Human decision 2026-10-16: a value a person fixed is said by the
+        step sentence, not by the value record (lane RV judgement 11), so
+        every item that states the old value -- the step sentence, its
+        sub-actions, and the step's timer; for an OCR value, every item on
+        its page that states it -- is asked again, with the sentence the
+        server makes by putting the new value in the old one's place when
+        the old value stands in it exactly once (otherwise a person writes
+        it). A decision on such an item made before the fix no longer
+        counts. Returns the links by item and the decisions that still
+        count. A safety statement is never linked: its words never change.
+        """
+
+        records = _review_records(target.protocol)
+        by_id = {record.item_id: record for record in records}
+        ocr_flags = {flag.item_id: flag for flag in target.flags
+                     if flag.reason == REVIEW_REASON_OCR_VALUE}
+        table = self._review_timer_table(revision, target)
+        links: dict[str, list[dict[str, object]]] = {}
+        for item_id, decision in decisions.items():
+            value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+            original = decision.get("original") if isinstance(decision.get("original"), dict) else {}
+            new, old = value.get("text"), original.get("text")
+            if decision.get("action") != "fix" or not isinstance(new, str) or not isinstance(old, str):
+                continue
+            if item_id in ocr_flags:
+                extra = ocr_flags[item_id].extra or {}
+                linked = [
+                    other for other in extra.get("items") or ()
+                    if other in by_id and by_id[other].kind in _FIXABLE_KINDS]
+            elif item_id in by_id and by_id[item_id].kind in {"value", "duration"}:
+                record = by_id[item_id]
+                linked = [
+                    other.item_id for other in records
+                    if other.item_id != item_id
+                    and other.kind in _FIXABLE_KINDS - {"value", "duration"}
+                    and _same_scope(other, record)]
+            else:
+                continue
+            old_tokens = [token for token, _ in ocr_value_tokens(old)]
+            new_values = ocr_value_tokens(new)
+            removed = [token for token in old_tokens
+                       if token not in {token for token, _ in new_values}]
+            added = [words for token, words in new_values if token not in old_tokens]
+            if not removed:
+                continue
+            sequence = decision.get("sequence_id")
+            stated: list[tuple[str, str, int | None]] = []
+            for other in linked:
+                record = by_id[other]
+                text = _record_words(record) or ""
+                spans = [span for span in _ocr_value_spans(text) if span[0] in removed]
+                if not spans:
+                    continue
+                candidate = None
+                if len(spans) == 1 and len(removed) == 1 and len(added) == 1:
+                    _, start, end = spans[0]
+                    candidate = text[:start] + added[0] + text[end:]
+                stated.append((other, candidate, None))
+                step = record.step
+                if step is not None and record.kind in {"step", "sub_action"}:
+                    timers = table.for_step(step.step_id)
+                    if any(token in removed for timer in timers
+                           for token, _ in ocr_value_tokens(timer.literal)):
+                        stated.append((
+                            f"timer:{step.step_id}", None,
+                            _duration_seconds(added[0]) if len(added) == 1 else None))
+            for other, candidate, seconds in stated:
+                link = {"source_item": item_id, "from": old, "to": new,
+                        "candidate": candidate, "candidate_seconds": seconds}
+                if link not in links.setdefault(other, []):
+                    links[other].append(link)
+                earlier = decisions.get(other)
+                if (
+                    earlier is not None and isinstance(sequence, int)
+                    and isinstance(earlier.get("sequence_id"), int)
+                    and earlier["sequence_id"] < sequence
+                ):
+                    earlier["stale"] = True
+        for item_links in links.values():
+            if len(item_links) > 1:
+                for link in item_links:
+                    link["candidate"] = None
+        return links, {
+            item_id: decision for item_id, decision in decisions.items()
+            if not decision.get("stale")
+        }
 
     def _review_timer_table(
         self, revision: ProtocolRevisionRecord, target: _ReviewTarget,
@@ -4148,6 +4244,7 @@ class ProtocolCatalog:
         memos: dict[str, dict[str, object]],
         *,
         timer_steps: Sequence[str] = (),
+        links: dict[str, list[dict[str, object]]] | None = None,
     ) -> list[dict[str, object]]:
         """Every item of the target as the review screen shows it.
 
@@ -4161,6 +4258,13 @@ class ProtocolCatalog:
         flags_by_item: dict[str, list[ReviewFlag]] = {}
         for flag in target.flags:
             flags_by_item.setdefault(flag.item_id, []).append(flag)
+        for item_id, item_links in (links or {}).items():
+            # Lane RV2, decision d: an item that states a value a person
+            # fixed waits for a person again.
+            for link in item_links:
+                flags_by_item.setdefault(item_id, []).append(ReviewFlag(
+                    item_id=item_id, reason=REVIEW_REASON_VALUE_CHANGED,
+                    field="text", reason_code=REVIEW_REASON_VALUE_CHANGED, extra=link))
         origins = target.origins or {}
         items: list[dict[str, object]] = []
 
@@ -4383,7 +4487,8 @@ class ProtocolCatalog:
                 if entry.development_only else "검토할 분석이 아직 없습니다.")
             return base
         decisions, memos = self._review_decisions(revision, target)
-        items = self._review_items(revision, target, decisions, memos)
+        links, decisions = self._value_change_links(revision, target, decisions)
+        items = self._review_items(revision, target, decisions, memos, links=links)
         pending = [
             item["item_id"] for item in items
             if item["needs_review"] and item["item_id"] not in decisions
@@ -4686,9 +4791,10 @@ class ProtocolCatalog:
             raise ProtocolReviewTargetChangedError(
                 "The analysis under review changed; read the review again.")
         decisions, memos = self._review_decisions(revision, target)
+        links, decisions = self._value_change_links(revision, target, decisions)
         item_id = request.get("item_id")
         items = {item["item_id"]: item for item in self._review_items(
-            revision, target, decisions, memos,
+            revision, target, decisions, memos, links=links,
             timer_steps=(
                 (item_id[len("timer:"):],)
                 if isinstance(item_id, str) and item_id.startswith("timer:") else ()),
@@ -4805,7 +4911,8 @@ class ProtocolCatalog:
             raise ProtocolReviewTargetChangedError(
                 "The analysis under review changed; read the review again.")
         decisions, memos = self._review_decisions(revision, target)
-        items = self._review_items(revision, target, decisions, memos)
+        links, decisions = self._value_change_links(revision, target, decisions)
+        items = self._review_items(revision, target, decisions, memos, links=links)
         pending = [
             item["item_id"] for item in items
             if item["needs_review"] and item["item_id"] not in decisions
@@ -5402,6 +5509,48 @@ def _record_words(record: "_ReviewRecord") -> str | None:
     return words if isinstance(words, str) else None
 
 
+def _same_scope(record: "_ReviewRecord", value: "_ReviewRecord") -> bool:
+    """Whether ``record`` is one of the records a value's sentence lives in:
+    its step's records, or, for a value outside any step, its owner."""
+
+    if value.step is not None:
+        return record.step is not None and record.step.step_id == value.step.step_id
+    return value.path.startswith(record.path + ".")
+
+
+def _ocr_value_spans(text: str) -> list[tuple[str, int, int]]:
+    """Each value ``text`` states as (token, start, end) in ``text``; empty
+    when the comparison form does not keep the text's positions."""
+
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("μ", "µ")
+    if len(normalized) != len(text):
+        return []
+    return [
+        (match[1] + _OCR_UNIT_SPELLINGS.get(match[2] or "", match[2] or ""),
+         match.start(), match.end())
+        for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized)
+    ]
+
+
+_DURATION_WORDS = re.compile(
+    r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(s|sec|secs|seconds?|min|mins|minutes?|h|hr|hrs|hours?"
+    r"|초|분|시간)\s*$", re.IGNORECASE)
+_DURATION_UNIT_SECONDS = {"s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1, "초": 1,
+                          "min": 60, "mins": 60, "minute": 60, "minutes": 60, "분": 60,
+                          "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+                          "시간": 3600}
+
+
+def _duration_seconds(words: str) -> int | None:
+    """Whole seconds of a value that is one duration ("10 min", "90 s"), or None."""
+
+    match = _DURATION_WORDS.match(words)
+    if match is None:
+        return None
+    seconds = float(match[1]) * _DURATION_UNIT_SECONDS[match[2].casefold()]
+    return int(seconds) if seconds.is_integer() and 1 <= seconds <= _MAX_TIMER_SECONDS else None
+
+
 def ocr_engine_names(provider: object) -> tuple[str, ...]:
     """The OCR engines a provider calls, as far as it says (lane RV2, b)."""
 
@@ -5495,6 +5644,32 @@ def _card_choices(
     reasons = [reason for reason in item.get("reasons") or () if isinstance(reason, dict)]
     request = lambda action, **extra: {"item_id": item_id, "action": action, **extra}
     choices: list[dict[str, object]] = []
+    changed = [
+        reason["extra"] for reason in reasons
+        if reason.get("reason") == REVIEW_REASON_VALUE_CHANGED and isinstance(reason.get("extra"), dict)
+    ]
+    if changed:
+        # Decision d: a value a person fixed is stated here too; the server's
+        # sentence with the new value, or a person writes it.
+        link = changed[0]
+        candidate, seconds = link.get("candidate"), link.get("candidate_seconds")
+        lines = source is not None and source.get("verified") is False
+        change = {"from": link.get("from"), "to": link.get("to"), "source_item": link.get("source_item")}
+        question = (f"{link.get('from')} → {link.get('to')}(으)로 고쳤어요. "
+                    f"이 {item['kind_ko']}에도 그 값이 있어요. 이렇게 바꿀까요?")
+        if kind == "timer":
+            if isinstance(seconds, int):
+                choices.append(_choice("fix_proposed", "이렇게 바꿔요",
+                                       request("fix", seconds=seconds), primary=True))
+            choices.append(_choice("fix", "다시 고칠게요", request("fix"), needs="seconds"))
+            return "value_changed", question, choices, {
+                "change": change, "proposal": seconds and _duration_words(seconds)}
+        if isinstance(candidate, str):
+            choices.append(_choice("fix_proposed", "이렇게 바꿔요", request("fix", text=candidate),
+                                   needs="source_lines" if lines else None, primary=True))
+        choices.append(_choice("fix", "다시 고칠게요", request("fix"),
+                               needs="source_lines_and_text" if lines else "text"))
+        return "value_changed", question, choices, {"change": change, "proposal": candidate}
     if kind == "pages":
         return "failed_pages", (
             f"{reasons[0].get('reason_ko') if reasons else '분석하지 못한 쪽'}. "

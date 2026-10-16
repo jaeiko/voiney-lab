@@ -3245,6 +3245,9 @@ REVIEW_REASON_PIECE_FAILED = "piece_failed"
 #: Lane RV2 (human decision 2026-10-16). A value read by OCR that the two
 #: engines did not both read alike (decision b).
 REVIEW_REASON_OCR_VALUE = "ocr_value"
+#: An item that states a value a person fixed (lane RV2, decision d): it is
+#: asked again during the review; never stored with an analysis.
+REVIEW_REASON_VALUE_CHANGED = "value_changed"
 REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_EVIDENCE_NOT_FOUND: "근거를 못 찾음",
     REVIEW_REASON_OCR_UNCLEAR: "OCR 흐림",
@@ -3252,6 +3255,7 @@ REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_NOT_IN_SOURCE: "원문에 없음",
     REVIEW_REASON_PIECE_FAILED: "조각 실패 쪽",
     REVIEW_REASON_OCR_VALUE: "OCR 값 확인",
+    REVIEW_REASON_VALUE_CHANGED: "고친 값이 들어 있음",
 }
 #: Why an OCR value waits (decision b): the two engines read the page's
 #: numbers differently, or only one engine read the page.
@@ -3318,7 +3322,8 @@ class ReviewFlag:
     first_page: int | None = None
     last_page: int | None = None
     #: What the card needs besides the reason (lane RV2): an OCR value's
-    #: words and the items that state it (b). JSON values only.
+    #: words and the items that state it (b), the value a person fixed (d).
+    #: JSON values only.
     extra: dict[str, object] | None = dataclass_field(
         default=None, compare=False, hash=False)
 
