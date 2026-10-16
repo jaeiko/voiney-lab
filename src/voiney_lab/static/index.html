@@ -144,7 +144,7 @@
     .procedure-card .run-card-question,.procedure-card .run-card-notice{margin:0;color:var(--muted);font-size:1rem;line-height:1.5rem}
     .procedure-card .run-card-body{display:-webkit-box;margin:0;overflow:hidden;color:var(--ink);font-size:1.25rem;line-height:1.75rem;font-weight:600;white-space:pre-line;-webkit-line-clamp:6;-webkit-box-orient:vertical}
     .run-card-more{display:flex;flex-direction:column;align-items:flex-start;gap:.35rem;padding-top:.5rem;border-top:1px dashed var(--border-accent)}
-    /* Lane UI3 decision 1 (2026-10-14): what the server tells the screen about the last turn -- the next step (M2), the values a note read back in large type (M3a), a value set against the source's (M3b, a record the server kept as a deviation), and the candidates asked back (M5b). The candidates are said, not tapped: the server takes no typed turn, so they are a list, not buttons. */
+    /* Lane UI3 decision 1 (2026-10-14): what the server tells the screen about the last turn -- the next step (M2), the values a note read back in large type (M3a), a value set against the source's (M3b, a record the server kept as a deviation), and the candidates asked back (M5b). Lane FX3 decision 4: each candidate is a button; a tap goes to the server, which takes it as the words of the next turn when it is one it asked back. */
     .run-next-step{display:none}
     body[data-view="during"] .run-next-step:not([hidden]){display:block;margin:0;color:var(--muted);font-size:1.125rem;line-height:1.625rem;font-weight:600}
     .run-card-values{display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin:0}
@@ -155,13 +155,15 @@
     .procedure-card .run-card-deviation .run-tag{border-color:var(--warning-ink);color:var(--warning-ink)}
     .run-card-choices-label{margin:0;color:var(--muted);font-size:1rem;line-height:1.5rem;font-weight:600}
     .run-card-choices{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:0;list-style:none}
-    .run-card-choices li{display:inline-flex;align-items:center;min-height:48px;padding:0 1rem;border:2px solid var(--ink);border-radius:2px;background:var(--paper);color:var(--ink);font-size:1.25rem;line-height:1.5rem;font-weight:700}
+    .run-card-choices li{display:inline-flex;align-items:center;min-height:48px;margin:0;padding:0}
+    .run-card-choices button{min-height:48px;padding:0 1rem;border:2px solid var(--ink);border-radius:2px;background:var(--paper);color:var(--ink);font:inherit;font-size:1.25rem;line-height:1.5rem;font-weight:700;cursor:pointer}
+    .run-card-choices button:active{background:var(--ink);color:var(--on-ink)}
     @media (orientation:landscape) and (max-height:480px){
      .procedure-card .run-card-value{font-size:2rem;line-height:2.5rem}
      body[data-view="during"] .run-next-step:not([hidden]){font-size:1rem;line-height:1.375rem}
      /* A phone on its side has no room for both: while a card answers the last turn, the next step waits. */
      body[data-view="during"] .run-left:has(> .run-card:not([hidden])) .run-next-step{display:none}
-     .run-card-choices li{min-height:40px;font-size:1.125rem}
+     .run-card-choices li,.run-card-choices button{min-height:40px;font-size:1.125rem}
     }
     /* The timer: 도는 중, 1분 남음 (a heavier frame and bar), 끝남 · 지남 (inverted), 없음 (muted). */
     body[data-view="during"] .run-timer{grid-area:timer;display:flex;flex-direction:column;justify-content:center;gap:.75rem;min-width:0;padding:1rem;border-left:1px solid var(--border);outline:4px solid transparent;outline-offset:-4px;color:var(--ink);container-type:inline-size}
@@ -1582,6 +1584,17 @@ function renderRunNextStep(){
  const text=nonemptyText(sentence)?`다음 단계: ${normalizePresentationText(sentence).replace(/\s+/g," ").trim()}`:"";
  line.textContent=text;line.hidden=!text;return text||null;
 }
+// Lane FX3 decision 4: a tapped candidate goes to the server, which takes it
+// as the next turn's words only if the last reply asked it back; its refusal
+// (the server's words) stays on the card it was tapped on.
+let clarifyChoiceRefusal=null;
+function chooseClarifyCandidate(turnId,name){
+ const accepted=acceptedSessionConfiguration;
+ if(!sessionActive||!accepted||socket?.readyState!==WebSocket.OPEN||!Number.isInteger(turnId)||!nonemptyText(name))return false;
+ clarifyChoiceRefusal=null;
+ sendControl("client.clarify_choice",{configuration_id:accepted.configuration_id,generation:accepted.server_generation,turn_id:turnId,candidate:name});
+ return true;
+}
 function renderRunCard(){
  const card=$("run-card");if(!card)return null;
  const state=curatedProtocolState,entry=runCardKey?runTurns.get(runCardKey):null;
@@ -1602,7 +1615,7 @@ function renderRunCard(){
  if(told.deviation){const line=document.createElement("p");line.className="run-card-deviation";line.setAttribute?.("role","status");const tag=document.createElement("span");tag.className="run-tag";tag.textContent="기준치와 다름";line.appendChild(tag);line.append(`원문 ${told.deviation.sources.join(" · ")}`);card.appendChild(line);}
  const bodyText=runCardTextWithoutChoices(entry.text,told.candidates);
  if(nonemptyText(bodyText)){const body=document.createElement("p");body.className="run-card-body";body.textContent=bodyText;card.appendChild(body);}
- if(told.candidates.length){const label=document.createElement("p");label.className="run-card-choices-label";label.textContent="후보 · 말로 고르기";card.appendChild(label);const list=document.createElement("ul");list.className="run-card-choices";list.setAttribute?.("aria-label","되묻기 후보 · 말로 고르기");for(const name of told.candidates){const item=document.createElement("li");item.textContent=name;list.appendChild(item);}card.appendChild(list);}
+ if(told.candidates.length){const label=document.createElement("p");label.className="run-card-choices-label";label.textContent=clarifyChoiceRefusal?.turnId===entry.turnId?clarifyChoiceRefusal.text:"후보 · 누르거나 말해서 고르기";label.setAttribute?.("role","status");card.appendChild(label);const list=document.createElement("ul");list.className="run-card-choices";list.setAttribute?.("aria-label","되묻기 후보 · 누르거나 말해서 고르기");for(const name of told.candidates){const item=document.createElement("li"),button=document.createElement("button");button.type="button";button.className="run-card-choice";button.textContent=name;button.addEventListener?.("click",()=>{chooseClarifyCandidate(entry.turnId,name);});item.appendChild(button);list.appendChild(item);}card.appendChild(list);}
  if(entry.research&&nonemptyText(entry.research.text)){const more=document.createElement("div");more.className="run-card-more";more.appendChild(runBadge(entry.research.label,entry.research.label==="일반 설명"?"is-general":""));const text=document.createElement("p");text.className="run-card-body";text.textContent=entry.research.text;more.appendChild(text);card.appendChild(more);}
  if(entry.text.length+(entry.research?.text?.length||0)>RUN_CARD_LONG){const again=document.createElement("button");again.type="button";again.className="run-card-again";again.textContent="대화 보기에서 전부 읽기";again.addEventListener?.("click",()=>{openRunSheet("conversation");});card.appendChild(again);}
  card.hidden=false;return entry.kind;
@@ -4232,6 +4245,7 @@ async function onMessage(e,generation,current){
   const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof m.text!=="string")return;activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=`words-${m.turn_id}`;const labels={voice_calibration:"목소리 맞추기",ambient_suggestion:"제안"};if(node.children?.[0])node.children[0].textContent="서버 안내";node.querySelector(".transcript").textContent=labels[m.words_kind]||"서버 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="서버가 말함 · 음성으로 중단 가능";renderState("THINKING");
  }
  if(m.type==="speaker.calibration"){renderVoiceCalibration(m);renderMicCheck();}
+ if(m.type==="clarify.choice.refused"){const accepted=acceptedSessionConfiguration;if(accepted&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&nonemptyText(m.text)){clarifyChoiceRefusal={turnId:m.turn_id,text:normalizePresentationText(m.text)};renderRunCard();}}
  // Lane VT decisions 1-2: the server tells the step timer before it is asked -- on the screen (a timer's end with a short sound) and, when the setting has it said, as a turn of its own like the greeting.
  if(m.type==="protocol.timer.notice"){
   const accepted=acceptedSessionConfiguration;if(!accepted||m.configuration_id!==accepted.configuration_id||typeof m.text!=="string")return;renderTimerNotice(m);

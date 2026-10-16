@@ -6,7 +6,8 @@ clarification asked back, the values a note read back and the deviation a note
 recorded (lane RA, decision f). The page draws them as the drafts M2, M3a, M3b
 and M5b show them -- and only them: what the server does not send is not drawn,
 and the three per-turn fields go on the card of the turn whose state carried
-them. The candidates are a list, not buttons: the server takes no typed turn.
+them. The candidates were a list, not buttons, while the server took no
+typed turn; since lane FX3 (decision 4) each is a button in that list.
 """
 
 from __future__ import annotations
@@ -121,7 +122,7 @@ assert(cls("run-card-value").length===1,"a state without a turn dropped the valu
 
 class CandidateTests(unittest.TestCase):
 
-    def test_candidates_are_a_list_to_say_not_buttons(self) -> None:
+    def test_candidates_are_a_list_of_buttons_to_tap_or_say(self) -> None:
         result = run_page_script(TURNS + r"""
 await step();
 await told(13,"그거 얼마나 넣어?","reference_clarification_required",{text:"어떤 시약인가요?\n1. TBST\n2. Blocking buffer",...said},{clarify_candidates:["TBST","Blocking buffer"]});
@@ -129,8 +130,9 @@ assert(card().dataset.kind==="clarify",`kind: ${card().dataset.kind}`);
 const list=cls("run-card-choices");
 assert(list.length===1&&list[0].tagName==="ul",`list: ${list.map(item=>item.tagName)}`);
 assert(list[0].children.map(item=>`${item.tagName}:${item.textContent}`).join("|")==="li:TBST|li:Blocking buffer",list[0].children.map(item=>item.textContent).join("|"));
-assert(kids(card()).every(item=>item.tagName!=="button"),"a candidate became a button the server cannot take");
-assert(cls("run-card-choices-label")[0].textContent==="후보 · 말로 고르기","the list does not say how to choose");
+// Lane FX3 decision 4: the server takes a tapped candidate now.
+assert(kids(card()).filter(item=>item.tagName==="button").map(item=>item.textContent).join("|")==="TBST|Blocking buffer","the candidates are not buttons");
+assert(cls("run-card-choices-label")[0].textContent==="후보 · 누르거나 말해서 고르기","the list does not say how to choose");
 assert(cls("run-card-body")[0].textContent==="어떤 시약인가요?",`the numbered list was repeated: ${cls("run-card-body")[0].textContent}`);
 await told(14,"그거 얼마나 넣어?","reference_clarification_required",{text:"'그거'가 어떤 시약인지 말해 주세요.",...said},{clarify_candidates:[]});
 assert(cls("run-card-choices").length===0,"candidates were drawn with none sent");

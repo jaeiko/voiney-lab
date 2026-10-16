@@ -5472,6 +5472,26 @@ class ListenerSession:
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
+    def start_chosen_turn(self)->int|None:
+        """Open the next turn for a candidate tapped on the screen (lane FX3, decision 4).
+
+        As a committed utterance opens one -- the next turn id, this
+        session's generation, committed now -- so the words then run
+        exactly where an utterance's words run. Only while listening with
+        nothing begun; None otherwise (speaking, answering, cooling down).
+        """
+
+        self.refresh_cooldown()
+        if not self.active or self.state is not TurnState.IDLE:
+            return None
+        turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=turn_id
+        self.turn_generations[turn_id]=self.generation
+        self.endpoint_at=self.clock()
+        self.turn_committed_at[turn_id]=self.endpoint_at
+        self.framer=FrameBuffer(); self._reset_interrupt_input()
+        self.detector.reset(TurnState.PROCESSING)
+        return turn_id
 
 
 def cascade_transcription_context(
@@ -8203,6 +8223,16 @@ async def _prompt_voice_calibration(
     )
     log.info("voice calibration prompted on screen turn_id=%s",turn_id)
     return True
+
+
+#: Lane FX3, decision 4: what the screen shows when a tapped candidate is
+#: not taken -- the session changed, it is not one the last reply asked
+#: back, or something is under way.
+CLARIFY_CHOICE_REFUSED_WORDS={
+    "stale_session":"세션이 바뀌어 이 후보를 고를 수 없어요.",
+    "not_asked":"지금 묻고 있는 후보가 아니에요. 말로 말씀해 주세요.",
+    "busy":"지금은 고를 수 없어요. 말이 끝난 뒤 다시 눌러 주세요.",
+}
 
 
 #: Lane SP1, decision 3: the suggestion after this many ignored voices in
@@ -11443,6 +11473,59 @@ async def voice_socket(websocket:WebSocket):
                 else:
                     session.track_visual_task(asyncio.create_task(
                         _prompt_voice_calibration(sender,session)))
+            elif control["type"]=="client.clarify_choice":
+                # Lane FX3, decision 4: a candidate the last reply asked back,
+                # tapped instead of said. Taken only if it is one of them and
+                # nothing else is under way; then it runs as an utterance's
+                # words do -- the same rules, confirmations and state changes.
+                curated=session.curated_protocol_session
+                chosen_turn_id=None
+                if not (
+                    session.active and session.accepted_mode=="cascade"
+                    and curated is not None
+                    and control["configuration_id"]==session.accepted_configuration_id
+                    and control["generation"]==session.generation
+                ):
+                    refusal="stale_session"
+                elif (words:=curated.clarify_choice(control["candidate"])) is None:
+                    refusal="not_asked"
+                elif (
+                    (task is not None and not task.done()) or session.calibration_pending
+                    or (chosen_turn_id:=session.start_chosen_turn()) is None
+                ):
+                    refusal="busy"
+                else:
+                    refusal=None
+                if refusal is not None:
+                    log.info(
+                        "client.clarify_choice refused reason=%s asked_turn_id=%s",
+                        refusal,control["turn_id"])
+                    await websocket.send_text(event(
+                        "clarify.choice.refused",
+                        configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,turn_id=control["turn_id"],
+                        reason=refusal,text=CLARIFY_CHOICE_REFUSED_WORDS[refusal]))
+                    continue
+                assert chosen_turn_id is not None
+                chosen_generation=session.turn_generations[chosen_turn_id]
+                log.info(
+                    "client.clarify_choice taken turn_id=%s asked_turn_id=%s",
+                    chosen_turn_id,control["turn_id"])
+                await websocket.send_text(event(
+                    "speech.start",turn_id=chosen_turn_id,generation=chosen_generation,
+                    state=session.state.value,voiced_frames=0,total_frames=0,
+                    prefix_frames_retained=0,duration_ms=0,reason=None,forced=False,
+                    input="clarify_choice"))
+                progress=session.advance_turn_progress(
+                    chosen_turn_id,chosen_generation,"listening")
+                if progress is not None:
+                    await websocket.send_text(event("turn.state",**progress))
+                task=asyncio.create_task(run_turn_safely(
+                    websocket,session,b"",chosen_turn_id,0,0,0,
+                    accepted_transcription=Transcription(
+                        words,session.last_confirmed_language
+                        or session.accepted_language),
+                    accepted_stt_ms=0))
             elif control["type"]=="client.audio_ready":
                 valid=bool(
                     session.active and session.accepted_mode=="cascade"
