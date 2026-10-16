@@ -15,6 +15,7 @@ import queue
 import re
 import secrets
 import time
+import unicodedata
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
@@ -29,8 +30,11 @@ from voiney_lab import experiment_protocol as domain
 from voiney_lab import pdf_text_engine
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
+    AUTO_RESOLVED_OCR_TWO_ENGINES,
     MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
+    OCR_VALUE_ENGINES_DIFFER,
+    OCR_VALUE_ONE_ENGINE,
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
     PieceConcurrencyGate,
@@ -43,6 +47,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
     REVIEW_ITEM_KINDS,
+    REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASONS_KO,
     ReviewFlag,
@@ -81,6 +86,16 @@ from voiney_lab.experiment_protocol_store import (  # noqa: E402
     _encode_domain as _encode_stored_record,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
+# The number-and-unit tokens the two OCR engines' readings were compared by
+# (lane P2/P3): an OCR value item (lane RV2, decision b) is named by the same
+# token, so "both engines read it alike" means the comparison's own sense.
+from voiney_lab.protocol_ocr_providers import (  # noqa: E402
+    _NUMBER_WITH_UNIT as _OCR_NUMBER_WITH_UNIT,
+    _UNIT_SPELLINGS as _OCR_UNIT_SPELLINGS,
+    CLOVA as OCR_CLOVA,
+    GOOGLE as OCR_GOOGLE,
+    numeric_tokens,
+)
 from voiney_lab.protocol_ocr import (
     OcrResult,
     ProtocolOcrProvider,
@@ -1517,6 +1532,8 @@ class ProtocolCatalog:
                     "languages": completed.get("languages", []),
                     "warnings": completed.get("warnings", []),
                     "page_count": completed.get("page_count"),
+                    "engines": completed.get("engines"),
+                    "pages_read_by_both": completed.get("pages_read_by_both"),
                     "pages": (
                         pages
                         if include_text
@@ -1698,6 +1715,12 @@ class ProtocolCatalog:
                 expected_page_count=extraction.page_count,
             )
             payload = {"ocr_id": ocr_id, **ocr_result_payload(validated)}
+            # Lane RV2, decision b: which engines read the document and which
+            # pages both of them read, so an OCR value both read alike can be
+            # settled without a person. Absent from results stored before.
+            engines = ocr_engine_names(provider)
+            payload["engines"] = list(engines)
+            payload["pages_read_by_both"] = pages_read_by_both(validated, engines)
             self.store.append_event(
                 f"ocr-completed-{ocr_id}",
                 protocol_id,
@@ -3267,7 +3290,7 @@ class ProtocolCatalog:
                 revision, failure_code, repaired=repair is not None
             ):
                 if kept is not None:
-                    return self._store_review_pending(revision, kept, analysis_id)
+                    return self._store_analysis_result(revision, kept, analysis_id)
                 raise
             # The same request again: the same extraction to the same model,
             # nothing about the failure added (lane AN, decision 1) -- except
@@ -3310,7 +3333,7 @@ class ProtocolCatalog:
                 if kept is not None:
                     # Lane RV, decision a: the first answer's items wait for a
                     # person rather than the analysis being thrown away.
-                    return self._store_review_pending(revision, kept, retry_of)
+                    return self._store_analysis_result(revision, kept, retry_of)
                 raise
         return self._store_analysis_result(revision, draft, analysis_id)
 
@@ -3323,8 +3346,13 @@ class ProtocolCatalog:
         pieces: tuple[AnalysisPiece, ...] = (),
     ) -> ProtocolCatalogEntry:
         """A passed analysis as the next analysis revision; one with items a
-        person must check as a review-pending ledger event (lane RV, a)."""
+        person must check as a review-pending ledger event (lane RV, a).
 
+        Lane RV2, decision b: the values read by OCR are settled or made
+        items first, so an analysis whose OCR values are not confirmed does
+        not run as it is."""
+
+        draft = self._with_ocr_value_flags(revision, draft)
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
@@ -3373,6 +3401,9 @@ class ProtocolCatalog:
             payload["pieces"] = [piece.public_dict() for piece in pieces]
         if draft.response_repair is not None:
             payload["response_repaired"] = draft.response_repair.public_dict()
+        if draft.auto_resolved:
+            # Lane RV2, decision b: what the server settled itself, and why.
+            payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
         self.store.append_event(
             f"analysis-review-pending-{analysis_id}",
             protocol_id,
@@ -3589,6 +3620,9 @@ class ProtocolCatalog:
         if pieces:
             # Lane AN, decision 2: read in these pieces and joined.
             ready_payload["pieces"] = [piece.public_dict() for piece in pieces]
+        if draft.auto_resolved:
+            # Lane RV2, decision b: what the server settled itself, and why.
+            ready_payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
         if draft.response_repair is not None:
             # Lane EV3, decision 1: the response was read after its brackets
             # were repaired in one of the two fixed shapes; every check above
@@ -4175,6 +4209,9 @@ class ProtocolCatalog:
                 allowed[:0] = ["confirm", "enter"] if needs_review else ["enter"]
             elif kind == "timer":
                 allowed[:0] = ["fix", "clear"] if text is not None else ["enter"]
+            elif kind == "ocr_value":
+                # Lane RV2, decision b: the value as read, or as the image shows it.
+                allowed[:0] = ["confirm", "fix"]
             if needs_review and kind in _CLEARABLE_KINDS:
                 allowed.insert(allowed.index("memo"), "clear")
             decision = decisions.get(item_id)
@@ -4270,11 +4307,48 @@ class ProtocolCatalog:
             if item_id in listed:
                 continue
             flag = flags[0]
+            if flag.reason == REVIEW_REASON_OCR_VALUE:
+                items.append(self._ocr_value_view(view, flag, extraction))
+                continue
             items.append(view(
                 item_id, "pages" if flag.field == "pages" else "construct",
                 flag.reason_ko,
                 extra={"first_page": flag.first_page, "last_page": flag.last_page}))
         return items
+
+    @staticmethod
+    def _ocr_value_view(
+        view: Callable[..., dict[str, object]], flag: ReviewFlag,
+        extraction: ProtocolPdfExtraction,
+    ) -> dict[str, object]:
+        """An OCR value item (lane RV2, decision b): the value as read, the
+        items that state it, its page's lines that print it and the OCR
+        value boxes to show it beside its piece of the image."""
+
+        extra = flag.extra or {}
+        page = flag.page_number
+        token = str(extra.get("token") or "")
+        lines: list[int] = []
+        if isinstance(page, int) and 1 <= page <= extraction.page_count:
+            lines = [
+                number for number, (_, _, line) in enumerate(
+                    _page_lines(extraction.pages[page - 1].text), start=1)
+                if token in {key for key, _ in ocr_value_tokens(line)}
+            ]
+        item = view(flag.item_id, "ocr_value", extra.get("value"), extra={
+            "page": page, "token": token, "linked_items": list(extra.get("items") or ()),
+            "ocr_state": flag.reason_code,
+        })
+        item["source"] = {
+            "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
+            "verified": True,
+            "lines": ({"page": page, "first_line": lines[0], "last_line": lines[0]}
+                      if lines else None),
+            "value_lines": lines,
+            "value_boxes": list(extra.get("value_boxes") or ()),
+            "suggested_lines": None,
+        }
+        return item
 
     def review_draft(self, protocol_id: str) -> dict[str, object]:
         """What the review screen shows (lane RV, decision b): the target, its
@@ -4373,6 +4447,119 @@ class ProtocolCatalog:
             page["source_page_number"]: page for page in projection.get("pages") or ()
             if isinstance(page, dict) and isinstance(page.get("source_page_number"), int)
         }
+
+    def _ocr_page_states(
+        self, revision: ProtocolRevisionRecord, extraction: ProtocolPdfExtraction,
+    ) -> tuple[dict[int, str], dict[int, dict[str, object]]]:
+        """Each OCR page's state for its values, and the OCR pages (lane RV2, b).
+
+        ``agree``: both engines read the page and their numbers and units
+        were the same; ``differ``: both read it and they were not;
+        ``one_engine``: one engine read it -- one configured, the other
+        failed on the page, or an OCR result stored before the engines were
+        recorded.
+        """
+
+        ocr_numbers = [page.source_page_number for page in extraction.pages if page.ocr_derived]
+        if not ocr_numbers:
+            return {}, {}
+        projection = self._ocr_projection(
+            revision, self._source_extraction(revision), include_text=True)
+        pages = {
+            page["source_page_number"]: page for page in projection.get("pages") or ()
+            if isinstance(page, dict) and isinstance(page.get("source_page_number"), int)
+        }
+        both = projection.get("pages_read_by_both")
+        both = {page for page in both if isinstance(page, int)} if isinstance(both, list) else set()
+        states = {}
+        for number in ocr_numbers:
+            if (pages.get(number) or {}).get("numeric_review_required"):
+                states[number] = OCR_PAGE_DIFFER
+            elif number in both:
+                states[number] = OCR_PAGE_AGREE
+            else:
+                states[number] = OCR_PAGE_ONE_ENGINE
+        return states, pages
+
+    def _with_ocr_value_flags(
+        self, revision: ProtocolRevisionRecord, draft: ProtocolAnalysisDraft,
+    ) -> ProtocolAnalysisDraft:
+        """The draft with its OCR values settled or made items (lane RV2, b).
+
+        Every value an executed item states on an OCR page is named by its
+        page and token. Where both engines read the page alike and the
+        item's quote passed, it is settled and recorded with that reason;
+        otherwise it is one item a person checks, naming the items that
+        state it. Items already waiting for a person are left to their card.
+        """
+
+        extraction = draft.extraction
+        states, pages = self._ocr_page_states(revision, extraction)
+        if not states:
+            return draft
+        flagged = {flag.item_id for flag in draft.review_flags}
+        quote_refused = {flag.item_id for flag in draft.review_flags if flag.field == "evidence"}
+        values: dict[tuple[int, str], dict[str, object]] = {}
+        for record in _review_records(draft.protocol):
+            evidence = record.evidence
+            if (
+                record.kind in _OCR_VALUE_SKIPPED_KINDS or evidence is None
+                or record.item_id in flagged or record.evidence_item_id in quote_refused
+            ):
+                continue
+            quoted = [evidence.source_page_number]
+            if evidence.continued_on_page_number is not None:
+                quoted.append(evidence.continued_on_page_number)
+            if not any(page in states for page in quoted):
+                continue
+            text = _record_words(record)
+            if not text:
+                continue
+            label = record.step.source_label if record.kind == "step" and record.step else None
+            for token, words in ocr_value_tokens(text, label=label):
+                page = next(
+                    (number for number in quoted if 1 <= number <= extraction.page_count
+                     and token in numeric_tokens(extraction.pages[number - 1].text)),
+                    quoted[0])
+                if page not in states:
+                    continue
+                entry = values.setdefault((page, token), {"value": words, "items": []})
+                if record.item_id not in entry["items"]:
+                    entry["items"].append(record.item_id)
+        flags: list[ReviewFlag] = []
+        settled: list[dict[str, object]] = []
+        for (page, token), entry in values.items():
+            if states[page] == OCR_PAGE_AGREE:
+                settled.append({
+                    "kind": "ocr_value", "page": page, "token": token,
+                    "value": entry["value"], "items": list(entry["items"]),
+                    "reason": AUTO_RESOLVED_OCR_TWO_ENGINES,
+                })
+                continue
+            boxes = (pages.get(page) or {}).get("value_boxes") or ()
+            flags.append(ReviewFlag(
+                item_id=f"ocr_value:{page}:{token}",
+                reason=REVIEW_REASON_OCR_VALUE,
+                field="value",
+                reason_code=(OCR_VALUE_ENGINES_DIFFER if states[page] == OCR_PAGE_DIFFER
+                             else OCR_VALUE_ONE_ENGINE),
+                page_number=page,
+                extra={
+                    "value": entry["value"], "token": token, "items": list(entry["items"]),
+                    "value_boxes": [
+                        index for index, box in enumerate(boxes)
+                        if isinstance(box, dict) and token in {
+                            key for key, _ in ocr_value_tokens(str(box.get("text") or ""))}
+                    ],
+                },
+            ))
+        if not flags and not settled:
+            return draft
+        return replace(
+            draft,
+            review_flags=(*draft.review_flags, *flags),
+            auto_resolved=(*draft.auto_resolved, *settled),
+        )
 
     @staticmethod
     def _line_views(page: ProtocolPdfPage, ocr: dict[str, object]) -> list[dict[str, object]]:
@@ -4527,7 +4714,8 @@ class ProtocolCatalog:
                     raise ProtocolReviewError("A repeat count needs a whole number.")
                 value = {"count": count, "text": f"{count}회"}
             else:
-                limit = (_MAX_REVIEW_VALUE if item["kind"] in {"value", "duration", "missing_value"}
+                limit = (_MAX_REVIEW_VALUE
+                         if item["kind"] in {"value", "duration", "missing_value", "ocr_value"}
                          else _MAX_REVIEW_TEXT)
                 value = {"text": _clean_review_text(request.get("text"), limit=limit,
                                                     label="Reviewed text")}
@@ -4541,6 +4729,14 @@ class ProtocolCatalog:
             evidence = source_lines_excerpt(target.protocol.metadata.pdf,
                                             request.get("source_lines"))
             source_lines = {**request["source_lines"], "excerpt": evidence.source_excerpt}
+            suggested = source.get("suggested_lines")
+            if isinstance(suggested, dict) and suggested.get("unique") and all(
+                source_lines.get(key, source_lines.get("first_line")) == suggested.get(key)
+                for key in ("page", "first_line", "last_line")
+            ):
+                # Lane RV2, decision b: the lines the server narrowed it to,
+                # which a person said are right -- recorded as such.
+                source_lines["suggested_by_server"] = True
         elif request.get("source_lines") is not None:
             raise ProtocolReviewError("Source lines are asked only for an item whose quote was not found.")
         memo = None
@@ -4772,6 +4968,7 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
     "repeat_count": "반복 횟수",
     "timer": "단계 타이머",
     "pages": "분석 실패 쪽",
+    "ocr_value": "OCR 값",
 }
 #: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
 #: the source does not print, a memo beside an item, and taking a draft
@@ -4990,16 +5187,28 @@ def _quote_lines(evidence: domain.SourceEvidence, extraction: ProtocolPdfExtract
     return _lines_of_span(text, found, found + len(evidence.source_excerpt))
 
 
+#: Lane RV2, decision b: a suggested source line is the only candidate when
+#: it is this alike to the item's words and no other place on the pages
+#: looked at is within the margin of it. A person still presses [맞아요].
+SUGGESTION_UNIQUE_MIN = 0.8
+SUGGESTION_UNIQUE_MARGIN = 0.1
+
+
 def _suggested_lines(
     words: str, extraction: ProtocolPdfExtraction, pages: Sequence[int],
 ) -> dict[str, object] | None:
     """The source lines most like ``words`` on these pages: an AI suggestion
-    of where an item comes from, for a person to accept or change."""
+    of where an item comes from, for a person to accept or change.
+
+    ``unique`` (lane RV2, decision b) says the lines narrow to this one
+    place: at least ``SUGGESTION_UNIQUE_MIN`` alike, and no place that does
+    not overlap them within ``SUGGESTION_UNIQUE_MARGIN`` of it.
+    """
 
     target = " ".join(words.split()).casefold()
     if not target:
         return None
-    best: tuple[float, int, int, int] | None = None
+    candidates: list[tuple[float, int, int, int]] = []
     for page_number in dict.fromkeys(pages):
         if not isinstance(page_number, int) or not 1 <= page_number <= extraction.page_count:
             continue
@@ -5012,12 +5221,20 @@ def _suggested_lines(
                     continue
                 ratio = SequenceMatcher(None, target, " ".join(joined.split()).casefold(),
                                         autojunk=False).ratio()
-                if best is None or ratio > best[0]:
-                    best = (ratio, page_number, first + 1, last + 1)
-    if best is None or best[0] < 0.6:
+                candidates.append((ratio, page_number, first + 1, last + 1))
+    if not candidates:
         return None
+    best = max(candidates, key=lambda candidate: candidate[0])
+    if best[0] < 0.6:
+        return None
+    rivals = [
+        candidate for candidate in candidates
+        if candidate[0] >= best[0] - SUGGESTION_UNIQUE_MARGIN
+        and (candidate[1] != best[1] or candidate[3] < best[2] or candidate[2] > best[3])
+    ]
     return {"page": best[1], "first_line": best[2], "last_line": best[3],
-            "similarity": round(best[0], 2)}
+            "similarity": round(best[0], 2),
+            "unique": best[0] >= SUGGESTION_UNIQUE_MIN and not rivals}
 
 
 def source_lines_excerpt(
@@ -5152,6 +5369,91 @@ def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
     )
 
 
+# --- OCR values (lane RV2, decision b; human decision 2026-10-16) -----------
+#
+# A number OCR read is executed only when it is confirmed: both engines read
+# the page and their numbers and units were the same (the comparison lane P2
+# and P3 made, footer band and picture text left out), and the item's quote
+# passed the source check -- then it is settled without a person, the reason
+# recorded. Otherwise -- the engines' numbers differed on the page, or only
+# one engine read it -- each value an executed item states on that page is a
+# card. The comparison is kept per page, not per value, so on a page whose
+# numbers differ anywhere every value is asked.
+
+#: Page states an OCR page can be in for its values.
+OCR_PAGE_AGREE = "agree"
+OCR_PAGE_DIFFER = "differ"
+OCR_PAGE_ONE_ENGINE = "one_engine"
+#: The kinds whose words never run as values (their numbers are named by
+#: other records): a section heading, the document's metadata, a value the
+#: source leaves out, a timer spec (its duration is a value record) and a
+#: repeat count (its construct's words are).
+_OCR_VALUE_SKIPPED_KINDS = frozenset({
+    "section", "metadata", "missing_value", "timer_spec", "repeat_count",
+})
+_ENGINE_FAILED_WARNING = re.compile(r"^Page ([0-9]+): .+ failed;")
+
+
+def _record_words(record: "_ReviewRecord") -> str | None:
+    """The words of a reviewable record a person reads (and the run says)."""
+
+    field = _REVIEW_TEXT_FIELD.get(type(record.record))
+    words = getattr(record.record, field, None) if field else None
+    return words if isinstance(words, str) else None
+
+
+def ocr_engine_names(provider: object) -> tuple[str, ...]:
+    """The OCR engines a provider calls, as far as it says (lane RV2, b)."""
+
+    names = getattr(provider, "engine_names", ())
+    if not isinstance(names, (tuple, list)):
+        return ()
+    return tuple(name for name in names if name in {OCR_CLOVA, OCR_GOOGLE})
+
+
+def pages_read_by_both(result: OcrResult, engines: Sequence[str]) -> list[int]:
+    """The pages both engines read: OCR pages, with two engines configured,
+    on which neither engine failed (the provider warns of each failure)."""
+
+    if set(engines) != {OCR_CLOVA, OCR_GOOGLE}:
+        return []
+    failed = {
+        int(match[1]) for warning in result.warnings
+        if (match := _ENGINE_FAILED_WARNING.match(warning)) is not None
+    }
+    return [
+        page.source_page_number for page in result.pages
+        if page.provider in {OCR_CLOVA, OCR_GOOGLE}
+        and page.source_page_number not in failed
+    ]
+
+
+def ocr_value_tokens(text: str, *, label: str | None = None) -> list[tuple[str, str]]:
+    """The values ``text`` states, as (token, words): the token the two OCR
+    engines were compared by ("4000rpm", "37°c"), and the words as written.
+
+    A step's own number opening its sentence ("3.", "(2)", or its label) is
+    not a value.
+    """
+
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("μ", "µ")
+    shown = text if len(normalized) == len(text) else normalized
+    start = 0
+    opening = _LEADING_LABEL.match(normalized)
+    if opening is not None:
+        start = opening.end()
+    elif label and label.strip():
+        own = re.match(rf"\s*\(?{re.escape(label.strip().casefold())}[.)]?\s+", normalized)
+        if own is not None:
+            start = own.end()
+    found: list[tuple[str, str]] = []
+    for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized, start):
+        unit = match[2] or ""
+        found.append((match[1] + _OCR_UNIT_SPELLINGS.get(unit, unit),
+                      shown[match.start():match.end()]))
+    return found
+
+
 # --- Cards (lane RV2, decision a; human decision 2026-10-16) ----------------
 #
 # A person is asked item by item, one card at a time, by buttons: the
@@ -5181,8 +5483,10 @@ def _subject(word: object) -> str:
     return f"{text}가"
 
 
-def _card_choices(item: dict[str, object]) -> tuple[str, str, list[dict[str, object]]]:
-    """The card's type, its question and its choices for one item."""
+def _card_choices(
+    item: dict[str, object],
+) -> tuple[str, str, list[dict[str, object]], dict[str, object]]:
+    """The card's type, its question, its choices and what else it shows."""
 
     item_id = str(item["item_id"])
     kind = str(item["kind"])
@@ -5197,9 +5501,31 @@ def _card_choices(item: dict[str, object]) -> tuple[str, str, list[dict[str, obj
             "이 쪽에 실험할 단계가 없나요?"), [
             _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),
             _choice("reanalysis", "다시 분석", None, route="reanalysis"),
-        ]
+        ], {}
+    if kind == "ocr_value":
+        # Decision b: a number OCR read that the two engines did not both
+        # read alike; the image piece is beside it on the card.
+        value = item.get("text")
+        return "ocr_value", f"원문 그림에서 이 값이 {value} 맞나요?", [
+            _choice("confirm", f"{value} 맞아요", request("confirm"), primary=True),
+            _choice("fix", "직접 입력", request("fix"), needs="text"),
+        ], {"proposal": value}
     quote_refused = source is not None and source.get("verified") is False
-    if quote_refused:
+    suggested = source.get("suggested_lines") if source is not None else None
+    if quote_refused and isinstance(suggested, dict) and suggested.get("unique"):
+        # Decision b: the lines narrow to one place; the server proposes it
+        # and a person only says it is right.
+        lines = {key: suggested[key] for key in ("page", "first_line", "last_line")}
+        choices.append(_choice(
+            "confirm_suggested", "맞아요", request("confirm", source_lines=lines), primary=True))
+        choices.append(_choice(
+            "confirm_lines", "다른 줄이에요", request("confirm"), needs="source_lines"))
+        question = (f"이 {item['kind_ko']}의 근거는 원문 {lines['page']}쪽 "
+                    f"{lines['first_line']}번째 줄"
+                    + (f"부터 {lines['last_line']}번째 줄" if lines["last_line"] != lines["first_line"]
+                       else "") + "인가요?")
+        card_type = "evidence_suggested"
+    elif quote_refused:
         choices.append(_choice(
             "confirm_lines", "고른 줄이 맞아요", request("confirm"), needs="source_lines",
             primary=True))
@@ -5210,7 +5536,7 @@ def _card_choices(item: dict[str, object]) -> tuple[str, str, list[dict[str, obj
             choices.append(_choice("confirm", "맞아요", request("confirm"), primary=True))
         question = f"이 {_subject(item['kind_ko'])} 원문과 같나요?"
         card_type = "claim"
-    if "fix" in allowed:
+    if "fix" in allowed and card_type != "evidence_suggested":
         choices.append(_choice(
             "fix", "직접 고칠게요", request("fix"),
             needs="source_lines_and_text" if quote_refused else "text"))
@@ -5220,7 +5546,7 @@ def _card_choices(item: dict[str, object]) -> tuple[str, str, list[dict[str, obj
         # A step is never left empty (lane RV): one the source does not hold
         # is read again.
         choices.append(_choice("reanalysis", "다시 분석", None, route="reanalysis"))
-    return card_type, question, choices
+    return card_type, question, choices, {}
 
 
 def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
@@ -5235,7 +5561,7 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     asked = [item for item in items if item.get("needs_review")]
     cards = []
     for position, item in enumerate(asked, start=1):
-        card_type, question, choices = _card_choices(item)
+        card_type, question, choices, shown = _card_choices(item)
         source = item.get("source") if isinstance(item.get("source"), dict) else None
         cards.append({
             "card_id": item["item_id"],
@@ -5253,6 +5579,8 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
             "shown": item.get("text"),
             "source": source,
             "choices": choices,
+            "proposal": shown.get("proposal"),
+            "change": shown.get("change"),
             "memo_allowed": "memo" in item["allowed_actions"],
             "decided": item.get("decision") is not None,
             "decision": item.get("decision"),
@@ -5523,7 +5851,9 @@ def _apply_review(
             timers[step_id] = int(value["seconds"]) if action in {"fix", "enter"} else None
             reviewed = value.get("text") if action in {"fix", "enter"} else None
             spoken = value.get("text") if action in {"fix", "enter"} else None
-        elif kind == "pages":
+        elif kind in {"pages", "ocr_value"}:
+            # A check, not a record: a fixed OCR value changes the items that
+            # state it through their own decisions (decision d).
             pass
         elif kind == "missing_value" and action == "enter":
             reviewed = spoken = value.get("text")

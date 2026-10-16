@@ -21,6 +21,7 @@ import types
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
+from dataclasses import field as dataclass_field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, Union, get_args, get_origin, get_type_hints
@@ -667,6 +668,10 @@ class ProtocolAnalysisDraft:
     #: source, kept as the model read it, and each failed piece's pages.
     #: Empty for an analysis that passed every check.
     review_flags: tuple["ReviewFlag", ...] = ()
+    #: What the server settled without asking a person, each with its reason
+    #: (lane RV2, decision b): an OCR value both engines read alike, a step
+    #: two pieces read in the same words kept once. Recorded with the result.
+    auto_resolved: tuple[dict[str, object], ...] = ()
 
     @property
     def capability_policy_id(self) -> str:
@@ -3237,13 +3242,28 @@ REVIEW_REASON_OCR_UNCLEAR = "ocr_unclear"
 REVIEW_REASON_AMBIGUOUS_REPEAT = "ambiguous_repeat"
 REVIEW_REASON_NOT_IN_SOURCE = "not_in_source"
 REVIEW_REASON_PIECE_FAILED = "piece_failed"
+#: Lane RV2 (human decision 2026-10-16). A value read by OCR that the two
+#: engines did not both read alike (decision b).
+REVIEW_REASON_OCR_VALUE = "ocr_value"
 REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_EVIDENCE_NOT_FOUND: "근거를 못 찾음",
     REVIEW_REASON_OCR_UNCLEAR: "OCR 흐림",
     REVIEW_REASON_AMBIGUOUS_REPEAT: "애매한 반복",
     REVIEW_REASON_NOT_IN_SOURCE: "원문에 없음",
     REVIEW_REASON_PIECE_FAILED: "조각 실패 쪽",
+    REVIEW_REASON_OCR_VALUE: "OCR 값 확인",
 }
+#: Why an OCR value waits (decision b): the two engines read the page's
+#: numbers differently, or only one engine read the page.
+OCR_VALUE_ENGINES_DIFFER = "ocr_engines_differ"
+OCR_VALUE_ONE_ENGINE = "ocr_one_engine"
+OCR_VALUE_REASONS_KO: dict[str, str] = {
+    OCR_VALUE_ENGINES_DIFFER: "두 OCR 엔진이 이 쪽의 숫자를 다르게 읽음",
+    OCR_VALUE_ONE_ENGINE: "OCR 엔진 하나만 읽은 쪽",
+}
+#: What the server settled itself, by reason (decision b, "기록에 사유 남김").
+AUTO_RESOLVED_OCR_TWO_ENGINES = "ocr_two_engines_agree"
+AUTO_RESOLVED_SAME_STEP = "pieces_read_the_same_words"
 
 #: The records a person reviews one by one, by what names them: kind and the
 #: field holding the record's own id. A value, a duration and the like have
@@ -3297,11 +3317,17 @@ class ReviewFlag:
     matching_source_pages: tuple[int, ...] = ()
     first_page: int | None = None
     last_page: int | None = None
+    #: What the card needs besides the reason (lane RV2): an OCR value's
+    #: words and the items that state it (b). JSON values only.
+    extra: dict[str, object] | None = dataclass_field(
+        default=None, compare=False, hash=False)
 
     @property
     def reason_ko(self) -> str:
         if self.reason == REVIEW_REASON_PIECE_FAILED and self.first_page is not None:
             return f"{self.first_page}–{self.last_page}쪽 분석 실패"
+        if self.reason == REVIEW_REASON_OCR_VALUE:
+            return OCR_VALUE_REASONS_KO.get(self.reason_code, REVIEW_REASONS_KO[self.reason])
         return REVIEW_REASONS_KO.get(self.reason, self.reason)
 
     def public_dict(self) -> dict[str, object]:
@@ -3317,6 +3343,8 @@ class ReviewFlag:
         if self.first_page is not None:
             values["first_page"] = self.first_page
             values["last_page"] = self.last_page
+        if self.extra is not None:
+            values["extra"] = self.extra
         return values
 
     @classmethod
@@ -3335,6 +3363,7 @@ class ReviewFlag:
             if isinstance(payload.get("first_page"), int) else None,
             last_page=payload.get("last_page")
             if isinstance(payload.get("last_page"), int) else None,
+            extra=dict(payload["extra"]) if isinstance(payload.get("extra"), dict) else None,
         )
 
 
@@ -4684,6 +4713,7 @@ def _join_section_lists(
     shared_page: int,
     piece: AnalysisPiece,
     renamed: dict[str, str],
+    merged: list[dict[str, object]] | None = None,
 ) -> None:
     """Add one piece's sections after the ones joined so far, in place.
 
@@ -4726,12 +4756,22 @@ def _join_section_lists(
                     reason="overlap_step_differs",
                     first_page=piece.first_page, last_page=piece.first_page,
                 )
-            if _covers(previous_extent, extent):
-                renamed[step.step_id] = previous.step_id
-            elif _covers(extent, previous_extent):
-                # The later piece read the step whole (it saw the next page).
-                replaced[(section_index, step_index)] = replace(step, step_id=previous.step_id)
-                renamed[step.step_id] = previous.step_id
+            if _covers(previous_extent, extent) or _covers(extent, previous_extent):
+                if _covers(previous_extent, extent):
+                    renamed[step.step_id] = previous.step_id
+                else:
+                    # The later piece read the step whole (it saw the next page).
+                    replaced[(section_index, step_index)] = replace(
+                        step, step_id=previous.step_id)
+                    renamed[step.step_id] = previous.step_id
+                if merged is not None:
+                    # Lane RV2, decision b: kept once, recorded with why.
+                    merged.append({
+                        "kind": "same_step", "page": shared_page,
+                        "kept": previous.step_id, "joined": step.step_id,
+                        "same_words": previous_extent == extent,
+                        "reason": AUTO_RESOLVED_SAME_STEP,
+                    })
             else:
                 raise ProtocolAnalysisPieceConflictError(
                     "Two pieces quote the shared page's step differently.",
@@ -4811,6 +4851,7 @@ def join_piece_analyses(
     if len(pieces) != len(drafts) or not pieces:
         raise ProtocolAnalysisError("Protocol pieces and their analyses do not match.")
     renamed: dict[str, str] = {}
+    merged: list[dict[str, object]] = []
     sections: list[domain.ProtocolSection] = []
     before: list[Any] = []
     materials: list[Any] = []
@@ -4832,6 +4873,7 @@ def join_piece_analyses(
             _join_section_lists(
                 sections, protocol.sections, extraction=extraction,
                 shared_page=piece.first_page, piece=piece, renamed=renamed,
+                merged=merged,
             )
         _join_items(before, protocol.before_start, extraction)
         _join_items(materials, protocol.materials, extraction)
@@ -4901,6 +4943,9 @@ def join_piece_analyses(
             *review_flags_for(verified, extraction, refused),
             *(piece_review_flag(piece, code) for piece, code in failed_pieces),
         ),
+        auto_resolved=tuple(
+            {**entry, "kept": renamed.get(str(entry["kept"]), entry["kept"])}
+            for entry in merged),
     )
 
 
