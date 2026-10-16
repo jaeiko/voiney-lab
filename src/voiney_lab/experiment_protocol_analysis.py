@@ -21,6 +21,7 @@ import types
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
+from dataclasses import field as dataclass_field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, Union, get_args, get_origin, get_type_hints
@@ -38,6 +39,10 @@ from voiney_lab.experiment_protocol_store import (
     ProtocolStore,
     serialize_analysis,
 )
+# The store's canonical encoding of a domain record: the other piece's
+# reading of a passage two pieces read differently travels with its item
+# (lane RV2, decision e) in that form.
+from voiney_lab.experiment_protocol_store import _encode_domain as _encode_record  # noqa: E402
 
 
 MAX_SINGLE_PASS_INPUT_BYTES = 512 * 1024
@@ -667,6 +672,10 @@ class ProtocolAnalysisDraft:
     #: source, kept as the model read it, and each failed piece's pages.
     #: Empty for an analysis that passed every check.
     review_flags: tuple["ReviewFlag", ...] = ()
+    #: What the server settled without asking a person, each with its reason
+    #: (lane RV2, decision b): an OCR value both engines read alike, a step
+    #: two pieces read in the same words kept once. Recorded with the result.
+    auto_resolved: tuple[dict[str, object], ...] = ()
 
     @property
     def capability_policy_id(self) -> str:
@@ -3237,13 +3246,40 @@ REVIEW_REASON_OCR_UNCLEAR = "ocr_unclear"
 REVIEW_REASON_AMBIGUOUS_REPEAT = "ambiguous_repeat"
 REVIEW_REASON_NOT_IN_SOURCE = "not_in_source"
 REVIEW_REASON_PIECE_FAILED = "piece_failed"
+#: Lane RV2 (human decision 2026-10-16). A value read by OCR that the two
+#: engines did not both read alike (decision b); pages the provider's safety
+#: filter would not let the model read (decision f).
+REVIEW_REASON_OCR_VALUE = "ocr_value"
+REVIEW_REASON_BLOCKED = "blocked_pages"
+#: A passage two pieces of a long document read differently (decision e).
+REVIEW_REASON_READ_TWO_WAYS = "read_two_ways"
+#: The failure code of an analysis or a piece the provider blocked (f).
+BLOCKED_FAILURE_CODE = "protocol_analysis_blocked"
+#: An item that states a value a person fixed (lane RV2, decision d): it is
+#: asked again during the review; never stored with an analysis.
+REVIEW_REASON_VALUE_CHANGED = "value_changed"
 REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_EVIDENCE_NOT_FOUND: "근거를 못 찾음",
     REVIEW_REASON_OCR_UNCLEAR: "OCR 흐림",
     REVIEW_REASON_AMBIGUOUS_REPEAT: "애매한 반복",
     REVIEW_REASON_NOT_IN_SOURCE: "원문에 없음",
     REVIEW_REASON_PIECE_FAILED: "조각 실패 쪽",
+    REVIEW_REASON_OCR_VALUE: "OCR 값 확인",
+    REVIEW_REASON_VALUE_CHANGED: "고친 값이 들어 있음",
+    REVIEW_REASON_BLOCKED: "분석 못 한 쪽",
+    REVIEW_REASON_READ_TWO_WAYS: "두 가지로 읽힘",
 }
+#: Why an OCR value waits (decision b): the two engines read the page's
+#: numbers differently, or only one engine read the page.
+OCR_VALUE_ENGINES_DIFFER = "ocr_engines_differ"
+OCR_VALUE_ONE_ENGINE = "ocr_one_engine"
+OCR_VALUE_REASONS_KO: dict[str, str] = {
+    OCR_VALUE_ENGINES_DIFFER: "두 OCR 엔진이 이 쪽의 숫자를 다르게 읽음",
+    OCR_VALUE_ONE_ENGINE: "OCR 엔진 하나만 읽은 쪽",
+}
+#: What the server settled itself, by reason (decision b, "기록에 사유 남김").
+AUTO_RESOLVED_OCR_TWO_ENGINES = "ocr_two_engines_agree"
+AUTO_RESOLVED_SAME_STEP = "pieces_read_the_same_words"
 
 #: The records a person reviews one by one, by what names them: kind and the
 #: field holding the record's own id. A value, a duration and the like have
@@ -3297,11 +3333,22 @@ class ReviewFlag:
     matching_source_pages: tuple[int, ...] = ()
     first_page: int | None = None
     last_page: int | None = None
+    #: What the card needs besides the reason (lane RV2): an OCR value's
+    #: words and the items that state it (b), the value a person fixed (d),
+    #: the two readings of a passage (e), the provider that blocked a piece
+    #: (f). JSON values only.
+    extra: dict[str, object] | None = dataclass_field(
+        default=None, compare=False, hash=False)
 
     @property
     def reason_ko(self) -> str:
         if self.reason == REVIEW_REASON_PIECE_FAILED and self.first_page is not None:
             return f"{self.first_page}–{self.last_page}쪽 분석 실패"
+        if self.reason == REVIEW_REASON_BLOCKED and self.first_page is not None:
+            return blocked_pages_ko(
+                self.first_page, self.last_page, (self.extra or {}).get("provider"))
+        if self.reason == REVIEW_REASON_OCR_VALUE:
+            return OCR_VALUE_REASONS_KO.get(self.reason_code, REVIEW_REASONS_KO[self.reason])
         return REVIEW_REASONS_KO.get(self.reason, self.reason)
 
     def public_dict(self) -> dict[str, object]:
@@ -3317,6 +3364,8 @@ class ReviewFlag:
         if self.first_page is not None:
             values["first_page"] = self.first_page
             values["last_page"] = self.last_page
+        if self.extra is not None:
+            values["extra"] = self.extra
         return values
 
     @classmethod
@@ -3335,7 +3384,37 @@ class ReviewFlag:
             if isinstance(payload.get("first_page"), int) else None,
             last_page=payload.get("last_page")
             if isinstance(payload.get("last_page"), int) else None,
+            extra=dict(payload["extra"]) if isinstance(payload.get("extra"), dict) else None,
         )
+
+
+def blocked_pages_ko(first_page: int, last_page: int | None, provider: object = None) -> str:
+    """"구글 안전 필터에 막혀 41–59쪽을 분석하지 못했어요" (lane RV2, decision f)."""
+
+    who = "구글" if str(provider or "google").casefold() in {
+        "google", "gemini", "vertex", "vertexai"} else "모델 공급자의"
+    pages = (f"{first_page}쪽" if last_page in (None, first_page)
+             else f"{first_page}–{last_page}쪽")
+    return f"{who} 안전 필터에 막혀 {pages}을 분석하지 못했어요"
+
+
+def safety_block_provider(error: BaseException | None) -> str | None:
+    """The provider whose safety filter blocked this call, or None (lane RV2, f).
+
+    Lane AN2 found the 315-page document's empty answers were Gemini prompt
+    blocks (``block_reason`` SAFETY), the same on every resend; lane GM's
+    adapter raises them as a ``ModelProviderError`` of kind ``blocked``. The
+    analysis model wraps it, so the cause chain is read.
+    """
+
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if getattr(error, "kind", None) == "blocked":
+            provider = getattr(error, "provider", None)
+            return str(provider) if provider else "unknown"
+        error = error.__cause__ or error.__context__
+    return None
 
 
 def _path_parts(path: str) -> list[tuple[str, int | None]]:
@@ -3421,16 +3500,24 @@ def review_flags_for(
     return tuple(flags)
 
 
-def piece_review_flag(piece: "AnalysisPiece", failure_code: str) -> ReviewFlag:
-    """The flag of a long document's piece that failed: its pages (lane RV, a)."""
+def piece_review_flag(
+    piece: "AnalysisPiece", failure_code: str, provider: str | None = None,
+) -> ReviewFlag:
+    """The flag of a long document's piece that failed: its pages (lane RV, a).
 
+    A piece the provider's safety filter blocked (lane RV2, decision f) is
+    "분석 못 한 쪽" and names the filter.
+    """
+
+    blocked = failure_code == BLOCKED_FAILURE_CODE
     return ReviewFlag(
         item_id=f"pages:{piece.first_page}-{piece.last_page}",
-        reason=REVIEW_REASON_PIECE_FAILED,
+        reason=REVIEW_REASON_BLOCKED if blocked else REVIEW_REASON_PIECE_FAILED,
         field="pages",
         reason_code=failure_code,
         first_page=piece.first_page,
         last_page=piece.last_page,
+        extra={"provider": provider} if blocked else None,
     )
 
 
@@ -4597,11 +4684,19 @@ class ProtocolAnalysisPieceConflictError(ProtocolAnalysisError):
 
     code = "protocol_analysis_piece_conflict"
 
-    def __init__(self, message: str, *, reason: str, first_page: int, last_page: int) -> None:
+    def __init__(
+        self, message: str, *, reason: str, first_page: int, last_page: int,
+        unlabelled_pieces: Sequence["AnalysisPiece"] = (),
+        labelled_pieces: Sequence["AnalysisPiece"] = (),
+    ) -> None:
         super().__init__(message)
         self.reason = reason
         self.first_page = first_page
         self.last_page = last_page
+        #: For ``step_labelling_differs`` (lane RV2): the pieces that read
+        #: their steps without numbers, and those that numbered them.
+        self.unlabelled_pieces = tuple(unlabelled_pieces)
+        self.labelled_pieces = tuple(labelled_pieces)
 
 
 #: Ids a piece's analysis names (``*_id`` and ``*_ids`` fields) that are not
@@ -4684,17 +4779,32 @@ def _join_section_lists(
     shared_page: int,
     piece: AnalysisPiece,
     renamed: dict[str, str],
+    merged: list[dict[str, object]] | None = None,
+    readings: dict[str, dict[str, object]] | None = None,
 ) -> None:
     """Add one piece's sections after the ones joined so far, in place.
 
     On the page the two pieces share, a step both read is kept once: the
     reading whose quote covers the other's (the earlier piece's when they are
     the same). Steps whose quotes overlap without one covering the other are
-    two readings of one passage, and the join is refused. The piece's first
-    section continues the last one joined when both quote the same heading.
+    two readings of one passage, and the join is refused -- or, given
+    ``readings`` (lane RV2, decision e), the earlier piece's reading is kept
+    in place and the later piece's is recorded beside it, keyed by the kept
+    step's id, for a person to choose between. The piece's first section
+    continues the last one joined when both quote the same heading.
     ``renamed`` collects the ids of steps and sections dropped this way,
     mapped to the ids they were joined into.
     """
+
+    def read_two_ways(group: list[domain.ProtocolSourceStep], step, kind: str) -> None:
+        key = group[0].step_id
+        entry = readings.setdefault(key, {
+            "kept": [], "others": [], "page": shared_page, "piece": piece.index, "kind": kind})
+        for kept_step in group:
+            if kept_step.step_id not in entry["kept"]:
+                entry["kept"].append(kept_step.step_id)
+        entry["others"].append(step)
+        renamed[step.step_id] = key
 
     earlier = [
         (section_index, step_index, step, _source_extent(step.evidence, extraction))
@@ -4713,6 +4823,9 @@ def _join_section_lists(
                 kept.append(step)
                 continue
             if len(same) > 1:
+                if readings is not None:
+                    read_two_ways([item[2] for item in same], step, "several_steps")
+                    continue
                 raise ProtocolAnalysisPieceConflictError(
                     "One step of the shared page overlaps several steps of the earlier piece.",
                     reason="overlap_step_differs",
@@ -4721,17 +4834,32 @@ def _join_section_lists(
             section_index, step_index, previous, previous_extent = same[0]
             labels = {previous.source_label.strip(), step.source_label.strip()} - {""}
             if len(labels) > 1:
+                if readings is not None:
+                    read_two_ways([previous], step, "two_numbers")
+                    continue
                 raise ProtocolAnalysisPieceConflictError(
                     "The shared page's step carries two different numbers.",
                     reason="overlap_step_differs",
                     first_page=piece.first_page, last_page=piece.first_page,
                 )
-            if _covers(previous_extent, extent):
-                renamed[step.step_id] = previous.step_id
-            elif _covers(extent, previous_extent):
-                # The later piece read the step whole (it saw the next page).
-                replaced[(section_index, step_index)] = replace(step, step_id=previous.step_id)
-                renamed[step.step_id] = previous.step_id
+            if _covers(previous_extent, extent) or _covers(extent, previous_extent):
+                if _covers(previous_extent, extent):
+                    renamed[step.step_id] = previous.step_id
+                else:
+                    # The later piece read the step whole (it saw the next page).
+                    replaced[(section_index, step_index)] = replace(
+                        step, step_id=previous.step_id)
+                    renamed[step.step_id] = previous.step_id
+                if merged is not None:
+                    # Lane RV2, decision b: kept once, recorded with why.
+                    merged.append({
+                        "kind": "same_step", "page": shared_page,
+                        "kept": previous.step_id, "joined": step.step_id,
+                        "same_words": previous_extent == extent,
+                        "reason": AUTO_RESOLVED_SAME_STEP,
+                    })
+            elif readings is not None:
+                read_two_ways([previous], step, "two_quotes")
             else:
                 raise ProtocolAnalysisPieceConflictError(
                     "Two pieces quote the shared page's step differently.",
@@ -4781,6 +4909,105 @@ def _join_items(
         joined.append(item)
 
 
+def _cleared_titles_that_hold(protocol: domain.ExperimentProtocol) -> domain.ExperimentProtocol:
+    """``protocol`` without emptied-title records that no longer hold.
+
+    A section a piece read without its title and that the join then merged
+    into the earlier piece's section has that section's title; the record
+    of the emptied title is dropped, not carried onto a title that is there.
+    """
+
+    titles = {section.section_id: section.title_source_text for section in protocol.sections}
+    kept = tuple(
+        field for field in protocol.cleared_fields
+        if not (field.startswith("sections.") and field.endswith(".title_source_text"))
+        or titles.get(field[len("sections."):-len(".title_source_text")]) == ""
+    )
+    return protocol if kept == protocol.cleared_fields else replace(protocol, cleared_fields=kept)
+
+
+def _refuse_mixed_step_labels(
+    protocol: domain.ExperimentProtocol, pieces: Sequence[AnalysisPiece],
+) -> None:
+    """Refuse a joined analysis whose pieces numbered their steps differently.
+
+    Human decision 2026-10-05 (lane P3): steps are all labelled or all
+    unlabelled -- whether the source prints step numbers is a property of
+    the whole source. A long manual read in pieces can print numbers in one
+    part and none in another; the pieces each pass, and the joined analysis
+    is refused. Lane RV2 names that refusal and its pages
+    (``step_labelling_differs``) instead of calling it two readings of a page;
+    whether such a document may mix the two is a person's to decide.
+    """
+
+    styles: dict[int, set[bool]] = {}
+    for section in protocol.sections:
+        for step in section.steps:
+            head = step.step_id.split(".", 1)[0]
+            if head.startswith("p") and head[1:].isdigit():
+                styles.setdefault(int(head[1:]), set()).add(bool(step.source_label.strip()))
+    if len({style for found in styles.values() for style in found}) < 2:
+        return
+    by_index = {piece.index: piece for piece in pieces}
+    unlabelled = [by_index[index] for index, found in sorted(styles.items())
+                  if found == {False} and index in by_index]
+    labelled = [by_index[index] for index, found in sorted(styles.items())
+                if True in found and index in by_index]
+    raise ProtocolAnalysisPieceConflictError(
+        "The pieces number their steps differently.",
+        reason="step_labelling_differs",
+        first_page=1, last_page=protocol.metadata.pdf.page_count,
+        unlabelled_pieces=unlabelled, labelled_pieces=labelled,
+    )
+
+
+def _reading(step: domain.ProtocolSourceStep) -> dict[str, object]:
+    return {
+        "step_id": step.step_id, "label": step.source_label,
+        "text": step.instruction_source_text, "page": step.evidence.source_page_number,
+        "excerpt": step.evidence.source_excerpt,
+        "continued_page": step.evidence.continued_on_page_number,
+        "continued_excerpt": step.evidence.continued_excerpt,
+    }
+
+
+def _two_readings_flags(
+    protocol: domain.ExperimentProtocol, readings: dict[str, dict[str, object]],
+    renamed: dict[str, str],
+) -> tuple[ReviewFlag, ...]:
+    """One item per passage two pieces read differently (lane RV2, decision e).
+
+    The earlier piece's reading stands in the analysis; the later piece's
+    rides with the item (its steps in the store's encoding, the ids it names
+    renamed as the join renamed them) so that a person's "저쪽으로 읽기" can
+    put it in place.
+    """
+
+    steps = {step.step_id: step for section in protocol.sections for step in section.steps}
+    flags = []
+    for key, entry in readings.items():
+        kept = [steps[step_id] for step_id in entry["kept"] if step_id in steps]
+        if not kept:
+            continue
+        others = [_renamed_ids(step, lambda value: renamed.get(value, value))
+                  for step in entry["others"]]
+        flags.append(ReviewFlag(
+            item_id=f"step:{kept[0].step_id}",
+            reason=REVIEW_REASON_READ_TWO_WAYS,
+            field="reading",
+            reason_code="overlap_step_differs",
+            page_number=int(entry["page"]),
+            extra={
+                "kind": entry["kind"], "piece": entry["piece"],
+                "kept": [step.step_id for step in kept],
+                "readings": [[_reading(step) for step in kept],
+                             [_reading(step) for step in others]],
+                "other_steps": [_encode_record(step) for step in others],
+            },
+        ))
+    return tuple(flags)
+
+
 def join_piece_analyses(
     extraction: ProtocolPdfExtraction,
     pieces: Sequence[AnalysisPiece],
@@ -4788,7 +5015,7 @@ def join_piece_analyses(
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     review_unverified: bool = False,
-    failed_pieces: Sequence[tuple[AnalysisPiece, str]] = (),
+    failed_pieces: Sequence[tuple[AnalysisPiece, str] | tuple[AnalysisPiece, str, str | None]] = (),
 ) -> ProtocolAnalysisDraft:
     """Join the pieces' analyses in page order and check the result as a whole.
 
@@ -4811,6 +5038,8 @@ def join_piece_analyses(
     if len(pieces) != len(drafts) or not pieces:
         raise ProtocolAnalysisError("Protocol pieces and their analyses do not match.")
     renamed: dict[str, str] = {}
+    merged: list[dict[str, object]] = []
+    readings: dict[str, dict[str, object]] | None = {} if review_unverified else None
     sections: list[domain.ProtocolSection] = []
     before: list[Any] = []
     materials: list[Any] = []
@@ -4821,17 +5050,24 @@ def join_piece_analyses(
     for piece, draft in zip(pieces, drafts):
         prefix = _piece_prefix(piece)
         protocol = _renamed_ids(draft.protocol, lambda value, prefix=prefix: prefix + value)
+        # A field a piece emptied names its section by the piece's own id;
+        # the section now carries the piece's prefix (lane RV2: before, the
+        # joined analysis named sections it did not hold and was refused).
+        own_cleared = [
+            f"sections.{prefix}{field[len('sections.'):]}" if field.startswith("sections.")
+            else field
+            for field in protocol.cleared_fields
+        ]
         if first is None:
             first = protocol
-            cleared.extend(protocol.cleared_fields)
+            cleared.extend(own_cleared)
             sections.extend(protocol.sections)
         else:
-            cleared.extend(
-                field for field in protocol.cleared_fields if field.startswith("sections.")
-            )
+            cleared.extend(field for field in own_cleared if field.startswith("sections."))
             _join_section_lists(
                 sections, protocol.sections, extraction=extraction,
                 shared_page=piece.first_page, piece=piece, renamed=renamed,
+                merged=merged, readings=readings,
             )
         _join_items(before, protocol.before_start, extraction)
         _join_items(materials, protocol.materials, extraction)
@@ -4854,6 +5090,8 @@ def join_piece_analyses(
                   for old in renamed if field == f"sections.{old}.title_source_text"), field)
             for field in joined.cleared_fields
         ))
+    joined = _cleared_titles_that_hold(joined)
+    _refuse_mixed_step_labels(joined, pieces)
     refused: dict[str, ProtocolAnalysisEvidenceError] = {}
     try:
         if review_unverified:
@@ -4899,8 +5137,12 @@ def join_piece_analyses(
         verified_evidence_count=evidence_count,
         review_flags=(
             *review_flags_for(verified, extraction, refused),
-            *(piece_review_flag(piece, code) for piece, code in failed_pieces),
+            *(piece_review_flag(*failed) for failed in failed_pieces),
+            *_two_readings_flags(verified, readings or {}, renamed),
         ),
+        auto_resolved=tuple(
+            {**entry, "kept": renamed.get(str(entry["kept"]), entry["kept"])}
+            for entry in merged),
     )
 
 
