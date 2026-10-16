@@ -3,7 +3,7 @@
 The search (``XaiAuthoritativeWebSearch``, ``ExternalReferenceSettings`` and the
 thirteen settings that went with them) was off by default. These tests pin what
 the deletion must leave behind: no name of it in the code, the table or the
-launchers; the screen's capability entry still present and "disabled"; and the
+launchers; no capability entry for it (lane FX3 took the screen's away); and the
 "AI 일반 지식" side of ``external_references`` still importable and working.
 Nothing here calls a provider.
 """
@@ -75,8 +75,10 @@ class TheGeneralExplanationIsKeptTests(unittest.TestCase):
     def test_a_session_has_no_web_search_settings_and_the_screen_entry_stays_disabled(self) -> None:
         session = server.ListenerSession()
         self.assertFalse(hasattr(session, "external_reference_settings"))
+        # Lane FX3, decision 3: the screen stopped reading the entry, so the
+        # server stopped sending it.
         source = (SRC / "server.py").read_text(encoding="utf-8")
-        self.assertIn('"external_text":{"status":"disabled"}', source)
+        self.assertNotIn('"external_text"', source)
 
 
 if __name__ == "__main__":

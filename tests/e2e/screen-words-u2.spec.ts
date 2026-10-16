@@ -48,9 +48,10 @@ async function startStep(page: Page, state: object) {
 
 const send = (page: Page, message: object) => page.evaluate(m => onMessage({ data: JSON.stringify(m) }, sessionGeneration, socket), message);
 
-async function capabilities(page: Page, web: 'enabled' | 'disabled') {
+// Lane FX3 decision 3: the server sends no entry for the deleted web search.
+async function capabilities(page: Page) {
   await send(page, { type: 'ready', research_capabilities: {
-    external_text: { status: web }, supplemental_model: { status: 'enabled' } } });
+    supplemental_model: { status: 'enabled' } } });
 }
 
 const visibleText = (page: Page, selector: string) => page.locator(selector).evaluate(node => (node as HTMLElement).innerText);
@@ -108,7 +109,7 @@ test.describe('Remaining screen words (lane U2)', () => {
 
   test('an explanation from outside the PDF has its own frame and name in the card and the panel', async ({ page }) => {
     await startStep(page, fixtureState());
-    await capabilities(page, 'disabled');
+    await capabilities(page);
     // A router answer the server marked as outside the PDF: the mark comes
     // in reply.delta and reply.complete carries the text alone.
     await send(page, { type: 'speech.start', turn_id: 1, generation: 0 });
@@ -138,12 +139,12 @@ test.describe('Remaining screen words (lane U2)', () => {
 
   test('the reference panel is named by where its words come from', async ({ page }) => {
     await startStep(page, fixtureState());
-    await capabilities(page, 'enabled');
+    await capabilities(page);
     const result = (turn: number, extra: object) => send(page, { type: 'research.result', configuration_id: 7, turn_id: turn, generation: 0, status: 'success', terminal_status: 'success', ...extra });
     for (const turn of [1, 2]) {
       await send(page, { type: 'speech.start', turn_id: turn, generation: 0 });
       await send(page, { type: 'transcript', turn_id: turn, generation: 0, text: `질문 ${turn}` });
-      await send(page, { type: 'research.state', configuration_id: 7, turn_id: turn, generation: 0, status: 'running', phase: turn === 1 ? 'supplemental_model' : 'authoritative_web' });
+      await send(page, { type: 'research.state', configuration_id: 7, turn_id: turn, generation: 0, status: 'running', phase: turn === 1 ? 'supplemental_model' : 'approved_references' });
     }
     await result(1, { primary_text: '일반적인 배경 설명', answer_origin: 'supplemental_model_knowledge', citations: [] });
     await expect(page.locator('#web-ref-title')).toHaveText('AI 일반 지식');
@@ -153,12 +154,12 @@ test.describe('Remaining screen words (lane U2)', () => {
     await expect(page.locator('#web-ref-title')).toHaveText('웹 참고 자료');
   });
 
-  test('with web search off, a web-reference limit card stays in the developer details', async ({ page }) => {
+  test('a reference-check limit stays in the developer details', async ({ page }) => {
     await startStep(page, fixtureState());
-    await capabilities(page, 'disabled');
+    await capabilities(page);
     await send(page, { type: 'speech.start', turn_id: 3, generation: 0 });
     await send(page, { type: 'reply.complete', turn_id: 3, generation: 0, text: 'PDF에서 확인할 수 없어요.' });
-    await send(page, { type: 'research.state', configuration_id: 7, turn_id: 3, generation: 0, status: 'running', phase: 'authoritative_web' });
+    await send(page, { type: 'research.state', configuration_id: 7, turn_id: 3, generation: 0, status: 'running', phase: 'supplemental_model' });
     await send(page, { type: 'research.result', configuration_id: 7, turn_id: 3, generation: 0, status: 'unavailable', terminal_status: 'disabled',
       limitation: '추가 내용을 확인하지 못했습니다. 현재 적용된 실험 PDF 내용은 유지됩니다.' });
     const reply = page.locator('#log .reply').first();
@@ -166,12 +167,14 @@ test.describe('Remaining screen words (lane U2)', () => {
     await expect(reply.locator('.research-supplement')).toHaveCount(0);
     expect(await page.locator('#log .turn-diagnostics-body .research-limit').first().evaluate(node => node.textContent)).toContain('disabled');
 
-    // With web search on, the same card is shown to the researcher.
-    await capabilities(page, 'enabled');
+    // Lane FX3 decision 3: a timeout stays there too -- the visible "웹 참고
+    // 자료 확인 …" card went with the web search, even if a server says it is on.
+    await send(page, { type: 'ready', research_capabilities: { external_text: { status: 'enabled' }, supplemental_model: { status: 'enabled' } } });
     await send(page, { type: 'speech.start', turn_id: 4, generation: 0 });
     await send(page, { type: 'transcript', turn_id: 4, generation: 0, text: '트립신 보관 온도는?' });
-    await send(page, { type: 'research.state', configuration_id: 7, turn_id: 4, generation: 0, status: 'running', phase: 'authoritative_web' });
+    await send(page, { type: 'research.state', configuration_id: 7, turn_id: 4, generation: 0, status: 'running', phase: 'supplemental_model' });
     await send(page, { type: 'research.result', configuration_id: 7, turn_id: 4, generation: 0, status: 'unavailable', terminal_status: 'timeout', limitation: '시간 안에 찾지 못했습니다.' });
-    await expect(page.locator('#log .research-supplement b', { hasText: '웹 참고 자료 확인 시간 초과' })).toHaveCount(1);
+    await expect(page.locator('#log .research-supplement b', { hasText: '웹 참고 자료 확인 시간 초과' })).toHaveCount(0);
+    await expect(page.locator('#log .turn-diagnostics-body .research-limit', { hasText: 'timeout' })).toHaveCount(1);
   });
 });

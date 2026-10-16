@@ -426,10 +426,8 @@ class ServerTests(unittest.TestCase):
             "language":"ko","protocol_id":protocol_id,
             "revision_id":"fixture-test-revision",
         })
-        self.assertEqual(
-            ready["research_capabilities"]["external_text"]["status"],
-            "disabled",
-        )
+        # Lane FX3, decision 3: no entry for the deleted web search.
+        self.assertNotIn("external_text",ready["research_capabilities"])
         curated_state=next(
             item for item in socket.sent
             if item["type"]=="protocol.fixture.state")

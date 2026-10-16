@@ -1031,7 +1031,6 @@
                 <span class="context-chip"><b>버전</b><span id="protocol-revision">—</span></span>
                 <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
                 <span class="context-chip"><b>문서 분석</b><span id="protocol-analysis-progress">상태 없음</span></span>
-                <span class="context-chip"><b>외부 검색</b><span id="research-text-capability">확인 중</span></span>
                 <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
                 <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
                 <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
@@ -1264,7 +1263,7 @@ const UI={
 };
 const VOICE_STATE_LABELS=Object.freeze({IDLE:"준비",CONNECTING:"연결 중",LISTENING:"듣는 중",THINKING:"요청 이해 중",SPEAKING:"안내 중",ERROR:"확인 필요",INTERRUPTING:"안내 중단 중",RECONNECTING:"다시 연결 중"});
 const RECOVERY_NOT_RESTORED_LABELS=Object.freeze({pending_confirmations:"완료 확인 대기",conversation_history:"이전 대화",active_timers:"진행 중이던 단계 타이머"});
-const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",search_authoritative_web:"웹 참고 자료 검색",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인"};
+const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인"};
 const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",step_learning_read:"현재 단계 학습·주의 근거 조회",protocol_audit_read:"프로토콜 버전·해시 조회",experiment_history_read:"이전 실험 세션 조회",bounded_uncertainty_response:"실험 결과 불확실성 안내",learning_next_preview_confirmation:"단계 이유·다음 단계 미리보기·완료 확인",protocol_structure_read:"보호된 프로토콜 구조 조회",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 참고 자료 질의",external_reference_qa:"웹 참고 자료 확인",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",completion_confirmation_declined:"완료 및 이동 취소",experiment_observation_recorded:"실험 관찰 기록",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단",agent_meta_information:"에이전트 역할 및 목적 안내",workflow_paused:"실험 일시 중지",workflow_resumed:"실험 재개",step_timer_started:"단계 타이머 시작",step_timer_status_read:"단계 타이머 상태 조회",step_preview_read:"단계 미리보기",expected_result_explanation:"예상 결과 설명",completion_criteria_read:"완료 조건 조회",operational_deviation_refused:"임의 절차 변경 거절",parameter_clarification_required:"파라미터 확인 필요",readonly_operation_cancelled:"조회 작업 취소",experiment_record_corrected:"실험 기록 정정",report_value_review:"보고서 값 확인"};
 const TURN_STATE_LABELS={listening:"듣는 중…",transcribing:"음성 인식 중…",routing:"요청 확인 중…",checking_protocol:"절차 확인 중…",checking_approved_information:"승인된 정보 확인 중…",composing:"답변 작성 중…",synthesizing:"음성 생성 중…",playing:"재생 중…",complete:"완료",blocked:"차단됨",cancelled:"중단됨",error:"오류"};
 const TURN_TERMINAL_STATES=new Set(["complete","blocked","cancelled","error"]);
@@ -2476,8 +2475,6 @@ function answerSourceToggle(source,citation,open){const details=sourceToggle(sou
 // Lane U3 decision 5: model knowledge is named the same way everywhere, in
 // the turn card as in the reference panel and the outside-PDF frame.
 const SUPPLEMENTAL_LABEL="AI 일반 지식",OUTSIDE_PDF_LABEL=`PDF 밖 설명 · ${SUPPLEMENTAL_LABEL}`;
-let researchCapabilityState=null;
-function webReferencesOn(){return researchCapabilityState?.external_text?.status==="enabled";}
 function researchOutsidePdf(message){return message?.outside_pdf===true||(message?.answer_origin==="supplemental_model_knowledge"&&Array.isArray(message?.limitations)&&message.limitations.includes("outside_pdf_explanation"));}
 function researchOriginTitle(message){
  if(researchOutsidePdf(message))return `PDF 밖 설명 · ${typeof message.source_label==="string"&&message.source_label.trim()?message.source_label.trim():"AI 일반 지식"}`;
@@ -2635,7 +2632,7 @@ function applyResearchState(message,browserGeneration=sessionGeneration){
  const key=researchEventKey(message),record=researchEvents.get(key);if(record?.terminal)return false;
  researchEvents.set(key,{terminal:false,phase:message.phase||record?.phase||null});
  const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;
- const labels={approved_references:"승인된 참고 자료 확인 중…",authoritative_web:"외부 권위 근거 확인 중 · 웹에서 참고 자료를 찾고 있어요 🔍",supplemental_model:"일반 배경 설명 준비 중…",optional_enrichment:"웹에서 참고 자료를 찾고 있어요 🔍"};
+ const labels={approved_references:"승인된 참고 자료 확인 중…",supplemental_model:"일반 배경 설명 준비 중…",optional_enrichment:"웹에서 참고 자료를 찾고 있어요 🔍"};
  target.textContent=(message.status==="background_bounded"?labels.optional_enrichment:(labels[message.phase]||message.message||"웹에서 참고 자료를 찾고 있어요 🔍"));
  target.hidden=false;
  startResearchProgressTimer(key,target,message.phase==="supplemental_model");
@@ -2755,24 +2752,12 @@ function applyResearchResult(message,browserGeneration=sessionGeneration){
    body.textContent=normalizePresentationText(cleanPrimary);
    block.appendChild(heading);block.appendChild(body);
   }
- }else if(!webReferencesOn()){
-  // Lane U2 decision 7: with web references off, a limit or failure of the
-  // reference check is not the researcher's concern; it stays in the turn's
-  // developer details.
+ }else{
+  // Lane U2 decision 7: a limit or failure of the reference check is not
+  // the researcher's concern; it stays in the turn's developer details.
+  // (Lane FX3 decision 3: the web search it once also showed it for is gone.)
   const details=node.querySelector?.(".turn-diagnostics-body");
   if(details){let line=details.querySelector?.(".research-limit");if(!line){line=document.createElement("div");line.className="research-limit";details.appendChild(line);}line.textContent=`참고 자료 확인 · ${message.terminal_status||message.status||"unknown"} · ${normalizePresentationText(message.limitation||"추가 내용 없음")}`;}
- }else{
-  const reply=node.querySelector?.(".reply");
-  if(reply){
-   let block=reply.querySelector?.(".research-supplement");
-   if(!block){block=document.createElement("div");block.className="research-supplement";reply.appendChild(block);}
-   block.replaceChildren();
-   const heading=document.createElement("b");
-   heading.textContent={timeout:"웹 참고 자료 확인 시간 초과",cancelled:"웹 참고 자료 확인 취소",superseded:"새 요청으로 이전 검색 종료",failed:"웹 참고 자료 확인 실패"}[message.terminal_status]||"웹 참고 자료 확인 제한";
-   const body=document.createElement("span");
-   body.textContent=normalizePresentationText(message.limitation||"추가 내용을 확인하지 못했습니다. 현재 적용된 실험 PDF 내용은 유지됩니다.");
-   block.appendChild(heading);block.appendChild(body);
-  }
  }
  const status=node.querySelector?.(".filler-status");if(status){status.textContent="";status.hidden=true;}
  finishChatPatch(snapshot,"research");return true;
@@ -4159,7 +4144,9 @@ async function registerSelectedProtocol(){
  }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode=mode;acknowledgedLanguage=language;const names={auto:"자동 감지",ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","입력 · "+(names[language]||"한국어"));}
-function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;researchCapabilityState=value;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);return true;}
+// Lane FX3 decision 3: the web search's entry is gone from the server; the
+// general explanation and the read-only roles are drawn as the server says.
+function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const supplemental=value.supplemental_model,multi=value.multi_brain,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi))return false;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);return true;}
 function confirmNewSession(){
  if(sessionActive){
   const modal=$("new-session-modal");

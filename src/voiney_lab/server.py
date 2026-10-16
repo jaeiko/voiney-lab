@@ -10646,9 +10646,8 @@ async def voice_socket(websocket:WebSocket):
         await websocket.close(code=1008,reason="invalid configuration")
         return
     research_capabilities={
-        # The xAI web reference search is gone (lane DOC3); the screen still
-        # reads this entry, so it says, always, that the capability is off.
-        "external_text":{"status":"disabled"},
+        # The xAI web reference search is gone (lane DOC3), and since lane FX3
+        # (decision 3) the screen no longer reads an entry for it.
         "supplemental_model":supplemental_settings.public_capability(),
         "multi_brain":multi_brain_settings.public_capability(),
         "web_explanation":web_explanation_settings.public_capability(),
