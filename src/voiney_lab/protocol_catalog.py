@@ -51,6 +51,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_REASON_BLOCKED,
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
+    REVIEW_REASON_READ_TWO_WAYS,
     REVIEW_REASON_VALUE_CHANGED,
     REVIEW_REASONS_KO,
     ReviewFlag,
@@ -1249,6 +1250,20 @@ def _latest_failure_payload(events: Sequence[Any]) -> dict[str, object]:
          if event.event_type == _ANALYSIS_FAILED_EVENT and isinstance(event.payload, dict)),
         {},
     )
+
+
+def _unlabelled_pieces_ko(events: Sequence[Any]) -> str | None:
+    """"15–29쪽·141–155쪽": pieces that read their steps without numbers while
+    others numbered them (lane RV2), from the latest failure."""
+
+    conflict = _latest_failure_payload(events).get("piece_conflict")
+    pieces = conflict.get("unlabelled_pieces") if isinstance(conflict, dict) else None
+    if not isinstance(pieces, list):
+        return None
+    return "·".join(
+        f"{piece['first_page']}–{piece['last_page']}쪽" for piece in pieces
+        if isinstance(piece, dict) and isinstance(piece.get("first_page"), int)
+    ) or None
 
 
 def _blocked_provider(events: Sequence[Any]) -> str | None:
@@ -3060,6 +3075,12 @@ class ProtocolCatalog:
                 if failure_code == BLOCKED_FAILURE_CODE and page_count is not None:
                     # Lane RV2, decision f: "구글 안전 필터에 막혀 1–12쪽을 분석하지 못했어요."
                     message = blocked_pages_ko(1, page_count, _blocked_provider(events)) + "."
+                unlabelled = _unlabelled_pieces_ko(events)
+                if failure_code == "protocol_analysis_piece_conflict" and unlabelled:
+                    message = (
+                        f"조각마다 단계 번호를 다르게 읽어 합치지 못했어요({unlabelled}은 "
+                        "번호 없이, 나머지는 번호를 붙여 읽음). 원문이 부분마다 번호를 다르게 "
+                        "붙였다면 한 문서에서 둘을 함께 쓸지는 사람이 정할 일이에요.")
                 if retry.get("state") == "failed" and truncated_how:
                     message += (f" {truncated_how} 자동으로 한 번 다시 보냈지만 "
                                 f"자동 재시도({retry_count})도 실패했습니다.")
@@ -3761,6 +3782,12 @@ class ProtocolCatalog:
                 "reason": exc.reason, "source_page_start": exc.first_page,
                 "source_page_end": exc.last_page,
             }
+            if exc.unlabelled_pieces:
+                # Lane RV2: the pieces that read their steps without numbers.
+                failure_payload["piece_conflict"]["unlabelled_pieces"] = [
+                    piece.public_dict() for piece in exc.unlabelled_pieces]
+                failure_payload["piece_conflict"]["labelled_pieces"] = [
+                    piece.public_dict() for piece in exc.labelled_pieces]
         if isinstance(exc, ProtocolAnalysisIncompleteError):
             # Lane EV2, decision 4: the two counts the refusal compared.
             failure_payload["step_counts"] = {
@@ -4377,6 +4404,9 @@ class ProtocolCatalog:
             elif kind == "ocr_value":
                 # Lane RV2, decision b: the value as read, or as the image shows it.
                 allowed[:0] = ["confirm", "fix"]
+            if any(flag.reason == REVIEW_REASON_READ_TWO_WAYS for flag in own):
+                # Lane RV2, decision e: this reading or the other piece's.
+                allowed = ["choose", *(action for action in allowed if action != "confirm")]
             if needs_review and kind in _CLEARABLE_KINDS:
                 allowed.insert(allowed.index("memo"), "clear")
             decision = decisions.get(item_id)
@@ -4390,6 +4420,17 @@ class ProtocolCatalog:
                     origin_after = REVIEW_ORIGIN_REVIEWER
                 elif action == "clear":
                     current = None
+                elif action == "choose":
+                    current = value.get("text")
+            reading_flag = next(
+                (flag for flag in own if flag.reason == REVIEW_REASON_READ_TWO_WAYS), None)
+            if reading_flag is not None:
+                # Lane RV2, decision e: both pieces' readings, each with the
+                # source lines its quotes stand on.
+                readings = (reading_flag.extra or {}).get("readings") or []
+                extra = {**(extra or {}), "readings": [
+                    [{**step, "lines": _reading_lines(step, extraction)} for step in group]
+                    for group in readings]}
             return {
                 "item_id": item_id,
                 "kind": kind,
@@ -4841,7 +4882,7 @@ class ProtocolCatalog:
         if not isinstance(request, dict):
             raise ProtocolReviewError("A review decision must be an object.")
         allowed_keys = {"item_id", "action", "text", "seconds", "count", "source_lines",
-                        "memo", "reviewer_name", "target"}
+                        "memo", "reviewer_name", "target", "reading"}
         if set(request) - allowed_keys:
             raise ProtocolReviewError("A review decision holds an unknown field.")
         revision = self._latest_protocol_revision(protocol_id)
@@ -4867,6 +4908,16 @@ class ProtocolCatalog:
         if action not in REVIEW_ACTIONS or action not in item["allowed_actions"]:
             raise ProtocolReviewError("This action is not allowed on this item.")
         value: dict[str, object] = {}
+        if action == "choose":
+            reading = request.get("reading")
+            readings = item.get("readings") if isinstance(item.get("readings"), list) else []
+            if reading not in {"a", "b"} or len(readings) != 2:
+                raise ProtocolReviewError("A choice names reading a or b.")
+            chosen = readings[0 if reading == "a" else 1]
+            value = {"reading": reading,
+                     "text": " / ".join(str(step.get("text")) for step in chosen)}
+        elif request.get("reading") is not None:
+            raise ProtocolReviewError("A reading is named only by a choice.")
         if action in {"fix", "enter"}:
             if item["kind"] == "timer":
                 seconds = request.get("seconds")
@@ -5141,10 +5192,13 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
 #: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
 #: the source does not print, a memo beside an item, and taking a draft
 #: decision back.
-REVIEW_ACTIONS: tuple[str, ...] = ("confirm", "fix", "clear", "enter", "memo", "reset")
+REVIEW_ACTIONS: tuple[str, ...] = (
+    "confirm", "fix", "clear", "enter", "memo", "reset", "choose")
 REVIEW_ACTION_KO: dict[str, str] = {
     "confirm": "확인", "fix": "고침", "clear": "원문에 없음으로 비워 둠",
     "enter": "입력", "memo": "메모", "reset": "되돌리기",
+    # Lane RV2, decision e: one of two pieces' readings of a passage.
+    "choose": "두 읽기 중 고름",
 }
 _STATEMENT_KINDS = {
     "warnings": "warning", "notes": "note", "tips": "tip",
@@ -5570,6 +5624,17 @@ def _record_words(record: "_ReviewRecord") -> str | None:
     return words if isinstance(words, str) else None
 
 
+def _reading_lines(step: dict[str, object], extraction: ProtocolPdfExtraction) -> dict[str, int] | None:
+    """The source lines one piece's reading of a step quotes (lane RV2, e)."""
+
+    page, excerpt = step.get("page"), step.get("excerpt")
+    if not isinstance(page, int) or not isinstance(excerpt, str):
+        return None
+    lines = _quote_lines(
+        domain.SourceEvidence(source_page_number=page, source_excerpt=excerpt), extraction)
+    return {"page": page, "first_line": lines[0], "last_line": lines[1]} if lines else None
+
+
 def _same_scope(record: "_ReviewRecord", value: "_ReviewRecord") -> bool:
     """Whether ``record`` is one of the records a value's sentence lives in:
     its step's records, or, for a value outside any step, its owner."""
@@ -5731,6 +5796,17 @@ def _card_choices(
         choices.append(_choice("fix", "다시 고칠게요", request("fix"),
                                needs="source_lines_and_text" if lines else "text"))
         return "value_changed", question, choices, {"change": change, "proposal": candidate}
+    two_ways = next((reason for reason in reasons
+                     if reason.get("reason") == REVIEW_REASON_READ_TWO_WAYS), None)
+    if two_ways is not None:
+        # Decision e: two pieces read this passage differently; a person
+        # picks one reading, with the page's lines beside both.
+        page = two_ways.get("page_number")
+        return "two_readings", f"두 조각이 {page}쪽을 다르게 읽었어요. 어느 쪽이 맞나요?", [
+            _choice("choose_a", "이쪽으로 읽기", request("choose", reading="a"), primary=True),
+            _choice("choose_b", "저쪽으로 읽기", request("choose", reading="b")),
+            _choice("fix", "직접 고칠게요", request("fix"), needs="text"),
+        ], {"readings": item.get("readings")}
     if kind == "pages":
         blocked = any(reason.get("reason") == REVIEW_REASON_BLOCKED for reason in reasons)
         return "blocked_pages" if blocked else "failed_pages", (
@@ -5818,6 +5894,7 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
             "choices": choices,
             "proposal": shown.get("proposal"),
             "change": shown.get("change"),
+            "readings": shown.get("readings"),
             "memo_allowed": "memo" in item["allowed_actions"],
             "decided": item.get("decision") is not None,
             "decision": item.get("decision"),
@@ -6019,6 +6096,35 @@ def _shifted_item_ids(
     return shifted
 
 
+def _other_reading(
+    protocol: domain.ExperimentProtocol, item: dict[str, object],
+) -> domain.ExperimentProtocol:
+    """``protocol`` with the later piece's reading in place of the kept one
+    (lane RV2, decision e): the kept steps are replaced, where the first of
+    them stood, by the other piece's steps, the first taking its id."""
+
+    flag = next((reason for reason in item.get("reasons") or ()
+                 if isinstance(reason, dict)
+                 and reason.get("reason") == REVIEW_REASON_READ_TWO_WAYS), None)
+    extra = (flag or {}).get("extra") or {}
+    kept = [str(step_id) for step_id in extra.get("kept") or ()]
+    others = [_decode_stored_record(step) for step in extra.get("other_steps") or ()]
+    if not kept or not others or not all(
+            isinstance(step, domain.ProtocolSourceStep) for step in others):
+        raise ProtocolReviewNotReadyError("The other reading of this passage is unreadable.")
+    others[0] = replace(others[0], step_id=kept[0])
+    sections = []
+    for section in protocol.sections:
+        steps: list[domain.ProtocolSourceStep] = []
+        for step in section.steps:
+            if step.step_id == kept[0]:
+                steps.extend(others)
+            elif step.step_id not in kept:
+                steps.append(step)
+        sections.append(replace(section, steps=tuple(steps)))
+    return replace(protocol, sections=tuple(sections))
+
+
 #: A step sentence's own number ("3.", "(2)") before its words.
 _LEADING_LABEL = re.compile(r"^\s*\(?[0-9]+(?:\.[0-9]+)*[.)]\s+")
 #: A number with the unit printed after it, as a step sentence states a value.
@@ -6151,6 +6257,9 @@ def _apply_review(
                     edits.append((path, lambda current, field=field, words=words: replace(
                         current, **{field: words})))
                     reviewed = words
+        if action == "choose":
+            # Lane RV2, decision e: the reading a person chose.
+            reviewed = value.get("text")
         if action == "confirm" and not item["needs_review"]:
             continue
         origin = (
@@ -6158,7 +6267,8 @@ def _apply_review(
             else REVIEW_ORIGIN_SOURCE if kind in _SOURCE_WORDS_ONLY and action == "confirm"
             else REVIEW_ORIGIN_AI if item["needs_review"] else str(item["origin"])
         )
-        if action in {"fix", "enter"} or (action == "confirm" and item["needs_review"]):
+        if action in {"fix", "enter", "choose"} or (
+                action == "confirm" and item["needs_review"]):
             origins[item_id] = origin
         changes.append(ReviewedChange(
             item_id=item_id, kind=kind, kind_ko=str(item["kind_ko"]),
@@ -6179,6 +6289,10 @@ def _apply_review(
         removals, key=lambda pair: (_path_depth(pair[0]), pair[0]), reverse=True,
     ):
         protocol = _removed_at(protocol, path)
+    for item_id, decision in decisions.items():
+        value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+        if decision.get("action") == "choose" and value.get("reading") == "b" and item_id in by_id:
+            protocol = _other_reading(protocol, by_id[item_id])
     origins = _shifted_item_ids(origins, [item_id for _, item_id in removals])
     changes.sort(key=lambda change: list(by_id).index(change.item_id))
     return protocol, changes, timers, origins
