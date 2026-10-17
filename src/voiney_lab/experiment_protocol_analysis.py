@@ -3253,6 +3253,9 @@ REVIEW_REASON_OCR_VALUE = "ocr_value"
 REVIEW_REASON_BLOCKED = "blocked_pages"
 #: A passage two pieces of a long document read differently (decision e).
 REVIEW_REASON_READ_TWO_WAYS = "read_two_ways"
+#: Lane AN3, decision B: where a long document's joined pieces change from
+#: numbered steps to unnumbered ones (or back), the two steps that meet.
+REVIEW_REASON_NUMBERING_SEAM = "numbering_seam"
 #: The failure code of an analysis or a piece the provider blocked (f).
 BLOCKED_FAILURE_CODE = "protocol_analysis_blocked"
 #: An item that states a value a person fixed (lane RV2, decision d): it is
@@ -3268,6 +3271,7 @@ REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_VALUE_CHANGED: "고친 값이 들어 있음",
     REVIEW_REASON_BLOCKED: "분석 못 한 쪽",
     REVIEW_REASON_READ_TWO_WAYS: "두 가지로 읽힘",
+    REVIEW_REASON_NUMBERING_SEAM: "번호 방식이 바뀌는 경계",
 }
 #: Why an OCR value waits (decision b): the two engines read the page's
 #: numbers differently, or only one engine read the page.
@@ -3645,6 +3649,7 @@ def validated_with_refused_quotes(
     refused_paths: Sequence[str],
     *,
     capability_policy: domain.CapabilityPolicy,
+    one_reading: bool = True,
 ) -> domain.ReadinessAssessment:
     """Validate a protocol whose refused quotes stand as the model wrote them.
 
@@ -3664,7 +3669,7 @@ def validated_with_refused_quotes(
         replacements[path] = stand_in
         originals[str(stand_in.location_detail)] = _value_at(protocol, path)
     view = replace_at_paths(protocol, replacements)
-    _validate_domain(view, extraction)
+    _validate_domain(view, extraction, one_reading=one_reading)
     readiness = domain.assess_readiness(view, capability_policy=capability_policy)
     return replace(readiness, reasons=tuple(
         replace(reason, evidence=originals[reason.evidence.location_detail])
@@ -3684,11 +3689,21 @@ def _value_at(protocol: domain.ExperimentProtocol, path: str) -> Any:
     return current
 
 
-def _validate_domain(protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction) -> None:
-    """The domain validation, its evidence failures reported as such."""
+def _validate_domain(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction, *,
+    one_reading: bool = True,
+) -> None:
+    """The domain validation, its evidence failures reported as such.
+
+    ``one_reading``: the protocol is one reading of the source -- a document
+    read at once, or one piece -- so its steps are labelled alike (lane P3;
+    lane AN3, decision B leaves a joined analysis out of it).
+    """
 
     try:
         domain.validate_protocol(protocol)
+        if one_reading:
+            domain.validate_step_labelling(protocol)
     except domain.ProtocolValidationError as exc:
         if exc.code in {
             domain.ProtocolValidationCode.INVALID_SOURCE_PAGE,
@@ -4109,6 +4124,8 @@ def _draft_from_response(
 def validate_protocol_analysis_evidence(
     protocol: domain.ExperimentProtocol,
     extraction: ProtocolPdfExtraction,
+    *,
+    one_reading: bool = True,
 ) -> tuple[domain.ExperimentProtocol, int]:
     """Revalidate one decoded Protocol against one exact PDF extraction.
 
@@ -4127,6 +4144,8 @@ def validate_protocol_analysis_evidence(
     _reject_deferred_state(verified_protocol)
     try:
         domain.validate_protocol(verified_protocol)
+        if one_reading:
+            domain.validate_step_labelling(verified_protocol)
     except domain.ProtocolValidationError as exc:
         if exc.code in {
             domain.ProtocolValidationCode.INVALID_SOURCE_PAGE,
@@ -4686,9 +4705,11 @@ class ProtocolAnalysisPieceConflictError(ProtocolAnalysisError):
     """Two pieces read the page they share differently, or the joined analysis fails.
 
     ``reason`` is ``overlap_step_differs`` (one step of the shared page read
-    two ways), ``step_labelling_differs`` (one piece numbers its steps, the
-    other does not) or ``joined_analysis_invalid``; ``pages`` are the pages
-    of the two pieces (or the whole document).
+    two ways) or ``joined_analysis_invalid``; ``pages`` are the pages of the
+    two pieces (or the whole document). ``step_labelling_differs`` (one piece
+    numbers its steps, the other does not) is lane RV2's and is no longer
+    raised -- since lane AN3, decision B, such a seam is an item -- but the
+    failures it recorded still read back by it.
     """
 
     code = "protocol_analysis_piece_conflict"
@@ -4935,39 +4956,42 @@ def _cleared_titles_that_hold(protocol: domain.ExperimentProtocol) -> domain.Exp
     return protocol if kept == protocol.cleared_fields else replace(protocol, cleared_fields=kept)
 
 
-def _refuse_mixed_step_labels(
-    protocol: domain.ExperimentProtocol, pieces: Sequence[AnalysisPiece],
-) -> None:
-    """Refuse a joined analysis whose pieces numbered their steps differently.
+def _piece_of(step_id: str) -> int | None:
+    head = step_id.split(".", 1)[0]
+    return int(head[1:]) if head.startswith("p") and head[1:].isdigit() else None
 
-    Human decision 2026-10-05 (lane P3): steps are all labelled or all
-    unlabelled -- whether the source prints step numbers is a property of
-    the whole source. A long manual read in pieces can print numbers in one
-    part and none in another; the pieces each pass, and the joined analysis
-    is refused. Lane RV2 names that refusal and its pages
-    (``step_labelling_differs``) instead of calling it two readings of a page;
-    whether such a document may mix the two is a person's to decide.
+
+def _numbering_seam_flags(protocol: domain.ExperimentProtocol) -> tuple[ReviewFlag, ...]:
+    """One item per seam where the joined steps' numbering changes (lane AN3, B).
+
+    Human decision 2026-10-16. Lane P3's rule -- the steps of one reading are
+    all numbered or all unnumbered -- holds for each piece, but a long manual
+    read in pieces may number its steps in one part and not in another
+    (lane RV2 found it in the 197- and 315-page documents, which failed on
+    it). The pieces are joined in page order and keep what the source prints
+    (no number where it prints none); where the numbering changes, the last
+    step before and the first step after are one item: does the second follow
+    the first? [이어져요] lets the joined order run; [아니요] sends the
+    document to be read again -- the server never reorders steps.
     """
 
-    styles: dict[int, set[bool]] = {}
-    for section in protocol.sections:
-        for step in section.steps:
-            head = step.step_id.split(".", 1)[0]
-            if head.startswith("p") and head[1:].isdigit():
-                styles.setdefault(int(head[1:]), set()).add(bool(step.source_label.strip()))
-    if len({style for found in styles.values() for style in found}) < 2:
-        return
-    by_index = {piece.index: piece for piece in pieces}
-    unlabelled = [by_index[index] for index, found in sorted(styles.items())
-                  if found == {False} and index in by_index]
-    labelled = [by_index[index] for index, found in sorted(styles.items())
-                if True in found and index in by_index]
-    raise ProtocolAnalysisPieceConflictError(
-        "The pieces number their steps differently.",
-        reason="step_labelling_differs",
-        first_page=1, last_page=protocol.metadata.pdf.page_count,
-        unlabelled_pieces=unlabelled, labelled_pieces=labelled,
-    )
+    steps = [step for section in protocol.sections for step in section.steps]
+    flags = []
+    for before, after in zip(steps, steps[1:]):
+        if bool(before.source_label.strip()) == bool(after.source_label.strip()):
+            continue
+        flags.append(ReviewFlag(
+            item_id=f"seam:{before.step_id}+{after.step_id}",
+            reason=REVIEW_REASON_NUMBERING_SEAM,
+            field="steps",
+            reason_code="step_labelling_differs",
+            page_number=after.evidence.source_page_number,
+            extra={
+                "steps": [_reading(before), _reading(after)],
+                "pieces": [_piece_of(before.step_id), _piece_of(after.step_id)],
+            },
+        ))
+    return tuple(flags)
 
 
 def _reading(step: domain.ProtocolSourceStep) -> dict[str, object]:
@@ -5100,19 +5124,22 @@ def join_piece_analyses(
             for field in joined.cleared_fields
         ))
     joined = _cleared_titles_that_hold(joined)
-    _refuse_mixed_step_labels(joined, pieces)
     refused: dict[str, ProtocolAnalysisEvidenceError] = {}
+    # Lane AN3, decision B: the pieces may number their steps differently; each
+    # seam where that changes is an item (``_numbering_seam_flags``).
     try:
         if review_unverified:
             verified, evidence_count, refused = _verify_for_review(joined, extraction)
             _reject_deferred_state(verified)
             if refused:
                 readiness = validated_with_refused_quotes(
-                    verified, extraction, tuple(refused), capability_policy=capability_policy)
+                    verified, extraction, tuple(refused), capability_policy=capability_policy,
+                    one_reading=False)
             else:
-                _validate_domain(verified, extraction)
+                _validate_domain(verified, extraction, one_reading=False)
         else:
-            verified, evidence_count = validate_protocol_analysis_evidence(joined, extraction)
+            verified, evidence_count = validate_protocol_analysis_evidence(
+                joined, extraction, one_reading=False)
     except ProtocolAnalysisEvidenceError:
         raise
     except ProtocolAnalysisError as exc:
@@ -5148,6 +5175,7 @@ def join_piece_analyses(
             *review_flags_for(verified, extraction, refused),
             *(piece_review_flag(*failed) for failed in failed_pieces),
             *_two_readings_flags(verified, readings or {}, renamed),
+            *_numbering_seam_flags(verified),
         ),
         auto_resolved=tuple(
             {**entry, "kept": renamed.get(str(entry["kept"]), entry["kept"])}

@@ -52,6 +52,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisTooManyPagesError,
     REVIEW_ITEM_KINDS,
     REVIEW_REASON_BLOCKED,
+    REVIEW_REASON_NUMBERING_SEAM,
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASON_READ_TWO_WAYS,
@@ -1214,27 +1215,33 @@ def _display_filename(value: str) -> str:
 def protocol_with_display_step_labels(
     protocol: domain.ExperimentProtocol,
 ) -> domain.ExperimentProtocol:
-    """The Protocol with its steps numbered in order when the source prints none.
+    """The Protocol with its steps numbered in order where the source prints none.
 
     An empty source_label means the source prints no step numbers (human
     decision 2026-10-05, lane P3). The stored analysis keeps it empty -- that
     is what the source says -- and the screen and the run number the steps
     1, 2, 3 ... in their order instead. A labelled Protocol is returned as is.
+
+    Lane AN3, decision B (human decision 2026-10-16): a long document joined
+    from pieces may hold both kinds. Its printed numbers are kept, and each
+    unnumbered step is shown by its place among all the steps (the 18th step
+    is "18") -- a number the screen shows, never one the source printed.
     """
 
     steps = [step for section in protocol.sections for step in section.steps]
-    if not steps or any(step.source_label.strip() for step in steps):
+    if not steps or all(step.source_label.strip() for step in steps):
         return protocol
     ordinal = iter(range(1, len(steps) + 1))
+
+    def shown(step: domain.ProtocolSourceStep, place: int) -> domain.ProtocolSourceStep:
+        return step if step.source_label.strip() else replace(step, source_label=str(place))
+
     return replace(
         protocol,
         sections=tuple(
             replace(
                 section,
-                steps=tuple(
-                    replace(step, source_label=str(next(ordinal)))
-                    for step in section.steps
-                ),
+                steps=tuple(shown(step, next(ordinal)) for step in section.steps),
             )
             for section in protocol.sections
         ),
@@ -1245,9 +1252,12 @@ def _review_sections(protocol: domain.ExperimentProtocol) -> object:
     shown = protocol_with_display_step_labels(protocol)
     sections = _review_value(shown.sections)
     if shown is not protocol:
+        printed = {step.step_id for section in protocol.sections for step in section.steps
+                   if step.source_label.strip()}
         for section in sections:
             for step in section["steps"]:
-                step["source_label_printed"] = False
+                if step["step_id"] not in printed:
+                    step["source_label_printed"] = False
     return sections
 
 
@@ -4621,6 +4631,9 @@ class ProtocolCatalog:
             elif kind == "ocr_value":
                 # Lane RV2, decision b: the value as read, or as the image shows it.
                 allowed[:0] = ["confirm", "fix"]
+            elif kind == "seam":
+                # Lane AN3, decision B: [이어져요]; [아니요] is a re-analysis.
+                allowed[:0] = ["confirm"]
             if any(flag.reason == REVIEW_REASON_READ_TWO_WAYS for flag in own):
                 # Lane RV2, decision e: this reading or the other piece's.
                 allowed = ["choose", *(action for action in allowed if action != "confirm")]
@@ -4732,6 +4745,21 @@ class ProtocolCatalog:
             flag = flags[0]
             if flag.reason == REVIEW_REASON_OCR_VALUE:
                 items.append(self._ocr_value_view(view, flag, extraction))
+                continue
+            if flag.reason == REVIEW_REASON_NUMBERING_SEAM:
+                # Lane AN3, decision B: the two steps that meet where the
+                # numbering changes, with their source lines and the numbers
+                # the screen and the run show them by.
+                shown_labels = {
+                    step.step_id: step.source_label
+                    for section in protocol_with_display_step_labels(protocol).sections
+                    for step in section.steps}
+                items.append(view(item_id, "seam", flag.reason_ko, extra={"steps": [
+                    {**step, "lines": _reading_lines(step, extraction),
+                     "label_shown": shown_labels.get(str(step.get("step_id"))),
+                     "label_printed": bool(str(step.get("label") or "").strip())}
+                    for step in (flag.extra or {}).get("steps") or () if isinstance(step, dict)
+                ]}))
                 continue
             items.append(view(
                 item_id, "pages" if flag.field == "pages" else "construct",
@@ -5479,6 +5507,7 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
     "timer": "단계 타이머",
     "pages": "분석 실패 쪽",
     "ocr_value": "OCR 값",
+    "seam": "조각 경계",
 }
 #: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
 #: the source does not print, a memo beside an item, and taking a draft
@@ -6177,6 +6206,17 @@ def _card_choices(
             _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),
             _choice("reanalysis", "다시 분석", None, route="reanalysis"),
         ], {}
+    if kind == "seam":
+        # Lane AN3, decision B (human decision 2026-10-16, "순서 확인"): where
+        # the numbering changes between pieces, does the second step follow
+        # the first? [아니요] does not reorder anything: the document is read
+        # again.
+        return "numbering_seam", (
+            "번호를 붙인 부분과 붙이지 않은 부분이 만나는 곳이에요. "
+            "앞 단계 다음에 뒤 단계가 이어지나요?"), [
+            _choice("confirm", "이어져요", request("confirm"), primary=True),
+            _choice("reanalysis", "아니요", None, route="reanalysis"),
+        ], {"steps": item.get("steps")}
     if kind == "ocr_value":
         # Decision b: a number OCR read that the two engines did not both
         # read alike; the image piece is beside it on the card.
@@ -6307,6 +6347,7 @@ def _ocr_page_card(values: Sequence[dict[str, object]]) -> dict[str, object]:
         "proposal": None,
         "change": None,
         "readings": None,
+        "steps": None,
         "memo_allowed": False,
         "decided": all(entry["decided"] for entry in entries),
         "decision": None,
@@ -6368,6 +6409,7 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
             "proposal": shown.get("proposal"),
             "change": shown.get("change"),
             "readings": shown.get("readings"),
+            "steps": shown.get("steps"),
             "memo_allowed": "memo" in item["allowed_actions"],
             "decided": item.get("decision") is not None,
             "decision": item.get("decision"),
@@ -6667,9 +6709,10 @@ def _apply_review(
             timers[step_id] = int(value["seconds"]) if action in {"fix", "enter"} else None
             reviewed = value.get("text") if action in {"fix", "enter"} else None
             spoken = value.get("text") if action in {"fix", "enter"} else None
-        elif kind in {"pages", "ocr_value"}:
+        elif kind in {"pages", "ocr_value", "seam"}:
             # A check, not a record: a fixed OCR value changes the items that
-            # state it through their own decisions (decision d).
+            # state it through their own decisions (decision d); a seam a
+            # person said follows on runs in the joined order (lane AN3, B).
             pass
         elif kind == "missing_value" and action == "enter":
             reviewed = spoken = value.get("text")
