@@ -3273,9 +3273,18 @@ REVIEW_REASONS_KO: dict[str, str] = {
 #: numbers differently, or only one engine read the page.
 OCR_VALUE_ENGINES_DIFFER = "ocr_engines_differ"
 OCR_VALUE_ONE_ENGINE = "ocr_one_engine"
+#: Lane AN3, decision A: the value compared in its place on the page -- the
+#: other engine read another number there, read no number there, or the
+#: value stands nowhere among the chosen engine's numbers.
+OCR_VALUE_READ_DIFFERENTLY = "ocr_value_read_differently"
+OCR_VALUE_ONE_ENGINE_READ = "ocr_value_one_engine"
+OCR_VALUE_NOT_PLACED = "ocr_value_not_placed"
 OCR_VALUE_REASONS_KO: dict[str, str] = {
     OCR_VALUE_ENGINES_DIFFER: "두 OCR 엔진이 이 쪽의 숫자를 다르게 읽음",
     OCR_VALUE_ONE_ENGINE: "OCR 엔진 하나만 읽은 쪽",
+    OCR_VALUE_READ_DIFFERENTLY: "두 OCR 엔진이 이 값을 다르게 읽음",
+    OCR_VALUE_ONE_ENGINE_READ: "OCR 엔진 하나만 이 값을 읽음",
+    OCR_VALUE_NOT_PLACED: "OCR 이 이 값을 읽은 자리를 찾지 못함",
 }
 #: What the server settled itself, by reason (decision b, "기록에 사유 남김").
 AUTO_RESOLVED_OCR_TWO_ENGINES = "ocr_two_engines_agree"

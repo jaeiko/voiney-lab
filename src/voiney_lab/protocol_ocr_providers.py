@@ -14,7 +14,10 @@ Selection, per page that needs OCR:
   is used; otherwise Google's. If one engine fails or times out, the other's
   text is used. If the two disagree about the numbers or units on the page,
   the page is marked ``numeric_review_required`` -- in the result data only;
-  it blocks nothing.
+  it blocks nothing. The other engine's text is kept beside the chosen one,
+  and each number of the chosen engine with the other engine's number in the
+  same place on the page (lane AN3, decision A: ``readings_by_place``), so the
+  catalog settles a value both engines read alike and asks about the rest.
 * one engine configured: that engine.
 * none: no provider is built, and the catalog's existing "OCR not
   configured" path applies.
@@ -31,6 +34,7 @@ OCR -> accept -> re-analysis flow ran end to end once in a measurement store.
 from __future__ import annotations
 
 import base64
+import bisect
 import logging
 import os
 import re
@@ -62,6 +66,7 @@ from voiney_lab.protocol_ocr import (
     OcrPage,
     OcrResult,
     OcrValueBox,
+    OcrValueReading,
     ProtocolOcrError,
     ProtocolOcrResultError,
 )
@@ -408,13 +413,145 @@ _NUMBER_WITH_UNIT = re.compile(
 )
 
 
+def _comparison_form(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold().replace("μ", "µ")
+
+
 def numeric_tokens(text: str) -> Counter[str]:
     """Every number on the page with the unit written right after it, if any."""
 
-    normalized = unicodedata.normalize("NFKC", text).casefold().replace("μ", "µ")
+    normalized = _comparison_form(text)
     return Counter(
         number + _UNIT_SPELLINGS.get(unit, unit)
         for number, unit in _NUMBER_WITH_UNIT.findall(normalized)
+    )
+
+
+# --- Numbers compared place by place (lane AN3, decision A) -----------------
+#
+# Human decision 2026-10-16: on a scanned or photographed page both engines
+# read, each number used in execution is compared with what the other engine
+# read in the same place on the page; the same number and unit there is the
+# deterministic ground on which it runs without a person. The criteria:
+#
+# * Place. Both engines are sent the same rendered PNG, so their word boxes
+#   are in one pixel grid. A number's place is the box of the words it
+#   stands in (the number and its unit). Two numbers stand in the same place
+#   when their boxes overlap by at least ``SAME_PLACE_MIN_OVERLAP`` of the
+#   smaller box: the same printed glyphs give nearly the same box in both
+#   engines, and measuring against the smaller box lets one engine's box take
+#   in the unit while the other's does not -- the unit is then compared, not
+#   lost.
+# * Order. Each number pairs with at most one number of the other engine:
+#   the largest overlap first, and between equal overlaps the earlier in the
+#   chosen engine's reading order, then in the other engine's.
+# * Unit. A number is compared with the unit written right after it, in the
+#   form lanes P2 and P3 compare pages by (``numeric_tokens``: "uL" is "µl",
+#   "xg" is "×g"). The same number with another unit, or with a unit on one
+#   side only, differs. Nothing in a number is read differently: "4000" and
+#   "400" differ, so do "12,000" and "12.000".
+#
+# A number the other engine read nowhere near is a number one engine read.
+
+#: Overlap, as a share of the smaller box, for two numbers to stand in one place.
+SAME_PLACE_MIN_OVERLAP = 0.5
+
+
+@dataclass(frozen=True)
+class PlacedNumber:
+    """A number an engine read, as ``numeric_tokens`` reads it, and its box."""
+
+    token: str
+    text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+def placed_numbers(words: tuple[OcrWord, ...]) -> tuple[PlacedNumber, ...]:
+    """Every number in an engine's words, with the box of the words it stands in.
+
+    The words are joined as the engine joins them (``OcrWord.after``) and read
+    with the same expression as ``numeric_tokens``, so a page's placed tokens
+    are its numeric tokens.
+    """
+
+    normalized: list[str] = []
+    shown: list[str] = []
+    spans: list[tuple[int, int]] = []
+    position = 0
+    for word in words:
+        form = _comparison_form(word.text)
+        spans.append((position, position + len(form)))
+        normalized.append(form)
+        # The engine's own spelling where the comparison form keeps its length.
+        shown.append(word.text if len(form) == len(word.text) else form)
+        position += len(form)
+        normalized.append(word.after)
+        shown.append(word.after)
+        position += len(word.after)
+    text, written = "".join(normalized), "".join(shown)
+    found: list[PlacedNumber] = []
+    for match in _NUMBER_WITH_UNIT.finditer(text):
+        covered = [
+            words[index] for index, (start, end) in enumerate(spans)
+            if start < match.end() and match.start() < end
+        ]
+        if not covered:
+            continue
+        unit = match[2] or ""
+        found.append(PlacedNumber(
+            match[1] + _UNIT_SPELLINGS.get(unit, unit),
+            " ".join(written[match.start():match.end()].split())[:64],
+            min(word.x0 for word in covered), min(word.y0 for word in covered),
+            max(word.x1 for word in covered), max(word.y1 for word in covered),
+        ))
+    return tuple(found)
+
+
+def _overlap_share(a: PlacedNumber, b: PlacedNumber) -> float:
+    width = min(a.x1, b.x1) - max(a.x0, b.x0)
+    height = min(a.y1, b.y1) - max(a.y0, b.y0)
+    smaller = min((a.x1 - a.x0) * (a.y1 - a.y0), (b.x1 - b.x0) * (b.y1 - b.y0))
+    if width <= 0 or height <= 0 or smaller <= 0:
+        return 0.0
+    return width * height / smaller
+
+
+def readings_by_place(
+    chosen: tuple[PlacedNumber, ...], other: tuple[PlacedNumber, ...],
+) -> tuple[OcrValueReading, ...]:
+    """Each number of the chosen engine with the other engine's number in the
+    same place, or none (see the criteria above)."""
+
+    order = sorted(range(len(other)), key=lambda index: other[index].y0)
+    tops = [other[index].y0 for index in order]
+    tallest = max((number.y1 - number.y0 for number in other), default=0.0)
+    candidates: list[tuple[float, int, int]] = []
+    for first, number in enumerate(chosen):
+        # Only the numbers whose boxes can reach this one's lines.
+        low = bisect.bisect_left(tops, number.y0 - tallest)
+        high = bisect.bisect_right(tops, number.y1)
+        for second in order[low:high]:
+            share = _overlap_share(number, other[second])
+            if share >= SAME_PLACE_MIN_OVERLAP:
+                candidates.append((share, first, second))
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    pairs: dict[int, int] = {}
+    taken: set[int] = set()
+    for _, first, second in candidates:
+        if first in pairs or second in taken:
+            continue
+        pairs[first] = second
+        taken.add(second)
+    return tuple(
+        OcrValueReading(
+            number.token, number.text, number.x0, number.y0, number.x1, number.y1,
+            other_token=other[pairs[index]].token if index in pairs else None,
+            other_text=other[pairs[index]].text if index in pairs else None,
+        )
+        for index, number in enumerate(chosen)
     )
 
 
@@ -588,9 +725,12 @@ def select_page_text(
         )
     by_name = {outcome.engine.name: outcome for outcome in succeeded}
     numeric_review = False
+    other: _EngineOutcome | None = None
+    readings: tuple[OcrValueReading, ...] | None = None
     if CLOVA in by_name and GOOGLE in by_name:
         clova, google = by_name[CLOVA], by_name[GOOGLE]
         chosen = clova if hangul_ratio(clova.page.text) >= threshold else google
+        other = google if chosen is clova else clova
         compared = (_comparison_text(clova.page, region), _comparison_text(google.page, region))
         if None in compared:
             compared = (clova.page.text, google.page.text)
@@ -600,6 +740,10 @@ def select_page_text(
                 f"Page {page_number}: CLOVA and Google Vision read different "
                 "numbers or units; check the numbers against the page."
             )
+        if chosen.page.words and other.page.words:
+            # Lane AN3, decision A: number by number, by place.
+            readings = readings_by_place(
+                placed_numbers(chosen.page.words), placed_numbers(other.page.words))
     else:
         chosen = succeeded[0]
     return PageSelection(
@@ -612,6 +756,10 @@ def select_page_text(
             numeric_review_required=numeric_review,
             value_boxes=value_boxes_of(chosen.page.words),
             render_dpi=dpi if chosen.page.words else None,
+            other_provider=other.engine.name if other is not None else None,
+            other_provider_version=other.engine.version if other is not None else None,
+            other_text=other.page.text if other is not None else None,
+            value_readings=readings[:MAX_OCR_VALUE_BOXES] if readings is not None else None,
         ),
         warnings=tuple(warnings),
     )

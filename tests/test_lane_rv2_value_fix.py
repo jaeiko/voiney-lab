@@ -147,7 +147,9 @@ class FixingAnOcrValueTests(_OcrCase):
         result = self.catalog.record_review_decision(self.protocol_id, {
             "item_id": "ocr_value:2:4000rpm", "action": "fix", "text": "400 rpm"})
         cards = {card["item_id"]: card for card in result["cards"]}
-        self.assertTrue(cards["ocr_value:2:4000rpm"]["decided"])
+        # Lane AN3, decision A2: the value is on its page's card.
+        self.assertTrue(next(value for value in cards["ocr_page:2"]["values"]
+                             if value["item_id"] == "ocr_value:2:4000rpm")["decided"])
         self.assertEqual(cards["step:s2"]["type"], "value_changed")
         self.assertEqual(cards["step:s2"]["proposal"], "2. Spin the tube at 400 rpm for 5 min.")
         for card in result["cards"]:
