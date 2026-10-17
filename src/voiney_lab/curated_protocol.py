@@ -11363,6 +11363,21 @@ class CuratedProtocolSession:
 
         return list(self._clarify_candidates)
 
+    def clarify_choice(self, candidate: str) -> str | None:
+        """A candidate tapped on the screen, if the last reply asked it back (lane FX3, decision 4).
+
+        The candidate as the reply named it, to go on as the words of the
+        next turn -- planned exactly as if they were said -- or None when it
+        is not one of them: another turn was planned since (each plan empties
+        the candidates), or it was never asked. Changes nothing.
+        """
+
+        said = " ".join(str(candidate or "").split())
+        for name in self._clarify_candidates:
+            if said and " ".join(name.split()) == said:
+                return name
+        return None
+
     def readback_values(self) -> list[str]:
         """The values the last note read back, as said."""
 

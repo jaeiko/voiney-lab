@@ -4568,6 +4568,8 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     # Lane RA, decision (g): a session without a protocol has no general
     # brain any more; its turn is answered by rule.
     "no_protocol",
+    # Lane FX3, decision 8: the router's model was at its request limit.
+    "model_unavailable",
 })
 #: Lane RA, decision (d): how long a turn whose words end in an unfinished
 #: Korean ending waits for the words that follow before it is routed alone
@@ -5472,6 +5474,26 @@ class ListenerSession:
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
+    def start_chosen_turn(self)->int|None:
+        """Open the next turn for a candidate tapped on the screen (lane FX3, decision 4).
+
+        As a committed utterance opens one -- the next turn id, this
+        session's generation, committed now -- so the words then run
+        exactly where an utterance's words run. Only while listening with
+        nothing begun; None otherwise (speaking, answering, cooling down).
+        """
+
+        self.refresh_cooldown()
+        if not self.active or self.state is not TurnState.IDLE:
+            return None
+        turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=turn_id
+        self.turn_generations[turn_id]=self.generation
+        self.endpoint_at=self.clock()
+        self.turn_committed_at[turn_id]=self.endpoint_at
+        self.framer=FrameBuffer(); self._reset_interrupt_input()
+        self.detector.reset(TurnState.PROCESSING)
+        return turn_id
 
 
 def cascade_transcription_context(
@@ -6942,6 +6964,15 @@ def _record_experiment_report_plan(
             # Lane VX, decision 3: the value was said "네" to in the 바로
             # 확인 way; the end-of-experiment review does not ask it again.
             payload["experimenter_confirmed"]=True
+        deviations=[
+            dict(item) for item in plan.note_record.get("deviations") or ()
+            if isinstance(item,dict)
+        ]
+        if deviations:
+            # Lane FX3, decision 5: the values that differ from the source's
+            # (said, number, unit, the source's value), for the record after
+            # the run as the run card showed them.
+            payload["deviations"]=deviations
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,
@@ -8031,6 +8062,11 @@ VOICE_CALIBRATION_PROMPT=(
 VOICE_CALIBRATION_DONE="목소리를 맞췄어요. 이제 이보다 많이 작은 말은 다른 사람 말로 보고 듣지 않아요."
 VOICE_CALIBRATION_SKIPPED="알겠어요. 목소리 맞추기는 건너뛸게요."
 VOICE_CALIBRATION_RETRY="목소리를 재지 못했어요. 화면의 문장을 한 번 더 읽어 주세요."
+#: Lane FX3 (2026-10-16), decision 7: said, and shown, when the room's noise
+#: floor is near the line just measured -- the sentence was read where the
+#: room's own sound is heard as loud as the wearer. A suggestion only.
+NOISY_CALIBRATION_WORDS="방이 시끄러워 맞추기가 정확하지 않아요. 조용한 곳에서 다시 맞추거나 시끄러운 곳 모드를 쓰세요."
+VOICE_CALIBRATION_DONE_NOISY=f"목소리를 맞췄어요. {NOISY_CALIBRATION_WORDS}"
 _VOICE_CALIBRATION_REQUEST=re.compile(
     r"^(?:내\s*)?목소리(?:를|도)?\s*(?:다시\s*|또\s*|한\s*번\s*더\s*)?"
     r"(?:맞춰|맞추|재|재어|측정해|등록해)(?:\s*(?:줘|줘요|주세요|줄래|보자|볼게|줄래요))?$"
@@ -8083,6 +8119,7 @@ async def _finish_voice_calibration(
 )->None:
     """Take the sentence read as the wearer's level, or the skip said instead."""
 
+    notice:str|None=None
     if voice_calibration_skipped(transcript):
         session.calibration_pending=False
         state,words="skipped",VOICE_CALIBRATION_SKIPPED
@@ -8096,6 +8133,19 @@ async def _finish_voice_calibration(
         log.info(
             "voice calibration measured level_db=%.1f margin_db=%.1f sensitivity=%s turn_id=%s",
             reference.reference_db,reference.margin_db,reference.sensitivity,turn_id)
+        if session.room_near_the_line() is True:
+            # Lane FX3, decision 7: lane SP2's noise floor already within
+            # LEVEL_ENDPOINT_FLOOR_GAP_DB of the line just measured. Said
+            # once, with the measurement; nothing is changed. It is the
+            # room's suggestion of the ten minutes (shared with lanes SP1
+            # and SP2), so the noise floor's own does not follow at once.
+            notice=NOISY_CALIBRATION_WORDS
+            words=VOICE_CALIBRATION_DONE_NOISY
+            session.ambient_suggested_at=session.clock()
+            floor=session.noise_floor.level_db()
+            log.info(
+                "voice calibration noisy room floor_db=%s reference_db=%.1f turn_id=%s",
+                round(floor,1) if floor is not None else None,reference.reference_db,turn_id)
     await current_text("transcript",turn_id=turn_id,text=transcript)
     reference=session.level_reference
     fields:dict[str,Any]={
@@ -8107,6 +8157,8 @@ async def _finish_voice_calibration(
             level_db=round(reference.reference_db,1),
             margin_db=round(reference.margin_db,1),
             threshold_db=round(reference.threshold_db,1))
+        if notice is not None:
+            fields["notice"]=notice
     await current_text("speaker.calibration",turn_id=turn_id,**fields)
     await finish(words,"voice_calibration",outcome="complete")
 
@@ -8203,6 +8255,21 @@ async def _prompt_voice_calibration(
     )
     log.info("voice calibration prompted on screen turn_id=%s",turn_id)
     return True
+
+
+#: Lane FX3, decision 8: said once when the router's model could not answer
+#: the turn (llm_router.ROUTER_MODEL_UNAVAILABLE_KINDS); nothing changes.
+ROUTER_UNAVAILABLE_WORDS="지금 답하지 못했어요. 다시 말씀해 주세요."
+
+
+#: Lane FX3, decision 4: what the screen shows when a tapped candidate is
+#: not taken -- the session changed, it is not one the last reply asked
+#: back, or something is under way.
+CLARIFY_CHOICE_REFUSED_WORDS={
+    "stale_session":"세션이 바뀌어 이 후보를 고를 수 없어요.",
+    "not_asked":"지금 묻고 있는 후보가 아니에요. 말로 말씀해 주세요.",
+    "busy":"지금은 고를 수 없어요. 말이 끝난 뒤 다시 눌러 주세요.",
+}
 
 
 #: Lane SP1, decision 3: the suggestion after this many ignored voices in
@@ -9080,6 +9147,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     actor_principal_id=turn_actor_principal_id,
                     actor_role=turn_actor_role,rules_route=rules_route,
                     progress=progress,clock=clock)
+                if router_outcome.handled_by=="model_unavailable":
+                    # Lane FX3, decision 8: the router's model was at its
+                    # request limit. Nothing was sent again and nothing was
+                    # routed; the turn says so once and changes nothing.
+                    log.info(
+                        "router model unavailable turn_id=%s reason=%s",
+                        turn_id,router_outcome.fallback_reason)
+                    _record_workspace_metric(
+                        category="voice",metric_name="command_failure",
+                        dimensions={"status":"stopped","reason_code":str(router_outcome.fallback_reason)[:100]},
+                    )
+                    await finish_blocked_voice(ROUTER_UNAVAILABLE_WORDS,"model_unavailable")
+                    return
                 routed_turn=(
                     replace(router_outcome.rule_route,plan=router_outcome.plan)
                     if router_outcome.rule_route is not None else
@@ -10646,9 +10726,8 @@ async def voice_socket(websocket:WebSocket):
         await websocket.close(code=1008,reason="invalid configuration")
         return
     research_capabilities={
-        # The xAI web reference search is gone (lane DOC3); the screen still
-        # reads this entry, so it says, always, that the capability is off.
-        "external_text":{"status":"disabled"},
+        # The xAI web reference search is gone (lane DOC3), and since lane FX3
+        # (decision 3) the screen no longer reads an entry for it.
         "supplemental_model":supplemental_settings.public_capability(),
         "multi_brain":multi_brain_settings.public_capability(),
         "web_explanation":web_explanation_settings.public_capability(),
@@ -11444,6 +11523,59 @@ async def voice_socket(websocket:WebSocket):
                 else:
                     session.track_visual_task(asyncio.create_task(
                         _prompt_voice_calibration(sender,session)))
+            elif control["type"]=="client.clarify_choice":
+                # Lane FX3, decision 4: a candidate the last reply asked back,
+                # tapped instead of said. Taken only if it is one of them and
+                # nothing else is under way; then it runs as an utterance's
+                # words do -- the same rules, confirmations and state changes.
+                curated=session.curated_protocol_session
+                chosen_turn_id=None
+                if not (
+                    session.active and session.accepted_mode=="cascade"
+                    and curated is not None
+                    and control["configuration_id"]==session.accepted_configuration_id
+                    and control["generation"]==session.generation
+                ):
+                    refusal="stale_session"
+                elif (words:=curated.clarify_choice(control["candidate"])) is None:
+                    refusal="not_asked"
+                elif (
+                    (task is not None and not task.done()) or session.calibration_pending
+                    or (chosen_turn_id:=session.start_chosen_turn()) is None
+                ):
+                    refusal="busy"
+                else:
+                    refusal=None
+                if refusal is not None:
+                    log.info(
+                        "client.clarify_choice refused reason=%s asked_turn_id=%s",
+                        refusal,control["turn_id"])
+                    await websocket.send_text(event(
+                        "clarify.choice.refused",
+                        configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,turn_id=control["turn_id"],
+                        reason=refusal,text=CLARIFY_CHOICE_REFUSED_WORDS[refusal]))
+                    continue
+                assert chosen_turn_id is not None
+                chosen_generation=session.turn_generations[chosen_turn_id]
+                log.info(
+                    "client.clarify_choice taken turn_id=%s asked_turn_id=%s",
+                    chosen_turn_id,control["turn_id"])
+                await websocket.send_text(event(
+                    "speech.start",turn_id=chosen_turn_id,generation=chosen_generation,
+                    state=session.state.value,voiced_frames=0,total_frames=0,
+                    prefix_frames_retained=0,duration_ms=0,reason=None,forced=False,
+                    input="clarify_choice"))
+                progress=session.advance_turn_progress(
+                    chosen_turn_id,chosen_generation,"listening")
+                if progress is not None:
+                    await websocket.send_text(event("turn.state",**progress))
+                task=asyncio.create_task(run_turn_safely(
+                    websocket,session,b"",chosen_turn_id,0,0,0,
+                    accepted_transcription=Transcription(
+                        words,session.last_confirmed_language
+                        or session.accepted_language),
+                    accepted_stt_ms=0))
             elif control["type"]=="client.audio_ready":
                 valid=bool(
                     session.active and session.accepted_mode=="cascade"

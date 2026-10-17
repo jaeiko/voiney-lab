@@ -90,7 +90,12 @@ test.describe('Researcher / Bench workspace', () => {
   });
 
   test('long conversation stays contained beside the continuous step and timeline workspace', async ({ page }) => {
+    // Lane FX3 decision 1: this test renders its own 24-row timeline, so it
+    // waits for the startup reset first (it flaked 3 of 5 CI runs when the
+    // reset landed after the render: event list scroll 74 = client 74).
+    const startupDone = experimentSessionsLoaded(page);
     await page.goto('/');
+    await startupDone;
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
     await page.locator('#hero-setup').evaluate((node) => node.classList.add('collapsed'));
     await page.evaluate(() => {

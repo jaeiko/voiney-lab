@@ -68,7 +68,7 @@ from voiney_lab.answer_checks import (
     without_sentences,
 )
 from voiney_lab.brain import RouterTurnRecord
-from voiney_lab.model_providers import RoleModel
+from voiney_lab.model_providers import ModelProviderError, RoleModel
 from voiney_lab.intent_fences import (
     evidence_fence_rejection,
     has_completion_evidence,
@@ -1815,15 +1815,27 @@ def answer_check_failures(
 
 # --- One routed turn -----------------------------------------------------------------
 
+#: Lane FX3 (2026-10-16), decision 8: the provider failure that stops a voice
+#: turn instead of handing it to the rules -- the request limit (429). Nothing
+#: is sent again (lane AN2: voice roles never wait) and nothing changes; the
+#: server says it could not answer now. A timeout, a server error or a lost
+#: connection -- far more frequent -- take the rules' path as before, so the
+#: rules still answer mid-experiment (the person's narrowing, 2026-10-16).
+ROUTER_MODEL_UNAVAILABLE_KINDS = frozenset({"rate_limited"})
+
+
 @dataclass(frozen=True)
 class RouterTurnOutcome:
     """How one turn was routed, and the plan it produced."""
 
     plan: Any
-    #: "front:<rule>", "llm", "llm+tool" or "fallback_rules" (design §4-2).
+    #: "front:<rule>", "llm", "llm+tool" or "fallback_rules" (design §4-2), or
+    #: "model_unavailable" (lane FX3, decision 8: at the request limit; no
+    #: plan, the turn stops).
     handled_by: str
     #: Why the rules answered instead: "timeout", "model_error", "no_reply",
-    #: "answer_unreadable", "refused:<code>", "answer_rejected:<checks>".
+    #: "answer_unreadable", "refused:<code>", "answer_rejected:<checks>"; or,
+    #: with "model_unavailable", "model_unavailable:<kind>".
     fallback_reason: str | None = None
     verdict: ProposalVerdict | None = None
     proposals: tuple[ToolProposal | str, ...] = ()
@@ -1953,6 +1965,15 @@ async def route_turn_with_llm_router(
             rule_route=route, timings_ms=timings, **kept,
         )
 
+    def unavailable(kind: str) -> RouterTurnOutcome:
+        # Lane FX3, decision 8: the turn stops here -- no rules, no plan.
+        stop_roles()
+        timings["total_ms"] = round((clock() - started) * 1000, 1)
+        return RouterTurnOutcome(
+            plan=None, handled_by="model_unavailable",
+            fallback_reason=f"model_unavailable:{kind}", timings_ms=timings,
+        )
+
     basis = session.proposal_basis(turn_id=turn_id, generation=generation)
     status_at_call = session.workflow_status
     context = session.router_context(
@@ -1984,8 +2005,10 @@ async def route_turn_with_llm_router(
     except asyncio.CancelledError:
         stop_roles()
         raise
-    except Exception:  # noqa: BLE001 -- any provider failure takes the rules' path
+    except Exception as exc:  # noqa: BLE001 -- any other provider failure takes the rules' path
         timings["model_ms"] = round((clock() - started) * 1000, 1) - timings["front_ms"]
+        if isinstance(exc, ModelProviderError) and exc.kind in ROUTER_MODEL_UNAVAILABLE_KINDS:
+            return unavailable(exc.kind)
         return await fall_back("model_error")
     timings["model_ms"] = reply.total_ms
     if reply.first_token_ms is not None:

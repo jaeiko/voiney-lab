@@ -5,6 +5,9 @@ from typing import Any
 
 class ProtocolError(ValueError): pass
 
+#: Lane FX3, decision 4: the longest candidate a tap may send.
+CLARIFY_CHOICE_MAX_CHARS=200
+
 def parse_control(raw: str) -> dict[str, Any]:
     try: message=json.loads(raw)
     except json.JSONDecodeError as exc: raise ProtocolError("control message must be valid JSON") from exc
@@ -154,6 +157,27 @@ def parse_control(raw: str) -> dict[str, Any]:
         return {
             "type":"client.voice_calibration","action":action,
             "configuration_id":configuration_id,"generation":generation,
+        }
+    if message["type"]=="client.clarify_choice":
+        # Lane FX3 (2026-10-16), decision 4: a candidate the last reply asked
+        # back, tapped on the screen. The server takes it as the words of the
+        # next turn only if it is one of those candidates.
+        candidate=message.get("candidate")
+        said=" ".join(candidate.split()) if isinstance(candidate,str) else ""
+        configuration_id=message.get("configuration_id")
+        generation=message.get("generation")
+        turn_id=message.get("turn_id")
+        if not said or len(said)>CLARIFY_CHOICE_MAX_CHARS:
+            raise ProtocolError("client.clarify_choice needs a candidate of 1-200 characters")
+        if (not isinstance(configuration_id,int) or isinstance(configuration_id,bool)
+                or configuration_id<=0 or
+                not isinstance(generation,int) or isinstance(generation,bool)
+                or generation<0 or
+                not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0):
+            raise ProtocolError("client.clarify_choice metadata is invalid")
+        return {
+            "type":"client.clarify_choice","configuration_id":configuration_id,
+            "generation":generation,"turn_id":turn_id,"candidate":said,
         }
     raise ProtocolError(f"unknown control type: {message.get('type')}")
 
