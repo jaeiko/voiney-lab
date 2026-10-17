@@ -1815,12 +1815,13 @@ def answer_check_failures(
 
 # --- One routed turn -----------------------------------------------------------------
 
-#: Lane FX3 (2026-10-16), decision 8: the provider failures that stop a voice
-#: turn instead of handing it to the rules -- at the request limit (429), late,
-#: or briefly down (5xx, the connection). Nothing is sent again (lane AN2:
-#: voice roles never wait) and nothing changes; the server says it could not
-#: answer now. Any other failure takes the rules' path as before.
-ROUTER_MODEL_UNAVAILABLE_KINDS = frozenset({"rate_limited", "timeout", "server", "connection"})
+#: Lane FX3 (2026-10-16), decision 8: the provider failure that stops a voice
+#: turn instead of handing it to the rules -- the request limit (429). Nothing
+#: is sent again (lane AN2: voice roles never wait) and nothing changes; the
+#: server says it could not answer now. A timeout, a server error or a lost
+#: connection -- far more frequent -- take the rules' path as before, so the
+#: rules still answer mid-experiment (the person's narrowing, 2026-10-16).
+ROUTER_MODEL_UNAVAILABLE_KINDS = frozenset({"rate_limited"})
 
 
 @dataclass(frozen=True)
@@ -1829,7 +1830,8 @@ class RouterTurnOutcome:
 
     plan: Any
     #: "front:<rule>", "llm", "llm+tool" or "fallback_rules" (design §4-2), or
-    #: "model_unavailable" (lane FX3, decision 8: no plan, the turn stops).
+    #: "model_unavailable" (lane FX3, decision 8: at the request limit; no
+    #: plan, the turn stops).
     handled_by: str
     #: Why the rules answered instead: "timeout", "model_error", "no_reply",
     #: "answer_unreadable", "refused:<code>", "answer_rejected:<checks>"; or,
@@ -1999,7 +2001,7 @@ async def route_turn_with_llm_router(
         )
     except asyncio.TimeoutError:
         timings["model_ms"] = round((clock() - started) * 1000, 1) - timings["front_ms"]
-        return unavailable("timeout")
+        return await fall_back("timeout")
     except asyncio.CancelledError:
         stop_roles()
         raise

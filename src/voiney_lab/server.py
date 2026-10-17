@@ -4568,7 +4568,7 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
     # Lane RA, decision (g): a session without a protocol has no general
     # brain any more; its turn is answered by rule.
     "no_protocol",
-    # Lane FX3, decision 8: the router's model was at its limit, late or down.
+    # Lane FX3, decision 8: the router's model was at its request limit.
     "model_unavailable",
 })
 #: Lane RA, decision (d): how long a turn whose words end in an unfinished
@@ -9149,9 +9149,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     progress=progress,clock=clock)
                 if router_outcome.handled_by=="model_unavailable":
                     # Lane FX3, decision 8: the router's model was at its
-                    # request limit, late or briefly down. Nothing was sent
-                    # again and nothing was routed; the turn says so once and
-                    # changes nothing.
+                    # request limit. Nothing was sent again and nothing was
+                    # routed; the turn says so once and changes nothing.
                     log.info(
                         "router model unavailable turn_id=%s reason=%s",
                         turn_id,router_outcome.fallback_reason)

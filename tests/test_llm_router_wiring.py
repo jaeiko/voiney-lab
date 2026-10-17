@@ -171,9 +171,8 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(outcome.fallback_reason, "refused:more_than_one_proposal")
 
     def test_a_late_or_failing_model_takes_the_rules_path(self) -> None:
-        # Lane FX3, decision 8: a late model no longer takes the rules' path;
-        # it stops the turn (tests/test_lane_fx3_router_unavailable.py).
         for name, script, reason in (
+            ("late", (answer_reply("늦은 답"), 0.6), "timeout"),
             ("error", RuntimeError("provider down"), "model_error"),
             ("silent", text_reply(""), "no_reply"),
             ("prose", text_reply("버퍼 1은 트리스 완충액입니다."), "answer_unreadable"),

@@ -1,4 +1,4 @@
-"""Lane FX3, decision 8: a voice turn's model at its request limit, late or briefly down.
+"""Lane FX3, decision 8: a voice turn's model at its request limit.
 
 Lane AN2 kept the provider resend for the background roles (analysis,
 translation, report); the voice-turn roles never wait. The person decided
@@ -7,11 +7,13 @@ does not change, and "지금 답하지 못했어요. 다시 말씀해 주세요.
 
 What was there: the router, on a timeout or any provider error, handed the
 turn to the rules (``fall_back``), which could themselves change the state.
-Now, for the router, a timeout and a ``ModelProviderError`` of the transient
-kinds (rate_limited, timeout, server, connection) stop the turn with that
-sentence; any other failure takes the rules' path as before. The Answer and
-supplemental roles already sent once and let the rules' answer stand (the
-person's choice: unchanged); the last tests pin that.
+Now a ``ModelProviderError`` of kind rate_limited (HTTP 429) stops the turn
+with that sentence. A timeout, a server error and a lost connection -- far
+more frequent -- take the rules' path as before, so the rules answer
+mid-experiment (the person narrowed the decision to the request limit on
+2026-10-16). The Answer and supplemental roles already sent once and let the
+rules' answer stand (the person's choice: unchanged); the last tests pin
+that.
 """
 
 from __future__ import annotations
@@ -41,36 +43,36 @@ def _error(kind: str, status: int | None) -> ModelProviderError:
 
 
 class RouterTests(unittest.TestCase):
-    def test_a_transient_failure_stops_the_turn_and_changes_nothing(self) -> None:
-        for name, script in (
-            ("429", _error("rate_limited", 429)),
-            ("503", _error("server", 503)),
-            ("connection", _error("connection", None)),
-            ("provider timeout", _error("timeout", None)),
-            ("late", (answer_reply("늦은 답"), 0.6)),
-        ):
-            with self.subTest(name):
-                session = _session()
-                before = _state(session)
-                client = FakeRouterClient(script)
-                outcome, built = _route(session, SAID, client, settings=QUICK)
-                self.assertEqual(outcome.handled_by, "model_unavailable")
-                self.assertIsNone(outcome.plan)
-                self.assertIsNone(outcome.rule_route, "the rules were run")
-                self.assertEqual(len(client.requests), 1, "sent again")
-                self.assertEqual(len(built), 1)
-                self.assertEqual(_state(session), before)
-
-    def test_the_reason_names_the_kind(self) -> None:
+    def test_the_request_limit_stops_the_turn_and_changes_nothing(self) -> None:
         session = _session()
-        outcome, _ = _route(session, SAID, FakeRouterClient(_error("rate_limited", 429)), settings=QUICK)
+        before = _state(session)
+        client = FakeRouterClient(_error("rate_limited", 429))
+        outcome, built = _route(session, SAID, client, settings=QUICK)
+        self.assertEqual(outcome.handled_by, "model_unavailable")
         self.assertEqual(outcome.fallback_reason, "model_unavailable:rate_limited")
-        outcome, _ = _route(_session(), SAID, FakeRouterClient((answer_reply("늦은 답"), 0.6)), settings=QUICK)
-        self.assertEqual(outcome.fallback_reason, "model_unavailable:timeout")
-        self.assertEqual(ROUTER_MODEL_UNAVAILABLE_KINDS, frozenset({"rate_limited", "timeout", "server", "connection"}))
+        self.assertIsNone(outcome.plan)
+        self.assertIsNone(outcome.rule_route, "the rules were run")
+        self.assertEqual(len(client.requests), 1, "sent again")
+        self.assertEqual(len(built), 1)
+        self.assertEqual(_state(session), before)
+        self.assertEqual(ROUTER_MODEL_UNAVAILABLE_KINDS, frozenset({"rate_limited"}))
+
+    def test_a_late_model_still_takes_the_rules_path(self) -> None:
+        session = _session()
+        client = FakeRouterClient((answer_reply("늦은 답"), 0.6))
+        outcome, _ = _route(session, SAID, client, settings=QUICK)
+        twin, plan = _rules_alone(SAID)
+        self.assertEqual(outcome.handled_by, "fallback_rules")
+        self.assertEqual(outcome.fallback_reason, "timeout")
+        self.assertEqual(outcome.plan, plan)
+        self.assertEqual(len(client.requests), 1, "sent again")
+        self.assertEqual(_state(session), _state(twin))
 
     def test_any_other_failure_still_takes_the_rules_path(self) -> None:
         for name, error in (
+            ("503", _error("server", 503)),
+            ("connection", _error("connection", None)),
+            ("provider timeout", _error("timeout", None)),
             ("401", _error("authentication", 401)),
             ("400", _error("invalid_request", 400)),
             ("402", _error("payment_required", 402)),
