@@ -3778,8 +3778,10 @@ class ProtocolCatalog:
                     except Exception as exc:  # noqa: BLE001 - sent once more by itself
                         if safety_block_provider(exc) is not None:
                             # Lane RV2, decision f: a prompt the safety filter
-                            # blocks is blocked again the same way (lane AN2
-                            # measured it three times); it is not sent again.
+                            # blocks is not sent again here. The adapter has
+                            # already sent it once more (lane AN3, decision C:
+                            # lane GM saw a block answered on another send);
+                            # blocked twice, its pages are an item.
                             raise
                         retry_model, retry_payload = observed.retry()
                         outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
