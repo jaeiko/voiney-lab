@@ -1082,6 +1082,73 @@ asks again); an analysis waiting for review shows its items without the new
 cards. Checked on the same copy with the code of `91b84c6`: all ten protocols
 listed and reviewed, the registered version loads.
 
+## Lane AN3 (2026-10-17): OCR numbers by place, one card per page, joined numbering, a block sent once more
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) only. Human decisions of 2026-10-16 (A, B, C).
+New fields and values, all append-only:
+
+- `protocol_ocr_completed` pages gain `other_provider` and
+  `other_provider_version` (the engine that also read the page), `other_text`
+  (its whole text) and `value_readings`: each number the chosen engine read,
+  `{"token", "text", "box": [x0, y0, x1, y1], "other_token", "other_text"}`,
+  with the other engine's number in the same place on the page rendered at
+  `render_dpi` (`other_*` null when it read none there). `value_readings` is
+  null where the numbers were not compared place by place (one engine read
+  the page, or an engine gave no word boxes).
+- `auto_resolved` entries of kind `ocr_value` may carry `"by": "place"` (both
+  engines read the value alike in every place it stands).
+- `ocr_value` flags carry `extra.readings` (the chosen engine's reading, then
+  the other engine's different ones: `{"engine", "text", "token"}`) and new
+  `reason_code`s: `ocr_value_read_differently`, `ocr_value_one_engine`,
+  `ocr_value_not_placed`. A page's values are one card, `ocr_page:<page>`;
+  `protocol_review_decision_recorded` gains `page_card` on each confirm that
+  card's [모두 맞아요] wrote (one event per value it confirmed).
+- A new flag reason `numbering_seam` (item id `seam:<step id>+<step id>`,
+  `reason_code` `step_labelling_differs`, `extra` = both steps' readings and
+  pieces): where a long document's joined pieces change from numbered to
+  unnumbered steps or back. Its decision is a `confirm` ([이어져요]).
+- The domain rule "the steps are all labelled or all unlabelled" left
+  `validate_protocol` for `validate_step_labelling`, which the analysis
+  applies to a document read at once and to each piece. A joined analysis,
+  its review-pending record and its review versions may hold both kinds.
+- A `protocol_analysis_failed` with a piece conflict `step_labelling_differs`
+  is no longer written (it still reads back as before).
+- The provider resends a blocked reply once (lane AN3, C): a piece event's
+  `provider_retries` may hold `{"reason": "blocked", ...}` rows.
+
+### Reading older data
+
+An OCR result stored before this version has no `value_readings`: its pages
+are compared as lane RV2 compared them, by page (same numbers and units on
+the page settle its values; any other page asks them). Flags, decisions and
+cards stored before read as before; an analysis waiting for review shows its
+OCR values on one card per page.
+Checked on a copy of `data/runtime/candidate-a-live-acceptance` (sqlite
+through the backup API, objects hard-linked; the original only read): the
+catalog listing, the review, the review draft with its cards and the pipeline
+line of all seven protocols read, and `/api/protocols` lists them; on the
+copy, with fake OCR engines and fake models, a scanned page the two engines
+read differently became one page card (`ocr_page:2`, the CLOVA reading chosen
+for one value, the sentence it stands in confirmed) and was registered as
+`pdf-1-review-1`, which runs; a document whose middle part prints no step
+numbers became two seam cards, [이어져요] at both, registered, and runs with
+the steps numbered 1-6 (lane AN3 report).
+
+### Going back
+Code from before this version ignores the new OCR fields and decision
+markers: a registered version reviewed through a page card reads and runs,
+and an analysis waiting for review shows its OCR values one item each. One
+record it cannot read: a **registered** review version whose steps mix
+numbered and unnumbered ones (decision B) -- the older `validate_protocol`
+refuses it when the store loads it, and the older catalog's protocol list
+then fails as a whole. A joined analysis still waiting for review reads (its
+items as before). Checked on the same copies with the code of `81ad9ed`:
+every other protocol listed, reviewed and loaded; the registered mixed
+version raised `ProtocolSerializationError`. Before going back with such a
+version stored, keep this version's `validate_protocol` (the rule moved to
+`validate_step_labelling`) or restore a store backup taken before it.
+
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 
 No schema change and no migration; nothing already stored is read differently.

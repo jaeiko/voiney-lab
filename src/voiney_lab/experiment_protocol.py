@@ -1463,6 +1463,40 @@ def _validate_cleared_fields(protocol: ExperimentProtocol) -> None:
             )
 
 
+def validate_step_labelling(protocol: ExperimentProtocol) -> ExperimentProtocol:
+    """Refuse a protocol whose steps are labelled in two ways.
+
+    Human decision 2026-10-05 (lane P3): an empty source_label means the
+    source prints no step numbers, and the screen numbers such steps in
+    order. Whether a source prints step numbers is a property of the source
+    one reading covers, so the steps of one analysis -- a document read at
+    once, or one piece of a long one -- are all labelled or all unlabelled.
+
+    Human decision 2026-10-16 (lane AN3, decision B): a long manual read in
+    pieces may number its steps in one part and not in another; the pieces
+    joined in page order keep each part's own numbers, and a person is asked
+    at each seam where the numbering changes. So this rule is no longer part
+    of ``validate_protocol`` -- a joined analysis, its stored record and its
+    review versions hold steps of both kinds -- and the analysis applies it
+    to each reading of the source.
+    """
+
+    labelled_first: bool | None = None
+    for section_index, section in enumerate(protocol.sections):
+        for step_index, step in enumerate(section.steps):
+            labelled = bool(step.source_label.strip())
+            if labelled_first is None:
+                labelled_first = labelled
+            elif labelled != labelled_first:
+                raise _error(
+                    ProtocolValidationCode.MISSING_SOURCE_LABEL,
+                    "source steps must all preserve their original number or "
+                    "label, or all be unlabelled",
+                    f"sections[{section_index}].steps[{step_index}]",
+                )
+    return protocol
+
+
 def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
     """Validate all evidence, identifiers, references, and dependency graphs."""
 
@@ -1549,7 +1583,6 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
 
     section_locations: dict[str, str] = {}
     step_locations: dict[str, str] = {}
-    step_labelled: bool | None = None
     step_sections: dict[str, str] = {}
     action_locations: dict[tuple[str, str], str] = {}
     edges: dict[tuple[str, str, str], set[tuple[str, str, str]]] = {}
@@ -1593,19 +1626,9 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
                     step_location,
                 )
             # Empty means the source prints no step numbers (human decision
-            # 2026-10-05, lane P3); the screen numbers such steps in order.
-            # That is a property of the whole source, so the steps are either
-            # all labelled or all unlabelled.
-            labelled = bool(step.source_label.strip())
-            if step_labelled is None:
-                step_labelled = labelled
-            elif labelled != step_labelled:
-                raise _error(
-                    ProtocolValidationCode.MISSING_SOURCE_LABEL,
-                    "source steps must all preserve their original number or "
-                    "label, or all be unlabelled",
-                    step_location,
-                )
+            # 2026-10-05, lane P3). Whether all of a protocol's steps must be
+            # labelled alike is ``validate_step_labelling``'s rule, applied
+            # by the analysis that reads the source (lane AN3, decision B).
             _text(
                 step.instruction_source_text,
                 f"{step_location}.instruction_source_text",

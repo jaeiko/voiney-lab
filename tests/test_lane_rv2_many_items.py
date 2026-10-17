@@ -167,7 +167,7 @@ class TooManyItemsTests(_ManyCase):
 
 
 class ManyOcrValuesTests(_OcrCase):
-    def test_the_guidance_names_the_ocr_when_its_values_are_most_of_the_items(self) -> None:
+    def test_one_page_of_ocr_values_is_one_card_not_the_guidance(self) -> None:
         values = ", ".join(f"{index} mL" for index in range(1, 15))
         step = f"2. Add {values}."
         scan = SCAN_TEXT.replace("2. Spin the tube at 4000 rpm for 5 min.", step)
@@ -175,14 +175,13 @@ class ManyOcrValuesTests(_OcrCase):
         self.catalog.run_ocr(self.protocol_id, _TwoEngineOcr(engines=("google",), text=scan),
                              ocr_id="ocr-" + "a" * 32)
         self.catalog.request_analysis(self.protocol_id, "analysis-" + "a" * 32)
-        with self.assertRaises(ProtocolAnalysisTooManyItemsError):
-            self.catalog.analyze(self.protocol_id, _RawModel(answer, answer),
-                                 analysis_id="analysis-" + "a" * 32)
-        (failed,) = self.events("protocol_analysis_failed")
-        self.assertEqual(failed["review_items"]["by_reason"], {"ocr_value": 15})
-        message = self.catalog.pipeline_status(self.protocol_id)["message"]
-        self.assertIn("그중 15건은 OCR 엔진 하나만 읽었거나 두 엔진이 다르게 읽은 쪽의 숫자예요", message)
-        self.assertIn("VOINEY_LAB_OCR_PROVIDERS=clova,google", message)
+        # Lane AN3, decision A3: the page's 15 values count once, so the
+        # analysis waits for review (the guidance with OCR pages:
+        # tests/test_lane_an3_ocr_two_engines.py).
+        entry = self.catalog.analyze(self.protocol_id, _RawModel(answer, answer),
+                                     analysis_id="analysis-" + "a" * 32)
+        self.assertEqual(self.events("protocol_analysis_failed"), [])
+        self.assertEqual(entry.review_pending["by_reason"], {"ocr_value": 1})
 
 
 class LongDocumentTests(_CatalogCase):

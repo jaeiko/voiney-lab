@@ -1084,6 +1084,13 @@ def _retry_after(exc: BaseException) -> float | None:
 
 #: An empty answer that ended with STOP is sent again this many times.
 EMPTY_STOP_RESENDS = 1
+#: A reply the safety filter blocked is sent again this many times, at once
+#: (lane AN3, decision C, human decision 2026-10-16). Lane GM measured the
+#: same request blocked on one send and answered on another (mfds_foodcode
+#: piece 22 flipped under one setting; pieces 13 and 19, blocked in lane
+#: AN2, were not blocked in lane GM); a blocked attempt costs no tokens and
+#: about 5-10 s. No wait: waiting is not what the filter answers to.
+BLOCKED_RESENDS = 1
 
 
 def _empty_stop(reply: Any) -> bool:
@@ -1103,7 +1110,8 @@ class _Retrying:
 
     The request is the same bytes each time and the reply goes through the
     same checks as any other (nothing here judges a reply). An empty answer
-    that ended with STOP is sent once more. Streams are not sent again: their
+    that ended with STOP is sent once more, and so is a reply the safety
+    filter blocked (lane AN3, decision C). Streams are not sent again: their
     errors come while the caller already reads them.
     """
 
@@ -1137,6 +1145,20 @@ class _Retrying:
         self._event(exc.kind, exc.status_code, attempt, wait or 0.0, exc.retry_after, wait is not None)
         return wait
 
+    def after_block(self, exc: ModelProviderError, blocks: int) -> bool:
+        """Whether a reply the safety filter blocked is to be sent once more.
+
+        ``blocks`` counts the blocked replies before this one. One resend,
+        and no wait (lane AN3, decision C); the 429 and server-error resends
+        are counted apart from it.
+        """
+
+        if exc.kind != "blocked":
+            return False
+        resend = blocks < BLOCKED_RESENDS
+        self._event("blocked", None, blocks + 1, 0.0, None, resend)
+        return resend
+
     def after_reply(self, reply: Any, empties: int) -> bool:
         """Whether an empty STOP answer is to be sent once more.
 
@@ -1157,11 +1179,16 @@ class _Retrying:
         def run(**kwargs: Any) -> Any:
             if kwargs.get("stream"):
                 return create(**kwargs)
-            failures = empties = 0
+            failures = empties = blocks = 0
             while True:
                 try:
                     reply = create(**kwargs)
                 except ModelProviderError as exc:
+                    if exc.kind == "blocked":
+                        if not self.after_block(exc, blocks):
+                            raise
+                        blocks += 1
+                        continue
                     wait = self.after_error(exc, failures)
                     if wait is None:
                         raise
@@ -1178,11 +1205,16 @@ class _Retrying:
         async def run(**kwargs: Any) -> Any:
             if kwargs.get("stream"):
                 return await create(**kwargs)
-            failures = empties = 0
+            failures = empties = blocks = 0
             while True:
                 try:
                     reply = await create(**kwargs)
                 except ModelProviderError as exc:
+                    if exc.kind == "blocked":
+                        if not self.after_block(exc, blocks):
+                            raise
+                        blocks += 1
+                        continue
                     wait = self.after_error(exc, failures)
                     if wait is None:
                         raise

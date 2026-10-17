@@ -172,7 +172,7 @@ class JoinBookkeepingTests(_TwoPiecesCase):
         # there); section "finish" kept its emptied title, by its joined id.
         self.assertEqual(ready["cleared_fields"], ["sections.p2.finish.title_source_text"])
 
-    def test_pieces_that_number_their_steps_differently_are_refused_by_name(self) -> None:
+    def test_pieces_that_number_their_steps_differently_are_joined_with_a_seam_card(self) -> None:
         def unlabelled(protocol: dict) -> None:
             for section in protocol["sections"]:
                 for step in section["steps"]:
@@ -181,16 +181,15 @@ class JoinBookkeepingTests(_TwoPiecesCase):
                         step[field] = step[field].split(". ", 1)[1]
                     step["evidence"]["source_excerpt"] = step["instruction_source_text"]
 
-        error = self.run_two(self.piece_answer((1, 2)), self.piece_answer((2, 3), unlabelled))
-        self.assertEqual(getattr(error, "reason", None), "step_labelling_differs")
-        (failed,) = self.events("protocol_analysis_failed")
-        conflict = failed["piece_conflict"]
-        self.assertEqual(conflict["reason"], "step_labelling_differs")
-        self.assertEqual([(piece["first_page"], piece["last_page"])
-                          for piece in conflict["unlabelled_pieces"]], [(2, 3)])
-        line = self.catalog.pipeline_status(self.protocol_id)
-        self.assertIn("조각마다 단계 번호를 다르게 읽어", line["message"])
-        self.assertIn("2–3쪽은 번호 없이", line["message"])
+        entry = self.run_two(self.piece_answer((1, 2)), self.piece_answer((2, 3), unlabelled))
+        # Lane AN3, decision B: no longer refused; where the numbering changes
+        # is a card of its own (the unnumbered quotes of numbered lines are
+        # cards for their evidence, as any such quote).
+        self.assertEqual(entry.analysis_status, "review_pending")
+        self.assertEqual(self.events("protocol_analysis_failed"), [])
+        cards = self.catalog.review_draft(self.protocol_id)["cards"]
+        self.assertIn(("seam:p1.s4+p2.s5", "numbering_seam"),
+                      [(card["item_id"], card["type"]) for card in cards])
 
 
 if __name__ == "__main__":

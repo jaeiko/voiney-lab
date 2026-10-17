@@ -303,8 +303,10 @@ class UnnumberedSourceTests(unittest.TestCase):
         mixed = section.steps[0].__class__(**{**section.steps[0].__dict__, "source_label": "1"})
         broken = protocol.__class__(**{**protocol.__dict__, "sections": (
             section.__class__(**{**section.__dict__, "steps": (mixed, section.steps[1])}),)})
+        # Lane AN3, decision B: the rule moved to validate_step_labelling, which
+        # the analysis applies to each reading of the source.
         with self.assertRaises(domain.ProtocolValidationError):
-            domain.validate_protocol(broken)
+            domain.validate_step_labelling(broken)
 
 
 # --- c. analysis time-out ------------------------------------------------------
