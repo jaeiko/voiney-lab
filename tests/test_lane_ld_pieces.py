@@ -399,18 +399,21 @@ class CatalogPieceTests(_CatalogCase):
         self.assertEqual(self.catalog.get_entry(protocol_id).analysis_status, "review_pending")
         self.assertIsNone(self.catalog.review(protocol_id)["analysis_failure"])
 
-    def test_two_pieces_reading_the_shared_page_differently_fail_the_document(self):
+    def test_two_pieces_reading_the_shared_page_differently_leave_it_for_a_person(self):
+        # Lane RV2, decision e (human decision 2026-10-16): the passage is one
+        # item, "두 가지로 읽힘"; the document no longer fails for it.
         protocol_id = self.register(page_texts(61))
         model = PieceModel(self.extraction, edit={
             (1, "25"): "25. Add 25 mL of buffer 25",
             (13, "25"): "Add 25 mL of buffer 25 to tube 25.",
         })
         error = self.analyze(protocol_id, model)
-        self.assertIsInstance(error, ProtocolAnalysisPieceConflictError)
-        (failed,) = self.events(protocol_id, "protocol_analysis_failed")
-        self.assertEqual(failed.payload["failure_code"], "protocol_analysis_piece_conflict")
-        self.assertEqual(self.catalog.get_entry(protocol_id).analysis_status, "merge_conflict")
-        self.assertIn("서로 다르게 읽은", self.catalog.pipeline_status(protocol_id)["message"])
+        self.assertIsNone(error)
+        self.assertEqual(self.events(protocol_id, "protocol_analysis_failed"), [])
+        entry = self.catalog.get_entry(protocol_id)
+        self.assertEqual(entry.analysis_status, "review_pending")
+        self.assertEqual(entry.review_pending["by_reason"], {"read_two_ways": 1})
+        self.assertIn("두 가지로 읽힘", self.catalog.pipeline_status(protocol_id)["message"])
 
     def test_more_pages_than_the_pieces_read_is_refused_before_any_call(self):
         pages = page_texts(MAX_PIECED_ANALYSIS_PAGES + 1, steps_per_page=1)

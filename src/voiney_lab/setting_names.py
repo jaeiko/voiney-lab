@@ -123,6 +123,15 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY", MODELS, "8",
             "긴 문서를 조각으로 나눠 분석할 때 한 번에 분석하는 조각 수 (1–16). 조각 분석 중 "
             "공급자가 429 를 돌려주면 그 문서의 남은 조각은 절반으로 줄여 시작 (줄 AN2 결정 3)"),
+    Setting("VOINEY_LAB_GEMINI_SAFETY", MODELS, "relaxed",
+            "분석·번역·보고서 Gemini 요청의 안전 필터: relaxed(서비스가 받는 가장 느슨한 값, 기본) / "
+            "default(보내지 않음, 서비스 기본) / strict(가장 엄격 — 올리는 길). 음성 턴 역할은 해당 없음 (줄 GM 결정 1)"),
+    Setting("VOINEY_LAB_REVIEW_MAX_ITEMS", MODELS, "12",
+            "검토 카드로 묻는 확인 필요 항목 수의 상한 (1–500). 넘는 분석은 카드를 만들지 않고 추론 한 "
+            "단계 위로 자동 다시 분석 1회, 그래도 넘으면 카드 없이 안내 (줄 RV2 결정 c)"),
+    Setting("VOINEY_LAB_REVIEW_REANALYSIS_MAX_CALLS", MODELS, "16",
+            "항목이 많아 자동으로 다시 분석할 때 그 문서에 쓸 수 있는 분석 호출 수 상한 "
+            "(조각 문서는 조각마다 2로 셈, 0 이면 다시 분석하지 않음; 줄 RV2 결정 c)"),
     Setting("VOINEY_LAB_REPORT_PROVIDER", MODELS, _SET_ME, "실험 보고서 서술 공급자"),
     Setting("VOINEY_LAB_REPORT_MODEL", MODELS, _SET_ME, "실험 보고서 서술 모델"),
     Setting("VOINEY_LAB_REPORT_REASONING", MODELS, "(공급자 기본)", "보고서 서술 추론"),

@@ -131,6 +131,37 @@ GEMINI_THINKING_ALLOWANCE_TOKENS = {"low": 4096, "medium": 16384, "high": 32768}
 #: gemini-3.8-flash's output limit (model page, lane P3).
 GEMINI_MAX_OUTPUT_TOKENS = 65536
 
+#: Gemini's safety filter (lane GM, human decision of 2026-10-16: analysis and
+#: agent runs first, so the filter is lowered, and raised when it is felt to be
+#: needed). ``relaxed`` (the default) sends the loosest value the service takes
+#: for every category a caller may adjust; ``default`` sends nothing, so the
+#: service's own applies; ``strict`` is the way up. Only the analysis,
+#: translation and report roles carry it -- a voice turn's request is left as it
+#: was. What the settings cannot lower (the service's built-in protections) is
+#: still refused, and the server's checks of evidence, boundary and translation
+#: judge every reply the same whichever level wrote it.
+GEMINI_SAFETY_SETTING = "VOINEY_LAB_GEMINI_SAFETY"
+GEMINI_SAFETY_LEVELS = ("relaxed", "default", "strict")
+DEFAULT_GEMINI_SAFETY = "relaxed"
+#: The categories this service took an explicit threshold for (lane GM, live:
+#: OFF, BLOCK_NONE, BLOCK_ONLY_HIGH and BLOCK_LOW_AND_ABOVE were each answered
+#: with HTTP 200 for each of these six on gemini-3.8-flash, Agent Platform
+#: express). ai.google.dev lists the first, second, third and fifth as
+#: adjustable; the SDK's HarmBlockThreshold names OFF as turning the filter off.
+GEMINI_SAFETY_CATEGORIES = (
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY",
+    "HARM_CATEGORY_JAILBREAK",
+)
+GEMINI_SAFETY_THRESHOLDS = {"relaxed": "OFF", "strict": "BLOCK_LOW_AND_ABOVE"}
+#: A reply that ended in the filter with nothing written is a block; these are
+#: the finish reasons that mean the filter (RECITATION, LANGUAGE, OTHER and
+#: MAX_TOKENS are not).
+GEMINI_FILTER_FINISH_REASONS = frozenset({"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"})
+
 
 class RoleNotConfiguredError(RuntimeError):
     """A role whose provider setting is empty was asked for a client.
@@ -150,16 +181,33 @@ class ModelProviderError(RuntimeError):
 
     ``kind`` is one of "payment_required" (a prepaid balance is spent:
     Gemini answers 402), "rate_limited", "timeout", "authentication",
-    "invalid_request", "server", "connection" or "other". The message never
+    "invalid_request", "server", "connection", "blocked" (Google's safety
+    filter answered with no text: lane GM) or "other". The message never
     carries a key or the prompt. ``retry_after`` is the seconds the provider
     asked to wait (Retry-After, or Google's RetryInfo), when it said.
+
+    A "blocked" error carries codes only, never the prompt, the reply or the
+    service's own sentence: ``block_reason`` (the prompt block's code),
+    ``finish_reason`` (the candidate's ending, when it was the filter) and
+    ``block_categories`` (the harm categories the service marked blocked).
     """
 
     def __init__(
         self, provider: str, kind: str, status_code: int | None = None,
-        retry_after: float | None = None,
+        retry_after: float | None = None, *, block_reason: str | None = None,
+        finish_reason: str | None = None, block_categories: Sequence[str] = (),
     ) -> None:
-        super().__init__(f"{provider} {kind}" + (f" (HTTP {status_code})" if status_code else ""))
+        self.block_reason = block_reason
+        self.finish_reason = finish_reason
+        self.block_categories = tuple(block_categories)
+        if kind == "blocked":
+            parts = [block_reason or finish_reason or "UNKNOWN"]
+            if self.block_categories:
+                parts.append(", ".join(self.block_categories))
+            message = "구글 안전 필터에 막힘 · " + " · ".join(parts)
+        else:
+            message = f"{provider} {kind}" + (f" (HTTP {status_code})" if status_code else "")
+        super().__init__(message)
         self.provider = provider
         self.kind = kind
         self.status_code = status_code
@@ -352,8 +400,32 @@ def chat_client(
             if timeout is not None and isinstance(timeout, (int, float)):
                 options["http_options"] = genai_types.HttpOptions(timeout=int(timeout * 1000))
             client = genai.Client(**google_client_options(environment), **options)
-        return _Facade(_GeminiBackend(client, role_model), asynchronous, policy)
+        safety = gemini_safety_level(environment) if role_model.role in RETRY_ROLES else None
+        return _Facade(_GeminiBackend(client, role_model, safety), asynchronous, policy)
     raise ValueError(f"unknown provider: {provider}")
+
+
+def gemini_safety_level(environment: Mapping[str, str] | None = None) -> str:
+    """``relaxed``, ``default`` or ``strict`` from VOINEY_LAB_GEMINI_SAFETY.
+
+    Empty is the default level; a value that is none of the three is refused
+    by name, so a typo for ``strict`` is not read as the loosest level.
+    """
+
+    env = os.environ if environment is None else environment
+    level = env.get(GEMINI_SAFETY_SETTING, "").strip().casefold() or DEFAULT_GEMINI_SAFETY
+    if level not in GEMINI_SAFETY_LEVELS:
+        raise ValueError(f"{GEMINI_SAFETY_SETTING} must be one of {', '.join(GEMINI_SAFETY_LEVELS)}")
+    return level
+
+
+def gemini_safety_settings(level: str | None) -> list[dict[str, str]] | None:
+    """The request's ``safety_settings`` for a level; None sends none."""
+
+    threshold = GEMINI_SAFETY_THRESHOLDS.get(level or "")
+    if threshold is None:
+        return None
+    return [{"category": category, "threshold": threshold} for category in GEMINI_SAFETY_CATEGORIES]
 
 
 # --- The shape the code reads -------------------------------------------------------
@@ -1629,9 +1701,12 @@ def _anthropic_error(exc: Exception) -> ModelProviderError:
 class _GeminiBackend:
     provider = "google"
 
-    def __init__(self, client: Any, role_model: RoleModel) -> None:
+    def __init__(self, client: Any, role_model: RoleModel, safety: str | None = None) -> None:
         self.client = client
         self.role_model = role_model
+        #: The safety level this role's requests carry (None: none, and a
+        #: blocked reply is the empty answer it always was).
+        self.safety = safety
 
     def _params(self, request: _Request) -> dict[str, Any]:
         system: list[str] = []
@@ -1700,6 +1775,9 @@ class _GeminiBackend:
                 system.append(_schema_instruction(schema[0], schema[1]))
         elif request.wants_json_object:
             config["response_mime_type"] = "application/json"
+        safety = gemini_safety_settings(self.safety)
+        if safety is not None:
+            config["safety_settings"] = safety
         if system:
             config["system_instruction"] = "\n\n".join(system)
         return {"model": request.model, "contents": contents, "config": config}
@@ -1725,17 +1803,72 @@ class _GeminiBackend:
         return list(getattr(content, "parts", None) or ())
 
     @staticmethod
-    def _finish_name(response: Any) -> str:
+    def _code(value: Any) -> str:
+        """An SDK enum's name, or a string (plain or dotted), upper case; "" for none."""
+
+        name = getattr(value, "name", None)
+        if not isinstance(name, str):
+            name = value if isinstance(value, str) else ""
+        return name.rsplit(".", 1)[-1].upper()
+
+    @classmethod
+    def _finish_name(cls, response: Any) -> str:
         """Gemini's own finish reason, upper case ("STOP", "MAX_TOKENS",
         "SAFETY"...; an enum, its name or a dotted name), or "" when the
         reply has none."""
 
         candidates = getattr(response, "candidates", None) or ()
-        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
-        name = getattr(reason, "name", None)
-        if not isinstance(name, str):
-            name = reason if isinstance(reason, str) else ""
-        return name.rsplit(".", 1)[-1].upper()
+        return cls._code(getattr(candidates[0], "finish_reason", None)) if candidates else ""
+
+    @classmethod
+    def _blocked_error(cls, response: Any, reply: SimpleNamespace) -> ModelProviderError | None:
+        """The block the safety filter answered with, as an error of codes only.
+
+        A reply that wrote nothing (no text, no function call) and either was
+        blocked as a prompt (``prompt_feedback.block_reason``, no candidate) or
+        ended in the filter (``SAFETY`` and the like) is a block. Nothing here
+        reads the service's own sentence or any text of the prompt.
+        """
+
+        message = reply.choices[0].message
+        if (message.content or "").strip() or message.tool_calls:
+            return None
+        feedback = getattr(response, "prompt_feedback", None)
+        reason = cls._code(getattr(feedback, "block_reason", None))
+        if reason in {"", "BLOCKED_REASON_UNSPECIFIED"}:
+            reason = ""
+        finish = cls._finish_name(response)
+        if finish not in GEMINI_FILTER_FINISH_REASONS:
+            finish = ""
+        if not reason and not finish:
+            return None
+        candidates = getattr(response, "candidates", None) or ()
+        ratings = list(getattr(feedback, "safety_ratings", None) or ())
+        ratings += list(getattr(candidates[0], "safety_ratings", None) or ()) if candidates else []
+        categories: list[str] = []
+        for rating in ratings:
+            code = cls._code(getattr(rating, "category", None))
+            if getattr(rating, "blocked", False) is True and code and code not in categories:
+                categories.append(code)
+        return ModelProviderError(
+            "google", "blocked", block_reason=reason or None, finish_reason=finish or None,
+            block_categories=categories,
+        )
+
+    def _checked(self, response: Any, model: str) -> SimpleNamespace:
+        """The reply, or the block error for a background role (a voice turn's
+        blocked reply stays the empty answer it was)."""
+
+        reply = self._reply(response, model)
+        if self.role_model.role in RETRY_ROLES:
+            error = self._blocked_error(response, reply)
+            if error is not None:
+                _logger.warning(
+                    "provider.blocked provider=google role=%s model=%s block_reason=%s "
+                    "finish_reason=%s categories=%s", self.role_model.role, model,
+                    error.block_reason, error.finish_reason, ",".join(error.block_categories))
+                raise error
+        return reply
 
     @classmethod
     def _finish_reason(cls, response: Any, calls: bool) -> str:
@@ -1784,14 +1917,14 @@ class _GeminiBackend:
             response = self.client.models.generate_content(**self._params(request))
         except Exception as exc:  # noqa: BLE001
             raise _gemini_error(exc) from exc
-        return _OpenAIResponsesBackend._restored(self._reply(response, request.model), request)
+        return _OpenAIResponsesBackend._restored(self._checked(response, request.model), request)
 
     async def acreate(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
         params = self._params(request)
         try:
             if not request.stream:
-                return _OpenAIResponsesBackend._restored(self._reply(
+                return _OpenAIResponsesBackend._restored(self._checked(
                     await self.client.aio.models.generate_content(**params), request.model,
                 ), request)
             stream = await self.client.aio.models.generate_content_stream(**params)

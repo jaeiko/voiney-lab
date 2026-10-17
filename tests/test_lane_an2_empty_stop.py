@@ -69,7 +69,10 @@ class EmptyStopResendTests(unittest.TestCase):
     def test_an_empty_answer_with_another_ending_is_not_sent_again(self) -> None:
         # MAX_TOKENS is the answer cut at the output limit (the analysis has its
         # own retry for that); the rest are refusals a second send does not change.
-        for finish in ("MAX_TOKENS", "SAFETY", "RECITATION", "OTHER", "PROHIBITED_CONTENT", None):
+        # (SAFETY and PROHIBITED_CONTENT are no longer in this list: since lane GM,
+        # decision 2, a background role's answer that ended there raises a
+        # "blocked" error -- still sent once, see test_lane_gm_safety.)
+        for finish in ("MAX_TOKENS", "RECITATION", "OTHER", None):
             with self.subTest(finish=finish):
                 fake = SequencedGemini(gemini_reply("", finish=finish), gemini_reply())
                 reply = call(client(fake))
