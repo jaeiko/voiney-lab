@@ -166,19 +166,21 @@ class OcrValuesTests(_OcrCase):
     def test_engines_that_read_the_page_differently_ask_each_value_on_it(self) -> None:
         entry = self.analyze_after_ocr(_TwoEngineOcr(differ=True))
         self.assertFalse(entry.available_for_execution)
-        self.assertEqual(entry.review_pending["needs_review_count"], 3)
-        self.assertEqual(entry.review_pending["by_reason"], {"ocr_value": 3})
+        # Lane AN3, decisions A2/A3: the page's values are one card, counted once.
+        self.assertEqual(entry.review_pending["needs_review_count"], 1)
+        self.assertEqual(entry.review_pending["by_reason"], {"ocr_value": 1})
         draft = self.catalog.review_draft(self.protocol_id)
         cards = draft["cards"]
-        self.assertEqual([card["item_id"] for card in cards],
+        self.assertEqual([card["item_id"] for card in cards], ["ocr_page:2"])
+        self.assertEqual([value["item_id"] for value in cards[0]["values"]],
                          ["ocr_value:2:4000rpm", "ocr_value:2:5min", "ocr_value:2:4"])
-        card = cards[0]
-        self.assertEqual((card["type"], card["shown"]), ("ocr_value", "4000 rpm"))
-        self.assertEqual(card["reasons_ko"], ["두 OCR 엔진이 이 쪽의 숫자를 다르게 읽음"])
+        card = cards[0]["values"][0]
+        self.assertEqual((cards[0]["type"], card["shown"]), ("ocr_page", "4000 rpm"))
+        self.assertEqual(card["reason_ko"], "두 OCR 엔진이 이 쪽의 숫자를 다르게 읽음")
         self.assertEqual([(choice["label_ko"], choice["needs"]) for choice in card["choices"]],
                          [("4000 rpm 맞아요", None), ("직접 입력", "text")])
-        self.assertEqual(card["source"]["value_boxes"], [0])
-        self.assertEqual(card["source"]["lines"], {"page": 2, "first_line": 2, "last_line": 2})
+        self.assertEqual(card["value_boxes"], [0])
+        self.assertEqual(card["lines"], {"page": 2, "first_line": 2, "last_line": 2})
         item = next(item for item in draft["items"] if item["item_id"] == "ocr_value:2:4000rpm")
         self.assertEqual(item["linked_items"], ["step:s2"])
         # The steps themselves passed and are not cards of their own.
@@ -202,7 +204,7 @@ class OcrValuesTests(_OcrCase):
         provider = _TwoEngineOcr()
         del provider.engine_names
         entry = self.analyze_after_ocr(provider)
-        self.assertEqual(entry.review_pending["by_reason"], {"ocr_value": 3})
+        self.assertEqual(entry.review_pending["by_reason"], {"ocr_value": 1})  # one page (lane AN3, A3)
 
     def test_numbers_on_a_text_layer_page_are_never_ocr_items(self) -> None:
         self.analyze_after_ocr(_TwoEngineOcr(differ=True))

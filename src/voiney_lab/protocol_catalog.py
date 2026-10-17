@@ -35,7 +35,10 @@ from voiney_lab.experiment_protocol_analysis import (
     MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
     OCR_VALUE_ENGINES_DIFFER,
+    OCR_VALUE_NOT_PLACED,
     OCR_VALUE_ONE_ENGINE,
+    OCR_VALUE_ONE_ENGINE_READ,
+    OCR_VALUE_READ_DIFFERENTLY,
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
     PieceConcurrencyGate,
@@ -49,6 +52,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisTooManyPagesError,
     REVIEW_ITEM_KINDS,
     REVIEW_REASON_BLOCKED,
+    REVIEW_REASON_NUMBERING_SEAM,
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASON_READ_TWO_WAYS,
@@ -488,10 +492,11 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
         ReviewFlag.from_public(item) for item in payload.get("flags") or ()
         if isinstance(item, dict)
     ]
-    items = list(dict.fromkeys(flag.item_id for flag in flags))
+    # Lane AN3, decision A: a page's OCR values are one card, counted once.
+    units = _asked_units(flags)
+    items = list(units)
     by_reason: dict[str, int] = {}
-    for item in items:
-        reason = next(flag.reason for flag in flags if flag.item_id == item)
+    for reason in units.values():
         by_reason[reason] = by_reason.get(reason, 0) + 1
     failed_pages = [
         {"first_page": flag.first_page, "last_page": flag.last_page,
@@ -500,6 +505,7 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
     ]
     words = " · ".join(
         f"{REVIEW_REASONS_KO.get(reason, reason)} {count}"
+        + ("쪽" if reason == REVIEW_REASON_OCR_VALUE else "")
         for reason, count in by_reason.items()
         if reason not in {REVIEW_REASON_PIECE_FAILED, REVIEW_REASON_BLOCKED}
     )
@@ -582,11 +588,10 @@ def escalated_analysis_model(
 
 
 def _items_by_reason(draft: ProtocolAnalysisDraft) -> tuple[int, dict[str, int]]:
-    """How many items the draft asks a person about, and by first reason."""
+    """How many items the draft asks a person about, and by first reason; a
+    page's OCR values count once (lane AN3, decision A3)."""
 
-    reasons: dict[str, str] = {}
-    for flag in draft.review_flags:
-        reasons.setdefault(flag.item_id, flag.reason)
+    reasons = _asked_units(draft.review_flags)
     by_reason: dict[str, int] = {}
     for reason in reasons.values():
         by_reason[reason] = by_reason.get(reason, 0) + 1
@@ -1210,27 +1215,33 @@ def _display_filename(value: str) -> str:
 def protocol_with_display_step_labels(
     protocol: domain.ExperimentProtocol,
 ) -> domain.ExperimentProtocol:
-    """The Protocol with its steps numbered in order when the source prints none.
+    """The Protocol with its steps numbered in order where the source prints none.
 
     An empty source_label means the source prints no step numbers (human
     decision 2026-10-05, lane P3). The stored analysis keeps it empty -- that
     is what the source says -- and the screen and the run number the steps
     1, 2, 3 ... in their order instead. A labelled Protocol is returned as is.
+
+    Lane AN3, decision B (human decision 2026-10-16): a long document joined
+    from pieces may hold both kinds. Its printed numbers are kept, and each
+    unnumbered step is shown by its place among all the steps (the 18th step
+    is "18") -- a number the screen shows, never one the source printed.
     """
 
     steps = [step for section in protocol.sections for step in section.steps]
-    if not steps or any(step.source_label.strip() for step in steps):
+    if not steps or all(step.source_label.strip() for step in steps):
         return protocol
     ordinal = iter(range(1, len(steps) + 1))
+
+    def shown(step: domain.ProtocolSourceStep, place: int) -> domain.ProtocolSourceStep:
+        return step if step.source_label.strip() else replace(step, source_label=str(place))
+
     return replace(
         protocol,
         sections=tuple(
             replace(
                 section,
-                steps=tuple(
-                    replace(step, source_label=str(next(ordinal)))
-                    for step in section.steps
-                ),
+                steps=tuple(shown(step, next(ordinal)) for step in section.steps),
             )
             for section in protocol.sections
         ),
@@ -1241,9 +1252,12 @@ def _review_sections(protocol: domain.ExperimentProtocol) -> object:
     shown = protocol_with_display_step_labels(protocol)
     sections = _review_value(shown.sections)
     if shown is not protocol:
+        printed = {step.step_id for section in protocol.sections for step in section.steps
+                   if step.source_label.strip()}
         for section in sections:
             for step in section["steps"]:
-                step["source_label_printed"] = False
+                if step["step_id"] not in printed:
+                    step["source_label_printed"] = False
     return sections
 
 
@@ -3190,10 +3204,12 @@ class ProtocolCatalog:
                     if isinstance(ocr_values, int) and ocr_values * 2 >= int(too_many.get("items") or 0) > 0:
                         # Most of them are OCR values no second engine confirmed:
                         # reading again does not change those; say what does.
+                        # (Lane AN3, decision A3: a page's OCR values are one.)
                         message += (
                             f" 그중 {ocr_values}건은 OCR 엔진 하나만 읽었거나 두 엔진이 다르게 읽은 "
-                            "쪽의 숫자예요 — 두 OCR 엔진(VOINEY_LAB_OCR_PROVIDERS=clova,google)이 "
-                            "모두 읽거나 절차가 있는 쪽만 올리면 줄어요.")
+                            "숫자가 있는 쪽이에요(쪽마다 한 건) — 두 OCR 엔진"
+                            "(VOINEY_LAB_OCR_PROVIDERS=clova,google)이 모두 읽거나 절차가 있는 쪽만 "
+                            "올리면 줄어요.")
                 unlabelled = _unlabelled_pieces_ko(events)
                 if failure_code == "protocol_analysis_piece_conflict" and unlabelled:
                     message = (
@@ -3778,8 +3794,10 @@ class ProtocolCatalog:
                     except Exception as exc:  # noqa: BLE001 - sent once more by itself
                         if safety_block_provider(exc) is not None:
                             # Lane RV2, decision f: a prompt the safety filter
-                            # blocks is blocked again the same way (lane AN2
-                            # measured it three times); it is not sent again.
+                            # blocks is not sent again here. The adapter has
+                            # already sent it once more (lane AN3, decision C:
+                            # lane GM saw a block answered on another send);
+                            # blocked twice, its pages are an item.
                             raise
                         retry_model, retry_payload = observed.retry()
                         outbox.put((f"piece-retry-{analysis_id}-{piece.index}", _CHUNK_STARTED_EVENT, {
@@ -4613,6 +4631,9 @@ class ProtocolCatalog:
             elif kind == "ocr_value":
                 # Lane RV2, decision b: the value as read, or as the image shows it.
                 allowed[:0] = ["confirm", "fix"]
+            elif kind == "seam":
+                # Lane AN3, decision B: [이어져요]; [아니요] is a re-analysis.
+                allowed[:0] = ["confirm"]
             if any(flag.reason == REVIEW_REASON_READ_TWO_WAYS for flag in own):
                 # Lane RV2, decision e: this reading or the other piece's.
                 allowed = ["choose", *(action for action in allowed if action != "confirm")]
@@ -4725,6 +4746,21 @@ class ProtocolCatalog:
             if flag.reason == REVIEW_REASON_OCR_VALUE:
                 items.append(self._ocr_value_view(view, flag, extraction))
                 continue
+            if flag.reason == REVIEW_REASON_NUMBERING_SEAM:
+                # Lane AN3, decision B: the two steps that meet where the
+                # numbering changes, with their source lines and the numbers
+                # the screen and the run show them by.
+                shown_labels = {
+                    step.step_id: step.source_label
+                    for section in protocol_with_display_step_labels(protocol).sections
+                    for step in section.steps}
+                items.append(view(item_id, "seam", flag.reason_ko, extra={"steps": [
+                    {**step, "lines": _reading_lines(step, extraction),
+                     "label_shown": shown_labels.get(str(step.get("step_id"))),
+                     "label_printed": bool(str(step.get("label") or "").strip())}
+                    for step in (flag.extra or {}).get("steps") or () if isinstance(step, dict)
+                ]}))
+                continue
             items.append(view(
                 item_id, "pages" if flag.field == "pages" else "construct",
                 flag.reason_ko,
@@ -4753,6 +4789,11 @@ class ProtocolCatalog:
         item = view(flag.item_id, "ocr_value", extra.get("value"), extra={
             "page": page, "token": token, "linked_items": list(extra.get("items") or ()),
             "ocr_state": flag.reason_code,
+            # Lane AN3, decision A: each engine's reading in the value's place,
+            # and the page's card the value is asked on.
+            "readings": [dict(reading) for reading in extra.get("readings") or ()
+                         if isinstance(reading, dict)],
+            "page_card": f"{OCR_PAGE_CARD_PREFIX}{page}",
         })
         item["source"] = {
             "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
@@ -4902,11 +4943,13 @@ class ProtocolCatalog:
     ) -> ProtocolAnalysisDraft:
         """The draft with its OCR values settled or made items (lane RV2, b).
 
-        Every value an executed item states on an OCR page is named by its
-        page and token. Where both engines read the page alike and the
-        item's quote passed, it is settled and recorded with that reason;
-        otherwise it is one item a person checks, naming the items that
-        state it. Items already waiting for a person are left to their card.
+        Every value an item used in execution states on an OCR page is named
+        by its page and token (lane AN3, decision A4: only those). Where both
+        engines read it alike in its place (decision A1; by page for a result
+        stored before) and the item's quote passed, it is settled and
+        recorded with that reason; otherwise it is one item a person checks,
+        naming the items that state it and what each engine read. Items
+        already waiting for a person are left to their card.
         """
 
         extraction = draft.extraction
@@ -4920,7 +4963,8 @@ class ProtocolCatalog:
         for record in _review_records(draft.protocol):
             evidence = record.evidence
             if (
-                record.kind in _OCR_VALUE_SKIPPED_KINDS or evidence is None
+                record.kind not in _OCR_VALUE_EXECUTION_KINDS
+                or isinstance(record.record, _OCR_VALUE_NOT_EXECUTED) or evidence is None
                 or record.item_id in flagged or record.evidence_item_id in quote_refused
             ):
                 continue
@@ -4947,11 +4991,13 @@ class ProtocolCatalog:
         flags: list[ReviewFlag] = []
         settled: list[dict[str, object]] = []
         for (page, token), entry in values.items():
-            if states[page] == OCR_PAGE_AGREE:
+            reason_code, readings = _ocr_value_state(states[page], pages.get(page) or {}, token)
+            if reason_code is None:
                 settled.append({
                     "kind": "ocr_value", "page": page, "token": token,
                     "value": entry["value"], "items": list(entry["items"]),
                     "reason": AUTO_RESOLVED_OCR_TWO_ENGINES,
+                    **({"by": "place"} if readings else {}),
                 })
                 continue
             boxes = (pages.get(page) or {}).get("value_boxes") or ()
@@ -4959,8 +5005,7 @@ class ProtocolCatalog:
                 item_id=f"ocr_value:{page}:{token}",
                 reason=REVIEW_REASON_OCR_VALUE,
                 field="value",
-                reason_code=(OCR_VALUE_ENGINES_DIFFER if states[page] == OCR_PAGE_DIFFER
-                             else OCR_VALUE_ONE_ENGINE),
+                reason_code=reason_code,
                 page_number=page,
                 extra={
                     "value": entry["value"], "token": token, "items": list(entry["items"]),
@@ -4969,6 +5014,8 @@ class ProtocolCatalog:
                         if isinstance(box, dict) and token in {
                             key for key, _ in ocr_value_tokens(str(box.get("text") or ""))}
                     ],
+                    # Lane AN3, decision A: what each engine read in its place.
+                    "readings": readings,
                 },
             ))
         if not flags and not settled:
@@ -5112,6 +5159,8 @@ class ProtocolCatalog:
                 (item_id[len("timer:"):],)
                 if isinstance(item_id, str) and item_id.startswith("timer:") else ()),
         )}
+        if isinstance(item_id, str) and item_id.startswith(OCR_PAGE_CARD_PREFIX):
+            return self._confirm_ocr_page(protocol_id, revision, target, request, items)
         if not isinstance(item_id, str) or item_id not in items:
             raise ProtocolReviewError("The review has no such item.")
         item = items[item_id]
@@ -5204,6 +5253,65 @@ class ProtocolCatalog:
             "target": draft["target"],
             # Lane RV2, decision a: the cards after this one, so a button
             # moves straight on to the next card.
+            "cards": draft["cards"],
+            "next_card": draft["next_card"],
+        }
+
+    def _confirm_ocr_page(
+        self,
+        protocol_id: str,
+        revision: ProtocolRevisionRecord,
+        target: _ReviewTarget,
+        request: dict[str, object],
+        items: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        """[모두 맞아요] on a page's OCR card (lane AN3, decision A2).
+
+        Every value of the page not decided yet is confirmed as the analysis
+        read it -- one decision event each, naming the card -- and a value a
+        person already decided is left as it was.
+        """
+
+        card_id = str(request["item_id"])
+        if set(request) - {"item_id", "action", "reviewer_name", "target"}:
+            raise ProtocolReviewError("A page's OCR card takes [모두 맞아요] only.")
+        if request.get("action") != "confirm":
+            raise ProtocolReviewError("This action is not allowed on this item.")
+        values = [item for item in items.values()
+                  if item["kind"] == "ocr_value" and item.get("page_card") == card_id
+                  and item["needs_review"]]
+        if not values:
+            raise ProtocolReviewError("The review has no such item.")
+        name = request.get("reviewer_name")
+        for item in values:
+            if item.get("decision") is not None:
+                continue
+            self.store.append_event(
+                f"review-decision-{secrets.token_hex(16)}",
+                protocol_id,
+                revision.revision_number,
+                _REVIEW_DECISION_EVENT,
+                {
+                    "target": target.key,
+                    "item_id": item["item_id"],
+                    "kind": item["kind"],
+                    "action": "confirm",
+                    "value": None,
+                    "source_lines": None,
+                    "memo": None,
+                    "reviewer_name": reviewer_name(name) if name is not None else None,
+                    "original": {"text": item["text"], "origin": item["origin"]},
+                    "page_card": card_id,
+                },
+            )
+        draft = self.review_draft(protocol_id)
+        decided = {item["item_id"] for item in values}
+        return {
+            "item": None,
+            "items": [entry for entry in draft["items"] if entry["item_id"] in decided],
+            "counts": draft["counts"],
+            "registrable": draft["registrable"],
+            "target": draft["target"],
             "cards": draft["cards"],
             "next_card": draft["next_card"],
         }
@@ -5399,6 +5507,7 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
     "timer": "단계 타이머",
     "pages": "분석 실패 쪽",
     "ocr_value": "OCR 값",
+    "seam": "조각 경계",
 }
 #: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
 #: the source does not print, a memo beside an item, and taking a draft
@@ -5802,29 +5911,100 @@ def _ocr_page_unclear(page: ProtocolPdfPage, ocr: dict[str, object]) -> bool:
     )
 
 
-# --- OCR values (lane RV2, decision b; human decision 2026-10-16) -----------
+# --- OCR values (lane RV2, decision b; lane AN3, decision A) ----------------
 #
-# A number OCR read is executed only when it is confirmed: both engines read
-# the page and their numbers and units were the same (the comparison lane P2
-# and P3 made, footer band and picture text left out), and the item's quote
-# passed the source check -- then it is settled without a person, the reason
-# recorded. Otherwise -- the engines' numbers differed on the page, or only
-# one engine read it -- each value an executed item states on that page is a
-# card. The comparison is kept per page, not per value, so on a page whose
-# numbers differ anywhere every value is asked.
+# A number OCR read is executed only when it is confirmed (human decisions
+# 2026-10-16): both engines read the same number and unit in its place on
+# the page (``protocol_ocr_providers.readings_by_place`` says what "in its
+# place" is), and the item's quote passed the source check -- then it is
+# settled without a person, the reason recorded. Otherwise the value is
+# asked: the other engine read another number there, or none, or only one
+# engine read the page. The values a page asks about are one card for the
+# page, and that card counts once under the limit of items (decision A3).
+#
+# An OCR result stored before lane AN3 has no number-by-number reading; for
+# it the comparison stays lane RV2's, by page: a page both engines read with
+# the same numbers and units settles its values, any other page asks them.
 
-#: Page states an OCR page can be in for its values.
+#: Page states an OCR page can be in for its values (by page: lane RV2).
 OCR_PAGE_AGREE = "agree"
 OCR_PAGE_DIFFER = "differ"
 OCR_PAGE_ONE_ENGINE = "one_engine"
-#: The kinds whose words never run as values (their numbers are named by
-#: other records): a section heading, the document's metadata, a value the
-#: source leaves out, a timer spec (its duration is a value record) and a
-#: repeat count (its construct's words are).
-_OCR_VALUE_SKIPPED_KINDS = frozenset({
-    "section", "metadata", "missing_value", "timer_spec", "repeat_count",
+#: Lane AN3, decision A4: the kinds whose numbers are used in execution --
+#: the steps and their sub-actions, amounts and durations (with the step
+#: timers read from them), the conditions and constructs that decide what
+#: runs (branches, repeats), the reminders the run sets, the preparation
+#: before the start and the completion criteria. Numbers anywhere else are
+#: not asked: notes and tips (background), material and equipment names
+#: (catalog, lot and model numbers), section headings and the document's
+#: metadata, a value the source leaves out, a timer spec and a repeat count
+#: (their numbers are other records' words), and safety statements, which a
+#: review never rewrites (lane RV2, decision g).
+_OCR_VALUE_EXECUTION_KINDS = frozenset({
+    "step", "sub_action", "value", "duration", "condition", "construct", "reminder",
+    "prerequisite", "expected_result", "observation",
 })
+#: Constructs that describe the source rather than what runs.
+_OCR_VALUE_NOT_EXECUTED = (domain.SourceAmbiguity, domain.ProtocolConflict)
 _ENGINE_FAILED_WARNING = re.compile(r"^Page ([0-9]+): .+ failed;")
+#: The engines' names as a card shows them.
+_OCR_ENGINE_KO = {OCR_CLOVA: "CLOVA", OCR_GOOGLE: "Google"}
+#: Lane AN3, decision A2: the card of one page's OCR values ("ocr_page:3"),
+#: which [모두 맞아요] names as a whole.
+OCR_PAGE_CARD_PREFIX = "ocr_page:"
+
+
+def _asked_units(flags: Sequence[ReviewFlag]) -> dict[str, str]:
+    """What a person is asked about, each with its first reason: an item, or
+    one page's OCR values as one (lane AN3, decision A3: under the limit of
+    items, a page's OCR card counts once)."""
+
+    units: dict[str, str] = {}
+    for flag in flags:
+        key = (f"{OCR_PAGE_CARD_PREFIX}{flag.page_number}"
+               if flag.reason == REVIEW_REASON_OCR_VALUE and flag.page_number is not None
+               else flag.item_id)
+        units.setdefault(key, flag.reason)
+    return units
+
+
+def _ocr_value_state(
+    page_state: str, page: dict[str, object], token: str,
+) -> tuple[str | None, list[dict[str, object]]]:
+    """Whether one value on an OCR page is settled, and the engines' readings
+    of it (lane AN3, decision A).
+
+    Returns (None, readings) when both engines read ``token`` in every place
+    the chosen engine read it; otherwise the reason code it is asked for and
+    the readings to show: the chosen engine's, then the other engine's
+    distinct numbers in those places. A page compared only as a whole (a
+    result stored before lane AN3, or engines without word boxes) gives the
+    page's state with no readings.
+    """
+
+    readings = page.get("value_readings")
+    if not isinstance(readings, list):
+        if page_state == OCR_PAGE_AGREE:
+            return None, []
+        return (OCR_VALUE_ENGINES_DIFFER if page_state == OCR_PAGE_DIFFER
+                else OCR_VALUE_ONE_ENGINE), []
+    places = [reading for reading in readings
+              if isinstance(reading, dict) and reading.get("token") == token]
+    if not places:
+        return OCR_VALUE_NOT_PLACED, []
+    chosen = _OCR_ENGINE_KO.get(str(page.get("provider")), str(page.get("provider")))
+    other = _OCR_ENGINE_KO.get(str(page.get("other_provider")), str(page.get("other_provider")))
+    shown = [{"engine": chosen, "text": places[0].get("text"), "token": token}]
+    for place in places:
+        other_token = place.get("other_token")
+        if other_token is not None and other_token != token and other_token not in {
+                item["token"] for item in shown}:
+            shown.append({"engine": other, "text": place.get("other_text"), "token": other_token})
+    if all(place.get("other_token") == token for place in places):
+        return None, shown
+    if len(shown) > 1:
+        return OCR_VALUE_READ_DIFFERENTLY, shown
+    return OCR_VALUE_ONE_ENGINE_READ, shown
 
 
 def _record_words(record: "_ReviewRecord") -> str | None:
@@ -6026,6 +6206,17 @@ def _card_choices(
             _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),
             _choice("reanalysis", "다시 분석", None, route="reanalysis"),
         ], {}
+    if kind == "seam":
+        # Lane AN3, decision B (human decision 2026-10-16, "순서 확인"): where
+        # the numbering changes between pieces, does the second step follow
+        # the first? [아니요] does not reorder anything: the document is read
+        # again.
+        return "numbering_seam", (
+            "번호를 붙인 부분과 붙이지 않은 부분이 만나는 곳이에요. "
+            "앞 단계 다음에 뒤 단계가 이어지나요?"), [
+            _choice("confirm", "이어져요", request("confirm"), primary=True),
+            _choice("reanalysis", "아니요", None, route="reanalysis"),
+        ], {"steps": item.get("steps")}
     if kind == "ocr_value":
         # Decision b: a number OCR read that the two engines did not both
         # read alike; the image piece is beside it on the card.
@@ -6073,6 +6264,97 @@ def _card_choices(
     return card_type, question, choices, {}
 
 
+def _ocr_value_entry(item: dict[str, object]) -> dict[str, object]:
+    """One value of a page's OCR card: what each engine read in its place and
+    its buttons -- each engine's reading (the analysis's own one confirms it,
+    another one fixes it to that reading) and [직접 입력]."""
+
+    item_id = str(item["item_id"])
+    request = lambda action, **extra: {"item_id": item_id, "action": action, **extra}
+    readings = [reading for reading in item.get("readings") or () if isinstance(reading, dict)]
+    choices: list[dict[str, object]] = []
+    for index, reading in enumerate(readings):
+        text = str(reading.get("text"))
+        same = reading.get("token") == item.get("token")
+        choices.append({
+            **_choice(f"reading_{index}", text,
+                      request("confirm") if same else request("fix", text=text),
+                      primary=index == 0),
+            "engine": reading.get("engine"),
+        })
+    if not readings:
+        choices.append(_choice("confirm", f"{item.get('text')} 맞아요", request("confirm"),
+                               primary=True))
+    choices.append(_choice("fix", "직접 입력", request("fix"), needs="text"))
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    reason = next((reason for reason in item.get("reasons") or ()
+                   if isinstance(reason, dict) and reason.get("reason") == REVIEW_REASON_OCR_VALUE),
+                  {})
+    return {
+        "item_id": item_id,
+        "token": item.get("token"),
+        "shown": item.get("text"),
+        "reason_code": reason.get("reason_code"),
+        "reason_ko": reason.get("reason_ko"),
+        "readings": readings,
+        "linked_items": item.get("linked_items"),
+        "value_boxes": source.get("value_boxes"),
+        "lines": source.get("lines"),
+        "choices": choices,
+        "decided": item.get("decision") is not None,
+        "decision": item.get("decision"),
+        "current": item.get("current"),
+    }
+
+
+def _ocr_page_card(values: Sequence[dict[str, object]]) -> dict[str, object]:
+    """One page's OCR values on one card (lane AN3, decision A2): the page's
+    piece (the values' boxes on it), the values with what each engine read,
+    [모두 맞아요] for the page, and each value's own buttons."""
+
+    page = values[0].get("page")
+    card_id = str(values[0].get("page_card"))
+    entries = [_ocr_value_entry(value) for value in values]
+    boxes = list(dict.fromkeys(
+        index for entry in entries for index in entry["value_boxes"] or ()))
+    lines = sorted({line for value in values
+                    for line in ((value.get("source") or {}).get("value_lines") or ())})
+    return {
+        "card_id": card_id,
+        "item_id": card_id,
+        "type": "ocr_page",
+        "kind": "ocr_page",
+        "kind_ko": REVIEW_ITEM_KIND_KO["ocr_value"],
+        "step_label": None,
+        "page": page,
+        "question_ko": (
+            f"원문 {page}쪽 그림의 값 {len(entries)}개를 확인해 주세요. "
+            "두 OCR 엔진이 다르게 읽었거나 한 엔진만 읽은 값이에요."),
+        "reasons_ko": list(dict.fromkeys(entry["reason_ko"] for entry in entries)),
+        "shown": None,
+        "source": {
+            "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
+            "verified": True,
+            "lines": ({"page": page, "first_line": lines[0], "last_line": lines[-1]}
+                      if lines else None),
+            "value_lines": lines,
+            "value_boxes": boxes,
+            "suggested_lines": None,
+        },
+        "values": entries,
+        "choices": [_choice("confirm_all", "모두 맞아요",
+                            {"item_id": card_id, "action": "confirm"}, primary=True)],
+        "proposal": None,
+        "change": None,
+        "readings": None,
+        "steps": None,
+        "memo_allowed": False,
+        "decided": all(entry["decided"] for entry in entries),
+        "decision": None,
+        "current": None,
+    }
+
+
 def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     """One card per item waiting for a person, in document order.
 
@@ -6082,9 +6364,30 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     (marked), so "← 이전" can go back to them.
     """
 
-    asked = [item for item in items if item.get("needs_review")]
+    # Lane AN3, decision A2: a page's OCR values are asked on one card, in
+    # the place of the first of them.
+    asked: list[dict[str, object] | list[dict[str, object]]] = []
+    pages: dict[str, list[dict[str, object]]] = {}
+    for item in items:
+        if not item.get("needs_review"):
+            continue
+        page_card = item.get("page_card") if item["kind"] == "ocr_value" else None
+        if isinstance(page_card, str):
+            if page_card not in pages:
+                pages[page_card] = []
+                asked.append(pages[page_card])
+            pages[page_card].append(item)
+            continue
+        asked.append(item)
     cards = []
     for position, item in enumerate(asked, start=1):
+        if isinstance(item, list):
+            cards.append({
+                **_ocr_page_card(item),
+                "position": position, "total": len(asked),
+                "progress_ko": f"{position} / {len(asked)}",
+            })
+            continue
         card_type, question, choices, shown = _card_choices(item)
         source = item.get("source") if isinstance(item.get("source"), dict) else None
         cards.append({
@@ -6106,6 +6409,7 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
             "proposal": shown.get("proposal"),
             "change": shown.get("change"),
             "readings": shown.get("readings"),
+            "steps": shown.get("steps"),
             "memo_allowed": "memo" in item["allowed_actions"],
             "decided": item.get("decision") is not None,
             "decision": item.get("decision"),
@@ -6405,9 +6709,10 @@ def _apply_review(
             timers[step_id] = int(value["seconds"]) if action in {"fix", "enter"} else None
             reviewed = value.get("text") if action in {"fix", "enter"} else None
             spoken = value.get("text") if action in {"fix", "enter"} else None
-        elif kind in {"pages", "ocr_value"}:
+        elif kind in {"pages", "ocr_value", "seam"}:
             # A check, not a record: a fixed OCR value changes the items that
-            # state it through their own decisions (decision d).
+            # state it through their own decisions (decision d); a seam a
+            # person said follows on runs in the joined order (lane AN3, B).
             pass
         elif kind == "missing_value" and action == "enter":
             reviewed = spoken = value.get("text")

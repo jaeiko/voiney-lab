@@ -57,6 +57,30 @@ MAX_OCR_VALUE_BOXES = 2_000
 
 
 @dataclass(frozen=True)
+class OcrValueReading:
+    """One number the chosen engine read on a page, and what the other engine
+    read in the same place (lane AN3, decision A; human decision 2026-10-16).
+
+    ``token`` is the number with the unit written right after it, in the form
+    the two engines are compared by ("4000rpm", "37°c"); ``text`` is how the
+    chosen engine wrote it; the box is where it stands on the page rendered
+    at ``OcrPage.render_dpi``. ``other_token`` and ``other_text`` are the
+    other engine's number in the same place, or None when it read no number
+    there. Equal tokens are the deterministic ground on which a value runs
+    without a person.
+    """
+
+    token: str
+    text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    other_token: str | None = None
+    other_text: str | None = None
+
+
+@dataclass(frozen=True)
 class OcrPage:
     source_page_number: int
     text: str
@@ -73,6 +97,16 @@ class OcrPage:
     #: resolution the page was rendered at for it (lane AN, FM).
     value_boxes: tuple[OcrValueBox, ...] = ()
     render_dpi: int | None = None
+    #: Lane AN3, decision A: the engine that also read the page, its whole
+    #: text, and each number of the chosen engine with the other engine's
+    #: number in the same place. ``value_readings`` is None when the numbers
+    #: were not compared place by place (one engine read the page, or an
+    #: engine gave no word boxes); an empty tuple is a page compared that
+    #: holds no number.
+    other_provider: str | None = None
+    other_provider_version: str | None = None
+    other_text: str | None = None
+    value_readings: tuple[OcrValueReading, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +127,35 @@ class ProtocolOcrProvider(Protocol):
         source_sha256: str,
         page_count: int,
     ) -> OcrResult: ...
+
+
+def _finite_edges(*edges: object) -> bool:
+    return all(
+        isinstance(edge, (int, float)) and not isinstance(edge, bool)
+        and math.isfinite(edge) and edge >= 0
+        for edge in edges
+    )
+
+
+def _short_text(value: object) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= 64
+
+
+def _valid_reading(reading: object) -> bool:
+    if not isinstance(reading, OcrValueReading):
+        return False
+    if not (_short_text(reading.token) and _short_text(reading.text)):
+        return False
+    if (reading.other_token is None) != (reading.other_text is None):
+        return False
+    if reading.other_token is not None and not (
+        _short_text(reading.other_token) and _short_text(reading.other_text)
+    ):
+        return False
+    return (
+        _finite_edges(reading.x0, reading.y0, reading.x1, reading.y1)
+        and reading.x0 <= reading.x1 and reading.y0 <= reading.y1
+    )
 
 
 def validate_ocr_result(
@@ -129,6 +192,7 @@ def validate_ocr_result(
             "OCR must return every source page exactly once and in order."
         )
     total_bytes = 0
+    other_bytes = 0
     non_empty = 0
     canonical_pages: list[OcrPage] = []
     for page in result.pages:
@@ -140,6 +204,13 @@ def validate_ocr_result(
         total_bytes += len(encoded)
         if total_bytes > MAX_OCR_DOCUMENT_TEXT_BYTES:
             raise ProtocolOcrResultError("OCR document text exceeds the size limit.")
+        if page.other_text is not None:
+            if not isinstance(page.other_text, str):
+                raise ProtocolOcrResultError("OCR page text is invalid.")
+            other = len(page.other_text.encode("utf-8"))
+            other_bytes += other
+            if other > MAX_OCR_PAGE_TEXT_BYTES or other_bytes > MAX_OCR_DOCUMENT_TEXT_BYTES:
+                raise ProtocolOcrResultError("OCR page text exceeds the size limit.")
         if page.text.strip():
             non_empty += 1
         confidence = page.confidence
@@ -149,12 +220,20 @@ def validate_ocr_result(
             or not 0 <= float(confidence) <= 1
         ):
             raise ProtocolOcrResultError("OCR page confidence is invalid.")
-        for identity in (page.provider, page.provider_version):
+        for identity in (page.provider, page.provider_version,
+                         page.other_provider, page.other_provider_version):
             if identity is not None and (
                 not isinstance(identity, str)
                 or _SAFE_PROVIDER.fullmatch(identity) is None
             ):
                 raise ProtocolOcrResultError("OCR page provider identity is invalid.")
+        readings = page.value_readings
+        if readings is not None and (
+            not isinstance(readings, tuple)
+            or len(readings) > MAX_OCR_VALUE_BOXES
+            or any(not _valid_reading(reading) for reading in readings)
+        ):
+            raise ProtocolOcrResultError("OCR page value readings are invalid.")
         if not isinstance(page.numeric_review_required, bool):
             raise ProtocolOcrResultError("OCR page review mark is invalid.")
         if page.render_dpi is not None and (
@@ -187,6 +266,10 @@ def validate_ocr_result(
                 numeric_review_required=page.numeric_review_required,
                 value_boxes=tuple(page.value_boxes),
                 render_dpi=page.render_dpi,
+                other_provider=page.other_provider,
+                other_provider_version=page.other_provider_version,
+                other_text=page.other_text,
+                value_readings=readings,
             )
         )
     if non_empty == 0:
@@ -234,6 +317,21 @@ def ocr_result_payload(result: OcrResult) -> dict[str, object]:
                                            round(box.x1, 1), round(box.y1, 1)]}
                 for box in page.value_boxes
             ],
+            # Lane AN3, decision A: the other engine and, number by number,
+            # what it read in the same place. Absent from results stored
+            # before; None where the numbers were not compared by place.
+            "other_provider": page.other_provider,
+            "other_provider_version": page.other_provider_version,
+            "other_text": page.other_text,
+            "value_readings": (
+                None if page.value_readings is None else [
+                    {"token": reading.token, "text": reading.text,
+                     "box": [round(reading.x0, 1), round(reading.y0, 1),
+                             round(reading.x1, 1), round(reading.y1, 1)],
+                     "other_token": reading.other_token, "other_text": reading.other_text}
+                    for reading in page.value_readings
+                ]
+            ),
         }
         for page in result.pages
     ]

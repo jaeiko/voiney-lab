@@ -136,10 +136,11 @@ class SafetySettingsTests(unittest.TestCase):
 
 class BlockedReplyTests(unittest.TestCase):
     def blocked_error(self, reply, **options) -> ModelProviderError:
-        fake = SequencedGemini(reply, gemini_reply())
+        # Lane AN3, decision C: a block is sent once more, then raised.
+        fake = SequencedGemini(reply, reply, gemini_reply())
         with self.assertRaises(ModelProviderError) as caught:
             call(client(fake, **options))
-        self.assertEqual(len(fake.requests), 1, "a block is not sent again")
+        self.assertEqual(len(fake.requests), 2, "a block is sent once more, then raised")
         return caught.exception
 
     def test_a_prompt_block_says_the_filter_and_the_reason_code(self) -> None:
@@ -193,11 +194,11 @@ class BlockedReplyTests(unittest.TestCase):
         self.assertNotIn("The prompt is blocked", text)
 
     def test_the_asynchronous_client_raises_it_too(self) -> None:
-        fake = SequencedGemini(prompt_blocked("SAFETY"), gemini_reply())
+        fake = SequencedGemini(prompt_blocked("SAFETY"), prompt_blocked("SAFETY"), gemini_reply())
         with self.assertRaises(ModelProviderError) as caught:
             asyncio.run(call(client(fake, asynchronous=True)))
         self.assertEqual(caught.exception.kind, "blocked")
-        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(len(fake.requests), 2)  # sent once more (lane AN3, decision C)
 
     def test_the_background_roles_raise_it(self) -> None:
         for role in ("analysis", "translation", "report"):
@@ -248,7 +249,8 @@ class BlockedReplyTests(unittest.TestCase):
     def test_the_analysis_wraps_it_and_keeps_the_codes_in_the_chain(self) -> None:
         from voiney_lab import experiment_protocol_analysis as epa
 
-        fake = SequencedGemini(prompt_blocked("SAFETY", [rating("HARM_CATEGORY_DANGEROUS_CONTENT", True)]))
+        blocked = prompt_blocked("SAFETY", [rating("HARM_CATEGORY_DANGEROUS_CONTENT", True)])
+        fake = SequencedGemini(blocked, blocked)  # sent once more (lane AN3, decision C)
         model = epa.OpenAICompatibleProtocolAnalysisModel(
             client=client(fake), model="gemini-3.8-flash", reasoning_effort="low")
         with self.assertRaises(epa.ProtocolAnalysisModelError) as caught:

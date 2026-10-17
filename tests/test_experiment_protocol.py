@@ -47,6 +47,7 @@ from voiney_lab.experiment_protocol import (
     assess_readiness,
     detect_features,
     validate_protocol,
+    validate_step_labelling,
 )
 from voiney_lab.experiment_protocol_pdf import (
     TextVerification,
@@ -477,14 +478,16 @@ class ExperimentProtocolTests(unittest.TestCase):
         base = minimal_protocol()
         step = base.sections[0].steps[0]
         # Lane P3 (human decision 2026-10-05): an empty label means the source
-        # prints no step numbers, so it is refused only beside a labelled step.
+        # prints no step numbers, so it is refused only beside a labelled step
+        # -- by validate_step_labelling since lane AN3, decision B, which the
+        # analysis applies to each reading of the source.
         unlabelled = replace(step, step_id=f"{step.step_id}-b", source_label="")
-        for bad_steps in (
-            (step, unlabelled),
-            (replace(step, step_id="not stable"),),
+        for check, bad_steps in (
+            (validate_step_labelling, (step, unlabelled)),
+            (validate_protocol, (replace(step, step_id="not stable"),)),
         ):
             with self.assertRaises(ProtocolValidationError):
-                validate_protocol(
+                check(
                     replace(
                         base,
                         sections=(
