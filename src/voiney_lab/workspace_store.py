@@ -1107,8 +1107,13 @@ class WorkspaceStore:
         return frozenset(row[0] for row in rows)
 
     def _experiment_row(
-        self, principal: Principal, session_id: str, *, write: bool = False
+        self, principal: Principal, session_id: str, *, write: bool = False,
+        every_owner: bool = False,
     ) -> sqlite3.Row:
+        """One experiment of the tenant: the principal's own, or -- for a
+        read by the lab's administrator (lane ON, decision ①,
+        ``every_owner``) -- any member's. Writes stay the owner's."""
+
         del write  # every member of the tenant may read and write their own experiments
         self.verify_membership(principal)
         session_id = _identifier(session_id, "Experiment session identifier")
@@ -1117,7 +1122,7 @@ class WorkspaceStore:
         ).fetchone()
         if row is None or row["organization_id"] != principal.organization_id:
             raise WorkspaceNotFoundError("Experiment session is not available.")
-        if row["owner_principal_id"] != principal.principal_id:
+        if not every_owner and row["owner_principal_id"] != principal.principal_id:
             raise WorkspaceNotFoundError("Experiment session is not available.")
         return row
 
@@ -1273,9 +1278,10 @@ class WorkspaceStore:
         return self.get_experiment(principal, selected_id)
 
     def get_experiment(
-        self, principal: Principal, session_id: str
+        self, principal: Principal, session_id: str, *, every_owner: bool = False
     ) -> dict[str, object]:
-        session = self._experiment(self._experiment_row(principal, session_id))
+        session = self._experiment(
+            self._experiment_row(principal, session_id, every_owner=every_owner))
         completed = self._connection.execute(
             """SELECT step_id,step_label,completed_by_principal_id,completed_at,event_id
             FROM experiment_completed_steps WHERE session_id=?
@@ -1312,13 +1318,17 @@ class WorkspaceStore:
         }
 
     def list_experiments(
-        self, principal: Principal, *, active_only: bool = False
+        self, principal: Principal, *, active_only: bool = False, every_owner: bool = False
     ) -> tuple[dict[str, object], ...]:
+        """The principal's experiments; with ``every_owner`` (the lab's
+        administrator, lane ON decision ①) every member's of the tenant."""
+
         self.verify_membership(principal)
         clauses = ["organization_id=?"]
         parameters: list[object] = [principal.organization_id]
-        clauses.append("owner_principal_id=?")
-        parameters.append(principal.principal_id)
+        if not every_owner:
+            clauses.append("owner_principal_id=?")
+            parameters.append(principal.principal_id)
         if active_only:
             clauses.append("status IN ('ready','in_progress','paused','blocked')")
         rows = self._connection.execute(
@@ -2349,9 +2359,9 @@ class WorkspaceStore:
         return self.get_experiment(principal, new_id)
 
     def experiment_timeline(
-        self, principal: Principal, session_id: str
+        self, principal: Principal, session_id: str, *, every_owner: bool = False
     ) -> dict[str, object]:
-        session = self.get_experiment(principal, session_id)
+        session = self.get_experiment(principal, session_id, every_owner=every_owner)
         observations = {
             row["observation_id"]: dict(row)
             for row in self._connection.execute(

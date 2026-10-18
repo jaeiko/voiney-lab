@@ -2815,8 +2815,11 @@ def get_workspace_experiments(active_only:bool=False)->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
+            # Lane ON, decision ①: an administrator sees the lab's experiments,
+            # an experimenter their own.
             experiments=list(
-                store.list_experiments(principal,active_only=active_only))
+                store.list_experiments(
+                    principal,active_only=active_only,every_owner=_account_is_admin()))
         finally:
             store.close()
     except Exception as exc:
@@ -2838,7 +2841,8 @@ def get_workspace_experiment(session_id:str)->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
-            return store.get_experiment(principal,session_id)
+            return store.get_experiment(
+                principal,session_id,every_owner=_account_is_admin())
         finally:
             store.close()
     except Exception as exc:
@@ -2885,7 +2889,8 @@ def get_workspace_experiment_timeline(session_id:str)->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
-            return store.experiment_timeline(principal,session_id)
+            return store.experiment_timeline(
+                principal,session_id,every_owner=_account_is_admin())
         finally:
             store.close()
     except Exception as exc:
@@ -4065,7 +4070,7 @@ def post_protocol_review_decision(
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.record_review_decision(protocol_id,body)
+            return catalog.record_review_decision(protocol_id,_review_body_with_account(body))
         finally:
             store.close()
     except Exception as exc:
@@ -4085,7 +4090,7 @@ def post_protocol_review_version(
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.register_review(protocol_id,body)
+            return catalog.register_review(protocol_id,_review_body_with_account(body))
         finally:
             store.close()
     except Exception as exc:
