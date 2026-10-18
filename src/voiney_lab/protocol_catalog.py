@@ -38,6 +38,8 @@ from voiney_lab.experiment_protocol_analysis import (
     OCR_VALUE_NOT_PLACED,
     OCR_VALUE_ONE_ENGINE,
     OCR_VALUE_ONE_ENGINE_READ,
+    OCR_VALUE_PAGE_DIFFERS_WIDELY,
+    OCR_VALUE_PAGE_LOW_CONFIDENCE,
     OCR_VALUE_READ_DIFFERENTLY,
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
@@ -5968,6 +5970,33 @@ def _asked_units(flags: Sequence[ReviewFlag]) -> dict[str, str]:
     return units
 
 
+#: Lane AN3, round 2, decision ② (human decision 2026-10-18): a page whose
+#: numbers the engines read differently, or not at all in place, at least this
+#: often, or that either engine read below this page confidence, settles no
+#: value by the engines' agreement. Live measurement (lane AN3, stage ②): the
+#: four values both engines read alike and wrongly stood on pages where 17-34%
+#: of the numbers differed and the confidences were 0.80-0.85; on the other 30
+#: runs these lines cost no pass.
+OCR_PAGE_MAX_DIFFERING_SHARE = 0.15
+OCR_PAGE_MIN_CONFIDENCE = 0.90
+
+
+def _ocr_page_gate(page: dict[str, object]) -> str | None:
+    """Why a page compared place by place settles no value, or None."""
+
+    readings = [reading for reading in page.get("value_readings") or ()
+                if isinstance(reading, dict)]
+    if readings and sum(
+        1 for reading in readings if reading.get("other_token") != reading.get("token")
+    ) >= OCR_PAGE_MAX_DIFFERING_SHARE * len(readings):
+        return OCR_VALUE_PAGE_DIFFERS_WIDELY
+    confidences = [value for value in (page.get("confidence"), page.get("other_confidence"))
+                   if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    if confidences and min(confidences) < OCR_PAGE_MIN_CONFIDENCE:
+        return OCR_VALUE_PAGE_LOW_CONFIDENCE
+    return None
+
+
 def _ocr_value_state(
     page_state: str, page: dict[str, object], token: str,
 ) -> tuple[str | None, list[dict[str, object]]]:
@@ -5979,13 +6008,16 @@ def _ocr_value_state(
     the readings to show: the chosen engine's, then the other engine's
     distinct numbers in those places. A page compared only as a whole (a
     result stored before lane AN3, or engines without word boxes) gives the
-    page's state with no readings.
+    page's state with no readings. A value read alike on a page read poorly
+    (``_ocr_page_gate``, round 2, decision ②) is asked with the gate's reason.
     """
 
     readings = page.get("value_readings")
     if not isinstance(readings, list):
         if page_state == OCR_PAGE_AGREE:
-            return None, []
+            # Round 2, decision ②: the confidence line holds here too (the
+            # result kept the chosen engine's page confidence only).
+            return _ocr_page_gate(page), []
         return (OCR_VALUE_ENGINES_DIFFER if page_state == OCR_PAGE_DIFFER
                 else OCR_VALUE_ONE_ENGINE), []
     places = [reading for reading in readings
@@ -6001,7 +6033,8 @@ def _ocr_value_state(
                 item["token"] for item in shown}:
             shown.append({"engine": other, "text": place.get("other_text"), "token": other_token})
     if all(place.get("other_token") == token for place in places):
-        return None, shown
+        # Lane AN3, round 2, decision ②: alike, but on a page read poorly.
+        return _ocr_page_gate(page), shown
     if len(shown) > 1:
         return OCR_VALUE_READ_DIFFERENTLY, shown
     return OCR_VALUE_ONE_ENGINE_READ, shown

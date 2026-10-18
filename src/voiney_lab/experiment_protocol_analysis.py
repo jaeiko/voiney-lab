@@ -3283,12 +3283,19 @@ OCR_VALUE_ONE_ENGINE = "ocr_one_engine"
 OCR_VALUE_READ_DIFFERENTLY = "ocr_value_read_differently"
 OCR_VALUE_ONE_ENGINE_READ = "ocr_value_one_engine"
 OCR_VALUE_NOT_PLACED = "ocr_value_not_placed"
+#: Lane AN3, round 2, decision ②: the page was read poorly -- the engines
+#: differ on a large share of its numbers, or one read it with low
+#: confidence -- so a value both read alike there is still asked.
+OCR_VALUE_PAGE_DIFFERS_WIDELY = "ocr_page_differs_widely"
+OCR_VALUE_PAGE_LOW_CONFIDENCE = "ocr_page_low_confidence"
 OCR_VALUE_REASONS_KO: dict[str, str] = {
     OCR_VALUE_ENGINES_DIFFER: "두 OCR 엔진이 이 쪽의 숫자를 다르게 읽음",
     OCR_VALUE_ONE_ENGINE: "OCR 엔진 하나만 읽은 쪽",
     OCR_VALUE_READ_DIFFERENTLY: "두 OCR 엔진이 이 값을 다르게 읽음",
     OCR_VALUE_ONE_ENGINE_READ: "OCR 엔진 하나만 이 값을 읽음",
     OCR_VALUE_NOT_PLACED: "OCR 이 이 값을 읽은 자리를 찾지 못함",
+    OCR_VALUE_PAGE_DIFFERS_WIDELY: "두 OCR 엔진이 이 쪽 숫자의 15% 이상을 다르게 읽어, 같게 읽은 값도 확인해요",
+    OCR_VALUE_PAGE_LOW_CONFIDENCE: "OCR 엔진의 이 쪽 신뢰도가 0.90 아래라, 같게 읽은 값도 확인해요",
 }
 #: What the server settled itself, by reason (decision b, "기록에 사유 남김").
 AUTO_RESOLVED_OCR_TWO_ENGINES = "ocr_two_engines_agree"

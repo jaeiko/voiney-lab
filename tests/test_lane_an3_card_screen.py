@@ -52,17 +52,20 @@ serve([["/review-draft",serverDraft]]);
 await loadReviewDraft(serverDraft.protocol_id);await tick();
 assert(node("review-card-progress").textContent==="1 / 1",node("review-card-progress").textContent);
 const text=visibleText(card());
-for(const words of ["OCR 값","원문 2쪽 그림의 값 2개를 확인해 주세요."])assert(text.includes(words),`${words}: ${text}`);
+// Round 2, decision ②: 2 of the page's 7 numbers differ, so 5 min (read alike) is asked too.
+for(const words of ["OCR 값","원문 2쪽 그림의 값 3개를 확인해 주세요."])assert(text.includes(words),`${words}: ${text}`);
 const rows=walk(card()).filter(el=>el.className==="choice-card-values-row");
-assert(rows.length===2,`rows: ${rows.length}`);
-assert(rows[0].dataset.valueId==="ocr_value:2:4000rpm"&&rows[1].dataset.valueId==="ocr_value:2:4",rows.map(row=>row.dataset.valueId).join("|"));
+assert(rows.length===3,`rows: ${rows.length}`);
+assert(JSON.stringify(rows.map(row=>row.dataset.valueId))===JSON.stringify(["ocr_value:2:4000rpm","ocr_value:2:5min","ocr_value:2:4"]),rows.map(row=>row.dataset.valueId).join("|"));
+assert(visibleText(rows[1]).includes("두 OCR 엔진이 이 쪽 숫자의 15% 이상을 다르게 읽어, 같게 읽은 값도 확인해요"),visibleText(rows[1]));
+assert(JSON.stringify(labels(rows[1]))===JSON.stringify(["5 min","직접 입력"]),`5 min buttons: ${labels(rows[1])}`);
 const first=visibleText(rows[0]);
 for(const words of ["4000 rpm","두 OCR 엔진이 이 값을 다르게 읽음","Google · 4000 rpm  /  CLOVA · 400 rpm"])assert(first.includes(words),`${words}: ${first}`);
-assert(visibleText(rows[1]).includes("Google · 4  /  CLOVA · 8"),visibleText(rows[1]));
+assert(visibleText(rows[2]).includes("Google · 4  /  CLOVA · 8"),visibleText(rows[2]));
 assert(JSON.stringify(labels(rows[0]))===JSON.stringify(["4000 rpm","400 rpm","직접 입력"]),`value buttons: ${labels(rows[0])}`);
 const images=walk(rows[0]).filter(el=>el.tagName==="img");
 assert(images.length>=1&&images.every(image=>/\/review-draft\/source-pages\/2\/value-boxes\/[0-9]+\/image$/.test(image.src)),images.map(image=>image.src).join("|"));
-const top=buttonsIn(card()).filter(button=>!walk(rows[0]).includes(button)&&!walk(rows[1]).includes(button)).map(button=>button.textContent);
+const top=buttonsIn(card()).filter(button=>!rows.some(row=>walk(row).includes(button))).map(button=>button.textContent);
 assert(JSON.stringify(top)===JSON.stringify(["모두 맞아요"]),`card buttons: ${top}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
