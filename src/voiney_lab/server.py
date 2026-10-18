@@ -4,7 +4,7 @@ import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, l
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -152,13 +152,18 @@ from voiney_lab.language import (
 from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.runtime_metrics import RUNTIME_METRICS
 from voiney_lab.pilot_metrics import (
+    ACCOUNT_ID_PATTERN as PILOT_ACCOUNT_PATTERN,
+    DAY_COLUMNS,
     DEVELOPMENT_ACCOUNT_ID,
     PILOT_METRICS,
     PILOT_METRICS_FILENAME,
     FeedbackAnswer,
     PilotContext,
     PilotMetricsStore,
+    PilotSources,
     analysis_outcome,
+    day_rows,
+    day_totals,
     review_card_count,
 )
 from voiney_lab.multi_brain import (
@@ -238,6 +243,7 @@ from voiney_lab.workspace_store import (
     WorkspaceConflictError,
     WorkspaceError,
     WorkspaceNotFoundError,
+    WORKSPACE_DATABASE_FILENAME,
     WorkspaceSettings,
     initialize_workspace_store,
 )
@@ -4244,6 +4250,78 @@ def get_admin_metrics(
             "by_analysis_status":analysis_counts,
         },
         "runtime":RUNTIME_METRICS.snapshot(),
+    }
+
+
+def _require_pilot_admin(presented_token:str|None)->None:
+    """Lane LOG, decision 4: an admin account, or else the admin token.
+
+    An account counts as an admin when one of its roles is "admin" -- a role
+    the accounts of lane ON may give; until then the token is the way in.
+    """
+
+    principal=_REQUEST_PRINCIPAL.get()
+    roles={
+        str(getattr(role,"value",role)) for role in getattr(principal,"roles",()) or ()
+    }
+    if "admin" in roles:
+        return
+    _require_admin_access(presented_token)
+
+
+def _pilot_sources()->PilotSources:
+    """The files the pilot metrics are read from, as this server is configured."""
+
+    metrics_db=workspace_db=reports_db=None
+    workspace=_workspace_settings()
+    if workspace.enabled and workspace.data_dir is not None:
+        metrics_db=workspace.data_dir/PILOT_METRICS_FILENAME
+        workspace_db=workspace.data_dir/WORKSPACE_DATABASE_FILENAME
+    try:
+        report_settings=ExperimentReportSettings.from_environment()
+    except ValueError:
+        report_settings=ExperimentReportSettings(False)
+    if report_settings.enabled:
+        reports_db=report_settings.database_path
+    return PilotSources(metrics_db=metrics_db,reports_db=reports_db,workspace_db=workspace_db)
+
+
+@app.get("/api/admin/pilot-metrics")
+def get_admin_pilot_metrics(
+    since:str|None=Query(default=None,alias="from"),
+    until:str|None=Query(default=None,alias="to"),
+    account:str|None=Query(default=None),
+    x_voice_workflow_admin_token:str|None=Header(default=None),
+)->dict[str,object]:
+    """Lane LOG, decision 4: the pilot's day table -- numbers, codes and times only.
+
+    The admin screen (static/admin-metrics.html) reads it. The rating memos
+    are not here; scripts/pilot_metrics.py notes is the only way to them.
+    """
+
+    _require_pilot_admin(x_voice_workflow_admin_token)
+    try:
+        first=date.fromisoformat(since) if since else None
+        last=date.fromisoformat(until) if until else None
+        if account is not None and not PILOT_ACCOUNT_PATTERN.fullmatch(account):
+            raise ValueError("account id is malformed")
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail="pilot_metrics_query_invalid") from exc
+    try:
+        days=day_rows(_pilot_sources(),since=first,until=last,account=account)
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=admin error=%s",type(exc).__name__)
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable") from exc
+    return {
+        "schema_version":1,
+        "period":{"from":since,"to":until,"account":account},
+        "columns":list(DAY_COLUMNS),
+        "days":days,
+        "totals":day_totals(days),
+        "privacy":{
+            "transcripts_included":False,"free_text_included":False,
+            "protocol_text_included":False,"raw_audio_included":False,
+        },
     }
 
 

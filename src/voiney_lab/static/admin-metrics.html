@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>파일럿 지표</title>
+<!-- Lane LOG, decision 4 (2026-10-18): the pilot's day table for administrators.
+     The numbers come from GET /api/admin/pilot-metrics, which needs the admin
+     token (VOINEY_LAB_ADMIN_TOKEN) or an admin account. Numbers, codes and
+     times only; the token stays in this page's memory and is sent as a header. -->
+<style>
+  :root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1d1b;--muted:#5d5d58;--line:#dcdcd6;--accent:#1f5fbf;--warn:#a33a1f}
+  @media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1d1d1b;--ink:#ecece8;--muted:#a3a39c;--line:#3a3a36;--accent:#7aa7ef;--warn:#f08a6c}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+  main{max-width:1200px;margin:0 auto;padding:24px 16px}
+  h1{font-size:1.4rem;margin:0 0 4px}
+  .lead{color:var(--muted);margin:0 0 20px}
+  form{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+  label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+  input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
+  button{font:inherit;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 16px;cursor:pointer}
+  #metrics-status{min-height:1.5em;margin:0 0 12px}
+  #metrics-status[data-kind="error"]{color:var(--warn)}
+  .totals{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+  .total{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:120px}
+  .total b{display:block;font-size:1.25rem}
+  .total span{color:var(--muted);font-size:.8rem}
+  .table-wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--panel)}
+  thead th{font-size:.8rem;color:var(--muted);font-weight:600;vertical-align:bottom}
+  .note{color:var(--muted);font-size:.85rem;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+  <h1>파일럿 지표</h1>
+  <p class="lead">하루별 실험·단계·타이머·끊김·평점. 숫자·코드·시각만 보여 줍니다 — 말한 글, 음성, 프로토콜 내용, 평점 메모는 없습니다.</p>
+  <form id="metrics-form">
+    <label>관리자 토큰<input id="metrics-token" type="password" autocomplete="off" required></label>
+    <label>시작 날짜<input id="metrics-from" type="date"></label>
+    <label>끝 날짜<input id="metrics-to" type="date"></label>
+    <label>계정 id (비우면 전체)<input id="metrics-account" type="text" autocomplete="off" spellcheck="false"></label>
+    <button id="metrics-load" type="submit">불러오기</button>
+  </form>
+  <p id="metrics-status" role="status"></p>
+  <div id="metrics-totals" class="totals" aria-label="기간 합계"></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr id="metrics-head"></tr></thead>
+      <tbody id="metrics-body"></tbody>
+    </table>
+  </div>
+  <p class="note">날짜는 한국 날짜, 실험은 시작한 날에 셉니다. 빈 칸은 그 값을 재지 않은 기록(이 기능 전 기록 등)입니다. 정의는 docs/PILOT_GUIDE.md 의 "무엇을 재는가".</p>
+</main>
+<script>
+"use strict";
+const COLUMN_LABELS={
+ day:"날짜",accounts:"계정",returning_accounts:"다시 온 계정",experiments:"실험",experiments_ended:"끝난 실험",
+ steps:"단계",steps_by_voice:"말로 넘김",steps_by_button:"버튼으로 넘김",hands_free_ratio:"손 안 쓴 비율",reverts:"되돌림",
+ turns:"턴",router_fallbacks:"규칙으로 넘김",router_timeouts:"시간 초과",router_rate_limits:"요청 한도",clarifies:"되묻기",
+ timer_alerts:"타이머 알림",alert_answer_median_ms:"알림 뒤 첫 말(초)",disconnects:"끊김",disconnected_ms:"끊긴 시간(초)",
+ records:"기록",deviations:"편차",anomalies:"이상",reports_made:"보고서",ratings:"평점 수",rating_mean:"평균 평점",
+ analyses:"분석",analyses_passed:"통과",analyses_review_pending:"검토 대기",analyses_notice:"안내",analyses_failed:"실패"
+};
+const TOTAL_KEYS=["experiments","steps","hands_free_ratio","timer_alerts","disconnects","rating_mean","analyses"];
+const ERRORS={503:"관리자 지표가 닫혀 있습니다. 서버에 VOINEY_LAB_ADMIN_TOKEN 을 설정하세요.",403:"관리자 토큰이 맞지 않습니다.",400:"날짜나 계정 id 형식이 맞지 않습니다."};
+const $=id=>document.getElementById(id);
+function shown(key,value){
+ if(value===null||value===undefined)return "";
+ if(key==="hands_free_ratio")return `${Math.round(value*1000)/10}%`;
+ if(key==="alert_answer_median_ms"||key==="disconnected_ms")return String(Math.round(value/100)/10);
+ return String(value);
+}
+function cell(tag,text){const item=document.createElement(tag);item.textContent=text;return item;}
+function setStatus(text,kind=""){const status=$("metrics-status");status.textContent=text;status.dataset.kind=kind;}
+function renderMetrics(payload){
+ const columns=Array.isArray(payload?.columns)?payload.columns:[];
+ const days=Array.isArray(payload?.days)?payload.days:[];
+ $("metrics-head").replaceChildren(...columns.map(key=>cell("th",COLUMN_LABELS[key]||key)));
+ $("metrics-body").replaceChildren(...days.map(day=>{const row=document.createElement("tr");row.replaceChildren(...columns.map(key=>cell("td",shown(key,day[key]))));return row;}));
+ const totals=payload?.totals||{};
+ $("metrics-totals").replaceChildren(...TOTAL_KEYS.map(key=>{const box=document.createElement("div");box.className="total";box.append(cell("b",shown(key,totals[key])||"—"),cell("span",COLUMN_LABELS[key]));return box;}));
+ setStatus(days.length?`${days.length}일`:"이 기간에 기록이 없습니다.");
+}
+async function loadMetrics(){
+ const token=$("metrics-token").value.trim();
+ if(!token){setStatus("관리자 토큰을 넣으세요.","error");return;}
+ const query=new URLSearchParams();
+ for(const [name,id] of [["from","metrics-from"],["to","metrics-to"],["account","metrics-account"]]){const value=$(id).value.trim();if(value)query.set(name,value);}
+ setStatus("불러오는 중…");
+ let response;
+ try{response=await fetch(`/api/admin/pilot-metrics?${query}`,{headers:{"X-Voice-Workflow-Admin-Token":token},cache:"no-store"});}
+ catch{setStatus("서버에 닿지 못했습니다.","error");return;}
+ if(!response.ok){setStatus(ERRORS[response.status]||`불러오지 못했습니다 (${response.status}).`,"error");return;}
+ renderMetrics(await response.json());
+}
+function defaultPeriod(now=new Date()){
+ const day=offset=>{const date=new Date(now.getTime()+9*3600*1000-offset*86400*1000);return date.toISOString().slice(0,10);};
+ if(!$("metrics-from").value)$("metrics-from").value=day(13);
+ if(!$("metrics-to").value)$("metrics-to").value=day(0);
+}
+$("metrics-form").addEventListener("submit",event=>{event.preventDefault();loadMetrics();});
+defaultPeriod();
+</script>
+</body>
+</html>

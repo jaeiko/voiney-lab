@@ -833,3 +833,151 @@ def analysis_rows(
         row for row in _analyses(_snapshot(sources))
         if _within(row["day"], since, until) and (account is None or row["account_id"] == account)
     ]
+
+
+# --- Decision 4: the day table and the memos
+
+
+DAY_COLUMNS = (
+    "day", "accounts", "returning_accounts", "experiments", "experiments_ended",
+    "steps", "steps_by_voice", "steps_by_button", "hands_free_ratio", "reverts",
+    "turns", "router_fallbacks", "router_timeouts", "router_rate_limits", "clarifies",
+    "timer_alerts", "alert_answer_median_ms", "disconnects", "disconnected_ms",
+    "records", "deviations", "anomalies", "reports_made", "ratings", "rating_mean",
+    "analyses", "analyses_passed", "analyses_review_pending", "analyses_notice",
+    "analyses_failed",
+)
+
+
+def _total(rows: list[dict[str, Any]], key: str) -> int | None:
+    values = [row[key] for row in rows if isinstance(row.get(key), int)]
+    return sum(values) if values else None
+
+
+def day_rows(
+    sources: PilotSources, *, since: date | None = None, until: date | None = None,
+    account: str | None = None,
+) -> list[dict[str, Any]]:
+    """One row per day (Korea) with an experiment or an analysis (DAY_COLUMNS).
+
+    An experiment counts on the day it started. A returning account is one
+    that ran an experiment on an earlier day, in all the data, not only the
+    period asked for. Totals of a measure nobody measured stay empty.
+    """
+
+    snapshot = _snapshot(sources)
+    experiments = _experiments(snapshot)
+    analyses = _analyses(snapshot)
+    first_day: dict[str, str] = {}
+    for row in experiments:
+        if row["day"] and row["account_id"] not in first_day:
+            first_day[row["account_id"]] = row["day"]
+    selected = [
+        row for row in experiments
+        if _within(row["day"], since, until) and (account is None or row["account_id"] == account)
+    ]
+    chosen = [
+        row for row in analyses
+        if _within(row["day"], since, until) and (account is None or row["account_id"] == account)
+    ]
+    days = sorted({row["day"] for row in selected + chosen if row["day"]})
+    out: list[dict[str, Any]] = []
+    for day in days:
+        runs = [row for row in selected if row["day"] == day]
+        runs_analysed = [row for row in chosen if row["day"] == day]
+        accounts = {row["account_id"] for row in runs}
+        steps = sum(row["steps"] for row in runs)
+        by_voice = sum(row["steps_by_voice"] for row in runs)
+        ratings = [row["rating"] for row in runs if isinstance(row["rating"], int)]
+        alerts = [
+            row["timer_last_minute_alerts"] + row["timer_end_alerts"] for row in runs]
+        outcomes = [row["outcome"] for row in runs_analysed]
+        out.append({
+            "day": day,
+            "accounts": len(accounts),
+            "returning_accounts": sum(1 for item in accounts if first_day.get(item, day) < day),
+            "experiments": len(runs),
+            "experiments_ended": sum(1 for row in runs if row["ended_at"]),
+            "steps": steps,
+            "steps_by_voice": by_voice,
+            "steps_by_button": sum(row["steps_by_button"] for row in runs),
+            "hands_free_ratio": round(by_voice / steps, 4) if steps else None,
+            "reverts": sum(row["reverts"] for row in runs),
+            "turns": _total(runs, "turns"),
+            "router_fallbacks": _total(runs, "router_fallbacks"),
+            "router_timeouts": _total(runs, "router_timeouts"),
+            "router_rate_limits": _total(runs, "router_rate_limits"),
+            "clarifies": _total(runs, "clarifies"),
+            "timer_alerts": sum(alerts),
+            "alert_answer_median_ms": _median(
+                row["alert_answer_median_ms"] for row in runs),
+            "disconnects": _total(runs, "disconnects"),
+            "disconnected_ms": _total(runs, "disconnected_ms"),
+            "records": sum(row["records"] for row in runs),
+            "deviations": sum(row["deviations"] for row in runs),
+            "anomalies": sum(row["anomalies"] for row in runs),
+            "reports_made": sum(row["report_made"] for row in runs),
+            "ratings": len(ratings),
+            "rating_mean": round(statistics.fmean(ratings), 2) if ratings else None,
+            "analyses": len(runs_analysed),
+            "analyses_passed": outcomes.count("passed"),
+            "analyses_review_pending": outcomes.count("review_pending"),
+            "analyses_notice": outcomes.count("notice"),
+            "analyses_failed": outcomes.count("failed"),
+        })
+    return out
+
+
+NOTE_COLUMNS = ("day", "account_id", "report_id", "recorded_at", "rating", "skipped", "note")
+
+
+def note_rows(
+    sources: PilotSources, *, since: date | None = None, until: date | None = None,
+    account: str | None = None,
+) -> list[dict[str, Any]]:
+    """The memos under the ratings (decision 3), for the team; never part of a metric."""
+
+    snapshot = _snapshot(sources)
+    return [
+        {
+            "day": pilot_day(item["recorded_at"]),
+            "account_id": item["account_id"],
+            "report_id": item["report_id"],
+            "recorded_at": item["recorded_at"],
+            "rating": item["rating"],
+            "skipped": item["skipped"],
+            "note": item["note"],
+        }
+        for item in snapshot.feedback
+        if item["note"]
+        and _within(pilot_day(item["recorded_at"]), since, until)
+        and (account is None or item["account_id"] == account)
+    ]
+
+
+#: An account id as the summaries and the admin route accept it.
+ACCOUNT_ID_PATTERN = _IDENTIFIER
+
+
+def day_totals(days: list[dict[str, Any]]) -> dict[str, Any]:
+    """The period's totals for the admin screen's boxes, from its day rows."""
+
+    def add(key: str) -> int | None:
+        values = [day[key] for day in days if isinstance(day.get(key), int)]
+        return sum(values) if values else None
+
+    steps = add("steps") or 0
+    ratings = add("ratings") or 0
+    rated = sum(
+        day["rating_mean"] * day["ratings"] for day in days
+        if isinstance(day.get("rating_mean"), (int, float)) and day.get("ratings"))
+    return {
+        "experiments": add("experiments") or 0,
+        "steps": steps,
+        "hands_free_ratio": round((add("steps_by_voice") or 0) / steps, 4) if steps else None,
+        "timer_alerts": add("timer_alerts") or 0,
+        "disconnects": add("disconnects"),
+        "ratings": ratings,
+        "rating_mean": round(rated / ratings, 2) if ratings else None,
+        "analyses": add("analyses") or 0,
+    }
