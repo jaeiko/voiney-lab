@@ -124,7 +124,56 @@ CREATE TABLE IF NOT EXISTS pilot_protocol_events(
  duration_ms INTEGER,
  card_count INTEGER
 );
+CREATE TABLE IF NOT EXISTS pilot_feedback(
+ id INTEGER PRIMARY KEY,
+ recorded_at TEXT NOT NULL,
+ account_id TEXT NOT NULL,
+ report_id TEXT NOT NULL,
+ rating INTEGER CHECK(rating IS NULL OR rating BETWEEN 1 AND 5),
+ skipped INTEGER NOT NULL CHECK(skipped IN (0,1)),
+ note TEXT,
+ CHECK((skipped=1 AND rating IS NULL) OR (skipped=0 AND rating IS NOT NULL))
+);
 """
+
+
+#: The memo under the rating: one line, at most this many characters.
+FEEDBACK_NOTE_MAX = 200
+
+
+@dataclass(frozen=True)
+class FeedbackAnswer:
+    """Decision 3: "이번 실험에 도움이 됐나요?" -- a rating 1-5 and a memo, or a skip."""
+
+    report_id: str
+    rating: int | None
+    skipped: bool
+    note: str | None
+
+    @classmethod
+    def from_request(cls, payload: Mapping[str, Any]) -> "FeedbackAnswer":
+        """The page's answer, or ValueError for anything that is not one."""
+
+        report_id = payload.get("report_id")
+        if not isinstance(report_id, str) or _IDENTIFIER.fullmatch(report_id) is None:
+            raise ValueError("report_id is invalid")
+        skipped = payload.get("skipped", False)
+        if not isinstance(skipped, bool):
+            raise ValueError("skipped is invalid")
+        rating = payload.get("rating")
+        if skipped:
+            if rating is not None:
+                raise ValueError("a skipped answer has no rating")
+        elif isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5:
+            raise ValueError("rating must be a whole number from 1 to 5")
+        note = payload.get("note")
+        if note is not None:
+            if not isinstance(note, str):
+                raise ValueError("note is invalid")
+            note = " ".join(note.split()) or None
+            if note is not None and len(note) > FEEDBACK_NOTE_MAX:
+                raise ValueError("note is too long")
+        return cls(report_id=report_id, rating=rating, skipped=skipped, note=note)
 
 
 def _now() -> str:
@@ -294,8 +343,27 @@ class PilotMetricsStore:
         finally:
             connection.close()
 
+    def record_feedback(self, *, account_id: str, answer: FeedbackAnswer) -> None:
+        values = (
+            _now(), _identifier(account_id), _identifier(answer.report_id), answer.rating,
+            int(answer.skipped), answer.note,
+        )
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(
+                    """INSERT INTO pilot_feedback(recorded_at,account_id,report_id,rating,
+                    skipped,note) VALUES(?,?,?,?,?,?)""",
+                    values,
+                )
+        finally:
+            connection.close()
+
     def turns(self) -> list[dict[str, Any]]:
         return self._read("SELECT * FROM pilot_turns ORDER BY id")
+
+    def feedback(self) -> list[dict[str, Any]]:
+        return self._read("SELECT * FROM pilot_feedback ORDER BY id")
 
     def marks(self) -> list[dict[str, Any]]:
         return self._read("SELECT * FROM pilot_marks ORDER BY id")
@@ -514,6 +582,7 @@ class _Snapshot:
     turns: list[dict[str, Any]]
     marks: list[dict[str, Any]]
     protocol_events: list[dict[str, Any]]
+    feedback: list[dict[str, Any]]
     owners: dict[str, str]
     metrics_present: bool
 
@@ -529,6 +598,7 @@ def _snapshot(sources: PilotSources) -> _Snapshot:
             turns=store.turns() if store else [],
             marks=store.marks() if store else [],
             protocol_events=store.protocol_events() if store else [],
+            feedback=store.feedback() if store else [],
             owners=_owners(workspace),
             metrics_present=store is not None,
         )
@@ -572,7 +642,7 @@ EXPERIMENT_COLUMNS = (
     "router_format", "router_refused", "router_errors", "clarifies", "first_audio_median_ms",
     "button_changes", "timer_last_minute_alerts", "timer_end_alerts", "alert_answer_median_ms",
     "disconnects", "disconnected_ms", "records", "deviations", "anomalies", "system_anomalies",
-    "corrections", "report_made", "report_minutes_after_end",
+    "corrections", "report_made", "report_minutes_after_end", "rating", "feedback_skipped",
 )
 
 
@@ -593,6 +663,8 @@ def _experiments(snapshot: _Snapshot) -> list[dict[str, Any]]:
         marks_by.setdefault(str(mark["session_id"]), []).append(mark)
         if mark["report_id"]:
             marks_by.setdefault(f"report:{mark['report_id']}", []).append(mark)
+    # The last answer about an experiment is the one that counts (decision 3).
+    answers = {str(item["report_id"]): item for item in snapshot.feedback}
     numbers: dict[tuple[str, ...], int] = {}
     rows: list[dict[str, Any]] = []
     for record in sorted(snapshot.ledger, key=lambda item: (item["started_at"], item["report_id"])):
@@ -678,6 +750,10 @@ def _experiments(snapshot: _Snapshot) -> list[dict[str, Any]]:
             "report_minutes_after_end": (
                 round((min(made) - ended).total_seconds() / 60, 1)
                 if made and ended and min(made) >= ended else None),
+            "rating": (answers.get(record["report_id"]) or {}).get("rating"),
+            "feedback_skipped": (
+                (answers[record["report_id"]]["skipped"])
+                if record["report_id"] in answers else None),
         })
     return rows
 

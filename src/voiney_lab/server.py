@@ -155,6 +155,7 @@ from voiney_lab.pilot_metrics import (
     DEVELOPMENT_ACCOUNT_ID,
     PILOT_METRICS,
     PILOT_METRICS_FILENAME,
+    FeedbackAnswer,
     PilotContext,
     PilotMetricsStore,
     analysis_outcome,
@@ -4244,6 +4245,41 @@ def get_admin_metrics(
         },
         "runtime":RUNTIME_METRICS.snapshot(),
     }
+
+
+@app.post("/api/pilot/feedback",status_code=201)
+async def post_pilot_feedback(request:Request)->dict[str,object]:
+    """Lane LOG, decision 3: "이번 실험에 도움이 됐나요?" -- kept with its experiment.
+
+    A rating 1-5 with an optional one-line memo, or a skip; the last answer
+    about an experiment is the one its summary carries. Kept in the pilot
+    metrics store, so without a workspace there is nowhere to keep it (503).
+    """
+
+    payload=await _json_object(request)
+    try:
+        answer=FeedbackAnswer.from_request(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail="feedback_invalid") from exc
+    try:
+        store=_pilot_store()
+    except Exception as exc:
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable") from exc
+    if store is None:
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable")
+    try:
+        _scope_tenant_resource("experiment_report",answer.report_id)
+        report_settings=ExperimentReportSettings.from_environment()
+        if report_settings.enabled and report_settings.database_path is not None:
+            ExperimentReportStore(report_settings.database_path).get_report(answer.report_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    try:
+        store.record_feedback(account_id=_pilot_account(),answer=answer)
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=feedback error=%s",type(exc).__name__)
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable") from exc
+    return {"saved":True}
 
 
 def _report_writer_brain()->ReportWriterBrain|None:
