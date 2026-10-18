@@ -379,8 +379,15 @@ const BAND_STYLE=`
 #connection-band[data-state="restored"] p:not(.connection-band-title){display:none}
 #connection-band .connection-band-timer{display:inline-block;margin:4px 0;padding:4px 10px;border-radius:8px;background:#fff;color:#b42318;font-weight:800;font-size:clamp(18px,4.8vw,24px)}
 #connection-band .connection-band-timer[hidden]{display:none}
-.run-timer-offline{margin:4px 0 0;padding:2px 8px;border-radius:6px;background:#b42318;color:#fff;font-weight:700;font-size:13px;display:inline-block}
-.run-timer-offline[hidden]{display:none}
+#run-timer #run-timer-offline{display:inline-block;width:auto;margin:4px 0;padding:2px 8px;border-radius:6px;background:#b42318;color:#fff;font-weight:700;font-size:13px;line-height:1.3}
+#run-timer #run-timer-offline[hidden]{display:none}
+@media (max-height:520px){
+ #connection-band{padding:6px 16px 8px}
+ #connection-band .connection-band-title{font-size:20px;margin:0 0 2px}
+ #connection-band :is(.connection-band-tries,.connection-band-mic){display:inline;margin-right:14px}
+ #connection-band .connection-band-clock{font-size:15px;margin:1px 0}
+ #connection-band .connection-band-timer{font-size:17px;padding:2px 8px;margin:2px 0}
+}
 body:is([data-connection="lost"],[data-connection="restored"]){padding-top:var(--connection-band-height,0px)}
 body:is([data-connection="lost"],[data-connection="restored"]) .sticky-rail{display:none}
 body[data-connection="lost"] :is(button,input,select,textarea,summary,a[href]):not(#connection-band *){pointer-events:none;opacity:.5}
@@ -392,7 +399,7 @@ function showBand(){
   (document.head||body)?.appendChild?.(style);
   const band=document.createElement("section");band.id="connection-band";band.setAttribute?.("role","alert");band.setAttribute?.("aria-live","assertive");
   const line=(name,className)=>{const item=document.createElement("p");item.className=className;item.dataset.line=name;band.appendChild(item);return item;};
-  net.band={node:band,title:line("title","connection-band-title"),tries:line("tries","connection-band-tries"),clock:line("clock","connection-band-clock"),timer:line("timer","connection-band-timer"),mic:line("mic","connection-band-mic"),screen:line("screen","connection-band-screen")};
+  net.band={node:band,title:line("title","connection-band-title"),tries:line("tries","connection-band-tries"),mic:line("mic","connection-band-mic"),clock:line("clock","connection-band-clock"),timer:line("timer","connection-band-timer"),screen:line("screen","connection-band-screen")};
   net.band.timer.hidden=true;net.band.clock.hidden=true;
   body?.prepend?.(band);
   // The space kept for the band follows its height as its lines change.
