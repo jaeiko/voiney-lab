@@ -1,6 +1,6 @@
 # 파일럿 안내 — 실행 · 데이터 처리 · 외부 AI 고지 · 삭제
 
-날짜: 2026-10-13 (줄 PL) · 대상: 파일럿을 여는 사람(기술 담당·연구실 담당)
+날짜: 2026-10-13 (줄 PL), 2026-10-18 지표 추가 (줄 LOG) · 대상: 파일럿을 여는 사람(기술 담당·연구실 담당)
 
 VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된 GLP/GMP/임상 시스템이 아니다(README). 이 문서는
 **한 연구실에서, 사람이 곁에서 지켜보며 하는 시험**을 여는 순서를 적는다. 설치·검증 목록은
@@ -96,6 +96,7 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 | 분석·OCR·확인 질문·프로토콜 리비전 | `protocol_workspace.sqlite` | 업로드 PDF 의 글자가 들어 있다 |
 | 실험 기록(말한 관찰·문제·메모), 보고서 문장 | `experiment_reports.sqlite` | 지우지 않는 장부 |
 | 실험 세션, 번역 문장, 증거 파일(사진), 실험자 설정, 분석 지표 | `workspace/commercial_workspace.sqlite`, `workspace/evidence/…` | 실험자 한 명(개발 신원) |
+| 파일럿 지표(숫자·코드·시각)와 실험 끝 평점·한 줄 메모 | `workspace/pilot_metrics.sqlite` | 3-3절. 계정 id 별로 남는다 |
 | 음성 진단 녹음(WAV)과 전사(JSON) | `stt-diagnostics/` | **`VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` 를 켰을 때만.** 끄면 원음을 저장하지 않는다 |
 | 기관 안전 문서 카탈로그 | `approved_safety_catalog.sqlite` | 있을 때만. 참가자 데이터가 아니라서 삭제 도구가 건드리지 않는다 |
 
@@ -118,6 +119,86 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 | 웹 설명·AI 도식 요청 | OpenAI | 켰을 때만 |
 | 실험 기록의 사실 | Google Gemini(보고서 서술) | 보고서를 만들 때 |
 
+### 3-3. 파일럿 지표 — 무엇을 재는가 (줄 LOG)
+
+파일럿에서 "무엇을 얼마나 도왔는지"를 숫자로 보려고 서버가 남기는 것이다(10/16 제안의 지표 중 서버가 셀 수 있는 것).
+**숫자·코드·시각만 남긴다.** 말한 글, 음성, 프로토콜 내용, 모델 출력은 지표에 들어가지 않는다(실험 기록은 원래 설계대로 남는다).
+지표를 남기다 실패해도 실험은 멈추지 않는다 — 서버 로그에 `pilot.metrics.failed` 한 줄이 남고 그 값만 빠진다.
+
+**어디에.** `VOINEY_LAB_WORKSPACE_DATA_DIR` 폴더의 `pilot_metrics.sqlite`(파일럿은 `data/runtime/pilot/workspace/pilot_metrics.sqlite`).
+작업공간이 꺼져 있으면 저장하지 않는다(서버 로그 한 줄은 남는다). 모든 행에 **계정 id** 가 붙는다 — 로그인한 계정이 있으면 그 id,
+없으면 개발 신원(`dev-local-admin`). 서버 로그 줄에는 계정이 없다.
+
+**턴마다 (서버 로그 한 줄 + 표 한 행).** 음성 턴이 끝날 때마다 서버 로그에 이런 줄이 남는다.
+
+```
+pilot.turn turn_id=7 router=fallback reason=timeout action=next changed=1 step=1 clarify=0 source=voice first_audio_ms=1830 total_ms=2410
+```
+
+| 항목 | 값 |
+|---|---|
+| `router` | `off`(라우터 꺼짐) · `front`(앞 규칙이 처리) · `used`(모델 답을 씀) · `fallback`(규칙으로 넘김) · `stopped`(요청 한도에서 멈춤) |
+| `reason` | 넘긴 이유: `timeout`(시간 초과) · `rate_limit`(요청 한도) · `format`(빈 답·읽을 수 없는 답) · `refused`(서버가 제안을 거부하거나 답 검사에서 떨어짐) · `error`(그 밖의 공급자 오류) · `none` |
+| `action` | 서버가 한 일의 코드(`next`, `current`, `record_observation` …) |
+| `changed` · `step` | 상태가 바뀌었는지, 단계를 넘겼는지 |
+| `clarify` | 되물었는지(완료·대상·값 확인, 다시 말해 달라는 요청) |
+| `source` | 그 턴의 말이 어디서 왔나: `voice`(말) · `candidate`(되물은 후보 단추를 누름) |
+| `first_audio_ms` · `total_ms` | 말이 끝난 뒤 첫 소리까지, 턴이 끝날 때까지(밀리초) |
+
+일시정지·다시 시작 **버튼**은 턴이 아니라서 `button_change` 표시로 따로 남는다. 상태 변경의 출처는 이 셋(말·버튼·후보 단추)이다.
+
+**실험마다 (한 행, 내보낼 때 계산).** 실험 기록 장부(`experiment_reports.sqlite`)와 위 표를 합쳐 계산한다. 이 기능 전의 기록도
+장부만으로 행이 나온다(그때 재지 않은 칸은 비어 있다).
+
+| 열 | 정의 |
+|---|---|
+| `account_id` · `report_id` · `protocol_id` · `development_only` · `status` | 계정 id, 실험 기록 id, 프로토콜 id, 개발용 큐레이션 기록인지(1/0), 기록 상태(`in_progress`·`completed`·`stopped`) |
+| `day` · `started_at` · `ended_at` · `duration_s` | 시작한 날(한국 날짜), 시작·끝(UTC), 걸린 초 |
+| `account_experiment_number` · `protocol_run_number` | 그 계정의 몇 번째 실험인지, 그 계정이 그 프로토콜을 몇 번째로 돌렸는지 — "다시 쓰는 비율"의 바탕 |
+| `steps` · `steps_by_voice` · `steps_by_button` · `hands_free_ratio` | 넘긴 단계 수, 말로 넘긴 것, 버튼(후보 단추)으로 넘긴 것, 말로 넘긴 비율 — "손을 쓰지 않고 끝낸 단계 비율". 단계를 넘기는 버튼은 지금 화면에 없어 후보 단추만 센다 |
+| `reverts` | 되돌린 단계 수("방금 완료 취소") — "잘못 바뀐 상태"를 보는 자리 |
+| `turns` · `router_*` · `clarifies` · `first_audio_median_ms` | 턴 수, 라우터 결과별 수(쓴 것·넘긴 것·이유별), 되묻기 수, 첫 소리까지 중앙값 |
+| `button_changes` | 일시정지·다시 시작 버튼을 누른 수 |
+| `timer_last_minute_alerts` · `timer_end_alerts` · `alert_answer_median_ms` | 타이머 1분 전·끝 알림 수, 알림 뒤 실험자의 첫 말까지 걸린 시간(중앙값) |
+| `disconnects` · `disconnected_ms` | 실험 중 음성 연결이 끊긴 수, 같은 계정이 다시 연결할 때까지 걸린 시간 합(2시간 안에 돌아온 것만). 줄 NET 의 끊김 기록 사건이 들어오면 그것으로 바꾼다 |
+| `records` · `deviations` · `anomalies` · `system_anomalies` · `corrections` | 기록(측정·관찰·메모), 편차, 이상 사항, 시스템 이상, 기록 정정·취소의 **개수** |
+| `report_made` · `report_minutes_after_end` | 보고서(Word·Markdown)를 만들었는지 또는 보고서 문장이 쓰였는지, 실험 끝에서 처음 만들 때까지(분) |
+| `rating` · `feedback_skipped` | 실험 끝 평점(1–5)과 건너뛰었는지(마지막 답) |
+
+**분석마다 (한 행).** `account_id`·`protocol_id`·`revision_id`·`recorded_at`(분석이 끝난 시각, UTC)과 `outcome`: `passed`(바로 실행 가능) · `review_pending`(검토 대기) · `notice`(끝났지만 실행을 막는 이유가 있어
+안내함) · `failed`(분석 실패). `duration_ms`(분석에 걸린 시간), `card_count`(검토 카드 수), `review_registered_after_s`(분석 끝에서
+"검토 완료하고 등록"까지 초), `executed` · `executed_after_review`(그 뒤 그 프로토콜로 실험을 시작했는지, 검토 등록 뒤에 시작했는지)
+— "올린 PDF 가 바로/검토 뒤 실행된 비율과 검토 시간".
+
+**하루마다 (관리자 화면의 표).** 위 실험·분석 행을 날짜별로 더한 것. `accounts`(그날 실험한 계정), `returning_accounts`(그 전 날에도
+실험한 계정), `experiments`·`experiments_ended`(끝난 실험), `steps`·`hands_free_ratio`, `timer_alerts`·`alert_answer_median_ms`, `disconnects`, `reports_made`, `ratings`·
+`rating_mean`, `analyses_*` 등.
+
+**실험 끝 한 문항.** 실험이 끝나면 "실험 기록 검토" 칸 아래에 "이번 실험에 도움이 됐나요?" 1–5 단추와 한 줄 메모(선택, 200자)가
+나온다. 건너뛸 수 있고, 같은 기기에서 같은 실험을 다시 묻지 않는다. 마지막 답이 그 실험의 평점이다. **메모는 지표가 아니다** —
+관리자 화면과 지표 CSV 에는 나오지 않고, 아래 `notes` 로만 꺼낸다.
+
+**관리자 화면.** 서버에 `VOINEY_LAB_ADMIN_TOKEN` 을 긴 임의 값으로 설정하고(비어 있으면 닫혀 있다) 서버를 다시 켠 뒤,
+브라우저에서 `https://<서버>/admin-metrics.html` 을 연다. 토큰을 넣고 기간(기본 최근 14일)·계정 id 를 골라 "불러오기".
+토큰은 그 페이지의 메모리에만 있고 요청 머리글(`X-Voice-Workflow-Admin-Token`)로만 보낸다. 서버 쪽 경로는
+`GET /api/admin/pilot-metrics?from=YYYY-MM-DD&to=YYYY-MM-DD&account=<id>`. 줄 ON 의 계정에 관리자 역할(`admin`)이 생기면 그 계정은
+토큰 없이 볼 수 있다.
+
+**CSV 내보내기.** 읽기만 하고, 원본 폴더가 아니라 사본을 읽는다(서버가 켜져 있어도 된다). 밖으로 보내는 것은 없다.
+
+```bash
+python scripts/pilot_metrics.py days --from 2026-10-20 --to 2026-10-26        # 하루 요약
+python scripts/pilot_metrics.py experiments --out experiments.csv              # 실험 단위 (엑셀용 UTF-8 BOM)
+python scripts/pilot_metrics.py analyses --account oidc:1a2b3c...              # 분석 단위, 한 계정
+python scripts/pilot_metrics.py notes                                          # 평점 메모 (팀 내부용)
+```
+
+기본 폴더는 `data/runtime/pilot`; 다른 폴더는 `--data-dir`, 파일 하나씩은 `--metrics-db`·`--reports-db`·`--workspace-db`.
+내보낸 CSV 는 삭제 도구가 모르는 **복사본**이다(5절 3번).
+
+**지우는 법.** `pilot_metrics.sqlite` 는 `workspace/` 안에 있어 5절의 삭제 도구가 "실험 세션·관찰·번역 문장·증거 파일·설정
+(작업공간)" 범주로 함께 지운다. 따로 지우는 명령은 없다.
+
 ## 4. 외부 AI 처리 고지 문안 (초안 — 사람이 확정)
 
 참가자에게 시작 전에 읽어 주거나 보여 줄 문안의 초안이다. 괄호 `[ ]` 는 운영자가 사실에 맞게 채운다.
@@ -135,7 +216,9 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 >    - 실험 기록 내용 → [Google Gemini] (보고서 문장)
 > 4. 보내는 내용은 이 목록에 있는 것뿐이며, 서비스 제공업체가 보내진 내용을 어떻게 보관하는지는 각 업체의 약관을 따릅니다.
 >    [업체별 보관·학습 사용 여부를 확인한 결과를 적는다].
-> 5. 연구실 서버에 남는 것: 올리신 PDF 와 분석 결과, 실험 기록, [음성 진단 녹음을 켰다면 그 녹음과 전사].
+> 5. 연구실 서버에 남는 것: 올리신 PDF 와 분석 결과, 실험 기록, [음성 진단 녹음을 켰다면 그 녹음과 전사],
+>    그리고 서비스가 얼마나 도움이 됐는지 보는 **사용 지표**(단계를 말로 넘긴 수, 응답 시간, 연결 끊김 같은 숫자·시각 — 말씀하신
+>    내용은 들어가지 않습니다)와 실험 끝에 남기신 평점·메모. 사용 지표는 계정별로 남고 관리자만 봅니다. 지표는 외부 AI 로 보내지 않습니다.
 >    **이 데이터는 서비스를 개선하는 데에만 쓰며, 파일럿이 끝나면 삭제합니다.** 삭제한 날짜와 항목(내용은 아님)은 기록으로 남깁니다.
 > 6. 참여를 멈추거나 데이터 삭제를 먼저 요청하실 수 있습니다: [연락처].
 
@@ -189,4 +272,6 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 2. 도메인 결정과 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 실행(줄 PL 은 실행하지 않았다).
 3. 보고서 문서(Word)의 시작 문장에 `institution_safety_notice` 를 적는 일(보고서 생성 코드 담당).
 4. 삭제 도구의 "파일을 열고 있는 프로세스" 확인은 Linux(`/proc`)에서만 하고, 다른 사용자가 연 파일은 볼 수 없다. 서버를 멈추는 것이 첫 단계다.
-5. 이 줄은 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).
+5. 파일럿 지표(3-3절): 끊김 시간은 "같은 계정이 다시 연결할 때까지"로 잰다. 줄 NET 의 끊김 기록 사건이 들어오면 그것으로 바꾼다.
+   관리자 계정은 줄 ON 이 역할을 정하면 쓴다(지금은 토큰만). 평점 메모를 누가 언제 읽을지는 사람이 정한다.
+6. 줄 PL 과 줄 LOG 는 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).
