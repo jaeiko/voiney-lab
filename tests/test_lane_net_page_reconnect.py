@@ -33,6 +33,8 @@ globalThis.fetch=async url=>{
 // worklet and the output are already open.
 function audioOpen(){micWorkletNode={port:{}};micContext={state:"running",resume:async()=>{}};playContext={...fakeOutput(),state:"running",sampleRate:48000};}
 const tries=()=>opened.length-1;
+// The server keeps beating once a second while the clock moves.
+async function beating(ws,ms){for(let gone=0;gone<ms;gone+=1000){await advance(1000);await ws.deliver({type:"server.heartbeat",server_time_ms:Date.now()});}}
 async function serverTakes(ws,state={}){
  const start=ws.texts("session.start").at(-1);
  await ws.deliver({type:"session.ready",configuration_id:start.configuration_id,generation:2,mode:"cascade",language:"ko",input_language:"ko",protocol_id:PROTOCOL_ID,revision_id:REVISION_ID,research_capabilities:{},experiment_session_id:EXPERIMENT_ID,experiment_session_version:8,experiment_recovered:true,connection_restored:true});
@@ -102,10 +104,13 @@ assert(!label||label.hidden===true,"the screen timer label stayed");
 assert(next.texts("client.audio_ready").length===1,"audio not reported ready to the new session");
 assert(next.texts("client.voice_calibration").length===0,"the wearer was asked to read again");
 let tap=tapEvent();assert(!tap.prevented,"controls stayed read only after the server took over");
-await advance(4000);
+await beating(next,4000);
 assert(band().hidden===true&&document.body.dataset.connection==="","the band stayed");
-await advance(60000);
-assert(opened.length===2,`tried again after the server took over: ${opened.length}`);
+await beating(next,60000);
+assert(opened.length===2&&socket===next,`tried again while the server was there: ${opened.length}`);
+// The new connection is watched as the first was: its silence is a new loss.
+await advance(3000);
+assert(socket===null&&band().hidden===false&&bandLine("title").startsWith("연결이 끊겼어요"),"the new connection's silence was not seen");
 """)
 
     def test_a_paused_run_comes_back_paused(self) -> None:
@@ -149,6 +154,18 @@ await advance(1000);
 assert(opened.length===1,"a socket opened for an experiment that cannot continue");
 assert(band().hidden===true&&sessionActive===false,"the run stayed");
 assert(node("status").textContent.startsWith(""" + repr(words) + r"""),`status: ${node("status").textContent}`);
+""")
+
+    def test_the_run_continues_whatever_the_experiment_list_shows(self) -> None:
+        # The screen's experiment list, refreshed during the run, may not hold
+        # it (an older list, another filter): the server's session.ready does.
+        self.run_page(r"""
+const ws=await openRun();
+currentExperimentSessionId=null;currentExperimentSessionVersion=null;
+ws.drop();await settle();
+assert(band()?.hidden===false,"a run the server bound to an experiment was not continued");
+await advance(1000);
+assert(fetches.includes(`/api/workspace/experiments/${EXPERIMENT_ID}`),`not the run's experiment: ${fetches}`);
 """)
 
     def test_back_online_tries_at_once(self) -> None:

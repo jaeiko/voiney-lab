@@ -61,12 +61,14 @@ const net={socket:null,heardAt:0,pingSeq:0,pingHandle:null,checkHandle:null,lost
 function runActive(){
  return sessionActive===true&&acceptedSessionConfiguration!==null&&net.socket!==null&&socket===net.socket;
 }
-// The run can be continued on a new connection: the server bound it to a
-// durable experiment (the workspace on, as in a pilot).
+// The run can be continued on a new connection: the server's session.ready
+// bound it to a durable experiment (the workspace on, as in a pilot) -- not
+// whatever the experiment list on the screen shows now. Each try reads the
+// experiment's version afresh.
 function resumable(){
  const accepted=acceptedSessionConfiguration;
  return typeof accepted?.experiment_session_id==="string"&&accepted.experiment_session_id.length>0
-  &&currentExperimentSessionId===accepted.experiment_session_id&&Number.isInteger(currentExperimentSessionVersion);
+  &&Number.isInteger(accepted.experiment_session_version);
 }
 
 // Every socket the page opens: anything that comes on it -- words, audio or
