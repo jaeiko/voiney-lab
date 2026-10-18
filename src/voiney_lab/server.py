@@ -201,6 +201,24 @@ from voiney_lab.vad import (
 )
 from voiney_lab import voice_providers
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
+from voiney_lab.accounts import (
+    SESSION_COOKIE_NAME,
+    SESSION_LIFETIME,
+    ACCOUNTS_DATABASE_FILENAME,
+    Account,
+    AccountDisabledError,
+    AccountError,
+    AccountNameInvalidError,
+    AccountNameTakenError,
+    AccountNotFoundError,
+    AccountStore,
+    AdminRequiredError,
+    AuthSettings,
+    InviteInvalidError,
+    LoginLockedError,
+    LoginRefusedError,
+    PasswordInvalidError,
+)
 from voiney_lab.identity import (
     AuthenticationRequiredError,
     AuthorizationDeniedError,
@@ -441,8 +459,11 @@ async def readyz()->JSONResponse:
         workspace=_workspace_settings()
         protocol=_protocol_store_settings()
         reports=ExperimentReportSettings.from_environment()
+        # Lane ON, decision ① (2026-10-18): "accounts" when the pilot's
+        # login is on (VOINEY_LAB_AUTH_MODE=accounts).
         capabilities["identity_mode"]=(
-            "oidc" if identity.oidc_settings is not None else "development"
+            "accounts" if _auth_settings().accounts
+            else "oidc" if identity.oidc_settings is not None else "development"
         )
         capabilities["workspace_enabled"]=workspace.enabled
         capabilities["protocol_catalog_enabled"]=protocol.enabled
@@ -492,7 +513,114 @@ def _workspace_settings()->WorkspaceSettings:
     return WorkspaceSettings.from_environment()
 
 
+# --- Accounts: the pilot's login (lane ON, decision ①, 2026-10-18) -----------
+# VOINEY_LAB_AUTH_MODE=accounts puts a session cookie in front of every /api
+# request and the /ws connection (the health paths and the admin metrics,
+# which carry their own token, excepted). An account is the experimenter
+# principal of its lab; the workspace store sees it as it saw the development
+# identity. In the default mode (dev) nothing below runs.
+#: The account behind this request, when the door is accounts; None otherwise.
+_REQUEST_ACCOUNT:contextvars.ContextVar[Account|None]=contextvars.ContextVar(
+    "voice_workflow_request_account",default=None)
+#: /api paths that answer without a session: the session question itself,
+#: logging in, joining, reading an invite, and the admin metrics (own token).
+_ACCOUNT_OPEN_PATHS=frozenset({
+    "/api/auth/session","/api/auth/login","/api/auth/signup","/api/admin/metrics"})
+_ACCOUNT_OPEN_PREFIXES=("/api/auth/invites/",)
+
+
+def _auth_settings()->AuthSettings:
+    return AuthSettings.from_environment()
+
+
+def _account_store()->AccountStore:
+    """The account store beside the workspace's database (accounts mode)."""
+
+    settings=_workspace_settings()
+    if not settings.enabled or settings.data_dir is None:
+        raise IdentityConfigurationError("Accounts need the tenant workspace.")
+    return AccountStore.open(settings.data_dir/ACCOUNTS_DATABASE_FILENAME)
+
+
+def _account_for_cookie(token:str|None)->Account:
+    """The signed-in account of a session cookie, or the refusal."""
+
+    if not token:
+        raise AuthenticationRequiredError("Authentication is required.")
+    store=_account_store()
+    try:
+        account=store.account_for_session(token)
+    finally:
+        store.close()
+    if account is None:
+        raise AuthenticationRequiredError("Authentication is required.")
+    return account
+
+
+def _request_account()->Account|None:
+    return _REQUEST_ACCOUNT.get()
+
+
+def _account_is_admin()->bool:
+    account=_REQUEST_ACCOUNT.get()
+    return account is not None and account.admin
+
+
+def _request_client(request:Request)->str:
+    """Who is asking, for the login lock: the proxy's X-Forwarded-For first value, else the peer."""
+
+    forwarded=request.headers.get("x-forwarded-for","")
+    if forwarded.strip():
+        return forwarded.split(",")[0].strip()[:200]
+    client=getattr(request,"client",None)
+    return str(getattr(client,"host","") or "")[:200]
+
+
+def _request_is_secure(request:Request)->bool:
+    """Whether the browser reached us over HTTPS (directly or through the proxy)."""
+
+    forwarded=request.headers.get("x-forwarded-proto","").split(",")[0].strip().casefold()
+    return request.url.scheme=="https" or forwarded=="https"
+
+
+def _set_session_cookie(response:Response,token:str,request:Request)->None:
+    response.set_cookie(
+        SESSION_COOKIE_NAME,token,max_age=int(SESSION_LIFETIME.total_seconds()),
+        httponly=True,samesite="lax",secure=_request_is_secure(request),path="/")
+
+
+def _clear_session_cookie(response:Response,request:Request)->None:
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,path="/",httponly=True,samesite="lax",secure=_request_is_secure(request))
+
+
+def _accounts_only()->None:
+    """The account routes answer only when the door is accounts."""
+
+    if not _auth_settings().accounts:
+        raise HTTPException(status_code=409,detail="accounts_disabled")
+
+
+def _review_body_with_account(body:dict[str,Any])->dict[str,Any]:
+    """The reviewer's name is the account's name when someone is signed in (decision ①)."""
+
+    account=_REQUEST_ACCOUNT.get()
+    if account is None:
+        return body
+    return {**body,"reviewer_name":account.name}
+
+
 def _workspace_http_error(exc:Exception)->HTTPException:
+    if isinstance(exc,AccountError):
+        status={
+            InviteInvalidError:404,AccountNotFoundError:404,AccountNameTakenError:409,
+            AccountNameInvalidError:422,PasswordInvalidError:422,LoginRefusedError:401,
+            LoginLockedError:429,AccountDisabledError:403,AdminRequiredError:403,
+        }.get(type(exc),400)
+        headers=(
+            {"Retry-After":str(exc.retry_after_seconds)}
+            if isinstance(exc,LoginLockedError) else None)
+        return HTTPException(status_code=status,detail=exc.code,headers=headers)
     if isinstance(exc,AuthenticationRequiredError):
         return HTTPException(status_code=401,detail=exc.code)
     if isinstance(exc,AuthorizationDeniedError):
@@ -516,21 +644,33 @@ async def commercial_identity_boundary(request:Request,call_next):
     if not request.url.path.startswith("/api/"):
         return await call_next(request)
     try:
+        auth=_auth_settings()
         settings=_workspace_settings()
         operational=_runtime_usage_scope()=="operational"
-        if not settings.enabled and not operational:
-            return await call_next(request)
-        if (
-            operational
-            and not settings.enabled
-            and request.url.path.endswith("/activate-development")
-        ):
-            return await call_next(request)
-        if not settings.enabled:
-            raise IdentityConfigurationError(
-                "Operational scope requires the tenant workspace."
-            )
-        principal=_identity_resolver().resolve(request.headers.get("authorization"))
+        account:Account|None=None
+        if auth.accounts:
+            # Lane ON, decision ①: the session cookie is the door.
+            path=request.url.path
+            if path in _ACCOUNT_OPEN_PATHS or path.startswith(_ACCOUNT_OPEN_PREFIXES):
+                return await call_next(request)
+            if not settings.enabled:
+                raise IdentityConfigurationError("Accounts need the tenant workspace.")
+            account=_account_for_cookie(request.cookies.get(SESSION_COOKIE_NAME))
+            principal=account.principal()
+        else:
+            if not settings.enabled and not operational:
+                return await call_next(request)
+            if (
+                operational
+                and not settings.enabled
+                and request.url.path.endswith("/activate-development")
+            ):
+                return await call_next(request)
+            if not settings.enabled:
+                raise IdentityConfigurationError(
+                    "Operational scope requires the tenant workspace."
+                )
+            principal=_identity_resolver().resolve(request.headers.get("authorization"))
         store=initialize_workspace_store(settings)
         try:
             store.bootstrap_principal(principal)
@@ -539,13 +679,17 @@ async def commercial_identity_boundary(request:Request,call_next):
             store.close()
         request.state.principal=principal
         token=_REQUEST_PRINCIPAL.set(principal)
+        account_token=_REQUEST_ACCOUNT.set(account)
         try:
             return await call_next(request)
         finally:
+            _REQUEST_ACCOUNT.reset(account_token)
             _REQUEST_PRINCIPAL.reset(token)
     except Exception as exc:
         error=_workspace_http_error(exc)
-        return JSONResponse(status_code=error.status_code,content={"detail":error.detail})
+        return JSONResponse(
+            status_code=error.status_code,content={"detail":error.detail},
+            headers=error.headers or None)
 
 
 def _commercial_workspace()->tuple[Principal,object]:
@@ -2445,6 +2589,201 @@ async def get_workspace_session()->dict[str,object]:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/auth/session")
+async def get_auth_session(request:Request)->dict[str,object]:
+    """Which door is in use and who is signed in (lane ON, decision ①).
+
+    Answered without a session, so the screen can show the login step.
+    In dev mode the one development identity is "signed in"; no cookie.
+    """
+
+    auth=_auth_settings()
+    if not auth.accounts:
+        principal=_REQUEST_PRINCIPAL.get()
+        if principal is None:
+            try:
+                principal=_identity_resolver().resolve(request.headers.get("authorization"))
+            except Exception:  # noqa: BLE001 - nobody is named, which is the answer
+                principal=None
+        return {
+            "mode":"dev","signed_in":principal is not None,
+            "account":None if principal is None else {
+                "account_id":principal.principal_id,"name":principal.display_name,
+                "organization_id":principal.organization_id,"admin":False,
+                "entitlement":None,"disabled":False,
+            },
+        }
+    try:
+        store=_account_store()
+        try:
+            account=store.account_for_session(request.cookies.get(SESSION_COOKIE_NAME))
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    return {
+        "mode":"accounts","signed_in":account is not None,
+        "account":None if account is None else account.public_dict(),
+    }
+
+
+@app.get("/api/auth/invites/{token}")
+async def get_auth_invite(token:str)->dict[str,object]:
+    """Whether an invite link still opens, and what it joins (the signup screen reads it)."""
+
+    _accounts_only()
+    try:
+        store=_account_store()
+        try:
+            invite=store.invite_for_token(token)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    return {
+        "valid":True,"organization_id":invite.organization_id,"admin":invite.admin,
+        "entitlement":invite.entitlement,"expires_at":invite.expires_at,
+    }
+
+
+@app.post("/api/auth/signup",status_code=201)
+async def post_auth_signup(request:Request,body:dict[str,Any]=Body(...))->Response:
+    """Join through an invite (name and password); signed in at once."""
+
+    _accounts_only()
+    try:
+        store=_account_store()
+        try:
+            account=store.sign_up(body.get("invite"),body.get("name"),body.get("password"))
+            token=store.open_session(account)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    log.info("auth.signup account_id=%s admin=%s",account.account_id,account.admin)
+    response=JSONResponse(status_code=201,content={"account":account.public_dict()})
+    _set_session_cookie(response,token,request)
+    return response
+
+
+@app.post("/api/auth/login")
+async def post_auth_login(request:Request,body:dict[str,Any]=Body(...))->Response:
+    """Log in by name and password; failures are limited by name and by client."""
+
+    _accounts_only()
+    try:
+        store=_account_store()
+        try:
+            account=store.log_in(
+                body.get("name"),body.get("password"),client=_request_client(request))
+            token=store.open_session(account)
+        finally:
+            store.close()
+    except LoginLockedError as exc:
+        log.info("auth.login locked retry_after=%s",exc.retry_after_seconds)
+        return JSONResponse(
+            status_code=429,content={"detail":exc.code},
+            headers={"Retry-After":str(exc.retry_after_seconds)})
+    except Exception as exc:
+        log.info("auth.login refused reason=%s",getattr(exc,"code",type(exc).__name__))
+        raise _workspace_http_error(exc) from exc
+    log.info("auth.login account_id=%s",account.account_id)
+    response=JSONResponse(status_code=200,content={"account":account.public_dict()})
+    _set_session_cookie(response,token,request)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def post_auth_logout(request:Request)->Response:
+    """End this device's session; the cookie is cleared."""
+
+    _accounts_only()
+    try:
+        store=_account_store()
+        try:
+            store.close_session(request.cookies.get(SESSION_COOKIE_NAME))
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    response=JSONResponse(status_code=200,content={"signed_out":True})
+    _clear_session_cookie(response,request)
+    return response
+
+
+@app.post("/api/auth/password")
+async def post_auth_password(request:Request,body:dict[str,Any]=Body(...))->dict[str,object]:
+    """Change the password after the current one; every other device signs out."""
+
+    _accounts_only()
+    account=_REQUEST_ACCOUNT.get()
+    if account is None:
+        raise HTTPException(status_code=401,detail="authentication_required")
+    try:
+        store=_account_store()
+        try:
+            store.change_password(
+                account.account_id,body.get("current"),body.get("new"),
+                keep_session_token=request.cookies.get(SESSION_COOKIE_NAME))
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    log.info("auth.password_changed account_id=%s",account.account_id)
+    return {"changed":True}
+
+
+@app.get("/api/auth/accounts")
+async def get_auth_accounts()->dict[str,object]:
+    """The lab's accounts (an administrator only)."""
+
+    _accounts_only()
+    account=_REQUEST_ACCOUNT.get()
+    try:
+        if account is None or not account.admin:
+            raise AdminRequiredError("An administrator is required.")
+        store=_account_store()
+        try:
+            listed=store.list_accounts(account.organization_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    return {"accounts":[item.public_dict() for item in listed]}
+
+
+@app.post("/api/auth/accounts/{account_id}/disabled")
+async def post_auth_account_disabled(
+    account_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """Switch one of the lab's accounts off (its sessions end) or on (an administrator only)."""
+
+    _accounts_only()
+    account=_REQUEST_ACCOUNT.get()
+    try:
+        if account is None or not account.admin:
+            raise AdminRequiredError("An administrator is required.")
+        if not isinstance(body.get("disabled"),bool):
+            raise AccountError("disabled must be true or false.")
+        if account_id==account.account_id:
+            raise HTTPException(status_code=409,detail="admin_self_disable")
+        store=_account_store()
+        try:
+            target=store.account(account_id)
+            if target.organization_id!=account.organization_id:
+                raise AccountNotFoundError("The account is unknown.")
+            changed=store.set_disabled(account_id,body["disabled"])
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    log.info("auth.account_disabled account_id=%s disabled=%s by=%s",
+             account_id,changed.disabled,account.account_id)
+    return {"account":changed.public_dict()}
 
 
 def _catalog_protocol_titles()->dict[str,str]:
@@ -10690,10 +11029,27 @@ async def cancel_cascade_generation(
 async def voice_socket(websocket:WebSocket):
     await websocket.accept()
     workspace_context_token=None
+    account_context_token=None
     try:
         settings=_workspace_settings()
         operational=_runtime_usage_scope()=="operational"
-        if settings.enabled or operational:
+        auth=_auth_settings()
+        if auth.accounts:
+            # Lane ON, decision ①: the same session cookie as the HTTP API.
+            if not settings.enabled:
+                raise IdentityConfigurationError("Accounts need the tenant workspace.")
+            cookies=getattr(websocket,"cookies",None) or {}
+            account=_account_for_cookie(cookies.get(SESSION_COOKIE_NAME))
+            principal=account.principal()
+            workspace=initialize_workspace_store(settings)
+            try:
+                workspace.bootstrap_principal(principal)
+                principal=workspace.effective_principal(principal)
+            finally:
+                workspace.close()
+            workspace_context_token=_REQUEST_PRINCIPAL.set(principal)
+            account_context_token=_REQUEST_ACCOUNT.set(account)
+        elif settings.enabled or operational:
             if not settings.enabled:
                 raise IdentityConfigurationError(
                     "Operational scope requires the tenant workspace.")
