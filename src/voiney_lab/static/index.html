@@ -3067,7 +3067,7 @@ async function ensureAudio(generation){
  if(playContext.state==="running"&&acceptedSessionConfiguration){
   sendControl("client.audio_ready",{configuration_id:acceptedSessionConfiguration.configuration_id,generation:acceptedSessionConfiguration.server_generation,audio_context_state:"running",sample_rate:playContext.sampleRate});
   // Lane SP1 decision 1: the wearer's voice is measured once at the start, after the greeting, unless turned off here (it can be skipped by voice or button).
-  if(voiceCalibrationAtStart())requestVoiceCalibration("start");
+  if(voiceCalibrationAtStart()&&!globalThis.voineyConnection?.reconnecting?.())requestVoiceCalibration("start");
  }
 }
 async function closeAudio(){
@@ -4403,6 +4403,7 @@ async function onMessage(e,generation,current){
   return;
  }
  const m=JSON.parse(e.data);
+ if(globalThis.voineyConnection?.consume?.(m,current))return;
  if(m.type==="ready"){renderResearchCapabilities(m.research_capabilities);if(m.voice_profile&&typeof m.voice_profile==="object")$("voice-profile").textContent=`${m.voice_profile.persona||"assistant"} · ${m.voice_profile.voice_id||"unknown"} · ${m.voice_profile.pipeline||"cascade"}`;if(visibleState==="IDLE")renderState("IDLE");}
  if(m.type==="session.ready"){
   const pending=pendingSessionConfiguration,serverInputLanguage=m.input_language??m.language,pendingInputLanguage=pending?.input_language??pending?.language,revisionValid=pending?.protocol_id===null?(m.revision_id===null||m.revision_id===undefined):(typeof m.revision_id==="string"&&m.revision_id.length>0),valid=pending&&Number.isInteger(m.configuration_id)&&m.configuration_id===pending.configuration_id&&m.mode===pending.mode&&m.language===pending.language&&serverInputLanguage===pendingInputLanguage&&m.protocol_id===pending.protocol_id&&revisionValid;
@@ -4413,7 +4414,7 @@ async function onMessage(e,generation,current){
   if(acceptedSessionConfiguration.experiment_session_id&&acceptedSessionConfiguration.experiment_session_version!==null){currentExperimentSessionId=acceptedSessionConfiguration.experiment_session_id;currentExperimentSessionVersion=acceptedSessionConfiguration.experiment_session_version;void loadExperimentSessions(currentExperimentSessionId);}
   renderResearchCapabilities(m.research_capabilities);renderLanguageState(serverInputLanguage==="auto"?"auto":"manual",serverInputLanguage);$("protocol-id").value=m.protocol_id||"";renderSelectedProtocolContext();$("protocol-revision").textContent=m.revision_id||"—";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id} · ${m.revision_id}`:"서버 확인 완료 · 프로토콜 미선택";
   try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
-  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=false;resetIgnoredSpeech();renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
+  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=curatedProtocolState?.attached===true&&curatedProtocolState.workflow_status==="paused";resetIgnoredSpeech();renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
  }
  if(m.type==="session.greeting"){
   const accepted=acceptedSessionConfiguration,key=m.greeting_id;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof key!=="string"||greetingEvents.has(key))return;greetingEvents.add(key);activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=key;if(node.children?.[0])node.children[0].textContent="Session greeting";node.querySelector(".transcript").textContent="새 세션 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="세션 준비 안내 · 음성으로 중단 가능";renderState("THINKING");

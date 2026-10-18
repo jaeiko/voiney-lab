@@ -8,7 +8,10 @@
 // loudly while the screen turns read only (decision 2). Meanwhile the step
 // timer goes on as a copy on the screen, counted from the timer's start and
 // end the server last sent, on the server's clock as measured on every
-// connection (decision 3).
+// connection (decision 3). The page tries again at 1, 2, 4 and 8 seconds and
+// then every 15; the server continues the same experiment on the new
+// connection, and its state then takes the place of the screen's copy
+// (decision 4).
 //
 // While the connection is lost the screen changes nothing: it sends no
 // command and keeps none to send later, the microphone is paused, and the
@@ -35,6 +38,17 @@ const SCREEN_TIMER_LABEL="연결 끊김 중 화면 타이머",TIMER_BUZZ=[500,20
 const SCREEN_TIMER_WORDS={
  last_minute:{exact:"1분 남았어요",minimum:"최소 시간까지 1분 남았어요",maximum:"최대 시간까지 1분 남았어요"},
  ended:{exact:"타이머가 끝났어요",minimum:"최소 시간이 지났어요",maximum:"최대 시간이 됐어요"},
+};
+// Decision 4: the waits between tries (the last one repeats). A try the
+// server has not taken within ATTEMPT_LIMIT_MS is given up for the next; the
+// server refusing the run REFUSALS_LIMIT times ends the trying.
+const RETRY_DELAYS_MS=[1000,2000,4000,8000,15000],ATTEMPT_LIMIT_MS=12000,REFUSALS_LIMIT=3;
+const RESTORED_TITLE="다시 연결됐어요 — 서버 상태로 바꿨어요",RESTORED_SHOWN_MS=4000;
+// When the run cannot be continued: the page ends the session and says why.
+const GIVEN_UP_WORDS={
+ ended:"다시 연결됐지만 이 실험은 이미 끝났어요. 실험 기록에서 확인해 주세요.",
+ not_available:"다시 연결됐지만 이 실험을 찾지 못했어요. 처음 화면에서 실험을 다시 골라 주세요.",
+ refused:"다시 연결됐지만 서버가 이 실험을 이어 받지 않았어요. 처음 화면에서 '실험 이어하기'를 눌러 확인해 주세요.",
 };
 
 const net={socket:null,heardAt:0,pingSeq:0,pingHandle:null,checkHandle:null,lost:null,tick:null,band:null,
@@ -93,12 +107,19 @@ function heartbeat(raw){
 }
 function serverNow(){return Date.now()+net.offset.ms;}
 
-function checkSilence(){if(runActive()&&Date.now()-net.heardAt>SILENT_LOST_MS)detected("server_silent");}
+// While a try is under way its own time limit stands in for the silence.
+function checkSilence(){if(!net.lost&&runActive()&&Date.now()-net.heardAt>SILENT_LOST_MS)detected("server_silent");}
 
 // The page's socket closed or failed (its onclose / onerror). True when the
 // loss is taken here; false leaves the page's own close handling to run --
-// no session ran on it, or it cannot be continued.
+// no session ran on it, or it cannot be continued. A try's socket failing is
+// that try failing.
 function lost(current,reason){
+ if(net.lost){
+  const attempt=net.lost.attempt;
+  if(attempt&&current&&attempt.socket===current)attemptFailed(attempt,reason);
+  return true;
+ }
  if(!current||current!==net.socket||socket!==current||!runActive())return false;
  net.socket=null;
  if(!resumable())return false;
@@ -122,7 +143,8 @@ function enterLost(current,reason){
  // and its own close handler finds it is no longer the page's socket.
  socket=null;
  try{if(current.readyState<WebSocket.CLOSING)current.close(4000,"connection lost");}catch(_){}
- net.lost={at:Date.now(),reason};
+ net.lost={at:Date.now(),reason,generation:sessionGeneration,accepted:{...acceptedSessionConfiguration},
+  tries:0,refusals:0,retryAt:null,retryHandle:null,attempt:null};
  pauseMicrophone(true);
  clearPlayback();removeProvisionalTurns(sessionGeneration);
  renderState("RECONNECTING",LOST_TITLE);
@@ -130,7 +152,136 @@ function enterLost(current,reason){
  showBand();
  playSound(LOST_SOUND);buzz(LOST_BUZZ);
  if(net.tick===null)net.tick=setInterval(tick,1000);
+ scheduleTry();
  tick();
+}
+
+// --- Trying again (decision 4) -----------------------------------------------
+function scheduleTry(){
+ const lostState=net.lost;if(!lostState||lostState.attempt)return;
+ const delay=RETRY_DELAYS_MS[Math.min(lostState.tries,RETRY_DELAYS_MS.length-1)];
+ clearTimeout(lostState.retryHandle);
+ lostState.retryAt=Date.now()+delay;
+ lostState.retryHandle=setTimeout(()=>{lostState.retryHandle=null;void tryAgain();},delay);
+ renderTryLine();
+}
+
+// One try: the experiment as the server has it now (its version, and whether
+// it can still be continued), a new socket, and the start that continues it.
+// Nothing said or pressed while the connection was lost goes with it.
+async function tryAgain(){
+ const lostState=net.lost;
+ if(!lostState||lostState.attempt)return;
+ if(lostState.generation!==sessionGeneration)return forget();
+ clearTimeout(lostState.retryHandle);lostState.retryHandle=null;
+ lostState.tries+=1;
+ const attempt={socket:null,configurationId:null,limit:null};
+ lostState.attempt=attempt;renderTryLine();
+ attempt.limit=setTimeout(()=>attemptFailed(attempt,"timeout"),ATTEMPT_LIMIT_MS);
+ const id=lostState.accepted.experiment_session_id;
+ let experiment;
+ try{
+  const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(id)}`,{cache:"no-store",headers:{Accept:"application/json"}});
+  if(lostState.attempt!==attempt)return;
+  if(response.status===404||response.status===403)return giveUp(attempt,"not_available");
+  if(!response.ok)return attemptFailed(attempt,"lookup");
+  experiment=await response.json();
+ }catch(_){return attemptFailed(attempt,"lookup");}
+ if(lostState.attempt!==attempt)return;
+ if(!RESUMABLE_EXPERIMENT_STATUSES.has(experiment?.status)||!Number.isInteger(experiment?.version))return giveUp(attempt,"ended");
+ currentExperimentSessionId=id;currentExperimentSessionVersion=experiment.version;currentExperimentSessionStatus=experiment.status;
+ try{
+  const opening=init(lostState.generation);attempt.socket=socket;
+  // A socket let go before it opened settles nothing of its own.
+  await Promise.race([opening,new Promise((_,reject)=>{attempt.abort=reject;})]);
+ }catch(_){return attemptFailed(attempt,"socket_error");}
+ if(lostState.attempt!==attempt)return;
+ // The new session's turns are its own; its first state is taken whatever
+ // number the old session's states had reached.
+ forgetTurns();curatedStateRevision=-1;
+ const previous=lostState.accepted,configuration_id=++nextConfigurationId;
+ const pending={configuration_id,mode:"cascade",language:previous.language||"ko",protocol_id:previous.protocol_id,
+  ...(previous.input_language&&previous.input_language!=="ko"?{input_language:previous.input_language}:{}),
+  experiment_session_id:id,experiment_session_version:experiment.version,
+  reconnect:{lost_at_ms:Math.round(lostState.at+net.offset.ms),reason:lostState.reason}};
+ attempt.configurationId=configuration_id;pendingSessionConfiguration=pending;
+ sendControl("session.start",pending);
+}
+
+// The page's per-turn bookkeeping, as resetSessionUI() clears it for a new
+// session; the conversation already on the screen stays.
+function forgetTurns(){
+ for(const map of [turns,provisionalTurns,pendingFillers,toolEvents,visualEvents,researchEvents,brainEvents,greetingEvents,webEvents,drawingEvents,turnProgress,turnServerGenerations,turnHoldEvidence,interruptedTurns,interruptedCascadeTurns,runTurns,audioRecoveryTurns])map.clear();
+ runCardKey=null;activeTurn=null;activeCascadeGeneration=null;
+}
+
+// What came on a try's socket, before the page reads it (onMessage). The
+// server refusing the start is that try failing, not the page's error; a
+// protocol it will not run ends the trying; its session started is the run
+// continued.
+function consume(message,current){
+ const attempt=net.lost?.attempt;
+ if(!attempt||attempt.socket!==current||!message)return false;
+ const taken=attempt.configurationId!==null&&acceptedSessionConfiguration?.configuration_id===attempt.configurationId;
+ if(message.type==="error"&&!taken){attemptFailed(attempt,"refused");return true;}
+ if(message.type==="session.configuration_required"&&message.configuration_id===attempt.configurationId){giveUp(attempt,"refused");return true;}
+ if(message.type==="session.started"&&taken)restored(attempt);
+ return false;
+}
+
+function letGo(attempt){
+ clearTimeout(attempt.limit);
+ attempt.abort?.(new Error("try ended"));
+ const current=attempt.socket;if(!current)return;
+ if(net.socket===current)net.socket=null;
+ if(socket===current)socket=null;
+ try{if(current.readyState<WebSocket.CLOSING)current.close(4001,"reconnect attempt ended");}catch(_){}
+}
+
+function attemptFailed(attempt,why){
+ const lostState=net.lost;if(!lostState||lostState.attempt!==attempt)return;
+ lostState.attempt=null;letGo(attempt);
+ if(pendingSessionConfiguration?.configuration_id===attempt.configurationId)pendingSessionConfiguration=null;
+ if(why==="refused"&&++lostState.refusals>=REFUSALS_LIMIT)return giveUp(null,"refused");
+ scheduleTry();
+}
+
+// The server took the run: its state now stands on the screen.
+function restored(attempt){
+ const lostState=net.lost;if(!lostState||lostState.attempt!==attempt)return;
+ clearTimeout(attempt.limit);clearTimeout(lostState.retryHandle);
+ endLost();
+ pauseMicrophone(false);
+ showRestored();
+ renderRunView();
+}
+
+// The run cannot be continued: the page ends the session as its own close
+// handling (init) does, and says why.
+function giveUp(attempt,why){
+ const lostState=net.lost;if(!lostState||(attempt&&lostState.attempt!==attempt))return;
+ if(lostState.attempt)letGo(lostState.attempt);
+ clearTimeout(lostState.retryHandle);
+ endLost();hideBand();
+ sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;
+ removeProvisionalTurns(sessionGeneration);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();
+ renderState("ERROR",GIVEN_UP_WORDS[why]||GIVEN_UP_WORDS.refused);
+}
+
+// The page moved on (a new session) while the connection was lost: stop.
+function forget(){const lostState=net.lost;if(!lostState)return;if(lostState.attempt)letGo(lostState.attempt);clearTimeout(lostState.retryHandle);endLost();hideBand();}
+
+function endLost(){
+ net.lost=null;net.screenTimer=null;
+ if(net.tick!==null){clearInterval(net.tick);net.tick=null;}
+ showScreenTimerLabel(false);
+}
+
+function renderTryLine(){
+ const lostState=net.lost;if(!lostState)return;
+ if(lostState.attempt){setBandText("tries",`다시 연결하는 중… · ${lostState.tries}번째 시도`);return;}
+ const wait=Math.max(0,Math.ceil(((lostState.retryAt??Date.now())-Date.now())/1000));
+ setBandText("tries",lostState.tries?`${lostState.tries}번 시도했어요 · 다음 시도 ${wait}초 뒤`:`다음 시도 ${wait}초 뒤`);
 }
 
 // Decision 2: the microphone is paused, not closed -- nothing is heard while
@@ -162,6 +313,7 @@ function tick(){
  if(!net.lost)return;
  const seconds=Math.max(0,Math.floor((Date.now()-net.lost.at)/1000));
  setBandText("title",`${LOST_TITLE} (${seconds}초)`);
+ renderTryLine();
  checkScreenTimer();
  renderRunView();
 }
@@ -209,12 +361,14 @@ const BAND_STYLE=`
 #connection-band[hidden]{display:none}
 #connection-band p{margin:2px 0}
 #connection-band .connection-band-title{font-size:clamp(20px,5.4vw,28px);font-weight:800;margin:0 0 4px}
+#connection-band[data-state="restored"]{background:#1b7f3b}
+#connection-band[data-state="restored"] p:not(.connection-band-title){display:none}
 #connection-band .connection-band-timer{display:inline-block;margin:4px 0;padding:4px 10px;border-radius:8px;background:#fff;color:#b42318;font-weight:800;font-size:clamp(18px,4.8vw,24px)}
 #connection-band .connection-band-timer[hidden]{display:none}
 .run-timer-offline{margin:4px 0 0;padding:2px 8px;border-radius:6px;background:#b42318;color:#fff;font-weight:700;font-size:13px;display:inline-block}
 .run-timer-offline[hidden]{display:none}
-body[data-connection="lost"]{padding-top:var(--connection-band-height,0px)}
-body[data-connection="lost"] .sticky-rail{top:var(--connection-band-height,0px)}
+body:is([data-connection="lost"],[data-connection="restored"]){padding-top:var(--connection-band-height,0px)}
+body:is([data-connection="lost"],[data-connection="restored"]) .sticky-rail{top:var(--connection-band-height,0px)}
 body[data-connection="lost"] :is(button,input,select,textarea,summary,a[href]):not(#connection-band *){pointer-events:none;opacity:.5}
 `;
 function showBand(){
@@ -224,17 +378,36 @@ function showBand(){
   (document.head||body)?.appendChild?.(style);
   const band=document.createElement("section");band.id="connection-band";band.setAttribute?.("role","alert");band.setAttribute?.("aria-live","assertive");
   const line=(name,className)=>{const item=document.createElement("p");item.className=className;item.dataset.line=name;band.appendChild(item);return item;};
-  net.band={node:band,title:line("title","connection-band-title"),timer:line("timer","connection-band-timer"),mic:line("mic","connection-band-mic"),screen:line("screen","connection-band-screen")};
+  net.band={node:band,title:line("title","connection-band-title"),tries:line("tries","connection-band-tries"),timer:line("timer","connection-band-timer"),mic:line("mic","connection-band-mic"),screen:line("screen","connection-band-screen")};
   net.band.timer.hidden=true;
   body?.prepend?.(band);
  }
  setBandText("mic",MIC_PAUSED);setBandText("screen",KEEP_SCREEN_ON);
+ clearTimeout(net.band.hideHandle);
+ if(net.band.node.dataset)net.band.node.dataset.state="lost";
+ net.band.timer.hidden=true;
  net.band.node.hidden=false;
  if(body?.dataset)body.dataset.connection="lost";
  const height=net.band.node.offsetHeight;
  if(Number.isFinite(height)&&height>0)body?.style?.setProperty?.("--connection-band-height",`${height}px`);
 }
 function setBandText(name,text){const item=net.band?.[name];if(item)item.textContent=text;}
+function showRestored(){
+ if(!net.band)return;
+ const body=globalThis.document?.body;
+ if(net.band.node.dataset)net.band.node.dataset.state="restored";
+ setBandText("title",RESTORED_TITLE);
+ if(body?.dataset)body.dataset.connection="restored";
+ clearTimeout(net.band.hideHandle);
+ net.band.hideHandle=setTimeout(()=>{if(!net.lost)hideBand();},RESTORED_SHOWN_MS);
+}
+function hideBand(){
+ if(!net.band)return;
+ clearTimeout(net.band.hideHandle);
+ net.band.node.hidden=true;
+ const body=globalThis.document?.body;
+ if(body?.dataset)body.dataset.connection="";
+}
 
 // Decision 2: read only. A tap, a typed key or a changed value on any control
 // outside the band goes nowhere while the connection is lost.
@@ -247,10 +420,14 @@ function readOnly(event){
 }
 for(const kind of ["click","change","input","submit","keydown"])globalThis.document?.addEventListener?.(kind,readOnly,true);
 
-globalThis.addEventListener?.("offline",()=>{if(runActive())detected("browser_offline");});
+globalThis.addEventListener?.("offline",()=>{if(net.lost)return;if(runActive())detected("browser_offline");});
+// The browser has a network again: the next try goes now, not at its time.
+globalThis.addEventListener?.("online",()=>{if(net.lost&&!net.lost.attempt)void tryAgain();});
 
 function micText(){return net.lost?MIC_PAUSED:"";}
 function isLost(){return net.lost!==null;}
+// A try is under way: the start it sends is the run's own, not a new session's.
+function reconnecting(){return Boolean(net.lost?.attempt);}
 
-globalThis.voineyConnection=Object.freeze({watch,lost,micText,isLost,serverNow});
+globalThis.voineyConnection=Object.freeze({watch,lost,consume,micText,isLost,reconnecting,serverNow});
 })();

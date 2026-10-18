@@ -74,6 +74,7 @@ async function openRun(extra={}){
  document.body=document.body||new Element("body");
  playContext=fakeOutput();micStream={getAudioTracks:()=>[micTrack],getTracks:()=>[micTrack]};
  const pending=init(sessionGeneration),ws=opened.at(-1);ws.open();await pending;
+ nextConfigurationId=CONFIGURATION_ID;
  acceptedSessionConfiguration={configuration_id:CONFIGURATION_ID,server_generation:1,mode:"cascade",language:"ko",input_language:"ko",protocol_id:PROTOCOL_ID,revision_id:REVISION_ID,experiment_session_id:EXPERIMENT_ID,experiment_session_version:3};
  currentExperimentSessionId=EXPERIMENT_ID;currentExperimentSessionVersion=3;currentExperimentSessionStatus="in_progress";
  sessionActive=true;
