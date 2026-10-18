@@ -154,6 +154,24 @@ assert(JSON.stringify(posts()[0].body)===JSON.stringify({item_id:"step:s2",actio
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_a_quote_over_two_lines_is_picked_by_two_taps_and_the_page_can_be_opened(self) -> None:
+        result = run(r"""
+serve([["/review-draft/source-pages/1",page1],["/review-decisions",answer([decided(evidence),ocrValue,page3,timer,seam],1)],["/review-draft",draft()]]);
+await loadReviewDraft("p-1");await tick();await tick();await tick();
+const lines=()=>walk(card()).filter(el=>String(el.className).startsWith("review-line")&&el.tagName==="button");
+const link=walk(card()).find(el=>el.tagName==="a");
+assert(link&&link.href==="/api/protocols/p-1/review-draft/source-pages/1/image"&&link.textContent==="원본 쪽 보기",`link: ${link?.href}`);
+lines()[2].dispatch("click");await tick();await tick();await tick();
+lines()[3].dispatch("click");await tick();await tick();await tick();
+assert(visibleText(card()).includes("고른 줄 · 원문 p.1 3–4줄"),visibleText(card()));
+lines()[0].dispatch("click");await tick();await tick();await tick();
+assert(visibleText(card()).includes("고른 줄 · 원문 p.1 1줄"),"a line away from the pick did not start again");
+lines()[1].dispatch("click");await tick();await tick();await tick();
+await press(card(),"고른 줄이 맞아요");
+assert(JSON.stringify(posts()[0].body.source_lines)===JSON.stringify({page:1,first_line:1,last_line:2}),JSON.stringify(posts()[0].body));
+""")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_a_button_that_needs_words_opens_an_input_with_the_value_written(self) -> None:
         result = run(r"""
 serve([["/review-decisions",answer([evidence,decided(ocrValue,"fix"),page3,timer,seam],2)],["/review-draft",draft({next_card:1})]]);

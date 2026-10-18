@@ -4059,6 +4059,7 @@ async function renderReviewCardLines(host,card){
   for(const [label,to] of [["앞 쪽",page-1],["다음 쪽",page+1]]){const button=compareEl("button","",label);button.type="button";if(button.dataset)button.dataset.page=String(to);button.disabled=to<1||to>count;button.addEventListener("click",()=>{reviewCardPage={cardId:card.card_id,page:to};void renderReviewCardLines(host,card);});turn.appendChild(button);}
   head.appendChild(turn);
  }
+ const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);
  host.appendChild(head);
  const suggested=source.suggested_lines?.page===page?reviewLineSpan(source.suggested_lines):null;
  const picked=reviewCardPicked?.cardId===card.card_id&&reviewCardPicked.page===page?[reviewCardPicked.first,reviewCardPicked.last]:null;
@@ -4071,14 +4072,17 @@ async function renderReviewCardLines(host,card){
   button.className=classes.join(" ");if(button.dataset)button.dataset.line=String(line.number);
   button.append(compareEl("span","review-line-number",String(line.number)),compareEl("span","review-line-text",String(line.text||"")));
   button.addEventListener("click",event=>{
-   const extend=event?.shiftKey===true&&reviewCardPicked?.cardId===card.card_id&&reviewCardPicked.page===page;
+   // A line next to the lines picked (or any, with Shift) adds to them: a quote
+   // over two lines is picked by two taps on a phone.
+   const same=reviewCardPicked?.cardId===card.card_id&&reviewCardPicked.page===page;
+   const extend=same&&(event?.shiftKey===true||line.number===reviewCardPicked.last+1||line.number===reviewCardPicked.first-1);
    const first=extend?Math.min(reviewCardPicked.first,line.number):line.number,last=extend?Math.max(reviewCardPicked.last,line.number):line.number;
    reviewCardPicked={cardId:card.card_id,page,first,last};void renderReviewCardLines(host,card);
   });
   row.appendChild(button);list.appendChild(row);
  }
  host.appendChild(list);
- host.appendChild(compareEl("p","choice-card-note",picked?`고른 줄 · 원문 p.${page} ${picked[0]}${picked[1]!==picked[0]?`–${picked[1]}`:""}줄`:"여러 줄은 Shift 를 누른 채 누르세요."));
+ host.appendChild(compareEl("p","choice-card-note",picked?`고른 줄 · 원문 p.${page} ${picked[0]}${picked[1]!==picked[0]?`–${picked[1]}`:""}줄`:"여러 줄이면 바로 옆 줄을 이어서 누르세요."));
  return list.children.length;
 }
 // One press: the decision the button names, with what it needs from the person
