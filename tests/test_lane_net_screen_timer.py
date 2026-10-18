@@ -74,6 +74,8 @@ assert(label()?.hidden===false&&label().textContent==="연결 끊김 중 화면 
 assert(alertLine()===null,"an alert at the loss");
 await advance(4000);
 assert(alertLine()===null&&sounds.length===2,`told early: ${alertLine()} ${sounds}`);
+// The copy's time is in the band too (the panel can be below the fold on a phone).
+assert(bandLine("clock")==="연결 끊김 중 화면 타이머 · 1:01 남음",`clock: ${bandLine("clock")}`);
 await advance(1500);
 assert(alertLine()==="화면 타이머 · 1분 남았어요",`last minute: ${alertLine()}`);
 assert(JSON.stringify(sounds)==="[740,494,880]"&&buzzes.length===2,`sound and buzz: ${JSON.stringify(sounds)} ${buzzes.length}`);
@@ -83,6 +85,7 @@ assert(alertLine()==="화면 타이머 · 타이머가 끝났어요",`end: ${ale
 assert(node("run-timer-digits").textContent==="끝남",`digits at the end: ${node("run-timer-digits").textContent}`);
 await advance(30000);
 assert(node("run-timer-foot").textContent==="0:30 지남",`foot: ${node("run-timer-foot").textContent}`);
+assert(bandLine("clock")==="연결 끊김 중 화면 타이머 · 끝남 · 0:30 지남",`clock after the end: ${bandLine("clock")}`);
 assert(JSON.stringify(sounds)==="[740,494,880,880]"&&buzzes.length===3,`told again: ${JSON.stringify(sounds)} ${buzzes.length}`);
 """)
 

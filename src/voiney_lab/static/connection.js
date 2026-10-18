@@ -277,6 +277,7 @@ function endLost(){
  net.lost=null;net.screenTimer=null;
  if(net.tick!==null){clearInterval(net.tick);net.tick=null;}
  showScreenTimerLabel(false);
+ if(net.band)net.band.clock.hidden=true;
 }
 
 function renderTryLine(){
@@ -318,6 +319,7 @@ function tick(){
  renderTryLine();
  checkScreenTimer();
  renderRunView();
+ syncBandHeight();
 }
 
 // --- The screen timer (decision 3) ------------------------------------------
@@ -338,6 +340,10 @@ function holdScreenTimer(){
 function checkScreenTimer(){
  const timer=net.screenTimer;if(!timer)return;
  const left=timer.deadline-serverNow();
+ // The copy's time, in the band too: the timer panel can be below the fold on a phone.
+ const seconds=Math.ceil(left/1000);
+ setBandText("clock",`${SCREEN_TIMER_LABEL} · ${seconds>0?`${formatElapsedClock(seconds)} 남음`:`끝남 · ${formatElapsedClock(-seconds)} 지남`}`);
+ if(net.band)net.band.clock.hidden=false;
  if(timer.ending&&left<=0){timer.ending=false;timer.lastMinute=false;screenTimerAlert("ended",timer.bound);}
  else if(timer.lastMinute&&left<=net.rule.seconds*1000){timer.lastMinute=false;screenTimerAlert("last_minute",timer.bound);}
 }
@@ -352,17 +358,23 @@ function showScreenTimerLabel(on){
  const panel=globalThis.document?.getElementById?.("run-timer");
  if(!screenTimerLabel&&on&&panel){
   screenTimerLabel=document.createElement("p");screenTimerLabel.id="run-timer-offline";screenTimerLabel.className="run-timer-offline";
-  screenTimerLabel.textContent=SCREEN_TIMER_LABEL;panel.appendChild(screenTimerLabel);
+  screenTimerLabel.textContent=SCREEN_TIMER_LABEL;
+  // At the top of the panel, above the digits, where it is seen with them.
+  const digits=panel.querySelector?.(".run-timer-digits");
+  if(digits&&typeof panel.insertBefore==="function")panel.insertBefore(screenTimerLabel,digits);else panel.appendChild(screenTimerLabel);
  }
  if(screenTimerLabel)screenTimerLabel.hidden=!on;
 }
 
 // --- The band (decision 2): across the whole screen, over the top. ---------
 const BAND_STYLE=`
-#connection-band{position:fixed;left:0;right:0;top:0;z-index:1000;margin:0;padding:12px 16px 14px;background:#b42318;color:#fff;box-shadow:0 2px 14px rgba(0,0,0,.35);font-size:16px;line-height:1.35}
+#connection-band{position:fixed;left:0;right:0;top:0;z-index:1000;margin:0;padding:10px 16px 12px;background:#b42318;color:#fff;box-shadow:0 2px 14px rgba(0,0,0,.35);font-size:15px;line-height:1.3}
 #connection-band[hidden]{display:none}
 #connection-band p{margin:2px 0}
-#connection-band .connection-band-title{font-size:clamp(20px,5.4vw,28px);font-weight:800;margin:0 0 4px}
+#connection-band .connection-band-title{font-size:clamp(20px,5.2vw,26px);font-weight:800;margin:0 0 4px}
+#connection-band .connection-band-clock{font-weight:700;font-size:17px}
+#connection-band .connection-band-clock[hidden]{display:none}
+#connection-band .connection-band-screen{font-size:13px;opacity:.95}
 #connection-band[data-state="restored"]{background:#1b7f3b}
 #connection-band[data-state="restored"] p:not(.connection-band-title){display:none}
 #connection-band .connection-band-timer{display:inline-block;margin:4px 0;padding:4px 10px;border-radius:8px;background:#fff;color:#b42318;font-weight:800;font-size:clamp(18px,4.8vw,24px)}
@@ -370,7 +382,7 @@ const BAND_STYLE=`
 .run-timer-offline{margin:4px 0 0;padding:2px 8px;border-radius:6px;background:#b42318;color:#fff;font-weight:700;font-size:13px;display:inline-block}
 .run-timer-offline[hidden]{display:none}
 body:is([data-connection="lost"],[data-connection="restored"]){padding-top:var(--connection-band-height,0px)}
-body:is([data-connection="lost"],[data-connection="restored"]) .sticky-rail{top:var(--connection-band-height,0px)}
+body:is([data-connection="lost"],[data-connection="restored"]) .sticky-rail{display:none}
 body[data-connection="lost"] :is(button,input,select,textarea,summary,a[href]):not(#connection-band *){pointer-events:none;opacity:.5}
 `;
 function showBand(){
@@ -380,9 +392,11 @@ function showBand(){
   (document.head||body)?.appendChild?.(style);
   const band=document.createElement("section");band.id="connection-band";band.setAttribute?.("role","alert");band.setAttribute?.("aria-live","assertive");
   const line=(name,className)=>{const item=document.createElement("p");item.className=className;item.dataset.line=name;band.appendChild(item);return item;};
-  net.band={node:band,title:line("title","connection-band-title"),tries:line("tries","connection-band-tries"),timer:line("timer","connection-band-timer"),mic:line("mic","connection-band-mic"),screen:line("screen","connection-band-screen")};
-  net.band.timer.hidden=true;
+  net.band={node:band,title:line("title","connection-band-title"),tries:line("tries","connection-band-tries"),clock:line("clock","connection-band-clock"),timer:line("timer","connection-band-timer"),mic:line("mic","connection-band-mic"),screen:line("screen","connection-band-screen")};
+  net.band.timer.hidden=true;net.band.clock.hidden=true;
   body?.prepend?.(band);
+  // The space kept for the band follows its height as its lines change.
+  if(typeof ResizeObserver==="function")new ResizeObserver(syncBandHeight).observe(band);
  }
  setBandText("mic",MIC_PAUSED);setBandText("screen",KEEP_SCREEN_ON);
  clearTimeout(net.band.hideHandle);
@@ -390,8 +404,11 @@ function showBand(){
  net.band.timer.hidden=true;
  net.band.node.hidden=false;
  if(body?.dataset)body.dataset.connection="lost";
- const height=net.band.node.offsetHeight;
- if(Number.isFinite(height)&&height>0)body?.style?.setProperty?.("--connection-band-height",`${height}px`);
+ syncBandHeight();
+}
+function syncBandHeight(){
+ const height=net.band?.node?.offsetHeight;
+ if(Number.isFinite(height)&&height>0)globalThis.document?.body?.style?.setProperty?.("--connection-band-height",`${height}px`);
 }
 function setBandText(name,text){const item=net.band?.[name];if(item)item.textContent=text;}
 function showRestored(){
@@ -400,6 +417,7 @@ function showRestored(){
  if(net.band.node.dataset)net.band.node.dataset.state="restored";
  setBandText("title",RESTORED_TITLE);
  if(body?.dataset)body.dataset.connection="restored";
+ syncBandHeight();
  clearTimeout(net.band.hideHandle);
  net.band.hideHandle=setTimeout(()=>{if(!net.lost)hideBand();},RESTORED_SHOWN_MS);
 }
