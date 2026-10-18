@@ -576,7 +576,10 @@
     .review-register{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--space-3);padding:var(--space-4);border-top:1px solid var(--line)}
     .review-register[hidden]{display:none}
     .review-register label{display:flex;flex-direction:column;gap:var(--space-1);flex:1 1 16rem;max-width:24rem;color:var(--ink-muted);font-size:.875rem;font-weight:600}
-    .review-register button{min-height:var(--target-run);font-weight:700}
+    .review-register button{min-height:var(--target-run);padding:0 var(--space-6);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font:inherit;font-size:1.0625rem;font-weight:700;cursor:pointer}
+    .review-register button:disabled{opacity:.45;cursor:default}
+    .review-register .review-input{min-height:var(--target-run);font-size:1.0625rem}
+    @media (max-width:600px){.review-register button{flex-basis:100%}}
     .review-register-status{flex-basis:100%;margin:0;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
     .review-history{padding:0 var(--space-4) var(--space-4)}
     .review-history>summary{min-height:var(--target-desk);display:flex;align-items:center;color:var(--ink-muted);font-size:.875rem;font-weight:600;cursor:pointer}

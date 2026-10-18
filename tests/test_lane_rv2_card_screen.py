@@ -343,6 +343,9 @@ class CardMarkupTests(unittest.TestCase):
         self.assertRegex(self.html, r"\.choice-card-choices button\{[^}]*min-height:var\(--target-run\)")
         self.assertRegex(self.html, r"\.review-cards-nav button\{[^}]*min-height:var\(--target-run\)")
         self.assertIn("@media (max-width:600px){.choice-card-choices button{flex-basis:100%}}", self.html)
+        # The name and "검토 완료하고 등록" after the last card are a hand tall too.
+        self.assertRegex(self.html, r"\.review-register button\{[^}]*min-height:var\(--target-run\)")
+        self.assertRegex(self.html, r"\.review-register \.review-input\{[^}]*min-height:var\(--target-run\)")
 
     def test_the_card_never_branches_on_a_card_type_and_puts_text_in_as_text(self) -> None:
         script = self.html.split("function renderChoiceCard(", 1)[1].split("\n}\n", 1)[0]
