@@ -151,6 +151,13 @@ from voiney_lab.language import (
 )
 from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.runtime_metrics import RUNTIME_METRICS
+from voiney_lab.pilot_metrics import (
+    DEVELOPMENT_ACCOUNT_ID,
+    PILOT_METRICS,
+    PILOT_METRICS_FILENAME,
+    PilotContext,
+    PilotMetricsStore,
+)
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
@@ -671,6 +678,64 @@ def _record_workspace_metric(
             "workspace.analytics.record_failed category=%s metric=%s error=%s",
             category,metric_name,type(exc).__name__,
         )
+
+
+# --- Lane LOG: the pilot metrics -- numbers, codes and times only
+
+def _pilot_store()->PilotMetricsStore|None:
+    """The pilot metrics file in the workspace folder, or None without a workspace."""
+
+    settings=_workspace_settings()
+    if not settings.enabled or settings.data_dir is None:
+        return None
+    return PilotMetricsStore(settings.data_dir/PILOT_METRICS_FILENAME)
+
+
+def _pilot_account(principal:Principal|None=None)->str:
+    """The signed-in account's id, or the development identity's."""
+
+    actor=principal or _REQUEST_PRINCIPAL.get()
+    return actor.principal_id if actor is not None else DEVELOPMENT_ACCOUNT_ID
+
+
+_PILOT_TURN_EVENTS=frozenset({"turn.route_decision","router.stopped","turn.done"})
+
+
+def _pilot_turn_event(session,turn_id:int,kind:str,fields:dict[str,Any])->None:
+    """Lane LOG, decision 1: a turn's codes, and at its end one log line and row.
+
+    Never raises: a metrics write that fails is logged and the turn goes on.
+    """
+
+    if kind not in _PILOT_TURN_EVENTS:
+        return
+    try:
+        PILOT_METRICS.turn_event(
+            PilotContext(
+                account_id=_pilot_account(),session_id=session.session_id,
+                report_id=session.experiment_report_id,
+                router_enabled=bool(session.llm_router_settings.enabled),
+                store=_pilot_store(),
+            ),
+            turn_id,kind,fields,
+        )
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
+
+
+def _pilot_mark(session,kind:str,**values:Any)->None:
+    """Lane LOG: one experiment-level mark (a button, an alert...); never raises."""
+
+    try:
+        store=_pilot_store()
+        if store is None:
+            return
+        store.record_mark(
+            account_id=_pilot_account(),kind=kind,session_id=session.session_id,
+            report_id=session.experiment_report_id,**values,
+        )
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
 
 
 def _start_or_resume_workspace_experiment(
@@ -8663,7 +8728,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         fields.setdefault("generation",generation)
         if session.accepted_configuration_id is not None:
             fields.setdefault("configuration_id",session.accepted_configuration_id)
-        await sender.text(kind,**fields); return True
+        await sender.text(kind,**fields)
+        _pilot_turn_event(session,turn_id,kind,fields); return True
 
     async def report_state(report:dict)->bool:
         public=_public_experiment_report_state(report)
@@ -9154,6 +9220,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     log.info(
                         "router model unavailable turn_id=%s reason=%s",
                         turn_id,router_outcome.fallback_reason)
+                    _pilot_turn_event(session,turn_id,"router.stopped",{
+                        "fallback_reason":router_outcome.fallback_reason})
                     _record_workspace_metric(
                         category="voice",metric_name="command_failure",
                         dimensions={"status":"stopped","reason_code":str(router_outcome.fallback_reason)[:100]},
@@ -10606,6 +10674,10 @@ async def run_barge_in_stt_failure_turn(
         output_frames=(len(frames) if frames else 0),tools_used=[],
         timings_ms={"stt":max(0,stt_ms)},
     )
+    # Lane LOG, decision 1: the words were not heard, so they are asked again.
+    _pilot_turn_event(session,turn_id,"turn.route_decision",{
+        "action":"transcript_unreliable","state_mutation":False})
+    _pilot_turn_event(session,turn_id,"turn.done",{"timings_ms":{}})
 
 async def _send_playback_terminal(
     websocket:WebSocket,session:ListenerSession,turn_id:int,*,cooldown_ms:int,
@@ -11434,6 +11506,8 @@ async def voice_socket(websocket:WebSocket):
                         task.cancel()
                     _record_screen_history(
                         session,screen_before,control="pause",changed=changed)
+                    if changed:
+                        _pilot_mark(session,"button_change",code="pause")
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -11475,6 +11549,8 @@ async def voice_socket(websocket:WebSocket):
                                 "experiment.session.state",state=experiment_state))
                     _record_screen_history(
                         session,screen_before,control="resume",changed=changed)
+                    if changed:
+                        _pilot_mark(session,"button_change",code="resume")
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -11561,6 +11637,10 @@ async def voice_socket(websocket:WebSocket):
                 log.info(
                     "client.clarify_choice taken turn_id=%s asked_turn_id=%s",
                     chosen_turn_id,control["turn_id"])
+                try:
+                    PILOT_METRICS.note_input(session.session_id,chosen_turn_id,"candidate")
+                except Exception as exc:
+                    log.warning("pilot.metrics.failed kind=input error=%s",type(exc).__name__)
                 await websocket.send_text(event(
                     "speech.start",turn_id=chosen_turn_id,generation=chosen_generation,
                     state=session.state.value,voiced_frames=0,total_frames=0,
