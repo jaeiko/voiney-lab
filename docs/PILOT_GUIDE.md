@@ -1,6 +1,6 @@
 # 파일럿 안내 — 실행 · 데이터 처리 · 외부 AI 고지 · 삭제
 
-날짜: 2026-10-13 (줄 PL) · 대상: 파일럿을 여는 사람(기술 담당·연구실 담당)
+날짜: 2026-10-13 (줄 PL), 계정 절(7절) 2026-10-18 (줄 ON) · 대상: 파일럿을 여는 사람(기술 담당·연구실 담당)
 
 VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된 GLP/GMP/임상 시스템이 아니다(README). 이 문서는
 **한 연구실에서, 사람이 곁에서 지켜보며 하는 시험**을 여는 순서를 적는다. 설치·검증 목록은
@@ -80,7 +80,8 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
    ```
 4. **휴대폰** — 휴대폰 브라우저는 HTTPS(또는 localhost)에서만 마이크를 쓴다. 서버는 `127.0.0.1` 에서만 듣는다.
    도메인이 정해진 뒤 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 순서로 HTTPS 와 접속 비밀번호를 둔다.
-   `HOST=0.0.0.0` 으로 서버를 직접 열지 않는다(파일럿 서버에는 로그인이 없다).
+   `HOST=0.0.0.0` 으로 서버를 직접 열지 않는다. 참가자마다 계정으로 로그인하게 하려면 7절(`VOINEY_LAB_AUTH_MODE=accounts`)을
+   먼저 한다 — 기본값 `dev` 에서는 로그인이 없고 모든 요청이 개발 신원 한 명이다.
 5. **멈춤** — 서버 프로세스를 멈춘다. 파일럿을 마치면 5절의 삭제로 간다.
 
 ## 3. 데이터 처리
@@ -95,7 +96,8 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 | 업로드한 프로토콜 PDF 원본(SHA-256 이름) | `objects/sha256/…` | 참가자가 올린 원문 |
 | 분석·OCR·확인 질문·프로토콜 리비전 | `protocol_workspace.sqlite` | 업로드 PDF 의 글자가 들어 있다 |
 | 실험 기록(말한 관찰·문제·메모), 보고서 문장 | `experiment_reports.sqlite` | 지우지 않는 장부 |
-| 실험 세션, 번역 문장, 증거 파일(사진), 실험자 설정, 분석 지표 | `workspace/commercial_workspace.sqlite`, `workspace/evidence/…` | 실험자 한 명(개발 신원) |
+| 실험 세션, 번역 문장, 증거 파일(사진), 실험자 설정, 분석 지표 | `workspace/commercial_workspace.sqlite`, `workspace/evidence/…` | `dev`: 실험자 한 명(개발 신원) · `accounts`: 계정마다 |
+| 계정(이름, 비밀번호 해시), 초대 링크의 해시, 로그인 세션, 로그인 시도 | `workspace/accounts.sqlite` | `accounts` 모드에서만 (7절). 비밀번호 원문은 어디에도 없다 |
 | 음성 진단 녹음(WAV)과 전사(JSON) | `stt-diagnostics/` | **`VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` 를 켰을 때만.** 끄면 원음을 저장하지 않는다 |
 | 기관 안전 문서 카탈로그 | `approved_safety_catalog.sqlite` | 있을 때만. 참가자 데이터가 아니라서 삭제 도구가 건드리지 않는다 |
 
@@ -183,7 +185,67 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
 **이 도구가 하지 않는 것**(사람이 한다): 백업·내보낸 보고서 같은 복사본 삭제, 외부 서비스(3-2절의 업체) 쪽에 남은 데이터의 삭제 요청,
 디스크 조각의 안전 삭제, 참가자 휴대폰 브라우저의 캐시, 서버 로그(말 내용은 원래 없다).
 
-## 6. 사람이 할 일 · 알려진 한계
+**참가자 한 사람만 지우기**(`accounts` 모드, 줄 ON): 한 사람이 참여를 멈추고 삭제를 요청하면 폴더 전체 대신 그 계정의 데이터만 지운다.
+같은 순서(미리보기 → 확인 단어 → 삭제 → 기록)이고, 서버를 먼저 멈춘다.
+```bash
+python scripts/pilot_data_delete.py --account "김재준"                       # 미리보기
+python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA9C2
+```
+지우는 것: 그 계정의 실험 세션과 사건·완료 단계·관찰·증거(기록과 파일), 그 계정에 묶인 실험 기록(장부·보고서 문장), 실험자 설정, 접근 기록,
+구성원 기록, 그리고 계정 자체(로그인 세션·로그인 시도). 덧붙이기만 하는 표는 삭제 중에만 잠금을 풀고 다시 잠근다.
+지우지 않는 것: 그 계정이 올린 프로토콜(연구실이 함께 쓰는 목록) — 그런 프로토콜이 있으면 신원 행은 이름 없이 남는다. 삭제 기록에는 범주와 개수만 남고 이름은 없다.
+
+## 7. 계정 (`VOINEY_LAB_AUTH_MODE=accounts`, 줄 ON 결정 ①, 2026-10-18)
+
+기본값 `dev` 는 지금까지와 같다: 로그인이 없고 모든 요청이 개발 신원 한 명("실험자 (개발 로그인)")이다. 파일럿에서 참가자마다
+계정을 두려면 `.env` 에 `VOINEY_LAB_AUTH_MODE=accounts` 를 적는다(작업공간 `VOINEY_LAB_WORKSPACE_ENABLED=true` 가 필요한데
+파일럿 실행기가 켠다). 그러면:
+
+- 모든 `/api` 요청과 음성 연결(`/ws`)에 로그인한 계정이 필요하다. 예외는 건강 확인(`/healthz`, `/readyz`), 세션 질문
+  (`GET /api/auth/session`), 로그인·가입·초대 확인, 그리고 제 토큰을 쓰는 관리자 지표(`/api/admin/metrics`)뿐이다.
+  로그인 없이 부르면 `401 authentication_required`.
+- 세션은 쿠키 `voiney_session` 하나다: HttpOnly, SameSite=Lax, HTTPS(또는 `X-Forwarded-Proto: https` 를 붙이는 Caddy) 뒤에서는
+  Secure, 30일. 서버에는 세션 토큰의 SHA-256 만 있다.
+- 비밀번호는 표준 라이브러리 scrypt 해시(소금 16바이트, N=2¹⁴)로만 저장한다. 8–200자.
+- 로그인 실패가 15분 안에 5번이면 그 이름(그리고 그 접속 주소)의 로그인을 15분 막는다(`429 login_locked`, `Retry-After`).
+- 계정에는 "이용 권한" 칸 하나가 있고 값은 `pilot` 뿐이다(결제는 만들지 않았다).
+- 실험·기록·검토본에 계정이 남는다: 실험 세션의 소유자, 실험 기록의 실험자 이름, 검토 결정과 검토본의 검토자 이름은 **계정 이름으로
+  서버가 채운다**(화면이 보낸 이름은 무시). 같은 연구실(`--lab`)의 계정은 프로토콜 목록을 함께 쓰고, 실험 기록은 본인 것만 보인다
+  (관리자는 연구실 전체를 읽는다 — 읽기만).
+
+### 7-1. 초대 → 가입 → 로그인
+
+1. **초대 링크**는 서버 셸에서만 만든다(기한·1회용). 링크는 지금 한 번만 보이고 저장소에는 해시만 남는다.
+   ```bash
+   source .venv/bin/activate
+   python scripts/pilot_invite.py --admin --base-url https://pilot.<도메인> --note "연구실 담당"   # 첫 관리자
+   python scripts/pilot_invite.py --base-url https://pilot.<도메인> --hours 48 --note "참가자 A"   # 참가자
+   ```
+   출력 예: `초대 링크 (지금 한 번만 보입니다 · 48시간 뒤 만료 · 한 번 쓰면 끝): https://pilot.<도메인>/?invite=…`.
+   폴더는 파일럿 실행기가 쓰는 `data/runtime/pilot/workspace`(셸의 `VOINEY_LAB_WORKSPACE_DATA_DIR` 이 있으면 그것). 다른 연구실은 `--lab <id>`.
+   `--list` 가 초대 목록(열림/사용됨/취소됨/만료됨), `--revoke <초대 id>` 가 취소.
+2. **가입**: 참가자가 링크를 열면 화면이 이름·비밀번호를 묻는다(단계 ② 화면; 그 전에는 `POST /api/auth/signup`
+   `{"invite": 토큰, "name": 이름, "password": 비밀번호}` → 201, 쿠키). 이름은 2–40자, 대소문자·띄어쓰기를 무시하고 하나뿐이다.
+   가입하면 바로 로그인 상태다.
+3. **로그인**: `POST /api/auth/login` `{"name","password"}` → 200 + 쿠키 / 401 `login_refused` / 429 `login_locked` / 403 `account_disabled`.
+   **로그아웃**: `POST /api/auth/logout`(이 기기의 세션만 끝). **비밀번호 바꾸기**: `POST /api/auth/password` `{"current","new"}` —
+   바꾸면 다른 기기의 세션은 모두 끝난다.
+4. **지금 누구인가**: `GET /api/auth/session` → `{"mode": "accounts", "signed_in": true, "account": {"name", "admin", "entitlement": "pilot", …}}`.
+
+### 7-2. 계정 끄기 (관리자 또는 서버 셸)
+
+- 관리자 계정은 `GET /api/auth/accounts` 로 연구실의 계정을 보고 `POST /api/auth/accounts/{account_id}/disabled` `{"disabled": true}` 로
+  끈다(그 계정의 열린 세션은 그 자리에서 끝나고 로그인도 막힌다). `false` 로 다시 켠다. 자기 자신은 끌 수 없다(`409 admin_self_disable`).
+- 서버 셸에서는 관리자 없이도 끌 수 있다: `python scripts/pilot_invite.py --disable "이름"` / `--enable "이름"`, 목록은 `--accounts`.
+- 한 사람의 데이터를 지우는 것은 5절 끝의 `--account`.
+
+### 7-3. 사람이 확인할 것
+
+- HTTPS 앞문([`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md))의 기본 인증은 그대로 둘 수도, 계정 로그인으로 갈음할 수도 있다 —
+  둘 다 두면 참가자는 두 번 로그인한다. 그 문서는 아직 "파일럿 서버에는 로그인이 없다"고 적혀 있다(줄 ON 의 허용 밖).
+- 계정 저장소(`workspace/accounts.sqlite`)는 작업공간 폴더에 있어 백업(`scripts/pilot_state_backup.py`)과 삭제 도구가 함께 다룬다.
+
+## 8. 사람이 할 일 · 알려진 한계
 
 1. 4절의 고지 문안 확정(윤리·법무 검토, 업체 약관 확인). 이 저장소는 외부 서비스의 보관을 보증하지 않는다.
 2. 도메인 결정과 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 실행(줄 PL 은 실행하지 않았다).
