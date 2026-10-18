@@ -8,6 +8,10 @@ reads the server's draft again; every value carries where it comes from
 (원문 · AI 제안 · 검토자 입력); the reviewer's name and "검토 완료하고 등록"
 make the review version; the versions are listed with what each changed.
 No approval. One column on a phone.
+
+Lane RV2 stage ② (human decision 2026-10-16) replaced the item list with one
+card at a time chosen by buttons: the tests that read the list now read the
+card the server builds for the same item (the same intent, through cards).
 """
 
 from __future__ import annotations
@@ -26,9 +30,20 @@ const flagged=item("step:s2",{step_id:"s2",step_label:"2",text:"Spin for an hour
  reasons:[{item_id:"step:s2",reason:"not_in_source",reason_ko:"원문에 없음",field:"evidence",reason_code:"quote_not_found",page_number:1,matching_source_pages:[]}],
  source:{page:1,excerpt:"Spin for an hour.",verified:false,lines:null,suggested_lines:{page:1,first_line:4,last_line:4,similarity:0.7}}});
 const timer=item("timer:s2",{kind:"timer",kind_ko:"단계 타이머",step_id:"s2",step_label:"2",text:"10 min",current:"10 min",value_kind_ko:"시간",seconds:[600],candidates:[],allowed_actions:["fix","clear","memo","reset"]});
+// Lane RV2: the cards the server builds for the flagged item and for a timer to fix.
+const flaggedCard={card_id:"step:s2",item_id:"step:s2",position:1,total:1,progress_ko:"1 / 1",type:"evidence",kind:"step",kind_ko:"단계",step_label:"2",
+ question_ko:"이 단계의 근거를 원문에서 찾지 못했어요. 원문의 어느 줄인가요?",reasons_ko:["원문에 없음"],shown:"Spin for an hour.",source:flagged.source,
+ choices:[{choice_id:"confirm_lines",label_ko:"고른 줄이 맞아요",request:{item_id:"step:s2",action:"confirm"},needs:"source_lines",route:null,primary:true},
+  {choice_id:"fix",label_ko:"직접 고칠게요",request:{item_id:"step:s2",action:"fix"},needs:"source_lines_and_text",route:null,primary:false},
+  {choice_id:"reanalysis",label_ko:"다시 분석",request:null,needs:null,route:"reanalysis",primary:false}],
+ proposal:null,change:null,readings:null,steps:null,memo_allowed:true,decided:false,decision:null,current:"Spin for an hour."};
+const timerCard={card_id:"timer:s2",item_id:"timer:s2",position:1,total:1,progress_ko:"1 / 1",type:"value_changed",kind:"timer",kind_ko:"단계 타이머",step_label:"2",
+ question_ko:"10 min → 15 min(으)로 고쳤어요. 이 단계 타이머에도 그 값이 있어요. 이렇게 바꿀까요?",reasons_ko:["고친 값이 들어 있음"],shown:"10 min",source:null,
+ choices:[{choice_id:"fix",label_ko:"다시 고칠게요",request:{item_id:"timer:s2",action:"fix"},needs:"seconds",route:null,primary:true}],
+ proposal:null,change:{from:"10 min",to:"15 min"},readings:null,steps:null,memo_allowed:true,decided:false,decision:null,current:"10 min"};
 const draft=(extra={})=>({protocol_id:"p-1",title:"Gamma",analysis_status:"review_pending",available_for_execution:false,
  target:{kind:"review_pending",event_id:"analysis-review-pending-a",recorded_at:"2026-10-14T01:00:00+00:00",revision_id:null,analysis_id:"a"},
- items:[item("step:s1"),flagged,timer],needs_review:["step:s2"],counts:{items:3,needs_review:1,decided:0,undecided:1,changed:0},
+ items:[item("step:s1"),flagged,timer],cards:[flaggedCard],next_card:0,needs_review:["step:s2"],counts:{items:3,needs_review:1,decided:0,undecided:1,changed:0},
  pages:[{page:1,ocr:true,ocr_unclear:true,unclear_line_count:2,line_count:5}],registrable:false,registration_blockers:[{item_id:"step:s2"}],...extra});
 const page1={protocol_id:"p-1",page:1,page_count:3,ocr:true,ocr_unclear:true,unclear_line_count:2,
  lines:[{number:1,text:"Protocol Gamma",has_value:false,unclear:false},{number:2,text:"Section preparation",has_value:false,unclear:false},{number:3,text:"1. Add 2 mL of buffer A.",has_value:true,unclear:true},{number:4,text:"2. Incubate for 10 min at 37 C.",has_value:true,unclear:true},{number:5,text:"Wear gloves.",has_value:false,unclear:false}],
@@ -36,44 +51,44 @@ const page1={protocol_id:"p-1",page:1,page_count:3,ocr:true,ocr_unclear:true,unc
 const calls=[];
 const serve=(answers)=>{globalThis.fetch=async(url,options={})=>{calls.push({url:String(url),method:options.method||"GET",body:typeof options.body==="string"?JSON.parse(options.body):null});for(const [pattern,answer] of answers){if(String(url).includes(pattern))return typeof answer==="function"?answer(options):json(answer);}throw new Error(`unexpected ${url}`);};};
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
-const rows=()=>node("review-items").children.map(row=>row.firstChild);
 const buttonsIn=host=>{const found=[];const walk=el=>{if(el.tagName==="button")found.push(el);for(const child of el.children||[])walk(child);};walk(host);return found;};
+const allIn=host=>{const found=[];const walk=el=>{found.push(el);for(const child of el.children||[])walk(child);};walk(host);return found;};
+const lines=()=>allIn(node("review-card")).filter(el=>el.tagName==="button"&&String(el.className).startsWith("review-line"));
+const press=async words=>{const button=buttonsIn(node("review-card")).find(b=>b.textContent===words);assert(button,`no "${words}": ${buttonsIn(node("review-card")).map(b=>b.textContent)}`);button.dispatch("click");await tick();await tick();await tick();};
 """
 
 
 class ReviewItemsTests(unittest.TestCase):
 
     def test_items_waiting_for_a_person_come_first_with_their_badges(self) -> None:
+        # Lane RV2: the item waiting for a person is the card shown, with its reasons.
         result = run_page_script(SETUP + r"""
 serve([["/review-draft/source-pages/1",page1],["/review-draft",draft()]]);
-await loadReviewDraft("p-1");await tick();await tick();
+await loadReviewDraft("p-1");await tick();await tick();await tick();
 const editor=node("protocol-review-editor");
 assert(editor.hidden===false&&editor.open===true,"the editor did not open for a review-pending analysis");
-assert(rows().map(row=>row.dataset.itemId).join(",")==="step:s2,step:s1,timer:s2",rows().map(row=>row.dataset.itemId).join(","));
-const first=visibleText(rows()[0]);
-for(const words of ["2단계 · 단계","Spin for an hour.","AI 제안","확인 필요 · 원문에 없음"])assert(first.includes(words),`${words}: ${first}`);
-assert(visibleText(rows()[1]).includes("원문")&&!visibleText(rows()[1]).includes("확인 필요"),visibleText(rows()[1]));
+assert(node("review-card-progress").textContent==="1 / 1",node("review-card-progress").textContent);
+const shown=visibleText(node("review-card"));
+for(const words of ["2단계 · 단계","Spin for an hour.","원문에 없음","원문의 어느 줄인가요?"])assert(shown.includes(words),`${words}: ${shown}`);
 const strip=node("review-editor-strip").children.map(badge=>`${badge.dataset.kind}:${badge.textContent}`);
-assert(JSON.stringify(strip)===JSON.stringify(["warning:검토 대기 분석","danger:확인 필요 1건","warning:OCR 흐린 줄 2개"]),`strip: ${strip}`);
-assert(node("review-editor-summary").textContent===" · 확인 필요 1건 · 남은 1건",node("review-editor-summary").textContent);
-// The flagged item is picked first: its page's numbered lines, the server's guess dashed.
-const lines=node("review-source").children[1].children.map(row=>row.firstChild);
-assert(lines.length===5&&lines[3].className.includes("is-suggested")&&lines[2].className.includes("is-unclear"),lines.map(line=>line.className).join("|"));
-assert(visibleText(lines[3]).includes("4")&&visibleText(lines[3]).includes("2. Incubate for 10 min at 37 C."),visibleText(lines[3]));
+assert(JSON.stringify(strip)===JSON.stringify(["warning:검토 대기 분석","danger:카드 1장"]),`strip: ${strip}`);
+assert(node("review-editor-summary").textContent===" · 확인할 카드 1장 · 남은 1장",node("review-editor-summary").textContent);
+// The page's numbered lines on the card, the server's guess dashed.
+assert(lines().length===5&&lines()[3].className.includes("is-suggested")&&lines()[2].className.includes("is-unclear"),lines().map(line=>line.className).join("|"));
+assert(visibleText(lines()[3]).includes("4")&&visibleText(lines()[3]).includes("2. Incubate for 10 min at 37 C."),visibleText(lines()[3]));
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_a_refused_quote_is_confirmed_only_with_the_lines_picked(self) -> None:
         result = run_page_script(SETUP + r"""
 serve([["/review-draft/source-pages/1",page1],["/review-decisions",{item:{},counts:{},registrable:true}],["/review-draft",draft()]]);
-await loadReviewDraft("p-1");await tick();await tick();
-const confirm=()=>buttonsIn(node("review-item")).find(button=>button.dataset.action==="confirm");
-confirm().dispatch("click");await tick();
+await loadReviewDraft("p-1");await tick();await tick();await tick();
+await press("고른 줄이 맞아요");
 assert(!calls.some(call=>call.method==="POST"),"a confirm without lines was sent");
-assert(visibleText(node("review-item")).includes("원문에서 이 항목이 있는 줄을 눌러 골라 주세요."),visibleText(node("review-item")));
-const lines=node("review-source").children[1].children.map(row=>row.firstChild);
-lines[3].dispatch("click");await tick();
-confirm().dispatch("click");await tick();await tick();
+assert(visibleText(node("review-card")).includes("원문에서 이 항목이 있는 줄을 눌러 골라 주세요."),visibleText(node("review-card")));
+await tick();await tick();
+lines()[3].dispatch("click");await tick();await tick();await tick();
+await press("고른 줄이 맞아요");
 const post=calls.find(call=>call.method==="POST");
 assert(post&&post.url==="/api/protocols/p-1/review-decisions",JSON.stringify(calls));
 assert(JSON.stringify(post.body)===JSON.stringify({item_id:"step:s2",action:"confirm",target:draft().target,source_lines:{page:1,first_line:4,last_line:4}}),JSON.stringify(post.body));
@@ -84,15 +99,14 @@ assert(JSON.stringify(post.body)===JSON.stringify({item_id:"step:s2",action:"con
         result = run_page_script(SETUP + r"""
 const page2={...page1,page:2,value_boxes:[],lines:[{number:1,text:"Spin the tube for an hour at 4 C.",has_value:true,unclear:false},{number:2,text:"Discard the supernatant.",has_value:false,unclear:false}]};
 serve([["/review-draft/source-pages/2",page2],["/review-draft/source-pages/1",page1],["/review-decisions",{item:{},counts:{},registrable:true}],["/review-draft",draft()]]);
-await loadReviewDraft("p-1");await tick();await tick();
-const head=()=>node("review-source").children[0],turn=()=>buttonsIn(head());
+await loadReviewDraft("p-1");await tick();await tick();await tick();
+const turn=()=>buttonsIn(node("review-card")).filter(button=>button.dataset.page);
 assert(turn().map(button=>`${button.textContent}:${button.disabled}`).join("|")==="앞 쪽:true|다음 쪽:false",turn().map(button=>`${button.textContent}:${button.disabled}`).join("|"));
-turn()[1].dispatch("click");await tick();await tick();
-assert(visibleText(head()).includes("원문 p.2"),visibleText(head()));
-const lines=node("review-source").children[1].children.map(row=>row.firstChild);
-assert(lines.length===2,String(lines.length));
-lines[0].dispatch("click");await tick();await tick();
-buttonsIn(node("review-item")).find(button=>button.dataset.action==="confirm").dispatch("click");await tick();await tick();
+turn()[1].dispatch("click");await tick();await tick();await tick();
+assert(visibleText(node("review-card")).includes("원문 p.2"),visibleText(node("review-card")));
+assert(lines().length===2,String(lines().length));
+lines()[0].dispatch("click");await tick();await tick();await tick();
+await press("고른 줄이 맞아요");
 const post=calls.find(call=>call.method==="POST");
 assert(JSON.stringify(post?.body?.source_lines)===JSON.stringify({page:2,first_line:1,last_line:1}),JSON.stringify(post?.body));
 """)
@@ -100,14 +114,14 @@ assert(JSON.stringify(post?.body?.source_lines)===JSON.stringify({page:2,first_l
 
     def test_a_timer_is_fixed_in_minutes_and_a_name_goes_with_the_decision(self) -> None:
         result = run_page_script(SETUP + r"""
-serve([["/review-draft/source-pages/1",page1],["/review-decisions",{item:{},counts:{},registrable:true}],["/review-draft",draft()]]);
+serve([["/review-decisions",{item:{},counts:{},registrable:true}],["/review-draft",draft({cards:[timerCard]})]]);
 await loadReviewDraft("p-1");await tick();
-rows()[2].dispatch("click");await tick();
-const host=node("review-item"),input=host.children.find(child=>child.id==="review-item-value");
-assert(input&&input.type==="number"&&input.value==="10",`timer input: ${input?.type} ${input?.value}`);
-assert(!buttonsIn(host).some(button=>button.dataset.action==="confirm"),"a timer offered a plain confirm");
+assert(!buttonsIn(node("review-card")).some(button=>button.textContent==="확인"),"a timer offered a plain confirm");
+await press("다시 고칠게요");
+const input=allIn(node("review-card")).find(child=>child.tagName==="input"&&child.type==="number");
+assert(input&&input.attributes["aria-label"]==="타이머(분)",`timer input: ${input?.type}`);
 input.value="15";node("reviewer-name").value="  김재준 ";
-buttonsIn(host).find(button=>button.dataset.action==="fix").dispatch("click");await tick();
+await press("보내기");
 const post=calls.find(call=>call.method==="POST");
 assert(post.body.item_id==="timer:s2"&&post.body.action==="fix"&&post.body.seconds===900&&post.body.reviewer_name==="김재준"&&!("source_lines" in post.body),JSON.stringify(post.body));
 """)
@@ -116,19 +130,18 @@ assert(post.body.item_id==="timer:s2"&&post.body.action==="fix"&&post.body.secon
     def test_the_actions_are_the_servers_and_a_refusal_is_said_in_words(self) -> None:
         result = run_page_script(SETUP + r"""
 serve([["/review-draft/source-pages/1",page1],["/review-decisions",()=>json({detail:"review_decision_invalid"},false)],["/review-draft",draft()]]);
-await loadReviewDraft("p-1");await tick();
-rows()[1].dispatch("click");await tick();
-const host=node("review-item"),actions=buttonsIn(host).map(button=>button.textContent);
-assert(JSON.stringify(actions)===JSON.stringify(["확인","고침","메모"]),`actions: ${actions}`);
-host.children.find(child=>child.id==="review-item-value").value="1. Add 2.5 mL of buffer A.";
-buttonsIn(host).find(button=>button.dataset.action==="fix").dispatch("click");await tick();await tick();
-assert(visibleText(node("review-item")).includes("이 항목에는 그렇게 할 수 없습니다."),visibleText(node("review-item")));
+await loadReviewDraft("p-1");await tick();await tick();await tick();
+const actions=buttonsIn(node("review-card")).filter(button=>!button.dataset.page&&!button.dataset.line&&button.textContent!=="메모 남기기").map(button=>button.textContent);
+assert(JSON.stringify(actions)===JSON.stringify(["고른 줄이 맞아요","직접 고칠게요","다시 분석"]),`actions: ${actions}`);
+lines()[3].dispatch("click");await tick();await tick();await tick();
+await press("고른 줄이 맞아요");
+assert(visibleText(node("review-card")).includes("이 항목에는 그렇게 할 수 없습니다."),visibleText(node("review-card")));
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_a_passed_analysis_is_read_only_when_a_person_opens_it(self) -> None:
         result = run_page_script(SETUP + r"""
-const passed=draft({target:{kind:"analysis",analysis_revision_number:2},items:[item("step:s1")],needs_review:[],
+const passed=draft({target:{kind:"analysis",analysis_revision_number:2},items:[item("step:s1")],cards:[],next_card:null,needs_review:[],
  counts:{items:1,needs_review:0,decided:0,undecided:0,changed:0},registrable:true,registration_blockers:[]});
 serve([["/review-draft/source-pages/1",page1],["/review-draft",passed]]);
 const editor=node("protocol-review-editor");
@@ -137,7 +150,7 @@ assert(editor.hidden===false&&editor.open!==true,`hidden=${editor.hidden} open=$
 assert(calls.length===0,`read before it was opened: ${JSON.stringify(calls)}`);
 editor.open=true;editor.dispatch("toggle");await tick();await tick();
 assert(calls[0]?.url==="/api/protocols/p-1/review-draft",JSON.stringify(calls));
-assert(rows().map(row=>row.dataset.itemId).join(",")==="step:s1",rows().map(row=>row.dataset.itemId).join(","));
+assert(visibleText(node("review-card")).includes("확인할 것이 없습니다."),visibleText(node("review-card")));
 assert(node("review-editor-strip").children[0].textContent==="통과한 분석",node("review-editor-strip").children[0].textContent);
 // Nothing to review before an analysis exists.
 assert(showReviewEditor("p-2",{protocol_id:"p-2",analysis_available:false,review_pending:null})===false&&editor.hidden===true,"the editor was offered without an analysis");
@@ -224,8 +237,9 @@ class ReviewMarkupTests(unittest.TestCase):
 
     def test_the_editor_sits_beside_the_read_only_compare_view(self) -> None:
         begin = self.html.index('<details id="protocol-review-editor"')
-        editor = self.html[begin:self.html.index("</details>", begin)]
-        for ident in ("review-items", "review-source", "review-item", "reviewer-name", "review-register", "review-history"):
+        editor = self.html[begin:self.html.index('<div class="setup-grid">', begin)]
+        # Lane RV2: the cards where the item list was.
+        for ident in ("review-cards", "review-card", "reviewer-name", "review-register", "review-history"):
             self.assertIn(f'id="{ident}"', editor, ident)
         self.assertIn("검토 완료하고 등록", editor)
         self.assertIn('maxlength="80"', editor)
@@ -236,10 +250,10 @@ class ReviewMarkupTests(unittest.TestCase):
         self.assertNotIn("<input", compare)
 
     def test_one_column_on_a_phone_three_on_a_wide_screen(self) -> None:
-        css = self.html[self.html.index(".review-editor-grid{"):]
-        self.assertTrue(css.startswith(".review-editor-grid{display:grid;grid-template-columns:minmax(0,1fr);"))
-        wide = re.search(r"@media \(min-width:1024px\)\{\s*\.review-editor-grid\{grid-template-columns:18rem minmax\(0,1fr\) minmax\(0,1fr\)", self.html)
-        self.assertIsNotNone(wide)
+        # Lane RV2: one card in one column at every width; its buttons stack on a phone.
+        css = self.html[self.html.index(".review-cards{"):]
+        self.assertTrue(css.startswith(".review-cards{display:flex;flex-direction:column;"))
+        self.assertIn("@media (max-width:600px){.choice-card-choices button{flex-basis:100%}}", self.html)
 
     def test_text_is_put_in_as_text(self) -> None:
         script = self.html.split("// Lane RV (2026-10-14): 검토 -- the compare view a person decides in.", 1)[1].split("async function pollProtocolAnalysisStatus", 1)[0]
