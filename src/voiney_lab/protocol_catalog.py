@@ -4769,7 +4769,10 @@ class ProtocolCatalog:
                     step.step_id: step.source_label
                     for section in protocol_with_display_step_labels(protocol).sections
                     for step in section.steps}
-                items.append(view(item_id, "seam", flag.reason_ko, extra={"steps": [
+                # No words of its own: the card's reason says what it is and
+                # its two steps are the content (lane AN3, stage ③ found the
+                # reason drawn twice).
+                items.append(view(item_id, "seam", None, extra={"steps": [
                     {**step, "lines": _reading_lines(step, extraction),
                      "label_shown": shown_labels.get(str(step.get("step_id"))),
                      "label_printed": bool(str(step.get("label") or "").strip())}
@@ -6428,7 +6431,9 @@ def _ocr_page_card(values: Sequence[dict[str, object]]) -> dict[str, object]:
         "question_ko": (
             f"원문 {page}쪽 그림의 값 {len(entries)}개를 확인해 주세요. "
             "두 OCR 엔진이 다르게 읽었거나 한 엔진만 읽은 값이에요."),
-        "reasons_ko": list(dict.fromkeys(entry["reason_ko"] for entry in entries)),
+        # Each value says its own reason; the card does not repeat them (lane
+        # AN3, stage ③).
+        "reasons_ko": [],
         "shown": None,
         "source": {
             "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
