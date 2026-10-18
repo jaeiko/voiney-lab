@@ -1534,7 +1534,7 @@ function renderRunStatus(){
 // The server's step timer, read as the rail and the timer row read it:
 // 도는 중, 1분 남음 (the server's deadline a minute or less away), 끝남 · 지남,
 // or 없음. The server's notice line stays with the step it spoke of.
-function stepTimerRemainingSeconds(step){const deadline=Date.parse(step.deadline_at);return Number.isFinite(deadline)?Math.ceil((deadline-Date.now())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);}
+function stepTimerRemainingSeconds(step){const deadline=Date.parse(step.deadline_at);return Number.isFinite(deadline)?Math.ceil((deadline-serverNowMs())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);}
 function renderRunTimer(){
  const panel=$("run-timer");if(!panel)return null;
  const state=curatedProtocolState,step=state?.attached===true?state.timers?.step||null:null,duration=Math.max(0,Number(step?.duration_seconds)||0);
@@ -1728,6 +1728,8 @@ function renderState(state,detail=""){
 }
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
 function stopWorkflowTimer(){if(workflowTimerHandle!==null){clearInterval(workflowTimerHandle);workflowTimerHandle=null;}}
+// Lane NET decision 3: the timers are read on the server's clock, this page's clock corrected by the difference measured on the connection (connection.js).
+function serverNowMs(){return globalThis.voineyConnection?.serverNow?.()??Date.now();}
 function formatElapsedClock(seconds){
  const total=Math.max(0,Math.floor(Number(seconds)||0));
  const hours=Math.floor(total/3600),minutes=Math.floor((total%3600)/60),secs=total%60;
@@ -1742,7 +1744,7 @@ function updateWorkflowTimer(){
  const parts=[];
  if(experiment){
   const started=experiment.started_at?Date.parse(experiment.started_at):NaN;
-  const elapsed=experiment.state==="running"&&Number.isFinite(started)?Math.max(0,Math.floor((Date.now()-started)/1000)):Math.max(0,Number(experiment.elapsed_seconds)||0);
+  const elapsed=experiment.state==="running"&&Number.isFinite(started)?Math.max(0,Math.floor((serverNowMs()-started)/1000)):Math.max(0,Number(experiment.elapsed_seconds)||0);
   if(experiment.state==="running")parts.push(`실험 진행 경과 시간 ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="stopped")parts.push(`전체 종료 · ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="not_started")parts.push("전체 대기");
@@ -1750,14 +1752,14 @@ function updateWorkflowTimer(){
  }
  if(pause&&pause.state==="paused"){
   const pausedAt=pause.paused_at?Date.parse(pause.paused_at):NaN;
-  const curPause=Number.isFinite(pausedAt)?Math.max(0,Math.floor((Date.now()-pausedAt)/1000)):Number(pause.current_pause_seconds)||0;
+  const curPause=Number.isFinite(pausedAt)?Math.max(0,Math.floor((serverNowMs()-pausedAt)/1000)):Number(pause.current_pause_seconds)||0;
   parts.push(`일시정지 중 (${formatElapsedClock(curPause)})`);
  }
  if(step){
   if(step.state==="running"||step.state==="expired"){
    const deadline=Date.parse(step.deadline_at);
    // Seconds left (positive) or gone past the end (negative), from the server's deadline.
-   const remaining=Number.isFinite(deadline)?Math.ceil((deadline-Date.now())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);
+   const remaining=Number.isFinite(deadline)?Math.ceil((deadline-serverNowMs())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);
    if(remaining>0){
     // Lane U2 decision 5: minutes and seconds left, "14:55 남음".
     parts.push(`단계 ${formatElapsedClock(remaining)} 남음`);
