@@ -3560,12 +3560,28 @@ class ProtocolCatalog:
         Lane RV2, decision b: the values read by OCR are settled or made
         items first, so an analysis whose OCR values are not confirmed does
         not run as it is. Decision c: with ``model``, an analysis with more
-        items than ``review_max_items()`` is analysed once more instead."""
+        items than ``review_max_items()`` is analysed once more instead --
+        except a document read in pieces (lane AN3, round 2, decision ④),
+        which may ask about ``review_max_items()`` plus one item per piece and
+        otherwise ends with the guidance."""
 
         draft = self._with_ocr_value_flags(revision, draft)
-        if model is not None and _items_by_reason(draft)[0] > review_max_items():
-            draft, analysis_id = self._fewer_items(
-                revision, draft, analysis_id, model=model, pieces=pieces)
+        if pieces:
+            # Lane AN3, round 2, decision ④ (human decision 2026-10-18): a long
+            # document is not analysed again by itself -- the one live
+            # re-analysis cost USD 0.91 and changed nothing -- and may ask about
+            # one more item per piece (a seam or an unread page is one press).
+            limit = review_max_items() + len(pieces)
+            count, by_reason = _items_by_reason(draft)
+            if count > limit:
+                too_many = ProtocolAnalysisTooManyItemsError(
+                    "The analysis asks a person about too many items.",
+                    items=count, limit=limit, items_after=None, by_reason=by_reason)
+                self._record_analysis_failure(
+                    revision, f"{analysis_id}-too-many-items", too_many)
+                raise too_many
+        elif model is not None and _items_by_reason(draft)[0] > review_max_items():
+            draft, analysis_id = self._fewer_items(revision, draft, analysis_id, model=model)
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
@@ -3577,7 +3593,6 @@ class ProtocolCatalog:
         analysis_id: str,
         *,
         model: ProtocolAnalysisModel,
-        pieces: tuple[AnalysisPiece, ...],
     ) -> tuple[ProtocolAnalysisDraft, str]:
         """Too many items for cards: one more analysis, or the guidance alone.
 
@@ -3590,12 +3605,14 @@ class ProtocolCatalog:
         at what level and what came of it. A result within the bound is
         kept (with cards or none); otherwise the analysis fails with the
         guidance and makes no cards. Returns the draft to keep and its id.
+        A document read in pieces is never analysed again this way (lane AN3,
+        round 2, decision ④): its call is one analysis.
         """
 
         protocol_id = revision.experiment_id
         limit = review_max_items()
         count, by_reason = _items_by_reason(first)
-        planned = 2 * len(pieces) if pieces else 1
+        planned = 1
         cap = review_reanalysis_max_calls()
         escalated, reasoning = escalated_analysis_model(model)
         again_id = f"{analysis_id}-more-1"
@@ -3620,13 +3637,8 @@ class ProtocolCatalog:
                 protocol_id, count, limit, reasoning.get("reasoning_effort"), planned,
             )
             try:
-                extraction = first.extraction
-                if pieces:
-                    again = self._analyze_in_pieces(
-                        revision, extraction, escalated, pieces, analysis_id=again_id)
-                else:
-                    again = analyze_protocol_extraction(
-                        extraction, escalated, review_unverified=True)
+                again = analyze_protocol_extraction(
+                    first.extraction, escalated, review_unverified=True)
                 again = self._with_ocr_value_flags(revision, again)
                 after = _items_by_reason(again)
             except Exception as exc:  # noqa: BLE001 - the first result's guidance stands
