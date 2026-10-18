@@ -21,6 +21,12 @@ from tests.test_screen_cleanup import INDEX, PRELUDE, ROOT
 CONNECTION = ROOT / "src" / "voiney_lab" / "static" / "connection.js"
 
 CLOCK = r"""
+const documentListeners={};
+document.addEventListener=(kind,fn)=>{(documentListeners[kind]||=[]).push(fn);};
+const tapEvent=(insideBand=false)=>{const event={prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;},target:{closest:selector=>selector==="#connection-band"?(insideBand?{}:null):{}}};for(const fn of documentListeners.click||[])fn(event);return event;};
+const sounds=[],buzzes=[];
+const fakeOutput=()=>({currentTime:0,destination:{},resume(){return Promise.resolve();},createOscillator(){const tone={type:"",frequency:{setValueAtTime(hz){tone.hz=hz;}},connect(){},start(){sounds.push(tone.hz);},stop(){},onended:null};return tone;},createGain(){return{gain:{setValueAtTime(){},linearRampToValueAtTime(){}},connect(){},disconnect(){}};}});
+Object.defineProperty(globalThis,"navigator",{value:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[]})},vibrate:pattern=>{buzzes.push(pattern);return true;}},configurable:true});
 let fakeNow=Date.UTC(2026,9,18,2,0,0);
 Date.now=()=>fakeNow;
 const fakeTimers=new Map();let fakeTimerId=0;
@@ -61,13 +67,17 @@ const fire=(kind,event={})=>{for(const fn of pageListeners[kind]||[])fn(event);}
 const CONFIGURATION_ID=41,PROTOCOL_ID="protocol-net",REVISION_ID="pdf-1-analysis-1",EXPERIMENT_ID="experiment-net-1";
 let stateRevision=0;
 function runState(extra={}){return{attached:true,protocol_id:PROTOCOL_ID,revision_id:REVISION_ID,display_name:"In-gel digestion",development_only:false,readiness_status:"guidance_ready",active:true,current_step_label:"4",current_step_id:"step-4",total_steps:12,at_final_step:false,block_reason:null,revision:++stateRevision,display_summary:"Incubate at 37 °C.",primary_summary:"37 °C에서 둡니다.",source_language:"en",spoken_summary:null,warning_texts:[],warning_presentations:[],visual_assets:[],visual_status:"unavailable",source_page_refs:[4],workflow_status:"running",...extra};}
+const micTrack={enabled:true,readyState:"live",stop(){},getSettings:()=>({})};
+const band=()=>document.body.children.find(child=>child.id==="connection-band")||null;
+const bandLine=name=>band()?.children.find(child=>child.dataset.line===name)?.textContent??null;
 async function openRun(extra={}){
  document.body=document.body||new Element("body");
+ playContext=fakeOutput();micStream={getAudioTracks:()=>[micTrack],getTracks:()=>[micTrack]};
  const pending=init(sessionGeneration),ws=opened.at(-1);ws.open();await pending;
  acceptedSessionConfiguration={configuration_id:CONFIGURATION_ID,server_generation:1,mode:"cascade",language:"ko",input_language:"ko",protocol_id:PROTOCOL_ID,revision_id:REVISION_ID,experiment_session_id:EXPERIMENT_ID,experiment_session_version:3};
  currentExperimentSessionId=EXPERIMENT_ID;currentExperimentSessionVersion=3;currentExperimentSessionStatus="in_progress";
  sessionActive=true;
- await ws.deliver({type:"protocol.fixture.state",configuration_id:CONFIGURATION_ID,action:"start",state:runState(extra)});
+ await ws.deliver({type:"protocol.fixture.state",configuration_id:CONFIGURATION_ID,action:"start",state:runState(extra),screen:{next_step_sentence:"5단계: 상층액을 버립니다."}});
  return ws;
 }
 """
