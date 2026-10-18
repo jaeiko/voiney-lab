@@ -224,3 +224,47 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 9. Apple 한국 외부 결제 26% 에 Small Business·구독 2년차 감면이 있는지. Google 미국·EEA·영국 새 요율표의 칸별 값.
    전기통신사업법 시행령의 세부(보도자료 본문이 첨부 파일에만 있음).
 10. Google 조직 계정이 신규 개인 계정의 "12명·14일" 비공개 테스트 요건에서 빠지는지(그 요건은 개인 계정 문장에만 있다).
+
+## 9. 앱 뼈대와 기기 기능 다리
+
+### 9.1 뼈대 (`mobile/`)
+
+| 경로 | 무엇 |
+|---|---|
+| `mobile/package.json` | Capacitor 8.5.3, `@capacitor/local-notifications` 8.3.1, `@capacitor/network` 8.0.1, `@capacitor/app` 8.1.2, `@capacitor-community/keep-awake` 8.0.1 (정확한 버전으로 고정) |
+| `mobile/capacitor.config.js` | 앱 id `com.voiney.lab`(자리표시 — 11절), 이름 VoineyLab. 기본은 화면 묶기, `VOINEY_APP_SERVER_URL=https://…` 이면 서버 주소, `VOINEY_APP_START_PATH` 로 첫 쪽 |
+| `mobile/scripts/prepare-web.mjs` | `mobile/www/`(추적 안 함)를 서버 정적 화면 + `mobile/www-src/` 로 만든다 |
+| `mobile/www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때의 화면 |
+| `mobile/www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: 2분 시험 타이머로 알림 예약·취소, 정확한 알람 설정, 화면 켜 두기, 네트워크 변화 |
+| `mobile/android/` | `npx cap add android` 결과. 고친 곳은 `AndroidManifest.xml` 뿐: `RECORD_AUDIO`·`MODIFY_AUDIO_SETTINGS`, `allowBackup="false"`(웹뷰 저장소가 클라우드 백업으로 나가지 않게) |
+
+### 9.2 다리 `src/voiney_lab/static/native-bridge.js`
+
+서버가 준 단계 타이머(`timers.step`)로 기기 알림 두 개(끝 1분 전, 끝)를 예약하고, 다음 서버 상태에 맞춰 취소·변경한다.
+번들러 없이 `<script>` 로 읽히고(`window.VoineyNativeBridge`), node 에서는 `require` 로 읽힌다. 시험:
+`node --test tests/native_bridge/timer_alerts.test.js`(pytest 에서는 `tests/test_native_bridge.py`).
+
+- `planTimerAlerts(state, {nowMs, offsetMs})`: 실험이 진행 중(`attached`·`active`)이고 단계 타이머가 `running` 이며 `started_at`·`deadline_at` 이
+  읽힐 때만 알림을 만든다. 1분 이하 타이머는 끝만. 이미 지난 시각은 넣지 않는다. 일시정지는 알림을 지우지 않는다(서버도 단계 타이머를 멈추지 않는다).
+- 알림 id 는 `step_id|started_at|종류` 의 해시(양의 31비트). 같은 타이머는 같은 id 라서 같은 상태가 여러 번 와도 다시 예약하지 않고,
+  다시 시작한 타이머(새 `started_at`)는 옛 쌍을 지우고 새 쌍을 넣는다.
+- 기기 시계가 서버와 3초 넘게 다르면 `remaining_seconds` 로 차이를 재서 맞춘다(`clockOffsetMs`).
+- 문구는 서버의 끝 문구(`_timer_end_words`)를 따른다: 최소 시간은 "최소 시간 2시간이 지났어요."(끝났다고 하지 않음),
+  최대 시간은 "최대 시간 15분이 됐어요.", 그 밖은 "타이머 15분이 끝났어요." — 모두 "앱에서 확인해 주세요."로 맺는다. 단계가 끝났다고 말하지 않는다.
+- `createTimerAlerts(notifier).sync(state, receivedAtMs)` 는 기기의 예약 목록(우리 것만, `extra.tag`)과 비교해 취소·예약하고, 동시에 온 두 상태가
+  섞이지 않게 차례로 돈다. `connectionLost()` 는 일부러 아무것도 하지 않는다.
+- Capacitor 가 웹뷰에 넣는 다리(`Capacitor.nativePromise`)로 플러그인을 부른다. 알림 채널 `voiney-timer`(중요도 5), `allowWhileIdle: true`.
+
+**연결 지점** (`static/index.html`, 2026-10-18 `dev` 기준 줄 번호. 이 줄에서는 고치지 않았다):
+
+| # | 자리 | 할 일 |
+|---|---|---|
+| ① | 1256줄 `<script>` 앞 | `<script src="/native-bridge.js"></script>`. 앱이 아니면(`isNativeApp` 거짓) 아무것도 하지 않게 |
+| ② | 시작할 때 한 번 | `prepareNotifications(cap)`(알림 권한·채널·정확한 알람 여부). 정확한 알람이 거부면 "타이머 알림이 몇 분 늦을 수 있어요 — 설정에서 허용" 안내 |
+| ③ | 2368줄 `renderCuratedProtocolState` 에서 상태를 받아들인 직후(`curatedProtocolState={...value}`, 2378줄) | `timerAlerts.sync(value, Date.now())`. **서버가 보낸 상태를 받아들인 이 자리에서만** 부른다 |
+| ④ | 2020줄 `invalidateCuratedProtocolState`, 2890줄 웹소켓 `onclose` | `sync` 를 부르지 **않는다**(여기서 상태가 `{attached:false}` 가 되므로 부르면 끊길 때 알림이 지워진다). `connectionLost()` 만 |
+| ⑤ | 2890줄 `new WebSocket(scheme+"://"+location.host+"/ws")`, `fetch("/api/…")` 16곳·`/readyz`, 3040줄 `/mic-capture-worklet.js`, 9줄 manifest | 화면을 앱에 묶으려면(5절) 서버 기준 주소를 설정에서 받아 붙인다. 서버 주소 모드에서는 고칠 것 없음 |
+| ⑥ | 1365줄 `showExperimentEnded` | 실험이 끝나면 `sync(null)` 로 남은 알림을 지운다(서버의 끝난 상태가 ③으로 오면 거기서도 지워진다) |
+| ⑦ | 1490줄 `keepScreenOn` | 앱에서는 `navigator.wakeLock` 대신(또는 함께) `keepAwake(cap, on)` |
+| ⑧ | 2929줄 `getUserMedia`, 4545줄 `visibilitychange` | 화면이 꺼져도 듣기는 네이티브 포그라운드 서비스가 맡는다(4절 다음 단계 3). 그 전까지는 지금처럼 화면이 보일 때만 |
+| ⑨ | 줄 NET 의 끊김 처리 | `onNetworkChange(cap, cb)` 로 기기의 연결 변화를 받을 수 있다. 끊김 표시는 줄 NET 의 화면을 따른다 |
