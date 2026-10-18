@@ -58,6 +58,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASON_READ_TWO_WAYS,
+    REVIEW_REASON_REFERENCE_MOVED,
     REVIEW_REASON_VALUE_CHANGED,
     REVIEW_REASONS_KO,
     ReviewFlag,
@@ -6282,6 +6283,16 @@ def _card_choices(
             _choice("choose_b", "저쪽으로 읽기", request("choose", reading="b")),
             _choice("fix", "직접 고칠게요", request("fix"), needs="text"),
         ], {"readings": item.get("readings")}
+    if any(reason.get("reason") == REVIEW_REASON_REFERENCE_MOVED for reason in reasons):
+        # Lane AN3, round 2, decision ⑤: the join pointed a construct at the
+        # section its step stands in; a person says it holds, or the document
+        # is read again.
+        return "reference_moved", (
+            "조각을 합친 뒤 이 구조가 가리키는 단계가 다른 절에 있어요. "
+            "원문대로 이 단계를 가리키면 [맞아요], 아니면 다시 분석해요."), [
+            _choice("confirm", "맞아요", request("confirm"), primary=True),
+            _choice("reanalysis", "다시 분석", None, route="reanalysis"),
+        ], {}
     if kind == "pages":
         blocked = any(reason.get("reason") == REVIEW_REASON_BLOCKED for reason in reasons)
         return "blocked_pages" if blocked else "failed_pages", (

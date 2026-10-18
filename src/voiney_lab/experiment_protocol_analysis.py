@@ -3256,6 +3256,9 @@ REVIEW_REASON_READ_TWO_WAYS = "read_two_ways"
 #: Lane AN3, decision B: where a long document's joined pieces change from
 #: numbered steps to unnumbered ones (or back), the two steps that meet.
 REVIEW_REASON_NUMBERING_SEAM = "numbering_seam"
+#: Lane AN3, round 2, decision ⑤: a construct whose step the join kept under
+#: another section than the one the construct named.
+REVIEW_REASON_REFERENCE_MOVED = "reference_moved"
 #: The failure code of an analysis or a piece the provider blocked (f).
 BLOCKED_FAILURE_CODE = "protocol_analysis_blocked"
 #: An item that states a value a person fixed (lane RV2, decision d): it is
@@ -3272,6 +3275,7 @@ REVIEW_REASONS_KO: dict[str, str] = {
     REVIEW_REASON_BLOCKED: "분석 못 한 쪽",
     REVIEW_REASON_READ_TWO_WAYS: "두 가지로 읽힘",
     REVIEW_REASON_NUMBERING_SEAM: "번호 방식이 바뀌는 경계",
+    REVIEW_REASON_REFERENCE_MOVED: "조각을 합친 뒤 가리키는 단계가 다른 절에 있음",
 }
 #: Why an OCR value waits (decision b): the two engines read the page's
 #: numbers differently, or only one engine read the page.
@@ -4963,6 +4967,53 @@ def _cleared_titles_that_hold(protocol: domain.ExperimentProtocol) -> domain.Exp
     return protocol if kept == protocol.cleared_fields else replace(protocol, cleared_fields=kept)
 
 
+def _constructs_named_by_their_steps(
+    protocol: domain.ExperimentProtocol,
+) -> tuple[domain.ExperimentProtocol, dict[int, dict[str, str]]]:
+    """``protocol`` with each construct naming the section its step stands in
+    (lane AN3, round 2, decision ⑤; human decision 2026-10-18).
+
+    A step read on the page two pieces share is kept once, under the earlier
+    piece's id and in the earlier piece's section; a construct of the later
+    piece named that step and its own section. The domain refuses such a
+    construct (DANGLING_REFERENCE) and so refused the whole joined document
+    (lane AN3's usgs re-analysis). The step is the same step either way; the
+    construct is pointed at the section that holds it, and returned by index
+    with what changed, to be asked about.
+    """
+
+    sections = {step.step_id: section.section_id
+                for section in protocol.sections for step in section.steps}
+    moved: dict[int, dict[str, str]] = {}
+    constructs = list(protocol.constructs)
+    for index, construct in enumerate(constructs):
+        step_id, section_id = construct.step_id, construct.section_id
+        holder = sections.get(step_id) if step_id is not None else None
+        if section_id is None or holder is None or holder == section_id:
+            continue
+        constructs[index] = replace(construct, section_id=holder)
+        moved[index] = {"step_id": step_id, "named_section": section_id, "step_section": holder}
+    if not moved:
+        return protocol, moved
+    return replace(protocol, constructs=tuple(constructs)), moved
+
+
+def _moved_reference_flags(
+    protocol: domain.ExperimentProtocol, moved: dict[int, dict[str, str]],
+) -> tuple[ReviewFlag, ...]:
+    return tuple(
+        ReviewFlag(
+            item_id=review_item_id(protocol, f"protocol.constructs[{index}].section_id"),
+            reason=REVIEW_REASON_REFERENCE_MOVED,
+            field="section_id",
+            reason_code="construct_step_in_other_section",
+            page_number=protocol.constructs[index].evidence.source_page_number,
+            extra=dict(change),
+        )
+        for index, change in moved.items()
+    )
+
+
 def _piece_of(step_id: str) -> int | None:
     head = step_id.split(".", 1)[0]
     return int(head[1:]) if head.startswith("p") and head[1:].isdigit() else None
@@ -5131,6 +5182,7 @@ def join_piece_analyses(
             for field in joined.cleared_fields
         ))
     joined = _cleared_titles_that_hold(joined)
+    joined, moved = _constructs_named_by_their_steps(joined)
     refused: dict[str, ProtocolAnalysisEvidenceError] = {}
     # Lane AN3, decision B: the pieces may number their steps differently; each
     # seam where that changes is an item (``_numbering_seam_flags``).
@@ -5183,6 +5235,7 @@ def join_piece_analyses(
             *(piece_review_flag(*failed) for failed in failed_pieces),
             *_two_readings_flags(verified, readings or {}, renamed),
             *_numbering_seam_flags(verified),
+            *_moved_reference_flags(verified, moved),
         ),
         auto_resolved=tuple(
             {**entry, "kept": renamed.get(str(entry["kept"]), entry["kept"])}
