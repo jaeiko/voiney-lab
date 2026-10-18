@@ -4796,6 +4796,7 @@ class ProtocolCatalog:
             "readings": [dict(reading) for reading in extra.get("readings") or ()
                          if isinstance(reading, dict)],
             "page_card": f"{OCR_PAGE_CARD_PREFIX}{page}",
+            "in_safety_statement": extra.get("in_safety_statement") is True,
         })
         item["source"] = {
             "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
@@ -4990,6 +4991,8 @@ class ProtocolCatalog:
                 entry = values.setdefault((page, token), {"value": words, "items": []})
                 if record.item_id not in entry["items"]:
                     entry["items"].append(record.item_id)
+                if record.kind == _OCR_SAFETY_KIND:
+                    entry["in_safety_statement"] = True
         flags: list[ReviewFlag] = []
         settled: list[dict[str, object]] = []
         for (page, token), entry in values.items():
@@ -5018,6 +5021,8 @@ class ProtocolCatalog:
                     ],
                     # Lane AN3, decision A: what each engine read in its place.
                     "readings": readings,
+                    # Round 2, decision ③: stated by a safety statement.
+                    **({"in_safety_statement": True} if entry.get("in_safety_statement") else {}),
                 },
             ))
         if not flags and not settled:
@@ -5201,6 +5206,14 @@ class ProtocolCatalog:
                                                     label="Reviewed text")}
                 if action == "fix" and value["text"] == item["text"]:
                     raise ProtocolReviewError("A fix must change the text; confirm it instead.")
+                if item["kind"] == "ocr_value" and item.get("in_safety_statement") is True and (
+                    value["text"] not in {
+                        str(reading.get("text")) for reading in item.get("readings") or ()
+                        if isinstance(reading, dict) and reading.get("token") != item.get("token")}
+                ):
+                    # Round 2, decision ③: the other engine's reading, or nothing.
+                    raise ProtocolReviewError(
+                        "A number in a safety statement takes one of the engines' readings.")
         source_lines = None
         source = item.get("source") if isinstance(item.get("source"), dict) else None
         if action in {"confirm", "fix"} and item["needs_review"] and source is not None \
@@ -5939,13 +5952,16 @@ OCR_PAGE_ONE_ENGINE = "one_engine"
 #: before the start and the completion criteria. Numbers anywhere else are
 #: not asked: notes and tips (background), material and equipment names
 #: (catalog, lot and model numbers), section headings and the document's
-#: metadata, a value the source leaves out, a timer spec and a repeat count
-#: (their numbers are other records' words), and safety statements, which a
-#: review never rewrites (lane RV2, decision g).
+#: metadata, a value the source leaves out, and a timer spec and a repeat
+#: count (their numbers are other records' words). Round 2, decision ③ (human
+#: decision 2026-10-18): a safety statement's numbers are compared too; one
+#: read differently takes one of the engines' readings, never a person's own
+#: words (``_OCR_SAFETY_KIND``).
 _OCR_VALUE_EXECUTION_KINDS = frozenset({
     "step", "sub_action", "value", "duration", "condition", "construct", "reminder",
-    "prerequisite", "expected_result", "observation",
+    "prerequisite", "expected_result", "observation", "warning",
 })
+_OCR_SAFETY_KIND = "warning"
 #: Constructs that describe the source rather than what runs.
 _OCR_VALUE_NOT_EXECUTED = (domain.SourceAmbiguity, domain.ProtocolConflict)
 _ENGINE_FAILED_WARNING = re.compile(r"^Page ([0-9]+): .+ failed;")
@@ -6080,6 +6096,29 @@ def _ocr_value_spans(text: str) -> list[tuple[str, int, int]]:
          match.start(), match.end())
         for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized)
     ]
+
+
+def _with_value_copied(text: str, token: str, reading: str) -> str:
+    """``text`` with every place it states the value ``token`` written as
+    ``reading`` (lane AN3, round 2, decision ③). Positions are kept through
+    the comparison form character by character, so a text the form lengthens
+    or shortens is still placed exactly."""
+
+    owners: list[int] = []
+    forms: list[str] = []
+    for index, character in enumerate(text):
+        form = unicodedata.normalize("NFKC", character).casefold().replace("μ", "µ")
+        forms.append(form)
+        owners.extend([index] * len(form))
+    normalized = "".join(forms)
+    spans = [
+        (owners[match.start()], owners[match.end() - 1] + 1)
+        for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized)
+        if match[1] + _OCR_UNIT_SPELLINGS.get(match[2] or "", match[2] or "") == token
+    ]
+    for start, end in reversed(spans):
+        text = text[:start] + reading + text[end:]
+    return text
 
 
 _DURATION_WORDS = re.compile(
@@ -6318,7 +6357,10 @@ def _ocr_value_entry(item: dict[str, object]) -> dict[str, object]:
     if not readings:
         choices.append(_choice("confirm", f"{item.get('text')} 맞아요", request("confirm"),
                                primary=True))
-    choices.append(_choice("fix", "직접 입력", request("fix"), needs="text"))
+    if item.get("in_safety_statement") is not True:
+        # Round 2, decision ③: a safety statement's number is one of the
+        # engines' readings, never words of a person's own.
+        choices.append(_choice("fix", "직접 입력", request("fix"), needs="text"))
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     reason = next((reason for reason in item.get("reasons") or ()
                    if isinstance(reason, dict) and reason.get("reason") == REVIEW_REASON_OCR_VALUE),
@@ -6829,6 +6871,34 @@ def _apply_review(
             decided_by=str(decision.get("reviewer_name") or name),
             decided_at=str(decision.get("recorded_at") or ""),
         ))
+    for item_id, decision in decisions.items():
+        # Lane AN3, round 2, decision ③ (human decision 2026-10-18): a number of
+        # a safety statement the two engines read differently takes the reading
+        # a person chose -- the source's characters as that engine read them,
+        # copied in its place; the statement is not otherwise edited.
+        item = by_id.get(item_id)
+        value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+        if (item is None or item["kind"] != "ocr_value" or item.get("in_safety_statement") is not True
+                or decision.get("action") != "fix" or not isinstance(value.get("text"), str)):
+            continue
+        for linked in item.get("linked_items") or ():
+            record = records.get(linked)
+            if record is None or record.kind != _OCR_SAFETY_KIND:
+                continue
+            words = _record_words(record) or ""
+            copied = _with_value_copied(words, str(item.get("token") or ""), value["text"])
+            if copied == words:
+                continue
+            edits.append((record.path, lambda current, copied=copied: replace(
+                current, source_text=copied)))
+            shown = by_id.get(linked) or {}
+            changes.append(ReviewedChange(
+                item_id=linked, kind=record.kind, kind_ko=str(shown.get("kind_ko") or record.kind),
+                step_id=shown.get("step_id"), step_label=shown.get("step_label"),
+                action="fix", original=words, reviewed=copied, origin=REVIEW_ORIGIN_SOURCE,
+                decided_by=str(decision.get("reviewer_name") or name),
+                decided_at=str(decision.get("recorded_at") or ""),
+            ))
     for item in items:
         if item.get("covered_by") in confirmed_owners:
             origins.setdefault(str(item["item_id"]), REVIEW_ORIGIN_AI)
