@@ -491,6 +491,85 @@ class ExperimentReportStore:
             },
         }
 
+    def summary_rows(self) -> list[dict[str, Any]]:
+        """One content-free row per experiment record, for the pilot metrics (lane LOG).
+
+        Ids, codes, times and counts only: the steps passed, the records,
+        deviations and anomalies kept, the timer notices given, and whether
+        the report's prose was written. No wording, payload or step label.
+        Reads with a plain connection, so pass a copy of a live file: this
+        never creates a table or a missing file.
+        """
+
+        if not self.path.is_file():
+            return []
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        try:
+            reports = connection.execute(
+                """
+                SELECT report_id,session_id,protocol_id,development_only,status,
+                       started_at,ended_at
+                  FROM experiment_reports ORDER BY started_at,report_id
+                """
+            ).fetchall()
+            events = connection.execute(
+                """
+                SELECT report_id,event_type,COALESCE(category,'') AS category,
+                       COUNT(*) AS count
+                  FROM experiment_report_events
+                 GROUP BY report_id,event_type,COALESCE(category,'')
+                """
+            ).fetchall()
+            try:
+                prose = {
+                    str(row["report_id"])
+                    for row in connection.execute(
+                        "SELECT report_id FROM experiment_report_prose WHERE reply IS NOT NULL"
+                    )
+                }
+            except sqlite3.OperationalError:  # a record from before lane RP's prose
+                prose = set()
+        finally:
+            connection.close()
+        counts: dict[str, dict[tuple[str, str], int]] = {}
+        for row in events:
+            counts.setdefault(str(row["report_id"]), {})[
+                (str(row["event_type"]), str(row["category"]))
+            ] = int(row["count"])
+
+        def total(report_id: str, *types: str, category: str | None = None,
+                  except_category: str | None = None) -> int:
+            return sum(
+                count for (kind, kind_category), count in counts.get(report_id, {}).items()
+                if kind in types
+                and (category is None or kind_category == category)
+                and (except_category is None or kind_category != except_category)
+            )
+
+        return [
+            {
+                "report_id": str(report["report_id"]),
+                "session_id": str(report["session_id"]),
+                "protocol_id": str(report["protocol_id"]),
+                "development_only": bool(report["development_only"]),
+                "status": str(report["status"]),
+                "started_at": str(report["started_at"]),
+                "ended_at": report["ended_at"],
+                "steps": total(report["report_id"], "step_completed", "step_advanced"),
+                "reverts": total(report["report_id"], "step_reverted"),
+                "records": total(report["report_id"], "observation", except_category="deviation"),
+                "deviations": total(report["report_id"], "observation", category="deviation"),
+                "anomalies": total(report["report_id"], "anomaly"),
+                "system_anomalies": total(report["report_id"], "system_anomaly"),
+                "corrections": total(report["report_id"], "record_corrected", "record_retracted"),
+                "timer_last_minute_alerts": total(report["report_id"], "timer_last_minute_notice"),
+                "timer_end_alerts": total(report["report_id"], "timer_end_notice"),
+                "report_prose": str(report["report_id"]) in prose,
+            }
+            for report in reports
+        ]
+
     def export_json(self, report_id: str) -> bytes:
         return (
             json.dumps(

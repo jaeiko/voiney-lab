@@ -157,6 +157,8 @@ from voiney_lab.pilot_metrics import (
     PILOT_METRICS_FILENAME,
     PilotContext,
     PilotMetricsStore,
+    analysis_outcome,
+    review_card_count,
 )
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
@@ -698,7 +700,8 @@ def _pilot_account(principal:Principal|None=None)->str:
     return actor.principal_id if actor is not None else DEVELOPMENT_ACCOUNT_ID
 
 
-_PILOT_TURN_EVENTS=frozenset({"turn.route_decision","router.stopped","turn.done"})
+_PILOT_TURN_EVENTS=frozenset({
+    "turn.processing","turn.route_decision","router.stopped","turn.done"})
 
 
 def _pilot_turn_event(session,turn_id:int,kind:str,fields:dict[str,Any])->None:
@@ -708,6 +711,17 @@ def _pilot_turn_event(session,turn_id:int,kind:str,fields:dict[str,Any])->None:
     """
 
     if kind not in _PILOT_TURN_EVENTS:
+        return
+    if kind=="turn.processing":
+        # Decision 2: the first words after a timer notice, timed from it.
+        try:
+            waited=PILOT_METRICS.alert_answered(
+                session.session_id,session.turn_committed_at.get(turn_id,session.clock()))
+        except Exception as exc:
+            log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
+            return
+        if waited is not None:
+            _pilot_mark("alert_answered",session=session,value_ms=waited)
         return
     try:
         PILOT_METRICS.turn_event(
@@ -723,7 +737,9 @@ def _pilot_turn_event(session,turn_id:int,kind:str,fields:dict[str,Any])->None:
         log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
 
 
-def _pilot_mark(session,kind:str,**values:Any)->None:
+def _pilot_mark(
+    kind:str,*,session=None,report_id:str|None=None,**values:Any,
+)->None:
     """Lane LOG: one experiment-level mark (a button, an alert...); never raises."""
 
     try:
@@ -731,8 +747,37 @@ def _pilot_mark(session,kind:str,**values:Any)->None:
         if store is None:
             return
         store.record_mark(
-            account_id=_pilot_account(),kind=kind,session_id=session.session_id,
-            report_id=session.experiment_report_id,**values,
+            account_id=_pilot_account(),kind=kind,
+            session_id=session.session_id if session is not None else None,
+            report_id=(
+                session.experiment_report_id if session is not None else report_id),
+            **values,
+        )
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
+
+
+def _pilot_protocol_event(
+    protocol_id:str,kind:str,*,principal:Principal|None=None,
+    public:dict[str,object]|None=None,failed:bool=False,started:float|None=None,
+)->None:
+    """Lane LOG, decision 2: an analysis that ended, or a review registered; never raises."""
+
+    try:
+        store=_pilot_store()
+        if store is None:
+            return
+        outcome=None
+        if kind=="analysis":
+            outcome="failed" if failed else analysis_outcome(public or {})
+        revision=(public or {}).get("revision_id")
+        store.record_protocol_event(
+            account_id=_pilot_account(principal),protocol_id=protocol_id,kind=kind,
+            revision_id=revision if isinstance(revision,str) else None,outcome=outcome,
+            duration_ms=(
+                round((time.monotonic()-started)*1000) if started is not None else None),
+            card_count=(
+                review_card_count(public or {}) if kind=="analysis" else None),
         )
     except Exception as exc:
         log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
@@ -3497,8 +3542,15 @@ async def trigger_protocol_analysis(
 
     try:
         if not background:
-            completed=await asyncio.to_thread(
-                run_explicit_analysis,request_first=True)
+            started=time.monotonic()
+            try:
+                completed=await asyncio.to_thread(
+                    run_explicit_analysis,request_first=True)
+            except Exception:
+                _pilot_protocol_event(
+                    protocol_id,"analysis",principal=metric_principal,failed=True,
+                    started=started)
+                raise
             _record_workspace_metric(
                 category="protocol",metric_name="analysis",
                 dimensions={
@@ -3507,6 +3559,9 @@ async def trigger_protocol_analysis(
                 },
                 principal=metric_principal,
             )
+            _pilot_protocol_event(
+                protocol_id,"analysis",principal=metric_principal,public=completed,
+                started=started)
             return completed
         deferred=_analysis_deferred_for_ocr(protocol_id)
         if deferred is not None:
@@ -3606,6 +3661,7 @@ async def _begin_background_analysis(
             store.close()
 
     async def background_worker()->None:
+        started=time.monotonic()
         try:
             completed=await asyncio.to_thread(run_analysis)
             _record_workspace_metric(
@@ -3616,6 +3672,9 @@ async def _begin_background_analysis(
                 },
                 principal=principal,
             )
+            _pilot_protocol_event(
+                protocol_id,"analysis",principal=principal,public=completed,
+                started=started)
         except Exception as exc:
             # The catalog persists bounded failure codes.  Provider responses,
             # prompts, and source text never enter logs or the lifecycle record.
@@ -3658,6 +3717,8 @@ async def _begin_background_analysis(
                 },
                 principal=principal,
             )
+            _pilot_protocol_event(
+                protocol_id,"analysis",principal=principal,failed=True,started=started)
 
     if _analysis_worker_running(protocol_id):
         catalog,store=_open_protocol_catalog()
@@ -3811,11 +3872,14 @@ def post_protocol_review_version(
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.register_review(protocol_id,body)
+            registered=catalog.register_review(protocol_id,body)
         finally:
             store.close()
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+    # Lane LOG, decision 2: the time from the analysis to its review.
+    _pilot_protocol_event(protocol_id,"review_registered")
+    return registered
 
 
 @app.get("/api/protocols/{protocol_id}/review-versions/{version}")
@@ -4396,6 +4460,8 @@ def export_experiment_report(report_id:str,format_name:str):
         raise HTTPException(
             status_code=404,detail="experiment report unavailable"
         ) from exc
+    # Lane LOG, decision 2: the report was made (Word, Markdown) or exported.
+    _pilot_mark("report_exported",report_id=report_id,code=format_name)
     return Response(
         content=content,media_type=media_type,
         headers={
@@ -6804,6 +6870,7 @@ def _open_experiment_report(
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
             "experiment_report",session.experiment_report_id,bind=True)
+        _pilot_mark("experiment_opened",session=session)
         experimenter=_experimenter_display_name()
         if experimenter:
             # Lane RP, decision 5: the report's 실험자 is the display name of
@@ -7846,6 +7913,11 @@ async def _show_timer_notice(
         notice.notice_id,notice.kind,notice.public_dict()["due_at"],
         round((current-notice.due_at)*1000),
     )
+    # Lane LOG, decision 2: the notice, and the next words timed from it.
+    _pilot_mark(
+        "timer_alert",session=session,
+        code="end" if notice.kind=="timer_ended" else "last_minute")
+    PILOT_METRICS.alert_shown(session.session_id,session.clock())
     return current,session.clock()
 
 
@@ -11350,6 +11422,7 @@ async def voice_socket(websocket:WebSocket):
                     ready_fields["experiment_recovered"]=(
                         recovery_session_id is not None)
                 await websocket.send_text(event("session.ready",**ready_fields))
+                _pilot_mark("voice_connected",session=session)
                 if experiment_state is not None:
                     await websocket.send_text(event(
                         "experiment.session.state",state=experiment_state))
@@ -11507,7 +11580,7 @@ async def voice_socket(websocket:WebSocket):
                     _record_screen_history(
                         session,screen_before,control="pause",changed=changed)
                     if changed:
-                        _pilot_mark(session,"button_change",code="pause")
+                        _pilot_mark("button_change",session=session,code="pause")
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -11550,7 +11623,7 @@ async def voice_socket(websocket:WebSocket):
                     _record_screen_history(
                         session,screen_before,control="resume",changed=changed)
                     if changed:
-                        _pilot_mark(session,"button_change",code="resume")
+                        _pilot_mark("button_change",session=session,code="resume")
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -11759,6 +11832,13 @@ async def voice_socket(websocket:WebSocket):
             try: await notice_task
             except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
         _unsubscribe_translations(session)
+        curated_at_close=session.curated_protocol_session
+        if (
+            session.experiment_report_id is not None and curated_at_close is not None
+            and not curated_at_close.experiment_ended
+        ):
+            # Lane LOG, decision 2: the connection closed mid-experiment.
+            _pilot_mark("connection_lost",session=session)
         session.stop()
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
