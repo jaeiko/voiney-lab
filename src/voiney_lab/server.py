@@ -10686,6 +10686,129 @@ async def cancel_cascade_generation(
         # other turn's, so no card is left "재생 중".
         await websocket.send_text(event("turn.state",**progress))
 
+# --- Lane NET (2026-10-18): a lost connection, seen at once and put back -----
+
+from voiney_lab.curated_protocol import (  # noqa: E402 - the rule the screen timer follows
+    TIMER_LAST_MINUTE_FROM_SECONDS,
+    TIMER_LAST_MINUTE_SECONDS,
+)
+
+#: Decision 1: the server tells the page it is there this often while a
+#: session runs. The page counts the connection lost when nothing at all
+#: has come for three heartbeats' time, and sends its own "client.ping" as
+#: often.
+HEARTBEAT_SECONDS=1.0
+#: The sleep the heartbeat waits on, taken at import: a test that replaces
+#: asyncio.sleep to hurry another loop must not make this one spin.
+_heartbeat_sleep=asyncio.sleep
+
+
+@dataclass
+class _Heartbeat:
+    """The page's last "client.ping" as the server received it (decision 1)."""
+
+    ping_seq:int|None=None
+    ping_sent_at_ms:float|None=None
+    ping_received_ms:int|None=None
+
+
+def _client_ping(raw:str)->dict[str,Any]|None:
+    """A page's "client.ping", read before the control parser (decision 1).
+
+    The page sends one a second; it changes nothing. Its number and the
+    page's own clock come back in the next heartbeat, from which the page
+    measures how far its clock is from the server's (decision 3). None for
+    any other message; {} for a ping whose fields cannot be used, which is
+    dropped -- a heartbeat never ends a session.
+    """
+
+    if '"client.ping"' not in raw:
+        return None
+    try:
+        message=json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(message,dict) or message.get("type")!="client.ping":
+        return None
+    seq,sent=message.get("seq"),message.get("sent_at_ms")
+    if (
+        not isinstance(seq,int) or isinstance(seq,bool) or seq<0
+        or not isinstance(sent,(int,float)) or isinstance(sent,bool)
+        or not math.isfinite(sent)
+    ):
+        return {}
+    return {"seq":seq,"sent_at_ms":float(sent)}
+
+
+async def _send_heartbeats(
+    session:ListenerSession,sender:LockedSender,heartbeat:_Heartbeat,
+)->None:
+    """Tell the page the server is there, once a second while a session runs.
+
+    Lane NET, decision 1. From its own task, so a turn the connection's loop
+    is still reading (the words of an interruption being checked) never holds
+    it up. Each carries the server's clock, the page's last ping as received
+    (decision 3) and the server's rule for a timer's last-minute notice,
+    which the page's screen timer follows while the connection is lost.
+    Nothing changes here.
+    """
+
+    while True:
+        await _heartbeat_sleep(HEARTBEAT_SECONDS)
+        if not session.active:
+            continue
+        fields:dict[str,Any]={
+            "server_time_ms":round(_wall_clock()*1000),
+            "timer_last_minute_from_seconds":TIMER_LAST_MINUTE_FROM_SECONDS,
+            "timer_last_minute_seconds":TIMER_LAST_MINUTE_SECONDS,
+        }
+        if heartbeat.ping_seq is not None:
+            fields.update(
+                ping_seq=heartbeat.ping_seq,ping_sent_at_ms=heartbeat.ping_sent_at_ms,
+                ping_received_ms=heartbeat.ping_received_ms,
+            )
+        await sender.text("server.heartbeat",**fields)
+
+
+@dataclass
+class _HeardConnection:
+    """The connection an experiment last continued on, and when it was last heard."""
+
+    connection_id:str
+    heard_at:float
+
+
+#: Decision 5: for each durable experiment, the connection that started or
+#: continued it last in this server process and the moment anything was
+#: last received on it -- where a lost connection's gap begins. Kept in
+#: memory only (the record keeps the gap); at most this many.
+_HEARD_CONNECTIONS:dict[str,_HeardConnection]={}
+_HEARD_CONNECTIONS_MAX=256
+
+
+def _bind_heard_connection(session:ListenerSession)->None:
+    """This connection now speaks for its experiment (it started or continued it)."""
+
+    if session.experiment_state_version is None or not session.session_id:
+        return
+    if (
+        session.session_id not in _HEARD_CONNECTIONS
+        and len(_HEARD_CONNECTIONS)>=_HEARD_CONNECTIONS_MAX
+    ):
+        oldest=min(_HEARD_CONNECTIONS,key=lambda key:_HEARD_CONNECTIONS[key].heard_at)
+        _HEARD_CONNECTIONS.pop(oldest,None)
+    _HEARD_CONNECTIONS[session.session_id]=_HeardConnection(
+        session.voice_connection_id,_wall_clock())
+
+
+def _note_heard(session:ListenerSession)->None:
+    """Anything received on the connection its experiment continues on: heard now."""
+
+    entry=_HEARD_CONNECTIONS.get(session.session_id) if session.session_id else None
+    if entry is not None and entry.connection_id==session.voice_connection_id:
+        entry.heard_at=_wall_clock()
+
+
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
     await websocket.accept()
@@ -10756,6 +10879,9 @@ async def voice_socket(websocket:WebSocket):
     sender=LockedSender(websocket); pipeline="cascade"
     # Lane VT, decisions 1-2: the step timer is told when it runs out.
     timer_notices=asyncio.create_task(_watch_timer_notices(session,sender))
+    # Lane NET, decision 1: the server's heartbeat, and the page's last ping.
+    heartbeat=_Heartbeat()
+    heartbeats=asyncio.create_task(_send_heartbeats(session,sender,heartbeat))
     await websocket.send_text(event("ready",sample_rate=16000,
                                     pipelines=["cascade"],frame_ms=20,
                                     frame_bytes=FRAME_BYTES,vad_mode=config.mode,
@@ -10773,6 +10899,7 @@ async def voice_socket(websocket:WebSocket):
         while True:
             message=await websocket.receive()
             if message.get("type")=="websocket.disconnect": break
+            _note_heard(session)
             if message.get("bytes") is not None:
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
                 listener_events=[]
@@ -10963,6 +11090,11 @@ async def voice_socket(websocket:WebSocket):
                         _suggest_noise_floor(sender,session)))
                 continue
             if message.get("text") is None:continue
+            if (ping:=_client_ping(message["text"])) is not None:
+                if ping:
+                    heartbeat.ping_seq,heartbeat.ping_sent_at_ms=ping["seq"],ping["sent_at_ms"]
+                    heartbeat.ping_received_ms=round(_wall_clock()*1000)
+                continue
             control=parse_control(message["text"])
             if control["type"]=="session.start":
                 if session.active:raise ProtocolError("session already active")
@@ -11190,6 +11322,7 @@ async def voice_socket(websocket:WebSocket):
                             if recovery_version is not None else None
                         ),
                     )
+                    _bind_heard_connection(session)
                     restored_before=None
                     if (
                         recovery_session_id is not None
@@ -11673,6 +11806,9 @@ async def voice_socket(websocket:WebSocket):
             except (asyncio.CancelledError, WebSocketDisconnect): pass
         timer_notices.cancel()
         try: await timer_notices
+        except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
+        heartbeats.cancel()
+        try: await heartbeats
         except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
         for notice_task in list(session.timer_notice_tasks|session.timer_notice_playback_tasks):
             notice_task.cancel()
