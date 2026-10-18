@@ -432,4 +432,7 @@ function isLost(){return net.lost!==null;}
 function reconnecting(){return Boolean(net.lost?.attempt);}
 
 globalThis.voineyConnection=Object.freeze({watch,lost,consume,micText,isLost,reconnecting,serverNow});
+// The page opens its socket in its own script, before this file loads, and a
+// session runs on that socket: it is watched from here.
+if(socket)watch(socket);
 })();
