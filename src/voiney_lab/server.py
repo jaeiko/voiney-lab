@@ -10947,33 +10947,59 @@ def _reconnect_timer_notices(
 def _connection_lost_at(
     previous:_HeardConnection|None,reconnect:Mapping[str,Any],session:ListenerSession,
     *,now:float,
-)->float|None:
-    """When the lost connection was last heard: the server's own note of it, else the page's.
+)->tuple[float|None,str]:
+    """When the lost connection was last heard, and whose note that is.
 
-    The server's note holds while this process ran through the loss; after
-    a restart only the page's moment (on the server's clock as it measured
-    it, within the last day) is left.
+    "server": the server's own note of the connection, which holds while
+    this process ran through the loss. "screen": after a restart only the
+    page's moment is left (on the server's clock as the page measured it,
+    within the last day). "unknown": neither.
     """
 
     if previous is not None and previous.connection_id!=session.voice_connection_id:
-        return min(previous.heard_at,now)
+        return min(previous.heard_at,now),"server"
     page=reconnect.get("lost_at_ms")
     if page is not None and now-86400<=page/1000<=now:
-        return page/1000
-    return None
+        return page/1000,"screen"
+    return None,"unknown"
+
+
+@dataclass(frozen=True)
+class _Reconnection:
+    """What a reconnection found: the timer's moments to give, and the gap (decisions 4-5)."""
+
+    notices:tuple[TimerNotice,...]
+    lost_at:float|None
+    lost_at_source:str
+    restored_at:float
+    #: Step timers whose end fell inside the gap; None when the gap's start is unknown.
+    timers_ended:int|None
+
+
+def _timers_ended_between(
+    timer:Mapping[str,Any]|None,lost_at:float|None,restored_at:float,
+)->int|None:
+    if lost_at is None:
+        return None
+    try:
+        deadline=datetime.fromisoformat(str((timer or {})["deadline_at"])).timestamp()
+    except (KeyError,TypeError,ValueError):
+        return 0
+    return int(lost_at<deadline<=restored_at)
 
 
 def _restore_lost_connection(
     session:ListenerSession,curated:CuratedProtocolSession,
     experiment_state:Mapping[str,Any],previous:_HeardConnection|None,
     reconnect:Mapping[str,Any],
-)->list[TimerNotice]:
+)->_Reconnection:
     """A reconnected run as the lost connection left it (decision 4).
 
     A paused or blocked experiment is paused again from the moment it was
     paused (only the experimenter lifts it); the step timer still running
     is put back. Its notices that fell due while the connection was lost
-    are returned, to be given once the page has the session.
+    come back, to be given once the page has the session, with the gap the
+    record keeps (decision 5).
     """
 
     if experiment_state.get("status") in {"paused","blocked"}:
@@ -10983,11 +11009,63 @@ def _restore_lost_connection(
         except ValueError:
             moment=None
         curated.pause_workflow(now=moment)
-    if _restore_standing_timer(curated,experiment_state) is None:
-        return []
     now=_wall_clock()
-    return _reconnect_timer_notices(
-        curated,lost_at=_connection_lost_at(previous,reconnect,session,now=now),now=now)
+    lost_at,source=_connection_lost_at(previous,reconnect,session,now=now)
+    timer=_restore_standing_timer(curated,experiment_state)
+    notices=(
+        _reconnect_timer_notices(curated,lost_at=lost_at,now=now)
+        if timer is not None else [])
+    return _Reconnection(
+        tuple(notices),lost_at,source,now,_timers_ended_between(timer,lost_at,now))
+
+
+def _record_connection_restored(
+    session:ListenerSession,curated:CuratedProtocolSession,reconnection:_Reconnection,
+    *,reason:str|None,status:str,
+)->None:
+    """Keep a lost connection's gap in the experiment record (decision 5).
+
+    One "connection_restored" event per reconnection, at the step the run
+    stands on, in moments and codes only: when the lost connection was
+    last heard and whose note that is, when the run was continued, the gap
+    in seconds, how many step timers ended inside it, why the page counted
+    the connection lost and the experiment's status. Only for a run that
+    was under way; no record open, nothing is written.
+    """
+
+    def moment(value:float|None)->str|None:
+        return datetime.fromtimestamp(value,timezone.utc).isoformat() if value is not None else None
+
+    gap=(
+        round(reconnection.restored_at-reconnection.lost_at,1)
+        if reconnection.lost_at is not None else None)
+    log.info(
+        "connection.restored gap_seconds=%s timers_ended=%s lost_at_source=%s reason=%s",
+        gap,reconnection.timers_ended,reconnection.lost_at_source,reason)
+    store=session.experiment_report_store
+    if store is None or not curated.active:
+        return
+    try:
+        if session.experiment_report_id is None:
+            _open_experiment_report(session,curated)
+        step=curated.fixture.steps[curated.current_index]
+        store.append_event(
+            session.experiment_report_id,
+            event_key=f"connection-restored-{session.voice_connection_id}",
+            event_type="connection_restored",
+            step_id=step.step_id,step_label=step.source_label,
+            payload={
+                "lost_at":moment(reconnection.lost_at),
+                "lost_at_source":reconnection.lost_at_source,
+                "restored_at":moment(reconnection.restored_at),
+                "gap_seconds":gap,
+                "timers_ended":reconnection.timers_ended,
+                "reason":reason,
+                "status":status,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the run continues; the log says the gap was not kept
+        log.warning("connection gap not recorded error=%s",type(exc).__name__)
 
 
 @app.websocket("/ws")
@@ -11294,6 +11372,7 @@ async def voice_socket(websocket:WebSocket):
                     if control.get("experiment_session_id") is not None else None)
                 restored_connection=False
                 reconnect_notices:list[TimerNotice]=[]
+                reconnection:_Reconnection|None=None
                 configuration_stage="server_policy"
                 try:
                     trusted_config=trusted_config or server_config()
@@ -11549,9 +11628,10 @@ async def voice_socket(websocket:WebSocket):
                             # Lane NET, decision 4: the run as the lost
                             # connection left it -- a pause (or a block) is
                             # still one, and the step timer still runs.
-                            reconnect_notices=_restore_lost_connection(
+                            reconnection=_restore_lost_connection(
                                 session,session.curated_protocol_session,
                                 experiment_state,previous_connection,reconnect)
+                            reconnect_notices=list(reconnection.notices)
                     if reconnect is not None and experiment_state is not None:
                         restored_connection=True
                         if (
@@ -11652,6 +11732,13 @@ async def voice_socket(websocket:WebSocket):
                     session.track_timer_notice_task(asyncio.create_task(
                         _deliver_timer_notice(
                             session,sender,session.curated_protocol_session,notice)))
+                if reconnection is not None and session.curated_protocol_session is not None:
+                    # Decision 5: the gap, kept in the experiment record.
+                    await asyncio.to_thread(
+                        _record_connection_restored,session,
+                        session.curated_protocol_session,reconnection,
+                        reason=reconnect.get("reason") if reconnect else None,
+                        status=str(experiment_state["status"]) if experiment_state else "unknown")
             elif control["type"]=="session.set_language":
                 if not session.active:
                     await websocket.send_text(event("error",message="session is not active"))

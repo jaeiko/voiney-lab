@@ -41,7 +41,8 @@ def _events(socket, kind: str) -> list[dict]:
     return [item for item in socket.sent if item["type"] == kind]
 
 
-class ReconnectTests(VoiceNotesHarness, unittest.TestCase):
+class ReconnectHarness(VoiceNotesHarness):
+    """A run, its lost connection and the page's reconnection, on one clock (also lane NET decision 5)."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -96,6 +97,12 @@ class ReconnectTests(VoiceNotesHarness, unittest.TestCase):
     def restored(socket) -> dict:
         return _events(socket, "protocol.fixture.state")[0]["state"]
 
+    async def wait_for_notice(self, socket, listener, say) -> None:
+        await socket.wait_for(lambda item: item["type"] == "protocol.timer.notice")
+
+
+class ReconnectTests(ReconnectHarness, unittest.TestCase):
+
     def test_the_same_run_continues_with_its_timer_and_says_what_ended_meanwhile(self) -> None:
         session_id, durable = self.run_to_timer()
         self.clock.advance(12)
@@ -122,9 +129,6 @@ class ReconnectTests(VoiceNotesHarness, unittest.TestCase):
         last = continued["events"][-1]
         self.assertEqual(last["event_type"], "session_recovered")
         self.assertEqual(last["payload"], {"previous_status": "in_progress", "reconnected": True})
-
-    async def wait_for_notice(self, socket, listener, say) -> None:
-        await socket.wait_for(lambda item: item["type"] == "protocol.timer.notice")
 
     def test_a_last_minute_under_way_is_said_with_the_time_left(self) -> None:
         session_id, durable = self.run_to_timer()
