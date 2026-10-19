@@ -1471,3 +1471,32 @@ What changes for someone:
 
 Going back: code from before this version reads the same data and prints
 the old report.
+
+## Lane RP3 (2026-10-20), decision ②: what the run asks for the notebook
+
+No schema change and no migration. Three event types the notebook already
+read (decision ①) are now written, and one setting is added.
+
+- `purpose_recorded` (목적·시료 기록): the words said after the start's
+  question "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고
+  하세요.", with `payload.samples` (name, condition, control) read from the
+  words deterministically. `result_recorded` (결과·다음 할 일 기록): the words
+  said after the end's question "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해
+  주세요.", with `payload.result` and `payload.next_change` split at "다음에(는)".
+  An observation said after "관찰한 것 있으면 말씀해 주세요." (asked once when a
+  step whose source names what to observe is completed without a
+  description) is an ordinary `observation` event at the completed step,
+  category `observed`. "목적 고쳐: …" / "결과 고쳐: …" append a
+  `record_corrected` event beside the saying it amends (lane N's shape).
+- Every `observation` and `anomaly` event whose words name a sample ("3번
+  샘플", "S2", "대조군") carries it as `payload.sample`.
+- `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION` (default true) turns the
+  observation question off. The start and end questions have no switch;
+  "넘어가" skips each.
+- None of the questions changes the workflow's state; a command said in
+  their place runs as it does now. The session checkpoint tuple has one more
+  trailing element (the open question and what was said), read as absent
+  by older checkpoints.
+
+Going back: code from before this version reads the same records; the new
+events are unknown to it and ignored by its report.

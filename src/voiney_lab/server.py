@@ -38,6 +38,7 @@ from voiney_lab.cascade_filler import (
 from voiney_lab.curated_protocol import (
     LANE_WV_PICTURE_KINDS,
     NO_FIGURE_WORDS,
+    RESULT_QUESTION_KO,
     STT_CONTROL_KEYTERMS,
     control_words,
     ClaimAdmissionStatus,
@@ -96,6 +97,7 @@ from voiney_lab.experiment_reports import (
     REVIEW_DEFERRED,
     record_amendments,
     report_review_items,
+    sample_in_text,
     ReportNarrative,
     ReportPdfError,
     ReportWriterBrain,
@@ -7767,7 +7769,39 @@ def _record_experiment_report_plan(
     timer_payload=getattr(plan,"timer_payload",None)
     if isinstance(timer_payload,dict) and timer_payload:
         payload["timer"]=timer_payload
-    if plan.action is CuratedProtocolAction.START and plan.state_changed:
+    # Lane RP3, decision ②: what the turn said for the notebook, as its own
+    # event; a correction of it is appended beside what it amends (lane N).
+    notebook=getattr(plan,"notebook_record",None) or {}
+    if notebook.get("kind")=="purpose":
+        event_type="purpose_recorded"
+        payload["samples"]=[dict(item) for item in notebook.get("samples") or () if isinstance(item,dict)]
+    elif notebook.get("kind")=="result":
+        event_type="result_recorded"
+        payload["result"]=str(notebook.get("result") or "")
+        payload["next_change"]=str(notebook.get("next_change") or "")
+    elif notebook.get("kind")=="observation":
+        event_type="observation"
+        if notebook.get("step_label"):
+            step_id=notebook.get("step_id") or step_id
+            step_label=str(notebook.get("step_label"))
+    elif notebook.get("kind")=="fix":
+        wanted="purpose_recorded" if notebook.get("target")=="purpose" else "result_recorded"
+        amended=next(
+            (item for item in reversed(report.get("events") or ()) if item.get("event_type")==wanted),
+            None,
+        )
+        if amended is None:
+            raise LookupError("nothing of that kind was said for the notebook")
+        event_type="record_corrected"
+        step_id=amended.get("step_id")
+        step_label=amended.get("step_label")
+        payload["record_fix"]={
+            "target_event_key":amended.get("event_key"),
+            "text_before":amended.get("user_wording"),
+            "text_after":notebook.get("text"),
+            "source":"voice",
+        }
+    elif plan.action is CuratedProtocolAction.START and plan.state_changed:
         event_type="session_started"
     elif plan.action is CuratedProtocolAction.NEXT and plan.state_changed:
         event_type=(
@@ -7875,7 +7909,10 @@ def _record_experiment_report_plan(
     )
     wording=plan.anomaly_text or plan.observation_outcome
     category=plan.anomaly_category or plan.observation_predicate
-    if event_type in {"record_corrected","record_retracted"}:
+    if notebook:
+        wording=str(notebook.get("text") or "")
+        category="observed" if notebook.get("kind")=="observation" else None
+    elif event_type in {"record_corrected","record_retracted"}:
         fix=plan.record_fix
         wording=fix.get("after") if event_type=="record_corrected" else fix.get("before")
         category=amended.get("category")
@@ -7898,6 +7935,11 @@ def _record_experiment_report_plan(
             # (said, number, unit, the source's value), for the record after
             # the run as the run card showed them.
             payload["deviations"]=deviations
+    if event_type in {"observation","anomaly"} and wording:
+        # Lane RP3, decision ② b: a note that names a sample carries it.
+        named=sample_in_text(wording)
+        if named:
+            payload["sample"]=named
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,
@@ -8185,6 +8227,9 @@ def _reportable(plan:Any)->bool:
 
     if (getattr(plan,"step_record",None) or {}).get("kind") in _RECORDED_STEP_RECORD_KINDS:
         return True
+    if getattr(plan,"notebook_record",None):
+        # Lane RP3, decision ②: what was said for the notebook.
+        return True
     return plan.action in _EXPERIMENT_REPORT_ACTIONS and (
         plan.state_changed or plan.action not in _REPORTED_WHEN_CHANGED)
 
@@ -8278,8 +8323,17 @@ def _with_experiment_end_sentence(plan:Any,sentence:str,*,spoken:str|None=None)-
         speech_text=f"{speech} {spoken if spoken is not None else sentence}".strip())
 
 
+def _before_notebook_question(text:str,sentence:str)->str:
+    """``sentence`` before the notebook's end question when the reply ends
+    with it (lane RP3, decision ② d), else after the reply."""
+
+    if text.endswith(RESULT_QUESTION_KO):
+        return f"{text[:-len(RESULT_QUESTION_KO)].rstrip()} {sentence} {RESULT_QUESTION_KO}"
+    return f"{text} {sentence}"
+
+
 def _acknowledge_report_persistence(
-    plan:Any,language:str,*,review:tuple[str,str]|None=None,
+    plan:Any,language:str,*,review:tuple[str,str]|None=None,question:str|None=None,
 )->Any:
     end=_experiment_end_kind(plan)
     if end is not None:
@@ -8303,6 +8357,10 @@ def _acknowledge_report_persistence(
             sentence,spoken=f"{saved} {review[0]}",f"{saved} {review[1]}"
         else:
             sentence=f"{saved} {_report_download_sentence(language)}"
+            if question:
+                # Lane RP3, decision ② d: nothing to confirm, so the result
+                # and the next change are asked right after the end.
+                sentence=f"{sentence} {question}"
             spoken=None
         if end=="completed" and plan.reported_observation:
             observed=(
@@ -8352,6 +8410,18 @@ def _acknowledge_report_persistence(
             speech_text=f"{acknowledgment} {plan.speech_text}",
         )
     return plan
+
+
+def _notebook_end_question(curated:Any,plan:Any,language:str)->str|None:
+    """The notebook's end question when the turn ended the experiment and
+    no value is to be confirmed first (lane RP3, decision ② d)."""
+
+    if language!="ko" or _experiment_end_kind(plan) is None:
+        return None
+    if getattr(curated,"report_review_report_id",None):
+        return None
+    opener=getattr(curated,"open_notebook_question",None)
+    return opener("result") if callable(opener) else None
 
 
 def _take_review_intro(session:Any)->tuple[str,str]|None:
@@ -10531,8 +10601,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         download=_report_download_sentence(turn_language)
                         plan=replace(
                             plan,
-                            display_text=f"{plan.display_text} {download}",
-                            speech_text=f"{plan.speech_text} {download}",
+                            display_text=_before_notebook_question(plan.display_text,download),
+                            speech_text=_before_notebook_question(plan.speech_text,download),
                         )
             # Lane VT, decision 5: after a long silence, an answer that is
             # not a command is led by where the run stands.
@@ -10697,7 +10767,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         code="report_persistence_failed")
                 else:
                     plan=_acknowledge_report_persistence(
-                        plan,turn_language,review=_take_review_intro(session))
+                        plan,turn_language,review=_take_review_intro(session),
+                        question=_notebook_end_question(curated,plan,turn_language))
                     await report_state(report)
             workspace_observation_requested=bool(
                 plan.reported_observation or plan.reported_anomaly
@@ -10935,7 +11006,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 else:
                     report_prepared=True
                     plan=_acknowledge_report_persistence(
-                        plan,turn_language,review=_take_review_intro(session))
+                        plan,turn_language,review=_take_review_intro(session),
+                        question=_notebook_end_question(curated,plan,turn_language))
                     await report_state(report)
             # Durable workspace persistence is the mutation gate; report
             # persistence is the reporting-acknowledgement gate. Re-read the

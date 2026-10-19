@@ -226,6 +226,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_START_CHECK_ENABLED", SWITCHES, "true",
             "시작 전 핵심 값 확인 2문항 (실행할 분석의 시간·온도·속도·양 값을 원문 조각과 함께 객관식으로; "
             "서버가 정답과 선택지를 정함; 줄 ON 결정 ③)"),
+    Setting("VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION", SWITCHES, "true",
+            "종점이 있는 단계를 끝낼 때 '관찰한 것 있으면 말씀해 주세요'를 한 번 묻기 (줄 RP3 결정 ② c)"),
     # --- 경로·저장소 --------------------------------------------------------------
     Setting("VOINEY_LAB_SAFETY_CATALOG", PATHS, "(없음, 필수)",
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),

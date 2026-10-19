@@ -263,7 +263,9 @@ class ExperimentEndVoiceTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(
             socket.reply(3),
             "1단계에서 실험을 종료했습니다. 지금까지의 기록을 보고서로 저장했어요. "
-            "화면에서 Word나 마크다운 파일로 받을 수 있어요.",
+            "화면에서 Word나 마크다운 파일로 받을 수 있어요. "
+            # Lane RP3, decision ② d: nothing to confirm, so the end asks at once.
+            "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요.",
         )
         self.assertEqual(seen[3]["durable_status"], "stopped")
         report = ExperimentReportStore(self.report_db).get_report(seen["report_id"])
