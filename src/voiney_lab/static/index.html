@@ -753,6 +753,16 @@
     body[data-view="during"]:not([data-tab="experiment"]) .shell{max-width:92rem;padding:.75rem 1.5rem 4rem}
     body[data-view="during"]:not([data-tab="experiment"]) .tab-panel:not([hidden]){display:flex}
     #tab-settings .install-guide-body{position:static;width:auto;margin-top:var(--space-2);box-shadow:none}
+    /* Lane IA decision ②: the home's cards. */
+    #tab-home .voice-copy h1{max-width:none}
+    .home-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-3)}
+    .home-card{display:flex;flex-direction:column;justify-content:center;gap:var(--space-1);min-height:96px;margin:0;padding:var(--space-4) var(--space-6);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;text-align:left;text-decoration:none;cursor:pointer}
+    .home-card:hover{background:var(--bench)}
+    .home-card[data-card="resume"],.home-card[data-card="running"],.home-card[data-card="first"]{border:3px solid var(--ink)}
+    .home-card-title{font-size:1.25rem;line-height:1.75rem;font-weight:800}
+    .home-card-sub{color:var(--ink-muted);font-size:.9375rem;line-height:1.375rem;font-weight:600;overflow-wrap:anywhere}
+    .home-note{margin:0;color:var(--ink-muted);font-size:.9375rem;font-weight:600}
+    #tab-home .example-strip{margin:0}
     @media (min-width:900px){
      .tab-bar{top:0;bottom:0;right:auto;width:var(--side-menu-w);flex-direction:column;align-items:stretch;justify-content:flex-start;height:auto;padding:var(--space-6) 0;border-top:0;border-right:1px solid var(--line)}
      .tab-link{flex:0 0 auto;flex-direction:row;justify-content:flex-start;gap:var(--space-3);min-height:56px;padding:0 var(--space-6);font-size:1rem}
@@ -856,12 +866,14 @@
 
   <main id="researcher-workspace" class="shell">
     <!-- Lane IA decision ① (2026-10-19): five tabs by hash route -- 홈, 프로토콜, 실험, 기록, 설정 -- one panel each; the hash names the tab (#/home, #/protocols, #/protocols/<id>, #/upload, #/experiment, #/records, #/records/<id>, #/settings), so the back button works. Every part of the one page before it keeps its id and its functions and sits in its own tab (the report's table). The server still decides every state; a tab is only where things are drawn. -->
+    <!-- Lane IA decision ②: the home -- big cards from the server's lists (the experiment to continue, a new experiment, the protocols waiting for a review, an upload), or one card for a first user. -->
     <section id="tab-home" class="tab-panel" data-tab="home" aria-labelledby="page-title" tabindex="-1">
       <div class="voice-copy">
         <p class="eyebrow">분석한 프로토콜 · 음성으로 진행</p>
         <h1 id="page-title">프로토콜을 확인하고, 손을 쓰지 않고 진행하세요.</h1>
         <p class="lede">프로토콜과 원문의 안전 주의를 확인한 뒤, 단계 안내·관찰 기록·안전 확인을 말로 하세요.</p>
       </div>
+      <div id="home-cards" class="home-cards" aria-label="지금 할 수 있는 일"></div>
       <section class="example-strip" aria-label="음성 사용 예시">
         <div class="example"><b>프로토콜 시작</b>“프로토콜을 시작해 줘.”</div>
         <div class="example"><b>현재 단계</b>“현재 단계를 알려 줘.” · “다시 말해 줘.”</div>
@@ -2033,8 +2045,8 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
    const option=document.createElement("option"),stateInfo=sessionStateBadgeInfo(item.status);option.value=item.session_id;option.textContent=[serverProtocolTitle(item)||protocolCatalog.get(item.protocol_id)?.title||"실험",`${localDateTimeText(item.started_at)}${serverDayNumber(item,experiments,"session_id")||""}`,`${item.current_step_label||"—"}단계`,stateInfo?.label||"상태 확인"].filter(Boolean).join(" · ");option.title=`${item.protocol_id} · ${item.session_id}`;select.appendChild(option);
   }
   const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";const loaded=selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
-  // Lane IA decision ①: a session named by the hash is picked once the list holds it.
-  workspaceExperiments=experiments;applyRouteSelections();return loaded;
+  // Lane IA decision ②: the list is kept for the home's cards; a session named by the hash is picked once the list holds it.
+  workspaceExperiments=experiments;renderHome();applyRouteSelections();return loaded;
  }catch(error){
   if(seq!==experimentLoadSeq)return false;
   select.replaceChildren();const option=document.createElement("option");option.value="";option.textContent="실험 세션 로드 실패";select.appendChild(option);setText("experiment-capture-status",researcherErrorMessage(error?.message,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));return false;
@@ -2194,7 +2206,7 @@ function renderProtocolList(){
  }
  const runnable=entries.filter(entry=>entry.available_for_execution===true).length;
  setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 실행 가능 ${runnable}개`:"");
- renderProtocolQueue();syncProtocolList();renderWizard();
+ renderProtocolQueue();syncProtocolList();renderWizard();renderHome();
  if(focused)for(const host of [list,$("protocol-queue-list")])for(const item of host?.children||[])if(item.firstChild?.dataset?.protocolId===focused.id&&item.firstChild.className===focused.className){item.firstChild.focus?.();return entries.length;}
  return entries.length;
 }
@@ -5046,6 +5058,7 @@ function renderRoute(){
  for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=!(name===tab||(name==="records"&&tab==="experiment"&&during));}
  for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tab?"page":"false");
  renderRunReturnBand();
+ if(tab==="home")renderHome();
  renderWizard();
  if(key!==lastRouteKey){lastRouteKey=key;applyRouteSelections();if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
  return tab;
@@ -5071,6 +5084,49 @@ function renderRunReturnBand(){
  const shown=screenView()==="during"&&shownTab()!=="experiment";band.hidden=!shown;
  if(shown){const label=curatedProtocolState?.current_step_label;setText("run-return-text",nonemptyText(label)?`실험 중 · ${label}단계`:"실험 중");}
  return shown;
+}
+// Lane IA decision ② (2026-10-19): the home -- big cards, each one thing to do,
+// from the server's lists alone: the saved experiment to continue (the
+// workspace's list, a status that can be resumed), a new experiment, the
+// protocols whose analysis waits for a review (the catalog's review_pending),
+// an upload. A first user, with an empty catalog, sees one card. During the
+// run the first card is the way back to it.
+function homeCard(kind,title,sub,href,onPick){
+ const card=document.createElement(href?"a":"button");card.className="home-card";if(card.dataset)card.dataset.card=kind;
+ if(href)card.setAttribute?.("href",href);else card.type="button";
+ const head=document.createElement("b");head.className="home-card-title";head.textContent=title;card.appendChild(head);
+ if(nonemptyText(sub)){const line=document.createElement("span");line.className="home-card-sub";line.textContent=sub;card.appendChild(line);}
+ if(typeof onPick==="function")card.addEventListener("click",event=>{event?.preventDefault?.();onPick();});
+ return card;
+}
+function latestResumableExperiment(){
+ const when=item=>{const at=Date.parse(String(item?.started_at||""));return Number.isFinite(at)?at:-Infinity;};
+ return workspaceExperiments.filter(item=>item&&typeof item.session_id==="string"&&RESUMABLE_EXPERIMENT_STATUSES.has(item.status)).sort((a,b)=>when(b)-when(a))[0]||null;
+}
+function renderHome(){
+ const host=$("home-cards");if(!host)return 0;host.replaceChildren();
+ const view=screenView(),entries=[...protocolCatalog.values()];
+ if(view==="during"){const label=curatedProtocolState?.current_step_label,name=curatedProtocolState?.display_name;host.appendChild(homeCard("running","실험 중 · 돌아가기",[nonemptyText(name)?name:"",nonemptyText(label)?`${label}단계`:""].filter(Boolean).join(" · "),"#/experiment"));}
+ if(catalogState==="loading"&&!entries.length){host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오는 중…"));return host.children.length;}
+ if(catalogState==="ready"&&!entries.length){host.appendChild(homeCard("first","먼저 프로토콜을 올려 주세요","PDF · Word · 사진을 올리면 분석이 시작돼요","#/upload"));return host.children.length;}
+ if(view!=="during"){
+  const resume=sessionActive?null:latestResumableExperiment();
+  if(resume)host.appendChild(homeCard("resume","이어서 하기",[serverProtocolTitle(resume)||protocolCatalog.get(resume.protocol_id)?.title||"실험",`${nonemptyText(resume.current_step_label)?resume.current_step_label:"—"}단계`,sessionStateBadgeInfo(resume.status)?.label||""].filter(Boolean).join(" · "),null,()=>{void resumeExperimentFromHome(resume);}));
+  host.appendChild(homeCard("new-experiment","새 실험 시작","프로토콜을 고르고 안전 주의를 확인한 뒤 시작해요","#/experiment"));
+ }
+ const pending=entries.filter(entry=>Number.isInteger(entry?.review_pending?.needs_review_count)).length;
+ if(pending)host.appendChild(homeCard("review",`검토할 프로토콜 ${pending}개`,"분석이 사람의 확인을 기다려요","#/protocols"));
+ host.appendChild(homeCard("upload","새 프로토콜 올리기","PDF · Word · 사진","#/upload"));
+ if(catalogState==="failed")host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오지 못했어요 · 새로고침해 주세요"));
+ return host.children.length;
+}
+async function resumeExperimentFromHome(item){
+ if(!item||typeof item.session_id!=="string")return false;
+ if(typeof item.protocol_id==="string"&&protocolCatalog.has(item.protocol_id))pickProtocolFromList(item.protocol_id);
+ chooseExperimentSession(item.session_id,{force:true});
+ navigateTab("experiment");
+ if(wizard.active)wizardGo("start");
+ return true;
 }
 globalThis.addEventListener?.("hashchange",()=>{renderRoute();});
 globalThis.addEventListener?.("load",()=>{renderRoute();void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();void openStartWizard();},{once:true});
