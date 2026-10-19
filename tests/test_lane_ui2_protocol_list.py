@@ -53,7 +53,8 @@ class ProtocolListRowsTests(unittest.TestCase):
     def test_each_row_says_its_state_in_words_from_the_catalog(self) -> None:
         result = run_page_script(SETUP + r"""
 assert(rows().length===7,`rows: ${rows().length}`);
-const expect={"p-pass":["done:분석 통과"],"p-dev":["done:분석 통과","quiet:개발용 큐레이션 분석"],"p-going":["pending:분석 중"],"p-failed":["danger:분석 실패"],"p-old":["done:분석 통과","warning:분석기 개선 전 분석 · 다시 분석 권장"],"p-again":["done:분석 통과","danger:다시 분석 실패"],"p-ocr":["missing:OCR 필요"]};
+// Lane IA decision ③ (2026-10-19): the list's words are plain -- "바로 쓸 수 있음" for an analysis that passed.
+const expect={"p-pass":["done:바로 쓸 수 있음"],"p-dev":["done:바로 쓸 수 있음","quiet:개발용 큐레이션 분석"],"p-going":["pending:분석 중"],"p-failed":["danger:분석 실패"],"p-old":["done:바로 쓸 수 있음","warning:분석기 개선 전 분석 · 다시 분석 권장"],"p-again":["done:바로 쓸 수 있음","danger:다시 분석 실패"],"p-ocr":["missing:OCR 필요"]};
 for(const [id,want] of Object.entries(expect))assert(JSON.stringify(badges(id))===JSON.stringify(want),`${id}: ${badges(id)}`);
 assert(line("p-failed")==="분석 실패 · 이유: 분석 시간 초과(제한 시간 안에 끝나지 않음)",`failure reason: ${line("p-failed")}`);
 assert(line("p-again").startsWith("다시 분석 실패 · 이유: 분석 모델 응답 형식이 올바르지 않음"),`re-analysis reason: ${line("p-again")}`);
@@ -61,7 +62,7 @@ assert(line("p-pass")==="",`a passed row has a line: ${line("p-pass")}`);
 const text=visibleText(row("p-pass"));
 assert(text.includes("Protocol p-pass")&&text.includes("원문: p-pass.pdf")&&text.includes("12단계")&&text.includes("2026년 10월 5일 올림"),`row words: ${text}`);
 assert(visibleText(row("p-dev")).includes("올린 날짜 기록 없음")&&visibleText(row("p-going")).includes("—"),"a missing date or step count was guessed");
-assert(node("protocol-library-count").textContent==="프로토콜 7개 · 실행 가능 4개",node("protocol-library-count").textContent);
+assert(node("protocol-library-count").textContent==="프로토콜 7개 · 바로 쓸 수 있는 것 4개",node("protocol-library-count").textContent);
 for(const word of ["승인","리비전","검토 대기"])assert(!visibleText(node("protocol-list")).includes(word),`${word} on the list`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
@@ -163,17 +164,18 @@ class MarkupTests(unittest.TestCase):
 
     def test_the_list_the_upload_box_and_the_picked_box_sit_together(self) -> None:
         # Lane IA decision ① (2026-10-19): the list, the upload box and the picked box are the protocols tab;
-        # the check before the start follows them there, and the voice console, the context card and the
-        # microphone stand on the experiment tab.
-        library = self.block('<section id="protocol-library"', '<section id="protocol-start-summary"')
+        # the voice console, the context card and the microphone stand on the experiment tab. Decision ③:
+        # the list is one view; the picked protocol's box, its check before the start, the compare view and
+        # the review are the protocol's own screen (#/protocols/<id>) in the same tab.
+        library = self.block('<section id="protocol-library"', '<div id="protocol-detail-view"')
         main = library[library.index('class="library-main"'):library.index('class="library-side"')]
         side = library[library.index('class="library-side"'):]
-        for ident in ("protocol-list", "protocol-review-panel", "protocol-review-analysis-notice", "protocol-analysis-retry"):
-            self.assertIn(f'id="{ident}"', main, ident)
+        self.assertIn('id="protocol-list"', main)
         for ident in ("protocol-pdf", "protocol-upload-status", "protocol-duplicate-notice", "protocol-queue"):
             self.assertIn(f'id="{ident}"', side, ident)
-        protocols = self.block('<section id="tab-protocols"', '<section id="tab-experiment"')
-        self.assertIn('id="protocol-start-summary"', protocols)
+        detail = self.block('<div id="protocol-detail-view"', '<section id="tab-experiment"')
+        for ident in ("protocol-review-panel", "protocol-review-analysis-notice", "protocol-analysis-retry", "protocol-start-summary"):
+            self.assertIn(f'id="{ident}"', detail, ident)
         prestart = self.block('<div class="prestart-side">', '<section class="workflow-grid"')
         order = [prestart.index(marker) for marker in ('class="voice-console"', 'class="experiment-context-card"', 'id="mic-check"')]
         self.assertEqual(order, sorted(order))

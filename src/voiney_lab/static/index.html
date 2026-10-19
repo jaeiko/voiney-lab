@@ -758,6 +758,21 @@
     body[data-view="during"]:not([data-tab="experiment"]) .shell{max-width:92rem;padding:.75rem 1.5rem 4rem}
     body[data-view="during"]:not([data-tab="experiment"]) .tab-panel:not([hidden]){display:flex}
     #tab-settings .install-guide-body{position:static;width:auto;margin-top:var(--space-2);box-shadow:none}
+    /* Lane IA decision ③: the protocols tab's two views and a protocol's screen. */
+    .protocol-list-view[hidden],.protocol-detail-view[hidden]{display:none}
+    .protocol-list-view,.protocol-detail-view{display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
+    .protocol-detail-head{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .protocol-detail-back{align-self:flex-start;display:inline-flex;align-items:center;min-height:var(--target-desk);color:var(--ink-muted);font-weight:700;text-decoration:none}
+    .protocol-detail-title{margin:0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700;overflow-wrap:anywhere}
+    .protocol-detail-head .protocol-review-status:empty{display:none}
+    .protocol-detail-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+    .protocol-detail-actions button{min-height:var(--target-run);padding:0 var(--space-8);border:1px solid var(--ink);border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font:inherit;font-size:1.125rem;font-weight:800;cursor:pointer}
+    .protocol-detail-actions button[hidden]{display:none}
+    .protocol-detail-group{border:1px solid var(--line);background:var(--paper)}
+    .protocol-detail-group>summary{display:flex;align-items:center;min-height:var(--target-desk);padding:0 var(--space-4);color:var(--ink);font-weight:700;cursor:pointer}
+    .protocol-detail-group>:not(summary){margin:0 var(--space-4) var(--space-4)}
+    .protocol-detail-group .protocol-start-summary{padding:0;border:0}
+    .protocol-detail-group .protocol-review{margin:0 var(--space-4) var(--space-4);border:0}
     /* Lane IA decision ②: the home's cards. */
     #tab-home .voice-copy h1{max-width:none}
     .home-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-3)}
@@ -913,6 +928,8 @@
     </section>
     <!-- Lane IA decision ①: the protocols -- the list (lane UI2), the upload box and what is still processed, the picked protocol's box, the check before the start, 원문 대조 보기 and the review cards. #/upload opens the upload box here; stage ② makes it a flow of its own. -->
     <section id="tab-protocols" class="tab-panel" data-tab="protocols" aria-labelledby="protocol-library-title" tabindex="-1" hidden>
+      <!-- Lane IA decision ③ (2026-10-19): #/protocols is the list; #/protocols/<id> is that protocol's own screen below (the list view hides, the detail view shows). -->
+      <div id="protocol-list-view" class="protocol-list-view">
       <!-- Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1 -- every protocol with its state in words, the upload box beside it and what is still being processed under it, and the picked protocol's analysis line and buttons right by the list. -->
       <section id="protocol-library" class="protocol-library" aria-labelledby="protocol-library-title">
         <div class="library-head">
@@ -923,29 +940,6 @@
           <div class="library-main">
             <div class="protocol-list-head" aria-hidden="true"><span>이름</span><span>상태</span><span>단계</span><span>올린 날짜</span></div>
             <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
-            <!-- Lane UI2 decision 3 (2026-10-13): the picked protocol's box -- its analysis line and buttons, always open by the list; the long result moved to 원문 대조 보기 below. -->
-            <section id="protocol-review-panel" class="protocol-review" aria-labelledby="protocol-review-title" hidden>
-              <h3 id="protocol-review-title" class="protocol-review-title">고른 프로토콜의 분석</h3>
-              <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
-              <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
-              <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
-              <div class="protocol-review-actions">
-                <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
-                <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
-                <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
-              </div>
-              <!-- Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables (lane AN) -- attach an .xlsx, the tables attached with their sheets and cell counts, and one opened cell by cell as the server keeps it. Never analysed and never a step's source. -->
-              <section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">
-                <div class="reagent-tables-head">
-                  <h4 id="reagent-tables-title">시약 표</h4>
-                  <input id="reagent-table-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">
-                  <label id="reagent-table-pick" for="reagent-table-file" class="btn-file-select" role="button" tabindex="0">시약 표(.xlsx) 붙이기</label>
-                </div>
-                <small id="reagent-table-status" role="status"></small>
-                <ul id="reagent-table-list" class="reagent-table-list" aria-label="붙인 시약 표"></ul>
-                <div id="reagent-table-view" class="reagent-table-view" hidden></div>
-              </section>
-            </section>
           </div>
           <div class="library-side">
             <div class="setup-col-left">
@@ -970,84 +964,131 @@
           </div>
         </div>
       </section>
-      <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
-        <!-- Lane UI2 decision 2 (2026-10-13): one card -- the badges in place of the draft's approved-version one (the source PDF, the day it was uploaded, the analysis state; the server's "다시 분석 권장" line), the safety statements first, then the step timers, the notices and the lines to check, and the start button. -->
-        <div class="start-card-head">
-          <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
-          <span id="protocol-start-basis" class="ui-badge" data-kind="done" hidden></span>
-          <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
-          <span id="protocol-start-outdated" class="ui-badge" data-kind="warning" role="status" hidden></span>
-        </div>
-        <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
-        <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
-        <div id="protocol-start-body">
-          <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
-          <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
-          <!-- Lane UI3 decision 2 (2026-10-14): the server's line on the safety documents behind the run (review.safety_scope.notice, lane PL) -- "기관 안전 문서 없음 · 원문 안전 주의만" -- above the source's statements; nothing when it sends none. -->
-          <p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>
-          <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
-          <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
-          <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
-          <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
-          <p id="protocol-start-cleared" class="protocol-review-status start-check-line" hidden></p>
-          <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
-          <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
-          <div class="protocol-review-actions">
+      </div>
+      <!-- Lane IA decision ③: a protocol's own screen -- its state and [이 프로토콜로 실험 시작] above; below, folded: the analysis summary (lane UI2's check before the start, open so the safety statements are never behind a click), 원문 대조 보기, the reagent tables, the review cards and versions, and the analysis itself. -->
+      <div id="protocol-detail-view" class="protocol-detail-view" hidden>
+        <div class="protocol-detail-head">
+          <a id="protocol-detail-back" class="protocol-detail-back" href="#/protocols">← 프로토콜 목록</a>
+          <h2 id="protocol-detail-title" class="protocol-detail-title"></h2>
+          <div id="protocol-detail-badges" class="protocol-row-badges" aria-label="상태"></div>
+          <p id="protocol-detail-line" class="protocol-review-status" role="status" aria-live="polite"></p>
+          <div class="protocol-detail-actions">
             <button id="protocol-start" type="button" hidden>이 프로토콜로 실험 시작</button>
           </div>
         </div>
-      </section>
-      <!-- Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only -- the steps the analysis took from the source, the source's own lines it read them from, page by page, and what it took from each (amounts and conditions, timers, warnings, values the source does not give) with the page; under it the rest of the analysis result. Nothing here can be changed. -->
-      <details id="protocol-compare" class="protocol-compare" hidden>
-        <summary><span class="protocol-compare-name">원문 대조 보기</span><span id="protocol-compare-summary" class="protocol-compare-summary"></span></summary>
-        <p id="protocol-compare-path" class="protocol-compare-path"></p>
-        <div id="protocol-compare-strip" class="protocol-compare-strip"></div>
-        <div class="protocol-compare-grid">
-          <div class="compare-col compare-steps-col">
-            <h4 id="protocol-compare-steps-title">단계</h4>
-            <ol id="protocol-compare-steps" class="compare-steps" aria-labelledby="protocol-compare-steps-title"></ol>
+        <details id="protocol-detail-summary" class="protocol-detail-group" open>
+          <summary>분석 요약 · 시작 전 확인</summary>
+        <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
+          <!-- Lane UI2 decision 2 (2026-10-13): one card -- the badges in place of the draft's approved-version one (the source PDF, the day it was uploaded, the analysis state; the server's "다시 분석 권장" line), the safety statements first, then the step timers, the notices and the lines to check, and the start button. -->
+          <div class="start-card-head">
+            <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
+            <span id="protocol-start-basis" class="ui-badge" data-kind="done" hidden></span>
+            <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
+            <span id="protocol-start-outdated" class="ui-badge" data-kind="warning" role="status" hidden></span>
           </div>
-          <section class="compare-col" aria-labelledby="protocol-compare-source-title">
-            <h4 id="protocol-compare-source-title">원문</h4>
-            <div id="protocol-compare-source" class="compare-source"></div>
-          </section>
-          <section class="compare-col" aria-labelledby="protocol-compare-fields-title">
-            <h4 id="protocol-compare-fields-title">분석이 뽑은 단계 · 수치 · 출처</h4>
-            <div id="protocol-compare-fields" class="compare-fields"></div>
-          </section>
-        </div>
-        <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
-        <div id="protocol-review-content" class="protocol-review-content"></div>
-        <div id="protocol-blockers" class="protocol-review-content"></div>
-      </details>
-      <!-- Lane RV (2026-10-14): 검토 -- the reviewer's name and "검토 완료하고 등록" make the review version that runs; the versions are kept. No approval. Lane RV2 (2026-10-16): the items are asked one card at a time. -->
-      <details id="protocol-review-editor" class="review-editor" hidden>
-        <summary><span class="review-editor-name">검토</span><span id="review-editor-summary" class="review-editor-summary"></span></summary>
-        <p id="review-editor-status" class="review-editor-status" role="status" aria-live="polite"></p>
-        <div id="review-editor-strip" class="review-editor-strip"></div>
-        <!-- Lane RV2 stage ② (2026-10-16): one card at a time, chosen by buttons -- no list of items to edit. "2 / 5" above; the card the server built (question, the value as read in large type, the piece of the page, the values, the source lines to pick when a button needs them, the server's buttons); "← 이전" back. After the last card, the reviewer's name and "검토 완료하고 등록". The versions folded below. -->
-        <section id="review-cards" class="review-cards" aria-labelledby="review-cards-title" tabindex="-1">
-          <div class="review-cards-head">
-            <h4 id="review-cards-title">확인할 것</h4>
-            <span id="review-card-progress" class="review-card-progress" role="status" aria-live="polite"></span>
-          </div>
-          <div id="review-card" class="review-card"></div>
-          <div class="review-cards-nav">
-            <button id="review-card-prev" type="button">← 이전</button>
-            <button id="review-card-next" type="button" hidden>다음 →</button>
+          <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
+          <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
+          <div id="protocol-start-body">
+            <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
+            <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+            <!-- Lane UI3 decision 2 (2026-10-14): the server's line on the safety documents behind the run (review.safety_scope.notice, lane PL) -- "기관 안전 문서 없음 · 원문 안전 주의만" -- above the source's statements; nothing when it sends none. -->
+            <p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>
+            <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
+            <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
+            <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
+            <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
+            <p id="protocol-start-cleared" class="protocol-review-status start-check-line" hidden></p>
+            <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
+            <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
           </div>
         </section>
-        <div id="review-register-block" class="review-register">
-          <label for="reviewer-name">검토자 이름<input id="reviewer-name" class="review-input" type="text" maxlength="80" autocomplete="name"></label>
-          <button id="review-register" type="button" disabled>검토 완료하고 등록</button>
-          <p id="review-register-status" class="review-register-status" role="status" aria-live="polite"></p>
-        </div>
-        <details id="review-history-fold" class="review-history">
-          <summary id="review-history-title">검토본 기록</summary>
-          <ol id="review-history" class="review-history-list"></ol>
-          <div id="review-history-changes"></div>
+
         </details>
-      </details>
+        <!-- Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only -- the steps the analysis took from the source, the source's own lines it read them from, page by page, and what it took from each (amounts and conditions, timers, warnings, values the source does not give) with the page; under it the rest of the analysis result. Nothing here can be changed. -->
+        <details id="protocol-compare" class="protocol-compare" hidden>
+          <summary><span class="protocol-compare-name">원문 대조 보기</span><span id="protocol-compare-summary" class="protocol-compare-summary"></span></summary>
+          <p id="protocol-compare-path" class="protocol-compare-path"></p>
+          <div id="protocol-compare-strip" class="protocol-compare-strip"></div>
+          <div class="protocol-compare-grid">
+            <div class="compare-col compare-steps-col">
+              <h4 id="protocol-compare-steps-title">단계</h4>
+              <ol id="protocol-compare-steps" class="compare-steps" aria-labelledby="protocol-compare-steps-title"></ol>
+            </div>
+            <section class="compare-col" aria-labelledby="protocol-compare-source-title">
+              <h4 id="protocol-compare-source-title">원문</h4>
+              <div id="protocol-compare-source" class="compare-source"></div>
+            </section>
+            <section class="compare-col" aria-labelledby="protocol-compare-fields-title">
+              <h4 id="protocol-compare-fields-title">분석이 뽑은 단계 · 수치 · 출처</h4>
+              <div id="protocol-compare-fields" class="compare-fields"></div>
+            </section>
+          </div>
+          <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
+          <div id="protocol-review-content" class="protocol-review-content"></div>
+          <div id="protocol-blockers" class="protocol-review-content"></div>
+        </details>
+
+        <details id="protocol-detail-reagents" class="protocol-detail-group">
+          <summary>시약 표</summary>
+          <!-- Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables (lane AN) -- attach an .xlsx, the tables attached with their sheets and cell counts, and one opened cell by cell as the server keeps it. Never analysed and never a step's source. -->
+          <section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">
+            <div class="reagent-tables-head">
+              <h4 id="reagent-tables-title">시약 표</h4>
+              <input id="reagent-table-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">
+              <label id="reagent-table-pick" for="reagent-table-file" class="btn-file-select" role="button" tabindex="0">시약 표(.xlsx) 붙이기</label>
+            </div>
+            <small id="reagent-table-status" role="status"></small>
+            <ul id="reagent-table-list" class="reagent-table-list" aria-label="붙인 시약 표"></ul>
+            <div id="reagent-table-view" class="reagent-table-view" hidden></div>
+          </section>
+
+        </details>
+        <!-- Lane RV (2026-10-14): 검토 -- the reviewer's name and "검토 완료하고 등록" make the review version that runs; the versions are kept. No approval. Lane RV2 (2026-10-16): the items are asked one card at a time. -->
+        <details id="protocol-review-editor" class="review-editor" hidden>
+          <summary><span class="review-editor-name">검토</span><span id="review-editor-summary" class="review-editor-summary"></span></summary>
+          <p id="review-editor-status" class="review-editor-status" role="status" aria-live="polite"></p>
+          <div id="review-editor-strip" class="review-editor-strip"></div>
+          <!-- Lane RV2 stage ② (2026-10-16): one card at a time, chosen by buttons -- no list of items to edit. "2 / 5" above; the card the server built (question, the value as read in large type, the piece of the page, the values, the source lines to pick when a button needs them, the server's buttons); "← 이전" back. After the last card, the reviewer's name and "검토 완료하고 등록". The versions folded below. -->
+          <section id="review-cards" class="review-cards" aria-labelledby="review-cards-title" tabindex="-1">
+            <div class="review-cards-head">
+              <h4 id="review-cards-title">확인할 것</h4>
+              <span id="review-card-progress" class="review-card-progress" role="status" aria-live="polite"></span>
+            </div>
+            <div id="review-card" class="review-card"></div>
+            <div class="review-cards-nav">
+              <button id="review-card-prev" type="button">← 이전</button>
+              <button id="review-card-next" type="button" hidden>다음 →</button>
+            </div>
+          </section>
+          <div id="review-register-block" class="review-register">
+            <label for="reviewer-name">검토자 이름<input id="reviewer-name" class="review-input" type="text" maxlength="80" autocomplete="name"></label>
+            <button id="review-register" type="button" disabled>검토 완료하고 등록</button>
+            <p id="review-register-status" class="review-register-status" role="status" aria-live="polite"></p>
+          </div>
+          <details id="review-history-fold" class="review-history">
+            <summary id="review-history-title">검토본 기록</summary>
+            <ol id="review-history" class="review-history-list"></ol>
+            <div id="review-history-changes"></div>
+          </details>
+        </details>
+
+        <details id="protocol-detail-analysis" class="protocol-detail-group">
+          <summary>분석 상태 · 다시 분석</summary>
+          <!-- Lane UI2 decision 3 (2026-10-13): the picked protocol's box -- its analysis line and buttons, always open by the list; the long result moved to 원문 대조 보기 below. -->
+          <section id="protocol-review-panel" class="protocol-review" aria-labelledby="protocol-review-title" hidden>
+            <h3 id="protocol-review-title" class="protocol-review-title">고른 프로토콜의 분석</h3>
+            <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
+            <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
+            <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
+            <div class="protocol-review-actions">
+              <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
+              <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
+              <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
+            </div>
+          </section>
+
+        </details>
+      </div>
     </section>
     <!-- Lane IA decision ①: the experiment -- lane ON's wizard before the run, lane UI0's run view during it (the voice console, the step card, the timer, the pictures, the conversation sheet), lane UI2's record review after it. -->
     <section id="tab-experiment" class="tab-panel" data-tab="experiment" aria-label="실험" tabindex="-1" hidden>
@@ -2234,17 +2275,17 @@ function protocolAnalysisRun(entry){return entry?.analysis_run&&typeof entry.ana
 function protocolListBadges(entry){
  const badges=[],run=protocolAnalysisRun(entry),runGoing=PROTOCOL_RUNNING_STATES.has(run?.state);
  if(entry?.available_for_execution===true){
-  badges.push({text:"분석 통과",kind:"done"});
+  badges.push({text:"바로 쓸 수 있음",kind:"done"});
   if(entry.development_only===true)badges.push({text:"개발용 큐레이션 분석",kind:"quiet"});
   if(run?.reanalysis===true&&runGoing)badges.push({text:"다시 분석 중",kind:"pending"});
   else if(run?.reanalysis===true&&nonemptyText(run.failure_code))badges.push({text:"다시 분석 실패",kind:"danger"});
  }else if(PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||runGoing)badges.push({text:"분석 중",kind:"pending"});
  else if(PROTOCOL_FAILED_ANALYSIS.has(entry?.analysis_status))badges.push({text:"분석 실패",kind:"danger"});
- else{const status=catalogStatusWord(entry);badges.push({text:status.label.split(" · ")[0],kind:status.kind==="failed"?"danger":"missing"});}
+ else if(!Number.isInteger(entry?.review_pending?.needs_review_count)){const status=catalogStatusWord(entry);badges.push({text:status.label.split(" · ")[0],kind:status.kind==="failed"?"danger":"missing"});}
  if(nonemptyText(entry?.analysis_outdated_ko))badges.push({text:entry.analysis_outdated_ko,kind:"warning"});
  // Lane RV: the review version that runs, and an analysis waiting for a person.
  if(nonemptyText(entry?.current_review_version?.version_ko))badges.push({text:entry.current_review_version.version_ko,kind:"done"});
- if(Number.isInteger(entry?.review_pending?.needs_review_count))badges.push({text:`검토 대기 · 확인 필요 ${entry.review_pending.needs_review_count}`,kind:"warning"});
+ if(Number.isInteger(entry?.review_pending?.needs_review_count))badges.push({text:`확인할 것 ${entry.review_pending.needs_review_count}개`,kind:"warning"});
  return badges;
 }
 function protocolRowLine(entry){
@@ -2271,8 +2312,8 @@ function renderProtocolList(){
   item.appendChild(row);list.appendChild(item);protocolRowLines.set(entry.protocol_id,[line]);
  }
  const runnable=entries.filter(entry=>entry.available_for_execution===true).length;
- setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 실행 가능 ${runnable}개`:"");
- renderProtocolQueue();syncProtocolList();renderWizard();renderHome();
+ setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 바로 쓸 수 있는 것 ${runnable}개`:"");
+ renderProtocolQueue();syncProtocolList();renderWizard();renderHome();renderProtocolDetailHead();
  if(focused)for(const host of [list,$("protocol-queue-list")])for(const item of host?.children||[])if(item.firstChild?.dataset?.protocolId===focused.id&&item.firstChild.className===focused.className){item.firstChild.focus?.();return entries.length;}
  return entries.length;
 }
@@ -2291,7 +2332,7 @@ function renderProtocolQueue(){
 }
 // The watched run's line changes every second; only its text is rewritten,
 // so a row in focus keeps the focus.
-function updateProtocolRowLines(protocolId){const entry=protocolCatalog.get(protocolId);if(!entry)return false;for(const line of protocolRowLines.get(protocolId)||[])line.textContent=protocolRowLine(entry)||line.dataset?.fallback||"";return true;}
+function updateProtocolRowLines(protocolId){const entry=protocolCatalog.get(protocolId);if(!entry)return false;for(const line of protocolRowLines.get(protocolId)||[])line.textContent=protocolRowLine(entry)||line.dataset?.fallback||"";if(protocolDetailId()===protocolId)setText("protocol-detail-line",protocolRowLine(entry));return true;}
 function syncProtocolList(){
  const select=$("protocol-id"),picked=select?.value||"",locked=Boolean(select?.disabled);
  for(const host of [$("protocol-list"),$("protocol-queue-list")])for(const item of host?.children||[]){const row=item.firstChild;if(!row?.dataset?.protocolId)continue;if(row.className==="protocol-row")row.setAttribute?.("aria-current",String(row.dataset.protocolId===picked));setDisabled(row,locked);}
@@ -3963,6 +4004,7 @@ function renderCompareFields(steps){
 async function loadProtocolReview(protocolId=currentProtocolReviewId,options={}){
  if(typeof protocolId!=="string"||!protocolId||typeof fetch!=="function")return null;
  currentProtocolReviewId=protocolId;const panel=$("protocol-review-panel"),status=$("protocol-review-status"),start=$("protocol-start");if(panel){panel.hidden=false;panel.open=options.open!==false;}if(start)start.hidden=true;if(status)status.textContent="원문 근거와 구조 분석 결과를 불러오는 중…";
+ if(screenRoute.tab==="protocols")syncProtocolRoute(protocolId);
  // The start button acts on currentProtocolReviewId, so an answer that
  // arrives after the person picked another protocol must not be rendered.
  try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);showReviewEditor(protocolId,payload);
@@ -5202,6 +5244,7 @@ function renderRoute(){
  for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during));}
  for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tab?"page":"false");
  renderRunReturnBand();
+ if(tab==="protocols")renderProtocolViews();
  if(tab==="home")renderHome();
  if(tab==="settings")renderSettingsExtras();
  renderWizard();
@@ -5216,7 +5259,22 @@ function applyRouteSelections(){
  return false;
 }
 function applyProtocolRoute(protocolId){if(!protocolCatalog.has(protocolId))return false;if($("protocol-id")?.value===protocolId&&currentProtocolReviewId===protocolId)return true;return pickProtocolFromList(protocolId);}
-function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenRoute.id===protocolId)return false;navigateTab("protocols",protocolId,{replace:true});return true;}
+// Lane IA decision ③: a row tapped on the list pushes the protocol's route (the back button returns to the list); from one protocol's screen to another's, the entry is replaced.
+function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenRoute.id===protocolId)return false;navigateTab("protocols",protocolId,{replace:nonemptyText(screenRoute.id)});return true;}
+function protocolDetailId(){return screenRoute.tab==="protocols"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
+function renderProtocolViews(){
+ const id=protocolDetailId(),list=$("protocol-list-view"),detail=$("protocol-detail-view");
+ if(list)list.hidden=Boolean(id);if(detail)detail.hidden=!id;
+ renderProtocolDetailHead(id);
+ return id;
+}
+function renderProtocolDetailHead(id=protocolDetailId()){
+ const entry=id?protocolCatalog.get(id):null;
+ setText("protocol-detail-title",entry?.title||(id?"프로토콜을 불러오는 중…":""));
+ const badges=$("protocol-detail-badges");if(badges){badges.replaceChildren();for(const badge of entry?protocolListBadges(entry):[])badges.appendChild(uiBadge(badge.text,badge.kind));}
+ setText("protocol-detail-line",entry?protocolRowLine(entry):"");
+ return Boolean(entry);
+}
 function chooseExperimentSession(sessionId,{force=false}={}){
  const id=typeof sessionId==="string"?sessionId:"",select=$("experiment-session-select");
  if(id&&select&&![...(select.options||[])].some(option=>option.value===id))return false;

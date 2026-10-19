@@ -39,8 +39,9 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,10));
 class MarkupTests(unittest.TestCase):
 
     def test_the_box_sits_in_the_picked_protocol_panel(self) -> None:
+        # Lane IA decision ③ (2026-10-19): the tables are their own folded group on the protocol's screen.
         html = INDEX.read_text(encoding="utf-8")
-        panel = html[html.index('id="protocol-review-panel"'):html.index("</section>", html.index('id="protocol-review-panel"'))]
+        panel = html[html.index('id="protocol-detail-reagents"'):html.index("</details>", html.index('id="protocol-detail-reagents"'))]
         self.assertIn('<section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">', panel)
         self.assertIn(
             f'<input id="reagent-table-file" type="file" accept=".xlsx,{XLSX}" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">',
