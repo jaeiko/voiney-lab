@@ -22,14 +22,22 @@ PORT="${PORT:-8080}"
 PILOT_DATA_DIR="$ROOT/data/runtime/pilot"
 
 CHECK_ONLY=false
+# Human decision of 2026-10-19 (lane FX4, decision 4): the pilot signs in.
+# Accounts (VOINEY_LAB_AUTH_MODE=accounts) unless a person chooses the
+# development identity here, on the command line.
+PILOT_AUTH_MODE="accounts"
 while [[ "$#" -ne 0 ]]; do
   case "$1" in
     --check-only)
       CHECK_ONLY=true
       shift
       ;;
+    --dev-identity)
+      PILOT_AUTH_MODE="dev"
+      shift
+      ;;
     *)
-      echo "usage: $0 [--check-only]"
+      echo "usage: $0 [--check-only] [--dev-identity]"
       exit 2
       ;;
   esac
@@ -149,6 +157,35 @@ else
   fi
 fi
 
+# --- Sign-in: decided here, never by a .env ----------------------------------
+# The shell's or the .env's VOINEY_LAB_AUTH_MODE does not choose the door: it
+# is the launcher's (accounts), or dev by --dev-identity. What the server will
+# read for the admin token -- the shell's value, else the .env's (server.py
+# loads the .env without overriding the shell) -- is looked at, never printed.
+read -r SET_AUTH_MODE ADMIN_TOKEN_STATE < <(python -B - "$ROOT/.env" <<'PY' 2>/dev/null || echo "- empty"
+import os
+import sys
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+written = dotenv_values(Path(sys.argv[1])) if Path(sys.argv[1]).is_file() else {}
+
+
+def value(name: str) -> str:
+    return (os.environ[name] if name in os.environ else written.get(name) or "").strip()
+
+
+print(value("VOINEY_LAB_AUTH_MODE").casefold() or "-",
+      "set" if value("VOINEY_LAB_ADMIN_TOKEN") else "empty")
+PY
+)
+if [[ "$SET_AUTH_MODE" != "-" && "$SET_AUTH_MODE" != "$PILOT_AUTH_MODE" ]]; then
+  echo "[WARN] VOINEY_LAB_AUTH_MODE was set to $SET_AUTH_MODE in the environment or .env."
+  echo "[WARN] The pilot ignores it and uses $PILOT_AUTH_MODE (--dev-identity chooses dev)."
+fi
+export VOINEY_LAB_AUTH_MODE="$PILOT_AUTH_MODE"
+
 feature_state() {
   case "${1:-}" in
     1|true|True|TRUE|yes|Yes|on|On) echo "enabled" ;;
@@ -190,6 +227,29 @@ report_feature "protocol_catalog:" "$VOINEY_LAB_PROTOCOL_ENABLED"
 report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
+
+echo
+echo "--- Sign-in (fixed by this launcher) ---"
+echo "AUTH_MODE      = $VOINEY_LAB_AUTH_MODE"
+echo "ADMIN_TOKEN    = $ADMIN_TOKEN_STATE"
+if [[ "$VOINEY_LAB_AUTH_MODE" == "accounts" ]]; then
+  echo "Every participant signs in with an account; invite one with"
+  echo "  python scripts/pilot_invite.py   (docs/PILOT_GUIDE.md, section 7)."
+else
+  echo "[WARN] --dev-identity: no sign-in. Everyone who reaches this server is the one"
+  echo "[WARN] development identity, and the record cannot tell participants apart."
+fi
+if [[ "$(feature_state "$VOINEY_LAB_WORKSPACE_ENABLED")" != "enabled" ]]; then
+  echo "[WARN] The workspace is off (VOINEY_LAB_WORKSPACE_ENABLED). Accounts live beside it:"
+  echo "[WARN] with accounts on, the server refuses every request until it is on."
+fi
+if [[ "$ADMIN_TOKEN_STATE" != "set" && "$VOINEY_LAB_AUTH_MODE" == "accounts" ]]; then
+  echo "[WARN] VOINEY_LAB_ADMIN_TOKEN is empty. The admin metrics screen opens only for an"
+  echo "[WARN] admin account; set a long random value to open it with the token too."
+elif [[ "$ADMIN_TOKEN_STATE" != "set" ]]; then
+  echo "[WARN] VOINEY_LAB_ADMIN_TOKEN is empty. The admin metrics screen is closed; set a"
+  echo "[WARN] long random value to open it with the token."
+fi
 
 # --- Word sources need LibreOffice: warn, never refuse -------------------------
 # A Word (.docx) source is turned into a PDF by LibreOffice (docs/SOURCE_FORMATS.md).
