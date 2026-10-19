@@ -277,13 +277,13 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 
 ## 10. 빌드
 
-### 10.1 Android 디버그 APK — 이 서버에서 만들었다 (2026-10-18)
+### 10.1 Android 디버그 APK — 이 서버에서 만들었다 (2026-10-18, 줄 NET 을 합친 뒤 2026-10-19 에 다시)
 
 | 항목 | 값 |
 |---|---|
-| 결과 | `BUILD SUCCESSFUL in 5m 37s`(잠금을 얻은 뒤의 Gradle 시간), 214 tasks |
+| 결과 | 처음 `BUILD SUCCESSFUL in 5m 37s`(잠금을 얻은 뒤의 Gradle 시간, 214 tasks). 저장소 안 스크립트로 다시 만들면 1–2분(Gradle 캐시) |
 | 파일 | `mobile/android/app/build/outputs/apk/debug/app-debug.apk`(추적 안 함). 같은 파일을 `~/app-build/out/voineylab-app0-debug.apk` 에 복사 |
-| 크기 | 4,371,519 바이트(4.2 MiB), sha256 `de3082354dc4830e3ff89e9637135211dd8a81fd1c4958609d65613a5ccfe0f6` |
+| 크기 | 4,525,666 바이트(4.3 MiB), sha256 `7214662fd43ff2a94daf853d1c6e21cc4ddf80cd77c8ca6dc8f3cdba2e0727e2`(줄 NET 의 `connection.js`, 서버 규칙을 따르는 다리, 6분 시험 타이머가 든 것. 처음 빌드는 4,371,519 바이트) |
 | 패키지 | `com.voiney.lab`, versionCode 1, compile/targetSdk 36 |
 | 권한(APK 안, `aapt2 dump badging`) | INTERNET, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS, RECEIVE_BOOT_COMPLETED, WAKE_LOCK, POST_NOTIFICATIONS, SCHEDULE_EXACT_ALARM, ACCESS_NETWORK_STATE (+ AndroidX 내부 권한 하나) |
 | 첫 화면 | `device-check.html`(묶기 모드, `appStartPath`) |
