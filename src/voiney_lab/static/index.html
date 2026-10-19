@@ -630,7 +630,12 @@
     .choice-card-said:empty{display:none}
     .choice-card-said{color:var(--danger)}
     .choice-card-done{margin:0;padding:var(--space-4);border:1px dashed var(--line-strong);font-size:1rem;line-height:1.5rem}
+    /* Lane IA decision ⑧ (lane AN3 ④): the engine's name under a value's button. */
+    .choice-card-choice-wrap{display:flex;flex:1 1 11rem;flex-direction:column;align-items:stretch;gap:2px}
+    .choice-card-choice-wrap button{flex:1 1 auto}
+    .choice-card-engine{text-align:center;color:var(--ink-muted);font-size:.8125rem;font-weight:700}
     @media (max-width:600px){.choice-card-choices button{flex-basis:100%}}
+    @media (max-width:600px){.choice-card-choice-wrap{flex-basis:100%}}
     .ui-badge[data-kind="origin-source"]{border-color:var(--ink);color:var(--ink)}
     .ui-badge[data-kind="origin-ai"]{border:var(--stroke-state) dashed var(--pending);background:var(--paper);color:var(--pending)}
     .ui-badge[data-kind="origin-reviewer"]{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
@@ -4027,12 +4032,24 @@ function reviewCardNow(){const cards=reviewCards();return Number.isInteger(revie
 //   options.writing                 {choiceId,valueId} whose words are being written
 //   options.write(choice,fields)    the written words were sent
 //   options.busy, options.note      buttons off; one line under the card
-function choiceStepWords(step){
+// Lane IA decision ⑧ (lane AN3's findings ① and ②, 2026-10-19): a step's
+// number once -- not before a text that already starts with it -- and a
+// number the source does not print (label_printed false, or an empty label
+// with a shown one) in brackets, so it is not taken for a printed one.
+function choiceStepLabel(step){
  const label=nonemptyText(step?.label_shown)?step.label_shown:nonemptyText(step?.label)?step.label:nonemptyText(step?.source_label)?step.source_label:"";
+ const printed=step?.label_printed===true||(step?.label_printed===undefined&&nonemptyText(step?.label));
+ return{label,printed};
+}
+function choiceStepWords(step){
+ const {label,printed}=choiceStepLabel(step);
  const text=String(step?.text??step?.instruction_source_text??"");
  const page=Number.isInteger(step?.page)?` · 원문 p.${step.page}${Number.isInteger(step?.lines?.first_line)?` ${step.lines.first_line}${step.lines.last_line!==step.lines.first_line?`–${step.lines.last_line}`:""}줄`:""}`:"";
- return `${label?`${label}. `:""}${text}${page}`;
+ const starts=Boolean(label)&&new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}[.)](\\s|$)`).test(text);
+ const head=!label?"":printed?(starts?"":`${label}. `):`[${label}] `;
+ return `${head}${text}${page}`;
 }
+function choiceStepsUnprinted(steps){return (Array.isArray(steps)?steps:[]).some(step=>step&&typeof step==="object"&&choiceStepLabel(step).label&&!choiceStepLabel(step).printed);}
 function choiceFigures(pictures){
  const strip=compareEl("div","choice-card-images");
  for(const picture of pictures.slice(0,6)){
@@ -4068,6 +4085,8 @@ function choiceButtons(card,choices,options,value){
   if(button.dataset){button.dataset.choiceId=String(choice.choice_id||"");button.dataset.primary=String(choice.primary===true);}
   button.disabled=options.busy===true;
   button.addEventListener("click",()=>{options.choose?.(choice,{value});});
+  // Lane IA decision ⑧ (lane AN3's finding ④): the engine that read a value stands with its button.
+  if(nonemptyText(choice.engine)){const engine=CHOICE_ENGINE_NAMES[choice.engine]||String(choice.engine);button.setAttribute?.("aria-label",`${choice.label_ko} · ${engine} 읽기`);const wrap=compareEl("span","choice-card-choice-wrap");wrap.appendChild(button);wrap.appendChild(compareEl("small","choice-card-engine",engine));row.appendChild(wrap);continue;}
   row.appendChild(button);
  }
  return row;
@@ -4097,6 +4116,7 @@ function renderChoiceCard(host,card,options={}){
  }
  const steps=Array.isArray(card.steps)?card.steps.filter(step=>step&&typeof step==="object"):[];
  if(steps.length){const list=compareEl("ol","choice-card-steps");for(const step of steps)list.appendChild(compareEl("li","",choiceStepWords(step)));box.appendChild(list);}
+ if(choiceStepsUnprinted(steps)||readings.some(choiceStepsUnprinted))box.appendChild(compareEl("p","choice-card-note","[ ] 번호는 원문에 없는 번호예요 · 분석이 매긴 순서"));
  const values=Array.isArray(card.values)?card.values.filter(value=>value&&typeof value==="object"):[];
  // The card's own pictures: those the card names, or -- when it lists no
  // values of its own -- the value boxes of its source.
@@ -4121,6 +4141,9 @@ function renderChoiceCard(host,card,options={}){
    list.appendChild(row);
   }
   box.appendChild(list);
+  // Lane IA decision ⑧ (lane AN3's finding ③): a card of a page's values opens the whole page.
+  const pageNumber=Number.isInteger(card.page)?card.page:card.source?.page,pageHref=typeof options.pageLink==="function"?options.pageLink(card,pageNumber):null;
+  if(nonemptyText(pageHref)){const link=compareEl("a","compare-page-link",`원본 쪽 보기${Number.isInteger(pageNumber)?` (p.${pageNumber})`:""}`);link.href=pageHref;link.target="_blank";link.rel="noopener";box.appendChild(link);}
  }
  if(typeof options.slot==="function"){const slot=compareEl("div","choice-card-slot");options.slot(slot,card);box.appendChild(slot);}
  const writing=options.writing&&!options.writing.valueId?(Array.isArray(card.choices)?card.choices:[]).find(choice=>choice?.choice_id===options.writing.choiceId):null;
@@ -4196,6 +4219,7 @@ function reviewCardPicture(card,ref,caption){
  return {src:`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}/value-boxes/${ref}/image`,
   alt:`원본 그림 조각${nonemptyText(String(caption??""))?` · ${caption}`:""}`,caption:`원문 p.${page} 그림에서 읽은 자리`};
 }
+function reviewCardPageLink(card,page){return Number.isInteger(page)&&reviewProtocolId?`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}/image`:null;}
 function reviewCardNeedsLines(card){return (Array.isArray(card?.choices)?card.choices:[]).some(choice=>String(choice?.needs||"").includes("source_lines"));}
 function renderReviewCards(note=""){
  const host=$("review-card"),section=$("review-cards"),cards=reviewCards();
@@ -4215,7 +4239,7 @@ function renderReviewCards(note=""){
  const count=renderChoiceCard(host,card,{
   busy:reviewBusy,note,
   writing:reviewCardWriting?.cardId===card.card_id?reviewCardWriting:null,
-  picture:reviewCardPicture,
+  picture:reviewCardPicture,pageLink:reviewCardPageLink,
   choose:(choice,{value}={})=>{void chooseReviewCard(card,choice,{value});},
   write:(choice,fields={})=>{if(!choice){reviewCardWriting=null;renderReviewCards();return;}void chooseReviewCard(card,choice,{...fields,written:true});},
   memo:(target,memo)=>{void chooseReviewCard(target,{choice_id:"memo",request:{item_id:target.item_id,action:"memo"},needs:"memo"},{memo});},
