@@ -24,6 +24,7 @@ from tests.test_lane_rv_review_pending import _CatalogCase, _RawModel
 from voiney_lab.experiment_protocol_analysis import (
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
+    REQUOTE_SYSTEM_PROMPT,
 )
 from voiney_lab.protocol_catalog import (
     REVIEW_MAX_ITEMS,
@@ -53,9 +54,17 @@ class _Client:
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
         self.levels: list[str | None] = []
+        self.reasks = 0
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
     def create(self, **request):
+        if request["messages"][0]["content"] == REQUOTE_SYSTEM_PROMPT:
+            # Lane AN4, decision 1: the refused items are asked about once
+            # more; this provider finds nothing for them, and ``levels`` and
+            # the answers stay the analysis calls'.
+            self.reasks += 1
+            message = SimpleNamespace(content=json.dumps({"answers": []}))
+            return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
         self.levels.append(request.get("reasoning_effort"))
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
@@ -204,7 +213,8 @@ class LongDocumentTests(_CatalogCase):
         # its limit is 12 plus its 3 pieces, so 13 items wait for review.
         self.assertEqual(entry.review_pending["needs_review_count"], 13)
         self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
-        self.assertEqual(model.analyze.call_count, 3)
+        # Three pieces and, lane AN4 decision 1, the re-ask of piece 1's items.
+        self.assertEqual(model.analyze.call_count, 4)
 
 
 class SettingsAndLevelsTests(unittest.TestCase):

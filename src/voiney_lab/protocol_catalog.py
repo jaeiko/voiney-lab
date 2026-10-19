@@ -64,6 +64,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ReviewFlag,
     analysis_piece_concurrency,
     analysis_pieces,
+    analysis_requote_enabled,
     analyze_protocol_extraction,
     analyze_protocol_piece,
     blocked_pages_ko,
@@ -72,6 +73,7 @@ from voiney_lab.experiment_protocol_analysis import (
     join_piece_analyses,
     prepare_protocol_analysis_request,
     replace_at_paths,
+    requote_unverified_items,
     review_item_id,
     safety_block_provider,
     verify_step_timers,
@@ -180,6 +182,10 @@ REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
 #: ``review_reanalysis_max_calls()`` model calls -- this event records why,
 #: at what level and what came of it. Still too many: the guidance alone.
 _AUTO_REANALYSIS_EVENT = "protocol_analysis_auto_reanalysis"
+#: Lane AN4, decision 1 (human decision 2026-10-19): the items the evidence
+#: check refused were asked about once more; this event records how many,
+#: what came of each kind of answer, and each call (no source text).
+_REQUOTE_EVENT = "protocol_analysis_evidence_requote"
 TOO_MANY_REVIEW_ITEMS_CODE = "protocol_analysis_too_many_review_items"
 REVIEW_MAX_ITEMS_SETTING = "VOINEY_LAB_REVIEW_MAX_ITEMS"
 REVIEW_MAX_ITEMS = 12
@@ -3564,8 +3570,13 @@ class ProtocolCatalog:
         items than ``review_max_items()`` is analysed once more instead --
         except a document read in pieces (lane AN3, round 2, decision ④),
         which may ask about ``review_max_items()`` plus one item per piece and
-        otherwise ends with the guidance."""
+        otherwise ends with the guidance.
 
+        Lane AN4, decision 1: before any of that, with ``model``, the items
+        the evidence check refused are asked about once more
+        (``_requoted``)."""
+
+        draft = self._requoted(revision, draft, analysis_id, model=model, pieces=pieces)
         draft = self._with_ocr_value_flags(revision, draft)
         if pieces:
             # Lane AN3, round 2, decision ④ (human decision 2026-10-18): a long
@@ -3586,6 +3597,54 @@ class ProtocolCatalog:
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
+
+    def _requoted(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        model: ProtocolAnalysisModel | None,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> ProtocolAnalysisDraft:
+        """The draft after its refused items were asked about once more.
+
+        Lane AN4, decision 1 (human decision 2026-10-19). Once per analysis --
+        a long document once per piece, ``analysis_piece_concurrency()`` at a
+        time -- the items the evidence check refused (원문에 없음, 근거를 못
+        찾음, a quote that does not open with its step number) go in one small
+        request with their pages' text only. What comes back passes the same
+        checks as any answer or the item stays a card as it was
+        (``requote_unverified_items``); a kept item is recorded beside the
+        server's other settlements as "근거를 다시 찾아 확인". Off with
+        ``VOINEY_LAB_ANALYSIS_REQUOTE=false``. The automatic re-analysis of
+        decision c, should it follow, is not asked about again.
+        """
+
+        if model is None or not draft.review_flags or not analysis_requote_enabled():
+            return draft
+        result = requote_unverified_items(
+            draft, model,
+            groups=[tuple(piece.page_numbers) for piece in pieces] or None,
+            one_reading=not pieces, concurrency=analysis_piece_concurrency())
+        if not result.questions:
+            return draft
+        summary = result.summary()
+        self.store.append_event(
+            f"analysis-requote-{analysis_id}",
+            revision.experiment_id,
+            revision.revision_number,
+            _REQUOTE_EVENT,
+            {"status": "completed", "analysis_id": analysis_id, **summary},
+        )
+        logging.getLogger(__name__).info(
+            "protocol.analysis.evidence_requote protocol_id=%s questions=%d items=%d "
+            "items_requoted=%d calls=%d failed_calls=%d",
+            revision.experiment_id, summary["questions"], summary["items"],
+            summary["items_requoted"], len(result.calls),
+            sum(1 for call in result.calls if call.get("status") != "answered"),
+        )
+        return result.draft
 
     def _fewer_items(
         self,

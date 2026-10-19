@@ -123,6 +123,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY", MODELS, "8",
             "긴 문서를 조각으로 나눠 분석할 때 한 번에 분석하는 조각 수 (1–16). 조각 분석 중 "
             "공급자가 429 를 돌려주면 그 문서의 남은 조각은 절반으로 줄여 시작 (줄 AN2 결정 3)"),
+    Setting("VOINEY_LAB_ANALYSIS_REQUOTE", MODELS, "true",
+            "첫 분석 뒤 근거 검사에 실패한 항목(원문에 없음·근거를 못 찾음)만 그 쪽 글과 함께 한 번 더 "
+            "물어 원문 그대로의 구간을 받음 (분석마다 1회, 긴 문서는 조각마다). 받은 구간도 같은 근거 "
+            "검사를 거치고 값이 다르면 카드로 남김. false 면 끔 (줄 AN4 결정 1)"),
     Setting("VOINEY_LAB_GEMINI_SAFETY", MODELS, "relaxed",
             "분석·번역·보고서 Gemini 요청의 안전 필터: relaxed(서비스가 받는 가장 느슨한 값, 기본) / "
             "default(보내지 않음, 서비스 기본) / strict(가장 엄격 — 올리는 길). 음성 턴 역할은 해당 없음 (줄 GM 결정 1)"),

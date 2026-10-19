@@ -267,14 +267,17 @@ class LibreOfficeOnTheServerTests(unittest.TestCase):
         self.assertIn("<family>sans-serif</family><prefer><family>NanumGothic</family>", conf)
         self.assertIn("<family>바탕</family><prefer><family>NanumMyeongjo</family>", conf)
 
-    def test_an_english_document_is_printed_as_libreoffice_prints_it(self) -> None:
+    def test_an_english_document_is_printed_without_the_korean_fonts(self) -> None:
+        # Lane AN4, decision 3 changed this from "printed as LibreOffice prints
+        # it" (no fontconfig): the Office fonts are pointed at the nearest
+        # installed ones (tests/test_lane_an4_word_fonts.py); never at Nanum.
         office = FakeOffice()
         source = self.root / "e.docx"
         source.write_bytes(docx_bytes("1. Add 5 mL buffer."))
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FONTCONFIG_FILE", None)
             docx_to_pdf(source, self.root / "e.pdf", converter="/usr/bin/soffice", run=office)
-        self.assertEqual(office.environments[0]["FONTCONFIG_FILE"], None)
+        self.assertNotIn("Nanum", office.environments[0]["fonts.conf"])
 
     def test_list_numbers_are_followed_by_a_space_in_the_copy_libreoffice_reads(self) -> None:
         numbering = (

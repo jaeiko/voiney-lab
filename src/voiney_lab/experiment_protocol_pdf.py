@@ -928,6 +928,49 @@ def _office_fontconfig(base: str) -> str:
     )
 
 
+#: The Office fonts a Word document names most that this server lacks, and the
+#: installed fonts closest to them (lane AN4, decision 3, 2026-10-19). Asked for
+#: a font it does not have, LibreOffice takes fontconfig's default, DejaVu, which
+#: is far wider than Calibri: narrow table cells then break a word inside it --
+#: zenodo_17293605's page header, printed on every page, read "31.07.202" / "5",
+#: its running lines were no longer told from the page body, and its steps
+#: running past a page end were refused -- and pages break elsewhere than in
+#: Word. Carlito and Caladea have Calibri's and Cambria's widths and are taken
+#: first when installed (apt fonts-crosextra-carlito fonts-crosextra-caladea);
+#: otherwise the Liberation fonts (installed beside LibreOffice here) are the
+#: nearer of what there is. Measured on the 15 corpus .docx: the broken header date gone, three
+#: documents one page shorter, words broken inside a cell 117 -> 111 (the rest
+#: are cells too narrow for the word in any font). A Korean document keeps
+#: lane AN's Nanum rules: a Latin font beside a Hangul fallback loses spaces.
+_OFFICE_LATIN_FONTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("Calibri", "Calibri Light", "Aptos", "Aptos Display", "Aptos Narrow", "Segoe UI", "Tahoma"),
+     ("Carlito", "Liberation Sans")),
+    (("Cambria",), ("Caladea", "Liberation Serif")),
+    (("Consolas",), ("Liberation Mono",)),
+)
+
+
+def _office_latin_fontconfig(base: str) -> str:
+    """The fontconfig a document without Hangul is printed with: the system's
+    own set, and each Office font LibreOffice cannot find pointed at the
+    nearest one installed (``_OFFICE_LATIN_FONTS``)."""
+
+    def prefer(targets: tuple[str, ...]) -> str:
+        return "".join(f"<family>{target}</family>" for target in targets)
+
+    return (
+        '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n'
+        f'<fontconfig>\n  <include ignore_missing="yes">{base}</include>\n'
+        + "".join(
+            f'  <alias binding="strong"><family>{family}</family>'
+            f"<prefer>{prefer(targets)}</prefer></alias>\n"
+            for families, targets in _OFFICE_LATIN_FONTS
+            for family in families
+        )
+        + "</fontconfig>\n"
+    )
+
+
 def _docx_holds_hangul(archive) -> bool:
     """Whether the document's body, headers, footers or notes hold Hangul."""
 
@@ -1018,13 +1061,15 @@ def docx_to_pdf(
         copy = work / "source.docx"
         _with_list_numbers_followed_by_space(source, copy)
         environment = dict(os.environ)
-        if korean:
-            fonts = work / "fonts.conf"
-            fonts.write_text(
-                _office_fontconfig(environment.get("FONTCONFIG_FILE") or "/etc/fonts/fonts.conf"),
-                encoding="utf-8",
-            )
-            environment["FONTCONFIG_FILE"] = str(fonts)
+        # A Korean document keeps lane AN's Nanum rules; any other one gets the
+        # Office fonts' nearest installed fonts (lane AN4, decision 3).
+        fonts = work / "fonts.conf"
+        fonts.write_text(
+            (_office_fontconfig if korean else _office_latin_fontconfig)(
+                environment.get("FONTCONFIG_FILE") or "/etc/fonts/fonts.conf"),
+            encoding="utf-8",
+        )
+        environment["FONTCONFIG_FILE"] = str(fonts)
         try:
             completed = run(
                 [
