@@ -27,6 +27,17 @@ It never touches ``approved_safety_catalog.sqlite``: that file is the
 institution's reviewed safety documents, not data collected from participants.
 Backups made with ``scripts/pilot_state_backup.py`` are copies this tool does
 not know about; delete them too.
+
+**One account** (lane ON, decision ①, 2026-10-18): ``--account NAME`` previews
+and deletes what one account left -- its experiment sessions with their
+events, completed steps, observations and evidence (rows and files), the
+experiment records bound to it, its settings, access records and resource
+ownership, and the account itself with its sessions and login attempts --
+through the same preview -> confirm -> delete -> record steps, inside the
+stores (the append-only triggers are lifted for the deletion and put back).
+The protocols the account uploaded are the lab's shared list and stay; the
+identity row stays, without its name, where such a protocol still names it
+as its owner. The log holds categories and counts only, never the name.
 """
 
 from __future__ import annotations
@@ -109,6 +120,367 @@ FILE_KINDS = {
 
 class RefusedError(RuntimeError):
     """The request is refused before anything is deleted (exit status 2)."""
+
+
+# --- One account's data (lane ON, decision ①) ---------------------------------
+WORKSPACE_DB = "workspace/commercial_workspace.sqlite"
+ACCOUNTS_DB = "workspace/accounts.sqlite"
+REPORTS_DB = "experiment_reports.sqlite"
+#: Workspace tables emptied of the account's rows, in an order the foreign
+#: keys allow, with the column that names the account or its sessions.
+ACCOUNT_WORKSPACE_TABLES = (
+    ("experiment_evidence", "session_id"),
+    ("experiment_observations", "session_id"),
+    ("experiment_completed_steps", "session_id"),
+    ("experiment_session_events", "session_id"),
+    ("experiment_sessions", "owner_principal_id"),
+    ("experimenter_settings", "principal_id"),
+    ("admin_audit_events", "actor_principal_id"),
+    ("memberships", "principal_id"),
+)
+ACCOUNT_TABLE_LABELS = {
+    **TABLE_LABELS,
+    "admin_audit_events": "접근 기록",
+    "resource_bindings": "자원 소유 기록",
+    "memberships": "구성원 기록",
+    "principals": "신원 행",
+    "accounts": "계정",
+    "sessions": "로그인 세션",
+    "login_attempts": "로그인 시도",
+}
+ACCOUNT_SHARED_RESOURCE_TYPES = ("experiment_session", "experiment_report")
+
+
+@dataclass
+class AccountEntry:
+    category: str
+    label: str
+    rows: dict[str, int] = field(default_factory=dict)
+    keys: list[str] = field(default_factory=list)
+    files: list[Path] = field(default_factory=list)
+
+
+def _copy_of(path: Path, temp: Path) -> Path:
+    copy = temp / path.name
+    shutil.copyfile(path, copy)
+    wal = Path(str(path) + "-wal")
+    if wal.is_file():
+        shutil.copyfile(wal, Path(str(copy) + "-wal"))
+    return copy
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _in_clause(values: list[str]) -> tuple[str, tuple[str, ...]]:
+    return ("(" + ",".join("?" for _ in values) + ")", tuple(values)) if values else ("(NULL)", ())
+
+
+def account_inventory(data_dir: Path, name: str, *, in_place: bool = False):
+    """The account and what it left: (account facts, entries, notes).
+
+    Read from copies unless ``in_place`` (the deletion itself), so the
+    preview changes nothing in the pilot folder.
+    """
+
+    from voiney_lab import accounts as acc
+
+    accounts_path = data_dir / ACCOUNTS_DB
+    if not accounts_path.is_file():
+        raise RefusedError(f"계정 저장소가 없습니다: {accounts_path}")
+    with tempfile.TemporaryDirectory(prefix="pilot-account-") as temp_name:
+        temp = Path(temp_name)
+        store = acc.AccountStore.open(accounts_path if in_place else _copy_of(accounts_path, temp))
+        try:
+            account = store.account_by_name(name)
+            if account is None:
+                raise RefusedError(f"그런 계정이 없습니다: {acc.normalize_name(name)}")
+            principal_id = account.principal().principal_id
+            facts = {
+                "account_id": account.account_id, "name": account.name,
+                "organization_id": account.organization_id, "principal_id": principal_id,
+                "name_key": acc.name_key(account.name),
+            }
+            accounts_entry = AccountEntry("account_store", "계정·로그인 세션·로그인 시도 (계정 저장소)")
+            connection = store._connection  # noqa: SLF001 - the tool reads the store it will delete from
+            for table, column, value in (
+                ("sessions", "account_id", account.account_id),
+                ("login_attempts", "name_key", facts["name_key"]),
+            ):
+                keys = [str(row[0]) for row in connection.execute(
+                    f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (value,))]
+                accounts_entry.rows[table] = len(keys)
+                accounts_entry.keys.extend(f"{table}:{key}" for key in keys)
+            accounts_entry.rows["accounts"] = 1
+            accounts_entry.keys.append(f"accounts:{account.account_id}")
+        finally:
+            store.close()
+
+        entries: list[AccountEntry] = []
+        notes: list[str] = []
+        report_ids: list[str] = []
+        workspace_path = data_dir / WORKSPACE_DB
+        if workspace_path.is_file():
+            connection = _connect(workspace_path if in_place else _copy_of(workspace_path, temp))
+            try:
+                sessions = [str(row[0]) for row in connection.execute(
+                    "SELECT session_id FROM experiment_sessions WHERE owner_principal_id=? ORDER BY session_id",
+                    (principal_id,))]
+                clause, parameters = _in_clause(sessions)
+                experiments = AccountEntry("workspace_experiments", "실험 세션·사건·완료 단계·관찰·증거 기록 (작업공간)")
+                for table, column in ACCOUNT_WORKSPACE_TABLES[:5]:
+                    if column == "session_id":
+                        rows = connection.execute(
+                            f"SELECT rowid FROM {table} WHERE session_id IN {clause} ORDER BY rowid", parameters).fetchall()
+                    else:
+                        rows = connection.execute(
+                            f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (principal_id,)).fetchall()
+                    experiments.rows[table] = len(rows)
+                    experiments.keys.extend(f"{table}:{row[0]}" for row in rows)
+                evidence = AccountEntry("workspace_evidence_files", "증거 파일 (사진·문서)")
+                for row in connection.execute(
+                        f"SELECT storage_reference FROM experiment_evidence WHERE session_id IN {clause}", parameters):
+                    reference = str(row[0])
+                    if reference.startswith("/") or ".." in Path(reference).parts:
+                        continue
+                    file = data_dir / "workspace" / reference
+                    if file.is_file() and not file.is_symlink():
+                        evidence.files.append(file)
+                evidence.rows["evidence_files"] = len(evidence.files)
+                records = AccountEntry("workspace_account_records", "실험자 설정·접근 기록·자원 소유·구성원·신원 (작업공간)")
+                for table, column in ACCOUNT_WORKSPACE_TABLES[5:]:
+                    rows = connection.execute(
+                        f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (principal_id,)).fetchall()
+                    records.rows[table] = len(rows)
+                    records.keys.extend(f"{table}:{row[0]}" for row in rows)
+                bindings = connection.execute(
+                    "SELECT rowid,resource_type,resource_id FROM resource_bindings WHERE owner_principal_id=? ORDER BY rowid",
+                    (principal_id,)).fetchall()
+                owned = [row for row in bindings if row["resource_type"] in ACCOUNT_SHARED_RESOURCE_TYPES]
+                shared = [row for row in bindings if row["resource_type"] not in ACCOUNT_SHARED_RESOURCE_TYPES]
+                records.rows["resource_bindings"] = len(owned)
+                records.keys.extend(f"resource_bindings:{row['rowid']}" for row in owned)
+                report_ids = [str(row["resource_id"]) for row in owned if row["resource_type"] == "experiment_report"]
+                principal_rows = connection.execute(
+                    "SELECT rowid FROM principals WHERE principal_id=?", (principal_id,)).fetchall()
+                if principal_rows and not shared:
+                    records.rows["principals"] = 1
+                    records.keys.append(f"principals:{principal_rows[0][0]}")
+                elif principal_rows:
+                    records.rows["principals"] = 0
+                    notes.append(f"이 계정이 올린 프로토콜 {len(shared)}건은 연구실 공유라 남기고, "
+                                 "신원 행은 이름 없이 남깁니다")
+                entries.extend([experiments, evidence, records])
+            finally:
+                connection.close()
+        else:
+            notes.append("작업공간 저장소가 없습니다 (실험 세션 없음)")
+        reports_path = data_dir / REPORTS_DB
+        if reports_path.is_file() and report_ids:
+            connection = _connect(reports_path if in_place else _copy_of(reports_path, temp))
+            try:
+                clause, parameters = _in_clause(report_ids)
+                reports = AccountEntry("experiment_records", "실험 기록 (실험 장부, 보고서 문장)")
+                for table in ("experiment_report_prose", "experiment_report_events", "experiment_reports"):
+                    rows = connection.execute(
+                        f"SELECT rowid FROM {table} WHERE report_id IN {clause} ORDER BY rowid", parameters).fetchall()
+                    reports.rows[table] = len(rows)
+                    reports.keys.extend(f"{table}:{row[0]}" for row in rows)
+                entries.append(reports)
+            finally:
+                connection.close()
+        entries.append(accounts_entry)
+        facts["report_ids"] = report_ids
+        facts["sessions"] = sessions if workspace_path.is_file() else []
+        facts["blank_principal"] = bool(workspace_path.is_file() and principal_rows and shared)
+    return facts, entries, notes
+
+
+def account_confirmation_word(facts: dict, entries: list[AccountEntry]) -> str:
+    """Six hex digits that name exactly the rows and files the preview listed."""
+
+    digest = hashlib.sha256()
+    digest.update(str(facts["account_id"]).encode("utf-8"))
+    for entry in entries:
+        for key in sorted(entry.keys):
+            digest.update(f"{entry.category}\0{key}\n".encode("utf-8"))
+        for file in sorted(entry.files):
+            digest.update(f"{file}\0{file.stat().st_size}\n".encode("utf-8"))
+    return digest.hexdigest()[:6].upper()
+
+
+def render_account_preview(data_dir: Path, facts: dict, entries: list[AccountEntry], notes: list[str]) -> str:
+    lines = [
+        "=== 파일럿 데이터 삭제 — 계정 하나 — 미리보기 (아무것도 지우지 않았습니다) ===",
+        f"데이터 폴더: {data_dir}",
+        f"계정: {facts['name']} (연구실 {facts['organization_id']})",
+        "",
+    ]
+    for number, entry in enumerate(entries, 1):
+        lines.append(f"[{number}] {entry.label}")
+        counted = [f"{ACCOUNT_TABLE_LABELS.get(table, table)} {count}" for table, count in entry.rows.items() if count]
+        if entry.files:
+            counted.append(f"파일 {len(entry.files)}개, {_megabytes(sum(file.stat().st_size for file in entry.files))}")
+        lines.append("    안에 든 것: " + (", ".join(counted) if counted else "기록 없음"))
+    for note in notes:
+        lines.append("지우지 않는 것: " + note)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _lift_delete_triggers(connection: sqlite3.Connection, tables: list[str]) -> list[str]:
+    """Drop the append-only delete triggers of ``tables``; their SQL, to put back."""
+
+    kept: list[str] = []
+    for table in tables:
+        for row in connection.execute(
+                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND sql LIKE '%DELETE%'",
+                (table,)).fetchall():
+            connection.execute(f'DROP TRIGGER "{str(row[0]).replace(chr(34), chr(34) * 2)}"')
+            kept.append(str(row[1]))
+    return kept
+
+
+def delete_account_data(data_dir: Path, facts: dict, entries: list[AccountEntry]) -> list[dict[str, object]]:
+    """Delete the rows and files of the preview; one record per store."""
+
+    from voiney_lab import accounts as acc
+
+    results: list[dict[str, object]] = []
+    by_category = {entry.category: entry for entry in entries}
+    principal_id = facts["principal_id"]
+    workspace_path = data_dir / WORKSPACE_DB
+    if "workspace_experiments" in by_category:
+        record: dict[str, object] = {"category": "workspace_records", "entry": WORKSPACE_DB,
+                                     "rows": {**by_category["workspace_experiments"].rows,
+                                              **by_category["workspace_account_records"].rows}}
+        connection = _connect(workspace_path)
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                tables = [table for table, _ in ACCOUNT_WORKSPACE_TABLES] + ["resource_bindings"]
+                triggers = _lift_delete_triggers(connection, tables)
+                clause, parameters = _in_clause(list(facts["sessions"]))
+                for table, column in ACCOUNT_WORKSPACE_TABLES:
+                    if column == "session_id":
+                        connection.execute(f"DELETE FROM {table} WHERE session_id IN {clause}", parameters)
+                    else:
+                        connection.execute(f"DELETE FROM {table} WHERE {column}=?", (principal_id,))
+                types, type_parameters = _in_clause(list(ACCOUNT_SHARED_RESOURCE_TYPES))
+                connection.execute(
+                    f"DELETE FROM resource_bindings WHERE owner_principal_id=? AND resource_type IN {types}",
+                    (principal_id, *type_parameters))
+                if facts["blank_principal"]:
+                    connection.execute(
+                        "UPDATE principals SET display_name='(삭제된 계정)',subject=? WHERE principal_id=?",
+                        ("deleted:" + hashlib.sha256(principal_id.encode("utf-8")).hexdigest()[:16], principal_id))
+                else:
+                    connection.execute("DELETE FROM principals WHERE principal_id=?", (principal_id,))
+                for sql in triggers:
+                    connection.execute(sql)
+                connection.commit()
+                record["result"] = "deleted"
+            except sqlite3.Error as exc:
+                connection.rollback()
+                record["result"] = "failed"
+                record["error"] = type(exc).__name__
+        finally:
+            connection.close()
+        results.append(record)
+        files = by_category["workspace_evidence_files"].files
+        file_record: dict[str, object] = {"category": "workspace_evidence_files", "entry": "workspace/evidence/",
+                                          "files": len(files), "bytes": sum(f.stat().st_size for f in files if f.exists()),
+                                          "result": "deleted"}
+        for file in files:
+            try:
+                file.unlink()
+                parent = file.parent
+                while parent != data_dir / "workspace" and parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
+            except OSError as exc:
+                file_record["result"] = "failed"
+                file_record["error"] = type(exc).__name__
+        results.append(file_record)
+    if "experiment_records" in by_category:
+        record = {"category": "experiment_records", "entry": REPORTS_DB, "rows": by_category["experiment_records"].rows}
+        connection = _connect(data_dir / REPORTS_DB)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                clause, parameters = _in_clause(list(facts["report_ids"]))
+                for table in ("experiment_report_prose", "experiment_report_events", "experiment_reports"):
+                    connection.execute(f"DELETE FROM {table} WHERE report_id IN {clause}", parameters)
+                connection.commit()
+                record["result"] = "deleted"
+            except sqlite3.Error as exc:
+                connection.rollback()
+                record["result"] = "failed"
+                record["error"] = type(exc).__name__
+        finally:
+            connection.close()
+        results.append(record)
+    record = {"category": "account_store", "entry": ACCOUNTS_DB, "rows": by_category["account_store"].rows}
+    store = acc.AccountStore.open(data_dir / ACCOUNTS_DB)
+    try:
+        store.delete_account(facts["account_id"])
+        record["result"] = "deleted"
+    except (acc.AccountError, sqlite3.Error) as exc:
+        record["result"] = "failed"
+        record["error"] = type(exc).__name__
+    finally:
+        store.close()
+    results.append(record)
+    return results
+
+
+def run_account(arguments: argparse.Namespace, out) -> int:
+    """``--account NAME``: preview, then delete one account's data on confirmation."""
+
+    data_dir = check_data_dir(arguments.data_dir)
+    facts, entries, notes = account_inventory(data_dir, arguments.account)
+    word = account_confirmation_word(facts, entries)
+    print(render_account_preview(data_dir, facts, entries, notes), file=out)
+    if not arguments.delete:
+        print("지우려면 파일럿 서버를 멈춘 뒤 이 줄을 그대로 실행하세요:", file=out)
+        print(f"  python scripts/pilot_data_delete.py --account {shlex_quote(facts['name'])} --delete --confirm {word}", file=out)
+        print("(되돌릴 수 없습니다. 이 사람과 약속한 보고서는 먼저 내려받으세요.)", file=out)
+        return 0
+    if arguments.confirm is None:
+        raise RefusedError("--delete 에는 미리보기가 알려 준 --confirm 확인 단어가 필요합니다.")
+    if arguments.confirm.strip().upper() != word:
+        raise RefusedError("확인 단어가 맞지 않습니다. 미리보기 뒤 내용이 바뀌었을 수 있으니 처음부터 다시 하세요.")
+    open_by = holders(data_dir)
+    if open_by:
+        raise RefusedError(
+            "다른 프로세스(pid " + ", ".join(map(str, open_by)) + ")가 이 폴더의 파일을 열고 있습니다. "
+            "파일럿 서버를 멈춘 뒤 다시 하세요.")
+    try:
+        probe = os.open(data_dir / LOG_NAME, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.close(probe)
+    except OSError as exc:
+        raise RefusedError("삭제 기록을 쓸 수 없어 아무것도 지우지 않았습니다.") from exc
+    # Read again in place: the deletion names the rows as they are now.
+    facts, entries, _ = account_inventory(data_dir, arguments.account, in_place=True)
+    if account_confirmation_word(facts, entries) != word:
+        raise RefusedError("미리보기 뒤에 내용이 바뀌었습니다. 처음부터 다시 하세요.")
+    results = delete_account_data(data_dir, facts, entries)
+    write_log(data_dir, word, results, scope="account")
+    failed = [item for item in results if item["result"] != "deleted"]
+    for item in results:
+        print(f"{item['result']}: {item['entry']}", file=out)
+    print(f"삭제 기록: {data_dir / LOG_NAME}", file=out)
+    return 1 if failed else 0
+
+
+def shlex_quote(value: str) -> str:
+    import shlex
+
+    return shlex.quote(value)
 
 
 @dataclass
@@ -359,10 +731,11 @@ def delete(data_dir: Path, entries: list[Entry]) -> list[dict[str, object]]:
     return results
 
 
-def write_log(data_dir: Path, word: str, results: list[dict[str, object]]) -> None:
+def write_log(data_dir: Path, word: str, results: list[dict[str, object]], *, scope: str = "folder") -> None:
     record = {
         "deleted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "data_dir": str(data_dir),
+        "scope": scope,
         "confirmation": word,
         "result": "deleted" if all(item["result"] == "deleted" for item in results) else "partial",
         "categories": results,
@@ -377,6 +750,8 @@ def write_log(data_dir: Path, word: str, results: list[dict[str, object]]) -> No
 
 def run(arguments: argparse.Namespace, out=None) -> int:
     out = out if out is not None else sys.stdout
+    if getattr(arguments, "account", None):
+        return run_account(arguments, out)
     data_dir = check_data_dir(arguments.data_dir)
     entries, others = inventory(data_dir)
     word = confirmation_word(data_dir, entries)
@@ -418,6 +793,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="파일럿 데이터 폴더 (기본 data/runtime/pilot)")
     parser.add_argument("--delete", action="store_true", help="미리보기 뒤 확인 단어와 함께 실제로 지운다")
     parser.add_argument("--confirm", help="미리보기가 알려 준 확인 단어")
+    parser.add_argument("--account", metavar="NAME",
+                        help="이 계정이 남긴 데이터만 미리보고 지운다 (줄 ON 결정 ①)")
     arguments = parser.parse_args(argv)
     try:
         return run(arguments)

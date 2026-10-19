@@ -262,6 +262,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_OIDC_NAME_CLAIM", OTHER, "name", "OIDC 이름 클레임"),
     Setting("VOINEY_LAB_ANALYTICS_RETENTION_DAYS", OTHER, "90",
             "작업공간 분석 보관 일수 (1–3650)"),
+    Setting("VOINEY_LAB_AUTH_MODE", OTHER, "dev",
+            "로그인 방식: dev(개발 신원 자동, 지금 그대로) / accounts(초대 링크로 가입한 계정으로 로그인 — "
+            "HTTP API·웹소켓 모두 필요, 건강 확인 경로 제외; 작업공간 필요; 줄 ON 결정 ①)"),
     Setting("VOINEY_LAB_CASCADE_VAD_MODE", OTHER, "3", "음성 감지 민감도 (0–3)"),
     Setting("VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES", OTHER, "4",
             "말 시작 판정: 유성 프레임 수"),

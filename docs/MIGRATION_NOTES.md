@@ -1184,6 +1184,62 @@ every protocol, the two new versions included, lists, reviews and loads (the
 new fields are ignored; a `reference_moved` flag reads as an item like any
 other).
 
+## Lane ON (2026-10-18), stage ①: accounts beside the workspace
+
+No workspace schema change (schema 10 stays) and no stored row rewritten.
+Human decision ① of 2026-10-16/18: `VOINEY_LAB_AUTH_MODE` is `dev` (the
+default: the one development identity, exactly as before) or `accounts`.
+
+New, only in `accounts` mode:
+
+- A second SQLite file beside the workspace's, `accounts.sqlite` in
+  `VOINEY_LAB_WORKSPACE_DATA_DIR` (`voiney_lab.accounts`, its own
+  `schema_metadata` at version 1): `accounts` (name, `name_key` for the
+  one-per-name rule, the scrypt `password_hash`, lab, admin flag,
+  `entitlement` = `pilot`, disabled flag), `invites` (the token's SHA-256,
+  lab, admin flag, expiry, used/revoked marks, note), `sessions` (the
+  token's SHA-256, expiry, revocation), `login_attempts` (name key, client,
+  time; kept for the 15-minute window). No password and no token is stored
+  in clear.
+- An account is the principal `acct-<account id>` with
+  `authentication_method="accounts"`, so the workspace store writes it into
+  `principals`, `memberships`, `resource_bindings`, `experiment_sessions`
+  (owner), `experiment_session_events` (actor), `experimenter_settings`
+  and `admin_audit_events` as it wrote the development identity. The
+  report ledger's `experimenter_recorded` event carries the account's name;
+  the catalog's review decisions and versions carry it as
+  `reviewer_name` (the server fills it in, whatever the screen sent).
+- `scripts/pilot_data_delete.py --account NAME` deletes one account's rows
+  from the three stores (lifting and restoring the append-only delete
+  triggers inside one transaction) and its evidence files; the deletion log
+  gains `"scope": "account"` (`"folder"` for the whole-folder path) and
+  holds no name. A principal row that still owns a shared protocol
+  (`resource_bindings` of type `protocol_catalog`) is kept with
+  `display_name='(삭제된 계정)'` and a hashed `subject`.
+
+### Reading older data
+
+A workspace made before this version opens unchanged; in `accounts` mode
+the account store is created empty beside it on first use, and an invite
+made with `--lab <that workspace's organization id>` joins the existing
+lab, so its protocol list is shared with the new accounts. Checked on a
+copy of `data/runtime/candidate-a-live-acceptance` (sqlite through the
+backup API, objects hard-linked; the original only read): workspace schema
+10 opened, two accounts joined the lab `tenant-local-demo` through two
+invites, both listed the seven protocols and read the in-gel review, the
+administrator listed the lab's 26 experiments and the member none of their
+own, logout closed the API (`~/reports/on/ledger/boot_check_stage1.json`).
+
+### Going back
+
+Code from before this version ignores `accounts.sqlite` and the
+`VOINEY_LAB_AUTH_MODE` setting (the setting-name guard does not know the
+name, so a `.env` that sets it is simply not read -- the older server then
+runs without a login). Everything an account wrote is ordinary workspace
+data under a principal id the older code treats like any other; the
+development identity's rows are untouched. A principal row blanked by the
+account deletion reads as a member without a name.
+
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 
 No schema change and no migration; nothing already stored is read differently.
