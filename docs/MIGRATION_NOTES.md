@@ -1212,6 +1212,16 @@ records, all append-only:
   are the same as the analysis wrote (otherwise the item stays an item).
 - Setting `VOINEY_LAB_ANALYSIS_REQUOTE` (default `true`; `false` turns it off).
 
+Decision 3 (the same day): a Word document without Hangul uploaded from this
+version is printed by LibreOffice with Calibri, Calibri Light, Aptos, Segoe
+UI and Tahoma pointed at Carlito (when installed) or Liberation Sans, Cambria
+at Caladea or Liberation Serif, Consolas at Liberation Mono (a per-run
+fontconfig, as lane AN's Korean one). Its PDF -- the registered source -- may
+break lines and pages differently from a PDF the older code printed for the
+same file; nothing stored is rewritten, and a document already registered
+keeps its PDF (the same .docx uploaded again is found by its own checksum, as
+before). Korean documents are printed as before.
+
 ### Reading older data
 
 Nothing older is read differently: an analysis stored before this version
