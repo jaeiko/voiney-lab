@@ -151,20 +151,22 @@ class AdminRouteTests(_Collected, unittest.TestCase):
         self.assertEqual(empty["days"], [])
 
     def test_an_admin_account_needs_no_token(self) -> None:
-        admin = SimpleNamespace(roles=(SimpleNamespace(value="admin"),))
-        researcher = SimpleNamespace(roles=(SimpleNamespace(value="researcher"),))
-        token = server_module._REQUEST_PRINCIPAL.set(admin)
+        # Lane FX4, decision 3: lane ON's admin account (the request's
+        # account), not a principal role named "admin".
+        admin = SimpleNamespace(admin=True)
+        researcher = SimpleNamespace(admin=False)
+        token = server_module._REQUEST_ACCOUNT.set(admin)
         try:
             server_module._require_pilot_admin(None)
         finally:
-            server_module._REQUEST_PRINCIPAL.reset(token)
-        token = server_module._REQUEST_PRINCIPAL.set(researcher)
+            server_module._REQUEST_ACCOUNT.reset(token)
+        token = server_module._REQUEST_ACCOUNT.set(researcher)
         try:
             with patch.dict("os.environ", {"VOINEY_LAB_ADMIN_TOKEN": TOKEN}):
                 with self.assertRaises(server_module.HTTPException) as refused:
                     server_module._require_pilot_admin(None)
         finally:
-            server_module._REQUEST_PRINCIPAL.reset(token)
+            server_module._REQUEST_ACCOUNT.reset(token)
         self.assertEqual(refused.exception.status_code, 403)
 
 

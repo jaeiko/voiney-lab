@@ -4773,15 +4773,12 @@ def get_admin_metrics(
 def _require_pilot_admin(presented_token:str|None)->None:
     """Lane LOG, decision 4: an admin account, or else the admin token.
 
-    An account counts as an admin when one of its roles is "admin" -- a role
-    the accounts of lane ON may give; until then the token is the way in.
+    Lane FX4, decision 3: an admin account is lane ON's administrator -- the
+    account behind this request (``_account_is_admin``, the one judgment);
+    a principal's role text is not read. Otherwise the token, as before.
     """
 
-    principal=_REQUEST_PRINCIPAL.get()
-    roles={
-        str(getattr(role,"value",role)) for role in getattr(principal,"roles",()) or ()
-    }
-    if "admin" in roles:
+    if _account_is_admin():
         return
     _require_admin_access(presented_token)
 
