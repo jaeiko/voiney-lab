@@ -81,8 +81,26 @@ source-linked protocol evidence.
   were removed on 2026-10-08 (lane DI); lane WV rebuilds them.
 - `experiment_reports.py`: append-only workflow event ledger and exports.
 - `runtime_metrics.py`: bounded content-free route/tool/latency aggregates.
+- `accounts.py`: pilot accounts beside the workspace (`accounts.sqlite`) --
+  invite-only signup, scrypt passwords, cookie sessions, login lock, admin
+  flag; `VOINEY_LAB_AUTH_MODE=accounts` puts it in front of every `/api`
+  request and `/ws` (lane ON). `scripts/run_pilot.sh` starts the pilot with it.
+- `pilot_metrics.py`: pilot metrics in numbers, codes and times only
+  (`pilot_metrics.sqlite` beside the workspace), their summaries and CSV
+  (`scripts/pilot_metrics.py`) and the admin day table (`static/admin-metrics.html`)
+  (lane LOG); never state, never words said.
+- `start_check.py`: the two key values asked as server-made multiple choice
+  before the start (lane ON); a wrong answer opens a review card, nothing more.
 - `static/index.html`: production browser cockpit; it renders canonical server
   events and never derives state from assistant prose.
+- `static/connection.js`: the page's half of a lost connection -- loss seen,
+  read-only screen, the step timer's copy on the server's clock, reconnection
+  that continues the same run on the server (lane NET).
+- `static/feedback.js`: the end-of-experiment rating box (`POST /api/pilot/feedback`, lane LOG).
+- `static/native-bridge.js`: the store app's device notifications, copied from
+  the server's timer states; it starts, stops or completes nothing (lane APP0).
+- `mobile/`: the Capacitor store-app shell around the same web screen; device
+  features only, the server keeps state and timers (lane APP0, `docs/APP_PLAN.md`).
 
 ## Required change discipline
 

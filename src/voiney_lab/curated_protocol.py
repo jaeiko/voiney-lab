@@ -15379,6 +15379,7 @@ class CuratedProtocolSession:
         skipped_step_ids: tuple[str, ...] = (),
         branch_skipped_step_ids: tuple[str, ...] = (),
         reverted_step_ids: tuple[str, ...] = (),
+        started_at: float | None = None,
     ) -> None:
         """Restore only a server-persisted exact-revision progress checkpoint.
 
@@ -15397,6 +15398,13 @@ class CuratedProtocolSession:
         steps whose completion a confirmed revert took back (lane CF,
         decision 3): their completions stay in the durable record, past the
         step the run stands on. Anything else is refused as before.
+
+        ``started_at`` is when the experiment first started, as the durable
+        record holds it (lane FX4, decision 1): the experiment's elapsed
+        clock goes on from there after a reconnection or "실험 이어하기"
+        instead of starting from 0 again. None (no stored moment) starts it
+        now, as before; a moment after now is taken as now. The silence
+        before the first words still counts from the restoration.
         """
 
         indexes = {
@@ -15451,7 +15459,10 @@ class CuratedProtocolSession:
         self.current_index = current_index
         self.active = True
         self._workflow_status = "active"
-        self._experiment_started_at = time.time()
+        now = time.time()
+        self._experiment_started_at = now if started_at is None else min(started_at, now)
+        if self._last_heard_at is None:
+            self._last_heard_at = now
         self._completed_step_ids = set(completed)
         self._revision += 1
 
