@@ -151,12 +151,37 @@ class CheckTests(_Case):
         # The run's values were confirmed but one: a note built on it is dropped.
         self.record.event("04:00", "observation", "6", user_wording="3번 샘플 생존율 95%", category="measurement")
         self.record.event("04:01", er.REVIEW_DEFERRED, None, payload={})
-        narrative, _ = self.write({
+        narrative, client = self.write({
             "observation_notes": [{"단계": "6", "시료": "3번 샘플", "문장": "3번 샘플 생존율은 95%였다."}],
             "result_summary": "",
         })
         self.assertEqual(narrative.ai_notes, ())
         self.assertEqual(narrative.ai_rejected[0][1], "확인되지 않은 값")
+        # The model is told which value that is, in words, not by the server's mark.
+        sent = client.calls[0]["messages"][1]["content"]
+        self.assertIn("6단계 측정: 3번 샘플 생존율 95%", sent)
+        self.assertNotIn("[미확인]", sent)
+
+    def test_a_condition_the_experimenter_did_not_confirm_is_said_so_to_the_model(self) -> None:
+        # A timer ended early that was never confirmed (lane RP2's "[미확인]"):
+        # the rows the model reads say so in words, never with the mark.
+        from tests.lane_rp2_support import RecordWriter
+
+        with temporary() as directory, environment():
+            record = RecordWriter(directory, session="session-rp3-unreviewed", title="Test digestion protocol")
+            record.event("00:30", "session_started", "1")
+            record.event("00:36", "step_completed", "1")
+            record.event("00:40", "step_completed", "2")
+            record.event("00:41", "timer_started", "3", payload={"timer": {"duration_seconds": 900}})
+            record.event("01:06", "step_completed", "3", payload={"timer": {
+                "completion_state": "step_exited_before_timer_elapsed",
+                "step_exited_before_timer_elapsed": True, "elapsed_seconds": 600, "source_duration_seconds": 900}})
+            record.event("01:15", "session_stopped", "4", payload={"stop_reason": "stopped_by_user"})
+            record.finalize("01:15", "stopped")
+            sent = er._writer_facts(er.ReportWriterBrain.facts_for(record.doc(), fixture=protocol_double()))
+            rows = sent["실제로 한 조건"] + sent["원문과 다르게 한 점"]
+            self.assertNotIn("[미확인]", "\n".join(rows))
+            self.assertIn("3단계 타이머: 원문 15분 중 10분에 끝냄 (확인되지 않음)", rows)
 
     def test_no_model_or_a_failed_call_leaves_the_record_sentences_only(self) -> None:
         for reply in ("not json", None):

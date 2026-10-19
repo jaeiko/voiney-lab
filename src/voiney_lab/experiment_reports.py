@@ -4271,16 +4271,17 @@ _WRITER_INSTRUCTIONS = """너는 연구자의 실험 노트를 돕는다. 아래
 - 기록·원문에 없는 관찰·결과·원인·해석을 지어내지 않는다. 추측하지 않는다.
 - 안전 지침·완료 기준·절차 지시("~하세요", "~해야 한다")를 쓰지 않는다.
 - 반복 회차를 쓸 때는 사실 JSON 에 적힌 대로 "(말로 확인한 돌아가기 기준)" 을 붙인다. 없으면 회차 수를 쓰지 않는다.
-- '확인되지 않은 값' 은 어느 문장에도 쓰지 않는다.
+- '확인되지 않은 값' 과 "(확인되지 않음)" 이 붙은 값은 어느 문장에도 쓰지 않는다.
 - 기록 ID, 버전, 해시, 영어 상태값, 명령 이름은 쓰지 않는다.
 
 JSON 객체 하나만 돌려준다. 키: observation_notes (목록), result_summary (문자열, 쓸 것이 없으면 "")."""
 
 
-def _without_mark(text: str) -> str:
-    """The words without the server's "[미확인]" mark, which the model may not copy."""
+def _mark_in_words(text: str) -> str:
+    """The server's "[미확인]" mark said in words, so the model knows which
+    value it may not state (and copies no mark of the server's)."""
 
-    return " ".join(text.replace(UNCONFIRMED_MARK, " ").split())
+    return " ".join(text.replace(UNCONFIRMED_MARK, "(확인되지 않음)").split())
 
 
 def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
@@ -4307,10 +4308,10 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
             for sample in (book.samples if book is not None else ())
         ],
         "실제로 한 조건": [
-            _without_mark(f"{process} — {words}")
+            _mark_in_words(f"{process} — {words}")
             for process, words in (book.condition_rows if book is not None else ())],
         "기록": records,
-        "원문과 다르게 한 점": [_without_mark(line) for line in (book.differences if book is not None else ())],
+        "원문과 다르게 한 점": [_mark_in_words(line) for line in (book.differences if book is not None else ())],
         "결과 (실험자가 말함)": book.result if book is not None else "",
         "다음에 바꿀 점 (실험자가 말함)": book.next_change if book is not None else "",
         "확인되지 않은 값": [
