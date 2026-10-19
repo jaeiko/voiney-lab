@@ -4,6 +4,7 @@ import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 import com.voiney.lab.alarm.TimerAlarmPlugin;
 import com.voiney.lab.mic.BackgroundMicPlugin;
+import com.voiney.lab.session.SessionStorePlugin;
 
 public class MainActivity extends BridgeActivity {
 
@@ -13,6 +14,7 @@ public class MainActivity extends BridgeActivity {
         // starts so the page sees them in Capacitor.Plugins.
         registerPlugin(TimerAlarmPlugin.class);
         registerPlugin(BackgroundMicPlugin.class);
+        registerPlugin(SessionStorePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

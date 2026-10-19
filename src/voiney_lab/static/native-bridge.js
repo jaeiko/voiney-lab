@@ -603,6 +603,143 @@
     };
   }
 
+  /*
+   * Lane APP1, decision 3: logging in from the bundled screen.
+   *
+   * The bundled screen runs at the app's origin, where the server's login
+   * cookie is never sent. For an origin the server lists
+   * (VOINEY_LAB_APP_ORIGINS) the login answer carries the session token
+   * instead; it is kept only in the phone's secure store (the VoineySessionStore
+   * plugin: Android Keystore) and in this closure, and sent as
+   * `Authorization: Bearer` on /api and as the first message on /ws -- never
+   * in a URL, never logged, never returned to the caller.
+   */
+  const SESSION_PLUGIN = "VoineySessionStore";
+  const SOCKET_AUTH_TYPE = "client.auth";
+  const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+  // "https://host[:port]" of a server address, or null. Plain http only for
+  // this computer (development); the microphone needs a secure page anyway.
+  function serverBase(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    let url;
+    try {
+      url = new URL(value.trim());
+    } catch (_error) {
+      return null;
+    }
+    if (url.username || url.password) return null;
+    if (url.protocol === "https:" || (url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname))) {
+      return `${url.protocol}//${url.host}`;
+    }
+    return null;
+  }
+
+  function apiUrl(base, path) {
+    if (typeof path !== "string" || !/^\/(api\/|readyz$|healthz$)/.test(path)) throw new Error("only the server's /api paths");
+    return `${base}${path}`;
+  }
+
+  function socketUrl(base) {
+    return `${base.replace(/^http/, "ws")}/ws`;
+  }
+
+  function authHeaders(token, headers) {
+    const copy = { ...(headers || {}) };
+    if (token) copy.Authorization = `Bearer ${token}`;
+    return copy;
+  }
+
+  function socketAuthMessage(token) {
+    return token ? JSON.stringify({ type: SOCKET_AUTH_TYPE, token }) : null;
+  }
+
+  /*
+   * options.serverUrl: the server's address (https). options.fetch: the
+   * page's fetch (tests give their own).
+   * -> { load, restore, login, logout, fetch, socketUrl, socketHello }
+   */
+  function createAppSession(cap, options) {
+    const opts = options || {};
+    const base = serverBase(opts.serverUrl);
+    if (!base) throw new Error("the server address must be https://");
+    const fetchImpl = typeof opts.fetch === "function" ? opts.fetch : (...args) => fetch(...args);
+    const store = pluginAvailable(cap, SESSION_PLUGIN);
+    let token = null;
+    let mode = null;
+
+    const forget = async () => {
+      token = null;
+      if (store) await cap.nativePromise(SESSION_PLUGIN, "clear", {}).catch(() => {});
+    };
+    const request = (path, init) => {
+      const given = init || {};
+      return fetchImpl(apiUrl(base, path), { ...given, credentials: "omit", headers: authHeaders(token, given.headers) });
+    };
+    const readJson = async (response) => {
+      try {
+        return await response.json();
+      } catch (_error) {
+        return null;
+      }
+    };
+
+    return {
+      // The stored token into memory (no network).
+      async load() {
+        if (!store) return false;
+        const result = await cap.nativePromise(SESSION_PLUGIN, "get", {});
+        token = result && typeof result.token === "string" && result.token ? result.token : null;
+        return token !== null;
+      },
+      // Who the stored token signs in, asked of the server; a session the
+      // server ended is forgotten here too.
+      async restore() {
+        await this.load();
+        const response = await request("/api/auth/session");
+        const body = (await readJson(response)) || {};
+        mode = body.mode || null;
+        if (body.signed_in !== true && token) await forget();
+        return { signedIn: body.signed_in === true, mode, account: body.account || null };
+      },
+      async login(name, password) {
+        const response = await request("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, password }),
+        });
+        const body = (await readJson(response)) || {};
+        if (!response.ok) return { signedIn: false, status: response.status, reason: body.detail || "login_failed" };
+        const given = body.app_session && typeof body.app_session.token === "string" ? body.app_session.token : null;
+        if (!given) return { signedIn: false, status: response.status, reason: "app_origin_not_listed" };
+        if (!store) return { signedIn: false, status: response.status, reason: "secure_store_unavailable" };
+        await cap.nativePromise(SESSION_PLUGIN, "set", { token: given });
+        token = given;
+        mode = "accounts";
+        return { signedIn: true, account: body.account || null };
+      },
+      async logout() {
+        if (token) await request("/api/auth/logout", { method: "POST" }).catch(() => null);
+        await forget();
+      },
+      // fetch for the server's /api: the bearer, never cookies. A 401 means
+      // the server ended the session; it is forgotten.
+      async fetch(path, init) {
+        const response = await request(path, init);
+        if (response.status === 401 && token) await forget();
+        return response;
+      },
+      socketUrl() {
+        return socketUrl(base);
+      },
+      // The first message to send on /ws, or null (no token, or a server in
+      // dev mode, which reads no token).
+      async socketHello() {
+        return mode === "dev" ? null : socketAuthMessage(token);
+      },
+    };
+  }
+
   function keepAwake(cap, on) {
     return cap.nativePromise("KeepAwake", on ? "keepAwake" : "allowSleep", {});
   }
@@ -648,6 +785,13 @@
     createFrameSplitter,
     nativeMicrophoneAvailable,
     createNativeMicrophone,
+    SESSION_PLUGIN,
+    serverBase,
+    apiUrl,
+    socketUrl,
+    authHeaders,
+    socketAuthMessage,
+    createAppSession,
     keepAwake,
     networkStatus,
     onNetworkChange,

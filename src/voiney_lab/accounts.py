@@ -14,7 +14,9 @@ What is kept, and how:
   constant time; the password itself is never written anywhere;
 * a session as the SHA-256 of a random token; the token goes to the browser
   as an HttpOnly cookie (``SESSION_COOKIE_NAME``) and is seen again only in
-  that cookie; a session lasts ``SESSION_LIFETIME`` and ends at logout, at a
+  that cookie -- or, for the app's bundled screen at an origin listed in
+  ``VOINEY_LAB_APP_ORIGINS`` (lane APP1), in the login answer, and back in an
+  ``Authorization: Bearer`` header or the socket's first message; a session lasts ``SESSION_LIFETIME`` and ends at logout, at a
   password change (the other devices' sessions), or when an administrator
   switches the account off;
 * an invite as the SHA-256 of its token, with its expiry, the lab it joins
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import math
 import os
 import re
@@ -46,6 +49,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from voiney_lab.configuration import ConfigurationError
 from voiney_lab.identity import Principal, Role
@@ -140,6 +144,105 @@ class AuthSettings:
     @property
     def accounts(self) -> bool:
         return self.mode == "accounts"
+
+
+# --- The app's screen (lane APP1, decisions 3-4, 2026-10-19) ---------------------
+#
+# A screen bundled in the store app runs at the app's own origin
+# (``https://localhost`` on Android, ``capacitor://localhost`` on iOS), so the
+# session cookie -- SameSite=Lax, set by the server's origin -- never reaches
+# the server from it. For an origin listed in ``VOINEY_LAB_APP_ORIGINS`` the
+# server hands the session token back in the login (or signup) answer instead
+# of a cookie; the app keeps it in the phone's secure store and sends it in an
+# ``Authorization: Bearer`` header on ``/api`` and as the first message on
+# ``/ws`` (``{"type": "client.auth", "token": ...}``) -- never in a URL, where
+# proxies and access logs would keep it. It is the same session as a cookie's:
+# the same lifetime, and logout, a password change or an administrator
+# switching the account off end it. Nothing reads a bearer from another
+# origin, and with the setting empty (the default) nothing here is used.
+
+APP_ORIGINS_ENV = "VOINEY_LAB_APP_ORIGINS"
+APP_SOCKET_AUTH_TYPE = "client.auth"
+#: How long an app's socket may take to send its token before it is closed.
+APP_SOCKET_AUTH_TIMEOUT_SECONDS = 10.0
+#: A session token is secrets.token_urlsafe(32): 43 URL-safe characters.
+_SESSION_TOKEN = re.compile(r"^[A-Za-z0-9_-]{20,200}$")
+_ORIGIN_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*$")
+
+
+def normalize_origin(value: object) -> str | None:
+    """``scheme://host[:port]`` in lower case, or None when ``value`` is not one origin."""
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip().casefold().rstrip("/")
+    if not text or text == "null" or "*" in text:
+        return None
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        not _ORIGIN_SCHEME.match(parts.scheme or "")
+        or not parts.hostname
+        or parts.path or parts.query or parts.fragment
+        or "@" in parts.netloc
+    ):
+        return None
+    return f"{parts.scheme}://{parts.hostname}" + (f":{port}" if port is not None else "")
+
+
+@dataclass(frozen=True)
+class AppAccessSettings:
+    """The app origins the server lets in (``VOINEY_LAB_APP_ORIGINS``, comma-separated)."""
+
+    origins: tuple[str, ...] = ()
+
+    @classmethod
+    def from_environment(cls, environment: Mapping[str, str] | None = None) -> "AppAccessSettings":
+        env = os.environ if environment is None else environment
+        origins: list[str] = []
+        for item in env.get(APP_ORIGINS_ENV, "").split(","):
+            if not item.strip():
+                continue
+            origin = normalize_origin(item)
+            if origin is None:
+                raise ConfigurationError(
+                    f"{APP_ORIGINS_ENV} lists exact origins (scheme://host[:port]); no wildcard, path or 'null'")
+            if origin not in origins:
+                origins.append(origin)
+        return cls(tuple(origins))
+
+    def allows(self, origin: object) -> bool:
+        normalized = normalize_origin(origin)
+        return normalized is not None and normalized in self.origins
+
+
+def bearer_token(header: object) -> str | None:
+    """The token of an ``Authorization: Bearer <token>`` header, or None."""
+
+    if not isinstance(header, str):
+        return None
+    parts = header.strip().split()
+    if len(parts) != 2 or parts[0].casefold() != "bearer" or not _SESSION_TOKEN.match(parts[1]):
+        return None
+    return parts[1]
+
+
+def socket_auth_token(raw: object) -> str | None:
+    """The token of an app socket's first message ``{"type": "client.auth", "token": ...}``, or None."""
+
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        message = json.loads(raw)
+    except (json.JSONDecodeError, RecursionError):
+        return None
+    if not isinstance(message, dict) or message.get("type") != APP_SOCKET_AUTH_TYPE:
+        return None
+    token = message.get("token")
+    return token if isinstance(token, str) and _SESSION_TOKEN.match(token) else None
 
 
 # --- Passwords ------------------------------------------------------------------

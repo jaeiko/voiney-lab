@@ -268,6 +268,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_AUTH_MODE", OTHER, "dev",
             "로그인 방식: dev(개발 신원 자동, 지금 그대로) / accounts(초대 링크로 가입한 계정으로 로그인 — "
             "HTTP API·웹소켓 모두 필요, 건강 확인 경로 제외; 작업공간 필요; 줄 ON 결정 ①)"),
+    Setting("VOINEY_LAB_APP_ORIGINS", OTHER, "(없음, 비면 지금 그대로)",
+            "앱에 묶은 화면의 출처 (쉼표로, 예: https://localhost,capacitor://localhost) — 이 출처에만 "
+            "로그인 응답에 세션 토큰을 주고 Authorization: Bearer 와 /ws 첫 메시지로 받으며, /api CORS 와 "
+            "/ws 출처 검사에서 허용 (쿠키는 넘기지 않음; 줄 APP1 결정 ③④)"),
     Setting("VOINEY_LAB_CASCADE_VAD_MODE", OTHER, "3", "음성 감지 민감도 (0–3)"),
     Setting("VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES", OTHER, "4",
             "말 시작 판정: 유성 프레임 수"),

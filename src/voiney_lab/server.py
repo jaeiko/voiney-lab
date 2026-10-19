@@ -215,6 +215,7 @@ from voiney_lab.vad import (
     NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
 )
 from voiney_lab import voice_providers
+from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
 from voiney_lab.start_check import StartCheck, StartCheckError
 from voiney_lab.accounts import (
@@ -229,11 +230,14 @@ from voiney_lab.accounts import (
     AccountNotFoundError,
     AccountStore,
     AdminRequiredError,
+    AppAccessSettings,
     AuthSettings,
     InviteInvalidError,
     LoginLockedError,
     LoginRefusedError,
     PasswordInvalidError,
+    bearer_token,
+    socket_auth_token,
 )
 from voiney_lab.identity import (
     AuthenticationRequiredError,
@@ -561,7 +565,7 @@ def _account_store()->AccountStore:
 
 
 def _account_for_cookie(token:str|None)->Account:
-    """The signed-in account of a session cookie, or the refusal."""
+    """The signed-in account of a session token (cookie or app bearer), or the refusal."""
 
     if not token:
         raise AuthenticationRequiredError("Authentication is required.")
@@ -573,6 +577,64 @@ def _account_for_cookie(token:str|None)->Account:
     if account is None:
         raise AuthenticationRequiredError("Authentication is required.")
     return account
+
+
+# Lane APP1, decision 3 (2026-10-19): the app's bundled screen runs at its
+# own origin, where the cookie never reaches us. For an origin listed in
+# VOINEY_LAB_APP_ORIGINS -- only for one -- the session token travels in the
+# login answer, an Authorization: Bearer header and the socket's first
+# message (accounts.py, "The app's screen"). Empty setting: nothing changes.
+def _app_access()->AppAccessSettings:
+    return AppAccessSettings.from_environment()
+
+
+def _from_app(headers)->bool:
+    """Whether the request comes from a listed app origin (the browser sets Origin; a page cannot)."""
+
+    origin=headers.get("origin")
+    return bool(origin) and _app_access().allows(origin)
+
+
+def _session_token(request:Request)->str|None:
+    """The session token of this request: the app's bearer from a listed origin, else the cookie."""
+
+    if _from_app(request.headers):
+        token=bearer_token(request.headers.get("authorization"))
+        if token:
+            return token
+    return request.cookies.get(SESSION_COOKIE_NAME)
+
+
+def _signed_in_response(request:Request,content:dict[str,Any],token:str,*,status_code:int=200)->JSONResponse:
+    """A login or signup answer: the cookie for the web, the token in the body for the app."""
+
+    if _from_app(request.headers):
+        return JSONResponse(status_code=status_code,content={
+            **content,
+            "app_session":{
+                "token":token,
+                "expires_in_seconds":int(SESSION_LIFETIME.total_seconds()),
+            },
+        })
+    response=JSONResponse(status_code=status_code,content=content)
+    _set_session_cookie(response,token,request)
+    return response
+
+
+async def _app_socket_token(websocket:WebSocket)->str:
+    """The token an app's socket sends first; anything else (or nothing in time) is the refusal."""
+
+    try:
+        message=await asyncio.wait_for(
+            websocket.receive(),timeout=accounts_module.APP_SOCKET_AUTH_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise AuthenticationRequiredError("Authentication is required.") from exc
+    token=(
+        socket_auth_token(message.get("text"))
+        if message.get("type")=="websocket.receive" else None)
+    if token is None:
+        raise AuthenticationRequiredError("Authentication is required.")
+    return token
 
 
 def _request_account()->Account|None:
@@ -673,7 +735,7 @@ async def commercial_identity_boundary(request:Request,call_next):
                 return await call_next(request)
             if not settings.enabled:
                 raise IdentityConfigurationError("Accounts need the tenant workspace.")
-            account=_account_for_cookie(request.cookies.get(SESSION_COOKIE_NAME))
+            account=_account_for_cookie(_session_token(request))
             principal=account.principal()
         else:
             if not settings.enabled and not operational:
@@ -2847,9 +2909,10 @@ async def get_auth_session(request:Request)->dict[str,object]:
             },
         }
     try:
+        token=_session_token(request)
         store=_account_store()
         try:
-            account=store.account_for_session(request.cookies.get(SESSION_COOKIE_NAME))
+            account=store.account_for_session(token)
         finally:
             store.close()
     except Exception as exc:
@@ -2894,9 +2957,10 @@ async def post_auth_signup(request:Request,body:dict[str,Any]=Body(...))->Respon
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
     log.info("auth.signup account_id=%s admin=%s",account.account_id,account.admin)
-    response=JSONResponse(status_code=201,content={"account":account.public_dict()})
-    _set_session_cookie(response,token,request)
-    return response
+    try:
+        return _signed_in_response(request,{"account":account.public_dict()},token,status_code=201)
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
 
 
 @app.post("/api/auth/login")
@@ -2921,9 +2985,10 @@ async def post_auth_login(request:Request,body:dict[str,Any]=Body(...))->Respons
         log.info("auth.login refused reason=%s",getattr(exc,"code",type(exc).__name__))
         raise _workspace_http_error(exc) from exc
     log.info("auth.login account_id=%s",account.account_id)
-    response=JSONResponse(status_code=200,content={"account":account.public_dict()})
-    _set_session_cookie(response,token,request)
-    return response
+    try:
+        return _signed_in_response(request,{"account":account.public_dict()},token)
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
 
 
 @app.post("/api/auth/logout")
@@ -2934,7 +2999,7 @@ async def post_auth_logout(request:Request)->Response:
     try:
         store=_account_store()
         try:
-            store.close_session(request.cookies.get(SESSION_COOKIE_NAME))
+            store.close_session(_session_token(request))
         finally:
             store.close()
     except Exception as exc:
@@ -2957,7 +3022,7 @@ async def post_auth_password(request:Request,body:dict[str,Any]=Body(...))->dict
         try:
             store.change_password(
                 account.account_id,body.get("current"),body.get("new"),
-                keep_session_token=request.cookies.get(SESSION_COOKIE_NAME))
+                keep_session_token=_session_token(request))
         finally:
             store.close()
     except Exception as exc:
@@ -11842,7 +11907,11 @@ async def voice_socket(websocket:WebSocket):
             if not settings.enabled:
                 raise IdentityConfigurationError("Accounts need the tenant workspace.")
             cookies=getattr(websocket,"cookies",None) or {}
-            account=_account_for_cookie(cookies.get(SESSION_COOKIE_NAME))
+            token=cookies.get(SESSION_COOKIE_NAME)
+            # Lane APP1, decision 3: the app's screen sends its token first.
+            if not token and _from_app(getattr(websocket,"headers",{})):
+                token=await _app_socket_token(websocket)
+            account=_account_for_cookie(token)
             principal=account.principal()
             workspace=initialize_workspace_store(settings)
             try:

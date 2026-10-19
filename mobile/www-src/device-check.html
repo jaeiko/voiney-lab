@@ -11,6 +11,8 @@
   p { line-height: 1.5; margin: 0.4rem 0 1rem; }
   button { display: block; width: 100%; margin: 0.5rem 0; font-size: 1.05rem; padding: 0.85rem 1rem; border: 0; border-radius: 0.6rem; background: #1f6f5c; color: #fff; text-align: left; }
   button.secondary { background: #dfe6e2; color: #1c2321; }
+  input { display: block; width: 100%; box-sizing: border-box; margin: 0.3rem 0; font-size: 1rem; padding: 0.6rem; border: 1px solid #c9d1cd; border-radius: 0.5rem; }
+  h2 { font-size: 1.05rem; margin: 1.2rem 0 0.3rem; }
   pre { white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #d5dbd8; border-radius: 0.5rem; padding: 0.75rem; font-size: 0.85rem; min-height: 6rem; }
 </style>
 </head>
@@ -27,7 +29,16 @@
   <button id="network" class="secondary">7. 네트워크 상태 보기·변화 기록</button>
   <button id="mic">9. 화면 꺼도 듣기 시작 (알림 줄 "VoineyLab 이 듣는 중 · 끄기")</button>
   <button id="mic-stop" class="secondary">10. 듣기 끄기</button>
+  <button id="mic-settings" class="secondary">11. 마이크 권한 설정 열기 (거절했을 때)</button>
   <button id="app" class="secondary">8. 앱 화면 열기 (index.html)</button>
+  <h2>앱 로그인 (서버가 VOINEY_LAB_APP_ORIGINS 에 https://localhost 를 넣었을 때)</h2>
+  <input id="server" type="url" placeholder="https://pilot.도메인" autocomplete="url">
+  <input id="name" placeholder="이름" autocomplete="username">
+  <input id="password" type="password" placeholder="비밀번호" autocomplete="current-password">
+  <button id="login">12. 로그인 (토큰은 휴대폰 보안 저장소에만)</button>
+  <button id="restore" class="secondary">13. 저장된 로그인 확인 (앱을 다시 연 뒤)</button>
+  <button id="socket" class="secondary">14. 웹소켓 열기 — 첫 메시지로 토큰, "ready" 가 오면 성공</button>
+  <button id="logout" class="secondary">15. 로그아웃</button>
   <pre id="log"></pre>
 </main>
 <script src="native-bridge.js"></script>
@@ -119,7 +130,7 @@
   document.getElementById("mic").onclick = guard(async () => {
     const result = await mic.start();
     if (!result.listening) {
-      if (result.reason === "permission_denied") log("권한을 다시 주려면 설정을 연다: 10번 옆 앱 설정 → 권한 → 마이크");
+      if (result.reason === "permission_denied") log("권한을 다시 주려면 11번으로 앱 설정을 연다 → 권한 → 마이크");
       return;
     }
     clearInterval(micReport);
@@ -132,6 +143,48 @@
   document.getElementById("mic-stop").onclick = guard(async () => {
     clearInterval(micReport);
     await mic.stop();
+  });
+  document.getElementById("mic-settings").onclick = guard(async () => {
+    await mic.openAppSettings();
+  });
+  // Lane APP1, decision 3: the app's login. The token is never shown here.
+  let session = null;
+  const sessionFor = () => {
+    const server = document.getElementById("server").value;
+    if (!session || session.server !== server) {
+      session = bridge.createAppSession(cap, { serverUrl: server });
+      session.server = server;
+    }
+    return session;
+  };
+  document.getElementById("login").onclick = guard(async () => {
+    const result = await sessionFor().login(document.getElementById("name").value, document.getElementById("password").value);
+    document.getElementById("password").value = "";
+    log(result.signedIn ? `로그인됨: ${result.account && result.account.name}` : `로그인 안 됨: ${result.reason} (${result.status})`);
+  });
+  document.getElementById("restore").onclick = guard(async () => {
+    const result = await sessionFor().restore();
+    log(`서버 방식 ${result.mode}, ${result.signedIn ? `로그인됨: ${result.account && result.account.name}` : "로그인 안 됨"}`);
+  });
+  document.getElementById("socket").onclick = guard(async () => {
+    const current = sessionFor();
+    const hello = await current.socketHello();
+    const socket = new WebSocket(current.socketUrl());
+    socket.onopen = () => {
+      if (hello) socket.send(hello);
+      log(hello ? "웹소켓 열림, 토큰을 첫 메시지로 보냄" : "웹소켓 열림 (토큰 없음)");
+    };
+    socket.onmessage = (event) => {
+      let type = "?";
+      try { type = JSON.parse(event.data).type; } catch (_error) { type = "(소리)"; }
+      log(`서버: ${type}${type === "ready" ? " — 앱 로그인으로 연결 성공" : ""}`);
+      if (type === "ready") socket.close();
+    };
+    socket.onclose = (event) => log(`웹소켓 닫힘 ${event.code}${event.code === 1008 ? " (로그인 또는 출처가 거절됨)" : ""}`);
+  });
+  document.getElementById("logout").onclick = guard(async () => {
+    await sessionFor().logout();
+    log("로그아웃됨, 휴대폰의 토큰도 지움");
   });
   document.getElementById("app").onclick = () => { location.href = "index.html"; };
   log(cap ? `앱 안에서 열림 (${cap.getPlatform ? cap.getPlatform() : "?"})` : "브라우저에서 열림 — 기기 기능 없음");
