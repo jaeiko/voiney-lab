@@ -19,6 +19,7 @@
 | [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) | 구성 요소, 상태 권한, 저장, 실패 처리 |
 | [`MIGRATION_NOTES.md`](MIGRATION_NOTES.md) | 저장 스키마와 설정 이름이 바뀐 기록 (지운 설정 포함) |
 | [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md) | 브랜치, 커밋, PR, 병합 규칙 |
+| [`VOICE_AND_TONE.md`](VOICE_AND_TONE.md) | 화면·음성 문구를 쓰는 규칙(해요체, 한 문장 한 뜻, 내부 말 금지, 단추는 동사)과 용어 사전. 새 문구에 적용한다. 지금 문구를 이 규칙대로 고치는 일은 아직 안 했다(2단계) |
 
 `.agent/` 안의 파일: `architecture.md`(지금 구조), `product_context.md`(제품이 약속하는 것·하지 않는 것),
 `roadmap.md`(지금 상태와 다음 계획), `coding_rules.md`·`security_rules.md`·`testing_strategy.md`·`evaluation_strategy.md`
