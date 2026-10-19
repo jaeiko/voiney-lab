@@ -175,6 +175,8 @@ _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
 #: ``review-v<N>-...``, and this event beside it holds who registered it,
 #: what it was reviewed from and every change with its original value.
 _REVIEW_VERSION_EVENT = "protocol_review_version_registered"
+#: Lane RP3, decision ④: a PI's "확인함" on a registered review version.
+_REVIEW_VERSION_PI_CONFIRMED_EVENT = "protocol_review_version_pi_confirmed"
 REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
 #: Lane RV2, decision c (human decision 2026-10-16): an analysis with more
 #: items for a person than ``review_max_items()`` makes no cards; it is
@@ -619,12 +621,30 @@ def _korean_date(timestamp: str) -> str:
     return moment.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
 
 
-def _review_version_summary(event: Any) -> dict[str, object]:
+def _pi_confirmations_of(events: Sequence[Any], version: object) -> list[dict[str, object]]:
+    """Each PI confirmation of one review version, in the order left (lane RP3, ④)."""
+
+    found = []
+    for event in events:
+        if event.event_type != _REVIEW_VERSION_PI_CONFIRMED_EVENT:
+            continue
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("version") != version:
+            continue
+        found.append({
+            "name": str(payload.get("name") or ""), "comment": str(payload.get("comment") or ""),
+            "at": event.recorded_at, "on": _korean_date(event.recorded_at),
+        })
+    return found
+
+
+def _review_version_summary(event: Any, confirmations: Sequence[Any] = ()) -> dict[str, object]:
     """One registered review version as the list shows it (lane RV, c, d)."""
 
     payload = event.payload if isinstance(event.payload, dict) else {}
     changes = [item for item in payload.get("changes") or () if isinstance(item, dict)]
     return {
+        "pi_confirmations": _pi_confirmations_of(confirmations, payload.get("version")),
         "version": payload.get("version"),
         "version_ko": f"검토본 v{payload.get('version')}",
         "revision_id": payload.get("revision_id"),
@@ -2391,7 +2411,8 @@ class ProtocolCatalog:
             review_pending=(
                 _review_pending_summary(pending) if pending is not None else None),
             review_versions=tuple(
-                _review_version_summary(event) for event, _ in versions),
+                _review_version_summary(event, self.store.list_events(revision.experiment_id))
+                for event, _ in versions),
         )
 
     def _review_pending_event(self, revision: ProtocolRevisionRecord) -> Any | None:
@@ -5539,12 +5560,32 @@ class ProtocolCatalog:
         for event, _ in self._review_versions(revision):
             if event.payload.get("version") == version:
                 return {
-                    **_review_version_summary(event),
+                    **_review_version_summary(event, self.store.list_events(revision.experiment_id)),
                     "changes": list(event.payload.get("changes") or ()),
                     "memos": dict(event.payload.get("memos") or {}),
                     "timers": dict(event.payload.get("timers") or {}),
                 }
         raise ProtocolCatalogNotFoundError("The protocol has no such review version.")
+
+    def confirm_review_version(
+        self, protocol_id: str, version: int, *, name: str, comment: str = "",
+    ) -> dict[str, object]:
+        """A PI's "확인함" on a registered review version (lane RP3, decision ④):
+        one append-only ledger event with the name, the line and the time.
+        It holds nothing back and changes no version; the version's record
+        shows every confirmation left."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        if not any(event.payload.get("version") == version for event, _ in self._review_versions(revision)):
+            raise ProtocolCatalogNotFoundError("The protocol has no such review version.")
+        recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.store.append_event(
+            "pi-confirmed-" + secrets.token_hex(12), protocol_id, revision.revision_number,
+            _REVIEW_VERSION_PI_CONFIRMED_EVENT,
+            {"version": version, "name": " ".join(str(name or "").split())[:120],
+             "comment": " ".join(str(comment or "").split())[:300], "recorded_at": recorded_at},
+        )
+        return self.review_version(protocol_id, version)
 
     def resolve_asset(
         self,

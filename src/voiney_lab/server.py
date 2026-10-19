@@ -95,6 +95,7 @@ from voiney_lab.experiment_reports import (
     REPORT_PROSE,
     REVIEW_CONFIRMED,
     REVIEW_DEFERRED,
+    pi_confirmations,
     record_amendments,
     report_review_items,
     sample_in_text,
@@ -5209,6 +5210,89 @@ def _prepared_report_prose(store:ExperimentReportStore,report_id:str)->None:
         )
 
 
+PI_COMMENT_LIMIT=300
+
+
+def _pi_confirmation_body(body:Any)->str:
+    """The one line a PI leaves, cleaned; 422 when longer than the box."""
+
+    comment=" ".join(str((body or {}).get("comment") or "").split()) if isinstance(body,dict) else ""
+    if len(comment)>PI_COMMENT_LIMIT:
+        raise HTTPException(status_code=422,detail="pi_confirmation_comment_too_long")
+    return comment
+
+
+def _pi_name()->str:
+    """The administrator account's name (lane ON), the notebook's "PI"."""
+
+    account=_REQUEST_ACCOUNT.get()
+    return " ".join(str(getattr(account,"name","") or "").split())[:120]
+
+
+@app.get("/api/experiment-reports/{report_id}/pi-confirmations")
+def get_experiment_report_pi_confirmations(report_id:str)->dict[str,object]:
+    """Every "확인함" a PI left on the notebook (lane RP3, decision ④)."""
+
+    store=_report_prose_store(report_id)
+    try:
+        report=store.get_report(report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return {"report_id":report_id,"confirmations":pi_confirmations(report["events"])}
+
+
+@app.post("/api/experiment-reports/{report_id}/pi-confirmations",status_code=201)
+def post_experiment_report_pi_confirmation(
+    report_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """An administrator account leaves "확인함" on the notebook (lane RP3,
+    decision ④): the account's name, the time, one line -- an append-only
+    event that blocks nothing and changes no record. Anyone else is refused.
+    """
+
+    if not _account_is_admin():
+        raise HTTPException(status_code=403,detail="pi_confirmation_admin_only")
+    comment=_pi_confirmation_body(body)
+    store=_report_prose_store(report_id)
+    try:
+        report=store.get_report(report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    count=sum(1 for event in report["events"] if event.get("event_type")=="pi_confirmed")
+    try:
+        store.append_event(
+            report_id,event_key=f"pi-confirmed-{count+1}",event_type="pi_confirmed",
+            user_wording=comment or None,
+            payload={"name":_pi_name(),"comment":comment,"source":"screen"},
+        )
+        report=store.get_report(report_id)
+    except (ValueError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return {"report_id":report_id,"confirmations":pi_confirmations(report["events"])}
+
+
+@app.post("/api/protocols/{protocol_id}/review-versions/{version}/pi-confirmations",status_code=201)
+def post_protocol_review_version_pi_confirmation(
+    protocol_id:str,version:int,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """An administrator account leaves "확인함" on a registered review
+    version (lane RP3, decision ④): an append-only event in the protocol's
+    ledger; the version's record shows it; the start is not held by it."""
+
+    if not _account_is_admin():
+        raise HTTPException(status_code=403,detail="pi_confirmation_admin_only")
+    comment=_pi_confirmation_body(body)
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.confirm_review_version(protocol_id,version,name=_pi_name(),comment=comment)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
@@ -8471,6 +8555,8 @@ def _public_experiment_report_state(report:dict)->dict:
         "event_count":len(events),"events":events,
         # Lane N, decision 3: the screen's checklist of the report's values.
         "review":report_review_items(events),
+        # Lane RP3, decision ④: the PI's confirmations, for the screen's button.
+        "pi_confirmations":pi_confirmations(events),
     }
 
 

@@ -1541,3 +1541,27 @@ two export formats are added.
 Going back: code from before this version reads the same records; a reply
 kept in the new shape has none of the old keys, so the old report prints
 its server sentences.
+
+## Lane RP3 (2026-10-20), decision ④: a PI's "확인함" on a notebook and on a review version
+
+No schema change and no migration. Two append-only event types are
+written; nothing waits on them and nothing is changed by them.
+
+- `pi_confirmed` in the experiment record (`experiment_reports` events;
+  Korean name "PI 확인" since decision ①): written by
+  `POST /api/experiment-reports/{id}/pi-confirmations` with `{"comment": "…"}`
+  (at most 300 characters), `payload` = the administrator account's name
+  (lane ON), the one line, `"source": "screen"`; the time is the event's.
+  Only an administrator account may post (403 `pi_confirmation_admin_only`);
+  `GET …/pi-confirmations` and the report's public state
+  (`pi_confirmations`) list them. The notebook's "7. 확인" prints each one
+  (name, time, line); a second confirmation is appended, never replaced.
+- `protocol_review_version_pi_confirmed` in the protocol ledger
+  (`workspace_store` events of the protocol's revision): written by
+  `POST /api/protocols/{id}/review-versions/{version}/pi-confirmations`,
+  `payload` = version, name, comment, recorded_at. The version's record and
+  the protocol's `review_versions` list carry `pi_confirmations`. The
+  start is not held by it (lane DI: analysis passed + the experimenter
+  starts).
+
+Going back: code from before this version ignores both event types.
