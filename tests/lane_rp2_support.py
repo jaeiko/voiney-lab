@@ -216,6 +216,37 @@ def unconfirmed_run(directory: str | Path) -> RecordWriter:
     return record
 
 
+#: The three sample records (lane RP2, decision 4), by the name of their files.
+SAMPLES = ("rp2_sample1_short", "rp2_sample2_deviations", "rp2_sample3_unconfirmed")
+
+
+def write_samples(directory: str | Path, *, converter: str | None = None, run=None) -> list[Path]:
+    """Each sample record's report as .docx, .pdf and .md in ``directory``.
+
+    The protocol is the double above; the check before the start is given
+    for the deviation run only. ``converter``/``run`` stand in for
+    LibreOffice in tests; left out, the server's LibreOffice prints the PDF.
+    """
+
+    out = Path(directory)
+    out.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    with tempfile.TemporaryDirectory() as records:
+        for name, build, fixture, check in zip(SAMPLES, (short_run, deviation_run, unconfirmed_run), (
+                protocol_double(labels=("1", "2")), protocol_double(), protocol_double()), ((), START_CHECK, ())):
+            record = build(records)
+            for suffix, made in (
+                ("docx", lambda: record.store.export_docx(record.report_id, fixture=fixture, start_check=check)),
+                ("pdf", lambda: record.store.export_pdf(record.report_id, fixture=fixture, start_check=check,
+                                                        converter=converter, run=run)),
+                ("md", lambda: record.store.export_markdown(record.report_id, fixture=fixture, start_check=check)),
+            ):
+                path = out / f"{name}.{suffix}"
+                path.write_bytes(made())
+                written.append(path)
+    return written
+
+
 def environment() -> mock._patch:
     return mock.patch.dict(os.environ, {"VOINEY_LAB_REPORT_TIMEZONE": "Asia/Seoul"})
 

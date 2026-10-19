@@ -74,7 +74,7 @@ class MarkTests(_Case):
         lines = text.splitlines()
         rows = lines[lines.index(STEP_HEADER) + 2:lines.index(STEP_HEADER) + 7]
         self.assertEqual(rows[1], "| 2 | 09:36 | 09:44 | 8분 | 측정: 세척액 450 µL [미확인] | — | — |")
-        self.assertEqual(rows[3], "| 4 | 10:01 | 완료 기록 없음 | — | 측정: acetonitrile 180 µL 넣음 [미확인] | — | — |")
+        self.assertEqual(rows[3], "| 4 | 10:01 | 미완료 | — | 측정: acetonitrile 180 µL 넣음 [미확인] | — | — |")
 
     def test_unconfirmed_deviations_and_anomalies_are_marked_in_both_tables(self) -> None:
         record = short_run(self.temporary.name)

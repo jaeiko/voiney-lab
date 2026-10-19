@@ -2716,7 +2716,7 @@ def build_report_glance(
             name = f"{label} ({len(completions)}회)" if len(completions) > 1 else label
             step_rows.append((name, _clock(start), _clock(end), taken, values, _cell(deviations), anomalies))
         elif label in seen_at:
-            step_rows.append((label, _clock(arrival_before(seen_at[label])), "완료 기록 없음", "—",
+            step_rows.append((label, _clock(arrival_before(seen_at[label])), "미완료", "—",
                               values, _cell(deviations), anomalies))
         else:
             step_rows.append((label, "—", "건너뜀" if label in skipped else "수행 안 함", "—",
@@ -4147,7 +4147,7 @@ TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     REVIEW_CHANGE_HEADER: (0.07, 0.13, 0.28, 0.28, 0.13, 0.11),
     # Lane RP2, decision 1: the first pages' tables, on A4's 16.6 cm text width.
     GLANCE_SUMMARY_HEADER: (0.17, 0.17, 0.17, 0.17, 0.16, 0.16),
-    GLANCE_STEP_HEADER: (0.07, 0.08, 0.10, 0.10, 0.29, 0.22, 0.14),
+    GLANCE_STEP_HEADER: (0.07, 0.08, 0.11, 0.10, 0.28, 0.21, 0.15),
     GLANCE_TIMER_HEADER: (0.07, 0.11, 0.11, 0.14, 0.14, 0.11, 0.32),
     GLANCE_ISSUE_HEADER: (0.06, 0.07, 0.13, 0.18, 0.38, 0.08, 0.10),
     GLANCE_PRESTART_HEADER: (0.12, 0.08, 0.17, 0.17, 0.34, 0.12),
