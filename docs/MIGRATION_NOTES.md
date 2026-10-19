@@ -1227,6 +1227,10 @@ before). Korean documents are printed as before.
 Nothing older is read differently: an analysis stored before this version
 has no requote event and no such `auto_resolved` entries, and its items are
 cards as before. The re-ask happens only right after a new analysis.
+Checked on a copy of `data/runtime/candidate-a-live-acceptance` (sqlite
+through the backup API, objects hard-linked; the original only read): all
+seven protocols list, review and -- the three that run -- load
+(`pdf-1-analysis-10` for the in-gel fixture).
 
 ### Going back
 
@@ -1234,6 +1238,9 @@ Code from before this version ignores the new event and the extra
 `auto_resolved` entries (it never reads `auto_resolved` back); an analysis
 whose items were kept by the re-ask reads, lists and runs like any other,
 since its quotes are the source's own words and pass the older checks.
+Checked with the code of `515421f` on a copy of this lane's live catalog
+(ten documents, two items kept by the re-ask in one review-pending analysis):
+every protocol listed and reviewed with the same cards as the new code.
 
 ## Workspace schema 10 → 11: the agent's voice and the calibration outcome (2026-10-18, lane ON)
 
