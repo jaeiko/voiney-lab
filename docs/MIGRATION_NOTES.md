@@ -1149,6 +1149,41 @@ version raised `ProtocolSerializationError`. Before going back with such a
 version stored, keep this version's `validate_protocol` (the rule moved to
 `validate_step_labelling`) or restore a store backup taken before it.
 
+### Round 2 (2026-10-18): poorly read pages, safety numbers, long documents
+
+Human decisions of 2026-10-18. Append-only again; no schema change:
+
+- `protocol_ocr_completed` pages gain `other_confidence` (the other engine's
+  page confidence). A page whose numbers the engines read differently or
+  without a partner at least 15% of the time, or with the lower confidence
+  below 0.90, settles no value; such values are flagged with `reason_code`
+  `ocr_page_differs_widely` or `ocr_page_low_confidence`.
+- An `ocr_value` flag stated by a safety statement carries
+  `extra.in_safety_statement: true`; its `fix` decision must be the other
+  engine's reading. A review version registered with such a fix holds the
+  statement with the reading copied in the value's place, and its `changes`
+  gain an entry for the statement (`kind` `warning`, `action` `fix`,
+  `origin` `source`).
+- A document read in pieces writes no `protocol_analysis_auto_reanalysis`;
+  its `protocol_analysis_too_many_review_items` failure names a `limit` of
+  `VOINEY_LAB_REVIEW_MAX_ITEMS` plus its number of pieces.
+- A new flag reason `reference_moved` (`item_id` `construct:<id>`,
+  `field` `section_id`, `reason_code` `construct_step_in_other_section`,
+  `extra` = `step_id`, `named_section`, `step_section`): the join pointed a
+  construct at the section its step stands in.
+
+Reading older data: an OCR result without `other_confidence` gates on the
+chosen engine's confidence alone. Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (sqlite through the backup API,
+objects hard-linked; the original only read): all seven protocols read; on
+the copy, with fake engines and models, a safety number the engines read
+differently was registered with the other engine's reading copied into the
+statement, and a joined document whose construct the join re-pointed was
+confirmed and registered -- both run. Going back to the code of `f8e1a5e`:
+every protocol, the two new versions included, lists, reviews and loads (the
+new fields are ignored; a `reference_moved` flag reads as an item like any
+other).
+
 ## Workspace schema 10 → 11: the agent's voice and the calibration outcome (2026-10-18, lane ON)
 
 Schema 11 is schema 10 with two more names in the `experimenter_settings`
