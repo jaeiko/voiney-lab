@@ -297,7 +297,8 @@ class TheStartScreenAndTheRecordTests(unittest.TestCase):
             report["report_id"], fixture=self.fixture
         ).decode()
         self.assertIn("| 프로토콜 상태 | 분석 통과 · 실험자가 시작함 |", text)
-        self.assertIn("| 안전 주의 확인 | 시작 전 화면에서 원문 안전 주의 1건을 보고 시작함 |", text)
+        # Lane RP3, decision ①: the notices seen are in the appendix's system line.
+        self.assertIn("안전 주의 1건 보고 시작", text)
         for gone in ("승인", "검토자"):
             self.assertNotIn(gone, text)
 

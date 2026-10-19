@@ -1434,3 +1434,134 @@ What changes for someone:
 
 Going back: code from before this version reads the same data; the deleted
 settings were read only by the deleted code.
+
+## Lane RP3 (2026-10-20), decision ①: the experiment report becomes a lab notebook
+
+No schema change and no migration; nothing already stored is read
+differently. The experiment record (`experiment_reports` and its events) is
+unchanged; the notebook is a reading of it.
+
+What changes for someone:
+
+- The Word, PDF and Markdown exports (`/api/experiment-reports/{id}.docx|pdf|md`)
+  are now the lab notebook: header (title = the purpose said, else the
+  protocol's name; date and time; experimenter; protocol with the version run
+  and its source; progress), "1. 시료와 조건", "2. 실제로 한 조건" ("원문 값 →
+  실제", steps done as the source says grouped as "원문대로"), "3. 관찰과 결과",
+  "4. 원문과 다르게 한 점·문제", "5. 지난번과 다른 점", "6. 다음에 바꿀 점·다음
+  할 일", "7. 확인" (experimenter, PI), "8. 부록" (step times, the words as
+  said with their corrections, the review version's changes, one line of
+  system events, the source). The old sections 1–6, the first pages of lane
+  RP2 (counts, timer and notices tables, the check's table) and the
+  materials tables are gone from the body; the unconfirmed-value line and
+  marks (lane RP2, decision 3) stay.
+- The model-written sections of lane RP (purpose, background, methods,
+  results summary, discussion suggestions, conclusion, next steps, item
+  uses) are still prepared and kept in `experiment_report_prose` as before,
+  but no longer printed: the notebook has no place for them. Decision ③ of
+  this lane brings the AI-written notes ("AI 정리") in their place.
+- Three event types are read when present and have Korean names in
+  `EVENT_NAMES_KO`: `purpose_recorded` (목적·시료 기록), `result_recorded`
+  (결과·다음 할 일 기록) and `pi_confirmed` (PI 확인). Nothing writes them yet
+  (decisions ② and ④); a record without them reads "말하지 않음" and "PI
+  확인: 아직 없음".
+- "5. 지난번과 다른 점" reads the finished run of the same protocol that
+  started last before this one from the same report store
+  (`ExperimentReportStore.previous_finished_report`); no new table.
+
+Going back: code from before this version reads the same data and prints
+the old report.
+
+## Lane RP3 (2026-10-20), decision ②: what the run asks for the notebook
+
+No schema change and no migration. Three event types the notebook already
+read (decision ①) are now written, and one setting is added.
+
+- `purpose_recorded` (목적·시료 기록): the words said after the start's
+  question "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고
+  하세요.", with `payload.samples` (name, condition, control) read from the
+  words deterministically. `result_recorded` (결과·다음 할 일 기록): the words
+  said after the end's question "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해
+  주세요.", with `payload.result` and `payload.next_change` split at "다음에(는)".
+  An observation said after "관찰한 것 있으면 말씀해 주세요." (asked once when a
+  step whose source names what to observe is completed without a
+  description) is an ordinary `observation` event at the completed step,
+  category `observed`. "목적 고쳐: …" / "결과 고쳐: …" append a
+  `record_corrected` event beside the saying it amends (lane N's shape).
+- Every `observation` and `anomaly` event whose words name a sample ("3번
+  샘플", "S2", "대조군") carries it as `payload.sample`.
+- `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION` (default true) turns the
+  observation question off. The start and end questions have no switch;
+  "넘어가" skips each.
+- None of the questions changes the workflow's state; a command said in
+  their place runs as it does now. The session checkpoint tuple has one more
+  trailing element (the open question and what was said), read as absent
+  by older checkpoints.
+
+Going back: code from before this version reads the same records; the new
+events are unknown to it and ignored by its report.
+
+## Lane RP3 (2026-10-20), decision ③: AI-written notes, the lab-meeting summary and the results table
+
+No schema change and no migration. The report model's reply, kept in
+`experiment_report_prose` as before (lane RP, decision 9), has a new shape;
+two export formats are added.
+
+- The model (the report role: `VOINEY_LAB_REPORT_PROVIDER` /
+  `VOINEY_LAB_REPORT_MODEL`, off with `VOINEY_LAB_REPORT_WRITER_ENABLED=false`)
+  now reads the notebook's facts only -- purpose, samples, the conditions
+  used, the records, the differences from the source, the result and the
+  change said, the values not confirmed -- and returns `observation_notes`
+  (one sentence per step and sample) and `result_summary` (one paragraph).
+  The old sections (purpose, background, methods, results, discussion,
+  conclusion, next steps, item uses, general background) are no longer
+  asked for, checked or printed; `check_report_sections`, `MODEL_SECTIONS`
+  and the item-use checks are gone from `experiment_reports`.
+- Each AI-written sentence is checked by the server (`check_ai_notes`):
+  every number and unit must be in the record or the source, a value the
+  experimenter did not confirm may not be stated, no step the record lacks,
+  no identifier, no safety or procedural direction, no round count without
+  "말로 확인한 돌아가기 기준", no speculation, no quotation that is not a
+  record. One that passes is printed in "3. 관찰과 결과" marked "AI 정리 —
+  N단계 · 시료: …" (and "결과 (AI 정리): …"); one that fails is dropped and
+  the record's own words stand. The notebook's last line says how many
+  sentences the model wrote, that the numbers were checked, and how many
+  were dropped.
+- A reply kept before this version (the old sections) is read as having no
+  notes: the notebook prints the record's sentences and "AI 가 쓴 문장은
+  없다". Asking for the prose again (the screen's button) writes it in the
+  new shape.
+- Two formats join `/api/experiment-reports/{id}.{format}`: `meeting-docx`
+  and `meeting-pdf` (the one-page lab-meeting summary: 목적, 시료, 핵심 결과,
+  지난번과 다른 점, 다음 할 일) and `xlsx` (the results table: one row per
+  record with 시료, 과정, 조건 (원문 → 실제), 관찰, 측정값, 단위, 시각, 출처;
+  the AI-written notes after the records, marked; the header on a second
+  sheet). `openpyxl` was already a dependency.
+
+Going back: code from before this version reads the same records; a reply
+kept in the new shape has none of the old keys, so the old report prints
+its server sentences.
+
+## Lane RP3 (2026-10-20), decision ④: a PI's "확인함" on a notebook and on a review version
+
+No schema change and no migration. Two append-only event types are
+written; nothing waits on them and nothing is changed by them.
+
+- `pi_confirmed` in the experiment record (`experiment_reports` events;
+  Korean name "PI 확인" since decision ①): written by
+  `POST /api/experiment-reports/{id}/pi-confirmations` with `{"comment": "…"}`
+  (at most 300 characters), `payload` = the administrator account's name
+  (lane ON), the one line, `"source": "screen"`; the time is the event's.
+  Only an administrator account may post (403 `pi_confirmation_admin_only`);
+  `GET …/pi-confirmations` and the report's public state
+  (`pi_confirmations`) list them. The notebook's "7. 확인" prints each one
+  (name, time, line); a second confirmation is appended, never replaced.
+- `protocol_review_version_pi_confirmed` in the protocol ledger
+  (`workspace_store` events of the protocol's revision): written by
+  `POST /api/protocols/{id}/review-versions/{version}/pi-confirmations`,
+  `payload` = version, name, comment, recorded_at. The version's record and
+  the protocol's `review_versions` list carry `pi_confirmations`. The
+  start is not held by it (lane DI: analysis passed + the experimenter
+  starts).
+
+Going back: code from before this version ignores both event types.

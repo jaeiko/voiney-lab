@@ -12,6 +12,7 @@ import collections
 import functools
 import hashlib
 import json
+import os
 import re
 import struct
 import time
@@ -51,6 +52,7 @@ from voiney_lab.answer_checks import (
     outside_pdf_violations,
 )
 from voiney_lab.llm_router import (
+    incomplete_fragment,
     RECORD_LOG,
     ProposalBasis,
     ProposalVerdict,
@@ -555,6 +557,11 @@ class CuratedProtocolTurnPlan:
     #: A setting the experimenter changed by voice (lane CF, decision 1):
     #: {"confirm_mode": "quiet"}; the server keeps it for the next session.
     setting_change: dict[str, str] | None = None
+    #: Lane RP3, decision ②: what the turn said for the notebook -- the
+    #: purpose and samples, an observation at a completed step, the result
+    #: and the change for next time, or a correction of one of these. The
+    #: server stores it; nothing here moves the run.
+    notebook_record: dict[str, Any] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -4136,6 +4143,55 @@ ROUTER_FIRST_HANDED_ON: frozenset[str] = frozenset({
 _SERVER_VALUE_SCOPES = frozenset({
     "version", "total_steps", "current_position", "remaining_steps",
 })
+
+
+# --- The notebook's questions (lane RP3, decision ②, 2026-10-20) ---------------
+#
+# Human decision: short questions the experimenter can skip, none of which
+# changes the workflow's state. Once at the start, the purpose and samples;
+# at a step whose source names what to observe (endpoint words), once when
+# it is completed without a description, what was observed; once at the end
+# (after the values were confirmed, or at once with none), the result and
+# what to change next; and "목적 고쳐: …" / "결과 고쳐: …" amend what was
+# said. The next words after a question are its answer unless they are a
+# command -- a step move, a completion, a start, an end, a note request, a
+# question, a problem -- which runs as it does now with the question
+# dropped; a bare "넘어가" / "없어" / a yes or no skips the question with
+# nothing moved. A question asked at a step lapses once the run moves. The
+# server writes the record (append-only).
+
+PURPOSE_QUESTION_KO = "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요."
+OBSERVATION_QUESTION_KO = "관찰한 것 있으면 말씀해 주세요."
+RESULT_QUESTION_KO = "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요."
+NOTEBOOK_SKIPPED_KO = "알겠어요."
+NOTEBOOK_OBSERVATION_QUESTION_ENV = "VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION"
+_NOTEBOOK_QUESTIONS = {
+    "purpose": PURPOSE_QUESTION_KO, "observation": OBSERVATION_QUESTION_KO, "result": RESULT_QUESTION_KO,
+}
+_NOTEBOOK_SKIP = re.compile(
+    r"^(?:(?:그냥|아니|아니요|아뇨|음|어|아)\s*)?"
+    r"(?:넘어가|넘어가요|넘어갈게|넘어갈게요|넘어가자|넘어가죠|패스|스킵|없어|없어요|없습니다|없음|"
+    r"괜찮아|괜찮아요|됐어|됐어요|나중에|나중에 할게|나중에 할게요|결과는 없어|결과 없어|딱히 없어|"
+    r"아직|아직이요|아직이에요|아직 아니야)"
+    r"(?:\s*요)?[.!]*$"
+    # Fillers alone ("아 음", "음 그러니까") answer nothing; "잠깐" is a pause.
+    r"|^(?:(?:아|어|음|자|그|저|그러니까|있잖아|자 이제)\s*)+[.!]*$"
+)
+#: A bare yes or no to a notebook question skips it; "완료했어" and the like
+#: are completions, read as commands before this.
+_NOTEBOOK_BARE_YES_NO = re.compile(
+    r"^(?:네|예|응|어|그래|맞아|아니|아니요|아뇨|아니야|아닙니다|yes|no)(?:\s*요)?[.!]*$"
+)
+#: A request or an order anywhere in the words ("원문 그림 띄워 줘", "관찰
+#: 메모해 줘 멤브레인이 살짝 말랐어", "해라"): a command, whatever the rules
+#: make of it -- not what the notebook asked for.
+_NOTEBOOK_REQUEST = re.compile(
+    r"(?:줘|주세요|주십시오|줄래|줄래요|주실래요|주라|달라|해라|하세요|하십시오)(?=[\s.!?,]|$)"
+)
+_NOTEBOOK_FIX = re.compile(
+    r"^\s*(?P<target>목적|시료|결과|다음에 바꿀 점|다음 할 일)\s*(?:을|를|은|는|만)?\s*"
+    r"(?:고쳐|바꿔|수정)(?:\s*줘|요|\s*주세요|해\s*줘|해)?\s*[:,：]?\s*(?P<text>.+?)\s*$"
+)
 
 
 @dataclass(frozen=True)
@@ -9446,6 +9502,15 @@ class CuratedProtocolSession:
         #: correction asked about. Open until every value is answered or the
         #: researcher leaves the rest for the screen.
         self._report_review: dict[str, Any] | None = None
+        #: Lane RP3, decision ②: the notebook's open question ("purpose",
+        #: "observation" at a completed step, "result"), answered by the next
+        #: words or dropped by a command; and what was said already, for the
+        #: corrections "목적 고쳐: …" / "결과 고쳐: …".
+        self._notebook_question: dict[str, Any] | None = None
+        self._notebook_said: dict[str, bool] = {"purpose": False, "result": False}
+        self._observation_question_enabled = (
+            os.environ.get(NOTEBOOK_OBSERVATION_QUESTION_ENV, "true").strip().casefold()
+            not in {"0", "false", "no", "off"})
         self.safety_pack: Any = None
         #: Lane CF (2026-10-08). The experimenter's settings, as the server
         #: applies them when a session opens (decisions 1 and 4). The
@@ -13347,7 +13412,10 @@ class CuratedProtocolSession:
             if state["index"] >= len(items):
                 self._report_review = None
                 done = "모두 확인했어요. 보고서 문장을 준비할게요."
-                return plan(f"{lead}{done}", f"{lead}{done}", kind, closed=True)
+                # Lane RP3, decision ② d: the result and the next change, once
+                # the values are confirmed.
+                asked_next = self.open_notebook_question("result")
+                return plan(f"{lead}{done} {asked_next}", f"{lead}{done} {asked_next}", kind, closed=True)
             display, speech = self._review_question()
             return plan(f"{lead}{display}", f"{lead}{speech}", kind)
 
@@ -13359,6 +13427,7 @@ class CuratedProtocolSession:
                 f"알겠어요. 남은 {len(remaining)}개는 화면의 확인 목록에서 확인할 수 있어요. "
                 "확인하지 않은 값은 보고서에 따로 적어 둘게요."
             )
+            said = f"{said} {self.open_notebook_question('result')}"
             return plan(said, said, kind, closed=True, remaining=remaining)
 
         if transcript_quality is not None:
@@ -15358,6 +15427,8 @@ class CuratedProtocolSession:
         self._last_record = None
         self._pending_record_fix = None
         self._report_review = None
+        self._notebook_question = None
+        self._notebook_said = {"purpose": False, "result": False}
         self._branch_answers.clear()
         self._registered_repetitions.clear()
         self._declined_round = None
@@ -15549,6 +15620,9 @@ class CuratedProtocolSession:
         self._last_record = None
         self._pending_record_fix = None
         self._report_review = None
+        # And its own notebook questions and sayings (lane RP3).
+        self._notebook_question = None
+        self._notebook_said = {"purpose": False, "result": False}
         # And its own answers to the source's conditions and counts (lane CB).
         self._branch_answers.clear()
         self._registered_repetitions.clear()
@@ -15809,6 +15883,12 @@ class CuratedProtocolSession:
                 if self._pending_note_confirmation is not None else None,
                 json.dumps(self._prestart) if self._prestart is not None else None,
             ),
+            # Lane RP3, decision ②: the notebook's open question and what was
+            # said roll back with the turn that opened or answered them.
+            (
+                json.dumps(self._notebook_question) if self._notebook_question is not None else None,
+                dict(self._notebook_said),
+            ),
         )
 
     def _restore(
@@ -15895,6 +15975,9 @@ class CuratedProtocolSession:
             asked = checkpoint[26] if len(checkpoint) >= 27 else (None, None)
             self._pending_note_confirmation = dict(asked[0]) if asked[0] is not None else None
             self._prestart = json.loads(asked[1]) if asked[1] is not None else None
+            notebook = checkpoint[27] if len(checkpoint) >= 28 else (None, None)
+            self._notebook_question = json.loads(notebook[0]) if notebook[0] is not None else None
+            self._notebook_said = dict(notebook[1]) if notebook[1] else {"purpose": False, "result": False}
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -15915,6 +15998,8 @@ class CuratedProtocolSession:
             self._report_review = None
             self._pending_note_confirmation = None
             self._prestart = None
+            self._notebook_question = None
+            self._notebook_said = {"purpose": False, "result": False}
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -17348,6 +17433,7 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan:
         """Plan one turn by the rules: the front rules, then all the others."""
 
+        pre_index, pre_active = self.current_index, self.active
         planned = self._plan(
             transcript,
             turn_id=turn_id,
@@ -17362,7 +17448,196 @@ class CuratedProtocolSession:
         )
         if planned is None:
             raise CuratedProtocolFixtureError("A turn was left unplanned.")
-        return planned
+        return self._with_notebook_question(
+            planned, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language)
+
+    # --- The notebook's questions (lane RP3, decision ②) -------------------------
+
+    def notebook_question_open(self) -> str | None:
+        """The kind of notebook question the next words answer, or None."""
+
+        if self._notebook_question is None or not self._notebook_question_valid():
+            return None
+        return str(self._notebook_question["kind"])
+
+    def open_notebook_question(self, kind: str, *, completed_index: int | None = None) -> str:
+        """Open one of the notebook's questions and return its words.
+
+        "purpose" and "observation" are answered at the step they were asked
+        at and lapse once the run moves; "result" is asked after the end.
+        Nothing moves: the question is a reading of the next words only.
+        """
+
+        completed_label = completed_step_id = None
+        if completed_index is not None and 0 <= completed_index < len(self.fixture.steps):
+            completed = self.fixture.steps[completed_index]
+            completed_label, completed_step_id = completed.source_label, completed.step_id
+        self._notebook_question = {
+            "kind": kind, "step_index": self.current_index, "revision": self._revision,
+            "completed_label": completed_label, "completed_step_id": completed_step_id,
+        }
+        return _NOTEBOOK_QUESTIONS[kind]
+
+    def _notebook_question_valid(self) -> bool:
+        held = self._notebook_question
+        if held is None:
+            return False
+        if held["kind"] == "result":
+            return not self.active and self._report_review is None
+        return bool(
+            self.active and self.current_index == held["step_index"]
+            and self._revision == held["revision"])
+
+    def _with_notebook_question(
+        self, planned: CuratedProtocolTurnPlan | None, *, pre_index: int, pre_active: bool,
+        turn_id: int, language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """Ask the notebook's question the turn calls for (decision ② a and c).
+
+        After a start that opened no other question: the purpose and samples.
+        After a completion of a step whose source names what to observe, when
+        the completion carried no description (a bare yes to the endpoint
+        question is none) and no other question is open: what was observed.
+        The words are added to the reply; the run is as the turn left it.
+        """
+
+        if planned is None or language != "ko" or not planned.state_changed:
+            return planned
+        words: str | None = None
+        if (
+            planned.action is CuratedProtocolAction.START and not pre_active and self.active
+            and self.open_server_question() is None
+        ):
+            words = self.open_notebook_question("purpose")
+        elif (
+            planned.action is CuratedProtocolAction.NEXT and planned.reported_completion
+            and self._observation_question_enabled and pre_active and self.active
+            and self.current_index != pre_index and not self._endpoint_words(pre_index).empty
+            and not (
+                planned.reported_observation
+                and not str(planned.observation_outcome or "").startswith("원문 종점"))
+            and self.open_server_question() is None
+        ):
+            words = self.open_notebook_question("observation", completed_index=pre_index)
+        if words is None:
+            return planned
+        asked = replace(
+            planned,
+            display_text=f"{planned.display_text}\n\n{words}",
+            speech_text=f"{planned.speech_text} {words}",
+        )
+        self._replay[turn_id] = asked
+        return asked
+
+    def _plan_notebook_answer(
+        self, transcript: str, *, turn_id: int, language: str, transcript_quality: str | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """The words after a notebook question: its answer, a skip, or None for a command."""
+
+        held = self._notebook_question
+        assert held is not None
+        words = " ".join(transcript.split())
+        key = _semantic_utterance_key(transcript)
+        if language != "ko" or transcript_quality is not None:
+            return None
+        if not key or _NOTEBOOK_SKIP.fullmatch(key) or _NOTEBOOK_BARE_YES_NO.fullmatch(key):
+            self._notebook_question = None
+            plan = self._words_plan(NOTEBOOK_SKIPPED_KO, intent_kind="notebook_question_skipped")
+            self._last_front_rule = "notebook_question"
+            self._replay[turn_id] = plan
+            return plan
+        # Whether the words are a command is read on the result alone when
+        # the answer to the end question goes on with "다음에는 …": those
+        # words name the change for next time, not the next step.
+        probe = words
+        if held["kind"] == "result":
+            from voiney_lab.experiment_reports import split_result_and_next
+
+            result_part, next_part = split_result_and_next(words)
+            probe = result_part or next_part
+        # A command is what the rules' own readers call one -- the session's
+        # classification of this turn (with its vocabulary and context), a
+        # step move or revert, a completion, a note request, a question, a
+        # problem; free words (related_question, off_topic) are the answer.
+        classified = self.deterministic_control_intent(
+            probe, language="ko", arbitration=arbitrate_request(probe))
+        if (
+            classified.action not in {
+                CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.OFF_TOPIC}
+            or _utterance_looks_like_new_command(probe)
+            or step_revert_request(probe) is not None
+            or has_completion_evidence(probe)
+            or classify_korean_completion_command(probe)
+            or note_request(probe) is not None
+            or _QUESTION_MARKERS.search(probe.casefold())
+            or _OBSERVATION_PROMPT_PROBLEM.search(_semantic_utterance_key(probe))
+            or _confirmation_is_mixed(probe)
+            # A request ("띄워 줘", "메모해 줘 …") is a command whatever the
+            # rules make of it; words cut short ("… 이 단계에서 쓰는", lane
+            # RA's fragment) are not an answer either -- the question stays.
+            or _NOTEBOOK_REQUEST.search(probe)
+            or incomplete_fragment(probe)
+        ):
+            return None
+        kind = str(held["kind"])
+        self._notebook_question = None
+        if kind == "purpose":
+            from voiney_lab.experiment_reports import samples_in_text
+
+            samples = samples_in_text(words)
+            said = f"목적과 시료 {len(samples)}개를 기록했어요." if samples else "목적을 기록했어요."
+            self._notebook_said["purpose"] = True
+            plan = replace(
+                self._words_plan(said, intent_kind="notebook_purpose",
+                                 action=CuratedProtocolAction.CLARIFY_PARAMETER),
+                notebook_record={"kind": "purpose", "text": words, "samples": samples},
+            )
+        elif kind == "observation":
+            plan = replace(
+                self._words_plan("관찰을 기록했어요.", intent_kind="notebook_observation",
+                                 action=CuratedProtocolAction.RECORD_OBSERVATION),
+                notebook_record={
+                    "kind": "observation", "text": words,
+                    "step_label": held.get("completed_label"), "step_id": held.get("completed_step_id"),
+                },
+                reported_observation=True, observation_predicate="observed", observation_outcome=words,
+                step_label=held.get("completed_label"),
+            )
+        else:
+            from voiney_lab.experiment_reports import split_result_and_next
+
+            result, next_change = split_result_and_next(words)
+            said = (
+                "결과와 다음에 바꿀 점을 기록했어요." if result and next_change
+                else "다음에 바꿀 점을 기록했어요." if next_change else "결과를 기록했어요.")
+            self._notebook_said["result"] = True
+            plan = replace(
+                self._words_plan(said, intent_kind="notebook_result",
+                                 action=CuratedProtocolAction.CLARIFY_PARAMETER),
+                notebook_record={"kind": "result", "text": words, "result": result, "next_change": next_change},
+            )
+        self._last_front_rule = "notebook_question"
+        self._replay[turn_id] = plan
+        return plan
+
+    def _plan_notebook_fix(self, match: re.Match[str], *, turn_id: int) -> CuratedProtocolTurnPlan:
+        """"목적 고쳐: …" / "결과 고쳐: …" (decision ② e): a correction the server
+        appends beside what was said, as lane N's corrections are."""
+
+        target = "purpose" if match.group("target") in {"목적", "시료"} else "result"
+        text = match.group("text").strip()
+        noun = "목적" if target == "purpose" else "결과"
+        if not self._notebook_said.get(target):
+            plan = self._words_plan(f"고칠 {noun} 기록이 없어요.", intent_kind="notebook_fix_nothing")
+        else:
+            plan = replace(
+                self._words_plan(f"{noun}{'을' if target == 'purpose' else '를'} 고쳤어요.",
+                                 intent_kind="notebook_fix", action=CuratedProtocolAction.CLARIFY_PARAMETER),
+                notebook_record={"kind": "fix", "target": target, "text": text},
+            )
+        self._last_front_rule = "notebook_fix"
+        self._replay[turn_id] = plan
+        return plan
 
     def front_plan(
         self,
@@ -17400,7 +17675,8 @@ class CuratedProtocolSession:
         ROUTER_FIRST_HANDED_ON are handed on too, untouched.
         """
 
-        return self._plan(
+        pre_index, pre_active = self.current_index, self.active
+        planned = self._plan(
             transcript,
             turn_id=turn_id,
             language=language,
@@ -17413,6 +17689,8 @@ class CuratedProtocolSession:
             front_only=True,
             hand_on=ROUTER_FIRST_HANDED_ON if router_first else frozenset(),
         )
+        return self._with_notebook_question(
+            planned, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language)
 
     #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
     _MIXED_REPLY_LEAD = {
@@ -17572,6 +17850,29 @@ class CuratedProtocolSession:
                 transcript, turn_id=turn_id, language=language,
                 transcript_quality=transcript_quality,
             )
+        if language == "ko" and transcript_quality is None:
+            # Lane RP3, decision ② e: "목적 고쳐: …" / "결과 고쳐: …".
+            fix = _NOTEBOOK_FIX.fullmatch(" ".join(transcript.split()))
+            if fix is not None:
+                return self._plan_notebook_fix(fix, turn_id=turn_id)
+        if self._notebook_question is not None:
+            # Lane RP3, decision ② a, c, d: the words after a notebook question.
+            # A server question open for this turn (a completion, an endpoint,
+            # a value, the end, ...) is answered first; the notebook's waits.
+            if self._notebook_question_valid() and self._open_questions(
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ).first_open is None and not self._value_choice_valid(
+                # The words after "A요, B요?" (lane VT) pick one; the notebook waits.
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ):
+                answered = self._plan_notebook_answer(
+                    transcript, turn_id=turn_id, language=language,
+                    transcript_quality=transcript_quality,
+                )
+                if answered is not None:
+                    return answered
+                # A command: the turn runs as it does now, the session as it
+                # was; the question lapses once the run moves.
         homophone = language == "ko" and self._step_homophone(
             transcript, transcript_quality=transcript_quality,
             turn_id=turn_id, configuration_id=configuration_id, generation=generation,
@@ -22451,7 +22752,10 @@ class CuratedProtocolSession:
             )
             return AppliedToolProposal(verdict, plan)
         intent = self._intent_for_proposal(verdict, common, transcript=transcript)
-        return AppliedToolProposal(verdict, self._execute_turn_intent(intent, **execute))
+        pre_index, pre_active = self.current_index, self.active
+        executed = self._execute_turn_intent(intent, **execute)
+        return AppliedToolProposal(verdict, self._with_notebook_question(
+            executed, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language))
 
     def _intent_for_proposal(
         self, verdict: ProposalVerdict, common: dict[str, Any], *, transcript: str = "",

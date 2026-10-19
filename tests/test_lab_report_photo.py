@@ -70,7 +70,7 @@ def test_an_image_upload_puts_a_photo_on_the_report_with_its_caption(monkeypatch
     assert photo["payload"]["evidence_id"] == response.json()["evidence_id"]
     (summary,) = store.list_reports()
     text = store.export_markdown(summary["report_id"], fixture=None).decode()
-    assert "| 20 | 사진 | 사진 첨부 — 젤 조각이 하얗게 됨 |" in text
+    assert "| 20단계 | — | 사진: 젤 조각이 하얗게 됨 |" in text
 
 
 def test_without_a_caption_the_file_name_is_used_and_documents_are_not_photos(monkeypatch, tmp_path):

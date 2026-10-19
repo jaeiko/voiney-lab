@@ -48,6 +48,10 @@ def session_at(fixture=None, step_index: int | None = 3, *, router_first: bool =
     if step_index is not None:
         session.plan("시작", turn_id=1, language="ko", configuration_id=1, generation=1)
         session.current_index = step_index
+        # Lane RP3, decision ②: the start asks for the purpose, and the next
+        # free words would be its answer; these sessions speak free words
+        # the router is to read, so the question is closed first.
+        session._notebook_question = None
     return session
 
 
