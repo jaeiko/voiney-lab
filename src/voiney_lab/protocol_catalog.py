@@ -38,6 +38,8 @@ from voiney_lab.experiment_protocol_analysis import (
     OCR_VALUE_NOT_PLACED,
     OCR_VALUE_ONE_ENGINE,
     OCR_VALUE_ONE_ENGINE_READ,
+    OCR_VALUE_PAGE_DIFFERS_WIDELY,
+    OCR_VALUE_PAGE_LOW_CONFIDENCE,
     OCR_VALUE_READ_DIFFERENTLY,
     AnalysisPiece,
     OpenAICompatibleProtocolAnalysisModel,
@@ -56,6 +58,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
     REVIEW_REASON_READ_TWO_WAYS,
+    REVIEW_REASON_REFERENCE_MOVED,
     REVIEW_REASON_VALUE_CHANGED,
     REVIEW_REASONS_KO,
     ReviewFlag,
@@ -3558,12 +3561,28 @@ class ProtocolCatalog:
         Lane RV2, decision b: the values read by OCR are settled or made
         items first, so an analysis whose OCR values are not confirmed does
         not run as it is. Decision c: with ``model``, an analysis with more
-        items than ``review_max_items()`` is analysed once more instead."""
+        items than ``review_max_items()`` is analysed once more instead --
+        except a document read in pieces (lane AN3, round 2, decision ④),
+        which may ask about ``review_max_items()`` plus one item per piece and
+        otherwise ends with the guidance."""
 
         draft = self._with_ocr_value_flags(revision, draft)
-        if model is not None and _items_by_reason(draft)[0] > review_max_items():
-            draft, analysis_id = self._fewer_items(
-                revision, draft, analysis_id, model=model, pieces=pieces)
+        if pieces:
+            # Lane AN3, round 2, decision ④ (human decision 2026-10-18): a long
+            # document is not analysed again by itself -- the one live
+            # re-analysis cost USD 0.91 and changed nothing -- and may ask about
+            # one more item per piece (a seam or an unread page is one press).
+            limit = review_max_items() + len(pieces)
+            count, by_reason = _items_by_reason(draft)
+            if count > limit:
+                too_many = ProtocolAnalysisTooManyItemsError(
+                    "The analysis asks a person about too many items.",
+                    items=count, limit=limit, items_after=None, by_reason=by_reason)
+                self._record_analysis_failure(
+                    revision, f"{analysis_id}-too-many-items", too_many)
+                raise too_many
+        elif model is not None and _items_by_reason(draft)[0] > review_max_items():
+            draft, analysis_id = self._fewer_items(revision, draft, analysis_id, model=model)
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
@@ -3575,7 +3594,6 @@ class ProtocolCatalog:
         analysis_id: str,
         *,
         model: ProtocolAnalysisModel,
-        pieces: tuple[AnalysisPiece, ...],
     ) -> tuple[ProtocolAnalysisDraft, str]:
         """Too many items for cards: one more analysis, or the guidance alone.
 
@@ -3588,12 +3606,14 @@ class ProtocolCatalog:
         at what level and what came of it. A result within the bound is
         kept (with cards or none); otherwise the analysis fails with the
         guidance and makes no cards. Returns the draft to keep and its id.
+        A document read in pieces is never analysed again this way (lane AN3,
+        round 2, decision ④): its call is one analysis.
         """
 
         protocol_id = revision.experiment_id
         limit = review_max_items()
         count, by_reason = _items_by_reason(first)
-        planned = 2 * len(pieces) if pieces else 1
+        planned = 1
         cap = review_reanalysis_max_calls()
         escalated, reasoning = escalated_analysis_model(model)
         again_id = f"{analysis_id}-more-1"
@@ -3618,13 +3638,8 @@ class ProtocolCatalog:
                 protocol_id, count, limit, reasoning.get("reasoning_effort"), planned,
             )
             try:
-                extraction = first.extraction
-                if pieces:
-                    again = self._analyze_in_pieces(
-                        revision, extraction, escalated, pieces, analysis_id=again_id)
-                else:
-                    again = analyze_protocol_extraction(
-                        extraction, escalated, review_unverified=True)
+                again = analyze_protocol_extraction(
+                    first.extraction, escalated, review_unverified=True)
                 again = self._with_ocr_value_flags(revision, again)
                 after = _items_by_reason(again)
             except Exception as exc:  # noqa: BLE001 - the first result's guidance stands
@@ -4754,7 +4769,10 @@ class ProtocolCatalog:
                     step.step_id: step.source_label
                     for section in protocol_with_display_step_labels(protocol).sections
                     for step in section.steps}
-                items.append(view(item_id, "seam", flag.reason_ko, extra={"steps": [
+                # No words of its own: the card's reason says what it is and
+                # its two steps are the content (lane AN3, stage ③ found the
+                # reason drawn twice).
+                items.append(view(item_id, "seam", None, extra={"steps": [
                     {**step, "lines": _reading_lines(step, extraction),
                      "label_shown": shown_labels.get(str(step.get("step_id"))),
                      "label_printed": bool(str(step.get("label") or "").strip())}
@@ -4794,6 +4812,7 @@ class ProtocolCatalog:
             "readings": [dict(reading) for reading in extra.get("readings") or ()
                          if isinstance(reading, dict)],
             "page_card": f"{OCR_PAGE_CARD_PREFIX}{page}",
+            "in_safety_statement": extra.get("in_safety_statement") is True,
         })
         item["source"] = {
             "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
@@ -4988,6 +5007,8 @@ class ProtocolCatalog:
                 entry = values.setdefault((page, token), {"value": words, "items": []})
                 if record.item_id not in entry["items"]:
                     entry["items"].append(record.item_id)
+                if record.kind == _OCR_SAFETY_KIND:
+                    entry["in_safety_statement"] = True
         flags: list[ReviewFlag] = []
         settled: list[dict[str, object]] = []
         for (page, token), entry in values.items():
@@ -5016,6 +5037,8 @@ class ProtocolCatalog:
                     ],
                     # Lane AN3, decision A: what each engine read in its place.
                     "readings": readings,
+                    # Round 2, decision ③: stated by a safety statement.
+                    **({"in_safety_statement": True} if entry.get("in_safety_statement") else {}),
                 },
             ))
         if not flags and not settled:
@@ -5199,6 +5222,14 @@ class ProtocolCatalog:
                                                     label="Reviewed text")}
                 if action == "fix" and value["text"] == item["text"]:
                     raise ProtocolReviewError("A fix must change the text; confirm it instead.")
+                if item["kind"] == "ocr_value" and item.get("in_safety_statement") is True and (
+                    value["text"] not in {
+                        str(reading.get("text")) for reading in item.get("readings") or ()
+                        if isinstance(reading, dict) and reading.get("token") != item.get("token")}
+                ):
+                    # Round 2, decision ③: the other engine's reading, or nothing.
+                    raise ProtocolReviewError(
+                        "A number in a safety statement takes one of the engines' readings.")
         source_lines = None
         source = item.get("source") if isinstance(item.get("source"), dict) else None
         if action in {"confirm", "fix"} and item["needs_review"] and source is not None \
@@ -5937,13 +5968,16 @@ OCR_PAGE_ONE_ENGINE = "one_engine"
 #: before the start and the completion criteria. Numbers anywhere else are
 #: not asked: notes and tips (background), material and equipment names
 #: (catalog, lot and model numbers), section headings and the document's
-#: metadata, a value the source leaves out, a timer spec and a repeat count
-#: (their numbers are other records' words), and safety statements, which a
-#: review never rewrites (lane RV2, decision g).
+#: metadata, a value the source leaves out, and a timer spec and a repeat
+#: count (their numbers are other records' words). Round 2, decision ③ (human
+#: decision 2026-10-18): a safety statement's numbers are compared too; one
+#: read differently takes one of the engines' readings, never a person's own
+#: words (``_OCR_SAFETY_KIND``).
 _OCR_VALUE_EXECUTION_KINDS = frozenset({
     "step", "sub_action", "value", "duration", "condition", "construct", "reminder",
-    "prerequisite", "expected_result", "observation",
+    "prerequisite", "expected_result", "observation", "warning",
 })
+_OCR_SAFETY_KIND = "warning"
 #: Constructs that describe the source rather than what runs.
 _OCR_VALUE_NOT_EXECUTED = (domain.SourceAmbiguity, domain.ProtocolConflict)
 _ENGINE_FAILED_WARNING = re.compile(r"^Page ([0-9]+): .+ failed;")
@@ -5968,6 +6002,33 @@ def _asked_units(flags: Sequence[ReviewFlag]) -> dict[str, str]:
     return units
 
 
+#: Lane AN3, round 2, decision ② (human decision 2026-10-18): a page whose
+#: numbers the engines read differently, or not at all in place, at least this
+#: often, or that either engine read below this page confidence, settles no
+#: value by the engines' agreement. Live measurement (lane AN3, stage ②): the
+#: four values both engines read alike and wrongly stood on pages where 17-34%
+#: of the numbers differed and the confidences were 0.80-0.85; on the other 30
+#: runs these lines cost no pass.
+OCR_PAGE_MAX_DIFFERING_SHARE = 0.15
+OCR_PAGE_MIN_CONFIDENCE = 0.90
+
+
+def _ocr_page_gate(page: dict[str, object]) -> str | None:
+    """Why a page compared place by place settles no value, or None."""
+
+    readings = [reading for reading in page.get("value_readings") or ()
+                if isinstance(reading, dict)]
+    if readings and sum(
+        1 for reading in readings if reading.get("other_token") != reading.get("token")
+    ) >= OCR_PAGE_MAX_DIFFERING_SHARE * len(readings):
+        return OCR_VALUE_PAGE_DIFFERS_WIDELY
+    confidences = [value for value in (page.get("confidence"), page.get("other_confidence"))
+                   if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    if confidences and min(confidences) < OCR_PAGE_MIN_CONFIDENCE:
+        return OCR_VALUE_PAGE_LOW_CONFIDENCE
+    return None
+
+
 def _ocr_value_state(
     page_state: str, page: dict[str, object], token: str,
 ) -> tuple[str | None, list[dict[str, object]]]:
@@ -5979,13 +6040,16 @@ def _ocr_value_state(
     the readings to show: the chosen engine's, then the other engine's
     distinct numbers in those places. A page compared only as a whole (a
     result stored before lane AN3, or engines without word boxes) gives the
-    page's state with no readings.
+    page's state with no readings. A value read alike on a page read poorly
+    (``_ocr_page_gate``, round 2, decision ②) is asked with the gate's reason.
     """
 
     readings = page.get("value_readings")
     if not isinstance(readings, list):
         if page_state == OCR_PAGE_AGREE:
-            return None, []
+            # Round 2, decision ②: the confidence line holds here too (the
+            # result kept the chosen engine's page confidence only).
+            return _ocr_page_gate(page), []
         return (OCR_VALUE_ENGINES_DIFFER if page_state == OCR_PAGE_DIFFER
                 else OCR_VALUE_ONE_ENGINE), []
     places = [reading for reading in readings
@@ -6001,7 +6065,8 @@ def _ocr_value_state(
                 item["token"] for item in shown}:
             shown.append({"engine": other, "text": place.get("other_text"), "token": other_token})
     if all(place.get("other_token") == token for place in places):
-        return None, shown
+        # Lane AN3, round 2, decision ②: alike, but on a page read poorly.
+        return _ocr_page_gate(page), shown
     if len(shown) > 1:
         return OCR_VALUE_READ_DIFFERENTLY, shown
     return OCR_VALUE_ONE_ENGINE_READ, shown
@@ -6047,6 +6112,29 @@ def _ocr_value_spans(text: str) -> list[tuple[str, int, int]]:
          match.start(), match.end())
         for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized)
     ]
+
+
+def _with_value_copied(text: str, token: str, reading: str) -> str:
+    """``text`` with every place it states the value ``token`` written as
+    ``reading`` (lane AN3, round 2, decision ③). Positions are kept through
+    the comparison form character by character, so a text the form lengthens
+    or shortens is still placed exactly."""
+
+    owners: list[int] = []
+    forms: list[str] = []
+    for index, character in enumerate(text):
+        form = unicodedata.normalize("NFKC", character).casefold().replace("μ", "µ")
+        forms.append(form)
+        owners.extend([index] * len(form))
+    normalized = "".join(forms)
+    spans = [
+        (owners[match.start()], owners[match.end() - 1] + 1)
+        for match in _OCR_NUMBER_WITH_UNIT.finditer(normalized)
+        if match[1] + _OCR_UNIT_SPELLINGS.get(match[2] or "", match[2] or "") == token
+    ]
+    for start, end in reversed(spans):
+        text = text[:start] + reading + text[end:]
+    return text
 
 
 _DURATION_WORDS = re.compile(
@@ -6198,6 +6286,16 @@ def _card_choices(
             _choice("choose_b", "저쪽으로 읽기", request("choose", reading="b")),
             _choice("fix", "직접 고칠게요", request("fix"), needs="text"),
         ], {"readings": item.get("readings")}
+    if any(reason.get("reason") == REVIEW_REASON_REFERENCE_MOVED for reason in reasons):
+        # Lane AN3, round 2, decision ⑤: the join pointed a construct at the
+        # section its step stands in; a person says it holds, or the document
+        # is read again.
+        return "reference_moved", (
+            "조각을 합친 뒤 이 구조가 가리키는 단계가 다른 절에 있어요. "
+            "원문대로 이 단계를 가리키면 [맞아요], 아니면 다시 분석해요."), [
+            _choice("confirm", "맞아요", request("confirm"), primary=True),
+            _choice("reanalysis", "다시 분석", None, route="reanalysis"),
+        ], {}
     if kind == "pages":
         blocked = any(reason.get("reason") == REVIEW_REASON_BLOCKED for reason in reasons)
         return "blocked_pages" if blocked else "failed_pages", (
@@ -6285,7 +6383,10 @@ def _ocr_value_entry(item: dict[str, object]) -> dict[str, object]:
     if not readings:
         choices.append(_choice("confirm", f"{item.get('text')} 맞아요", request("confirm"),
                                primary=True))
-    choices.append(_choice("fix", "직접 입력", request("fix"), needs="text"))
+    if item.get("in_safety_statement") is not True:
+        # Round 2, decision ③: a safety statement's number is one of the
+        # engines' readings, never words of a person's own.
+        choices.append(_choice("fix", "직접 입력", request("fix"), needs="text"))
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     reason = next((reason for reason in item.get("reasons") or ()
                    if isinstance(reason, dict) and reason.get("reason") == REVIEW_REASON_OCR_VALUE),
@@ -6330,7 +6431,9 @@ def _ocr_page_card(values: Sequence[dict[str, object]]) -> dict[str, object]:
         "question_ko": (
             f"원문 {page}쪽 그림의 값 {len(entries)}개를 확인해 주세요. "
             "두 OCR 엔진이 다르게 읽었거나 한 엔진만 읽은 값이에요."),
-        "reasons_ko": list(dict.fromkeys(entry["reason_ko"] for entry in entries)),
+        # Each value says its own reason; the card does not repeat them (lane
+        # AN3, stage ③).
+        "reasons_ko": [],
         "shown": None,
         "source": {
             "page": page, "excerpt": None, "continued_page": None, "continued_excerpt": None,
@@ -6796,6 +6899,34 @@ def _apply_review(
             decided_by=str(decision.get("reviewer_name") or name),
             decided_at=str(decision.get("recorded_at") or ""),
         ))
+    for item_id, decision in decisions.items():
+        # Lane AN3, round 2, decision ③ (human decision 2026-10-18): a number of
+        # a safety statement the two engines read differently takes the reading
+        # a person chose -- the source's characters as that engine read them,
+        # copied in its place; the statement is not otherwise edited.
+        item = by_id.get(item_id)
+        value = decision.get("value") if isinstance(decision.get("value"), dict) else {}
+        if (item is None or item["kind"] != "ocr_value" or item.get("in_safety_statement") is not True
+                or decision.get("action") != "fix" or not isinstance(value.get("text"), str)):
+            continue
+        for linked in item.get("linked_items") or ():
+            record = records.get(linked)
+            if record is None or record.kind != _OCR_SAFETY_KIND:
+                continue
+            words = _record_words(record) or ""
+            copied = _with_value_copied(words, str(item.get("token") or ""), value["text"])
+            if copied == words:
+                continue
+            edits.append((record.path, lambda current, copied=copied: replace(
+                current, source_text=copied)))
+            shown = by_id.get(linked) or {}
+            changes.append(ReviewedChange(
+                item_id=linked, kind=record.kind, kind_ko=str(shown.get("kind_ko") or record.kind),
+                step_id=shown.get("step_id"), step_label=shown.get("step_label"),
+                action="fix", original=words, reviewed=copied, origin=REVIEW_ORIGIN_SOURCE,
+                decided_by=str(decision.get("reviewer_name") or name),
+                decided_at=str(decision.get("recorded_at") or ""),
+            ))
     for item in items:
         if item.get("covered_by") in confirmed_owners:
             origins.setdefault(str(item["item_id"]), REVIEW_ORIGIN_AI)

@@ -349,7 +349,11 @@ class OnePageOneCardTests(_ScanCase):
         self.assertIn("2쪽", card["question_ko"])
         self.assertEqual([choice["label_ko"] for choice in card["choices"]], ["모두 맞아요"])
         self.assertEqual(card["choices"][0]["request"], {"item_id": "ocr_page:2", "action": "confirm"})
-        spin, keep = card["values"]
+        # Round 2, decision ②: 2 of the page's 7 numbers differ (29%), so the
+        # value both engines read alike is asked too.
+        spin, rest, keep = card["values"]
+        self.assertEqual((rest["item_id"], rest["reason_code"]),
+                         ("ocr_value:2:5min", "ocr_page_differs_widely"))
         self.assertEqual((spin["item_id"], spin["shown"]), ("ocr_value:2:4000rpm", "4000 rpm"))
         self.assertEqual([(reading["engine"], reading["text"]) for reading in spin["readings"]],
                          [("Google", "4000 rpm"), ("CLOVA", "400 rpm")])
@@ -376,6 +380,7 @@ class OnePageOneCardTests(_ScanCase):
         decisions = self.events("protocol_review_decision_recorded")
         self.assertEqual([(d["item_id"], d["action"], d["page_card"]) for d in decisions], [
             ("ocr_value:2:4000rpm", "confirm", "ocr_page:2"),
+            ("ocr_value:2:5min", "confirm", "ocr_page:2"),  # round 2, decision ②
             ("ocr_value:2:4", "confirm", "ocr_page:2")])
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
         self.assertEqual(self.catalog.load_executable_fixture(self.protocol_id).revision_id,
@@ -385,12 +390,13 @@ class OnePageOneCardTests(_ScanCase):
         other = [line.replace("4000 rpm", "400 rpm").replace("4 C", "8 C") for line in SCAN]
         self.analyze(provider(SCAN, other))
         (card,) = self.cards()
-        keep = card["values"][1]
+        keep = card["values"][2]  # round 2, decision ②: 5 min is asked too, in between
         self.catalog.record_review_decision(self.protocol_id, keep["choices"][1]["request"])
         self.catalog.record_review_decision(self.protocol_id, card["choices"][0]["request"])
         decisions = self.events("protocol_review_decision_recorded")
         self.assertEqual([(d["item_id"], d["action"]) for d in decisions], [
-            ("ocr_value:2:4", "fix"), ("ocr_value:2:4000rpm", "confirm")])
+            ("ocr_value:2:4", "fix"), ("ocr_value:2:4000rpm", "confirm"),
+            ("ocr_value:2:5min", "confirm")])
 
     def test_the_other_engine_s_value_asks_the_step_sentence_again(self) -> None:
         other = [line.replace("4000 rpm", "400 rpm") for line in SCAN]
