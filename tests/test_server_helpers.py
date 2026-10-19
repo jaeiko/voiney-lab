@@ -1412,8 +1412,8 @@ class ServerTests(unittest.TestCase):
             ):
                 for format_name,media_type,prefix in (
                     ("json","application/json",b"{"),
-                    # Lane RP: the Markdown export is the researcher's report.
-                    ("md","text/markdown","# Candidate A 실험 보고서".encode()),
+                    # Lane RP3: the Markdown export is the researcher's notebook.
+                    ("md","text/markdown","# Candidate A\n".encode()),
                     ("csv","text/csv",b"\xef\xbb\xbf"),
                 ):
                     with self.subTest(format_name=format_name):

@@ -324,9 +324,13 @@ class ServedNoteTests(VoiceNotesHarness, unittest.TestCase):
             [(o["category"], o["content"]) for o in recorded],
             [("measurement", "pH 7.2"), ("note", "튜브 라벨 A-170")])
         markdown = self.report_markdown()
-        self.assertIn("| 2 | 측정 | pH 7.2 |", markdown)
-        self.assertIn("| 2 | 메모 | 튜브 라벨 A-170 |", markdown)
-        self.assertIn("측정 1건 · 관찰 0건 · 메모 1건 · 이상 0건 · 사진 0건", markdown)
+        # Lane RP3, decision ①: the observations by step, and the words as said
+        # with their kinds in the appendix.
+        # (pH 7.2 is not confirmed yet: the run is still going.)
+        self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| pH 7\.2 \[미확인\] \| \d\d:\d\d \|")
+        self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| 튜브 라벨 A-170 \| \d\d:\d\d \|")
+        self.assertRegex(markdown, r"\| \d\d:\d\d \| 2 \| 측정 \| pH 7\.2 \|")
+        self.assertRegex(markdown, r"\| \d\d:\d\d \| 2 \| 메모 \| 튜브 라벨 A-170 \|")
 
     def test_a_correction_is_appended_and_the_record_shows_the_latest_words(self) -> None:
         socket = self.turns(
@@ -346,7 +350,7 @@ class ServedNoteTests(VoiceNotesHarness, unittest.TestCase):
         public = _public_experiment_report_state(self.report())
         amended = next(e for e in public["events"] if e["event_key"] == original["event_key"])
         self.assertEqual(amended["amended"], {"status": "정정됨", "text": "pH 7.4"})
-        self.assertIn("| 2 | 측정 | pH 7.4 (정정됨 — 처음 기록 “pH 7.2”) |", self.report_markdown())
+        self.assertIn("| — | pH 7.4 (정정됨 — 처음 “pH 7.2”) [미확인] |", self.report_markdown())
         observation = next(
             e["observation"] for e in self.timeline()["timeline"]
             if e["event_type"] == "observation_recorded"
@@ -363,8 +367,10 @@ class ServedNoteTests(VoiceNotesHarness, unittest.TestCase):
         self.assertEqual(
             shown(socket)[5], "방금 기록을 취소로 표시했어요. 처음 기록은 지우지 않고 남겨 두었어요.")
         markdown = self.report_markdown()
-        self.assertIn("| 2 | 메모 | 튜브 라벨 A-170 (취소됨) |", markdown)
-        self.assertIn("관찰 0건 · 이상 0건 · 사진 0건", markdown)
+        # Lane RP3, decision ①: a withdrawn record is out of the observations
+        # and keeps its history in the appendix.
+        self.assertNotIn("| — | 튜브 라벨 A-170 |", markdown)
+        self.assertRegex(markdown, r"\| 메모 \| 튜브 라벨 A-170 → \d\d:\d\d 취소 \|")
         timeline = self.timeline()["timeline"]
         self.assertTrue(any(e["event_type"] == "observation_retracted" for e in timeline))
 
@@ -374,8 +380,9 @@ class ServedNoteTests(VoiceNotesHarness, unittest.TestCase):
             "기록해 줘, 원문과 다르게 Solution A를 600 µL 넣었어",
         )
         markdown = self.report_markdown()
-        self.assertIn("- 2단계: 연구자 기록 — “원문과 다르게 Solution A를 600 µL 넣었어”.", markdown)
-        self.assertIn("| 2 | 편차 |", markdown)
+        # Lane RP3, decision ①: with the source's value beside what was used.
+        self.assertIn("- 2단계 양: 원문 500 µL → 600 µL — “원문과 다르게 Solution A를 600 µL 넣었어”", markdown)
+        self.assertIn("| 편차 | 원문과 다르게 Solution A를 600 µL 넣었어 |", markdown)
 
 
 class ScreenTests(unittest.TestCase):
