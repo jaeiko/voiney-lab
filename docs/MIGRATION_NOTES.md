@@ -1342,6 +1342,51 @@ data under a principal id the older code treats like any other; the
 development identity's rows are untouched. A principal row blanked by the
 account deletion reads as a member without a name.
 
+## Lane LOG (2026-10-18): pilot metrics beside the workspace
+
+No workspace schema change and no stored row rewritten. Recorded here by lane
+FX4 (decision 6, 2026-10-19); lane LOG added the file.
+
+New: a SQLite file `pilot_metrics.sqlite` in `VOINEY_LAB_WORKSPACE_DATA_DIR`
+(`voiney_lab.pilot_metrics`, `PILOT_METRICS_FILENAME`;
+`data/runtime/pilot/workspace` for the pilot). It is created on the first
+write and only while the workspace is on; without the workspace nothing is
+stored (the `pilot.turn` server log line is still written). It holds
+numbers, codes and times only -- no words said, no audio, no protocol text,
+no model output -- in four tables, each row naming its account
+(`account_id`: the request's principal id -- `acct-<account id>` for a
+signed-in account, the development identity's otherwise -- or
+`dev-local-admin` when no principal is known), with `recorded_at` in UTC:
+
+| Table | One row per | Columns besides `id`, `recorded_at`, `account_id` |
+|---|---|---|
+| `pilot_turns` | voice turn (or tapped candidate) | `session_id`, `report_id`, `turn_id`, `router` (`off`/`front`/`used`/`fallback`/`stopped`), `reason` (`none`/`timeout`/`rate_limit`/`format`/`refused`/`error`), `action`, `source` (`voice`/`candidate`), `state_changed`, `step_advanced`, `clarified` (0/1), `first_audio_ms`, `total_ms` |
+| `pilot_marks` | experiment-level mark | `session_id`, `report_id`, `kind` (`button_change`, `experiment_opened`, `connection_lost`, `timer_alert`, `alert_answered`, `report_exported`), `code`, `value_ms` |
+| `pilot_protocol_events` | analysis outcome or registered review version | `protocol_id`, `revision_id`, `kind` (`analysis`/`review_registered`), `outcome` (`passed`/`review_pending`/`notice`/`failed`), `duration_ms`, `card_count` |
+| `pilot_feedback` | end-of-experiment answer ("이번 실험에 도움이 됐나요?") | `report_id`, `rating` (1-5, or NULL when `skipped`=1), `skipped`, `note` (the optional one-line memo, at most 200 characters -- the only free text) |
+
+The tables are made with `CREATE TABLE IF NOT EXISTS` on each write
+connection and carry no schema-version row; there are no delete triggers.
+Readers (`GET /api/admin/pilot-metrics`, `scripts/pilot_metrics.py`) open a
+temporary copy or open the file read-only. A write that fails is logged as
+`pilot.metrics.failed` and dropped.
+
+Deleting pilot data: the whole-folder path of `scripts/pilot_data_delete.py`
+deletes the file with the rest of the workspace folder. The `--account NAME`
+path does not read or change `pilot_metrics.sqlite` (that account's metric
+rows stay until the folder is deleted).
+
+### Reading older data
+
+A workspace made before lane LOG has no `pilot_metrics.sqlite`; every reader
+reads a missing file (or a missing table) as no rows, so the metrics of the
+time before it are empty, not wrong. Nothing is filled in after the fact.
+
+### Going back
+
+Code from before lane LOG does not open the file; it stays in the folder,
+unread, and does no harm. Delete it by hand if it should go.
+
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 
 No schema change and no migration; nothing already stored is read differently.

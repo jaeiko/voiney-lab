@@ -1,9 +1,9 @@
-# mobile/ — VoineyLab 스토어 앱 뼈대 (줄 APP0)
+# mobile/ — VoineyLab 스토어 앱 (줄 APP0 뼈대 · 줄 APP1 플러그인)
 
 왜 이렇게 만들었는지, 권한·심사·결제·오프라인 계획은 [`docs/APP_PLAN.md`](../docs/APP_PLAN.md) 에 있다. 이 파일은 만드는 법만 적는다.
 
 - 방식: **Capacitor 8.5.3** 로 서버의 웹 화면(`src/voiney_lab/static/`)을 감싼다. Android 먼저.
-- 원칙: 서버가 상태와 타이머의 권한을 그대로 갖는다. 앱은 기기 기능(알림·화면 켜 두기·네트워크 상태, 다음에 백그라운드 마이크)만 더한다.
+- 원칙: 서버가 상태와 타이머의 권한을 그대로 갖는다. 앱은 기기 기능(정시 알람·화면 꺼도 듣기·화면 켜 두기·네트워크 상태)과 앱 로그인만 더한다.
 - 비밀 값·서명 키는 저장소에 넣지 않는다(`.gitignore` 가 `*.keystore`·`*.jks` 를 막는다).
 
 ## 파일
@@ -11,15 +11,17 @@
 | 경로 | 무엇 |
 |---|---|
 | `package.json` | Capacitor 와 플러그인. 버전을 정확히 고정했다 |
-| `capacitor.config.js` | 앱 id·이름, 화면을 묶을지(기본) 서버 주소로 열지(`VOINEY_APP_SERVER_URL`) |
+| `capacitor.config.js` | 앱 id·이름, 화면을 묶을지(기본) 서버 주소로 열지(`VOINEY_APP_SERVER_URL`). `loggingBehavior: "none"` — 플러그인 호출(토큰·소리)이 기기 로그에 남지 않게 |
 | `scripts/build-android-debug.sh` | 디버그 APK 빌드(아래 3번을 묶음) |
-| `scripts/prepare-web.mjs` | `www/`(추적 안 함)를 만든다: 서버 정적 화면 + `www-src/` |
+| `scripts/prepare-web.mjs` | `www/`(추적 안 함)를 만든다: 서버 정적 화면 + `www-src/` + `app-config.js`(묶은 화면의 서버 주소, `VOINEY_APP_API_URL=https://…`) |
+| `scripts/app-config.mjs` | 그 주소를 확인하고 `app-config.js` 를 쓰는 함수(시험 `tests/native_bridge/app_config.test.js`) |
 | `www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때 보이는 화면(`server.errorPath`) |
-| `www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: `native-bridge.js` 로 6분 시험 타이머 알림(5분 뒤 "1분 전", 6분 뒤 끝)을 예약·취소 |
-| `android/` | `npx cap add android` 가 만든 Android 프로젝트. 고친 곳: `AndroidManifest.xml` 의 마이크 권한, `allowBackup=false` |
+| `www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: 6분 시험 타이머 알림(5분 뒤 "1분 전", 6분 뒤 끝, 알람 시계인지 표시), 화면 꺼도 듣기, 앱 로그인·웹소켓 첫 메시지 (순서는 `docs/APP_PLAN.md` 11.3절) |
+| `android/app/src/main/java/com/voiney/lab/{alarm,mic,session}/` | 앱 플러그인 셋(줄 APP1): `VoineyAlarm`(setAlarmClock, 재부팅 뒤 다시), `VoineyMicrophone`(마이크 포그라운드 서비스), `VoineySessionStore`(Keystore 로 봉한 로그인 토큰). `MainActivity` 가 등록 |
+| `android/` | `npx cap add android` 가 만든 Android 프로젝트. 고친 곳: `AndroidManifest.xml`(마이크·포그라운드 서비스·정확한 알람 권한, 수신기·서비스, `allowBackup=false`), `MainActivity.java`, 위 플러그인 |
 
-화면 쪽 다리는 `src/voiney_lab/static/native-bridge.js` 이고, 시험은 `node --test tests/native_bridge/timer_alerts.test.js`
-(pytest 에서는 `tests/test_native_bridge.py`).
+화면 쪽 다리는 `src/voiney_lab/static/native-bridge.js` 이고, 시험은 `node --test tests/native_bridge/*.test.js`
+(pytest 에서는 `tests/test_native_bridge.py`; 안드로이드 소스 확인은 `tests/test_lane_app1_*.py`).
 
 ## Android 디버그 APK (리눅스, sudo 없이)
 

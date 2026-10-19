@@ -11,6 +11,8 @@
   p { line-height: 1.5; margin: 0.4rem 0 1rem; }
   button { display: block; width: 100%; margin: 0.5rem 0; font-size: 1.05rem; padding: 0.85rem 1rem; border: 0; border-radius: 0.6rem; background: #1f6f5c; color: #fff; text-align: left; }
   button.secondary { background: #dfe6e2; color: #1c2321; }
+  input { display: block; width: 100%; box-sizing: border-box; margin: 0.3rem 0; font-size: 1rem; padding: 0.6rem; border: 1px solid #c9d1cd; border-radius: 0.5rem; }
+  h2 { font-size: 1.05rem; margin: 1.2rem 0 0.3rem; }
   pre { white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #d5dbd8; border-radius: 0.5rem; padding: 0.75rem; font-size: 0.85rem; min-height: 6rem; }
 </style>
 </head>
@@ -25,9 +27,21 @@
   <button id="pending" class="secondary">5. 예약된 알림 보기</button>
   <button id="awake" class="secondary">6. 화면 켜 두기 켜기/끄기</button>
   <button id="network" class="secondary">7. 네트워크 상태 보기·변화 기록</button>
+  <button id="mic">9. 화면 꺼도 듣기 시작 (알림 줄 "VoineyLab 이 듣는 중 · 끄기")</button>
+  <button id="mic-stop" class="secondary">10. 듣기 끄기</button>
+  <button id="mic-settings" class="secondary">11. 마이크 권한 설정 열기 (거절했을 때)</button>
   <button id="app" class="secondary">8. 앱 화면 열기 (index.html)</button>
+  <h2>앱 로그인 (서버가 VOINEY_LAB_APP_ORIGINS 에 https://localhost 를 넣었을 때)</h2>
+  <input id="server" type="url" placeholder="https://pilot.도메인" autocomplete="url">
+  <input id="name" placeholder="이름" autocomplete="username">
+  <input id="password" type="password" placeholder="비밀번호" autocomplete="current-password">
+  <button id="login">12. 로그인 (토큰은 휴대폰 보안 저장소에만)</button>
+  <button id="restore" class="secondary">13. 저장된 로그인 확인 (앱을 다시 연 뒤)</button>
+  <button id="socket" class="secondary">14. 웹소켓 열기 — 첫 메시지로 토큰, "ready" 가 오면 성공</button>
+  <button id="logout" class="secondary">15. 로그아웃</button>
   <pre id="log"></pre>
 </main>
+<script src="app-config.js"></script>
 <script src="native-bridge.js"></script>
 <script>
   "use strict";
@@ -42,7 +56,16 @@
     if (!cap) { log("Capacitor 가 없다 — 앱 안에서 열어야 한다."); return; }
     try { await fn(); } catch (error) { log(`오류: ${error && error.message ? error.message : error}`); }
   };
-  const alerts = cap ? bridge.createTimerAlerts(bridge.capacitorNotifier(cap)) : null;
+  // Lane APP1, decision 1: the alarm clock (VoineyAlarm) when exact alarms
+  // are allowed, the official plugin otherwise. Chosen again at step 1.
+  let chosen = cap ? { kind: "local_notifications", notifier: bridge.capacitorNotifier(cap) } : null;
+  const alerts = cap ? bridge.createTimerAlerts(chosen.notifier) : null;
+  const kindWords = { alarm_clock: "알람 시계(setAlarmClock, Doze 에서도 정시)", local_notifications: "공식 알림 플러그인(Doze 에서 늦을 수 있음)" };
+  const choose = async () => {
+    chosen = await bridge.chooseNotifier(cap);
+    await alerts.setNotifier(chosen.notifier);
+    return chosen;
+  };
   // The shape the server sends as timers.step (curated_protocol timer_status).
   const testState = (running) => {
     const now = Date.now();
@@ -58,10 +81,12 @@
   document.getElementById("prepare").onclick = guard(async () => {
     const result = await bridge.prepareNotifications(cap);
     log(`알림 표시: ${result.display}, 정확한 알람: ${result.exactAlarm === null || result.exactAlarm === undefined ? "해당 없음" : result.exactAlarm}`);
+    const now = await choose();
+    log(`타이머 알림 방식: ${kindWords[now.kind] || now.kind}`);
   });
   document.getElementById("exact").onclick = guard(async () => {
-    const result = await cap.nativePromise("LocalNotifications", "changeExactNotificationSetting", {});
-    log(`정확한 알람: ${result && result.exact_alarm}`);
+    await bridge.openExactAlarmSettings(cap);
+    log("설정에서 허용한 뒤 돌아와 1번을 다시 누른다.");
   });
   document.getElementById("schedule").onclick = guard(async () => {
     const plan = await alerts.sync(testState(true), Date.now());
@@ -72,9 +97,8 @@
     log(`취소 ${plan.cancel.length}건`);
   });
   document.getElementById("pending").onclick = guard(async () => {
-    const result = await cap.nativePromise("LocalNotifications", "getPending", {});
-    const own = bridge.ownPending(result && result.notifications);
-    log(`예약된 알림 ${own.length}건: ${own.map((item) => `${item.id} ${clock(item.at)}`).join(", ") || "없음"}`);
+    const own = await chosen.notifier.pending();
+    log(`예약된 알림 ${own.length}건 (${kindWords[chosen.kind] || chosen.kind}): ${own.map((item) => `${item.id} ${Number.isFinite(item.at) ? clock(item.at) : "다시 예약 필요"}`).join(", ") || "없음"}`);
   });
   document.getElementById("awake").onclick = guard(async () => {
     awake = !awake;
@@ -89,6 +113,82 @@
       listening = true;
       bridge.onNetworkChange(cap, (change) => log(`네트워크 변화: ${change && change.connected ? "연결" : "끊김"} (${change && change.connectionType})`));
     }
+  });
+  // Lane APP1, decision 2: the native microphone. The frames go nowhere
+  // here (no server); the log shows that they keep coming with the screen
+  // off, and how loud they are.
+  let micFrames = 0, micLoudest = 0, micReport = null;
+  const mic = cap ? bridge.createNativeMicrophone(cap, {
+    onFrame: (frame) => {
+      micFrames += 1;
+      const samples = new Int16Array(frame);
+      let energy = 0;
+      for (let i = 0; i < samples.length; i += 1) energy += samples[i] * samples[i];
+      micLoudest = Math.max(micLoudest, Math.sqrt(energy / samples.length) / 32768);
+    },
+    onState: (state) => log(`듣기: ${state.words}`),
+  }) : null;
+  document.getElementById("mic").onclick = guard(async () => {
+    const result = await mic.start();
+    if (!result.listening) {
+      if (result.reason === "permission_denied") log("권한을 다시 주려면 11번으로 앱 설정을 연다 → 권한 → 마이크");
+      return;
+    }
+    clearInterval(micReport);
+    micReport = setInterval(() => {
+      const stats = mic.stats();
+      log(`받은 프레임 ${micFrames}개(20 ms), 빠진 묶음 ${stats.missedBatches}, 10초 동안 가장 큰 소리 ${(micLoudest * 100).toFixed(1)}%`);
+      micLoudest = 0;
+    }, 10000);
+  });
+  document.getElementById("mic-stop").onclick = guard(async () => {
+    clearInterval(micReport);
+    await mic.stop();
+  });
+  document.getElementById("mic-settings").onclick = guard(async () => {
+    await mic.openAppSettings();
+  });
+  // Lane APP1, decision 3: the app's login. The token is never shown here.
+  // The server address built in (VOINEY_APP_API_URL), when there is one.
+  const built = window.VOINEY_APP_CONFIG && window.VOINEY_APP_CONFIG.serverUrl;
+  if (built) document.getElementById("server").value = built;
+  let session = null;
+  const sessionFor = () => {
+    const server = document.getElementById("server").value;
+    if (!session || session.server !== server) {
+      session = bridge.createAppSession(cap, { serverUrl: server });
+      session.server = server;
+    }
+    return session;
+  };
+  document.getElementById("login").onclick = guard(async () => {
+    const result = await sessionFor().login(document.getElementById("name").value, document.getElementById("password").value);
+    document.getElementById("password").value = "";
+    log(result.signedIn ? `로그인됨: ${result.account && result.account.name}` : `로그인 안 됨: ${result.reason} (${result.status})`);
+  });
+  document.getElementById("restore").onclick = guard(async () => {
+    const result = await sessionFor().restore();
+    log(`서버 방식 ${result.mode}, ${result.signedIn ? `로그인됨: ${result.account && result.account.name}` : "로그인 안 됨"}`);
+  });
+  document.getElementById("socket").onclick = guard(async () => {
+    const current = sessionFor();
+    const hello = await current.socketHello();
+    const socket = new WebSocket(current.socketUrl());
+    socket.onopen = () => {
+      if (hello) socket.send(hello);
+      log(hello ? "웹소켓 열림, 토큰을 첫 메시지로 보냄" : "웹소켓 열림 (토큰 없음)");
+    };
+    socket.onmessage = (event) => {
+      let type = "?";
+      try { type = JSON.parse(event.data).type; } catch (_error) { type = "(소리)"; }
+      log(`서버: ${type}${type === "ready" ? " — 앱 로그인으로 연결 성공" : ""}`);
+      if (type === "ready") socket.close();
+    };
+    socket.onclose = (event) => log(`웹소켓 닫힘 ${event.code}${event.code === 1008 ? " (로그인 또는 출처가 거절됨)" : ""}`);
+  });
+  document.getElementById("logout").onclick = guard(async () => {
+    await sessionFor().logout();
+    log("로그아웃됨, 휴대폰의 토큰도 지움");
   });
   document.getElementById("app").onclick = () => { location.href = "index.html"; };
   log(cap ? `앱 안에서 열림 (${cap.getPlatform ? cap.getPlatform() : "?"})` : "브라우저에서 열림 — 기기 기능 없음");

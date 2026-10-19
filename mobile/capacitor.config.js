@@ -34,6 +34,11 @@ module.exports = {
   appName: "VoineyLab",
   webDir: "www",
   server,
+  // Lane APP1: Capacitor's default ("debug") logs every plugin call's
+  // options and answers to the device log in debug builds -- that would put
+  // the login token (VoineySessionStore) and the microphone's sound
+  // (VoineyMicrophone) in logcat. Off in every build.
+  loggingBehavior: "none",
   plugins: {
     LocalNotifications: {
       iconColor: "#1f6f5c",

@@ -1,5 +1,5 @@
 // Lane APP0: the native bridge's notification schedule, pinned without a
-// device. Run with `node --test tests/native_bridge/`; tests/test_native_bridge.py
+// device. Run with `node --test tests/native_bridge/*.test.js`; tests/test_native_bridge.py
 // runs the same from pytest.
 "use strict";
 
