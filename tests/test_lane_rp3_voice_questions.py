@@ -326,6 +326,51 @@ class FixTests(_Voice):
         self.assertRegex(text, r"밴드가 깨끗하게 나왔어 → \d\d:\d\d 정정: 밴드가 조금 흐릿했어")
 
 
+class NotAnAnswerTests(_Voice):
+    """Words after the start question that are not its answer -- found by the
+    full suite at the first ② commit: a pause word, words cut short (lane RA's
+    fragment), the pick after "A요, B요?" (lane VT), a request the rules do
+    not understand ("원문 그림 띄워 줘")."""
+
+    def test_a_pause_word_pauses(self) -> None:
+        self.say("프로토콜 시작해줘")
+        plan = self.say("잠깐")
+        self.assertIsNone(plan.notebook_record)
+        self.assertEqual(self.session.last_front_rule, "pause")
+        self.assertEqual(self.session.current_index, 0)
+        self.assertEqual([e[0] for e in self.events() if e[0] == "purpose_recorded"], [])
+
+    def test_words_cut_short_are_not_the_purpose(self) -> None:
+        self.say("프로토콜 시작해줘")
+        plan = self.say("어 그러니까 음 지금 이 단계에서 쓰는")
+        self.assertIsNone(plan.notebook_record)
+        self.assertEqual(self.session.notebook_question_open(), "purpose")
+        self.assertEqual(self.say(PURPOSE).speech_text, "목적과 시료 3개를 기록했어요.")
+
+    def test_a_request_is_a_command_whatever_the_rules_make_of_it(self) -> None:
+        for words in ("원문 그림 띄워 줘", "관찰 메모해 줘 멤브레인이 살짝 말랐어", "이 단계 다시 읽어 주세요"):
+            with self.subTest(words=words):
+                self.setUp()
+                self.say("프로토콜 시작해줘")
+                plan = self.say(words)
+                self.assertIsNone(plan.notebook_record)
+                self.assertEqual(self.session.current_index, 0)
+                self.assertEqual([e[0] for e in self.events() if e[0] == "purpose_recorded"], [])
+
+    def test_the_words_after_a_value_choice_pick_one_first(self) -> None:
+        from tests.test_lane_vt_vague_reference import mixed_fixture
+
+        self.session = CuratedProtocolSession(mixed_fixture())
+        self.session.activate_configured()
+        self.say("프로토콜 시작해줘")
+        self.assertEqual(self.say("그거 얼마나 넣어?").display_text, "Buffer A요, Buffer B요?")
+        picked = self.say("버퍼 비")
+        self.assertEqual(picked.display_text, "이 단계의 Buffer B는 30 µL예요.")
+        self.assertIsNone(picked.notebook_record)
+        self.assertEqual(self.session.notebook_question_open(), "purpose")
+        self.assertEqual(self.say(PURPOSE).speech_text, "목적과 시료 3개를 기록했어요.")
+
+
 class ServedTests(VoiceNotesHarness, unittest.TestCase):
     """The production path: the socket, the server's records, the notebook."""
 

@@ -52,6 +52,7 @@ from voiney_lab.answer_checks import (
     outside_pdf_violations,
 )
 from voiney_lab.llm_router import (
+    incomplete_fragment,
     RECORD_LOG,
     ProposalBasis,
     ProposalVerdict,
@@ -4173,13 +4174,19 @@ _NOTEBOOK_SKIP = re.compile(
     r"괜찮아|괜찮아요|됐어|됐어요|나중에|나중에 할게|나중에 할게요|결과는 없어|결과 없어|딱히 없어|"
     r"아직|아직이요|아직이에요|아직 아니야)"
     r"(?:\s*요)?[.!]*$"
-    # Fillers alone ("아 잠깐 잠깐만", "음 그러니까") answer nothing.
-    r"|^(?:(?:아|어|음|자|그|저|잠깐|잠깐만|그러니까|있잖아|자 이제)\s*)+[.!]*$"
+    # Fillers alone ("아 음", "음 그러니까") answer nothing; "잠깐" is a pause.
+    r"|^(?:(?:아|어|음|자|그|저|그러니까|있잖아|자 이제)\s*)+[.!]*$"
 )
 #: A bare yes or no to a notebook question skips it; "완료했어" and the like
 #: are completions, read as commands before this.
 _NOTEBOOK_BARE_YES_NO = re.compile(
     r"^(?:네|예|응|어|그래|맞아|아니|아니요|아뇨|아니야|아닙니다|yes|no)(?:\s*요)?[.!]*$"
+)
+#: A request or an order anywhere in the words ("원문 그림 띄워 줘", "관찰
+#: 메모해 줘 멤브레인이 살짝 말랐어", "해라"): a command, whatever the rules
+#: make of it -- not what the notebook asked for.
+_NOTEBOOK_REQUEST = re.compile(
+    r"(?:줘|주세요|주십시오|줄래|줄래요|주실래요|주라|달라|해라|하세요|하십시오)(?=[\s.!?,]|$)"
 )
 _NOTEBOOK_FIX = re.compile(
     r"^\s*(?P<target>목적|시료|결과|다음에 바꿀 점|다음 할 일)\s*(?:을|를|은|는|만)?\s*"
@@ -17565,6 +17572,11 @@ class CuratedProtocolSession:
             or _QUESTION_MARKERS.search(probe.casefold())
             or _OBSERVATION_PROMPT_PROBLEM.search(_semantic_utterance_key(probe))
             or _confirmation_is_mixed(probe)
+            # A request ("띄워 줘", "메모해 줘 …") is a command whatever the
+            # rules make of it; words cut short ("… 이 단계에서 쓰는", lane
+            # RA's fragment) are not an answer either -- the question stays.
+            or _NOTEBOOK_REQUEST.search(probe)
+            or incomplete_fragment(probe)
         ):
             return None
         kind = str(held["kind"])
@@ -17849,7 +17861,10 @@ class CuratedProtocolSession:
             # a value, the end, ...) is answered first; the notebook's waits.
             if self._notebook_question_valid() and self._open_questions(
                 turn_id=turn_id, configuration_id=configuration_id, generation=generation,
-            ).first_open is None:
+            ).first_open is None and not self._value_choice_valid(
+                # The words after "A요, B요?" (lane VT) pick one; the notebook waits.
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ):
                 answered = self._plan_notebook_answer(
                     transcript, turn_id=turn_id, language=language,
                     transcript_quality=transcript_quality,
