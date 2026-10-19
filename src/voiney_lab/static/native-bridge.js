@@ -437,6 +437,172 @@
     return { display: status && status.display, exactAlarm: await exactAlarmStatus(cap) };
   }
 
+  /*
+   * Lane APP1, decision 2: listening with the screen off.
+   *
+   * Android lets a background app use the microphone only from a
+   * "microphone" foreground service started while the app is visible. The
+   * app's VoineyMicrophone plugin (mobile/android/.../mic/) runs one, with
+   * the notification line "VoineyLab 이 듣는 중 · 끄기", records 16 kHz mono
+   * PCM16 and hands it to the page in batches (base64, 100 ms each). Here the
+   * batches become the 20 ms frames the web screen's worklet sends on /ws
+   * today (voiney_lab.audio: SAMPLE_RATE, FRAME_MS, FRAME_BYTES), and the
+   * page sends them on its one socket -- a second socket would be a second
+   * server session. Nothing here touches the experiment's state: turning
+   * listening off only stops the sound.
+   */
+  const MIC_PLUGIN = "VoineyMicrophone";
+  const MIC_FORMAT = Object.freeze({ sampleRate: 16000, frameMs: 20, frameBytes: 640 });
+
+  const MIC_WORDS = {
+    listening: "VoineyLab 이 듣는 중 — 화면을 꺼도 계속 들어요. 알림 줄의 '끄기'로 멈출 수 있어요.",
+    user_stopped: "알림 줄의 '끄기'로 듣기를 껐어요. 다시 들으려면 화면에서 듣기를 켜 주세요.",
+    stopped: "듣기를 멈췄어요.",
+    permission_denied: "마이크 권한이 거절됐어요. 설정 → 앱 → VoineyLab → 권한에서 마이크를 허용해 주세요.",
+    not_visible: "앱 화면이 보일 때만 듣기를 시작할 수 있어요. 화면을 켜고 다시 시작해 주세요.",
+    mic_unavailable: "마이크를 열지 못했어요. 다른 앱이 마이크를 쓰고 있는지 확인해 주세요.",
+    unavailable: "이 앱에는 화면이 꺼져도 듣는 기능이 없어요. 화면을 켜 둔 채로 들어요.",
+  };
+
+  function micStateWords(reason) {
+    return MIC_WORDS[reason] || MIC_WORDS.stopped;
+  }
+
+  function micState(reason) {
+    const listening = reason === "listening";
+    return { state: listening ? "listening" : "off", listening, reason, words: micStateWords(reason) };
+  }
+
+  function base64ToBytes(text) {
+    if (typeof text !== "string" || !text) return new Uint8Array(0);
+    if (typeof atob === "function") {
+      const binary = atob(text);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+    return Uint8Array.from(Buffer.from(text, "base64"));
+  }
+
+  // Cuts byte batches into whole frames (ArrayBuffer each, as the worklet
+  // path sends); a partial frame waits for the next batch.
+  function createFrameSplitter(frameBytes) {
+    const size = Number.isInteger(frameBytes) && frameBytes > 0 ? frameBytes : MIC_FORMAT.frameBytes;
+    let carry = new Uint8Array(0);
+    return {
+      push(bytes) {
+        const joined = new Uint8Array(carry.length + bytes.length);
+        joined.set(carry, 0);
+        joined.set(bytes, carry.length);
+        const frames = [];
+        let offset = 0;
+        for (; offset + size <= joined.length; offset += size) frames.push(joined.slice(offset, offset + size).buffer);
+        carry = joined.slice(offset);
+        return frames;
+      },
+      held() {
+        return carry.length;
+      },
+      reset() {
+        carry = new Uint8Array(0);
+      },
+    };
+  }
+
+  function nativeMicrophoneAvailable(cap) {
+    return pluginAvailable(cap, MIC_PLUGIN);
+  }
+
+  /*
+   * handlers.onFrame(ArrayBuffer): one 640-byte frame -- send it as the
+   *   worklet's frames are sent (session active, socket open).
+   * handlers.onState({state, listening, reason, words}): listening began or
+   *   ended (the notification's 끄기, a refused permission, the microphone
+   *   lost) -- show the words; the page's own microphone stays off while
+   *   the native one is used.
+   * start() never throws for a refusal; it answers {listening:false, reason, words}.
+   */
+  function createNativeMicrophone(cap, handlers) {
+    const onFrame = handlers && typeof handlers.onFrame === "function" ? handlers.onFrame : () => {};
+    const onState = handlers && typeof handlers.onState === "function" ? handlers.onState : () => {};
+    const splitter = createFrameSplitter(MIC_FORMAT.frameBytes);
+    let listeners = [];
+    let lastSequence = null;
+    const counts = { batches: 0, frames: 0, missedBatches: 0 };
+
+    const removeListeners = async () => {
+      const current = listeners;
+      listeners = [];
+      // Android's injected addListener answers the handle; @capacitor/core's, a promise of it.
+      await Promise.all(current.map((handle) => Promise.resolve(handle).then((h) => h && h.remove && h.remove()).catch(() => {})));
+    };
+    const tell = (reason) => {
+      const state = micState(reason);
+      onState(state);
+      return state;
+    };
+    const onBatch = (event) => {
+      if (!listeners.length) return;
+      const sequence = Number(event && event.sequence);
+      if (Number.isFinite(sequence)) {
+        if (lastSequence !== null && sequence > lastSequence + 1) counts.missedBatches += sequence - lastSequence - 1;
+        lastSequence = sequence;
+      }
+      counts.batches += 1;
+      for (const frame of splitter.push(base64ToBytes(event && event.data))) {
+        counts.frames += 1;
+        onFrame(frame);
+      }
+    };
+    const onNativeState = (event) => {
+      const reason = (event && event.reason) || "stopped";
+      if (event && event.state === "listening") return;
+      void removeListeners();
+      splitter.reset();
+      tell(reason);
+    };
+
+    return {
+      async start() {
+        if (!nativeMicrophoneAvailable(cap)) return micState("unavailable");
+        await removeListeners();
+        splitter.reset();
+        lastSequence = null;
+        listeners = [cap.addListener(MIC_PLUGIN, "frames", onBatch), cap.addListener(MIC_PLUGIN, "state", onNativeState)];
+        try {
+          await cap.nativePromise(MIC_PLUGIN, "start", { sampleRate: MIC_FORMAT.sampleRate, frameMs: MIC_FORMAT.frameMs });
+        } catch (error) {
+          await removeListeners();
+          const code = error && typeof error.code === "string" && MIC_WORDS[error.code] ? error.code : "mic_unavailable";
+          return tell(code);
+        }
+        return tell("listening");
+      },
+      async stop() {
+        await removeListeners();
+        splitter.reset();
+        if (!nativeMicrophoneAvailable(cap)) return micState("stopped");
+        try {
+          await cap.nativePromise(MIC_PLUGIN, "stop", {});
+        } catch (_error) {
+          // Already stopped.
+        }
+        return micState("stopped");
+      },
+      async status() {
+        if (!nativeMicrophoneAvailable(cap)) return { listening: false, permission: null };
+        return cap.nativePromise(MIC_PLUGIN, "status", {});
+      },
+      // The system page where a refused microphone permission is allowed.
+      openAppSettings() {
+        return cap.nativePromise(MIC_PLUGIN, "openAppSettings", {});
+      },
+      stats() {
+        return { ...counts };
+      },
+    };
+  }
+
   function keepAwake(cap, on) {
     return cap.nativePromise("KeepAwake", on ? "keepAwake" : "allowSleep", {});
   }
@@ -475,6 +641,13 @@
     exactAlarmStatus,
     openExactAlarmSettings,
     prepareNotifications,
+    MIC_PLUGIN,
+    MIC_FORMAT,
+    micStateWords,
+    base64ToBytes,
+    createFrameSplitter,
+    nativeMicrophoneAvailable,
+    createNativeMicrophone,
     keepAwake,
     networkStatus,
     onNetworkChange,

@@ -25,6 +25,8 @@
   <button id="pending" class="secondary">5. 예약된 알림 보기</button>
   <button id="awake" class="secondary">6. 화면 켜 두기 켜기/끄기</button>
   <button id="network" class="secondary">7. 네트워크 상태 보기·변화 기록</button>
+  <button id="mic">9. 화면 꺼도 듣기 시작 (알림 줄 "VoineyLab 이 듣는 중 · 끄기")</button>
+  <button id="mic-stop" class="secondary">10. 듣기 끄기</button>
   <button id="app" class="secondary">8. 앱 화면 열기 (index.html)</button>
   <pre id="log"></pre>
 </main>
@@ -99,6 +101,37 @@
       listening = true;
       bridge.onNetworkChange(cap, (change) => log(`네트워크 변화: ${change && change.connected ? "연결" : "끊김"} (${change && change.connectionType})`));
     }
+  });
+  // Lane APP1, decision 2: the native microphone. The frames go nowhere
+  // here (no server); the log shows that they keep coming with the screen
+  // off, and how loud they are.
+  let micFrames = 0, micLoudest = 0, micReport = null;
+  const mic = cap ? bridge.createNativeMicrophone(cap, {
+    onFrame: (frame) => {
+      micFrames += 1;
+      const samples = new Int16Array(frame);
+      let energy = 0;
+      for (let i = 0; i < samples.length; i += 1) energy += samples[i] * samples[i];
+      micLoudest = Math.max(micLoudest, Math.sqrt(energy / samples.length) / 32768);
+    },
+    onState: (state) => log(`듣기: ${state.words}`),
+  }) : null;
+  document.getElementById("mic").onclick = guard(async () => {
+    const result = await mic.start();
+    if (!result.listening) {
+      if (result.reason === "permission_denied") log("권한을 다시 주려면 설정을 연다: 10번 옆 앱 설정 → 권한 → 마이크");
+      return;
+    }
+    clearInterval(micReport);
+    micReport = setInterval(() => {
+      const stats = mic.stats();
+      log(`받은 프레임 ${micFrames}개(20 ms), 빠진 묶음 ${stats.missedBatches}, 10초 동안 가장 큰 소리 ${(micLoudest * 100).toFixed(1)}%`);
+      micLoudest = 0;
+    }, 10000);
+  });
+  document.getElementById("mic-stop").onclick = guard(async () => {
+    clearInterval(micReport);
+    await mic.stop();
   });
   document.getElementById("app").onclick = () => { location.href = "index.html"; };
   log(cap ? `앱 안에서 열림 (${cap.getPlatform ? cap.getPlatform() : "?"})` : "브라우저에서 열림 — 기기 기능 없음");
