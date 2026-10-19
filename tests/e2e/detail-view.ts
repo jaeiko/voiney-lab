@@ -5,11 +5,15 @@ import { test as base } from '@playwright/test';
 // was, which stays behind "자세히 보기" -- the same choice a person makes, kept
 // for the tab in sessionStorage. This fixture makes that choice before each
 // page of those specs loads, so they test the view they were written for.
+export async function chooseDetailView(target: { addInitScript: (script: () => void) => Promise<void> }) {
+  await target.addInitScript(() => {
+    try { sessionStorage.setItem('voiney-lab.start-view', 'detail'); } catch (_) { /* no storage: the wizard shows */ }
+  });
+}
+
 export const test = base.extend({
   page: async ({ page }, use) => {
-    await page.addInitScript(() => {
-      try { sessionStorage.setItem('voiney-lab.start-view', 'detail'); } catch (_) { /* no storage: the wizard shows */ }
-    });
+    await chooseDetailView(page);
     await use(page);
   },
 });
