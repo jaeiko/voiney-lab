@@ -1,4 +1,4 @@
-import { test, expect, devices } from '@playwright/test';
+import { test, expect, devices } from './detail-view';
 
 test.describe.configure({ timeout: 45_000 });
 

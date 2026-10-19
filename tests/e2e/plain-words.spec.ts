@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './detail-view';
 
 // Lane U (2026-10-05): the researcher's screen in plain words. Every server
 // answer here is mocked with page.route or fed to the page's own message

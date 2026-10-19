@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Page, type Route } from './detail-view';
 
 // Lane RV2 stage ② (human decision 2026-10-16): review is one card at a time,
 // chosen by buttons. Server answers are mocked with page.route; nothing talks

@@ -730,6 +730,53 @@
     body[data-view="during"] #protocol-compare{display:none}
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
+    /* Lane ON decision 2 (2026-10-18): the start, one thing per screen (토스식). While the
+       wizard is on, the rest of the 실험 전 view waits behind "자세히 보기": one column
+       that fits a phone, progress dots above, one big button, "← 이전". */
+    body[data-wizard="on"] .topbar,body[data-wizard="on"] .sticky-rail,body[data-wizard="on"] .example-strip,body[data-wizard="on"] .shell>:not(#start-wizard){display:none}
+    body[data-wizard="on"] .shell{display:block;max-width:none;padding:0}
+    #start-wizard[hidden]{display:none}
+    .wizard{max-width:480px;margin:0 auto;padding:var(--space-4) var(--space-4) var(--space-12);display:flex;flex-direction:column;gap:var(--space-4);min-height:100dvh;box-sizing:border-box}
+    .wizard-dots{display:flex;gap:var(--space-2);justify-content:center;margin:0;padding:var(--space-2) 0;list-style:none}
+    .wizard-dots li{width:10px;height:10px;border-radius:50%;background:var(--line);border:1px solid var(--line-strong)}
+    .wizard-dots li[data-state="done"]{background:var(--ink);border-color:var(--ink)}
+    .wizard-dots li[data-state="current"]{background:var(--paper);border:3px solid var(--ink);width:14px;height:14px}
+    .wizard-card{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6) var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .wizard-kicker{margin:0;color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .wizard-title{margin:0;font-size:1.5rem;line-height:1.3;font-weight:800;color:var(--ink);word-break:keep-all}
+    .wizard-lead{margin:0;color:var(--subtext);font-size:1rem;line-height:1.5;white-space:pre-wrap}
+    .wizard-body{display:flex;flex-direction:column;gap:var(--space-3)}
+    .wizard-note{min-height:1.5rem;margin:0;color:var(--ink);font-size:.95rem;font-weight:600;white-space:pre-wrap}
+    .wizard-note[data-kind="error"]{color:var(--danger)}
+    .wizard-actions{display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-2)}
+    .wizard-primary{min-height:var(--target-run);padding:0 var(--space-4);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:800;cursor:pointer}
+    .wizard-primary:disabled{opacity:.45;cursor:not-allowed}
+    .wizard-primary[hidden]{display:none}
+    .wizard-back{min-height:var(--target-desk);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font-weight:700;cursor:pointer}
+    .wizard-back[hidden]{display:none}
+    .wizard-foot{display:flex;flex-direction:column;gap:var(--space-2);align-items:center}
+    .wizard-quick{min-height:var(--target-run);width:100%;border:2px solid var(--ink);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font-size:1.0625rem;font-weight:800;cursor:pointer}
+    .wizard-quick[hidden]{display:none}
+    .wizard-link{border:0;background:none;color:var(--ink-muted);font-weight:700;text-decoration:underline;cursor:pointer;min-height:var(--target-desk)}
+    .wizard-field{display:flex;flex-direction:column;gap:var(--space-1);font-weight:700}
+    .wizard-field input{min-height:var(--target-desk);padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);font-size:1.0625rem}
+    .wizard-check{display:flex;align-items:center;gap:var(--space-2);min-height:var(--target-desk);font-weight:600}
+    .wizard-options{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none}
+    .wizard-option{display:flex;align-items:stretch;gap:var(--space-2)}
+    .wizard-option-pick{flex:1 1 auto;min-height:var(--target-run);padding:var(--space-2) var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font-size:1.0625rem;font-weight:700;text-align:left;cursor:pointer}
+    .wizard-option-pick[aria-pressed="true"]{border:3px solid var(--ink);background:var(--bench)}
+    .wizard-option-pick:disabled{opacity:.5;cursor:not-allowed}
+    .wizard-option-aside{min-height:var(--target-run);padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font-weight:700;cursor:pointer;white-space:nowrap}
+    .wizard-option-sub{display:block;color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .wizard-excerpt{margin:0;padding:var(--space-3);border-left:var(--stroke-current) solid var(--ink);background:var(--bench);font-size:1.0625rem;line-height:1.5;white-space:pre-wrap}
+    .wizard-excerpt-where{display:block;color:var(--ink-muted);font-size:.875rem;font-weight:600}
+    .wizard-choices .choice-card-choice,.wizard-body .choice-card-choice{min-height:var(--target-run)}
+    .wizard-safety{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:var(--space-2)}
+    .wizard-safety li{padding:var(--space-3);border:1px solid var(--line);background:var(--bench)}
+    .wizard-safety b{display:block;color:var(--ink-muted);font-size:.875rem}
+    .wizard-safety p{margin:var(--space-1) 0 0;white-space:pre-wrap}
+    .wizard-scope{margin:0;padding:var(--space-3);border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-weight:700}
+    .wizard-done{margin:0;color:var(--ink-muted);font-weight:600}
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
 </head>
@@ -792,6 +839,25 @@
   </header>
 
   <main id="researcher-workspace" class="shell">
+    <!-- Lane ON decision 2 (2026-10-18): the start, one thing per screen -- login (when accounts are on), the microphone and the voice, the agent's voice, the protocol, two key values, the safety check, the start. The server decides every step's content; the page draws what it sends. "자세히 보기" shows the whole 실험 전 view below instead. -->
+    <section id="start-wizard" class="wizard" aria-label="시작 준비" hidden>
+      <ol id="wizard-dots" class="wizard-dots" aria-label="진행"></ol>
+      <div class="wizard-card">
+        <p id="wizard-kicker" class="wizard-kicker"></p>
+        <h2 id="wizard-title" class="wizard-title"></h2>
+        <p id="wizard-lead" class="wizard-lead"></p>
+        <div id="wizard-body" class="wizard-body"></div>
+        <p id="wizard-note" class="wizard-note" role="status" aria-live="polite"></p>
+        <div class="wizard-actions">
+          <button id="wizard-primary" type="button" class="wizard-primary"></button>
+          <button id="wizard-back" type="button" class="wizard-back">← 이전</button>
+        </div>
+      </div>
+      <div class="wizard-foot">
+        <button id="wizard-quick" type="button" class="wizard-quick" hidden>지난번 설정으로 바로 시작</button>
+        <button id="wizard-detail" type="button" class="wizard-link">자세히 보기</button>
+      </div>
+    </section>
     <div id="hero-setup" class="hero">
       <section class="panel voice-panel" aria-labelledby="page-title">
         <div class="voice-copy">
@@ -1509,6 +1575,7 @@ function screenView(){
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
+ renderWizard();
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
  if((view==="during")!==screenWakeLockWanted)void keepScreenOn(view==="during");
  return view;
@@ -2078,7 +2145,7 @@ function renderProtocolList(){
  }
  const runnable=entries.filter(entry=>entry.available_for_execution===true).length;
  setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 실행 가능 ${runnable}개`:"");
- renderProtocolQueue();syncProtocolList();
+ renderProtocolQueue();syncProtocolList();renderWizard();
  if(focused)for(const host of [list,$("protocol-queue-list")])for(const item of host?.children||[])if(item.firstChild?.dataset?.protocolId===focused.id&&item.firstChild.className===focused.className){item.firstChild.focus?.();return entries.length;}
  return entries.length;
 }
@@ -3364,14 +3431,14 @@ function renderExperimenterSettings(settings){
  if(sensitivity&&["high","normal","low"].includes(settings.speaker_sensitivity))sensitivity.value=settings.speaker_sensitivity;
 }
 async function loadExperimenterSettings(){
- try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
+ try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);}}catch(_){}
 }
 async function saveExperimenterSetting(name,value){
  const status=$("experimenter-settings-status");
  try{
   const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({[name]:value})});
   if(!response.ok)throw new Error("refused");
-  const payload=await response.json();renderExperimenterSettings(payload?.settings);
+  const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);
   if(status)status.textContent="저장했습니다 · 다음 실험부터 적용됩니다.";
  }catch(_){if(status)status.textContent="설정을 저장하지 못했습니다.";void loadExperimenterSettings();}
 }
@@ -3448,6 +3515,7 @@ function renderStartSummary(review){
  renderStepTimers(review.timers);
  if(start){start.hidden=review.available_for_execution!==true||sessionActive;start.disabled=isRegisteringProtocol;}
  foldStartSummary(review);
+ renderWizard();
  return true;
 }
 // Lane PT, decision 4: each step's timer as the server verified it against
@@ -4582,7 +4650,311 @@ async function installFromHomeScreenOffer(){const offer=installOffer;if(!offer||
 globalThis.addEventListener?.("beforeinstallprompt",event=>{event?.preventDefault?.();installOffer=event;renderInstallGuide();});
 globalThis.addEventListener?.("appinstalled",()=>{installOffer=null;renderInstallGuide();});
 $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer();});
-globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();},{once:true});
+// ---------------------------------------------------------------------------
+// Lane ON decision 2 (2026-10-18): the start, one thing per screen, like a
+// phone app's identity check -- login (only when accounts are on) → the
+// microphone and "목소리 맞추기" (skipped once measured) → the agent's voice
+// (the provider's Korean voices, [들어 보기], kept as a setting) → the protocol
+// (the list, or an upload) → two key values (decision 3; the server's
+// questions and choices only) → the safety check → [이 프로토콜로 시작]. Dots
+// above, one big button, "← 이전", one column. "지난번 설정으로 바로 시작"
+// skips what is saved. "자세히 보기" shows the 실험 전 view as it was. The
+// page decides nothing about the run: every step shows what the server sent
+// and sends the person's press back as one request.
+const WIZARD_VIEW_KEY="voiney-lab.start-view",WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
+const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
+const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
+var wizard={active:false,step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:""};
+function wizardDetailChosen(){try{return globalThis.sessionStorage?.getItem(WIZARD_VIEW_KEY)==="detail";}catch(_){return false;}}
+function wizardChooseDetail(on){try{if(on)globalThis.sessionStorage?.setItem(WIZARD_VIEW_KEY,"detail");else globalThis.sessionStorage?.removeItem(WIZARD_VIEW_KEY);}catch(_){}}
+function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
+function wizardLastProtocol(){try{return globalThis.localStorage?.getItem(WIZARD_LAST_PROTOCOL_KEY)||"";}catch(_){return "";}}
+function wizardRememberProtocol(id){try{globalThis.localStorage?.setItem(WIZARD_LAST_PROTOCOL_KEY,id);}catch(_){}}
+function wizardTakeSettings(settings){if(!wizard)return;if(settings&&typeof settings==="object")wizard.settings={...settings};if(wizard.active)renderWizard();}
+function wizardSettings(){return wizard.settings||{};}
+function wizardSteps(){
+ const steps=[];
+ if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true)steps.push("login");
+ if(wizardSettings().voice_calibration!=="measured")steps.push("voice");
+ if((wizard.voices?.voices?.length||0)>=2)steps.push("agent");
+ steps.push("protocol","check","safety","start");
+ return steps;
+}
+function wizardStepIndex(){return wizardSteps().indexOf(wizard.step);}
+function wizardSelectedProtocol(){const id=$("protocol-id")?.value||"";return id&&protocolCatalog.get(id)?protocolCatalog.get(id):null;}
+function wizardNote(text,kind=""){wizard.note=text||"";wizard.noteKind=kind;const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=kind;}}
+async function loadAuthSession(){
+ try{const response=await fetch("/api/auth/session",{cache:"no-store"});if(!response.ok)return null;const payload=await response.json();wizard.auth=payload&&typeof payload==="object"?payload:null;if(wizard.auth?.account?.name)wizard.reviewerName=String(wizard.auth.account.name);return wizard.auth;}catch(_){return null;}
+}
+async function loadAgentVoices(){
+ try{const response=await fetch("/api/voice/voices",{cache:"no-store"});if(!response.ok){wizard.voices=null;return null;}const payload=await response.json();wizard.voices=payload&&typeof payload==="object"&&Array.isArray(payload.voices)?payload:null;return wizard.voices;}catch(_){wizard.voices=null;return null;}
+}
+async function openStartWizard(){
+ if(wizardDetailChosen()||sessionActive){wizard.active=false;renderWizard();return false;}
+ wizard.active=true;wizard.invite=wizardInviteToken();
+ await loadAuthSession();
+ if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderWizard();return true;}
+ await wizardAfterSignIn();
+ wizard.step=wizardSteps()[0];renderWizard();return true;
+}
+async function wizardAfterSignIn(){
+ const settings=fetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
+ await Promise.all([settings,loadAgentVoices()]);
+}
+function wizardGo(step){wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
+function wizardNext(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<0||index>=steps.length-1)return;wizardGo(steps[index+1]);}
+function wizardBack(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<=0)return;wizardGo(steps[index-1]);}
+function wizardField(label,id,type,autocomplete){const field=compareEl("label","wizard-field",label);let input=document.getElementById(id);if(!input){input=document.createElement("input");input.id=id;}input.type=type;if(autocomplete)input.setAttribute?.("autocomplete",autocomplete);field.appendChild(input);return field;}
+function wizardSetBusy(on){wizard.busy=on;setDisabled($("wizard-primary"),on);}
+function wizardOption(label,sub,pressed,onPick,aside){
+ const item=compareEl("li","wizard-option"),pick=compareEl("button","wizard-option-pick",label);pick.type="button";pick.setAttribute?.("aria-pressed",String(pressed===true));if(sub)pick.appendChild(compareEl("span","wizard-option-sub",sub));
+ if(typeof onPick==="function")pick.addEventListener("click",()=>{onPick();});else pick.disabled=true;
+ item.appendChild(pick);if(aside)item.appendChild(aside);return item;
+}
+function renderWizard(){
+ if(!wizard)return false;
+ const body=globalThis.document?.body,section=$("start-wizard");
+ const on=wizard.active===true&&screenView()==="before";
+ if(body?.dataset)body.dataset.wizard=on?"on":"off";
+ if(section)section.hidden=!on;
+ if(!on)return false;
+ const steps=wizardSteps();if(!steps.includes(wizard.step))wizard.step=steps[0];
+ const dots=$("wizard-dots");
+ if(dots){dots.replaceChildren();steps.forEach((step,index)=>{const dot=document.createElement("li");if(dot.dataset)dot.dataset.state=index<steps.indexOf(wizard.step)?"done":step===wizard.step?"current":"todo";dot.setAttribute?.("aria-label",WIZARD_STEP_WORDS[step].title);dots.appendChild(dot);});}
+ const words=WIZARD_STEP_WORDS[wizard.step];
+ setText("wizard-kicker",`${steps.indexOf(wizard.step)+1} / ${steps.length} · ${words.kicker}`);
+ setText("wizard-title",words.title);
+ const host=$("wizard-body");if(host)host.replaceChildren();
+ const primary=$("wizard-primary"),back=$("wizard-back");
+ if(primary){primary.hidden=false;primary.disabled=wizard.busy;primary.textContent="다음";}
+ if(back)back.hidden=steps.indexOf(wizard.step)<=0;
+ const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=wizard.noteKind;}
+ const renderers={login:renderWizardLogin,voice:renderWizardVoice,agent:renderWizardAgent,protocol:renderWizardProtocol,check:renderWizardCheck,safety:renderWizardSafety,start:renderWizardStart};
+ renderers[wizard.step]?.(host,primary);
+ const quick=$("wizard-quick"),last=wizardLastProtocol();
+ if(quick)quick.hidden=!(steps.indexOf(wizard.step)===0&&wizard.step!=="login"&&last&&protocolCatalog.get(last)?.available_for_execution===true);
+ return true;
+}
+function renderWizardLogin(host,primary){
+ const signup=Boolean(wizard.invite);
+ if(signup){setText("wizard-title","가입하기");setText("wizard-lead",wizard.inviteValid?.valid===true?`초대 링크로 들어왔어요 · 연구실 ${wizard.inviteValid.organization_id||""}${wizard.inviteValid.admin?" · 관리자":""}\n이름과 비밀번호를 정하면 바로 시작할 수 있어요.`:"초대 링크가 만료되었거나 이미 쓰였어요. 연구실 담당에게 새 링크를 받아 주세요.");}
+ else setText("wizard-lead","연구실 담당에게 받은 이름과 비밀번호로 로그인해요. 처음이면 초대 링크를 열어 주세요.");
+ host.appendChild(wizardField("이름","wizard-name","text","username"));
+ host.appendChild(wizardField("비밀번호","wizard-password","password",signup?"new-password":"current-password"));
+ if(primary){primary.textContent=signup?"가입하고 시작":"로그인";primary.disabled=wizard.busy||(signup&&wizard.inviteValid?.valid!==true);}
+}
+async function wizardSubmitLogin(){
+ if(wizard.busy)return null;
+ const name=String($("wizard-name")?.value||"").trim(),password=String($("wizard-password")?.value||"");
+ if(!name||!password){wizardNote("이름과 비밀번호를 적어 주세요.","error");return null;}
+ wizardSetBusy(true);
+ try{
+  const signup=Boolean(wizard.invite);
+  const response=await fetch(signup?"/api/auth/signup":"/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(signup?{invite:wizard.invite,name,password}:{name,password}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){wizardSetBusy(false);wizardNote(WIZARD_AUTH_WORDS[typeof payload?.detail==="string"?payload.detail:""]||"로그인하지 못했어요. 다시 해 주세요.","error");return null;}
+  wizard.invite="";wizard.inviteValid=null;
+  await loadAuthSession();
+  await Promise.all([loadProtocolCatalog(),loadWorkspaceSession(),loadExperimenterSettings()]);
+  await wizardAfterSignIn();
+  wizardSetBusy(false);wizardGo(wizardSteps()[0]);return payload;
+ }catch(_){wizardSetBusy(false);wizardNote("서버에 연결할 수 없어요. 네트워크를 확인해 주세요.","error");return null;}
+}
+function renderWizardVoice(host,primary){
+ const settings=wizardSettings();
+ setText("wizard-lead","실험 중에는 말로 안내하고 말로 답해요. 마이크를 켜서 확인하고, 시작할 때 목소리를 한 번 맞출게요.");
+ const check=compareEl("button","wizard-option-pick",wizard.mic?`마이크 사용 가능 · ${wizard.mic}`:"마이크 켜서 확인");check.id="wizard-mic-check";check.type="button";check.setAttribute?.("aria-pressed",String(Boolean(wizard.mic)));
+ check.addEventListener("click",()=>{void wizardCheckMic();});host.appendChild(check);
+ const row=compareEl("label","wizard-check"),box=document.createElement("input");box.type="checkbox";box.id="wizard-calibrate";box.checked=voiceCalibrationAtStart();
+ box.addEventListener("change",()=>{storeVoiceCalibrationAtStart(box.checked);const setting=$("voice-calibration-at-start");if(setting)setting.checked=box.checked;});
+ row.appendChild(box);row.append(" 실험을 시작할 때 문장 하나를 읽어 목소리를 맞출게요");host.appendChild(row);
+ if(settings.voice_calibration==="skipped")host.appendChild(compareEl("p","wizard-done","지난번에는 건너뛰었어요 · 모든 말을 들어요"));
+ if(primary)primary.textContent="다음";
+}
+async function wizardCheckMic(){
+ try{
+  const media=globalThis.navigator?.mediaDevices;if(!media?.getUserMedia){wizardNote("이 브라우저에서는 마이크를 쓸 수 없어요. HTTPS 주소로 열어 주세요.","error");return false;}
+  const stream=await media.getUserMedia({audio:true});const track=(stream.getTracks?.()||[])[0];wizard.mic=nonemptyText(track?.label)?track.label:"기본 마이크";for(const item of stream.getTracks?.()||[])item.stop?.();
+  wizardNote("마이크가 켜져요. 다음으로 가 주세요.");renderWizard();return true;
+ }catch(_){wizard.mic=null;wizardNote("마이크를 쓸 수 없어요. 브라우저의 마이크 권한을 허용해 주세요.","error");renderWizard();return false;}
+}
+function renderWizardAgent(host,primary){
+ const list=wizard.voices,selected=String(wizardSettings().agent_voice||"default"),chosen=selected==="default"?list?.default_voice_id:selected;
+ setText("wizard-lead",`안내하는 목소리를 골라요. [들어 보기]로 듣고 고르면 저장돼요.${list?.preview_text_ko?`\n들려주는 말: "${list.preview_text_ko}"`:""}`);
+ const options=compareEl("ul","wizard-options");
+ for(const voice of list?.voices||[]){
+  const aside=compareEl("button","wizard-option-aside",wizard.previewing===voice.voice_id?"듣는 중…":"들어 보기");aside.type="button";aside.disabled=wizard.busy;if(aside.dataset)aside.dataset.voiceId=voice.voice_id;
+  aside.addEventListener("click",()=>{void wizardPreviewVoice(voice.voice_id);});
+  const pick=wizardOption(voice.label_ko,voice.voice_id===list?.default_voice_id?"기본 목소리":"",voice.voice_id===chosen,()=>{void wizardPickVoice(voice.voice_id);},aside);
+  if(pick.firstChild?.dataset)pick.firstChild.dataset.voiceId=voice.voice_id;
+  options.appendChild(pick);
+ }
+ host.appendChild(options);
+ if(primary)primary.textContent="이 목소리로 할게요";
+}
+async function wizardPreviewVoice(voiceId){
+ if(wizard.previewing)return false;wizard.previewing=voiceId;renderWizard();
+ try{
+  const response=await fetch("/api/voice/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice_id:voiceId}),redirect:"error"});
+  if(!response.ok)throw new Error("preview");
+  const blob=await response.blob();
+  if(typeof globalThis.Audio==="function"&&globalThis.URL?.createObjectURL){const audio=new globalThis.Audio(globalThis.URL.createObjectURL(blob));await audio.play?.();}
+  wizardNote("");return true;
+ }catch(_){wizardNote("들어 보기에 실패했어요. 잠시 뒤 다시 눌러 주세요.","error");return false;}
+ finally{wizard.previewing=null;renderWizard();}
+}
+async function wizardPickVoice(voiceId){
+ const before=wizardSettings().agent_voice;wizard.settings={...wizardSettings(),agent_voice:voiceId};renderWizard();
+ try{
+  const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_voice:voiceId})});
+  if(!response.ok)throw new Error("refused");
+  const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);wizardNote("저장했어요 · 이 목소리로 안내해요.");return true;
+ }catch(_){wizard.settings={...wizardSettings(),agent_voice:before};wizardNote("목소리를 저장하지 못했어요.","error");renderWizard();return false;}
+}
+function renderWizardProtocol(host,primary){
+ const entries=[...protocolCatalog.values()],selected=wizardSelectedProtocol();
+ setText("wizard-lead",entries.length?"실행할 프로토콜을 고르거나 원문을 올려요. 분석을 통과한 것만 시작할 수 있어요.":"아직 올린 프로토콜이 없어요. 원문(PDF·Word·사진)을 올리면 분석이 시작돼요.");
+ const options=compareEl("ul","wizard-options");
+ const ordered=[...entries.filter(entry=>entry.available_for_execution===true),...entries.filter(entry=>entry.available_for_execution!==true)];
+ for(const entry of ordered){
+  const badges=protocolListBadges(entry).map(badge=>badge.text).join(" · ");
+  const item=wizardOption(entry.title,badges,selected?.protocol_id===entry.protocol_id,entry.available_for_execution===true?()=>{void wizardPickProtocol(entry.protocol_id);}:null,null);
+  if(item.firstChild?.dataset)item.firstChild.dataset.protocolId=entry.protocol_id;
+  options.appendChild(item);
+ }
+ host.appendChild(options);
+ const upload=compareEl("button","wizard-back","원문 올리기 (PDF · Word · 사진)");upload.id="wizard-upload";upload.type="button";upload.addEventListener("click",()=>{$("protocol-pdf")?.click?.();});host.appendChild(upload);
+ const status=$("protocol-upload-status")?.textContent||"";if(isRegisteringProtocol&&nonemptyText(status))host.appendChild(compareEl("p","wizard-done",status));
+ if(primary){primary.textContent="이 프로토콜로 할게요";primary.disabled=wizard.busy||selected?.available_for_execution!==true;}
+}
+async function wizardPickProtocol(protocolId){
+ if(!pickProtocolFromList(protocolId))return false;
+ wizard.busy=true;renderWizard();
+ try{await loadProtocolReview(protocolId);}finally{wizard.busy=false;}
+ wizardRememberProtocol(protocolId);renderWizard();return true;
+}
+async function wizardLoadCheck(){
+ const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
+ wizard.check=null;wizard.question=0;wizard.busy=true;renderWizard();
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable"};
+ }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable"};}
+ finally{wizard.busy=false;}
+ if(!wizard.check.questions.length){wizardNext();return wizard.check;}
+ renderWizard();return wizard.check;
+}
+function wizardQuestion(){return wizard.check?.questions?.[wizard.question]||null;}
+function renderWizardCheck(host,primary){
+ const question=wizardQuestion();
+ if(primary)primary.hidden=true;
+ if(!question){setText("wizard-lead",wizard.busy?"원문의 값을 불러오는 중…":"확인할 값을 불러오는 중…");return;}
+ setText("wizard-kicker",`${wizardStepIndex()+1} / ${wizardSteps().length} · 핵심 값 확인 ${question.progress_ko||""}`);
+ setText("wizard-title",question.question_ko||"원문의 값을 확인해 주세요");
+ setText("wizard-lead","원문 조각을 보고, 적힌 값을 골라 주세요.");
+ const excerpt=compareEl("blockquote","wizard-excerpt",String(question.source?.excerpt||""));
+ const page=question.source?.page,lines=question.source?.lines;
+ excerpt.prepend(compareEl("span","wizard-excerpt-where",`원문 p.${Number.isInteger(page)?page:"—"}${Number.isInteger(lines?.first_line)?` · ${lines.first_line}${lines.last_line!==lines.first_line?`–${lines.last_line}`:""}줄`:""}`));
+ host.appendChild(excerpt);
+ if(wizard.card){
+  // [분석 값이 틀렸어요]: the server's card for the item; its button is the review decision that fixes it.
+  const cardHost=compareEl("div","wizard-choices");host.appendChild(cardHost);
+  renderChoiceCard(cardHost,wizard.card,{busy:wizard.busy,note:wizard.note,writing:wizard.cardText?{choiceId:wizard.cardText.choiceId,valueId:null}:null,
+   choose:(choice)=>{void wizardCardChoice(choice);},
+   write:(choice,fields={})=>{if(!choice){wizard.cardText=null;renderWizard();return;}void wizardCardChoice(choice,{...fields,written:true});}});
+  if(wizard.auth?.mode!=="accounts"){const name=wizardField("검토자 이름","wizard-reviewer-name","text","name");name.firstChild&&(name.firstChild.value=wizard.reviewerName||storedReviewerName());host.appendChild(name);}
+  return;
+ }
+ const choices=compareEl("div","wizard-choices");host.appendChild(choices);
+ if(wizard.wrong){
+  host.insertBefore(compareEl("p","wizard-note",wizard.wrong.message_ko||"원문 조각을 다시 봐 주세요."),choices);
+  renderChoiceCard(choices,{card_id:question.question_id,choices:(wizard.wrong.followups||[]).map(item=>({choice_id:item.choice_id,label_ko:item.label_ko,request:item.request,primary:item.choice_id==="accept"}))},{busy:wizard.busy,
+   choose:(choice)=>{if(choice.choice_id==="open_card"){wizard.card=wizard.wrong?.card||null;wizard.cardText=null;wizardNote("");renderWizard();return;}void wizardAnswer(choice);}});
+  return;
+ }
+ renderChoiceCard(choices,{card_id:question.question_id,choices:(question.choices||[]).map(choice=>({choice_id:choice.choice_id,label_ko:choice.label_ko,request:{question_id:question.question_id,choice_id:choice.choice_id}}))},{busy:wizard.busy,
+  choose:(choice)=>{void wizardAnswer(choice);}});
+}
+async function wizardAnswer(choice){
+ const question=wizardQuestion(),entry=wizardSelectedProtocol();if(!question||!entry||wizard.busy||!choice?.request)return null;
+ wizard.busy=true;renderWizard();
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/answers`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(choice.request),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  wizard.busy=false;
+  if(!response.ok||!payload){wizardNote("답을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
+  if(payload.proceed===true){wizard.wrong=null;wizard.card=null;wizardNote("");if(wizard.question+1<wizard.check.questions.length){wizard.question+=1;renderWizard();}else wizardNext();return payload;}
+  wizard.wrong=payload;wizardNote("");renderWizard();return payload;
+ }catch(_){wizard.busy=false;wizardNote("서버에 연결할 수 없어요.","error");renderWizard();return null;}
+}
+async function wizardCardChoice(choice,fields={}){
+ const entry=wizardSelectedProtocol(),card=wizard.card;if(!entry||!card||wizard.busy)return null;
+ if(choice.route==="back"){wizard.card=null;wizard.cardText=null;renderWizard();return null;}
+ const request=choice.request&&typeof choice.request==="object"?choice.request:null;if(!request)return null;
+ if(String(choice.needs||"")==="text"&&fields.written!==true){wizard.cardText={choiceId:choice.choice_id};renderWizard();return null;}
+ const text=String(fields.text||"").trim();if(String(choice.needs||"")==="text"&&!text){wizardNote("원문대로 고친 문장을 적어 주세요.","error");return null;}
+ const name=wizard.auth?.mode==="accounts"?String(wizard.auth.account?.name||""):String($("wizard-reviewer-name")?.value||wizard.reviewerName||storedReviewerName()||"").trim();
+ if(!name){wizardNote("검토자 이름을 적어 주세요.","error");return null;}
+ wizard.busy=true;renderWizard();
+ try{
+  const draft=await loadReviewDraft(entry.protocol_id);
+  const body={...request,...(text?{text}:{}),reviewer_name:name,...(draft?.target?{target:draft.target}:{})};
+  const decided=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  if(!decided.ok){const payload=await safeProtocolUploadPayload(decided);wizard.busy=false;wizardNote(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""),"error");renderWizard();return null;}
+  const registered=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,...(draft?.target?{target:draft.target}:{})}),redirect:"error"});
+  if(!registered.ok){const payload=await safeProtocolUploadPayload(registered);wizard.busy=false;wizardNote(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""),"error");renderWizard();return null;}
+  if(wizard.auth?.mode!=="accounts")storeReviewerName(name);
+  wizard.busy=false;wizard.card=null;wizard.cardText=null;wizard.wrong=null;
+  await loadProtocolCatalog(entry.protocol_id);await loadProtocolReview(entry.protocol_id);
+  wizardNote("고친 값으로 검토본을 등록했어요 · 값을 다시 확인할게요.");
+  return wizardLoadCheck();
+ }catch(_){wizard.busy=false;wizardNote("서버에 연결할 수 없어요.","error");renderWizard();return null;}
+}
+function renderWizardSafety(host,primary){
+ const review=lastProtocolReview&&lastProtocolReview.protocol_id===wizardSelectedProtocol()?.protocol_id?lastProtocolReview:null;
+ const safety=Array.isArray(review?.safety_notices)?review.safety_notices:[],notices=Array.isArray(review?.execution_notices)?review.execution_notices:[];
+ setText("wizard-lead",safety.length?`원문에 적힌 안전 주의 ${safety.length}건이에요. 읽고 나서 다음으로 가 주세요.`:"원문에 적힌 안전 주의가 없어요. 안전 수칙은 연구실 규정을 따르세요.");
+ const scope=typeof review?.safety_scope?.notice==="string"?normalizePresentationText(review.safety_scope.notice).trim():"";
+ if(scope)host.appendChild(compareEl("p","wizard-scope",scope));
+ const list=compareEl("ul","wizard-safety");
+ for(const item of safety){const row=document.createElement("li");row.appendChild(compareEl("b","",`${item.step_label?`${item.step_label}단계`:"단계"} · 원문 p.${item.source_page_number??"—"}`));row.appendChild(compareEl("p","",nonemptyText(item.primary_text)?item.primary_text:"한국어 번역 없음 · 원문을 그대로 읽어 드립니다."));row.appendChild(compareEl("p","wizard-option-sub",String(item.source_text||"")));list.appendChild(row);}
+ for(const item of notices){const row=document.createElement("li");row.appendChild(compareEl("b","","시작 전 알림"));row.appendChild(compareEl("p","",String(item.message_ko||item.message||"")));list.appendChild(row);}
+ if(safety.length||notices.length)host.appendChild(list);
+ const skipped=wizard.check&&!wizard.check.questions?.length?wizard.check.skipped_reason:null;
+ if(skipped==="no_numeric_values")host.appendChild(compareEl("p","wizard-done","확인할 숫자 값이 없어 핵심 값 확인은 건너뛰었어요."));
+ else if(skipped==="disabled")host.appendChild(compareEl("p","wizard-done","핵심 값 확인은 꺼져 있어요(서버 설정)."));
+ if(primary)primary.textContent="읽었어요";
+}
+function renderWizardStart(host,primary){
+ const entry=wizardSelectedProtocol();
+ setText("wizard-title",entry?.title||"시작할 준비가 됐어요");
+ setText("wizard-lead","시작하면 마이크가 켜지고 음성 안내가 시작돼요. 안전 주의를 확인한 것으로 기록돼요.");
+ const voice=wizard.voices?.voices?.find(item=>item.voice_id===(wizardSettings().agent_voice==="default"?wizard.voices?.default_voice_id:wizardSettings().agent_voice));
+ if(voice)host.appendChild(compareEl("p","wizard-done",`안내 목소리 · ${voice.label_ko}`));
+ if(experimentIsResumable())host.appendChild(compareEl("p","wizard-done","진행 중이던 실험이 있어요. 이어하려면 '자세히 보기'에서 '실험 이어하기'를 누르세요."));
+ if(primary){primary.textContent="이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
+}
+async function wizardPrimary(){
+ if(wizard.busy)return null;
+ switch(wizard.step){
+  case "login":return wizardSubmitLogin();
+  case "voice":case "agent":case "safety":wizardNext();return true;
+  case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
+  case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();renderWizard();return true;}
+  default:return null;
+ }
+}
+async function wizardQuickStart(){
+ const last=wizardLastProtocol();if(!last||!protocolCatalog.get(last)?.available_for_execution)return false;
+ if(!(await wizardPickProtocol(last)))return false;
+ wizardGo("check");return true;
+}
+$("wizard-primary")?.addEventListener("click",()=>{void wizardPrimary();});
+$("wizard-back")?.addEventListener("click",()=>{wizardBack();});
+$("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
+$("wizard-detail")?.addEventListener("click",()=>{wizardChooseDetail(true);wizard.active=false;renderWizard();});
+globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();void openStartWizard();},{once:true});
 </script>
 </body>
 </html>

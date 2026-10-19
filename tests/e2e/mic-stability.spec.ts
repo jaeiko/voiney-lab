@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './detail-view';
 
 // Lane U2 (2026-10-06): the microphone is opened once per session and kept
 // open; a device that goes away is reconnected once, and a failure shows a
