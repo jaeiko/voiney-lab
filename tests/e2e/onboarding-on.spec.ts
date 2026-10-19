@@ -2,8 +2,9 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 
 // Lane ON stage ② (human decision 2026-10-16/18): the start, one thing per
 // screen -- the voice, the agent's voice, the protocol, two key values, the
-// safety check, the start. Lane IA (2026-10-19): the wizard is the experiment
-// tab's start (#/experiment); the view behind "자세히 보기" is gone.
+// safety check, the start. Lane IA (2026-10-19): the steps open as a sheet
+// over the page from the experiment tab's start button (and the home's
+// card); the view behind "자세히 보기" is gone.
 // Server answers are mocked with page.route; nothing talks to a model. The
 // CI server runs in dev mode (no login step), so the wizard opens on the
 // microphone step.
@@ -72,6 +73,8 @@ test.describe('Start wizard (lane ON)', () => {
   test('opens one step at a time and walks to the start through the servers questions', async ({ page }) => {
     const answers = await mock(page);
     await page.goto('/#/experiment');
+    // Lane IA addendum: the steps open as a sheet from the experiment tab's start button.
+    await page.locator('#experiment-start-open').click();
     await expect(page.locator('#start-wizard')).toBeVisible();
     await expect(page.locator('body')).toHaveAttribute('data-wizard', 'on');
     await expect(page.locator('#start')).toBeHidden();
@@ -116,6 +119,7 @@ test.describe('Start wizard (lane ON)', () => {
   test('← 이전 goes back one step', async ({ page }) => {
     await mock(page);
     await page.goto('/#/experiment');
+    await page.locator('#experiment-start-open').click();
     await page.locator('#wizard-primary').click();
     await expect(page.locator('#wizard-title')).toHaveText('안내 목소리 고르기');
     await page.locator('#wizard-back').click();

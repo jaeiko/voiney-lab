@@ -778,16 +778,31 @@
      .tab-link{flex:0 0 auto;flex-direction:row;justify-content:flex-start;gap:var(--space-3);min-height:56px;padding:0 var(--space-6);font-size:1rem}
      .tab-link[aria-current="page"]{box-shadow:inset 4px 0 0 var(--ink);background:var(--bench)}
      body:not([data-view="during"]):not([data-auth="required"]){padding-left:var(--side-menu-w);padding-bottom:0}
-     .wizard{min-height:100dvh}
     }
-    /* Lane ON decision 2 (2026-10-18): the start, one thing per screen (토스식). While the
-       wizard is on, the rest of the experiment tab waits behind it (lane IA ⑦: there is
-       no detail view any more): one column that fits a phone, progress dots above, one big
-       button, "← 이전". */
-    body[data-wizard="on"] .topbar,body[data-wizard="on"] .sticky-rail,body[data-wizard="on"] #tab-experiment>:not(#start-wizard){display:none}
-    body[data-wizard="on"] .shell{display:block;max-width:none;padding:0}
+    /* Lane ON decision 2 (2026-10-18): the start, one thing per screen (토스식): one column
+       that fits a phone, progress dots above, one big button, "← 이전". Lane IA addendum
+       (2026-10-19): it is a sheet over the page -- from below on a phone, a window in the
+       middle of a wide screen -- and a page of its own only for the login and the signup. */
+    .wizard-sheet[hidden]{display:none}
+    .wizard-sheet{position:fixed;inset:0;z-index:150;display:flex;align-items:flex-end;justify-content:center}
+    .wizard-sheet-backdrop{position:absolute;inset:0;background:rgba(28,28,26,.45)}
+    .wizard-sheet-panel{position:relative;width:100%;max-height:calc(100dvh - 24px);overflow:auto;border-top:2px solid var(--ink);border-radius:var(--radius-md) var(--radius-md) 0 0;background:var(--bench);outline:none}
+    .wizard-close{position:absolute;top:var(--space-2);right:var(--space-2);z-index:1;width:var(--target-desk);height:var(--target-desk);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font-size:1.5rem;line-height:1;cursor:pointer}
+    .wizard-close[hidden]{display:none}
+    .wizard-sheet[data-mode="page"]{position:static;display:block}
+    .wizard-sheet[data-mode="page"] .wizard-sheet-backdrop{display:none}
+    .wizard-sheet[data-mode="page"] .wizard-sheet-panel{max-height:none;margin:0 auto;overflow:visible;border:0;border-radius:0;background:none}
+    .wizard-sheet[data-mode="page"] .wizard{min-height:100dvh}
+    body[data-auth="required"] .topbar,body[data-auth="required"] .sticky-rail,body[data-auth="required"] .shell{display:none}
+    body[data-wizard="on"]:not([data-auth="required"]){overflow:hidden}
+    .experiment-start{display:grid}
+    body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
+    @media (min-width:900px){
+     .wizard-sheet{align-items:center;padding:var(--space-6)}
+     .wizard-sheet-panel{width:min(560px,100%);max-height:calc(100dvh - 48px);border:2px solid var(--ink);border-radius:var(--radius-md)}
+    }
     #start-wizard[hidden]{display:none}
-    .wizard{max-width:480px;margin:0 auto;padding:var(--space-4) var(--space-4) var(--space-12);display:flex;flex-direction:column;gap:var(--space-4);min-height:calc(100dvh - var(--tab-bar-h));box-sizing:border-box}
+    .wizard{max-width:480px;margin:0 auto;padding:var(--space-8) var(--space-4) var(--space-8);display:flex;flex-direction:column;gap:var(--space-4);box-sizing:border-box}
     .wizard-dots{display:flex;gap:var(--space-2);justify-content:center;margin:0;padding:var(--space-2) 0;list-style:none}
     .wizard-dots li{width:10px;height:10px;border-radius:50%;background:var(--line);border:1px solid var(--line-strong)}
     .wizard-dots li[data-state="done"]{background:var(--ink);border-color:var(--ink)}
@@ -1030,24 +1045,10 @@
     </section>
     <!-- Lane IA decision ①: the experiment -- lane ON's wizard before the run, lane UI0's run view during it (the voice console, the step card, the timer, the pictures, the conversation sheet), lane UI2's record review after it. -->
     <section id="tab-experiment" class="tab-panel" data-tab="experiment" aria-label="실험" tabindex="-1" hidden>
-      <!-- Lane ON decision 2 (2026-10-18): the start, one thing per screen -- login (when accounts are on), the microphone and the voice, the agent's voice, the protocol, two key values, the safety check, the start. The server decides every step's content; the page draws what it sends. Lane IA decision ⑦ (2026-10-19): the wizard is the experiment tab's start; the detail view behind it is gone, every part has its own tab. -->
-      <section id="start-wizard" class="wizard" aria-label="시작 준비" hidden>
-        <ol id="wizard-dots" class="wizard-dots" aria-label="진행"></ol>
-        <div class="wizard-card">
-          <p id="wizard-kicker" class="wizard-kicker"></p>
-          <h2 id="wizard-title" class="wizard-title"></h2>
-          <p id="wizard-lead" class="wizard-lead"></p>
-          <div id="wizard-body" class="wizard-body"></div>
-          <p id="wizard-note" class="wizard-note" role="status" aria-live="polite"></p>
-          <div class="wizard-actions">
-            <button id="wizard-primary" type="button" class="wizard-primary"></button>
-            <button id="wizard-back" type="button" class="wizard-back">← 이전</button>
-          </div>
-        </div>
-        <div class="wizard-foot">
-          <button id="wizard-quick" type="button" class="wizard-quick" hidden>지난번 설정으로 바로 시작</button>
-        </div>
-      </section>
+      <!-- Lane IA addendum (2026-10-19): before a run the experiment tab offers the start; lane ON's step-by-step screens open as a sheet over the page (#wizard-sheet, after the main). The voice console's own start and stop buttons wait for the 실험 후 view. -->
+      <div id="experiment-start" class="experiment-start">
+        <button id="experiment-start-open" type="button" class="home-card" data-card="new-experiment"><b class="home-card-title">새 실험 시작</b><span class="home-card-sub">마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요</span></button>
+      </div>
       <div class="prestart-side">
         <div class="voice-console" aria-live="polite">
           <div class="pulse" aria-hidden="true">●</div>
@@ -1379,6 +1380,31 @@
       </details>
     </section>
   </main>
+  <!-- Lane IA addendum (2026-10-19, human decision): lane ON's step-by-step screens are not a screen of their own -- they open as a sheet over the page: from below on a phone (nearly the whole height), a window in the middle of a wide screen. Opened by the home's [새 실험 시작], the experiment tab's start, the protocol's [이 프로토콜로 실험 시작] (that protocol picked, from the two questions), and once after the first login as the first setup (the microphone, the voice, the agent's voice; it can be closed and done again in the settings). Closed by ×, a press outside, Esc or the back button; the page under it stays as it was. Login and signup, which cannot show the page, stay a screen of their own (data-mode="page"). The start of the experiment closes it and opens the run's tab. -->
+  <div id="wizard-sheet" class="wizard-sheet" data-mode="sheet" hidden>
+    <div id="wizard-sheet-backdrop" class="wizard-sheet-backdrop"></div>
+    <div id="wizard-sheet-panel" class="wizard-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="wizard-title" tabindex="-1">
+      <button id="wizard-close" type="button" class="wizard-close" aria-label="닫기">×</button>
+      <!-- Lane ON decision 2 (2026-10-18): the start, one thing per screen -- login (when accounts are on), the microphone and the voice, the agent's voice, the protocol, two key values, the safety check, the start. The server decides every step's content; the page draws what it sends. Lane IA decision ⑦ (2026-10-19): the wizard is the experiment tab's start; the detail view behind it is gone, every part has its own tab. -->
+      <section id="start-wizard" class="wizard" aria-label="시작 준비" hidden>
+        <ol id="wizard-dots" class="wizard-dots" aria-label="진행"></ol>
+        <div class="wizard-card">
+          <p id="wizard-kicker" class="wizard-kicker"></p>
+          <h2 id="wizard-title" class="wizard-title"></h2>
+          <p id="wizard-lead" class="wizard-lead"></p>
+          <div id="wizard-body" class="wizard-body"></div>
+          <p id="wizard-note" class="wizard-note" role="status" aria-live="polite"></p>
+          <div class="wizard-actions">
+            <button id="wizard-primary" type="button" class="wizard-primary"></button>
+            <button id="wizard-back" type="button" class="wizard-back">← 이전</button>
+          </div>
+        </div>
+        <div class="wizard-foot">
+          <button id="wizard-quick" type="button" class="wizard-quick" hidden>지난번 설정으로 바로 시작</button>
+        </div>
+      </section>
+    </div>
+  </div>
   <!-- Lane IA decision ①: the tab bar -- five links, the hash of each tab; below on a phone, a menu on the left of a wide screen, hidden while the experiment runs and before a login. -->
   <nav id="tab-bar" class="tab-bar" aria-label="화면">
     <a id="tab-link-home" class="tab-link" href="#/home" data-tab="home"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg><span>홈</span></a>
@@ -1664,6 +1690,7 @@ function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
  // Lane IA decision ①: the run opens the experiment tab once (replacing the entry, so the back button leaves the run's tab, not a tab before it); the route draws the tab, the band and the wizard.
+ if(view!=="before"&&wizard.open)closeWizardSheet({silent:true});
  if(view==="during"&&lastScreenView!=="during"&&shownTab()!=="experiment"){lastScreenView=view;navigateTab("experiment",null,{replace:true});}
  else{lastScreenView=view;renderRoute();}
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
@@ -4686,7 +4713,14 @@ $("protocol-id")?.addEventListener("change",onProtocolSelectionChanged);$("repea
 $("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolReview();});
 $("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
 $("protocol-analysis-retry")?.addEventListener("click",async()=>{const protocolId=currentProtocolReviewId;if(!protocolId)return;const reanalysis=$("protocol-analysis-retry")?.dataset?.reanalysis==="true";if(reanalysis&&!confirmProtocolReanalysis())return;await analyzeRegisteredProtocol(protocolId,{reanalysis});await loadProtocolCatalog(protocolId);restoreProtocolAnalysisNotice();});
-$("protocol-start")?.addEventListener("click",()=>{void startReviewedProtocol();});
+// Lane IA addendum: the protocol's start opens the step-by-step sheet with that protocol picked, from the two questions; the wizard's last press is the one human confirmation (startReviewedProtocol).
+$("protocol-start")?.addEventListener("click",()=>{openStartForProtocol(currentProtocolReviewId);});
+function openStartForProtocol(protocolId){
+ if(typeof protocolId!=="string"||!protocolId||!protocolCatalog.has(protocolId))return false;
+ const select=$("protocol-id");if(select&&select.value!==protocolId&&!select.disabled)select.value=protocolId;
+ wizardRememberProtocol(protocolId);
+ return openWizardSheet("check");
+}
 // Lane RV: the review's name field and its register button.
 $("reviewer-name")?.addEventListener("input",()=>{const status=$("review-register-status");if(status?.dataset)delete status.dataset.result;renderReviewRegister();});
 $("review-register")?.addEventListener("click",()=>{void registerReview();});
@@ -4706,7 +4740,12 @@ $("experiment-evidence-upload")?.addEventListener("click",()=>{void uploadExperi
 
 for(const [name,parts] of Object.entries(RUN_SHEETS)){$(parts.opener)?.addEventListener("click",()=>{toggleRunSheet(name);});$(parts.close)?.addEventListener("click",()=>{closeRunSheet();});}
 $("run-sheet-backdrop")?.addEventListener("click",()=>{closeRunSheet();});
-globalThis.document?.addEventListener?.("keydown",event=>{onRunSheetKey(event);});
+function onWizardSheetKey(event){if(event?.key!=="Escape"||!wizard.open||authRequired())return false;closeWizardSheet();return true;}
+globalThis.document?.addEventListener?.("keydown",event=>{if(onWizardSheetKey(event))return;onRunSheetKey(event);});
+$("experiment-start-open")?.addEventListener("click",()=>{openWizardSheet();});
+$("wizard-close")?.addEventListener("click",()=>{closeWizardSheet();});
+$("wizard-sheet-backdrop")?.addEventListener("click",()=>{closeWizardSheet();});
+globalThis.addEventListener?.("popstate",()=>{if(wizard.open)closeWizardSheet({fromHistory:true});else wizardSheetPushed=false;renderRoute();});
 globalThis.document?.addEventListener?.("visibilitychange",()=>{void onScreenVisibilityChange();});
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
@@ -4763,7 +4802,9 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
 const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
-var wizard={active:false,step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:""};
+var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:""};
+var wizardSheetPushed=false,wizardOpener=null;
+const FIRST_SETUP_KEY="voiney-lab.first-setup";
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
 function wizardLastProtocol(){try{return globalThis.localStorage?.getItem(WIZARD_LAST_PROTOCOL_KEY)||"";}catch(_){return "";}}
 function wizardRememberProtocol(id){try{globalThis.localStorage?.setItem(WIZARD_LAST_PROTOCOL_KEY,id);}catch(_){}}
@@ -4774,8 +4815,45 @@ function wizardSteps(){
  if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true)steps.push("login");
  if(wizardSettings().voice_calibration!=="measured")steps.push("voice");
  if((wizard.voices?.voices?.length||0)>=2)steps.push("agent");
+ // Lane IA addendum: the first setup after a login is the voice steps alone.
+ if(wizard.mode==="setup")return steps.filter(step=>step!=="login");
  steps.push("protocol","check","safety","start");
  return steps;
+}
+// Lane IA addendum (2026-10-19): the sheet -- opened by the page's own buttons (never on its own, except the login), closed by ×, a press outside, Esc or the back button (one history entry is pushed while it is open), and by the start of the experiment.
+function openWizardSheet(step=null,{mode="start"}={}){
+ if(authRequired())return false;
+ wizard.mode=mode;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");
+ const steps=wizardSteps();if(!steps.length)return false;
+ wizard.step=step&&steps.includes(step)?step:steps[0];
+ if(!wizard.open){wizard.open=true;wizardOpener=globalThis.document?.activeElement||null;pushWizardSheetHistory();}
+ renderWizard();
+ $("wizard-sheet-panel")?.focus?.();
+ if(wizard.step==="check")void wizardLoadCheck();
+ return true;
+}
+function closeWizardSheet({fromHistory=false,silent=false}={}){
+ if(!wizard.open)return false;
+ wizard.open=false;wizard.mode="start";renderWizard();
+ const pushed=wizardSheetPushed;wizardSheetPushed=false;
+ if(pushed&&!fromHistory&&!silent){try{globalThis.history?.back?.();}catch(_){}}
+ const opener=wizardOpener;wizardOpener=null;opener?.focus?.();
+ return true;
+}
+function pushWizardSheetHistory(){
+ const history=globalThis.history,loc=globalThis.location;
+ if(!history||typeof history.pushState!=="function"||!loc)return false;
+ try{history.pushState({wizardSheet:true},"",typeof loc.href==="string"?loc.href:String(loc.hash||""));wizardSheetPushed=true;}catch(_){wizardSheetPushed=false;}
+ return wizardSheetPushed;
+}
+function firstSetupOffered(accountId){try{return globalThis.localStorage?.getItem(`${FIRST_SETUP_KEY}:${accountId}`)==="done";}catch(_){return false;}}
+function rememberFirstSetupOffered(accountId){try{globalThis.localStorage?.setItem(`${FIRST_SETUP_KEY}:${accountId}`,"done");}catch(_){}}
+// Once after the first login: the microphone, the voice and the agent's voice, as a sheet that can be closed; the settings tab has them again.
+function offerFirstSetup(){
+ const account=wizard.auth?.account,accountId=typeof account?.account_id==="string"?account.account_id:"";
+ if(wizard.auth?.mode!=="accounts"||!accountId||firstSetupOffered(accountId))return false;
+ rememberFirstSetupOffered(accountId);
+ return openWizardSheet(null,{mode:"setup"});
 }
 function wizardStepIndex(){return wizardSteps().indexOf(wizard.step);}
 function wizardSelectedProtocol(){const id=$("protocol-id")?.value||"";return id&&protocolCatalog.get(id)?protocolCatalog.get(id):null;}
@@ -4788,7 +4866,7 @@ async function loadAgentVoices(){
 }
 async function openStartWizard(){
  if(sessionActive){wizard.active=false;renderRoute();return false;}
- wizard.active=true;wizard.invite=wizardInviteToken();
+ wizard.active=true;wizard.open=false;wizard.invite=wizardInviteToken();
  await loadAuthSession();
  if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
  await wizardAfterSignIn();
@@ -4810,17 +4888,20 @@ function wizardOption(label,sub,pressed,onPick,aside){
 }
 function renderWizard(){
  if(!wizard)return false;
- const body=globalThis.document?.body,section=$("start-wizard");
- // Lane IA decision ①: the wizard is the experiment tab's 실험 전 view; before a login it is the login screen whatever the hash.
- const on=wizard.active===true&&screenView()==="before"&&shownTab()==="experiment";
+ const body=globalThis.document?.body,section=$("start-wizard"),sheet=$("wizard-sheet");
+ // Lane IA addendum: a sheet over the page while it is open and no run is on; the login's page of its own whatever the hash.
+ const page=authRequired(),on=page||(wizard.open===true&&screenView()==="before");
+ if(!on&&wizard.open)wizard.open=false;
  if(body?.dataset)body.dataset.wizard=on?"on":"off";
+ if(sheet){sheet.hidden=!on;if(sheet.dataset)sheet.dataset.mode=page?"page":"sheet";}
+ const close=$("wizard-close");if(close)close.hidden=page;
  if(section)section.hidden=!on;
  if(!on)return false;
  const steps=wizardSteps();if(!steps.includes(wizard.step))wizard.step=steps[0];
  const dots=$("wizard-dots");
  if(dots){dots.replaceChildren();steps.forEach((step,index)=>{const dot=document.createElement("li");if(dot.dataset)dot.dataset.state=index<steps.indexOf(wizard.step)?"done":step===wizard.step?"current":"todo";dot.setAttribute?.("aria-label",WIZARD_STEP_WORDS[step].title);dots.appendChild(dot);});}
  const words=WIZARD_STEP_WORDS[wizard.step];
- setText("wizard-kicker",`${steps.indexOf(wizard.step)+1} / ${steps.length} · ${words.kicker}`);
+ setText("wizard-kicker",`${steps.indexOf(wizard.step)+1} / ${steps.length} · ${wizard.mode==="setup"?"첫 설정 · ":""}${words.kicker}`);
  setText("wizard-title",words.title);
  const host=$("wizard-body");if(host)host.replaceChildren();
  const primary=$("wizard-primary"),back=$("wizard-back");
@@ -4829,8 +4910,9 @@ function renderWizard(){
  const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=wizard.noteKind;}
  const renderers={login:renderWizardLogin,voice:renderWizardVoice,agent:renderWizardAgent,protocol:renderWizardProtocol,check:renderWizardCheck,safety:renderWizardSafety,start:renderWizardStart};
  renderers[wizard.step]?.(host,primary);
+ if(wizard.mode==="setup"){host.appendChild(compareEl("p","wizard-done","설정 탭에서 언제든 다시 할 수 있어요."));if(primary&&steps.indexOf(wizard.step)===steps.length-1)primary.textContent="다 됐어요";}
  const quick=$("wizard-quick"),last=wizardLastProtocol();
- if(quick)quick.hidden=!(steps.indexOf(wizard.step)===0&&wizard.step!=="login"&&last&&protocolCatalog.get(last)?.available_for_execution===true);
+ if(quick)quick.hidden=!(wizard.mode!=="setup"&&steps.indexOf(wizard.step)===0&&wizard.step!=="login"&&last&&protocolCatalog.get(last)?.available_for_execution===true);
  return true;
 }
 function renderWizardLogin(host,primary){
@@ -4855,7 +4937,7 @@ async function wizardSubmitLogin(){
   await loadAuthSession();
   await Promise.all([loadProtocolCatalog(),loadWorkspaceSession(),loadExperimenterSettings()]);
   await wizardAfterSignIn();
-  wizardSetBusy(false);wizardGo(wizardSteps()[0]);renderRoute();return payload;
+  wizardSetBusy(false);wizard.step=wizardSteps()[0];renderRoute();offerFirstSetup();return payload;
  }catch(_){wizardSetBusy(false);wizardNote("서버에 연결할 수 없어요. 네트워크를 확인해 주세요.","error");return null;}
 }
 function renderWizardVoice(host,primary){
@@ -5039,9 +5121,9 @@ async function wizardPrimary(){
  if(wizard.busy)return null;
  switch(wizard.step){
   case "login":return wizardSubmitLogin();
-  case "voice":case "agent":case "safety":wizardNext();return true;
+  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}wizardNext();return true;}
   case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
-  case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();renderWizard();return true;}
+  case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;}
   default:return null;
  }
 }
@@ -5072,7 +5154,7 @@ function parseRoute(hash){const match=TAB_ROUTE_PATTERN.exec(String(hash||""));i
 function routePath(tab,id=null){return `#/${tab}${nonemptyText(id)?`/${encodeURIComponent(id)}`:""}`;}
 function currentTab(){return screenRoute.tab==="upload"?"protocols":screenRoute.tab;}
 function authRequired(){return wizard?.auth?.mode==="accounts"&&wizard.auth.signed_in!==true;}
-function shownTab(){return authRequired()?"experiment":currentTab();}
+function shownTab(){return currentTab();}
 function readRoute(){const loc=globalThis.location;if(loc&&typeof loc.hash==="string")screenRoute=parseRoute(loc.hash);return screenRoute;}
 function navigateTab(tab,id=null,{replace=false}={}){
  const path=routePath(tab,id),loc=globalThis.location;
@@ -5086,9 +5168,10 @@ function navigateTab(tab,id=null,{replace=false}={}){
 }
 function renderRoute(){
  readRoute();
- const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",key=`${tab}|${screenRoute.path}|${authRequired()}`;
- if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(authRequired()?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
- for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=!(name===tab||(name==="records"&&tab==="experiment"&&during));}
+ const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",page=authRequired(),key=`${tab}|${screenRoute.path}|${page}`;
+ if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(page?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
+ // Before a login no panel shows: the login is a page of its own (the sheet in page mode).
+ for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during));}
  for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tab?"page":"false");
  renderRunReturnBand();
  if(tab==="home")renderHome();
@@ -5115,7 +5198,7 @@ function chooseExperimentSession(sessionId,{force=false}={}){
 }
 function renderRunReturnBand(){
  const band=$("run-return-band");if(!band)return false;
- const shown=screenView()==="during"&&shownTab()!=="experiment";band.hidden=!shown;
+ const shown=screenView()==="during"&&!authRequired()&&shownTab()!=="experiment";band.hidden=!shown;
  if(shown){const label=curatedProtocolState?.current_step_label;setText("run-return-text",nonemptyText(label)?`실험 중 · ${label}단계`:"실험 중");}
  return shown;
 }
@@ -5146,7 +5229,7 @@ function renderHome(){
  if(view!=="during"){
   const resume=sessionActive?null:latestResumableExperiment();
   if(resume)host.appendChild(homeCard("resume","이어서 하기",[serverProtocolTitle(resume)||protocolCatalog.get(resume.protocol_id)?.title||"실험",`${nonemptyText(resume.current_step_label)?resume.current_step_label:"—"}단계`,sessionStateBadgeInfo(resume.status)?.label||""].filter(Boolean).join(" · "),null,()=>{void resumeExperimentFromHome(resume);}));
-  host.appendChild(homeCard("new-experiment","새 실험 시작","프로토콜을 고르고 안전 주의를 확인한 뒤 시작해요","#/experiment"));
+  host.appendChild(homeCard("new-experiment","새 실험 시작","마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요",null,()=>{openWizardSheet();}));
  }
  const pending=entries.filter(entry=>Number.isInteger(entry?.review_pending?.needs_review_count)).length;
  if(pending)host.appendChild(homeCard("review",`검토할 프로토콜 ${pending}개`,"분석이 사람의 확인을 기다려요","#/protocols"));
@@ -5158,9 +5241,7 @@ async function resumeExperimentFromHome(item){
  if(!item||typeof item.session_id!=="string")return false;
  if(typeof item.protocol_id==="string"&&protocolCatalog.has(item.protocol_id))pickProtocolFromList(item.protocol_id);
  chooseExperimentSession(item.session_id,{force:true});
- navigateTab("experiment");
- if(wizard.active)wizardGo("start");
- return true;
+ return openWizardSheet("start");
 }
 // Lane IA decision ⑥ (2026-10-19): the settings tab's own sections beside lane
 // UI0's sheet -- the agent's voice (lane ON's list and preview, the same

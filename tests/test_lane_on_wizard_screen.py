@@ -6,7 +6,7 @@ identity check -- login (when accounts are on) → the microphone and 목소리
 voices, [들어 보기], saved) → the protocol (list, upload) → two key values →
 the safety check → [이 프로토콜로 시작]. Dots above, one big button, "← 이전",
 one column. From the second time one button, "지난번 설정으로 바로 시작",
-skips what is saved. The wizard is the experiment tab's start (lane IA ⑦). The page
+skips what is saved. The wizard is a sheet over the page (lane IA addendum). The page
 draws only what the server sends: the questions, their choices and the
 cards are the server's. Every test loads the whole page script into Node
 with the fake DOM and drives the production functions.
@@ -46,8 +46,8 @@ const WRONG={question_id:"q1:step:s2:10min",correct:false,proceed:false,chosen_l
 const RIGHT=(next)=>({question_id:"q",correct:true,proceed:true,chosen_label:"x",next_question_id:next,message_ko:"",followups:[],card:null});
 function serve(answers){globalThis.fetch=async(url,options={})=>{const call={url:String(url),method:options.method||"GET",body:typeof options.body==="string"?JSON.parse(options.body):null};calls.push(call);for(const [pattern,answer] of answers){if(call.url.includes(pattern)){const value=typeof answer==="function"?answer(call):answer;return value&&typeof value.then==="function"?value:value&&value.ok!==undefined&&value.json?value:json(value);}}throw new Error(`unexpected ${call.url}`);};}
 const base=(session=DEV_SESSION,settings=SETTINGS(),voices=VOICES,catalog=CATALOG)=>[["/api/auth/session",session],["/api/experimenter/settings",settings],["/api/voice/voices",voices],["/api/protocols?",catalog],["/review",REVIEW()],["/api/protocols",catalog],["/api/workspace/session",{display_name:"김재준"}],["/api/workspace/experiments",{experiments:[]}],["/api/source-formats",{formats:[]}]];
-// Lane IA decision ① (2026-10-19): the wizard is the experiment tab's start, so these tests open that tab.
-async function open(answers){serve(answers);navigateTab("experiment");await loadProtocolCatalog();await openStartWizard();await settle();}
+// Lane IA addendum (2026-10-19): the wizard is a sheet the page opens (the login shows by itself), so these tests open it as the home's [새 실험 시작] does.
+async function open(answers){serve(answers);await loadProtocolCatalog();await openStartWizard();openWizardSheet();await settle();}
 """
 
 

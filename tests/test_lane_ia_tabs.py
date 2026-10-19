@@ -26,7 +26,8 @@ from tests.test_screen_cleanup import INDEX, run_page_script
 
 SETUP = WIZARD_SETUP + r"""
 globalThis.location.hash="";
-globalThis.history={replaced:[],replaceState(_,__,path){globalThis.history.replaced.push(path);globalThis.location.hash=path;}};
+globalThis.history={replaced:[],pushed:[],backs:0,replaceState(_,__,path){globalThis.history.replaced.push(path);globalThis.location.hash=path;},pushState(state,_,path){globalThis.history.pushed.push(state);},back(){globalThis.history.backs+=1;globalThis.history.pushed.pop();},popBack(){globalThis.history.backs+=1;globalThis.history.pushed.pop();for(const handler of pageListeners.popstate||[])handler({});}};
+
 const go=hash=>{globalThis.location.hash=hash;return renderRoute();};
 const tab=()=>document.body.dataset.tab;
 const panelShown=name=>node(`tab-${name}`).hidden===false;
@@ -60,7 +61,7 @@ PLACES = {
     "protocols": ("protocol-library", "protocol-list", "protocol-review-panel", "protocol-reagent-tables",
                   "protocol-pdf", "protocol-queue", "protocol-start-summary", "protocol-start",
                   "protocol-compare", "protocol-review-editor", "review-card", "review-register", "review-history-fold"),
-    "experiment": ("start-wizard", "state", "status", "start", "stop", "run-caption-text", "mic-recovery",
+    "experiment": ("experiment-start-open", "state", "status", "start", "stop", "run-caption-text", "mic-recovery",
                    "voice-calibration", "experiment-context-name", "experiment-resume-disclosure", "mic-check",
                    "procedure-primary", "run-card", "run-timer", "run-next-step", "procedure-warning",
                    "figures-sheet", "procedure-visual", "task-web-reference-panel", "after-state",
@@ -84,6 +85,7 @@ class TabMarkupTests(unittest.TestCase):
         main = self.html[self.html.index('<main id="researcher-workspace"'):self.html.index("</main>")]
         found = re.findall(r'<section id="tab-([a-z]+)" class="tab-panel"[^>]*data-tab="([a-z]+)"', main)
         self.assertEqual(found, [(name, name) for name in ("home", "protocols", "experiment", "records", "settings")])
+        self.assertEqual(self.html.count('id="start-wizard"'), 1)
         # Only the home panel is open before the script runs; a page without its script shows the home.
         for name in ("protocols", "experiment", "records", "settings"):
             self.assertRegex(main, rf'<section id="tab-{name}" class="tab-panel"[^>]*\bhidden>')
@@ -116,6 +118,22 @@ class TabMarkupTests(unittest.TestCase):
                      "wizardDetailChosen", "wizardChooseDetail"):
             with self.subTest(gone=gone):
                 self.assertNotIn(gone, self.html)
+
+    def test_the_sheet_markup_wraps_the_wizard_after_the_main(self) -> None:
+        # Lane IA addendum (2026-10-19): the sheet, its backdrop and its ×; the wizard inside it, outside every panel.
+        sheet = self.html[self.html.index('<div id="wizard-sheet"'):self.html.index('<nav id="tab-bar"')]
+        self.assertLess(self.html.index("</main>"), self.html.index('<div id="wizard-sheet"'))
+        for needle in ('id="wizard-sheet-backdrop"', 'role="dialog" aria-modal="true" aria-labelledby="wizard-title"',
+                       '<button id="wizard-close" type="button" class="wizard-close" aria-label="닫기">×</button>', '<section id="start-wizard"'):
+            self.assertIn(needle, sheet, needle)
+        self.assertNotIn('id="start-wizard"', panel(self.html, "experiment"))
+        self.assertIn('<button id="experiment-start-open" type="button" class="home-card" data-card="new-experiment">', panel(self.html, "experiment"))
+        self.assertIn(".wizard-sheet{position:fixed;inset:0;", self.style)
+        self.assertIn('.wizard-sheet[data-mode="page"]{position:static;display:block}', self.style)
+        self.assertIn('body[data-auth="required"] .topbar,body[data-auth="required"] .sticky-rail,body[data-auth="required"] .shell{display:none}', self.style)
+        wide = self.style[self.style.index("@media (min-width:900px){\n     .wizard-sheet{"):]
+        self.assertIn(".wizard-sheet-panel{width:min(560px,100%);", wide[:wide.index("\n    }\n")])
+        self.assertIn('body[data-view="before"] #tab-experiment .voice-console .controls{display:none}', self.style)
 
     def test_the_bar_is_fixed_below_on_a_phone_and_a_menu_on_the_left_of_a_wide_screen(self) -> None:
         self.assertIn(".tab-bar{position:fixed;left:0;right:0;bottom:0;", self.style)
@@ -196,15 +214,74 @@ assert(calls.some(call=>call.url.includes("/api/workspace/experiments/s-9/timeli
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_the_wizard_is_on_only_on_the_experiment_tab(self) -> None:
+    def test_the_wizard_is_a_sheet_the_page_opens_and_closes_over_any_tab(self) -> None:
+        # Lane IA addendum (2026-10-19): the step-by-step screens open as a sheet over the page, never by themselves.
         result = run(r"""
 await boot(base());
-assert(document.body.dataset.wizard==="off",`home: wizard ${document.body.dataset.wizard}`);
+assert(document.body.dataset.wizard==="off"&&node("wizard-sheet").hidden===true,`home: wizard ${document.body.dataset.wizard}`);
 go("#/experiment");
-assert(document.body.dataset.wizard==="on","the wizard is off on its own tab");
-assert(!node("start-wizard").hidden,"the wizard section is hidden");
-go("#/settings");
-assert(document.body.dataset.wizard==="off","the wizard stays on over the settings");
+assert(document.body.dataset.wizard==="off"&&node("wizard-sheet").hidden===true,"the wizard opened by itself on the experiment tab");
+assert(node("experiment-start-open"),"the experiment tab has no start button");
+node("experiment-start-open").dispatch("click");
+assert(wizard.open===true&&document.body.dataset.wizard==="on"&&node("wizard-sheet").hidden===false,"the start button did not open the sheet");
+assert(node("wizard-sheet").dataset.mode==="sheet"&&node("wizard-close").hidden===false,"not a sheet with its ×");
+assert(wizard.step==="voice"&&tab()==="experiment",`step ${wizard.step} tab ${tab()}`);
+assert(globalThis.history.pushed.length===1,"no history entry for the back button");
+node("wizard-close").dispatch("click");
+assert(wizard.open===false&&node("wizard-sheet").hidden===true,"× did not close the sheet");
+assert(globalThis.history.backs===1,"× did not pop the sheet's history entry");
+assert(tab()==="experiment"&&panelShown("experiment"),"the page under the sheet changed");
+openWizardSheet();node("wizard-sheet-backdrop").dispatch("click");
+assert(wizard.open===false,"a press outside did not close the sheet");
+openWizardSheet();onWizardSheetKey({key:"Escape"});
+assert(wizard.open===false,"Esc did not close the sheet");
+openWizardSheet();onWizardSheetKey({key:"Enter"});
+assert(wizard.open===true,"another key closed the sheet");closeWizardSheet();
+openWizardSheet();const backsBefore=globalThis.history.backs;globalThis.history.popBack();
+assert(wizard.open===false&&globalThis.history.backs===backsBefore+1,"the back button did not close the sheet (or history.back was called again)");
+go("#/settings");openWizardSheet("protocol");
+assert(wizard.open===true&&tab()==="settings"&&panelShown("settings"),"the sheet took the settings tab away");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_start_closes_the_sheet_and_opens_the_run_tab(self) -> None:
+        result = run(r"""
+let started=0;startReviewedProtocol=async()=>{started+=1;};
+await boot(base());
+go("#/protocols/p-1");await settle(8);
+node("protocol-start").dispatch("click");await settle(8);
+assert(wizard.open===true&&["check","safety"].includes(wizard.step),`the protocol's start did not open the sheet at the questions: ${wizard.step}`);
+assert(node("protocol-id").value==="p-1","the protocol was not kept");
+wizardGo("start");await wizardPrimary();await settle();
+assert(started===1,"the sheet's last press did not start");
+assert(wizard.open===false&&tab()==="experiment",`after the start: open ${wizard.open} tab ${tab()}`);
+// A run that begins while the sheet is open closes it too.
+go("#/home");openWizardSheet();startRun();
+assert(wizard.open===false&&node("wizard-sheet").hidden===true&&tab()==="experiment","the run left the sheet open");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_first_login_offers_the_setup_once_as_a_sheet(self) -> None:
+        result = run(r"""
+const stored={};globalThis.localStorage={getItem:key=>stored[key]??null,setItem:(key,value)=>{stored[key]=String(value);},removeItem:key=>{delete stored[key];}};
+let signedIn=false;
+await boot([["/api/auth/session",()=>ACCOUNT_SESSION(signedIn)],["/api/auth/login",()=>{signedIn=true;return {signed_in:true};}],...base(ACCOUNT_SESSION(false))]);
+assert(node("wizard-sheet").dataset.mode==="page"&&node("wizard-close").hidden===true,"the login is not a page of its own");
+node("wizard-name").value="김재준";node("wizard-password").value="password1";
+await wizardSubmitLogin();await settle(8);
+assert(wizard.open===true&&wizard.mode==="setup"&&node("wizard-sheet").dataset.mode==="sheet",`after the login: open ${wizard.open} mode ${wizard.mode}`);
+assert(wizardSteps().join()==="voice,agent",`setup steps: ${wizardSteps()}`);
+assert(node("wizard-kicker").textContent.includes("첫 설정"),node("wizard-kicker").textContent);
+assert(walk(body()).some(el=>el.textContent.includes("설정 탭에서 언제든")),"the way back to the settings is not said");
+assert(node("wizard-quick").hidden===true,"a quick start inside the setup");
+primary().dispatch("click");await settle();
+assert(wizard.step==="agent"&&primary().textContent==="다 됐어요",`last setup step: ${wizard.step} ${primary().textContent}`);
+primary().dispatch("click");await settle();
+assert(wizard.open===false,"the setup did not close at its end");
+assert(stored["voiney-lab.first-setup:a1"]==="done","the offer was not remembered");
+// Offered once: a second login does not ask again.
+wizard.open=false;offerFirstSetup();
+assert(wizard.open===false,"the setup was offered twice");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -237,8 +314,8 @@ let signedIn=false;
 await boot([["/api/auth/session",()=>ACCOUNT_SESSION(signedIn)],["/api/auth/login",()=>{signedIn=true;return {signed_in:true};}],...base(ACCOUNT_SESSION(false))]);
 go("#/records");
 assert(document.body.dataset.auth==="required",`auth: ${document.body.dataset.auth}`);
-assert(tab()==="experiment"&&shownPanels().join()==="experiment",`login panels: ${shownPanels()}`);
-assert(document.body.dataset.wizard==="on"&&wizard.step==="login",`step: ${wizard.step}`);
+assert(shownPanels().join()==="",`login panels: ${shownPanels()}`);
+assert(document.body.dataset.wizard==="on"&&wizard.step==="login"&&node("wizard-sheet").dataset.mode==="page",`step: ${wizard.step}`);
 assert(globalThis.location.hash==="#/records","the hash was rewritten by the login");
 node("wizard-name").value="김재준";node("wizard-password").value="password1";
 await wizardSubmitLogin();await settle(8);
@@ -255,7 +332,7 @@ class DetailViewGoneTests(unittest.TestCase):
         result = run(r"""
 const stored={"voiney-lab.start-view":"detail"};globalThis.sessionStorage={getItem:key=>stored[key]??null,setItem:(key,value)=>{stored[key]=String(value);},removeItem:key=>{delete stored[key];}};
 await boot(base());
-go("#/experiment");
+go("#/experiment");openWizardSheet();
 assert(document.body.dataset.wizard==="on","the old choice hid the wizard");
 assert(typeof globalThis.wizardDetailChosen==="undefined","the detail choice is still read");
 """)

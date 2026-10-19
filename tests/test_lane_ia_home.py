@@ -40,7 +40,10 @@ await boot(base());
 const kinds=cards().map(card=>card.dataset.card);
 assert(kinds.join()==="new-experiment,review,upload",`cards: ${kinds}`);
 const [start,review,upload]=cards();
-assert(start.textContent.includes("새 실험 시작")&&cardHref(start)==="#/experiment",start.textContent);
+assert(start.textContent.includes("새 실험 시작")&&cardHref(start)===undefined,start.textContent);
+start.dispatch("click");
+assert(wizard.open===true&&wizard.step==="voice"&&tab()==="home","[새 실험 시작] did not open the sheet over the home");
+closeWizardSheet();
 assert(review.textContent.includes("검토할 프로토콜 1개")&&cardHref(review)==="#/protocols",review.textContent);
 assert(upload.textContent.includes("새 프로토콜 올리기")&&cardHref(upload)==="#/upload",upload.textContent);
 // The count is the catalog's review_pending alone; a second pending protocol makes two.
@@ -58,7 +61,7 @@ assert(cards()[0].dataset.card==="resume",`cards: ${cards().map(card=>card.datas
 assert(cards()[0].textContent.includes("이어서 하기")&&cards()[0].textContent.includes("Gamma")&&cards()[0].textContent.includes("3단계"),cards()[0].textContent);
 calls.length=0;
 cards()[0].dispatch("click");await settle(10);
-assert(tab()==="experiment",`tab: ${tab()}`);
+assert(tab()==="home"&&wizard.open===true,`the card did not open the sheet over the home: tab ${tab()} open ${wizard.open}`);
 assert(node("protocol-id").value==="p-1"&&node("experiment-session-select").value==="s-9","the protocol and the session were not picked");
 assert(calls.some(call=>call.url.includes("/experiments/s-9/timeline")),"the session was not read");
 assert(wizard.step==="start",`step: ${wizard.step}`);
