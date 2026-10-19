@@ -15,7 +15,6 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
 from docx import Document
 from docx.shared import Pt
@@ -179,135 +178,6 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
         self.assertNotIn("이름 (원문 그대로)", text)
 
 
-USES = [
-    {"번호": 1, "용도": "세척·탈수 용매"},
-    {"번호": 2, "용도": "완충 용액 성분"},
-    {"번호": 3, "용도": "단백질 분해 효소"},
-    {"번호": 5, "용도": "세균 배양 배지"},
-    {"번호": 10, "용도": "건조 가열 장치"},
-]
-
-
-class ItemUseTests(_ReportCase):
-    """Decision 4: a short use per item from the same call, each checked."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.fixture = items_double()
-        self.event("00:30", "session_started", "1")
-        self.event("00:36", "step_completed", "1")
-        self.event("00:40", "session_stopped", "2", payload={"stop_reason": "stopped_by_user"})
-        self.store.finalize(self.report_id, status="stopped", event_key="turn-final")
-
-    def write(self, reply) -> tuple[er.ReportNarrative, _Client]:
-        er._NARRATIVE_CACHE.clear()  # each reply is a new call, not the record's kept narrative
-        client = _Client(reply)
-        brain = er.ReportWriterBrain(client=client, model="fake-model", timeout_seconds=5)
-        doc = self.doc()
-        return asyncio.run(brain.generate_narrative(doc, list(doc["events"]), fixture=self.fixture)), client
-
-    def test_uses_from_the_one_call_fill_a_use_column(self) -> None:
-        narrative, client = self.write(dict(GOOD_REPLY, item_uses=USES))
-        self.assertEqual(len(client.calls), 1)
-        # The uses that pass are kept with the narrative; lane RP3, decision
-        # ① took the materials table (and its use column) out of the notebook.
-        self.assertEqual(narrative.item_uses["Promega trypsin Promega Catalog #V5113"], "단백질 분해 효소")
-        self.assertEqual(narrative.item_uses["modified heating oven"], "건조 가열 장치")
-        text = er.render_markdown(narrative)
-        self.assertNotIn("| 용도 |", text)
-        self.assertNotIn("단백질 분해 효소", text)
-        self.assertNotIn("용도는 AI", text)
-
-    def test_the_model_reads_each_item_with_its_steps(self) -> None:
-        _, client = self.write(dict(GOOD_REPLY, item_uses=USES))
-        sent = json.loads(client.calls[0]["messages"][1]["content"])
-        self.assertEqual(sent["재료·장비"][2], {
-            "번호": 3, "종류": "재료", "이름": "Promega trypsin Promega Catalog #V5113", "사용 단계": ["3"]})
-        self.assertEqual(sent["재료·장비가 나오는 원문 단계"]["3"], "Add trypsin made up in AMBIC.")
-        self.assertNotIn("10", sent["재료·장비가 나오는 원문 단계"])  # no listed item is named there
-        self.assertIn("item_uses", client.calls[0]["messages"][0]["content"])
-
-    def test_each_use_is_checked_and_a_failing_one_is_left_blank(self) -> None:
-        narrative, _ = self.write(dict(GOOD_REPLY, item_uses=[
-            {"번호": 1, "용도": "단백질 펩타이드를 젤 조각에서 추출하고 탈수하는 데 쓰는 유기 용매"},
-            {"번호": 2, "용도": "25 mM 완충 용액"},
-            {"번호": 3, "용도": "µL 단위 효소 용액"},
-            {"번호": 4, "용도": "피부 접촉 주의 산"},
-            {"번호": 5, "용도": "배지를 먼저 데우세요"},
-            {"번호": 6, "용도": "고체 배지를 만든다."},
-            {"번호": 99, "용도": "원문에 없는 장비"},
-            {"번호": 7, "이름": "Centrifuge", "용도": "원심 분리"},
-            {"번호": 8, "용도": "용액 옮기기"},
-            {"번호": 12, "용도": "작은 고정 부품"},
-        ]))
-        self.assertEqual(dict(narrative.item_uses), {
-            "Glass Pasteur pipette (150 mm)": "용액 옮기기", "Ferrules": "작은 고정 부품"})
-        self.assertEqual(list(narrative.item_uses_rejected), [
-            ("Acetonitrile LC-MS grade B&J Brand VWR International (Avantor) Catalog #BJLC015-2.5", "25자 넘음"),
-            ("Ammonium bicarbonate Merck MilliporeSigma (Sigma-Aldrich) Catalog #A6141", "숫자"),
-            ("Promega trypsin Promega Catalog #V5113", "단위 “µL”"),
-            ("Formic acid, LC-MS grade Thermo Fisher Scientific Catalog #28905", "안전 지시 “주의”"),
-            ("Lysogeny Broth (LB) (Sigma-Aldrich)", "절차 지시 “먼저”"),
-            ("Lysogeny Agar (Sigma-Aldrich)", "절차 지시 “다.”"),
-            ("번호 99", "원문에 없는 항목"),
-            ("Centrifuge", "원문에 없는 항목"),
-        ])
-        self.assertNotIn("원심 분리", er.render_markdown(narrative))
-
-    def test_drawing_liquid_up_is_not_a_safety_word(self) -> None:
-        # Live run, headspace: "흡입" for a pipette controller is drawing liquid
-        # up, not breathing in; a warning still says so in other words.
-        narrative, _ = self.write(dict(GOOD_REPLY, item_uses=[
-            {"번호": 8, "용도": "피펫 용액 흡입 조절기"}, {"번호": 7, "용도": "증기 흡입 주의"}]))
-        self.assertEqual(dict(narrative.item_uses), {"Glass Pasteur pipette (150 mm)": "피펫 용액 흡입 조절기"})
-        self.assertEqual(list(narrative.item_uses_rejected), [("Glass pipettes (10 mL)", "안전 지시 “주의”")])
-
-    def test_a_value_from_an_item_step_the_model_read_is_the_sources(self) -> None:
-        # Live run, D and E: the model read step 21's and step 10's text for
-        # the uses and quoted their values in next_steps; those steps were not
-        # done, and the number check knew only the steps done.
-        narrative, _ = self.write(dict(GOOD_REPLY, next_steps=["4단계에서 포름산을 10% v/v 로 넣는다."]))
-        self.assertEqual(narrative.section_origin["next_steps"], "모델")
-        narrative, _ = self.write(dict(GOOD_REPLY, next_steps=["4단계에서 포름산을 37% 로 넣는다."]))
-        self.assertEqual(narrative.rejected["next_steps"], ("기록·원문에 없는 값 37%",))
-
-    def test_no_model_a_failed_call_or_no_passing_use_leaves_no_use_column(self) -> None:
-        server = er.ReportWriterBrain().build_deterministic_narrative(
-            self.doc(), list(self.doc()["events"]), fixture=self.fixture)
-        failed, _ = self.write("not json")
-        refused, _ = self.write(dict(GOOD_REPLY, item_uses=[{"번호": 1, "용도": "10% 용액"}]))
-        for narrative in (server, failed, refused):
-            text = er.render_markdown(narrative)
-            self.assertNotIn("이름 (원문 그대로)", text)
-            self.assertNotIn("| 용도 |", text)
-            self.assertNotIn("용도는 AI", text)
-
-    def test_uses_alone_still_say_ai_wrote_part_of_the_report(self) -> None:
-        narrative, _ = self.write({"item_uses": USES})
-        self.assertNotIn("모델", {narrative.section_origin[key] for key in er.MODEL_SECTIONS})
-        # Lane RP3, decision ①: the uses are not in the notebook, so no AI words are.
-        self.assertIn("AI 가 쓴 문장은 없다", er.authorship_line(narrative))
-
-    def test_the_use_column_is_the_widest_and_the_steps_the_narrowest(self) -> None:
-        name, use, steps = er.TABLE_WIDTHS[er.ITEM_USE_HEADER]
-        self.assertGreater(use, name)
-        self.assertGreater(name, steps)
-        self.assertAlmostEqual(name + use + steps, 1.0)
-
-    def test_a_download_uses_the_kept_reply_and_checks_its_uses_again(self) -> None:
-        client = _Client(dict(GOOD_REPLY, item_uses=USES))
-        preparer = er.ReportProsePreparer()
-        with mock.patch.object(er, "report_protocol_fixture", return_value=(self.fixture, "")):
-            preparer.start(self.store, self.report_id, lambda: er.ReportWriterBrain(
-                client=client, model="fake-model", timeout_seconds=5))
-            self.assertTrue(preparer.wait(self.store, self.report_id, 10))
-            text = self.store.export_markdown(self.report_id).decode()
-            self.store.export_docx(self.report_id)
-        self.assertEqual(len(client.calls), 1)
-        # Lane RP3, decision ①: the kept reply is read; the notebook has no use column.
-        self.assertNotIn("단백질 분해 효소", text)
-
-
 def _skip_record(start: str, skipped: list[str]) -> dict:
     return {"step_record": {"kind": "start_at_step", "start_step": start, "skipped_step_labels": skipped,
                             "skipped_step_ids": [f"p-step-0{label}" for label in skipped],
@@ -392,10 +262,10 @@ class LaterStartAndReturnTests(_ReportCase):
         doc = self.doc()
         asyncio.run(brain.generate_narrative(doc, list(doc["events"]), fixture=self.fixture))
         sent = json.loads(client.calls[0]["messages"][1]["content"])
-        self.assertIn("4단계에서 2단계로 돌아갔다 — 2회차(말로 확인한 돌아가기 기준), 10:00.",
-                      sent["원문과 다르게 한 점"])
-        steps = {step["단계"]: step for step in sent["수행한 단계"]}
-        self.assertEqual(steps["2"]["완료 시각"], "1회차 09:40, 2회차 10:05")
+        # Lane RP3, decision ③: the model reads the conditions used -- the
+        # return with its round and its basis among them -- not a step table.
+        self.assertIn("2–4단계 반복 — 2회차까지 함 (말로 확인한 돌아가기 기준)", sent["실제로 한 조건"])
+        self.assertNotIn("수행한 단계", sent)
 
 
 class RulesToReportTests(_Turns, unittest.TestCase):

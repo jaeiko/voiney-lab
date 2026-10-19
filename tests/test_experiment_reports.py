@@ -241,14 +241,17 @@ class ExperimentReportStoreTests(unittest.TestCase):
 
         brain = ReportWriterBrain(ReportWriterSettings(enabled=True, model="grok-4.6-preview"))
         narrative = brain.build_deterministic_narrative(ctx)
-        self.assertIn("목적", narrative.objective)
-        self.assertIn("절차", narrative.materials_and_methods)
-        # Results should mention actual observation for step 1
-        self.assertIn("투명하고 균일한 1 mm 크기", narrative.results_and_observations)
-        # Results should strictly disclaim unobserved actual result for step 2 without claiming false success
-        # Lane RP: a step-completion wording is the researcher's observation.
-        self.assertIn("워시 완충액을 넣었습니다", narrative.results_and_observations)
-        self.assertNotIn("모든 단계가 정상적으로 완료되었다", narrative.results_and_observations)
+        # Lane RP3, decisions ① and ③: the notebook holds the researcher's
+        # words as recorded (a step-completion wording is an observation,
+        # lane RP), claims no success that was not said, and without a model
+        # has no AI-written sentence.
+        from voiney_lab.experiment_reports import render_markdown
+
+        text = render_markdown(narrative)
+        self.assertIn("젤 밴드를 1x1 mm 크기로 잘랐습니다.", text)
+        self.assertIn("워시 완충액을 넣었습니다.", text)
+        self.assertNotIn("모든 단계가 정상적으로 완료되었다", text)
+        self.assertIn("AI 가 쓴 문장은 없다", text)
 
     def test_docx_export_contains_grounded_step_table(self):
         report = self.open()

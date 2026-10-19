@@ -5244,6 +5244,23 @@ def export_experiment_report(report_id:str,format_name:str):
             except ReportPdfError as exc:
                 raise HTTPException(status_code=503,detail=exc.code) from exc
             media_type="application/pdf"
+        elif format_name=="meeting-docx":
+            # Lane RP3, decision ③: the one-page lab-meeting summary.
+            _prepared_report_prose(store,report_id)
+            content=store.export_meeting_docx(report_id)
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif format_name=="meeting-pdf":
+            _prepared_report_prose(store,report_id)
+            try:
+                content=store.export_meeting_pdf(report_id)
+            except ReportPdfError as exc:
+                raise HTTPException(status_code=503,detail=exc.code) from exc
+            media_type="application/pdf"
+        elif format_name=="xlsx":
+            # Lane RP3, decision ③: the results table.
+            _prepared_report_prose(store,report_id)
+            content=store.export_xlsx(report_id)
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
     except HTTPException:

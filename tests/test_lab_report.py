@@ -234,20 +234,19 @@ class _Client:
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
 
 
+#: Lane RP3, decision ③: the model's reply is the observation notes and one
+#: result paragraph; every number in them is in the record or the source.
 GOOD_REPLY = {
-    "purpose": "이 실험은 젤 속 단백질을 분석할 수 있게 준비하는 것을 목적으로 한다[1].",
-    "background": "원문은 탈색과 탈수 순서로 진행한다[1].",
-    "methods_summary": "1–4단계를 수행했고 3단계는 원문 15분 중 10분에 끝냈다.",
-    "results_summary": "4단계에서 “밴드가 투명해졌어”라는 관찰과 “튜브를 쏟았어”라는 이상이 기록되었다.",
-    "discussion_confirmed": ["1–4단계가 완료로 기록되었다."],
-    "discussion_to_check": ["4단계 이상 뒤 처리 내용을 확인해야 한다."],
-    "discussion_review": [{"항목 번호": 2, "제안": "쏟은 양이 결과에 영향을 주었는지 검토한다."}],
-    "conclusion": "5단계 중 4단계를 마치고 5단계에서 중단했다.",
-    "next_steps": ["5단계부터 이어서 진행한다."],
+    "observation_notes": [{"단계": "4", "시료": "", "문장": "4단계에서 밴드가 투명해졌다."}],
+    "result_summary": "3단계는 원문 15분 중 10분에 끝냈고, 4단계에서 튜브를 쏟았다.",
 }
 
 
 class ReportWriterTests(_ReportCase):
+    """Lane RP3, decision ③: the model reads the notebook's facts and writes
+    the observation notes and one result paragraph, each checked
+    (tests/test_lane_rp3_ai_notes.py has the checks themselves)."""
+
     def write(self, reply: dict | str) -> tuple[er.ReportNarrative, _Client]:
         client = _Client(reply)
         brain = er.ReportWriterBrain(client=client, model="fake", timeout_seconds=5)
@@ -262,83 +261,35 @@ class ReportWriterTests(_ReportCase):
         for identifier in (self.report_id, *REPORT_ID_FIELDS, "stopped", "step_completed",
                            "user_command", "p-step-03", "analysis_required"):
             self.assertNotIn(identifier, sent)
-        for content in ("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", "밴드가 투명해졌어",
-                        "튜브를 쏟았어", "원문 15분 / 10분에 끝냄", "09:30"):
+        for content in ("밴드가 투명해졌어", "튜브를 쏟았어", "원문 15분 중 10분에 끝냄", "500 µL · 37°C"):
             self.assertIn(content, sent)
-        self.assertEqual(set(narrative.section_origin.values()), {"모델", "서버"})
-        self.assertEqual(narrative.section_origin["discussion_confirmed"], "서버")
-        self.assertEqual(narrative.purpose, GOOD_REPLY["purpose"])
-        self.assertEqual(narrative.discussion_review,
-                         ("검토 제안 (항목 2): 쏟은 양이 결과에 영향을 주었는지 검토한다.",))
-
-    def test_each_check_replaces_only_the_section_that_fails(self) -> None:
-        self.run_steps_one_to_four_then_stop()
-        bad = dict(GOOD_REPLY)
-        bad["purpose"] = "37°C에서 소화하는 실험이다[1]."
-        bad["methods_summary"] = "1–4단계를 수행했고 3단계는 20분 걸렸다."
-        bad["results_summary"] = "4단계에서 “젤이 노랗게 변했다”는 관찰이 기록되었다."
-        bad["conclusion"] = f"기록 {self.report_id} 는 stopped 상태다."
-        bad["discussion_review"] = [{"항목 번호": 99, "제안": "온도가 원인으로 보인다."}]
-        narrative, _ = self.write(bad)
-        fallback = er.deterministic_sections(narrative.facts)
-        for key, reason in (
-            ("purpose", "실험 조건 숫자"),
-            ("methods_summary", "기록·원문에 없는 값 20분"),
-            ("results_summary", "기록에 없는 관찰"),
-            ("conclusion", "본문에 ER-/fixture-/candidate- 식별자"),
-            ("discussion_review", "기록된 이상·편차에 붙지 않은 원인 추정"),
-        ):
-            self.assertEqual(narrative.section_origin[key], "대체", key)
-            self.assertTrue(any(reason in item for item in narrative.rejected[key]), (key, narrative.rejected[key]))
-            self.assertEqual(getattr(narrative, key), fallback[key] if not isinstance(fallback[key], tuple) else tuple(fallback[key]))
-        self.assertEqual(narrative.section_origin["next_steps"], "모델")
-
-    def test_discussion_confirmed_and_to_check_are_the_servers_lists(self) -> None:
-        # Decision 2 (2026-10-06): the model wrote "completed as specified"
-        # in (가), which the record does not say; (가) and (나) are now the
-        # server's lists only, whatever the model returns.
-        self.run_steps_one_to_four_then_stop()
-        narrative, client = self.write(dict(
-            GOOD_REPLY, discussion_confirmed=["모든 단계를 조건대로 정상적으로 완료했다."],
-            discussion_to_check=["특별히 확인할 점은 없다."]))
-        self.assertEqual(narrative.discussion_confirmed, narrative.facts.confirmed)
-        self.assertEqual(narrative.discussion_to_check, narrative.facts.to_check)
-        self.assertEqual(narrative.section_origin["discussion_confirmed"], "서버")
-        self.assertEqual(narrative.section_origin["discussion_to_check"], "서버")
-        text = er.render_markdown(narrative)
-        self.assertNotIn("조건대로 정상적으로", text)
-        self.assertNotIn("discussion_confirmed (", client.calls[0]["messages"][0]["content"])
-
-    def test_purpose_sentences_need_a_source_number(self) -> None:
-        self.run_steps_one_to_four_then_stop()
-        reply = dict(GOOD_REPLY, purpose="이 실험은 단백질을 분석하기 위한 것이다.")
-        narrative, _ = self.write(reply)
-        self.assertEqual(narrative.section_origin["purpose"], "대체")
-        self.assertIn("출처 번호가 없는 문장", narrative.rejected["purpose"])
+        # Decision ③: no step sentence is copied to the model -- it reads the
+        # conditions used and the records -- and no mark of the server's.
+        self.assertNotIn("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", sent)
+        self.assertNotIn("[미확인]", sent)
+        self.assertEqual([note.text for note in narrative.ai_notes], ["4단계에서 밴드가 투명해졌다."])
+        self.assertEqual(narrative.ai_result, GOOD_REPLY["result_summary"])
+        self.assertEqual(narrative.writer, "fake")
 
     def test_the_report_uses_no_outside_sources(self) -> None:
         # Decision of 2026-10-06, option (a): no Google Search grounding, so
         # nothing but the protocol is cited and the writer is never asked to
         # search.
         self.run_steps_one_to_four_then_stop()
-        narrative, client = self.write(dict(GOOD_REPLY, background="트립신은 단백질을 자른다[2]."))
+        narrative, client = self.write(GOOD_REPLY)
         self.assertNotIn("web_search", client.calls[0])
         self.assertNotIn("외부 자료", client.calls[0]["messages"][1]["content"])
-        self.assertEqual(narrative.section_origin["background"], "대체")
-        self.assertIn("없는 출처 번호", narrative.rejected["background"])
         self.assertEqual([source.kind for source in narrative.sources], ["protocol"])
-        text = er.render_markdown(narrative)
-        self.assertNotIn("구글", text)
+        self.assertNotIn("구글", er.render_markdown(narrative))
 
     def test_a_failed_model_keeps_the_same_structure_with_the_servers_sentences(self) -> None:
         self.run_steps_one_to_four_then_stop()
         narrative, client = self.write("not json")
         self.assertEqual(len(client.calls), 1)
-        self.assertEqual({narrative.section_origin[key] for key in er.MODEL_SECTIONS}, {"대체"})
+        self.assertEqual((narrative.ai_notes, narrative.ai_result), ((), ""))
+        self.assertEqual((narrative.writer, narrative.failure), ("fake (실패)", "모델 답 실패(JSONDecodeError)"))
         deterministic = er.ReportWriterBrain().build_deterministic_narrative(
             self.doc(), list(self.doc()["events"]), fixture=self.fixture)
-        # Lane RP3, decision ①: the notebook has no place for the old model
-        # sections, so the two renderings are the same document.
         self.assertEqual(er.render_markdown(narrative), er.render_markdown(deterministic))
 
 
@@ -410,19 +361,19 @@ class ReportExportRouteTests(_ReportCase):
                 text = response.text
             else:
                 text = "\n".join(p.text for p in Document(io.BytesIO(response.content)).paragraphs)
-            # Lane RP3, decision ①: the old model sections have no place in
-            # the notebook (decision ③ brings the AI-written notes).
-            self.assertNotIn(GOOD_REPLY["purpose"], text, suffix)
+            # Lane RP3, decision ③: the kept reply's notes are in both, marked.
+            self.assertIn("AI 정리 — 4단계: 4단계에서 밴드가 투명해졌다.", text, suffix)
             self.assertIn("Test digestion protocol", text, suffix)
 
 
 class NumberAndUnitCheckTests(_ReportCase):
     """Decision 3 (2026-10-06): a number with a unit is compared with its unit."""
 
-    def problems(self, methods: str) -> list[str]:
+    def problems(self, sentence: str) -> list[str]:
         self.run_steps_one_to_four_then_stop()
         facts = er.ReportWriterBrain.facts_for(self.doc(), fixture=self.fixture)
-        return er.check_report_sections({"methods_summary": methods}, facts).get("methods_summary", [])
+        # Lane RP3, decision ③: the same check, on an AI-written sentence.
+        return [why for _, why in er.check_ai_notes({"result_summary": sentence}, facts)[2]]
 
     def test_the_same_value_written_another_way_passes(self) -> None:
         # The source says "500 µL", "37°C" and "15 min".
@@ -523,13 +474,17 @@ class ReportLayoutTests(_ReportCase):
     def test_the_last_line_says_who_wrote_the_sentences_and_when(self) -> None:
         self.run_steps_one_to_four_then_stop()
         self.at("02:00")
-        # Lane RP3, decision ①: no model sentence is in the notebook (decision
-        # ③ adds the AI-written notes), so both say the server wrote it.
-        for narrative in (self.narrative(GOOD_REPLY), self.narrative()):
-            text = er.render_markdown(narrative)
-            self.assertTrue(text.rstrip().endswith(
-                "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. AI 가 쓴 문장은 없다. "
-                "작성 2026년 10월 6일 11:00."), text[-300:])
+        text = er.render_markdown(self.narrative())
+        self.assertTrue(text.rstrip().endswith(
+            "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. AI 가 쓴 문장은 없다. "
+            "작성 2026년 10월 6일 11:00."), text[-300:])
+        # Lane RP3, decision ③: the AI-written sentences that passed are
+        # counted, with the writer, and the check they passed is named.
+        text = er.render_markdown(self.narrative(GOOD_REPLY))
+        self.assertTrue(text.rstrip().endswith(
+            "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. "
+            "AI 정리 2문장(fake-model)은 ‘AI 정리’로 표시했고 모든 숫자·단위가 기록이나 원문에 있는지 "
+            "서버가 검사했다. 작성 2026년 10월 6일 11:00."), text[-300:])
 
 
 class _SlowClient(_Client):
@@ -594,9 +549,8 @@ class ReportProsePreparationTests(_ReportCase):
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         self.store.export_docx(self.report_id, fixture=self.fixture)
         self.assertEqual(len(client.calls), 1)
-        # Lane RP3, decision ①: the kept reply is read, but the old sections
-        # have no place in the notebook (decision ③ brings the AI-written notes).
-        self.assertNotIn(GOOD_REPLY["purpose"], text)
+        # Lane RP3, decision ③: the kept reply's notes are in the notebook, marked.
+        self.assertIn("> AI 정리 — 4단계: 4단계에서 밴드가 투명해졌다.", text)
 
     def test_asking_again_is_a_second_call(self) -> None:
         self.run_steps_one_to_four_then_stop()
@@ -622,7 +576,7 @@ class ReportProsePreparationTests(_ReportCase):
         self.assertEqual((status["state"], status["ai_written"]), ("ready", False))
         self.assertIn("AI 문장을 쓰지 못함: 모델 답 실패(JSONDecodeError)", status["label"])
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        self.assertNotIn(GOOD_REPLY["purpose"], text)
+        self.assertNotIn("AI 정리 —", text)
         self.assertIn("AI 가 쓴 문장은 없다", text)
 
     def test_records_added_after_preparing_appear_and_are_counted(self) -> None:
@@ -656,7 +610,8 @@ class QuotedObservationTests(_ReportCase):
         self.event("00:32", "observation", "4", user_wording="젤 조각이 다 흡수했어",
                    confirmation_state="user_reported")
         facts = er.ReportWriterBrain.facts_for(self.doc(), fixture=self.fixture)
-        return er.check_report_sections({"results_summary": results}, facts).get("results_summary", [])
+        # Lane RP3, decision ③: the same check, on an AI-written sentence.
+        return [why for _, why in er.check_ai_notes({"result_summary": results}, facts)[2]]
 
     def test_a_record_with_curly_quotes_quoted_in_straight_ones_passes(self) -> None:
         self.assertEqual(self.check(

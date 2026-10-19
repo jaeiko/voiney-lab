@@ -1500,3 +1500,44 @@ read (decision ①) are now written, and one setting is added.
 
 Going back: code from before this version reads the same records; the new
 events are unknown to it and ignored by its report.
+
+## Lane RP3 (2026-10-20), decision ③: AI-written notes, the lab-meeting summary and the results table
+
+No schema change and no migration. The report model's reply, kept in
+`experiment_report_prose` as before (lane RP, decision 9), has a new shape;
+two export formats are added.
+
+- The model (the report role: `VOINEY_LAB_REPORT_PROVIDER` /
+  `VOINEY_LAB_REPORT_MODEL`, off with `VOINEY_LAB_REPORT_WRITER_ENABLED=false`)
+  now reads the notebook's facts only -- purpose, samples, the conditions
+  used, the records, the differences from the source, the result and the
+  change said, the values not confirmed -- and returns `observation_notes`
+  (one sentence per step and sample) and `result_summary` (one paragraph).
+  The old sections (purpose, background, methods, results, discussion,
+  conclusion, next steps, item uses, general background) are no longer
+  asked for, checked or printed; `check_report_sections`, `MODEL_SECTIONS`
+  and the item-use checks are gone from `experiment_reports`.
+- Each AI-written sentence is checked by the server (`check_ai_notes`):
+  every number and unit must be in the record or the source, a value the
+  experimenter did not confirm may not be stated, no step the record lacks,
+  no identifier, no safety or procedural direction, no round count without
+  "말로 확인한 돌아가기 기준", no speculation, no quotation that is not a
+  record. One that passes is printed in "3. 관찰과 결과" marked "AI 정리 —
+  N단계 · 시료: …" (and "결과 (AI 정리): …"); one that fails is dropped and
+  the record's own words stand. The notebook's last line says how many
+  sentences the model wrote, that the numbers were checked, and how many
+  were dropped.
+- A reply kept before this version (the old sections) is read as having no
+  notes: the notebook prints the record's sentences and "AI 가 쓴 문장은
+  없다". Asking for the prose again (the screen's button) writes it in the
+  new shape.
+- Two formats join `/api/experiment-reports/{id}.{format}`: `meeting-docx`
+  and `meeting-pdf` (the one-page lab-meeting summary: 목적, 시료, 핵심 결과,
+  지난번과 다른 점, 다음 할 일) and `xlsx` (the results table: one row per
+  record with 시료, 과정, 조건 (원문 → 실제), 관찰, 측정값, 단위, 시각, 출처;
+  the AI-written notes after the records, marked; the header on a second
+  sheet). `openpyxl` was already a dependency.
+
+Going back: code from before this version reads the same records; a reply
+kept in the new shape has none of the old keys, so the old report prints
+its server sentences.

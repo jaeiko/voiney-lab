@@ -1,28 +1,24 @@
-"""The report's text: Korean steps, an AI background, and rounds (lane N, decisions 6-8).
+"""The report's text: Korean steps and rounds (lane N, decisions 6 and 8).
 
-6. The "수행한 단계" table and what the model reads for the methods use a
-   step's stored translation when there is one -- marked "(자동 번역)", the
-   source under it in the same cell in small type. A translation that fails
-   its check is not stored as usable, and the source is used.
-7. With no background or principle in the source, the report model may give
-   a short one from general knowledge (3-4 sentences, no numbers, procedures
-   or safety directions), labelled "AI 일반 지식 — 출처 없음, 확인 필요"; one
-   that fails the server's check leaves the server's sentence. A source
-   background is used alone.
-8. A model sentence that gives a number of rounds or repetitions must say
-   "말로 확인한 돌아가기 기준"; otherwise the section is the server's.
+6. A step's stored translation is read for the report when there is one;
+   one that fails its check is not stored as usable, and the source is
+   used. Lane RP3, decision ①: the notebook copies no step sentence, so the
+   marked Korean cell is gone from the exports; decision ③: the model reads
+   the notebook's facts, not the steps.
+7. Lane N's labelled general-knowledge background is gone with lane RP3,
+   decision ③: the notebook has no background section.
+8. An AI-written sentence that gives a number of rounds or repetitions must
+   say "말로 확인한 돌아가기 기준"; otherwise it is dropped (lane RP3,
+   decision ③ keeps lane N's rule for the notes).
 """
 
 from __future__ import annotations
 
-import dataclasses
-import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from docx import Document
 
 from tests.lane_n_support import notes_fixture
 from voiney_lab import experiment_reports as er
@@ -51,27 +47,8 @@ def _done(label: str, key: str, **payload) -> dict:
             "payload": payload, "created_at": "2026-10-07T00:10:00+00:00"}
 
 
-def _translated_fixture():
-    return dataclasses.replace(
-        notes_fixture(), machine_localizations={"step-1/current_step": KOREAN_STEP_1})
-
-
 class KoreanStepTableTests(unittest.TestCase):
-    """Decision 6: the stored Korean, marked, with the source under it."""
-
-    def facts(self) -> er.ReportFacts:
-        return er.build_report_facts(
-            _report(_done("1", "d1"), _done("2", "d2")), fixture=_translated_fixture())
-
-    # Lane RP3, decision ① (2026-10-20): the notebook copies no step
-    # sentence, so the marked Korean cell with the source under it is gone
-    # from the exports; the model still reads the Korean beside the source.
-
-    def test_the_model_reads_the_korean_marked_beside_the_source(self) -> None:
-        steps = {step["단계"]: step for step in er._writer_facts(self.facts())["수행한 단계"]}
-        self.assertEqual(steps["1"]["한국어(자동 번역)"], KOREAN_STEP_1)
-        self.assertTrue(steps["1"]["원문"].startswith("1 Cut the stained band"))
-        self.assertNotIn("한국어(자동 번역)", steps["2"])
+    """Decision 6: the stored translation is read for the report, never started by it."""
 
     def test_the_report_reads_stored_translations_without_starting_one(self) -> None:
         import voiney_lab.server as server
@@ -115,52 +92,6 @@ class KoreanStepTableTests(unittest.TestCase):
         self.assertIsNone(loaded.localized_fact("step-2", "current_step"))
 
 
-class GeneralBackgroundTests(unittest.TestCase):
-    """Decision 7: a labelled general-knowledge background, checked by the server."""
-
-    GENERAL = ("젤 속 단백질은 염색약과 결합해 밴드로 보인다. 세척 용액은 결합하지 않은 염색약을 "
-               "씻어 낸다. 밴드가 투명해지면 다음 처리에 방해가 되는 염색약이 빠진 것이다.")
-
-    def narrative(self, reply: dict) -> er.ReportNarrative:
-        facts = er.build_report_facts(_report(_done("1", "d1")), fixture=notes_fixture())
-        return er.narrative_from_reply(facts, reply, writer="fake-writer")
-
-    def test_with_no_source_background_the_general_one_is_used_and_labelled(self) -> None:
-        narrative = self.narrative({"background": "", "background_general": self.GENERAL})
-        self.assertTrue(narrative.background_general)
-        self.assertEqual(narrative.background, self.GENERAL)
-        # Lane RP3, decision ①: the background has no place in the notebook;
-        # the narrative keeps the labelled general knowledge for a later decision.
-        self.assertNotIn(self.GENERAL, er.render_markdown(narrative))
-
-    def test_a_source_that_says_it_has_none_is_replaced_too(self) -> None:
-        narrative = self.narrative({
-            "background": "원문에는 원리에 대한 설명이 기재되어 있지 않다[1].",
-            "background_general": self.GENERAL,
-        })
-        self.assertTrue(narrative.background_general)
-
-    def test_numbers_procedures_or_safety_leave_the_servers_sentence(self) -> None:
-        for general in (
-            "젤 조각을 37도에서 세척한다. 염색약이 빠진다. 밴드가 투명해진다.",
-            "젤 조각을 세척해야 한다. 염색약이 빠진다. 밴드가 투명해진다.",
-            "염색약은 독성이 있어 장갑을 낀다. 염색약이 빠진다. 밴드가 투명해진다.",
-            "염색약이 빠진다[1]. 밴드가 투명해진다. 다음 처리에 쓴다.",
-        ):
-            with self.subTest(general=general):
-                narrative = self.narrative({"background": "", "background_general": general})
-                self.assertFalse(narrative.background_general)
-                self.assertIn("background_general", narrative.rejected)
-
-    def test_a_source_background_is_used_alone(self) -> None:
-        narrative = self.narrative({
-            "background": "원문은 염색약을 씻어 낸 뒤 다음 단계로 간다고 적고 있다[1].",
-            "background_general": self.GENERAL,
-        })
-        self.assertFalse(narrative.background_general)
-        self.assertEqual(narrative.background, "원문은 염색약을 씻어 낸 뒤 다음 단계로 간다고 적고 있다[1].")
-
-
 class RoundBasisTests(unittest.TestCase):
     """Decision 8: a number of rounds is said with its basis, or not at all."""
 
@@ -176,21 +107,21 @@ class RoundBasisTests(unittest.TestCase):
         ]
         return er.build_report_facts(_report(*events), fixture=notes_fixture())
 
+    def dropped(self, sentence: str) -> list[str]:
+        # Lane RP3, decision ③: the rule now reads an AI-written sentence.
+        return [why for _, why in er.check_ai_notes({"result_summary": sentence}, self.facts())[2]]
+
     def test_a_round_count_without_its_basis_is_refused(self) -> None:
-        for methods in ("2–4단계 세척을 총 2회 반복 수행했다.", "2단계를 2회차까지 수행했다.",
-                        "세척을 두 번 반복했다."):
-            with self.subTest(methods=methods):
-                refused = er.check_report_sections({"methods_summary": methods}, self.facts())
-                self.assertIn("methods_summary", refused)
-                self.assertTrue(any("말로 확인한 돌아가기 기준" in why for why in refused["methods_summary"]))
+        for sentence in ("2–4단계 세척을 총 2회 반복 수행했다.", "2단계를 2회차까지 수행했다.",
+                         "세척을 두 번 반복했다."):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(self.dropped(sentence), ["회차를 ‘말로 확인한 돌아가기 기준’ 없이 씀"])
 
     def test_a_round_count_with_its_basis_passes(self) -> None:
-        methods = "5단계에서 2단계로 돌아가 2회차(말로 확인한 돌아가기 기준)를 수행했다."
-        self.assertEqual(er.check_report_sections({"methods_summary": methods}, self.facts()), {})
+        self.assertEqual(self.dropped("5단계에서 2단계로 돌아가 2회차(말로 확인한 돌아가기 기준)를 수행했다."), [])
 
     def test_the_sources_own_count_is_not_a_round(self) -> None:
-        self.assertEqual(
-            er.check_report_sections({"methods_summary": "2–4단계를 수행했다."}, self.facts()), {})
+        self.assertEqual(self.dropped("2–4단계를 수행했다."), [])
         self.assertIsNone(er._ROUND_COUNT.search("원문은 2회 세척 후 투명해진다고 적는다."))
 
 
