@@ -42,7 +42,16 @@
     if (!cap) { log("Capacitor 가 없다 — 앱 안에서 열어야 한다."); return; }
     try { await fn(); } catch (error) { log(`오류: ${error && error.message ? error.message : error}`); }
   };
-  const alerts = cap ? bridge.createTimerAlerts(bridge.capacitorNotifier(cap)) : null;
+  // Lane APP1, decision 1: the alarm clock (VoineyAlarm) when exact alarms
+  // are allowed, the official plugin otherwise. Chosen again at step 1.
+  let chosen = cap ? { kind: "local_notifications", notifier: bridge.capacitorNotifier(cap) } : null;
+  const alerts = cap ? bridge.createTimerAlerts(chosen.notifier) : null;
+  const kindWords = { alarm_clock: "알람 시계(setAlarmClock, Doze 에서도 정시)", local_notifications: "공식 알림 플러그인(Doze 에서 늦을 수 있음)" };
+  const choose = async () => {
+    chosen = await bridge.chooseNotifier(cap);
+    await alerts.setNotifier(chosen.notifier);
+    return chosen;
+  };
   // The shape the server sends as timers.step (curated_protocol timer_status).
   const testState = (running) => {
     const now = Date.now();
@@ -58,10 +67,12 @@
   document.getElementById("prepare").onclick = guard(async () => {
     const result = await bridge.prepareNotifications(cap);
     log(`알림 표시: ${result.display}, 정확한 알람: ${result.exactAlarm === null || result.exactAlarm === undefined ? "해당 없음" : result.exactAlarm}`);
+    const now = await choose();
+    log(`타이머 알림 방식: ${kindWords[now.kind] || now.kind}`);
   });
   document.getElementById("exact").onclick = guard(async () => {
-    const result = await cap.nativePromise("LocalNotifications", "changeExactNotificationSetting", {});
-    log(`정확한 알람: ${result && result.exact_alarm}`);
+    await bridge.openExactAlarmSettings(cap);
+    log("설정에서 허용한 뒤 돌아와 1번을 다시 누른다.");
   });
   document.getElementById("schedule").onclick = guard(async () => {
     const plan = await alerts.sync(testState(true), Date.now());
@@ -72,9 +83,8 @@
     log(`취소 ${plan.cancel.length}건`);
   });
   document.getElementById("pending").onclick = guard(async () => {
-    const result = await cap.nativePromise("LocalNotifications", "getPending", {});
-    const own = bridge.ownPending(result && result.notifications);
-    log(`예약된 알림 ${own.length}건: ${own.map((item) => `${item.id} ${clock(item.at)}`).join(", ") || "없음"}`);
+    const own = await chosen.notifier.pending();
+    log(`예약된 알림 ${own.length}건 (${kindWords[chosen.kind] || chosen.kind}): ${own.map((item) => `${item.id} ${Number.isFinite(item.at) ? clock(item.at) : "다시 예약 필요"}`).join(", ") || "없음"}`);
   });
   document.getElementById("awake").onclick = guard(async () => {
     awake = !awake;

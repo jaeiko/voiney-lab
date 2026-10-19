@@ -40,6 +40,10 @@
   const RESCHEDULE_TOLERANCE_MS = 2000;
   const CHANNEL_ID = "voiney-timer";
   const EXTRA_TAG = "voiney-timer";
+  // Lane APP1, decision 1: the app's own alarm-clock plugin
+  // (mobile/android/.../alarm/TimerAlarmPlugin.java) and the official one.
+  const ALARM_PLUGIN = "VoineyAlarm";
+  const NOTIFICATIONS_PLUGIN = "LocalNotifications";
 
   function parseIso(value) {
     if (typeof value !== "string" || !value) return null;
@@ -223,6 +227,7 @@
     const opts = options || {};
     const now = typeof opts.now === "function" ? opts.now : () => Date.now();
     let rule = validRule(opts.rule);
+    let current = notifier;
     let queue = Promise.resolve();
     const run = (task) => {
       const next = queue.then(task, task);
@@ -240,10 +245,19 @@
           const given = syncOptions && syncOptions.offsetMs;
           const offsetMs = Number.isFinite(given) ? given : clockOffsetMs(stepTimer(state), received);
           const desired = planTimerAlerts(state, { nowMs: now(), offsetMs, rule });
-          const plan = diffAlerts(await notifier.pending(), desired);
-          if (plan.cancel.length) await notifier.cancel(plan.cancel);
-          if (plan.schedule.length) await notifier.schedule(plan.schedule);
+          const plan = diffAlerts(await current.pending(), desired);
+          if (plan.cancel.length) await current.cancel(plan.cancel);
+          if (plan.schedule.length) await current.schedule(plan.schedule);
           return plan;
+        });
+      },
+      // chooseNotifier gave another answer (exact alarms allowed or taken
+      // back since the app started). Queued like a sync, so a sync running
+      // now finishes with the notifier it began with; the next sync moves
+      // what the old one still holds.
+      setNotifier(next) {
+        return run(async () => {
+          current = next;
         });
       },
       // The server's heartbeat changed the last-minute rule; the next sync
@@ -270,10 +284,18 @@
     return !!(cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform());
   }
 
+  // Whether the app carries a native plugin. Capacitor's Android bridge lists
+  // every registered plugin in Capacitor.Plugins before the page runs.
+  function pluginAvailable(cap, name) {
+    if (!cap) return false;
+    if (typeof cap.isPluginAvailable === "function") return !!cap.isPluginAvailable(name);
+    return !!(cap.Plugins && Object.prototype.hasOwnProperty.call(cap.Plugins, name));
+  }
+
   // @capacitor/local-notifications through the bridge Capacitor injects, so
   // this file needs no bundler.
   function capacitorNotifier(cap) {
-    const call = (method, options) => cap.nativePromise("LocalNotifications", method, options || {});
+    const call = (method, options) => cap.nativePromise(NOTIFICATIONS_PLUGIN, method, options || {});
     return {
       async pending() {
         const result = await call("getPending");
@@ -288,12 +310,122 @@
     };
   }
 
+  /*
+   * Lane APP1, decision 1: Android's alarm clock (AlarmManager.setAlarmClock)
+   * through the app's VoineyAlarm plugin. Doze lets an alarm clock fire on
+   * time, where the official plugin's setExactAndAllowWhileIdle is held to
+   * about once per nine minutes per app. The plugin keeps each alarm (with
+   * its words) and posts the notification itself, so it rings with the app
+   * closed and is set again after a reboot.
+   */
+  function toAlarmClock(alert) {
+    return {
+      id: alert.id,
+      at: alert.at,
+      title: alert.title,
+      body: alert.body,
+      kind: alert.kind,
+      key: alert.key,
+      channelId: CHANNEL_ID,
+    };
+  }
+
+  // The plugin's pending list ([{id, at, armed, ...}]) as {id, at}. One the
+  // system no longer holds (armed false: exact alarms were taken back and
+  // given again) has no time, so the next sync cancels and sets it again.
+  function armedAlarms(alarms) {
+    const own = [];
+    for (const item of alarms || []) {
+      if (!item || !Number.isInteger(item.id)) continue;
+      const at = Number(item.at);
+      own.push({ id: item.id, at: item.armed === false || !Number.isFinite(at) ? NaN : at });
+    }
+    return own;
+  }
+
+  function alarmClockNotifier(cap) {
+    const call = (method, options) => cap.nativePromise(ALARM_PLUGIN, method, options || {});
+    return {
+      async pending() {
+        const result = await call("pending");
+        return armedAlarms(result && result.alarms);
+      },
+      cancel(ids) {
+        return call("cancel", { ids });
+      },
+      schedule(alerts) {
+        return call("schedule", { alarms: alerts.map(toAlarmClock) });
+      },
+    };
+  }
+
+  // `primary` schedules. Whatever of ours `secondary` still holds is read
+  // back without a time, so the next sync cancels it there (cancel goes to
+  // both) and sets it on the primary: one alert, never two.
+  function preferNotifier(primary, secondary) {
+    return {
+      async pending() {
+        const [own, other] = await Promise.all([primary.pending(), secondary.pending().catch(() => [])]);
+        return [...own, ...other.map((item) => ({ id: item.id, at: NaN }))];
+      },
+      async cancel(ids) {
+        await Promise.all([primary.cancel(ids), Promise.resolve().then(() => secondary.cancel(ids)).catch(() => {})]);
+      },
+      schedule(alerts) {
+        return primary.schedule(alerts);
+      },
+    };
+  }
+
+  /*
+   * The notifier for this device: the alarm clock when the app has the plugin
+   * and exact alarms are allowed, the official plugin otherwise (iOS, an
+   * app built before lane APP1, exact alarms not allowed -- then the alerts
+   * may be a few minutes late in Doze, which the screen should say).
+   * Ask again when the app comes back to the front (the person may have
+   * changed the setting) and hand the answer to createTimerAlerts().setNotifier.
+   * -> { kind: "alarm_clock" | "local_notifications", exactAlarm, notifier }
+   */
+  async function chooseNotifier(cap) {
+    const local = capacitorNotifier(cap);
+    if (!pluginAvailable(cap, ALARM_PLUGIN)) {
+      return { kind: "local_notifications", exactAlarm: null, notifier: local };
+    }
+    let exact = null;
+    try {
+      const status = await cap.nativePromise(ALARM_PLUGIN, "exactAlarmStatus", {});
+      exact = (status && status.exact_alarm) || null;
+    } catch (_error) {
+      exact = null;
+    }
+    const alarm = alarmClockNotifier(cap);
+    if (exact === "granted") return { kind: "alarm_clock", exactAlarm: exact, notifier: preferNotifier(alarm, local) };
+    return { kind: "local_notifications", exactAlarm: exact, notifier: preferNotifier(local, alarm) };
+  }
+
+  async function exactAlarmStatus(cap) {
+    const plugin = pluginAvailable(cap, ALARM_PLUGIN) ? ALARM_PLUGIN : NOTIFICATIONS_PLUGIN;
+    const method = plugin === ALARM_PLUGIN ? "exactAlarmStatus" : "checkExactNotificationSetting";
+    try {
+      const status = await cap.nativePromise(plugin, method, {});
+      return (status && status.exact_alarm) || null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // Android 12+: the system page where the person allows exact alarms.
+  async function openExactAlarmSettings(cap) {
+    if (pluginAvailable(cap, ALARM_PLUGIN)) return cap.nativePromise(ALARM_PLUGIN, "openExactAlarmSettings", {});
+    return cap.nativePromise(NOTIFICATIONS_PLUGIN, "changeExactNotificationSetting", {});
+  }
+
   // Once per app start: notification permission, the high-importance channel
   // (Android), and whether exact alarms are allowed (Android 12+).
   async function prepareNotifications(cap) {
-    const status = await cap.nativePromise("LocalNotifications", "requestPermissions", {});
+    const status = await cap.nativePromise(NOTIFICATIONS_PLUGIN, "requestPermissions", {});
     if (cap.getPlatform && cap.getPlatform() === "android") {
-      await cap.nativePromise("LocalNotifications", "createChannel", {
+      await cap.nativePromise(NOTIFICATIONS_PLUGIN, "createChannel", {
         id: CHANNEL_ID,
         name: "타이머",
         description: "단계 타이머 1분 전과 끝",
@@ -302,13 +434,7 @@
         vibration: true,
       });
     }
-    let exact = null;
-    try {
-      exact = await cap.nativePromise("LocalNotifications", "checkExactNotificationSetting", {});
-    } catch (_error) {
-      exact = null;
-    }
-    return { display: status && status.display, exactAlarm: exact && exact.exact_alarm };
+    return { display: status && status.display, exactAlarm: await exactAlarmStatus(cap) };
   }
 
   function keepAwake(cap, on) {
@@ -328,6 +454,7 @@
     lastMinuteRule,
     CHANNEL_ID,
     EXTRA_TAG,
+    ALARM_PLUGIN,
     alertId,
     alertText,
     clockOffsetMs,
@@ -339,6 +466,14 @@
     capacitorOf,
     isNativeApp,
     capacitorNotifier,
+    pluginAvailable,
+    toAlarmClock,
+    armedAlarms,
+    alarmClockNotifier,
+    preferNotifier,
+    chooseNotifier,
+    exactAlarmStatus,
+    openExactAlarmSettings,
     prepareNotifications,
     keepAwake,
     networkStatus,

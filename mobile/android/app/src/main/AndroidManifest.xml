@@ -24,6 +24,23 @@
 
         </activity>
 
+        <!-- Lane APP1, decision 1: the step timer's alarms (VoineyAlarm plugin).
+             The receiver posts a due alarm; the boot receiver sets the stored
+             alarms again after a reboot, an app update, or exact alarms being
+             allowed again. -->
+        <receiver
+            android:name=".alarm.TimerAlarmReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".alarm.TimerAlarmBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -44,4 +61,12 @@
          which is the next step (docs/APP_PLAN.md) and is not declared yet. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Lane APP1, decision 1: alarm clocks for the step timer and setting
+         them again after a reboot. The notification plugin merges the same
+         three; they are written here because the app's own plugin needs them.
+         Exact alarms are allowed by the person (off by default on new installs
+         from Android 14); USE_EXACT_ALARM is for alarm or timer apps only. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>
