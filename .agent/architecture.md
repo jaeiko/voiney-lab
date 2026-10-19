@@ -252,7 +252,7 @@ off, the guidance sentence as before. The Snakemake/Nextflow metadata lane
 ## Persistence and reporting
 
 - Protocol catalog: SQLite plus content-addressed source objects.
-- Experiment workspace: SQLite (schema 9), the experimenter's durable
+- Experiment workspace: SQLite (schema 11), the experimenter's durable
   ExperimentSession with checkpoints, observations, evidence metadata and
   recovery. The approval, adaptation, connector, inbox, dry-lab, ELN-audit,
   membership and analytics tables stay in the schema but nothing writes to
@@ -264,11 +264,45 @@ off, the guidance sentence as before. The Snakemake/Nextflow metadata lane
   files) was deleted on 2026-10-10 (lane CL), with the model tools that filed
   and checked reports.
 - Runtime metrics: bounded in-memory aggregates derived from event allowlists.
+- Accounts (`accounts.py`, lane ON): `accounts.sqlite` beside the workspace's
+  database -- accounts, invites, sessions and login attempts, only hashes of
+  passwords and tokens. In `VOINEY_LAB_AUTH_MODE=accounts` an account is the
+  experimenter principal of its lab, so the workspace, catalog and reports
+  see it as they saw the development identity. The pilot launcher starts in
+  this mode; the development identity is an explicit `--dev-identity` choice
+  (lane FX4, 2026-10-19).
+- Pilot metrics (`pilot_metrics.py`, lane LOG): `pilot_metrics.sqlite` beside
+  the workspace's database, four tables of numbers, codes and times
+  (`docs/MIGRATION_NOTES.md`); read by `GET /api/admin/pilot-metrics` (an
+  admin account, or the shared token) and `scripts/pilot_metrics.py`. It
+  holds no state and no words said; the experiment record stays the record.
 
 `GET /api/admin/metrics` requires a configured shared token and returns aggregate
 report, catalog, route, intent, tool, and latency data. It excludes audio,
 transcripts, free text, private titles, and identifiers. A shared token is an MVP
 boundary, not a substitute for a production login.
+
+## Module map: modules added since lane DI
+
+- `accounts.py`: the account store behind the login door (above); `server.py`
+  checks the cookie in its HTTP middleware and at `/ws`, and
+  `_account_is_admin` is the one administrator judgment (also for the pilot
+  metrics, lane FX4).
+- `pilot_metrics.py`: the pilot metrics store and its summaries (above).
+- `start_check.py`: before the start, the two key values of the analysis or
+  review version asked as multiple choice the server makes and judges; every
+  answer goes into the protocol's ledger, and a wrong answer offers a review
+  card -- it never edits the protocol or starts the run (lane ON).
+- `static/connection.js`: the page's side of a lost connection (lane NET):
+  loss detection, a read-only screen, the step timer's copy counted on the
+  server's clock, retries; the server continues the same experiment and its
+  state replaces the copy.
+- `static/feedback.js`: the end-of-experiment rating box (lane LOG).
+- `static/native-bridge.js`: device notifications for the store app, copied
+  from the server's timer states (lane APP0); its header says whether
+  `index.html` loads it.
+- `mobile/`: the Capacitor (Android first) store-app shell around the same
+  web screen, device features only (lane APP0, `docs/APP_PLAN.md`).
 
 ## Frontend authority
 
