@@ -22,3 +22,12 @@ node_modules/
 data/development_cache/
 .env.*
 !.env.example
+
+# Lane APP0: the store app's generated web copy, build outputs and signing
+# keys (keys never enter the repository; docs/APP_PLAN.md).
+/mobile/www/
+/mobile/android/app/build/
+/mobile/android/build/
+/mobile/android/.gradle/
+*.keystore
+*.jks
