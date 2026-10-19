@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 import voiney_lab.server as server_module
 from tests.lane_n_support import VoiceNotesHarness
+from tests.test_lane_net_reconnect import ReconnectHarness
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.server import LockedSender
 
@@ -64,8 +65,9 @@ class ExperimentRowTests(VoiceNotesHarness, unittest.TestCase):
         self.assertEqual(row["deviations"], 0)
         self.assertEqual(row["anomalies"], 1)
         self.assertEqual(row["report_made"], 0)
-        # The socket closed with the experiment still running.
-        self.assertEqual(row["disconnects"], 1)
+        # The socket closed with the experiment still running; no reconnection was recorded.
+        self.assertEqual(row["connections_closed"], 1)
+        self.assertEqual((row["disconnects"], row["disconnected_ms"]), (0, None))
         self.assertEqual(row["account_experiment_number"], 1)
         self.assertEqual(row["protocol_run_number"], 1)
         for value in row.values():
@@ -74,16 +76,12 @@ class ExperimentRowTests(VoiceNotesHarness, unittest.TestCase):
                 for word in ("튜브", "A-170", "시약", "Wash", "Cut"):
                     self.assertNotIn(word, value)
 
-    def test_a_connection_lost_counts_until_the_next_connection(self) -> None:
+    def test_each_experiment_is_numbered_for_its_account_and_protocol(self) -> None:
         self.turns("프로토콜 시작해줘", "1단계 완료했어")
-        time.sleep(0.05)
         self.turns("프로토콜 시작해줘")
         rows = _pilot().experiment_rows(self._sources())
         self.assertEqual(len(rows), 2)
-        first = rows[0]
-        self.assertEqual(first["disconnects"], 1)
-        self.assertIsInstance(first["disconnected_ms"], int)
-        self.assertGreaterEqual(first["disconnected_ms"], 40)
+        self.assertEqual([row["connections_closed"] for row in rows], [1, 1])
         self.assertEqual(rows[1]["account_experiment_number"], 2)
         self.assertEqual(rows[1]["protocol_run_number"], 2)
 
@@ -172,17 +170,47 @@ class LedgerCountTests(unittest.TestCase):
                     report_id, event_key=key, event_type=kind, category=category,
                     user_wording="말한 그대로의 글" if kind == "observation" else None,
                 )
+            # Lane NET, decision 5: one event per reconnection, its gap in seconds or unknown.
+            for key, gap in (("m", 720.0), ("n", 60.5), ("o", None)):
+                store.append_event(
+                    report_id, event_key=key, event_type="connection_restored",
+                    payload={"gap_seconds": gap, "reason": "browser_offline"},
+                )
             (row,) = store.summary_rows()
         self.assertEqual(
             {name: row[name] for name in (
                 "records", "deviations", "anomalies", "system_anomalies", "corrections",
                 "steps", "reverts", "timer_last_minute_alerts", "timer_end_alerts",
-                "report_prose")},
+                "report_prose", "reconnections", "reconnection_gap_seconds")},
             {"records": 2, "deviations": 2, "anomalies": 1, "system_anomalies": 1,
              "corrections": 1, "steps": 2, "reverts": 1, "timer_last_minute_alerts": 1,
-             "timer_end_alerts": 1, "report_prose": False},
+             "timer_end_alerts": 1, "report_prose": False, "reconnections": 3,
+             "reconnection_gap_seconds": 780.5},
         )
         self.assertNotIn("말한 그대로의 글", repr(row))
+
+
+class ReconnectionRowTests(ReconnectHarness, unittest.TestCase):
+    """Lane NET's connection_restored events are the experiment's disconnects."""
+
+    def test_a_reconnection_counts_with_its_gap(self) -> None:
+        session_id, durable = self.run_to_timer()
+        self.clock.advance(12)
+        self.reconnect(session_id, durable)
+        pilot = _pilot()
+        rows = pilot.experiment_rows(pilot.PilotSources(
+            metrics_db=self.workspace_dir / pilot.PILOT_METRICS_FILENAME,
+            reports_db=self.report_db, workspace_db=None,
+        ))
+        self.assertEqual(sum(row["disconnects"] for row in rows), 1)
+        self.assertEqual(
+            sum(row["disconnected_ms"] or 0 for row in rows), 720_000)
+        self.assertGreaterEqual(sum(row["connections_closed"] or 0 for row in rows), 1)
+        (day,) = pilot.day_rows(pilot.PilotSources(
+            metrics_db=self.workspace_dir / pilot.PILOT_METRICS_FILENAME,
+            reports_db=self.report_db, workspace_db=None,
+        ))
+        self.assertEqual((day["disconnects"], day["disconnected_ms"]), (1, 720_000))
 
 
 class AnalysisRowTests(unittest.TestCase):

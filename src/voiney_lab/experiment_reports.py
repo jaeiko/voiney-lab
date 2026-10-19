@@ -495,8 +495,9 @@ class ExperimentReportStore:
         """One content-free row per experiment record, for the pilot metrics (lane LOG).
 
         Ids, codes, times and counts only: the steps passed, the records,
-        deviations and anomalies kept, the timer notices given, and whether
-        the report's prose was written. No wording, payload or step label.
+        deviations and anomalies kept, the timer notices given, the
+        reconnections and their gaps (lane NET), and whether the report's
+        prose was written. No wording, payload or step label.
         Reads with a plain connection, so pass a copy of a live file: this
         never creates a table or a missing file.
         """
@@ -521,6 +522,21 @@ class ExperimentReportStore:
                  GROUP BY report_id,event_type,COALESCE(category,'')
                 """
             ).fetchall()
+            # Lane NET, decision 5: one connection_restored per reconnection,
+            # its gap in seconds (a number, or null when unknown).
+            gaps = {
+                str(row["report_id"]): (int(row["count"]), row["gap"])
+                for row in connection.execute(
+                    """
+                    SELECT report_id,COUNT(*) AS count,
+                           SUM(CASE WHEN json_type(payload,'$.gap_seconds') IN ('integer','real')
+                                    THEN json_extract(payload,'$.gap_seconds') END) AS gap
+                      FROM experiment_report_events
+                     WHERE event_type='connection_restored'
+                     GROUP BY report_id
+                    """
+                )
+            }
             try:
                 prose = {
                     str(row["report_id"])
@@ -566,6 +582,8 @@ class ExperimentReportStore:
                 "timer_last_minute_alerts": total(report["report_id"], "timer_last_minute_notice"),
                 "timer_end_alerts": total(report["report_id"], "timer_end_notice"),
                 "report_prose": str(report["report_id"]) in prose,
+                "reconnections": gaps.get(str(report["report_id"]), (0, None))[0],
+                "reconnection_gap_seconds": gaps.get(str(report["report_id"]), (0, None))[1],
             }
             for report in reports
         ]

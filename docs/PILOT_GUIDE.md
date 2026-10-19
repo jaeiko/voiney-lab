@@ -160,7 +160,8 @@ pilot.turn turn_id=7 router=fallback reason=timeout action=next changed=1 step=1
 | `turns` · `router_*` · `clarifies` · `first_audio_median_ms` | 턴 수, 라우터 결과별 수(쓴 것·넘긴 것·이유별), 되묻기 수, 첫 소리까지 중앙값 |
 | `button_changes` | 일시정지·다시 시작 버튼을 누른 수 |
 | `timer_last_minute_alerts` · `timer_end_alerts` · `alert_answer_median_ms` | 타이머 1분 전·끝 알림 수, 알림 뒤 실험자의 첫 말까지 걸린 시간(중앙값) |
-| `disconnects` · `disconnected_ms` | 실험 중 음성 연결이 끊긴 수, 같은 계정이 다시 연결할 때까지 걸린 시간 합(2시간 안에 돌아온 것만). 줄 NET 의 끊김 기록 사건이 들어오면 그것으로 바꾼다 |
+| `disconnects` · `disconnected_ms` | 줄 NET 의 끊김 기록 사건(`connection_restored`, 끊겼다가 다시 연결해 이어 간 한 번)의 수와 끊긴 시간 합. 사건은 이어 간 실험 기록에 붙는다. 끊긴 순간을 모르면 시간은 빈 칸 |
+| `connections_closed` | 실험이 끝나지 않은 채 음성 연결이 닫힌 수(이 줄의 표시) — 다시 연결하지 않은 것, 페이지를 닫은 것도 센다 |
 | `records` · `deviations` · `anomalies` · `system_anomalies` · `corrections` | 기록(측정·관찰·메모), 편차, 이상 사항, 시스템 이상, 기록 정정·취소의 **개수** |
 | `report_made` · `report_minutes_after_end` | 보고서(Word·Markdown)를 만들었는지 또는 보고서 문장이 쓰였는지, 실험 끝에서 처음 만들 때까지(분) |
 | `rating` · `feedback_skipped` | 실험 끝 평점(1–5)과 건너뛰었는지(마지막 답) |
@@ -171,7 +172,7 @@ pilot.turn turn_id=7 router=fallback reason=timeout action=next changed=1 step=1
 — "올린 PDF 가 바로/검토 뒤 실행된 비율과 검토 시간".
 
 **하루마다 (관리자 화면의 표).** 위 실험·분석 행을 날짜별로 더한 것. `accounts`(그날 실험한 계정), `returning_accounts`(그 전 날에도
-실험한 계정), `experiments`·`experiments_ended`(끝난 실험), `steps`·`hands_free_ratio`, `timer_alerts`·`alert_answer_median_ms`, `disconnects`, `reports_made`, `ratings`·
+실험한 계정), `experiments`·`experiments_ended`(끝난 실험), `steps`·`hands_free_ratio`, `timer_alerts`·`alert_answer_median_ms`, `disconnects`·`disconnected_ms`·`connections_closed`, `reports_made`, `ratings`·
 `rating_mean`, `analyses_*` 등.
 
 **실험 끝 한 문항.** 실험이 끝나면 "실험 기록 검토" 칸 아래에 "이번 실험에 도움이 됐나요?" 1–5 단추와 한 줄 메모(선택, 200자)가
@@ -272,6 +273,6 @@ python scripts/pilot_metrics.py notes                                          #
 2. 도메인 결정과 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 실행(줄 PL 은 실행하지 않았다).
 3. 보고서 문서(Word)의 시작 문장에 `institution_safety_notice` 를 적는 일(보고서 생성 코드 담당).
 4. 삭제 도구의 "파일을 열고 있는 프로세스" 확인은 Linux(`/proc`)에서만 하고, 다른 사용자가 연 파일은 볼 수 없다. 서버를 멈추는 것이 첫 단계다.
-5. 파일럿 지표(3-3절): 끊김 시간은 "같은 계정이 다시 연결할 때까지"로 잰다. 줄 NET 의 끊김 기록 사건이 들어오면 그것으로 바꾼다.
+5. 파일럿 지표(3-3절): 끊김 수·시간은 줄 NET 의 `connection_restored` 사건으로 센다(다시 연결해 이어 간 것만).
    관리자 계정은 줄 ON 이 역할을 정하면 쓴다(지금은 토큰만). 평점 메모를 누가 언제 읽을지는 사람이 정한다.
 6. 줄 PL 과 줄 LOG 는 실제 외부 호출을 하지 않았다(0회). 위 표의 공급자 호출은 이 저장소의 테스트에서 모두 가짜 응답으로만 확인했다(contract-tested).

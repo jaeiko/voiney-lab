@@ -11966,7 +11966,6 @@ async def voice_socket(websocket:WebSocket):
                     # Lane NET, decision 4: the page's own reconnection was taken.
                     ready_fields["connection_restored"]=True
                 await websocket.send_text(event("session.ready",**ready_fields))
-                _pilot_mark("voice_connected",session=session)
                 if experiment_state is not None:
                     await websocket.send_text(event(
                         "experiment.session.state",state=experiment_state))

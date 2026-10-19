@@ -68,8 +68,9 @@ MARK_CODES: Mapping[str, frozenset[str]] = {
     "button_change": frozenset({"pause", "resume"}),
     # Decision 2: the account an experiment record belongs to.
     "experiment_opened": frozenset(),
-    "voice_connected": frozenset(),
-    # The voice connection closed while the experiment was still running.
+    # The voice connection closed while the experiment was still running
+    # (counted as connections_closed; lane NET's connection_restored record
+    # events are the disconnects and their gaps).
     "connection_lost": frozenset(),
     "timer_alert": frozenset({"last_minute", "end"}),
     # The experimenter's next words after a timer notice (value_ms: how long after).
@@ -79,8 +80,6 @@ MARK_CODES: Mapping[str, frozenset[str]] = {
 ANALYSIS_OUTCOMES = frozenset({"passed", "review_pending", "notice", "failed"})
 #: The pilot's days are the labs' days: Korea, UTC+9 all year.
 PILOT_DAY_ZONE = timezone(timedelta(hours=9))
-#: A connection that did not come back within this long is counted, not timed.
-RECONNECT_WINDOW = timedelta(hours=2)
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -641,7 +640,8 @@ EXPERIMENT_COLUMNS = (
     "turns", "router_used", "router_fallbacks", "router_timeouts", "router_rate_limits",
     "router_format", "router_refused", "router_errors", "clarifies", "first_audio_median_ms",
     "button_changes", "timer_last_minute_alerts", "timer_end_alerts", "alert_answer_median_ms",
-    "disconnects", "disconnected_ms", "records", "deviations", "anomalies", "system_anomalies",
+    "disconnects", "disconnected_ms", "connections_closed", "records", "deviations",
+    "anomalies", "system_anomalies",
     "corrections", "report_made", "report_minutes_after_end", "rating", "feedback_skipped",
 )
 
@@ -651,10 +651,6 @@ def _experiments(snapshot: _Snapshot) -> list[dict[str, Any]]:
         str(mark["session_id"]): str(mark["account_id"])
         for mark in snapshot.marks if mark["kind"] == "experiment_opened" and mark["session_id"]
     }
-    connected: dict[str, list[datetime]] = {}
-    for mark in snapshot.marks:
-        if mark["kind"] == "voice_connected" and (moment := _moment(mark["recorded_at"])):
-            connected.setdefault(str(mark["account_id"]), []).append(moment)
     turns_by: dict[str, list[dict[str, Any]]] = {}
     for turn in snapshot.turns:
         turns_by.setdefault(str(turn["session_id"]), []).append(turn)
@@ -685,15 +681,7 @@ def _experiments(snapshot: _Snapshot) -> list[dict[str, Any]]:
         steps = int(record["steps"])
         by_voice = max(0, steps - by_button)
         started, ended = _moment(record["started_at"]), _moment(record["ended_at"])
-        lost_ms: list[int] = []
-        for mark in kinds("connection_lost"):
-            lost = _moment(mark["recorded_at"])
-            back = next((
-                moment for moment in sorted(connected.get(account, []))
-                if lost is not None and lost < moment <= lost + RECONNECT_WINDOW
-            ), None)
-            if lost is not None and back is not None:
-                lost_ms.append(int((back - lost).total_seconds() * 1000))
+        gap = record["reconnection_gap_seconds"]
         made = [
             moment for mark in kinds("report_exported")
             if mark["code"] in {"docx", "md"} and (moment := _moment(mark["recorded_at"]))
@@ -739,8 +727,9 @@ def _experiments(snapshot: _Snapshot) -> list[dict[str, Any]]:
             "timer_end_alerts": record["timer_end_alerts"],
             "alert_answer_median_ms": _median(
                 mark["value_ms"] for mark in kinds("alert_answered")),
-            "disconnects": len(kinds("connection_lost")) if measured else None,
-            "disconnected_ms": sum(lost_ms) if lost_ms else None,
+            "disconnects": record["reconnections"],
+            "disconnected_ms": int(round(gap * 1000)) if gap is not None else None,
+            "connections_closed": len(kinds("connection_lost")) if measured else None,
             "records": record["records"],
             "deviations": record["deviations"],
             "anomalies": record["anomalies"],
@@ -843,7 +832,7 @@ DAY_COLUMNS = (
     "steps", "steps_by_voice", "steps_by_button", "hands_free_ratio", "reverts",
     "turns", "router_fallbacks", "router_timeouts", "router_rate_limits", "clarifies",
     "timer_alerts", "alert_answer_median_ms", "disconnects", "disconnected_ms",
-    "records", "deviations", "anomalies", "reports_made", "ratings", "rating_mean",
+    "connections_closed", "records", "deviations", "anomalies", "reports_made", "ratings", "rating_mean",
     "analyses", "analyses_passed", "analyses_review_pending", "analyses_notice",
     "analyses_failed",
 )
@@ -913,6 +902,7 @@ def day_rows(
                 row["alert_answer_median_ms"] for row in runs),
             "disconnects": _total(runs, "disconnects"),
             "disconnected_ms": _total(runs, "disconnected_ms"),
+            "connections_closed": _total(runs, "connections_closed"),
             "records": sum(row["records"] for row in runs),
             "deviations": sum(row["deviations"] for row in runs),
             "anomalies": sum(row["anomalies"] for row in runs),
