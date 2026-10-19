@@ -78,7 +78,6 @@
        the page as it was (lane UI2 redraws them); 실험 중 puts the step card
        across the page and keeps, of the setup, only the voice console. */
     body[data-view="during"] .topbar,body[data-view="during"] .example-strip{display:none}
-    body[data-view="during"] .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat"}
     /* Lane UI0 decision 2 (2026-10-12): the 실험 중 view, after the draft's M2.
        The step's words fill the left and the timer stands on the right; the
        status line runs along the top and one line of voice along the bottom
@@ -92,7 +91,7 @@
     body[data-view="during"]{padding-bottom:var(--run-bottom-h)}
     body[data-view="during"] .shell{max-width:none;padding:0;gap:0}
     body[data-view="during"] .workflow-grid{gap:0}
-    body[data-view="during"] #hero-setup,body[data-view="during"] #hero-setup.collapsed,body[data-view="during"] .voice-panel,body[data-view="during"] .voice-actions,body[data-view="during"] .setup-grid{display:contents}
+    body[data-view="during"] .tab-panel:not([hidden]){display:block}
     body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] #protocol-start-summary,body[data-view="during"] #protocol-review-panel,body[data-view="during"] .dev-diagnostics{display:none}
     /* The status line: the basis badge, the protocol, the step, the connection and the microphone. */
     body[data-view="during"] .sticky-rail{min-height:var(--run-statusbar-h);padding:.25rem 1rem;gap:.75rem;flex-wrap:nowrap;-webkit-backdrop-filter:none;backdrop-filter:none;transition:none}
@@ -107,7 +106,7 @@
     body[data-view="during"] .run-stat{order:5;display:inline-flex;align-items:center;gap:.4rem;flex:none;color:var(--ink);font-size:1rem;font-weight:600;white-space:nowrap}
     /* The buttons along the bottom: pause or resume and stop, 64px. */
     body[data-view="during"] .rail-right{position:fixed;right:0;bottom:0;z-index:95;height:var(--target-run);gap:0;background:var(--ink)}
-    body[data-view="during"] #rail-new-session,body[data-view="during"] #toggle-setup-btn{display:none}
+    body[data-view="during"] #rail-new-session{display:none}
     body[data-view="during"] .rail-right button{width:var(--run-action-w);height:var(--target-run);min-height:var(--target-run);padding:.25rem;border:0;border-left:1px solid var(--muted);border-radius:0;background:var(--ink);color:var(--on-ink);font-size:.9rem;font-weight:700;line-height:1.2;white-space:normal}
     body[data-view="during"] .rail-right button:disabled{opacity:.45}
     /* The voice console becomes the line of voice: what it is doing, and the last words. */
@@ -361,10 +360,6 @@
        right under the list; then the check before the start beside the voice
        console, the basis card and the microphone. The list is the catalog
        the server sent; a row is picked through the same select as before. */
-    body:not([data-view="during"]) .voice-panel{display:block;padding:0;border:0;background:none;box-shadow:none;overflow:visible}
-    body:not([data-view="during"]) .voice-copy{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
-    body:not([data-view="during"]) .voice-actions{display:flex;flex-direction:column;gap:var(--space-6)}
-    body:not([data-view="during"]) .setup-grid{margin-top:0}
     body:not([data-view="during"]) .settings-sheet,body:not([data-view="during"]) .dev-diagnostics{padding:var(--space-4);border:1px solid var(--line);background:var(--paper)}
     .protocol-library{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
     .library-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--space-1) var(--space-4)}
@@ -413,8 +408,7 @@
     .queue-row-file{grid-area:file;color:var(--ink);font-size:.9375rem;line-height:1.5rem}
     .queue-row .ui-badge{grid-area:badge}
     .library-main .protocol-review{margin:0;border:1px solid var(--line);background:var(--paper)}
-    .prestart{display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--space-4);min-width:0}
-    .prestart>.protocol-start-summary{flex:999 1 30rem;min-width:0;margin:0}
+    .protocol-start-summary{min-width:0;margin:0}
     .prestart-side{flex:1 1 20rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-4);align-items:start;min-width:0}
     body:not([data-view="during"]) .prestart-side .voice-console,.prestart-side .experiment-context-card{margin:0;border:1px solid var(--line);border-radius:0;background:var(--paper)}
     body:not([data-view="during"]) .prestart-side .voice-console{grid-template-columns:auto minmax(0,1fr)}
@@ -440,7 +434,7 @@
        their Korean come first and are never folded; the step timers, the
        notices and the lines the server asks to check follow; the start is a
        64px button. Once the experiment runs the card folds as before. */
-    .prestart>.protocol-start-summary{padding:var(--space-6);border:1px solid var(--line);border-radius:0;background:var(--paper)}
+    .protocol-start-summary{padding:var(--space-6);border:1px solid var(--line);border-radius:0;background:var(--paper)}
     .start-card-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
     .protocol-start-summary .start-card-head h3{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:700}
     #protocol-start-body:not([hidden]){display:flex;flex-direction:column;gap:var(--space-4)}
@@ -652,7 +646,10 @@
     body[data-view="after"] .after-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
     .after-title{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
     .after-experimenter{color:var(--ink-muted);font-size:.875rem;font-weight:600}
-    body[data-view="after"] .shell{grid-template-areas:"work chat" "setup setup"}
+    body[data-view="after"] #tab-experiment{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);grid-template-areas:"work chat" "setup setup";align-items:start}
+    body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}
+    body[data-view="after"] #tab-experiment .timeline{grid-area:chat}
+    body[data-view="after"] #tab-experiment .prestart-side{grid-area:setup}
     body[data-view="after"] #protocol-library,body[data-view="after"] #protocol-compare,body[data-view="after"] #protocol-start-summary,body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
     body[data-view="after"] .procedure-card .run-left,body[data-view="after"] .spoken-summary,body[data-view="after"] .voice-command-hint,body[data-view="after"] .workflow-details-rows,body[data-view="after"] .task-body-right{display:none}
     body[data-view="after"] .procedure-card{padding:var(--space-6)}
@@ -691,7 +688,7 @@
     .report-actions a.report-make{border-color:var(--ink);background:var(--ink);color:var(--on-ink);font-size:.9375rem}
     body[data-view="after"] .report-actions{margin-top:var(--space-4)}
     body[data-view="after"] .report-actions a.report-make{min-height:var(--target-run);padding:0 var(--space-8);font-size:1.125rem}
-    @media (max-width:980px){body[data-view="after"] .shell{grid-template-areas:"work" "chat" "setup"}}
+    @media (max-width:980px){body[data-view="after"] #tab-experiment{grid-template-columns:minmax(0,1fr);grid-template-areas:"work" "chat" "setup"}}
     @media (max-width:719px){
      body[data-view="after"] .procedure-card{padding:var(--space-4)}
      .report-pending .report-review-actions button,body[data-view="after"] .report-actions a.report-make{flex:1 1 auto;justify-content:center}
@@ -729,14 +726,48 @@
     }
     body[data-view="during"] #protocol-compare{display:none}
     body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
-    body[data-view="during"] .prestart,body[data-view="during"] .prestart-side{display:contents}
+    body[data-view="during"] .prestart-side{display:contents}
+    /* Lane IA decision ① (2026-10-19): five tabs. The shell is one column of
+       panels, one shown at a time; the bar of five links is fixed below on a
+       phone (64px, the gloved-hand target) and a menu on the left of a wide
+       screen; it hides while the experiment runs and before a login. On
+       another tab during the run the band below names the run and the way
+       back, and the rail keeps its timer and safety badges in view. */
+    :root{--tab-bar-h:64px;--side-menu-w:13.5rem}
+    .shell{display:block}
+    .tab-panel{display:flex;flex-direction:column;gap:var(--space-6);min-width:0}
+    .tab-panel[hidden]{display:none}
+    .tab-panel:focus{outline:none}
+    .tab-bar{position:fixed;left:0;right:0;bottom:0;z-index:130;display:flex;align-items:stretch;height:calc(var(--tab-bar-h) + env(safe-area-inset-bottom,0px));padding-bottom:env(safe-area-inset-bottom,0px);border-top:1px solid var(--line);background:var(--paper)}
+    .tab-link{flex:1 1 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;min-height:var(--target-run);color:var(--ink-muted);font-size:.75rem;font-weight:700;text-decoration:none}
+    .tab-link[aria-current="page"]{color:var(--ink);box-shadow:inset 0 3px 0 var(--ink)}
+    .tab-ico{width:24px;height:24px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    body:not([data-view="during"]){padding-bottom:calc(var(--tab-bar-h) + env(safe-area-inset-bottom,0px))}
+    body[data-view="during"] .tab-bar,body[data-auth="required"] .tab-bar{display:none}
+    body[data-auth="required"]{padding-bottom:0}
+    .run-return-band{position:fixed;left:0;right:0;bottom:0;z-index:132;display:flex;align-items:center;gap:var(--space-3);min-height:var(--target-run);padding:0 var(--space-4);background:var(--ink);color:var(--on-ink);font-size:1.125rem;font-weight:800}
+    .run-return-band[hidden]{display:none}
+    .run-return-link{margin-left:auto;display:inline-flex;align-items:center;min-height:48px;padding:0 var(--space-4);border:2px solid var(--on-ink);border-radius:var(--radius-md);color:var(--on-ink);font-weight:800;text-decoration:none}
+    body[data-view="during"]:not([data-tab="experiment"]) .rail-right{display:none}
+    body[data-view="during"]:not([data-tab="experiment"]) #rail-timer-badge,body[data-view="during"]:not([data-tab="experiment"]) #rail-safety-badge{display:inline-flex}
+    body[data-view="during"]:not([data-tab="experiment"]) .shell{max-width:92rem;padding:.75rem 1.5rem 4rem}
+    body[data-view="during"]:not([data-tab="experiment"]) .tab-panel:not([hidden]){display:flex}
+    #tab-settings .install-guide-body{position:static;width:auto;margin-top:var(--space-2);box-shadow:none}
+    @media (min-width:900px){
+     .tab-bar{top:0;bottom:0;right:auto;width:var(--side-menu-w);flex-direction:column;align-items:stretch;justify-content:flex-start;height:auto;padding:var(--space-6) 0;border-top:0;border-right:1px solid var(--line)}
+     .tab-link{flex:0 0 auto;flex-direction:row;justify-content:flex-start;gap:var(--space-3);min-height:56px;padding:0 var(--space-6);font-size:1rem}
+     .tab-link[aria-current="page"]{box-shadow:inset 4px 0 0 var(--ink);background:var(--bench)}
+     body:not([data-view="during"]):not([data-auth="required"]){padding-left:var(--side-menu-w);padding-bottom:0}
+     .wizard{min-height:100dvh}
+    }
     /* Lane ON decision 2 (2026-10-18): the start, one thing per screen (토스식). While the
-       wizard is on, the rest of the 실험 전 view waits behind "자세히 보기": one column
-       that fits a phone, progress dots above, one big button, "← 이전". */
-    body[data-wizard="on"] .topbar,body[data-wizard="on"] .sticky-rail,body[data-wizard="on"] .example-strip,body[data-wizard="on"] .shell>:not(#start-wizard){display:none}
+       wizard is on, the rest of the experiment tab waits behind it (lane IA ⑦: there is
+       no detail view any more): one column that fits a phone, progress dots above, one big
+       button, "← 이전". */
+    body[data-wizard="on"] .topbar,body[data-wizard="on"] .sticky-rail,body[data-wizard="on"] #tab-experiment>:not(#start-wizard){display:none}
     body[data-wizard="on"] .shell{display:block;max-width:none;padding:0}
     #start-wizard[hidden]{display:none}
-    .wizard{max-width:480px;margin:0 auto;padding:var(--space-4) var(--space-4) var(--space-12);display:flex;flex-direction:column;gap:var(--space-4);min-height:100dvh;box-sizing:border-box}
+    .wizard{max-width:480px;margin:0 auto;padding:var(--space-4) var(--space-4) var(--space-12);display:flex;flex-direction:column;gap:var(--space-4);min-height:calc(100dvh - var(--tab-bar-h));box-sizing:border-box}
     .wizard-dots{display:flex;gap:var(--space-2);justify-content:center;margin:0;padding:var(--space-2) 0;list-style:none}
     .wizard-dots li{width:10px;height:10px;border-radius:50%;background:var(--line);border:1px solid var(--line-strong)}
     .wizard-dots li[data-state="done"]{background:var(--ink);border-color:var(--ink)}
@@ -810,7 +841,6 @@
       <button id="rail-new-session" type="button" class="btn-rail-secondary">새 실험</button>
       <button id="rail-pause-session" type="button" class="btn-rail-secondary" disabled>일시정지</button>
       <button id="rail-stop-session" type="button" class="btn-rail-danger" disabled>종료</button>
-      <button id="toggle-setup-btn" type="button" class="btn-rail-ghost" aria-expanded="true" aria-controls="hero-setup">⚙️ 설정 접기</button>
     </div>
   </header>
 
@@ -820,437 +850,358 @@
       <div>VoineyLab<small>Lab Copilot · 지능형 실험 보조</small></div>
     </div>
     <div class="topbar-side">
-      <!-- Lane UI2 decision 5: how to put VoineyLab on the home screen. The browser's own install offer, where it gives one, is a button here; otherwise the steps for each kind of device. -->
-      <details id="install-guide" class="install-guide">
-        <summary>홈 화면에 추가</summary>
-        <div class="install-guide-body">
-          <button id="install-app" type="button" hidden>VoineyLab 설치</button>
-          <p id="install-secure" class="install-secure" role="status" hidden></p>
-          <ul>
-            <li><b>아이폰·아이패드 (Safari)</b> 공유 버튼 → “홈 화면에 추가”</li>
-            <li><b>안드로이드 (Chrome)</b> 메뉴(⋮) → “홈 화면에 추가” 또는 “앱 설치”</li>
-            <li><b>PC (Chrome·Edge)</b> 주소창 오른쪽의 설치 아이콘</li>
-          </ul>
-          <p>홈 화면에서 열면 주소창 없이 화면 전체를 씁니다. 가로·세로 모두 됩니다. 서버에 연결되어 있어야 쓸 수 있습니다(오프라인 없음).</p>
-        </div>
-      </details>
       <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
     </div>
   </header>
 
   <main id="researcher-workspace" class="shell">
-    <!-- Lane ON decision 2 (2026-10-18): the start, one thing per screen -- login (when accounts are on), the microphone and the voice, the agent's voice, the protocol, two key values, the safety check, the start. The server decides every step's content; the page draws what it sends. "자세히 보기" shows the whole 실험 전 view below instead. -->
-    <section id="start-wizard" class="wizard" aria-label="시작 준비" hidden>
-      <ol id="wizard-dots" class="wizard-dots" aria-label="진행"></ol>
-      <div class="wizard-card">
-        <p id="wizard-kicker" class="wizard-kicker"></p>
-        <h2 id="wizard-title" class="wizard-title"></h2>
-        <p id="wizard-lead" class="wizard-lead"></p>
-        <div id="wizard-body" class="wizard-body"></div>
-        <p id="wizard-note" class="wizard-note" role="status" aria-live="polite"></p>
-        <div class="wizard-actions">
-          <button id="wizard-primary" type="button" class="wizard-primary"></button>
-          <button id="wizard-back" type="button" class="wizard-back">← 이전</button>
-        </div>
+    <!-- Lane IA decision ① (2026-10-19): five tabs by hash route -- 홈, 프로토콜, 실험, 기록, 설정 -- one panel each; the hash names the tab (#/home, #/protocols, #/protocols/<id>, #/upload, #/experiment, #/records, #/records/<id>, #/settings), so the back button works. Every part of the one page before it keeps its id and its functions and sits in its own tab (the report's table). The server still decides every state; a tab is only where things are drawn. -->
+    <section id="tab-home" class="tab-panel" data-tab="home" aria-labelledby="page-title" tabindex="-1">
+      <div class="voice-copy">
+        <p class="eyebrow">분석한 프로토콜 · 음성으로 진행</p>
+        <h1 id="page-title">프로토콜을 확인하고, 손을 쓰지 않고 진행하세요.</h1>
+        <p class="lede">프로토콜과 원문의 안전 주의를 확인한 뒤, 단계 안내·관찰 기록·안전 확인을 말로 하세요.</p>
       </div>
-      <div class="wizard-foot">
-        <button id="wizard-quick" type="button" class="wizard-quick" hidden>지난번 설정으로 바로 시작</button>
-        <button id="wizard-detail" type="button" class="wizard-link">자세히 보기</button>
-      </div>
+      <section class="example-strip" aria-label="음성 사용 예시">
+        <div class="example"><b>프로토콜 시작</b>“프로토콜을 시작해 줘.”</div>
+        <div class="example"><b>현재 단계</b>“현재 단계를 알려 줘.” · “다시 말해 줘.”</div>
+        <div class="example"><b>시각 자료 & 검색</b>“SDS-PAGE 사진 보여줘.” · “AMBIC이 뭐야?”</div>
+      </section>
     </section>
-    <div id="hero-setup" class="hero">
-      <section class="panel voice-panel" aria-labelledby="page-title">
-        <div class="voice-copy">
-          <p class="eyebrow">분석한 프로토콜 · 음성으로 진행</p>
-          <h1 id="page-title">프로토콜을 확인하고, 손을 쓰지 않고 진행하세요.</h1>
-          <p class="lede">프로토콜과 원문의 안전 주의를 확인한 뒤, 단계 안내·관찰 기록·안전 확인을 말로 하세요.</p>
+    <!-- Lane IA decision ①: the protocols -- the list (lane UI2), the upload box and what is still processed, the picked protocol's box, the check before the start, 원문 대조 보기 and the review cards. #/upload opens the upload box here; stage ② makes it a flow of its own. -->
+    <section id="tab-protocols" class="tab-panel" data-tab="protocols" aria-labelledby="protocol-library-title" tabindex="-1" hidden>
+      <!-- Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1 -- every protocol with its state in words, the upload box beside it and what is still being processed under it, and the picked protocol's analysis line and buttons right by the list. -->
+      <section id="protocol-library" class="protocol-library" aria-labelledby="protocol-library-title">
+        <div class="library-head">
+          <h2 id="protocol-library-title">프로토콜</h2>
+          <small id="protocol-library-count" class="library-count" role="status"></small>
         </div>
-        <div class="voice-actions">
-          <!-- Lane UI2 decision 1 (2026-10-13): the 실험 전 view after the drafts' P1 -- every protocol with its state in words, the upload box beside it and what is still being processed under it, and the picked protocol's analysis line and buttons right by the list. -->
-          <section id="protocol-library" class="protocol-library" aria-labelledby="protocol-library-title">
-            <div class="library-head">
-              <h2 id="protocol-library-title">프로토콜</h2>
-              <small id="protocol-library-count" class="library-count" role="status"></small>
-            </div>
-            <div class="library-grid">
-              <div class="library-main">
-                <div class="protocol-list-head" aria-hidden="true"><span>이름</span><span>상태</span><span>단계</span><span>올린 날짜</span></div>
-                <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
-                <!-- Lane UI2 decision 3 (2026-10-13): the picked protocol's box -- its analysis line and buttons, always open by the list; the long result moved to 원문 대조 보기 below. -->
-                <section id="protocol-review-panel" class="protocol-review" aria-labelledby="protocol-review-title" hidden>
-                  <h3 id="protocol-review-title" class="protocol-review-title">고른 프로토콜의 분석</h3>
-                  <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
-                  <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
-                  <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
-                  <div class="protocol-review-actions">
-                    <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
-                    <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
-                    <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
-                  </div>
-                  <!-- Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables (lane AN) -- attach an .xlsx, the tables attached with their sheets and cell counts, and one opened cell by cell as the server keeps it. Never analysed and never a step's source. -->
-                  <section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">
-                    <div class="reagent-tables-head">
-                      <h4 id="reagent-tables-title">시약 표</h4>
-                      <input id="reagent-table-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">
-                      <label id="reagent-table-pick" for="reagent-table-file" class="btn-file-select" role="button" tabindex="0">시약 표(.xlsx) 붙이기</label>
-                    </div>
-                    <small id="reagent-table-status" role="status"></small>
-                    <ul id="reagent-table-list" class="reagent-table-list" aria-label="붙인 시약 표"></ul>
-                    <div id="reagent-table-view" class="reagent-table-view" hidden></div>
-                  </section>
-                </section>
+        <div class="library-grid">
+          <div class="library-main">
+            <div class="protocol-list-head" aria-hidden="true"><span>이름</span><span>상태</span><span>단계</span><span>올린 날짜</span></div>
+            <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
+            <!-- Lane UI2 decision 3 (2026-10-13): the picked protocol's box -- its analysis line and buttons, always open by the list; the long result moved to 원문 대조 보기 below. -->
+            <section id="protocol-review-panel" class="protocol-review" aria-labelledby="protocol-review-title" hidden>
+              <h3 id="protocol-review-title" class="protocol-review-title">고른 프로토콜의 분석</h3>
+              <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
+              <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
+              <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
+              <div class="protocol-review-actions">
+                <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
+                <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
+                <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
               </div>
-              <div class="library-side">
-                <div class="setup-col-left">
-                  <!-- Lane UI3 decision 3 (2026-10-14): the server turns a Word document or a photo into the PDF it analyses (lane AN), so the input offers them and each file goes with its own type. -->
-                  <div class="protocol-register">
-                    <span class="control-label">새 프로토콜 원문 등록</span>
-                    <small id="protocol-source-formats" class="protocol-source-formats">PDF · Word(.docx) · 사진(JPG·PNG·HEIC)</small>
-                    <div class="custom-file-wrapper">
-                      <input id="protocol-pdf" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,image/jpeg,.jpg,.jpeg,image/png,.png,image/heic,.heic" class="visually-hidden-file-input" aria-label="프로토콜 원문 등록 (PDF, Word, 사진)" aria-describedby="protocol-upload-status">
-                      <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
-                      <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
-                    </div>
-                    <small id="protocol-upload-status" role="status"></small>
-                    <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
-                    <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
-                  </div>
+              <!-- Lane UI3 decision 4 (2026-10-14): the picked protocol's reagent tables (lane AN) -- attach an .xlsx, the tables attached with their sheets and cell counts, and one opened cell by cell as the server keeps it. Never analysed and never a step's source. -->
+              <section id="protocol-reagent-tables" class="reagent-tables" aria-labelledby="reagent-tables-title">
+                <div class="reagent-tables-head">
+                  <h4 id="reagent-tables-title">시약 표</h4>
+                  <input id="reagent-table-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="visually-hidden-file-input" aria-label="시약 표(.xlsx) 붙이기" aria-describedby="reagent-table-status">
+                  <label id="reagent-table-pick" for="reagent-table-file" class="btn-file-select" role="button" tabindex="0">시약 표(.xlsx) 붙이기</label>
                 </div>
-                <section id="protocol-queue" class="protocol-queue" aria-labelledby="protocol-queue-title" hidden>
-                  <h3 id="protocol-queue-title">처리 중</h3>
-                  <ul id="protocol-queue-list" class="protocol-queue-list"></ul>
-                </section>
-              </div>
-            </div>
-          </section>
-          <!-- Lane UI2 decision 1: the drafts' M1 -- the check before the start beside the voice console, the protocol's basis card and the microphone, which is this browser's own. -->
-          <div class="prestart">
-            <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
-              <!-- Lane UI2 decision 2 (2026-10-13): one card -- the badges in place of the draft's approved-version one (the source PDF, the day it was uploaded, the analysis state; the server's "다시 분석 권장" line), the safety statements first, then the step timers, the notices and the lines to check, and the start button. -->
-              <div class="start-card-head">
-                <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
-                <span id="protocol-start-basis" class="ui-badge" data-kind="done" hidden></span>
-                <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
-                <span id="protocol-start-outdated" class="ui-badge" data-kind="warning" role="status" hidden></span>
-              </div>
-              <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
-              <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
-              <div id="protocol-start-body">
-                <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
-                <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
-                <!-- Lane UI3 decision 2 (2026-10-14): the server's line on the safety documents behind the run (review.safety_scope.notice, lane PL) -- "기관 안전 문서 없음 · 원문 안전 주의만" -- above the source's statements; nothing when it sends none. -->
-                <p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>
-                <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
-                <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
-                <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
-                <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
-                <p id="protocol-start-cleared" class="protocol-review-status start-check-line" hidden></p>
-                <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
-                <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
-                <div class="protocol-review-actions">
-                  <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
-                </div>
-              </div>
+                <small id="reagent-table-status" role="status"></small>
+                <ul id="reagent-table-list" class="reagent-table-list" aria-label="붙인 시약 표"></ul>
+                <div id="reagent-table-view" class="reagent-table-view" hidden></div>
+              </section>
             </section>
-            <div class="prestart-side">
-              <div class="voice-console" aria-live="polite">
-                <div class="pulse" aria-hidden="true">●</div>
-                <div class="voice-console-body">
-                  <div id="state">준비</div>
-                  <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
-                  <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
-                  <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
-                  <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
-                  <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
-                    <span id="mic-recovery-text"></span>
-                    <button id="mic-reconnect" type="button">마이크 다시 연결</button>
-                  </div>
-                  <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
-                  <div id="voice-calibration" class="voice-calibration" role="status" hidden>
-                    <div id="voice-calibration-title" class="voice-calibration-title">목소리 맞추기 · 아래 문장을 평소 목소리로 읽어 주세요</div>
-                    <p id="voice-calibration-sentence" class="voice-calibration-sentence"></p>
-                    <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
-                  </div>
-                  <!-- Lane FX3 decision 7 (2026-10-16): the server's sentence when the voice was measured in a noisy room. -->
-                  <div id="voice-calibration-notice" class="voice-calibration-notice" role="status" hidden><span id="voice-calibration-notice-text"></span><button id="voice-calibration-notice-close" type="button">닫기</button></div>
-                </div>
-                <div class="controls">
-                  <button id="start" type="button" disabled>새 실험 시작</button>
-                  <button id="stop" type="button" disabled>종료</button>
-                </div>
-              </div>
-              <section class="experiment-context-card" aria-labelledby="experiment-context-title">
-                <div class="experiment-context-head">
-                  <div>
-                    <span class="experiment-context-kicker">시작 전 확인</span>
-                    <h2 id="experiment-context-title">이 실험의 기준 정보</h2>
-                  </div>
-                  <span id="experiment-context-readiness" class="experiment-context-readiness">프로토콜 선택 필요</span>
-                </div>
-                <div class="experiment-context-grid">
-                  <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
-                  <div><span>분석 상태</span><strong id="experiment-context-version">—</strong></div>
-                  <div><span>실험자</span><strong id="experiment-context-experimenter">—</strong></div>
-                  <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
-                  <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">분석을 통과한 프로토콜 선택</strong></div>
-                </div>
-                <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
-              </section>
-              <section id="mic-check" class="mic-check" aria-labelledby="mic-check-title">
-                <h3 id="mic-check-title">마이크 확인</h3>
-                <p class="mic-check-state"><span id="mic-check-state">마이크 꺼짐</span></p>
-                <p id="mic-check-hint" class="mic-check-line">실험을 시작하면 켜집니다</p>
-                <p id="mic-check-device" class="mic-check-line">기본 마이크 (시스템 설정)</p>
-                <p id="mic-check-voice" class="mic-check-line"></p>
-                <button id="mic-check-settings" type="button" class="mic-check-settings" aria-controls="mic-device">마이크 설정</button>
-              </section>
-            </div>
           </div>
-          <!-- Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only -- the steps the analysis took from the source, the source's own lines it read them from, page by page, and what it took from each (amounts and conditions, timers, warnings, values the source does not give) with the page; under it the rest of the analysis result. Nothing here can be changed. -->
-          <details id="protocol-compare" class="protocol-compare" hidden>
-            <summary><span class="protocol-compare-name">원문 대조 보기</span><span id="protocol-compare-summary" class="protocol-compare-summary"></span></summary>
-            <p id="protocol-compare-path" class="protocol-compare-path"></p>
-            <div id="protocol-compare-strip" class="protocol-compare-strip"></div>
-            <div class="protocol-compare-grid">
-              <div class="compare-col compare-steps-col">
-                <h4 id="protocol-compare-steps-title">단계</h4>
-                <ol id="protocol-compare-steps" class="compare-steps" aria-labelledby="protocol-compare-steps-title"></ol>
+          <div class="library-side">
+            <div class="setup-col-left">
+              <!-- Lane UI3 decision 3 (2026-10-14): the server turns a Word document or a photo into the PDF it analyses (lane AN), so the input offers them and each file goes with its own type. -->
+              <div class="protocol-register">
+                <span class="control-label">새 프로토콜 원문 등록</span>
+                <small id="protocol-source-formats" class="protocol-source-formats">PDF · Word(.docx) · 사진(JPG·PNG·HEIC)</small>
+                <div class="custom-file-wrapper">
+                  <input id="protocol-pdf" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,image/jpeg,.jpg,.jpeg,image/png,.png,image/heic,.heic" class="visually-hidden-file-input" aria-label="프로토콜 원문 등록 (PDF, Word, 사진)" aria-describedby="protocol-upload-status">
+                  <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
+                  <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
+                </div>
+                <small id="protocol-upload-status" role="status"></small>
+                <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
+                <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
               </div>
-              <section class="compare-col" aria-labelledby="protocol-compare-source-title">
-                <h4 id="protocol-compare-source-title">원문</h4>
-                <div id="protocol-compare-source" class="compare-source"></div>
-              </section>
-              <section class="compare-col" aria-labelledby="protocol-compare-fields-title">
-                <h4 id="protocol-compare-fields-title">분석이 뽑은 단계 · 수치 · 출처</h4>
-                <div id="protocol-compare-fields" class="compare-fields"></div>
-              </section>
             </div>
-            <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
-            <div id="protocol-review-content" class="protocol-review-content"></div>
-            <div id="protocol-blockers" class="protocol-review-content"></div>
-          </details>
-          <!-- Lane RV (2026-10-14): 검토 -- the reviewer's name and "검토 완료하고 등록" make the review version that runs; the versions are kept. No approval. Lane RV2 (2026-10-16): the items are asked one card at a time. -->
-          <details id="protocol-review-editor" class="review-editor" hidden>
-            <summary><span class="review-editor-name">검토</span><span id="review-editor-summary" class="review-editor-summary"></span></summary>
-            <p id="review-editor-status" class="review-editor-status" role="status" aria-live="polite"></p>
-            <div id="review-editor-strip" class="review-editor-strip"></div>
-            <!-- Lane RV2 stage ② (2026-10-16): one card at a time, chosen by buttons -- no list of items to edit. "2 / 5" above; the card the server built (question, the value as read in large type, the piece of the page, the values, the source lines to pick when a button needs them, the server's buttons); "← 이전" back. After the last card, the reviewer's name and "검토 완료하고 등록". The versions folded below. -->
-            <section id="review-cards" class="review-cards" aria-labelledby="review-cards-title" tabindex="-1">
-              <div class="review-cards-head">
-                <h4 id="review-cards-title">확인할 것</h4>
-                <span id="review-card-progress" class="review-card-progress" role="status" aria-live="polite"></span>
-              </div>
-              <div id="review-card" class="review-card"></div>
-              <div class="review-cards-nav">
-                <button id="review-card-prev" type="button">← 이전</button>
-                <button id="review-card-next" type="button" hidden>다음 →</button>
-              </div>
+            <section id="protocol-queue" class="protocol-queue" aria-labelledby="protocol-queue-title" hidden>
+              <h3 id="protocol-queue-title">처리 중</h3>
+              <ul id="protocol-queue-list" class="protocol-queue-list"></ul>
             </section>
-            <div id="review-register-block" class="review-register">
-              <label for="reviewer-name">검토자 이름<input id="reviewer-name" class="review-input" type="text" maxlength="80" autocomplete="name"></label>
-              <button id="review-register" type="button" disabled>검토 완료하고 등록</button>
-              <p id="review-register-status" class="review-register-status" role="status" aria-live="polite"></p>
-            </div>
-            <details id="review-history-fold" class="review-history">
-              <summary id="review-history-title">검토본 기록</summary>
-              <ol id="review-history" class="review-history-list"></ol>
-              <div id="review-history-changes"></div>
-            </details>
-          </details>
-          <div class="setup-grid">
-            <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
-            <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
-              <div class="settings-sheet-head">
-                <h2 id="settings-sheet-title">설정</h2>
-                <small id="experimenter-settings-status" class="mic-device-status" role="status"></small>
-                <button id="run-close-settings" type="button" class="run-sheet-close">닫기</button>
-              </div>
-              <div class="settings-groups">
-                <fieldset class="settings-group" aria-labelledby="settings-group-protocol"><legend id="settings-group-protocol">프로토콜</legend>
-                  <label class="control-field"><span>실행할 프로토콜</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
-                      <option value="">카탈로그를 불러오는 중…</option>
-                  </select></label>
-                  <label class="control-field"><span>조건 분기·반복 횟수 질문</span><select id="question-timing" aria-label="조건 분기와 반복 횟수 질문 시점" aria-describedby="experimenter-settings-status">
-                    <option value="before_start" selected>시작 전에 묻기</option>
-                    <option value="during">실험 중에 묻기</option>
-                  </select></label>
-                </fieldset>
-                <fieldset class="settings-group" aria-labelledby="settings-group-voice"><legend id="settings-group-voice">음성 입력</legend>
-                  <label class="control-field"><span>음성 입력 언어</span><select id="input-language" aria-label="음성 입력 언어">
-                    <option value="ko" selected>한국어</option>
-                    <option value="auto">자동 감지</option>
-                    <option value="en">English</option>
-                  </select></label>
-                  <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
-                    <option value="">기본 마이크 (시스템 설정)</option>
-                  </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
-                  <!-- Lane SP1 decision 2: the browser's automatic gain control would lift a quieter (farther) voice toward the wearer's level and undo the measurement, so it is turned off on the microphone track once the voice is being measured (the default); the echo cancellation and noise suppression stay on. -->
-                  <label class="control-field"><span>마이크 자동 음량 조절</span><select id="agc-mode" aria-label="마이크 자동 음량 조절" aria-describedby="agc-status">
-                    <option value="calibrated" selected>목소리를 맞추면 끔 (기본)</option>
-                    <option value="on">항상 켬 · 작은 소리도 키움</option>
-                    <option value="off">항상 끔</option>
-                  </select><small id="agc-status" class="mic-device-status" role="status"></small></label>
-                  <!-- Lane SP1 decision 1: measure the wearer's voice again (the same as saying "목소리 다시 맞춰 줘"); the measurement is kept for this session only. -->
-                  <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button><label class="voice-calibration-auto"><input id="voice-calibration-at-start" type="checkbox" checked> 세션 시작 때 한 번</label></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
-                  <label class="control-field"><span>목소리 민감도</span><select id="speaker-sensitivity" aria-label="목소리 민감도" aria-describedby="experimenter-settings-status">
-                    <option value="high">높음 · 조금만 작아도 거름 (9 dB) · 이어버드에 맞음</option>
-                    <option value="normal" selected>보통 (12 dB)</option>
-                    <option value="low">낮음 · 많이 작을 때만 거름 (18 dB)</option>
-                  </select></label>
-                  <!-- Lane SP1 decision 3: in a noisy place every command that changes the workflow and every record is asked about once (the same as saying "시끄러운 곳 모드로 바꿔 줘"); decision 1: how much quieter than the measured voice still counts as the wearer ("민감도 높음으로"). -->
-                  <label class="control-field"><span>주변 소리</span><select id="ambient-mode" aria-label="주변 소리" aria-describedby="experimenter-settings-status">
-                    <option value="quiet" selected>조용함 · 명령은 바로</option>
-                    <option value="noisy">시끄러움 · 상태를 바꾸는 말과 기록은 한 번 확인</option>
-                  </select></label>
-                </fieldset>
-                <fieldset class="settings-group" aria-labelledby="settings-group-guidance"><legend id="settings-group-guidance">안내 방식</legend>
-                  <!-- Lane CF decisions 1 and 4: the experimenter's own settings, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
-                  <label class="control-field"><span>수치 확인 방식</span><select id="confirm-mode" aria-label="수치 확인 방식" aria-describedby="experimenter-settings-status">
-                    <option value="readback" selected>되읽기 · 기록한 수치를 되읽고 묻지 않음</option>
-                    <option value="confirm">바로 확인 · 수치마다 맞는지 물음</option>
-                    <option value="quiet">조용히 · 실험 끝에 한 번에 확인</option>
-                  </select></label>
-                  <!-- Lane VT decision 6: what the server says before it is asked (the same as saying "먼저 알려 주기 꺼 줘"). -->
-                  <label class="control-field"><span>먼저 알려 주기</span><select id="proactive-mode" aria-label="먼저 알려 주기" aria-describedby="experimenter-settings-status">
-                    <option value="all" selected>모두 · 타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계</option>
-                    <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
-                    <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
-                  </select></label>
-                  <!-- Lane WV decision 2: the web is looked at only for an explanation or a photograph, shown with its source; the experimenter can turn it off (the same as saying "웹 찾아보기 꺼 줘"). -->
-                  <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
-                    <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
-                    <option value="off">끔 · 원문에서만 찾기</option>
-                  </select></label>
-                </fieldset>
-              </div>
-            </section>
-            <details class="dev-diagnostics" style="grid-column:1/-1;margin-top:.35rem;">
-              <summary>개발 상세 정보</summary>
-              <div class="dev-chips">
-                <span class="context-chip"><b>실험 PDF</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
-                <span class="context-chip"><b>안내 언어</b><span id="language-status">서버 고정 · 한국어</span></span>
-                <span class="context-chip"><b>마이크</b><span id="audio-processing-capability">확인 전</span></span>
-                <span class="context-chip"><b>음성</b><span id="voice-profile">Cascade · 확인 중</span></span>
-                <span class="context-chip"><b>버전</b><span id="protocol-revision">—</span></span>
-                <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
-                <span class="context-chip"><b>문서 분석</b><span id="protocol-analysis-progress">상태 없음</span></span>
-                <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
-                <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
-                <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
-              </div>
-            </details>
           </div>
         </div>
       </section>
-    </div>
-
-    <section class="workflow-grid" aria-label="현재 단계와 실험 PDF 이미지">
-      <div class="panel procedure-card" aria-live="polite">
-        <!-- Lane UI0 decision 2: on the run screen the step's column is the left, the timer the right (portrait: one below the other). -->
-        <div class="run-left">
-        <div class="procedure-head">
-          <div>
-            <div class="label" style="color:var(--magenta);font-weight:800;font-size:.74rem;letter-spacing:.08em;">지금 할 일 📄</div>
-            <strong id="procedure-title">선택된 프로토콜 없음</strong>
-            <div id="procedure-meta">실험을 시작하면 현재 단계가 여기에 나옵니다.</div>
-            <div id="procedure-translation-note" class="translation-note" hidden></div>
+      <section id="protocol-start-summary" class="protocol-start-summary" aria-labelledby="protocol-start-summary-title" hidden>
+        <!-- Lane UI2 decision 2 (2026-10-13): one card -- the badges in place of the draft's approved-version one (the source PDF, the day it was uploaded, the analysis state; the server's "다시 분석 권장" line), the safety statements first, then the step timers, the notices and the lines to check, and the start button. -->
+        <div class="start-card-head">
+          <h3 id="protocol-start-summary-title">시작 전 확인 · 분석 결과 요약</h3>
+          <span id="protocol-start-basis" class="ui-badge" data-kind="done" hidden></span>
+          <!-- Lane RN decision 3: the server's advice over an analysis stored before the analyser improved. -->
+          <span id="protocol-start-outdated" class="ui-badge" data-kind="warning" role="status" hidden></span>
+        </div>
+        <!-- Lane VF decision 6: once the experiment runs (the server's state) the check folds to this one line. -->
+        <p id="protocol-start-done" class="protocol-start-done" role="status" hidden><span id="protocol-start-done-text">시작 전 확인 완료</span><button id="protocol-start-review" type="button">다시 보기</button></p>
+        <div id="protocol-start-body">
+          <p id="protocol-start-overview" class="protocol-review-status" role="status"></p>
+          <div id="protocol-execution-blockers" class="protocol-execution-reasons"></div>
+          <!-- Lane UI3 decision 2 (2026-10-14): the server's line on the safety documents behind the run (review.safety_scope.notice, lane PL) -- "기관 안전 문서 없음 · 원문 안전 주의만" -- above the source's statements; nothing when it sends none. -->
+          <p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>
+          <div id="protocol-safety-notices" class="protocol-safety-notices" aria-live="polite"></div>
+          <div id="protocol-step-timers" class="protocol-execution-reasons" hidden></div>
+          <div id="protocol-execution-notices" class="protocol-execution-reasons"></div>
+          <!-- Lane EV2 decision 2: the fields the server emptied because the source did not confirm them. -->
+          <p id="protocol-start-cleared" class="protocol-review-status start-check-line" hidden></p>
+          <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
+          <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
+          <div class="protocol-review-actions">
+            <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
           </div>
-          <div id="procedure-status">대기</div>
         </div>
-        <div id="workflow-paused-banner" class="workflow-paused-banner" role="status" aria-live="polite" hidden>
-          <div><strong>일시정지 중</strong><span id="workflow-paused-text">준비되면 ‘다시 시작’을 누르거나 “재개”라고 말하세요.</span></div>
-          <button id="workflow-resume-button" type="button">▶ 다시 시작</button>
+      </section>
+      <!-- Lane UI2 decision 3 (2026-10-13): 원문 대조 보기, the draft's P2 read only -- the steps the analysis took from the source, the source's own lines it read them from, page by page, and what it took from each (amounts and conditions, timers, warnings, values the source does not give) with the page; under it the rest of the analysis result. Nothing here can be changed. -->
+      <details id="protocol-compare" class="protocol-compare" hidden>
+        <summary><span class="protocol-compare-name">원문 대조 보기</span><span id="protocol-compare-summary" class="protocol-compare-summary"></span></summary>
+        <p id="protocol-compare-path" class="protocol-compare-path"></p>
+        <div id="protocol-compare-strip" class="protocol-compare-strip"></div>
+        <div class="protocol-compare-grid">
+          <div class="compare-col compare-steps-col">
+            <h4 id="protocol-compare-steps-title">단계</h4>
+            <ol id="protocol-compare-steps" class="compare-steps" aria-labelledby="protocol-compare-steps-title"></ol>
+          </div>
+          <section class="compare-col" aria-labelledby="protocol-compare-source-title">
+            <h4 id="protocol-compare-source-title">원문</h4>
+            <div id="protocol-compare-source" class="compare-source"></div>
+          </section>
+          <section class="compare-col" aria-labelledby="protocol-compare-fields-title">
+            <h4 id="protocol-compare-fields-title">분석이 뽑은 단계 · 수치 · 출처</h4>
+            <div id="protocol-compare-fields" class="compare-fields"></div>
+          </section>
         </div>
-        <div id="procedure-progress"></div>
-        <p id="procedure-step-title"></p>
-        <p id="procedure-primary" class="step-body"></p>
-        <!-- Lane UI3 decision 1 (2026-10-14): the draft M2's "다음 단계: …" -- the next step's sentence as the server sends it (screen.next_step_sentence); nothing when it sends none. -->
-        <p id="run-next-step" class="run-next-step" hidden></p>
-        <div id="procedure-open-question" class="open-question" role="status" hidden></div>
-        <!-- Lane UI0 decision 2: the server's answer to the last turn -- 확인 대기, 되묻기, 답변 with its source, 기록 -- as the server named it (server.operation). -->
-        <div id="run-card" class="run-card" role="status" hidden></div>
-        <details id="procedure-source-toggle" class="source-toggle" hidden><summary>원문</summary><p id="procedure-instruction"></p></details>
-        <div id="procedure-warning" class="step-warning" role="alert" hidden></div>
+        <h4 class="protocol-compare-more">그 밖의 분석 결과</h4>
+        <div id="protocol-review-content" class="protocol-review-content"></div>
+        <div id="protocol-blockers" class="protocol-review-content"></div>
+      </details>
+      <!-- Lane RV (2026-10-14): 검토 -- the reviewer's name and "검토 완료하고 등록" make the review version that runs; the versions are kept. No approval. Lane RV2 (2026-10-16): the items are asked one card at a time. -->
+      <details id="protocol-review-editor" class="review-editor" hidden>
+        <summary><span class="review-editor-name">검토</span><span id="review-editor-summary" class="review-editor-summary"></span></summary>
+        <p id="review-editor-status" class="review-editor-status" role="status" aria-live="polite"></p>
+        <div id="review-editor-strip" class="review-editor-strip"></div>
+        <!-- Lane RV2 stage ② (2026-10-16): one card at a time, chosen by buttons -- no list of items to edit. "2 / 5" above; the card the server built (question, the value as read in large type, the piece of the page, the values, the source lines to pick when a button needs them, the server's buttons); "← 이전" back. After the last card, the reviewer's name and "검토 완료하고 등록". The versions folded below. -->
+        <section id="review-cards" class="review-cards" aria-labelledby="review-cards-title" tabindex="-1">
+          <div class="review-cards-head">
+            <h4 id="review-cards-title">확인할 것</h4>
+            <span id="review-card-progress" class="review-card-progress" role="status" aria-live="polite"></span>
+          </div>
+          <div id="review-card" class="review-card"></div>
+          <div class="review-cards-nav">
+            <button id="review-card-prev" type="button">← 이전</button>
+            <button id="review-card-next" type="button" hidden>다음 →</button>
+          </div>
+        </section>
+        <div id="review-register-block" class="review-register">
+          <label for="reviewer-name">검토자 이름<input id="reviewer-name" class="review-input" type="text" maxlength="80" autocomplete="name"></label>
+          <button id="review-register" type="button" disabled>검토 완료하고 등록</button>
+          <p id="review-register-status" class="review-register-status" role="status" aria-live="polite"></p>
         </div>
-        <!-- Lane UI0 decision 2: the step timer -- 도는 중, 1분 남음, 끝남 · 지남, 없음 -- read from the server's timer; the server's notice line sits under it. -->
-        <aside id="run-timer" class="run-timer" aria-label="단계 타이머" aria-live="off" data-timer="none">
-          <div class="run-timer-head"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span id="run-timer-name">단계 타이머</span></div>
-          <p id="run-timer-digits" class="run-timer-digits">--:--</p>
-          <div class="run-timer-bar"><span id="run-timer-bar"></span></div>
-          <p id="run-timer-foot" class="run-timer-foot">진행 중인 타이머 없음</p>
-          <div class="workflow-detail-row run-timer-notice" id="timer-notice-container" hidden><b>타이머 알림</b><span class="run-tag">먼저 알림</span><span id="timer-notice" role="status">—</span></div>
-        </aside>
-
-        <div class="task-body-split">
-          <div class="task-body-left">
-            <div class="spoken-summary">
-              <b>짧은 음성 안내</b>
-              <span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span>
+        <details id="review-history-fold" class="review-history">
+          <summary id="review-history-title">검토본 기록</summary>
+          <ol id="review-history" class="review-history-list"></ol>
+          <div id="review-history-changes"></div>
+        </details>
+      </details>
+    </section>
+    <!-- Lane IA decision ①: the experiment -- lane ON's wizard before the run, lane UI0's run view during it (the voice console, the step card, the timer, the pictures, the conversation sheet), lane UI2's record review after it. -->
+    <section id="tab-experiment" class="tab-panel" data-tab="experiment" aria-label="실험" tabindex="-1" hidden>
+      <!-- Lane ON decision 2 (2026-10-18): the start, one thing per screen -- login (when accounts are on), the microphone and the voice, the agent's voice, the protocol, two key values, the safety check, the start. The server decides every step's content; the page draws what it sends. Lane IA decision ⑦ (2026-10-19): the wizard is the experiment tab's start; the detail view behind it is gone, every part has its own tab. -->
+      <section id="start-wizard" class="wizard" aria-label="시작 준비" hidden>
+        <ol id="wizard-dots" class="wizard-dots" aria-label="진행"></ol>
+        <div class="wizard-card">
+          <p id="wizard-kicker" class="wizard-kicker"></p>
+          <h2 id="wizard-title" class="wizard-title"></h2>
+          <p id="wizard-lead" class="wizard-lead"></p>
+          <div id="wizard-body" class="wizard-body"></div>
+          <p id="wizard-note" class="wizard-note" role="status" aria-live="polite"></p>
+          <div class="wizard-actions">
+            <button id="wizard-primary" type="button" class="wizard-primary"></button>
+            <button id="wizard-back" type="button" class="wizard-back">← 이전</button>
+          </div>
+        </div>
+        <div class="wizard-foot">
+          <button id="wizard-quick" type="button" class="wizard-quick" hidden>지난번 설정으로 바로 시작</button>
+        </div>
+      </section>
+      <div class="prestart-side">
+        <div class="voice-console" aria-live="polite">
+          <div class="pulse" aria-hidden="true">●</div>
+          <div class="voice-console-body">
+            <div id="state">준비</div>
+            <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
+            <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
+            <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
+            <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
+            <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
+              <span id="mic-recovery-text"></span>
+              <button id="mic-reconnect" type="button">마이크 다시 연결</button>
             </div>
-            <p id="voice-command-hint" class="voice-command-hint">“다시 말해 줘”, “다음 단계”처럼 말하면 됩니다.</p>
-            <div class="workflow-details-rows">
-              <div class="workflow-detail-row"><b>출처</b><span id="procedure-source">—</span></div>
-              <div class="workflow-detail-row run-row-timer"><b>타이머</b><span id="procedure-timer">—</span></div>
-              <div class="workflow-detail-row" id="observation-container"><b>관찰</b><span id="procedure-observation">—</span></div>
-              <div class="workflow-detail-row" id="handoff-container" hidden><b>진행 제한</b><span id="procedure-handoff">—</span></div>
-              <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
+            <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
+            <div id="voice-calibration" class="voice-calibration" role="status" hidden>
+              <div id="voice-calibration-title" class="voice-calibration-title">목소리 맞추기 · 아래 문장을 평소 목소리로 읽어 주세요</div>
+              <p id="voice-calibration-sentence" class="voice-calibration-sentence"></p>
+              <div class="voice-calibration-actions"><span id="voice-calibration-status"></span><button id="voice-calibration-skip" type="button">건너뛰기</button></div>
             </div>
-            <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
-              <!-- Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, after the drafts' P4 and M6 -- how the experiment ended (the server's experiment.ended), the badge of the source it followed and who ran it. -->
-              <div class="after-head">
-                <h2 class="after-title">실험 기록 검토</h2>
-                <span id="after-state" class="ui-badge" data-kind="done" hidden></span>
-                <span id="after-basis" class="ui-badge" data-kind="quiet" hidden></span>
-                <span id="after-experimenter" class="after-experimenter"></span>
-              </div>
-              <div class="label" id="experiment-report-title">실험 기록</div>
-              <strong id="last-report-id">아직 실험 기록 없음</strong>
-              <span id="last-report-dev"></span>
-              <div id="last-report-state">실험을 시작하면 기록이 자동으로 쌓입니다.</div>
-              <div id="report-prose-state" role="status"></div>
-              <button id="report-prose-again" type="button" hidden>보고서 문장 다시 만들기</button>
-              <div id="report-review-checklist" class="report-review-checklist" aria-label="보고서에 넣을 값 확인" hidden></div>
-              <!-- Lane UI2 decision 4: 보고서 만들기 -- the Word report, as before -- out of the fold once a record exists; there is no approval. -->
-              <div class="report-actions">
-                <a id="export-report-docx" class="report-make" aria-disabled="true">보고서 만들기 (Word)</a>
-                <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
-                <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
-                <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
-              </div>
-              <!-- Lane LOG, decision 3: "이번 실험에 도움이 됐나요?" -- filled by /feedback.js once the experiment ends. -->
-              <div id="pilot-feedback" class="pilot-feedback" aria-live="polite" hidden></div>
-              <details id="procedure-report-details">
-                <summary>기록 보기 · 이상 사항 · 내보내기</summary>
-                <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
-                <div id="experiment-report-events" class="report-event-ledger" aria-label="이 세션의 실험 기록 이벤트"></div>
-                <div id="pending-report" hidden></div>
-              </details>
-            </aside>
+            <!-- Lane FX3 decision 7 (2026-10-16): the server's sentence when the voice was measured in a noisy room. -->
+            <div id="voice-calibration-notice" class="voice-calibration-notice" role="status" hidden><span id="voice-calibration-notice-text"></span><button id="voice-calibration-notice-close" type="button">닫기</button></div>
           </div>
-
-          <!-- Lane UI0 decision 3: the pictures -- the source's figures, the AI drawing with its label, the web's explanation and photograph with their sources. On the run screen a sheet from below on a phone, the right column on a wide screen. -->
-          <div class="task-body-right" id="figures-sheet" aria-label="그림">
-            <div class="run-sheet-head"><b>그림</b><button id="run-close-figures" type="button" class="run-sheet-close">닫기</button></div>
-            <section class="panel source-card" aria-labelledby="source-visual-title">
-              <h2 id="source-visual-title">원문 PDF 그림</h2>
-              <div class="source-meta" aria-live="polite">
-                <span><b>상태</b> <span id="source-visual-state">단계를 시작하면 표시</span></span>
-                <span><b>파일</b> <span id="source-filename">—</span></span>
-                <span><b>페이지</b> <span id="source-page-number">—</span></span>
-                <span hidden><b>SHA-256</b> <span id="source-short-hash">—</span></span>
-              </div>
-              <div id="procedure-visual" class="step-visual" hidden></div>
-              <div id="procedure-web" class="step-visual web-lookup-panel" hidden></div>
-              <div id="procedure-drawing" class="step-visual drawn-panel" hidden></div>
-            </section>
-            <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
-              <h2 id="web-ref-title">참고 자료</h2>
-              <div id="task-web-reference-content"></div>
-            </section>
+          <div class="controls">
+            <button id="start" type="button" disabled>새 실험 시작</button>
+            <button id="stop" type="button" disabled>종료</button>
           </div>
         </div>
+        <section class="experiment-context-card" aria-labelledby="experiment-context-title">
+          <div class="experiment-context-head">
+            <div>
+              <span class="experiment-context-kicker">시작 전 확인</span>
+              <h2 id="experiment-context-title">이 실험의 기준 정보</h2>
+            </div>
+            <span id="experiment-context-readiness" class="experiment-context-readiness">프로토콜 선택 필요</span>
+          </div>
+          <div class="experiment-context-grid">
+            <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
+            <div><span>분석 상태</span><strong id="experiment-context-version">—</strong></div>
+            <div><span>실험자</span><strong id="experiment-context-experimenter">—</strong></div>
+            <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
+            <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">분석을 통과한 프로토콜 선택</strong></div>
+          </div>
+          <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
+        </section>
+        <section id="mic-check" class="mic-check" aria-labelledby="mic-check-title">
+          <h3 id="mic-check-title">마이크 확인</h3>
+          <p class="mic-check-state"><span id="mic-check-state">마이크 꺼짐</span></p>
+          <p id="mic-check-hint" class="mic-check-line">실험을 시작하면 켜집니다</p>
+          <p id="mic-check-device" class="mic-check-line">기본 마이크 (시스템 설정)</p>
+          <p id="mic-check-voice" class="mic-check-line"></p>
+          <button id="mic-check-settings" type="button" class="mic-check-settings" aria-controls="mic-device">마이크 설정</button>
+        </section>
       </div>
+      <section class="workflow-grid" aria-label="현재 단계와 실험 PDF 이미지">
+        <div class="panel procedure-card" aria-live="polite">
+          <!-- Lane UI0 decision 2: on the run screen the step's column is the left, the timer the right (portrait: one below the other). -->
+          <div class="run-left">
+          <div class="procedure-head">
+            <div>
+              <div class="label" style="color:var(--magenta);font-weight:800;font-size:.74rem;letter-spacing:.08em;">지금 할 일 📄</div>
+              <strong id="procedure-title">선택된 프로토콜 없음</strong>
+              <div id="procedure-meta">실험을 시작하면 현재 단계가 여기에 나옵니다.</div>
+              <div id="procedure-translation-note" class="translation-note" hidden></div>
+            </div>
+            <div id="procedure-status">대기</div>
+          </div>
+          <div id="workflow-paused-banner" class="workflow-paused-banner" role="status" aria-live="polite" hidden>
+            <div><strong>일시정지 중</strong><span id="workflow-paused-text">준비되면 ‘다시 시작’을 누르거나 “재개”라고 말하세요.</span></div>
+            <button id="workflow-resume-button" type="button">▶ 다시 시작</button>
+          </div>
+          <div id="procedure-progress"></div>
+          <p id="procedure-step-title"></p>
+          <p id="procedure-primary" class="step-body"></p>
+          <!-- Lane UI3 decision 1 (2026-10-14): the draft M2's "다음 단계: …" -- the next step's sentence as the server sends it (screen.next_step_sentence); nothing when it sends none. -->
+          <p id="run-next-step" class="run-next-step" hidden></p>
+          <div id="procedure-open-question" class="open-question" role="status" hidden></div>
+          <!-- Lane UI0 decision 2: the server's answer to the last turn -- 확인 대기, 되묻기, 답변 with its source, 기록 -- as the server named it (server.operation). -->
+          <div id="run-card" class="run-card" role="status" hidden></div>
+          <details id="procedure-source-toggle" class="source-toggle" hidden><summary>원문</summary><p id="procedure-instruction"></p></details>
+          <div id="procedure-warning" class="step-warning" role="alert" hidden></div>
+          </div>
+          <!-- Lane UI0 decision 2: the step timer -- 도는 중, 1분 남음, 끝남 · 지남, 없음 -- read from the server's timer; the server's notice line sits under it. -->
+          <aside id="run-timer" class="run-timer" aria-label="단계 타이머" aria-live="off" data-timer="none">
+            <div class="run-timer-head"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span id="run-timer-name">단계 타이머</span></div>
+            <p id="run-timer-digits" class="run-timer-digits">--:--</p>
+            <div class="run-timer-bar"><span id="run-timer-bar"></span></div>
+            <p id="run-timer-foot" class="run-timer-foot">진행 중인 타이머 없음</p>
+            <div class="workflow-detail-row run-timer-notice" id="timer-notice-container" hidden><b>타이머 알림</b><span class="run-tag">먼저 알림</span><span id="timer-notice" role="status">—</span></div>
+          </aside>
 
+          <div class="task-body-split">
+            <div class="task-body-left">
+              <div class="spoken-summary">
+                <b>짧은 음성 안내</b>
+                <span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span>
+              </div>
+              <p id="voice-command-hint" class="voice-command-hint">“다시 말해 줘”, “다음 단계”처럼 말하면 됩니다.</p>
+              <div class="workflow-details-rows">
+                <div class="workflow-detail-row"><b>출처</b><span id="procedure-source">—</span></div>
+                <div class="workflow-detail-row run-row-timer"><b>타이머</b><span id="procedure-timer">—</span></div>
+                <div class="workflow-detail-row" id="observation-container"><b>관찰</b><span id="procedure-observation">—</span></div>
+                <div class="workflow-detail-row" id="handoff-container" hidden><b>진행 제한</b><span id="procedure-handoff">—</span></div>
+                <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
+              </div>
+              <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
+                <!-- Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, after the drafts' P4 and M6 -- how the experiment ended (the server's experiment.ended), the badge of the source it followed and who ran it. -->
+                <div class="after-head">
+                  <h2 class="after-title">실험 기록 검토</h2>
+                  <span id="after-state" class="ui-badge" data-kind="done" hidden></span>
+                  <span id="after-basis" class="ui-badge" data-kind="quiet" hidden></span>
+                  <span id="after-experimenter" class="after-experimenter"></span>
+                </div>
+                <div class="label" id="experiment-report-title">실험 기록</div>
+                <strong id="last-report-id">아직 실험 기록 없음</strong>
+                <span id="last-report-dev"></span>
+                <div id="last-report-state">실험을 시작하면 기록이 자동으로 쌓입니다.</div>
+                <div id="report-prose-state" role="status"></div>
+                <button id="report-prose-again" type="button" hidden>보고서 문장 다시 만들기</button>
+                <div id="report-review-checklist" class="report-review-checklist" aria-label="보고서에 넣을 값 확인" hidden></div>
+                <!-- Lane UI2 decision 4: 보고서 만들기 -- the Word report, as before -- out of the fold once a record exists; there is no approval. -->
+                <div class="report-actions">
+                  <a id="export-report-docx" class="report-make" aria-disabled="true">보고서 만들기 (Word)</a>
+                  <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
+                  <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
+                  <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
+                </div>
+                <!-- Lane LOG, decision 3: "이번 실험에 도움이 됐나요?" -- filled by /feedback.js once the experiment ends. -->
+                <div id="pilot-feedback" class="pilot-feedback" aria-live="polite" hidden></div>
+                <details id="procedure-report-details">
+                  <summary>기록 보기 · 이상 사항 · 내보내기</summary>
+                  <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
+                  <div id="experiment-report-events" class="report-event-ledger" aria-label="이 세션의 실험 기록 이벤트"></div>
+                  <div id="pending-report" hidden></div>
+                </details>
+              </aside>
+            </div>
+
+            <!-- Lane UI0 decision 3: the pictures -- the source's figures, the AI drawing with its label, the web's explanation and photograph with their sources. On the run screen a sheet from below on a phone, the right column on a wide screen. -->
+            <div class="task-body-right" id="figures-sheet" aria-label="그림">
+              <div class="run-sheet-head"><b>그림</b><button id="run-close-figures" type="button" class="run-sheet-close">닫기</button></div>
+              <section class="panel source-card" aria-labelledby="source-visual-title">
+                <h2 id="source-visual-title">원문 PDF 그림</h2>
+                <div class="source-meta" aria-live="polite">
+                  <span><b>상태</b> <span id="source-visual-state">단계를 시작하면 표시</span></span>
+                  <span><b>파일</b> <span id="source-filename">—</span></span>
+                  <span><b>페이지</b> <span id="source-page-number">—</span></span>
+                  <span hidden><b>SHA-256</b> <span id="source-short-hash">—</span></span>
+                </div>
+                <div id="procedure-visual" class="step-visual" hidden></div>
+                <div id="procedure-web" class="step-visual web-lookup-panel" hidden></div>
+                <div id="procedure-drawing" class="step-visual drawn-panel" hidden></div>
+              </section>
+              <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
+                <h2 id="web-ref-title">참고 자료</h2>
+                <div id="task-web-reference-content"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+      </section>
+      <!-- Lane UI0 decision 3: on the run screen the conversation is a drawer -- the long answers to read again, and the voices not heard. -->
+      <section class="panel timeline" id="conversation-sheet" aria-labelledby="timeline-title">
+        <div class="timeline-head">
+          <h2 id="timeline-title">실험 대화 💬</h2>
+          <p>음성 대화와 검색 참고 자료</p>
+          <button id="run-close-conversation" type="button" class="run-sheet-close">닫기</button>
+        </div>
+        <!-- Lane SP1 decision 4 (2026-10-10): a voice the server took for another person's leaves one small line here with the time -- no words, since nothing was transcribed -- folded away; it goes into no record and no report. -->
+        <details id="ignored-speech" class="ignored-speech" hidden><summary id="ignored-speech-summary">다른 사람 말로 보여 듣지 않은 말 0개</summary><ul id="ignored-speech-list"></ul></details>
+        <div id="log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="세션 대화 기록"></div>
+        <button id="new-chat-update" type="button" hidden aria-label="최신 메시지로 이동">새 메시지 ↑</button>
+      </section>
+    </section>
+    <!-- Lane IA decision ①: the records -- the experiments and their timelines (lane ON: an administrator sees the lab's). While the experiment runs this panel stays under the run view, as lane UI0 left it, so the run's own observations and attachments are reached while the bar is hidden. -->
+    <section id="tab-records" class="tab-panel" data-tab="records" aria-labelledby="experiment-ledger-title" tabindex="-1" hidden>
       <section id="experiment-session-ledger" class="panel experiment-ledger" aria-labelledby="experiment-ledger-title">
         <div class="experiment-ledger-head">
           <div>
@@ -1285,26 +1236,114 @@
         </div>
       </section>
     </section>
-
-    <!-- Lane UI0 decision 3: on the run screen the conversation is a drawer -- the long answers to read again, and the voices not heard. -->
-    <section class="panel timeline" id="conversation-sheet" aria-labelledby="timeline-title">
-      <div class="timeline-head">
-        <h2 id="timeline-title">실험 대화 💬</h2>
-        <p>음성 대화와 검색 참고 자료</p>
-        <button id="run-close-conversation" type="button" class="run-sheet-close">닫기</button>
-      </div>
-      <!-- Lane SP1 decision 4 (2026-10-10): a voice the server took for another person's leaves one small line here with the time -- no words, since nothing was transcribed -- folded away; it goes into no record and no report. -->
-      <details id="ignored-speech" class="ignored-speech" hidden><summary id="ignored-speech-summary">다른 사람 말로 보여 듣지 않은 말 0개</summary><ul id="ignored-speech-list"></ul></details>
-      <div id="log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="세션 대화 기록"></div>
-      <button id="new-chat-update" type="button" hidden aria-label="최신 메시지로 이동">새 메시지 ↑</button>
-    </section>
-
-    <section class="example-strip" aria-label="음성 사용 예시">
-      <div class="example"><b>프로토콜 시작</b>“프로토콜을 시작해 줘.”</div>
-      <div class="example"><b>현재 단계</b>“현재 단계를 알려 줘.” · “다시 말해 줘.”</div>
-      <div class="example"><b>시각 자료 & 검색</b>“SDS-PAGE 사진 보여줘.” · “AMBIC이 뭐야?”</div>
+    <!-- Lane IA decision ①: the settings -- lane UI0's sheet (voice input, guidance; the protocol group as before), the home-screen guide (lane UI2) and the developer details. -->
+    <section id="tab-settings" class="tab-panel" data-tab="settings" aria-labelledby="settings-sheet-title" tabindex="-1" hidden>
+      <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
+      <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
+        <div class="settings-sheet-head">
+          <h2 id="settings-sheet-title">설정</h2>
+          <small id="experimenter-settings-status" class="mic-device-status" role="status"></small>
+          <button id="run-close-settings" type="button" class="run-sheet-close">닫기</button>
+        </div>
+        <div class="settings-groups">
+          <fieldset class="settings-group" aria-labelledby="settings-group-protocol"><legend id="settings-group-protocol">프로토콜</legend>
+            <label class="control-field"><span>실행할 프로토콜</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
+                <option value="">카탈로그를 불러오는 중…</option>
+            </select></label>
+            <label class="control-field"><span>조건 분기·반복 횟수 질문</span><select id="question-timing" aria-label="조건 분기와 반복 횟수 질문 시점" aria-describedby="experimenter-settings-status">
+              <option value="before_start" selected>시작 전에 묻기</option>
+              <option value="during">실험 중에 묻기</option>
+            </select></label>
+          </fieldset>
+          <fieldset class="settings-group" aria-labelledby="settings-group-voice"><legend id="settings-group-voice">음성 입력</legend>
+            <label class="control-field"><span>음성 입력 언어</span><select id="input-language" aria-label="음성 입력 언어">
+              <option value="ko" selected>한국어</option>
+              <option value="auto">자동 감지</option>
+              <option value="en">English</option>
+            </select></label>
+            <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
+              <option value="">기본 마이크 (시스템 설정)</option>
+            </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
+            <!-- Lane SP1 decision 2: the browser's automatic gain control would lift a quieter (farther) voice toward the wearer's level and undo the measurement, so it is turned off on the microphone track once the voice is being measured (the default); the echo cancellation and noise suppression stay on. -->
+            <label class="control-field"><span>마이크 자동 음량 조절</span><select id="agc-mode" aria-label="마이크 자동 음량 조절" aria-describedby="agc-status">
+              <option value="calibrated" selected>목소리를 맞추면 끔 (기본)</option>
+              <option value="on">항상 켬 · 작은 소리도 키움</option>
+              <option value="off">항상 끔</option>
+            </select><small id="agc-status" class="mic-device-status" role="status"></small></label>
+            <!-- Lane SP1 decision 1: measure the wearer's voice again (the same as saying "목소리 다시 맞춰 줘"); the measurement is kept for this session only. -->
+            <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button><label class="voice-calibration-auto"><input id="voice-calibration-at-start" type="checkbox" checked> 세션 시작 때 한 번</label></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
+            <label class="control-field"><span>목소리 민감도</span><select id="speaker-sensitivity" aria-label="목소리 민감도" aria-describedby="experimenter-settings-status">
+              <option value="high">높음 · 조금만 작아도 거름 (9 dB) · 이어버드에 맞음</option>
+              <option value="normal" selected>보통 (12 dB)</option>
+              <option value="low">낮음 · 많이 작을 때만 거름 (18 dB)</option>
+            </select></label>
+            <!-- Lane SP1 decision 3: in a noisy place every command that changes the workflow and every record is asked about once (the same as saying "시끄러운 곳 모드로 바꿔 줘"); decision 1: how much quieter than the measured voice still counts as the wearer ("민감도 높음으로"). -->
+            <label class="control-field"><span>주변 소리</span><select id="ambient-mode" aria-label="주변 소리" aria-describedby="experimenter-settings-status">
+              <option value="quiet" selected>조용함 · 명령은 바로</option>
+              <option value="noisy">시끄러움 · 상태를 바꾸는 말과 기록은 한 번 확인</option>
+            </select></label>
+          </fieldset>
+          <fieldset class="settings-group" aria-labelledby="settings-group-guidance"><legend id="settings-group-guidance">안내 방식</legend>
+            <!-- Lane CF decisions 1 and 4: the experimenter's own settings, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
+            <label class="control-field"><span>수치 확인 방식</span><select id="confirm-mode" aria-label="수치 확인 방식" aria-describedby="experimenter-settings-status">
+              <option value="readback" selected>되읽기 · 기록한 수치를 되읽고 묻지 않음</option>
+              <option value="confirm">바로 확인 · 수치마다 맞는지 물음</option>
+              <option value="quiet">조용히 · 실험 끝에 한 번에 확인</option>
+            </select></label>
+            <!-- Lane VT decision 6: what the server says before it is asked (the same as saying "먼저 알려 주기 꺼 줘"). -->
+            <label class="control-field"><span>먼저 알려 주기</span><select id="proactive-mode" aria-label="먼저 알려 주기" aria-describedby="experimenter-settings-status">
+              <option value="all" selected>모두 · 타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계</option>
+              <option value="needed">필요한 것만 · 타이머 끝, 반복 횟수</option>
+              <option value="off">끄기 · 말로 알리지 않음 (화면 알림과 소리는 남음)</option>
+            </select></label>
+            <!-- Lane WV decision 2: the web is looked at only for an explanation or a photograph, shown with its source; the experimenter can turn it off (the same as saying "웹 찾아보기 꺼 줘"). -->
+            <label class="control-field"><span>웹 찾아보기</span><select id="web-lookup" aria-label="웹 찾아보기" aria-describedby="experimenter-settings-status">
+              <option value="on" selected>켬 · 설명과 사진만, 출처와 함께 (값·안전은 원문만)</option>
+              <option value="off">끔 · 원문에서만 찾기</option>
+            </select></label>
+          </fieldset>
+        </div>
+      </section>
+      <details id="install-guide" class="install-guide">
+        <summary>홈 화면에 추가</summary>
+        <div class="install-guide-body">
+          <button id="install-app" type="button" hidden>VoineyLab 설치</button>
+          <p id="install-secure" class="install-secure" role="status" hidden></p>
+          <ul>
+            <li><b>아이폰·아이패드 (Safari)</b> 공유 버튼 → “홈 화면에 추가”</li>
+            <li><b>안드로이드 (Chrome)</b> 메뉴(⋮) → “홈 화면에 추가” 또는 “앱 설치”</li>
+            <li><b>PC (Chrome·Edge)</b> 주소창 오른쪽의 설치 아이콘</li>
+          </ul>
+          <p>홈 화면에서 열면 주소창 없이 화면 전체를 씁니다. 가로·세로 모두 됩니다. 서버에 연결되어 있어야 쓸 수 있습니다(오프라인 없음).</p>
+        </div>
+      </details>
+      <details id="dev-diagnostics" class="dev-diagnostics">
+        <summary>개발 상세 정보</summary>
+        <div class="dev-chips">
+          <span class="context-chip"><b>실험 PDF</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
+          <span class="context-chip"><b>안내 언어</b><span id="language-status">서버 고정 · 한국어</span></span>
+          <span class="context-chip"><b>마이크</b><span id="audio-processing-capability">확인 전</span></span>
+          <span class="context-chip"><b>음성</b><span id="voice-profile">Cascade · 확인 중</span></span>
+          <span class="context-chip"><b>버전</b><span id="protocol-revision">—</span></span>
+          <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
+          <span class="context-chip"><b>문서 분석</b><span id="protocol-analysis-progress">상태 없음</span></span>
+          <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
+          <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
+          <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
+        </div>
+      </details>
     </section>
   </main>
+  <!-- Lane IA decision ①: the tab bar -- five links, the hash of each tab; below on a phone, a menu on the left of a wide screen, hidden while the experiment runs and before a login. -->
+  <nav id="tab-bar" class="tab-bar" aria-label="화면">
+    <a id="tab-link-home" class="tab-link" href="#/home" data-tab="home"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg><span>홈</span></a>
+    <a id="tab-link-protocols" class="tab-link" href="#/protocols" data-tab="protocols"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg><span>프로토콜</span></a>
+    <a id="tab-link-experiment" class="tab-link" href="#/experiment" data-tab="experiment"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6"/><path d="M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"/><path d="M7.5 15h9"/></svg><span>실험</span></a>
+    <a id="tab-link-records" class="tab-link" href="#/records" data-tab="records"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span>기록</span></a>
+    <a id="tab-link-settings" class="tab-link" href="#/settings" data-tab="settings"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg><span>설정</span></a>
+  </nav>
+  <!-- Lane IA decision ①: while the experiment runs, another tab carries this band -- the run and its step, and the way back. The rail above keeps the timer and the safety badge in view. -->
+  <div id="run-return-band" class="run-return-band" role="status" aria-live="polite" hidden><span id="run-return-text"></span><a id="run-return-link" class="run-return-link" href="#/experiment">돌아가기</a></div>
 
   <!-- Lane UI0 decision 3: behind an open sheet; a touch on it closes the sheet. -->
   <div id="run-sheet-backdrop" class="run-sheet-backdrop" hidden></div>
@@ -1579,7 +1618,9 @@ function screenView(){
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
- renderWizard();
+ // Lane IA decision ①: the run opens the experiment tab once (replacing the entry, so the back button leaves the run's tab, not a tab before it); the route draws the tab, the band and the wizard.
+ if(view==="during"&&lastScreenView!=="during"&&shownTab()!=="experiment"){lastScreenView=view;navigateTab("experiment",null,{replace:true});}
+ else{lastScreenView=view;renderRoute();}
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
  if((view==="during")!==screenWakeLockWanted)void keepScreenOn(view==="during");
  return view;
@@ -1991,7 +2032,9 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
    if(!item||typeof item.session_id!=="string")continue;
    const option=document.createElement("option"),stateInfo=sessionStateBadgeInfo(item.status);option.value=item.session_id;option.textContent=[serverProtocolTitle(item)||protocolCatalog.get(item.protocol_id)?.title||"실험",`${localDateTimeText(item.started_at)}${serverDayNumber(item,experiments,"session_id")||""}`,`${item.current_step_label||"—"}단계`,stateInfo?.label||"상태 확인"].filter(Boolean).join(" · ");option.title=`${item.protocol_id} · ${item.session_id}`;select.appendChild(option);
   }
-  const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";return selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
+  const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";const loaded=selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
+  // Lane IA decision ①: a session named by the hash is picked once the list holds it.
+  workspaceExperiments=experiments;applyRouteSelections();return loaded;
  }catch(error){
   if(seq!==experimentLoadSeq)return false;
   select.replaceChildren();const option=document.createElement("option");option.value="";option.textContent="실험 세션 로드 실패";select.appendChild(option);setText("experiment-capture-status",researcherErrorMessage(error?.message,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));return false;
@@ -2179,7 +2222,7 @@ function syncProtocolList(){
 function pickProtocolFromList(protocolId){
  const select=$("protocol-id");if(!select||select.disabled||!protocolCatalog.has(protocolId))return false;
  if(select.value!==protocolId||currentProtocolReviewId!==protocolId){select.value=protocolId;onProtocolSelectionChanged();}
- syncProtocolList();return true;
+ syncProtocolList();syncProtocolRoute(protocolId);return true;
 }
 // Lane UI2 decision 1: the drafts' M1 microphone check, said in words. The
 // microphone is this browser's own and opens when the experiment starts; no
@@ -3176,6 +3219,7 @@ async function loadProtocolCatalog(preferredProtocolId=null){
  const selector=$("protocol-id");
  if(!selector||typeof fetch!=="function")return;
  const manual=selector.value,selected=preferredProtocolId||manual,status=$("protocol-upload-status");
+ catalogState="loading";
  selector.setAttribute?.("aria-busy","true");
  $("protocol-readiness").textContent="카탈로그 불러오는 중";
  if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
@@ -3198,9 +3242,9 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
   else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
   if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
-  renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();
+  catalogState="ready";renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();applyRouteSelections();
  }catch(_){
-  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";renderState(visibleState);renderProtocolList();
+  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";catalogState="failed";renderState(visibleState);renderProtocolList();
  }finally{selector.setAttribute?.("aria-busy","false");}
 }
 
@@ -4666,15 +4710,15 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 // (the list, or an upload) → two key values (decision 3; the server's
 // questions and choices only) → the safety check → [이 프로토콜로 시작]. Dots
 // above, one big button, "← 이전", one column. "지난번 설정으로 바로 시작"
-// skips what is saved. "자세히 보기" shows the 실험 전 view as it was. The
-// page decides nothing about the run: every step shows what the server sent
-// and sends the person's press back as one request.
-const WIZARD_VIEW_KEY="voiney-lab.start-view",WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
+// skips what is saved. Lane IA decision ⑦ (2026-10-19): the wizard is the
+// experiment tab's start and the view behind it is gone -- every part of the
+// page has a tab of its own. The page decides nothing about the run: every
+// step shows what the server sent and sends the person's press back as one
+// request.
+const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
 const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
 var wizard={active:false,step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:""};
-function wizardDetailChosen(){try{return globalThis.sessionStorage?.getItem(WIZARD_VIEW_KEY)==="detail";}catch(_){return false;}}
-function wizardChooseDetail(on){try{if(on)globalThis.sessionStorage?.setItem(WIZARD_VIEW_KEY,"detail");else globalThis.sessionStorage?.removeItem(WIZARD_VIEW_KEY);}catch(_){}}
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
 function wizardLastProtocol(){try{return globalThis.localStorage?.getItem(WIZARD_LAST_PROTOCOL_KEY)||"";}catch(_){return "";}}
 function wizardRememberProtocol(id){try{globalThis.localStorage?.setItem(WIZARD_LAST_PROTOCOL_KEY,id);}catch(_){}}
@@ -4698,12 +4742,12 @@ async function loadAgentVoices(){
  try{const response=await fetch("/api/voice/voices",{cache:"no-store"});if(!response.ok){wizard.voices=null;return null;}const payload=await response.json();wizard.voices=payload&&typeof payload==="object"&&Array.isArray(payload.voices)?payload:null;return wizard.voices;}catch(_){wizard.voices=null;return null;}
 }
 async function openStartWizard(){
- if(wizardDetailChosen()||sessionActive){wizard.active=false;renderWizard();return false;}
+ if(sessionActive){wizard.active=false;renderRoute();return false;}
  wizard.active=true;wizard.invite=wizardInviteToken();
  await loadAuthSession();
- if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderWizard();return true;}
+ if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
  await wizardAfterSignIn();
- wizard.step=wizardSteps()[0];renderWizard();return true;
+ wizard.step=wizardSteps()[0];renderRoute();return true;
 }
 async function wizardAfterSignIn(){
  const settings=fetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
@@ -4722,7 +4766,8 @@ function wizardOption(label,sub,pressed,onPick,aside){
 function renderWizard(){
  if(!wizard)return false;
  const body=globalThis.document?.body,section=$("start-wizard");
- const on=wizard.active===true&&screenView()==="before";
+ // Lane IA decision ①: the wizard is the experiment tab's 실험 전 view; before a login it is the login screen whatever the hash.
+ const on=wizard.active===true&&screenView()==="before"&&shownTab()==="experiment";
  if(body?.dataset)body.dataset.wizard=on?"on":"off";
  if(section)section.hidden=!on;
  if(!on)return false;
@@ -4765,7 +4810,7 @@ async function wizardSubmitLogin(){
   await loadAuthSession();
   await Promise.all([loadProtocolCatalog(),loadWorkspaceSession(),loadExperimenterSettings()]);
   await wizardAfterSignIn();
-  wizardSetBusy(false);wizardGo(wizardSteps()[0]);return payload;
+  wizardSetBusy(false);wizardGo(wizardSteps()[0]);renderRoute();return payload;
  }catch(_){wizardSetBusy(false);wizardNote("서버에 연결할 수 없어요. 네트워크를 확인해 주세요.","error");return null;}
 }
 function renderWizardVoice(host,primary){
@@ -4940,8 +4985,10 @@ function renderWizardStart(host,primary){
  setText("wizard-lead","시작하면 마이크가 켜지고 음성 안내가 시작돼요. 안전 주의를 확인한 것으로 기록돼요.");
  const voice=wizard.voices?.voices?.find(item=>item.voice_id===(wizardSettings().agent_voice==="default"?wizard.voices?.default_voice_id:wizardSettings().agent_voice));
  if(voice)host.appendChild(compareEl("p","wizard-done",`안내 목소리 · ${voice.label_ko}`));
- if(experimentIsResumable())host.appendChild(compareEl("p","wizard-done","진행 중이던 실험이 있어요. 이어하려면 '자세히 보기'에서 '실험 이어하기'를 누르세요."));
- if(primary){primary.textContent="이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
+ // Lane IA decision ⑦: a saved experiment picked in the records (or from the home's card) continues from here -- the start sends the session the server named, as the voice console's '실험 이어하기' did.
+ const resuming=experimentIsResumable();
+ if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 기록 탭에서 실험 선택을 비우세요.`));
+ if(primary){primary.textContent=resuming?"실험 이어하기":"이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
 }
 async function wizardPrimary(){
  if(wizard.busy)return null;
@@ -4961,8 +5008,72 @@ async function wizardQuickStart(){
 $("wizard-primary")?.addEventListener("click",()=>{void wizardPrimary();});
 $("wizard-back")?.addEventListener("click",()=>{wizardBack();});
 $("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
-$("wizard-detail")?.addEventListener("click",()=>{wizardChooseDetail(true);wizard.active=false;renderWizard();});
-globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();void openStartWizard();},{once:true});
+
+// ---------------------------------------------------------------------------
+// Lane IA decision ① (2026-10-19): five tabs by hash route. The hash names
+// the tab -- #/home, #/protocols, #/protocols/<id>, #/upload, #/experiment,
+// #/records, #/records/<id>, #/settings -- so the back button works and a
+// link can open a tab. The panels are the markup's; this only shows the one
+// the hash names (and the records under the run view while the experiment
+// runs, as lane UI0 left them). While the experiment runs the run's tab is
+// the default and the bar is hidden; another tab carries the band "실험 중 ·
+// n단계 · 돌아가기" and keeps the rail's timer and safety badges. Before a
+// login only the login shows, whatever the hash. Nothing here decides a
+// state: the view is the server's (screenView), the tab is where it is drawn.
+const TAB_ROUTE_PATTERN=/^#\/(home|protocols|upload|experiment|records|settings)(?:\/([^/?#]+))?\/?(?:\?[^#]*)?$/;
+const TAB_PANELS=Object.freeze(["home","protocols","experiment","records","settings"]);
+var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading";
+function parseRoute(hash){const match=TAB_ROUTE_PATTERN.exec(String(hash||""));if(!match)return{tab:"home",id:null,path:"#/home"};let id=null;if(match[2]){try{id=decodeURIComponent(match[2]);}catch(_){id=match[2];}}return{tab:match[1],id,path:match[0]};}
+function routePath(tab,id=null){return `#/${tab}${nonemptyText(id)?`/${encodeURIComponent(id)}`:""}`;}
+function currentTab(){return screenRoute.tab==="upload"?"protocols":screenRoute.tab;}
+function authRequired(){return wizard?.auth?.mode==="accounts"&&wizard.auth.signed_in!==true;}
+function shownTab(){return authRequired()?"experiment":currentTab();}
+function readRoute(){const loc=globalThis.location;if(loc&&typeof loc.hash==="string")screenRoute=parseRoute(loc.hash);return screenRoute;}
+function navigateTab(tab,id=null,{replace=false}={}){
+ const path=routePath(tab,id),loc=globalThis.location;
+ if(loc&&typeof loc.hash==="string"&&loc.hash!==path){
+  let replaced=false;
+  if(replace){try{globalThis.history?.replaceState?.(null,"",path);replaced=loc.hash===path;}catch(_){replaced=false;}}
+  if(!replaced){try{loc.hash=path;}catch(_){}}
+ }
+ screenRoute=parseRoute(path);
+ return renderRoute();
+}
+function renderRoute(){
+ readRoute();
+ const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",key=`${tab}|${screenRoute.path}|${authRequired()}`;
+ if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(authRequired()?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
+ for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=!(name===tab||(name==="records"&&tab==="experiment"&&during));}
+ for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tab?"page":"false");
+ renderRunReturnBand();
+ renderWizard();
+ if(key!==lastRouteKey){lastRouteKey=key;applyRouteSelections();if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
+ return tab;
+}
+// The hash's own id: the protocol or the session it names, once the list that holds it is here.
+function applyRouteSelections(){
+ if(screenRoute.tab==="protocols"&&screenRoute.id)return applyProtocolRoute(screenRoute.id);
+ if(screenRoute.tab==="records"&&screenRoute.id)return chooseExperimentSession(screenRoute.id);
+ if(screenRoute.tab==="upload"){const pick=$("protocol-pdf-pick");pick?.scrollIntoView?.({block:"center"});pick?.focus?.();return Boolean(pick);}
+ return false;
+}
+function applyProtocolRoute(protocolId){if(!protocolCatalog.has(protocolId))return false;if($("protocol-id")?.value===protocolId&&currentProtocolReviewId===protocolId)return true;return pickProtocolFromList(protocolId);}
+function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenRoute.id===protocolId)return false;navigateTab("protocols",protocolId,{replace:true});return true;}
+function chooseExperimentSession(sessionId,{force=false}={}){
+ const id=typeof sessionId==="string"?sessionId:"",select=$("experiment-session-select");
+ if(id&&select&&![...(select.options||[])].some(option=>option.value===id))return false;
+ if(!force&&currentExperimentSessionId===(id||null))return false;
+ if(select)select.value=id;
+ currentExperimentSessionId=id||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);return true;
+}
+function renderRunReturnBand(){
+ const band=$("run-return-band");if(!band)return false;
+ const shown=screenView()==="during"&&shownTab()!=="experiment";band.hidden=!shown;
+ if(shown){const label=curatedProtocolState?.current_step_label;setText("run-return-text",nonemptyText(label)?`실험 중 · ${label}단계`:"실험 중");}
+ return shown;
+}
+globalThis.addEventListener?.("hashchange",()=>{renderRoute();});
+globalThis.addEventListener?.("load",()=>{renderRoute();void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();void openStartWizard();},{once:true});
 </script>
 <!-- Lane NET (2026-10-18): a lost connection, seen at once and put back. -->
 <script src="/connection.js"></script>

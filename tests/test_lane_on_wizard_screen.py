@@ -6,7 +6,7 @@ identity check -- login (when accounts are on) → the microphone and 목소리
 voices, [들어 보기], saved) → the protocol (list, upload) → two key values →
 the safety check → [이 프로토콜로 시작]. Dots above, one big button, "← 이전",
 one column. From the second time one button, "지난번 설정으로 바로 시작",
-skips what is saved. The 실험 전 view stays behind "자세히 보기". The page
+skips what is saved. The wizard is the experiment tab's start (lane IA ⑦). The page
 draws only what the server sends: the questions, their choices and the
 cards are the server's. Every test loads the whole page script into Node
 with the fake DOM and drives the production functions.
@@ -46,7 +46,8 @@ const WRONG={question_id:"q1:step:s2:10min",correct:false,proceed:false,chosen_l
 const RIGHT=(next)=>({question_id:"q",correct:true,proceed:true,chosen_label:"x",next_question_id:next,message_ko:"",followups:[],card:null});
 function serve(answers){globalThis.fetch=async(url,options={})=>{const call={url:String(url),method:options.method||"GET",body:typeof options.body==="string"?JSON.parse(options.body):null};calls.push(call);for(const [pattern,answer] of answers){if(call.url.includes(pattern)){const value=typeof answer==="function"?answer(call):answer;return value&&typeof value.then==="function"?value:value&&value.ok!==undefined&&value.json?value:json(value);}}throw new Error(`unexpected ${call.url}`);};}
 const base=(session=DEV_SESSION,settings=SETTINGS(),voices=VOICES,catalog=CATALOG)=>[["/api/auth/session",session],["/api/experimenter/settings",settings],["/api/voice/voices",voices],["/api/protocols?",catalog],["/review",REVIEW()],["/api/protocols",catalog],["/api/workspace/session",{display_name:"김재준"}],["/api/workspace/experiments",{experiments:[]}],["/api/source-formats",{formats:[]}]];
-async function open(answers){serve(answers);await loadProtocolCatalog();await openStartWizard();await settle();}
+// Lane IA decision ① (2026-10-19): the wizard is the experiment tab's start, so these tests open that tab.
+async function open(answers){serve(answers);navigateTab("experiment");await loadProtocolCatalog();await openStartWizard();await settle();}
 """
 
 
@@ -78,21 +79,6 @@ await open(base(DEV_SESSION,SETTINGS({voice_calibration:"measured"}),{...VOICES,
 assert(wizardSteps().join(",")==="protocol,check,safety,start",`steps: ${wizardSteps()}`);
 assert(wizard.step==="protocol",`step: ${wizard.step}`);
 assert(node("wizard-dots").children.length===4,"dots");
-""")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_detail_view_hides_the_wizard_and_shows_the_page_as_it_was(self):
-        result = run(r"""
-const stored={};globalThis.sessionStorage={getItem:key=>stored[key]??null,setItem:(key,value)=>{stored[key]=String(value);},removeItem:key=>{delete stored[key];}};
-await open(base());
-assert(wizardOn(),"on first");
-node("wizard-detail").dispatch("click");await settle();
-assert(!wizardOn(),"still on after 자세히 보기");
-assert(node("start-wizard").hidden,"section still shown");
-assert(stored["voiney-lab.start-view"]==="detail","the choice was not remembered for this tab");
-wizard={...wizard,active:false};
-await openStartWizard();
-assert(!wizardOn(),"the wizard came back in the same tab");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -357,8 +343,9 @@ assert(node("wizard-quick").hidden===true,"a quick start with nothing remembered
 class MarkupTests(unittest.TestCase):
     def test_the_wizard_markup_and_its_tokens_are_in_the_page(self):
         html = INDEX.read_text(encoding="utf-8")
+        # Lane IA decision ⑦ (2026-10-19): "자세히 보기" and its button are gone.
         for needle in ('id="start-wizard"', 'id="wizard-dots"', 'id="wizard-primary"', 'id="wizard-back"',
-                       'id="wizard-quick"', 'id="wizard-detail"', "지난번 설정으로 바로 시작", "자세히 보기",
+                       'id="wizard-quick"', "지난번 설정으로 바로 시작",
                        'body[data-wizard="on"]', "min-height:var(--target-run)", "max-width:480px"):
             self.assertIn(needle, html, needle)
 

@@ -135,7 +135,8 @@ class CompareMarkupTests(unittest.TestCase):
             self.assertIn(f'id="{ident}"', box, ident)
         self.assertNotIn("<details", box)
         self.assertNotIn('id="protocol-review-content"', box)
-        library = self.html[self.html.index('<section id="protocol-library"'):self.html.index('<div class="prestart">')]
+        # Lane IA decision ①: the library is followed by the check before the start on the protocols tab.
+        library = self.html[self.html.index('<section id="protocol-library"'):self.html.index('<section id="protocol-start-summary"')]
         self.assertIn('id="protocol-review-panel"', library)
 
 

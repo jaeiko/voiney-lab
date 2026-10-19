@@ -323,7 +323,8 @@ class CardMarkupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.html = INDEX.read_text(encoding="utf-8")
         begin = self.html.index('<details id="protocol-review-editor"')
-        self.editor = self.html[begin:self.html.index('<div class="setup-grid">', begin)]
+        # Lane IA decision ①: the editor closes the protocols tab; the experiment tab follows it.
+        self.editor = self.html[begin:self.html.index('<section id="tab-experiment"', begin)]
 
     def test_cards_instead_of_an_item_list_and_the_versions_folded(self) -> None:
         for ident in ("review-cards", "review-card-progress", "review-card", "review-card-prev",
