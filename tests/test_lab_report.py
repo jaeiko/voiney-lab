@@ -141,8 +141,11 @@ class ReportStructureTests(_ReportCase):
         self.run_steps_one_to_four_then_stop()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         headings = [line for line in text.splitlines() if line.startswith("#")]
-        self.assertEqual(headings[:2], ["# Test digestion protocol 실험 보고서", "## 1. 실험 목적"])
-        order = ["## 1. 실험 목적", "## 2. 배경·원리", "## 3. 재료 및 방법", "## 4. 결과",
+        # Lane RP2, decision 1 (2026-10-19): the first pages come before the sections.
+        self.assertEqual(headings[:2], ["# Test digestion protocol 실험 보고서", "## 한눈 요약"])
+        order = ["## 한눈 요약", "## 단계별 기록", "## 타이머", "## 편차·이상 모음",
+                 "## 시작 전 확인 결과", "## 실험자 확인",
+                 "## 1. 실험 목적", "## 2. 배경·원리", "## 3. 재료 및 방법", "## 4. 결과",
                  "## 5. 고찰", "## 6. 결론", "## 참고문헌"]
         self.assertEqual([h for h in headings if h.startswith("## ")], order)
         for identifier in (self.report_id, *REPORT_ID_FIELDS, "stopped", "step_completed",
@@ -444,8 +447,12 @@ class NumberAndUnitCheckTests(_ReportCase):
 class ReportLayoutTests(_ReportCase):
     """Decisions 4–6 (2026-10-06): column widths, the experimenter, authorship."""
 
-    NARROW = {"단계", "종류", "시각", "완료 시각", "타이머 (원문 / 실제)", "항목", "사용 단계"}
-    WIDE = {"원문 단계", "기록 내용 (연구자가 말한 그대로)", "내용", "이름 (원문 그대로)"}
+    NARROW = {"단계", "종류", "시각", "완료 시각", "타이머 (원문 / 실제)", "항목", "사용 단계",
+              # Lane RP2, decision 1: the first pages' tables.
+              "시작", "끝", "소요", "원문 시간", "켠 시각", "1분 전 알림", "끝 알림", "단계 끝",
+              "번호", "확인", "확인한 값"}
+    WIDE = {"원문 단계", "기록 내용 (연구자가 말한 그대로)", "내용", "이름 (원문 그대로)",
+            "기록한 값", "편차 (원문 → 기록)", "이상", "결과", "원문 (쪽)", "기록", "원문 값", "고른 값"}
 
     def narrative(self, reply: dict | None = None) -> er.ReportNarrative:
         doc = self.doc()
@@ -458,10 +465,14 @@ class ReportLayoutTests(_ReportCase):
         self.run_steps_one_to_four_then_stop()
         tables = [content for kind, content in er.report_blocks(self.narrative()) if kind == "table"]
         # Lane RP2, decision 2: materials and equipment are two tables of their own.
-        self.assertEqual(len(tables), 5)
+        # Lane RP2 (2026-10-19), decision 1: and four tables on the first pages
+        # (counts, steps, timers, deviations and anomalies).
+        self.assertEqual(len(tables), 9)
         for header, _rows, widths in tables:
             self.assertEqual(len(widths), len(header), header)
             self.assertAlmostEqual(sum(widths), 1.0, places=6)
+            if header == er.GLANCE_SUMMARY_HEADER:
+                continue  # the counts: six equal columns by design
             narrow = [share for name, share in zip(header, widths) if name in self.NARROW]
             wide = [share for name, share in zip(header, widths) if name in self.WIDE]
             self.assertEqual(len(narrow) + len(wide), len(header), header)
@@ -473,7 +484,8 @@ class ReportLayoutTests(_ReportCase):
 
         self.run_steps_one_to_four_then_stop()
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
-        self.assertEqual(len(document.tables), 5)
+        # Lane RP2, decision 1: the first pages add five (with the place to sign).
+        self.assertEqual(len(document.tables), 10)
         for table in document.tables:
             header = tuple(cell.text for cell in table.rows[0].cells)
             shares = er.TABLE_WIDTHS[header]
