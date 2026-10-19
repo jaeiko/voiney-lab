@@ -203,7 +203,8 @@ assert(wizard.open===false,"the sheet stayed open after the start");
 
     def test_the_start_button_is_named_for_what_it_does(self) -> None:
         html = (ROOT / "src" / "voiney_lab" / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>', html)
+        # Lane IA addendum (2026-10-19): the button opens the step-by-step sheet; plain words name what it starts.
+        self.assertIn('<button id="protocol-start" type="button" hidden>이 프로토콜로 실험 시작</button>', html)
 
     def test_no_start_button_while_the_analysis_has_not_passed(self) -> None:
         self.run_page(r"""

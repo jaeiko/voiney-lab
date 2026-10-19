@@ -797,6 +797,7 @@
     body[data-wizard="on"]:not([data-auth="required"]){overflow:hidden}
     .experiment-start{display:grid}
     body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
+    body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}
     @media (min-width:900px){
      .wizard-sheet{align-items:center;padding:var(--space-6)}
      .wizard-sheet-panel{width:min(560px,100%);max-height:calc(100dvh - 48px);border:2px solid var(--ink);border-radius:var(--radius-md)}
@@ -987,7 +988,7 @@
           <!-- Lane EV2 decision 3: the fixed repeat counts to check before the start. -->
           <div id="protocol-start-repeat-checks" class="protocol-execution-reasons start-check-lines" hidden></div>
           <div class="protocol-review-actions">
-            <button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>
+            <button id="protocol-start" type="button" hidden>이 프로토콜로 실험 시작</button>
           </div>
         </div>
       </section>
@@ -3616,7 +3617,8 @@ function renderStartSummary(review){
  if(notices.length)parts.push(`시작 전 알림 ${notices.length}건`);
  const pipeline=review.pipeline&&typeof review.pipeline==="object"?review.pipeline:null;
  if(pipeline?.translation&&typeof pipeline.translation.message==="string")parts.push(`번역 · ${pipeline.translation.message}`);
- if(review.available_for_execution===true)parts.push("분석 통과 · 아래 안전 주의를 읽고 '이 프로토콜로 시작'을 누르면 실험을 시작합니다. 이 한 번의 확인이 사람의 확인입니다.");
+ // Lane IA addendum (2026-10-19): the button opens the step-by-step sheet; its last press is the one human confirmation.
+ if(review.available_for_execution===true)parts.push("바로 쓸 수 있어요 · 아래 안전 주의를 읽고 '이 프로토콜로 실험 시작'을 누르면 핵심 값과 안전 주의를 확인한 뒤 시작합니다. 그 마지막 확인이 사람의 확인입니다.");
  else if(blockers.length)parts.push(`실행 불가 · ${pipeline?.action||"아래 사유를 확인하세요."}`);
  else if(pipeline?.message)parts.push(`${pipeline.blocked===true?"막힘":"진행"} · ${pipeline.message}${pipeline.action?` · 할 일 · ${pipeline.action}`:""}`);
  overview.textContent=parts.join(" · ");
@@ -3829,7 +3831,7 @@ function renderProtocolReview(review,options={}){
   `처리 단계 · ${serverCodeText("lifecycle_state",lifecycleCode)}`,
   `상태 · ${serverCodeText("readiness_status",readinessCode)}`,
   ...reasons.map(reason=>`${serverCodeText(["readiness_reason","analysis_status"],reason.code)} · ${reason.message_ko||reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
-  review?.available_for_execution===true?"실행 가능 · 실험자가 '이 프로토콜로 시작'을 누르면 시작":"분석 통과 전 실행 불가",
+  review?.available_for_execution===true?"실험 시작 가능 · '이 프로토콜로 실험 시작'을 누르면 확인 뒤 시작":"분석 통과 전 실행 불가",
  ],[["lifecycle_state",lifecycleCode],["readiness_status",readinessCode],["readiness_label",typeof readiness.label==="string"?readiness.label:null],...reasons.map(reason=>["reason",reason?.code]),...reasons.map(reason=>["reason_message",typeof reason?.message==="string"?reason.message:null])]);
  const ocr=review?.ocr||{},ocrPages=Array.isArray(ocr.pages)?ocr.pages:[];
  if(ocr.state&&ocr.state!=="not_required"){
@@ -4716,7 +4718,9 @@ $("protocol-analysis-retry")?.addEventListener("click",async()=>{const protocolI
 // Lane IA addendum: the protocol's start opens the step-by-step sheet with that protocol picked, from the two questions; the wizard's last press is the one human confirmation (startReviewedProtocol).
 $("protocol-start")?.addEventListener("click",()=>{openStartForProtocol(currentProtocolReviewId);});
 function openStartForProtocol(protocolId){
+ // Only the protocol whose result is on screen, and only when the server says it can run (as the direct start did).
  if(typeof protocolId!=="string"||!protocolId||!protocolCatalog.has(protocolId))return false;
+ if(lastProtocolReview?.protocol_id!==protocolId||lastProtocolReview?.available_for_execution!==true||protocolCatalog.get(protocolId)?.available_for_execution!==true){const button=$("protocol-start");if(button)button.hidden=true;return false;}
  const select=$("protocol-id");if(select&&select.value!==protocolId&&!select.disabled)select.value=protocolId;
  wizardRememberProtocol(protocolId);
  return openWizardSheet("check");
@@ -5232,7 +5236,7 @@ function renderHome(){
   host.appendChild(homeCard("new-experiment","새 실험 시작","마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요",null,()=>{openWizardSheet();}));
  }
  const pending=entries.filter(entry=>Number.isInteger(entry?.review_pending?.needs_review_count)).length;
- if(pending)host.appendChild(homeCard("review",`검토할 프로토콜 ${pending}개`,"분석이 사람의 확인을 기다려요","#/protocols"));
+ if(pending)host.appendChild(homeCard("review",`확인할 프로토콜 ${pending}개`,"분석이 읽은 값을 사람이 한 번 확인해야 해요","#/protocols"));
  host.appendChild(homeCard("upload","새 프로토콜 올리기","PDF · Word · 사진","#/upload"));
  if(catalogState==="failed")host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오지 못했어요 · 새로고침해 주세요"));
  return host.children.length;

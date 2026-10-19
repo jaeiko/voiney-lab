@@ -1,6 +1,6 @@
 """Lane IA, decision ② (2026-10-19): the home -- big cards from the server's lists.
 
-[이어서 하기 · the saved experiment] [새 실험 시작] [검토할 프로토콜 n개] [새 프로토콜
+[이어서 하기 · the saved experiment] [새 실험 시작] [확인할 프로토콜 n개] [새 프로토콜
 올리기]; a first user, with an empty catalog, sees "먼저 프로토콜을 올려 주세요".
 The counts are the server's alone (the catalog's review_pending, the
 workspace's experiments). Shares the fake page of tests/test_lane_ia_tabs.py.
@@ -44,11 +44,12 @@ assert(start.textContent.includes("새 실험 시작")&&cardHref(start)===undefi
 start.dispatch("click");
 assert(wizard.open===true&&wizard.step==="voice"&&tab()==="home","[새 실험 시작] did not open the sheet over the home");
 closeWizardSheet();
-assert(review.textContent.includes("검토할 프로토콜 1개")&&cardHref(review)==="#/protocols",review.textContent);
+assert(review.textContent.includes("확인할 프로토콜 1개")&&cardHref(review)==="#/protocols",review.textContent);
+assert(!review.textContent.includes("검토"),`plain words (human finding 10/19): ${review.textContent}`);
 assert(upload.textContent.includes("새 프로토콜 올리기")&&cardHref(upload)==="#/upload",upload.textContent);
 // The count is the catalog's review_pending alone; a second pending protocol makes two.
 protocolCatalog.set("p-3",ENTRY("p-3","Epsilon",false,{review_pending:{needs_review_count:5}}));renderHome();
-assert(cards()[1].textContent.includes("검토할 프로토콜 2개"),cards()[1].textContent);
+assert(cards()[1].textContent.includes("확인할 프로토콜 2개"),cards()[1].textContent);
 protocolCatalog.delete("p-2");protocolCatalog.delete("p-3");renderHome();
 assert(cards().map(card=>card.dataset.card).join()==="new-experiment,upload","a review card without pending protocols");
 """)

@@ -134,6 +134,7 @@ class TabMarkupTests(unittest.TestCase):
         wide = self.style[self.style.index("@media (min-width:900px){\n     .wizard-sheet{"):]
         self.assertIn(".wizard-sheet-panel{width:min(560px,100%);", wide[:wide.index("\n    }\n")])
         self.assertIn('body[data-view="before"] #tab-experiment .voice-console .controls{display:none}', self.style)
+        self.assertIn('body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}', self.style)
 
     def test_the_bar_is_fixed_below_on_a_phone_and_a_menu_on_the_left_of_a_wide_screen(self) -> None:
         self.assertIn(".tab-bar{position:fixed;left:0;right:0;bottom:0;", self.style)
