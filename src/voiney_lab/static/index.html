@@ -392,13 +392,13 @@
     .ui-badge[data-kind="warning"]{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
     .ui-badge[data-kind="quiet"]{border-color:var(--line);color:var(--ink-muted)}
     .ui-badge[data-kind="missing"]{border-style:dashed;color:var(--ink-muted)}
-    .library-side .protocol-register{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-6) var(--space-4);border:var(--stroke-state) dashed var(--line-strong);background:var(--paper);text-align:center}
-    .library-side .protocol-register .control-label{color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:600;letter-spacing:0}
-    .library-side .custom-file-wrapper{flex-direction:column;gap:var(--space-2);max-width:100%}
-    .library-side .btn-file-select{height:auto;min-height:var(--target-run);padding:0 var(--space-6);border:1px solid var(--ink);background:var(--ink);color:var(--on-ink);font-size:1rem;font-weight:600}
-    .library-side .btn-file-select:hover{background:var(--blurple-hover);color:var(--on-ink)}
-    .library-side .selected-file-name{max-width:100%;color:var(--ink-muted);text-align:center}
-    .library-side .protocol-register small{max-width:100%;color:var(--ink);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
+    .upload-step .protocol-register,.library-side .protocol-register{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-6) var(--space-4);border:var(--stroke-state) dashed var(--line-strong);background:var(--paper);text-align:center}
+    .upload-step .protocol-register .control-label,.library-side .protocol-register .control-label{color:var(--ink);font-size:1.125rem;line-height:1.625rem;font-weight:600;letter-spacing:0}
+    .upload-step .custom-file-wrapper,.library-side .custom-file-wrapper{flex-direction:column;gap:var(--space-2);max-width:100%}
+    .upload-step .btn-file-select,.library-side .btn-file-select{height:auto;min-height:var(--target-run);padding:0 var(--space-6);border:1px solid var(--ink);background:var(--ink);color:var(--on-ink);font-size:1rem;font-weight:600}
+    .upload-step .btn-file-select:hover,.library-side .btn-file-select:hover{background:var(--blurple-hover);color:var(--on-ink)}
+    .upload-step .selected-file-name,.library-side .selected-file-name{max-width:100%;color:var(--ink-muted);text-align:center}
+    .upload-step .protocol-register small,.library-side .protocol-register small{max-width:100%;color:var(--ink);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
     .protocol-queue{border:1px solid var(--line);background:var(--paper)}
     .protocol-queue[hidden]{display:none}
     .protocol-queue h3{margin:0;padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
@@ -773,6 +773,17 @@
     .protocol-detail-group>:not(summary){margin:0 var(--space-4) var(--space-4)}
     .protocol-detail-group .protocol-start-summary{padding:0;border:0}
     .protocol-detail-group .protocol-review{margin:0 var(--space-4) var(--space-4);border:0}
+    /* Lane IA decision ③: the upload, one screen at a time. */
+    .upload-flow{display:flex;flex-direction:column;gap:var(--space-4);max-width:560px}
+    .upload-step{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6) var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .upload-step[hidden]{display:none}
+    .upload-title{margin:0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:800;word-break:keep-all}
+    .upload-big{margin:0;color:var(--ink);font-size:2rem;line-height:2.5rem;font-weight:800;font-variant-numeric:tabular-nums}
+    .upload-big:empty{display:none}
+    .upload-actions{display:flex;flex-direction:column;gap:var(--space-2)}
+    .upload-actions button,.upload-actions a{display:flex;align-items:center;justify-content:center;min-height:var(--target-run);padding:0 var(--space-4);border:2px solid var(--ink);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-size:1.0625rem;font-weight:800;text-decoration:none;cursor:pointer}
+    .upload-actions [data-primary="true"]{background:var(--ink);color:var(--on-ink)}
+    .upload-step .protocol-register{align-self:stretch}
     /* Lane IA decision ②: the home's cards. */
     #tab-home .voice-copy h1{max-width:none}
     .home-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-3)}
@@ -942,21 +953,8 @@
             <ul id="protocol-list" class="protocol-list" aria-label="프로토콜 목록"><li class="protocol-list-empty">카탈로그를 불러오는 중…</li></ul>
           </div>
           <div class="library-side">
-            <div class="setup-col-left">
-              <!-- Lane UI3 decision 3 (2026-10-14): the server turns a Word document or a photo into the PDF it analyses (lane AN), so the input offers them and each file goes with its own type. -->
-              <div class="protocol-register">
-                <span class="control-label">새 프로토콜 원문 등록</span>
-                <small id="protocol-source-formats" class="protocol-source-formats">PDF · Word(.docx) · 사진(JPG·PNG·HEIC)</small>
-                <div class="custom-file-wrapper">
-                  <input id="protocol-pdf" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,image/jpeg,.jpg,.jpeg,image/png,.png,image/heic,.heic" class="visually-hidden-file-input" aria-label="프로토콜 원문 등록 (PDF, Word, 사진)" aria-describedby="protocol-upload-status">
-                  <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
-                  <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
-                </div>
-                <small id="protocol-upload-status" role="status"></small>
-                <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
-                <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
-              </div>
-            </div>
+            <!-- Lane IA decision ③: the upload is a flow of its own (#/upload); the list offers it. -->
+            <a id="protocol-upload-link" class="home-card" data-card="upload" href="#/upload"><b class="home-card-title">새 프로토콜 올리기</b><span class="home-card-sub">PDF · Word · 사진</span></a>
             <section id="protocol-queue" class="protocol-queue" aria-labelledby="protocol-queue-title" hidden>
               <h3 id="protocol-queue-title">처리 중</h3>
               <ul id="protocol-queue-list" class="protocol-queue-list"></ul>
@@ -1088,6 +1086,41 @@
           </section>
 
         </details>
+      </div>
+    </section>
+    <!-- Lane IA decision ③ (2026-10-19): the upload, one screen at a time -- the file, the analysis as it runs (the time taken, what is being done), the result (바로 쓸 수 있어요 / 확인할 것 n개 / the failure and its reason) -- drawn from the catalog's entry and the page's own upload path, analysis call, polling and notices (lanes UI3·PA·RN), which are kept as they were. -->
+    <section id="tab-upload" class="tab-panel" data-tab="upload" aria-labelledby="upload-title" tabindex="-1" hidden>
+      <div id="upload-flow" class="upload-flow" data-step="pick">
+        <a id="upload-back" class="protocol-detail-back" href="#/protocols">← 프로토콜 목록</a>
+        <ol id="upload-dots" class="wizard-dots" aria-label="진행"></ol>
+        <section id="upload-step-pick" class="upload-step" aria-labelledby="upload-title">
+          <h2 id="upload-title" class="upload-title">새 프로토콜 올리기</h2>
+          <p class="wizard-lead">PDF · Word · 사진을 올리면 분석이 바로 시작돼요. 끝나면 결과를 여기에 알려 드려요.</p>
+          <!-- Lane UI3 decision 3 (2026-10-14): the server turns a Word document or a photo into the PDF it analyses (lane AN), so the input offers them and each file goes with its own type. -->
+          <div class="protocol-register">
+            <span class="control-label">새 프로토콜 원문 등록</span>
+            <small id="protocol-source-formats" class="protocol-source-formats">PDF · Word(.docx) · 사진(JPG·PNG·HEIC)</small>
+            <div class="custom-file-wrapper">
+              <input id="protocol-pdf" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,image/jpeg,.jpg,.jpeg,image/png,.png,image/heic,.heic" class="visually-hidden-file-input" aria-label="프로토콜 원문 등록 (PDF, Word, 사진)" aria-describedby="protocol-upload-status">
+              <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
+              <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
+            </div>
+            <small id="protocol-upload-status" role="status"></small>
+            <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
+            <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
+          </div>
+        </section>
+        <section id="upload-step-progress" class="upload-step" aria-labelledby="upload-progress-title" hidden>
+          <h2 id="upload-progress-title" class="upload-title">분석하고 있어요</h2>
+          <p id="upload-progress-elapsed" class="upload-big"></p>
+          <p id="upload-progress-text" class="wizard-lead" role="status" aria-live="polite"></p>
+          <p class="wizard-done">기다리는 동안 다른 탭을 봐도 돼요. 끝나면 프로토콜 목록에도 나와요.</p>
+        </section>
+        <section id="upload-step-result" class="upload-step" aria-labelledby="upload-result-title" hidden>
+          <h2 id="upload-result-title" class="upload-title"></h2>
+          <p id="upload-result-text" class="wizard-lead"></p>
+          <div id="upload-result-actions" class="upload-actions"></div>
+        </section>
       </div>
     </section>
     <!-- Lane IA decision ①: the experiment -- lane ON's wizard before the run, lane UI0's run view during it (the voice console, the step card, the timer, the pictures, the conversation sheet), lane UI2's record review after it. -->
@@ -2313,7 +2346,7 @@ function renderProtocolList(){
  }
  const runnable=entries.filter(entry=>entry.available_for_execution===true).length;
  setText("protocol-library-count",entries.length?`프로토콜 ${entries.length}개 · 바로 쓸 수 있는 것 ${runnable}개`:"");
- renderProtocolQueue();syncProtocolList();renderWizard();renderHome();renderProtocolDetailHead();
+ renderProtocolQueue();syncProtocolList();renderWizard();renderHome();renderProtocolDetailHead();renderUploadFlow();
  if(focused)for(const host of [list,$("protocol-queue-list")])for(const item of host?.children||[])if(item.firstChild?.dataset?.protocolId===focused.id&&item.firstChild.className===focused.className){item.firstChild.focus?.();return entries.length;}
  return entries.length;
 }
@@ -3465,7 +3498,7 @@ function confirmProtocolReanalysis(){const ask=globalThis.confirm;return typeof 
 function setProtocolAnalysisBusy(protocolId,busy){protocolAnalysisBusyFor=busy?protocolId:null;const retry=$("protocol-analysis-retry");if(retry&&(busy||currentProtocolReviewId===protocolId))retry.disabled=busy||isRegisteringProtocol;}
 function protocolAnalysisRunning(review){const running=["analysis_pending","analyzing"];return running.includes(review?.lifecycle_state)||running.includes(review?.reanalysis?.state)||["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(review?.analysis_status);}
 function automaticRetryCount(run,state){const retry=run?.automatic_retry;return retry&&typeof retry==="object"&&retry.state===state?`${Number.isInteger(retry.attempt)?retry.attempt:1}/${Number.isInteger(retry.limit)?retry.limit:1}`:"";}
-function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);updateProtocolRowLines(protocolId);}
+function showProtocolAnalysisNotice(protocolId,text,progress=null){protocolAnalysisNotice={protocolId,text};if(progress!==null)protocolAnalysisProgressLine={protocolId,text:progress};const status=$("protocol-upload-status");if(status)status.textContent=text;const output=$("protocol-analysis-progress");if(output&&progress!==null)output.textContent=progress;if(currentProtocolReviewId===protocolId)showProtocolAnalysisBoxLine(protocolId);updateProtocolRowLines(protocolId);renderUploadFlow();}
 function restoreProtocolAnalysisNotice(){if(!currentProtocolReviewId)return;const status=$("protocol-upload-status"),output=$("protocol-analysis-progress");if(status&&protocolAnalysisNotice?.protocolId===currentProtocolReviewId)status.textContent=protocolAnalysisNotice.text;if(output&&protocolAnalysisProgressLine?.protocolId===currentProtocolReviewId)output.textContent=protocolAnalysisProgressLine.text;showProtocolAnalysisBoxLine(currentProtocolReviewId);}
 // Lane RN decision 4 (2026-10-11): the same notice stands in the box that
 // holds the button ("올린 PDF 분석 결과"), with the time taken from the progress
@@ -4554,7 +4587,7 @@ async function registerSelectedProtocol(){
  if(!PROTOCOL_SOURCE_MEDIA_TYPES.has(mediaType)){if(status)status.textContent=protocolUploadErrorMessage("unsupported_pdf_media_type");if(input)input.value="";return;}
  if(isRegisteringProtocol)return;
  const duplicate=$("protocol-duplicate-notice");if(duplicate){duplicate.hidden=true;duplicate.textContent="";}
- isRegisteringProtocol=true;
+ isRegisteringProtocol=true;renderUploadFlow();
  if(input)input.setAttribute?.("aria-busy","true");
  if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
  try{
@@ -4566,7 +4599,7 @@ async function registerSelectedProtocol(){
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
   const registered=payload.protocol&&typeof payload.protocol==="object"?payload.protocol:null,protocolId=typeof registered?.protocol_id==="string"?registered.protocol_id:null;
   if(!protocolId){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}
-  currentProtocolReviewId=protocolId;
+  currentProtocolReviewId=protocolId;uploadFlowFollow(protocolId);
   // The catalog stores a PDF once by its bytes, so a second upload of the
   // same file under another name returns the existing entry. The status
   // line below is rewritten by the analysis and catalog refresh, so the
@@ -4589,7 +4622,7 @@ async function registerSelectedProtocol(){
   else if(failed){const review=await loadProtocolReview(protocolId);showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(review?.analysis_failure?.code||registered.analysis_status),"");}
   else{const text=registered.analysis_status==="ocr_required"?protocolUploadErrorMessage("ocr_required"):"등록 완료 · 분석은 이미 끝났습니다. 아래 검토 결과를 확인해 주세요.";showProtocolAnalysisNotice(protocolId,text,"");await loadProtocolReview(protocolId);}
   await loadProtocolCatalog(protocolId);restoreProtocolAnalysisNotice();
- }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;}
+ }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;renderUploadFlow();}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode=mode;acknowledgedLanguage=language;const names={auto:"자동 감지",ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","입력 · "+(names[language]||"한국어"));}
 // Lane FX3 decision 3: the web search's entry is gone from the server; the
@@ -5218,11 +5251,12 @@ $("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
 // login only the login shows, whatever the hash. Nothing here decides a
 // state: the view is the server's (screenView), the tab is where it is drawn.
 const TAB_ROUTE_PATTERN=/^#\/(home|protocols|upload|experiment|records|settings)(?:\/([^/?#]+))?\/?(?:\?[^#]*)?$/;
-const TAB_PANELS=Object.freeze(["home","protocols","experiment","records","settings"]);
+const TAB_PANELS=Object.freeze(["home","protocols","upload","experiment","records","settings"]);
 var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading",accountPasswordOpen=false;
 function parseRoute(hash){const match=TAB_ROUTE_PATTERN.exec(String(hash||""));if(!match)return{tab:"home",id:null,path:"#/home"};let id=null;if(match[2]){try{id=decodeURIComponent(match[2]);}catch(_){id=match[2];}}return{tab:match[1],id,path:match[0]};}
 function routePath(tab,id=null){return `#/${tab}${nonemptyText(id)?`/${encodeURIComponent(id)}`:""}`;}
-function currentTab(){return screenRoute.tab==="upload"?"protocols":screenRoute.tab;}
+function currentTab(){return screenRoute.tab;}
+function tabLinkFor(tab){return tab==="upload"?"protocols":tab;}
 function authRequired(){return wizard?.auth?.mode==="accounts"&&wizard.auth.signed_in!==true;}
 function shownTab(){return currentTab();}
 function readRoute(){const loc=globalThis.location;if(loc&&typeof loc.hash==="string")screenRoute=parseRoute(loc.hash);return screenRoute;}
@@ -5242,20 +5276,22 @@ function renderRoute(){
  if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(page?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
  // Before a login no panel shows: the login is a page of its own (the sheet in page mode).
  for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during));}
- for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tab?"page":"false");
+ for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tabLinkFor(tab)?"page":"false");
  renderRunReturnBand();
  if(tab==="protocols")renderProtocolViews();
+ if(tab==="upload")renderUploadFlow();
  if(tab==="home")renderHome();
  if(tab==="settings")renderSettingsExtras();
  renderWizard();
- if(key!==lastRouteKey){lastRouteKey=key;applyRouteSelections();if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
+ if(key!==lastRouteKey){lastRouteKey=key;applyRouteSelections({entered:true});if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
  return tab;
 }
 // The hash's own id: the protocol or the session it names, once the list that holds it is here.
-function applyRouteSelections(){
+// Lane IA decision ③: the upload flow is entered on a route change only; a list that comes later (the catalog, the experiments) never resets it.
+function applyRouteSelections({entered=false}={}){
  if(screenRoute.tab==="protocols"&&screenRoute.id)return applyProtocolRoute(screenRoute.id);
  if(screenRoute.tab==="records"&&screenRoute.id)return chooseExperimentSession(screenRoute.id);
- if(screenRoute.tab==="upload"){const pick=$("protocol-pdf-pick");pick?.scrollIntoView?.({block:"center"});pick?.focus?.();return Boolean(pick);}
+ if(screenRoute.tab==="upload")return entered?uploadFlowEnter():false;
  return false;
 }
 function applyProtocolRoute(protocolId){if(!protocolCatalog.has(protocolId))return false;if($("protocol-id")?.value===protocolId&&currentProtocolReviewId===protocolId)return true;return pickProtocolFromList(protocolId);}
@@ -5281,6 +5317,68 @@ function chooseExperimentSession(sessionId,{force=false}={}){
  if(!force&&currentExperimentSessionId===(id||null))return false;
  if(select)select.value=id;
  currentExperimentSessionId=id||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);return true;
+}
+// Lane IA decision ③ (2026-10-19): the upload as one screen at a time. The
+// flow follows the protocol the upload registered (uploadFlow.protocolId) and
+// is drawn from what the page already keeps: the upload in flight
+// (isRegisteringProtocol), the analysis and OCR polls and their notices
+// (lanes PA·RN), and the catalog's entry once the server has it. Nothing
+// here decides a state.
+var uploadFlow={protocolId:null};
+function uploadFlowFollow(protocolId){uploadFlow.protocolId=typeof protocolId==="string"&&protocolId?protocolId:null;renderUploadFlow();return uploadFlow.protocolId;}
+function uploadFlowReset(){uploadFlow.protocolId=null;const input=$("protocol-pdf");if(input)input.value="";setText("selected-file-name","선택된 파일 없음");renderUploadFlow();return "pick";}
+function uploadFlowEnter(){if(uploadFlowStep()==="result")uploadFlowReset();else renderUploadFlow();const pick=$("protocol-pdf-pick");pick?.focus?.();return Boolean(pick);}
+function uploadFlowStep(){
+ const id=uploadFlow.protocolId;
+ if(isRegisteringProtocol)return "uploading";
+ if(!id)return "pick";
+ const entry=protocolCatalog.get(id),run=protocolAnalysisRun(entry);
+ const polling=(protocolAnalysisPollHandle!==null||protocolOcrPollHandle!==null)&&currentProtocolReviewId===id;
+ const running=polling||PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||PROTOCOL_RUNNING_STATES.has(run?.state);
+ if(running||!entry)return "progress";
+ return "result";
+}
+function uploadResultKind(entry){
+ if(entry?.available_for_execution===true)return "ready";
+ if(Number.isInteger(entry?.review_pending?.needs_review_count))return "review";
+ if(PROTOCOL_FAILED_ANALYSIS.has(entry?.analysis_status)||nonemptyText(protocolAnalysisRun(entry)?.failure_code))return "failed";
+ return "other";
+}
+function uploadAction(label,{href=null,primary=false,onPick=null}={}){
+ const item=document.createElement(href?"a":"button");item.className="upload-action";if(item.dataset)item.dataset.primary=String(primary);
+ if(href)item.setAttribute?.("href",href);else item.type="button";
+ item.textContent=label;
+ if(typeof onPick==="function")item.addEventListener("click",event=>{event?.preventDefault?.();onPick();});
+ return item;
+}
+function renderUploadFlow(){
+ const host=$("upload-flow");if(!host)return null;
+ const step=uploadFlowStep(),id=uploadFlow.protocolId,entry=id?protocolCatalog.get(id):null,shown={pick:"pick",uploading:"progress",progress:"progress",result:"result"}[step];
+ if(host.dataset)host.dataset.step=step;
+ for(const name of ["pick","progress","result"]){const section=$(`upload-step-${name}`);if(section)section.hidden=name!==shown;}
+ const dots=$("upload-dots");
+ if(dots){dots.replaceChildren();const at={pick:0,progress:1,result:2}[shown];["파일 고르기","분석 중","결과"].forEach((name,index)=>{const dot=document.createElement("li");if(dot.dataset)dot.dataset.state=index<at?"done":index===at?"current":"todo";dot.setAttribute?.("aria-label",name);dots.appendChild(dot);});}
+ if(shown==="progress"){
+  const line=protocolAnalysisProgressLine?.protocolId===id?protocolAnalysisProgressLine.text:"",elapsed=(String(line||"").match(/걸린 시간 \d+분 \d\d초/)||[""])[0]||protocolAnalysisElapsedText(protocolAnalysisRun(entry)?.requested_at);
+  setText("upload-progress-elapsed",step==="uploading"?"":elapsed);
+  setText("upload-progress-text",step==="uploading"?($("protocol-upload-status")?.textContent||"파일을 올리고 있어요…"):(protocolAnalysisNotice?.protocolId===id&&nonemptyText(protocolAnalysisNotice.text)?protocolAnalysisNotice.text:"분석 중 · 원문을 읽고 있어요."));
+ }
+ const actions=$("upload-result-actions");
+ if(shown==="result"&&entry&&actions){
+  const name=entry.title||entry.source_filename||"프로토콜",kind=uploadResultKind(entry),detail=routePath("protocols",id);
+  actions.replaceChildren();
+  if(kind==="ready"){setText("upload-result-title","바로 쓸 수 있어요");setText("upload-result-text",`${name} · 분석이 원문 근거를 확인했어요. 안전 주의를 읽고 바로 시작할 수 있어요.`);
+   actions.appendChild(uploadAction("이 프로토콜로 실험 시작",{primary:true,onPick:()=>{if(!openStartForProtocol(id))navigateTab("protocols",id);}}));
+   actions.appendChild(uploadAction("프로토콜 화면 보기",{href:detail}));}
+  else if(kind==="review"){setText("upload-result-title",`확인할 것 ${entry.review_pending.needs_review_count}개가 있어요`);setText("upload-result-text",`${name} · 분석이 읽은 값을 사람이 한 번 확인해야 해요. 카드로 하나씩 보여 드려요.`);
+   actions.appendChild(uploadAction("확인 시작",{href:detail,primary:true}));}
+  else if(kind==="failed"){setText("upload-result-title","분석하지 못했어요");setText("upload-result-text",`${name} · ${protocolRowLine(entry)||catalogStatus(entry).label}`);
+   actions.appendChild(uploadAction("분석 다시 시도",{primary:true,onPick:()=>{void analyzeRegisteredProtocol(id).then(()=>loadProtocolCatalog(id));}}));}
+  else{setText("upload-result-title","아직 쓸 수 없어요");setText("upload-result-text",`${name} · ${catalogStatus(entry).label}`);
+   actions.appendChild(uploadAction("프로토콜 화면 보기",{href:detail,primary:true}));}
+  actions.appendChild(uploadAction("다른 파일 올리기",{onPick:()=>{uploadFlowReset();}}));
+ }
+ return step;
 }
 function renderRunReturnBand(){
  const band=$("run-return-band");if(!band)return false;

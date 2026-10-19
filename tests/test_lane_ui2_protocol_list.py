@@ -171,8 +171,12 @@ class MarkupTests(unittest.TestCase):
         main = library[library.index('class="library-main"'):library.index('class="library-side"')]
         side = library[library.index('class="library-side"'):]
         self.assertIn('id="protocol-list"', main)
-        for ident in ("protocol-pdf", "protocol-upload-status", "protocol-duplicate-notice", "protocol-queue"):
+        # Decision ③: the upload box is the upload panel's; the side offers it and keeps what is still processed.
+        for ident in ("protocol-upload-link", "protocol-queue"):
             self.assertIn(f'id="{ident}"', side, ident)
+        upload = self.block('<section id="tab-upload"', '<section id="tab-experiment"')
+        for ident in ("protocol-pdf", "protocol-upload-status", "protocol-duplicate-notice"):
+            self.assertIn(f'id="{ident}"', upload, ident)
         detail = self.block('<div id="protocol-detail-view"', '<section id="tab-experiment"')
         for ident in ("protocol-review-panel", "protocol-review-analysis-notice", "protocol-analysis-retry", "protocol-start-summary"):
             self.assertIn(f'id="{ident}"', detail, ident)
