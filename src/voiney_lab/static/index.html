@@ -1403,7 +1403,7 @@ const SERVER_CODE_LABELS=Object.freeze({
  pipeline_stage:Object.freeze({extraction:"원문 읽기",ocr:"OCR",analysis:"분석",evidence:"근거 대조",readiness:"실행 준비",translation:"번역",ready:"실행 가능"}),
  block_reason:Object.freeze({unsupported_repeat_until:"반복 종료 조건 미지원",unresolved_ambiguity:"실행 제어 미해결",final_step_boundary:"마지막 단계 경계",endpoint_observation_not_reported:"관찰 결과 보고 필요",repeat_interval_open:"반복 구간 진행 중",next_step_not_startable:"다음 단계 시작 불가 · 사람 확인 필요",already_at_final_step:"이미 마지막 단계",run_not_active:"실행 중이 아님"}),
  experiment_report_status:Object.freeze({in_progress:"진행 중",completed:"완료",blocked:"진행 차단",stopped:"종료됨",incomplete:"미완료"}),
- experiment_report_event:Object.freeze({session_started:"세션 시작",step_completed:"단계 완료",step_advanced:"단계 이동",observation:"관찰 기록",blocked:"진행 차단",anomaly:"이상 사항",session_stopped:"세션 종료",timer_started:"타이머 시작",workflow_paused:"일시정지",workflow_resumed:"재개",step_presented:"단계 안내",source_consulted:"참고 자료 확인",system_anomaly:"시스템 이상",safety_notices_acknowledged:"안전 주의 확인",workflow_completed:"실험 완료",report_finalized:"기록 마감",record_corrected:"기록 정정",record_retracted:"기록 취소",report_value_confirmed:"값 확인",report_review_deferred:"값 확인 화면으로",timer_end_notice:"타이머 끝 알림",timer_last_minute_notice:"타이머 1분 전 알림"}),
+ experiment_report_event:Object.freeze({connection_restored:"연결 끊김 뒤 다시 연결",session_started:"세션 시작",step_completed:"단계 완료",step_advanced:"단계 이동",observation:"관찰 기록",blocked:"진행 차단",anomaly:"이상 사항",session_stopped:"세션 종료",timer_started:"타이머 시작",workflow_paused:"일시정지",workflow_resumed:"재개",step_presented:"단계 안내",source_consulted:"참고 자료 확인",system_anomaly:"시스템 이상",safety_notices_acknowledged:"안전 주의 확인",workflow_completed:"실험 완료",report_finalized:"기록 마감",record_corrected:"기록 정정",record_retracted:"기록 취소",report_value_confirmed:"값 확인",report_review_deferred:"값 확인 화면으로",timer_end_notice:"타이머 끝 알림",timer_last_minute_notice:"타이머 1분 전 알림"}),
  timer_completion_state:Object.freeze({completed:"완료",in_progress:"진행 중",not_started:"시작 전"}),
  report_status:REPORT_LABELS,
  safety_report_urgency:Object.freeze({emergency:"응급",urgent:"긴급",routine:"일반"}),
@@ -1591,7 +1591,7 @@ function renderRunStatus(){
  if(analysis){const text=attached?(state.development_only?"개발용 큐레이션 분석":"분석 통과"):"";analysis.textContent=text;analysis.hidden=!text;}
  const open=sessionActive&&socket?.readyState===WebSocket.OPEN;
  setText("run-connection",open?"연결됨":["CONNECTING","RECONNECTING"].includes(visibleState)?"연결 중":"연결 안 됨");
- setText("run-mic",$("mic-recovery")?.hidden===false?"마이크 끊김":micWorkletNode?"마이크 켜짐":"마이크 꺼짐");
+ setText("run-mic",globalThis.voineyConnection?.micText?.()||($("mic-recovery")?.hidden===false?"마이크 끊김":micWorkletNode?"마이크 켜짐":"마이크 꺼짐"));
  // The step's words fill the left; a long step is set a size smaller so it stays on the screen.
  const primary=$("procedure-primary"),length=String(primary?.textContent||"").length;
  if(primary?.dataset)primary.dataset.length=length>120?"long":length>60?"medium":"short";
@@ -1601,7 +1601,7 @@ function renderRunStatus(){
 // The server's step timer, read as the rail and the timer row read it:
 // 도는 중, 1분 남음 (the server's deadline a minute or less away), 끝남 · 지남,
 // or 없음. The server's notice line stays with the step it spoke of.
-function stepTimerRemainingSeconds(step){const deadline=Date.parse(step.deadline_at);return Number.isFinite(deadline)?Math.ceil((deadline-Date.now())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);}
+function stepTimerRemainingSeconds(step){const deadline=Date.parse(step.deadline_at);return Number.isFinite(deadline)?Math.ceil((deadline-serverNowMs())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);}
 function renderRunTimer(){
  const panel=$("run-timer");if(!panel)return null;
  const state=curatedProtocolState,step=state?.attached===true?state.timers?.step||null:null,duration=Math.max(0,Number(step?.duration_seconds)||0);
@@ -1795,6 +1795,8 @@ function renderState(state,detail=""){
 }
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
 function stopWorkflowTimer(){if(workflowTimerHandle!==null){clearInterval(workflowTimerHandle);workflowTimerHandle=null;}}
+// Lane NET decision 3: the timers are read on the server's clock, this page's clock corrected by the difference measured on the connection (connection.js).
+function serverNowMs(){return globalThis.voineyConnection?.serverNow?.()??Date.now();}
 function formatElapsedClock(seconds){
  const total=Math.max(0,Math.floor(Number(seconds)||0));
  const hours=Math.floor(total/3600),minutes=Math.floor((total%3600)/60),secs=total%60;
@@ -1809,7 +1811,7 @@ function updateWorkflowTimer(){
  const parts=[];
  if(experiment){
   const started=experiment.started_at?Date.parse(experiment.started_at):NaN;
-  const elapsed=experiment.state==="running"&&Number.isFinite(started)?Math.max(0,Math.floor((Date.now()-started)/1000)):Math.max(0,Number(experiment.elapsed_seconds)||0);
+  const elapsed=experiment.state==="running"&&Number.isFinite(started)?Math.max(0,Math.floor((serverNowMs()-started)/1000)):Math.max(0,Number(experiment.elapsed_seconds)||0);
   if(experiment.state==="running")parts.push(`실험 진행 경과 시간 ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="stopped")parts.push(`전체 종료 · ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="not_started")parts.push("전체 대기");
@@ -1817,14 +1819,14 @@ function updateWorkflowTimer(){
  }
  if(pause&&pause.state==="paused"){
   const pausedAt=pause.paused_at?Date.parse(pause.paused_at):NaN;
-  const curPause=Number.isFinite(pausedAt)?Math.max(0,Math.floor((Date.now()-pausedAt)/1000)):Number(pause.current_pause_seconds)||0;
+  const curPause=Number.isFinite(pausedAt)?Math.max(0,Math.floor((serverNowMs()-pausedAt)/1000)):Number(pause.current_pause_seconds)||0;
   parts.push(`일시정지 중 (${formatElapsedClock(curPause)})`);
  }
  if(step){
   if(step.state==="running"||step.state==="expired"){
    const deadline=Date.parse(step.deadline_at);
    // Seconds left (positive) or gone past the end (negative), from the server's deadline.
-   const remaining=Number.isFinite(deadline)?Math.ceil((deadline-Date.now())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);
+   const remaining=Number.isFinite(deadline)?Math.ceil((deadline-serverNowMs())/1000):step.state==="expired"?-Math.max(0,(Number(step.elapsed_seconds)||0)-(Number(step.duration_seconds)||0)):Math.max(0,Number(step.remaining_seconds)||0);
    if(remaining>0){
     // Lane U2 decision 5: minutes and seconds left, "14:55 남음".
     parts.push(`단계 ${formatElapsedClock(remaining)} 남음`);
@@ -2954,7 +2956,7 @@ function cascadeTurnInterrupted(message){return Number.isInteger(message?.turn_i
 function currentCascadeMessage(message){return message.turn_id===activeTurn&&(!Number.isInteger(message.generation)||activeCascadeGeneration===null||message.generation===activeCascadeGeneration);}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
 
-async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",current=new WebSocket(scheme+"://"+location.host+"/ws");socket=current;current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
+async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",current=new WebSocket(scheme+"://"+location.host+"/ws");socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
 function resamplePcm16(input,sourceRate,targetRate){
  const length=Math.max(1,Math.round(input.length*targetRate/sourceRate)),output=new Int16Array(length);
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
@@ -3132,7 +3134,7 @@ async function ensureAudio(generation){
  if(playContext.state==="running"&&acceptedSessionConfiguration){
   sendControl("client.audio_ready",{configuration_id:acceptedSessionConfiguration.configuration_id,generation:acceptedSessionConfiguration.server_generation,audio_context_state:"running",sample_rate:playContext.sampleRate});
   // Lane SP1 decision 1: the wearer's voice is measured once at the start, after the greeting, unless turned off here (it can be skipped by voice or button).
-  if(voiceCalibrationAtStart())requestVoiceCalibration("start");
+  if(voiceCalibrationAtStart()&&!globalThis.voineyConnection?.reconnecting?.())requestVoiceCalibration("start");
  }
 }
 async function closeAudio(){
@@ -4469,6 +4471,7 @@ async function onMessage(e,generation,current){
   return;
  }
  const m=JSON.parse(e.data);
+ if(globalThis.voineyConnection?.consume?.(m,current))return;
  if(m.type==="ready"){renderResearchCapabilities(m.research_capabilities);if(m.voice_profile&&typeof m.voice_profile==="object")$("voice-profile").textContent=`${m.voice_profile.persona||"assistant"} · ${m.voice_profile.voice_id||"unknown"} · ${m.voice_profile.pipeline||"cascade"}`;if(visibleState==="IDLE")renderState("IDLE");}
  if(m.type==="session.ready"){
   const pending=pendingSessionConfiguration,serverInputLanguage=m.input_language??m.language,pendingInputLanguage=pending?.input_language??pending?.language,revisionValid=pending?.protocol_id===null?(m.revision_id===null||m.revision_id===undefined):(typeof m.revision_id==="string"&&m.revision_id.length>0),valid=pending&&Number.isInteger(m.configuration_id)&&m.configuration_id===pending.configuration_id&&m.mode===pending.mode&&m.language===pending.language&&serverInputLanguage===pendingInputLanguage&&m.protocol_id===pending.protocol_id&&revisionValid;
@@ -4479,7 +4482,7 @@ async function onMessage(e,generation,current){
   if(acceptedSessionConfiguration.experiment_session_id&&acceptedSessionConfiguration.experiment_session_version!==null){currentExperimentSessionId=acceptedSessionConfiguration.experiment_session_id;currentExperimentSessionVersion=acceptedSessionConfiguration.experiment_session_version;void loadExperimentSessions(currentExperimentSessionId);}
   renderResearchCapabilities(m.research_capabilities);renderLanguageState(serverInputLanguage==="auto"?"auto":"manual",serverInputLanguage);$("protocol-id").value=m.protocol_id||"";renderSelectedProtocolContext();$("protocol-revision").textContent=m.revision_id||"—";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id} · ${m.revision_id}`:"서버 확인 완료 · 프로토콜 미선택";
   try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
-  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=false;resetIgnoredSpeech();renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
+  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=curatedProtocolState?.attached===true&&curatedProtocolState.workflow_status==="paused";resetIgnoredSpeech();renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
  }
  if(m.type==="session.greeting"){
   const accepted=acceptedSessionConfiguration,key=m.greeting_id;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof key!=="string"||greetingEvents.has(key))return;greetingEvents.add(key);activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=key;if(node.children?.[0])node.children[0].textContent="Session greeting";node.querySelector(".transcript").textContent="새 세션 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="세션 준비 안내 · 음성으로 중단 가능";renderState("THINKING");
@@ -4956,5 +4959,7 @@ $("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
 $("wizard-detail")?.addEventListener("click",()=>{wizardChooseDetail(true);wizard.active=false;renderWizard();});
 globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();void openStartWizard();},{once:true});
 </script>
+<!-- Lane NET (2026-10-18): a lost connection, seen at once and put back. -->
+<script src="/connection.js"></script>
 </body>
 </html>
