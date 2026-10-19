@@ -41,6 +41,7 @@
   <button id="logout" class="secondary">15. 로그아웃</button>
   <pre id="log"></pre>
 </main>
+<script src="app-config.js"></script>
 <script src="native-bridge.js"></script>
 <script>
   "use strict";
@@ -148,6 +149,9 @@
     await mic.openAppSettings();
   });
   // Lane APP1, decision 3: the app's login. The token is never shown here.
+  // The server address built in (VOINEY_APP_API_URL), when there is one.
+  const built = window.VOINEY_APP_CONFIG && window.VOINEY_APP_CONFIG.serverUrl;
+  if (built) document.getElementById("server").value = built;
   let session = null;
   const sessionFor = () => {
     const server = document.getElementById("server").value;

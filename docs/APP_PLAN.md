@@ -1,6 +1,10 @@
-# 스토어 앱 계획 — 화면이 꺼져도 듣기, 앱 밖 타이머 알림, 끊겨도 울리는 타이머 (줄 APP0)
+# 스토어 앱 계획 — 화면이 꺼져도 듣기, 앱 밖 타이머 알림, 끊겨도 울리는 타이머 (줄 APP0 · APP1)
 
-2026-10-18 작성. 조사와 뼈대만 담았다. 실제 기기에서는 아직 아무것도 시험하지 않았다. 스토어 정책·수수료는 아래에 적은 날짜에
+2026-10-19 줄 APP1 이 고친 곳: 정시 알람 플러그인(9.3절), 화면 꺼도 듣기 플러그인(9.4절), 앱 로그인과 앱 출처 허용(9.5절, 서버),
+다리 연결 지점을 함수 이름으로 다시 적음(9.2절), APK 다시 만듦(10.1절), 기기 시험 순서(11.3절). 사람의 결정(2026-10-18): 앱은 반드시 낸다 —
+화면이 꺼져도 듣기, 앱 밖 타이머 알림(가장 중요), 와이파이가 끊겨도 안전. 파일럿은 웹이고 앱은 그 뒤를 준비한다.
+
+2026-10-18 작성(줄 APP0). 조사와 뼈대만 담았다. 실제 기기에서는 아직 아무것도 시험하지 않았다. 스토어 정책·수수료는 아래에 적은 날짜에
 공식 문서에서 확인한 것만 적었고, 확인하지 못한 것은 "확인 못 함"으로 남겼다(8절). 규정은 바뀌므로 등록 직전에 링크를 다시 연다.
 
 ## 1. 요약
@@ -69,9 +73,10 @@ fire normally." `@capacitor/local-notifications` 8.3.1 의 Android 코드는 `se
 | 블루투스 마이크 | `MODIFY_AUDIO_SETTINGS`. 기기 이름 등 BluetoothDevice API 를 쓰면 `BLUETOOTH_CONNECT`(실행 중 요청) | 권한 없음(오디오 세션 옵션) |
 | 개인정보 | Play Console 데이터 보안 양식 | `PrivacyInfo.xcprivacy` — "apps that don't describe their use of required reason API in their privacy manifest file aren't accepted" ([문서](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)) |
 
-이 줄의 뼈대가 실제로 선언한 것: `INTERNET`, `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS`(앱), `POST_NOTIFICATIONS`·`SCHEDULE_EXACT_ALARM`·
-`RECEIVE_BOOT_COMPLETED`·`WAKE_LOCK`(알림 플러그인이 합쳐 넣음). 포그라운드 서비스 권한은 서비스 코드가 생길 때 넣는다 —
-쓰지 않는 유형을 선언하면 Play 선언 대상만 늘어난다.
+줄 APP0 의 뼈대가 선언한 것: `INTERNET`, `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS`(앱), `POST_NOTIFICATIONS`·`SCHEDULE_EXACT_ALARM`·
+`RECEIVE_BOOT_COMPLETED`·`WAKE_LOCK`(알림 플러그인이 합쳐 넣음). 줄 APP1 이 더한 것: `FOREGROUND_SERVICE`·`FOREGROUND_SERVICE_MICROPHONE`
+(마이크 서비스가 생겨서), 그리고 앱 플러그인이 직접 쓰는 `POST_NOTIFICATIONS`·`SCHEDULE_EXACT_ALARM`·`RECEIVE_BOOT_COMPLETED` 를 앱 매니페스트에도 적었다.
+쓰지 않는 포그라운드 서비스 유형은 선언하지 않는다 — Play 선언 대상만 늘어난다.
 
 ### 3.3 스토어 심사 위험
 
@@ -106,12 +111,12 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 
 다음 단계(순서대로):
 
-1. 이 줄: 뼈대, 알림 다리(1분 전·끝), Android 디버그 APK, 기기 시험 화면.
-2. 다리를 `index.html` 에 연결(9.2절의 연결 지점) + 화면을 앱에 묶기 위한 서버 주소 설정(5절). 화면 담당과 함께.
-3. Android 마이크 포그라운드 서비스 플러그인: 실험을 시작할 때(화면이 보일 때) 서비스 시작, 네이티브 `AudioRecord` 로 받아
-   같은 `/ws` 로 PCM 을 보냄. 재생(TTS)도 네이티브. 블루투스 마이크는 `setCommunicationDevice`.
-4. 끝 알림을 `setAlarmClock` 으로(Doze 에서도 정시).
-5. iOS: 맥에서 `npx cap add ios`, `audio` 백그라운드 모드 + AVAudioEngine 캡처, AlarmKit 또는 시간 민감 알림.
+1. 줄 APP0(끝남): 뼈대, 알림 다리(1분 전·끝), Android 디버그 APK, 기기 시험 화면.
+2. 줄 APP1(끝남): 끝 알림을 `setAlarmClock` 으로(9.3절). Android 마이크 포그라운드 서비스 플러그인 — 화면이 보일 때 시작, 네이티브 `AudioRecord`,
+   페이지의 소켓 하나로 같은 형식(9.4절). 앱 로그인(토큰, Bearer, 소켓 첫 메시지)과 앱 출처 허용(9.5절). 묶은 화면의 서버 주소(`VOINEY_APP_API_URL`).
+3. 다음 줄: 다리를 `index.html` 에 연결(9.2절의 연결 지점 ①–⑫). 화면 담당(줄 IA 이후 구조)과 함께. 그다음 실기기 시험(11.3절).
+4. 그 뒤: 재생(TTS)이 화면 꺼진 채 안 나오면 재생도 네이티브로. 블루투스 마이크는 `setCommunicationDevice`.
+5. iOS: 맥에서 `npx cap add ios`, `audio` 백그라운드 모드 + AVAudioEngine 캡처, AlarmKit 또는 시간 민감 알림. 같은 플러그인 이름으로 만들면 다리는 그대로 쓴다.
 
 ## 5. 화면: 앱에 묶을까, 서버 주소로 열까
 
@@ -123,11 +128,12 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 | Apple 4.2 | 앱 안에 화면이 있다 | 원격 웹사이트를 띄우는 앱으로 보일 위험이 더 크다 |
 | 오프라인으로 앱을 열 때 | 앱 화면이 뜨고 마지막 상태·예약된 알림을 보여 줄 수 있다 | 웹뷰 오류 → `server.errorPath`(`offline.html`) 만 뜬다. Android 에서는 그 쪽이 플러그인을 못 쓴다("On Android the html file won't have access to Capacitor plugins") |
 | 화면 고침 배포 | 앱 업데이트(심사)가 필요 | 서버 배포만으로 바뀐다 |
-| 지금 `index.html` 로 되나 | **아직 안 된다.** 화면이 서버를 `location.host` 로 찾는다(9.2절 ⑤). 앱 안에서는 그 값이 `localhost` 다 | 된다 |
+| 지금 `index.html` 로 되나 | **아직 안 된다.** 화면이 서버를 `location.host` 로 찾는다. 앱 안에서는 그 값이 `localhost` 다. 서버 쪽 준비(출처 허용·앱 로그인)와 다리(`createAppFetch`·`socketUrl`)는 줄 APP1 에서 됐고, 남은 것은 `index.html` 의 연결(9.2절 ②④⑤) | 된다 |
 
 그래서 뼈대(`mobile/capacitor.config.js`)는 두 방식을 빌드할 때 고른다. 기본은 묶기, `VOINEY_APP_SERVER_URL=https://…` 를 주면 서버 주소.
-묶기로 실제 서버에 붙으려면 9.2절 ⑤의 고침과 서버 쪽 준비(앱 출처 `https://localhost` 를 웹소켓·API 가 받기, 로그인 쿠키 대신 토큰 또는
-`SameSite=None`)가 필요하다. 화면 고침을 심사 없이 내보내는 일(라이브 업데이트)은 이 줄에서 다루지 않는다.
+묶기로 실제 서버에 붙으려면 9.2절 ②④⑤의 연결이 필요하다. 서버 쪽 준비는 줄 APP1 이 했다: 서버의 `VOINEY_LAB_APP_ORIGINS` 에
+`https://localhost`(iOS 는 `capacitor://localhost`)를 넣으면 웹소켓·API 가 그 출처를 받고, 로그인은 쿠키 대신 토큰이다(9.5절; `SameSite=None` 쿠키는
+쓰지 않았다 — 교차 사이트 쿠키는 브라우저마다 막히고 CSRF 대비가 따로 필요하다). 묶은 화면의 서버 주소는 빌드할 때 `VOINEY_APP_API_URL`. 화면 고침을 심사 없이 내보내는 일(라이브 업데이트)은 이 줄에서 다루지 않는다.
 
 파일럿 서버는 HTTP 기본 인증 뒤에 있다(`docs/PILOT_HTTPS_SETUP.md`). Capacitor 웹뷰가 기본 인증 창을 띄우는지는 확인하지 않았다 —
 서버 주소 모드로 시험할 때 첫 번째로 볼 것이다(11.3절).
@@ -225,6 +231,10 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 9. Apple 한국 외부 결제 26% 에 Small Business·구독 2년차 감면이 있는지. Google 미국·EEA·영국 새 요율표의 칸별 값.
    전기통신사업법 시행령의 세부(보도자료 본문이 첨부 파일에만 있음).
 10. Google 조직 계정이 신규 개인 계정의 "12명·14일" 비공개 테스트 요건에서 빠지는지(그 요건은 개인 계정 문장에만 있다).
+11. (줄 APP1) 화면이 꺼진 채 웹뷰가 네이티브 마이크 프레임을 받아 소켓으로 보내는지(Capacitor 는 웹뷰 타이머를 멈추지 않지만 Chromium 의 숨은 페이지 처리는 확인 못 함),
+    화면이 꺼진 채 웹뷰의 `AudioContext` 재생(TTS)이 나오는지.
+12. (줄 APP1) 알람 시계를 건 채 Doze 강제(`force-idle`) 때 1분 전과 끝이 둘 다 제시각에 오는지, 정확한 알람을 거둔 뒤 다시 허용했을 때 저장된 알람이 다시 걸리는지.
+13. (줄 APP1) 기기 회사(삼성 등)의 배터리 최적화가 마이크 포그라운드 서비스나 알람 시계를 막는지.
 
 ## 9. 앱 뼈대와 기기 기능 다리
 
@@ -232,48 +242,125 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 
 | 경로 | 무엇 |
 |---|---|
-| `mobile/package.json` | Capacitor 8.5.3, `@capacitor/local-notifications` 8.3.1, `@capacitor/network` 8.0.1, `@capacitor/app` 8.1.2, `@capacitor-community/keep-awake` 8.0.1 (정확한 버전으로 고정) |
-| `mobile/capacitor.config.js` | 앱 id `com.voiney.lab`(자리표시 — 11절), 이름 VoineyLab. 기본은 화면 묶기, `VOINEY_APP_SERVER_URL=https://…` 이면 서버 주소, `VOINEY_APP_START_PATH` 로 첫 쪽 |
-| `mobile/scripts/prepare-web.mjs` | `mobile/www/`(추적 안 함)를 서버 정적 화면 + `mobile/www-src/` 로 만든다 |
+| `mobile/package.json` | Capacitor 8.5.3, `@capacitor/local-notifications` 8.3.1, `@capacitor/network` 8.0.1, `@capacitor/app` 8.1.2, `@capacitor-community/keep-awake` 8.0.1 (정확한 버전으로 고정). 줄 APP1 은 npm 패키지를 더하지 않았다 — 플러그인 셋은 앱 안 코드다 |
+| `mobile/capacitor.config.js` | 앱 id `com.voiney.lab`(자리표시 — 11절), 이름 VoineyLab. 기본은 화면 묶기, `VOINEY_APP_SERVER_URL=https://…` 이면 서버 주소, `VOINEY_APP_START_PATH` 로 첫 쪽. **`loggingBehavior: "none"`**(줄 APP1): Capacitor 의 기본값 "debug" 는 디버그 빌드에서 모든 플러그인 호출의 인자와 답을 기기 로그(logcat)에 적는다 — 로그인 토큰과 마이크 소리가 거기 남는다 |
+| `mobile/scripts/prepare-web.mjs` | `mobile/www/`(추적 안 함)를 서버 정적 화면 + `mobile/www-src/` 로 만들고, 줄 APP1 부터 `www/app-config.js`(`window.VOINEY_APP_CONFIG = {serverUrl}`)를 쓴다. 주소는 빌드할 때 `VOINEY_APP_API_URL=https://…`(`mobile/scripts/app-config.mjs`, 시험 `tests/native_bridge/app_config.test.js`). 공개 주소만 — 토큰·키는 넣지 않는다 |
 | `mobile/www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때의 화면 |
-| `mobile/www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: 6분 시험 타이머(5분 뒤 "1분 전", 6분 뒤 끝)로 알림 예약·취소, 정확한 알람 설정, 화면 켜 두기, 네트워크 변화 |
-| `mobile/android/` | `npx cap add android` 결과. 고친 곳은 `AndroidManifest.xml` 뿐: `RECORD_AUDIO`·`MODIFY_AUDIO_SETTINGS`, `allowBackup="false"`(웹뷰 저장소가 클라우드 백업으로 나가지 않게) |
+| `mobile/www-src/device-check.html` | 디버그 빌드의 기기 시험 화면(11.3절): 알림(어느 방식이 쓰이는지 표시), 정확한 알람 설정, 화면 켜 두기, 네트워크, 화면 꺼도 듣기(받은 프레임 수·소리 크기), 마이크 권한 설정, 앱 로그인·웹소켓 첫 메시지·로그아웃 |
+| `mobile/android/app/src/main/java/com/voiney/lab/alarm/` | **VoineyAlarm**(줄 APP1 결정 ①): `TimerAlarmPlugin`(schedule·cancel·pending·exactAlarmStatus·openExactAlarmSettings), `TimerAlarms`(setAlarmClock·게시·재부팅 복원), `TimerAlarmStore`(앱 전용 설정 파일), `TimerAlarmReceiver`·`TimerAlarmBootReceiver`, `TimerAlarmPolicy`(안드로이드 없는 규칙 — JDK 로 시험) |
+| `mobile/android/app/src/main/java/com/voiney/lab/mic/` | **VoineyMicrophone**(결정 ②): `BackgroundMicPlugin`(start·stop·status·openAppSettings, 이벤트 frames·state), `ListeningService`(마이크 포그라운드 서비스), `MicEvents` |
+| `mobile/android/app/src/main/java/com/voiney/lab/session/` | **VoineySessionStore**(결정 ③): `SessionStorePlugin`(set·get·clear) — Android Keystore 의 AES-256-GCM 키로 토큰을 봉한다 |
+| `mobile/android/app/src/main/java/com/voiney/lab/MainActivity.java` | 위 세 플러그인을 `super.onCreate` 전에 `registerPlugin` |
+| `mobile/android/app/src/main/AndroidManifest.xml` | APP0: `RECORD_AUDIO`·`MODIFY_AUDIO_SETTINGS`, `allowBackup="false"`. APP1: `FOREGROUND_SERVICE`·`FOREGROUND_SERVICE_MICROPHONE`, `SCHEDULE_EXACT_ALARM`·`RECEIVE_BOOT_COMPLETED`·`POST_NOTIFICATIONS`(알림 플러그인도 합쳐 넣지만 앱 플러그인이 쓰므로 직접 적음), 수신기 둘, 서비스 하나(`foregroundServiceType="microphone"`). `USE_EXACT_ALARM` 은 넣지 않는다(Play 정책상 알람·타이머 앱만) |
 
-### 9.2 다리 `src/voiney_lab/static/native-bridge.js`
+### 9.2 다리 `src/voiney_lab/static/native-bridge.js` 와 연결 지점 (다음 줄에 넘김)
 
-서버가 준 단계 타이머(`timers.step`)로 기기 알림 두 개("1분 전"과 끝)를 예약하고, 다음 서버 상태에 맞춰 취소·변경한다.
 번들러 없이 `<script>` 로 읽히고(`window.VoineyNativeBridge`), node 에서는 `require` 로 읽힌다. 시험:
-`node --test tests/native_bridge/timer_alerts.test.js`(pytest 에서는 `tests/test_native_bridge.py`).
+`node --test tests/native_bridge/*.test.js`(pytest 에서는 `tests/test_native_bridge.py` 가 모두 돌린다. 줄 APP1 끝에 43개).
+**아직 `index.html` 에 연결하지 않았다** — 이번 차례에 화면 구조를 줄 IA 가 바꾸고 있어서다. 아래 연결 지점은 **함수 이름**으로
+적었다(줄 번호는 IA 가 합쳐진 뒤 연결하는 줄이 다시 잰다. 2026-10-19 `dev`(515421f) 와 그때의 IA 작업 폴더 모두 아래 함수가 그대로 있었다).
 
-- `planTimerAlerts(state, {nowMs, offsetMs, rule})`: 실험이 진행 중(`attached`·`active`)이고 단계 타이머가 `running` 이며 `started_at`·`deadline_at` 이
-  읽힐 때만 알림을 만든다. 이미 지난 시각은 넣지 않는다. 일시정지는 알림을 지우지 않는다(서버도 단계 타이머를 멈추지 않는다).
-- "1분 전"은 **서버가 말하는 규칙 그대로** 정한다: 5분 이상인 타이머에만, 끝 60초 전(`curated_protocol.py` 의 `TIMER_LAST_MINUTE_FROM_SECONDS`·
-  `TIMER_LAST_MINUTE_SECONDS`, 줄 NET 부터 서버 하트비트가 `timer_last_minute_from_seconds`·`timer_last_minute_seconds` 로 보낸다).
-  기본값은 `LAST_MINUTE_RULE`(300·60)이고, 하트비트를 받으면 `lastMinuteRule(message)` → `setRule(rule)`. 기본값이 서버 상수와 같은지는
-  `tests/test_native_bridge.py` 가 못 박는다. 5분보다 짧은 타이머는 끝 알림만 있다 — 줄 NET 의 화면 타이머와 같다.
-- 알림 id 는 `step_id|started_at|종류` 의 해시(양의 31비트). 같은 타이머는 같은 id 라서 같은 상태가 여러 번 와도 다시 예약하지 않고,
-  다시 시작한 타이머(새 `started_at`)는 옛 쌍을 지우고 새 쌍을 넣는다.
-- 기기 시계와 서버 시계의 차이: 화면이 잰 값(줄 NET 의 `voineyConnection.serverNow()` → `Date.now()-serverNow()`)을 `sync` 의 세 번째 인자
-  `{offsetMs}` 로 주면 그것을 쓰고, 없으면 `remaining_seconds` 로 어림해 3초 넘게 다를 때만 맞춘다(`clockOffsetMs`).
-- 문구는 서버의 끝 문구(`_timer_end_words`)를 따른다: 최소 시간은 "최소 시간 2시간이 지났어요."(끝났다고 하지 않음),
-  최대 시간은 "최대 시간 15분이 됐어요.", 그 밖은 "타이머 15분이 끝났어요." — 모두 "앱에서 확인해 주세요."로 맺는다. 단계가 끝났다고 말하지 않는다.
-- `createTimerAlerts(notifier).sync(state, receivedAtMs, {offsetMs})` 는 기기의 예약 목록(우리 것만, `extra.tag`)과 비교해 취소·예약하고, 동시에 온 두
-  상태가 섞이지 않게 차례로 돈다. `connectionLost()` 는 일부러 아무것도 하지 않는다.
-- Capacitor 가 웹뷰에 넣는 다리(`Capacitor.nativePromise`)로 플러그인을 부른다. 알림 채널 `voiney-timer`(중요도 5), `allowWhileIdle: true`.
+다리가 하는 일:
 
-**연결 지점** (`static/index.html`, 2026-10-19 `dev`(줄 NET #92 합친 뒤) 기준 줄 번호. 이 줄에서는 고치지 않았다):
-
-| # | 자리 | 할 일 |
+| 무엇 | 함수 | 시험 |
 |---|---|---|
-| ① | 4591줄 `<script src="/connection.js"></script>` 옆 | `<script src="/native-bridge.js"></script>`(줄 NET 의 `connection.js` 처럼 따로 읽힘). 앱이 아니면(`isNativeApp` 거짓) 아무것도 하지 않게 |
-| ② | 시작할 때 한 번 | `prepareNotifications(cap)`(알림 권한·채널·정확한 알람 여부). 정확한 알람이 거부면 "타이머 알림이 몇 분 늦을 수 있어요 — 설정에서 허용" 안내 |
-| ③ | 2370줄 `renderCuratedProtocolState` 에서 상태를 받아들인 직후(`curatedProtocolState={...value}`, 2380줄) | `timerAlerts.sync(value, Date.now(), {offsetMs: Date.now()-voineyConnection.serverNow()})`. **서버가 보낸 상태를 받아들인 이 자리에서만** 부른다 |
-| ④ | 2022줄 `invalidateCuratedProtocolState`, 2892줄 웹소켓 `onclose` | `sync` 를 부르지 **않는다**(여기서 상태가 `{attached:false}` 가 되므로 부르면 끊길 때 알림이 지워진다). 줄 NET 이 되살릴 끊김(`voineyConnection.lost()` 가 참)이면 `onclose` 는 거기서 돌아가고, 아니면 상태를 비운다 — 어느 쪽이든 `connectionLost()` 만 |
-| ⑤ | 2892줄 `new WebSocket(scheme+"://"+location.host+"/ws")`, `fetch("/api/…")` 16곳·`/readyz`, 3042줄 `/mic-capture-worklet.js`, 9줄 manifest, 4591줄 `/connection.js` | 화면을 앱에 묶으려면(5절) 서버 기준 주소를 설정에서 받아 붙인다. 서버 주소 모드에서는 고칠 것 없음 |
-| ⑥ | 1365줄 `showExperimentEnded` | 실험이 끝나면 `sync(null)` 로 남은 알림을 지운다(서버의 끝난 상태가 ③으로 오면 거기서도 지워진다) |
-| ⑦ | 1490줄 `keepScreenOn` | 앱에서는 `navigator.wakeLock` 대신(또는 함께) `keepAwake(cap, on)` |
-| ⑧ | 2931줄 `getUserMedia`, 4548줄 `visibilitychange` | 화면이 꺼져도 듣기는 네이티브 포그라운드 서비스가 맡는다(4절 다음 단계 3). 그 전까지는 지금처럼 화면이 보일 때만 |
-| ⑨ | `connection.js` 의 하트비트(`server.heartbeat`)와 화면 타이머 | 하트비트의 규칙을 `setRule(lastMinuteRule(message))` 로 넘긴다. 줄 NET 의 화면 타이머는 끊긴 동안 화면이 켜져 있을 때 소리·진동으로 알리고 "화면이 꺼지거나 다른 앱으로 가면 화면 타이머 알림이 울리지 않을 수 있어요" 라고 쓴다 — 앱에서는 기기 알림이 같은 순간에 함께 울리므로, 연결하는 줄에서 앱일 때 그 문구와 소리를 어떻게 할지 화면 담당과 정한다. 기기의 연결 변화는 `onNetworkChange(cap, cb)` |
+| 서버 타이머 → 기기 알림 두 개(1분 전·끝), 다음 서버 상태에 맞춰 취소·변경 (APP0) | `planTimerAlerts`, `diffAlerts`, `createTimerAlerts(notifier).sync(state, receivedAt, {offsetMs})`, `setRule`, `connectionLost()`(일부러 아무것도 안 함) | `timer_alerts.test.js` |
+| 알림 방식 고르기 (APP1 ①): 앱에 VoineyAlarm 이 있고 정확한 알람이 허용이면 알람 시계, 아니면 공식 플러그인. 안 쓰는 쪽에 남은 우리 알림은 다음 `sync` 에서 지운다(두 번 울리지 않음) | `chooseNotifier(cap)` → `{kind, exactAlarm, notifier}`, `createTimerAlerts(...).setNotifier(next)`, `openExactAlarmSettings(cap)`, `prepareNotifications(cap)` | `alarm_clock.test.js` |
+| 화면 꺼도 듣기 (APP1 ②): 플러그인의 100 ms 묶음(base64)을 웹 화면 worklet 이 지금 보내는 20 ms·640바이트 프레임으로 자른다. 거절·끄기는 문구로 | `createNativeMicrophone(cap, {onFrame, onState})` → `start/stop/status/openAppSettings/stats`, `MIC_FORMAT`, `micStateWords`, `nativeMicrophoneAvailable` | `background_mic.test.js` |
+| 앱 로그인 (APP1 ③): 토큰은 보안 저장소와 이 함수 안에만. Bearer, 소켓 첫 메시지, 서버가 끝낸 세션은 잊음 | `createAppSession(cap, {serverUrl})` → `load/restore/login/signup/logout/fetch/socketUrl/socketHello` | `app_session.test.js` |
+| 앱 안에서 페이지의 `fetch` 와 그림·내려받기 | `createAppFetch(session, fetch)`(서버 경로 `/api/…`·`/readyz`·`/healthz` 만 서버로, 나머지는 묶은 파일), `resourceObjectUrl(session, path)`(`blob:` 주소) | `app_session.test.js` |
+
+연결 지점 — 앱일 때만(`VoineyNativeBridge.isNativeApp(window)` 참) 하고, 웹에서는 지금 동작 그대로 둔다:
+
+| # | 자리 (함수로 찾는다) | 할 일 |
+|---|---|---|
+| ① | 끝의 `<script src="/connection.js">` 옆 | `<script src="/app-config.js">`(앱 빌드에만 있음 — 웹에서는 404 로 아무 일 없음, 또는 앱일 때만 동적으로 읽기) 와 `<script src="/native-bridge.js">`. 정적 파일은 절대 경로(`/connection.js`, `/mic-capture-worklet.js`)도 묶은 화면의 뿌리에서 그대로 열린다 — 고칠 것은 서버로 가는 것뿐이다 |
+| ② | 페이지 시작(첫 `fetch` 보다 먼저) | `session=createAppSession(cap,{serverUrl:VOINEY_APP_CONFIG.serverUrl})`, `await session.restore()`, 그리고 **`window.fetch=createAppFetch(session, window.fetch.bind(window))`** 한 줄로 `index.html`·`connection.js`·`feedback.js` 의 `fetch("/api/…")` 26여 곳과 `/readyz` 를 모두 서버로 보낸다(각 줄을 고치지 않는다) |
+| ③ | 시작 화면(wizard)의 로그인·가입 단계 — 지금 `fetch("/api/auth/login")`·`/api/auth/signup` 을 부르는 곳 | 앱이면 `session.login(name,password)`·`session.signup(invite,name,password)`. 결과 `reason` 이 `app_origin_not_listed` 면 서버의 `VOINEY_LAB_APP_ORIGINS` 가 비었다는 뜻(관리자 문구). 로그아웃은 `session.logout()` |
+| ④ | `init()` 의 `new WebSocket(scheme+"://"+location.host+"/ws")` 와 그 `onopen` | 앱이면 주소를 `session.socketUrl()` 로, `onopen` 에서 **다른 무엇보다 먼저** `const hello=await session.socketHello(); if(hello) socket.send(hello)` 를 보낸 뒤 `resolve()`. 서버는 앱 출처의 소켓에서 첫 메시지를 토큰으로 읽으므로 `session.start` 가 먼저 가면 1008 로 닫힌다. 서버가 dev 모드면 `socketHello()` 가 `null` 이다. 줄 NET 의 다시 연결(`connection.js`)도 새 소켓마다 같은 순서 |
+| ⑤ | 서버가 준 그림 주소(`image.src=figure.url`·`asset.url`·`diagram.url`·`photo.url`, 원문 쪽 값 상자 `src:`)와 내려받기 링크(`.href=\`/api/experiment-reports/…\``, 개정본 비교, 원문 쪽 그림, 증거 파일 — 넷) | `<img>`·`<a>` 는 Bearer 를 실을 수 없다. 앱이면 `resourceObjectUrl(session, url)` 로 `blob:` 주소를 받아 쓰고, 다 쓰면 `URL.revokeObjectURL` |
+| ⑥ | 시작할 때 한 번, 그리고 앱이 앞으로 올 때(`document` 의 `resume` 이벤트 또는 `visibilitychange` 가 visible) | `prepareNotifications(cap)` → `chooseNotifier(cap)` → 처음이면 `timerAlerts=createTimerAlerts(chosen.notifier)`, 다음부터는 `timerAlerts.setNotifier(chosen.notifier)`. `kind==="local_notifications"` 이고 `exactAlarm==="denied"` 면 "타이머 알림이 몇 분 늦을 수 있어요 — 정확한 알람 허용" 과 `openExactAlarmSettings(cap)` 단추 |
+| ⑦ | `renderCuratedProtocolState` 에서 상태를 받아들인 직후(`curatedProtocolState={...value}`) | `timerAlerts.sync(value, Date.now(), {offsetMs: Date.now()-voineyConnection.serverNow()})`. **서버가 보낸 상태를 받아들인 이 자리에서만** |
+| ⑧ | `invalidateCuratedProtocolState`, `init()` 의 `onclose` | `sync` 를 부르지 **않는다**(여기서 상태가 `{attached:false}` 가 되므로 부르면 끊길 때 알림이 지워진다). `connectionLost()` 만 |
+| ⑨ | `showExperimentEnded` | `timerAlerts.sync(null)` 로 남은 알림을 지운다 |
+| ⑩ | `ensureAudio(generation)` 의 마이크 부분(`openMicStream` → `AudioWorkletNode` → `port.onmessage` 의 `socket.send(p.buffer)`) | 앱이고 `nativeMicrophoneAvailable(cap)` 이면 `getUserMedia`·worklet 을 열지 **않고**(두 녹음이 겹치면 한쪽이 무음이 된다) `mic=createNativeMicrophone(cap,{onFrame,onState})`, `await mic.start()`. `onFrame` 은 worklet 처리기와 같은 조건(`generation===sessionGeneration && sessionActive && socket.readyState===OPEN`)에서 `socket.send(frame)` — 프레임 모양이 같으므로 서버는 차이를 모른다. worklet 쪽의 첫 소리 감지(`micSignalSeen`)는 `onFrame` 에서 Int16 로 같은 계산. `start()` 는 화면이 보일 때만 된다(실험 시작 단추를 누른 순간). `onState` 의 `user_stopped`(알림 줄 끄기)·`permission_denied`·`mic_unavailable` 은 지금의 마이크 복구 띠(`showMicRecovery`)에 `words` 와 [다시 듣기]·[권한 설정 열기](`mic.openAppSettings()`)로. 실험을 끝내거나 나갈 때 `mic.stop()`. `closeAudio` 도 같은 자리 |
+| ⑪ | `keepScreenOn` | 앱에서는 `navigator.wakeLock` 대신(또는 함께) `keepAwake(cap, on)`. 화면 꺼도 듣기가 되면 화면을 켜 둘 필요가 줄어든다 — 화면 담당과 정한다 |
+| ⑫ | `connection.js` 의 하트비트(`server.heartbeat`)와 화면 타이머 | 하트비트의 규칙을 `timerAlerts.setRule(lastMinuteRule(message))` 로. 줄 NET 의 화면 타이머 소리와 기기 알림이 같은 순간에 함께 울리므로, 앱일 때 화면 타이머 소리를 끌지 화면 담당과 정한다. 기기의 연결 변화는 `onNetworkChange(cap, cb)` |
+
+연결하는 줄이 지킬 것: 앱이 하는 일은 기기 기능뿐이다. 알림·녹음·로그인 어느 것도 단계·타이머·실험 상태를 바꾸지 않는다. 듣기를 꺼도
+서버는 소리를 못 받을 뿐 상태는 그대로다.
+
+### 9.3 정시 알람 (결정 ①) — 설계
+
+- **왜**: `@capacitor/local-notifications` 8.3.1 은 `setExactAndAllowWhileIdle` 를 쓴다. Doze 에서 이것은 "앱마다 9분에 한 번"
+  ([Doze](https://developer.android.com/training/monitoring-device-state/doze-standby))이라 1분 전 알림 60초 뒤의 끝 알림이 늦을 수 있다.
+  같은 문서: "Alarms set with setAlarmClock() continue to fire normally".
+- **어떻게**: `VoineyAlarm.schedule({alarms:[{id, at, kind, key, title, body, channelId}]})` 를 받으면 앱 전용 설정 파일(`voiney_timer_alarms`,
+  백업 안 됨)에 문구째 적고 `AlarmManager.setAlarmClock(AlarmClockInfo(at, 앱 열기), 우리 수신기)` 로 건다. 울리면 수신기가 `voiney-timer`
+  채널(다리의 `CHANNEL_ID`, 없으면 만듦: 중요도 높음·진동)에 알림을 내고 기록을 지운다. 앱이 닫혀 있어도 된다. 알람 시계가 걸려 있는 동안
+  상태 표시줄에 알람 아이콘이 보인다(안드로이드가 그렇게 보인다).
+- **정확한 알람이 허용 안 됨**(Android 12+ 설정, 14부터 새 설치는 기본 거부): 다리가 공식 플러그인을 쓴다(늦을 수 있음 — 화면이 알린다).
+  플러그인도 그때는 `setAndAllowWhileIdle` 로 내려간다(`schedule` 의 답 `exact:false`).
+- **재부팅·앱 업데이트·정확한 알람이 다시 허용됨**(`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`, `SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED`):
+  저장된 알람마다 `TimerAlarmPolicy.afterBoot` — 아직 앞이면 다시 걸고, 꺼져 있는 동안 지난 **끝**은 한 번 늦게 알린다("휴대폰이 꺼져 있던 14:05에
+  울렸어야 할 알림이에요. …"), 지난 **1분 전**은 버린다(늦게 "1분 남았어요"는 틀린 말). 공식 플러그인도 재부팅 때 지난 알림을 곧바로 낸다 — 같은 쪽이다.
+- **`pending`** 은 저장된 알람과 함께 시스템이 아직 쥐고 있는지(`armed`, 그 PendingIntent 가 있는지 — 최선의 추정)를 돌려준다. 시스템이 버린 알람은
+  다리가 다음 `sync` 에서 다시 건다.
+- 앱이 하지 않는 것: 시각을 만들거나 옮기기. 시각과 문구는 서버 상태에서 다리가 만든 것 그대로다.
+
+### 9.4 화면 꺼도 듣기 (결정 ②) — 설계
+
+- **형식(코드에서 확인)**: 웹 화면은 `AudioWorklet` 이 기기 표본율로 약 20 ms 씩 모은 것을 `resamplePcm16` 으로 **16 kHz·모노·PCM16(리틀 엔디언)**
+  으로 바꿔 `/ws` 에 **바이너리 메시지 하나에 약 20 ms(640바이트)** 씩 보낸다(`index.html` `ensureAudio`). 서버는 `voiney_lab.audio`
+  (`SAMPLE_RATE=16000`, `FRAME_MS=20`, `FRAME_BYTES=640`)로 받고 `FrameBuffer` 가 20 ms 로 다시 자른다. 서버의 `ready` 도 같은 값을 알린다.
+- **네이티브**: `ListeningService` 가 `AudioRecord(VOICE_COMMUNICATION, 16000, MONO, PCM_16BIT)` 로 640바이트 × 5(100 ms)씩 읽어 플러그인에 넘기고,
+  플러그인이 `frames` 이벤트(base64, 번호)로 페이지에 보낸다. 다리가 640바이트 프레임으로 잘라 페이지가 **자기 소켓 하나로** 보낸다.
+  두 번째 소켓을 열지 않는 이유: 서버의 세션(`ListenerSession`)은 연결마다 하나라서 두 번째 소켓은 두 번째 세션이 된다.
+  `VOICE_COMMUNICATION` 은 기기의 에코 제거·잡음 억제를 켠다(웹 화면이 `getUserMedia` 에 `echoCancellation`·`noiseSuppression` 을 청하는 것과 같은 뜻).
+  세 곳(서버·다리·서비스)의 값이 같은지 `tests/test_lane_app1_background_mic.py` 가 못 박는다.
+- **시작**: 앱 화면이 보일 때만(`Lifecycle.STARTED` 이상, 아니면 `not_visible`). 마이크 권한이 없으면 묻고, 거절이면 `permission_denied`
+  (설정 열기는 `openAppSettings`). Android 가 화면 밖에서 마이크 서비스를 시작하지 못하게 하므로("you cannot create a microphone foreground service
+  while your app is in the background", [문서](https://developer.android.com/develop/background-work/services/fgs/service-types)) 실험 시작 단추를 누른 순간에 시작한다.
+- **알림 줄**: 채널 `voiney-listening`(조용함), "VoineyLab 이 듣는 중 · 화면을 꺼도 실험 안내를 계속 들어요." + **[끄기]**. 끄기를 누르면 서비스가 멈추고
+  페이지는 `user_stopped` 를 받는다. 마이크를 잃으면 `mic_unavailable`.
+- **아무도 받지 않으면 녹음하지 않는다**: 화면의 액티비티가 사라지면(앱 종료) 서비스도 멈춘다. 휴대폰에 소리를 저장하지 않는다. 페이지가 바빠 묶음이
+  빠지면 다리가 `missedBatches` 로 센다(숨기지 않음).
+- **화면이 꺼진 동안 웹뷰 JS 가 도는가**: Capacitor 8 은 `KeepRunning` 기본값이 참이라 액티비티가 멈춰도 웹뷰 타이머를 멈추지 않는다(`Bridge.onPause` →
+  `MockCordovaWebViewImpl.handlePause(keepRunning)` — 코드로 확인). 그래도 Chromium 이 숨은 페이지를 늦출 수 있고, 화면이 꺼진 채 **재생(TTS)이 나오는지**는
+  확인하지 못했다 — 11.3절 시험 항목. 안 되면 재생도 네이티브로 옮기는 것이 다음 단계다.
+- Play 선언: 마이크 포그라운드 서비스는 설명문과 시연 영상이 필요하다(3.3절).
+
+### 9.5 앱 로그인과 출처 허용 (결정 ③·④) — 설계와 보안 판단
+
+- **문제**: 앱에 묶은 화면의 출처는 `https://localhost`(Android, `androidScheme:"https"`)·`capacitor://localhost`(iOS)라 서버와 다르다. 로그인 쿠키
+  `voiney_session`(HttpOnly, SameSite=Lax)은 다른 사이트의 요청에 실리지 않는다.
+- **방식**: 서버 설정 `VOINEY_LAB_APP_ORIGINS`(쉼표로 정확한 출처, 기본 빈 값). 그 출처에서 온 요청에만:
+  1. `POST /api/auth/login`·`/api/auth/signup` 의 답에 `app_session: {token, expires_in_seconds}`(쿠키는 보내지 않음).
+  2. `/api` 는 `Authorization: Bearer <token>` 을 받는다(그 밖의 출처에서 온 Bearer 는 읽지 않는다 — 계정 모드에서 Bearer 는 앱의 문일 뿐이다).
+  3. `/ws` 는 쿠키가 없으면 첫 메시지 `{"type":"client.auth","token":…}` 를 최대 10초 기다린다. 다른 첫 메시지·잘못된 토큰·시간 초과는 `authentication_required` 후 1008.
+  4. `/api`·`/readyz`·`/healthz` 에 CORS: 사전 요청(OPTIONS)은 세션을 묻기 전에 204, 모든 답(401·429 거절 포함)에 `Access-Control-Allow-Origin`(받은 출처),
+     `Vary: Origin`, 노출 머리글 `Retry-After`·`Content-Disposition`. 허용 머리글 `Authorization, Content-Type, Accept`. **`Allow-Credentials` 는 보내지 않는다.**
+  5. `/ws` 출처 검사: 목록이 비면 지금처럼 검사 없음. 목록이 있으면 브라우저 소켓은 서버 자신의 호스트(`Host` 또는 프록시의 `X-Forwarded-Host`), 목록의 앱 출처,
+     또는 Origin 없음(브라우저가 아님 — 로그인은 여전히 필요)만 받고 그 밖은 `origin_not_allowed` 로 1008. **조사 결과: 줄 APP1 전까지 `/ws` 에는 출처 검사가
+     전혀 없었다**(결정 문장의 "출처 검사"는 새로 만든 것이다). 쿠키 소켓의 교차 사이트 도용은 지금 SameSite=Lax 가 막는다.
+  6. 목록이 잘못되면(`*`, 경로, `null`) `/readyz` 가 503, CORS 없음, 소켓은 `configuration_invalid` 로 닫힌다.
+- **같은 세션**: 토큰은 쿠키와 같은 세션 표(`accounts.sqlite` 의 `sessions`, 토큰의 SHA-256 만)다. 수명 30일, 로그아웃·비밀번호 바꾸기(다른 기기 세션 끝)·
+  관리자가 계정 끄기로 끝난다. 스키마는 바뀌지 않았다.
+- **앱 쪽**: `VoineySessionStore` 가 Android Keystore 의 AES-256-GCM 키(키는 Keystore 밖으로 나오지 않음)로 봉해 앱 전용 설정 파일에 암호문만 둔다
+  (`allowBackup="false"`). 다리는 토큰을 그 저장소와 함수 안에만 두고 URL·로그·돌려주는 값에 싣지 않는다. 401 이면 잊는다.
+- **보안 판단**:
+  - 웹의 HttpOnly 쿠키와 달리 **앱의 토큰은 웹뷰 JS 가 읽는다**. 앱의 화면은 묶은 파일뿐이고 외부 스크립트를 읽지 않으므로 XSS 위험은 웹과 같은 크기다.
+    대신 토큰이 기기의 다른 앱·백업·로그로 새지 않게 했다(Keystore, 백업 끔, Capacitor 로그 끔). 토큰을 아예 JS 밖에 두려면 모든 HTTP·소켓을
+    네이티브가 맡아야 하는데, 소켓이 웹뷰의 것이라 이번 범위 밖이다.
+  - 토큰을 받는 문은 비밀번호(또는 초대 링크)다 — 이 경로가 새 권한을 주지 않는다. 비밀번호를 가진 사람은 이미 쿠키를 받을 수 있다.
+  - `Origin` 은 브라우저가 붙이고 페이지가 바꿀 수 없다. 브라우저가 아닌 프로그램은 바꿀 수 있지만, 그 프로그램은 비밀번호로 쿠키 값도 받을 수 있으므로
+    더 열리는 것이 없다. Bearer 는 자동으로 실리지 않으므로 CSRF 대상이 아니다.
+  - `Allow-Credentials` 가 없으므로 목록에 있는 출처라도 브라우저 쿠키 세션을 쓸 수 없다. `https://localhost` 를 넣으면 같은 컴퓨터의 다른 로컬 웹 서버도
+    그 출처가 되지만, 토큰 없이 할 수 있는 것은 로그인 화면과 같다.
+  - 토큰은 URL·쿼리에 싣지 않는다(프록시·접속 기록에 남지 않게). 서버 로그도 토큰을 적지 않는다(테스트가 확인).
+  - **파일럿의 Caddy 기본 인증과 함께 쓸 수 없다**: 기본 인증도 `Authorization` 머리글을 쓰고, CORS 사전 요청(OPTIONS)은 인증 정보를 싣지 않아 Caddy 가
+    401 로 막는다. 앱을 실제 서버에 붙이는 날에는 PILOT_GUIDE 7-3절의 열린 결정("기본 인증을 둘지, 계정 로그인으로 갈음할지")을 **계정 로그인으로**
+    정해야 한다. 서버 주소 모드(`VOINEY_APP_SERVER_URL`)는 같은 출처라 쿠키·기본 인증이 그대로 된다.
 
 ## 10. 빌드
 

@@ -15,9 +15,14 @@
  * server state (timer restarted, changed, stopped, experiment ended) cancels or
  * moves them.
  *
+ * Lane APP1 added the app's own plugins behind the same rules: the alarm
+ * clock that rings on time in Doze (VoineyAlarm), listening with the screen
+ * off (VoineyMicrophone), and the app's login (VoineySessionStore, the bearer
+ * and the socket's first message, the page's fetch in the app).
+ *
  * Not linked from index.html yet: the connection points are listed in
- * docs/APP_PLAN.md. The planning functions are pure and pinned by
- * tests/native_bridge/timer_alerts.test.js (node --test).
+ * docs/APP_PLAN.md 9.2. The planning functions are pure and pinned by
+ * tests/native_bridge/*.test.js (node --test).
  */
 (function (root, factory) {
   const api = factory();
@@ -645,7 +650,9 @@
   }
 
   function authHeaders(token, headers) {
-    const copy = { ...(headers || {}) };
+    // A Headers (or Map) keeps its entries; a plain object is copied.
+    const plain = headers && typeof headers.entries === "function" && !Array.isArray(headers) ? Object.fromEntries(headers.entries()) : headers;
+    const copy = { ...(plain || {}) };
     if (token) copy.Authorization = `Bearer ${token}`;
     return copy;
   }
@@ -684,6 +691,25 @@
       }
     };
 
+    // Login and signup: the server answers an app origin with the token in
+    // the body; it goes to the secure store and this closure only.
+    const signIn = async (path, payload) => {
+      const response = await request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = (await readJson(response)) || {};
+      if (!response.ok) return { signedIn: false, status: response.status, reason: body.detail || "login_failed" };
+      const given = body.app_session && typeof body.app_session.token === "string" ? body.app_session.token : null;
+      if (!given) return { signedIn: false, status: response.status, reason: "app_origin_not_listed" };
+      if (!store) return { signedIn: false, status: response.status, reason: "secure_store_unavailable" };
+      await cap.nativePromise(SESSION_PLUGIN, "set", { token: given });
+      token = given;
+      mode = "accounts";
+      return { signedIn: true, account: body.account || null };
+    };
+
     return {
       // The stored token into memory (no network).
       async load() {
@@ -702,26 +728,18 @@
         if (body.signed_in !== true && token) await forget();
         return { signedIn: body.signed_in === true, mode, account: body.account || null };
       },
-      async login(name, password) {
-        const response = await request("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, password }),
-        });
-        const body = (await readJson(response)) || {};
-        if (!response.ok) return { signedIn: false, status: response.status, reason: body.detail || "login_failed" };
-        const given = body.app_session && typeof body.app_session.token === "string" ? body.app_session.token : null;
-        if (!given) return { signedIn: false, status: response.status, reason: "app_origin_not_listed" };
-        if (!store) return { signedIn: false, status: response.status, reason: "secure_store_unavailable" };
-        await cap.nativePromise(SESSION_PLUGIN, "set", { token: given });
-        token = given;
-        mode = "accounts";
-        return { signedIn: true, account: body.account || null };
+      login(name, password) {
+        return signIn("/api/auth/login", { name, password });
+      },
+      // Joining through an invite link signs in at once, the same way.
+      signup(invite, name, password) {
+        return signIn("/api/auth/signup", { invite, name, password });
       },
       async logout() {
         if (token) await request("/api/auth/logout", { method: "POST" }).catch(() => null);
         await forget();
       },
+
       // fetch for the server's /api: the bearer, never cookies. A 401 means
       // the server ended the session; it is forgotten.
       async fetch(path, init) {
@@ -738,6 +756,28 @@
         return mode === "dev" ? null : socketAuthMessage(token);
       },
     };
+  }
+
+  // For the screen bundled in the app: a fetch the page can use in place of
+  // its own. Its server paths (/api/..., /readyz, /healthz -- written relative
+  // today) go to the server through the session (bearer, no cookies);
+  // anything else -- the bundled files -- goes to `baseFetch` untouched.
+  function createAppFetch(session, baseFetch) {
+    const local = typeof baseFetch === "function" ? baseFetch : (...args) => fetch(...args);
+    return (input, init) => {
+      if (typeof input === "string" && /^\/(api\/|readyz$|healthz$)/.test(input)) return session.fetch(input, init);
+      return local(input, init);
+    };
+  }
+
+  // An image or download the server serves under /api (figures, page images,
+  // reports): an <img src> or <a href> cannot carry the bearer, so it is
+  // fetched with it and shown from a blob: address (revoke it when done).
+  async function resourceObjectUrl(session, path, urlApi) {
+    const api = urlApi || (typeof URL !== "undefined" ? URL : null);
+    const response = await session.fetch(path);
+    if (!response.ok || !api || typeof api.createObjectURL !== "function") return null;
+    return api.createObjectURL(await response.blob());
   }
 
   function keepAwake(cap, on) {
@@ -792,6 +832,8 @@
     authHeaders,
     socketAuthMessage,
     createAppSession,
+    createAppFetch,
+    resourceObjectUrl,
     keepAwake,
     networkStatus,
     onNetworkChange,

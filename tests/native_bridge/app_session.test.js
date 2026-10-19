@@ -181,3 +181,58 @@ test("without the secure store the token is never kept anywhere else", async () 
   assert.equal(await session.socketHello(), null);
   assert.throws(() => bridge.createAppSession(cap, { serverUrl: "http://pilot.example", fetch }));
 });
+
+test("the page's own fetch, in the app: server paths go to the server with the bearer, the rest stays local", async () => {
+  const cap = fakeCapacitor({ stored: TOKEN });
+  const fetch = fakeFetch({
+    [`GET ${BASE}/api/protocols?filename=a.pdf`]: { status: 200, body: {} },
+    [`GET ${BASE}/readyz`]: { status: 200, body: { status: "ok" } },
+    [`PUT ${BASE}/api/experimenter/settings`]: { status: 200, body: {} },
+    "GET /mic-capture-worklet.js": { status: 200, body: {} },
+  });
+  const session = bridge.createAppSession(cap, { serverUrl: BASE, fetch });
+  await session.load();
+  const appFetch = bridge.createAppFetch(session, fetch);
+  await appFetch("/api/protocols?filename=a.pdf", { headers: { Accept: "application/json" }, redirect: "error" });
+  await appFetch("/readyz", { cache: "no-store" });
+  await appFetch("/api/experimenter/settings", { method: "PUT", headers: new Map([["Content-Type", "application/json"]]) });
+  await appFetch("/mic-capture-worklet.js");
+  const [list, ready, put, local] = fetch.calls;
+  assert.equal(list.url, `${BASE}/api/protocols?filename=a.pdf`);
+  assert.equal(list.init.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.equal(list.init.headers.Accept, "application/json");
+  assert.equal(list.init.redirect, "error");
+  assert.equal(ready.url, `${BASE}/readyz`);
+  assert.equal(put.init.headers["Content-Type"], "application/json", "a Headers-like object keeps its entries");
+  assert.equal(local.url, "/mic-capture-worklet.js");
+  assert.equal(local.init.headers, undefined, "the bundled files never see the token");
+});
+
+test("an image or a download from /api becomes a blob address, fetched with the bearer", async () => {
+  const cap = fakeCapacitor({ stored: TOKEN });
+  const blob = { size: 3 };
+  const made = [];
+  const fetch = async (url, init) => ({ status: 200, ok: true, url, init, blob: async () => blob });
+  const session = bridge.createAppSession(cap, { serverUrl: BASE, fetch: async (url, init) => { made.push([url, init]); return fetch(url, init); } });
+  await session.load();
+  const address = await bridge.resourceObjectUrl(session, "/api/protocols/p1/figures/2", { createObjectURL: (value) => (value === blob ? "blob:app/1" : null) });
+  assert.equal(address, "blob:app/1");
+  assert.equal(made[0][0], `${BASE}/api/protocols/p1/figures/2`);
+  assert.equal(made[0][1].headers.Authorization, `Bearer ${TOKEN}`);
+  const refused = bridge.createAppSession(fakeCapacitor({ stored: TOKEN }), { serverUrl: BASE, fetch: async () => ({ status: 404, ok: false }) });
+  await refused.load();
+  assert.equal(await bridge.resourceObjectUrl(refused, "/api/x", { createObjectURL: () => "blob:never" }), null);
+});
+
+test("joining through an invite link from the app signs in the same way", async () => {
+  const cap = fakeCapacitor();
+  const fetch = fakeFetch({
+    [`POST ${BASE}/api/auth/signup`]: (init) => {
+      assert.deepEqual(JSON.parse(init.body), { invite: "inv-1", name: "김재준", password: "correct horse battery" });
+      return { status: 201, body: { account: { name: "김재준" }, app_session: { token: TOKEN } } };
+    },
+  });
+  const session = bridge.createAppSession(cap, { serverUrl: BASE, fetch });
+  assert.deepEqual(await session.signup("inv-1", "김재준", "correct horse battery"), { signedIn: true, account: { name: "김재준" } });
+  assert.equal(cap.stored, TOKEN);
+});
