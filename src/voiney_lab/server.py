@@ -797,8 +797,13 @@ def _start_or_resume_workspace_experiment(
     protocol_revision_id:str,
     recovery_session_id:str|None=None,
     recovery_version:int|None=None,
+    reattach:bool=False,
 )->dict[str,object]|None:
-    """Bind a voice connection to one durable, tenant-owned experiment."""
+    """Bind a voice connection to one durable, tenant-owned experiment.
+
+    ``reattach`` (lane NET, decision 4): the page's reconnection after a lost
+    connection; the experiment keeps its status (a pause stays a pause).
+    """
 
     settings=_workspace_settings()
     if not settings.enabled:
@@ -814,6 +819,7 @@ def _start_or_resume_workspace_experiment(
                 protocol_id=protocol_id,
                 protocol_revision_id=protocol_revision_id,
                 voice_connection_id=session.voice_connection_id,
+                reattach=reattach,
             )
         else:
             first_step=(
@@ -10944,6 +10950,382 @@ async def cancel_cascade_generation(
         # other turn's, so no card is left "재생 중".
         await websocket.send_text(event("turn.state",**progress))
 
+# --- Lane NET (2026-10-18): a lost connection, seen at once and put back -----
+
+from voiney_lab.curated_protocol import (  # noqa: E402 - the rule the screen timer follows
+    TIMER_LAST_MINUTE_FROM_SECONDS,
+    TIMER_LAST_MINUTE_SECONDS,
+)
+
+#: Decision 1: the server tells the page it is there this often while a
+#: session runs. The page counts the connection lost when nothing at all
+#: has come for three heartbeats' time, and sends its own "client.ping" as
+#: often.
+HEARTBEAT_SECONDS=1.0
+#: The sleep the heartbeat waits on, taken at import: a test that replaces
+#: asyncio.sleep to hurry another loop must not make this one spin.
+_heartbeat_sleep=asyncio.sleep
+
+
+@dataclass
+class _Heartbeat:
+    """The page's last "client.ping" as the server received it (decision 1)."""
+
+    ping_seq:int|None=None
+    ping_sent_at_ms:float|None=None
+    ping_received_ms:int|None=None
+
+
+def _client_ping(raw:str)->dict[str,Any]|None:
+    """A page's "client.ping", read before the control parser (decision 1).
+
+    The page sends one a second; it changes nothing. Its number and the
+    page's own clock come back in the next heartbeat, from which the page
+    measures how far its clock is from the server's (decision 3). None for
+    any other message; {} for a ping whose fields cannot be used, which is
+    dropped -- a heartbeat never ends a session.
+    """
+
+    if '"client.ping"' not in raw:
+        return None
+    try:
+        message=json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(message,dict) or message.get("type")!="client.ping":
+        return None
+    seq,sent=message.get("seq"),message.get("sent_at_ms")
+    if (
+        not isinstance(seq,int) or isinstance(seq,bool) or seq<0
+        or not isinstance(sent,(int,float)) or isinstance(sent,bool)
+        or not math.isfinite(sent)
+    ):
+        return {}
+    return {"seq":seq,"sent_at_ms":float(sent)}
+
+
+async def _send_heartbeats(
+    session:ListenerSession,sender:LockedSender,heartbeat:_Heartbeat,
+)->None:
+    """Tell the page the server is there, once a second while a session runs.
+
+    Lane NET, decision 1. From its own task, so a turn the connection's loop
+    is still reading (the words of an interruption being checked) never holds
+    it up. Each carries the server's clock, the page's last ping as received
+    (decision 3) and the server's rule for a timer's last-minute notice,
+    which the page's screen timer follows while the connection is lost.
+    Nothing changes here.
+    """
+
+    while True:
+        await _heartbeat_sleep(HEARTBEAT_SECONDS)
+        if not session.active:
+            continue
+        fields:dict[str,Any]={
+            "server_time_ms":round(_wall_clock()*1000),
+            "timer_last_minute_from_seconds":TIMER_LAST_MINUTE_FROM_SECONDS,
+            "timer_last_minute_seconds":TIMER_LAST_MINUTE_SECONDS,
+        }
+        if heartbeat.ping_seq is not None:
+            fields.update(
+                ping_seq=heartbeat.ping_seq,ping_sent_at_ms=heartbeat.ping_sent_at_ms,
+                ping_received_ms=heartbeat.ping_received_ms,
+            )
+        await sender.text("server.heartbeat",**fields)
+
+
+@dataclass
+class _HeardConnection:
+    """The connection an experiment last continued on, and when it was last heard.
+
+    ``level_reference`` is the wearer's measured voice on it (lane SP1), which
+    a reconnection keeps instead of asking the wearer to read again.
+    """
+
+    connection_id:str
+    heard_at:float
+    level_reference:Any=None
+
+
+#: Decision 5: for each durable experiment, the connection that started or
+#: continued it last in this server process and the moment anything was
+#: last received on it -- where a lost connection's gap begins. Kept in
+#: memory only (the record keeps the gap); at most this many.
+_HEARD_CONNECTIONS:dict[str,_HeardConnection]={}
+_HEARD_CONNECTIONS_MAX=256
+
+
+def _bind_heard_connection(session:ListenerSession)->None:
+    """This connection now speaks for its experiment (it started or continued it)."""
+
+    if session.experiment_state_version is None or not session.session_id:
+        return
+    if (
+        session.session_id not in _HEARD_CONNECTIONS
+        and len(_HEARD_CONNECTIONS)>=_HEARD_CONNECTIONS_MAX
+    ):
+        oldest=min(_HEARD_CONNECTIONS,key=lambda key:_HEARD_CONNECTIONS[key].heard_at)
+        _HEARD_CONNECTIONS.pop(oldest,None)
+    _HEARD_CONNECTIONS[session.session_id]=_HeardConnection(
+        session.voice_connection_id,_wall_clock())
+
+
+def _note_heard(session:ListenerSession)->None:
+    """Anything received on the connection its experiment continues on: heard now."""
+
+    entry=_HEARD_CONNECTIONS.get(session.session_id) if session.session_id else None
+    if entry is not None and entry.connection_id==session.voice_connection_id:
+        entry.heard_at=_wall_clock()
+        entry.level_reference=session.level_reference
+
+
+#: Why the page counted its last connection lost (decision 4), as it says it.
+_RECONNECT_REASONS=frozenset({"socket_closed","socket_error","browser_offline","server_silent"})
+
+
+def _reconnect_request(raw:str)->dict[str,Any]|None:
+    """The page's own reconnection, beside a session.start that continues a run.
+
+    Decision 4. The control parser keeps only the fields every session.start
+    has, so the page's "reconnect" -- when its last connection was lost, on
+    the server's clock as the page measured it, and why -- is read here from
+    the message itself. None when the start is not a reconnection (the
+    experimenter's "실험 이어하기" or a new run).
+    """
+
+    try:
+        message=json.loads(raw)
+    except ValueError:
+        return None
+    reconnect=message.get("reconnect") if isinstance(message,dict) else None
+    if not isinstance(reconnect,dict):
+        return None
+    lost=reconnect.get("lost_at_ms")
+    reason=reconnect.get("reason")
+    return {
+        "lost_at_ms":(
+            float(lost) if isinstance(lost,(int,float)) and not isinstance(lost,bool)
+            and math.isfinite(lost) else None),
+        "reason":reason if reason in _RECONNECT_REASONS else None,
+    }
+
+
+#: Durable events after a timer's start that leave that timer standing: a
+#: pause or a resume of the run, a recovery, a note or a photo. Any other
+#: event (a step moved, a later start, a stop, an event this list does not
+#: know) is taken to have ended it -- a timer is put back only when the
+#: record shows it plainly still running.
+_TIMER_KEEPING_EVENTS=frozenset({
+    "session_paused","session_in_progress","session_blocked",
+    "session_resumed","session_recovered",
+    "observation_recorded","observation_corrected","observation_retracted",
+    "evidence_attached",
+})
+
+
+def _standing_timer(experiment_state:Mapping[str,Any])->dict[str,Any]|None:
+    """The step timer the durable record shows still running at its current step."""
+
+    standing=None
+    for item in experiment_state.get("events") or ():
+        kind=item.get("event_type")
+        if kind=="timer_started":
+            timer=(item.get("payload") or {}).get("timer")
+            standing=timer if isinstance(timer,dict) else None
+        elif kind not in _TIMER_KEEPING_EVENTS:
+            standing=None
+    if standing is None or standing.get("step_id")!=experiment_state.get("current_step_id"):
+        return None
+    return standing
+
+
+def _restore_standing_timer(
+    curated:CuratedProtocolSession,experiment_state:Mapping[str,Any],
+)->dict[str,Any]|None:
+    """Put back the step timer a lost connection left running (decision 4).
+
+    The same timer -- its step, its length and its start as the record kept
+    them -- so it ends when it would have ended and the screen counts it on
+    from the same end; the source must still state that length for the step
+    (``start_timer`` checks it). None when no timer stands.
+    """
+
+    timer=_standing_timer(experiment_state)
+    if timer is None:
+        return None
+    try:
+        started=datetime.fromisoformat(str(timer["started_at"])).timestamp()
+        duration=int(timer["duration_seconds"])
+    except (KeyError,TypeError,ValueError):
+        return None
+    index=next(
+        (place for place,step in enumerate(curated.fixture.steps)
+         if step.step_id==timer.get("step_id")),
+        None)
+    if index is None or index!=curated.current_index:
+        return None
+    ok,_seconds,_words=curated.start_timer(index,now=started,duration_seconds=duration)
+    return curated.timer_status() if ok else None
+
+
+def _after_first_sentence(text:str)->str:
+    """A timer notice's words after its first sentence: " 다음은 N단계, …", or ""."""
+
+    place=text.find(" 다음은 ")
+    return text[place:] if place>=0 else ""
+
+
+def _reconnect_timer_notices(
+    curated:CuratedProtocolSession,*,lost_at:float|None,now:float,
+)->list[TimerNotice]:
+    """The restored timer's notices that fell due while the connection was lost.
+
+    Decision 4: they are taken now (never given again) and said as they
+    stand now, in the words "몇 분 남았어?" gets (lane VF, decision 5): a timer
+    over is "연결이 끊긴 동안 2단계 10분 타이머는 2분 전에 끝났어요.", a
+    last minute already under way "2단계 타이머 40초 남았어요.", each with
+    the notice's own next-step line. A notice that fell due before the loss
+    was given on the old connection and is not given again.
+    """
+
+    notices=[]
+    for notice in curated.due_timer_notices(now=now):
+        if lost_at is not None and notice.due_at<=lost_at:
+            continue
+        lead="연결이 끊긴 동안 " if notice.kind=="timer_ended" and lost_at is not None else ""
+        answer=curated._remaining_answer("ko")
+        notices.append(replace(
+            notice,
+            display_text=f"{lead}{answer}{_after_first_sentence(notice.display_text)}",
+            speech_text=f"{lead}{answer}{_after_first_sentence(notice.speech_text)}",
+        ))
+    return notices
+
+
+def _connection_lost_at(
+    previous:_HeardConnection|None,reconnect:Mapping[str,Any],session:ListenerSession,
+    *,now:float,
+)->tuple[float|None,str]:
+    """When the lost connection was last heard, and whose note that is.
+
+    "server": the server's own note of the connection, which holds while
+    this process ran through the loss. "screen": after a restart only the
+    page's moment is left (on the server's clock as the page measured it,
+    within the last day). "unknown": neither.
+    """
+
+    if previous is not None and previous.connection_id!=session.voice_connection_id:
+        return min(previous.heard_at,now),"server"
+    page=reconnect.get("lost_at_ms")
+    if page is not None and now-86400<=page/1000<=now:
+        return page/1000,"screen"
+    return None,"unknown"
+
+
+@dataclass(frozen=True)
+class _Reconnection:
+    """What a reconnection found: the timer's moments to give, and the gap (decisions 4-5)."""
+
+    notices:tuple[TimerNotice,...]
+    lost_at:float|None
+    lost_at_source:str
+    restored_at:float
+    #: Step timers whose end fell inside the gap; None when the gap's start is unknown.
+    timers_ended:int|None
+
+
+def _timers_ended_between(
+    timer:Mapping[str,Any]|None,lost_at:float|None,restored_at:float,
+)->int|None:
+    if lost_at is None:
+        return None
+    try:
+        deadline=datetime.fromisoformat(str((timer or {})["deadline_at"])).timestamp()
+    except (KeyError,TypeError,ValueError):
+        return 0
+    return int(lost_at<deadline<=restored_at)
+
+
+def _restore_lost_connection(
+    session:ListenerSession,curated:CuratedProtocolSession,
+    experiment_state:Mapping[str,Any],previous:_HeardConnection|None,
+    reconnect:Mapping[str,Any],
+)->_Reconnection:
+    """A reconnected run as the lost connection left it (decision 4).
+
+    A paused or blocked experiment is paused again from the moment it was
+    paused (only the experimenter lifts it); the step timer still running
+    is put back. Its notices that fell due while the connection was lost
+    come back, to be given once the page has the session, with the gap the
+    record keeps (decision 5).
+    """
+
+    if experiment_state.get("status") in {"paused","blocked"}:
+        paused_at=experiment_state.get("paused_at")
+        try:
+            moment=datetime.fromisoformat(str(paused_at)).timestamp() if paused_at else None
+        except ValueError:
+            moment=None
+        curated.pause_workflow(now=moment)
+    now=_wall_clock()
+    lost_at,source=_connection_lost_at(previous,reconnect,session,now=now)
+    timer=_restore_standing_timer(curated,experiment_state)
+    notices=(
+        _reconnect_timer_notices(curated,lost_at=lost_at,now=now)
+        if timer is not None else [])
+    return _Reconnection(
+        tuple(notices),lost_at,source,now,_timers_ended_between(timer,lost_at,now))
+
+
+def _record_connection_restored(
+    session:ListenerSession,curated:CuratedProtocolSession,reconnection:_Reconnection,
+    *,reason:str|None,status:str,
+)->None:
+    """Keep a lost connection's gap in the experiment record (decision 5).
+
+    One "connection_restored" event per reconnection, at the step the run
+    stands on, in moments and codes only: when the lost connection was
+    last heard and whose note that is, when the run was continued, the gap
+    in seconds, how many step timers ended inside it, why the page counted
+    the connection lost and the experiment's status. Only for a run that
+    was under way; no record open, nothing is written.
+    """
+
+    def moment(value:float|None)->str|None:
+        return datetime.fromtimestamp(value,timezone.utc).isoformat() if value is not None else None
+
+    gap=(
+        round(reconnection.restored_at-reconnection.lost_at,1)
+        if reconnection.lost_at is not None else None)
+    log.info(
+        "connection.restored gap_seconds=%s timers_ended=%s lost_at_source=%s reason=%s",
+        gap,reconnection.timers_ended,reconnection.lost_at_source,reason)
+    store=session.experiment_report_store
+    if store is None or not curated.active:
+        return
+    try:
+        if session.experiment_report_id is None:
+            _open_experiment_report(session,curated)
+        step=curated.fixture.steps[curated.current_index]
+        store.append_event(
+            session.experiment_report_id,
+            event_key=f"connection-restored-{session.voice_connection_id}",
+            event_type="connection_restored",
+            step_id=step.step_id,step_label=step.source_label,
+            payload={
+                "lost_at":moment(reconnection.lost_at),
+                "lost_at_source":reconnection.lost_at_source,
+                "restored_at":moment(reconnection.restored_at),
+                "gap_seconds":gap,
+                "timers_ended":reconnection.timers_ended,
+                "reason":reason,
+                "status":status,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the run continues; the log says the gap was not kept
+        log.warning("connection gap not recorded error=%s",type(exc).__name__)
+
+
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
     await websocket.accept()
@@ -11014,6 +11396,11 @@ async def voice_socket(websocket:WebSocket):
     sender=LockedSender(websocket); pipeline="cascade"
     # Lane VT, decisions 1-2: the step timer is told when it runs out.
     timer_notices=asyncio.create_task(_watch_timer_notices(session,sender))
+    # Lane NET, decision 1: the server's heartbeat, and the page's last ping.
+    heartbeat=_Heartbeat()
+    heartbeats=asyncio.create_task(_send_heartbeats(session,sender,heartbeat))
+    # Decision 4: the session running now continues a run after a lost connection.
+    restored_connection=False
     await websocket.send_text(event("ready",sample_rate=16000,
                                     pipelines=["cascade"],frame_ms=20,
                                     frame_bytes=FRAME_BYTES,vad_mode=config.mode,
@@ -11031,6 +11418,7 @@ async def voice_socket(websocket:WebSocket):
         while True:
             message=await websocket.receive()
             if message.get("type")=="websocket.disconnect": break
+            _note_heard(session)
             if message.get("bytes") is not None:
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
                 listener_events=[]
@@ -11221,6 +11609,11 @@ async def voice_socket(websocket:WebSocket):
                         _suggest_noise_floor(sender,session)))
                 continue
             if message.get("text") is None:continue
+            if (ping:=_client_ping(message["text"])) is not None:
+                if ping:
+                    heartbeat.ping_seq,heartbeat.ping_sent_at_ms=ping["seq"],ping["sent_at_ms"]
+                    heartbeat.ping_received_ms=round(_wall_clock()*1000)
+                continue
             control=parse_control(message["text"])
             if control["type"]=="session.start":
                 if session.active:raise ProtocolError("session already active")
@@ -11230,6 +11623,14 @@ async def voice_socket(websocket:WebSocket):
                 requested_input_language=normalize_input_language_preference(
                     control.get("input_language",control["language"])
                 )
+                # Lane NET, decision 4: the page continuing its run after a
+                # lost connection, and what is said of the timer then.
+                reconnect=(
+                    _reconnect_request(message["text"])
+                    if control.get("experiment_session_id") is not None else None)
+                restored_connection=False
+                reconnect_notices:list[TimerNotice]=[]
+                reconnection:_Reconnection|None=None
                 configuration_stage="server_policy"
                 try:
                     trusted_config=trusted_config or server_config()
@@ -11447,13 +11848,20 @@ async def voice_socket(websocket:WebSocket):
                             int(recovery_version)
                             if recovery_version is not None else None
                         ),
+                        reattach=reconnect is not None,
                     )
+                    previous_connection=(
+                        _HEARD_CONNECTIONS.get(session.session_id)
+                        if reconnect is not None else None)
+                    _bind_heard_connection(session)
                     restored_before=None
                     if (
                         recovery_session_id is not None
                         and experiment_state is not None
                         and session.curated_protocol_session is not None
-                        and experiment_state["status"]=="in_progress"
+                        and experiment_state["status"] in (
+                            {"in_progress","paused","blocked"}
+                            if reconnect is not None else {"in_progress"})
                     ):
                         restored_before=history_before(
                             session.curated_protocol_session)
@@ -11474,6 +11882,25 @@ async def voice_socket(websocket:WebSocket):
                             reverted_step_ids=_workspace_reverted_step_ids(
                                 experiment_state),
                         )
+                        if reconnect is not None:
+                            # Lane NET, decision 4: the run as the lost
+                            # connection left it -- a pause (or a block) is
+                            # still one, and the step timer still runs.
+                            reconnection=_restore_lost_connection(
+                                session,session.curated_protocol_session,
+                                experiment_state,previous_connection,reconnect)
+                            reconnect_notices=list(reconnection.notices)
+                    if reconnect is not None and experiment_state is not None:
+                        restored_connection=True
+                        if (
+                            previous_connection is not None
+                            and previous_connection.level_reference is not None
+                        ):
+                            # The wearer's voice as measured on the lost
+                            # connection (lane SP1); nobody reads again.
+                            session.level_reference=(
+                                previous_connection.level_reference.with_sensitivity(
+                                    session.speaker_sensitivity))
                     pipeline="cascade"
                     session.accept_configuration(
                         configuration_id,pipeline,context.language,
@@ -11535,6 +11962,9 @@ async def voice_socket(websocket:WebSocket):
                         session.experiment_state_version)
                     ready_fields["experiment_recovered"]=(
                         recovery_session_id is not None)
+                if restored_connection:
+                    # Lane NET, decision 4: the page's own reconnection was taken.
+                    ready_fields["connection_restored"]=True
                 await websocket.send_text(event("session.ready",**ready_fields))
                 _pilot_mark("voice_connected",session=session)
                 if experiment_state is not None:
@@ -11555,6 +11985,19 @@ async def voice_socket(websocket:WebSocket):
                                                 pipeline=pipeline))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
+                for notice in reconnect_notices:
+                    # Lane NET, decision 4: the timer's moments the lost
+                    # connection missed, given as the server gives a notice.
+                    session.track_timer_notice_task(asyncio.create_task(
+                        _deliver_timer_notice(
+                            session,sender,session.curated_protocol_session,notice)))
+                if reconnection is not None and session.curated_protocol_session is not None:
+                    # Decision 5: the gap, kept in the experiment record.
+                    await asyncio.to_thread(
+                        _record_connection_restored,session,
+                        session.curated_protocol_session,reconnection,
+                        reason=reconnect.get("reason") if reconnect else None,
+                        status=str(experiment_state["status"]) if experiment_state else "unknown")
             elif control["type"]=="session.set_language":
                 if not session.active:
                     await websocket.send_text(event("error",message="session is not active"))
@@ -11868,6 +12311,11 @@ async def voice_socket(websocket:WebSocket):
                     control["configuration_id"],control["generation"],
                     control["sample_rate"],
                 )
+                if restored_connection:
+                    # Lane NET, decision 4: a reconnection continues the run;
+                    # it is not greeted as a new session.
+                    log.info("session.greeting skipped reason=connection_restored")
+                    continue
                 session.track_visual_task(asyncio.create_task(
                     _send_session_greeting(
                         sender,session,
@@ -11940,6 +12388,9 @@ async def voice_socket(websocket:WebSocket):
             except (asyncio.CancelledError, WebSocketDisconnect): pass
         timer_notices.cancel()
         try: await timer_notices
+        except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
+        heartbeats.cancel()
+        try: await heartbeats
         except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
         for notice_task in list(session.timer_notice_tasks|session.timer_notice_playback_tasks):
             notice_task.cancel()
