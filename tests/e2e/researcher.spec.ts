@@ -28,9 +28,10 @@ test.describe('Researcher / Bench workspace', () => {
     await expect(page.locator('#tab-bar')).toBeVisible();
     await expect(page.locator('#home-cards .home-card').first()).toBeVisible();
 
-    // Voice controls on the experiment tab (lane ON's wizard stands over them before a run)
+    // The experiment tab before a run: the start button (lane ON's steps open as a sheet from it) and the state
     await page.locator('#tab-link-experiment').click();
-    await expect(page.locator('#start-wizard')).toBeVisible();
+    await expect(page.locator('#experiment-start-open')).toBeVisible();
+    await expect(page.locator('#start-wizard')).toBeHidden();
     await expect(page.locator('#stop')).toBeDisabled();
     await expect(page.locator('#state')).toHaveText('준비');
 
