@@ -18,15 +18,18 @@ import pytest
 from voiney_lab import curated_protocol
 
 ROOT = Path(__file__).resolve().parents[1]
-NODE_TESTS = ROOT / "tests" / "native_bridge" / "timer_alerts.test.js"
+#: Every node test of the bridge (lane APP1 added the alarm clock, the
+#: background microphone and the app login beside the timer alerts).
+NODE_TESTS = sorted((ROOT / "tests" / "native_bridge").glob("*.test.js"))
 
 
 def test_native_bridge_timer_alerts_under_node() -> None:
     node = shutil.which("node")
     if node is None:
-        pytest.skip("node is not installed; run `node --test tests/native_bridge/timer_alerts.test.js`")
+        pytest.skip("node is not installed; run `node --test tests/native_bridge/`")
+    assert NODE_TESTS
     result = subprocess.run(
-        [node, "--test", str(NODE_TESTS)],
+        [node, "--test", *map(str, NODE_TESTS)],
         cwd=ROOT,
         capture_output=True,
         text=True,
