@@ -121,8 +121,11 @@ class AfterViewMarkupTests(unittest.TestCase):
         self.style = self.html.split("<style>", 1)[1].split("</style>", 1)[0]
 
     def test_the_record_comes_first_with_the_conversation_beside_it(self) -> None:
-        self.assertIn('body[data-view="after"] .shell{grid-template-areas:"work chat" "setup setup"}', self.style)
-        self.assertIn('@media (max-width:980px){body[data-view="after"] .shell{grid-template-areas:"work" "chat" "setup"}}', self.style)
+        # Lane IA decision ① (2026-10-19): the 실험 후 view is the experiment tab's panel, laid out as the shell was.
+        self.assertIn('body[data-view="after"] #tab-experiment{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);grid-template-areas:"work chat" "setup setup";', self.style)
+        self.assertIn('body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}', self.style)
+        self.assertIn('body[data-view="after"] #tab-experiment .timeline{grid-area:chat}', self.style)
+        self.assertIn('@media (max-width:980px){body[data-view="after"] #tab-experiment{grid-template-columns:minmax(0,1fr);grid-template-areas:"work" "chat" "setup"}}', self.style)
         hidden = re.search(r'body\[data-view="after"\] #protocol-library,[^{]*\{display:none\}', self.style).group(0)
         for part in ("#protocol-compare", "#protocol-start-summary", ".mic-check"):
             self.assertIn(part, hidden)

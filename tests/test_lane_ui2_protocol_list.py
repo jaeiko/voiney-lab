@@ -162,17 +162,22 @@ class MarkupTests(unittest.TestCase):
         return self.html[begin:self.html.index(end, begin)]
 
     def test_the_list_the_upload_box_and_the_picked_box_sit_together(self) -> None:
-        library = self.block('<section id="protocol-library"', '<div class="prestart">')
+        # Lane IA decision ① (2026-10-19): the list, the upload box and the picked box are the protocols tab;
+        # the check before the start follows them there, and the voice console, the context card and the
+        # microphone stand on the experiment tab.
+        library = self.block('<section id="protocol-library"', '<section id="protocol-start-summary"')
         main = library[library.index('class="library-main"'):library.index('class="library-side"')]
         side = library[library.index('class="library-side"'):]
         for ident in ("protocol-list", "protocol-review-panel", "protocol-review-analysis-notice", "protocol-analysis-retry"):
             self.assertIn(f'id="{ident}"', main, ident)
         for ident in ("protocol-pdf", "protocol-upload-status", "protocol-duplicate-notice", "protocol-queue"):
             self.assertIn(f'id="{ident}"', side, ident)
-        prestart = self.block('<div class="prestart">', '<div class="setup-grid">')
-        order = [prestart.index(marker) for marker in ('id="protocol-start-summary"', 'class="voice-console"', 'class="experiment-context-card"', 'id="mic-check"')]
+        protocols = self.block('<section id="tab-protocols"', '<section id="tab-experiment"')
+        self.assertIn('id="protocol-start-summary"', protocols)
+        prestart = self.block('<div class="prestart-side">', '<section class="workflow-grid"')
+        order = [prestart.index(marker) for marker in ('class="voice-console"', 'class="experiment-context-card"', 'id="mic-check"')]
         self.assertEqual(order, sorted(order))
-        self.assertLess(self.html.index('id="protocol-library"'), self.html.index('class="prestart"'))
+        self.assertLess(self.html.index('id="protocol-library"'), self.html.index('class="prestart-side"'))
 
     def test_wide_screens_put_the_list_beside_the_upload_box_and_rows_are_touch_sized(self) -> None:
         self.assertIn("@media (min-width:900px){.library-grid{grid-template-columns:minmax(0,1fr) 360px}}", self.style)

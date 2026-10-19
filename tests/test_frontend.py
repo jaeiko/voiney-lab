@@ -80,18 +80,20 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
         self.assertIn('<button id="start" type="button" disabled>', html)
         self.assertNotIn('<div id="state">IDLE</div>', html)
         self.assertNotIn('<strong id="rail-state">IDLE</strong>', html)
+        # Lane IA decision ① (2026-10-19): the step card and the conversation are the experiment tab,
+        # the ledger the records tab after it.
         self.assertLess(
             html.index('class="panel procedure-card"'),
             html.index('id="experiment-session-ledger"'),
         )
         self.assertLess(
-            html.index('id="experiment-session-ledger"'),
             html.index('id="timeline-title"'),
+            html.index('id="experiment-session-ledger"'),
         )
-        workflow = html.split(
-            '<section class="workflow-grid"', 1
-        )[1].split('<section class="panel timeline"', 1)[0]
-        self.assertIn('id="experiment-session-ledger"', workflow)
+        records = html.split(
+            '<section id="tab-records"', 1
+        )[1].split('<section id="tab-settings"', 1)[0]
+        self.assertIn('id="experiment-session-ledger"', records)
         render_block = html.split(
             "function renderExperimentTimeline", 1
         )[1].split("async function loadExperimentTimeline", 1)[0]
@@ -430,11 +432,12 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         self.assertIn('id="rail-pause-session"', html)
         self.assertIn('summary>근거·처리·지연시간 세부정보', html)
         self.assertIn('<div class="turn-diagnostics-body"><div class="server-operation" hidden></div><div class="tools" hidden></div><div class="stats"></div></div>', html)
+        # Lane IA decision ① (2026-10-19): the voice examples are on the home tab, before the experiment tab's step card and conversation.
         self.assertLess(
-            html.index('class="panel timeline"'),
             html.index('class="example-strip"'),
+            html.index('class="panel timeline"'),
         )
-        self.assertLess(html.index('class="panel voice-panel"'), html.index('class="workflow-grid"'))
+        self.assertLess(html.index('id="tab-home"'), html.index('class="workflow-grid"'))
         self.assertLess(html.index('class="workflow-grid"'), html.index('class="panel timeline"'))
         self.assertLess(
             html.index('class="report-card procedure-report"'),

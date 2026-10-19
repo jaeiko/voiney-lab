@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './detail-view';
+import { test, expect, type Page, TAB, protocolRoute } from './routes';
 
 // Lane U (2026-10-05): the researcher's screen in plain words. Every server
 // answer here is mocked with page.route or fed to the page's own message
@@ -39,11 +39,11 @@ async function mockCatalog(page: Page, runnable: boolean) {
   await page.route(`**/api/protocols/${PROTOCOL_ID}/review`, route => route.fulfill({ json: review }));
 }
 
+// Lane IA: the protocol's route picks it and opens the protocols tab, where its check stands.
 async function openReview(page: Page) {
   await mockCatalog(page, false);
-  await page.goto('/');
+  await page.goto(protocolRoute(PROTOCOL_ID));
   await page.waitForFunction(() => typeof renderProtocolReview === 'function');
-  await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
   await expect(page.locator('#protocol-start-summary')).toBeVisible();
 }
 
@@ -69,9 +69,9 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
 
   test('the body shows readable names, never hash or identifier shapes', async ({ page }) => {
     await mockCatalog(page, true);
-    await page.goto('/');
+    await page.goto(protocolRoute(PROTOCOL_ID));
     await page.waitForFunction(() => typeof renderExperimentContext === 'function');
-    await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
+    await expect(page.locator('#protocol-start-summary')).toBeVisible();
     await acceptSession(page);
     await page.evaluate(([pid, rid]) => {
       const report = (id: string, started: string) => onMessage({ data: JSON.stringify({
@@ -79,8 +79,12 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
         report: { report_id: id, status: 'in_progress', started_at: started, protocol_id: pid, anomaly_count: 0, blocker_count: 0, event_count: 0, events: [] },
       }) }, sessionGeneration, socket);
       void report('ER-C9806BA37B70D727BDF8', '2026-10-05T05:12:00+00:00');
+      // Lane IA: the record and the context card stand on the experiment tab after the run.
+      void onMessage({ data: JSON.stringify({ type: 'experiment.ended', configuration_id: 7, status: 'completed', report: 'saved' }) }, sessionGeneration, socket);
       renderExperimentContext();
     }, [PROTOCOL_ID, REVISION_ID]);
+    await page.locator('#tab-link-experiment').click();
+    await expect(page.locator('body')).toHaveAttribute('data-view', 'after');
     await page.locator('#procedure-report-details').evaluate(node => { (node as HTMLDetailsElement).open = true; });
     await expect(page.locator('#experiment-context-version')).toContainText('개발용 큐레이션 분석');
     await expect(page.locator('#last-report-id')).toHaveText(/^실험 기록 · In-gel digestion · 2026-10-0\d \d\d:\d\d$/);
@@ -108,9 +112,22 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
   });
 
   test('a turn card shows one status, and a finished turn keeps no progress label', async ({ page }) => {
+    await mockCatalog(page, true);
     await page.goto('/');
     await page.waitForFunction(() => typeof applyTurnState === 'function');
     await acceptSession(page);
+    // Lane IA: the conversation is the run view's sheet; it is opened so the statuses on screen are counted.
+    await page.evaluate(([pid, rid]) => {
+      sessionActive = true;
+      onMessage({ data: JSON.stringify({ type: 'protocol.fixture.state', configuration_id: 7, action: 'start', state: {
+        attached: true, protocol_id: pid, revision_id: rid, display_name: 'In-gel digestion', development_only: true,
+        readiness_status: 'guidance_ready', active: true, current_step_label: '1', current_step_id: 'step-1', total_steps: 9,
+        at_final_step: false, block_reason: null, revision: 1, display_summary: '1 Cut.', primary_summary: '1단계: 자릅니다.',
+        source_language: 'en', spoken_summary: '1단계입니다.', warning_texts: [], warning_presentations: [], visual_assets: [],
+        visual_status: 'unavailable', source_page_refs: [1], workflow_status: 'running' } }) }, sessionGeneration, socket);
+      openRunSheet('conversation');
+    }, [PROTOCOL_ID, REVISION_ID]);
+    await expect(page.locator('body')).toHaveAttribute('data-sheet', 'conversation');
     await page.evaluate(() => {
       const send = (turn: number, revision: number, state: string) => onMessage({ data: JSON.stringify({
         type: 'turn.state', configuration_id: 7, turn_id: turn, generation: 0, revision, state }) }, sessionGeneration, socket);
@@ -168,8 +185,21 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
   });
 
   test('the microphone asks for echo cancellation and says so when it is off', async ({ page }) => {
+    await mockCatalog(page, true);
     await page.goto('/');
     await page.waitForFunction(() => typeof ensureAudio === 'function');
+    // Lane IA: the notice is in the voice console, which the run view shows (the wizard stands over it before a run).
+    await acceptSession(page);
+    await page.evaluate(([pid, rid]) => {
+      sessionActive = true;
+      onMessage({ data: JSON.stringify({ type: 'protocol.fixture.state', configuration_id: 7, action: 'start', state: {
+        attached: true, protocol_id: pid, revision_id: rid, display_name: 'In-gel digestion', development_only: true,
+        readiness_status: 'guidance_ready', active: true, current_step_label: '1', current_step_id: 'step-1', total_steps: 9,
+        at_final_step: false, block_reason: null, revision: 1, display_summary: '1 Cut.', primary_summary: '1단계: 자릅니다.',
+        source_language: 'en', spoken_summary: '1단계입니다.', warning_texts: [], warning_presentations: [], visual_assets: [],
+        visual_status: 'unavailable', source_page_refs: [1], workflow_status: 'running' } }) }, sessionGeneration, socket);
+    }, [PROTOCOL_ID, REVISION_ID]);
+    await expect(page.locator('body')).toHaveAttribute('data-view', 'during');
     const result = await page.evaluate(async () => {
       let requested: MediaStreamConstraints | null = null;
       const track = { getSettings: () => ({ echoCancellation: false, noiseSuppression: true, autoGainControl: true }), stop() {} };

@@ -237,7 +237,8 @@ class ReviewMarkupTests(unittest.TestCase):
 
     def test_the_editor_sits_beside_the_read_only_compare_view(self) -> None:
         begin = self.html.index('<details id="protocol-review-editor"')
-        editor = self.html[begin:self.html.index('<div class="setup-grid">', begin)]
+        # Lane IA decision ①: the editor closes the protocols tab; the experiment tab follows it.
+        editor = self.html[begin:self.html.index('<section id="tab-experiment"', begin)]
         # Lane RV2: the cards where the item list was.
         for ident in ("review-cards", "review-card", "reviewer-name", "review-register", "review-history"):
             self.assertIn(f'id="{ident}"', editor, ident)
