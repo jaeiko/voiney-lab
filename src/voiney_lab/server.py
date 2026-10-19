@@ -4,7 +4,7 @@ import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, l
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -151,6 +151,21 @@ from voiney_lab.language import (
 )
 from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.runtime_metrics import RUNTIME_METRICS
+from voiney_lab.pilot_metrics import (
+    ACCOUNT_ID_PATTERN as PILOT_ACCOUNT_PATTERN,
+    DAY_COLUMNS,
+    DEVELOPMENT_ACCOUNT_ID,
+    PILOT_METRICS,
+    PILOT_METRICS_FILENAME,
+    FeedbackAnswer,
+    PilotContext,
+    PilotMetricsStore,
+    PilotSources,
+    analysis_outcome,
+    day_rows,
+    day_totals,
+    review_card_count,
+)
 from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
@@ -248,6 +263,7 @@ from voiney_lab.workspace_store import (
     WorkspaceConflictError,
     WorkspaceError,
     WorkspaceNotFoundError,
+    WORKSPACE_DATABASE_FILENAME,
     WorkspaceSettings,
     initialize_workspace_store,
 )
@@ -817,6 +833,107 @@ def _record_workspace_metric(
             "workspace.analytics.record_failed category=%s metric=%s error=%s",
             category,metric_name,type(exc).__name__,
         )
+
+
+# --- Lane LOG: the pilot metrics -- numbers, codes and times only
+
+def _pilot_store()->PilotMetricsStore|None:
+    """The pilot metrics file in the workspace folder, or None without a workspace."""
+
+    settings=_workspace_settings()
+    if not settings.enabled or settings.data_dir is None:
+        return None
+    return PilotMetricsStore(settings.data_dir/PILOT_METRICS_FILENAME)
+
+
+def _pilot_account(principal:Principal|None=None)->str:
+    """The signed-in account's id, or the development identity's."""
+
+    actor=principal or _REQUEST_PRINCIPAL.get()
+    return actor.principal_id if actor is not None else DEVELOPMENT_ACCOUNT_ID
+
+
+_PILOT_TURN_EVENTS=frozenset({
+    "turn.processing","turn.route_decision","router.stopped","turn.done"})
+
+
+def _pilot_turn_event(session,turn_id:int,kind:str,fields:dict[str,Any])->None:
+    """Lane LOG, decision 1: a turn's codes, and at its end one log line and row.
+
+    Never raises: a metrics write that fails is logged and the turn goes on.
+    """
+
+    if kind not in _PILOT_TURN_EVENTS:
+        return
+    if kind=="turn.processing":
+        # Decision 2: the first words after a timer notice, timed from it.
+        try:
+            waited=PILOT_METRICS.alert_answered(
+                session.session_id,session.turn_committed_at.get(turn_id,session.clock()))
+        except Exception as exc:
+            log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
+            return
+        if waited is not None:
+            _pilot_mark("alert_answered",session=session,value_ms=waited)
+        return
+    try:
+        PILOT_METRICS.turn_event(
+            PilotContext(
+                account_id=_pilot_account(),session_id=session.session_id,
+                report_id=session.experiment_report_id,
+                router_enabled=bool(session.llm_router_settings.enabled),
+                store=_pilot_store(),
+            ),
+            turn_id,kind,fields,
+        )
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
+
+
+def _pilot_mark(
+    kind:str,*,session=None,report_id:str|None=None,**values:Any,
+)->None:
+    """Lane LOG: one experiment-level mark (a button, an alert...); never raises."""
+
+    try:
+        store=_pilot_store()
+        if store is None:
+            return
+        store.record_mark(
+            account_id=_pilot_account(),kind=kind,
+            session_id=session.session_id if session is not None else None,
+            report_id=(
+                session.experiment_report_id if session is not None else report_id),
+            **values,
+        )
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
+
+
+def _pilot_protocol_event(
+    protocol_id:str,kind:str,*,principal:Principal|None=None,
+    public:dict[str,object]|None=None,failed:bool=False,started:float|None=None,
+)->None:
+    """Lane LOG, decision 2: an analysis that ended, or a review registered; never raises."""
+
+    try:
+        store=_pilot_store()
+        if store is None:
+            return
+        outcome=None
+        if kind=="analysis":
+            outcome="failed" if failed else analysis_outcome(public or {})
+        revision=(public or {}).get("revision_id")
+        store.record_protocol_event(
+            account_id=_pilot_account(principal),protocol_id=protocol_id,kind=kind,
+            revision_id=revision if isinstance(revision,str) else None,outcome=outcome,
+            duration_ms=(
+                round((time.monotonic()-started)*1000) if started is not None else None),
+            card_count=(
+                review_card_count(public or {}) if kind=="analysis" else None),
+        )
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
 
 
 def _start_or_resume_workspace_experiment(
@@ -3890,8 +4007,15 @@ async def trigger_protocol_analysis(
 
     try:
         if not background:
-            completed=await asyncio.to_thread(
-                run_explicit_analysis,request_first=True)
+            started=time.monotonic()
+            try:
+                completed=await asyncio.to_thread(
+                    run_explicit_analysis,request_first=True)
+            except Exception:
+                _pilot_protocol_event(
+                    protocol_id,"analysis",principal=metric_principal,failed=True,
+                    started=started)
+                raise
             _record_workspace_metric(
                 category="protocol",metric_name="analysis",
                 dimensions={
@@ -3900,6 +4024,9 @@ async def trigger_protocol_analysis(
                 },
                 principal=metric_principal,
             )
+            _pilot_protocol_event(
+                protocol_id,"analysis",principal=metric_principal,public=completed,
+                started=started)
             return completed
         deferred=_analysis_deferred_for_ocr(protocol_id)
         if deferred is not None:
@@ -3999,6 +4126,7 @@ async def _begin_background_analysis(
             store.close()
 
     async def background_worker()->None:
+        started=time.monotonic()
         try:
             completed=await asyncio.to_thread(run_analysis)
             _record_workspace_metric(
@@ -4009,6 +4137,9 @@ async def _begin_background_analysis(
                 },
                 principal=principal,
             )
+            _pilot_protocol_event(
+                protocol_id,"analysis",principal=principal,public=completed,
+                started=started)
         except Exception as exc:
             # The catalog persists bounded failure codes.  Provider responses,
             # prompts, and source text never enter logs or the lifecycle record.
@@ -4051,6 +4182,8 @@ async def _begin_background_analysis(
                 },
                 principal=principal,
             )
+            _pilot_protocol_event(
+                protocol_id,"analysis",principal=principal,failed=True,started=started)
 
     if _analysis_worker_running(protocol_id):
         catalog,store=_open_protocol_catalog()
@@ -4204,11 +4337,14 @@ def post_protocol_review_version(
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.register_review(protocol_id,_review_body_with_account(body))
+            registered=catalog.register_review(protocol_id,_review_body_with_account(body))
         finally:
             store.close()
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+    # Lane LOG, decision 2: the time from the analysis to its review.
+    _pilot_protocol_event(protocol_id,"review_registered")
+    return registered
 
 
 @app.get("/api/protocols/{protocol_id}/start-check")
@@ -4615,6 +4751,113 @@ def get_admin_metrics(
     }
 
 
+def _require_pilot_admin(presented_token:str|None)->None:
+    """Lane LOG, decision 4: an admin account, or else the admin token.
+
+    An account counts as an admin when one of its roles is "admin" -- a role
+    the accounts of lane ON may give; until then the token is the way in.
+    """
+
+    principal=_REQUEST_PRINCIPAL.get()
+    roles={
+        str(getattr(role,"value",role)) for role in getattr(principal,"roles",()) or ()
+    }
+    if "admin" in roles:
+        return
+    _require_admin_access(presented_token)
+
+
+def _pilot_sources()->PilotSources:
+    """The files the pilot metrics are read from, as this server is configured."""
+
+    metrics_db=workspace_db=reports_db=None
+    workspace=_workspace_settings()
+    if workspace.enabled and workspace.data_dir is not None:
+        metrics_db=workspace.data_dir/PILOT_METRICS_FILENAME
+        workspace_db=workspace.data_dir/WORKSPACE_DATABASE_FILENAME
+    try:
+        report_settings=ExperimentReportSettings.from_environment()
+    except ValueError:
+        report_settings=ExperimentReportSettings(False)
+    if report_settings.enabled:
+        reports_db=report_settings.database_path
+    return PilotSources(metrics_db=metrics_db,reports_db=reports_db,workspace_db=workspace_db)
+
+
+@app.get("/api/admin/pilot-metrics")
+def get_admin_pilot_metrics(
+    since:str|None=Query(default=None,alias="from"),
+    until:str|None=Query(default=None,alias="to"),
+    account:str|None=Query(default=None),
+    x_voice_workflow_admin_token:str|None=Header(default=None),
+)->dict[str,object]:
+    """Lane LOG, decision 4: the pilot's day table -- numbers, codes and times only.
+
+    The admin screen (static/admin-metrics.html) reads it. The rating memos
+    are not here; scripts/pilot_metrics.py notes is the only way to them.
+    """
+
+    _require_pilot_admin(x_voice_workflow_admin_token)
+    try:
+        first=date.fromisoformat(since) if since else None
+        last=date.fromisoformat(until) if until else None
+        if account is not None and not PILOT_ACCOUNT_PATTERN.fullmatch(account):
+            raise ValueError("account id is malformed")
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail="pilot_metrics_query_invalid") from exc
+    try:
+        days=day_rows(_pilot_sources(),since=first,until=last,account=account)
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=admin error=%s",type(exc).__name__)
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable") from exc
+    return {
+        "schema_version":1,
+        "period":{"from":since,"to":until,"account":account},
+        "columns":list(DAY_COLUMNS),
+        "days":days,
+        "totals":day_totals(days),
+        "privacy":{
+            "transcripts_included":False,"free_text_included":False,
+            "protocol_text_included":False,"raw_audio_included":False,
+        },
+    }
+
+
+@app.post("/api/pilot/feedback",status_code=201)
+async def post_pilot_feedback(request:Request)->dict[str,object]:
+    """Lane LOG, decision 3: "이번 실험에 도움이 됐나요?" -- kept with its experiment.
+
+    A rating 1-5 with an optional one-line memo, or a skip; the last answer
+    about an experiment is the one its summary carries. Kept in the pilot
+    metrics store, so without a workspace there is nowhere to keep it (503).
+    """
+
+    payload=await _json_object(request)
+    try:
+        answer=FeedbackAnswer.from_request(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail="feedback_invalid") from exc
+    try:
+        store=_pilot_store()
+    except Exception as exc:
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable") from exc
+    if store is None:
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable")
+    try:
+        _scope_tenant_resource("experiment_report",answer.report_id)
+        report_settings=ExperimentReportSettings.from_environment()
+        if report_settings.enabled and report_settings.database_path is not None:
+            ExperimentReportStore(report_settings.database_path).get_report(answer.report_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    try:
+        store.record_feedback(account_id=_pilot_account(),answer=answer)
+    except Exception as exc:
+        log.warning("pilot.metrics.failed kind=feedback error=%s",type(exc).__name__)
+        raise HTTPException(status_code=503,detail="pilot_metrics_unavailable") from exc
+    return {"saved":True}
+
+
 def _report_writer_brain()->ReportWriterBrain|None:
     """The report role's writer, or None when no report model is configured."""
 
@@ -4829,6 +5072,8 @@ def export_experiment_report(report_id:str,format_name:str):
         raise HTTPException(
             status_code=404,detail="experiment report unavailable"
         ) from exc
+    # Lane LOG, decision 2: the report was made (Word, Markdown) or exported.
+    _pilot_mark("report_exported",report_id=report_id,code=format_name)
     return Response(
         content=content,media_type=media_type,
         headers={
@@ -7240,6 +7485,7 @@ def _open_experiment_report(
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
             "experiment_report",session.experiment_report_id,bind=True)
+        _pilot_mark("experiment_opened",session=session)
         experimenter=_experimenter_display_name()
         if experimenter:
             # Lane RP, decision 5: the report's 실험자 is the display name of
@@ -8282,6 +8528,11 @@ async def _show_timer_notice(
         notice.notice_id,notice.kind,notice.public_dict()["due_at"],
         round((current-notice.due_at)*1000),
     )
+    # Lane LOG, decision 2: the notice, and the next words timed from it.
+    _pilot_mark(
+        "timer_alert",session=session,
+        code="end" if notice.kind=="timer_ended" else "last_minute")
+    PILOT_METRICS.alert_shown(session.session_id,session.clock())
     return current,session.clock()
 
 
@@ -9171,7 +9422,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         fields.setdefault("generation",generation)
         if session.accepted_configuration_id is not None:
             fields.setdefault("configuration_id",session.accepted_configuration_id)
-        await sender.text(kind,**fields); return True
+        await sender.text(kind,**fields)
+        _pilot_turn_event(session,turn_id,kind,fields); return True
 
     async def report_state(report:dict)->bool:
         public=_public_experiment_report_state(report)
@@ -9662,6 +9914,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     log.info(
                         "router model unavailable turn_id=%s reason=%s",
                         turn_id,router_outcome.fallback_reason)
+                    _pilot_turn_event(session,turn_id,"router.stopped",{
+                        "fallback_reason":router_outcome.fallback_reason})
                     _record_workspace_metric(
                         category="voice",metric_name="command_failure",
                         dimensions={"status":"stopped","reason_code":str(router_outcome.fallback_reason)[:100]},
@@ -11114,6 +11368,10 @@ async def run_barge_in_stt_failure_turn(
         output_frames=(len(frames) if frames else 0),tools_used=[],
         timings_ms={"stt":max(0,stt_ms)},
     )
+    # Lane LOG, decision 1: the words were not heard, so they are asked again.
+    _pilot_turn_event(session,turn_id,"turn.route_decision",{
+        "action":"transcript_unreliable","state_mutation":False})
+    _pilot_turn_event(session,turn_id,"turn.done",{"timings_ms":{}})
 
 async def _send_playback_terminal(
     websocket:WebSocket,session:ListenerSession,turn_id:int,*,cooldown_ms:int,
@@ -12404,6 +12662,8 @@ async def voice_socket(websocket:WebSocket):
                         task.cancel()
                     _record_screen_history(
                         session,screen_before,control="pause",changed=changed)
+                    if changed:
+                        _pilot_mark("button_change",session=session,code="pause")
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -12445,6 +12705,8 @@ async def voice_socket(websocket:WebSocket):
                                 "experiment.session.state",state=experiment_state))
                     _record_screen_history(
                         session,screen_before,control="resume",changed=changed)
+                    if changed:
+                        _pilot_mark("button_change",session=session,code="resume")
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -12531,6 +12793,10 @@ async def voice_socket(websocket:WebSocket):
                 log.info(
                     "client.clarify_choice taken turn_id=%s asked_turn_id=%s",
                     chosen_turn_id,control["turn_id"])
+                try:
+                    PILOT_METRICS.note_input(session.session_id,chosen_turn_id,"candidate")
+                except Exception as exc:
+                    log.warning("pilot.metrics.failed kind=input error=%s",type(exc).__name__)
                 await websocket.send_text(event(
                     "speech.start",turn_id=chosen_turn_id,generation=chosen_generation,
                     state=session.state.value,voiced_frames=0,total_frames=0,
@@ -12657,6 +12923,13 @@ async def voice_socket(websocket:WebSocket):
             try: await notice_task
             except (asyncio.CancelledError, WebSocketDisconnect, Exception): pass
         _unsubscribe_translations(session)
+        curated_at_close=session.curated_protocol_session
+        if (
+            session.experiment_report_id is not None and curated_at_close is not None
+            and not curated_at_close.experiment_ended
+        ):
+            # Lane LOG, decision 2: the connection closed mid-experiment.
+            _pilot_mark("connection_lost",session=session)
         session.stop()
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)

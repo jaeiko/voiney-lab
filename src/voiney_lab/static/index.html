@@ -1217,6 +1217,8 @@
                 <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
                 <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
               </div>
+              <!-- Lane LOG, decision 3: "이번 실험에 도움이 됐나요?" -- filled by /feedback.js once the experiment ends. -->
+              <div id="pilot-feedback" class="pilot-feedback" aria-live="polite" hidden></div>
               <details id="procedure-report-details">
                 <summary>기록 보기 · 이상 사항 · 내보내기</summary>
                 <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
@@ -1319,6 +1321,7 @@
     </div>
   </div>
 
+<script src="/feedback.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 function setText(id,value){const node=$(id);if(node)node.textContent=value;}
@@ -1435,6 +1438,7 @@ function showExperimentEnded(message){
  setText("procedure-status",`${status}${report}`);
  renderAfterHead(message);
  renderScreenView();
+ globalThis.VoineyFeedback?.ended(lastReportId);
 }
 // Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, set once at the
 // server's end and kept until a new session: how it ended, the badge of the
@@ -2312,6 +2316,7 @@ function resetSessionUI(){
  experimentEndedOnScreen=false;workflowPaused=false;clearAfterHead();
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
+ globalThis.VoineyFeedback?.reset();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
  turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
  webReferenceHistory.length=0;runTurns.clear();runCardKey=null;renderRunCaption("");runFigureKeys.clear();runFigureKeysSeen.clear();runSheet="";renderRunSheets();
@@ -4535,7 +4540,7 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}

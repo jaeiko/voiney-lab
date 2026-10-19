@@ -1860,6 +1860,29 @@ class RouterTurnOutcome:
         return not self.handled_by.startswith("front:")
 
 
+def router_reason_code(reason: str | None) -> str:
+    """The pilot record's code for why the rules answered (lane LOG, decision 1).
+
+    One of "none", "timeout", "rate_limit" (the turn stopped at the request
+    limit), "format" (no reply, or one that could not be read), "refused" (the
+    server refused the proposal or a check rejected the answer) or "error"
+    (any other provider failure). Only the code goes to the record; the
+    reason's own detail stays on the socket.
+    """
+
+    if not reason:
+        return "none"
+    if reason == "timeout":
+        return "timeout"
+    if reason.startswith("model_unavailable:"):
+        return "rate_limit"
+    if reason in {"no_reply", "answer_unreadable"}:
+        return "format"
+    if reason.startswith(("refused:", "answer_rejected:")):
+        return "refused"
+    return "error"
+
+
 def _answer_from_brain(output: Any) -> RouterAnswer | None:
     """The Answer role's output as a router answer, for the same checks (lane RA, b)."""
 

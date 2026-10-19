@@ -45,6 +45,7 @@
 |---|---|---|
 | [`ARCHITECTURE_MAP.md`](ARCHITECTURE_MAP.md) | Laboratory Workflow OS 이전의 구조 스냅샷 | `CLAUDE.md` 가 이 경로를 이름으로 가리킨다. 내용은 기록으로만 읽는다. 코드와 다르면 `.agent/architecture.md` 가 맞다 |
 | [`PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md`](PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md) | 분석의 단락 경계·완전성 의무에 대한 결함 기록과 설계 (스스로 "design only" 라고 적음) | 분석 작업이 다루는 영역의 설계라서 남김 |
+| [`APP_PLAN.md`](APP_PLAN.md) | 스토어 앱 계획(줄 APP0): 하이브리드·RN·네이티브 비교, 권한·심사 위험, 결제 규칙과 이용 권한 설계, 오프라인 단계, 앱 뼈대(`mobile/`)와 빌드, 사람이 할 일 | 조사와 뼈대뿐이고 앱은 아직 내지 않았다. 정책·수수료는 적힌 확인일 기준 |
 | [`course-archive/`](course-archive/) | 이 저장소가 시작된 강의 자료 | 기록으로만 둔다 |
 | [`archive/`](archive/) | 보관한 옛 보고서와 설계 | 읽지 않는다(`CLAUDE.md`). 사람이 지난 결정을 물을 때만 |
 

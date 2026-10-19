@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>기기 시험 · VoineyLab</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f6f7f5; color: #1c2321; }
+  main { max-width: 32rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 0.5rem; }
+  p { line-height: 1.5; margin: 0.4rem 0 1rem; }
+  button { display: block; width: 100%; margin: 0.5rem 0; font-size: 1.05rem; padding: 0.85rem 1rem; border: 0; border-radius: 0.6rem; background: #1f6f5c; color: #fff; text-align: left; }
+  button.secondary { background: #dfe6e2; color: #1c2321; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #d5dbd8; border-radius: 0.5rem; padding: 0.75rem; font-size: 0.85rem; min-height: 6rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>기기 시험 (디버그 빌드)</h1>
+  <p>native-bridge.js 가 기기 알림을 예약하는지 사람이 확인하는 화면이다. 서버에 연결하지 않고, 서버가 보내는 것과 같은 모양의 시험 타이머(지금부터 6분 — 서버는 5분 이상 타이머에만 "1분 전"을 알린다)를 만든다. 순서는 docs/APP_PLAN.md 의 "실제 기기 시험 순서".</p>
+  <button id="prepare">1. 알림 권한·채널 준비</button>
+  <button id="exact" class="secondary">2. 정확한 알람 설정 열기 (Android 12+)</button>
+  <button id="schedule">3. 시험 타이머 예약 — 6분 (5분 뒤 "1분 전", 6분 뒤 끝)</button>
+  <button id="cancel" class="secondary">4. 시험 타이머 취소 (서버가 타이머를 멈춘 것처럼)</button>
+  <button id="pending" class="secondary">5. 예약된 알림 보기</button>
+  <button id="awake" class="secondary">6. 화면 켜 두기 켜기/끄기</button>
+  <button id="network" class="secondary">7. 네트워크 상태 보기·변화 기록</button>
+  <button id="app" class="secondary">8. 앱 화면 열기 (index.html)</button>
+  <pre id="log"></pre>
+</main>
+<script src="native-bridge.js"></script>
+<script>
+  "use strict";
+  const bridge = window.VoineyNativeBridge;
+  const cap = bridge && bridge.capacitorOf(window);
+  const logBox = document.getElementById("log");
+  const log = (line) => {
+    const at = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+    logBox.textContent = `${at}  ${line}\n` + logBox.textContent;
+  };
+  const guard = (fn) => async () => {
+    if (!cap) { log("Capacitor 가 없다 — 앱 안에서 열어야 한다."); return; }
+    try { await fn(); } catch (error) { log(`오류: ${error && error.message ? error.message : error}`); }
+  };
+  const alerts = cap ? bridge.createTimerAlerts(bridge.capacitorNotifier(cap)) : null;
+  // The shape the server sends as timers.step (curated_protocol timer_status).
+  const testState = (running) => {
+    const now = Date.now();
+    const timer = running
+      ? { state: "running", duration_seconds: 360, remaining_seconds: 360, elapsed_seconds: 0, step_id: "device-check", step_label: "시험",
+          started_at: new Date(now).toISOString(), deadline_at: new Date(now + 360000).toISOString(), name: "6분", bound: "exact" }
+      : { state: "not_started", duration_seconds: 360, remaining_seconds: 360, step_id: "device-check", step_label: "시험", deadline_at: null };
+    return { attached: true, active: true, workflow_status: "active", timers: { step: timer }, timer };
+  };
+  const clock = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour12: false });
+  let awake = false;
+
+  document.getElementById("prepare").onclick = guard(async () => {
+    const result = await bridge.prepareNotifications(cap);
+    log(`알림 표시: ${result.display}, 정확한 알람: ${result.exactAlarm === null || result.exactAlarm === undefined ? "해당 없음" : result.exactAlarm}`);
+  });
+  document.getElementById("exact").onclick = guard(async () => {
+    const result = await cap.nativePromise("LocalNotifications", "changeExactNotificationSetting", {});
+    log(`정확한 알람: ${result && result.exact_alarm}`);
+  });
+  document.getElementById("schedule").onclick = guard(async () => {
+    const plan = await alerts.sync(testState(true), Date.now());
+    log(`예약 ${plan.schedule.length}건 (${plan.schedule.map((a) => `${a.kind} ${clock(a.at)}`).join(", ")}), 취소 ${plan.cancel.length}건. 이제 화면을 끄고 와이파이를 꺼 본다.`);
+  });
+  document.getElementById("cancel").onclick = guard(async () => {
+    const plan = await alerts.sync(testState(false), Date.now());
+    log(`취소 ${plan.cancel.length}건`);
+  });
+  document.getElementById("pending").onclick = guard(async () => {
+    const result = await cap.nativePromise("LocalNotifications", "getPending", {});
+    const own = bridge.ownPending(result && result.notifications);
+    log(`예약된 알림 ${own.length}건: ${own.map((item) => `${item.id} ${clock(item.at)}`).join(", ") || "없음"}`);
+  });
+  document.getElementById("awake").onclick = guard(async () => {
+    awake = !awake;
+    await bridge.keepAwake(cap, awake);
+    log(awake ? "화면 켜 두기: 켬" : "화면 켜 두기: 끔");
+  });
+  let listening = false;
+  document.getElementById("network").onclick = guard(async () => {
+    const status = await bridge.networkStatus(cap);
+    log(`네트워크: ${status.connected ? "연결" : "끊김"} (${status.connectionType})`);
+    if (!listening) {
+      listening = true;
+      bridge.onNetworkChange(cap, (change) => log(`네트워크 변화: ${change && change.connected ? "연결" : "끊김"} (${change && change.connectionType})`));
+    }
+  });
+  document.getElementById("app").onclick = () => { location.href = "index.html"; };
+  log(cap ? `앱 안에서 열림 (${cap.getPlatform ? cap.getPlatform() : "?"})` : "브라우저에서 열림 — 기기 기능 없음");
+</script>
+</body>
+</html>

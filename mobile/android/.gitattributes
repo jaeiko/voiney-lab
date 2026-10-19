@@ -1,0 +1,2 @@
+# gradlew.bat is a Windows script and keeps its CRLF line endings.
+gradlew.bat -whitespace
