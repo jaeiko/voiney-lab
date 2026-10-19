@@ -828,7 +828,7 @@ def _table(rows: Iterable[Row]) -> str:
     for row in rows:
         lines.append(
             f"| {row.id} | {row.title} | {row.field} | {row.label} | "
-            f"{row.steps if row.steps is not None else '–'} | {row.calls} | {row.usd:g} |")
+            f"{row.steps if row.state == STATE_READY and row.steps is not None else '–'} | {row.calls} | {row.usd:g} |")
     return "\n".join(lines)
 
 

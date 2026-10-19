@@ -15,6 +15,7 @@ import csv
 import importlib.util
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -182,7 +183,9 @@ class ListTests(unittest.TestCase):
 class ShippedListTests(unittest.TestCase):
     def test_every_row_is_reusable_and_names_its_source_and_authors(self) -> None:
         entries = tool.read_list(SHIPPED_LIST)
-        self.assertGreaterEqual(len(entries), 8)
+        # Decision of 2026-10-20: eight to twelve protocols, both fields.
+        self.assertTrue(8 <= len(entries) <= 12, len(entries))
+        self.assertEqual({entry.field for entry in entries}, {"생명", "화학·소재"})
         for entry in entries:
             self.assertTrue(tool.license_allowed(entry.license), entry.id)
             self.assertTrue(entry.source and entry.authors and entry.source_url, entry.id)
@@ -410,6 +413,30 @@ class MeterTests(unittest.TestCase):
         self.assertEqual(tool.read_price("1,0.1,5", "some-new-model"), (1.0, 0.1, 5.0))
         with self.assertRaises(tool.StarterPackError):
             tool.read_price("1,2", "x")
+
+
+class GuideTests(unittest.TestCase):
+    """docs/PILOT_GUIDE.md section 6 names what the tool takes and writes."""
+
+    def setUp(self) -> None:
+        text = (ROOT / "docs" / "PILOT_GUIDE.md").read_text(encoding="utf-8")
+        self.section = text.split("## 6. 스타터 팩", 1)[1].split("## 7.", 1)[0]
+
+    def test_every_option_the_guide_shows_exists(self) -> None:
+        parser = tool.build_parser()
+        known = {option for action in parser._actions for option in action.option_strings}
+        shown = set(re.findall(r"--[a-z][a-z-]+", self.section))
+        self.assertTrue(shown)
+        self.assertEqual(shown - known, set())
+
+    def test_the_guide_names_the_files_the_tool_writes_and_the_licence_rule(self) -> None:
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        names = [path.name for path in tool.write_report(folder, [], tool.Meter(max_usd=1, max_clova_pages=1))]
+        for name in names:
+            self.assertIn(name.removesuffix(".md").removesuffix(".json"), self.section)
+        for word in ("CC BY", "service-starter-pack", "lab-pilot", "--allow-runtime-dir", "--retry-failed"):
+            self.assertIn(word, self.section)
 
 
 class OutputTests(_Case):
