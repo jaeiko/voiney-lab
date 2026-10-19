@@ -343,6 +343,19 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
 
 두 번째부터는 첫 화면에 **[지난번 설정으로 바로 시작]**(이 브라우저가 기억한 마지막 프로토콜) 이 있어 2·3·4 를 건너뛰고 5 부터 간다. **[자세히 보기]** 를 누르면 지금까지의 실험 전 화면(목록·검토·원문 대조·기록)이 그대로 나온다(이 탭에서는 그대로 유지).
 
+### 7-5. 스토어 앱의 로그인과 출처 (`VOINEY_LAB_APP_ORIGINS`, 줄 APP1, 2026-10-19 — 파일럿에는 쓰지 않음)
+
+파일럿은 웹이다. 이 설정은 다음에 낼 스토어 앱(설계: [`APP_PLAN.md`](APP_PLAN.md) 9.5절)을 위한 것이고, **비워 두면(기본) 서버는 지금과 똑같다.**
+
+- 앱에 묶은 화면은 출처가 서버와 달라(`https://localhost` Android, `capacitor://localhost` iOS) 로그인 쿠키가 가지 않는다. 그 출처를
+  `VOINEY_LAB_APP_ORIGINS=https://localhost,capacitor://localhost` 처럼 적으면 그 출처에서만: 로그인·가입 답에 세션 토큰(쿠키 없음),
+  `/api` 는 `Authorization: Bearer`, `/ws` 는 첫 메시지 `{"type":"client.auth","token":…}`(10초 안), `/api`·`/readyz` 에 CORS(자격 증명 없음).
+  토큰은 쿠키와 같은 세션이라 로그아웃·비밀번호 바꾸기·계정 끄기(7-2절)로 끝난다. URL 과 로그에는 싣지 않는다.
+- 목록을 적으면 `/ws` 가 브라우저의 출처도 본다: 서버 자신의 주소, 목록의 앱, 출처 없음(브라우저가 아님)만 받는다. 목록이 비면 지금처럼 보지 않는다.
+- 잘못 적으면(`*`, 경로, `null`) `/readyz` 가 `not_ready`(`ConfigurationError`)다.
+- **Caddy 기본 인증(`PILOT_HTTPS_SETUP.md`)과 함께 쓸 수 없다** — 둘 다 `Authorization` 머리글을 쓰고, 앱의 사전 요청(OPTIONS)은 인증 정보를 싣지 않는다.
+  앱을 실제 서버에 붙이는 날에는 7-3절의 "기본 인증을 둘지, 계정 로그인으로 갈음할지" 를 계정 로그인으로 정해야 한다.
+
 ## 8. 사람이 할 일 · 알려진 한계
 
 1. 4절의 고지 문안 확정(윤리·법무 검토, 업체 약관 확인). 이 저장소는 외부 서비스의 보관을 보증하지 않는다.
