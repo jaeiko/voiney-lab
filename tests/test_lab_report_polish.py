@@ -400,7 +400,9 @@ class LaterStartAndReturnTests(_ReportCase):
         # The second round's timer started after the first completion: the
         # first round is not timed against it (it read "실제 0분").
         self.run_with_a_return()
-        row = next(line for line in self.markdown().splitlines() if line.startswith("| 3 | "))
+        # Lane RP2, decision 1: the step table of 3-2, not the first pages' tables.
+        steps = self.markdown().split("### 3-2. 수행한 단계")[1].split("### 3-3.")[0]
+        row = next(line for line in steps.splitlines() if line.startswith("| 3 | "))
         self.assertTrue(row.endswith("| 1회차 09:56, 2회차 10:16 | 원문 15분 / 실제 1회차 15분, 2회차 10분 |"), row)
 
     def test_the_model_reads_the_start_and_the_return_as_recorded(self) -> None:

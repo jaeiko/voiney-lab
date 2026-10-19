@@ -24,6 +24,31 @@
 
         </activity>
 
+        <!-- Lane APP1, decision 1: the step timer's alarms (VoineyAlarm plugin).
+             The receiver posts a due alarm; the boot receiver sets the stored
+             alarms again after a reboot, an app update, or exact alarms being
+             allowed again. -->
+        <receiver
+            android:name=".alarm.TimerAlarmReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".alarm.TimerAlarmBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Lane APP1, decision 2: listening with the screen off (VoineyMicrophone
+             plugin). Started only while the app is on screen; its notification
+             line says "VoineyLab 이 듣는 중" with a 끄기 action. -->
+        <service
+            android:name=".mic.ListeningService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -40,8 +65,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Lane APP0: the screen's microphone (getUserMedia in the WebView asks
          for this at run time) and audio routing to a Bluetooth headset.
-         Listening with the screen off needs a microphone foreground service,
-         which is the next step (docs/APP_PLAN.md) and is not declared yet. -->
+         Lane APP1, decision 2: the same permission for the native recording,
+         and the microphone foreground service that keeps it with the screen
+         off (Play asks for a description and a video of it). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Lane APP1, decision 1: alarm clocks for the step timer and setting
+         them again after a reboot. The notification plugin merges the same
+         three; they are written here because the app's own plugin needs them.
+         Exact alarms are allowed by the person (off by default on new installs
+         from Android 14); USE_EXACT_ALARM is for alarm or timer apps only. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

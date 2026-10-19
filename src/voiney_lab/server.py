@@ -97,6 +97,7 @@ from voiney_lab.experiment_reports import (
     record_amendments,
     report_review_items,
     ReportNarrative,
+    ReportPdfError,
     ReportWriterBrain,
     ReportWriterSettings,
     new_session_id,
@@ -215,6 +216,7 @@ from voiney_lab.vad import (
     NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
 )
 from voiney_lab import voice_providers
+from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
 from voiney_lab.start_check import StartCheck, StartCheckError
 from voiney_lab.accounts import (
@@ -229,11 +231,15 @@ from voiney_lab.accounts import (
     AccountNotFoundError,
     AccountStore,
     AdminRequiredError,
+    AppAccessSettings,
     AuthSettings,
     InviteInvalidError,
     LoginLockedError,
     LoginRefusedError,
     PasswordInvalidError,
+    bearer_token,
+    normalize_origin,
+    socket_auth_token,
 )
 from voiney_lab.identity import (
     AuthenticationRequiredError,
@@ -477,6 +483,8 @@ async def readyz()->JSONResponse:
         workspace=_workspace_settings()
         protocol=_protocol_store_settings()
         reports=ExperimentReportSettings.from_environment()
+        # Lane APP1, decision 4: the app origins parse (exact origins only).
+        _app_access()
         # Lane ON, decision ① (2026-10-18): "accounts" when the pilot's
         # login is on (VOINEY_LAB_AUTH_MODE=accounts).
         capabilities["identity_mode"]=(
@@ -561,7 +569,7 @@ def _account_store()->AccountStore:
 
 
 def _account_for_cookie(token:str|None)->Account:
-    """The signed-in account of a session cookie, or the refusal."""
+    """The signed-in account of a session token (cookie or app bearer), or the refusal."""
 
     if not token:
         raise AuthenticationRequiredError("Authentication is required.")
@@ -573,6 +581,64 @@ def _account_for_cookie(token:str|None)->Account:
     if account is None:
         raise AuthenticationRequiredError("Authentication is required.")
     return account
+
+
+# Lane APP1, decision 3 (2026-10-19): the app's bundled screen runs at its
+# own origin, where the cookie never reaches us. For an origin listed in
+# VOINEY_LAB_APP_ORIGINS -- only for one -- the session token travels in the
+# login answer, an Authorization: Bearer header and the socket's first
+# message (accounts.py, "The app's screen"). Empty setting: nothing changes.
+def _app_access()->AppAccessSettings:
+    return AppAccessSettings.from_environment()
+
+
+def _from_app(headers)->bool:
+    """Whether the request comes from a listed app origin (the browser sets Origin; a page cannot)."""
+
+    origin=headers.get("origin")
+    return bool(origin) and _app_access().allows(origin)
+
+
+def _session_token(request:Request)->str|None:
+    """The session token of this request: the app's bearer from a listed origin, else the cookie."""
+
+    if _from_app(request.headers):
+        token=bearer_token(request.headers.get("authorization"))
+        if token:
+            return token
+    return request.cookies.get(SESSION_COOKIE_NAME)
+
+
+def _signed_in_response(request:Request,content:dict[str,Any],token:str,*,status_code:int=200)->JSONResponse:
+    """A login or signup answer: the cookie for the web, the token in the body for the app."""
+
+    if _from_app(request.headers):
+        return JSONResponse(status_code=status_code,content={
+            **content,
+            "app_session":{
+                "token":token,
+                "expires_in_seconds":int(SESSION_LIFETIME.total_seconds()),
+            },
+        })
+    response=JSONResponse(status_code=status_code,content=content)
+    _set_session_cookie(response,token,request)
+    return response
+
+
+async def _app_socket_token(websocket:WebSocket)->str:
+    """The token an app's socket sends first; anything else (or nothing in time) is the refusal."""
+
+    try:
+        message=await asyncio.wait_for(
+            websocket.receive(),timeout=accounts_module.APP_SOCKET_AUTH_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise AuthenticationRequiredError("Authentication is required.") from exc
+    token=(
+        socket_auth_token(message.get("text"))
+        if message.get("type")=="websocket.receive" else None)
+    if token is None:
+        raise AuthenticationRequiredError("Authentication is required.")
+    return token
 
 
 def _request_account()->Account|None:
@@ -673,7 +739,7 @@ async def commercial_identity_boundary(request:Request,call_next):
                 return await call_next(request)
             if not settings.enabled:
                 raise IdentityConfigurationError("Accounts need the tenant workspace.")
-            account=_account_for_cookie(request.cookies.get(SESSION_COOKIE_NAME))
+            account=_account_for_cookie(_session_token(request))
             principal=account.principal()
         else:
             if not settings.enabled and not operational:
@@ -708,6 +774,90 @@ async def commercial_identity_boundary(request:Request,call_next):
         return JSONResponse(
             status_code=error.status_code,content={"detail":error.detail},
             headers=error.headers or None)
+
+
+# Lane APP1, decision 4 (2026-10-19): CORS for the app's origins. Registered
+# after commercial_identity_boundary, so it wraps it: the preflight is
+# answered before any session is asked for, and a refusal (401, 429) carries
+# the origin so the app can read why. No Allow-Credentials -- the app sends a
+# bearer, and a cookie session is never offered to another origin. Only
+# /api and the health paths the screen reads; the app carries its own copy
+# of the screen's files. With VOINEY_LAB_APP_ORIGINS empty nothing is added.
+_APP_CORS_PATHS=frozenset({"/readyz","/healthz"})
+_APP_CORS_METHODS="GET, POST, PUT, PATCH, DELETE"
+_APP_CORS_HEADERS="Authorization, Content-Type, Accept"
+_APP_CORS_EXPOSE="Retry-After, Content-Disposition"
+_APP_CORS_MAX_AGE_SECONDS=600
+
+
+def _with_vary_origin(headers)->None:
+    vary=headers.get("vary","")
+    if "origin" not in {item.strip().casefold() for item in vary.split(",")}:
+        headers["vary"]=f"{vary}, Origin" if vary.strip() else "Origin"
+
+
+@app.middleware("http")
+async def app_origin_cors(request:Request,call_next):
+    """CORS for the origins in VOINEY_LAB_APP_ORIGINS, on /api and the health paths."""
+
+    path=request.url.path
+    origin=request.headers.get("origin")
+    if not origin or not (path.startswith("/api/") or path in _APP_CORS_PATHS):
+        return await call_next(request)
+    try:
+        allowed=_app_access().allows(origin)
+    except ConfigurationError:
+        # An invalid list lets no app in; /readyz reports it.
+        allowed=False
+    if not allowed:
+        return await call_next(request)
+    if request.method=="OPTIONS" and request.headers.get("access-control-request-method"):
+        preflight=Response(status_code=204,headers={
+            "Access-Control-Allow-Origin":origin,
+            "Access-Control-Allow-Methods":_APP_CORS_METHODS,
+            "Access-Control-Allow-Headers":_APP_CORS_HEADERS,
+            "Access-Control-Max-Age":str(_APP_CORS_MAX_AGE_SECONDS),
+        })
+        _with_vary_origin(preflight.headers)
+        return preflight
+    response=await call_next(request)
+    response.headers["Access-Control-Allow-Origin"]=origin
+    response.headers["Access-Control-Expose-Headers"]=_APP_CORS_EXPOSE
+    _with_vary_origin(response.headers)
+    return response
+
+
+def _socket_origin_refusal(websocket:WebSocket)->str|None:
+    """Why /ws refuses this browser's origin, or None (lane APP1, decision 4).
+
+    With VOINEY_LAB_APP_ORIGINS empty there is no check, as before. Once it
+    lists the app, a browser's socket must come from the server's own host
+    (Host, or the proxy's X-Forwarded-Host) or a listed app origin; a client
+    that sends no Origin is not a browser and still needs its login.
+    """
+
+    try:
+        settings=_app_access()
+    except ConfigurationError:
+        return "configuration_invalid"
+    if not settings.origins:
+        return None
+    headers=getattr(websocket,"headers",{})
+    origin=headers.get("origin")
+    if origin is None:
+        return None
+    if settings.allows(origin):
+        return None
+    normalized=normalize_origin(origin)
+    if normalized is not None:
+        own_hosts={
+            value.split(",")[0].strip().casefold()
+            for value in (headers.get("host",""),headers.get("x-forwarded-host",""))
+            if value.strip()
+        }
+        if normalized.split("://",1)[1] in own_hosts:
+            return None
+    return "origin_not_allowed"
 
 
 def _commercial_workspace()->tuple[Principal,object]:
@@ -2866,9 +3016,10 @@ async def get_auth_session(request:Request)->dict[str,object]:
             },
         }
     try:
+        token=_session_token(request)
         store=_account_store()
         try:
-            account=store.account_for_session(request.cookies.get(SESSION_COOKIE_NAME))
+            account=store.account_for_session(token)
         finally:
             store.close()
     except Exception as exc:
@@ -2913,9 +3064,10 @@ async def post_auth_signup(request:Request,body:dict[str,Any]=Body(...))->Respon
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
     log.info("auth.signup account_id=%s admin=%s",account.account_id,account.admin)
-    response=JSONResponse(status_code=201,content={"account":account.public_dict()})
-    _set_session_cookie(response,token,request)
-    return response
+    try:
+        return _signed_in_response(request,{"account":account.public_dict()},token,status_code=201)
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
 
 
 @app.post("/api/auth/login")
@@ -2940,9 +3092,10 @@ async def post_auth_login(request:Request,body:dict[str,Any]=Body(...))->Respons
         log.info("auth.login refused reason=%s",getattr(exc,"code",type(exc).__name__))
         raise _workspace_http_error(exc) from exc
     log.info("auth.login account_id=%s",account.account_id)
-    response=JSONResponse(status_code=200,content={"account":account.public_dict()})
-    _set_session_cookie(response,token,request)
-    return response
+    try:
+        return _signed_in_response(request,{"account":account.public_dict()},token)
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
 
 
 @app.post("/api/auth/logout")
@@ -2953,7 +3106,7 @@ async def post_auth_logout(request:Request)->Response:
     try:
         store=_account_store()
         try:
-            store.close_session(request.cookies.get(SESSION_COOKIE_NAME))
+            store.close_session(_session_token(request))
         finally:
             store.close()
     except Exception as exc:
@@ -2976,7 +3129,7 @@ async def post_auth_password(request:Request,body:dict[str,Any]=Body(...))->dict
         try:
             store.change_password(
                 account.account_id,body.get("current"),body.get("new"),
-                keep_session_token=request.cookies.get(SESSION_COOKIE_NAME))
+                keep_session_token=_session_token(request))
         finally:
             store.close()
     except Exception as exc:
@@ -5080,6 +5233,15 @@ def export_experiment_report(report_id:str,format_name:str):
             _prepared_report_prose(store,report_id)
             content=store.export_docx(report_id)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif format_name=="pdf":
+            # Lane RP2, decision 2: the Word report printed by the server's
+            # LibreOffice; without it (or when it fails) the format is refused by name.
+            _prepared_report_prose(store,report_id)
+            try:
+                content=store.export_pdf(report_id)
+            except ReportPdfError as exc:
+                raise HTTPException(status_code=503,detail=exc.code) from exc
+            media_type="application/pdf"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
     except HTTPException:
@@ -11847,6 +12009,12 @@ def _record_connection_restored(
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
     await websocket.accept()
+    if (origin_refusal:=_socket_origin_refusal(websocket)) is not None:
+        await websocket.send_text(event("error",message=origin_refusal))
+        await websocket.close(
+            code=1008,
+            reason="origin not allowed" if origin_refusal=="origin_not_allowed" else "invalid configuration")
+        return
     workspace_context_token=None
     account_context_token=None
     try:
@@ -11858,7 +12026,11 @@ async def voice_socket(websocket:WebSocket):
             if not settings.enabled:
                 raise IdentityConfigurationError("Accounts need the tenant workspace.")
             cookies=getattr(websocket,"cookies",None) or {}
-            account=_account_for_cookie(cookies.get(SESSION_COOKIE_NAME))
+            token=cookies.get(SESSION_COOKIE_NAME)
+            # Lane APP1, decision 3: the app's screen sends its token first.
+            if not token and _from_app(getattr(websocket,"headers",{})):
+                token=await _app_socket_token(websocket)
+            account=_account_for_cookie(token)
             principal=account.principal()
             workspace=initialize_workspace_store(settings)
             try:
