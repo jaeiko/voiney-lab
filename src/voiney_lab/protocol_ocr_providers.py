@@ -760,6 +760,7 @@ def select_page_text(
             other_provider_version=other.engine.version if other is not None else None,
             other_text=other.page.text if other is not None else None,
             value_readings=readings[:MAX_OCR_VALUE_BOXES] if readings is not None else None,
+            other_confidence=other.page.confidence if other is not None else None,
         ),
         warnings=tuple(warnings),
     )
