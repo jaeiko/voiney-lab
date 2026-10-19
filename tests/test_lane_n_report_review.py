@@ -130,10 +130,12 @@ class ServedReviewTests(VoiceNotesHarness, unittest.TestCase):
         self.assertEqual([e["payload"]["text"] for e in confirmed],
                          ["pH 7.2", "원문과 다르게 Solution A를 600 µL 넣었어"])
         markdown = self.report_markdown()
-        self.assertIn("| 2 | 측정 | pH 7.2 (실험자 확인) |", markdown)
-        self.assertIn("- 2단계: 연구자 기록 — “원문과 다르게 Solution A를 600 µL 넣었어” (실험자 확인).", markdown)
-        self.assertIn("보고서에 넣은 중요 값 2개를 실험자가 모두 확인했다", markdown)
-        self.assertNotIn("확인되지 않은 값", markdown)
+        # Lane RP3, decision ①: the record as said in the observations, the
+        # deviation with the source's value, nothing marked unconfirmed.
+        self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| pH 7\.2 \| \d\d:\d\d \|")
+        self.assertIn("- 2단계 양: 원문 500 µL → 600 µL — “원문과 다르게 Solution A를 600 µL 넣었어”", markdown)
+        self.assertNotIn("확인 안 된 값", markdown)
+        self.assertNotIn(er.UNCONFIRMED_MARK, markdown)
 
     def test_a_correction_is_asked_appended_and_confirmed(self) -> None:
         socket = self.turns(*self.NOTES, "고쳐 줘, 7.2가 아니라 7.4", "응", "나중에 할게")
@@ -144,8 +146,7 @@ class ServedReviewTests(VoiceNotesHarness, unittest.TestCase):
         fix = next(e for e in events if e["event_type"] == "record_corrected")
         self.assertEqual(fix["payload"]["record_fix"]["source"], "voice_review")
         self.assertEqual(fix["payload"]["record_fix"]["text_after"], "pH 7.4")
-        self.assertIn("| 2 | 측정 | pH 7.4 (정정됨 — 처음 기록 “pH 7.2”) (실험자 확인) |",
-                      self.report_markdown())
+        self.assertIn("| — | pH 7.4 (정정됨 — 처음 “pH 7.2”) |", self.report_markdown())
         timeline = self.timeline()["timeline"]
         corrected = next(e for e in timeline if e["event_type"] == "observation_corrected")
         self.assertEqual(corrected["payload"]["content"], "pH 7.4")
@@ -159,9 +160,9 @@ class ServedReviewTests(VoiceNotesHarness, unittest.TestCase):
         deferred = next(e for e in self.report()["events"] if e["event_type"] == er.REVIEW_DEFERRED)
         self.assertEqual(len(deferred["payload"]["item_ids"]), 1)
         markdown = self.report_markdown()
-        self.assertIn("### 확인되지 않은 값", markdown)
+        self.assertIn("> **확인 안 된 값 1개**", markdown)
         self.assertIn("- 2단계 편차: 원문과 다르게 Solution A를 600 µL 넣었어", markdown)
-        self.assertIn("| 2 | 측정 | pH 7.2 (실험자 확인) |", markdown)
+        self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| pH 7\.2 \| \d\d:\d\d \|")
 
     def test_a_no_asks_how_to_correct_and_keeps_the_value(self) -> None:
         socket = self.turns(*self.NOTES, "아니", "네")
@@ -267,7 +268,8 @@ class ScreenChecklistTests(unittest.TestCase):
             [e["payload"]["source"] for e in events if e["event_type"] == er.REVIEW_CONFIRMED],
             ["screen", "screen"])
         markdown = self.store.export_markdown(self.report_id, fixture=notes_fixture()).decode()
-        self.assertIn("튜브를 조금 쏟았어 (정정됨 — 처음 기록 “튜브를 쏟았어”) (실험자 확인)", markdown)
+        self.assertIn("“튜브를 조금 쏟았어”", markdown)
+        self.assertRegex(markdown, r"튜브를 쏟았어 → \d\d:\d\d 정정: 튜브를 조금 쏟았어")
 
     def test_an_unknown_value_is_not_found(self) -> None:
         self.store.finalize(self.report_id, status="stopped", event_key="end")

@@ -94,7 +94,8 @@ class ReportTests(Recorded, unittest.TestCase):
         self.assertEqual(len(facts.branch_answers), 1)
         answer = facts.branch_answers[0]
         self.assertEqual((answer.step_label, answer.answer, answer.value_source), ("42", "예", "사람이 답함"))
-        self.assertIn(f"| 42 | 조건: “{CONDITION_42}” → 예 (사람이 답함) |", self.markdown())
+        # Lane RP3, decision ①: a row of the conditions actually used.
+        self.assertIn(f"| 42단계 조건 “{CONDITION_42}” | 예 (사람이 답함) |", self.markdown())
 
     def test_a_no_names_the_skipped_step(self) -> None:
         self.open(None)
@@ -103,7 +104,7 @@ class ReportTests(Recorded, unittest.TestCase):
         self.record("41단계 완료했어")
         self.record("아니요")
         self.assertIn(
-            f"| 42 | 조건: “{CONDITION_42}” → 아니요 (사람이 답함) · 42단계 건너뜀 |", self.markdown())
+            f"| 42단계 조건 “{CONDITION_42}” | 아니요 (사람이 답함) · 42단계 건너뜀 |", self.markdown())
 
     def test_the_count_and_the_rounds_are_in_the_table(self) -> None:
         self.open(None)
@@ -123,8 +124,8 @@ class ReportTests(Recorded, unittest.TestCase):
         self.assertEqual(len(facts.repetitions), 1)
         self.assertEqual((facts.repetitions[0].count, facts.repetitions[0].value_source), (3, "사람이 답함"))
         markdown = self.markdown()
-        self.assertIn("| 19~20 | 반복 횟수 3회 — 사람이 답함 |", markdown)
-        self.assertRegex(markdown, r"\| 19 \| .*\| 1회차 \d\d:\d\d, 2회차 \d\d:\d\d \|")
+        self.assertIn("| 19~20단계 반복 횟수 | 3회 — 사람이 답함 |", markdown)
+        self.assertRegex(markdown, r"\| 19 \(2회\) \| \d\d:\d\d \| \d\d:\d\d \|")
         self.assertIn(
             "21단계: 19~20단계를 3회 하기로 했으나(사람이 답함) 2회차까지만 하고 22단계로 넘어갔다"
             "(회차는 말로 확인한 돌아가기 기준).", facts.deviations)
@@ -144,7 +145,7 @@ class ReportTests(Recorded, unittest.TestCase):
         self.record("21단계 완료했어")
         self.record("아니")
         markdown = self.markdown()
-        self.assertIn("| 19~20 | 반복 횟수 1회 — 사람이 답함(회차마다 물음) |", markdown)
+        self.assertIn("| 19~20단계 반복 횟수 | 1회 — 사람이 답함 (회차마다 물음) |", markdown)
         self.assertNotIn("넘어갔다", "\n".join(self.facts().deviations))
 
     def test_the_writer_facts_are_as_lane_n_left_them(self) -> None:

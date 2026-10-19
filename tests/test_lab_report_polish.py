@@ -54,12 +54,13 @@ class WordSpacingTests(_ReportCase):
             form = paragraph.paragraph_format
             return form.space_before, form.space_after, form.line_spacing
 
-        self.assertEqual(spacing(paragraphs[texts.index("1. 실험 목적")]), (Pt(12), Pt(4), 1.0))
-        self.assertEqual(spacing(paragraphs[texts.index("3-2. 수행한 단계")]), (Pt(8), Pt(3), 1.0))
-        body = paragraphs[texts.index("1. 실험 목적") + 1]
-        self.assertEqual(spacing(body), (Pt(0), Pt(4), 1.15))
-        # 5. 고찰 (나): one list; its items are close, its last item is not.
-        start = texts.index("(나) 확인이 필요한 점") + 1
+        # Lane RP3, decision ①: the notebook's headings and lists.
+        self.assertEqual(spacing(paragraphs[texts.index("1. 시료와 조건")]), (Pt(12), Pt(4), 1.0))
+        self.assertEqual(spacing(paragraphs[texts.index("단계 시각표")]), (Pt(8), Pt(3), 1.0))
+        note = paragraphs[texts.index("1. 시료와 조건") + 1]
+        self.assertEqual(spacing(note), (Pt(2), Pt(4), 1.15))
+        # 4. 원문과 다르게 한 점·문제: one list; its items are close, its last item is not.
+        start = texts.index("4. 원문과 다르게 한 점·문제") + 1
         items = []
         while texts[start + len(items)].startswith("• "):
             items.append(paragraphs[start + len(items)])
@@ -152,34 +153,17 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
             "Ferrules": "8",
         })
 
-    def test_two_tables_in_markdown_and_word_without_a_prefix(self) -> None:
+    def test_the_items_used_are_one_line_without_the_lists_labels(self) -> None:
+        # Lane RP3, decision ①: the materials and equipment tables are gone;
+        # the notebook names the items the performed steps' text names.
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        block = text.split("### 3-1. 재료와 장비")[1].split("### 3-2.")[0]
-        self.assertNotIn("장비:", text)
-        self.assertEqual([line for line in block.splitlines() if line.startswith("#")],
-                         ["#### 재료", "#### 장비"])
-        self.assertEqual(block.count("| 이름 (원문 그대로) | 사용 단계 |"), 2)
-        self.assertIn("| Promega trypsin Promega Catalog #V5113 | 3 |", block)
-        self.assertIn("| Thermomixer C Model 5382 | — |", block)
-        self.assertIn("사용 단계는 서버가 원문 단계 글에서 그 이름(또는 원문이 쓰는 줄임말)을 찾아 적었다.", block)
-
+        self.assertIn("> 쓴 재료·장비: Ammonium bicarbonate", text)
+        self.assertNotIn("MilliporeSigma", text)
+        self.assertNotIn("이름 (원문 그대로)", text)
+        self.assertNotIn("Catalog #", text)
+        self.assertNotIn("NAME", text)
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
-        tables = [[[cell.text for cell in row.cells] for row in table.rows] for table in document.tables]
-        item_tables = [rows for rows in tables if tuple(rows[0]) == er.ITEM_HEADER]
-        self.assertEqual(len(item_tables), 2)
-        self.assertEqual(len(item_tables[0]) - 1, 8)
-        self.assertEqual(item_tables[1][1:], [
-            ["Thermomixer C Model 5382", "—"], ["modified heating oven", "9"],
-            ["modified heating block", "9"], ["Ferrules", "8"]])
-        # Markdown carries the same rows.
-        for row in item_tables[0][1:] + item_tables[1][1:]:
-            self.assertIn("| " + " | ".join(row) + " |", block)
-        # A caption stands between the two tables, so Word keeps them apart.
-        body = document.element.body
-        kinds = [child.tag.rsplit("}", 1)[1] for child in body.iterchildren()]
-        texts = [p.text for p in document.paragraphs]
-        self.assertEqual(texts[texts.index("재료") + 1], "장비")
-        self.assertNotIn(["tbl", "tbl"], [kinds[i:i + 2] for i in range(len(kinds) - 1)])
+        self.assertIn("쓴 재료·장비: Ammonium bicarbonate", [p.text for p in document.paragraphs])
 
     def test_the_steps_column_is_narrow(self) -> None:
         name, steps = er.TABLE_WIDTHS[er.ITEM_HEADER]
@@ -190,7 +174,8 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
         self.fixture.draft.protocol.materials = ()
         self.fixture.draft.protocol.equipment = ()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        self.assertIn("> 원문에서 재료 목록을 불러오지 못했다.", text)
+        # Lane RP3, decision ①: without a list there is no line of items.
+        self.assertNotIn("쓴 재료·장비", text)
         self.assertNotIn("이름 (원문 그대로)", text)
 
 
@@ -224,18 +209,14 @@ class ItemUseTests(_ReportCase):
     def test_uses_from_the_one_call_fill_a_use_column(self) -> None:
         narrative, client = self.write(dict(GOOD_REPLY, item_uses=USES))
         self.assertEqual(len(client.calls), 1)
+        # The uses that pass are kept with the narrative; lane RP3, decision
+        # ① took the materials table (and its use column) out of the notebook.
+        self.assertEqual(narrative.item_uses["Promega trypsin Promega Catalog #V5113"], "단백질 분해 효소")
+        self.assertEqual(narrative.item_uses["modified heating oven"], "건조 가열 장치")
         text = er.render_markdown(narrative)
-        block = text.split("### 3-1. 재료와 장비")[1].split("### 3-2.")[0]
-        self.assertEqual(block.count("| 이름 (원문 그대로) | 용도 | 사용 단계 |"), 2)
-        self.assertIn("| Promega trypsin Promega Catalog #V5113 | 단백질 분해 효소 | 3 |", block)
-        self.assertIn("| Lysogeny Agar (Sigma-Aldrich) |   | 6 |", block)
-        self.assertIn("| modified heating oven | 건조 가열 장치 | 9 |", block)
-        self.assertIn("> 용도는 AI 가 원문 단계를 바탕으로 정리했다.", block)
-        document = Document(io.BytesIO(er.render_docx(narrative)))
-        rows = [[cell.text for cell in row.cells] for table in document.tables
-                for row in table.rows]
-        self.assertIn(["Lysogeny Broth (LB) (Sigma-Aldrich)", "세균 배양 배지", "5, 7"], rows)
-        self.assertIn("용도는 AI 가 원문 단계를 바탕으로 정리했다.", [p.text for p in document.paragraphs])
+        self.assertNotIn("| 용도 |", text)
+        self.assertNotIn("단백질 분해 효소", text)
+        self.assertNotIn("용도는 AI", text)
 
     def test_the_model_reads_each_item_with_its_steps(self) -> None:
         _, client = self.write(dict(GOOD_REPLY, item_uses=USES))
@@ -271,9 +252,7 @@ class ItemUseTests(_ReportCase):
             ("번호 99", "원문에 없는 항목"),
             ("Centrifuge", "원문에 없는 항목"),
         ])
-        text = er.render_markdown(narrative)
-        self.assertIn("| Promega trypsin Promega Catalog #V5113 |   | 3 |", text)
-        self.assertNotIn("원심 분리", text)
+        self.assertNotIn("원심 분리", er.render_markdown(narrative))
 
     def test_drawing_liquid_up_is_not_a_safety_word(self) -> None:
         # Live run, headspace: "흡입" for a pipette controller is drawing liquid
@@ -299,14 +278,15 @@ class ItemUseTests(_ReportCase):
         refused, _ = self.write(dict(GOOD_REPLY, item_uses=[{"번호": 1, "용도": "10% 용액"}]))
         for narrative in (server, failed, refused):
             text = er.render_markdown(narrative)
-            self.assertIn("| 이름 (원문 그대로) | 사용 단계 |", text)
+            self.assertNotIn("이름 (원문 그대로)", text)
             self.assertNotIn("| 용도 |", text)
             self.assertNotIn("용도는 AI", text)
 
     def test_uses_alone_still_say_ai_wrote_part_of_the_report(self) -> None:
         narrative, _ = self.write({"item_uses": USES})
         self.assertNotIn("모델", {narrative.section_origin[key] for key in er.MODEL_SECTIONS})
-        self.assertIn("문장 일부는 AI(fake-model)", er.authorship_line(narrative))
+        # Lane RP3, decision ①: the uses are not in the notebook, so no AI words are.
+        self.assertIn("AI 가 쓴 문장은 없다", er.authorship_line(narrative))
 
     def test_the_use_column_is_the_widest_and_the_steps_the_narrowest(self) -> None:
         name, use, steps = er.TABLE_WIDTHS[er.ITEM_USE_HEADER]
@@ -324,7 +304,8 @@ class ItemUseTests(_ReportCase):
             text = self.store.export_markdown(self.report_id).decode()
             self.store.export_docx(self.report_id)
         self.assertEqual(len(client.calls), 1)
-        self.assertIn("| Promega trypsin Promega Catalog #V5113 | 단백질 분해 효소 | 3 |", text)
+        # Lane RP3, decision ①: the kept reply is read; the notebook has no use column.
+        self.assertNotIn("단백질 분해 효소", text)
 
 
 def _skip_record(start: str, skipped: list[str]) -> dict:
@@ -353,7 +334,7 @@ class LaterStartAndReturnTests(_ReportCase):
         return self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
 
     def deviations(self, text: str) -> list[str]:
-        block = text.split("### 3-4. 원문과 다르게 한 점 (기록에서)")[1].split("## 4.")[0]
+        block = text.split("## 4. 원문과 다르게 한 점·문제")[1].split("## 5.")[0]
         return [line[2:] for line in block.splitlines() if line.startswith("- ")]
 
     def test_a_later_start_is_written_from_its_event(self) -> None:
@@ -361,13 +342,14 @@ class LaterStartAndReturnTests(_ReportCase):
         self.event("00:30", "steps_skipped", "3", payload=_skip_record("3", ["1", "2"]))
         self.event("00:41", "step_completed", "3")
         deviations = self.deviations(self.markdown())
-        self.assertEqual(deviations[0], "3단계부터 시작(1–2단계 건너뜀).")
+        # Never asked about, so not confirmed (lane RP2, decision 3, kept).
+        self.assertEqual(deviations[0], "3단계부터 시작 — 1–2단계 건너뜀 [미확인]")
         self.assertFalse(any("이 기록에 없다" in line for line in deviations))
 
     def test_without_the_event_the_first_step_recorded_still_says_so(self) -> None:
         self.event("00:30", "session_started", "3")
         self.event("00:41", "step_completed", "3")
-        self.assertEqual(self.deviations(self.markdown())[0], "1–2단계는 이 기록에 없다(3단계부터 기록됨).")
+        self.assertEqual(self.deviations(self.markdown())[0], "1–2단계는 이 기록에 없다 (3단계부터 기록됨)")
 
     def run_with_a_return(self) -> None:
         self.event("00:30", "session_started", "1")
@@ -384,26 +366,24 @@ class LaterStartAndReturnTests(_ReportCase):
     def test_a_return_is_in_the_step_table_and_the_deviations_with_its_round(self) -> None:
         self.run_with_a_return()
         text = self.markdown()
-        self.assertIn("4단계에서 2단계로 돌아갔다 — 2회차(말로 확인한 돌아가기 기준), 10:00.",
-                      self.deviations(text))
-        rows = [line for line in text.split("### 3-2. 수행한 단계")[1].split("### 3-3.")[0].splitlines()
-                if line.startswith("| ") and not line.startswith("| 단계")]
-        self.assertEqual([row.split(" | ")[0] for row in rows], ["| 1", "| 2", "| 3", "| 4", "| 4→2"])
-        self.assertIn("| 1회차 09:40, 2회차 10:05 |", rows[1])
-        self.assertTrue(rows[0].endswith("| 09:36 | — |"), rows[0])
-        self.assertEqual(rows[4], "| 4→2 | 2단계로 돌아감 — 2회차 시작(회차는 말로 확인한 돌아가기 기준) | 10:00 | — |")
+        # Lane RP3, decision ①: a return the source states is a repeat row of
+        # the conditions, not a point done differently; the step times in
+        # the appendix count the step twice.
+        self.assertIn("| 2–4단계 반복 | 2회차까지 함 (말로 확인한 돌아가기 기준) |", text)
+        self.assertNotIn("돌아갔다", "\n".join(self.deviations(text)))
+        self.assertIn("| 2 (2회) | 09:36 | 10:05 | 9분 | — |", text)
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
         cells = [[cell.text for cell in row.cells] for table in document.tables for row in table.rows]
-        self.assertIn(["4→2", "2단계로 돌아감 — 2회차 시작(회차는 말로 확인한 돌아가기 기준)", "10:00", "—"], cells)
+        self.assertIn(["2–4단계 반복", "2회차까지 함 (말로 확인한 돌아가기 기준)"], cells)
 
     def test_each_round_times_its_own_timer(self) -> None:
         # The second round's timer started after the first completion: the
         # first round is not timed against it (it read "실제 0분").
         self.run_with_a_return()
-        # Lane RP2, decision 1: the step table of 3-2, not the first pages' tables.
-        steps = self.markdown().split("### 3-2. 수행한 단계")[1].split("### 3-3.")[0]
-        row = next(line for line in steps.splitlines() if line.startswith("| 3 | "))
-        self.assertTrue(row.endswith("| 1회차 09:56, 2회차 10:16 | 원문 15분 / 실제 1회차 15분, 2회차 10분 |"), row)
+        # Lane RP3, decision ①: the appendix's step times carry the timer words.
+        steps = self.markdown().split("### 단계 시각표")[1].split("### 말한 그대로의 기록")[0]
+        row = next(line for line in steps.splitlines() if line.startswith("| 3 (2회) | "))
+        self.assertTrue(row.endswith("| 원문 15분 / 실제 1회차 15분, 2회차 10분 |"), row)
 
     def test_the_model_reads_the_start_and_the_return_as_recorded(self) -> None:
         self.run_with_a_return()
@@ -446,13 +426,13 @@ class RulesToReportTests(_Turns, unittest.TestCase):
         self.record("프로토콜 시작해줘", "1단계 완료했어", "2단계 완료했어", "3단계 완료했어",
                     "4단계 완료했어", "2단계로 돌아가", "응", "2단계 완료했어")
         text = self.markdown()
-        self.assertRegex(text, r"- 5단계에서 2단계로 돌아갔다 — 2회차\(말로 확인한 돌아가기 기준\), \d\d:\d\d\.")
-        self.assertRegex(text, r"\| 5→2 \| 2단계로 돌아감 — 2회차 시작\(회차는 말로 확인한 돌아가기 기준\) \| \d\d:\d\d \| — \|")
-        self.assertRegex(text, r"\| 2 \| [^|]+ \| 1회차 \d\d:\d\d, 2회차 \d\d:\d\d \|")
+        self.assertRegex(text, r"\| \d+–\d+단계 반복 \([^|]*\) \| 2회차까지 함 \(말로 확인한 돌아가기 기준\) \|")
+        self.assertNotIn("돌아갔다", text)
+        self.assertRegex(text, r"\| 2 \(2회\) \| \d\d:\d\d \| \d\d:\d\d \| [^|]+ \| ")
 
     def test_a_confirmed_later_start_reaches_the_report_as_recorded(self) -> None:
         self.open(None)
         self.record("4단계부터 시작해줘", "응", "4단계 완료했어")
         text = self.markdown()
-        self.assertIn("- 4단계부터 시작(1–3단계 건너뜀).", text)
+        self.assertIn("- 4단계부터 시작 — 1–3단계 건너뜀", text)
         self.assertNotIn("이 기록에 없다", text)

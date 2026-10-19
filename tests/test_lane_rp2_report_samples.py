@@ -35,15 +35,16 @@ class SampleTests(unittest.TestCase):
             f"{name}.{suffix}" for name in SAMPLES for suffix in ("docx", "pdf", "md")])
         texts = {path.stem: path.read_text(encoding="utf-8") for path in written if path.suffix == ".md"}
         short, deviation, unconfirmed = (texts[name] for name in SAMPLES)
-        self.assertIn("| 2 / 2 | 0건 | 0건 | 0건 | 0개 | 0회 |", short)
-        self.assertIn("| 5 / 5 | 2건 | 1건 | 1건 | 0개 | 1회 |", deviation)
-        self.assertIn("| 3 / 5 | 0건 | 0건 | 0건 | 2개 | 0회 |", unconfirmed)
+        # Lane RP3, decision ①: the notebook's header says how far the run got.
+        self.assertIn("| 진행 | 끝까지 완료 · 2 / 2단계 |", short)
+        self.assertIn("| 진행 | 끝까지 완료 · 5 / 5단계 |", deviation)
+        self.assertIn("| 진행 | 중단 — 4단계에서 · 3 / 5단계 |", unconfirmed)
         self.assertIn("> **확인 안 된 값 2개**", unconfirmed)
         self.assertNotIn("확인 안 된 값", short + deviation)
         for path in written:
             if path.suffix == ".docx":
                 paragraphs = [p.text for p in Document(io.BytesIO(path.read_bytes())).paragraphs]
-                self.assertIn("한눈 요약", paragraphs, path.name)
+                self.assertIn("1. 시료와 조건", paragraphs, path.name)
 
     @unittest.skipUnless(find_office_converter(), "LibreOffice is not installed here")
     def test_the_pdfs_print_here(self) -> None:
@@ -53,8 +54,8 @@ class SampleTests(unittest.TestCase):
         for path in written:
             if path.suffix == ".pdf":
                 first = fitz.open(path)[0].get_text()
-                self.assertIn("한눈 요약", first, path.name)
-                self.assertIn("단계별 기록", first, path.name)
+                self.assertIn("실험 노트", first, path.name)
+                self.assertIn("1. 시료와 조건", first, path.name)
 
 
 if __name__ == "__main__":

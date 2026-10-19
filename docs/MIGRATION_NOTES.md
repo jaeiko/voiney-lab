@@ -1434,3 +1434,40 @@ What changes for someone:
 
 Going back: code from before this version reads the same data; the deleted
 settings were read only by the deleted code.
+
+## Lane RP3 (2026-10-20), decision ①: the experiment report becomes a lab notebook
+
+No schema change and no migration; nothing already stored is read
+differently. The experiment record (`experiment_reports` and its events) is
+unchanged; the notebook is a reading of it.
+
+What changes for someone:
+
+- The Word, PDF and Markdown exports (`/api/experiment-reports/{id}.docx|pdf|md`)
+  are now the lab notebook: header (title = the purpose said, else the
+  protocol's name; date and time; experimenter; protocol with the version run
+  and its source; progress), "1. 시료와 조건", "2. 실제로 한 조건" ("원문 값 →
+  실제", steps done as the source says grouped as "원문대로"), "3. 관찰과 결과",
+  "4. 원문과 다르게 한 점·문제", "5. 지난번과 다른 점", "6. 다음에 바꿀 점·다음
+  할 일", "7. 확인" (experimenter, PI), "8. 부록" (step times, the words as
+  said with their corrections, the review version's changes, one line of
+  system events, the source). The old sections 1–6, the first pages of lane
+  RP2 (counts, timer and notices tables, the check's table) and the
+  materials tables are gone from the body; the unconfirmed-value line and
+  marks (lane RP2, decision 3) stay.
+- The model-written sections of lane RP (purpose, background, methods,
+  results summary, discussion suggestions, conclusion, next steps, item
+  uses) are still prepared and kept in `experiment_report_prose` as before,
+  but no longer printed: the notebook has no place for them. Decision ③ of
+  this lane brings the AI-written notes ("AI 정리") in their place.
+- Three event types are read when present and have Korean names in
+  `EVENT_NAMES_KO`: `purpose_recorded` (목적·시료 기록), `result_recorded`
+  (결과·다음 할 일 기록) and `pi_confirmed` (PI 확인). Nothing writes them yet
+  (decisions ② and ④); a record without them reads "말하지 않음" and "PI
+  확인: 아직 없음".
+- "5. 지난번과 다른 점" reads the finished run of the same protocol that
+  started last before this one from the same report store
+  (`ExperimentReportStore.previous_finished_report`); no new table.
+
+Going back: code from before this version reads the same data and prints
+the old report.

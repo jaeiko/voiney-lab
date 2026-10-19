@@ -63,25 +63,9 @@ class KoreanStepTableTests(unittest.TestCase):
         return er.build_report_facts(
             _report(_done("1", "d1"), _done("2", "d2")), fixture=_translated_fixture())
 
-    def test_the_markdown_cell_holds_the_korean_and_the_source_under_it(self) -> None:
-        markdown = er.render_markdown(er.narrative_from_sections(self.facts()))
-        self.assertIn(
-            f"| 1 | {KOREAN_STEP_1} (자동 번역)<br><small>원문: 1 Cut the stained band into "
-            "pieces and place them in a 1.5 mL tube.</small> |",
-            markdown)
-        self.assertIn("| 2 | 2 Wash the pieces with 500 µL of Solution A for 10 min. (원문 영어) |",
-                      markdown)
-
-    def test_the_word_cell_has_the_source_below_in_small_type(self) -> None:
-        document = Document(io.BytesIO(er.render_docx(er.narrative_from_sections(self.facts()))))
-        cell = next(
-            row.cells[1] for table in document.tables for row in table.rows
-            if row.cells[0].text == "1" and "자동 번역" in row.cells[1].text
-        )
-        self.assertEqual(cell.paragraphs[0].text, f"{KOREAN_STEP_1} (자동 번역)")
-        below = cell.paragraphs[1].runs[0]
-        self.assertTrue(below.text.startswith("원문: 1 Cut the stained band"))
-        self.assertLess(below.font.size.pt, 9)
+    # Lane RP3, decision ① (2026-10-20): the notebook copies no step
+    # sentence, so the marked Korean cell with the source under it is gone
+    # from the exports; the model still reads the Korean beside the source.
 
     def test_the_model_reads_the_korean_marked_beside_the_source(self) -> None:
         steps = {step["단계"]: step for step in er._writer_facts(self.facts())["수행한 단계"]}
@@ -145,9 +129,9 @@ class GeneralBackgroundTests(unittest.TestCase):
         narrative = self.narrative({"background": "", "background_general": self.GENERAL})
         self.assertTrue(narrative.background_general)
         self.assertEqual(narrative.background, self.GENERAL)
-        markdown = er.render_markdown(narrative)
-        self.assertIn(f"{self.GENERAL}\n\n> AI 일반 지식 — 출처 없음, 확인 필요", markdown)
-        self.assertIn("AI 가 일반 지식으로 썼으며 출처가 없다", markdown)
+        # Lane RP3, decision ①: the background has no place in the notebook;
+        # the narrative keeps the labelled general knowledge for a later decision.
+        self.assertNotIn(self.GENERAL, er.render_markdown(narrative))
 
     def test_a_source_that_says_it_has_none_is_replaced_too(self) -> None:
         narrative = self.narrative({
@@ -167,8 +151,6 @@ class GeneralBackgroundTests(unittest.TestCase):
                 narrative = self.narrative({"background": "", "background_general": general})
                 self.assertFalse(narrative.background_general)
                 self.assertIn("background_general", narrative.rejected)
-                self.assertIn("외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.",
-                              er.render_markdown(narrative))
 
     def test_a_source_background_is_used_alone(self) -> None:
         narrative = self.narrative({
