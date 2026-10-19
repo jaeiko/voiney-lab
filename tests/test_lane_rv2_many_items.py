@@ -187,7 +187,7 @@ class ManyOcrValuesTests(_OcrCase):
 class LongDocumentTests(_CatalogCase):
     PIECES = (AnalysisPiece(1, 3, 1, 1), AnalysisPiece(2, 3, 2, 2), AnalysisPiece(3, 3, 3, 3))
 
-    def test_a_long_document_counts_two_calls_a_piece_against_the_cap(self) -> None:
+    def test_a_long_document_is_not_analysed_again_and_may_ask_one_more_item_a_piece(self) -> None:
         many = with_made_up_notes(self.answer(pages=(1,)), 13)
         answers = {1: [many], 2: [self.answer(pages=(2,))], 3: [self.answer(pages=(3,))]}
 
@@ -199,10 +199,11 @@ class LongDocumentTests(_CatalogCase):
         self.catalog.request_analysis(self.protocol_id, "analysis-" + "e" * 32)
         with patch("voiney_lab.protocol_catalog.analysis_pieces", return_value=self.PIECES), \
                 patch.dict(os.environ, {"VOINEY_LAB_REVIEW_REANALYSIS_MAX_CALLS": "5"}):
-            with self.assertRaises(ProtocolAnalysisTooManyItemsError):
-                self.catalog.analyze(self.protocol_id, model, analysis_id="analysis-" + "e" * 32)
-        (skipped,) = self.events("protocol_analysis_auto_reanalysis")
-        self.assertEqual((skipped["status"], skipped["planned_calls"]), ("skipped_over_call_cap", 6))
+            entry = self.catalog.analyze(self.protocol_id, model, analysis_id="analysis-" + "e" * 32)
+        # Lane AN3, round 2, decision ④: no re-analysis for a long document;
+        # its limit is 12 plus its 3 pieces, so 13 items wait for review.
+        self.assertEqual(entry.review_pending["needs_review_count"], 13)
+        self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
         self.assertEqual(model.analyze.call_count, 3)
 
 

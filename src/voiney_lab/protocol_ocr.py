@@ -107,6 +107,9 @@ class OcrPage:
     other_provider_version: str | None = None
     other_text: str | None = None
     value_readings: tuple[OcrValueReading, ...] | None = None
+    #: The other engine's page confidence (lane AN3, round 2, decision ②):
+    #: a page either engine read with low confidence settles no value.
+    other_confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -214,12 +217,13 @@ def validate_ocr_result(
         if page.text.strip():
             non_empty += 1
         confidence = page.confidence
-        if confidence is not None and (
-            not isinstance(confidence, (int, float))
-            or isinstance(confidence, bool)
-            or not 0 <= float(confidence) <= 1
-        ):
-            raise ProtocolOcrResultError("OCR page confidence is invalid.")
+        for value in (confidence, page.other_confidence):
+            if value is not None and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not 0 <= float(value) <= 1
+            ):
+                raise ProtocolOcrResultError("OCR page confidence is invalid.")
         for identity in (page.provider, page.provider_version,
                          page.other_provider, page.other_provider_version):
             if identity is not None and (
@@ -270,6 +274,8 @@ def validate_ocr_result(
                 other_provider_version=page.other_provider_version,
                 other_text=page.other_text,
                 value_readings=readings,
+                other_confidence=(
+                    float(page.other_confidence) if page.other_confidence is not None else None),
             )
         )
     if non_empty == 0:
@@ -323,6 +329,7 @@ def ocr_result_payload(result: OcrResult) -> dict[str, object]:
             "other_provider": page.other_provider,
             "other_provider_version": page.other_provider_version,
             "other_text": page.other_text,
+            "other_confidence": page.other_confidence,
             "value_readings": (
                 None if page.value_readings is None else [
                     {"token": reading.token, "text": reading.text,
