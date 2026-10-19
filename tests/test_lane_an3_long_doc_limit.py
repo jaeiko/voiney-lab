@@ -47,7 +47,8 @@ class LongDocumentLimitTests(_Pieces):
             2: [self.answer(pages=(2,))], 3: [self.answer(pages=(3,))]})
         self.assertEqual(entry.analysis_status, "review_pending")
         self.assertEqual(entry.review_pending["needs_review_count"], 15)
-        self.assertEqual(model.analyze.call_count, 3)
+        # Three pieces and, lane AN4 decision 1, the re-ask of piece 1's items.
+        self.assertEqual(model.analyze.call_count, 4)
         self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
         self.assertEqual(len(self.catalog.review_draft(self.protocol_id)["cards"]), 15)
 
@@ -56,7 +57,8 @@ class LongDocumentLimitTests(_Pieces):
             1: [with_made_up_notes(self.answer(pages=(1,)), 16)],
             2: [self.answer(pages=(2,))], 3: [self.answer(pages=(3,))]})
         self.assertIsInstance(error, ProtocolAnalysisTooManyItemsError)
-        self.assertEqual(model.analyze.call_count, 3)
+        # Three pieces and, lane AN4 decision 1, the re-ask of piece 1's items.
+        self.assertEqual(model.analyze.call_count, 4)
         self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
         (failed,) = self.events("protocol_analysis_failed")
         self.assertEqual((failed["review_items"]["items"], failed["review_items"]["limit"]), (16, 15))

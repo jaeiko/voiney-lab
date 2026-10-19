@@ -1184,6 +1184,47 @@ every protocol, the two new versions included, lists, reviews and loads (the
 new fields are ignored; a `reference_moved` flag reads as an item like any
 other).
 
+## Lane AN4 (2026-10-19): refused items asked about once more
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) only. Human decision of 2026-10-19 (1). New
+records, all append-only:
+
+- A new event `protocol_analysis_evidence_requote`, written once per
+  analysis run whose first answer had items the evidence check refused
+  (원문에 없음, 근거를 못 찾음, OCR 흐림 with a quote, claim or step-number
+  refusal): `{"status": "completed", "analysis_id", "questions", "items",
+  "items_requoted", "by_outcome": {<outcome>: n}, "calls": [{"first_page",
+  "last_page", "pages", "questions", "status": "answered" | "failed",
+  "failure_code"?, "seconds"}], "check_seconds"}`. Outcomes: `requoted`,
+  `model_found_nothing`, `no_answer`, `invalid_answer`, `value_differs`,
+  `other_passage`, `still_refused`, `call_failed`. A long document has one
+  call per piece with refused items. No source text is recorded.
+- `auto_resolved` (on `protocol_analysis_ready` and
+  `protocol_analysis_review_pending`) may hold entries
+  `{"reason": "evidence_requoted", "reason_ko": "근거를 다시 찾아 확인",
+  "item", "field", "was": <the flag reason it had>, "page"}` beside the OCR
+  and same-step entries.
+- The stored analysis (or review-pending protocol) holds the page's own words
+  where an item was kept: its quote replaced by the stretch the re-ask
+  returned (a step's or statement's words too when they were the refused
+  quote's own), or a claim's words replaced by the page's. Values and units
+  are the same as the analysis wrote (otherwise the item stays an item).
+- Setting `VOINEY_LAB_ANALYSIS_REQUOTE` (default `true`; `false` turns it off).
+
+### Reading older data
+
+Nothing older is read differently: an analysis stored before this version
+has no requote event and no such `auto_resolved` entries, and its items are
+cards as before. The re-ask happens only right after a new analysis.
+
+### Going back
+
+Code from before this version ignores the new event and the extra
+`auto_resolved` entries (it never reads `auto_resolved` back); an analysis
+whose items were kept by the re-ask reads, lists and runs like any other,
+since its quotes are the source's own words and pass the older checks.
+
 ## Workspace schema 10 → 11: the agent's voice and the calibration outcome (2026-10-18, lane ON)
 
 Schema 11 is schema 10 with two more names in the `experimenter_settings`
