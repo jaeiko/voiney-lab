@@ -251,7 +251,10 @@ await pick("p-run");
 currentProtocolReviewId="p-block";start.dispatch("click");await settle();
 assert(started===null,"the start acted on a protocol whose result is not on screen");
 await pick("p-run");
+// Lane IA addendum (2026-10-19): the press opens the step-by-step sheet with that protocol; the sheet's last press starts.
 start.dispatch("click");await settle();
+assert(started===null&&wizard.open===true&&["check","safety"].includes(wizard.step),`the press did not open the sheet at the questions: started ${started} open ${wizard.open} step ${wizard.step}`);
+wizardGo("start");await wizardPrimary();await settle();
 assert(started==="p-run",`the start did not begin the session on the reviewed pick: ${started}`);
 assert(!calls.some(call=>call.startsWith("POST")),`an authority call was made: ${calls}`);
 """)
@@ -277,7 +280,8 @@ renderProtocolReview({protocol_id:"p-1",title:"In-gel",revision_id:"pdf-1-analys
  execution_blockers:[],execution_notices:[{code:"unresolved_ambiguity",message_ko:"원문에 서로 다른 두 서술이 있습니다.",kind:"source_note",source_page_number:4,source_excerpt:"20 µL or 30 µL",step_id:"step-4"}],
  safety_notices:[],sections:[]});
 const text=["protocol-review-content","protocol-blockers","protocol-start-summary","protocol-start-overview","protocol-execution-blockers","protocol-safety-notices","protocol-execution-notices"].map(id=>visibleText(node(id))).join(" ");
-for(const phrase of ["원문 파일","9쪽","처리 단계 · 분석 통과 · 실행 가능","시작 전 알림 1건","원문에 서로 다른 두 서술","원문에 적힌 안전 주의 없음","이 프로토콜로 시작"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
+// Lane IA addendum (2026-10-19): the start button opens the step-by-step sheet and is named for it in plain words.
+for(const phrase of ["원문 파일","9쪽","처리 단계 · 분석 통과 · 실행 가능","시작 전 알림 1건","원문에 서로 다른 두 서술","원문에 적힌 안전 주의 없음","이 프로토콜로 실험 시작"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
 for(const gone of ["검토","승인","해제"])assert(!text.includes(gone),`reviewer wording still rendered: ${gone}`);
 // Lane U decision 2: the revision id and the hashes sit in the developer details, not the body.
 for(const hidden of ["pdf-1-analysis-2","SHA-256","a".repeat(64),"b".repeat(64)])assert(!text.includes(hidden),`identifier in the body: ${hidden}`);

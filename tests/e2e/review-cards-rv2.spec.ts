@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from './detail-view';
+import { test, expect, type Page, type Route, TAB } from './routes';
 
 // Lane RV2 stage ② (human decision 2026-10-16): review is one card at a time,
 // chosen by buttons. Server answers are mocked with page.route; nothing talks
@@ -71,7 +71,7 @@ async function openCards(page: Page) {
     const after = draft(decided);
     await route.fulfill({ json: { item: {}, counts: after.counts, registrable: after.registrable, target, cards: after.cards, next_card: after.next_card } });
   });
-  await page.goto('/');
+  await page.goto(TAB.protocols);
   await page.waitForFunction(() => typeof loadReviewDraft === 'function');
   await page.evaluate(id => loadProtocolReview(id), PROTOCOL_ID);
   await expect(page.locator('#review-card')).toBeVisible();

@@ -178,22 +178,33 @@ assert(status.includes("분석 통과"),`pass line: ${status}`);
     def test_one_press_starts_the_experiment_on_a_passed_analysis(self) -> None:
         # Lane DI (2026-10-08): the press is the one human confirmation. No
         # activation call is made; the session starts on the protocol whose
-        # analysis result is on screen.
+        # analysis result is on screen. Lane IA addendum (2026-10-19): the
+        # protocol's button opens the step-by-step sheet with that protocol
+        # picked (from the two questions); the sheet's last press is the one
+        # human confirmation and starts the session.
         self.run_page(r"""
 let started=null;startSession=async()=>{started=node("protocol-id").value};
+document.body=node("body");
 reviewExtra={analysis_status:"review_required",analysis_failure:null,available_for_execution:true};
 await upload({analysis_status:"review_required",available_for_execution:true},true);
 const button=node("protocol-start");
 assert(!button.hidden,"the start button is not offered for a passed analysis");
 button.dispatch("click");
 await new Promise(resolve=>setTimeout(resolve,30));
+assert(wizard.open===true&&["check","safety"].includes(wizard.step),`the sheet did not open at the questions: open ${wizard.open} step ${wizard.step}`);
+assert(node("protocol-id").value==="p-ankom","the sheet did not keep the analysed protocol");
+assert(started===null,"the press itself started the experiment");
+wizardGo("start");await wizardPrimary();
+await new Promise(resolve=>setTimeout(resolve,30));
 assert(!calls.some(call=>call.includes("activate-development")||call.includes("/approve")),`an authority call was made: ${calls}`);
 assert(started==="p-ankom",`the experiment did not start on the analysed protocol: ${started}`);
+assert(wizard.open===false,"the sheet stayed open after the start");
 """)
 
     def test_the_start_button_is_named_for_what_it_does(self) -> None:
         html = (ROOT / "src" / "voiney_lab" / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>', html)
+        # Lane IA addendum (2026-10-19): the button opens the step-by-step sheet; plain words name what it starts.
+        self.assertIn('<button id="protocol-start" type="button" hidden>이 프로토콜로 실험 시작</button>', html)
 
     def test_no_start_button_while_the_analysis_has_not_passed(self) -> None:
         self.run_page(r"""

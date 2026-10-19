@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './detail-view';
+import { test, expect, type Page, TAB } from './routes';
 
 // Lane U3 (2026-10-06): the screen reads the values lane R6 added for it.
 // Server answers are mocked with page.route or fed to the page's own message
@@ -107,6 +107,8 @@ test.describe('Server values on the screen (lane U3)', () => {
 
   test('the context card says the analysis state and the experimenter, never an approver', async ({ page }) => {
     await openPage(page, entry(true));
+    // Lane IA: the protocol select is in the settings tab.
+    await page.locator('#tab-link-settings').click();
     await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
     await page.evaluate(() => renderExperimentContext());
     await expect(page.locator('#experiment-context-version')).toContainText('분석 통과');

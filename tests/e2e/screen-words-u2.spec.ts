@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './detail-view';
+import { test, expect, type Page, protocolRoute } from './routes';
 
 // Lane U2 (2026-10-06), decisions 5–7: the remaining screen words. Server
 // answers are mocked with page.route or fed to the page's own message
@@ -91,9 +91,9 @@ test.describe('Remaining screen words (lane U2)', () => {
   test('the analysis result lists the blocker and the notice in plain words', async ({ page }) => {
     await page.route('**/api/protocols', route => route.fulfill({ json: { protocols: [entry(false)] } }));
     await page.route(`**/api/protocols/${PROTOCOL_ID}/review`, route => route.fulfill({ json: review }));
-    await page.goto('/');
+    // Lane IA: the protocol's route picks it and opens the protocols tab, where its check stands.
+    await page.goto(protocolRoute(PROTOCOL_ID));
     await page.waitForFunction(() => typeof renderProtocolReview === 'function');
-    await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
     const summary = page.locator('#protocol-start-summary');
     await expect(summary).toBeVisible();
     await expect(summary).toContainText('실행을 막는 사유 1건');

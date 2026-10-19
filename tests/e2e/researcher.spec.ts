@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './detail-view';
+import { test, expect, type Page, TAB } from './routes';
 
 test.describe.configure({ timeout: 45_000 });
 
@@ -21,35 +21,41 @@ async function experimentSessionsLoaded(page: Page) {
 }
 
 test.describe('Researcher / Bench workspace', () => {
-  test('loads with the researcher workspace active and core state visible', async ({ page }) => {
-    await page.goto('/');
+  // Lane IA (2026-10-19): the one page became five tabs; each part is checked on its own tab.
+  test('loads with the home active and each tab showing its own part', async ({ page }) => {
+    await page.goto(TAB.home);
     await expect(page.locator('#researcher-workspace')).toBeVisible();
+    await expect(page.locator('#tab-bar')).toBeVisible();
+    await expect(page.locator('#home-cards .home-card').first()).toBeVisible();
 
-    // Voice controls
-    await expect(page.locator('#start')).toBeVisible();
+    // The experiment tab before a run: the start button (lane ON's steps open as a sheet from it) and the state
+    await page.locator('#tab-link-experiment').click();
+    await expect(page.locator('#experiment-start-open')).toBeVisible();
+    await expect(page.locator('#start-wizard')).toBeHidden();
     await expect(page.locator('#stop')).toBeDisabled();
     await expect(page.locator('#state')).toHaveText('준비');
 
-    // Protocol selection
+    // Protocol selection on the settings tab; the context card's words are filled
+    await page.locator('#tab-link-settings').click();
     await expect(page.locator('#protocol-id')).toBeVisible();
-    await expect(page.locator('.experiment-context-card')).toBeVisible();
     await expect(page.locator('#experiment-context-name')).not.toHaveText('');
     await expect(page.locator('#experiment-context-version')).not.toHaveText('');
     await expect(page.locator('#experiment-context-experimenter')).not.toHaveText('');
     await expect(page.locator('#experiment-context-actions')).not.toHaveText('');
 
-    // Experiment ledger / timeline empty state before any session exists
+    // Experiment ledger / timeline empty state on the records tab before any session exists
+    await page.locator('#tab-link-records').click();
     await expect(page.locator('#experiment-session-ledger')).toBeVisible();
     await expect(page.locator('#experiment-event-timeline')).toBeVisible();
   });
 
   test('experiment session status badge is hidden when no experiment is selected', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(TAB.records);
     await expect(page.locator('#experiment-session-status-badge')).toBeHidden();
   });
 
   test('evidence and observation capture controls are present with non-blank guidance text', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(TAB.records);
     await expect(page.locator('#manual-observation-content')).toBeVisible();
     await expect(page.locator('#experiment-evidence-file')).toBeVisible();
     const captureStatus = page.locator('#experiment-capture-status');
@@ -58,7 +64,7 @@ test.describe('Researcher / Bench workspace', () => {
 
   test('recorded evidence exposes a same-origin opaque download action', async ({ page }) => {
     const startupDone = experimentSessionsLoaded(page);
-    await page.goto('/');
+    await page.goto(TAB.records);
     await startupDone;
     // This test exercises the local renderer. A large catalog refresh may still
     // be in flight and is not a prerequisite for rendering an evidence event.
@@ -89,21 +95,17 @@ test.describe('Researcher / Bench workspace', () => {
     await expect(link).not.toHaveAttribute('href', /private-name/);
   });
 
-  test('long conversation stays contained beside the continuous step and timeline workspace', async ({ page }) => {
+  test('a long timeline stays contained on the records tab', async ({ page }) => {
     // Lane FX3 decision 1: this test renders its own 24-row timeline, so it
     // waits for the startup reset first (it flaked 3 of 5 CI runs when the
     // reset landed after the render: event list scroll 74 = client 74).
+    // Lane IA: the conversation lives on the experiment tab now (a sheet during
+    // the run, beside the record after it), so only the ledger is measured here.
     const startupDone = experimentSessionsLoaded(page);
-    await page.goto('/');
+    await page.goto(TAB.records);
     await startupDone;
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
-    await page.locator('#hero-setup').evaluate((node) => node.classList.add('collapsed'));
     await page.evaluate(() => {
-      for (let turnId = 1; turnId <= 18; turnId += 1) {
-        const node = turnNode(turnId);
-        node.querySelector('.transcript').textContent = `연구자 음성 요청 ${turnId}`;
-        node.querySelector('.reply').textContent = `서버 소유 상태 응답 ${turnId}`;
-      }
       renderExperimentTimeline({
         session: {
           session_id: 'experiment-layout-audit', version: 24,
@@ -123,35 +125,23 @@ test.describe('Researcher / Bench workspace', () => {
       });
     });
     const layout = await page.evaluate(() => {
-      const procedure = document.querySelector('.procedure-card').getBoundingClientRect();
       const ledger = document.querySelector('#experiment-session-ledger').getBoundingClientRect();
-      const chat = document.querySelector('.timeline').getBoundingClientRect();
-      const log = document.querySelector('#log');
       const capture = document.querySelector('.experiment-ledger-capture').getBoundingClientRect();
       const events = document.querySelector('#experiment-event-timeline');
       return {
-        workflowGap: ledger.top - procedure.bottom,
         viewportWidth: window.innerWidth,
-        chatLeft: chat.left,
-        chatTop: chat.top,
-        workflowRight: procedure.right,
-        ledgerBottom: ledger.bottom,
-        logClientHeight: log.clientHeight,
-        logScrollHeight: log.scrollHeight,
+        ledgerVisible: ledger.width > 0 && ledger.height > 0,
         captureHeight: capture.height,
         eventClientHeight: events.clientHeight,
         eventScrollHeight: events.scrollHeight,
         horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       };
     });
-    expect(layout.workflowGap).toBeLessThanOrEqual(24);
+    expect(layout.ledgerVisible).toBe(true);
     if (layout.viewportWidth > 980) {
-      expect(layout.chatLeft).toBeGreaterThanOrEqual(layout.workflowRight - 1);
-      expect(layout.logScrollHeight).toBeGreaterThan(layout.logClientHeight);
       expect(layout.eventScrollHeight).toBeGreaterThan(layout.eventClientHeight);
       expect(layout.eventClientHeight).toBeLessThan(layout.captureHeight);
     } else {
-      expect(layout.chatTop).toBeGreaterThanOrEqual(layout.ledgerBottom - 1);
       expect(layout.eventScrollHeight).toBeLessThanOrEqual(layout.eventClientHeight + 1);
     }
     expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
@@ -159,7 +149,7 @@ test.describe('Researcher / Bench workspace', () => {
 
   test('only explicitly selected open experiments use the resume action', async ({ page }) => {
     const startupDone = experimentSessionsLoaded(page);
-    await page.goto('/');
+    await page.goto(TAB.records);
     await startupDone;
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
     await page.evaluate(() => renderExperimentTimeline({

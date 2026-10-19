@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from './detail-view';
+import { test, expect, type Page, type Route, TAB } from './routes';
 
 // Lane RV (2026-10-14): the review screen. Server answers are mocked with
 // page.route; nothing talks to a model. The screen sends one decision per
@@ -86,7 +86,7 @@ async function openReview(page: Page) {
     posted.push({ url: route.request().url(), body: route.request().postDataJSON() });
     await route.fulfill({ status: 201, json: { protocol: entry, review_version: { version: 1, version_ko: '검토본 v1', revision_id: 'pdf-1-review-1', reviewer_name: '김재준', changes: [] } } });
   });
-  await page.goto('/');
+  await page.goto(TAB.protocols);
   await page.waitForFunction(() => typeof loadReviewDraft === 'function');
   await page.evaluate(id => loadProtocolReview(id), PROTOCOL_ID);
   await expect(page.locator('#protocol-review-editor')).toBeVisible();

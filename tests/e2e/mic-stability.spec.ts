@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './detail-view';
+import { test, expect, type Page, TAB } from './routes';
 
 // Lane U2 (2026-10-06): the microphone is opened once per session and kept
 // open; a device that goes away is reconnected once, and a failure shows a
@@ -160,6 +160,9 @@ test.describe('Microphone stays open (lane U2)', () => {
     await instrumentMediaDevices(page);
     await page.goto('/');
     await openSession(page);
+    // Lane IA: the recovery line is in the voice console, which the run view shows (the wizard stands over it before a run).
+    await page.evaluate(m => onMessage({ data: JSON.stringify(m) }, sessionGeneration, socket), { type: 'protocol.fixture.state', configuration_id: 7, action: 'start', state: fixtureState(false, 1) });
+    await expect(page.locator('body')).toHaveAttribute('data-view', 'during');
     await page.evaluate(() => {
       window.__gum.fail = 'NotFoundError';
       const track = micStream!.getAudioTracks()[0];
@@ -186,7 +189,7 @@ test.describe('Microphone stays open (lane U2)', () => {
   test('the chosen microphone is remembered, requested, and switched once during a session', async ({ page }) => {
     const devices = [{ deviceId: 'mic-built-in', label: 'MacBook 마이크' }, { deviceId: 'mic-iphone', label: 'iPhone 마이크' }];
     await instrumentMediaDevices(page, devices);
-    await page.goto('/');
+    await page.goto(TAB.settings);
     const select = page.locator('#mic-device');
     await expect(select.locator('option[value="mic-iphone"]')).toHaveText('iPhone 마이크');
     await select.selectOption('mic-iphone');
@@ -207,7 +210,7 @@ test.describe('Microphone stays open (lane U2)', () => {
   test('a remembered microphone that is not connected falls back to the system default', async ({ page }) => {
     await instrumentMediaDevices(page, [{ deviceId: 'mic-built-in', label: 'MacBook 마이크' }]);
     await page.addInitScript(() => { try { localStorage.setItem('voiney-lab.mic-device', JSON.stringify({ deviceId: 'mic-airpods', label: 'AirPods' })); } catch (_) { /* storage may be off */ } });
-    await page.goto('/');
+    await page.goto(TAB.settings);
     await expect(page.locator('#mic-device option:checked')).toContainText('연결 안 됨');
     await openSession(page);
     const audio = await page.evaluate(() => window.__gum.calls[0].audio as MediaTrackConstraints);
