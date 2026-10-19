@@ -364,21 +364,23 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 
 ## 10. 빌드
 
-### 10.1 Android 디버그 APK — 이 서버에서 만들었다 (2026-10-18, 줄 NET 을 합친 뒤 2026-10-19 에 다시)
+### 10.1 Android 디버그 APK — 이 서버에서 만들었다 (줄 APP0 2026-10-18, 줄 APP1 2026-10-19 에 다시)
 
 | 항목 | 값 |
 |---|---|
-| 결과 | 처음 `BUILD SUCCESSFUL in 5m 37s`(잠금을 얻은 뒤의 Gradle 시간, 214 tasks). 저장소 안 스크립트로 다시 만들면 1–2분(Gradle 캐시) |
-| 파일 | `mobile/android/app/build/outputs/apk/debug/app-debug.apk`(추적 안 함). 같은 파일을 `~/app-build/out/voineylab-app0-debug.apk` 에 복사 |
-| 크기 | 4,525,666 바이트(4.3 MiB), sha256 `7214662fd43ff2a94daf853d1c6e21cc4ddf80cd77c8ca6dc8f3cdba2e0727e2`(줄 NET 의 `connection.js`, 서버 규칙을 따르는 다리, 6분 시험 타이머가 든 것. 처음 빌드는 4,371,519 바이트) |
+| 결과 | 줄 APP1: `mobile/scripts/build-android-debug.sh` 로 `BUILD SUCCESSFUL in 1m 12s`(Gradle 캐시, 내려받기 없음 — 플러그인 셋은 새 의존성 없이 앱 안 코드다). 줄 APP0 의 첫 빌드는 5분 37초 |
+| 파일 | `mobile/android/app/build/outputs/apk/debug/app-debug.apk`(추적 안 함). 같은 파일을 `~/app-build/out/voineylab-app1-debug.apk` 에 복사(줄 APP0 의 것은 `voineylab-app0-debug.apk` 로 남김) |
+| 크기 | 4,702,879 바이트(4.5 MiB), sha256 `77eda0f172173a31676bae0d7f789241f589d8d0bea9663164ae2fd3e3e50fff`. 줄 APP0 마지막 빌드는 4,525,666 바이트 |
+| 들어 있는 것 | 플러그인 `VoineyAlarm`·`VoineyMicrophone`·`VoineySessionStore`(dex 에서 확인), 수신기 둘·마이크 서비스 하나(`foregroundServiceType=microphone`), `assets/public/app-config.js`(이 빌드는 `VOINEY_APP_API_URL` 없이 만들어 `serverUrl:null` — 기기 시험 화면에 서버 주소를 적는다), `capacitor.config.json` 의 `loggingBehavior: "none"` |
 | 패키지 | `com.voiney.lab`, versionCode 1, compile/targetSdk 36 |
-| 권한(APK 안, `aapt2 dump badging`) | INTERNET, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS, RECEIVE_BOOT_COMPLETED, WAKE_LOCK, POST_NOTIFICATIONS, SCHEDULE_EXACT_ALARM, ACCESS_NETWORK_STATE (+ AndroidX 내부 권한 하나) |
+| 권한(APK 안, `aapt2 dump badging`) | INTERNET, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MICROPHONE, SCHEDULE_EXACT_ALARM, RECEIVE_BOOT_COMPLETED, POST_NOTIFICATIONS, WAKE_LOCK, ACCESS_NETWORK_STATE (+ AndroidX 내부 권한 하나) |
 | 첫 화면 | `device-check.html`(묶기 모드, `appStartPath`) |
 | 서명 | 디버그 키(Gradle 이 만든 것, 저장소 밖). **스토어에 올릴 수 없다** — 출시용은 사람이 만든 업로드 키로 `bundleRelease` |
 | 도구 | Temurin JDK 21.0.12.1+1, Android 명령줄 도구 23.0, platforms;android-36, build-tools;36.0.0, Gradle 8.14.3(래퍼), AGP 8.13.0, Node 22.22.1 — 모두 `~/app-build/` 아래, sudo 없이 |
-| 디스크 | `~/app-build/` 합계 2.7 GB: Gradle 캐시 1.4 GB, Android SDK 635 MB, 내려받은 원본 371 MB(지워도 됨), JDK 346 MB. 저장소 안: `mobile/node_modules` 40 MB, 빌드 산출물 약 23 MB(모두 추적 안 함) |
+| 디스크 | `~/app-build/` 합계 2.7 GB(줄 APP1 에서 늘지 않음). 저장소 안(추적 안 함): `mobile/node_modules` 40 MB(줄 APP1 에서 새로 설치), 빌드 산출물 약 23 MB |
 
-다시 만들기: `mobile/scripts/build-android-debug.sh`(도구를 내려받는 법은 `mobile/README.md`). 기기 시험 순서는 11.3절.
+다시 만들기: `mobile/scripts/build-android-debug.sh`(도구를 내려받는 법은 `mobile/README.md`). 묶은 화면이 붙을 서버를 넣어 만들려면
+`VOINEY_APP_API_URL=https://pilot.<도메인> mobile/scripts/build-android-debug.sh`. 기기 시험 순서는 11.3절.
 
 ### 10.2 맥에서 iOS 빌드하는 순서
 
@@ -422,24 +424,56 @@ EC2 에는 Xcode 가 없어서 iOS 는 이 줄에서 만들지 않았다. 맥에
 | 스크린샷·설명·아이콘 | 기기 크기별 스크린샷 | 기능 그래픽·스크린샷 |
 | 상태 표현 | "MVP 시제품 — 현장 미검증", 의료·GLP 검증 제품이 아니라는 문장 | 같음 |
 
-### 11.3 실제 기기 시험 순서 (Android 디버그 APK)
+### 11.3 실제 기기 시험 순서 (Android 디버그 APK, 줄 APP1 판)
 
-준비: Android 8 이상 휴대폰 한 대(가능하면 Android 14 이상 한 대 더), USB 디버깅을 켜고 `adb` 가 있는 컴퓨터, 블루투스 헤드셋.
+준비: Android 8 이상 휴대폰 한 대(가능하면 **Android 14 이상** 한 대 더 — 정확한 알람 기본 거부, 마이크 서비스 규칙이 다르다), USB 디버깅을 켜고
+`adb`(Android SDK platform-tools)가 있는 컴퓨터, 블루투스 헤드셋. 결과는 기기 모델·Android 버전·번호마다 결과·늦은 초를 적어 다음 줄에 넘긴다.
 
-1. 설치: `adb install -r app-debug.apk`(10.1절의 파일). 앱을 열면 기기 시험 화면이 뜬다.
-2. "1. 알림 권한·채널 준비" → 알림 허용. 결과 줄에 `알림 표시: granted`. Android 14 새 설치면 `정확한 알람: denied` 가 정상이다.
-3. "2. 정확한 알람 설정 열기" → 허용 → 돌아와 1번을 다시 눌러 `granted` 확인.
-4. "3. 시험 타이머 예약" → 결과에 예약 2건과 두 시각(지금+5분, 지금+6분 — 서버 규칙대로 5분 이상 타이머만 "1분 전"이 있다).
-   **화면을 끄고 와이파이·데이터를 끈다.** 5분 뒤 "시험단계 · 1분 전", 6분 뒤 "시험단계 · 타이머 끝" 알림이 오는지, 소리·진동이 나는지 적는다.
-5. 3번을 다시 누르고 곧바로 "4. 시험 타이머 취소" → "5. 예약된 알림 보기" 가 `없음` 이고 알림이 오지 않는지.
-6. Doze: 3번을 누른 뒤 컴퓨터에서 `adb shell dumpsys deviceidle force-idle` → 두 알림이 제때 오는지, 늦으면 몇 초 늦는지 적는다
-   (3.1절의 걱정 — 두 번째가 9분 넘게 늦으면 `setAlarmClock` 플러그인이 필요하다는 증거). 끝나면 `adb shell dumpsys deviceidle unforce`.
-7. 재부팅: 3번을 누르고 바로 휴대폰을 껐다 켠다 → 알림이 그래도 오는지(플러그인이 재부팅 뒤 예약을 되살린다).
-8. "6. 화면 켜 두기" 켬 → 화면이 꺼지지 않는지, 끔 → 평소대로 꺼지는지.
-9. "7. 네트워크 상태" → 와이파이를 껐다 켤 때 "네트워크 변화" 줄이 찍히는지.
-10. "8. 앱 화면 열기" → 지금의 화면이 뜬다. 묶기 모드라 서버에 붙지 못하는 것이 정상이다(5절, 9.2절 ⑤).
-11. 서버 주소 모드(내부 시험): `VOINEY_APP_SERVER_URL=https://pilot.<도메인>/` 로 다시 빌드 → 기본 인증 창이 뜨는지(5절), 마이크 권한을 묻는지,
-    음성으로 한 단계를 진행할 수 있는지, 블루투스 헤드셋 마이크로 말해도 알아듣는지. **화면을 끄면 듣기가 멈추는지** 적는다 —
-    멈추면 4절 다음 단계 3(포그라운드 서비스)이 필요하다는 확인이다.
+**A. 설치**
 
-결과(기기 모델·Android 버전·각 번호의 결과·늦은 초)를 줄 보고서에 적어 다음 줄에 넘긴다.
+1. 파일: `~/app-build/out/voineylab-app1-debug.apk`(10.1절의 크기·sha256 으로 확인: `sha256sum`). 컴퓨터로 옮긴다.
+2. 휴대폰: 설정 → 휴대전화 정보 → 빌드 번호 7번 → 개발자 옵션 → USB 디버깅 켬. USB 로 잇고 `adb devices` 에 보이는지.
+3. `adb install -r voineylab-app1-debug.apk`. 줄 APP0 의 앱이 있으면 같은 패키지라 덮어쓴다(`-r`). 서명 충돌이면 `adb uninstall com.voiney.lab` 뒤 다시.
+   (USB 없이: 파일을 휴대폰에 옮겨 열고 "출처를 알 수 없는 앱" 허용.) 앱을 열면 기기 시험 화면이 뜬다.
+
+**B. 정시 알람 (결정 ①)**
+
+4. "1. 알림 권한·채널 준비" → 알림 허용. 결과 줄에 `알림 표시: granted` 와 **`타이머 알림 방식`**. Android 14 새 설치면 `정확한 알람: denied`,
+   방식은 "공식 알림 플러그인" 이 정상이다.
+5. "2. 정확한 알람 설정 열기" → 허용 → 돌아와 1번을 다시 → `정확한 알람: granted`, 방식 **"알람 시계(setAlarmClock…)"**.
+6. "3. 시험 타이머 예약" → 예약 2건(지금+5분, 지금+6분). 상태 표시줄에 **알람 시계 아이콘**이 보이는지. "5. 예약된 알림 보기" 가 두 건.
+7. **화면 끔**: 화면을 끄고 둔다. 5분 뒤 "시험단계 · 1분 전", 6분 뒤 "시험단계 · 타이머 끝" — 소리·진동, 늦은 초.
+8. **Doze 강제**: 3번을 누르고 화면을 끈 뒤 컴퓨터에서 `adb shell dumpsys deviceidle force-idle`(답이 `Now forced in to deep idle mode`).
+   두 알림이 **둘 다 제시각**에 오는지 — 줄 APP0 의 걱정(두 번째가 9분 넘게 늦음)이 알람 시계로 풀렸는지의 증거다. 끝나면 `adb shell dumpsys deviceidle unforce`.
+   비교하려면 정확한 알람을 끄고(방식이 공식 플러그인) 같은 시험을 한 번 더.
+9. **취소**: 3번 → 곧바로 "4. 시험 타이머 취소" → 5번이 `없음`, 알람 아이콘이 사라지고 알림이 오지 않는지.
+10. **재부팅**: 3번 → 휴대폰을 껐다 켠다(잠금 해제까지). 알림이 제시각에 오는지(앱을 열지 않은 채). 그리고 3번 → 바로 끄고 **6분 넘게 꺼 둔 뒤** 켠다 →
+    "휴대폰이 꺼져 있던 HH:MM에 울렸어야 할 알림이에요. …" 가 한 번 오고, "1분 전" 은 오지 않는지.
+11. **비행기 모드**: 3번 → 비행기 모드 켜고 화면 끔 → 두 알림이 제시각에 오는지(알림은 네트워크가 필요 없다).
+
+**C. 화면 꺼도 듣기 (결정 ②)**
+
+12. "9. 화면 꺼도 듣기 시작" → 마이크 권한 허용 → 알림 줄에 **"VoineyLab 이 듣는 중"** 과 **[끄기]**. 10초마다 "받은 프레임 … 가장 큰 소리 …%" 가 찍힌다
+    (10초에 약 500프레임). 말하면 % 가 오르는지.
+13. **화면 끔**: 1분 동안 화면을 끄고 말한다 → 켜서 로그를 본다: 그 사이에도 10초마다 줄이 찍혔는지, 프레임 수가 줄지 않았는지, "빠진 묶음" 이 0 인지.
+    (이것이 8절 11 — 웹뷰가 화면 꺼진 채 프레임을 받는지의 첫 증거다.) 다른 앱을 연 채로도 한 번.
+14. 알림 줄의 **[끄기]** → 로그에 "알림 줄의 '끄기'로 듣기를 껐어요…", 알림 줄이 사라지는지. "10. 듣기 끄기" 로도 한 번.
+15. **권한 거절**: 앱 정보 → 권한 → 마이크 "허용 안함" → 9번 → "마이크 권한이 거절됐어요…" 문구. "11. 마이크 권한 설정 열기" 로 설정이 열리는지.
+16. **받을 화면이 없으면 녹음하지 않음**: 듣는 중에 최근 앱 목록에서 앱을 쓸어 닫는다 → 알림 줄이 사라지는지.
+17. 블루투스 헤드셋을 이은 채 12번 — 헤드셋 마이크로 들어오는지(% 가 헤드셋에 말할 때 오르는지). 안 되면 `setCommunicationDevice` 가 다음 일이다.
+
+**D. 앱 로그인 (결정 ③④) — 서버 준비가 필요하다**
+
+18. 서버(내부 시험 서버, 기본 인증 **없는** 것 — 9.5절 끝): `.env` 에 `VOINEY_LAB_AUTH_MODE=accounts`, `VOINEY_LAB_APP_ORIGINS=https://localhost`,
+    작업공간 켬, `scripts/pilot_invite.py` 로 계정 하나. HTTPS 주소가 있어야 한다.
+19. 기기 시험 화면 아래쪽에 서버 주소·이름·비밀번호 → "12. 로그인" → "로그인됨: 이름". 틀린 비밀번호면 "로그인 안 됨: login_refused (401)".
+    `VOINEY_LAB_APP_ORIGINS` 를 비우고 다시 하면 "app_origin_not_listed" — 서버 목록이 문이라는 확인.
+20. "14. 웹소켓 열기" → "서버: ready — 앱 로그인으로 연결 성공". 앱을 완전히 닫았다가 다시 열고 "13. 저장된 로그인 확인" → 로그인됨(토큰이 보안 저장소에서 돌아옴).
+21. "15. 로그아웃" → 13번이 "로그인 안 됨", 14번이 `1008`.
+22. **토큰이 기기 로그에 없는지**: 19–21번을 한 뒤 `adb logcat -d | grep -ci -e bearer -e client.auth` 가 `0`(Capacitor 로그를 끈 확인).
+
+**E. 그 밖 (줄 APP0 항목)**
+
+23. "6. 화면 켜 두기" 켬/끔, "7. 네트워크 상태" 변화 기록, "8. 앱 화면 열기" → 지금의 화면이 뜨지만 묶기 모드라 서버에 붙지 못하는 것이 정상(9.2절 연결 전).
+24. 서버 주소 모드(내부 시험): `VOINEY_APP_SERVER_URL=https://pilot.<도메인>/ mobile/scripts/build-android-debug.sh` → 기본 인증 창이 뜨는지, 웹 화면으로
+    음성으로 한 단계를 진행할 수 있는지, **화면을 끄면 웹 마이크가 멈추는지**(멈추는 것이 예상 — 그래서 결정 ②).
