@@ -301,3 +301,52 @@ EC2 에는 Xcode 가 없어서 iOS 는 이 줄에서 만들지 않았다. 맥에
    로컬 알림만 쓰므로 Push Notifications 능력은 넣지 않는다. 시간 민감 알림을 쓰면 Time Sensitive Notifications 능력.
 6. 실제 아이폰을 연결해 Run. 11.3절의 순서를 iOS 에서도 같은 번호로(정확한 알람 항목 2·3·6 은 iOS 에 없음).
 7. 배포: Product → Archive → App Store Connect 에 올려 TestFlight 로 내부 시험.
+
+## 11. 사람이 할 일
+
+### 11.1 계정과 도구
+
+| # | 할 일 | 비용·조건 (확인 2026-10-18) | 비고 |
+|---|---|---|---|
+| 1 | **Apple Developer Program** 등록 — 회사(조직)로 | "99 USD per membership year" ([링크](https://developer.apple.com/programs/whats-included/)). 수수료 면제는 비영리·교육기관·정부만 | 조직 등록에는 D-U-N-S 번호가 필요하다(Apple 쪽 요건 문장은 이 줄에서 확인하지 않았다 — 등록 화면에서 확인) |
+| 2 | **Google Play Console** 등록 — 회사(조직) 계정 권장 | "US$25 one-time registration fee" ([링크](https://support.google.com/googleplay/android-developer/answer/6112435)). 조직 계정은 D-U-N-S 번호 필요([링크](https://support.google.com/googleplay/android-developer/answer/13634885)) | 2023-11-13 이후 만든 **개인** 계정은 "a minimum of 12 testers … at least 14 days" 비공개 테스트 뒤에야 출시([링크](https://support.google.com/googleplay/android-developer/answer/14151465)). 조직 계정이 빠지는지는 8절 10 |
+| 3 | 앱 id(패키지 이름) 확정 | — | 지금은 자리표시 `com.voiney.lab`. **스토어에 처음 올린 뒤에는 바꿀 수 없다.** 회사 도메인을 거꾸로 쓴 이름으로 정해 `mobile/capacitor.config.js`, Android `app/build.gradle` 의 `namespace`·`applicationId`, `MainActivity.java` 의 패키지 폴더를 함께 바꾼다 |
+| 4 | 맥과 Xcode 26 이상 | "Capacitor 8 requires Xcode 26.0+." ([링크](https://capacitorjs.com/docs/updating/8-0)) | EC2 에는 Xcode 가 없다. iOS 빌드·서명·제출은 맥에서만 |
+| 5 | 서명 키 보관 | — | Android 업로드 키(keystore)와 Apple 인증서는 **저장소 밖** 비밀 보관소에. 잃으면 업데이트를 못 올린다(Google Play 앱 서명을 쓰면 업로드 키는 재설정 가능 — 등록 때 확인) |
+| 6 | Apple 문의: 결제 구성 | — | 개인 앱 안 구독 + 기관 직접 판매를 한 앱에 둘 수 있는지(3.1.3(c) 해석, 6.2절). 답에 따라 결제 설계를 정한다 |
+
+### 11.2 스토어 등록에 필요한 것
+
+| 항목 | Apple | Google |
+|---|---|---|
+| 개인정보 처리방침 URL | 필수, 앱 안에서도 링크(5.1.1(i)) | 필수(데이터 보안 양식과 함께) |
+| 외부 AI 로 데이터가 간다는 고지와 동의 | 5.1.2(i) "including with third-party AI, and obtain explicit permission" | 데이터 보안 양식에 "공유" 로 적는다 |
+| 마이크 권한 문구 | `NSMicrophoneUsageDescription` 예: "실험 단계를 음성으로 안내하고 말로 진행하려고 마이크를 씁니다. 들은 소리는 음성 인식을 위해 서버와 외부 음성 인식 공급자로 보냅니다." | 실행 중 권한 요청 앞에 같은 뜻의 설명 화면 |
+| 백그라운드 사유 | 심사 메모: 화면을 끈 채 음성으로 실험을 진행하는 영상, `audio` 모드 사유(2.5.4) | 마이크 포그라운드 서비스 선언: 설명 + 시연 영상 링크 |
+| 알림·알람 | 알림 권한 요청 시점(실험 시작 때) | `SCHEDULE_EXACT_ALARM` 허용 안내 화면, Android 13+ 알림 권한 |
+| 계정 삭제 | 앱 안에서(5.1.1(v)) — 줄 ON | Play 의 계정 삭제 요구(데이터 삭제 URL) — 등록 때 확인 |
+| 시험 계정 | 심사용 로그인과 실험 하나를 끝까지 해 볼 수 있는 프로토콜 | 같음 |
+| 스크린샷·설명·아이콘 | 기기 크기별 스크린샷 | 기능 그래픽·스크린샷 |
+| 상태 표현 | "MVP 시제품 — 현장 미검증", 의료·GLP 검증 제품이 아니라는 문장 | 같음 |
+
+### 11.3 실제 기기 시험 순서 (Android 디버그 APK)
+
+준비: Android 8 이상 휴대폰 한 대(가능하면 Android 14 이상 한 대 더), USB 디버깅을 켜고 `adb` 가 있는 컴퓨터, 블루투스 헤드셋.
+
+1. 설치: `adb install -r app-debug.apk`(10.1절의 파일). 앱을 열면 기기 시험 화면이 뜬다.
+2. "1. 알림 권한·채널 준비" → 알림 허용. 결과 줄에 `알림 표시: granted`. Android 14 새 설치면 `정확한 알람: denied` 가 정상이다.
+3. "2. 정확한 알람 설정 열기" → 허용 → 돌아와 1번을 다시 눌러 `granted` 확인.
+4. "3. 시험 타이머 예약" → 결과에 예약 2건과 두 시각(지금+1분, 지금+2분). **화면을 끄고 와이파이·데이터를 끈다.** 1분 뒤 "시험단계 · 1분 전",
+   2분 뒤 "시험단계 · 타이머 끝" 알림이 오는지, 소리·진동이 나는지 적는다.
+5. 3번을 다시 누르고 곧바로 "4. 시험 타이머 취소" → "5. 예약된 알림 보기" 가 `없음` 이고 알림이 오지 않는지.
+6. Doze: 3번을 누른 뒤 컴퓨터에서 `adb shell dumpsys deviceidle force-idle` → 두 알림이 제때 오는지, 늦으면 몇 초 늦는지 적는다
+   (3.1절의 걱정 — 두 번째가 9분 넘게 늦으면 `setAlarmClock` 플러그인이 필요하다는 증거). 끝나면 `adb shell dumpsys deviceidle unforce`.
+7. 재부팅: 3번을 누르고 바로 휴대폰을 껐다 켠다 → 알림이 그래도 오는지(플러그인이 재부팅 뒤 예약을 되살린다).
+8. "6. 화면 켜 두기" 켬 → 화면이 꺼지지 않는지, 끔 → 평소대로 꺼지는지.
+9. "7. 네트워크 상태" → 와이파이를 껐다 켤 때 "네트워크 변화" 줄이 찍히는지.
+10. "8. 앱 화면 열기" → 지금의 화면이 뜬다. 묶기 모드라 서버에 붙지 못하는 것이 정상이다(5절, 9.2절 ⑤).
+11. 서버 주소 모드(내부 시험): `VOINEY_APP_SERVER_URL=https://pilot.<도메인>/` 로 다시 빌드 → 기본 인증 창이 뜨는지(5절), 마이크 권한을 묻는지,
+    음성으로 한 단계를 진행할 수 있는지, 블루투스 헤드셋 마이크로 말해도 알아듣는지. **화면을 끄면 듣기가 멈추는지** 적는다 —
+    멈추면 4절 다음 단계 3(포그라운드 서비스)이 필요하다는 확인이다.
+
+결과(기기 모델·Android 버전·각 번호의 결과·늦은 초)를 줄 보고서에 적어 다음 줄에 넘긴다.
