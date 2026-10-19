@@ -737,6 +737,19 @@ class ExperimentReportStore:
 
         return render_docx(self._narrative(report_id, narrative, fixture, start_check))
 
+    def export_pdf(
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
+        converter: str | None = None, run: Any = None,
+    ) -> bytes:
+        """The researcher's report as PDF: the .docx above, printed by the
+        server's LibreOffice (lane RP2, decision 2). ``ReportPdfError`` when
+        it cannot be printed."""
+
+        return report_docx_to_pdf(
+            self.export_docx(report_id, narrative, fixture=fixture, start_check=start_check),
+            converter=converter, run=run)
+
 
 @dataclass(frozen=True)
 class StepExecutionContext:
@@ -4297,6 +4310,47 @@ def render_docx(narrative: ReportNarrative) -> bytes:
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+class ReportPdfError(RuntimeError):
+    """The report could not be printed to PDF (lane RP2, decision 2).
+
+    ``report_pdf_unavailable``: this server has no LibreOffice;
+    ``report_pdf_failed``: LibreOffice did not print it.
+    """
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def report_docx_to_pdf(document: bytes, *, converter: str | None = None, run: Any = None) -> bytes:
+    """The Word report as the PDF the server's LibreOffice prints (lane RP2, decision 2).
+
+    The same report, not another rendering of it: the .docx is printed the
+    way an uploaded Word protocol is (``docx_to_pdf``: its own LibreOffice
+    profile, and the Korean font names pointed at Nanum).
+    """
+
+    import tempfile
+
+    from voiney_lab.experiment_protocol_pdf import (
+        ProtocolPdfError,
+        ProtocolSourceConversionUnavailableError,
+        docx_to_pdf,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="experiment-report-") as root:
+        source, target = Path(root) / "report.docx", Path(root) / "report.pdf"
+        source.write_bytes(document)
+        try:
+            docx_to_pdf(source, target, converter=converter, run=run)
+        except ProtocolSourceConversionUnavailableError as exc:
+            raise ReportPdfError(
+                "LibreOffice is not installed on this server.", code="report_pdf_unavailable") from exc
+        except ProtocolPdfError as exc:
+            raise ReportPdfError("LibreOffice did not print the report.", code="report_pdf_failed") from exc
+        return target.read_bytes()
 
 
 def _format_elapsed_clock(value: Any) -> str:
