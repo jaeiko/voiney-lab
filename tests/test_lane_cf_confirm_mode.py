@@ -296,7 +296,9 @@ class SettingsApiTests(unittest.TestCase):
             self.call(server_module.get_experimenter_settings),
             {"settings": {"confirm_mode": "readback", "question_timing": "before_start",
                           "web_lookup": "on", "proactive_mode": "all",
-                          "ambient_mode": "quiet", "speaker_sensitivity": "normal"}})
+                          "ambient_mode": "quiet", "speaker_sensitivity": "normal",
+                          # Lane ON (2026-10-18): the agent's voice and the calibration outcome.
+                          "agent_voice": "default", "voice_calibration": "none"}})
         changed = self.call(server_module.put_experimenter_settings, {"confirm_mode": "quiet"})
         self.assertEqual(changed["settings"]["confirm_mode"], "quiet")
         self.assertEqual(
@@ -325,8 +327,8 @@ class WorkspaceSchemaTests(unittest.TestCase):
         from voiney_lab import workspace_store as ws
 
         # Lane VT (2026-10-09) raised the schema to 9, lane SP1 (2026-10-10)
-        # to 10; a 7 still opens.
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 10)
+        # to 10, lane ON (2026-10-18) to 11; a 7 still opens.
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 11)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ws.WORKSPACE_DATABASE_FILENAME
             connection = sqlite3.connect(path)
@@ -339,7 +341,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             try:
                 version = store._connection.execute(
                     "SELECT schema_version FROM schema_metadata").fetchone()[0]
-                self.assertEqual(version, 10)
+                self.assertEqual(version, 11)
                 principal = development_principal()
                 store.bootstrap_principal(principal)
                 store.record_experimenter_setting(
