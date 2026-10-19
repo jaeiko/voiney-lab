@@ -1184,6 +1184,50 @@ every protocol, the two new versions included, lists, reviews and loads (the
 new fields are ignored; a `reference_moved` flag reads as an item like any
 other).
 
+## Workspace schema 10 → 11: the agent's voice and the calibration outcome (2026-10-18, lane ON)
+
+Schema 11 is schema 10 with two more names in the `experimenter_settings`
+CHECK: `agent_voice` (the voice the agent speaks with: the TTS provider's
+voice id, or `default`) and `voice_calibration` (what the last "목소리
+맞추기" came to: `none` / `measured` / `skipped`; the start screen skips the
+step once measured). Human decision ② of 2026-10-16/18. Built the way
+schema 10 was: the rows are copied with their sequence ids, the
+AUTOINCREMENT counter is put back, the index and both append-only triggers
+are made again (`MIGRATION_10_TO_11`). Nothing else in the store changes.
+
+`EXPERIMENTER_SETTING_VALUES["agent_voice"]` is `None`: the store accepts an
+identifier of up to 80 characters and the server checks it against the
+configured provider's voices (`voice_providers.korean_voices`), since the
+store does not know the provider. The server's own `synthesize` reads the
+chosen voice from the speaking session (`ListenerSession.tts_voice`, set at
+the connection from the setting) and the `ready` event's `voice_profile`
+carries `voice_id` (the voice in use) and `agent_voice` (the setting).
+
+New in the protocol store (`protocol_workspace.sqlite`), append-only, no
+schema change: the event `protocol_start_check_answered` (lane ON, decision
+③) -- one per answered question of the start check: `question_id`, `kind`,
+`item_id`, `step_label`, `value` (the analysed value), `chosen`, `correct`,
+`action` (`answer` / `accept`), `analysis_id`, `target`,
+`actor_principal_id`, `recorded_at`. The catalog's readers ignore it.
+
+### Reading older data
+
+A schema-10 store migrates on open; it holds no row of the new names, so
+the voice is the provider's default and the calibration step is shown until
+it is measured once. Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (sqlite through the backup API,
+objects hard-linked; the original only read): the workspace opened at 11
+with its rows, the voices listed, a voice saved and read back, the start
+check of the in-gel protocol answered and recorded (lane ON report).
+
+### Going back
+
+Code from before this version refuses a schema-11 store ("Commercial
+workspace schema is unsupported"): restore a backup taken before the
+migration, or rebuild the table with schema 10's CHECK after deleting the
+rows of the two new names. The `protocol_start_check_answered` events are
+read by nothing older and do no harm.
+
 ## Lane ON (2026-10-18), stage ①: accounts beside the workspace
 
 No workspace schema change (schema 10 stays) and no stored row rewritten.

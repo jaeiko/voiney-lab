@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './detail-view';
 
 // Lane U3 (2026-10-06): the screen reads the values lane R6 added for it.
 // Server answers are mocked with page.route or fed to the page's own message

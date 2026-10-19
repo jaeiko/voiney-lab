@@ -22,7 +22,7 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 10
+WORKSPACE_SCHEMA_VERSION = 11
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -861,16 +861,79 @@ DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
 
+#: Lane ON (2026-10-18), decision ②: the settings table takes two more
+#: names, "agent_voice" (the voice the agent speaks with: the TTS provider's
+#: voice id, or "default") and "voice_calibration" (what the last "목소리
+#:맞추기" came to: none / measured / skipped -- the start screen skips the
+#: step by it). Built again the way schema 10 was (SQLite cannot widen a
+#: CHECK in place): rows copied with their sequence ids, the AUTOINCREMENT
+#: counter put back, the index and both append-only triggers made as
+#: before. DROP TABLE fires no trigger.
+MIGRATION_10_TO_11 = """
+CREATE TABLE experimenter_settings_v10 AS SELECT * FROM experimenter_settings;
+CREATE TABLE experimenter_settings_v10_sequence AS
+ SELECT seq FROM sqlite_sequence WHERE name='experimenter_settings';
+DROP TABLE experimenter_settings;
+CREATE TABLE experimenter_settings(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ name TEXT NOT NULL CHECK(name IN ('confirm_mode','question_timing','web_lookup','proactive_mode','ambient_mode','speaker_sensitivity','agent_voice','voice_calibration')),
+ value TEXT NOT NULL,
+ source TEXT NOT NULL CHECK(source IN ('voice','screen')),
+ created_at TEXT NOT NULL
+);
+INSERT INTO experimenter_settings(
+ sequence_id,organization_id,principal_id,name,value,source,created_at
+) SELECT sequence_id,organization_id,principal_id,name,value,source,created_at
+ FROM experimenter_settings_v10 ORDER BY sequence_id;
+DELETE FROM sqlite_sequence WHERE name='experimenter_settings';
+INSERT INTO sqlite_sequence(name,seq)
+ SELECT 'experimenter_settings',seq FROM experimenter_settings_v10_sequence;
+CREATE INDEX experimenter_settings_principal
+ ON experimenter_settings(organization_id,principal_id,name,sequence_id);
+CREATE TRIGGER experimenter_settings_no_update BEFORE UPDATE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experimenter_settings_no_delete BEFORE DELETE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+DROP TABLE experimenter_settings_v10;
+DROP TABLE experimenter_settings_v10_sequence;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=11)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(11);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
 #: The values each setting may take (lane CF, decisions 1 and 4; lane WV,
-#: decision 2; lane VT, decision 6; lane SP1, decisions 1 and 3).
-EXPERIMENTER_SETTING_VALUES: dict[str, tuple[str, ...]] = {
+#: decision 2; lane VT, decision 6; lane SP1, decisions 1 and 3; lane ON,
+#: decision 2). ``None``: the value is an identifier of up to 80 characters
+#: whose meaning another module checks (the agent's voice is the TTS
+#: provider's own id, which this store does not know).
+EXPERIMENTER_SETTING_VALUES: dict[str, tuple[str, ...] | None] = {
     "confirm_mode": ("readback", "confirm", "quiet"),
     "question_timing": ("before_start", "during"),
     "web_lookup": ("on", "off"),
     "proactive_mode": ("all", "needed", "off"),
     "ambient_mode": ("quiet", "noisy"),
     "speaker_sensitivity": ("high", "normal", "low"),
+    "agent_voice": None,
+    "voice_calibration": ("none", "measured", "skipped"),
 }
+_SETTING_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,79}$")
+
+
+def experimenter_setting_value_allowed(name: str, value: object) -> bool:
+    """Whether ``value`` may be kept under ``name`` (the store's own rule)."""
+
+    if name not in EXPERIMENTER_SETTING_VALUES or not isinstance(value, str):
+        return False
+    allowed = EXPERIMENTER_SETTING_VALUES[name]
+    if allowed is None:
+        return _SETTING_IDENTIFIER.fullmatch(value) is not None
+    return value in allowed
 
 
 def _now() -> str:
@@ -2802,7 +2865,7 @@ class WorkspaceStore:
     ) -> dict[str, str]:
         """Append one setting change of this experimenter; the settings after it."""
 
-        if value not in EXPERIMENTER_SETTING_VALUES.get(name, ()):
+        if not experimenter_setting_value_allowed(name, value):
             raise WorkspaceError("Experimenter setting is invalid.")
         if source not in {"voice", "screen"}:
             raise WorkspaceError("Experimenter setting source is invalid.")
@@ -3009,6 +3072,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 10
+    if version == 10:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_10_TO_11 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 11
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

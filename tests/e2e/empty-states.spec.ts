@@ -1,4 +1,4 @@
-import { test, expect, devices } from '@playwright/test';
+import { test, expect, devices, chooseDetailView } from './detail-view';
 
 test.describe.configure({ timeout: 45_000 });
 
@@ -18,6 +18,8 @@ test.describe('Empty and loading states', () => {
 test.describe('Responsive layout', () => {
   test('researcher workspace remains usable at a narrow mobile viewport', async ({ browser }) => {
     const context = await browser.newContext({ ...devices['iPhone 13'] });
+    // A context of its own: it makes the "자세히 보기" choice the page fixture makes (lane ON).
+    await chooseDetailView(context);
     const page = await context.newPage();
     await page.goto('/');
     await expect(page.locator('#researcher-workspace')).toBeVisible();

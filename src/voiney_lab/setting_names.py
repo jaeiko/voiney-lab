@@ -219,6 +219,9 @@ SETTINGS: tuple[Setting, ...] = (
             "AI 가 그린 도식 (줄 WV 결정 3; 켜면 OPENAI_API_KEY 필수; '그림으로 그려 줘'에만)"),
     Setting("VOINEY_LAB_STT_DIAGNOSTICS_ENABLED", SWITCHES, "false",
             "실제 음성 STT 진단 녹음 보관"),
+    Setting("VOINEY_LAB_START_CHECK_ENABLED", SWITCHES, "true",
+            "시작 전 핵심 값 확인 2문항 (실행할 분석의 시간·온도·속도·양 값을 원문 조각과 함께 객관식으로; "
+            "서버가 정답과 선택지를 정함; 줄 ON 결정 ③)"),
     # --- 경로·저장소 --------------------------------------------------------------
     Setting("VOINEY_LAB_SAFETY_CATALOG", PATHS, "(없음, 필수)",
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),

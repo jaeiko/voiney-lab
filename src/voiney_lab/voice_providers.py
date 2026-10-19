@@ -76,6 +76,50 @@ DEFAULT_TTS_VOICES = {
 }
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
+
+# --- The agent's voice, chosen by the person (lane ON, decision ②, 2026-10-18) ---
+#: What the preview says in each voice ([들어 보기]).
+PREVIEW_SENTENCE_KO = "안녕하세요, 보이니랩이에요. 이 목소리로 실험을 안내할게요."
+
+
+@dataclass(frozen=True)
+class AgentVoice:
+    """One voice a person may choose: the provider's id and a Korean label."""
+
+    provider: str
+    voice_id: str
+    label_ko: str
+
+
+#: Two to four Korean voices per provider, the provider's default first.
+#: google_cloud: Chirp 3 HD speakers of the ko-KR locale (the server moves the
+#: speaker to the turn's locale, ``google_voice_for``). elevenlabs: premade
+#: voices of the default library (multilingual models speak Korean with them).
+#: xai: the one voice the server has used; no other id is written down here.
+KOREAN_VOICES: Mapping[str, tuple[AgentVoice, ...]] = {
+    GOOGLE_CLOUD: (
+        AgentVoice(GOOGLE_CLOUD, "ko-KR-Chirp3-HD-Charon", "차론 · 남성 · 차분한"),
+        AgentVoice(GOOGLE_CLOUD, "ko-KR-Chirp3-HD-Kore", "코레 · 여성 · 또렷한"),
+        AgentVoice(GOOGLE_CLOUD, "ko-KR-Chirp3-HD-Aoede", "아오이데 · 여성 · 부드러운"),
+        AgentVoice(GOOGLE_CLOUD, "ko-KR-Chirp3-HD-Puck", "퍽 · 남성 · 밝은"),
+    ),
+    ELEVENLABS: (
+        AgentVoice(ELEVENLABS, "JBFqnCBsd6RMkjVDRZzb", "조지 · 남성"),
+        AgentVoice(ELEVENLABS, "EXAVITQu4vr4xnSDxMaL", "사라 · 여성"),
+        AgentVoice(ELEVENLABS, "FGY2WhTYpPnrIDTdsKH5", "로라 · 여성"),
+        AgentVoice(ELEVENLABS, "IKne3meq5aSn9XLyUdCD", "찰리 · 남성"),
+    ),
+    XAI: (
+        AgentVoice(XAI, "leo", "레오"),
+    ),
+}
+
+
+def korean_voices(provider: str) -> tuple[AgentVoice, ...]:
+    """The voices a person may choose for ``provider`` (none for an unknown one)."""
+
+    return tuple(KOREAN_VOICES.get(provider, ()))
+
 GOOGLE_STT_URL = "https://speech.googleapis.com/v1/speech:recognize"
 GOOGLE_TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"

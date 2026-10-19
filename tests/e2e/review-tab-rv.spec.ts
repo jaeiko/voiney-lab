@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Page, type Route } from './detail-view';
 
 // Lane RV (2026-10-14): the review screen. Server answers are mocked with
 // page.route; nothing talks to a model. The screen sends one decision per

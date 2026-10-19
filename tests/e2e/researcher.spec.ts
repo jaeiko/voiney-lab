@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './detail-view';
 
 test.describe.configure({ timeout: 45_000 });
 

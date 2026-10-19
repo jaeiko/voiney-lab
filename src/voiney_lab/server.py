@@ -216,6 +216,7 @@ from voiney_lab.vad import (
 )
 from voiney_lab import voice_providers
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
+from voiney_lab.start_check import StartCheck, StartCheckError
 from voiney_lab.accounts import (
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
@@ -256,6 +257,7 @@ from voiney_lab.protocol_translation import (
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
+    experimenter_setting_value_allowed,
     EXPERIMENTER_SETTING_VALUES,
     ApprovalReplayError,
     WorkspaceConflictError,
@@ -1348,6 +1350,10 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # margin under the wearer's measured voice, "보통" (12 dB).
     "ambient_mode":"quiet",
     "speaker_sensitivity":"normal",
+    # Lane ON, decision 2: the agent's voice ("default": the provider's
+    # configured voice) and what the last 목소리 맞추기 came to.
+    "agent_voice":"default",
+    "voice_calibration":"none",
 }
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
@@ -1389,7 +1395,9 @@ def _save_experimenter_settings(changes:Mapping[str,Any],source:str)->dict[str,s
     if not isinstance(changes,Mapping) or not changes:
         raise WorkspaceError("Experimenter setting is invalid.")
     for name,value in changes.items():
-        if value not in EXPERIMENTER_SETTING_VALUES.get(str(name),()):
+        if not experimenter_setting_value_allowed(str(name),value):
+            raise WorkspaceError("Experimenter setting is invalid.")
+        if str(name)=="agent_voice" and not _agent_voice_known(str(value)):
             raise WorkspaceError("Experimenter setting is invalid.")
     changed={str(name):str(value) for name,value in changes.items()}
     if _workspace_settings().enabled:
@@ -1417,6 +1425,70 @@ def put_experimenter_settings(body:dict[str,Any]=Body(...))->dict[str,object]:
         return {"settings":_save_experimenter_settings(body,"screen")}
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/voice/voices")
+def get_voice_voices()->dict[str,object]:
+    """The voices a person may choose for the agent, and the one chosen (lane ON, decision 2)."""
+
+    try:
+        provider=_tts_provider()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503,detail="configuration_invalid") from exc
+    voices=voice_providers.korean_voices(provider)
+    settings=_load_experimenter_settings()
+    selected=str(settings.get("agent_voice","default") or "default")
+    if not _agent_voice_known(selected):
+        selected="default"
+    return {
+        "provider":provider,
+        "default_voice_id":voice_providers.DEFAULT_TTS_VOICES.get(provider,""),
+        "voices":[{"voice_id":voice.voice_id,"label_ko":voice.label_ko} for voice in voices],
+        "selected":selected,
+        "preview_text_ko":voice_providers.PREVIEW_SENTENCE_KO,
+    }
+
+
+@app.post("/api/voice/preview")
+def post_voice_preview(body:dict[str,Any]=Body(...))->Response:
+    """[들어 보기]: the preview sentence in one voice, as a 16 kHz WAV.
+
+    One real TTS call per voice per process (the audio is kept); a failure
+    is said and nothing is kept. The pilot's cap for these is small (lane
+    ON: USD 1 for the whole lane), so the sentence is short.
+    """
+
+    voice_id=str(body.get("voice_id") or "")
+    try:
+        provider=_tts_provider()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503,detail="configuration_invalid") from exc
+    if not any(voice.voice_id==voice_id for voice in voice_providers.korean_voices(provider)):
+        raise HTTPException(status_code=422,detail="voice_unknown")
+    key=(provider,voice_id)
+    pcm=_VOICE_PREVIEW_CACHE.get(key)
+    if pcm is None:
+        settings=replace(TtsProviderSettings.from_environment(),voice=voice_id)
+        try:
+            if provider==voice_providers.XAI:
+                session=ListenerSession()
+                session.tts_voice=voice_id
+                token=_SPEAKING_SESSION.set(session)
+                try:
+                    pcm=synthesize(voice_providers.PREVIEW_SENTENCE_KO,"ko")
+                finally:
+                    _SPEAKING_SESSION.reset(token)
+            else:
+                pcm=voice_providers.synthesize(voice_providers.PREVIEW_SENTENCE_KO,"ko",settings)
+        except Exception as exc:  # noqa: BLE001 - the provider's failure, said by name only
+            log.warning("voice.preview failed provider=%s error=%s",provider,type(exc).__name__)
+            raise HTTPException(status_code=502,detail="voice_preview_failed") from exc
+        if not pcm:
+            raise HTTPException(status_code=502,detail="voice_preview_failed")
+        _VOICE_PREVIEW_CACHE[key]=pcm
+        log.info("voice.preview synthesized provider=%s voice=%s bytes=%d",provider,voice_id,len(pcm))
+    return Response(content=pcm_to_wav(pcm),media_type="audio/wav",
+                    headers={"Cache-Control":"private, max-age=3600"})
 
 
 def _source_basis_from(fixture_filename:Any,entry:Mapping[str,Any]|None)->dict[str,Any]:
@@ -2315,6 +2387,38 @@ def _tts_provider() -> str:
     return TtsProviderSettings.from_environment().provider
 
 
+# --- The agent's voice, chosen by the person (lane ON, decision ②) -----------
+#: Previews already made in this process: (provider, voice id) -> 16 kHz PCM.
+_VOICE_PREVIEW_CACHE:dict[tuple[str,str],bytes]={}
+
+
+def _agent_voice_known(value:str)->bool:
+    """``default`` or one of the configured provider's choosable voices."""
+
+    if value=="default":
+        return True
+    try:
+        provider=_tts_provider()
+    except ConfigurationError:
+        return False
+    return any(voice.voice_id==value for voice in voice_providers.korean_voices(provider))
+
+
+def _agent_voice_id(settings:Mapping[str,str])->str|None:
+    """The voice id the experimenter chose, or None for the provider's default."""
+
+    chosen=str(settings.get("agent_voice","default") or "default")
+    return None if chosen=="default" or not _agent_voice_known(chosen) else chosen
+
+
+def _session_tts_voice()->str|None:
+    """The chosen voice of the session speaking now, when it chose one."""
+
+    session=_SPEAKING_SESSION.get()
+    voice=getattr(session,"tts_voice",None)
+    return voice if isinstance(voice,str) and voice else None
+
+
 def stt_endpoint_label() -> str:
     """The STT request the diagnostics name: the xAI path keeps "/v1/stt"."""
 
@@ -2330,6 +2434,10 @@ def synthesize(text:str,language:str|None=None)->bytes:
     if not clean_text:
         return b""
     settings=TtsProviderSettings.from_environment()
+    # Lane ON, decision 2: the voice the person chose for this session.
+    chosen=_session_tts_voice()
+    if chosen is not None:
+        settings=replace(settings,voice=chosen)
     if settings.provider!=voice_providers.XAI:
         return voice_providers.synthesize(clean_text,language or "ko",settings)
     voice = settings.voice
@@ -4239,6 +4347,46 @@ def post_protocol_review_version(
     return registered
 
 
+@app.get("/api/protocols/{protocol_id}/start-check")
+def get_protocol_start_check(protocol_id:str)->dict[str,object]:
+    """The two key values to confirm before the start (lane ON, decision ③):
+    the questions without their answers, or why there are none."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return StartCheck(catalog).questions(protocol_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/start-check/answers")
+def post_protocol_start_check_answer(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """One choice on one question, judged and recorded by the server; or the
+    value taken as it stands after a wrong choice (``action: accept``)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            principal=_REQUEST_PRINCIPAL.get()
+            return StartCheck(catalog).answer(
+                protocol_id,body.get("question_id"),
+                choice_id=body.get("choice_id"),action=body.get("action"),
+                actor_principal_id=principal.principal_id if principal is not None else None)
+        finally:
+            store.close()
+    except StartCheckError as exc:
+        raise HTTPException(status_code=422,detail=exc.code) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get("/api/protocols/{protocol_id}/review-versions/{version}")
 def get_protocol_review_version(protocol_id:str,version:int)->dict[str,object]:
     """One registered review version with what it changed and from what
@@ -5249,6 +5397,9 @@ class ListenerSession:
         #: goes to the model, and to the rules when the model cannot be used.
         self.llm_router_settings=llm_router_settings or LlmRouterSettings()
         self.experiment_report_id:str|None=None
+        #: Lane ON, decision 2: the voice the person chose (None: the
+        #: provider's configured voice); ``synthesize`` reads it.
+        self.tts_voice:str|None=None
         #: The words that open the report's value review (lane N, decision 3),
         #: said once after the end of the experiment.
         self.report_review_intro:tuple[str,str]|None=None
@@ -8748,6 +8899,13 @@ async def _finish_voice_calibration(
                 "voice calibration noisy room floor_db=%s reference_db=%.1f turn_id=%s",
                 round(floor,1) if floor is not None else None,reference.reference_db,turn_id)
     await current_text("transcript",turn_id=turn_id,text=transcript)
+    if state in {"measured","skipped"}:
+        # Lane ON, decision 2: what the calibration came to is the
+        # experimenter's setting, so the start screen skips the step next time.
+        try:
+            await asyncio.to_thread(_save_experimenter_settings,{"voice_calibration":state},"voice")
+        except Exception as exc:  # noqa: BLE001 - the measurement stands either way
+            log.warning("voice calibration outcome not kept error=%s",type(exc).__name__)
     reference=session.level_reference
     fields:dict[str,Any]={
         "state":state,"sentence":VOICE_CALIBRATION_SENTENCE,
@@ -11753,6 +11911,13 @@ async def voice_socket(websocket:WebSocket):
     # Every sentence this connection synthesizes is remembered for the echo
     # check; tasks started from here inherit the binding.
     _SPEAKING_SESSION.set(session)
+    # Lane ON, decision 2: the connection speaks with the voice the person
+    # chose (their setting), and says which in ``ready``.
+    try:
+        agent_voice_settings=await asyncio.to_thread(_load_experimenter_settings)
+    except Exception:  # noqa: BLE001 - the provider's voice then
+        agent_voice_settings={}
+    session.tts_voice=_agent_voice_id(agent_voice_settings)
     curated_fixture=None
     sender=LockedSender(websocket); pipeline="cascade"
     # Lane VT, decisions 1-2: the step timer is told when it runs out.
@@ -11771,7 +11936,8 @@ async def voice_socket(websocket:WebSocket):
                                     voice_profile={
                                         "pipeline":"cascade",
                                         "provider":_tts_provider(),
-                                        "voice_id":_tts_voice(),
+                                        "voice_id":session.tts_voice or _tts_voice(),
+                                        "agent_voice":session.tts_voice or "default",
                                         "persona":"professor",
                                     },
                                     research_capabilities=research_capabilities))
