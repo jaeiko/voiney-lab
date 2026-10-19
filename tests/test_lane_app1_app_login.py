@@ -303,11 +303,12 @@ def test_without_a_listed_origin_the_socket_does_not_wait_for_a_token(monkeypatc
 
     _configure(monkeypatch, tmp_path)
     token = _app_token(tmp_path)
-    for headers in ({}, {"origin": "https://evil.test"}):
+    # Another site is refused by its origin (decision 4) before any login.
+    for headers, refusal in (({}, "authentication_required"), ({"origin": "https://evil.test"}, "origin_not_allowed")):
         socket = _Socket(headers, [_auth(token)])
         asyncio.run(voice_socket(socket))
         assert socket.received == 0
-        assert socket.sent[0]["message"] == "authentication_required" and socket.closed[0] == 1008
+        assert socket.sent[0]["message"] == refusal and socket.closed[0] == 1008
     _configure(monkeypatch, tmp_path, app_origins=None)
     socket = _Socket({"origin": APP}, [_auth(token)])
     asyncio.run(voice_socket(socket))

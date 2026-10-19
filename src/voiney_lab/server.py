@@ -237,6 +237,7 @@ from voiney_lab.accounts import (
     LoginRefusedError,
     PasswordInvalidError,
     bearer_token,
+    normalize_origin,
     socket_auth_token,
 )
 from voiney_lab.identity import (
@@ -481,6 +482,8 @@ async def readyz()->JSONResponse:
         workspace=_workspace_settings()
         protocol=_protocol_store_settings()
         reports=ExperimentReportSettings.from_environment()
+        # Lane APP1, decision 4: the app origins parse (exact origins only).
+        _app_access()
         # Lane ON, decision ① (2026-10-18): "accounts" when the pilot's
         # login is on (VOINEY_LAB_AUTH_MODE=accounts).
         capabilities["identity_mode"]=(
@@ -770,6 +773,90 @@ async def commercial_identity_boundary(request:Request,call_next):
         return JSONResponse(
             status_code=error.status_code,content={"detail":error.detail},
             headers=error.headers or None)
+
+
+# Lane APP1, decision 4 (2026-10-19): CORS for the app's origins. Registered
+# after commercial_identity_boundary, so it wraps it: the preflight is
+# answered before any session is asked for, and a refusal (401, 429) carries
+# the origin so the app can read why. No Allow-Credentials -- the app sends a
+# bearer, and a cookie session is never offered to another origin. Only
+# /api and the health paths the screen reads; the app carries its own copy
+# of the screen's files. With VOINEY_LAB_APP_ORIGINS empty nothing is added.
+_APP_CORS_PATHS=frozenset({"/readyz","/healthz"})
+_APP_CORS_METHODS="GET, POST, PUT, PATCH, DELETE"
+_APP_CORS_HEADERS="Authorization, Content-Type, Accept"
+_APP_CORS_EXPOSE="Retry-After, Content-Disposition"
+_APP_CORS_MAX_AGE_SECONDS=600
+
+
+def _with_vary_origin(headers)->None:
+    vary=headers.get("vary","")
+    if "origin" not in {item.strip().casefold() for item in vary.split(",")}:
+        headers["vary"]=f"{vary}, Origin" if vary.strip() else "Origin"
+
+
+@app.middleware("http")
+async def app_origin_cors(request:Request,call_next):
+    """CORS for the origins in VOINEY_LAB_APP_ORIGINS, on /api and the health paths."""
+
+    path=request.url.path
+    origin=request.headers.get("origin")
+    if not origin or not (path.startswith("/api/") or path in _APP_CORS_PATHS):
+        return await call_next(request)
+    try:
+        allowed=_app_access().allows(origin)
+    except ConfigurationError:
+        # An invalid list lets no app in; /readyz reports it.
+        allowed=False
+    if not allowed:
+        return await call_next(request)
+    if request.method=="OPTIONS" and request.headers.get("access-control-request-method"):
+        preflight=Response(status_code=204,headers={
+            "Access-Control-Allow-Origin":origin,
+            "Access-Control-Allow-Methods":_APP_CORS_METHODS,
+            "Access-Control-Allow-Headers":_APP_CORS_HEADERS,
+            "Access-Control-Max-Age":str(_APP_CORS_MAX_AGE_SECONDS),
+        })
+        _with_vary_origin(preflight.headers)
+        return preflight
+    response=await call_next(request)
+    response.headers["Access-Control-Allow-Origin"]=origin
+    response.headers["Access-Control-Expose-Headers"]=_APP_CORS_EXPOSE
+    _with_vary_origin(response.headers)
+    return response
+
+
+def _socket_origin_refusal(websocket:WebSocket)->str|None:
+    """Why /ws refuses this browser's origin, or None (lane APP1, decision 4).
+
+    With VOINEY_LAB_APP_ORIGINS empty there is no check, as before. Once it
+    lists the app, a browser's socket must come from the server's own host
+    (Host, or the proxy's X-Forwarded-Host) or a listed app origin; a client
+    that sends no Origin is not a browser and still needs its login.
+    """
+
+    try:
+        settings=_app_access()
+    except ConfigurationError:
+        return "configuration_invalid"
+    if not settings.origins:
+        return None
+    headers=getattr(websocket,"headers",{})
+    origin=headers.get("origin")
+    if origin is None:
+        return None
+    if settings.allows(origin):
+        return None
+    normalized=normalize_origin(origin)
+    if normalized is not None:
+        own_hosts={
+            value.split(",")[0].strip().casefold()
+            for value in (headers.get("host",""),headers.get("x-forwarded-host",""))
+            if value.strip()
+        }
+        if normalized.split("://",1)[1] in own_hosts:
+            return None
+    return "origin_not_allowed"
 
 
 def _commercial_workspace()->tuple[Principal,object]:
@@ -11896,6 +11983,12 @@ def _record_connection_restored(
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
     await websocket.accept()
+    if (origin_refusal:=_socket_origin_refusal(websocket)) is not None:
+        await websocket.send_text(event("error",message=origin_refusal))
+        await websocket.close(
+            code=1008,
+            reason="origin not allowed" if origin_refusal=="origin_not_allowed" else "invalid configuration")
+        return
     workspace_context_token=None
     account_context_token=None
     try:
