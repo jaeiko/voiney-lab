@@ -763,6 +763,16 @@
     .home-card-sub{color:var(--ink-muted);font-size:.9375rem;line-height:1.375rem;font-weight:600;overflow-wrap:anywhere}
     .home-note{margin:0;color:var(--ink-muted);font-size:.9375rem;font-weight:600}
     #tab-home .example-strip{margin:0}
+    /* Lane IA decision ⑥: the settings tab's own sections. */
+    .settings-extra{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .settings-extra h2{margin:0;color:var(--ink);font-size:.95rem}
+    .settings-extra-lead,.settings-account-name{margin:0;color:var(--ink);font-size:.9375rem;line-height:1.5rem;white-space:pre-wrap}
+    .settings-account-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+    .settings-account-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
+    .settings-account-actions button[hidden],.settings-account-form[hidden]{display:none}
+    .settings-account-form{display:flex;flex-direction:column;gap:var(--space-3);max-width:28rem}
+    #settings-agent-voice-list .wizard-option-pick,#settings-agent-voice-list .wizard-option-aside{min-height:var(--target-desk)}
+    body:not([data-dev="on"]) #dev-diagnostics{display:none}
     @media (min-width:900px){
      .tab-bar{top:0;bottom:0;right:auto;width:var(--side-menu-w);flex-direction:column;align-items:stretch;justify-content:flex-start;height:auto;padding:var(--space-6) 0;border-top:0;border-right:1px solid var(--line)}
      .tab-link{flex:0 0 auto;flex-direction:row;justify-content:flex-start;gap:var(--space-3);min-height:56px;padding:0 var(--space-6);font-size:1rem}
@@ -1248,7 +1258,7 @@
         </div>
       </section>
     </section>
-    <!-- Lane IA decision ①: the settings -- lane UI0's sheet (voice input, guidance; the protocol group as before), the home-screen guide (lane UI2) and the developer details. -->
+    <!-- Lane IA decision ⑥: the settings -- lane UI0's sheet (voice input, guidance; the protocol group as before), the agent's voice (lane ON), the account (lane ON), the home-screen guide (lane UI2) and, in dev mode only, the developer details. -->
     <section id="tab-settings" class="tab-panel" data-tab="settings" aria-labelledby="settings-sheet-title" tabindex="-1" hidden>
       <!-- Lane UI0 decision 3 (2026-10-12): the eleven settings in three groups -- 프로토콜, 음성 입력, 안내 방식. Before and after the experiment they lie open across the setup; during it they open as a sheet over the run screen. Each control, its id and what it saves are as before. -->
       <section id="settings-sheet" class="settings-sheet" aria-labelledby="settings-sheet-title">
@@ -1315,6 +1325,29 @@
             </select></label>
           </fieldset>
         </div>
+      </section>
+      <section id="settings-agent-voice" class="settings-extra" aria-labelledby="settings-agent-voice-title">
+        <h2 id="settings-agent-voice-title">안내 목소리</h2>
+        <p id="settings-agent-voice-lead" class="settings-extra-lead">실험을 안내하는 목소리예요. [들어 보기]로 듣고 고르면 저장돼요.</p>
+        <ul id="settings-agent-voice-list" class="wizard-options" aria-label="안내 목소리"></ul>
+        <small id="settings-agent-voice-note" class="mic-device-status" role="status" aria-live="polite"></small>
+      </section>
+      <section id="settings-account" class="settings-extra" aria-labelledby="settings-account-title">
+        <h2 id="settings-account-title">계정</h2>
+        <p id="settings-account-name" class="settings-account-name"></p>
+        <div class="settings-account-actions">
+          <button id="account-password-open" type="button" hidden>비밀번호 바꾸기</button>
+          <button id="account-logout" type="button" hidden>로그아웃</button>
+        </div>
+        <form id="account-password-form" class="settings-account-form" hidden>
+          <label class="wizard-field">지금 비밀번호<input id="account-password-current" type="password" autocomplete="current-password"></label>
+          <label class="wizard-field">새 비밀번호 (8자 이상)<input id="account-password-new" type="password" autocomplete="new-password"></label>
+          <div class="settings-account-actions">
+            <button id="account-password-send" type="submit">바꾸기</button>
+            <button id="account-password-cancel" type="button">닫기</button>
+          </div>
+          <small id="account-password-status" class="mic-device-status" role="status" aria-live="polite"></small>
+        </form>
       </section>
       <details id="install-guide" class="install-guide">
         <summary>홈 화면에 추가</summary>
@@ -4734,7 +4767,7 @@ var wizard={active:false,step:null,auth:null,settings:null,voices:null,check:nul
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
 function wizardLastProtocol(){try{return globalThis.localStorage?.getItem(WIZARD_LAST_PROTOCOL_KEY)||"";}catch(_){return "";}}
 function wizardRememberProtocol(id){try{globalThis.localStorage?.setItem(WIZARD_LAST_PROTOCOL_KEY,id);}catch(_){}}
-function wizardTakeSettings(settings){if(!wizard)return;if(settings&&typeof settings==="object")wizard.settings={...settings};if(wizard.active)renderWizard();}
+function wizardTakeSettings(settings){if(!wizard)return;if(settings&&typeof settings==="object")wizard.settings={...settings};if(wizard.active)renderWizard();renderSettingsExtras();}
 function wizardSettings(){return wizard.settings||{};}
 function wizardSteps(){
  const steps=[];
@@ -5034,7 +5067,7 @@ $("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
 // state: the view is the server's (screenView), the tab is where it is drawn.
 const TAB_ROUTE_PATTERN=/^#\/(home|protocols|upload|experiment|records|settings)(?:\/([^/?#]+))?\/?(?:\?[^#]*)?$/;
 const TAB_PANELS=Object.freeze(["home","protocols","experiment","records","settings"]);
-var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading";
+var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading",accountPasswordOpen=false;
 function parseRoute(hash){const match=TAB_ROUTE_PATTERN.exec(String(hash||""));if(!match)return{tab:"home",id:null,path:"#/home"};let id=null;if(match[2]){try{id=decodeURIComponent(match[2]);}catch(_){id=match[2];}}return{tab:match[1],id,path:match[0]};}
 function routePath(tab,id=null){return `#/${tab}${nonemptyText(id)?`/${encodeURIComponent(id)}`:""}`;}
 function currentTab(){return screenRoute.tab==="upload"?"protocols":screenRoute.tab;}
@@ -5059,6 +5092,7 @@ function renderRoute(){
  for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tab?"page":"false");
  renderRunReturnBand();
  if(tab==="home")renderHome();
+ if(tab==="settings")renderSettingsExtras();
  renderWizard();
  if(key!==lastRouteKey){lastRouteKey=key;applyRouteSelections();if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
  return tab;
@@ -5128,6 +5162,62 @@ async function resumeExperimentFromHome(item){
  if(wizard.active)wizardGo("start");
  return true;
 }
+// Lane IA decision ⑥ (2026-10-19): the settings tab's own sections beside lane
+// UI0's sheet -- the agent's voice (lane ON's list and preview, the same
+// setting), the account (the name; log out and a new password, lane ON's
+// routes; nothing in dev mode), the home-screen guide (lane UI2) and, in dev
+// mode only (the server's session says dev), the developer details.
+const ACCOUNT_PASSWORD_WORDS=Object.freeze({login_refused:"지금 비밀번호가 맞지 않아요.",password_invalid:"새 비밀번호는 8자 이상으로 적어 주세요.",authentication_required:"로그인이 풀렸어요. 다시 로그인해 주세요.",accounts_disabled:"이 서버에는 계정이 없어요(개발 모드)."});
+function renderSettingsExtras(){
+ const list=$("settings-agent-voice-list");
+ if(list){
+  list.replaceChildren();
+  const voices=wizard?.voices,selected=String(wizardSettings().agent_voice||"default"),chosen=selected==="default"?voices?.default_voice_id:selected;
+  for(const voice of voices?.voices||[]){
+   const aside=compareEl("button","wizard-option-aside",wizard.previewing===voice.voice_id?"듣는 중…":"들어 보기");aside.type="button";aside.disabled=Boolean(wizard.previewing);
+   aside.addEventListener("click",()=>{void previewAgentVoiceFromSettings(voice.voice_id);});
+   list.appendChild(wizardOption(voice.label_ko,voice.voice_id===voices?.default_voice_id?"기본 목소리":"",voice.voice_id===chosen,()=>{void pickAgentVoiceFromSettings(voice.voice_id);},aside));
+  }
+  const lead=$("settings-agent-voice-lead");if(lead)lead.textContent=(voices?.voices||[]).length?`실험을 안내하는 목소리예요. [들어 보기]로 듣고 고르면 저장돼요.${voices?.preview_text_ko?` 들려주는 말: "${voices.preview_text_ko}"`:""}`:"이 서버에는 고를 목소리가 없어요 · 기본 목소리로 안내해요.";
+ }
+ const auth=wizard?.auth,accounts=auth?.mode==="accounts"&&auth.signed_in===true,name=$("settings-account-name");
+ if(name)name.textContent=!auth?"계정 확인 중…":accounts?`${auth.account?.name||""} · 연구실 ${auth.account?.organization_id||""}${auth.account?.admin?" · 관리자":""}`:auth.mode==="accounts"?"로그인 전":`${auth.account?.name||"개발 로그인"} · 계정 없음 (개발 모드)`;
+ for(const id of ["account-logout","account-password-open"]){const button=$(id);if(button)button.hidden=!accounts;}
+ if(!accounts)accountPasswordOpen=false;
+ const form=$("account-password-form");if(form)form.hidden=!accountPasswordOpen;
+ return accounts;
+}
+async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoice(voiceId);setText("settings-agent-voice-note",ok?"저장했어요 · 이 목소리로 안내해요.":"목소리를 저장하지 못했어요.");renderSettingsExtras();return ok;}
+async function previewAgentVoiceFromSettings(voiceId){const started=wizard.previewing===null;renderSettingsExtras();const ok=await wizardPreviewVoice(voiceId);if(started)setText("settings-agent-voice-note",ok?"":"들어 보기에 실패했어요. 잠시 뒤 다시 눌러 주세요.");renderSettingsExtras();return ok;}
+async function logOutAccount(){
+ const button=$("account-logout"),status=$("account-password-status");setDisabled(button,true);
+ try{const response=await fetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("refused");}
+ catch(_){setDisabled(button,false);if(status)status.textContent="로그아웃하지 못했어요. 다시 해 주세요.";return false;}
+ setDisabled(button,false);
+ // The page's lists belong to the account that left: a reload starts clean at the login.
+ if(typeof globalThis.location?.reload==="function"){try{globalThis.location.reload();return true;}catch(_){}}
+ wizard.auth={mode:"accounts",signed_in:false,account:null};wizard.active=true;wizard.step="login";renderRoute();return true;
+}
+async function changeAccountPassword(event){
+ event?.preventDefault?.();
+ const current=String($("account-password-current")?.value||""),next=String($("account-password-new")?.value||""),status=$("account-password-status");
+ if(!current||!next){if(status)status.textContent="지금 비밀번호와 새 비밀번호를 적어 주세요.";return false;}
+ setDisabled($("account-password-send"),true);
+ try{
+  const response=await fetch("/api/auth/password",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({current,new:next}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){if(status)status.textContent=ACCOUNT_PASSWORD_WORDS[typeof payload?.detail==="string"?payload.detail:""]||"비밀번호를 바꾸지 못했어요. 지금 비밀번호를 확인해 주세요.";return false;}
+  if(status)status.textContent="비밀번호를 바꿨어요 · 다른 기기는 로그아웃돼요.";
+  for(const id of ["account-password-current","account-password-new"]){const field=$(id);if(field)field.value="";}
+  return true;
+ }catch(_){if(status)status.textContent="서버에 연결할 수 없어요.";return false;}
+ finally{setDisabled($("account-password-send"),false);}
+}
+$("account-logout")?.addEventListener("click",()=>{void logOutAccount();});
+$("account-password-open")?.addEventListener("click",()=>{accountPasswordOpen=!accountPasswordOpen;renderSettingsExtras();if(accountPasswordOpen)$("account-password-current")?.focus?.();});
+$("account-password-cancel")?.addEventListener("click",()=>{accountPasswordOpen=false;renderSettingsExtras();});
+$("account-password-form")?.addEventListener("submit",event=>{void changeAccountPassword(event);});
+$("account-password-send")?.addEventListener("click",event=>{void changeAccountPassword(event);});
 globalThis.addEventListener?.("hashchange",()=>{renderRoute();});
 globalThis.addEventListener?.("load",()=>{renderRoute();void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();void loadSourceFormats();renderInstallGuide();void openStartWizard();},{once:true});
 </script>
