@@ -32,8 +32,10 @@ from voiney_lab.experiment_protocol_analysis import (
     REQUOTE_SYSTEM_PROMPT,
     analysis_requote_enabled,
     parse_protocol_analysis_response,
+    requote_keeps_the_order,
     requote_shares_words,
     requote_stated_values,
+    requote_words,
     requote_unverified_items,
 )
 
@@ -140,13 +142,28 @@ class AskedAgainAndKeptTests(_RequoteCase):
 
     def test_a_step_s_words_written_differently_take_the_page_s_words(self) -> None:
         model = _AskingModel(
-            self.with_instruction("2. Incubate at 37 C for 10 min."),
+            self.with_instruction("2. Incubate 10 minutes at 37 C."),
             requote=lambda request: answer_with(found(first_item(request)["id"], 1, STEP_TWO)))
         entry = self.run_analysis(model)
         self.assertTrue(entry.available_for_execution)
         (item,) = model.requests[0]["items"]
-        self.assertEqual((item["ask"], item["written"]), ("words", "2. Incubate at 37 C for 10 min."))
+        self.assertEqual((item["ask"], item["written"]), ("words", "2. Incubate 10 minutes at 37 C."))
         self.assertEqual(self.step_two().instruction_source_text, STEP_TWO)
+
+    def test_a_stretch_whose_words_stand_in_another_order_leaves_the_item_a_card(self) -> None:
+        # The page's words in another order than the written text's: on a page
+        # whose lines run out of order (an OCR page read across columns) such a
+        # stretch no longer says the step, so it is not taken.
+        model = _AskingModel(
+            self.with_instruction("2. Incubate at 37 C for 10 min."),
+            requote=lambda request: answer_with(found(first_item(request)["id"], 1, STEP_TWO)))
+        entry = self.run_analysis(model)
+        self.assertEqual(entry.analysis_status, "review_pending")
+        (event,) = self.events("protocol_analysis_evidence_requote")
+        self.assertEqual(event["by_outcome"], {"words_out_of_order": 1})
+        protocol = self.catalog.review_pending_analysis(self.protocol_id)[0]
+        self.assertEqual(protocol.sections[0].steps[1].instruction_source_text,
+                         "2. Incubate at 37 C for 10 min.")
 
     def test_a_quote_that_does_not_open_with_its_step_number_is_asked_for_with_it(self) -> None:
         # The quote is the page's own words from the middle of step 3's line,
@@ -462,6 +479,25 @@ class ValuesAndWordsTests(unittest.TestCase):
         ):
             self.assertNotEqual(requote_stated_values(written), requote_stated_values(page),
                                 (written, page))
+
+    def test_lines_read_out_of_order_are_not_the_written_order(self) -> None:
+        # Lane AN4's live run: an OCR page that ran two columns' lines into
+        # each other gave the same words and numbers in another order.
+        written = ("The live and dead cells were harvested by centrifugation at 7,000 × g for 7 min "
+                   "at room temperature and the pellets were resuspended in saline at "
+                   "approximately 1 × 108 CFU/ml (an OD 600 of 0.255).")
+        scrambled = ("The live and dead cells\nwere harvested by centrifugation at 7,000 × g for 7 min at\n"
+                     "approximately 1 × 108 CFU/ml (an OD 600 of 0.255). Live cells\n"
+                     "room temperature and the pellets were resuspended in saline at")
+        self.assertEqual(requote_stated_values(written), requote_stated_values(scrambled))
+        self.assertTrue(requote_shares_words(written, scrambled))
+        self.assertFalse(requote_keeps_the_order(written, scrambled))
+
+    def test_a_word_broken_at_the_line_end_is_the_same_word_in_the_same_place(self) -> None:
+        written = "All culture incubations are performed in a 37°C, 5% CO2 incubator unless otherwise specified."
+        printed = "All culture incubations are performed in a 37°C, 5% CO2 incubator unless oth-\nerwise specified."
+        self.assertTrue(requote_keeps_the_order(written, printed))
+        self.assertEqual(requote_words(written), requote_words(printed))
 
     def test_the_same_passage_shares_half_its_words(self) -> None:
         self.assertTrue(requote_shares_words("Wear the gloves.", "Wear gloves."))

@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from dataclasses import field as dataclass_field
+from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, Union, get_args, get_origin, get_type_hints
@@ -5271,7 +5272,8 @@ def join_piece_analyses(
 # claim and domain checks as any answer; an item none of them refuses any
 # longer is kept and recorded as "근거를 다시 찾아 확인". Its values never
 # change: a stretch whose numbers or units differ from what the analysis
-# wrote, or that shares too few of its words to be the same passage, leaves
+# wrote, that shares too few of its words to be the same passage, or whose
+# words stand in another order (a page whose lines run out of order) leaves
 # the item a card, as does anything the checks still refuse. The model's
 # word alone settles nothing.
 
@@ -5304,6 +5306,13 @@ REQUOTE_MAX_SPAN_CHARACTERS = 4000
 #: The share of the written text's words a stretch must hold to be read as
 #: the same passage rather than another one with the same numbers.
 REQUOTE_MIN_SHARED_WORDS = 0.5
+#: The share of a stretch's words (those the written text also has) that must
+#: stand in the written text's order. A page whose text runs its lines out of
+#: order -- an OCR page read across two columns (lane AN4's live run,
+#: PMC6474257 scan: "...for 7 min at" / "approximately 1 x 108 CFU/ml" /
+#: "room temperature and ...") -- gives a stretch with the same words and
+#: numbers that no longer says the step; the written text read it in order.
+REQUOTE_MIN_WORDS_IN_ORDER = 0.9
 #: How many times the re-check may drop items and check again.
 _REQUOTE_CHECK_ROUNDS = 3
 
@@ -5363,6 +5372,7 @@ REQUOTE_NO_ANSWER = "no_answer"
 REQUOTE_INVALID_ANSWER = "invalid_answer"
 REQUOTE_VALUE_DIFFERS = "value_differs"
 REQUOTE_OTHER_PASSAGE = "other_passage"
+REQUOTE_OUT_OF_ORDER = "words_out_of_order"
 REQUOTE_STILL_REFUSED = "still_refused"
 REQUOTE_CALL_FAILED = "call_failed"
 
@@ -5643,20 +5653,29 @@ def _without_step_number(text: str, label: str | None) -> str:
 
 
 _REQUOTE_WORD = re.compile(r"[^\W_]+")
+#: A word the page breaks at the line end with a hyphen ("Ani-" / "mal"),
+#: joined for these comparisons only.
+_REQUOTE_LINE_END_HYPHEN = re.compile(r"(?<=[^\W\d_])[-‐‑]\s*\n\s*(?=[^\W\d_])")
 
 
-def requote_words(text: str) -> frozenset[str]:
-    """The words a passage is told by: letters and digits, case set aside; a
-    Korean word by its first two syllables, so a changed particle is the same
-    word; one-letter words left out."""
+def requote_word_list(text: str) -> list[str]:
+    """The words a passage is told by, in order: letters and digits, case set
+    aside, a word the page breaks at the line end read whole; a Korean word by
+    its first two syllables, so a changed particle is the same word;
+    one-letter words left out."""
 
-    words = set()
-    for word in _REQUOTE_WORD.findall(unicodedata.normalize("NFKC", text).casefold()):
+    form = _REQUOTE_LINE_END_HYPHEN.sub("", unicodedata.normalize("NFKC", text)).casefold()
+    words = []
+    for word in _REQUOTE_WORD.findall(form):
         if any(_is_hangul(character) for character in word):
             word = word[:2]
         if len(word) > 1 or word.isdigit():
-            words.add(word)
-    return frozenset(words)
+            words.append(word)
+    return words
+
+
+def requote_words(text: str) -> frozenset[str]:
+    return frozenset(requote_word_list(text))
 
 
 def requote_shares_words(written: str, span: str) -> bool:
@@ -5664,6 +5683,21 @@ def requote_shares_words(written: str, span: str) -> bool:
     if not words:
         return True
     return len(words & requote_words(span)) >= REQUOTE_MIN_SHARED_WORDS * len(words)
+
+
+def requote_keeps_the_order(written: str, span: str) -> bool:
+    """Whether the stretch's words stand in the written text's order: of its
+    words the written text also has, ``REQUOTE_MIN_WORDS_IN_ORDER`` must be
+    matched in order (longest matching runs)."""
+
+    words = requote_word_list(written)
+    known = set(words)
+    shared = [word for word in requote_word_list(span) if word in known]
+    if not shared:
+        return True
+    matcher = SequenceMatcher(None, words, shared, autojunk=False)
+    in_order = sum(block.size for block in matcher.get_matching_blocks())
+    return in_order >= REQUOTE_MIN_WORDS_IN_ORDER * len(shared)
 
 
 def _answer_replacements(
@@ -5698,6 +5732,8 @@ def _answer_replacements(
         return REQUOTE_VALUE_DIFFERS, {}, page
     if not requote_shares_words(compare_written, compare_span):
         return REQUOTE_OTHER_PASSAGE, {}, page
+    if not requote_keeps_the_order(compare_written, compare_span):
+        return REQUOTE_OUT_OF_ORDER, {}, page
     if question.ask == "words":
         return REQUOTE_KEPT, {question.path: span}, page
     evidence = replace(

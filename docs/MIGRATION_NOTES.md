@@ -1198,7 +1198,7 @@ records, all append-only:
   "last_page", "pages", "questions", "status": "answered" | "failed",
   "failure_code"?, "seconds"}], "check_seconds"}`. Outcomes: `requoted`,
   `model_found_nothing`, `no_answer`, `invalid_answer`, `value_differs`,
-  `other_passage`, `still_refused`, `call_failed`. A long document has one
+  `other_passage`, `words_out_of_order`, `still_refused`, `call_failed`. A long document has one
   call per piece with refused items. No source text is recorded.
 - `auto_resolved` (on `protocol_analysis_ready` and
   `protocol_analysis_review_pending`) may hold entries
