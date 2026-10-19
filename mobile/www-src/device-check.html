@@ -17,10 +17,10 @@
 <body>
 <main>
   <h1>기기 시험 (디버그 빌드)</h1>
-  <p>native-bridge.js 가 기기 알림을 예약하는지 사람이 확인하는 화면이다. 서버에 연결하지 않고, 서버가 보내는 것과 같은 모양의 시험 타이머(지금부터 2분)를 만든다. 순서는 docs/APP_PLAN.md 의 "실제 기기 시험 순서".</p>
+  <p>native-bridge.js 가 기기 알림을 예약하는지 사람이 확인하는 화면이다. 서버에 연결하지 않고, 서버가 보내는 것과 같은 모양의 시험 타이머(지금부터 6분 — 서버는 5분 이상 타이머에만 "1분 전"을 알린다)를 만든다. 순서는 docs/APP_PLAN.md 의 "실제 기기 시험 순서".</p>
   <button id="prepare">1. 알림 권한·채널 준비</button>
   <button id="exact" class="secondary">2. 정확한 알람 설정 열기 (Android 12+)</button>
-  <button id="schedule">3. 시험 타이머 예약 — 2분 (1분 전·끝)</button>
+  <button id="schedule">3. 시험 타이머 예약 — 6분 (5분 뒤 "1분 전", 6분 뒤 끝)</button>
   <button id="cancel" class="secondary">4. 시험 타이머 취소 (서버가 타이머를 멈춘 것처럼)</button>
   <button id="pending" class="secondary">5. 예약된 알림 보기</button>
   <button id="awake" class="secondary">6. 화면 켜 두기 켜기/끄기</button>
@@ -47,9 +47,9 @@
   const testState = (running) => {
     const now = Date.now();
     const timer = running
-      ? { state: "running", duration_seconds: 120, remaining_seconds: 120, elapsed_seconds: 0, step_id: "device-check", step_label: "시험",
-          started_at: new Date(now).toISOString(), deadline_at: new Date(now + 120000).toISOString(), name: "2분", bound: "exact" }
-      : { state: "not_started", duration_seconds: 120, remaining_seconds: 120, step_id: "device-check", step_label: "시험", deadline_at: null };
+      ? { state: "running", duration_seconds: 360, remaining_seconds: 360, elapsed_seconds: 0, step_id: "device-check", step_label: "시험",
+          started_at: new Date(now).toISOString(), deadline_at: new Date(now + 360000).toISOString(), name: "6분", bound: "exact" }
+      : { state: "not_started", duration_seconds: 360, remaining_seconds: 360, step_id: "device-check", step_label: "시험", deadline_at: null };
     return { attached: true, active: true, workflow_status: "active", timers: { step: timer }, timer };
   };
   const clock = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour12: false });

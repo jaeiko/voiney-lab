@@ -19,7 +19,8 @@
 ## 2. 지금 제품과 이 줄의 원칙
 
 - 서버 중심이다. 상태와 타이머의 권한은 서버(`CuratedProtocolSession`)에 있고, 음성은 서버의 STT·TTS·LLM 이 처리하고,
-  화면은 웹소켓(`/ws`)으로 상태를 받는다. 화면은 한 파일 PWA(`src/voiney_lab/static/index.html`, manifest 있음, 서비스 워커 없음).
+  화면은 웹소켓(`/ws`)으로 상태를 받는다. 화면은 PWA(`src/voiney_lab/static/index.html`, manifest 있음, 서비스 워커 없음)이고,
+  끊김 대비는 줄 NET 의 `static/connection.js`(2026-10-19 `dev` 에 합침)가 맡는다.
 - 서버가 화면에 보내는 단계 타이머(`timers.step`, `curated_protocol.py` 의 `timer_status()`):
   `state`(`not_started`·`running`·`expired`), `duration_seconds`, `remaining_seconds`, `started_at`, `deadline_at`(ISO, UTC),
   `step_id`, `step_label`, `name`("최소 2시간"·"15분"), `bound`(`minimum`·`maximum`·`approximate`·`exact`).
@@ -192,7 +193,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 | 단계 | 끊긴 동안 되는 것 | 필요한 것 | 서버 권한과의 관계 |
 |---|---|---|---|
 | 0 (이 줄) | 타이머 1분 전·끝 알림 | 로컬 알림 | 서버 시각의 사본. 상태 변화 없음 |
-| 1 | 지금 단계를 화면에 보여 주고 "연결 끊김"을 알림 | 마지막 서버 상태를 기기에 보관(읽기 전용) | 상태 변화 없음. 다시 연결되면 서버 상태로 덮어씀 |
+| 1 (줄 NET 이 웹에서 만듦) | 끊김을 3초 안에 알리고 화면을 읽기 전용으로, 마지막 단계·다음 단계·안전 주의를 그대로 둠, 화면 타이머 사본(화면이 켜져 있을 때 1분 전·끝을 소리로), 1·2·4·8·15초마다 다시 연결해 같은 실험을 이어 감 | 앱에서 더할 것: 앱을 새로 열었을 때도 보이게 마지막 서버 상태를 기기에 보관(읽기 전용) | 상태 변화 없음. 다시 연결되면 서버 상태로 덮어씀 |
 | 2 | "지금 단계 다시 들려줘" | 분석 통과한 프로토콜의 단계 글과, **연결돼 있을 때 서버 TTS 로 미리 만든 단계 음성**을 기기에 내려받기. 질문을 알아듣는 것은 화면 버튼 또는 기기 안 STT 의 작은 명령 어휘 | 읽기만 한다. 단계를 넘기지 않는다 |
 | 3 | 끊긴 동안 "다음 단계"를 말해도 진행 | 기기 안 STT·TTS, 기기 안 상태 기록 | **두 번째 상태 권한이 생긴다.** 지금 규칙(AGENTS.md 규칙 2–3, "끊긴 동안 앱은 상태를 바꾸지 않는다")에 어긋난다. 하려면 "끊긴 동안의 요청을 기록만 하고, 다시 연결되면 서버가 검증하고 사람이 확인해서 반영"하는 식의 설계를 사람이 먼저 정해야 한다 |
 
@@ -235,39 +236,44 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 | `mobile/capacitor.config.js` | 앱 id `com.voiney.lab`(자리표시 — 11절), 이름 VoineyLab. 기본은 화면 묶기, `VOINEY_APP_SERVER_URL=https://…` 이면 서버 주소, `VOINEY_APP_START_PATH` 로 첫 쪽 |
 | `mobile/scripts/prepare-web.mjs` | `mobile/www/`(추적 안 함)를 서버 정적 화면 + `mobile/www-src/` 로 만든다 |
 | `mobile/www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때의 화면 |
-| `mobile/www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: 2분 시험 타이머로 알림 예약·취소, 정확한 알람 설정, 화면 켜 두기, 네트워크 변화 |
+| `mobile/www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: 6분 시험 타이머(5분 뒤 "1분 전", 6분 뒤 끝)로 알림 예약·취소, 정확한 알람 설정, 화면 켜 두기, 네트워크 변화 |
 | `mobile/android/` | `npx cap add android` 결과. 고친 곳은 `AndroidManifest.xml` 뿐: `RECORD_AUDIO`·`MODIFY_AUDIO_SETTINGS`, `allowBackup="false"`(웹뷰 저장소가 클라우드 백업으로 나가지 않게) |
 
 ### 9.2 다리 `src/voiney_lab/static/native-bridge.js`
 
-서버가 준 단계 타이머(`timers.step`)로 기기 알림 두 개(끝 1분 전, 끝)를 예약하고, 다음 서버 상태에 맞춰 취소·변경한다.
+서버가 준 단계 타이머(`timers.step`)로 기기 알림 두 개("1분 전"과 끝)를 예약하고, 다음 서버 상태에 맞춰 취소·변경한다.
 번들러 없이 `<script>` 로 읽히고(`window.VoineyNativeBridge`), node 에서는 `require` 로 읽힌다. 시험:
 `node --test tests/native_bridge/timer_alerts.test.js`(pytest 에서는 `tests/test_native_bridge.py`).
 
-- `planTimerAlerts(state, {nowMs, offsetMs})`: 실험이 진행 중(`attached`·`active`)이고 단계 타이머가 `running` 이며 `started_at`·`deadline_at` 이
-  읽힐 때만 알림을 만든다. 1분 이하 타이머는 끝만. 이미 지난 시각은 넣지 않는다. 일시정지는 알림을 지우지 않는다(서버도 단계 타이머를 멈추지 않는다).
+- `planTimerAlerts(state, {nowMs, offsetMs, rule})`: 실험이 진행 중(`attached`·`active`)이고 단계 타이머가 `running` 이며 `started_at`·`deadline_at` 이
+  읽힐 때만 알림을 만든다. 이미 지난 시각은 넣지 않는다. 일시정지는 알림을 지우지 않는다(서버도 단계 타이머를 멈추지 않는다).
+- "1분 전"은 **서버가 말하는 규칙 그대로** 정한다: 5분 이상인 타이머에만, 끝 60초 전(`curated_protocol.py` 의 `TIMER_LAST_MINUTE_FROM_SECONDS`·
+  `TIMER_LAST_MINUTE_SECONDS`, 줄 NET 부터 서버 하트비트가 `timer_last_minute_from_seconds`·`timer_last_minute_seconds` 로 보낸다).
+  기본값은 `LAST_MINUTE_RULE`(300·60)이고, 하트비트를 받으면 `lastMinuteRule(message)` → `setRule(rule)`. 기본값이 서버 상수와 같은지는
+  `tests/test_native_bridge.py` 가 못 박는다. 5분보다 짧은 타이머는 끝 알림만 있다 — 줄 NET 의 화면 타이머와 같다.
 - 알림 id 는 `step_id|started_at|종류` 의 해시(양의 31비트). 같은 타이머는 같은 id 라서 같은 상태가 여러 번 와도 다시 예약하지 않고,
   다시 시작한 타이머(새 `started_at`)는 옛 쌍을 지우고 새 쌍을 넣는다.
-- 기기 시계가 서버와 3초 넘게 다르면 `remaining_seconds` 로 차이를 재서 맞춘다(`clockOffsetMs`).
+- 기기 시계와 서버 시계의 차이: 화면이 잰 값(줄 NET 의 `voineyConnection.serverNow()` → `Date.now()-serverNow()`)을 `sync` 의 세 번째 인자
+  `{offsetMs}` 로 주면 그것을 쓰고, 없으면 `remaining_seconds` 로 어림해 3초 넘게 다를 때만 맞춘다(`clockOffsetMs`).
 - 문구는 서버의 끝 문구(`_timer_end_words`)를 따른다: 최소 시간은 "최소 시간 2시간이 지났어요."(끝났다고 하지 않음),
   최대 시간은 "최대 시간 15분이 됐어요.", 그 밖은 "타이머 15분이 끝났어요." — 모두 "앱에서 확인해 주세요."로 맺는다. 단계가 끝났다고 말하지 않는다.
-- `createTimerAlerts(notifier).sync(state, receivedAtMs)` 는 기기의 예약 목록(우리 것만, `extra.tag`)과 비교해 취소·예약하고, 동시에 온 두 상태가
-  섞이지 않게 차례로 돈다. `connectionLost()` 는 일부러 아무것도 하지 않는다.
+- `createTimerAlerts(notifier).sync(state, receivedAtMs, {offsetMs})` 는 기기의 예약 목록(우리 것만, `extra.tag`)과 비교해 취소·예약하고, 동시에 온 두
+  상태가 섞이지 않게 차례로 돈다. `connectionLost()` 는 일부러 아무것도 하지 않는다.
 - Capacitor 가 웹뷰에 넣는 다리(`Capacitor.nativePromise`)로 플러그인을 부른다. 알림 채널 `voiney-timer`(중요도 5), `allowWhileIdle: true`.
 
-**연결 지점** (`static/index.html`, 2026-10-18 `dev` 기준 줄 번호. 이 줄에서는 고치지 않았다):
+**연결 지점** (`static/index.html`, 2026-10-19 `dev`(줄 NET #92 합친 뒤) 기준 줄 번호. 이 줄에서는 고치지 않았다):
 
 | # | 자리 | 할 일 |
 |---|---|---|
-| ① | 1256줄 `<script>` 앞 | `<script src="/native-bridge.js"></script>`. 앱이 아니면(`isNativeApp` 거짓) 아무것도 하지 않게 |
+| ① | 4591줄 `<script src="/connection.js"></script>` 옆 | `<script src="/native-bridge.js"></script>`(줄 NET 의 `connection.js` 처럼 따로 읽힘). 앱이 아니면(`isNativeApp` 거짓) 아무것도 하지 않게 |
 | ② | 시작할 때 한 번 | `prepareNotifications(cap)`(알림 권한·채널·정확한 알람 여부). 정확한 알람이 거부면 "타이머 알림이 몇 분 늦을 수 있어요 — 설정에서 허용" 안내 |
-| ③ | 2368줄 `renderCuratedProtocolState` 에서 상태를 받아들인 직후(`curatedProtocolState={...value}`, 2378줄) | `timerAlerts.sync(value, Date.now())`. **서버가 보낸 상태를 받아들인 이 자리에서만** 부른다 |
-| ④ | 2020줄 `invalidateCuratedProtocolState`, 2890줄 웹소켓 `onclose` | `sync` 를 부르지 **않는다**(여기서 상태가 `{attached:false}` 가 되므로 부르면 끊길 때 알림이 지워진다). `connectionLost()` 만 |
-| ⑤ | 2890줄 `new WebSocket(scheme+"://"+location.host+"/ws")`, `fetch("/api/…")` 16곳·`/readyz`, 3040줄 `/mic-capture-worklet.js`, 9줄 manifest | 화면을 앱에 묶으려면(5절) 서버 기준 주소를 설정에서 받아 붙인다. 서버 주소 모드에서는 고칠 것 없음 |
+| ③ | 2370줄 `renderCuratedProtocolState` 에서 상태를 받아들인 직후(`curatedProtocolState={...value}`, 2380줄) | `timerAlerts.sync(value, Date.now(), {offsetMs: Date.now()-voineyConnection.serverNow()})`. **서버가 보낸 상태를 받아들인 이 자리에서만** 부른다 |
+| ④ | 2022줄 `invalidateCuratedProtocolState`, 2892줄 웹소켓 `onclose` | `sync` 를 부르지 **않는다**(여기서 상태가 `{attached:false}` 가 되므로 부르면 끊길 때 알림이 지워진다). 줄 NET 이 되살릴 끊김(`voineyConnection.lost()` 가 참)이면 `onclose` 는 거기서 돌아가고, 아니면 상태를 비운다 — 어느 쪽이든 `connectionLost()` 만 |
+| ⑤ | 2892줄 `new WebSocket(scheme+"://"+location.host+"/ws")`, `fetch("/api/…")` 16곳·`/readyz`, 3042줄 `/mic-capture-worklet.js`, 9줄 manifest, 4591줄 `/connection.js` | 화면을 앱에 묶으려면(5절) 서버 기준 주소를 설정에서 받아 붙인다. 서버 주소 모드에서는 고칠 것 없음 |
 | ⑥ | 1365줄 `showExperimentEnded` | 실험이 끝나면 `sync(null)` 로 남은 알림을 지운다(서버의 끝난 상태가 ③으로 오면 거기서도 지워진다) |
 | ⑦ | 1490줄 `keepScreenOn` | 앱에서는 `navigator.wakeLock` 대신(또는 함께) `keepAwake(cap, on)` |
-| ⑧ | 2929줄 `getUserMedia`, 4545줄 `visibilitychange` | 화면이 꺼져도 듣기는 네이티브 포그라운드 서비스가 맡는다(4절 다음 단계 3). 그 전까지는 지금처럼 화면이 보일 때만 |
-| ⑨ | 줄 NET 의 끊김 처리 | `onNetworkChange(cap, cb)` 로 기기의 연결 변화를 받을 수 있다. 끊김 표시는 줄 NET 의 화면을 따른다 |
+| ⑧ | 2931줄 `getUserMedia`, 4548줄 `visibilitychange` | 화면이 꺼져도 듣기는 네이티브 포그라운드 서비스가 맡는다(4절 다음 단계 3). 그 전까지는 지금처럼 화면이 보일 때만 |
+| ⑨ | `connection.js` 의 하트비트(`server.heartbeat`)와 화면 타이머 | 하트비트의 규칙을 `setRule(lastMinuteRule(message))` 로 넘긴다. 줄 NET 의 화면 타이머는 끊긴 동안 화면이 켜져 있을 때 소리·진동으로 알리고 "화면이 꺼지거나 다른 앱으로 가면 화면 타이머 알림이 울리지 않을 수 있어요" 라고 쓴다 — 앱에서는 기기 알림이 같은 순간에 함께 울리므로, 연결하는 줄에서 앱일 때 그 문구와 소리를 어떻게 할지 화면 담당과 정한다. 기기의 연결 변화는 `onNetworkChange(cap, cb)` |
 
 ## 10. 빌드
 
@@ -336,8 +342,8 @@ EC2 에는 Xcode 가 없어서 iOS 는 이 줄에서 만들지 않았다. 맥에
 1. 설치: `adb install -r app-debug.apk`(10.1절의 파일). 앱을 열면 기기 시험 화면이 뜬다.
 2. "1. 알림 권한·채널 준비" → 알림 허용. 결과 줄에 `알림 표시: granted`. Android 14 새 설치면 `정확한 알람: denied` 가 정상이다.
 3. "2. 정확한 알람 설정 열기" → 허용 → 돌아와 1번을 다시 눌러 `granted` 확인.
-4. "3. 시험 타이머 예약" → 결과에 예약 2건과 두 시각(지금+1분, 지금+2분). **화면을 끄고 와이파이·데이터를 끈다.** 1분 뒤 "시험단계 · 1분 전",
-   2분 뒤 "시험단계 · 타이머 끝" 알림이 오는지, 소리·진동이 나는지 적는다.
+4. "3. 시험 타이머 예약" → 결과에 예약 2건과 두 시각(지금+5분, 지금+6분 — 서버 규칙대로 5분 이상 타이머만 "1분 전"이 있다).
+   **화면을 끄고 와이파이·데이터를 끈다.** 5분 뒤 "시험단계 · 1분 전", 6분 뒤 "시험단계 · 타이머 끝" 알림이 오는지, 소리·진동이 나는지 적는다.
 5. 3번을 다시 누르고 곧바로 "4. 시험 타이머 취소" → "5. 예약된 알림 보기" 가 `없음` 이고 알림이 오지 않는지.
 6. Doze: 3번을 누른 뒤 컴퓨터에서 `adb shell dumpsys deviceidle force-idle` → 두 알림이 제때 오는지, 늦으면 몇 초 늦는지 적는다
    (3.1절의 걱정 — 두 번째가 9분 넘게 늦으면 `setAlarmClock` 플러그인이 필요하다는 증거). 끝나면 `adb shell dumpsys deviceidle unforce`.

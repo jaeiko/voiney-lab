@@ -15,7 +15,7 @@
 | `scripts/build-android-debug.sh` | 디버그 APK 빌드(아래 3번을 묶음) |
 | `scripts/prepare-web.mjs` | `www/`(추적 안 함)를 만든다: 서버 정적 화면 + `www-src/` |
 | `www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때 보이는 화면(`server.errorPath`) |
-| `www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: `native-bridge.js` 로 2분 시험 타이머 알림을 예약·취소 |
+| `www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: `native-bridge.js` 로 6분 시험 타이머 알림(5분 뒤 "1분 전", 6분 뒤 끝)을 예약·취소 |
 | `android/` | `npx cap add android` 가 만든 Android 프로젝트. 고친 곳: `AndroidManifest.xml` 의 마이크 권한, `allowBackup=false` |
 
 화면 쪽 다리는 `src/voiney_lab/static/native-bridge.js` 이고, 시험은 `node --test tests/native_bridge/timer_alerts.test.js`

@@ -3,8 +3,9 @@
  *
  * The store app (mobile/, Capacitor) wraps this same web screen and adds
  * device features only. This file is the screen's side of that: it turns the
- * step timer the server sent into device notifications (one minute before and
- * at the end) and keeps them in step with later server states.
+ * step timer the server sent into device notifications (its last minute, by
+ * the server's own rule, and its end) and keeps them in step with later server
+ * states.
  *
  * What it must not do: the server is the workflow and timer authority. A
  * device notification is a copy of the start and end times the server gave;
@@ -25,7 +26,12 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const WARNING_LEAD_MS = 60 * 1000;
+  // The server's rule for a timer's last minute (curated_protocol
+  // TIMER_LAST_MINUTE_FROM_SECONDS / TIMER_LAST_MINUTE_SECONDS): a timer at
+  // least this long is told its last minute. The server's heartbeat carries
+  // it (timer_last_minute_from_seconds, timer_last_minute_seconds); these are
+  // its values when no heartbeat has come yet.
+  const LAST_MINUTE_RULE = Object.freeze({ fromSeconds: 300, seconds: 60 });
   // A device clock this far from the server's is corrected for; below it the
   // difference is rounding (remaining_seconds is whole seconds) and latency.
   const CLOCK_SKEW_TOLERANCE_MS = 3000;
@@ -50,6 +56,19 @@
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
     return (hash & 0x7fffffff) || 1;
+  }
+
+  // The rule from a server.heartbeat message, or null when it has none.
+  function lastMinuteRule(message) {
+    if (!message || typeof message !== "object") return null;
+    const fromSeconds = Number(message.timer_last_minute_from_seconds);
+    const seconds = Number(message.timer_last_minute_seconds);
+    if (!Number.isFinite(fromSeconds) || fromSeconds < 0 || !Number.isFinite(seconds) || seconds <= 0) return null;
+    return { fromSeconds, seconds };
+  }
+
+  function validRule(rule) {
+    return rule && Number.isFinite(rule.fromSeconds) && Number.isFinite(rule.seconds) && rule.seconds > 0 ? rule : LAST_MINUTE_RULE;
   }
 
   function stepTimer(state) {
@@ -86,13 +105,18 @@
   // The words follow the server's own end words (curated_protocol
   // _timer_end_words): a minimum's end is not the step's end, so it is never
   // said to be over.
-  function alertText(timer, kind) {
+  function leadWords(seconds) {
+    return seconds % 60 === 0 ? `${seconds / 60}분` : `${seconds}초`;
+  }
+
+  function alertText(timer, kind, leadSeconds) {
     const label = typeof timer.step_label === "string" && timer.step_label ? `${timer.step_label}단계` : "타이머";
     const words = durationWords(timer);
     if (kind === "warning") {
-      if (timer.bound === "minimum") return { title: `${label} · 1분 전`, body: `최소 시간 ${words}까지 1분 남았어요.` };
-      if (timer.bound === "maximum") return { title: `${label} · 1분 전`, body: `최대 시간 ${words}까지 1분 남았어요.` };
-      return { title: `${label} · 1분 전`, body: `타이머 ${words}, 1분 남았어요.` };
+      const lead = leadWords(Number.isFinite(leadSeconds) ? leadSeconds : LAST_MINUTE_RULE.seconds);
+      if (timer.bound === "minimum") return { title: `${label} · ${lead} 전`, body: `최소 시간 ${words}까지 ${lead} 남았어요.` };
+      if (timer.bound === "maximum") return { title: `${label} · ${lead} 전`, body: `최대 시간 ${words}까지 ${lead} 남았어요.` };
+      return { title: `${label} · ${lead} 전`, body: `타이머 ${words}, ${lead} 남았어요.` };
     }
     if (timer.bound === "minimum") return { title: `${label} · 최소 시간`, body: `최소 시간 ${words}이 지났어요. 앱에서 확인해 주세요.` };
     if (timer.bound === "maximum") return { title: `${label} · 최대 시간`, body: `최대 시간 ${words}이 됐어요. 앱에서 확인해 주세요.` };
@@ -106,11 +130,13 @@
    *   (attached, active, timers.step with state, started_at, deadline_at, ...).
    * options.nowMs: the device's now (default Date.now()).
    * options.offsetMs: device clock minus server clock (see clockOffsetMs).
+   * options.rule: the server's last-minute rule (default LAST_MINUTE_RULE).
    */
   function planTimerAlerts(state, options) {
     const opts = options || {};
     const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
     const offsetMs = Number.isFinite(opts.offsetMs) ? opts.offsetMs : 0;
+    const rule = validRule(opts.rule);
     if (!state || state.attached !== true || state.active !== true) return [];
     const timer = stepTimer(state);
     if (!timer || timer.state !== "running") return [];
@@ -122,7 +148,7 @@
     const add = (kind, at) => {
       if (at <= nowMs) return;
       const key = `${base}|${kind}`;
-      const text = alertText(timer, kind);
+      const text = alertText(timer, kind, rule.seconds);
       alerts.push({
         id: alertId(key),
         key,
@@ -134,8 +160,11 @@
         deadline_at: timer.deadline_at,
       });
     };
-    // A timer of a minute or less has no "one minute before".
-    if (deadline - started > WARNING_LEAD_MS) add("warning", deadline - WARNING_LEAD_MS + offsetMs);
+    // As the server tells it: only a timer at least rule.fromSeconds long has
+    // a last minute.
+    const given = Number(timer.duration_seconds);
+    const durationSeconds = Number.isFinite(given) && given > 0 ? given : (deadline - started) / 1000;
+    if (durationSeconds >= rule.fromSeconds) add("warning", deadline - rule.seconds * 1000 + offsetMs);
     add("end", deadline + offsetMs);
     return alerts.sort((a, b) => a.at - b.at);
   }
@@ -193,6 +222,7 @@
   function createTimerAlerts(notifier, options) {
     const opts = options || {};
     const now = typeof opts.now === "function" ? opts.now : () => Date.now();
+    let rule = validRule(opts.rule);
     let queue = Promise.resolve();
     const run = (task) => {
       const next = queue.then(task, task);
@@ -201,16 +231,26 @@
     };
     return {
       // Call with every curated protocol state the server sends.
-      sync(state, receivedAtMs) {
+      // syncOptions.offsetMs: device minus server clock when the page has
+      // measured it (lane NET's voineyConnection.serverNow); otherwise it is
+      // estimated from the timer's remaining_seconds.
+      sync(state, receivedAtMs, syncOptions) {
         return run(async () => {
           const received = Number.isFinite(receivedAtMs) ? receivedAtMs : now();
-          const offsetMs = clockOffsetMs(stepTimer(state), received);
-          const desired = planTimerAlerts(state, { nowMs: now(), offsetMs });
+          const given = syncOptions && syncOptions.offsetMs;
+          const offsetMs = Number.isFinite(given) ? given : clockOffsetMs(stepTimer(state), received);
+          const desired = planTimerAlerts(state, { nowMs: now(), offsetMs, rule });
           const plan = diffAlerts(await notifier.pending(), desired);
           if (plan.cancel.length) await notifier.cancel(plan.cancel);
           if (plan.schedule.length) await notifier.schedule(plan.schedule);
           return plan;
         });
+      },
+      // The server's heartbeat changed the last-minute rule; the next sync
+      // uses it.
+      setRule(next) {
+        rule = validRule(next);
+        return rule;
       },
       // The connection dropped: deliberately nothing. Scheduled notifications
       // are the server's times already and ring without the network.
@@ -284,7 +324,8 @@
   }
 
   return {
-    WARNING_LEAD_MS,
+    LAST_MINUTE_RULE,
+    lastMinuteRule,
     CHANNEL_ID,
     EXTRA_TAG,
     alertId,

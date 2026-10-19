@@ -93,9 +93,33 @@ test("a paused experiment keeps its step timer's notifications (pause does not s
   assert.equal(alerts.length, 2);
 });
 
-test("a timer of a minute or less has only the end", () => {
-  const state = runningState({}, { duration_seconds: 60, deadline_at: iso(T0 + 60 * 1000), name: "1분" });
-  assert.deepEqual(bridge.planTimerAlerts(state, { nowMs: T0 }).map((a) => a.kind), ["end"]);
+test("as the server tells it, only a timer of five minutes or more has a last minute", () => {
+  // curated_protocol TIMER_LAST_MINUTE_FROM_SECONDS = 300, TIMER_LAST_MINUTE_SECONDS = 60.
+  assert.deepEqual(bridge.LAST_MINUTE_RULE, { fromSeconds: 300, seconds: 60 });
+  const kinds = (seconds) => bridge.planTimerAlerts(
+    runningState({}, { duration_seconds: seconds, deadline_at: iso(T0 + seconds * 1000), name: `${seconds}초` }),
+    { nowMs: T0 },
+  ).map((a) => a.kind);
+  assert.deepEqual(kinds(60), ["end"]);
+  assert.deepEqual(kinds(299), ["end"]);
+  assert.deepEqual(kinds(300), ["warning", "end"]);
+});
+
+test("the heartbeat's rule is read and used", () => {
+  assert.deepEqual(
+    bridge.lastMinuteRule({ type: "server.heartbeat", timer_last_minute_from_seconds: 120, timer_last_minute_seconds: 30 }),
+    { fromSeconds: 120, seconds: 30 },
+  );
+  assert.equal(bridge.lastMinuteRule({ type: "server.heartbeat" }), null);
+  assert.equal(bridge.lastMinuteRule({ timer_last_minute_from_seconds: 120, timer_last_minute_seconds: 0 }), null);
+  const state = runningState({}, { duration_seconds: 120, deadline_at: iso(T0 + 120 * 1000), name: "2분" });
+  const [warning, end] = bridge.planTimerAlerts(state, { nowMs: T0, rule: { fromSeconds: 120, seconds: 30 } });
+  assert.equal(warning.at, T0 + 90 * 1000);
+  assert.equal(warning.title, "4단계 · 30초 전");
+  assert.equal(warning.body, "타이머 2분, 30초 남았어요.");
+  assert.equal(end.at, T0 + 120 * 1000);
+  // A broken rule falls back to the server's values.
+  assert.deepEqual(bridge.planTimerAlerts(state, { nowMs: T0, rule: { fromSeconds: 120, seconds: -1 } }).map((a) => a.kind), ["end"]);
 });
 
 test("a time already passed is not scheduled", () => {
@@ -171,6 +195,20 @@ test("sync follows the server: restart replaces, stop cancels, connection loss k
   await alerts.sync(restarted, now);
   await alerts.sync(runningState({ active: false }), now);
   assert.deepEqual(notifier.scheduled(), []);
+});
+
+test("sync takes the rule from setRule and an offset the page measured", async () => {
+  const notifier = fakeNotifier();
+  const alerts = bridge.createTimerAlerts(notifier, { now: () => T0 });
+  const short = runningState({}, { duration_seconds: 120, deadline_at: iso(T0 + 120 * 1000), name: "2분" });
+  await alerts.sync(short, T0);
+  assert.deepEqual(notifier.scheduled().map((a) => a.kind), ["end"]);
+  alerts.setRule({ fromSeconds: 60, seconds: 60 });
+  await alerts.sync(short, T0);
+  assert.deepEqual(notifier.scheduled().map((a) => a.kind), ["warning", "end"]);
+  // The page's own measure of the clocks (lane NET) wins over the estimate.
+  await alerts.sync(short, T0, { offsetMs: 5000 });
+  assert.equal(notifier.scheduled()[1].at, T0 + 125 * 1000);
 });
 
 test("syncs run one after another", async () => {
