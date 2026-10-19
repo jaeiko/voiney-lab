@@ -1387,8 +1387,16 @@ class WorkspaceStore:
         protocol_id: str,
         protocol_revision_id: str,
         voice_connection_id: str,
+        reattach: bool = False,
     ) -> dict[str, object]:
-        """Recover an existing exact-revision session with optimistic locking."""
+        """Recover an existing exact-revision session with optimistic locking.
+
+        ``reattach`` (lane NET, decision 4): the page's own reconnection after
+        a lost connection, not the experimenter's "실험 이어하기". The
+        experiment is bound to the new connection and keeps its status -- a
+        pause or a block is lifted only by the experimenter -- and the event
+        says it was a reconnection.
+        """
 
         row = self._experiment_row(principal, session_id, write=True)
         protocol_id = _identifier(protocol_id, "Protocol identifier")
@@ -1408,18 +1416,22 @@ class WorkspaceStore:
             raise WorkspaceError("Experiment version is invalid.")
         target_version = expected_version + 1
         target_status = (
-            "in_progress" if row["status"] in {"paused", "blocked"} else row["status"]
+            row["status"] if reattach
+            else "in_progress" if row["status"] in {"paused", "blocked"}
+            else row["status"]
         )
+        paused_at = row["paused_at"] if reattach else None
         now = _now()
         event_key = f"voice-recovery-v{target_version}"
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             cursor = self._connection.execute(
-                """UPDATE experiment_sessions SET status=?,paused_at=NULL,
+                """UPDATE experiment_sessions SET status=?,paused_at=?,
                 ended_at=NULL,updated_at=?,version=?,last_voice_connection_id=?
                 WHERE session_id=? AND organization_id=? AND version=?""",
                 (
                     target_status,
+                    paused_at,
                     now,
                     target_version,
                     voice_connection_id,
@@ -1437,11 +1449,16 @@ class WorkspaceStore:
                 session_id=session_id,
                 event_key=event_key,
                 event_type=(
-                    "session_resumed" if row["status"] == "paused" else "session_recovered"
+                    "session_resumed"
+                    if row["status"] == "paused" and not reattach
+                    else "session_recovered"
                 ),
                 step_id=row["current_step_id"],
                 step_label=row["current_step_label"],
-                payload={"previous_status": row["status"]},
+                payload={
+                    "previous_status": row["status"],
+                    **({"reconnected": True} if reattach else {}),
+                },
                 created_at=now,
             )
             self._connection.commit()
