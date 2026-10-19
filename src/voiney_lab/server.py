@@ -1095,6 +1095,25 @@ def _workspace_reverted_step_ids(state:Any)->tuple[str,...]:
     return tuple(found)
 
 
+def _workspace_started_at(state:Any)->float|None:
+    """When the experiment first started, as the durable record holds it, or None.
+
+    Lane FX4, decision 1: its "protocol_started" event (the run's start), or
+    for a run opened from a checkpoint, which has none, the session's own
+    start. A restored run's elapsed clock goes on from this moment.
+    """
+
+    state=state or {}
+    started=next(
+        (event.get("created_at") for event in state.get("events") or ()
+         if isinstance(event,dict) and event.get("event_type")=="protocol_started"),
+        state.get("started_at"))
+    try:
+        return datetime.fromisoformat(str(started)).timestamp() if started else None
+    except ValueError:
+        return None
+
+
 def _transition_workspace_experiment(
     session:ListenerSession,
     *,
@@ -4754,15 +4773,12 @@ def get_admin_metrics(
 def _require_pilot_admin(presented_token:str|None)->None:
     """Lane LOG, decision 4: an admin account, or else the admin token.
 
-    An account counts as an admin when one of its roles is "admin" -- a role
-    the accounts of lane ON may give; until then the token is the way in.
+    Lane FX4, decision 3: an admin account is lane ON's administrator -- the
+    account behind this request (``_account_is_admin``, the one judgment);
+    a principal's role text is not read. Otherwise the token, as before.
     """
 
-    principal=_REQUEST_PRINCIPAL.get()
-    roles={
-        str(getattr(role,"value",role)) for role in getattr(principal,"roles",()) or ()
-    }
-    if "admin" in roles:
+    if _account_is_admin():
         return
     _require_admin_access(presented_token)
 
@@ -12408,6 +12424,9 @@ async def voice_socket(websocket:WebSocket):
                             # Lane CF, decision 3: completions a revert took back.
                             reverted_step_ids=_workspace_reverted_step_ids(
                                 experiment_state),
+                            # Lane FX4, decision 1: the elapsed clock goes on
+                            # from the experiment's own start.
+                            started_at=_workspace_started_at(experiment_state),
                         )
                         if reconnect is not None:
                             # Lane NET, decision 4: the run as the lost

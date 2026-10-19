@@ -51,11 +51,14 @@ class SafetyNumberTests(_ScanCase):
         self.analyze_warned(MISREAD)
         value = self.safety_value()
         self.assertEqual(value["reason_ko"], "두 OCR 엔진이 이 값을 다르게 읽음")
+        # Lane FX4, decision 5: the engines' readings, then [원문과 달라요] when
+        # neither is the source's (no words of a person's own still).
         self.assertEqual([(choice["label_ko"], choice.get("engine")) for choice in value["choices"]],
-                         [("37 °C", "Google"), ("31 °C", "CLOVA")])
+                         [("37 °C", "Google"), ("31 °C", "CLOVA"), ("원문과 달라요", None)])
         self.assertEqual([choice["request"] for choice in value["choices"]], [
             {"item_id": "ocr_value:2:37°c", "action": "confirm"},
-            {"item_id": "ocr_value:2:37°c", "action": "fix", "text": "31 °C"}])
+            {"item_id": "ocr_value:2:37°c", "action": "fix", "text": "31 °C"},
+            {"item_id": "ocr_value:2:37°c", "action": "source_differs"}])
         self.assertTrue(value["value_boxes"], "no piece of the page for the safety number")
 
     def test_words_of_a_persons_own_are_refused_for_a_safety_number(self) -> None:

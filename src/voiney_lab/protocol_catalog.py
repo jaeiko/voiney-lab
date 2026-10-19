@@ -4646,6 +4646,9 @@ class ProtocolCatalog:
             elif kind == "ocr_value":
                 # Lane RV2, decision b: the value as read, or as the image shows it.
                 allowed[:0] = ["confirm", "fix"]
+                if (extra or {}).get("in_safety_statement") is True:
+                    # Lane FX4, decision 5: no reading is the source's.
+                    allowed.insert(2, "source_differs")
             elif kind == "seam":
                 # Lane AN3, decision B: [이어져요]; [아니요] is a re-analysis.
                 allowed[:0] = ["confirm"]
@@ -4667,6 +4670,11 @@ class ProtocolCatalog:
                     current = None
                 elif action == "choose":
                     current = value.get("text")
+                elif action == "source_differs":
+                    # Lane FX4, decision 5: the value stays as read, for the source.
+                    extra = {**(extra or {}), "source_check": {
+                        "state_ko": SOURCE_CHECK_STATE_KO,
+                        "guidance_ko": SOURCE_CHECK_GUIDANCE_KO}}
             reading_flag = next(
                 (flag for flag in own if flag.reason == REVIEW_REASON_READ_TWO_WAYS), None)
             if reading_flag is not None:
@@ -4865,6 +4873,7 @@ class ProtocolCatalog:
             if item["needs_review"] and item["item_id"] not in decisions
         ]
         cards = review_cards(items)
+        held = _source_check_items(items)
         base.update({
             "target": {
                 **target.key, "recorded_at": target.recorded_at,
@@ -4888,8 +4897,14 @@ class ProtocolCatalog:
             "registration_blockers": [
                 {"item_id": item_id, "message_ko": "확인 필요 항목을 정하지 않았습니다."}
                 for item_id in pending
+            ] + [
+                # Lane FX4, decision 5.
+                {"item_id": item_id,
+                 "message_ko": f"{SOURCE_CHECK_STATE_KO}: {SOURCE_CHECK_GUIDANCE_KO}",
+                 "source_check": True}
+                for item_id in held
             ],
-            "registrable": not pending,
+            "registrable": not pending and not held,
         })
         return base
 
@@ -5201,6 +5216,10 @@ class ProtocolCatalog:
                      "text": " / ".join(str(step.get("text")) for step in chosen)}
         elif request.get("reading") is not None:
             raise ProtocolReviewError("A reading is named only by a choice.")
+        if action == "source_differs" and any(
+                request.get(key) is not None for key in ("text", "seconds", "count")):
+            # Lane FX4, decision 5: it marks the value; it writes nothing.
+            raise ProtocolReviewError("[원문과 달라요] carries no value.")
         if action in {"fix", "enter"}:
             if item["kind"] == "timer":
                 seconds = request.get("seconds")
@@ -5383,6 +5402,11 @@ class ProtocolCatalog:
             raise ProtocolReviewItemsPendingError(
                 "Every item that waits for a person must be decided first.",
                 item_ids=pending)
+        held = _source_check_items(items)
+        if held:
+            raise ProtocolReviewSourceCheckError(
+                "A safety number differs from the source; read the page again.",
+                item_ids=held)
         protocol, changes, timers, origins = _apply_review(target, items, decisions, name)
         try:
             domain.validate_protocol(protocol)
@@ -5544,13 +5568,21 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
 #: the source does not print, a memo beside an item, and taking a draft
 #: decision back.
 REVIEW_ACTIONS: tuple[str, ...] = (
-    "confirm", "fix", "clear", "enter", "memo", "reset", "choose")
+    "confirm", "fix", "clear", "enter", "memo", "reset", "choose", "source_differs")
 REVIEW_ACTION_KO: dict[str, str] = {
     "confirm": "확인", "fix": "고침", "clear": "원문에 없음으로 비워 둠",
     "enter": "입력", "memo": "메모", "reset": "되돌리기",
     # Lane RV2, decision e: one of two pieces' readings of a passage.
     "choose": "두 읽기 중 고름",
+    # Lane FX4, decision 5: a safety number no engine's reading gets right.
+    "source_differs": "원문과 달라요(원문 확인 필요)",
 }
+#: Lane FX4, decision 5 (human decision 2026-10-19): a number in a safety
+#: statement that differs from the source in every engine's reading. It stays
+#: as read, marked for the source, and the version is not registered; the
+#: page is photographed again more clearly or the document analysed again.
+SOURCE_CHECK_STATE_KO = "원문 확인 필요"
+SOURCE_CHECK_GUIDANCE_KO = "이 쪽을 더 선명하게 다시 찍어 올리거나 다시 분석해 주세요."
 _STATEMENT_KINDS = {
     "warnings": "warning", "notes": "note", "tips": "tip",
     "expected_results": "expected_result", "conditions": "condition",
@@ -5861,6 +5893,23 @@ class ProtocolReviewItemsPendingError(ProtocolReviewNotReadyError):
     def __init__(self, message: str, *, item_ids: Sequence[str]) -> None:
         super().__init__(message)
         self.item_ids = tuple(item_ids)
+
+
+class ProtocolReviewSourceCheckError(ProtocolReviewNotReadyError):
+    """Lane FX4, decision 5: a safety number marked [원문과 달라요] holds the version."""
+
+    code = "review_source_check_needed"
+
+    def __init__(self, message: str, *, item_ids: Sequence[str]) -> None:
+        super().__init__(message)
+        self.item_ids = tuple(item_ids)
+
+
+def _source_check_items(items: Sequence[dict[str, object]]) -> list[str]:
+    """The items whose decision is [원문과 달라요] (lane FX4, decision 5)."""
+
+    return [str(item["item_id"]) for item in items
+            if (item.get("decision") or {}).get("action") == "source_differs"]
 
 
 _REVIEW_DECISION_EVENT = "protocol_review_decision_recorded"
@@ -6387,6 +6436,10 @@ def _ocr_value_entry(item: dict[str, object]) -> dict[str, object]:
         # Round 2, decision ③: a safety statement's number is one of the
         # engines' readings, never words of a person's own.
         choices.append(_choice("fix", "직접 입력", request("fix"), needs="text"))
+    elif "source_differs" in item.get("allowed_actions", ()):
+        # Lane FX4, decision 5: when no reading is the source's, the value
+        # waits for the source (원문 확인 필요) and the version is not registered.
+        choices.append(_choice("source_differs", "원문과 달라요", request("source_differs")))
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     reason = next((reason for reason in item.get("reasons") or ()
                    if isinstance(reason, dict) and reason.get("reason") == REVIEW_REASON_OCR_VALUE),
@@ -6405,6 +6458,7 @@ def _ocr_value_entry(item: dict[str, object]) -> dict[str, object]:
         "decided": item.get("decision") is not None,
         "decision": item.get("decision"),
         "current": item.get("current"),
+        **({"source_check": item["source_check"]} if item.get("source_check") else {}),
     }
 
 

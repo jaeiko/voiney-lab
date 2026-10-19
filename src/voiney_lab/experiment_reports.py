@@ -84,6 +84,8 @@ def _clean_text(value: str, *, maximum: int = 1600) -> str:
 #: The experiment record's events by their Korean names, as the screen's
 #: event list shows them; the report's timeline (CSV) carries them beside the
 #: event type. Lane VT, decision 8: the timer notices the server gave first.
+#: Lane FX4, decision 2: every event type the server writes to the record has
+#: its name (tests/test_lane_fx4_event_names.py reads them from server.py).
 EVENT_NAMES_KO: dict[str, str] = {
     "session_started": "세션 시작", "step_completed": "단계 완료", "step_advanced": "단계 이동",
     "observation": "관찰 기록", "blocked": "진행 차단", "anomaly": "이상 사항",
@@ -95,6 +97,13 @@ EVENT_NAMES_KO: dict[str, str] = {
     "record_retracted": "기록 취소", "report_value_confirmed": "값 확인",
     "report_review_deferred": "값 확인 화면으로",
     "timer_end_notice": "타이머 끝 알림", "timer_last_minute_notice": "타이머 1분 전 알림",
+    "connection_restored": "연결 끊김 뒤 다시 연결", "photo_attached": "사진 첨부",
+    "web_reference": "웹 참고 링크", "experimenter_recorded": "실험자 기록",
+    "protocol_basis_recorded": "따른 원문 파일 기록", "steps_skipped": "단계 건너뜀",
+    "step_reverted": "이전 단계로 되돌림", "repeat_returned": "반복 구간으로 돌아감",
+    "repeat_registered": "반복 횟수 등록", "repeat_rounds_declined": "반복 더 하지 않음",
+    "repeat_closed": "반복 마침", "branch_answered": "조건 답변",
+    "branch_steps_skipped": "조건에 따라 단계 건너뜀",
 }
 
 
