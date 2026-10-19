@@ -33,6 +33,7 @@ from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfPage,
     extract_protocol_pdf,
 )
+from voiney_lab.pdf_text_engine import PdfTextBlock
 from voiney_lab.experiment_protocol_store import (
     ANALYSIS_SCHEMA_VERSION,
     AnalysisRevisionRecord,
@@ -1955,6 +1956,12 @@ def _page_end_span(
         return start, len(body.rstrip())
     located: list[tuple[Any, tuple[int, int]]] = []
     for block in page.blocks:
+        # A stored analysis's pages come back from the protocol store with
+        # each block as a plain tuple (it keeps a NamedTuple so); read it as
+        # the block it was (lane AN4: the review draft of a passed analysis
+        # whose step timer runs past a page end answered 500).
+        if not isinstance(block, PdfTextBlock):
+            block = PdfTextBlock(*block)
         spans = _canonical_match_spans(body, block.text, ocr_derived=_hangul_breaks_joined(page))
         if len(spans) == 1 and not _is_furniture_block(block, page, extraction, spans[0]):
             located.append((block, spans[0]))
