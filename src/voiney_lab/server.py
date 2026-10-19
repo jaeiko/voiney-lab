@@ -97,6 +97,7 @@ from voiney_lab.experiment_reports import (
     record_amendments,
     report_review_items,
     ReportNarrative,
+    ReportPdfError,
     ReportWriterBrain,
     ReportWriterSettings,
     new_session_id,
@@ -5232,6 +5233,15 @@ def export_experiment_report(report_id:str,format_name:str):
             _prepared_report_prose(store,report_id)
             content=store.export_docx(report_id)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif format_name=="pdf":
+            # Lane RP2, decision 2: the Word report printed by the server's
+            # LibreOffice; without it (or when it fails) the format is refused by name.
+            _prepared_report_prose(store,report_id)
+            try:
+                content=store.export_pdf(report_id)
+            except ReportPdfError as exc:
+                raise HTTPException(status_code=503,detail=exc.code) from exc
+            media_type="application/pdf"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
     except HTTPException:

@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
+#: Lane RP2, decision 1: an export left to read the check before the start
+#: from the protocol's ledger itself (the server's path); a test gives it.
+_FROM_LEDGER = object()
 _FALSE = frozenset({"0", "false", "no", "off", ""})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 _STATUSES = frozenset({"in_progress", "completed", "blocked", "stopped", "incomplete"})
@@ -607,19 +610,21 @@ class ExperimentReportStore:
 
     def export_markdown(
         self, report_id: str, narrative: ReportNarrative | None = None,
-        *, fixture: Any = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
     ) -> bytes:
         """The researcher's report as Markdown (same structure as the .docx).
 
         Without a narrative the server's own sentences fill every section.
         ``fixture`` is the protocol the session ran; left out, it is looked up
-        the way the server loads it.
+        the way the server loads it, and so are the answers given in the check
+        before the start (``start_check``, lane RP2: None when not read).
         """
 
-        return render_markdown(self._narrative(report_id, narrative, fixture)).encode()
+        return render_markdown(self._narrative(report_id, narrative, fixture, start_check)).encode()
 
     def _narrative(
         self, report_id: str, narrative: ReportNarrative | None, fixture: Any,
+        start_check: Any = _FROM_LEDGER,
     ) -> ReportNarrative:
         """The given narrative, else the prepared prose, else the server's sentences.
 
@@ -630,8 +635,13 @@ class ExperimentReportStore:
         if narrative is not None and narrative.facts is not None:
             return narrative
         report = self.get_report(report_id)
+        if start_check is _FROM_LEDGER:
+            start_check = (
+                report_start_check_answers(report, since=self._previous_start(report))
+                if fixture is None else None)
         facts = ReportWriterBrain.facts_for(
-            report, list(report["events"]), fixture=_AUTO if fixture is None else fixture)
+            report, list(report["events"]), fixture=_AUTO if fixture is None else fixture,
+            start_check=start_check)
         prose = self.get_prose(report_id)
         if prose is None or prose["writer"] == SERVER_WRITER:
             return narrative_from_sections(facts)
@@ -639,6 +649,23 @@ class ExperimentReportStore:
             facts, prose["reply"], failure=prose["failure"], writer=prose["writer"],
             written_at=prose["prepared_at"],
         )
+
+    def _previous_start(self, report: Mapping[str, Any]) -> str | None:
+        """When the run of the same protocol before this one started, or None.
+
+        Lane RP2, decision 1: the check before the start that belongs to a run
+        is the one answered after the run before it started.
+        """
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT MAX(started_at) FROM experiment_reports
+                 WHERE protocol_id=? AND started_at<?
+                """,
+                (report["protocol_id"], report["started_at"]),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def save_prose(
         self, report_id: str, *, writer: str, reply: Mapping[str, Any] | None,
@@ -709,7 +736,7 @@ class ExperimentReportStore:
 
     def export_docx(
         self, report_id: str, narrative: ReportNarrative | None = None,
-        *, fixture: Any = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
     ) -> bytes:
         """The researcher's report as .docx (same structure as the Markdown).
 
@@ -717,7 +744,20 @@ class ExperimentReportStore:
         derived, human-readable projection of it.
         """
 
-        return render_docx(self._narrative(report_id, narrative, fixture))
+        return render_docx(self._narrative(report_id, narrative, fixture, start_check))
+
+    def export_pdf(
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
+        converter: str | None = None, run: Any = None,
+    ) -> bytes:
+        """The researcher's report as PDF: the .docx above, printed by the
+        server's LibreOffice (lane RP2, decision 2). ``ReportPdfError`` when
+        it cannot be printed."""
+
+        return report_docx_to_pdf(
+            self.export_docx(report_id, narrative, fixture=fixture, start_check=start_check),
+            converter=converter, run=run)
 
 
 @dataclass(frozen=True)
@@ -1485,6 +1525,8 @@ class ReportFacts:
     #: its reviewer changed or confirmed, against the source.
     review_version_words: str = ""
     review_changes: tuple[ReportReviewChange, ...] = ()
+    #: Lane RP2, decision 1: the report's first pages, from the record.
+    glance: "ReportGlance | None" = None
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1550,6 +1592,8 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
                 "translation": translation,
                 "expected": tuple(expected),
                 "timer": timers.get(step.step_id),
+                # Lane RP2, decision 1: the source page the step is on.
+                "page": getattr(getattr(step, "evidence", None), "source_page_number", None),
                 # The step's whole source text, its sub-actions too: where a
                 # material or piece of equipment is looked for (decision 3).
                 "whole_source_text": " ".join(part for part in whole if part),
@@ -1911,8 +1955,13 @@ def build_report_facts(
     context: "GroundedReportContext | None" = None,
     zone: ZoneInfo | None = None,
     protocol_problem: str = "",
+    start_check: Sequence[Mapping[str, Any]] | None = None,
 ) -> ReportFacts:
-    """The report's facts from the record and the protocol the session ran."""
+    """The report's facts from the record and the protocol the session ran.
+
+    ``start_check`` is the answers given in the check before the start, as
+    the protocol's ledger keeps them (lane RP2), or None when not read.
+    """
 
     zone = zone or report_timezone()
     events = list(report_data.get("events") or ()) if events is None else list(events)
@@ -2396,7 +2445,7 @@ def build_report_facts(
         title=f"{author}" if author else f"{title} (실험 PDF)",
         url=doi, note="실험에 쓴 프로토콜 원문 PDF",
     )
-    return ReportFacts(
+    facts = ReportFacts(
         protocol_title=title, protocol_loaded=bool(source_steps), total_steps=total,
         run_rows=run_rows, completed_labels=tuple(completed_labels), outcome=outcome,
         stop_label=stop_label, steps=tuple(steps), records=tuple(records),
@@ -2412,6 +2461,436 @@ def build_report_facts(
             (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
             for step in source_steps if any(step["label"] in item.steps for item in items)
         ),
+    )
+    reviewer = " ".join(str(getattr(getattr(getattr(fixture, "draft", None), "review_version", None),
+                                    "reviewer_name", "") or "").split())
+    return _replace_dataclass(facts, glance=build_report_glance(
+        facts, events, source_steps=source_steps, zone=zone, reviewer=reviewer,
+        start_check=start_check))
+
+
+# --- The report's first pages (lane RP2, decision 1, 2026-10-19) -------------
+#
+# Human decision: before its sections the report opens with what a reader
+# takes in at a glance -- the header (protocol, review version and reviewer,
+# experimenter, date, start and end, time taken), the counts, one row per
+# step, one row per timer, the deviations and anomalies with the source's
+# side beside each, the check before the start, and a place for the
+# experimenter's name and date. All of it is read from the record (and the
+# check from the protocol's ledger); no model writes any of it, a value the
+# record lacks is "기록 없음", and the record is never changed.
+
+#: The header's first rows, in the decided order; the run's other rows follow.
+GLANCE_HEADER_FIRST = ("프로토콜", "검토본", "검토자", "실험자", "날짜", "시작", "끝", "걸린 시간")
+GLANCE_SUMMARY_HEADER = ("단계 완료", "편차", "이상", "정정", "미확인", "연결 끊김")
+GLANCE_STEP_HEADER = ("단계", "시작", "끝", "소요", "기록한 값", "편차 (원문 → 기록)", "이상")
+GLANCE_TIMER_HEADER = ("단계", "원문 시간", "켠 시각", "1분 전 알림", "끝 알림", "단계 끝", "결과")
+GLANCE_ISSUE_HEADER = ("번호", "단계", "종류", "원문 (쪽)", "기록", "시각", "확인")
+GLANCE_PRESTART_HEADER = ("확인한 값", "단계", "원문 값", "고른 값", "결과", "시각")
+GLANCE_SIGN_HEADER = ("실험자 확인", "적는 칸")
+GLANCE_SIGN_ROWS = (("이름", ""), ("날짜", ""), ("서명", ""))
+NO_REVIEW_VERSION_WORDS = "없음 (분석 결과 그대로 실행)"
+#: Lane RP2, decision 3: what a value the experimenter has not confirmed
+#: carries in the tables, and the report's line about them under its title.
+UNCONFIRMED_MARK = "[미확인]"
+UNCONFIRMED_WORDS = (f"실험자가 아직 확인하지 않은 값이다. 표에 {UNCONFIRMED_MARK}로 표시했다. "
+                     "화면의 확인 목록에서 확인하면 빠진다.")
+#: Events that move the run to a step: a step's time starts at the last one
+#: before its completion.
+_ARRIVALS = frozenset({
+    "session_started", "step_completed", "step_advanced", "repeat_returned", "step_reverted",
+    "steps_skipped", "branch_steps_skipped",
+})
+_STEP_DONE = frozenset({"step_completed", "step_advanced"})
+_VALUE_KINDS = ("측정", "관찰", "메모", "사진")
+
+
+@dataclass(frozen=True)
+class ReportGlance:
+    """The report's first pages (lane RP2, decision 1), each table's rows."""
+
+    header_rows: tuple[tuple[str, str], ...]
+    summary: tuple[str, ...]  # in the order of GLANCE_SUMMARY_HEADER
+    connections: tuple[str, ...]
+    step_rows: tuple[tuple[str, ...], ...]
+    timer_rows: tuple[tuple[str, ...], ...]
+    issue_rows: tuple[tuple[str, ...], ...]
+    #: None when the check before the start was not read; () when it has no answer.
+    prestart_rows: tuple[tuple[str, ...], ...] | None
+    prestart_notes: tuple[str, ...]
+    #: Lane RP2, decision 3: each value not confirmed ("2단계 측정: 세척액 450 µL").
+    unconfirmed: tuple[str, ...] = ()
+
+
+def _clock(moment: datetime | None) -> str:
+    return f"{moment:%H:%M}" if moment else "—"
+
+
+def _span_words(seconds: float | int | None) -> str:
+    """"40초", "1분 30초" under ten minutes, else as ``_duration_words``."""
+
+    if seconds is None:
+        return ""
+    whole = max(int(round(float(seconds))), 0)
+    if whole < 60:
+        return f"{whole}초"
+    minutes, rest = divmod(whole, 60)
+    if minutes < 10 and rest:
+        return f"{minutes}분 {rest}초"
+    return _duration_words(whole)
+
+
+def _cell(lines: Sequence[str]) -> str:
+    """A table cell holding one value per line, or "—"."""
+
+    kept = [line for line in lines if line]
+    return "\n".join(kept) if kept else "—"
+
+
+def start_check_answers_between(
+    events: Sequence[Any], *, since: str | None, until: str | None,
+) -> list[dict[str, Any]]:
+    """The answers of the check before the start recorded after ``since`` and
+    by ``until``, in the order recorded (lane RP2, decision 1).
+
+    ``events`` are the protocol ledger's events (records or mappings). The
+    check is answered right before a run starts, so a run's answers are those
+    after the run before it started and before it started itself.
+    """
+
+    from voiney_lab.start_check import START_CHECK_EVENT
+
+    lower = _local(since, timezone.utc) if since else None
+    upper = _local(until, timezone.utc) if until else None
+    chosen: list[dict[str, Any]] = []
+    for event in events:
+        kind = event.get("event_type") if isinstance(event, Mapping) else getattr(event, "event_type", None)
+        payload = event.get("payload") if isinstance(event, Mapping) else getattr(event, "payload", None)
+        if kind != START_CHECK_EVENT or not isinstance(payload, Mapping):
+            continue
+        at = _local(payload.get("recorded_at") or (
+            None if isinstance(event, Mapping) else getattr(event, "recorded_at", None)), timezone.utc)
+        if at is None or (lower is not None and at <= lower) or (upper is not None and at > upper):
+            continue
+        chosen.append(dict(payload))
+    return chosen
+
+
+def report_start_check_answers(
+    report_data: Mapping[str, Any], *, since: str | None,
+) -> list[dict[str, Any]] | None:
+    """The check before the start of a report's run, read from the protocol's
+    ledger as the server opens it; None when it cannot be read."""
+
+    try:
+        from voiney_lab.server import _open_protocol_catalog
+
+        _catalog, store = _open_protocol_catalog()
+        try:
+            events = store.list_events(str(report_data.get("protocol_id") or ""))
+        finally:
+            store.close()
+    except Exception as exc:  # noqa: BLE001 -- said on the report, never raised
+        log.warning("report start check not read error=%s", type(exc).__name__)
+        return None
+    return start_check_answers_between(events, since=since, until=str(report_data.get("started_at") or ""))
+
+
+def build_report_glance(
+    facts: ReportFacts,
+    events: Sequence[Mapping[str, Any]],
+    *,
+    source_steps: Sequence[Mapping[str, Any]],
+    zone: ZoneInfo,
+    reviewer: str = "",
+    start_check: Sequence[Mapping[str, Any]] | None = None,
+) -> ReportGlance:
+    """The report's first pages from the record (lane RP2, decision 1)."""
+
+    kinds = [str(event.get("event_type") or "") for event in events]
+    labels = [str(event.get("step_label") or "") for event in events]
+    keys = [str(event.get("event_key") or "") for event in events]
+    moments = [_local(event.get("created_at"), zone) for event in events]
+    payloads = [event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+                for event in events]
+    pages = {str(step["label"]): step.get("page") for step in source_steps}
+    source_timers = {str(step["label"]): step.get("timer") for step in source_steps}
+    order = [str(step["label"]) for step in source_steps] or [step.label for step in facts.steps]
+    for step in facts.steps:
+        if step.label not in order:
+            order.append(step.label)
+    records = {record.key: record for record in facts.records if record.key}
+    review = report_review_items(events)
+    confirmed_by_key = {item["source_key"]: bool(item["confirmed"]) for item in review}
+    # Lane RP2, decision 3: a value the experimenter has not confirmed -- asked
+    # about or not yet -- is marked wherever the first pages show it.
+    unconfirmed_keys = {item["source_key"] for item in review if not item["confirmed"]}
+
+    def marked(text: str, key: str) -> str:
+        return f"{text} {UNCONFIRMED_MARK}" if key and key in unconfirmed_keys else text
+
+    def arrival_before(index: int) -> datetime | None:
+        for earlier in range(index - 1, -1, -1):
+            if kinds[earlier] in _ARRIVALS:
+                return moments[earlier]
+        return None
+
+    def page_words(label: str) -> str:
+        page = pages.get(label)
+        return f"{page}쪽" if isinstance(page, int) and not isinstance(page, bool) and page > 0 else ""
+
+    def timer_of(index: int) -> Mapping[str, Any]:
+        timer = payloads[index].get("timer")
+        return timer if isinstance(timer, Mapping) else {}
+
+    def ended_early(index: int) -> tuple[int, int] | None:
+        timer = timer_of(index)
+        if not (timer.get("step_exited_before_timer_elapsed")
+                or timer.get("completion_state") == "step_exited_before_timer_elapsed"):
+            return None
+        try:
+            return (int(timer.get("elapsed_seconds") or 0),
+                    int(timer.get("source_duration_seconds") or timer.get("duration_seconds") or 0))
+        except (TypeError, ValueError):
+            return None
+
+    def source_values(record: ReportRecord) -> str:
+        payload = payloads[keys.index(record.key)] if record.key in keys else {}
+        found = [str(item.get("source") or "") for item in payload.get("deviations") or ()
+                 if isinstance(item, Mapping) and item.get("source")]
+        return " · ".join(dict.fromkeys(found))
+
+    def said_values(record: ReportRecord) -> list[tuple[str, str]]:
+        payload = payloads[keys.index(record.key)] if record.key in keys else {}
+        return [(str(item.get("source") or ""), str(item.get("said") or ""))
+                for item in payload.get("deviations") or ()
+                if isinstance(item, Mapping) and item.get("source") and item.get("said")]
+
+    # The steps, each from the arrival before its completion to the completion.
+    done_at: dict[str, list[int]] = {}
+    seen_at: dict[str, int] = {}
+    skipped: set[str] = set()
+    for index, kind in enumerate(kinds):
+        if labels[index]:
+            seen_at.setdefault(labels[index], index)
+        if kind in _STEP_DONE and labels[index]:
+            done_at.setdefault(labels[index], []).append(index)
+        record = payloads[index].get("step_record") if isinstance(payloads[index].get("step_record"), Mapping) else {}
+        if kind in {"steps_skipped", "branch_steps_skipped", "branch_answered"}:
+            skipped.update(str(item) for item in record.get("skipped_step_labels") or ())
+    pauses: dict[str, list[tuple[datetime, datetime]]] = {}
+    for index, kind in enumerate(kinds):
+        if kind == "workflow_paused" and moments[index] is not None:
+            resumed = next((later for later in range(index + 1, len(kinds))
+                            if kinds[later] == "workflow_resumed"), None)
+            if resumed is not None and moments[resumed] is not None:
+                pauses.setdefault(labels[index], []).append((moments[index], moments[resumed]))
+    by_label = {step.label: step for step in facts.steps}
+    step_rows: list[tuple[str, ...]] = []
+    for label in order:
+        step = by_label.get(label)
+        live = [record for record in (step.records if step else ()) if record.status != "취소됨"]
+        values = _cell([
+            marked(f"{record.kind}: {record.text}" + (" (정정됨)" if record.status == "정정됨" else ""), record.key)
+            for record in live if record.kind in _VALUE_KINDS])
+        deviations: list[str] = []
+        for record in live:
+            if record.kind != "편차":
+                continue
+            pairs = said_values(record)
+            if pairs and record.status != "정정됨":
+                shown = " · ".join(f"{source} → {said}" for source, said in pairs)
+            elif record.status == "정정됨":
+                shown = f"원문 {source_values(record) or '값 없음'} → “{record.text}” (정정됨)"
+            else:
+                shown = f"“{record.text}” (원문 값 없음)"
+            deviations.append(marked(shown, record.key))
+        completions = done_at.get(label, [])
+        for index in completions:
+            early = ended_early(index)
+            if early is not None:
+                deviations.append(marked(
+                    f"타이머 {_duration_words(early[1])} → {_duration_words(early[0])}에 끝냄", keys[index]))
+        anomalies = _cell([marked(record.text, record.key) for record in live if record.kind == "이상"])
+        if completions:
+            visits = [(arrival_before(index), moments[index]) for index in completions]
+            start, end = visits[0][0], visits[-1][1]
+            if all(arrived and done for arrived, done in visits):
+                spent = sum((done - arrived).total_seconds() for arrived, done in visits)  # type: ignore[operator]
+                paused = sum((back - away).total_seconds() for away, back in pauses.get(label, ())
+                             if start is not None and end is not None and start <= away and back <= end)
+                taken = _span_words(spent) + (f" (멈춤 {_span_words(paused)} 포함)" if paused else "")
+            else:
+                taken = "—"
+            name = f"{label} ({len(completions)}회)" if len(completions) > 1 else label
+            step_rows.append((name, _clock(start), _clock(end), taken, values, _cell(deviations), anomalies))
+        elif label in seen_at:
+            step_rows.append((label, _clock(arrival_before(seen_at[label])), "미완료", "—",
+                              values, _cell(deviations), anomalies))
+        else:
+            step_rows.append((label, "—", "건너뜀" if label in skipped else "수행 안 함", "—",
+                              values, _cell(deviations), anomalies))
+
+    # The timers: each start with its notices and the completion after it, and
+    # a source timer the run reached but never started.
+    timer_rows: list[tuple[str, ...]] = []
+    for label in order:
+        starts = [index for index, kind in enumerate(kinds) if kind == "timer_started" and labels[index] == label]
+        for position, index in enumerate(starts):
+            until = starts[position + 1] if position + 1 < len(starts) else len(kinds)
+            timer = timer_of(index)
+            try:
+                seconds = int(timer.get("duration_seconds") or timer.get("source_duration_seconds") or 0) or None
+            except (TypeError, ValueError):
+                seconds = None
+            source = source_timers.get(label) or seconds
+
+            def notice(kind: str) -> str:
+                found = next((later for later in range(index + 1, until)
+                              if kinds[later] == kind and labels[later] == label), None)
+                if found is None:
+                    return "—"
+                return f"{_clock(moments[found])} ({'말함' if payloads[found].get('spoken') else '화면'})"
+
+            done = next((later for later in done_at.get(label, []) if later > index), None)
+            if done is None:
+                result = "단계 끝 기록 없음"
+            elif (early := ended_early(done)) is not None:
+                result = f"일찍 끝냄 (원문 {_duration_words(early[1] or source)} 중 {_duration_words(early[0])})"
+            elif moments[index] is not None and moments[done] is not None:
+                actual = (moments[done] - moments[index]).total_seconds()
+                result = (f"원문 시간 뒤 완료 (실제 {_span_words(actual)})"
+                          if seconds is None or actual >= seconds - 30 else f"완료 (실제 {_span_words(actual)})")
+            else:
+                result = "완료 (걸린 시간 기록 없음)"
+            timer_rows.append((label, _duration_words(source) or "—", _clock(moments[index]),
+                               notice("timer_last_minute_notice"), notice("timer_end_notice"),
+                               _clock(moments[done]) if done is not None else "—", result))
+        if not starts and source_timers.get(label) and (label in done_at or label in seen_at):
+            done = done_at.get(label, [None])[-1]
+            timer_rows.append((label, _duration_words(source_timers[label]), "켜지 않음", "—", "—",
+                               _clock(moments[done]) if done is not None else "—", "타이머 기록 없음"))
+
+    # The deviations and anomalies, in the order recorded, with the source's side.
+    issues: list[tuple[str, ...]] = []
+
+    def checked(key: str) -> str:
+        if key not in confirmed_by_key:
+            return "—"
+        return "확인" if confirmed_by_key[key] else "미확인"
+
+    def add_issue(label: str, kind: str, source: str, recorded: str, index: int) -> None:
+        side = " · ".join(part for part in (source, page_words(label)) if part) or "—"
+        issues.append((str(len(issues) + 1), label or "—", kind, side, recorded,
+                       _clock(moments[index]), checked(keys[index])))
+
+    for index, kind in enumerate(kinds):
+        record = records.get(keys[index])
+        step_record = (payloads[index].get("step_record")
+                       if isinstance(payloads[index].get("step_record"), Mapping) else {})
+        if record is not None and record.status != "취소됨" and record.kind in {"편차", "이상"} and (
+                kind in {"observation", "anomaly"}):
+            recorded = record.text + (f"\n처음 기록: “{record.original}”" if record.status == "정정됨" else "")
+            add_issue(record.step_label, record.kind,
+                      source_values(record) if record.kind == "편차" else "", recorded, index)
+        elif kind == "step_completed" and (early := ended_early(index)) is not None:
+            add_issue(labels[index], "타이머 일찍 끝냄", _duration_words(early[1]),
+                      f"{_duration_words(early[0])}에 단계를 끝냄", index)
+        elif kind == "steps_skipped" and step_record.get("skipped_step_labels"):
+            passed = [str(item) for item in step_record.get("skipped_step_labels") or ()]
+            start = str(step_record.get("start_step") or labels[index])
+            issues_label = passed[0] if passed else labels[index]
+            add_issue(issues_label, "단계 건너뜀", _ranges(passed),
+                      f"{start}단계부터 시작", index)
+        elif kind == "repeat_rounds_declined":
+            first, last = _range_pair(step_record)
+            add_issue(labels[index], "반복 덜 함",
+                      f"{first}~{last}단계 {step_record.get('rounds_required')}회",
+                      f"{step_record.get('rounds_done')}회차까지만 하고 넘어감", index)
+        elif kind == "step_advanced" and labels[index]:
+            add_issue(labels[index], "완료 말 없이 넘어감", "", "완료를 말하지 않고 다음 단계로 넘어감", index)
+
+    connections: list[str] = []
+    for index, kind in enumerate(kinds):
+        if kind != "connection_restored":
+            continue
+        payload = payloads[index]
+        lost = _local(payload.get("lost_at"), zone)
+        restored = _local(payload.get("restored_at"), zone) or moments[index]
+        gap = payload.get("gap_seconds")
+        gap_words = (_span_words(gap) if isinstance(gap, (int, float)) and not isinstance(gap, bool)
+                     else "기록 없음")
+        where = f"{labels[index]}단계에서 " if labels[index] else ""
+        line = (f"{where}{_clock(lost)}에 연결이 끊겼다가 {_clock(restored)}에 다시 연결됨 — 끊긴 시간 {gap_words}"
+                if lost else f"{where}연결이 끊겼다가 {_clock(restored)}에 다시 연결됨 — 끊긴 시간 {gap_words}")
+        ended = payload.get("timers_ended")
+        if isinstance(ended, int) and not isinstance(ended, bool) and ended:
+            line += f", 그사이 끝난 타이머 {ended}개"
+        connections.append(line)
+
+    run = dict(facts.run_rows)
+    header: list[tuple[str, str]] = []
+    for name in GLANCE_HEADER_FIRST:
+        if name == "검토본":
+            header.append((name, run.get(name) or NO_REVIEW_VERSION_WORDS))
+        elif name == "검토자":
+            # Only a review version has a reviewer: a run of the analysis as
+            # it came names none (lane DI keeps reviewer words out of it).
+            if run.get("검토본") and reviewer:
+                header.append((name, reviewer))
+        else:
+            header.append((name, run.get(name, "")))
+    header += [(name, value) for name, value in facts.run_rows if name not in GLANCE_HEADER_FIRST]
+
+    deviation_count = sum(1 for row in issues if row[2] != "이상")
+    summary = (
+        f"{len(facts.completed_labels)} / {facts.total_steps}" if facts.total_steps
+        else str(len(facts.completed_labels)),
+        f"{deviation_count}건",
+        f"{len(issues) - deviation_count}건",
+        f"{sum(1 for kind in kinds if kind in {'record_corrected', 'record_retracted'})}건",
+        f"{sum(1 for item in review if not item['confirmed'])}개",
+        f"{len(connections)}회",
+    )
+
+    from voiney_lab.start_check import KIND_KO
+
+    prestart_rows: tuple[tuple[str, ...], ...] | None = None
+    if start_check is not None:
+        rows = []
+        for answer in start_check:
+            if answer.get("action") == "accept":
+                result = "원문대로 맞다고 함"
+            else:
+                result = "맞음" if answer.get("correct") is True else "다르게 고름"
+            rows.append((
+                KIND_KO.get(str(answer.get("kind") or ""), str(answer.get("kind") or "") or "—"),
+                str(answer.get("step_label") or "") or "—",
+                str(answer.get("value") or "") or "—",
+                str(answer.get("chosen") or "") or "—",
+                result,
+                _clock(_local(answer.get("recorded_at"), zone)),
+            ))
+        prestart_rows = tuple(rows)
+    notes = []
+    if run.get("안전 주의 확인"):
+        notes.append(f"안전 주의: {run['안전 주의 확인']}")
+    for answer in facts.branch_answers:
+        if BEFORE_START_WORDS in answer.value_source:
+            notes.append(f"{answer.step_label}단계 조건 “{answer.condition}” → {answer.answer} ({answer.value_source})")
+    for repetition in facts.repetitions:
+        if BEFORE_START_WORDS in repetition.value_source:
+            count = f"{repetition.count}회" if repetition.count else "미정"
+            notes.append(f"{repetition.first}~{repetition.last}단계 반복 횟수 {count} ({repetition.value_source})")
+
+    return ReportGlance(
+        header_rows=tuple(header), summary=summary, connections=tuple(connections),
+        step_rows=tuple(step_rows), timer_rows=tuple(timer_rows), issue_rows=tuple(issues),
+        prestart_rows=prestart_rows, prestart_notes=tuple(notes),
+        unconfirmed=tuple(
+            (f"{item['step_label']}단계 {item['kind']}: {item['text']}" if item["step_label"]
+             else f"{item['kind']}: {item['text']}")
+            for item in review if not item["confirmed"]),
     )
 
 
@@ -3202,6 +3681,7 @@ class ReportWriterBrain:
         events: Sequence[Mapping[str, Any]] | None = None,
         *,
         fixture: Any = _AUTO,
+        start_check: Sequence[Mapping[str, Any]] | None = None,
     ) -> ReportFacts:
         if isinstance(report_data_or_context, GroundedReportContext):
             context = report_data_or_context
@@ -3217,7 +3697,7 @@ class ReportWriterBrain:
             context = build_grounded_report_context(
                 dict(report_data), list(events or report_data.get("events") or ()), lookup=False)
         return build_report_facts(report_data, events, fixture=fixture, context=context,
-                                  protocol_problem=problem)
+                                  protocol_problem=problem, start_check=start_check)
 
     def build_deterministic_narrative(
         self,
@@ -3456,8 +3936,19 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     facts = narrative.facts
     assert facts is not None
     blocks: list[tuple[str, Any]] = [("title", narrative.title)]
+    glance = facts.glance
+    if glance is not None and glance.unconfirmed:
+        # Lane RP2, decision 3: the first line says how many values are not
+        # confirmed and which; the report is still made.
+        blocks += [("alert", (f"확인 안 된 값 {len(glance.unconfirmed)}개", UNCONFIRMED_WORDS)),
+                   ("list", glance.unconfirmed)]
+    # Lane RP2, decision 1: the run table is the header, its decided rows first.
     blocks.append(_table(("항목", "내용"), tuple(
-        (name, value or "(직접 적어 주세요)") for name, value in facts.run_rows)))
+        (name, value or "(직접 적어 주세요)")
+        for name, value in (glance.header_rows if glance is not None else facts.run_rows))))
+    if glance is not None:
+        blocks += glance_blocks(glance)
+        blocks.append(("pagebreak", None))
 
     blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
 
@@ -3598,6 +4089,38 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     return blocks
 
 
+def glance_blocks(glance: ReportGlance) -> list[tuple[str, Any]]:
+    """The report's first pages after its header (lane RP2, decision 1)."""
+
+    blocks: list[tuple[str, Any]] = [("h1", "한눈 요약"), _table(GLANCE_SUMMARY_HEADER, (glance.summary,))]
+    if glance.connections:
+        blocks.append(("list", glance.connections))
+    blocks.append(("h1", "단계별 기록"))
+    blocks.append(_table(GLANCE_STEP_HEADER, glance.step_rows) if glance.step_rows
+                  else ("note", "기록된 단계가 없다."))
+    blocks.append(("h1", "타이머"))
+    blocks.append(_table(GLANCE_TIMER_HEADER, glance.timer_rows) if glance.timer_rows
+                  else ("note", "이 실험에는 타이머가 없다."))
+    blocks.append(("h1", "편차·이상 모음"))
+    if glance.issue_rows:
+        blocks += [_table(GLANCE_ISSUE_HEADER, glance.issue_rows),
+                   ("note", "원문 (쪽)은 원문의 값과 그 단계가 원문에 있는 쪽이다.")]
+    else:
+        blocks.append(("note", "기록에서 편차·이상을 찾지 못했다."))
+    blocks.append(("h1", "시작 전 확인 결과"))
+    if glance.prestart_rows is None:
+        blocks.append(("note", "시작 전 핵심 값 확인 기록을 읽지 못했다."))
+    elif glance.prestart_rows:
+        blocks.append(_table(GLANCE_PRESTART_HEADER, glance.prestart_rows))
+    else:
+        blocks.append(("note", "시작 전 핵심 값 확인 기록이 없다 (확인이 꺼져 있었거나 확인할 숫자 값이 없었다)."))
+    if glance.prestart_notes:
+        blocks.append(("list", glance.prestart_notes))
+    blocks += [("h1", "실험자 확인"), ("note", "위 기록이 실제로 한 실험과 같은지 확인한 뒤 적는다."),
+               ("sign", (GLANCE_SIGN_HEADER, GLANCE_SIGN_ROWS, TABLE_WIDTHS[GLANCE_SIGN_HEADER]))]
+    return blocks
+
+
 def authorship_line(narrative: ReportNarrative) -> str:
     """Who wrote the report's sentences, under the references (decision 6)."""
 
@@ -3631,7 +4154,19 @@ TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     ("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"): (0.07, 0.59, 0.12, 0.22),
     ("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"): (0.07, 0.09, 0.73, 0.11),
     REVIEW_CHANGE_HEADER: (0.07, 0.13, 0.28, 0.28, 0.13, 0.11),
+    # Lane RP2, decision 1: the first pages' tables, on A4's 16.6 cm text width.
+    GLANCE_SUMMARY_HEADER: (0.17, 0.17, 0.17, 0.17, 0.16, 0.16),
+    GLANCE_STEP_HEADER: (0.07, 0.08, 0.11, 0.10, 0.28, 0.21, 0.15),
+    GLANCE_TIMER_HEADER: (0.07, 0.11, 0.11, 0.14, 0.14, 0.11, 0.32),
+    GLANCE_ISSUE_HEADER: (0.06, 0.07, 0.13, 0.18, 0.38, 0.08, 0.10),
+    GLANCE_PRESTART_HEADER: (0.12, 0.08, 0.17, 0.17, 0.34, 0.12),
+    GLANCE_SIGN_HEADER: (0.30, 0.70),
 }
+#: The report's one font, for Korean and Latin letters alike (lane RP2,
+#: decision 1): Word prints it as Malgun Gothic, and the server's LibreOffice
+#: prints it as NanumGothic (the Korean names point there, lane AN), so a
+#: line never mixes two fonts.
+REPORT_FONT = "맑은 고딕"
 
 
 def _table(header: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> tuple[str, Any]:
@@ -3642,7 +4177,10 @@ def render_markdown(narrative: ReportNarrative) -> str:
     def cell(value: Any) -> str:
         if isinstance(value, StackedCell):
             return (f"{cell(value.main)}<br><small>원문: {cell(value.below)}</small>")
-        return " ".join(str(value).split()).replace("|", "\\|") or " "
+        # Lane RP2: a cell holding one value per line keeps its lines.
+        return "<br>".join(
+            " ".join(line.split()).replace("|", "\\|") for line in str(value).split("\n")
+        ).strip() or " "
 
     lines: list[str] = []
     for kind, content in report_blocks(narrative):
@@ -3658,9 +4196,11 @@ def render_markdown(narrative: ReportNarrative) -> str:
             lines += [str(content).strip(), ""]
         elif kind == "note":
             lines += [f"> {content}", ""]
+        elif kind == "alert":
+            lines += [f"> **{content[0]}** — {content[1]}", ""]
         elif kind == "list":
             lines += [f"- {item}" for item in content] + [""]
-        elif kind == "table":
+        elif kind in {"table", "sign"}:
             header, rows, widths = content
             lines.append("| " + " | ".join(cell(h) for h in header) + " |")
             # Markdown has no column widths; the dash counts carry the
@@ -3683,6 +4223,7 @@ DOCX_SPACING: dict[str, tuple[float, float, float]] = {
     "h3": (6, 2, 1.0),
     "p": (0, 4, 1.15),
     "note": (2, 4, 1.15),
+    "alert": (2, 2, 1.15),
     "list": (0, 1, 1.15),
     "table": (0, 0, 1.0),
 }
@@ -3700,7 +4241,8 @@ def _space(paragraph: Any, kind: str, *, after: float | None = None) -> None:
 
 def render_docx(narrative: ReportNarrative) -> bytes:
     from docx import Document
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+    from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
     from docx.shared import Cm, Pt, RGBColor
 
@@ -3711,7 +4253,12 @@ def render_docx(narrative: ReportNarrative) -> bytes:
         setattr(section, side, Cm(2.2))
     normal = document.styles["Normal"]
     normal.font.size = Pt(10.5)
-    normal.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "맑은 고딕")
+    # Lane RP2, decision 1: one Korean font for every script, not the theme's.
+    fonts = normal.element.get_or_add_rPr().get_or_add_rFonts()
+    for script in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+        fonts.set(qn(script), REPORT_FONT)
+    for theme in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+        fonts.attrib.pop(qn(theme), None)
     # Paragraphs a person adds in Word take the body's spacing, not the template's.
     body_before, body_after, body_line = DOCX_SPACING["p"]
     normal.paragraph_format.space_before = Pt(body_before)
@@ -3743,12 +4290,25 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             run.italic = True
             run.font.color.rgb = RGBColor(90, 90, 90)
             _space(paragraph, "note")
+        elif kind == "alert":
+            # Lane RP2, decision 3: "확인 안 된 값 n개" in bold red, first under the title.
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(content[0])
+            run.bold = True
+            run.font.color.rgb = RGBColor(176, 32, 32)
+            paragraph.add_run(f" — {content[1]}")
+            _space(paragraph, "alert")
         elif kind == "list":
             for index, item in enumerate(content):
                 last = index == len(content) - 1
                 _space(document.add_paragraph(f"• {item}"), "list",
                        after=DOCX_SPACING["p"][1] if last else None)
-        elif kind == "table":
+        elif kind == "pagebreak":
+            # Lane RP2, decision 1: the sections start on the page after the first pages.
+            paragraph = document.add_paragraph()
+            paragraph.add_run().add_break(WD_BREAK.PAGE)
+            _space(paragraph, "table")
+        elif kind in {"table", "sign"}:
             header, rows, widths = content
             table = document.add_table(rows=1, cols=len(header))
             table.style = "Table Grid"
@@ -3757,6 +4317,10 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                 for run in table.rows[0].cells[index].paragraphs[0].runs:
                     run.bold = True
                     run.font.size = Pt(9)
+            # A table that runs onto the next page repeats its heading row there.
+            repeat = OxmlElement("w:tblHeader")
+            repeat.set(qn("w:val"), "true")
+            table.rows[0]._tr.get_or_add_trPr().append(repeat)
             for row in rows:
                 cells = table.add_row().cells
                 for index, value in enumerate(row):
@@ -3770,7 +4334,11 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                         for run in cells[index].paragraphs[0].runs:
                             run.font.size = Pt(9)
                         continue
-                    cells[index].text = str(value)
+                    # One value per line, each its own paragraph (lane RP2).
+                    first, *more = str(value).split("\n")
+                    cells[index].text = first
+                    for line in more:
+                        cells[index].add_paragraph(line)
                     for paragraph in cells[index].paragraphs:
                         for run in paragraph.runs:
                             run.font.size = Pt(9)
@@ -3778,10 +4346,55 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
                         _space(paragraph, "table")
+            if kind == "sign":
+                # Room to write a name, a date and a signature by hand.
+                for row in table.rows[1:]:
+                    row.height = Cm(1.1)
             _fix_column_widths(table, [int(text_width * share) for share in widths])
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+class ReportPdfError(RuntimeError):
+    """The report could not be printed to PDF (lane RP2, decision 2).
+
+    ``report_pdf_unavailable``: this server has no LibreOffice;
+    ``report_pdf_failed``: LibreOffice did not print it.
+    """
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def report_docx_to_pdf(document: bytes, *, converter: str | None = None, run: Any = None) -> bytes:
+    """The Word report as the PDF the server's LibreOffice prints (lane RP2, decision 2).
+
+    The same report, not another rendering of it: the .docx is printed the
+    way an uploaded Word protocol is (``docx_to_pdf``: its own LibreOffice
+    profile, and the Korean font names pointed at Nanum).
+    """
+
+    import tempfile
+
+    from voiney_lab.experiment_protocol_pdf import (
+        ProtocolPdfError,
+        ProtocolSourceConversionUnavailableError,
+        docx_to_pdf,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="experiment-report-") as root:
+        source, target = Path(root) / "report.docx", Path(root) / "report.pdf"
+        source.write_bytes(document)
+        try:
+            docx_to_pdf(source, target, converter=converter, run=run)
+        except ProtocolSourceConversionUnavailableError as exc:
+            raise ReportPdfError(
+                "LibreOffice is not installed on this server.", code="report_pdf_unavailable") from exc
+        except ProtocolPdfError as exc:
+            raise ReportPdfError("LibreOffice did not print the report.", code="report_pdf_failed") from exc
+        return target.read_bytes()
 
 
 def _format_elapsed_clock(value: Any) -> str:
