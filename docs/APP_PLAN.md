@@ -268,3 +268,36 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 | ⑦ | 1490줄 `keepScreenOn` | 앱에서는 `navigator.wakeLock` 대신(또는 함께) `keepAwake(cap, on)` |
 | ⑧ | 2929줄 `getUserMedia`, 4545줄 `visibilitychange` | 화면이 꺼져도 듣기는 네이티브 포그라운드 서비스가 맡는다(4절 다음 단계 3). 그 전까지는 지금처럼 화면이 보일 때만 |
 | ⑨ | 줄 NET 의 끊김 처리 | `onNetworkChange(cap, cb)` 로 기기의 연결 변화를 받을 수 있다. 끊김 표시는 줄 NET 의 화면을 따른다 |
+
+## 10. 빌드
+
+### 10.1 Android 디버그 APK — 이 서버에서 만들었다 (2026-10-18)
+
+| 항목 | 값 |
+|---|---|
+| 결과 | `BUILD SUCCESSFUL in 5m 37s`(잠금을 얻은 뒤의 Gradle 시간), 214 tasks |
+| 파일 | `mobile/android/app/build/outputs/apk/debug/app-debug.apk`(추적 안 함). 같은 파일을 `~/app-build/out/voineylab-app0-debug.apk` 에 복사 |
+| 크기 | 4,371,519 바이트(4.2 MiB), sha256 `de3082354dc4830e3ff89e9637135211dd8a81fd1c4958609d65613a5ccfe0f6` |
+| 패키지 | `com.voiney.lab`, versionCode 1, compile/targetSdk 36 |
+| 권한(APK 안, `aapt2 dump badging`) | INTERNET, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS, RECEIVE_BOOT_COMPLETED, WAKE_LOCK, POST_NOTIFICATIONS, SCHEDULE_EXACT_ALARM, ACCESS_NETWORK_STATE (+ AndroidX 내부 권한 하나) |
+| 첫 화면 | `device-check.html`(묶기 모드, `appStartPath`) |
+| 서명 | 디버그 키(Gradle 이 만든 것, 저장소 밖). **스토어에 올릴 수 없다** — 출시용은 사람이 만든 업로드 키로 `bundleRelease` |
+| 도구 | Temurin JDK 21.0.12.1+1, Android 명령줄 도구 23.0, platforms;android-36, build-tools;36.0.0, Gradle 8.14.3(래퍼), AGP 8.13.0, Node 22.22.1 — 모두 `~/app-build/` 아래, sudo 없이 |
+| 디스크 | `~/app-build/` 합계 2.7 GB: Gradle 캐시 1.4 GB, Android SDK 635 MB, 내려받은 원본 371 MB(지워도 됨), JDK 346 MB. 저장소 안: `mobile/node_modules` 40 MB, 빌드 산출물 약 23 MB(모두 추적 안 함) |
+
+다시 만들기: `mobile/scripts/build-android-debug.sh`(도구를 내려받는 법은 `mobile/README.md`). 기기 시험 순서는 11.3절.
+
+### 10.2 맥에서 iOS 빌드하는 순서
+
+EC2 에는 Xcode 가 없어서 iOS 는 이 줄에서 만들지 않았다. 맥에서:
+
+1. Xcode 26 이상과 명령줄 도구(`xcode-select --install`), Node 22 이상, CocoaPods 또는 Swift Package Manager(어느 쪽이 기본인지는 이 줄에서 확인하지 않았다 —
+   `npx cap add ios` 가 묻거나 고르는 것을 따른다).
+2. `cd mobile && npm ci && node scripts/prepare-web.mjs && npm install @capacitor/ios@8.5.3 --save-exact && npx cap add ios`
+   (`@capacitor/ios` 와 `ios/` 폴더는 그 줄에서 커밋).
+3. `ios/App/App/Info.plist` 에 `NSMicrophoneUsageDescription`(11.2절 문구), 백그라운드 듣기를 만들 때 `UIBackgroundModes` 에 `audio`.
+4. `ios/App/App/PrivacyInfo.xcprivacy` — 플러그인이 쓰는 required-reason API 를 적는다(Capacitor 안내: <https://capacitorjs.com/docs/ios/privacy-manifest>).
+5. `npx cap sync ios && npx cap open ios` → Xcode 에서 Signing & Capabilities 에 팀(Apple Developer Program 계정)을 고르고, Push 가 아닌
+   로컬 알림만 쓰므로 Push Notifications 능력은 넣지 않는다. 시간 민감 알림을 쓰면 Time Sensitive Notifications 능력.
+6. 실제 아이폰을 연결해 Run. 11.3절의 순서를 iOS 에서도 같은 번호로(정확한 알람 항목 2·3·6 은 iOS 에 없음).
+7. 배포: Product → Archive → App Store Connect 에 올려 TestFlight 로 내부 시험.

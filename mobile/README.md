@@ -12,6 +12,7 @@
 |---|---|
 | `package.json` | Capacitor 와 플러그인. 버전을 정확히 고정했다 |
 | `capacitor.config.js` | 앱 id·이름, 화면을 묶을지(기본) 서버 주소로 열지(`VOINEY_APP_SERVER_URL`) |
+| `scripts/build-android-debug.sh` | 디버그 APK 빌드(아래 3번을 묶음) |
 | `scripts/prepare-web.mjs` | `www/`(추적 안 함)를 만든다: 서버 정적 화면 + `www-src/` |
 | `www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때 보이는 화면(`server.errorPath`) |
 | `www-src/device-check.html` | 디버그 빌드의 기기 시험 화면: `native-bridge.js` 로 2분 시험 타이머 알림을 예약·취소 |
@@ -38,7 +39,8 @@ mv cmdline-tools latest
 export JAVA_HOME=$(ls -d ~/app-build/jdk-21*) ANDROID_HOME=~/app-build/android-sdk
 $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
-# 3. 빌드 (Node 22 이상)
+# 3. 빌드 (Node 22 이상) — 아래를 묶은 것이 scripts/build-android-debug.sh
+#    (그 스크립트는 ~/app-build 를 기본으로 쓴다: APP_BUILD·JAVA_HOME·ANDROID_HOME 로 바꿀 수 있다)
 cd <저장소>/mobile && npm ci
 node scripts/prepare-web.mjs
 VOINEY_APP_START_PATH=device-check.html npx cap sync android   # 기기 시험 화면으로 시작
