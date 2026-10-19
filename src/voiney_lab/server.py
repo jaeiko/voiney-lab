@@ -201,6 +201,7 @@ from voiney_lab.vad import (
 )
 from voiney_lab import voice_providers
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
+from voiney_lab.start_check import StartCheck, StartCheckError
 from voiney_lab.accounts import (
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
@@ -4200,6 +4201,46 @@ def post_protocol_review_version(
             return catalog.register_review(protocol_id,_review_body_with_account(body))
         finally:
             store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/start-check")
+def get_protocol_start_check(protocol_id:str)->dict[str,object]:
+    """The two key values to confirm before the start (lane ON, decision ③):
+    the questions without their answers, or why there are none."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return StartCheck(catalog).questions(protocol_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/start-check/answers")
+def post_protocol_start_check_answer(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """One choice on one question, judged and recorded by the server; or the
+    value taken as it stands after a wrong choice (``action: accept``)."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            principal=_REQUEST_PRINCIPAL.get()
+            return StartCheck(catalog).answer(
+                protocol_id,body.get("question_id"),
+                choice_id=body.get("choice_id"),action=body.get("action"),
+                actor_principal_id=principal.principal_id if principal is not None else None)
+        finally:
+            store.close()
+    except StartCheckError as exc:
+        raise HTTPException(status_code=422,detail=exc.code) from exc
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
