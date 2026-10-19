@@ -2481,6 +2481,11 @@ GLANCE_PRESTART_HEADER = ("확인한 값", "단계", "원문 값", "고른 값",
 GLANCE_SIGN_HEADER = ("실험자 확인", "적는 칸")
 GLANCE_SIGN_ROWS = (("이름", ""), ("날짜", ""), ("서명", ""))
 NO_REVIEW_VERSION_WORDS = "없음 (분석 결과 그대로 실행)"
+#: Lane RP2, decision 3: what a value the experimenter has not confirmed
+#: carries in the tables, and the report's line about them under its title.
+UNCONFIRMED_MARK = "[미확인]"
+UNCONFIRMED_WORDS = (f"실험자가 아직 확인하지 않은 값이다. 표에 {UNCONFIRMED_MARK}로 표시했다. "
+                     "화면의 확인 목록에서 확인하면 빠진다.")
 #: Events that move the run to a step: a step's time starts at the last one
 #: before its completion.
 _ARRIVALS = frozenset({
@@ -2504,6 +2509,8 @@ class ReportGlance:
     #: None when the check before the start was not read; () when it has no answer.
     prestart_rows: tuple[tuple[str, ...], ...] | None
     prestart_notes: tuple[str, ...]
+    #: Lane RP2, decision 3: each value not confirmed ("2단계 측정: 세척액 450 µL").
+    unconfirmed: tuple[str, ...] = ()
 
 
 def _clock(moment: datetime | None) -> str:
@@ -2606,6 +2613,12 @@ def build_report_glance(
     records = {record.key: record for record in facts.records if record.key}
     review = report_review_items(events)
     confirmed_by_key = {item["source_key"]: bool(item["confirmed"]) for item in review}
+    # Lane RP2, decision 3: a value the experimenter has not confirmed -- asked
+    # about or not yet -- is marked wherever the first pages show it.
+    unconfirmed_keys = {item["source_key"] for item in review if not item["confirmed"]}
+
+    def marked(text: str, key: str) -> str:
+        return f"{text} {UNCONFIRMED_MARK}" if key and key in unconfirmed_keys else text
 
     def arrival_before(index: int) -> datetime | None:
         for earlier in range(index - 1, -1, -1):
@@ -2669,7 +2682,7 @@ def build_report_glance(
         step = by_label.get(label)
         live = [record for record in (step.records if step else ()) if record.status != "취소됨"]
         values = _cell([
-            f"{record.kind}: {record.text}" + (" (정정됨)" if record.status == "정정됨" else "")
+            marked(f"{record.kind}: {record.text}" + (" (정정됨)" if record.status == "정정됨" else ""), record.key)
             for record in live if record.kind in _VALUE_KINDS])
         deviations: list[str] = []
         for record in live:
@@ -2677,17 +2690,19 @@ def build_report_glance(
                 continue
             pairs = said_values(record)
             if pairs and record.status != "정정됨":
-                deviations.append(" · ".join(f"{source} → {said}" for source, said in pairs))
+                shown = " · ".join(f"{source} → {said}" for source, said in pairs)
             elif record.status == "정정됨":
-                deviations.append(f"원문 {source_values(record) or '값 없음'} → “{record.text}” (정정됨)")
+                shown = f"원문 {source_values(record) or '값 없음'} → “{record.text}” (정정됨)"
             else:
-                deviations.append(f"“{record.text}” (원문 값 없음)")
+                shown = f"“{record.text}” (원문 값 없음)"
+            deviations.append(marked(shown, record.key))
         completions = done_at.get(label, [])
         for index in completions:
             early = ended_early(index)
             if early is not None:
-                deviations.append(f"타이머 {_duration_words(early[1])} → {_duration_words(early[0])}에 끝냄")
-        anomalies = _cell([record.text for record in live if record.kind == "이상"])
+                deviations.append(marked(
+                    f"타이머 {_duration_words(early[1])} → {_duration_words(early[0])}에 끝냄", keys[index]))
+        anomalies = _cell([marked(record.text, record.key) for record in live if record.kind == "이상"])
         if completions:
             visits = [(arrival_before(index), moments[index]) for index in completions]
             start, end = visits[0][0], visits[-1][1]
@@ -2863,6 +2878,10 @@ def build_report_glance(
         header_rows=tuple(header), summary=summary, connections=tuple(connections),
         step_rows=tuple(step_rows), timer_rows=tuple(timer_rows), issue_rows=tuple(issues),
         prestart_rows=prestart_rows, prestart_notes=tuple(notes),
+        unconfirmed=tuple(
+            (f"{item['step_label']}단계 {item['kind']}: {item['text']}" if item["step_label"]
+             else f"{item['kind']}: {item['text']}")
+            for item in review if not item["confirmed"]),
     )
 
 
@@ -3909,6 +3928,11 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     assert facts is not None
     blocks: list[tuple[str, Any]] = [("title", narrative.title)]
     glance = facts.glance
+    if glance is not None and glance.unconfirmed:
+        # Lane RP2, decision 3: the first line says how many values are not
+        # confirmed and which; the report is still made.
+        blocks += [("alert", (f"확인 안 된 값 {len(glance.unconfirmed)}개", UNCONFIRMED_WORDS)),
+                   ("list", glance.unconfirmed)]
     # Lane RP2, decision 1: the run table is the header, its decided rows first.
     blocks.append(_table(("항목", "내용"), tuple(
         (name, value or "(직접 적어 주세요)")
@@ -4163,6 +4187,8 @@ def render_markdown(narrative: ReportNarrative) -> str:
             lines += [str(content).strip(), ""]
         elif kind == "note":
             lines += [f"> {content}", ""]
+        elif kind == "alert":
+            lines += [f"> **{content[0]}** — {content[1]}", ""]
         elif kind == "list":
             lines += [f"- {item}" for item in content] + [""]
         elif kind in {"table", "sign"}:
@@ -4188,6 +4214,7 @@ DOCX_SPACING: dict[str, tuple[float, float, float]] = {
     "h3": (6, 2, 1.0),
     "p": (0, 4, 1.15),
     "note": (2, 4, 1.15),
+    "alert": (2, 2, 1.15),
     "list": (0, 1, 1.15),
     "table": (0, 0, 1.0),
 }
@@ -4254,6 +4281,14 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             run.italic = True
             run.font.color.rgb = RGBColor(90, 90, 90)
             _space(paragraph, "note")
+        elif kind == "alert":
+            # Lane RP2, decision 3: "확인 안 된 값 n개" in bold red, first under the title.
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(content[0])
+            run.bold = True
+            run.font.color.rgb = RGBColor(176, 32, 32)
+            paragraph.add_run(f" — {content[1]}")
+            _space(paragraph, "alert")
         elif kind == "list":
             for index, item in enumerate(content):
                 last = index == len(content) - 1

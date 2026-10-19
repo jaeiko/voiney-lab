@@ -120,7 +120,8 @@ class StepTableTests(_GlanceCase):
     def test_a_stopped_run_shows_the_step_it_stopped_at_and_the_steps_not_done(self) -> None:
         text = self.markdown(unconfirmed_run(self.temporary.name))
         rows = self.table(text, self.HEADER)
-        self.assertEqual(rows[3], "| 4 | 10:01 | 완료 기록 없음 | — | 측정: acetonitrile 180 µL 넣음 | — | — |")
+        # The value is not confirmed: decision 3 marks it.
+        self.assertEqual(rows[3], "| 4 | 10:01 | 완료 기록 없음 | — | 측정: acetonitrile 180 µL 넣음 [미확인] | — | — |")
         self.assertEqual(rows[4], "| 5 | — | 수행 안 함 | — | — | — | — |")
 
     def test_a_pause_is_named_in_the_time_taken(self) -> None:
