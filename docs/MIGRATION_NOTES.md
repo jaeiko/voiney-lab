@@ -1633,3 +1633,77 @@ written; nothing waits on them and nothing is changed by them.
   starts).
 
 Going back: code from before this version ignores both event types.
+
+## Lane AN5 (2026-10-20): analysis finish -- one reading's mixed numbering, page-margin furniture, the re-ask after the cards
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) only. Human decisions of 2026-10-20 (1-5).
+
+- Decision 1: an analysis read at once (or one piece of a long document)
+  may hold numbered and unnumbered steps, as the source prints them. Its
+  review-pending payload's `flags` then hold lane AN3's seam items
+  `{"item_id": "seam:<step>+<step>", "reason": "numbering_seam",
+  "reason_code": "step_labelling_differs", ...}` for a single reading too
+  (step ids without the `p<n>.` prefix); its review versions hold steps of
+  both kinds, as AN3's joined documents' do. Nothing else is recorded.
+- Decision 2: a quote that runs from one page's end onto the next may now be
+  accepted past a page-margin line (a printed page number with the
+  document's page offset, "200.8-24"; a line printed nearly alike in the
+  outermost lines of another page; the copyright or licence footer of page
+  1 or 2). It is stored in lane PA's form -- `source_excerpt` on its page,
+  `continued_on_page_number` / `continued_excerpt` on the next -- each piece
+  its own page's characters, the margin line in neither.
+- Decision 3: the re-ask of lane AN4 runs after the analysis is stored.
+  New append-only events:
+  - `protocol_analysis_evidence_requote_started`: `{"status": "running",
+    "analysis_id", "review_pending_event": <event id>, "time_limit_seconds":
+    300}`, written right after the review-pending event; the summary's line
+    ends " · 원문 위치를 다시 찾는 중" until the requote event below names the
+    same `analysis_id` (or 420 s have passed: a server stopped under it).
+  - `protocol_analysis_evidence_requote` (lane AN4's) gains
+    `"review_pending_event"`, `"closed": "some" | "all" | "superseded"`
+    when it closed cards (or found the target registered or read again
+    meanwhile) and `"answered_by_person": [item ids]`; outcomes gain
+    `answered_by_person`, `ocr_values_unsettled`; a call not back within the
+    limit is `{"status": "failed", "failure_code": "requote_time_limit"}`.
+    An analysis with more items than its cards may be is still asked about
+    first, as lane AN4 did (no started event then).
+  - `protocol_analysis_review_cards_closed`: `{"review_pending_event",
+    "analysis_id", "closed": [{"item", "field", "page", "reason":
+    "evidence_requoted", "reason_ko": "원문 위치를 다시 찾아 확인했어요"}]}`
+    plus the record the review reads from then on, in the review-pending
+    payload's own keys (`flags`, `needs_review_count`, `protocol`,
+    `readiness`, `source_pages`, `auto_resolved`, ...). The review-pending
+    event itself is not changed. `review_draft()` keeps each closed item's
+    card in its place as `{"type": "requoted", "decided": true, "choices":
+    [], "closed_ko": "원문 위치를 다시 찾아 확인했어요", "decision": {"action":
+    "requoted", ...}}` (a person's own decision on it shows instead); the
+    item carries `"closed": {"by": "server", ...}`. The protocol summary's
+    `review_pending` gains `requoting`/`requoting_ko` while it runs and
+    `closed_by_requote` after.
+  - When the re-ask closes every card and nobody decided or wrote a memo
+    on any, the analysis is stored as passed (`protocol_analysis_ready`,
+    with the `evidence_requoted` entries in `auto_resolved`), as lane AN4
+    stored it.
+- Decision 5: each send of the analysis and translation roles writes one
+  log line `provider.call provider=… role=… model=… status=… seconds=…
+  output_tokens=… tokens_per_second=… finish=…` (no text). Nothing stored.
+
+### Reading older data
+
+Nothing older is read differently: an analysis stored before has no
+started or closed event, and its cards are as they were. Checked on a copy
+of `data/runtime/candidate-a-live-acceptance` (sqlite through the backup
+API, objects hard-linked; the original only read): all seven protocols
+list and review and the three that run load (`pdf-1-analysis-10` for the
+in-gel fixture), the same as the code before this version.
+
+### Going back
+
+Code from before this version ignores the started and closed events: a
+review-pending analysis whose cards the re-ask closed shows those cards
+open again (as the analysis first read them); answering them registers as
+before. A single reading's seam items and mixed review versions read as
+lane AN3's do. A quote accepted past a margin line stays valid (each piece
+is its page's own characters); only a step timer whose sentence runs past
+such a page end is refused by the older timer check.

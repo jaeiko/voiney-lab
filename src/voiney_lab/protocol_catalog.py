@@ -31,6 +31,7 @@ from voiney_lab import pdf_text_engine
 from voiney_lab.curated_protocol import CuratedProtocolFixture
 from voiney_lab.experiment_protocol_analysis import (
     AUTO_RESOLVED_OCR_TWO_ENGINES,
+    AUTO_RESOLVED_REQUOTED,
     BLOCKED_FAILURE_CODE,
     MAX_PIECED_ANALYSIS_PAGES,
     MAX_SINGLE_PASS_INPUT_BYTES,
@@ -52,6 +53,9 @@ from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisPieceConflictError,
     ProtocolAnalysisPieceFailedError,
     ProtocolAnalysisTooManyPagesError,
+    REQUOTE_ANSWERED_BY_PERSON,
+    REQUOTE_OCR_VALUES,
+    REQUOTE_TIME_LIMIT_SECONDS,
     REVIEW_ITEM_KINDS,
     REVIEW_REASON_BLOCKED,
     REVIEW_REASON_NUMBERING_SEAM,
@@ -73,7 +77,9 @@ from voiney_lab.experiment_protocol_analysis import (
     join_piece_analyses,
     prepare_protocol_analysis_request,
     replace_at_paths,
+    requote_questions,
     requote_unverified_items,
+    resettle_requote,
     review_item_id,
     safety_block_provider,
     verify_step_timers,
@@ -188,6 +194,17 @@ _AUTO_REANALYSIS_EVENT = "protocol_analysis_auto_reanalysis"
 #: check refused were asked about once more; this event records how many,
 #: what came of each kind of answer, and each call (no source text).
 _REQUOTE_EVENT = "protocol_analysis_evidence_requote"
+#: Lane AN5, decision 3 (human decision 2026-10-20): the re-ask runs after the
+#: analysis is stored and its cards are shown. It started (the progress line
+#: says so until its completed event above), and the cards it closed, with
+#: the record the review reads from since.
+_REQUOTE_STARTED_EVENT = "protocol_analysis_evidence_requote_started"
+_REQUOTE_CLOSED_EVENT = "protocol_analysis_review_cards_closed"
+REQUOTE_RUNNING_KO = "원문 위치를 다시 찾는 중"
+REQUOTE_CLOSED_KO = "원문 위치를 다시 찾아 확인했어요"
+#: A re-ask started this long ago with no end was cut off (the server
+#: stopped under it); it is no longer said to be running.
+_REQUOTE_STALE_SECONDS = REQUOTE_TIME_LIMIT_SECONDS + 120
 TOO_MANY_REVIEW_ITEMS_CODE = "protocol_analysis_too_many_review_items"
 REVIEW_MAX_ITEMS_SETTING = "VOINEY_LAB_REVIEW_MAX_ITEMS"
 REVIEW_MAX_ITEMS = 12
@@ -490,17 +507,56 @@ def _piece_run_end(
     return "review_required", None
 
 
-def _review_pending_summary(event: Any) -> dict[str, object]:
+def _cards_closed_event(pending: Any, events: Sequence[Any]) -> Any | None:
+    """The latest record of the cards the re-ask closed on this review-pending
+    analysis (lane AN5, decision 3), or None."""
+
+    return next((
+        event for event in reversed(events)
+        if event.event_type == _REQUOTE_CLOSED_EVENT and isinstance(event.payload, dict)
+        and event.payload.get("review_pending_event") == pending.event_id
+    ), None)
+
+
+def _requote_running(pending: Any, events: Sequence[Any]) -> bool:
+    """Whether the re-ask over this review-pending analysis is still running
+    (lane AN5, decision 3): started, not ended, and not cut off."""
+
+    started = next((
+        event for event in reversed(events)
+        if event.event_type == _REQUOTE_STARTED_EVENT and isinstance(event.payload, dict)
+        and event.payload.get("review_pending_event") == pending.event_id
+    ), None)
+    if started is None or any(
+        event.event_type == _REQUOTE_EVENT and event.sequence_id > started.sequence_id
+        and isinstance(event.payload, dict)
+        and event.payload.get("analysis_id") == started.payload.get("analysis_id")
+        for event in events
+    ):
+        return False
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(started.recorded_at)).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age <= _REQUOTE_STALE_SECONDS
+
+
+def _review_pending_summary(event: Any, events: Sequence[Any] = ()) -> dict[str, object]:
     """What the screen says of a review-pending analysis (lane RV, decision a).
 
     ``needs_review_count`` items, by reason, with one Korean line: "검토 대기 ·
     확인 필요 12건(근거를 못 찾음 9 · OCR 흐림 3)", and "41–59쪽 분석 실패" for
     each failed piece of a long document.
+
+    Lane AN5, decision 3: given the protocol's ``events``, the items left
+    after the re-ask closed cards, and " · 원문 위치를 다시 찾는 중" while it runs.
     """
 
     payload = event.payload if isinstance(event.payload, dict) else {}
+    closed = _cards_closed_event(event, events)
+    record = closed.payload if closed is not None else payload
     flags = [
-        ReviewFlag.from_public(item) for item in payload.get("flags") or ()
+        ReviewFlag.from_public(item) for item in record.get("flags") or ()
         if isinstance(item, dict)
     ]
     # Lane AN3, decision A: a page's OCR values are one card, counted once.
@@ -527,7 +583,10 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
         if flag.first_page is not None:
             # "41–59쪽 분석 실패", or lane RV2 decision f's "구글 안전 필터에 막혀 …".
             line += f" · {flag.reason_ko}"
-    return {
+    requoting = bool(events) and _requote_running(event, events)
+    if requoting:
+        line += f" · {REQUOTE_RUNNING_KO}"
+    summary: dict[str, object] = {
         "analysis_id": payload.get("analysis_id"),
         "recorded_at": event.recorded_at,
         "needs_review_count": len(items),
@@ -535,6 +594,12 @@ def _review_pending_summary(event: Any) -> dict[str, object]:
         "failed_pages": failed_pages,
         "message_ko": line,
     }
+    if requoting:
+        summary["requoting"] = True
+        summary["requoting_ko"] = REQUOTE_RUNNING_KO
+    if closed is not None:
+        summary["closed_by_requote"] = len(closed.payload.get("closed") or ())
+    return summary
 
 
 def review_version_suggestion(entry: "ProtocolCatalogEntry") -> dict[str, object] | None:
@@ -1616,7 +1681,7 @@ class ProtocolCatalog:
             "automatic_retry": _automatic_retry_status(after),
         }
         if state == "review_pending":
-            status["review_pending"] = _review_pending_summary(after[-1])
+            status["review_pending"] = _review_pending_summary(after[-1], events)
         return status
 
     def _latest_ocr_events(
@@ -2409,7 +2474,8 @@ class ProtocolCatalog:
             analysis_outdated_codes=outdated_codes,
             analysis_outdated_ko=ANALYSIS_OUTDATED_KO if outdated_codes else None,
             review_pending=(
-                _review_pending_summary(pending) if pending is not None else None),
+                _review_pending_summary(pending, self.store.list_events(revision.experiment_id))
+                if pending is not None else None),
             review_versions=tuple(
                 _review_version_summary(event, self.store.list_events(revision.experiment_id))
                 for event, _ in versions),
@@ -2449,13 +2515,18 @@ class ProtocolCatalog:
         and its accepted OCR; when those are not the pages the analysis read
         (an OCR read again since), it is refused: the items cannot be shown
         against pages they were not read from.
+
+        Lane AN5, decision 3: after the re-ask closed cards, the record it
+        wrote is read instead (the stored analysis itself never changes).
         """
 
         revision = self._latest_protocol_revision(protocol_id)
         event = self._review_pending_event(revision)
         if event is None:
             raise ProtocolCatalogNotFoundError("No analysis is waiting for review.")
-        payload = event.payload if isinstance(event.payload, dict) else {}
+        closed = _cards_closed_event(event, self.store.list_events(revision.experiment_id))
+        payload = closed.payload if closed is not None else event.payload
+        payload = payload if isinstance(payload, dict) else {}
         protocol = _decode_stored_record(payload.get("protocol"))
         readiness = _decode_stored_record(payload.get("readiness"))
         if not isinstance(protocol, domain.ExperimentProtocol) or not isinstance(
@@ -3593,18 +3664,30 @@ class ProtocolCatalog:
         which may ask about ``review_max_items()`` plus one item per piece and
         otherwise ends with the guidance.
 
-        Lane AN4, decision 1: before any of that, with ``model``, the items
-        the evidence check refused are asked about once more
-        (``_requoted``)."""
+        Lane AN4, decision 1: with ``model``, the items the evidence check
+        refused are asked about once more. Lane AN5, decision 3 (human
+        decision 2026-10-20): the analysis is stored and its cards shown
+        first, and the re-ask runs after (``_requote_after_storing``) --
+        unless the items are more than the cards may be, where the re-ask
+        comes first as before (``_requoted``), since what it keeps decides
+        whether the document is read again or ends with the guidance."""
 
-        draft = self._requoted(revision, draft, analysis_id, model=model, pieces=pieces)
-        draft = self._with_ocr_value_flags(revision, draft)
+        groups = [tuple(piece.page_numbers) for piece in pieces] or None
+        asks = (
+            model is not None and bool(draft.review_flags) and analysis_requote_enabled()
+            and bool(requote_questions(draft, groups=groups)))
+        first = draft
+        draft = self._with_ocr_value_flags(revision, first)
+        limit = review_max_items() + len(pieces) if pieces else review_max_items()
+        if asks and _items_by_reason(draft)[0] > limit:
+            draft = self._with_ocr_value_flags(revision, self._requoted(
+                revision, first, analysis_id, model=model, pieces=pieces))
+            asks = False
         if pieces:
             # Lane AN3, round 2, decision ④ (human decision 2026-10-18): a long
             # document is not analysed again by itself -- the one live
             # re-analysis cost USD 0.91 and changed nothing -- and may ask about
             # one more item per piece (a seam or an unread page is one press).
-            limit = review_max_items() + len(pieces)
             count, by_reason = _items_by_reason(draft)
             if count > limit:
                 too_many = ProtocolAnalysisTooManyItemsError(
@@ -3616,7 +3699,12 @@ class ProtocolCatalog:
         elif model is not None and _items_by_reason(draft)[0] > review_max_items():
             draft, analysis_id = self._fewer_items(revision, draft, analysis_id, model=model)
         if draft.review_flags:
-            return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
+            entry = self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
+            if asks:
+                self._requote_after_storing(
+                    revision, draft, analysis_id, model=model, pieces=pieces)
+                entry = self.get_entry(revision.experiment_id)
+            return entry
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
 
     def _requoted(
@@ -3639,7 +3727,9 @@ class ProtocolCatalog:
         (``requote_unverified_items``); a kept item is recorded beside the
         server's other settlements as "근거를 다시 찾아 확인". Off with
         ``VOINEY_LAB_ANALYSIS_REQUOTE=false``. The automatic re-analysis of
-        decision c, should it follow, is not asked about again.
+        decision c, should it follow, is not asked about again. Lane AN5,
+        decision 3: here only for an analysis with more items than its cards
+        may be; the calls are waited for ``REQUOTE_TIME_LIMIT_SECONDS``.
         """
 
         if model is None or not draft.review_flags or not analysis_requote_enabled():
@@ -3647,16 +3737,23 @@ class ProtocolCatalog:
         result = requote_unverified_items(
             draft, model,
             groups=[tuple(piece.page_numbers) for piece in pieces] or None,
-            one_reading=not pieces, concurrency=analysis_piece_concurrency())
+            concurrency=analysis_piece_concurrency(), time_limit=REQUOTE_TIME_LIMIT_SECONDS)
         if not result.questions:
             return draft
+        self._record_requote(revision, analysis_id, result)
+        return result.draft
+
+    def _record_requote(
+        self, revision: ProtocolRevisionRecord, analysis_id: str, result: Any,
+        **extra: object,
+    ) -> None:
         summary = result.summary()
         self.store.append_event(
             f"analysis-requote-{analysis_id}",
             revision.experiment_id,
             revision.revision_number,
             _REQUOTE_EVENT,
-            {"status": "completed", "analysis_id": analysis_id, **summary},
+            {"status": "completed", "analysis_id": analysis_id, **summary, **extra},
         )
         logging.getLogger(__name__).info(
             "protocol.analysis.evidence_requote protocol_id=%s questions=%d items=%d "
@@ -3665,7 +3762,156 @@ class ProtocolCatalog:
             summary["items_requoted"], len(result.calls),
             sum(1 for call in result.calls if call.get("status") != "answered"),
         )
-        return result.draft
+
+    def _requote_after_storing(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        model: ProtocolAnalysisModel,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> None:
+        """Ask about the refused items once more after the cards are shown.
+
+        Lane AN5, decision 3 (human decision 2026-10-20). The analysis waits
+        for a person already; while this runs its line says "원문 위치를 다시
+        찾는 중". The calls are waited for ``REQUOTE_TIME_LIMIT_SECONDS`` at
+        most (a call not back leaves its cards as they are). Then
+        (``_close_requoted_cards``) each item kept closes its card as "원문
+        위치를 다시 찾아 확인했어요" -- one more ledger event; nothing stored
+        before changes -- except a card a person answered meanwhile, which
+        stays theirs, and one whose values on an OCR page would ask on a card
+        of their own. When that closes every card and nobody has touched
+        them, the analysis passes as it would have with the items found the
+        first time.
+        """
+
+        pending = self._review_pending_event(revision)
+        if pending is None:
+            return
+        self.store.append_event(
+            f"analysis-requote-started-{analysis_id}",
+            revision.experiment_id,
+            revision.revision_number,
+            _REQUOTE_STARTED_EVENT,
+            {"status": "running", "analysis_id": analysis_id,
+             "review_pending_event": pending.event_id,
+             "time_limit_seconds": REQUOTE_TIME_LIMIT_SECONDS},
+        )
+        try:
+            result = requote_unverified_items(
+                draft, model,
+                groups=[tuple(piece.page_numbers) for piece in pieces] or None,
+                concurrency=analysis_piece_concurrency(), time_limit=REQUOTE_TIME_LIMIT_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - the cards stay as they are
+            self.store.append_event(
+                f"analysis-requote-{analysis_id}",
+                revision.experiment_id,
+                revision.revision_number,
+                _REQUOTE_EVENT,
+                {"status": "failed", "analysis_id": analysis_id,
+                 "review_pending_event": pending.event_id, "failure_code": type(exc).__name__},
+            )
+            logging.getLogger(__name__).warning(
+                "protocol.analysis.evidence_requote_failed protocol_id=%s error=%s",
+                revision.experiment_id, type(exc).__name__)
+            return
+        self._close_requoted_cards(revision, pending, draft, result, analysis_id, pieces=pieces)
+
+    def _close_requoted_cards(
+        self,
+        revision: ProtocolRevisionRecord,
+        pending: Any,
+        draft: ProtocolAnalysisDraft,
+        result: Any,
+        analysis_id: str,
+        *,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> None:
+        """Close the cards of the items the re-ask kept (lane AN5, decision 3)."""
+
+        extra: dict[str, object] = {"review_pending_event": pending.event_id}
+        current = self._review_pending_event(revision)
+        if current is None or current.event_id != pending.event_id:
+            # Registered, analysed again or passed meanwhile: nothing to close.
+            self._record_requote(revision, analysis_id, result, **extra, closed="superseded")
+            return
+        target = self._review_target(revision)
+        decisions, memos = (
+            self._review_decisions(revision, target) if target is not None else ({}, {}))
+        answered = sorted(set(result.kept_items) & set(decisions))
+        if answered:
+            # "사람이 이미 답한 카드는 그대로 둔다".
+            result = resettle_requote(result, answered, outcome=REQUOTE_ANSWERED_BY_PERSON)
+        result, closed_draft = self._with_requoted_ocr_values(revision, draft, result)
+        kept = result.kept_items
+        if answered:
+            extra["answered_by_person"] = answered
+        if not kept:
+            self._record_requote(revision, analysis_id, result, **extra)
+            return
+        closed = [
+            {"item": entry["item"], "field": entry["field"], "page": entry["page"],
+             "reason": entry["reason"], "reason_ko": REQUOTE_CLOSED_KO}
+            for entry in closed_draft.auto_resolved
+            if entry.get("reason") == AUTO_RESOLVED_REQUOTED
+        ]
+        if not closed_draft.review_flags and not decisions and not memos:
+            self._record_requote(revision, analysis_id, result, **extra, closed="all")
+            self._store_passed_analysis(revision, closed_draft, analysis_id, pieces=pieces)
+            return
+        self.store.append_event(
+            f"analysis-cards-closed-{analysis_id}",
+            revision.experiment_id,
+            revision.revision_number,
+            _REQUOTE_CLOSED_EVENT,
+            {"review_pending_event": pending.event_id, "analysis_id": analysis_id,
+             "closed": closed, **self._review_pending_record(closed_draft, pieces)},
+        )
+        self._record_requote(revision, analysis_id, result, **extra, closed="some")
+        logging.getLogger(__name__).info(
+            "protocol.analysis.review_cards_closed protocol_id=%s closed=%d left=%d",
+            revision.experiment_id, len(closed),
+            len({flag.item_id for flag in closed_draft.review_flags}),
+        )
+
+    def _with_requoted_ocr_values(
+        self, revision: ProtocolRevisionRecord, draft: ProtocolAnalysisDraft, result: Any,
+    ) -> tuple[Any, ProtocolAnalysisDraft]:
+        """The re-ask's result, and its draft with the OCR values read again.
+
+        A quote kept on an OCR page now states values the first pass left to
+        its card (lane RV2, decision b). Where reading the values again with
+        it gives the same OCR cards, its own values settled by both engines
+        are recorded as such; where it would change a card or open one, the
+        items kept on OCR pages are left to their cards.
+        """
+
+        before = [flag.public_dict() for flag in draft.review_flags
+                  if flag.reason == REVIEW_REASON_OCR_VALUE]
+        ocr_pages = {page.source_page_number for page in draft.extraction.pages if page.ocr_derived}
+        for _ in range(3):
+            if not result.kept_items:
+                return result, result.draft
+            base = replace(
+                result.draft,
+                review_flags=tuple(flag for flag in result.draft.review_flags
+                                   if flag.reason != REVIEW_REASON_OCR_VALUE),
+                auto_resolved=tuple(entry for entry in result.draft.auto_resolved
+                                    if entry.get("kind") != "ocr_value"),
+            )
+            checked = self._with_ocr_value_flags(revision, base)
+            if [flag.public_dict() for flag in checked.review_flags
+                    if flag.reason == REVIEW_REASON_OCR_VALUE] == before:
+                return result, checked
+            on_ocr = {
+                question.item_id for question in result.questions
+                if result.pages.get(question.question_id) in ocr_pages
+            } & set(result.kept_items)
+            result = resettle_requote(
+                result, on_ocr or set(result.kept_items), outcome=REQUOTE_OCR_VALUES)
+        return resettle_requote(result, set(result.kept_items), outcome=REQUOTE_OCR_VALUES), draft
 
     def _fewer_items(
         self,
@@ -3762,33 +4008,11 @@ class ProtocolCatalog:
         """
 
         protocol_id = revision.experiment_id
-        protocol = draft.protocol
-        if protocol.protocol_id != protocol_id:
-            protocol = replace(protocol, protocol_id=protocol_id)
-        pdf = protocol.metadata.pdf
-        stored = replace(protocol, metadata=replace(
-            protocol.metadata, pdf=replace(pdf, pages=())))
-        flags = draft.review_flags
         payload: dict[str, object] = {
             "status": "review_pending",
             "analysis_id": analysis_id,
-            "flags": [flag.public_dict() for flag in flags],
-            "needs_review_count": len({flag.item_id for flag in flags}),
-            "verified_evidence_count": draft.verified_evidence_count,
-            "capability_policy_id": draft.capability_policy_id,
-            "source_pages": [_text_sha256(page.text) for page in pdf.pages],
-            "protocol": _encode_stored_record(stored),
-            "readiness": _encode_stored_record(draft.readiness),
+            **self._review_pending_record(draft, pieces, protocol_id=protocol_id),
         }
-        if protocol.cleared_fields:
-            payload["cleared_fields"] = list(protocol.cleared_fields)
-        if pieces:
-            payload["pieces"] = [piece.public_dict() for piece in pieces]
-        if draft.response_repair is not None:
-            payload["response_repaired"] = draft.response_repair.public_dict()
-        if draft.auto_resolved:
-            # Lane RV2, decision b: what the server settled itself, and why.
-            payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
         self.store.append_event(
             f"analysis-review-pending-{analysis_id}",
             protocol_id,
@@ -3798,9 +4022,47 @@ class ProtocolCatalog:
         )
         logging.getLogger(__name__).info(
             "protocol.analysis.review_pending protocol_id=%s items=%d flags=%d",
-            protocol_id, payload["needs_review_count"], len(flags),
+            protocol_id, payload["needs_review_count"], len(draft.review_flags),
         )
         return self.get_entry(protocol_id)
+
+    @staticmethod
+    def _review_pending_record(
+        draft: ProtocolAnalysisDraft,
+        pieces: tuple[AnalysisPiece, ...] = (),
+        *,
+        protocol_id: str | None = None,
+    ) -> dict[str, object]:
+        """What a review-pending analysis is read back from: its protocol
+        without the pages, its items, readiness and settlements (lane RV, a;
+        lane AN5, decision 3 records it again with the cards it closed)."""
+
+        protocol = draft.protocol
+        if protocol_id is not None and protocol.protocol_id != protocol_id:
+            protocol = replace(protocol, protocol_id=protocol_id)
+        pdf = protocol.metadata.pdf
+        stored = replace(protocol, metadata=replace(
+            protocol.metadata, pdf=replace(pdf, pages=())))
+        flags = draft.review_flags
+        record: dict[str, object] = {
+            "flags": [flag.public_dict() for flag in flags],
+            "needs_review_count": len({flag.item_id for flag in flags}),
+            "verified_evidence_count": draft.verified_evidence_count,
+            "capability_policy_id": draft.capability_policy_id,
+            "source_pages": [_text_sha256(page.text) for page in pdf.pages],
+            "protocol": _encode_stored_record(stored),
+            "readiness": _encode_stored_record(draft.readiness),
+        }
+        if protocol.cleared_fields:
+            record["cleared_fields"] = list(protocol.cleared_fields)
+        if pieces:
+            record["pieces"] = [piece.public_dict() for piece in pieces]
+        if draft.response_repair is not None:
+            record["response_repaired"] = draft.response_repair.public_dict()
+        if draft.auto_resolved:
+            # Lane RV2, decision b: what the server settled itself, and why.
+            record["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
+        return record
 
     def _analyze_in_pieces(
         self,
@@ -4490,12 +4752,17 @@ class ProtocolCatalog:
         if latest.event_type == _REVIEW_PENDING_EVENT:
             protocol, readiness, flags, event = self.review_pending_analysis(
                 revision.experiment_id)
+            closed = _cards_closed_event(event, events)
             return _ReviewTarget(
                 kind="review_pending",
                 key={"kind": "review_pending", "event_id": event.event_id},
                 protocol=protocol, readiness=readiness, flags=flags,
                 recorded_at=event.recorded_at,
                 analysis_id=str((event.payload or {}).get("analysis_id") or ""),
+                closed={
+                    str(entry["item"]): {**entry, "recorded_at": closed.recorded_at}
+                    for entry in closed.payload.get("closed") or () if isinstance(entry, dict)
+                } if closed is not None else {},
             )
         analysis = self.store.get_analysis_revision(
             revision.experiment_id, revision.revision_number,
@@ -4764,6 +5031,13 @@ class ProtocolCatalog:
                 extra = {**(extra or {}), "readings": [
                     [{**step, "lines": _reading_lines(step, extraction)} for step in group]
                     for group in readings]}
+            closed = (target.closed or {}).get(item_id)
+            if closed is not None and not needs_review:
+                # Lane AN5, decision 3: the re-ask found its source after the
+                # card was shown, and closed it.
+                extra = {**(extra or {}), "closed": {
+                    "by": "server", "reason": closed.get("reason"), "label_ko": REQUOTE_CLOSED_KO,
+                    "page": closed.get("page"), "recorded_at": closed.get("recorded_at")}}
             return {
                 "item_id": item_id,
                 "kind": kind,
@@ -6031,6 +6305,8 @@ class _ReviewTarget:
     origins: dict[str, str] | None = None
     #: Step id -> the reviewer's timer seconds (None: no timer) of that version.
     timers: dict[str, int | None] | None = None
+    #: Item id -> the card the re-ask closed (lane AN5, decision 3).
+    closed: dict[str, dict[str, object]] | None = None
 
 
 def _safe_page_view(
@@ -6626,7 +6902,7 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     asked: list[dict[str, object] | list[dict[str, object]]] = []
     pages: dict[str, list[dict[str, object]]] = {}
     for item in items:
-        if not item.get("needs_review"):
+        if not item.get("needs_review") and not item.get("closed"):
             continue
         page_card = item.get("page_card") if item["kind"] == "ocr_value" else None
         if isinstance(page_card, str):
@@ -6645,8 +6921,30 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
                 "progress_ko": f"{position} / {len(asked)}",
             })
             continue
-        card_type, question, choices, shown = _card_choices(item)
         source = item.get("source") if isinstance(item.get("source"), dict) else None
+        closed = item.get("closed") if not item.get("needs_review") else None
+        if isinstance(closed, dict):
+            # Lane AN5, decision 3: closed by the re-ask -- in its place, marked
+            # decided, nothing to press; a person's own decision on it shows.
+            cards.append({
+                "card_id": item["item_id"], "item_id": item["item_id"],
+                "position": position, "total": len(asked),
+                "progress_ko": f"{position} / {len(asked)}",
+                "type": "requoted", "kind": item["kind"], "kind_ko": item["kind_ko"],
+                "step_label": item.get("step_label"),
+                "question_ko": REQUOTE_CLOSED_KO,
+                "reasons_ko": [], "shown": item.get("text"), "source": source, "choices": [],
+                "proposal": None, "change": None, "readings": None, "steps": None,
+                "memo_allowed": "memo" in item["allowed_actions"],
+                "decided": True,
+                "decision": item.get("decision") or {
+                    "action": "requoted", "value": None, "source_lines": None,
+                    "reviewer_name": None, "recorded_at": closed.get("recorded_at")},
+                "current": item.get("current"),
+                "closed_ko": closed.get("label_ko"),
+            })
+            continue
+        card_type, question, choices, shown = _card_choices(item)
         cards.append({
             "card_id": item["item_id"],
             "item_id": item["item_id"],
