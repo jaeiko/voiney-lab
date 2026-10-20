@@ -84,7 +84,7 @@ is there (human decision of 2026-10-13, lane PL; `PILOT_GUIDE.md` §1):
   `--check-only` exits 1, when that catalog is unreadable, holds any demo document
   (scope `demo`/`test_only` or a title containing "fictional", in any approval
   state), or has no approved, active `reference_only` document. Build it as
-  `APPROVED_DOCUMENT_OPERATIONS.md` §4 describes and require
+  `docs/DEPLOYMENT_RUNBOOK.md` §3 describes and require
   `./scripts/run_pilot.sh --check-only` to exit 0 before the session. A file that
   is there but unusable is never taken for "no catalog"; move it away to start
   without institution documents.
@@ -198,7 +198,7 @@ Use a non-hazardous or fictional workflow to verify:
    `PILOT_GUIDE.md` §5), and delete the backups and exports made in steps 2-3
    once they are no longer needed.
 6. Do not advance beyond a supervised pilot until the remaining gates -- an
-   identity provider, the field evaluation in `VOICE_FIELD_EVALUATION_PLAN.md`,
+   identity provider, the field evaluation in `.agent/testing_strategy.md` §5,
    and the providers' data-handling terms -- have owners and acceptance
    evidence.
 

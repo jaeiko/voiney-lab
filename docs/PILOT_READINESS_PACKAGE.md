@@ -119,9 +119,8 @@ Raw audio and full transcripts are not retained in analytics. Observations
 and evidence you explicitly record are stored as `observation_only` /
 `not_interpreted` — they become part of your experiment record but never
 silently become new instructions. Model reasoning and provider secrets are
-never logged. See the README (§7, "데이터와 외부 AI 처리") and
-`docs/BEHAVIOR_REFERENCE.md` ("Security and privacy boundaries") for the
-complete, code-enforced list.
+never logged. See `docs/FEATURES.md` (F18, "밖으로 나가는 것") and
+`.agent/security_rules.md` for the complete, code-enforced list.
 
 ### Known limitations (state these to every pilot participant)
 - Controlled-pilot system: not a validated GLP/GMP/clinical system, not a

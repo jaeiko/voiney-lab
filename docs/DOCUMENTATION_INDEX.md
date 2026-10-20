@@ -14,9 +14,9 @@
 |---|---|
 | [`README.md`](../README.md) | 한 문장 정의와 상태, 지금 흐름, 값과 설명의 원칙, 하지 않는 것, 역할별 공급자, 실행 방법, 테스트 기준, 데이터·외부 AI, 라이선스, 다음 계획 |
 | [`AGENTS.md`](../AGENTS.md), [`.agent/`](../.agent/) | 코드가 지켜야 할 규칙. `.agent/architecture.md` 가 지금 구조의 기준 |
-| [`BEHAVIOR_REFERENCE.md`](BEHAVIOR_REFERENCE.md) | 지금 동작의 상세(영어). 옛 README 의 절들을 옮겨 둔 것. README 다음 |
+| [`BEHAVIOR_REFERENCE.md`](archive/BEHAVIOR_REFERENCE.md) | 지금 동작의 상세(영어). 옛 README 의 절들을 옮겨 둔 것. README 다음 |
 | [`CLAUDE.md`](../CLAUDE.md) | 코딩 에이전트의 작업 규칙 |
-| [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) | 구성 요소, 상태 권한, 저장, 실패 처리 |
+| [`CURRENT_ARCHITECTURE.md`](archive/CURRENT_ARCHITECTURE.md) | 구성 요소, 상태 권한, 저장, 실패 처리 |
 | [`MIGRATION_NOTES.md`](MIGRATION_NOTES.md) | 저장 스키마와 설정 이름이 바뀐 기록 (지운 설정 포함) |
 | [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md) | 브랜치, 커밋, PR, 병합 규칙 |
 | [`VOICE_AND_TONE.md`](VOICE_AND_TONE.md) | 화면·음성 문구를 쓰는 규칙(해요체, 한 문장 한 뜻, 내부 말 금지, 단추는 동사)과 용어 사전. 새 문구에 적용한다. 지금 문구를 이 규칙대로 고치는 일은 아직 안 했다(2단계) |
@@ -38,13 +38,13 @@
 | [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | 증상별로 상태를 지키며 복구하는 법 (영어) |
 | [`APPROVED_DOCUMENT_OPERATIONS.md`](APPROVED_DOCUMENT_OPERATIONS.md) | 승인 안전 문서 카탈로그 만들기 — **선택**이다. 파일럿 실행기는 카탈로그가 없으면 `source_protocol_only` 로 시작하고, 있으면 점검한다. 단계 안전 카드도 이 카탈로그를 읽는다 (영어) |
 | [`PILOT_READINESS_PACKAGE.md`](PILOT_READINESS_PACKAGE.md) | 파일럿 점검표, KPI 정의, 참여자 안내, 중단 기준 (영어, 숫자는 날짜가 적힌 기록) |
-| [`VOICE_FIELD_EVALUATION_PLAN.md`](VOICE_FIELD_EVALUATION_PLAN.md) | 현장 음성 평가 계획 (영어, 아직 하지 않음) |
+| [`VOICE_FIELD_EVALUATION_PLAN.md`](archive/VOICE_FIELD_EVALUATION_PLAN.md) | 현장 음성 평가 계획 (영어, 아직 하지 않음) |
 
 ## 3. 설계·기록 — 지금 동작의 기준이 아니다
 
 | 문서 | 무엇인가 | 왜 이 자리에 있나 |
 |---|---|---|
-| [`ARCHITECTURE_MAP.md`](ARCHITECTURE_MAP.md) | Laboratory Workflow OS 이전의 구조 스냅샷 | `CLAUDE.md` 가 이 경로를 이름으로 가리킨다. 내용은 기록으로만 읽는다. 코드와 다르면 `.agent/architecture.md` 가 맞다 |
+| [`ARCHITECTURE_MAP.md`](archive/ARCHITECTURE_MAP.md) | Laboratory Workflow OS 이전의 구조 스냅샷 | `CLAUDE.md` 가 이 경로를 이름으로 가리킨다. 내용은 기록으로만 읽는다. 코드와 다르면 `.agent/architecture.md` 가 맞다 |
 | [`PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md`](PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md) | 분석의 단락 경계·완전성 의무에 대한 결함 기록과 설계 (스스로 "design only" 라고 적음) | 분석 작업이 다루는 영역의 설계라서 남김 |
 | [`APP_PLAN.md`](APP_PLAN.md) | 스토어 앱 계획(줄 APP0): 하이브리드·RN·네이티브 비교, 권한·심사 위험, 결제 규칙과 이용 권한 설계, 오프라인 단계, 앱 뼈대(`mobile/`)와 빌드, 사람이 할 일 | 조사와 뼈대뿐이고 앱은 아직 내지 않았다. 정책·수수료는 적힌 확인일 기준 |
 | [`course-archive/`](course-archive/) | 이 저장소가 시작된 강의 자료 | 기록으로만 둔다 |
