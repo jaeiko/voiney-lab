@@ -43,10 +43,12 @@ import math
 import os
 import re
 import secrets
+import shutil
 import sqlite3
+import tempfile
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -127,6 +129,12 @@ class AdminRequiredError(AccountError):
 
 class AccountNotFoundError(AccountError):
     code = "account_not_found"
+
+
+class LastAdminError(AccountError):
+    """The lab's only active administrator cannot leave (lane FX5, decision 2)."""
+
+    code = "last_admin"
 
 
 @dataclass(frozen=True)
@@ -651,11 +659,44 @@ class AccountStore:
             raise
         return self.account(account.account_id)
 
+    def switch_off_for_deletion(self, account_id: object, password: object, *, client: str = "") -> Account:
+        """The first step of an account deleting itself (lane FX5, decision 2).
+
+        The password is asked again and checked as a login is (a wrong one
+        counts toward the lock). Then, in one transaction, the lab's last
+        active administrator is refused and every other account is switched
+        off with its sessions -- so two administrators leaving at once cannot
+        both be the one who was not last.
+        """
+
+        account = self.account(account_id)
+        if not isinstance(password, str) or not password:
+            raise PasswordInvalidError("The password is needed again to delete the account.")
+        self.log_in(account.name, password, client=client)
+        now = self._stamp(self._now())
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            if account.admin and not self._connection.execute(
+                    "SELECT 1 FROM accounts WHERE organization_id=? AND admin=1 AND disabled=0 AND account_id<>?",
+                    (account.organization_id, account.account_id)).fetchone():
+                raise LastAdminError("This is the lab's last administrator.")
+            self._connection.execute(
+                "UPDATE accounts SET disabled=1,updated_at=? WHERE account_id=?", (now, account.account_id))
+            self._connection.execute(
+                "UPDATE sessions SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL",
+                (now, account.account_id))
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.account(account.account_id)
+
     def delete_account(self, account_id: object) -> dict[str, int]:
         """Remove the account and its own rows; the counts removed, by table."""
 
         account = self.account(account_id)
         counts: dict[str, int] = {}
+        self._connection.execute("PRAGMA secure_delete=ON")
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             counts["sessions"] = self._connection.execute(
@@ -795,3 +836,546 @@ class AccountStore:
             (self._stamp(self._now()), str(account_id)))
         self._connection.commit()
         return cursor.rowcount
+
+
+# --- Erasing one account's data (lane FX5, decisions 1-2, 2026-10-20) ---------------
+#
+# ``scripts/pilot_data_delete.py --account NAME`` (the operator, with a preview
+# and a confirmation word) and ``POST /api/auth/delete-account`` (the account
+# itself, with its password) delete the same things, so the scope is written
+# once, here. What goes: the account's experiment sessions with their events,
+# completed steps, observations and evidence (rows and files), the experiment
+# records bound to it, its pilot metrics rows, its settings, access records and
+# ownership rows, and the account with its sessions and login attempts. What the
+# lab shares stays -- the protocol list, a review version and the PI
+# confirmations left on a version or on another person's notebook -- and the
+# name written there becomes ``DELETED_ACCOUNT_LABEL`` (only the name fields:
+# words a person typed into a comment or a memo are left as they were). Every
+# deleting connection overwrites what it frees (``secure_delete``), and the
+# record of a deletion holds categories, counts and times, never a name.
+
+DELETED_ACCOUNT_LABEL = "(삭제된 계정)"
+DELETION_LOG_NAME = "deletion_log.jsonl"
+#: The stores' names as the deletion record writes them, relative to the pilot folder.
+WORKSPACE_ENTRY = "workspace/commercial_workspace.sqlite"
+EVIDENCE_ENTRY = "workspace/evidence/"
+REPORTS_ENTRY = "experiment_reports.sqlite"
+METRICS_ENTRY = "workspace/pilot_metrics.sqlite"
+ACCOUNTS_ENTRY = "workspace/accounts.sqlite"
+CATALOG_ENTRY = "protocol_workspace.sqlite"
+WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
+REPORTS_DATABASE_FILENAME = "experiment_reports.sqlite"
+CATALOG_DATABASE_FILENAME = "protocol_workspace.sqlite"
+#: Workspace tables emptied of the account's rows, in an order the foreign
+#: keys allow, with the column that names the account or its sessions.
+ACCOUNT_WORKSPACE_TABLES = (
+    ("experiment_evidence", "session_id"),
+    ("experiment_observations", "session_id"),
+    ("experiment_completed_steps", "session_id"),
+    ("experiment_session_events", "session_id"),
+    ("experiment_sessions", "owner_principal_id"),
+    ("experimenter_settings", "principal_id"),
+    ("admin_audit_events", "actor_principal_id"),
+    ("memberships", "principal_id"),
+)
+ACCOUNT_SHARED_RESOURCE_TYPES = ("experiment_session", "experiment_report")
+#: Name fields a review decision, a review version and a PI confirmation carry.
+_CATALOG_NAME_FIELDS = frozenset({"reviewer_name", "decided_by"})
+_CATALOG_PI_EVENT = "protocol_review_version_pi_confirmed"
+_REPORT_PI_EVENT = "pi_confirmed"
+
+
+@dataclass(frozen=True)
+class AccountDataLocations:
+    """Where the stores are. ``None`` for a store this deployment does not have."""
+
+    workspace_dir: Path
+    reports_db: Path | None = None
+    catalog_db: Path | None = None
+    log_path: Path | None = None
+
+    @classmethod
+    def pilot_folder(cls, data_dir: Path | str) -> "AccountDataLocations":
+        """The pilot folder's layout (``scripts/run_pilot.sh``: data/runtime/pilot)."""
+
+        folder = Path(data_dir)
+        return cls(
+            workspace_dir=folder / "workspace", reports_db=folder / REPORTS_DATABASE_FILENAME,
+            catalog_db=folder / CATALOG_DATABASE_FILENAME, log_path=folder / DELETION_LOG_NAME)
+
+    @property
+    def accounts_db(self) -> Path:
+        return self.workspace_dir / ACCOUNTS_DATABASE_FILENAME
+
+    @property
+    def workspace_db(self) -> Path:
+        return self.workspace_dir / WORKSPACE_DATABASE_FILENAME
+
+    @property
+    def metrics_db(self) -> Path:
+        from voiney_lab.pilot_metrics import PILOT_METRICS_FILENAME
+
+        return self.workspace_dir / PILOT_METRICS_FILENAME
+
+
+@dataclass
+class AccountEntry:
+    """One store's share of an account's data: row counts, row keys and files."""
+
+    category: str
+    label: str
+    rows: dict[str, int] = field(default_factory=dict)
+    keys: list[str] = field(default_factory=list)
+    files: list[Path] = field(default_factory=list)
+
+
+def _copy_of(path: Path, temp: Path) -> Path:
+    copy = temp / path.name
+    shutil.copyfile(path, copy)
+    wal = Path(str(path) + "-wal")
+    if wal.is_file():
+        shutil.copyfile(wal, Path(str(copy) + "-wal"))
+    return copy
+
+
+def _open_sqlite(path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(path, timeout=10)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _in_clause(values: list[str]) -> tuple[str, tuple[str, ...]]:
+    return ("(" + ",".join("?" for _ in values) + ")", tuple(values)) if values else ("(NULL)", ())
+
+
+def _without_name(value: object, fields: frozenset[str], target: str) -> tuple[object, int]:
+    """``value`` with every ``fields`` string that is the account's name replaced; and how many were."""
+
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        changed = 0
+        for key, item in value.items():
+            if key in fields and isinstance(item, str) and name_key(item) == target:
+                result[key] = DELETED_ACCOUNT_LABEL
+                changed += 1
+            else:
+                result[key], more = _without_name(item, fields, target)
+                changed += more
+        return result, changed
+    if isinstance(value, list):
+        items = [_without_name(item, fields, target) for item in value]
+        return [item for item, _ in items], sum(count for _, count in items)
+    return value, 0
+
+
+def _name_fields(event_type: str, payload_event: str, own: frozenset[str]) -> frozenset[str]:
+    return frozenset({"name"}) if event_type == payload_event else own
+
+
+def _named_rows(
+    connection: sqlite3.Connection, table: str, key: str, type_column: str, payload_column: str,
+    fields_of: Callable[[str], frozenset[str]], name: str,
+) -> list[tuple[object, str]]:
+    """(row key, rewritten payload) of each row of ``table`` whose payload holds the name in a name field."""
+
+    found: list[tuple[object, str]] = []
+    target = name_key(name)
+    for row in connection.execute(
+            f"SELECT {key},{type_column},{payload_column} FROM {table} WHERE instr({payload_column},?)>0 ORDER BY {key}",
+            (name,)).fetchall():
+        try:
+            payload = json.loads(row[2])
+        except (TypeError, ValueError):
+            continue
+        rewritten, changed = _without_name(payload, fields_of(str(row[1])), target)
+        if changed:
+            found.append((row[0], json.dumps(
+                rewritten, ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
+    return found
+
+
+def _catalog_fields(event_type: str) -> frozenset[str]:
+    return _name_fields(event_type, _CATALOG_PI_EVENT, _CATALOG_NAME_FIELDS)
+
+
+def _report_fields(event_type: str) -> frozenset[str]:
+    return frozenset({"name"}) if event_type == _REPORT_PI_EVENT else frozenset()
+
+
+def account_data_inventory(
+    locations: AccountDataLocations, name: str, *, in_place: bool = False,
+) -> tuple[dict[str, object], list[AccountEntry], list[str]]:
+    """The account and what it left: (account facts, entries, notes).
+
+    Read from copies unless ``in_place`` (the deletion itself), so a preview
+    changes nothing. An unknown name is ``AccountNotFoundError``; a missing
+    account store is ``AccountError``.
+    """
+
+    from voiney_lab.pilot_metrics import PilotMetricsStore
+
+    if not locations.accounts_db.is_file():
+        raise AccountError("The account store is missing.")
+    with tempfile.TemporaryDirectory(prefix="account-data-") as temp_name:
+        temp = Path(temp_name)
+
+        def source(path: Path) -> Path:
+            return path if in_place else _copy_of(path, temp)
+
+        store = AccountStore.open(source(locations.accounts_db))
+        try:
+            account = store.account_by_name(name)
+            if account is None:
+                raise AccountNotFoundError("The account is unknown.")
+            principal_id = account.principal().principal_id
+            facts: dict[str, object] = {
+                "account_id": account.account_id, "name": account.name,
+                "organization_id": account.organization_id, "principal_id": principal_id,
+                "name_key": name_key(account.name),
+            }
+            accounts_entry = AccountEntry("account_store", "계정·로그인 세션·로그인 시도 (계정 저장소)")
+            connection = store._connection  # noqa: SLF001 - the erasure reads the store it will delete from
+            for table, column, value in (
+                ("sessions", "account_id", account.account_id),
+                ("login_attempts", "name_key", facts["name_key"]),
+            ):
+                keys = [str(row[0]) for row in connection.execute(
+                    f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (value,))]
+                accounts_entry.rows[table] = len(keys)
+                accounts_entry.keys.extend(f"{table}:{key}" for key in keys)
+            accounts_entry.rows["accounts"] = 1
+            accounts_entry.keys.append(f"accounts:{account.account_id}")
+        finally:
+            store.close()
+
+        entries: list[AccountEntry] = []
+        notes: list[str] = []
+        report_ids: list[str] = []
+        sessions: list[str] = []
+        blank_principal = False
+        if locations.workspace_db.is_file():
+            connection = _open_sqlite(source(locations.workspace_db))
+            try:
+                sessions = [str(row[0]) for row in connection.execute(
+                    "SELECT session_id FROM experiment_sessions WHERE owner_principal_id=? ORDER BY session_id",
+                    (principal_id,))]
+                clause, parameters = _in_clause(sessions)
+                experiments = AccountEntry("workspace_experiments", "실험 세션·사건·완료 단계·관찰·증거 기록 (작업공간)")
+                for table, column in ACCOUNT_WORKSPACE_TABLES[:5]:
+                    if column == "session_id":
+                        rows = connection.execute(
+                            f"SELECT rowid FROM {table} WHERE session_id IN {clause} ORDER BY rowid", parameters).fetchall()
+                    else:
+                        rows = connection.execute(
+                            f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (principal_id,)).fetchall()
+                    experiments.rows[table] = len(rows)
+                    experiments.keys.extend(f"{table}:{row[0]}" for row in rows)
+                evidence = AccountEntry("workspace_evidence_files", "증거 파일 (사진·문서)")
+                for row in connection.execute(
+                        f"SELECT storage_reference FROM experiment_evidence WHERE session_id IN {clause}", parameters):
+                    reference = str(row[0])
+                    if reference.startswith("/") or ".." in Path(reference).parts:
+                        continue
+                    file = locations.workspace_dir / reference
+                    if file.is_file() and not file.is_symlink():
+                        evidence.files.append(file)
+                evidence.rows["evidence_files"] = len(evidence.files)
+                records = AccountEntry("workspace_account_records", "실험자 설정·접근 기록·자원 소유·구성원·신원 (작업공간)")
+                for table, column in ACCOUNT_WORKSPACE_TABLES[5:]:
+                    rows = connection.execute(
+                        f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (principal_id,)).fetchall()
+                    records.rows[table] = len(rows)
+                    records.keys.extend(f"{table}:{row[0]}" for row in rows)
+                bindings = connection.execute(
+                    "SELECT rowid,resource_type,resource_id FROM resource_bindings WHERE owner_principal_id=? ORDER BY rowid",
+                    (principal_id,)).fetchall()
+                owned = [row for row in bindings if row["resource_type"] in ACCOUNT_SHARED_RESOURCE_TYPES]
+                shared = [row for row in bindings if row["resource_type"] not in ACCOUNT_SHARED_RESOURCE_TYPES]
+                records.rows["resource_bindings"] = len(owned)
+                records.keys.extend(f"resource_bindings:{row['rowid']}" for row in owned)
+                report_ids = [str(row["resource_id"]) for row in owned if row["resource_type"] == "experiment_report"]
+                principal_rows = connection.execute(
+                    "SELECT rowid FROM principals WHERE principal_id=?", (principal_id,)).fetchall()
+                if principal_rows and not shared:
+                    records.rows["principals"] = 1
+                    records.keys.append(f"principals:{principal_rows[0][0]}")
+                elif principal_rows:
+                    records.rows["principals"] = 0
+                    blank_principal = True
+                    notes.append(f"이 계정이 올린 프로토콜 {len(shared)}건은 연구실 공유라 남기고, "
+                                 "신원 행은 이름 없이 남깁니다")
+                entries.extend([experiments, evidence, records])
+            finally:
+                connection.close()
+        else:
+            notes.append("작업공간 저장소가 없습니다 (실험 세션 없음)")
+        if locations.reports_db is not None and locations.reports_db.is_file():
+            connection = _open_sqlite(source(locations.reports_db))
+            try:
+                if report_ids:
+                    clause, parameters = _in_clause(report_ids)
+                    reports = AccountEntry("experiment_records", "실험 기록 (실험 장부, 보고서 문장)")
+                    for table in ("experiment_report_prose", "experiment_report_events", "experiment_reports"):
+                        rows = connection.execute(
+                            f"SELECT rowid FROM {table} WHERE report_id IN {clause} ORDER BY rowid", parameters).fetchall()
+                        reports.rows[table] = len(rows)
+                        reports.keys.extend(f"{table}:{row[0]}" for row in rows)
+                    entries.append(reports)
+                named = _named_rows(
+                    connection, "experiment_report_events", "id", "event_type", "payload", _report_fields,
+                    account.name)
+                # A PI confirmation inside a record that is deleted anyway is not a rename.
+                named = [item for item in named if connection.execute(
+                    "SELECT report_id FROM experiment_report_events WHERE id=?", (item[0],)).fetchone()[0]
+                    not in report_ids]
+                if named:
+                    entry = AccountEntry(
+                        "report_pi_names", "다른 사람 기록에 남긴 PI 확인의 이름 (이름만 바꿈, 실험 기록)")
+                    entry.rows["experiment_report_events"] = len(named)
+                    entry.keys.extend(f"experiment_report_events:{key}" for key, _ in named)
+                    entries.append(entry)
+            finally:
+                connection.close()
+        if locations.catalog_db is not None and locations.catalog_db.is_file():
+            connection = _open_sqlite(source(locations.catalog_db))
+            try:
+                named = _named_rows(
+                    connection, "protocol_events", "sequence_id", "event_type", "payload_json", _catalog_fields,
+                    account.name)
+                if named:
+                    entry = AccountEntry(
+                        "protocol_catalog_names", "검토 결정·검토본·PI 확인에 적힌 이름 (이름만 바꿈, 프로토콜 카탈로그)")
+                    entry.rows["protocol_events"] = len(named)
+                    entry.keys.extend(f"protocol_events:{key}" for key, _ in named)
+                    entries.append(entry)
+            finally:
+                connection.close()
+        if locations.metrics_db.is_file():
+            found = PilotMetricsStore(source(locations.metrics_db)).account_row_ids(principal_id)
+            if found:
+                metrics = AccountEntry("pilot_metrics", "파일럿 지표 (턴·표시·프로토콜 사건·평점)")
+                for table, ids in found.items():
+                    metrics.rows[table] = len(ids)
+                    metrics.keys.extend(f"{table}:{key}" for key in ids)
+                entries.append(metrics)
+        entries.append(accounts_entry)
+    facts["report_ids"] = report_ids
+    facts["sessions"] = sessions
+    facts["blank_principal"] = blank_principal
+    return facts, entries, notes
+
+
+def _lift_triggers(connection: sqlite3.Connection, tables: list[str], verb: str) -> list[str]:
+    """Drop the append-only ``verb`` ("DELETE" or "UPDATE") triggers of ``tables``; their SQL, to put back."""
+
+    kept: list[str] = []
+    for table in tables:
+        for row in connection.execute(
+                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND sql LIKE ?",
+                (table, f"%BEFORE {verb}%")).fetchall():
+            connection.execute(f'DROP TRIGGER "{str(row[0]).replace(chr(34), chr(34) * 2)}"')
+            kept.append(str(row[1]))
+    return kept
+
+
+def _failed(record: dict[str, object], exc: Exception) -> None:
+    record["result"] = "failed"
+    record["error"] = type(exc).__name__
+
+
+def _rename_rows(
+    path: Path, table: str, key: str, column: str, entry: AccountEntry, rewritten: dict[str, str], lift: bool,
+) -> None:
+    """Write each row's payload with the name replaced; the append-only guard is lifted and put back."""
+
+    connection = _open_sqlite(path)
+    try:
+        connection.execute("PRAGMA secure_delete=ON")
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            triggers = _lift_triggers(connection, [table], "UPDATE") if lift else []
+            for row_key, payload in rewritten.items():
+                connection.execute(f"UPDATE {table} SET {column}=? WHERE {key}=?", (payload, row_key))
+            for sql in triggers:
+                connection.execute(sql)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    finally:
+        connection.close()
+
+
+def delete_account_data(
+    locations: AccountDataLocations, facts: dict[str, object], entries: list[AccountEntry],
+) -> list[dict[str, object]]:
+    """Delete the rows and files the inventory listed; one record per store, counts only."""
+
+    from voiney_lab.pilot_metrics import PilotMetricsStore
+
+    results: list[dict[str, object]] = []
+    by_category = {entry.category: entry for entry in entries}
+    principal_id = str(facts["principal_id"])
+    if "workspace_experiments" in by_category:
+        record: dict[str, object] = {"category": "workspace_records", "entry": WORKSPACE_ENTRY,
+                                     "rows": {**by_category["workspace_experiments"].rows,
+                                              **by_category["workspace_account_records"].rows}}
+        connection = _open_sqlite(locations.workspace_db)
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA secure_delete=ON")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                tables = [table for table, _ in ACCOUNT_WORKSPACE_TABLES] + ["resource_bindings"]
+                triggers = _lift_triggers(connection, tables, "DELETE")
+                clause, parameters = _in_clause(list(facts["sessions"]))  # type: ignore[arg-type]
+                for table, column in ACCOUNT_WORKSPACE_TABLES:
+                    if column == "session_id":
+                        connection.execute(f"DELETE FROM {table} WHERE session_id IN {clause}", parameters)
+                    else:
+                        connection.execute(f"DELETE FROM {table} WHERE {column}=?", (principal_id,))
+                types, type_parameters = _in_clause(list(ACCOUNT_SHARED_RESOURCE_TYPES))
+                connection.execute(
+                    f"DELETE FROM resource_bindings WHERE owner_principal_id=? AND resource_type IN {types}",
+                    (principal_id, *type_parameters))
+                blanked = ("UPDATE principals SET display_name=?,subject=? WHERE principal_id=?",
+                           (DELETED_ACCOUNT_LABEL,
+                            "deleted:" + hashlib.sha256(principal_id.encode("utf-8")).hexdigest()[:16], principal_id))
+                if facts["blank_principal"]:
+                    connection.execute(*blanked)
+                else:
+                    # An identity row something else still points at is blanked, not deleted.
+                    connection.execute("SAVEPOINT identity_row")
+                    try:
+                        connection.execute("DELETE FROM principals WHERE principal_id=?", (principal_id,))
+                        connection.execute("RELEASE identity_row")
+                    except sqlite3.IntegrityError:
+                        connection.execute("ROLLBACK TO identity_row")
+                        connection.execute("RELEASE identity_row")
+                        connection.execute(*blanked)
+                for sql in triggers:
+                    connection.execute(sql)
+                connection.commit()
+                record["result"] = "deleted"
+            except sqlite3.Error as exc:
+                connection.rollback()
+                _failed(record, exc)
+        finally:
+            connection.close()
+        results.append(record)
+        files = by_category["workspace_evidence_files"].files
+        file_record: dict[str, object] = {"category": "workspace_evidence_files", "entry": EVIDENCE_ENTRY,
+                                          "files": len(files), "bytes": sum(f.stat().st_size for f in files if f.exists()),
+                                          "result": "deleted"}
+        for file in files:
+            try:
+                file.unlink()
+                parent = file.parent
+                while parent != locations.workspace_dir and parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
+            except OSError as exc:
+                _failed(file_record, exc)
+        results.append(file_record)
+    if "experiment_records" in by_category and locations.reports_db is not None:
+        record = {"category": "experiment_records", "entry": REPORTS_ENTRY, "rows": by_category["experiment_records"].rows}
+        connection = _open_sqlite(locations.reports_db)
+        try:
+            connection.execute("PRAGMA secure_delete=ON")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                clause, parameters = _in_clause(list(facts["report_ids"]))  # type: ignore[arg-type]
+                for table in ("experiment_report_prose", "experiment_report_events", "experiment_reports"):
+                    connection.execute(f"DELETE FROM {table} WHERE report_id IN {clause}", parameters)
+                connection.commit()
+                record["result"] = "deleted"
+            except sqlite3.Error as exc:
+                connection.rollback()
+                _failed(record, exc)
+        finally:
+            connection.close()
+        results.append(record)
+    for category, entry_name, path, table, key, type_column, column, fields_of, lift in (
+        ("report_pi_names", REPORTS_ENTRY, locations.reports_db, "experiment_report_events", "id",
+         "event_type", "payload", _report_fields, False),
+        ("protocol_catalog_names", CATALOG_ENTRY, locations.catalog_db, "protocol_events", "sequence_id",
+         "event_type", "payload_json", _catalog_fields, True),
+    ):
+        if category not in by_category or path is None:
+            continue
+        record = {"category": category, "entry": entry_name, "rows": by_category[category].rows}
+        try:
+            wanted = {key_text.split(":", 1)[1] for key_text in by_category[category].keys}
+            connection = _open_sqlite(path)
+            try:
+                found = _named_rows(connection, table, key, type_column, column, fields_of, str(facts["name"]))
+            finally:
+                connection.close()
+            _rename_rows(path, table, key, column, by_category[category],
+                         {row_key: payload for row_key, payload in found if str(row_key) in wanted}, lift)
+            record["result"] = "deleted"
+        except sqlite3.Error as exc:
+            _failed(record, exc)
+        results.append(record)
+    if "pilot_metrics" in by_category:
+        record = {"category": "pilot_metrics", "entry": METRICS_ENTRY, "rows": by_category["pilot_metrics"].rows}
+        try:
+            PilotMetricsStore(locations.metrics_db).delete_account_rows(principal_id)
+            record["result"] = "deleted"
+        except sqlite3.Error as exc:
+            _failed(record, exc)
+        results.append(record)
+    record = {"category": "account_store", "entry": ACCOUNTS_ENTRY, "rows": by_category["account_store"].rows}
+    store = AccountStore.open(locations.accounts_db)
+    try:
+        store.delete_account(str(facts["account_id"]))
+        record["result"] = "deleted"
+    except (AccountError, sqlite3.Error) as exc:
+        _failed(record, exc)
+    finally:
+        store.close()
+    results.append(record)
+    return results
+
+
+def erase_account_data(locations: AccountDataLocations, account_id: str) -> list[dict[str, object]]:
+    """Delete everything of one account from every store (the account deleting itself); the records.
+
+    The account may already be switched off. An unknown id is
+    ``AccountNotFoundError`` and nothing is touched.
+    """
+
+    store = AccountStore.open(locations.accounts_db)
+    try:
+        name = store.account(account_id).name
+    finally:
+        store.close()
+    facts, entries, _ = account_data_inventory(locations, name, in_place=True)
+    return delete_account_data(locations, facts, entries)
+
+
+def _overall(results: list[dict[str, object]]) -> str:
+    done = [item["result"] == "deleted" for item in results]
+    return "deleted" if all(done) else "partial" if any(done) else "failed"
+
+
+def write_deletion_log(
+    path: Path, *, word: str, results: list[dict[str, object]], scope: str = "account", via: str = "tool",
+) -> None:
+    """Append one record: when, which store, how many -- no file name from the data, no name, no id."""
+
+    record = {
+        "deleted_at": _utc_now().isoformat(timespec="seconds"),
+        "data_dir": str(Path(path).parent),
+        "scope": scope,
+        "via": via,
+        "confirmation": word,
+        "result": _overall(results),
+        "categories": results,
+    }
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

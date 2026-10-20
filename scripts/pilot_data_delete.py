@@ -123,23 +123,10 @@ class RefusedError(RuntimeError):
     """The request is refused before anything is deleted (exit status 2)."""
 
 
-# --- One account's data (lane ON, decision ①) ---------------------------------
-WORKSPACE_DB = "workspace/commercial_workspace.sqlite"
-ACCOUNTS_DB = "workspace/accounts.sqlite"
-REPORTS_DB = "experiment_reports.sqlite"
-METRICS_DB = "workspace/pilot_metrics.sqlite"
-#: Workspace tables emptied of the account's rows, in an order the foreign
-#: keys allow, with the column that names the account or its sessions.
-ACCOUNT_WORKSPACE_TABLES = (
-    ("experiment_evidence", "session_id"),
-    ("experiment_observations", "session_id"),
-    ("experiment_completed_steps", "session_id"),
-    ("experiment_session_events", "session_id"),
-    ("experiment_sessions", "owner_principal_id"),
-    ("experimenter_settings", "principal_id"),
-    ("admin_audit_events", "actor_principal_id"),
-    ("memberships", "principal_id"),
-)
+# --- One account's data (lane ON, decision ①; one scope with the server's, lane FX5) -
+# What an account leaves, and how it is deleted, is written once in
+# ``voiney_lab.accounts`` (``account_data_inventory``, ``delete_account_data``):
+# the account deleting itself in the app deletes the same things.
 ACCOUNT_TABLE_LABELS = {
     **TABLE_LABELS,
     "admin_audit_events": "접근 기록",
@@ -154,169 +141,30 @@ ACCOUNT_TABLE_LABELS = {
     "pilot_protocol_events": "지표 프로토콜 사건",
     "pilot_feedback": "지표 평점",
 }
-ACCOUNT_SHARED_RESOURCE_TYPES = ("experiment_session", "experiment_report")
-
-
-@dataclass
-class AccountEntry:
-    category: str
-    label: str
-    rows: dict[str, int] = field(default_factory=dict)
-    keys: list[str] = field(default_factory=list)
-    files: list[Path] = field(default_factory=list)
-
-
-def _copy_of(path: Path, temp: Path) -> Path:
-    copy = temp / path.name
-    shutil.copyfile(path, copy)
-    wal = Path(str(path) + "-wal")
-    if wal.is_file():
-        shutil.copyfile(wal, Path(str(copy) + "-wal"))
-    return copy
-
-
-def _connect(path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(path)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def _in_clause(values: list[str]) -> tuple[str, tuple[str, ...]]:
-    return ("(" + ",".join("?" for _ in values) + ")", tuple(values)) if values else ("(NULL)", ())
 
 
 def account_inventory(data_dir: Path, name: str, *, in_place: bool = False):
-    """The account and what it left: (account facts, entries, notes).
-
-    Read from copies unless ``in_place`` (the deletion itself), so the
-    preview changes nothing in the pilot folder.
-    """
+    """The account and what it left: (account facts, entries, notes), as ``accounts.account_data_inventory``."""
 
     from voiney_lab import accounts as acc
-    from voiney_lab.pilot_metrics import PilotMetricsStore
 
-    accounts_path = data_dir / ACCOUNTS_DB
-    if not accounts_path.is_file():
-        raise RefusedError(f"계정 저장소가 없습니다: {accounts_path}")
-    with tempfile.TemporaryDirectory(prefix="pilot-account-") as temp_name:
-        temp = Path(temp_name)
-        store = acc.AccountStore.open(accounts_path if in_place else _copy_of(accounts_path, temp))
-        try:
-            account = store.account_by_name(name)
-            if account is None:
-                raise RefusedError(f"그런 계정이 없습니다: {acc.normalize_name(name)}")
-            principal_id = account.principal().principal_id
-            facts = {
-                "account_id": account.account_id, "name": account.name,
-                "organization_id": account.organization_id, "principal_id": principal_id,
-                "name_key": acc.name_key(account.name),
-            }
-            accounts_entry = AccountEntry("account_store", "계정·로그인 세션·로그인 시도 (계정 저장소)")
-            connection = store._connection  # noqa: SLF001 - the tool reads the store it will delete from
-            for table, column, value in (
-                ("sessions", "account_id", account.account_id),
-                ("login_attempts", "name_key", facts["name_key"]),
-            ):
-                keys = [str(row[0]) for row in connection.execute(
-                    f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (value,))]
-                accounts_entry.rows[table] = len(keys)
-                accounts_entry.keys.extend(f"{table}:{key}" for key in keys)
-            accounts_entry.rows["accounts"] = 1
-            accounts_entry.keys.append(f"accounts:{account.account_id}")
-        finally:
-            store.close()
-
-        entries: list[AccountEntry] = []
-        notes: list[str] = []
-        report_ids: list[str] = []
-        workspace_path = data_dir / WORKSPACE_DB
-        if workspace_path.is_file():
-            connection = _connect(workspace_path if in_place else _copy_of(workspace_path, temp))
-            try:
-                sessions = [str(row[0]) for row in connection.execute(
-                    "SELECT session_id FROM experiment_sessions WHERE owner_principal_id=? ORDER BY session_id",
-                    (principal_id,))]
-                clause, parameters = _in_clause(sessions)
-                experiments = AccountEntry("workspace_experiments", "실험 세션·사건·완료 단계·관찰·증거 기록 (작업공간)")
-                for table, column in ACCOUNT_WORKSPACE_TABLES[:5]:
-                    if column == "session_id":
-                        rows = connection.execute(
-                            f"SELECT rowid FROM {table} WHERE session_id IN {clause} ORDER BY rowid", parameters).fetchall()
-                    else:
-                        rows = connection.execute(
-                            f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (principal_id,)).fetchall()
-                    experiments.rows[table] = len(rows)
-                    experiments.keys.extend(f"{table}:{row[0]}" for row in rows)
-                evidence = AccountEntry("workspace_evidence_files", "증거 파일 (사진·문서)")
-                for row in connection.execute(
-                        f"SELECT storage_reference FROM experiment_evidence WHERE session_id IN {clause}", parameters):
-                    reference = str(row[0])
-                    if reference.startswith("/") or ".." in Path(reference).parts:
-                        continue
-                    file = data_dir / "workspace" / reference
-                    if file.is_file() and not file.is_symlink():
-                        evidence.files.append(file)
-                evidence.rows["evidence_files"] = len(evidence.files)
-                records = AccountEntry("workspace_account_records", "실험자 설정·접근 기록·자원 소유·구성원·신원 (작업공간)")
-                for table, column in ACCOUNT_WORKSPACE_TABLES[5:]:
-                    rows = connection.execute(
-                        f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (principal_id,)).fetchall()
-                    records.rows[table] = len(rows)
-                    records.keys.extend(f"{table}:{row[0]}" for row in rows)
-                bindings = connection.execute(
-                    "SELECT rowid,resource_type,resource_id FROM resource_bindings WHERE owner_principal_id=? ORDER BY rowid",
-                    (principal_id,)).fetchall()
-                owned = [row for row in bindings if row["resource_type"] in ACCOUNT_SHARED_RESOURCE_TYPES]
-                shared = [row for row in bindings if row["resource_type"] not in ACCOUNT_SHARED_RESOURCE_TYPES]
-                records.rows["resource_bindings"] = len(owned)
-                records.keys.extend(f"resource_bindings:{row['rowid']}" for row in owned)
-                report_ids = [str(row["resource_id"]) for row in owned if row["resource_type"] == "experiment_report"]
-                principal_rows = connection.execute(
-                    "SELECT rowid FROM principals WHERE principal_id=?", (principal_id,)).fetchall()
-                if principal_rows and not shared:
-                    records.rows["principals"] = 1
-                    records.keys.append(f"principals:{principal_rows[0][0]}")
-                elif principal_rows:
-                    records.rows["principals"] = 0
-                    notes.append(f"이 계정이 올린 프로토콜 {len(shared)}건은 연구실 공유라 남기고, "
-                                 "신원 행은 이름 없이 남깁니다")
-                entries.extend([experiments, evidence, records])
-            finally:
-                connection.close()
-        else:
-            notes.append("작업공간 저장소가 없습니다 (실험 세션 없음)")
-        reports_path = data_dir / REPORTS_DB
-        if reports_path.is_file() and report_ids:
-            connection = _connect(reports_path if in_place else _copy_of(reports_path, temp))
-            try:
-                clause, parameters = _in_clause(report_ids)
-                reports = AccountEntry("experiment_records", "실험 기록 (실험 장부, 보고서 문장)")
-                for table in ("experiment_report_prose", "experiment_report_events", "experiment_reports"):
-                    rows = connection.execute(
-                        f"SELECT rowid FROM {table} WHERE report_id IN {clause} ORDER BY rowid", parameters).fetchall()
-                    reports.rows[table] = len(rows)
-                    reports.keys.extend(f"{table}:{row[0]}" for row in rows)
-                entries.append(reports)
-            finally:
-                connection.close()
-        metrics_path = data_dir / METRICS_DB
-        if metrics_path.is_file():
-            metrics_store = PilotMetricsStore(metrics_path if in_place else _copy_of(metrics_path, temp))
-            found = metrics_store.account_row_ids(principal_id)
-            if found:
-                metrics = AccountEntry("pilot_metrics", "파일럿 지표 (턴·표시·프로토콜 사건·평점)")
-                for table, ids in found.items():
-                    metrics.rows[table] = len(ids)
-                    metrics.keys.extend(f"{table}:{key}" for key in ids)
-                entries.append(metrics)
-        entries.append(accounts_entry)
-        facts["report_ids"] = report_ids
-        facts["sessions"] = sessions if workspace_path.is_file() else []
-        facts["blank_principal"] = bool(workspace_path.is_file() and principal_rows and shared)
-    return facts, entries, notes
+    try:
+        return acc.account_data_inventory(acc.AccountDataLocations.pilot_folder(data_dir), name, in_place=in_place)
+    except acc.AccountNotFoundError as exc:
+        raise RefusedError(f"그런 계정이 없습니다: {acc.normalize_name(name)}") from exc
+    except acc.AccountError as exc:
+        raise RefusedError(f"계정 저장소가 없습니다: {data_dir / 'workspace' / acc.ACCOUNTS_DATABASE_FILENAME}") from exc
 
 
-def account_confirmation_word(facts: dict, entries: list[AccountEntry]) -> str:
+def delete_account_data(data_dir: Path, facts: dict, entries) -> list[dict[str, object]]:
+    """Delete the rows and files of the preview; one record per store."""
+
+    from voiney_lab import accounts as acc
+
+    return acc.delete_account_data(acc.AccountDataLocations.pilot_folder(data_dir), facts, entries)
+
+
+def account_confirmation_word(facts: dict, entries: list) -> str:
     """Six hex digits that name exactly the rows and files the preview listed."""
 
     digest = hashlib.sha256()
@@ -329,7 +177,7 @@ def account_confirmation_word(facts: dict, entries: list[AccountEntry]) -> str:
     return digest.hexdigest()[:6].upper()
 
 
-def render_account_preview(data_dir: Path, facts: dict, entries: list[AccountEntry], notes: list[str]) -> str:
+def render_account_preview(data_dir: Path, facts: dict, entries: list, notes: list[str]) -> str:
     lines = [
         "=== 파일럿 데이터 삭제 — 계정 하나 — 미리보기 (아무것도 지우지 않았습니다) ===",
         f"데이터 폴더: {data_dir}",
@@ -346,124 +194,6 @@ def render_account_preview(data_dir: Path, facts: dict, entries: list[AccountEnt
         lines.append("지우지 않는 것: " + note)
     lines.append("")
     return "\n".join(lines)
-
-
-def _lift_delete_triggers(connection: sqlite3.Connection, tables: list[str]) -> list[str]:
-    """Drop the append-only delete triggers of ``tables``; their SQL, to put back."""
-
-    kept: list[str] = []
-    for table in tables:
-        for row in connection.execute(
-                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND sql LIKE '%DELETE%'",
-                (table,)).fetchall():
-            connection.execute(f'DROP TRIGGER "{str(row[0]).replace(chr(34), chr(34) * 2)}"')
-            kept.append(str(row[1]))
-    return kept
-
-
-def delete_account_data(data_dir: Path, facts: dict, entries: list[AccountEntry]) -> list[dict[str, object]]:
-    """Delete the rows and files of the preview; one record per store."""
-
-    from voiney_lab import accounts as acc
-
-    results: list[dict[str, object]] = []
-    by_category = {entry.category: entry for entry in entries}
-    principal_id = facts["principal_id"]
-    workspace_path = data_dir / WORKSPACE_DB
-    if "workspace_experiments" in by_category:
-        record: dict[str, object] = {"category": "workspace_records", "entry": WORKSPACE_DB,
-                                     "rows": {**by_category["workspace_experiments"].rows,
-                                              **by_category["workspace_account_records"].rows}}
-        connection = _connect(workspace_path)
-        try:
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                tables = [table for table, _ in ACCOUNT_WORKSPACE_TABLES] + ["resource_bindings"]
-                triggers = _lift_delete_triggers(connection, tables)
-                clause, parameters = _in_clause(list(facts["sessions"]))
-                for table, column in ACCOUNT_WORKSPACE_TABLES:
-                    if column == "session_id":
-                        connection.execute(f"DELETE FROM {table} WHERE session_id IN {clause}", parameters)
-                    else:
-                        connection.execute(f"DELETE FROM {table} WHERE {column}=?", (principal_id,))
-                types, type_parameters = _in_clause(list(ACCOUNT_SHARED_RESOURCE_TYPES))
-                connection.execute(
-                    f"DELETE FROM resource_bindings WHERE owner_principal_id=? AND resource_type IN {types}",
-                    (principal_id, *type_parameters))
-                if facts["blank_principal"]:
-                    connection.execute(
-                        "UPDATE principals SET display_name='(삭제된 계정)',subject=? WHERE principal_id=?",
-                        ("deleted:" + hashlib.sha256(principal_id.encode("utf-8")).hexdigest()[:16], principal_id))
-                else:
-                    connection.execute("DELETE FROM principals WHERE principal_id=?", (principal_id,))
-                for sql in triggers:
-                    connection.execute(sql)
-                connection.commit()
-                record["result"] = "deleted"
-            except sqlite3.Error as exc:
-                connection.rollback()
-                record["result"] = "failed"
-                record["error"] = type(exc).__name__
-        finally:
-            connection.close()
-        results.append(record)
-        files = by_category["workspace_evidence_files"].files
-        file_record: dict[str, object] = {"category": "workspace_evidence_files", "entry": "workspace/evidence/",
-                                          "files": len(files), "bytes": sum(f.stat().st_size for f in files if f.exists()),
-                                          "result": "deleted"}
-        for file in files:
-            try:
-                file.unlink()
-                parent = file.parent
-                while parent != data_dir / "workspace" and parent.is_dir() and not any(parent.iterdir()):
-                    parent.rmdir()
-                    parent = parent.parent
-            except OSError as exc:
-                file_record["result"] = "failed"
-                file_record["error"] = type(exc).__name__
-        results.append(file_record)
-    if "experiment_records" in by_category:
-        record = {"category": "experiment_records", "entry": REPORTS_DB, "rows": by_category["experiment_records"].rows}
-        connection = _connect(data_dir / REPORTS_DB)
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                clause, parameters = _in_clause(list(facts["report_ids"]))
-                for table in ("experiment_report_prose", "experiment_report_events", "experiment_reports"):
-                    connection.execute(f"DELETE FROM {table} WHERE report_id IN {clause}", parameters)
-                connection.commit()
-                record["result"] = "deleted"
-            except sqlite3.Error as exc:
-                connection.rollback()
-                record["result"] = "failed"
-                record["error"] = type(exc).__name__
-        finally:
-            connection.close()
-        results.append(record)
-    if "pilot_metrics" in by_category:
-        from voiney_lab.pilot_metrics import PilotMetricsStore
-
-        record = {"category": "pilot_metrics", "entry": METRICS_DB, "rows": by_category["pilot_metrics"].rows}
-        try:
-            PilotMetricsStore(data_dir / METRICS_DB).delete_account_rows(principal_id)
-            record["result"] = "deleted"
-        except sqlite3.Error as exc:
-            record["result"] = "failed"
-            record["error"] = type(exc).__name__
-        results.append(record)
-    record = {"category": "account_store", "entry": ACCOUNTS_DB, "rows": by_category["account_store"].rows}
-    store = acc.AccountStore.open(data_dir / ACCOUNTS_DB)
-    try:
-        store.delete_account(facts["account_id"])
-        record["result"] = "deleted"
-    except (acc.AccountError, sqlite3.Error) as exc:
-        record["result"] = "failed"
-        record["error"] = type(exc).__name__
-    finally:
-        store.close()
-    results.append(record)
-    return results
 
 
 def run_account(arguments: argparse.Namespace, out) -> int:
@@ -764,6 +494,7 @@ def write_log(data_dir: Path, word: str, results: list[dict[str, object]], *, sc
         "deleted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "data_dir": str(data_dir),
         "scope": scope,
+        "via": "tool",
         "confirmation": word,
         "result": "deleted" if all(item["result"] == "deleted" for item in results) else "partial",
         "categories": results,
