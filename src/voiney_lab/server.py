@@ -13,6 +13,9 @@ from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -244,6 +247,7 @@ from voiney_lab.accounts import (
     AppAccessSettings,
     AuthSettings,
     InviteInvalidError,
+    LastAdminError,
     LoginLockedError,
     LoginRefusedError,
     PasswordInvalidError,
@@ -314,6 +318,16 @@ log=logging.getLogger("voiney_lab")
 _LOG_QUERY_KEY=re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _LOG_ANY_QUERY=re.compile(r"\?[^\s\"']+")
 _LOG_QUERY_REMOVED="?<query removed>"
+# Lane FX5, decision 4 (2026-10-20): the invite token is a path segment
+# (GET /api/auth/invites/<token>), which uvicorn's access line prints whole.
+_LOG_PATH_SECRET=re.compile(r"(/api/auth/invites/)[^/?#\s\"']+")
+_LOG_PATH_SECRET_REMOVED=r"\1<token removed>"
+
+
+def mask_path_secrets(value:object)->object:
+    """``value`` without the secret a URL path carries (an invite's token)."""
+
+    return _LOG_PATH_SECRET.sub(_LOG_PATH_SECRET_REMOVED,value) if isinstance(value,str) else value
 _UVICORN_ACCESS_LINE='%s - "%s %s HTTP/%s" %d'
 _UVICORN_WEBSOCKET_LINE='%s - "WebSocket %s"'
 
@@ -369,6 +383,12 @@ class UvicornQueryStringFilter(logging.Filter):
                     record.msg,record.args=strip(record.msg),()
             else:
                 record.msg=strip(record.msg)
+        # Whatever shape the record has, a path's secret is removed (decision 4).
+        if isinstance(record.args,tuple):
+            record.args=tuple(mask_path_secrets(value) for value in record.args)
+        elif isinstance(record.args,dict):
+            record.args={key:mask_path_secrets(value) for key,value in record.args.items()}
+        record.msg=mask_path_secrets(record.msg)
         return True
 
 
@@ -469,6 +489,22 @@ def _log_source_format_support()->None:
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_without_credentials(request:Request,exc:RequestValidationError):
+    """FastAPI's 422, but on the account routes without the value that was sent.
+
+    Lane FX5, decision 4 (2026-10-20): the default answer repeats each
+    rejected input, so a password (or a token) sent in a body of the wrong
+    shape -- a JSON list, say -- came straight back, into whatever keeps
+    responses. Every other route answers as FastAPI does.
+    """
+
+    if not request.url.path.startswith("/api/auth/"):
+        return await request_validation_exception_handler(request,exc)
+    errors=[{key:value for key,value in error.items() if key!="input"} for error in exc.errors()]
+    return JSONResponse(status_code=422,content={"detail":jsonable_encoder(errors)})
 
 
 @app.get("/healthz")
@@ -710,6 +746,7 @@ def _workspace_http_error(exc:Exception)->HTTPException:
             InviteInvalidError:404,AccountNotFoundError:404,AccountNameTakenError:409,
             AccountNameInvalidError:422,PasswordInvalidError:422,LoginRefusedError:401,
             LoginLockedError:429,AccountDisabledError:403,AdminRequiredError:403,
+            LastAdminError:409,
         }.get(type(exc),400)
         headers=(
             {"Retry-After":str(exc.retry_after_seconds)}
@@ -3197,6 +3234,102 @@ async def post_auth_account_disabled(
     log.info("auth.account_disabled account_id=%s disabled=%s by=%s",
              account_id,changed.disabled,account.account_id)
     return {"account":changed.public_dict()}
+
+
+# Lane FX5, decision 2 (2026-10-20): an account deletes itself (the store apps
+# ask for it inside the app). The password is asked again; the scope is the
+# operator tool's (accounts.py, "Erasing one account's data").
+_LAST_ADMIN_MESSAGE_KO="이 연구실의 마지막 관리자라서 계정을 지울 수 없어요. 다른 사람을 관리자로 초대한 뒤에 다시 해 주세요."
+_ACCOUNT_DELETED_MESSAGE_KO="계정과 그 계정이 남긴 기록을 지웠어요."
+
+
+def _account_data_locations()->accounts_module.AccountDataLocations:
+    """Where the stores an account leaves data in are, read from the server's own settings.
+
+    The deletion record sits beside the workspace folder -- the pilot folder
+    in ``scripts/run_pilot.sh``'s layout, where the operator's tool keeps its own.
+    """
+
+    settings=_workspace_settings()
+    if not settings.enabled or settings.data_dir is None:
+        raise IdentityConfigurationError("Accounts need the tenant workspace.")
+    reports=ExperimentReportSettings.from_environment()
+    protocol=_protocol_store_settings()
+    return accounts_module.AccountDataLocations(
+        workspace_dir=settings.data_dir,
+        reports_db=reports.database_path if reports.enabled else None,
+        catalog_db=(
+            protocol.data_dir/accounts_module.CATALOG_DATABASE_FILENAME
+            if protocol.enabled and protocol.data_dir is not None else None),
+        log_path=settings.data_dir.parent/accounts_module.DELETION_LOG_NAME,
+    )
+
+
+@app.post("/api/auth/delete-account")
+async def post_auth_delete_account(request:Request,body:dict[str,Any]=Body(...))->Response:
+    """Delete the signed-in account and what it left (lane FX5, decision 2).
+
+    Steps, in order: the password is checked as a login is (a wrong one
+    counts toward the lock); the lab's last administrator is refused; the
+    account is switched off (its sessions end); the data is deleted as the
+    operator's ``--account`` deletes it; the account is deleted; one record
+    of categories and counts is appended. A store that fails leaves the
+    account switched off -- nobody signs in to half an account -- and the
+    operator finishes it with the tool. Another lab's and another account's
+    data is never touched.
+    """
+
+    _accounts_only()
+    account=_REQUEST_ACCOUNT.get()
+    if account is None:
+        raise HTTPException(status_code=401,detail="authentication_required")
+    try:
+        locations=_account_data_locations()
+        # As the tool does: no record to write, nothing is deleted.
+        try:
+            probe=os.open(locations.log_path,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+            os.close(probe)
+        except OSError as exc:
+            log.warning("auth.account_delete_refused reason=deletion_log_unavailable")
+            raise HTTPException(status_code=503,detail="deletion_log_unavailable") from exc
+        store=_account_store()
+        try:
+            store.switch_off_for_deletion(
+                account.account_id,body.get("password"),client=_request_client(request))
+        finally:
+            store.close()
+    except LastAdminError:
+        log.info("auth.account_delete_refused reason=last_admin")
+        return JSONResponse(
+            status_code=409,content={"detail":"last_admin","message_ko":_LAST_ADMIN_MESSAGE_KO})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.info("auth.account_delete_refused reason=%s",getattr(exc,"code",type(exc).__name__))
+        raise _workspace_http_error(exc) from exc
+    try:
+        results=await asyncio.to_thread(
+            accounts_module.erase_account_data,locations,account.account_id)
+    except Exception as exc:  # noqa: BLE001 - recorded and answered below, never leaked
+        results=[{"category":"account_erasure","entry":"","result":"failed","error":type(exc).__name__}]
+    try:
+        accounts_module.write_deletion_log(
+            locations.log_path,word="password",results=results,scope="account",via="app")
+    except OSError as exc:
+        log.warning("auth.account_delete_log_failed error=%s",type(exc).__name__)
+    if any(item.get("result")!="deleted" for item in results):
+        log.warning(
+            "auth.account_delete_incomplete failed=%s",
+            ",".join(str(item.get("category")) for item in results if item.get("result")!="deleted"))
+        raise HTTPException(status_code=500,detail="account_delete_incomplete")
+    log.info("auth.account_deleted categories=%d",len(results))
+    response=JSONResponse(status_code=200,content={
+        "deleted":True,
+        "message_ko":_ACCOUNT_DELETED_MESSAGE_KO,
+        "removed":{item["category"]:item.get("rows",item.get("files")) for item in results},
+    })
+    _clear_session_cookie(response,request)
+    return response
 
 
 def _catalog_protocol_titles()->dict[str,str]:

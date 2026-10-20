@@ -1372,9 +1372,11 @@ temporary copy or open the file read-only. A write that fails is logged as
 `pilot.metrics.failed` and dropped.
 
 Deleting pilot data: the whole-folder path of `scripts/pilot_data_delete.py`
-deletes the file with the rest of the workspace folder. The `--account NAME`
-path does not read or change `pilot_metrics.sqlite` (that account's metric
-rows stay until the folder is deleted).
+deletes the file with the rest of the workspace folder. Until lane FX5
+(2026-10-20) the `--account NAME` path did not read or change
+`pilot_metrics.sqlite` (that account's metric rows stayed until the folder
+was deleted); since lane FX5 it lists, confirms and deletes them (see "Lane
+FX5" below).
 
 ### Reading older data
 
@@ -1386,6 +1388,72 @@ time before it are empty, not wrong. Nothing is filled in after the fact.
 
 Code from before lane LOG does not open the file; it stays in the folder,
 unread, and does no harm. Delete it by hand if it should go.
+
+## Lane FX5 (2026-10-20): an account's metrics deleted with it, an account that deletes itself, no credential kept
+
+No schema change (workspace schema 11, accounts schema 1 stay) and no stored
+row rewritten by the upgrade itself.
+
+- **Deleting one account.** `scripts/pilot_data_delete.py --account NAME`
+  now also lists, binds into its confirmation word and deletes that
+  account's rows in `pilot_metrics.sqlite` (`pilot_turns`, `pilot_marks`,
+  `pilot_protocol_events`, `pilot_feedback`, the rating's memo included; the
+  rows are found by `account_id` = the account's principal id). It also
+  rewrites, to `(삭제된 계정)`, the account's name where a record the lab
+  shares carries it: `reviewer_name` and `decided_by` of review decisions
+  and review versions (the catalog's `protocol_events` payloads, the
+  append-only update trigger lifted and put back in one transaction) and
+  the `name` of a PI confirmation on a review version (catalog) or on
+  someone else's notebook (`experiment_report_events`, `pi_confirmed`).
+  Only those name fields are rewritten; words a person typed are not. The
+  rewritten payloads are compact canonical JSON (sorted keys, no spaces).
+  Every deleting connection sets `PRAGMA secure_delete=ON`. An identity row
+  (`principals`) that something still points at -- a shared protocol, or the
+  lab's `organization_settings.updated_by_principal_id` -- is blanked, not
+  deleted (`display_name='(삭제된 계정)'`, hashed `subject`).
+- **One scope, two callers.** The inventory and the deletion moved from the
+  tool into `voiney_lab.accounts` (`AccountDataLocations`,
+  `account_data_inventory`, `delete_account_data`, `erase_account_data`,
+  `write_deletion_log`); the tool keeps the preview text, the confirmation
+  word, the open-file check and its log, and calls them. A deletion record
+  (`deletion_log.jsonl`, beside the pilot folder's other records) gains
+  `"via"`: `"tool"` or `"app"`; older lines have none. A record's overall
+  `result` is `deleted`, `partial` or (new) `failed` when no store deleted.
+- **`POST /api/auth/delete-account`** `{"password"}`: accounts mode,
+  signed in. `AccountStore.switch_off_for_deletion` checks the password as a
+  login is checked (the failure counts toward the lock), refuses the lab's
+  last active administrator (`409 last_admin` with `message_ko`) and switches
+  the account off with its sessions in one `BEGIN IMMEDIATE`; the server then
+  calls `erase_account_data` and appends the record. A failure leaves the
+  account switched off (`500 account_delete_incomplete`); the tool finishes it.
+- **Credentials.** `login_attempts.name_key` holds
+  `sha256("login-attempt\0" + name key)[:32]` instead of the typed name, so a
+  token or password pasted into the name box is not kept; attempts past the
+  15-minute window are deleted at the next login check. The uvicorn
+  access/WebSocket log filter also masks the invite token in
+  `/api/auth/invites/<token>` (`mask_path_secrets`), and `/api/auth/*`
+  validation errors (422) no longer repeat the rejected `input`.
+- The admin metrics page (`static/admin-metrics.html`) no longer refuses to
+  ask the server while its token box is empty; it shows the box after a 401
+  or 403.
+
+### Reading older data
+
+`login_attempts` rows written before this version are keyed by the plain
+name; they match no digest, so they count for nothing and are removed at the
+next login check (they were at most 15 minutes old to count anyway). Earlier
+deletion records lack `"via"`. Metrics rows of an account deleted by the
+older `--account` path are not recoverable and not orphaned (the folder
+deletion removes them); a metrics row written for an account id that no
+longer exists (a turn on a voice connection that was already open when the
+account was deleted) stays until the folder is deleted.
+
+### Going back
+
+Code from before this version does not delete metrics or rename shared
+names, and finds failed logins by the plain name: the lock does not see
+attempts made under digests (they are gone within 15 minutes). The route
+does not exist there. Nothing else reads the new record key.
 
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 

@@ -78,6 +78,8 @@ MARK_CODES: Mapping[str, frozenset[str]] = {
     "report_exported": frozenset({"docx", "md", "json", "csv"}),
 }
 ANALYSIS_OUTCOMES = frozenset({"passed", "review_pending", "notice", "failed"})
+#: The tables whose rows each name an account (``account_id``).
+ACCOUNT_TABLES = ("pilot_turns", "pilot_marks", "pilot_protocol_events", "pilot_feedback")
 #: The pilot's days are the labs' days: Korea, UTC+9 all year.
 PILOT_DAY_ZONE = timezone(timedelta(hours=9))
 
@@ -369,6 +371,42 @@ class PilotMetricsStore:
 
     def protocol_events(self) -> list[dict[str, Any]]:
         return self._read("SELECT * FROM pilot_protocol_events ORDER BY id")
+
+    # --- One account's rows (lane FX5, decision 1) ---------------------------
+
+    def account_row_ids(self, account_id: str) -> dict[str, list[int]]:
+        """The row ids of one account in each table, for a preview; empty when it has none."""
+
+        found: dict[str, list[int]] = {}
+        for table in ACCOUNT_TABLES:
+            rows = self._read(
+                f"SELECT id FROM {table} WHERE account_id=? ORDER BY id", (_identifier(account_id),))
+            if rows:
+                found[table] = [int(row["id"]) for row in rows]
+        return found
+
+    def delete_account_rows(self, account_id: str) -> dict[str, int]:
+        """Delete every row of one account (turns, marks, protocol events, ratings); the counts by table.
+
+        Rows of other accounts are not touched. A missing file is left missing,
+        and freed pages are overwritten so a rating's free-text line does not
+        outlive its row inside the file.
+        """
+
+        account = _identifier(account_id)
+        if not self.path.is_file():
+            return {}
+        connection = self._connect()
+        try:
+            connection.execute("PRAGMA secure_delete=ON")
+            with connection:
+                return {
+                    table: connection.execute(
+                        f"DELETE FROM {table} WHERE account_id=?", (account,)).rowcount
+                    for table in ACCOUNT_TABLES
+                }
+        finally:
+            connection.close()
 
 
 @dataclass(frozen=True)
