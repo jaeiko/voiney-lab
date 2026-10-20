@@ -153,11 +153,11 @@ class LibreOfficePdfTests(unittest.TestCase):
         self.assertAlmostEqual(first.rect.width, 595.3, delta=1.0)
         self.assertAlmostEqual(first.rect.height, 841.9, delta=1.0)
         text = first.get_text()
-        for words in ("Test digestion protocol 실험 보고서", "한눈 요약", "검토자", "김검토", "37°C → 40°C"):
+        for words in ("Test digestion protocol", "실험 노트", "김검토", "37°C → 40°C"):
             self.assertIn(words, text)
         whole = "".join(page.get_text() for page in document)
         self.assertIn("튜브를 쏟았어", whole)
-        self.assertIn("1. 실험 목적", whole)
+        self.assertIn("1. 시료와 조건", whole)
         fonts = {font[3] for page in document for font in page.get_fonts()}
         self.assertTrue(any("Nanum" in name for name in fonts), fonts)
 

@@ -158,13 +158,10 @@ def test_docx_export_contains_10_sections(tmp_path):
 
     # Verify key sections and metadata (lane RP: the researcher's report)
     table_text = "\n".join(cell.text for table in doc.tables for row in table.rows for cell in row.cells)
-    assert "1. 실험 목적" in full_text
-    assert "2. 배경·원리" in full_text
-    assert "3. 재료 및 방법" in full_text
-    assert "4. 결과" in full_text
-    assert "5. 고찰" in full_text
-    assert "6. 결론" in full_text
-    assert "참고문헌" in full_text
+    # Lane RP3, decision ① (2026-10-20): the notebook's sections.
+    for heading in ("1. 시료와 조건", "2. 실제로 한 조건", "3. 관찰과 결과", "4. 원문과 다르게 한 점·문제",
+                    "5. 지난번과 다른 점", "6. 다음에 바꿀 점·다음 할 일", "7. 확인", "8. 부록"):
+        assert heading in full_text
     assert "실험자" in table_text
     assert "In-Gel Protein Digestion" in full_text
     # Decision 6 (2026-10-06): identifiers and the event list stay in the

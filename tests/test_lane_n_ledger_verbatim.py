@@ -70,8 +70,9 @@ class ServedTimerLedgerTests(VoiceNotesHarness, unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertEqual(events.count((kind, "2")), 1)
         markdown = self.report_markdown()
-        self.assertRegex(markdown, r"\| 2 \| [^|]+ \| \d\d:\d\d \| 원문 10분 / 실제 12분 \|")
-        self.assertRegex(markdown, r"- 2단계에서 3분 동안 멈췄다가 다시 진행했다\(\d\d:\d\d–\d\d:\d\d\)\.")
+        # Lane RP3, decision ①: the appendix's step times carry the timer and the pause.
+        self.assertRegex(markdown, r"\| 2 \| \d\d:\d\d \| \d\d:\d\d \| [^|]*\(멈춤 3분 포함\) \| 원문 10분 / 실제 12분 \|")
+        self.assertIn("멈춤 1회", markdown)
         self.assertNotIn("타이머 기록이 없다", markdown)
         self.assertNotIn("타이머 기록 없음", markdown)
 
@@ -80,8 +81,10 @@ class ServedTimerLedgerTests(VoiceNotesHarness, unittest.TestCase):
             "프로토콜 시작해줘", "1단계 완료했어", "타이머 시작해줘", 6, "2단계 완료했어",
         ))
         markdown = self.report_markdown()
-        self.assertRegex(markdown, r"\| 2 \| [^|]+ \| \d\d:\d\d \| 원문 10분 / 6분에 끝냄 \|")
-        self.assertIn("2단계: 타이머를 일찍 끝낸 것이 결과에 영향을 주었는지 확인한다.", markdown)
+        # Lane RP3, decision ①: the appendix's step times, and the timer ended
+        # early among what was done differently.
+        self.assertRegex(markdown, r"\| 2 \| \d\d:\d\d \| \d\d:\d\d \| [^|]+ \| 원문 10분 / 6분에 끝냄 \|")
+        self.assertIn("- 2단계 타이머: 원문 10분 중 6분에 끝냄", markdown)
         self.assertNotIn("타이머 기록이 없다", markdown)
 
 

@@ -36,6 +36,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_REASON_EVIDENCE_NOT_FOUND,
     REVIEW_REASON_NOT_IN_SOURCE,
     REVIEW_REASON_OCR_UNCLEAR,
+    REQUOTE_SYSTEM_PROMPT,
     _review_reason,
     parse_protocol_analysis_response,
     review_item_id,
@@ -218,8 +219,15 @@ class _RawModel:
     def __init__(self, *answers: str) -> None:
         self.answers = list(answers)
         self.calls = 0
+        self.reasks = 0
 
     def analyze(self, *, system_prompt: str, input_json: str, response_schema: dict) -> str:
+        if system_prompt == REQUOTE_SYSTEM_PROMPT:
+            # Lane AN4, decision 1: the refused items are asked about once
+            # more; this model finds nothing for them, and ``calls`` and the
+            # answers stay the analysis calls'.
+            self.reasks += 1
+            return json.dumps({"answers": []})
         self.calls += 1
         return self.answers.pop(0)
 

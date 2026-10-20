@@ -64,6 +64,7 @@ from voiney_lab.experiment_protocol_analysis import (
     ReviewFlag,
     analysis_piece_concurrency,
     analysis_pieces,
+    analysis_requote_enabled,
     analyze_protocol_extraction,
     analyze_protocol_piece,
     blocked_pages_ko,
@@ -72,6 +73,7 @@ from voiney_lab.experiment_protocol_analysis import (
     join_piece_analyses,
     prepare_protocol_analysis_request,
     replace_at_paths,
+    requote_unverified_items,
     review_item_id,
     safety_block_provider,
     verify_step_timers,
@@ -173,6 +175,8 @@ _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
 #: ``review-v<N>-...``, and this event beside it holds who registered it,
 #: what it was reviewed from and every change with its original value.
 _REVIEW_VERSION_EVENT = "protocol_review_version_registered"
+#: Lane RP3, decision ④: a PI's "확인함" on a registered review version.
+_REVIEW_VERSION_PI_CONFIRMED_EVENT = "protocol_review_version_pi_confirmed"
 REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
 #: Lane RV2, decision c (human decision 2026-10-16): an analysis with more
 #: items for a person than ``review_max_items()`` makes no cards; it is
@@ -180,6 +184,10 @@ REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"
 #: ``review_reanalysis_max_calls()`` model calls -- this event records why,
 #: at what level and what came of it. Still too many: the guidance alone.
 _AUTO_REANALYSIS_EVENT = "protocol_analysis_auto_reanalysis"
+#: Lane AN4, decision 1 (human decision 2026-10-19): the items the evidence
+#: check refused were asked about once more; this event records how many,
+#: what came of each kind of answer, and each call (no source text).
+_REQUOTE_EVENT = "protocol_analysis_evidence_requote"
 TOO_MANY_REVIEW_ITEMS_CODE = "protocol_analysis_too_many_review_items"
 REVIEW_MAX_ITEMS_SETTING = "VOINEY_LAB_REVIEW_MAX_ITEMS"
 REVIEW_MAX_ITEMS = 12
@@ -613,12 +621,30 @@ def _korean_date(timestamp: str) -> str:
     return moment.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
 
 
-def _review_version_summary(event: Any) -> dict[str, object]:
+def _pi_confirmations_of(events: Sequence[Any], version: object) -> list[dict[str, object]]:
+    """Each PI confirmation of one review version, in the order left (lane RP3, ④)."""
+
+    found = []
+    for event in events:
+        if event.event_type != _REVIEW_VERSION_PI_CONFIRMED_EVENT:
+            continue
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("version") != version:
+            continue
+        found.append({
+            "name": str(payload.get("name") or ""), "comment": str(payload.get("comment") or ""),
+            "at": event.recorded_at, "on": _korean_date(event.recorded_at),
+        })
+    return found
+
+
+def _review_version_summary(event: Any, confirmations: Sequence[Any] = ()) -> dict[str, object]:
     """One registered review version as the list shows it (lane RV, c, d)."""
 
     payload = event.payload if isinstance(event.payload, dict) else {}
     changes = [item for item in payload.get("changes") or () if isinstance(item, dict)]
     return {
+        "pi_confirmations": _pi_confirmations_of(confirmations, payload.get("version")),
         "version": payload.get("version"),
         "version_ko": f"검토본 v{payload.get('version')}",
         "revision_id": payload.get("revision_id"),
@@ -2385,7 +2411,8 @@ class ProtocolCatalog:
             review_pending=(
                 _review_pending_summary(pending) if pending is not None else None),
             review_versions=tuple(
-                _review_version_summary(event) for event, _ in versions),
+                _review_version_summary(event, self.store.list_events(revision.experiment_id))
+                for event, _ in versions),
         )
 
     def _review_pending_event(self, revision: ProtocolRevisionRecord) -> Any | None:
@@ -3564,8 +3591,13 @@ class ProtocolCatalog:
         items than ``review_max_items()`` is analysed once more instead --
         except a document read in pieces (lane AN3, round 2, decision ④),
         which may ask about ``review_max_items()`` plus one item per piece and
-        otherwise ends with the guidance."""
+        otherwise ends with the guidance.
 
+        Lane AN4, decision 1: before any of that, with ``model``, the items
+        the evidence check refused are asked about once more
+        (``_requoted``)."""
+
+        draft = self._requoted(revision, draft, analysis_id, model=model, pieces=pieces)
         draft = self._with_ocr_value_flags(revision, draft)
         if pieces:
             # Lane AN3, round 2, decision ④ (human decision 2026-10-18): a long
@@ -3586,6 +3618,54 @@ class ProtocolCatalog:
         if draft.review_flags:
             return self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
         return self._store_passed_analysis(revision, draft, analysis_id, pieces=pieces)
+
+    def _requoted(
+        self,
+        revision: ProtocolRevisionRecord,
+        draft: ProtocolAnalysisDraft,
+        analysis_id: str,
+        *,
+        model: ProtocolAnalysisModel | None,
+        pieces: tuple[AnalysisPiece, ...] = (),
+    ) -> ProtocolAnalysisDraft:
+        """The draft after its refused items were asked about once more.
+
+        Lane AN4, decision 1 (human decision 2026-10-19). Once per analysis --
+        a long document once per piece, ``analysis_piece_concurrency()`` at a
+        time -- the items the evidence check refused (원문에 없음, 근거를 못
+        찾음, a quote that does not open with its step number) go in one small
+        request with their pages' text only. What comes back passes the same
+        checks as any answer or the item stays a card as it was
+        (``requote_unverified_items``); a kept item is recorded beside the
+        server's other settlements as "근거를 다시 찾아 확인". Off with
+        ``VOINEY_LAB_ANALYSIS_REQUOTE=false``. The automatic re-analysis of
+        decision c, should it follow, is not asked about again.
+        """
+
+        if model is None or not draft.review_flags or not analysis_requote_enabled():
+            return draft
+        result = requote_unverified_items(
+            draft, model,
+            groups=[tuple(piece.page_numbers) for piece in pieces] or None,
+            one_reading=not pieces, concurrency=analysis_piece_concurrency())
+        if not result.questions:
+            return draft
+        summary = result.summary()
+        self.store.append_event(
+            f"analysis-requote-{analysis_id}",
+            revision.experiment_id,
+            revision.revision_number,
+            _REQUOTE_EVENT,
+            {"status": "completed", "analysis_id": analysis_id, **summary},
+        )
+        logging.getLogger(__name__).info(
+            "protocol.analysis.evidence_requote protocol_id=%s questions=%d items=%d "
+            "items_requoted=%d calls=%d failed_calls=%d",
+            revision.experiment_id, summary["questions"], summary["items"],
+            summary["items_requoted"], len(result.calls),
+            sum(1 for call in result.calls if call.get("status") != "answered"),
+        )
+        return result.draft
 
     def _fewer_items(
         self,
@@ -5480,12 +5560,32 @@ class ProtocolCatalog:
         for event, _ in self._review_versions(revision):
             if event.payload.get("version") == version:
                 return {
-                    **_review_version_summary(event),
+                    **_review_version_summary(event, self.store.list_events(revision.experiment_id)),
                     "changes": list(event.payload.get("changes") or ()),
                     "memos": dict(event.payload.get("memos") or {}),
                     "timers": dict(event.payload.get("timers") or {}),
                 }
         raise ProtocolCatalogNotFoundError("The protocol has no such review version.")
+
+    def confirm_review_version(
+        self, protocol_id: str, version: int, *, name: str, comment: str = "",
+    ) -> dict[str, object]:
+        """A PI's "확인함" on a registered review version (lane RP3, decision ④):
+        one append-only ledger event with the name, the line and the time.
+        It holds nothing back and changes no version; the version's record
+        shows every confirmation left."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        if not any(event.payload.get("version") == version for event, _ in self._review_versions(revision)):
+            raise ProtocolCatalogNotFoundError("The protocol has no such review version.")
+        recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.store.append_event(
+            "pi-confirmed-" + secrets.token_hex(12), protocol_id, revision.revision_number,
+            _REVIEW_VERSION_PI_CONFIRMED_EVENT,
+            {"version": version, "name": " ".join(str(name or "").split())[:120],
+             "comment": " ".join(str(comment or "").split())[:300], "recorded_at": recorded_at},
+        )
+        return self.review_version(protocol_id, version)
 
     def resolve_asset(
         self,

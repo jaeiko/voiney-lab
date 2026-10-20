@@ -90,9 +90,9 @@ class TheReportListsTheChangesTests(_ReviewedCase):
             report = server_module._open_experiment_report(listener, curated)
         text = listener.experiment_report_store.export_markdown(
             report["report_id"], fixture=self.fixture).decode()
-        self.assertIn("### 3-5. 원문 대비 검토자 수정 3건", text)
-        self.assertIn("이 실험은 검토본 v1 · 김재준 · ", text)
-        self.assertRegex(text, r"\| 검토본 \| 검토본 v1 · 김재준 · \d{4}-\d{2}-\d{2} \|")
+        # Lane RP3, decision ①: the version in the header, the table in the appendix.
+        self.assertRegex(text, r"\| 프로토콜 \| [^|]+ · 검토본 v1 \(김재준, \d{4}-\d{2}-\d{2}\) \|")
+        self.assertRegex(text, r"### 검토본 v1 · 김재준 · \d{4}-\d{2}-\d{2}")
         self.assertIn("| 단계 | 항목 | 원문 · AI 제안 | 검토본 | 출처 | 검토자 |", text)
         self.assertIn(f"| 1 | 단계 | 1. Add 2 mL of buffer A. | 1. Add 2.5 mL of buffer A. | 검토자 입력 | 김재준 |", text)
         self.assertIn(f"| 2 | 단계 | {MADE_UP} | {STEP_TWO} | 검토자 입력 | 김재준 |", text)

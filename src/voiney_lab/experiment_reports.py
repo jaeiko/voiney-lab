@@ -107,6 +107,10 @@ EVENT_NAMES_KO: dict[str, str] = {
     "repeat_registered": "반복 횟수 등록", "repeat_rounds_declined": "반복 더 하지 않음",
     "repeat_closed": "반복 마침", "branch_answered": "조건 답변",
     "branch_steps_skipped": "조건에 따라 단계 건너뜀",
+    # Lane RP3 (decisions ②, ④): what the experimenter says at the start and
+    # the end of a run, and a PI's confirmation of the notebook.
+    "purpose_recorded": "목적·시료 기록", "result_recorded": "결과·다음 할 일 기록",
+    "pi_confirmed": "PI 확인",
 }
 
 
@@ -610,21 +614,23 @@ class ExperimentReportStore:
 
     def export_markdown(
         self, report_id: str, narrative: ReportNarrative | None = None,
-        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
     ) -> bytes:
-        """The researcher's report as Markdown (same structure as the .docx).
+        """The researcher's notebook as Markdown (same structure as the .docx).
 
         Without a narrative the server's own sentences fill every section.
         ``fixture`` is the protocol the session ran; left out, it is looked up
         the way the server loads it, and so are the answers given in the check
-        before the start (``start_check``, lane RP2: None when not read).
+        before the start (``start_check``, lane RP2: None when not read) and
+        the run of the same protocol before this one (``previous``, lane RP3:
+        None when there is none).
         """
 
-        return render_markdown(self._narrative(report_id, narrative, fixture, start_check)).encode()
+        return render_markdown(self._narrative(report_id, narrative, fixture, start_check, previous)).encode()
 
     def _narrative(
         self, report_id: str, narrative: ReportNarrative | None, fixture: Any,
-        start_check: Any = _FROM_LEDGER,
+        start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
     ) -> ReportNarrative:
         """The given narrative, else the prepared prose, else the server's sentences.
 
@@ -639,9 +645,20 @@ class ExperimentReportStore:
             start_check = (
                 report_start_check_answers(report, since=self._previous_start(report))
                 if fixture is None else None)
+        if previous is _FROM_LEDGER:
+            # Lane RP3, decision ① (6): the finished run of the same protocol
+            # before this one, from this store; its facts are built the same
+            # way (with the same protocol when it ran the same revision).
+            earlier = self.previous_finished_report(report)
+            previous = None
+            if earlier is not None:
+                same = fixture is not None and str(earlier.get("protocol_revision")) == str(
+                    report.get("protocol_revision"))
+                previous = ReportWriterBrain.facts_for(
+                    earlier, list(earlier["events"]), fixture=fixture if same else _AUTO)
         facts = ReportWriterBrain.facts_for(
             report, list(report["events"]), fixture=_AUTO if fixture is None else fixture,
-            start_check=start_check)
+            start_check=start_check, previous=previous)
         prose = self.get_prose(report_id)
         if prose is None or prose["writer"] == SERVER_WRITER:
             return narrative_from_sections(facts)
@@ -666,6 +683,24 @@ class ExperimentReportStore:
                 (report["protocol_id"], report["started_at"]),
             ).fetchone()
         return row[0] if row and row[0] else None
+
+    def previous_finished_report(self, report: Mapping[str, Any]) -> dict[str, Any] | None:
+        """The finished run of the same protocol that started last before this
+        one, with its events, or None (lane RP3, decision ① (6): "지난번").
+
+        Same protocol, any revision; a run still in progress is not "지난번".
+        """
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT report_id FROM experiment_reports
+                 WHERE protocol_id=? AND started_at<? AND ended_at IS NOT NULL AND report_id<>?
+                 ORDER BY started_at DESC, report_id DESC LIMIT 1
+                """,
+                (report["protocol_id"], report["started_at"], report["report_id"]),
+            ).fetchone()
+        return self.get_report(row[0]) if row else None
 
     def save_prose(
         self, report_id: str, *, writer: str, reply: Mapping[str, Any] | None,
@@ -736,28 +771,56 @@ class ExperimentReportStore:
 
     def export_docx(
         self, report_id: str, narrative: ReportNarrative | None = None,
-        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
     ) -> bytes:
-        """The researcher's report as .docx (same structure as the Markdown).
+        """The researcher's notebook as .docx (same structure as the Markdown).
 
         The SQLite event ledger remains the authority; this document is a
         derived, human-readable projection of it.
         """
 
-        return render_docx(self._narrative(report_id, narrative, fixture, start_check))
+        return render_docx(self._narrative(report_id, narrative, fixture, start_check, previous))
 
     def export_pdf(
         self, report_id: str, narrative: ReportNarrative | None = None,
-        *, fixture: Any = None, start_check: Any = _FROM_LEDGER,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
         converter: str | None = None, run: Any = None,
     ) -> bytes:
-        """The researcher's report as PDF: the .docx above, printed by the
+        """The researcher's notebook as PDF: the .docx above, printed by the
         server's LibreOffice (lane RP2, decision 2). ``ReportPdfError`` when
         it cannot be printed."""
 
         return report_docx_to_pdf(
-            self.export_docx(report_id, narrative, fixture=fixture, start_check=start_check),
+            self.export_docx(report_id, narrative, fixture=fixture, start_check=start_check, previous=previous),
             converter=converter, run=run)
+
+    def export_meeting_docx(
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
+    ) -> bytes:
+        """The one-page lab-meeting summary as .docx (lane RP3, decision ③)."""
+
+        return render_meeting_docx(self._narrative(report_id, narrative, fixture, start_check, previous))
+
+    def export_meeting_pdf(
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
+        converter: str | None = None, run: Any = None,
+    ) -> bytes:
+        """The lab-meeting summary printed by the server's LibreOffice."""
+
+        return report_docx_to_pdf(
+            self.export_meeting_docx(report_id, narrative, fixture=fixture, start_check=start_check,
+                                     previous=previous),
+            converter=converter, run=run)
+
+    def export_xlsx(
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
+    ) -> bytes:
+        """The results table as .xlsx (lane RP3, decision ③)."""
+
+        return render_xlsx(self._narrative(report_id, narrative, fixture, start_check, previous))
 
 
 @dataclass(frozen=True)
@@ -1116,20 +1179,6 @@ def build_grounded_report_context(
 REPORT_TIMEZONE_SETTING = "VOINEY_LAB_REPORT_TIMEZONE"
 DEFAULT_REPORT_TIMEZONE = "Asia/Seoul"
 
-#: The model-written sections, in report order.
-MODEL_SECTIONS = (
-    "purpose", "background", "methods_summary",
-    "results_summary", "discussion_review", "conclusion", "next_steps",
-)
-_SECTION_NAMES = {
-    "purpose": "1. 실험 목적",
-    "background": "2. 배경·원리",
-    "methods_summary": "3. 방법 요약",
-    "results_summary": "4. 결과 요약",
-    "discussion_review": "5. 고찰 (다)",
-    "conclusion": "6. 결론",
-    "next_steps": "6. 다음 할 일",
-}
 _WEEKDAYS = "월화수목금토일"
 
 
@@ -1527,6 +1576,9 @@ class ReportFacts:
     review_changes: tuple[ReportReviewChange, ...] = ()
     #: Lane RP2, decision 1: the report's first pages, from the record.
     glance: "ReportGlance | None" = None
+    #: Lane RP3, decision ①: the lab notebook the exports render, from the
+    #: record, the source and the run before.
+    notebook: "LabNotebook | None" = None
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1944,7 +1996,7 @@ def _pdf_front_matter(fixture: Any) -> tuple[str, str, str, str]:
     return purpose, keywords, doi, author
 
 
-_SECTION_DURATION = re.compile(r"\s+\d+\s*(?:m|min|h|hr|s)\s*$", re.I)
+_SECTION_DURATION = re.compile(r"\s+\d+\s*(?:m|min|h|hr|s|d)\s*$", re.I)
 
 
 def build_report_facts(
@@ -1956,11 +2008,14 @@ def build_report_facts(
     zone: ZoneInfo | None = None,
     protocol_problem: str = "",
     start_check: Sequence[Mapping[str, Any]] | None = None,
+    previous: "ReportFacts | None" = None,
 ) -> ReportFacts:
     """The report's facts from the record and the protocol the session ran.
 
     ``start_check`` is the answers given in the check before the start, as
     the protocol's ledger keeps them (lane RP2), or None when not read.
+    ``previous`` is the facts of the finished run of the same protocol
+    before this one (lane RP3), or None when there is none.
     """
 
     zone = zone or report_timezone()
@@ -2464,9 +2519,12 @@ def build_report_facts(
     )
     reviewer = " ".join(str(getattr(getattr(getattr(fixture, "draft", None), "review_version", None),
                                     "reviewer_name", "") or "").split())
-    return _replace_dataclass(facts, glance=build_report_glance(
+    facts = _replace_dataclass(facts, glance=build_report_glance(
         facts, events, source_steps=source_steps, zone=zone, reviewer=reviewer,
         start_check=start_check))
+    return _replace_dataclass(facts, notebook=build_lab_notebook(
+        facts, events, source_steps=source_steps, zone=zone, previous=previous,
+        protocol_problem=protocol_problem if fixture is None else ""))
 
 
 # --- The report's first pages (lane RP2, decision 1, 2026-10-19) -------------
@@ -2894,6 +2952,944 @@ def build_report_glance(
     )
 
 
+# --- The lab notebook (lane RP3, decision ①, 2026-10-20) -----------------------
+#
+# Human decision (2026-10-19/20): the report is an experiment notebook for
+# the researcher who ran the experiment, their PI and the lab meeting. It
+# says first what a researcher wants to know -- what was done, with which
+# samples, under which conditions, what was seen, what differed from the
+# source and from the run before, and what to change next -- in this order:
+# the header (title: the purpose said, else the protocol's name; date and
+# time; experimenter; protocol with the version run and its source), the
+# samples and their conditions as said, the conditions actually used ("원문
+# 값 → 실제", steps done as the source says grouped as "원문대로", only a
+# difference standing out, never the source's sentences copied), the
+# observations and results grouped by step and sample (values as recorded),
+# what was done differently from the source (with the reason when the
+# record holds one) and the problems, what differed from the run before
+# (deterministic; "처음 실험" when there is none), what to change next (what
+# the experimenter said, and the source's next step), the confirmation box
+# (experimenter, PI -- decision ④), and a small appendix (the steps' times,
+# the words as said with their corrections, one line of system events).
+#
+# The agent's own doings -- notices, lost connections, the check before the
+# start, the router -- stay out of the body. Every number, value and fact
+# comes from the record or the source; nothing in this decision is written
+# by a model. What the source allows (a repeat "until", a range) is no
+# difference. The old sections (purpose from keywords, a background of
+# section names, a materials table with the list's labels, a conclusion of
+# counts, a discussion repeating the quotations, the notices tables) are
+# gone from the body.
+
+NOTEBOOK_SECTIONS = (
+    "1. 시료와 조건", "2. 실제로 한 조건", "3. 관찰과 결과", "4. 원문과 다르게 한 점·문제",
+    "5. 지난번과 다른 점", "6. 다음에 바꿀 점·다음 할 일", "7. 확인", "8. 부록",
+)
+NOTEBOOK_HEADINGS = tuple(f"## {name}" for name in NOTEBOOK_SECTIONS)
+#: Decision ②'s events (written by the voice rules in that decision; read
+#: here): the purpose and samples said at the start, the result and the
+#: change for next time said at the end. Decision ④'s event: a PI's
+#: confirmation of the notebook (name, time, one line).
+PURPOSE_RECORDED = "purpose_recorded"
+RESULT_RECORDED = "result_recorded"
+PI_CONFIRMED = "pi_confirmed"
+SAMPLE_HEADER = ("시료", "조건", "대조군")
+CONDITION_HEADER = ("과정", "원문 값 → 실제")
+OBSERVATION_HEADER = ("과정", "시료", "관찰·측정 (기록 그대로)", "시각")
+CONFIRM_HEADER = ("확인", "이름", "날짜·시각", "서명·한 줄 의견")
+APPENDIX_STEP_HEADER = ("단계", "시작", "끝", "소요", "타이머 (원문 / 실제)")
+APPENDIX_RECORD_HEADER = ("시각", "단계", "종류", "말한 그대로")
+NOT_SAID_WORDS = "말하지 않음."
+FIRST_RUN_WORDS = "처음 실험 — 같은 프로토콜의 앞선 기록이 없다."
+SAME_AS_LAST_WORDS = "지난번과 조건·관찰이 같다."
+AS_SOURCE_WORDS = "원문대로"
+NO_DIFFERENCE_WORDS = "원문대로 했고, 기록된 문제가 없다."
+NO_SOURCE_VALUES_WORDS = "프로토콜 원문을 불러오지 못해 원문 값을 적지 못했다."
+NO_VALUED_STEPS_WORDS = "원문에 값(양·시간·온도·속도·농도)이 적힌 과정을 수행하지 않았다."
+NO_OBSERVATION_WORDS = "기록된 관찰이 없다."
+NO_PI_WORDS = "PI 확인: 아직 없음."
+NOTEBOOK_SUBTITLE = "실험 노트"
+#: The kinds the appendix's record table gives decision ②'s sayings.
+SAYING_KINDS = {PURPOSE_RECORDED: "목적·시료", RESULT_RECORDED: "결과·다음 할 일"}
+
+
+@dataclass(frozen=True)
+class NotebookSample:
+    """A sample as the experimenter named it at the start (decision ② a)."""
+
+    name: str
+    condition: str
+    control: bool
+
+
+@dataclass(frozen=True)
+class NotebookValue:
+    """One value the source states for a step, and what was actually used.
+
+    ``actual`` is empty when the run kept the source's value; otherwise the
+    value as recorded (a deviation note's value, a measurement that
+    differs, a timer ended early), with the record's words and key.
+    """
+
+    label: str
+    kind: str  # 시간 | 온도 | 양 | 농도 | 속도
+    family: str  # what it is compared within: time, volume, mass, molar, or the unit itself
+    written: str  # as the source writes it ("37°C", "15 min")
+    actual: str = ""
+    words: str = ""
+    key: str = ""
+    early: bool = False
+
+
+@dataclass(frozen=True)
+class NotebookObservation:
+    label: str
+    process: str
+    sample: str
+    text: str  # the latest words, without the marks
+    shown: str  # as the table shows it (correction, marks)
+    at: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class NotebookDifference:
+    """One line of "원문과 다르게 한 점·문제", in the order recorded."""
+
+    order: int
+    text: str
+
+
+@dataclass(frozen=True)
+class LabNotebook:
+    """The notebook the exports render (decision ①), from the record alone."""
+
+    title: str
+    subtitle: str
+    header_rows: tuple[tuple[str, str], ...]
+    purpose: str  # the purpose as said (""), its title form
+    purpose_words: str  # the whole utterance
+    samples: tuple[NotebookSample, ...]
+    values: tuple[NotebookValue, ...]
+    condition_rows: tuple[tuple[str, str], ...]
+    condition_note: str  # why there are no rows, or ""
+    materials_words: str
+    observations: tuple[NotebookObservation, ...]
+    result: str
+    result_words: str
+    next_change: str
+    differences: tuple[str, ...]
+    previous_words: str  # "지난번: ..." or ""
+    previous_lines: tuple[str, ...]
+    next_lines: tuple[str, ...]
+    pi_rows: tuple[tuple[str, str, str, str], ...]
+    appendix_step_rows: tuple[tuple[str, ...], ...]
+    appendix_record_rows: tuple[tuple[str, ...], ...]
+    system_words: str
+    source_words: str
+    performed: tuple[str, ...]
+    run_words: str  # how this run is named when it is "지난번" to the next
+    #: Decision ③: each step's condition in short ("원문대로 — 100 µL",
+    #: "온도 37°C → 40°C"), for the results table.
+    condition_by_label: Mapping[str, str] = field(default_factory=dict)
+
+
+# Samples named in words (decision ② a-b): "3번 샘플", "샘플 2번", "S2", "대조군",
+# "시료 3개"; read deterministically, canonical names "{n}번 샘플", "S2", "대조군".
+_SAMPLE_NOUN = r"(?:샘플|시료|시편)"
+_NUMBER_LIST = r"\d+(?:\s*(?:[,·/]|~|–|-|번)\s*\d+)*"
+_SAMPLES_BEFORE_NOUN = re.compile(rf"({_NUMBER_LIST})\s*번\s*({_SAMPLE_NOUN})")
+_SAMPLES_AFTER_NOUN = re.compile(rf"({_SAMPLE_NOUN})\s*(\d+)\s*번?(?![\d개])")
+_SAMPLE_CODE = re.compile(rf"(?:{_SAMPLE_NOUN}\s*)?(?<![A-Za-z0-9])(S\d{{1,2}})(?![A-Za-z0-9])")
+_SAMPLE_COUNT = re.compile(rf"({_SAMPLE_NOUN})\s*(\d+)\s*개")
+_CONTROL = re.compile(r"((?:음성|양성)\s*)?(대조군|컨트롤|(?<![A-Za-z])control(?![A-Za-z]))", re.I)
+_CONTROL_COUNT = re.compile(r"((?:음성|양성)\s*)?대조군\s*(\d+)\s*개")
+_BARE_NUMBERS = re.compile(rf"(?<![\d.])({_NUMBER_LIST})\s*번(?!\s*{_SAMPLE_NOUN})(?!\d)")
+_CLAUSE_SPLIT = re.compile(r"[,.;!?。]\s*|\s(?:그리고|및)\s|(?<=이고)\s|(?<=하고)\s|(?<=이며)\s")
+_PARTICLE_HEAD = re.compile(r"^(?:은|는|이|가|을|를|도|에는|에|으로|로|의)\s*")
+_COPULA_TAIL = re.compile(r"\s*(?:이에요|예요|에요|입니다|이야|이다|야|요|임|이고|고|이며)?\s*$")
+_TITLE_HEAD = re.compile(r"^(?:오늘은|오늘|이번에는|이번엔|이번 실험은|이번은)\s+")
+_TITLE_TAIL = re.compile(r"\s*(?:이에요|예요|에요|입니다|이야|이다|야|요)?[.!?。]*\s*$")
+_SENTENCE_END = re.compile(r"(?<=[.!?。])\s+")
+#: Where "다음에 바꿀 점" begins in the one utterance said at the end (② d).
+_NEXT_WORDS = re.compile(r"(?:^|(?<=\s))(?:다음(?:번)?(?:에는|엔|에|부터는|부터)|앞으로는|앞으로)\s*")
+
+
+def _expand_numbers(text: str) -> list[int]:
+    found: list[int] = []
+    for part in re.split(r"[,·/]|\s*번\s*", text):
+        part = part.strip()
+        if not part:
+            continue
+        span = re.fullmatch(r"(\d+)\s*(?:~|–|-)\s*(\d+)", part)
+        if span:
+            first, last = int(span.group(1)), int(span.group(2))
+            found += list(range(first, last + 1)) if first <= last else [first, last]
+        elif part.isdigit():
+            found.append(int(part))
+    return found
+
+
+def _condition_words(clause: str, spans: Sequence[tuple[int, int]]) -> str:
+    """The clause without the sample mentions, without its particles."""
+
+    kept = []
+    position = 0
+    for start, end in sorted(spans):
+        kept.append(clause[position:start])
+        position = end
+    kept.append(clause[position:])
+    words = " ".join("".join(kept).split())
+    words = _PARTICLE_HEAD.sub("", words)
+    words = _COPULA_TAIL.sub("", words)
+    return words.strip(" ,·")
+
+
+def samples_in_text(text: str) -> list[dict[str, Any]]:
+    """The samples a sentence names, each with its condition and whether it is
+    a control (decision ② a): deterministic, [] when none is named."""
+
+    words = " ".join(str(text or "").split())
+    nouns = re.findall(_SAMPLE_NOUN, words)
+    default_noun = nouns[0] if nouns else "샘플"
+    found: dict[str, dict[str, Any]] = {}
+
+    def add(name: str, condition: str, control: bool) -> None:
+        if name not in found:
+            found[name] = {"name": name, "condition": condition, "control": control}
+            return
+        if condition and not found[name]["condition"]:
+            found[name]["condition"] = condition
+        found[name]["control"] = found[name]["control"] or control
+
+    for clause in _CLAUSE_SPLIT.split(words):
+        clause = clause.strip()
+        if not clause:
+            continue
+        spans: list[tuple[int, int]] = []
+        names: list[str] = []
+        standalone_controls: list[str] = []
+
+        def free(start: int, end: int) -> bool:
+            return all(end <= a or start >= b for a, b in spans)
+
+        for match in _SAMPLES_BEFORE_NOUN.finditer(clause):
+            spans.append(match.span())
+            names += [f"{n}번 {match.group(2)}" for n in _expand_numbers(match.group(1))]
+        for match in _SAMPLES_AFTER_NOUN.finditer(clause):
+            if free(*match.span()):
+                spans.append(match.span())
+                names.append(f"{match.group(2)}번 {match.group(1)}")
+        for match in _SAMPLE_CODE.finditer(clause):
+            if free(*match.span()):
+                spans.append(match.span())
+                names.append(match.group(1))
+        for match in _SAMPLE_COUNT.finditer(clause):
+            if free(*match.span()):
+                spans.append(match.span())
+                names += [f"{n}번 {match.group(1)}" for n in range(1, int(match.group(2)) + 1)]
+        for match in _CONTROL_COUNT.finditer(clause):
+            if free(*match.span()):
+                spans.append(match.span())
+                standalone_controls.append(f"{(match.group(1) or '').strip()} 대조군".strip())
+        control_here = False
+        for match in _CONTROL.finditer(clause):
+            if free(*match.span()):
+                control_here = True
+        if nouns:
+            for match in _BARE_NUMBERS.finditer(clause):
+                if free(*match.span()):
+                    spans.append(match.span())
+                    names += [f"{n}번 {default_noun}" for n in _expand_numbers(match.group(1))]
+        condition = _condition_words(clause, spans) if names or standalone_controls else ""
+        for name in names:
+            add(name, condition, control_here)
+        for name in standalone_controls:
+            add(name, "", True)
+        if control_here and not names and not standalone_controls:
+            match = next(m for m in _CONTROL.finditer(clause) if free(*m.span()))
+            add(f"{(match.group(1) or '').strip()} 대조군".strip(), "", True)
+    return list(found.values())
+
+
+def sample_in_text(text: str) -> str:
+    """The first sample a record names, in its canonical name, or "" (② b)."""
+
+    words = " ".join(str(text or "").split())
+    mentions: list[tuple[int, str]] = []
+    match = _SAMPLES_BEFORE_NOUN.search(words)
+    if match:
+        numbers = _expand_numbers(match.group(1))
+        if numbers:
+            mentions.append((match.start(), f"{numbers[0]}번 {match.group(2)}"))
+    match = _SAMPLES_AFTER_NOUN.search(words)
+    if match:
+        mentions.append((match.start(), f"{match.group(2)}번 {match.group(1)}"))
+    match = _SAMPLE_CODE.search(words)
+    if match:
+        mentions.append((match.start(), match.group(1)))
+    match = _CONTROL.search(words)
+    if match:
+        mentions.append((match.start(), f"{(match.group(1) or '').strip()} 대조군".strip()))
+    if not mentions:
+        return ""
+    return min(mentions)[1]
+
+
+def split_result_and_next(text: str) -> tuple[str, str]:
+    """(the result, what to change next) from the one utterance said at the
+    end (decision ② d): split where "다음에(는)" begins; all result without it."""
+
+    words = " ".join(str(text or "").split())
+    match = _NEXT_WORDS.search(words)
+    if match is None:
+        return words, ""
+    return words[:match.start()].strip(), words[match.end():].strip()
+
+
+def notebook_title(purpose: str) -> str:
+    """The experiment's title from the purpose said: its first sentence,
+    without "오늘은" and the sentence's polite ending, at most 80 characters."""
+
+    words = " ".join(str(purpose or "").split())
+    if not words:
+        return ""
+    first = _SENTENCE_END.split(words, 1)[0]
+    first = _TITLE_HEAD.sub("", first)
+    first = _TITLE_TAIL.sub("", first).strip()
+    if len(first) > 80:
+        first = first[:79].rstrip() + "…"
+    return first
+
+
+# The values a step states and what was used (decision ① 3): the units the
+# notebook compares, each with the kind it is shown under and the family it
+# is compared within (hours with minutes, mL with µL).
+_CONDITION_KIND = {
+    "h": "시간", "min": "시간", "s": "시간", "°C": "온도", "µL": "양", "mL": "양", "L": "양",
+    "mg": "양", "µg": "양", "ng": "양", "g": "양", "mM": "농도", "µM": "농도", "nM": "농도",
+    "M": "농도", "%": "농도", "rpm": "속도", "×g": "속도", "mm/s": "속도",
+}
+_CONDITION_FAMILY = {
+    "h": "time", "min": "time", "s": "time", "µL": "volume", "mL": "volume", "L": "volume",
+    "mg": "mass", "µg": "mass", "ng": "mass", "g": "mass", "mM": "molar", "µM": "molar", "nM": "molar",
+    "M": "molar",
+}
+_CONDITION_BASE = {
+    "h": 3600.0, "min": 60.0, "s": 1.0, "µL": 1.0, "mL": 1000.0, "L": 1e6, "mg": 1000.0, "µg": 1.0,
+    "ng": 0.001, "g": 1e6, "mM": 1e6, "µM": 1e3, "nM": 1.0, "M": 1e9,
+}
+#: A deviation event's kind (lane RA) when its value carries no unit the table knows.
+_DEVIATION_KIND_KO = {
+    "temperature": "온도", "time": "시간", "volume": "양", "mass": "양", "concentration": "농도",
+    "percent": "농도", "speed": "속도", "force": "속도",
+}
+
+
+@dataclass(frozen=True)
+class _Measure:
+    number: str
+    unit: str
+    written: str
+
+    @property
+    def kind(self) -> str:
+        return _CONDITION_KIND.get(self.unit, "")
+
+    @property
+    def family(self) -> str:
+        return _CONDITION_FAMILY.get(self.unit, self.unit)
+
+    def same_as(self, other: "_Measure") -> bool:
+        if self.family != other.family:
+            return False
+        try:
+            mine, theirs = float(self.number), float(other.number)
+        except ValueError:
+            return self.number == other.number and self.unit == other.unit
+        if self.unit == other.unit:
+            return abs(mine - theirs) <= 1e-9 * max(1.0, abs(theirs))
+        if self.unit in _CONDITION_BASE and other.unit in _CONDITION_BASE:
+            mine, theirs = mine * _CONDITION_BASE[self.unit], theirs * _CONDITION_BASE[other.unit]
+            return abs(mine - theirs) <= 1e-9 * max(1.0, abs(theirs))
+        return False
+
+
+def _condition_measures(text: str) -> list[_Measure]:
+    """The values of the notebook's kinds a text states, in order, once each."""
+
+    found: list[_Measure] = []
+    for number, unit, written in _measures(text):
+        if unit not in _CONDITION_KIND:
+            continue
+        measure = _Measure(number, unit, " ".join(written.split()))
+        if not any(item.unit == measure.unit and item.number == measure.number for item in found):
+            found.append(measure)
+    return found
+
+
+#: Words after an item's name that say who sells it or its grade, not what
+#: it is (decision ① 3: "재료는 실험에 쓴 것만 이름 정리"). The first word is
+#: always the name's ("Promega trypsin", "Eppendorf tubes").
+_VENDOR_WORDS = frozenset({
+    "merck", "milliporesigma", "sigma-aldrich", "sigma", "aldrich", "vwr", "thermo", "fisher",
+    "scientific", "promega", "avantor", "international", "brand", "b&j", "lc-ms", "hplc", "grade",
+    "catalog", "cat.", "cat", "whatman", "esslab", "kinesis", "bio-rad", "invitrogen", "gibco",
+    "corning", "millipore", "roche", "qiagen", "neb", "abcam", "santa", "cruz",
+})
+_ITEM_TOKEN = re.compile(r"\([^)]*\)|\S+")
+
+
+def _short_item_name(name: str) -> str:
+    """An item's name for "쓴 재료·장비": without its catalog number, the
+    company and grade words after its first word, and parentheses that hold
+    neither a short name nor a measurement."""
+
+    text = re.split(r"\s*(?:Catalog|Cat\.?)\s*#.*$|\s+#\S+.*$", item_display_name(name))[0]
+    kept: list[str] = []
+    for index, token in enumerate(_ITEM_TOKEN.findall(text)):
+        if index and token.startswith("("):
+            inside = token[1:-1].strip()
+            if _SHORT_NAME.fullmatch(inside) or any(ch.isdigit() for ch in inside):
+                kept.append(token)
+            continue
+        if index and token.casefold().strip(",;") in _VENDOR_WORDS:
+            break
+        kept.append(token)
+    return " ".join(kept).strip(" ,;") or " ".join(text.split()) or item_display_name(name)
+
+
+_REPEAT_SENTENCE = re.compile(r"[^.!?\n]*(?:[Rr]epeat|반복)[^.!?\n]*[.!?]?")
+
+
+def _repeat_sentence(text: str) -> str:
+    """The sentence of a step's text that states the repeat, at most 90 characters."""
+
+    words = " ".join(str(text or "").split())
+    match = _REPEAT_SENTENCE.search(words)
+    chosen = " ".join(match.group(0).split()) if match else words
+    return chosen if len(chosen) <= 90 else chosen[:88].rstrip() + "…"
+
+
+def pi_confirmations(events: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """Each PI confirmation of a notebook (decision ④): name, one line, when."""
+
+    found = []
+    for event in events:
+        if str(event.get("event_type") or "") != PI_CONFIRMED:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        found.append({
+            "name": " ".join(str(payload.get("name") or "").split()),
+            "comment": " ".join(str(payload.get("comment") or "").split()),
+            "at": str(event.get("created_at") or ""),
+        })
+    return found
+
+
+def _clock_words(moment: datetime | None) -> str:
+    return f"{moment.year}년 {moment.month}월 {moment.day}일 {moment:%H:%M}" if moment else ""
+
+
+def build_lab_notebook(
+    facts: ReportFacts,
+    events: Sequence[Mapping[str, Any]],
+    *,
+    source_steps: Sequence[Mapping[str, Any]],
+    zone: ZoneInfo,
+    previous: ReportFacts | None = None,
+    protocol_problem: str = "",
+) -> LabNotebook:
+    """The notebook from the record, the source and the run before (decision ①)."""
+
+    kinds = [str(event.get("event_type") or "") for event in events]
+    labels = [str(event.get("step_label") or "") for event in events]
+    keys = [str(event.get("event_key") or "") for event in events]
+    moments = [_local(event.get("created_at"), zone) for event in events]
+    payloads = [event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+                for event in events]
+    wordings = [" ".join(str(event.get("user_wording") or "").split()) for event in events]
+    index_by_key = {key: index for index, key in enumerate(keys) if key}
+    section_of = {step.label: step.section for step in facts.steps}
+    for step in source_steps:
+        section_of.setdefault(str(step["label"]), _SECTION_DURATION.sub("", str(step.get("section") or "")).strip())
+    source_text_of = {str(step["label"]): str(step.get("source_text") or "") for step in source_steps}
+    order = {str(step["label"]): index for index, step in enumerate(source_steps)}
+    # Lane RP2, decision 3 (kept): a value the experimenter has not confirmed
+    # -- asked about or not yet -- is marked wherever the notebook shows it.
+    unconfirmed_keys = {item["source_key"] for item in report_review_items(events) if not item["confirmed"]}
+
+    def mark(key: str) -> str:
+        return f" {UNCONFIRMED_MARK}" if key and key in unconfirmed_keys else ""
+
+    def process_words(step_labels: Sequence[str]) -> str:
+        section = section_of.get(step_labels[0], "")
+        runs = _label_runs(list(step_labels))
+        return f"{runs}단계 · {section}" if section else f"{runs}단계"
+
+    # Lane N's amendments by the record they amend, with when each was made.
+    history: dict[str, list[tuple[str, str, str]]] = {}
+    latest_text: dict[str, str] = {}
+    for index, kind in enumerate(kinds):
+        if kind not in {"record_corrected", "record_retracted"}:
+            continue
+        fix = payloads[index].get("record_fix") if isinstance(payloads[index].get("record_fix"), Mapping) else {}
+        target = str(fix.get("target_event_key") or "")
+        if not target:
+            continue
+        if kind == "record_retracted":
+            history.setdefault(target, []).append((_clock(moments[index]), "취소", ""))
+        else:
+            after = " ".join(str(fix.get("text_after") or "").split())
+            history.setdefault(target, []).append((_clock(moments[index]), "정정", after))
+            latest_text[target] = after
+
+    # Decision ②'s sayings: the purpose and samples, the result and the next change.
+    purpose_words = ""
+    samples: list[NotebookSample] = []
+    result_words = result = next_change = ""
+    for index, kind in enumerate(kinds):
+        if kind == PURPOSE_RECORDED and not purpose_words:
+            amended = keys[index] in latest_text
+            purpose_words = latest_text.get(keys[index]) or wordings[index]
+            listed = payloads[index].get("samples") if not amended else None
+            if isinstance(listed, (list, tuple)) and listed:
+                samples = [NotebookSample(
+                    name=" ".join(str(item.get("name") or "").split()),
+                    condition=" ".join(str(item.get("condition") or "").split()),
+                    control=bool(item.get("control")))
+                    for item in listed if isinstance(item, Mapping) and str(item.get("name") or "").strip()]
+            else:
+                samples = [NotebookSample(item["name"], item["condition"], item["control"])
+                           for item in samples_in_text(purpose_words)]
+        elif kind == RESULT_RECORDED and not result_words:
+            amended = keys[index] in latest_text
+            result_words = latest_text.get(keys[index]) or wordings[index]
+            payload = payloads[index]
+            if not amended and ("result" in payload or "next_change" in payload):
+                result = " ".join(str(payload.get("result") or "").split())
+                next_change = " ".join(str(payload.get("next_change") or "").split())
+            else:
+                result, next_change = split_result_and_next(result_words)
+    purpose = notebook_title(purpose_words)
+
+    # The header (decision ① 1).
+    run = dict(facts.run_rows)
+    title = purpose or facts.protocol_title or "실험 노트"
+    subtitle = f"{NOTEBOOK_SUBTITLE} · {facts.protocol_title}" if purpose and facts.protocol_title else NOTEBOOK_SUBTITLE
+    if facts.outcome == "in_progress":
+        when = f"{run.get('날짜', '')} {run.get('시작', '')} – 진행 중"
+    else:
+        when = f"{run.get('날짜', '')} {run.get('시작', '')} – {run.get('끝', '')} · {run.get('걸린 시간', '')}"
+    if facts.review_version_words:
+        parts = facts.review_version_words.split(" · ")
+        version = f"{parts[0]} ({', '.join(parts[1:])})" if len(parts) > 1 else parts[0]
+    else:
+        version = "분석 결과 그대로"
+    done = run.get("완료 단계", str(len(facts.completed_labels)))
+    if facts.outcome == "completed":
+        progress = f"끝까지 완료 · {done}단계"
+    elif facts.outcome == "stopped":
+        progress = (f"중단 — {facts.stop_label}단계에서 · {done}단계" if facts.stop_label
+                    else f"중단 · {done}단계")
+    else:
+        progress = f"진행 중 · {done}단계"
+    header: list[tuple[str, str]] = [
+        ("날짜·시간", " ".join(when.split())),
+        ("실험자", run.get("실험자") or "(직접 적어 주세요)"),
+        ("프로토콜", f"{facts.protocol_title} · {version}" if facts.protocol_title else version),
+    ]
+    reference = facts.protocol_reference
+    if reference.url or not reference.title.endswith("(실험 PDF)"):
+        header.append(("출처", " ".join(part for part in (reference.title, reference.url) if part)))
+    if run.get("기준 파일"):
+        header.append(("기준 파일", run["기준 파일"]))
+    if run.get("프로토콜 상태"):
+        header.append(("프로토콜 상태", run["프로토콜 상태"]))
+    header.append(("진행", progress))
+
+    # Timers ended early, by step, from the completions (as the first pages read them).
+    early: dict[str, tuple[int, int, str]] = {}
+    for index, kind in enumerate(kinds):
+        if kind != "step_completed" or not labels[index]:
+            continue
+        timer = payloads[index].get("timer") if isinstance(payloads[index].get("timer"), Mapping) else {}
+        if timer.get("step_exited_before_timer_elapsed") or (
+                timer.get("completion_state") == "step_exited_before_timer_elapsed"):
+            try:
+                early[labels[index]] = (
+                    int(timer.get("elapsed_seconds") or 0),
+                    int(timer.get("source_duration_seconds") or timer.get("duration_seconds") or 0),
+                    keys[index])
+            except (TypeError, ValueError):
+                continue
+
+    # The conditions actually used (decision ① 3): each performed step's
+    # source values, and for each what the record says was used instead.
+    live = [record for record in facts.records if record.status != "취소됨"]
+    values: list[NotebookValue] = []
+    rows: list[tuple[str, str]] = []
+    group: list[tuple[str, list[NotebookValue], bool]] = []
+    condition_by_label: dict[str, str] = {}
+
+    def flush_group() -> None:
+        if not group:
+            return
+        group_labels = [label for label, _, _ in group]
+        if len(group) == 1:
+            written = " · ".join(dict.fromkeys(value.written for value in group[0][1]))
+        else:
+            written = " / ".join(
+                f"{label}단계 " + " · ".join(dict.fromkeys(value.written for value in items))
+                for label, items, _ in group)
+        finished = all(done for _, _, done in group)
+        rows.append((process_words(group_labels),
+                     f"{AS_SOURCE_WORDS} — {written}" + ("" if finished else " (끝내지 않음)")))
+        group.clear()
+
+    for step in facts.steps:
+        if step.label not in source_text_of:
+            continue
+        found = [NotebookValue(step.label, item.kind, item.family, item.written)
+                 for item in _condition_measures(source_text_of[step.label])]
+        measures = {id(value): item for value, item in zip(
+            found, _condition_measures(source_text_of[step.label]))}
+
+        def set_actual(position: int, actual: str, words: str, key: str, is_early: bool = False) -> None:
+            if found[position].actual:
+                return
+            found[position] = _replace_dataclass(
+                found[position], actual=actual, words=words, key=key, early=is_early)
+
+        for record in live:
+            if record.step_label != step.label or record.kind in {"이상", "사진"}:
+                continue
+            payload = payloads[index_by_key[record.key]] if record.key in index_by_key else {}
+            deviations = [item for item in payload.get("deviations") or () if isinstance(item, Mapping)]
+            if record.kind == "편차" and deviations and record.status != "정정됨":
+                for item in deviations:
+                    said = " ".join(str(item.get("said") or "").split())
+                    said_measure = next(iter(_condition_measures(said)), None)
+                    sources = [part.strip() for part in str(item.get("source") or "").split("·") if part.strip()]
+                    source_measures = [m for part in sources for m in _condition_measures(part)]
+                    position = next((i for i, value in enumerate(found) if any(
+                        measures[id(value)].unit == m.unit and measures[id(value)].number == m.number
+                        for m in source_measures)), None)
+                    if position is not None:
+                        set_actual(position, said, record.text, record.key)
+                    else:
+                        kind = said_measure.kind if said_measure else _DEVIATION_KIND_KO.get(
+                            str(item.get("kind") or ""), "값")
+                        found.append(NotebookValue(
+                            step.label, kind, said_measure.family if said_measure else "",
+                            sources[0] if sources else "값 없음", actual=said, words=record.text, key=record.key))
+                continue
+            for measure in _condition_measures(record.text):
+                family = [i for i, value in enumerate(found) if measures.get(id(value)) is not None
+                          and measures[id(value)].family == measure.family]
+                if not family or any(measures[id(found[i])].same_as(measure) for i in family):
+                    continue
+                set_actual(family[0], measure.written, record.text, record.key)
+        if step.label in early:
+            elapsed, duration, key = early[step.label]
+            ended = f"{_duration_words(elapsed)}에 끝냄"
+            position = next((i for i, value in enumerate(found) if measures.get(id(value)) is not None
+                             and measures[id(value)].family == "time" and measures[id(value)].same_as(
+                                 _Measure(str(duration), "s", f"{duration} s"))), None)
+            if position is not None:
+                set_actual(position, ended, "", key, True)
+            elif duration:
+                found.append(NotebookValue(step.label, "시간", "time", _duration_words(duration),
+                                           actual=ended, key=key, early=True))
+        values += found
+        if not found:
+            continue
+        differing = [value for value in found if value.actual]
+        condition_by_label[step.label] = (
+            " · ".join(f"{value.kind} {value.written} → {value.actual}" for value in differing)
+            if differing else f"{AS_SOURCE_WORDS} — " + " · ".join(dict.fromkeys(value.written for value in found)))
+        if differing:
+            flush_group()
+            parts = []
+            for value in differing:
+                part = f"{value.kind} {value.written} → {value.actual}"
+                if value.early:
+                    part += " (타이머 일찍 끝냄)"
+                if value.words:
+                    part += f" (“{value.words}”)"
+                parts.append(part + mark(value.key))
+            others = list(dict.fromkeys(value.written for value in found if not value.actual))
+            text = " · ".join(parts)
+            if others:
+                text += f" · 그 밖 {AS_SOURCE_WORDS} ({' · '.join(others)})"
+            if not step.completed:
+                text += " (끝내지 않음)"
+            rows.append((process_words([step.label]), text))
+        elif group and section_of.get(group[-1][0], "") == section_of.get(step.label, ""):
+            group.append((step.label, found, step.completed))
+        else:
+            flush_group()
+            group.append((step.label, found, step.completed))
+    flush_group()
+    # A repeat the source states, as the run did it: rounds by confirmed returns.
+    repeats: dict[tuple[str, ...], dict[str, Any]] = {}
+    for index, kind in enumerate(kinds):
+        if kind != "repeat_returned":
+            continue
+        record = payloads[index].get("step_record") if isinstance(payloads[index].get("step_record"), Mapping) else {}
+        span = tuple(str(item) for item in record.get("repeated_step_labels") or ())
+        if not span:
+            continue
+        entry = repeats.setdefault(span, {"round": 0, "stated": str(record.get("stated_at_step") or ""),
+                                          "source": " ".join(str(record.get("source_text") or "").split())})
+        try:
+            entry["round"] = max(entry["round"], int(record.get("round") or 0))
+        except (TypeError, ValueError):
+            pass
+    for span, entry in repeats.items():
+        process = f"{span[0]}–{span[-1]}단계 반복" if len(span) > 1 else f"{span[0]}단계 반복"
+        if entry["source"]:
+            quote = _repeat_sentence(entry["source"])
+            process += f" ({entry['stated']}단계 원문: “{quote}”)" if entry["stated"] else f" (원문: “{quote}”)"
+        rows.append((process, f"{entry['round']}회차까지 함 (말로 확인한 돌아가기 기준)" if entry["round"]
+                     else "돌아감 (회차 기록 없음)"))
+    # Lane CB, decision 5 (kept): a source condition answered on the run and
+    # a repeat's count a person gave, each with where its value came from.
+    for answer in facts.branch_answers:
+        skipped = f" · {_ranges(list(answer.skipped_labels))} 건너뜀" if answer.skipped_labels else ""
+        rows.append((f"{answer.step_label}단계 조건 “{answer.condition}”",
+                     f"{answer.answer} ({answer.value_source}){skipped}"))
+    for repetition in facts.repetitions:
+        count = f"{repetition.count}회" if repetition.count else "미정"
+        asked = " (회차마다 물음)" if repetition.per_round else ""
+        rows.append((f"{repetition.first}~{repetition.last}단계 반복 횟수",
+                     f"{count} — {repetition.value_source}{asked}"))
+    condition_note = ""
+    if protocol_problem or not any(str(step.get("source_text") or "") for step in source_steps):
+        condition_note = NO_SOURCE_VALUES_WORDS
+    elif not rows:
+        condition_note = NO_VALUED_STEPS_WORDS
+    performed = tuple(step.label for step in facts.steps)
+    used = [_short_item_name(item.name) for item in facts.items if set(item.steps) & set(performed)]
+    if used:
+        materials_words = "쓴 재료·장비: " + " · ".join(dict.fromkeys(used))
+    elif facts.items:
+        materials_words = "쓴 재료·장비: 원문 목록 중 수행한 단계 글에 나오는 것을 찾지 못했다."
+    else:
+        materials_words = ""
+
+    # Observations and results (decision ① 4): by step, with the sample named.
+    observations: list[NotebookObservation] = []
+    for record in live:
+        if record.kind not in {"측정", "관찰", "메모", "사진"}:
+            continue
+        payload = payloads[index_by_key[record.key]] if record.key in index_by_key else {}
+        text = record.text
+        if record.kind == "사진":
+            text = "사진: " + text.removeprefix("사진 첨부 — ").removeprefix("사진 첨부").strip() if text != "사진 첨부" else "사진"
+        shown = text
+        if record.status == "정정됨":
+            shown = f"{text} (정정됨 — 처음 “{record.original}”)"
+        shown += mark(record.key)
+        sample = " ".join(str(payload.get("sample") or "").split()) or sample_in_text(record.text) or "—"
+        observations.append(NotebookObservation(
+            label=record.step_label, process=process_words([record.step_label]) if record.step_label != "—" else "—",
+            sample=sample, text=text, shown=shown, at=record.at or "—", kind=record.kind))
+
+    # What was done differently from the source, and the problems (decision ① 5).
+    differences: list[NotebookDifference] = []
+    for index, kind in enumerate(kinds):
+        record = payloads[index].get("step_record") if isinstance(payloads[index].get("step_record"), Mapping) else {}
+        if kind == "steps_skipped" and record.get("skipped_step_labels"):
+            skipped = [str(item) for item in record.get("skipped_step_labels") or ()]
+            start = str(record.get("start_step") or labels[index])
+            differences.append(NotebookDifference(-1, f"{start}단계부터 시작 — {_ranges(skipped)} 건너뜀" + mark(keys[index])))
+        elif kind == "repeat_rounds_declined":
+            first, last = _range_pair(record)
+            differences.append(NotebookDifference(
+                index, f"{first}~{last}단계 반복: {record.get('rounds_required')}회 중 "
+                       f"{record.get('rounds_done')}회차까지만 하고 넘어감 (회차는 말로 확인한 돌아가기 기준)" + mark(keys[index])))
+        elif kind == "step_reverted":
+            reverted = [str(item) for item in record.get("reverted_step_labels") or ()]
+            span = reverted[0] if len(reverted) == 1 else f"{reverted[0]}~{reverted[-1]}" if reverted else ""
+            differences.append(NotebookDifference(
+                index, f"{record.get('from_step') or ''}단계에서 {record.get('to_step') or labels[index]}단계로 되돌아감"
+                       + (f" — {span}단계를 다시 함" if span else "")))
+    if not any(kind == "steps_skipped" for kind in kinds) and source_steps and facts.completed_labels:
+        first = min(order.get(label, 0) for label in facts.completed_labels)
+        before = [str(step["label"]) for step in source_steps[:first]]
+        if before:
+            differences.append(NotebookDifference(
+                -1, f"{_ranges(before)}는 이 기록에 없다 ({facts.completed_labels[0]}단계부터 기록됨)"))
+    for value in values:
+        if value.actual and not value.early:
+            position = index_by_key.get(value.key, len(kinds))
+            differences.append(NotebookDifference(
+                position, f"{value.label}단계 {value.kind}: 원문 {value.written} → {value.actual}"
+                          + (f" — “{value.words}”" if value.words else "") + mark(value.key)))
+    for label, (elapsed, duration, key) in early.items():
+        differences.append(NotebookDifference(
+            index_by_key.get(key, len(kinds)),
+            f"{label}단계 타이머: 원문 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 끝냄" + mark(key)))
+    for record in live:
+        if record.kind == "이상":
+            differences.append(NotebookDifference(
+                index_by_key.get(record.key, len(kinds)),
+                f"이상 · {record.step_label}단계 ({record.at or '시각 없음'}): “{record.text}”" + mark(record.key)))
+    if facts.outcome == "stopped" and source_steps:
+        last_done = max((order.get(label, -1) for label in facts.completed_labels), default=-1)
+        after = [str(step["label"]) for step in source_steps
+                 if str(step["label"]) not in facts.completed_labels and order.get(str(step["label"]), 0) > last_done]
+        if after:
+            where = f"{facts.stop_label}단계에서 끝냄" if facts.stop_label else "실험을 끝냄"
+            differences.append(NotebookDifference(len(kinds) + 1, f"{where} — {_ranges(after)}는 하지 않음"))
+    differences.sort(key=lambda item: item.order)
+
+    # What differed from the run before (decision ① 6).
+    previous_words = ""
+    previous_lines: list[str] = []
+    if previous is not None and previous.notebook is not None:
+        before = previous.notebook
+        previous_words = f"지난번: {before.run_words}"
+        if (purpose or before.purpose) and purpose != before.purpose:
+            previous_lines.append(f"목적: 지난번 {('“' + before.purpose + '”') if before.purpose else NOT_SAID_WORDS.rstrip('.')}"
+                                  f" → 이번 {('“' + purpose + '”') if purpose else NOT_SAID_WORDS.rstrip('.')}")
+        mine = [sample.name for sample in samples]
+        theirs = [sample.name for sample in before.samples]
+        if mine != theirs and (mine or theirs):
+            previous_lines.append(f"시료: 지난번 {' · '.join(theirs) or NOT_SAID_WORDS.rstrip('.')}"
+                                  f" → 이번 {' · '.join(mine) or NOT_SAID_WORDS.rstrip('.')}")
+        performed_before = set(before.performed)
+        performed_now = set(performed)
+
+        def value_words(value: NotebookValue | None, written: str) -> str:
+            return value.actual if value is not None and value.actual else f"{AS_SOURCE_WORDS} ({written})"
+
+        seen: list[tuple[str, str, str]] = []
+        for value in list(values) + list(before.values):
+            key = (value.label, value.kind, value.written)
+            if key not in seen:
+                seen.append(key)
+        seen.sort(key=lambda key: order.get(key[0], 10_000))
+        for key in seen:
+            if key[0] not in performed_before or key[0] not in performed_now:
+                continue
+            now = next((v for v in values if (v.label, v.kind, v.written) == key), None)
+            then = next((v for v in before.values if (v.label, v.kind, v.written) == key), None)
+            if (now.actual if now else "") != (then.actual if then else ""):
+                previous_lines.append(
+                    f"{key[0]}단계 {key[1]}: 지난번 {value_words(then, key[2])} → 이번 {value_words(now, key[2])}")
+        only_now = [label for label in performed if label not in performed_before]
+        only_then = [label for label in before.performed if label not in performed_now]
+        if only_now:
+            previous_lines.append(f"이번에만 한 단계: {_ranges(only_now)}")
+        if only_then:
+            previous_lines.append(f"지난번에만 한 단계: {_ranges(only_then)}")
+        step_labels = sorted({item.label for item in observations} | {item.label for item in before.observations},
+                             key=lambda label: order.get(label, 10_000))
+        for label in step_labels:
+            now_texts = [f"“{item.text}”" for item in observations if item.label == label]
+            then_texts = [f"“{item.text}”" for item in before.observations if item.label == label]
+            if now_texts == then_texts:
+                continue
+            if now_texts and then_texts:
+                previous_lines.append(f"{label}단계 관찰: 지난번 {' · '.join(then_texts)} → 이번 {' · '.join(now_texts)}")
+            elif now_texts:
+                previous_lines.append(f"{label}단계 관찰: 이번에만 기록 — {' · '.join(now_texts)}")
+            else:
+                previous_lines.append(f"{label}단계 관찰: 지난번에만 기록 — {' · '.join(then_texts)}")
+        if (result or before.result) and result != before.result:
+            previous_lines.append(f"결과: 지난번 {('“' + before.result + '”') if before.result else NOT_SAID_WORDS.rstrip('.')}"
+                                  f" → 이번 {('“' + result + '”') if result else NOT_SAID_WORDS.rstrip('.')}")
+
+    # What to change next (decision ① 7).
+    next_lines: list[str] = []
+    if next_change:
+        next_lines.append(f"{next_change} (실험자가 말함)")
+    if facts.outcome == "stopped" and facts.stop_label:
+        next_lines.append(f"{facts.stop_label}단계부터 이어서 한다 (원문의 다음 단계)")
+
+    # The confirmation box (decisions ① 8, ④).
+    pi_rows: list[tuple[str, str, str, str]] = []
+    for index, kind in enumerate(kinds):
+        if kind != PI_CONFIRMED:
+            continue
+        pi_rows.append(("PI", " ".join(str(payloads[index].get("name") or "").split()),
+                        _clock_words(moments[index]), " ".join(str(payloads[index].get("comment") or "").split())))
+
+    # The appendix (decision ① 9).
+    timer_words = {step.label: step.timer_note for step in facts.steps}
+    step_rows: list[tuple[str, ...]] = []
+    for row in (facts.glance.step_rows if facts.glance is not None else ()):
+        label = row[0].split(" ")[0]
+        if row[1] == "—" and row[2] in {"수행 안 함", "건너뜀"}:
+            continue
+        step_rows.append((row[0], row[1], row[2], row[3], timer_words.get(label) or "—"))
+    record_rows: list[tuple[str, ...]] = []
+    for index, kind in enumerate(kinds):
+        text = wordings[index]
+        if kind == "observation" and text:
+            said_kind = RECORD_KINDS.get(str(events[index].get("category") or ""), "관찰")
+        elif kind == "anomaly" and text:
+            said_kind = "이상"
+        elif kind == "photo_attached":
+            said_kind, text = "사진", text or "사진 첨부"
+        elif kind in SAYING_KINDS and text:
+            said_kind = SAYING_KINDS[kind]
+        elif kind == "step_completed" and text:
+            said_kind = "관찰"
+        else:
+            continue
+        for clock, change, after in history.get(keys[index], ()):
+            text += f" → {clock} {change}" + (f": {after}" if after else "")
+        record_rows.append((_clock(moments[index]), labels[index] or "—", said_kind, text))
+
+    connections = []
+    for index, kind in enumerate(kinds):
+        if kind != "connection_restored":
+            continue
+        lost = _local(payloads[index].get("lost_at"), zone)
+        restored = _local(payloads[index].get("restored_at"), zone) or moments[index]
+        gap = payloads[index].get("gap_seconds")
+        gap_words = (_span_words(gap) if isinstance(gap, (int, float)) and not isinstance(gap, bool) else "기록 없음")
+        where = f"{labels[index]}단계 " if labels[index] else ""
+        connections.append(f"{where}{_clock(lost)}–{_clock(restored)}, {gap_words}")
+    spoken = sum(1 for i, k in enumerate(kinds) if k in {"timer_last_minute_notice", "timer_end_notice"} and payloads[i].get("spoken"))
+    shown_notices = sum(1 for i, k in enumerate(kinds) if k in {"timer_last_minute_notice", "timer_end_notice"} and not payloads[i].get("spoken"))
+    system = [f"연결 끊김 {len(connections)}회" + (f" ({' · '.join(connections)})" if connections else "")]
+    notices = spoken + shown_notices
+    system.append(f"타이머 알림 {notices}회" + (f" (말함 {spoken} · 화면 {shown_notices})" if notices else ""))
+    prestart = facts.glance.prestart_rows if facts.glance is not None else None
+    if prestart is None:
+        system.append("시작 전 확인 기록을 읽지 못함")
+    elif not prestart:
+        system.append("시작 전 확인 기록 없음")
+    else:
+        counts = {name: sum(1 for row in prestart if row[4] == name) for name in ("맞음", "다르게 고름", "원문대로 맞다고 함")}
+        system.append(f"시작 전 확인 {len(prestart)}답 (" + " · ".join(f"{name} {count}" for name, count in counts.items()) + ")")
+    safety = next((payloads[i].get("notice_count") for i, k in enumerate(kinds) if k == "safety_notices_acknowledged"), None)
+    if isinstance(safety, int) and not isinstance(safety, bool):
+        system.append(f"안전 주의 {safety}건 보고 시작" if safety else "원문에 안전 주의 없음 · 시작 전 화면 보고 시작")
+    system.append(f"멈춤 {sum(1 for k in kinds if k == 'workflow_paused')}회")
+    advanced = sum(1 for k in kinds if k == "step_advanced")
+    if advanced:
+        system.append(f"완료 말 없이 넘어감 {advanced}회")
+    source_words = f"[{reference.number}] {reference.title}" + (f" {reference.url}" if reference.url else "") + " — 실험에 쓴 프로토콜 원문"
+    run_words = " · ".join(part for part in (
+        f"{run.get('날짜', '')} {run.get('시작', '')}".strip(), run.get("실험자", ""),
+        f"{run.get('결과', '')} ({done}단계)") if part)
+    return LabNotebook(
+        title=title, subtitle=subtitle, header_rows=tuple(header), purpose=purpose, purpose_words=purpose_words,
+        samples=tuple(samples), values=tuple(values), condition_rows=tuple(rows), condition_note=condition_note,
+        materials_words=materials_words, observations=tuple(observations), result=result, result_words=result_words,
+        next_change=next_change, differences=tuple(item.text for item in differences),
+        previous_words=previous_words, previous_lines=tuple(previous_lines), next_lines=tuple(next_lines),
+        pi_rows=tuple(pi_rows), appendix_step_rows=tuple(step_rows), appendix_record_rows=tuple(record_rows),
+        system_words="시스템 사건: " + " · ".join(system), source_words=source_words, performed=performed,
+        run_words=run_words, condition_by_label=condition_by_label,
+    )
+
+
 # --- The server's checks on model sections (decision 5) ------------------------
 
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
@@ -2939,6 +3935,7 @@ _UNIT_FORMS = (
     (r"nM", "nM"),
     (r"M", "M"),
     (r"rpm|RPM", "rpm"),
+    (r"mm/s", "mm/s"),
     (r"[x×]\s*g", "×g"),
     (r"mg", "mg"),
     (r"[µμu]g", "µg"),
@@ -3050,197 +4047,114 @@ ROUND_BASIS = "말로 확인한 돌아가기 기준"
 _GENERAL_INSTRUCTION = re.compile(
     r"하세요|하십시오|해라|하라|할 것|해야|하지 마|마세요|마십시오|반드시|금지"
 )
-GENERAL_BACKGROUND_LABEL = "AI 일반 지식 — 출처 없음, 확인 필요"
-#: A background that says the source has none ("원문에는 원리가 기재되어 있지 않다").
-_SOURCE_SAYS_NONE = re.compile(
-    r"(?:원문|프로토콜|문서|자료)[^.。]{0,40}(?:없[다으음었]|않[다는았으음]|찾지\s*못)"
-)
-
-
-def general_background_problems(text: str) -> list[str]:
-    """Why a general-knowledge background may not be used (decision 7)."""
-
-    problems: list[str] = []
-    plain = " ".join(text.split())
-    if not plain:
-        return ["빈 문단"]
-    if re.search(r"\d", plain):
-        problems.append("숫자")
-    if _USE_UNIT.search(plain):
-        problems.append("단위")
-    if _CITATION.search(plain):
-        problems.append("출처 번호")
-    if _GENERAL_INSTRUCTION.search(plain):
-        problems.append("절차·지시")
-    if any(word in plain for word in _USE_SAFETY):
-        problems.append("안전 지시")
-    for name, shape in _IDENTIFIER_SHAPES:
-        if shape.search(plain):
-            problems.append(f"본문에 {name}")
-    sentences = [part for part in _SENTENCE.split(plain) if part.strip()]
-    if not 2 <= len(sentences) <= 5 or len(plain) > 500:
-        problems.append("길이(3–4문장)")
-    return problems
-
-
-def check_report_sections(
-    sections: Mapping[str, Any],
-    facts: ReportFacts,
-) -> dict[str, list[str]]:
-    """Why each model section may not be used ({} for a section that passes)."""
-
-    allowed = _allowed_numbers(facts)
-    allowed_measures = _allowed_measures(facts)
-    record_texts = [" ".join(text.split()) for text in facts.record_texts]
-    # Lane N: an item the researcher did not confirm is not one to build on.
-    unconfirmed = set(facts.unconfirmed_texts)
-    reviewable = {
-        number for number in range(1, len(facts.records) + len(facts.deviations) + 1)
-        if not (number <= len(facts.records) and facts.records[number - 1].text in unconfirmed)
-        and not (number > len(facts.records)
-                 and facts.deviations[number - len(facts.records) - 1] in unconfirmed)
-    }
-    reasons: dict[str, list[str]] = {}
-    for key in MODEL_SECTIONS:
-        value = sections.get(key)
-        text = _as_text(value)
-        problems: list[str] = []
-        for name, shape in _IDENTIFIER_SHAPES:
-            if shape.search(_CITATION.sub(" ", text)):
-                problems.append(f"본문에 {name}")
-        cited = {int(n) for group in _CITATION.findall(text) for n in group.split(",")}
-        if key in {"purpose", "background"}:
-            if _CONDITION_NUMBER.search(_CITATION.sub(" ", text)):
-                problems.append("실험 조건 숫자")
-            if cited - {1}:
-                problems.append("없는 출처 번호")
-            if key == "purpose":
-                for sentence in filter(None, (s.strip() for s in _SENTENCE.split(text))):
-                    if not _CITATION.search(sentence):
-                        problems.append("출처 번호가 없는 문장")
-                        break
-        else:
-            unknown = [written for number, unit, written in _measures(text)
-                       if (number, unit) not in allowed_measures]
-            if unknown:
-                problems.append("기록·원문에 없는 값 " + ", ".join(dict.fromkeys(unknown)))
-            extra = _numbers(_MEASURE.sub(" ", _plain(text))) - allowed
-            if extra:
-                problems.append("기록·원문에 없는 숫자 " + ", ".join(sorted(extra, key=lambda x: (len(x), x))[:6]))
-            if cited:
-                problems.append("방법·결과·고찰 칸의 출처 번호")
-        if key not in {"purpose", "background"} and _ROUND_COUNT.search(text) and ROUND_BASIS not in text:
-            # Lane N, decision 8: a round counted with no basis.
-            problems.append(f"회차를 ‘{ROUND_BASIS}’ 없이 씀")
-        if key in {"results_summary", "methods_summary"}:
-            for word in _SPECULATION:
-                if word in text:
-                    problems.append(f"추측 표현 “{word}”")
-                    break
-        if key == "results_summary":
-            for match in _QUOTED.finditer(text):
-                quoted = " ".join(next(group for group in match.groups() if group is not None).split())
-                if not any(quoted in record or record in quoted for record in record_texts):
-                    problems.append(f"기록에 없는 관찰 “{quoted[:30]}”")
-                    break
-        if key == "discussion_review" and value:
-            for item in value if isinstance(value, (list, tuple)) else [value]:
-                number = item.get("항목 번호") if isinstance(item, Mapping) else None
-                try:
-                    number = int(number)
-                except (TypeError, ValueError):
-                    number = None
-                if number not in reviewable:
-                    problems.append("기록된 이상·편차에 붙지 않은 원인 추정")
-                    break
-        if problems:
-            reasons[key] = problems
-    general = sections.get("background_general")
-    if general:
-        problems = general_background_problems(_as_text(general))
-        if problems:
-            reasons["background_general"] = problems
-    return reasons
-
-
-# --- The server's checks on each item's use (decision 4) -----------------------
+# --- The server's checks on AI-written notes (lane RP3, decision ③) ------------
 #
-# The model gives a short Korean use for each listed material and piece of
-# equipment in the same call as the prose. A use is a noun phrase of at most
-# 25 characters: no digit or unit, nothing about safety, nothing that tells a
-# person what to do, and only for an item the protocol lists. A use that
-# fails is left blank; the others stand.
+# The model writes the observation sentences and one result paragraph; every
+# number and unit in a sentence must be in the record or the source, a value
+# the experimenter has not confirmed may not be stated, and no safety or
+# procedural direction is written. A sentence that fails is dropped and the
+# record's own words stand; one that passes is marked "AI 정리".
 
-USE_LIMIT = 25
-_USE_UNIT = re.compile(
-    r"(?<![A-Za-zµμ])(?:°\s*C|[µμu]?[Ll]|m[Ll]|[mµμun]M|M|mg|[µμu]g|ng|kg|g|rpm|RPM|[x×]\s*g|"
-    r"min|h|hr|sec|s|kDa|cm|mm|[µμ]m|nm|v/v|w/v)(?![A-Za-z])|%|℃|°"
-)
 #: Not "흡입": for a pipette it is drawing liquid up (live run, headspace);
 #: a warning about breathing something in still holds "주의", "위험" or "하지 마".
 _USE_SAFETY = ("주의", "위험", "안전", "유해", "독성", "부식", "인화", "폭발", "화상", "응급", "보호",
                "장갑", "보안경", "고글", "마스크", "환기", "후드", "피부", "눈에", "눈을",
                "금지", "MSDS")
-_USE_INSTRUCTION = re.compile(
-    r"하세요|하십시오|해라|하라|할 것|해야|하지 마|마세요|마십시오|먼저|다음에|후에|전에|동안|까지|"
-    r"(?:다|요|오|라|것)\s*[.!]?\s*$|[.!?]\s*$"
-)
+AI_NOTE_LABEL = "AI 정리"
+#: Reasons a sentence is dropped, in the words the notebook's appendix uses.
+AI_NOTE_LIMIT = 300
 
 
-def _use_problem(use: str) -> str:
-    if len(use) > USE_LIMIT:
-        return f"{USE_LIMIT}자 넘음"
-    if re.search(r"\d", use):
-        return "숫자"
-    unit = _USE_UNIT.search(use)
-    if unit:
-        return f"단위 “{unit.group(0)}”"
-    safety = next((word for word in _USE_SAFETY if word in use), None)
+@dataclass(frozen=True)
+class AiNote:
+    """One AI-written sentence that passed its check, at the step (and sample) it is about."""
+
+    step_label: str
+    sample: str
+    text: str
+
+
+def _ai_sentence_problem(
+    text: str, *, label: str | None, labels: set[str], allowed: set[str],
+    allowed_measures: set[tuple[str, str]], unconfirmed_texts: Sequence[str],
+    unconfirmed_measures: set[tuple[str, str]], record_texts: Sequence[str],
+) -> str:
+    """Why an AI-written sentence may not be used, or "" when it may."""
+
+    plain = " ".join(text.split())
+    if not plain:
+        return "빈 문장"
+    if label is not None and label not in labels:
+        return f"기록에 없는 단계 {label}"
+    for name, shape in _IDENTIFIER_SHAPES:
+        if shape.search(_CITATION.sub(" ", plain)):
+            return f"본문에 {name}"
+    if any(value and value in plain for value in unconfirmed_texts) or any(
+            (number, unit) in unconfirmed_measures for number, unit, _ in _measures(plain)):
+        return "확인되지 않은 값"
+    unknown = [written for number, unit, written in _measures(plain) if (number, unit) not in allowed_measures]
+    if unknown:
+        return "기록·원문에 없는 값 " + ", ".join(dict.fromkeys(unknown))
+    extra = _numbers(_MEASURE.sub(" ", _plain(plain))) - allowed
+    if extra:
+        return "기록·원문에 없는 숫자 " + ", ".join(sorted(extra, key=lambda x: (len(x), x))[:6])
+    if _ROUND_COUNT.search(plain) and ROUND_BASIS not in plain:
+        # Lane N, decision 8: a round counted with no basis.
+        return f"회차를 ‘{ROUND_BASIS}’ 없이 씀"
+    for word in _SPECULATION:
+        if word in plain:
+            return f"추측 표현 “{word}”"
+    for match in _QUOTED.finditer(plain):
+        quoted = " ".join(next(group for group in match.groups() if group is not None).split())
+        if not any(quoted in record or record in quoted for record in record_texts):
+            return f"기록에 없는 관찰 “{quoted[:30]}”"
+    safety = next((word for word in _USE_SAFETY if word in plain), None)
     if safety:
         return f"안전 지시 “{safety}”"
-    instruction = _USE_INSTRUCTION.search(use)
-    if instruction:
-        return f"절차 지시 “{instruction.group(0).strip() or use[-2:]}”"
+    if _GENERAL_INSTRUCTION.search(plain):
+        return "절차·지시"
+    if len(plain) > AI_NOTE_LIMIT:
+        return f"{AI_NOTE_LIMIT}자 넘음"
     return ""
 
 
-def check_item_uses(
-    value: Any, facts: ReportFacts,
-) -> tuple[dict[str, str], tuple[tuple[str, str], ...]]:
-    """(item name -> use that passed, ((item, why it was left blank), ...))."""
+def check_ai_notes(
+    reply: Mapping[str, Any], facts: ReportFacts,
+) -> tuple[tuple[AiNote, ...], str, tuple[tuple[str, str], ...]]:
+    """(the notes that passed, the result paragraph or "", ((sentence, why dropped), ...))."""
 
-    if isinstance(value, Mapping):
-        value = [{"번호": key, "용도": use} for key, use in value.items()]
-    if not isinstance(value, (list, tuple)):
-        return {}, ()
-    by_name = {item.name.casefold(): item for item in facts.items}
-    uses: dict[str, str] = {}
+    allowed = _allowed_numbers(facts)
+    allowed_measures = _allowed_measures(facts)
+    unconfirmed_texts = [" ".join(str(text).split()) for text in facts.unconfirmed_texts]
+    unconfirmed_measures = {
+        (number, unit) for text in unconfirmed_texts for number, unit, _ in _measures(text)}
+    labels = {step.label for step in facts.steps}
+    if facts.glance is not None:
+        labels |= {str(row[0]).split(" ")[0] for row in facts.glance.step_rows}
+    check = dict(labels=labels, allowed=allowed, allowed_measures=allowed_measures,
+                 unconfirmed_texts=unconfirmed_texts, unconfirmed_measures=unconfirmed_measures,
+                 record_texts=[" ".join(text.split()) for text in facts.record_texts])
+    notes: list[AiNote] = []
     rejected: list[tuple[str, str]] = []
-    for entry in value:
-        if not isinstance(entry, Mapping):
+    items = reply.get("observation_notes") if isinstance(reply, Mapping) else None
+    for item in items if isinstance(items, (list, tuple)) else ():
+        if not isinstance(item, Mapping):
             continue
-        use = " ".join(str(entry.get("용도") or "").split())
-        named = " ".join(str(entry.get("이름") or "").split())
-        number = entry.get("번호")
-        try:
-            item = facts.items[int(number) - 1] if int(number) >= 1 else None
-        except (TypeError, ValueError, IndexError):
-            item = None
-        if item is None and number in (None, "") and named:
-            item = by_name.get(named.casefold())
-        if item is not None and named and named.casefold() != item.name.casefold():
-            item = None  # the number names one item, the name another
-        if item is None:
-            rejected.append((named or f"번호 {number}", "원문에 없는 항목"))
-            continue
-        if not use or item.name in uses:
-            continue
-        problem = _use_problem(use)
-        if problem:
-            rejected.append((item.name, problem))
+        label = " ".join(str(item.get("단계") or "").split())
+        sample = " ".join(str(item.get("시료") or "").split())
+        text = " ".join(str(item.get("문장") or "").split())
+        why = _ai_sentence_problem(text, label=label or None, **check)
+        if why:
+            rejected.append((text, why))
         else:
-            uses[item.name] = use
-    return uses, tuple(rejected)
+            notes.append(AiNote(step_label=label, sample=sample, text=text))
+    result = " ".join(str((reply.get("result_summary") if isinstance(reply, Mapping) else "") or "").split())
+    if result:
+        why = _ai_sentence_problem(result, label=None, **check)
+        if why:
+            rejected.append((result, why))
+            result = ""
+    return tuple(notes), result, tuple(rejected)
 
 
 # --- The narrative and the server's own sentences -------------------------------
@@ -3248,141 +4162,23 @@ def check_item_uses(
 
 @dataclass(frozen=True)
 class ReportNarrative:
-    """The report's prose: model sections that passed, server sentences for the rest."""
+    """The notebook's sentences: the server's, and the AI-written notes that
+    passed their check (lane RP3, decision ③)."""
 
     title: str
-    purpose: str
-    background: str
-    methods_summary: str
-    results_summary: str
-    discussion_confirmed: tuple[str, ...]
-    discussion_to_check: tuple[str, ...]
-    discussion_review: tuple[str, ...]
-    conclusion: str
-    next_steps: tuple[str, ...]
     facts: ReportFacts | None = None
     sources: tuple[ReportSource, ...] = ()
-    section_origin: Mapping[str, str] = field(default_factory=dict)
-    rejected: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
-    writer: str = "서버 대체 문장"
+    writer: str = "서버"
     written_at: str = ""
-    #: The model's use for each listed item that passed the server's check
-    #: (decision 4), by the item's name; and each use left blank, with why.
-    item_uses: Mapping[str, str] = field(default_factory=dict)
-    item_uses_rejected: tuple[tuple[str, str], ...] = ()
-    #: Lane N, decision 7: the background is the model's general knowledge,
-    #: the source having none -- labelled "AI 일반 지식 — 출처 없음, 확인 필요".
-    background_general: bool = False
-
-    # Earlier names, kept for callers written before lane RP.
-    @property
-    def objective(self) -> str:
-        return self.purpose
+    ai_notes: tuple[AiNote, ...] = ()
+    ai_result: str = ""
+    #: Each AI-written sentence dropped, with why.
+    ai_rejected: tuple[tuple[str, str], ...] = ()
+    failure: str = ""
 
     @property
-    def materials_and_methods(self) -> str:
-        return self.methods_summary
-
-    @property
-    def results_and_observations(self) -> str:
-        lines = []
-        if self.facts is not None:
-            lines = [f"{r.step_label}단계 {r.kind}: {r.text}" for r in self.facts.records]
-            for step in self.facts.steps:
-                if not step.records:
-                    lines.append(f"{step.label}단계: 기록된 관찰이 없다.")
-        return "\n".join(lines + [self.results_summary])
-
-    @property
-    def discussion(self) -> str:
-        return "\n".join(self.discussion_confirmed + self.discussion_to_check + self.discussion_review)
-
-
-def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
-    """The server's own sentence for every model section."""
-
-    title = facts.protocol_title or "이 프로토콜"
-    if facts.purpose_from_pdf:
-        purpose = f"원문은 이 실험의 목적을 다음과 같이 적고 있다: “{facts.purpose_from_pdf}”[1]."
-    elif facts.keywords:
-        purpose = (f"이 실험은 '{title}' 프로토콜에 따라 수행했다[1]. "
-                   f"원문에는 목적을 따로 밝힌 문장이 없으며, 원문 키워드는 '{facts.keywords}'이다[1].")
-    else:
-        purpose = f"이 실험은 '{title}' 프로토콜에 따라 수행했다[1]. 원문에는 목적을 따로 밝힌 문장이 없다[1]."
-    background = (
-        "원문은 다음 순서의 단계 묶음으로 되어 있다: " + " → ".join(facts.sections) + "[1]."
-        if facts.sections else "원문에서 원리를 설명하는 부분을 찾지 못했다[1]."
-    )
-    groups: list[tuple[str, list[str]]] = []
-    for step in facts.steps:
-        if not step.completed:
-            continue
-        if groups and groups[-1][0] == step.section:
-            groups[-1][1].append(step.label)
-        else:
-            groups.append((step.section, [step.label]))
-    if groups:
-        methods = " ".join(
-            (f"‘{section}’ 묶음의 {_ranges(labels)}를 수행했다." if section else f"{_ranges(labels)}를 수행했다.")
-            for section, labels in groups
-        ) + " 단계별 절차와 원문 조건은 3-2의 표에 원문 그대로 적었다."
-    else:
-        methods = "완료로 기록된 단계가 없다."
-    live = [r for r in facts.records if r.status != "취소됨"]
-    counts = {kind: sum(1 for r in live if r.kind == kind) for kind in ("관찰", "이상", "사진")}
-    counted = record_counts(facts.records, separator=", ")
-    if facts.records:
-        results = (f"{counted}이 기록되었다. "
-                   "내용은 위 표에 연구자가 말한 그대로 적었다.")
-    else:
-        results = "기록된 관찰이 없습니다."
-    done = len(facts.completed_labels)
-    if facts.outcome == "completed":
-        conclusion = f"{facts.total_steps}단계 중 {done}단계를 완료로 기록하고 실험을 끝까지 마쳤다."
-    elif facts.outcome == "stopped":
-        where = f" {facts.stop_label}단계에서" if facts.stop_label else ""
-        conclusion = f"{facts.total_steps}단계 중 {done}단계를 완료로 기록하고{where} 실험을 중단했다."
-    else:
-        conclusion = f"{facts.total_steps}단계 중 {done}단계가 완료로 기록되었고 실험이 진행 중이다."
-    conclusion += f" {counted}이 기록되었다."
-    next_steps: list[str] = []
-    if facts.outcome == "stopped" and facts.stop_label:
-        next_steps.append(f"{facts.stop_label}단계부터 이어서 진행한다.")
-    if counts["이상"]:
-        next_steps.append("이상 기록의 처리 결과를 적는다.")
-    if counts["사진"]:
-        next_steps.append("사진에서 본 것을 결과에 적는다.")
-    next_steps.append("‘연구자 해석’ 칸을 채운다.")
-    return {
-        "purpose": purpose,
-        "background": background,
-        "methods_summary": methods,
-        "results_summary": results,
-        "discussion_confirmed": tuple(facts.confirmed) or ("기록에서 확인되는 완료 단계가 없다.",),
-        "discussion_to_check": tuple(facts.to_check) or ("기록에서 따로 확인할 점을 찾지 못했다.",),
-        "discussion_review": (),
-        "conclusion": conclusion,
-        "next_steps": tuple(next_steps),
-    }
-
-
-def _review_items(value: Any) -> tuple[str, ...]:
-    items = value if isinstance(value, (list, tuple)) else []
-    texts = []
-    for item in items:
-        if isinstance(item, Mapping):
-            text = " ".join(str(item.get("제안") or "").split())
-            number = item.get("항목 번호")
-            if text:
-                texts.append(f"검토 제안 (항목 {number}): {text}")
-    return tuple(texts)
-
-
-def _text_items(value: Any) -> tuple[str, ...]:
-    if isinstance(value, (list, tuple)):
-        return tuple(" ".join(str(item).split()) for item in value if str(item).strip())
-    text = " ".join(str(value or "").split())
-    return (text,) if text else ()
+    def ai_written(self) -> bool:
+        return bool(self.ai_notes or self.ai_result)
 
 
 def narrative_from_sections(
@@ -3390,67 +4186,20 @@ def narrative_from_sections(
     model: Mapping[str, Any] | None = None,
     *,
     rejected: Mapping[str, Sequence[str]] | None = None,
-    writer: str = "서버 대체 문장",
+    writer: str = "서버",
     written_at: str | None = None,
+    failure: str = "",
 ) -> ReportNarrative:
-    if model:
-        item_uses, item_uses_rejected = check_item_uses(model.get("item_uses"), facts)
-    else:
-        item_uses, item_uses_rejected = {}, ()
-    fallback = deterministic_sections(facts)
-    rejected = {key: tuple(value) for key, value in (rejected or {}).items()}
-    chosen: dict[str, Any] = {}
-    origin: dict[str, str] = {}
-    for key in MODEL_SECTIONS:
-        value = None if model is None or key in rejected else model.get(key)
-        if key == "next_steps":
-            value = _text_items(value) if value else None
-        elif key == "discussion_review":
-            value = _review_items(value) if value else None
-        elif value is not None:
-            value = " ".join(str(value).split()) or None
-        if value:
-            chosen[key], origin[key] = value, "모델"
-        else:
-            chosen[key] = fallback[key]
-            if model is None:
-                origin[key] = "서버"
-            elif key in rejected or not model:
-                origin[key] = "대체"
-            else:
-                # The model left it empty: not a refusal, but not its words.
-                origin[key] = "모델이 비움 — 서버 문장"
-    # Lane N, decision 7: with no background in the source the model may give
-    # a short one from general knowledge; used only when it passes its check
-    # and the source background was not used (or only said there is none).
-    general = " ".join(str((model or {}).get("background_general") or "").split())
-    said = " ".join(str((model or {}).get("background") or "").split())
-    background_general = False
-    if (
-        general
-        and "background_general" not in rejected
-        # Only where the model found no background in the source: a source
-        # background refused by its check is not replaced by general knowledge.
-        and (not said or _SOURCE_SAYS_NONE.search(said))
-    ):
-        chosen["background"], origin["background"] = general, "모델 (AI 일반 지식)"
-        background_general = True
-    # Discussion (가) and (나) are lists the server builds from the record
-    # (decision 2); the model does not write them.
-    for key in ("discussion_confirmed", "discussion_to_check"):
-        chosen[key], origin[key] = fallback[key], "서버"
+    """The notebook's narrative: the server's sentences, and the model's notes
+    when a reply is given and they pass (``rejected`` is kept for callers
+    written before decision ③; it is not read)."""
+
+    notes, result, dropped = check_ai_notes(model, facts) if model else ((), "", ())
     return ReportNarrative(
-        title=f"{facts.protocol_title} 실험 보고서" if facts.protocol_title else "실험 보고서",
-        purpose=chosen["purpose"], background=chosen["background"],
-        methods_summary=chosen["methods_summary"], results_summary=chosen["results_summary"],
-        discussion_confirmed=tuple(chosen["discussion_confirmed"]),
-        discussion_to_check=tuple(chosen["discussion_to_check"]),
-        discussion_review=tuple(chosen["discussion_review"]),
-        conclusion=chosen["conclusion"], next_steps=tuple(chosen["next_steps"]),
-        facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
-        rejected=rejected, writer=writer, written_at=written_at or _now(),
-        item_uses=item_uses, item_uses_rejected=item_uses_rejected,
-        background_general=background_general,
+        title=(facts.notebook.title if facts.notebook is not None else facts.protocol_title) or "실험 노트",
+        facts=facts, sources=(facts.protocol_reference,), writer=writer,
+        written_at=written_at or _now(), ai_notes=notes, ai_result=result, ai_rejected=dropped,
+        failure=failure,
     )
 
 
@@ -3512,94 +4261,63 @@ class ReportWriterSettings:
 _NARRATIVE_CACHE: dict[tuple[Any, ...], ReportNarrative] = {}
 _AUTO = object()
 
-_WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는다. 아래 JSON 은 서버가 실험 기록과 프로토콜 원문에서 뽑은 사실이다. 이 사실로 한국어 실험 보고서의 서술 칸만 쓴다. 표(수행 정보, 수행한 단계, 결과 표, 원문과 다르게 한 점)는 서버가 따로 넣으므로 다시 쓰지 않는다.
+_WRITER_INSTRUCTIONS = """너는 연구자의 실험 노트를 돕는다. 아래 JSON 은 서버가 실험 기록과 프로토콜 원문에서 뽑은 사실이다. 이 사실만으로 두 가지를 쓴다.
 
-문체: 간결하고 명확한 한국어 학술 문체(~했다/~이다). 핵심만 쓴다.
+1. observation_notes: '기록' 의 관찰·측정을 단계(와 시료)별로 묶어 실험 노트 말투(~했다/~였다)의 한 문장씩. 항목마다 {"단계": 단계 번호, "시료": 시료 이름 또는 "", "문장": 문장}. 기록이 없는 단계는 쓰지 않는다.
+2. result_summary: 결과 한 문단(1–3문장) — '기록', '실제로 한 조건', '원문과 다르게 한 점', '결과 (실험자가 말함)' 에 있는 것만으로.
 
 지킬 것:
-- 기록에 없는 결과·관찰·측정·수치·오차 원인을 지어내지 않는다. 결과 칸은 기록된 사실만 쓰고 추측하지 않는다.
-- 숫자와 단위는 사실 JSON 에 있는 그대로 쓴다. 바꾸거나 계산해서 새 숫자를 만들지 않는다.
-- 목적·배경 칸에는 온도·시간·농도·부피·회전수 같은 실험 조건 숫자를 쓰지 않는다.
-- 목적 칸의 모든 문장 끝에 출처 번호 [1](프로토콜 원문)을 단다.
-- 'background' 는 프로토콜 원문에 원리·배경 설명이 있을 때만 원문 내용으로 쓰고 문장 끝에 [1] 을 단다. 원문에 그런 설명이 없으면 'background' 는 빈 문자열 "" 로 두고, 'background_general' 에 이 실험의 원리를 일반 지식으로 3–4문장 쓴다. 'background_general' 에는 숫자·단위·절차·지시("~하세요", "~해야 한다")·안전 지시·출처 번호·식별자를 쓰지 않는다. 서버가 'AI 일반 지식 — 출처 없음, 확인 필요' 표시를 붙인다. 원문에 설명이 있으면 'background_general' 은 쓰지 않는다.
-- 회차나 반복 횟수("2회 반복", "2회차")를 쓸 때는 반드시 '말로 확인한 돌아가기 기준' 이라는 말을 같은 문장에 쓴다. 기록에 있는 회차만 쓴다.
-- 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
-- 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
-- 고찰의 '기록에서 확인되는 점'과 '확인이 필요한 점'은 서버가 기록에서 목록으로 만든다. 다시 쓰지 않는다.
-- '확인되지 않은 값' 은 실험자가 아직 확인하지 않은 값이다. 서버가 보고서에 따로 적으므로, 어느 칸에도 그 값(숫자·문구)을 쓰지 않는다.
-- 'item_uses' 는 '재료·장비' 의 항목마다 그 항목이 이 실험에서 하는 일을 짧은 한국어 명사구로 쓴다(예: "세균 배양 배지", "휘발성 물질 흡착"). '재료·장비가 나오는 원문 단계' 에서 알 수 있는 것만 쓰고, 알 수 없으면 그 항목은 뺀다. 25자 안, 숫자·단위 없이, 안전 지시나 절차 지시("~하세요", "~한 뒤") 없이 쓴다. 목록에 없는 항목은 쓰지 않는다.
+- 숫자와 단위는 사실 JSON 에 있는 그대로 쓴다. 바꾸거나 계산하거나 새 숫자를 만들지 않는다. 서버가 모든 숫자·단위를 기록·원문과 대조해 없는 문장은 버린다.
+- 기록·원문에 없는 관찰·결과·원인·해석을 지어내지 않는다. 추측하지 않는다.
+- 안전 지침·완료 기준·절차 지시("~하세요", "~해야 한다")를 쓰지 않는다.
+- 반복 회차를 쓸 때는 사실 JSON 에 적힌 대로 "(말로 확인한 돌아가기 기준)" 을 붙인다. 없으면 회차 수를 쓰지 않는다.
+- '확인되지 않은 값' 과 "(확인되지 않음)" 이 붙은 값은 어느 문장에도 쓰지 않는다.
+- 기록 ID, 버전, 해시, 영어 상태값, 명령 이름은 쓰지 않는다.
 
-JSON 객체 하나만 돌려준다. 키:
-purpose (1–3문장), background, background_general (원문에 배경이 없을 때만), methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
-results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
-discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록),
-item_uses (목록, 각 항목 {"번호": '재료·장비' 의 번호, "용도": 명사구})."""
+JSON 객체 하나만 돌려준다. 키: observation_notes (목록), result_summary (문자열, 쓸 것이 없으면 "")."""
 
 
-def _reviewable_numbers(facts: ReportFacts) -> dict[int, str]:
-    """The items a cause suggestion may name: anomalies and deviations, less
-    what the researcher was asked about and did not confirm (lane N)."""
+def _mark_in_words(text: str) -> str:
+    """The server's "[미확인]" mark said in words, so the model knows which
+    value it may not state (and copies no mark of the server's)."""
 
-    unconfirmed = set(facts.unconfirmed_texts)
-    items = {
-        record.number: f"이상: {record.text}"
-        for record in facts.records
-        if record.kind == "이상" and record.status != "취소됨" and record.text not in unconfirmed
-    }
-    items.update({
-        len(facts.records) + index: f"원문과 다르게 한 점: {text}"
-        for index, text in enumerate(facts.deviations, 1) if text not in unconfirmed
-    })
-    return items
+    return " ".join(text.replace(UNCONFIRMED_MARK, "(확인되지 않음)").split())
 
 
 def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
-    """What the model reads: experiment content only, no identifiers (decision 3)."""
+    """What the model reads: the notebook's facts only, no identifiers (decision ③)."""
 
-    labels = {record.number: record.step_label for record in facts.records}
-    reviewable = [
-        {"항목 번호": number, **({"단계": labels[number]} if number in labels else {}), "내용": text}
-        for number, text in sorted(_reviewable_numbers(facts).items())
-    ]
+    book = facts.notebook
+    unconfirmed = set(facts.unconfirmed_texts)
+    records: list[dict[str, Any]] = []
+    for item in (book.observations if book is not None else ()):
+        if item.text in unconfirmed:
+            continue
+        records.append({
+            "단계": item.label, "과정": item.process, "시료": "" if item.sample == "—" else item.sample,
+            "종류": item.kind, "기록": item.text, "시각": item.at,
+        })
+    for record in facts.records:
+        if record.kind in {"편차", "이상"} and record.status != "취소됨" and record.text not in unconfirmed:
+            records.append({"단계": record.step_label, "종류": record.kind, "기록": record.text, "시각": record.at})
     return {
         "프로토콜": facts.protocol_title,
-        "원문 키워드": facts.keywords,
-        "원문에 적힌 목적": facts.purpose_from_pdf,
-        "원문 단계 묶음": list(facts.sections),
-        "재료·장비": [
-            {"번호": number, "종류": item.kind, "이름": item.name, "사용 단계": list(item.steps)}
-            for number, item in enumerate(facts.items, 1)
+        "목적": book.purpose if book is not None else "",
+        "시료": [
+            {"이름": sample.name, "조건": sample.condition, "대조군": sample.control}
+            for sample in (book.samples if book is not None else ())
         ],
-        "재료·장비가 나오는 원문 단계": dict(facts.item_step_texts),
-        "수행 정보": {name: value for name, value in facts.run_rows if value and name != "실험자"},
-        "수행한 단계": [
-            {
-                "단계": step.label, "묶음": step.section,
-                # Lane N, decision 6: a stored machine translation as the
-                # Korean, marked, with the source beside it.
-                **({"원문": step.source_text, "한국어(자동 번역)": step.text}
-                   if step.translation == "machine" else {"원문": step.text}),
-                "완료": step.completed,
-                **({"완료 시각": step.completed_at} if step.completed_at else {}),
-                **({"타이머": step.timer_note} if step.timer_note else {}),
-                **({"원문 기대 결과": list(step.expected)} if step.expected else {}),
-            }
-            for step in facts.steps
-        ],
-        "기록": [
-            {"번호": r.number, "단계": r.step_label, "종류": r.kind, "내용": r.text, "시각": r.at,
-             **({"상태": r.status} if r.status else {}),
-             **({"실험자 확인": True} if r.confirmed else {})}
-            for r in facts.records
-            if r.status != "취소됨" and r.text not in set(facts.unconfirmed_texts)
-        ],
+        "실제로 한 조건": [
+            _mark_in_words(f"{process} — {words}")
+            for process, words in (book.condition_rows if book is not None else ())],
+        "기록": records,
+        "원문과 다르게 한 점": [_mark_in_words(line) for line in (book.differences if book is not None else ())],
+        "결과 (실험자가 말함)": book.result if book is not None else "",
+        "다음에 바꿀 점 (실험자가 말함)": book.next_change if book is not None else "",
         "확인되지 않은 값": [
             f"{item['step_label']}단계 {item['kind']}: {item['text']}"
             for item in facts.review if not item["confirmed"]
         ],
-        "원문과 다르게 한 점": list(facts.deviations),
-        "서버가 찾은 확인이 필요한 점": list(facts.to_check),
-        "검토할 수 있는 항목": reviewable,
     }
 
 
@@ -3682,12 +4400,14 @@ class ReportWriterBrain:
         *,
         fixture: Any = _AUTO,
         start_check: Sequence[Mapping[str, Any]] | None = None,
+        previous: ReportFacts | None = None,
     ) -> ReportFacts:
         if isinstance(report_data_or_context, GroundedReportContext):
             context = report_data_or_context
             report_data = {**context.report_metadata, **context.protocol_metadata,
                            **context.session_timing}
-            return build_report_facts(report_data, list(events or context.event_ledger), context=context)
+            return build_report_facts(report_data, list(events or context.event_ledger), context=context,
+                                      previous=previous)
         report_data = report_data_or_context
         problem = ""
         if fixture is _AUTO:
@@ -3697,7 +4417,7 @@ class ReportWriterBrain:
             context = build_grounded_report_context(
                 dict(report_data), list(events or report_data.get("events") or ()), lookup=False)
         return build_report_facts(report_data, events, fixture=fixture, context=context,
-                                  protocol_problem=problem, start_check=start_check)
+                                  protocol_problem=problem, start_check=start_check, previous=previous)
 
     def build_deterministic_narrative(
         self,
@@ -3775,13 +4495,8 @@ def narrative_from_reply(
 
     if reply is None:
         return narrative_from_sections(
-            facts, {}, rejected={key: (failure or "모델 답 없음",) for key in MODEL_SECTIONS},
-            writer=f"{writer} (실패)", written_at=written_at,
-        )
-    return narrative_from_sections(
-        facts, reply, rejected=check_report_sections(reply, facts), writer=writer,
-        written_at=written_at,
-    )
+            facts, None, writer=f"{writer} (실패)", written_at=written_at, failure=failure or "모델 답 없음")
+    return narrative_from_sections(facts, reply, writer=writer, written_at=written_at)
 
 
 # --- Preparing the prose when the experiment ends (decision 9) --------------------
@@ -3931,211 +4646,115 @@ REPORT_PROSE = ReportProsePreparer()
 
 
 def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
-    """The report as blocks: ("title"|"h1"|"h2"|"h3"|"p"|"list"|"table"|"note", content)."""
+    """The notebook as blocks (lane RP3, decision ①): ("title"|"subtitle"|
+    "h1"|"h2"|"p"|"list"|"table"|"sign"|"note"|"alert"|"appendix", content)."""
 
     facts = narrative.facts
-    assert facts is not None
-    blocks: list[tuple[str, Any]] = [("title", narrative.title)]
+    assert facts is not None and facts.notebook is not None
+    book = facts.notebook
     glance = facts.glance
+    blocks: list[tuple[str, Any]] = [("title", book.title), ("subtitle", book.subtitle)]
     if glance is not None and glance.unconfirmed:
-        # Lane RP2, decision 3: the first line says how many values are not
-        # confirmed and which; the report is still made.
+        # Lane RP2, decision 3 (kept): the first line says how many values
+        # are not confirmed and which; the notebook is still made.
         blocks += [("alert", (f"확인 안 된 값 {len(glance.unconfirmed)}개", UNCONFIRMED_WORDS)),
                    ("list", glance.unconfirmed)]
-    # Lane RP2, decision 1: the run table is the header, its decided rows first.
-    blocks.append(_table(("항목", "내용"), tuple(
-        (name, value or "(직접 적어 주세요)")
-        for name, value in (glance.header_rows if glance is not None else facts.run_rows))))
-    if glance is not None:
-        blocks += glance_blocks(glance)
-        blocks.append(("pagebreak", None))
+    blocks.append(_table(("항목", "내용"), book.header_rows))
 
-    blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
-
-    blocks += [("h1", "2. 배경·원리"), ("p", narrative.background),
-               ("note", GENERAL_BACKGROUND_LABEL if narrative.background_general
-                else "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
-
-    blocks += [("h1", "3. 재료 및 방법"), ("h2", "3-1. 재료와 장비")]
-    if facts.items:
-        # Decisions 2-4: materials and equipment each in their own table, the
-        # name as listed, the model's use when one passed the server's check,
-        # and the source steps that name it. Without any use (no model, a
-        # failed call, every use refused) the tables have no use column. A
-        # caption stands between the two, so Word does not join them.
-        uses = narrative.item_uses
-        for kind in ("재료", "장비"):
-            rows = tuple(
-                (item.name, uses.get(item.name, ""), _label_runs(item.steps) or "—") if uses
-                else (item.name, _label_runs(item.steps) or "—")
-                for item in facts.items if item.kind == kind)
-            if rows:
-                blocks += [("h3", kind), _table(ITEM_USE_HEADER if uses else ITEM_HEADER, rows)]
-        if uses:
-            blocks.append(("note", "용도는 AI 가 원문 단계를 바탕으로 정리했다."))
-        blocks.append(("note", "사용 단계는 서버가 원문 단계 글에서 그 이름(또는 원문이 쓰는 줄임말)을 찾아 적었다. "
-                               "찾지 못하면 —."))
-        if any(item.name != item.listed for item in facts.items if item.listed):
-            blocks.append(("note", ITEM_LABELS_NOTE))
+    blocks.append(("h1", NOTEBOOK_SECTIONS[0]))
+    if book.samples:
+        blocks.append(_table(SAMPLE_HEADER, tuple(
+            (sample.name, sample.condition, "예" if sample.control else "") for sample in book.samples)))
+        blocks.append(("note", f"말한 그대로: “{book.purpose_words}”"))
+    elif book.purpose_words:
+        blocks.append(("note", f"시료는 말하지 않음. 말한 그대로: “{book.purpose_words}”"))
     else:
-        blocks.append(("note", "원문에서 재료 목록을 불러오지 못했다."))
-    blocks.append(("h2", "3-2. 수행한 단계"))
-    rows: list[tuple[str, ...]] = []
-    for step in facts.steps:
-        if step.translation == "machine" and step.text and step.source_text:
-            # Lane N, decision 6: the stored Korean, marked as a machine
-            # translation, with the source under it in small type.
-            shown: Any = StackedCell(f"{step.text} (자동 번역)", step.source_text)
-        elif step.text:
-            shown = step.text + ("" if step.translated else " (원문 영어)")
-        else:
-            shown = "(원문을 불러오지 못함)"
-        rows.append((
-            step.label, shown,
-            step.completed_at or ("완료 기록 없음" if not step.completed else ""), step.timer_note or "—"))
-        # Decision 6: a confirmed return, under the step it was made at.
-        for back in facts.returns:
-            if back.from_label == step.label:
-                round_words = (f"{back.round}회차 시작(회차는 말로 확인한 돌아가기 기준)" if back.round
-                               else "회차 기록 없음")
-                rows.append((f"{back.from_label}→{back.to_label}",
-                             f"{back.to_label}단계로 돌아감 — {round_words}", back.at or "—", "—"))
-        # Lane CB, decision 5: the condition's answer under its step, and the
-        # count a person gave under the step it was asked at, each with where
-        # the value came from.
-        for answer in facts.branch_answers:
-            if answer.step_label == step.label:
-                skipped = (f" · {_ranges(list(answer.skipped_labels))} 건너뜀"
-                           if answer.skipped_labels else "")
-                rows.append((step.label,
-                             f"조건: “{answer.condition}” → {answer.answer} ({answer.value_source}){skipped}",
-                             answer.at or "—", "—"))
-        for repetition in facts.repetitions:
-            if repetition.asked_at == step.label:
-                count = f"{repetition.count}회" if repetition.count else "미정"
-                asked = "(회차마다 물음)" if repetition.per_round else ""
-                rows.append((f"{repetition.first}~{repetition.last}",
-                             f"반복 횟수 {count} — {repetition.value_source}{asked}",
-                             repetition.at or "—", "—"))
-    if rows:
-        blocks.append(_table(("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), tuple(rows)))
+        blocks.append(("note", NOT_SAID_WORDS))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[1]))
+    if book.condition_rows:
+        blocks.append(_table(CONDITION_HEADER, book.condition_rows))
     else:
-        blocks.append(("note", "수행한 단계가 기록되지 않았다."))
-    blocks += [("h2", "3-3. 방법 요약"), ("p", narrative.methods_summary),
-               ("h2", "3-4. 원문과 다르게 한 점 (기록에서)")]
-    blocks.append(("list", facts.deviations) if facts.deviations else ("note", "기록에서 원문과 다르게 한 점을 찾지 못했다."))
+        blocks.append(("note", book.condition_note or NO_VALUED_STEPS_WORDS))
+    if book.materials_words:
+        blocks.append(("note", book.materials_words))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[2]))
+    if book.observations:
+        blocks.append(_table(OBSERVATION_HEADER, tuple(
+            (item.process, item.sample, item.shown, item.at) for item in book.observations)))
+    else:
+        blocks.append(("note", NO_OBSERVATION_WORDS))
+    for note in narrative.ai_notes:
+        # Decision ③: an AI-written sentence that passed its check, marked.
+        where = f"{note.step_label}단계" + (f" · {note.sample}" if note.sample else "")
+        blocks.append(("note", f"{AI_NOTE_LABEL} — {where}: {note.text}"))
+    blocks.append(("note", f"결과 (실험자가 말함): “{book.result}”" if book.result else f"결과: {NOT_SAID_WORDS}"))
+    if narrative.ai_result:
+        blocks.append(("note", f"결과 ({AI_NOTE_LABEL}): {narrative.ai_result}"))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[3]))
+    blocks.append(("list", book.differences) if book.differences else ("note", NO_DIFFERENCE_WORDS))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[4]))
+    if book.previous_words:
+        blocks.append(("note", book.previous_words))
+        blocks.append(("list", book.previous_lines) if book.previous_lines else ("note", SAME_AS_LAST_WORDS))
+    else:
+        blocks.append(("note", FIRST_RUN_WORDS))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[5]))
+    blocks.append(("list", book.next_lines) if book.next_lines else ("note", NOT_SAID_WORDS))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[6]))
+    confirm_rows = (("실험자", "", "", ""),) + (book.pi_rows or (("PI", "", "", ""),))
+    blocks.append(("sign", (CONFIRM_HEADER, confirm_rows, TABLE_WIDTHS[CONFIRM_HEADER])))
+    if not book.pi_rows:
+        blocks.append(("note", NO_PI_WORDS))
+
+    blocks += [("h1", NOTEBOOK_SECTIONS[7]), ("appendix", None), ("h2", "단계 시각표")]
+    blocks.append(_table(APPENDIX_STEP_HEADER, book.appendix_step_rows) if book.appendix_step_rows
+                  else ("note", "기록된 단계가 없다."))
+    blocks.append(("h2", "말한 그대로의 기록"))
+    blocks.append(_table(APPENDIX_RECORD_HEADER, book.appendix_record_rows) if book.appendix_record_rows
+                  else ("note", "말로 남긴 기록이 없다."))
     if facts.review_version_words:
-        # Lane RV, decision g: what the review version the run followed holds
-        # apart from the source, item by item.
-        changed = [change for change in facts.review_changes if change.changed]
-        blocks.append(("h2", f"3-5. 원문 대비 검토자 수정 {len(changed)}건"))
-        blocks.append(("note", f"이 실험은 {facts.review_version_words}을 따랐다."))
+        # Lane RV, decision g (kept, in the appendix): what the review version
+        # the run followed holds apart from the source, item by item.
+        blocks.append(("h2", facts.review_version_words))
         if facts.review_changes:
             blocks.append(_table(REVIEW_CHANGE_HEADER, tuple(
                 (change.step_label or "—", change.kind, change.original, change.reviewed,
                  change.origin, change.reviewer)
                 for change in facts.review_changes)))
-            confirmed = len(facts.review_changes) - len(changed)
-            if confirmed:
-                blocks.append(("note", f"AI 제안을 검토자가 원문과 대조해 확인한 항목 {confirmed}건이 표에 함께 있다."))
         else:
             blocks.append(("note", "검토자가 원문에서 바꾼 값이 없다."))
-
-    blocks.append(("h1", "4. 결과"))
-    if facts.records:
-        blocks.append(_table(("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"), tuple(
-            (r.step_label, r.kind, r.shown, r.at) for r in facts.records)))
-    else:
-        blocks.append(("p", "기록된 관찰이 없습니다."))
-    # Lane N, decision 3: what the researcher confirmed, and what not, apart.
-    unconfirmed = [item for item in facts.review if not item["confirmed"]]
-    if unconfirmed:
-        blocks += [
-            ("h2", "확인되지 않은 값"),
-            ("note", "실험이 끝난 뒤 실험자가 아직 확인하지 않은 값이다. 화면의 확인 목록에서 확인하면 이 칸에서 빠진다."),
-            ("list", tuple(
-                f"{item['step_label']}단계 {item['kind']}: {item['text']}" if item["step_label"]
-                else f"{item['kind']}: {item['text']}"
-                for item in unconfirmed)),
-        ]
-    elif facts.review:
-        blocks.append(("note", f"보고서에 넣은 중요 값 {len(facts.review)}개를 실험자가 모두 확인했다(표의 ‘실험자 확인’)."))
-    if facts.records:
-        blocks += [("h2", "요약"), ("p", narrative.results_summary)]
-
-    blocks += [("h1", "5. 고찰"),
-               ("h2", "(가) 기록에서 확인되는 점"), ("list", narrative.discussion_confirmed),
-               ("h2", "(나) 확인이 필요한 점"), ("list", narrative.discussion_to_check),
-               ("h2", "(다) 원인 검토 제안")]
-    if narrative.discussion_review:
-        blocks += [("note", "아래는 기록된 이상·편차에 붙인 검토 제안이며 확인된 원인이 아니다."),
-                   ("list", narrative.discussion_review)]
-    else:
-        blocks.append(("note", "기록된 이상·편차에 붙일 검토 제안이 없다."))
-    blocks += [("h2", "(라) 연구자 해석"), ("p", "(연구자가 직접 적는다)\n\n\n")]
-
-    blocks += [("h1", "6. 결론"), ("p", narrative.conclusion), ("h2", "다음 할 일"),
-               ("list", narrative.next_steps)]
-
-    blocks.append(("h1", "참고문헌"))
-    references = []
-    for source in narrative.sources:
-        text = f"[{source.number}] {source.title}"
-        if source.url:
-            text += f" {source.url}"
-        references.append(text + " — 실험에 쓴 프로토콜 원문")
-    blocks.append(("list", tuple(references)))
-    blocks.append(("note", authorship_line(narrative)))
-    return blocks
-
-
-def glance_blocks(glance: ReportGlance) -> list[tuple[str, Any]]:
-    """The report's first pages after its header (lane RP2, decision 1)."""
-
-    blocks: list[tuple[str, Any]] = [("h1", "한눈 요약"), _table(GLANCE_SUMMARY_HEADER, (glance.summary,))]
-    if glance.connections:
-        blocks.append(("list", glance.connections))
-    blocks.append(("h1", "단계별 기록"))
-    blocks.append(_table(GLANCE_STEP_HEADER, glance.step_rows) if glance.step_rows
-                  else ("note", "기록된 단계가 없다."))
-    blocks.append(("h1", "타이머"))
-    blocks.append(_table(GLANCE_TIMER_HEADER, glance.timer_rows) if glance.timer_rows
-                  else ("note", "이 실험에는 타이머가 없다."))
-    blocks.append(("h1", "편차·이상 모음"))
-    if glance.issue_rows:
-        blocks += [_table(GLANCE_ISSUE_HEADER, glance.issue_rows),
-                   ("note", "원문 (쪽)은 원문의 값과 그 단계가 원문에 있는 쪽이다.")]
-    else:
-        blocks.append(("note", "기록에서 편차·이상을 찾지 못했다."))
-    blocks.append(("h1", "시작 전 확인 결과"))
-    if glance.prestart_rows is None:
-        blocks.append(("note", "시작 전 핵심 값 확인 기록을 읽지 못했다."))
-    elif glance.prestart_rows:
-        blocks.append(_table(GLANCE_PRESTART_HEADER, glance.prestart_rows))
-    else:
-        blocks.append(("note", "시작 전 핵심 값 확인 기록이 없다 (확인이 꺼져 있었거나 확인할 숫자 값이 없었다)."))
-    if glance.prestart_notes:
-        blocks.append(("list", glance.prestart_notes))
-    blocks += [("h1", "실험자 확인"), ("note", "위 기록이 실제로 한 실험과 같은지 확인한 뒤 적는다."),
-               ("sign", (GLANCE_SIGN_HEADER, GLANCE_SIGN_ROWS, TABLE_WIDTHS[GLANCE_SIGN_HEADER]))]
+    blocks += [("note", book.system_words), ("note", f"출처: {book.source_words}"),
+               ("note", authorship_line(narrative))]
     return blocks
 
 
 def authorship_line(narrative: ReportNarrative) -> str:
-    """Who wrote the report's sentences, under the references (decision 6)."""
+    """Who wrote the notebook's sentences, and when (decision ①: the server)."""
 
     facts = narrative.facts
     written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
     when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
-    if narrative.background_general:
-        return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
-                f"작성했다. 배경·원리 문단은 원문에 설명이 없어 AI 가 일반 지식으로 썼으며 출처가 없다. "
-                f"외부 자료는 쓰지 않았다. 작성 {when}.")
-    if narrative.item_uses or any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
-        return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
-                f"작성했으며, 외부 자료는 쓰지 않았다. 작성 {when}.")
-    return (f"이 보고서의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었으며 AI 가 쓴 문장은 없다. "
-            f"작성 {when}.")
+    base = "이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다."
+    count = len(narrative.ai_notes) + (1 if narrative.ai_result else 0)
+    dropped = len(narrative.ai_rejected)
+    if count:
+        # Decision ③: how many sentences the model wrote and that every number
+        # and unit in them was checked against the record and the source.
+        line = (f"{base} {AI_NOTE_LABEL} {count}문장({narrative.writer})은 ‘{AI_NOTE_LABEL}’로 표시했고 "
+                f"모든 숫자·단위가 기록이나 원문에 있는지 서버가 검사했다.")
+        if dropped:
+            line += f" 검사에서 버린 문장 {dropped}개."
+    elif dropped:
+        line = f"{base} AI 가 쓴 문장은 없다(검사에서 버린 문장 {dropped}개)."
+    else:
+        line = f"{base} AI 가 쓴 문장은 없다."
+    return f"{line} 작성 {when}."
 
 
 #: Each report table's column widths as shares of the text width (decision 4):
@@ -4145,12 +4764,9 @@ ITEM_HEADER = ("이름 (원문 그대로)", "사용 단계")
 #: Said under the tables when a name was shown without what the protocols.io
 #: list writes after it (lane FX, decision 4).
 ITEM_LABELS_NOTE = "이름 뒤에 붙은 protocols.io 목록 꼬리표(NAME·TYPE·BRAND·SKU)와 끝의 긴 숫자 코드는 표에서 뺐다."
-ITEM_USE_HEADER = ("이름 (원문 그대로)", "용도", "사용 단계")
-
 TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     ("항목", "내용"): (0.22, 0.78),
     ITEM_HEADER: (0.80, 0.20),
-    ITEM_USE_HEADER: (0.38, 0.44, 0.18),
     ("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"): (0.07, 0.59, 0.12, 0.22),
     ("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"): (0.07, 0.09, 0.73, 0.11),
     REVIEW_CHANGE_HEADER: (0.07, 0.13, 0.28, 0.28, 0.13, 0.11),
@@ -4161,6 +4777,13 @@ TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     GLANCE_ISSUE_HEADER: (0.06, 0.07, 0.13, 0.18, 0.38, 0.08, 0.10),
     GLANCE_PRESTART_HEADER: (0.12, 0.08, 0.17, 0.17, 0.34, 0.12),
     GLANCE_SIGN_HEADER: (0.30, 0.70),
+    # Lane RP3, decision ①: the notebook's tables.
+    SAMPLE_HEADER: (0.30, 0.55, 0.15),
+    CONDITION_HEADER: (0.32, 0.68),
+    OBSERVATION_HEADER: (0.20, 0.12, 0.58, 0.10),
+    CONFIRM_HEADER: (0.14, 0.20, 0.26, 0.40),
+    APPENDIX_STEP_HEADER: (0.10, 0.14, 0.14, 0.22, 0.40),
+    APPENDIX_RECORD_HEADER: (0.10, 0.08, 0.14, 0.68),
 }
 #: The report's one font, for Korean and Latin letters alike (lane RP2,
 #: decision 1): Word prints it as Malgun Gothic, and the server's LibreOffice
@@ -4186,6 +4809,10 @@ def render_markdown(narrative: ReportNarrative) -> str:
     for kind, content in report_blocks(narrative):
         if kind == "title":
             lines += [f"# {content}", ""]
+        elif kind == "subtitle":
+            lines += [f"> {content}", ""]
+        elif kind == "appendix":
+            continue  # Lane RP3: Word prints what follows in smaller type.
         elif kind == "h1":
             lines += [f"## {content}", ""]
         elif kind == "h2":
@@ -4240,6 +4867,10 @@ def _space(paragraph: Any, kind: str, *, after: float | None = None) -> None:
 
 
 def render_docx(narrative: ReportNarrative) -> bytes:
+    return _render_docx_blocks(report_blocks(narrative))
+
+
+def _render_docx_blocks(blocks: Sequence[tuple[str, Any]]) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
     from docx.oxml import OxmlElement
@@ -4265,8 +4896,10 @@ def render_docx(narrative: ReportNarrative) -> bytes:
     normal.paragraph_format.space_after = Pt(body_after)
     normal.paragraph_format.line_spacing = body_line
     text_width = section.page_width - section.left_margin - section.right_margin
+    # Lane RP3, decision ① (9): the appendix is printed in smaller type.
+    small = False
 
-    for kind, content in report_blocks(narrative):
+    for kind, content in blocks:
         if kind == "title":
             paragraph = document.add_paragraph()
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -4274,21 +4907,37 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             run.bold = True
             run.font.size = Pt(16)
             _space(paragraph, "title")
+        elif kind == "subtitle":
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = paragraph.add_run(str(content))
+            run.italic = True
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor(90, 90, 90)
+            _space(paragraph, "note")
+        elif kind == "appendix":
+            small = True
         elif kind in {"h1", "h2", "h3"}:
             paragraph = document.add_paragraph()
             run = paragraph.add_run(str(content))
             run.bold = True
-            run.font.size = Pt({"h1": 13, "h2": 11, "h3": 10.5}[kind])
+            run.font.size = Pt({"h1": 13, "h2": 10 if small else 11, "h3": 10.5}[kind])
             run.font.color.rgb = RGBColor(20, 50, 35)
             _space(paragraph, kind)
         elif kind == "p":
             for line in str(content).split("\n"):
-                _space(document.add_paragraph(line), "p")
+                paragraph = document.add_paragraph(line)
+                if small:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(8.5)
+                _space(paragraph, "p")
         elif kind == "note":
             paragraph = document.add_paragraph()
             run = paragraph.add_run(str(content))
             run.italic = True
             run.font.color.rgb = RGBColor(90, 90, 90)
+            if small:
+                run.font.size = Pt(8.5)
             _space(paragraph, "note")
         elif kind == "alert":
             # Lane RP2, decision 3: "확인 안 된 값 n개" in bold red, first under the title.
@@ -4301,8 +4950,11 @@ def render_docx(narrative: ReportNarrative) -> bytes:
         elif kind == "list":
             for index, item in enumerate(content):
                 last = index == len(content) - 1
-                _space(document.add_paragraph(f"• {item}"), "list",
-                       after=DOCX_SPACING["p"][1] if last else None)
+                paragraph = document.add_paragraph(f"• {item}")
+                if small:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(8.5)
+                _space(paragraph, "list", after=DOCX_SPACING["p"][1] if last else None)
         elif kind == "pagebreak":
             # Lane RP2, decision 1: the sections start on the page after the first pages.
             paragraph = document.add_paragraph()
@@ -4316,7 +4968,7 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                 table.rows[0].cells[index].text = str(text)
                 for run in table.rows[0].cells[index].paragraphs[0].runs:
                     run.bold = True
-                    run.font.size = Pt(9)
+                    run.font.size = Pt(8 if small else 9)
             # A table that runs onto the next page repeats its heading row there.
             repeat = OxmlElement("w:tblHeader")
             repeat.set(qn("w:val"), "true")
@@ -4341,7 +4993,7 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                         cells[index].add_paragraph(line)
                     for paragraph in cells[index].paragraphs:
                         for run in paragraph.runs:
-                            run.font.size = Pt(9)
+                            run.font.size = Pt(8 if small else 9)
             for row in table.rows:
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
@@ -4353,6 +5005,118 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             _fix_column_widths(table, [int(text_width * share) for share in widths])
     buffer = io.BytesIO()
     document.save(buffer)
+    return buffer.getvalue()
+
+
+MEETING_HEADINGS = ("목적", "시료", "핵심 결과", "지난번과 다른 점", "다음 할 일")
+XLSX_HEADER = ("시료", "과정", "조건 (원문 → 실제)", "관찰", "측정값", "단위", "시각", "출처")
+
+
+def meeting_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
+    """The one-page lab-meeting summary (decision ③): purpose, samples, key
+    results, what differed from the run before, what to do next."""
+
+    facts = narrative.facts
+    assert facts is not None and facts.notebook is not None
+    book = facts.notebook
+    run = dict(facts.run_rows)
+    line = " · ".join(part for part in ("랩미팅 요약", run.get("날짜", ""), run.get("실험자", ""), facts.protocol_title) if part)
+    blocks: list[tuple[str, Any]] = [("title", book.title), ("subtitle", line)]
+    blocks += [("h2", "목적"), ("p", book.purpose or NOT_SAID_WORDS)]
+    blocks.append(("h2", "시료"))
+    if book.samples:
+        blocks.append(_table(SAMPLE_HEADER, tuple(
+            (sample.name, sample.condition, "예" if sample.control else "") for sample in book.samples)))
+    else:
+        blocks.append(("p", NOT_SAID_WORDS))
+    blocks.append(("h2", "핵심 결과"))
+    if narrative.ai_result:
+        blocks.append(("p", f"결과 ({AI_NOTE_LABEL}): {narrative.ai_result}"))
+    if book.result:
+        blocks.append(("p", f"실험자: “{book.result}”"))
+    if narrative.ai_notes:
+        blocks.append(("list", tuple(
+            f"{note.step_label}단계" + (f" · {note.sample}" if note.sample else "") + f": {note.text} ({AI_NOTE_LABEL})"
+            for note in narrative.ai_notes)))
+    elif book.observations:
+        blocks.append(("list", tuple(
+            f"{item.label}단계" + (f" · {item.sample}" if item.sample != "—" else "") + f": {item.text}"
+            for item in book.observations)))
+    if not (narrative.ai_result or book.result or narrative.ai_notes or book.observations):
+        blocks.append(("p", NO_OBSERVATION_WORDS))
+    if book.differences:
+        blocks.append(("list", tuple(f"원문과 다르게: {item}" for item in book.differences)))
+    blocks.append(("h2", "지난번과 다른 점"))
+    if book.previous_words:
+        blocks.append(("p", book.previous_words))
+        blocks.append(("list", book.previous_lines) if book.previous_lines else ("p", SAME_AS_LAST_WORDS))
+    else:
+        blocks.append(("p", FIRST_RUN_WORDS))
+    blocks.append(("h2", "다음 할 일"))
+    blocks.append(("list", book.next_lines) if book.next_lines else ("p", NOT_SAID_WORDS))
+    return blocks
+
+
+def render_meeting_docx(narrative: ReportNarrative) -> bytes:
+    """The lab-meeting summary as one Word page (decision ③)."""
+
+    return _render_docx_blocks(meeting_blocks(narrative))
+
+
+def _record_measure(text: str) -> tuple[Any, str | None]:
+    """The first number with a unit in a record, as a number and its unit, else (None, None)."""
+
+    for number, unit, _ in _measures(text):
+        try:
+            value: Any = float(number)
+            if value.is_integer():
+                value = int(value)
+        except ValueError:
+            value = number
+        return value, unit
+    return None, None
+
+
+def render_xlsx(narrative: ReportNarrative) -> bytes:
+    """The results table (decision ③): one row per record, each with its
+    sample, its step, the condition used, the value and unit, and the time;
+    the AI-written notes after them, marked; the header on a second sheet."""
+
+    from openpyxl import Workbook
+
+    facts = narrative.facts
+    assert facts is not None and facts.notebook is not None
+    book = facts.notebook
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "결과"
+    sheet.append(list(XLSX_HEADER))
+    process_of = {item.label: item.process for item in book.observations}
+    for record in facts.records:
+        if record.status == "취소됨":
+            continue
+        payload_sample = next((item.sample for item in book.observations if item.text == record.text and item.label == record.step_label), None)
+        sample = payload_sample if payload_sample and payload_sample != "—" else (sample_in_text(record.text) or "—")
+        process = process_of.get(record.step_label) or (
+            f"{record.step_label}단계 · {next((s.section for s in facts.steps if s.label == record.step_label), '')}".rstrip(" ·"))
+        value, unit = _record_measure(record.text)
+        sheet.append([sample, process, book.condition_by_label.get(record.step_label), record.text,
+                      value, unit, record.at or None, "기록"])
+    for note in narrative.ai_notes:
+        sheet.append([note.sample or "—", process_of.get(note.step_label) or f"{note.step_label}단계", None,
+                      note.text, None, None, None, AI_NOTE_LABEL])
+    if narrative.ai_result:
+        sheet.append(["—", "결과", None, narrative.ai_result, None, None, None, AI_NOTE_LABEL])
+    for column, width in zip("ABCDEFGH", (14, 24, 30, 48, 10, 8, 8, 8)):
+        sheet.column_dimensions[column].width = width
+    head = workbook.create_sheet("머리")
+    head.append(["실험", book.title])
+    for name, value in book.header_rows:
+        head.append([name, value])
+    head.column_dimensions["A"].width = 14
+    head.column_dimensions["B"].width = 80
+    buffer = io.BytesIO()
+    workbook.save(buffer)
     return buffer.getvalue()
 
 

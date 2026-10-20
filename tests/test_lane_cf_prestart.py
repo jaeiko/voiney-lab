@@ -201,8 +201,9 @@ class PrestartReportTests(RecordedSession, unittest.TestCase):
         self.assertEqual((answered["answer"], answered["asked"]), ("yes", "before_start"))
         markdown = er.render_markdown(er.narrative_from_sections(
             er.build_report_facts(self.report(), fixture=self.session.fixture)))
-        self.assertIn(f"| 42 | 조건: “{CONDITION_42}” → 예 (사람이 답함 · 시작 전에 답함) |", markdown)
-        self.assertIn("| 19~20 | 반복 횟수 3회 — 사람이 답함 · 시작 전에 답함 |", markdown)
+        # Lane RP3, decision ①: rows of the conditions actually used.
+        self.assertIn(f"| 42단계 조건 “{CONDITION_42}” | 예 (사람이 답함 · 시작 전에 답함) |", markdown)
+        self.assertIn("| 19~20단계 반복 횟수 | 3회 — 사람이 답함 · 시작 전에 답함 |", markdown)
 
 
 if __name__ == "__main__":

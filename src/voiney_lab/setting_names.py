@@ -123,6 +123,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY", MODELS, "8",
             "긴 문서를 조각으로 나눠 분석할 때 한 번에 분석하는 조각 수 (1–16). 조각 분석 중 "
             "공급자가 429 를 돌려주면 그 문서의 남은 조각은 절반으로 줄여 시작 (줄 AN2 결정 3)"),
+    Setting("VOINEY_LAB_ANALYSIS_REQUOTE", MODELS, "true",
+            "첫 분석 뒤 근거 검사에 실패한 항목(원문에 없음·근거를 못 찾음)만 그 쪽 글과 함께 한 번 더 "
+            "물어 원문 그대로의 구간을 받음 (분석마다 1회, 긴 문서는 조각마다). 받은 구간도 같은 근거 "
+            "검사를 거치고 값이 다르면 카드로 남김. false 면 끔 (줄 AN4 결정 1)"),
     Setting("VOINEY_LAB_GEMINI_SAFETY", MODELS, "relaxed",
             "분석·번역·보고서 Gemini 요청의 안전 필터: relaxed(서비스가 받는 가장 느슨한 값, 기본) / "
             "default(보내지 않음, 서비스 기본) / strict(가장 엄격 — 올리는 길). 음성 턴 역할은 해당 없음 (줄 GM 결정 1)"),
@@ -222,6 +226,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_START_CHECK_ENABLED", SWITCHES, "true",
             "시작 전 핵심 값 확인 2문항 (실행할 분석의 시간·온도·속도·양 값을 원문 조각과 함께 객관식으로; "
             "서버가 정답과 선택지를 정함; 줄 ON 결정 ③)"),
+    Setting("VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION", SWITCHES, "true",
+            "종점이 있는 단계를 끝낼 때 '관찰한 것 있으면 말씀해 주세요'를 한 번 묻기 (줄 RP3 결정 ② c)"),
     # --- 경로·저장소 --------------------------------------------------------------
     Setting("VOINEY_LAB_SAFETY_CATALOG", PATHS, "(없음, 필수)",
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),

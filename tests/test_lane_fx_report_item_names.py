@@ -105,19 +105,16 @@ class ReportTableTests(_ReportCase):
         })
 
     def test_markdown_and_word_show_the_name_and_say_what_was_left_out(self) -> None:
+        # Lane RP3, decision ①: no materials table; the notebook names the
+        # items the performed steps' text names, without the list's labels.
+        self.event("00:40", "step_completed", "2")
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        block = text.split("### 3-1. 재료와 장비")[1].split("### 3-2.")[0]
-        self.assertIn("| Eppendorf Thermomixer C Model 5382 | 2 |", block)
-        self.assertIn("| Centrifuge 5424 R | 3 |", block)
-        for label in ("NAME", "TYPE", "BRAND", "SKU", "5382000023"):
-            self.assertNotIn(label, block.split("> ")[0])
-        self.assertIn(er.ITEM_LABELS_NOTE, block)
+        self.assertIn("> 쓴 재료·장비: Eppendorf tubes · Eppendorf Thermomixer C Model 5382", text)
+        for label in ("NAME", "TYPE", "BRAND", "SKU", "5382000023", er.ITEM_LABELS_NOTE):
+            self.assertNotIn(label, text)
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
-        tables = [[[cell.text for cell in row.cells] for row in table.rows]
-                  for table in document.tables]
-        rows = [row for table in tables if tuple(table[0]) == er.ITEM_HEADER for row in table[1:]]
-        self.assertIn(["Eppendorf Thermomixer C Model 5382", "2"], rows)
-        self.assertIn(er.ITEM_LABELS_NOTE, [p.text for p in document.paragraphs])
+        self.assertIn("쓴 재료·장비: Eppendorf tubes · Eppendorf Thermomixer C Model 5382",
+                      [p.text for p in document.paragraphs])
 
     def test_no_note_when_no_name_carried_labels(self) -> None:
         self.fixture.draft.protocol.equipment = (SimpleNamespace(name_source_text="Centrifuge 5424 R"),)

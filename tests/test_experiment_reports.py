@@ -168,11 +168,10 @@ class ExperimentReportStoreTests(unittest.TestCase):
         )
         self.assertIn("실험자", text)
         self.assertIn("(직접 적어 주세요)", text)
-        self.assertIn("1. 실험 목적", text)
-        self.assertIn("3. 재료 및 방법", text)
-        self.assertIn("4. 결과", text)
-        self.assertIn("5. 고찰", text)
-        self.assertIn("6. 결론", text)
+        # Lane RP3, decision ① (2026-10-20): the notebook's sections.
+        self.assertIn("1. 시료와 조건", text)
+        self.assertIn("3. 관찰과 결과", text)
+        self.assertIn("7. 확인", text)
         # Lane RP, decision 6: the raw event list (with its timer values) is
         # no longer in the Word report; the ledger and JSON export keep it.
         self.assertIn("현재 단계를 완료했어요.", text)
@@ -242,14 +241,17 @@ class ExperimentReportStoreTests(unittest.TestCase):
 
         brain = ReportWriterBrain(ReportWriterSettings(enabled=True, model="grok-4.6-preview"))
         narrative = brain.build_deterministic_narrative(ctx)
-        self.assertIn("목적", narrative.objective)
-        self.assertIn("절차", narrative.materials_and_methods)
-        # Results should mention actual observation for step 1
-        self.assertIn("투명하고 균일한 1 mm 크기", narrative.results_and_observations)
-        # Results should strictly disclaim unobserved actual result for step 2 without claiming false success
-        # Lane RP: a step-completion wording is the researcher's observation.
-        self.assertIn("워시 완충액을 넣었습니다", narrative.results_and_observations)
-        self.assertNotIn("모든 단계가 정상적으로 완료되었다", narrative.results_and_observations)
+        # Lane RP3, decisions ① and ③: the notebook holds the researcher's
+        # words as recorded (a step-completion wording is an observation,
+        # lane RP), claims no success that was not said, and without a model
+        # has no AI-written sentence.
+        from voiney_lab.experiment_reports import render_markdown
+
+        text = render_markdown(narrative)
+        self.assertIn("젤 밴드를 1x1 mm 크기로 잘랐습니다.", text)
+        self.assertIn("워시 완충액을 넣었습니다.", text)
+        self.assertNotIn("모든 단계가 정상적으로 완료되었다", text)
+        self.assertIn("AI 가 쓴 문장은 없다", text)
 
     def test_docx_export_contains_grounded_step_table(self):
         report = self.open()
@@ -272,11 +274,11 @@ class ExperimentReportStoreTests(unittest.TestCase):
         docx_bytes = self.store.export_docx(report["report_id"])
         from docx import Document
         doc = Document(io.BytesIO(docx_bytes))
-        # Verify table exists in docx (lane RP: the results table is the last one)
+        # Verify table exists in docx (lane RP3: the words as said are the last table)
         self.assertGreater(len(doc.tables), 0)
         table_text = " ".join(cell.text for row in doc.tables[-1].rows for cell in row.cells)
         self.assertIn("단계", table_text)
-        self.assertIn("기록 내용", table_text)
+        self.assertIn("말한 그대로", table_text)
         self.assertIn("시약을 추가했습니다", table_text)
 
     def test_grounded_report_with_candidate_a_domain_protocol_rehydration(self):

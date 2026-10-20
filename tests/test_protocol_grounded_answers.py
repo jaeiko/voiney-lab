@@ -116,7 +116,9 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
         _, (start,) = _run(self.fixture, ("시작",))
         self.assertEqual(start.action, CuratedProtocolAction.START)
         self.assertEqual(
-            start.speech_text, "실험을 시작합니다. 현재 1단계입니다. 안내를 화면에 표시했습니다."
+            start.speech_text,
+            # Lane RP3, decision ②: the start asks for the purpose and samples.
+            "실험을 시작합니다. 현재 1단계입니다. 안내를 화면에 표시했습니다. 오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요.",
         )
         self.assertIn(self.fixture.steps[0].instruction_source_text, start.display_text)
 
@@ -300,7 +302,9 @@ class InGelHearsItsOwnPdfTests(unittest.TestCase):
         self.assertTrue(reviewed.startswith("1단계: "))
         self.assertEqual(
             start.speech_text,
-            "실험을 시작합니다. 현재 1단계입니다. " + reviewed.removeprefix("1단계: "),
+            "실험을 시작합니다. 현재 1단계입니다. " + reviewed.removeprefix("1단계: ")
+            # Lane RP3, decision ②: the start asks for the purpose and samples.
+            + " 오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요.",
         )
 
     def test_ambic_is_defined_by_the_pdf_itself(self) -> None:

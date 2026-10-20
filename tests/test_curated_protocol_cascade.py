@@ -882,7 +882,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                         plan.speech_text,
                         "실험을 시작합니다. 현재 1단계입니다. "
                         "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
-                        "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
+                        "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다."
+                        # Lane RP3, decision ②: the start asks for the purpose and samples.
+                        + " 오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요.",
                     )
                     self.assertEqual(session.current_index, 0)
                     started = session.state()
@@ -944,7 +946,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 CuratedProtocolAction.START,
                 "실험을 시작합니다. 현재 1단계입니다. "
                 "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
-                "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
+                "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다."
+                # Lane RP3, decision ②: the start asks for the purpose and samples.
+                + " 오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요.",
             ),
             (
                 "현재 단계 알려줘",
@@ -2742,7 +2746,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             tts.call_args.args[0],
             "실험을 시작합니다. 현재 1단계입니다. "
             "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
-            "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
+            "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다."
+            # Lane RP3, decision ②: the start asks for the purpose and samples.
+            + " 오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요.",
         )
         self.assertNotIn("검증된 개발용 픽스처", display)
         self.assertTrue(session.playback_ended(1))
@@ -3914,7 +3920,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
             "실험을 시작합니다. 현재 1단계입니다. "
             "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
-            "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
+            "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다."
+            # Lane RP3, decision ②: the start asks for the purpose and samples.
+            + " 오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요. 없으면 '넘어가'라고 하세요.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
             MOVED_TO_2_SAID,

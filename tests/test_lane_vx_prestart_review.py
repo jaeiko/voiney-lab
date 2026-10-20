@@ -140,9 +140,10 @@ class ServedConfirmedValueTests(VoiceNotesHarness, unittest.TestCase):
             if e["event_type"] == "observation" and e["user_wording"] == "0.5 mL")
         self.assertIs(observation["payload"]["experimenter_confirmed"], True)
         markdown = self.report_markdown()
-        self.assertIn("| 2 | 측정 | 0.5 mL (실험자 확인) |", markdown)
-        self.assertIn("| 2 | 측정 | pH 7.2 (실험자 확인) |", markdown)
-        self.assertIn("보고서에 넣은 중요 값 2개를 실험자가 모두 확인했다", markdown)
+        # Lane RP3, decision ①: the records as said, nothing marked unconfirmed.
+        self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| 0\.5 mL \| \d\d:\d\d \|")
+        self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| pH 7\.2 \| \d\d:\d\d \|")
+        self.assertNotIn("확인 안 된 값", markdown)
 
     def test_a_value_stored_without_a_question_is_still_reviewed(self) -> None:
         socket = self.turns(
