@@ -1,107 +1,98 @@
-# Product and engineering roadmap
+# Roadmap — now, next, later
 
-Revised 2026-10-10 (lane CL) to the human decisions of that day, and
-2026-10-14 (lane DOC3) to what has been built since. VoineyLab is an MVP
-prototype, not field-validated ("MVP 시제품 — 현장 미검증"). Everything under
-"Next lanes", "Before a pilot" and "Later" is planned, not built, unless it
-says otherwise.
+Rewritten 2026-10-20 (lane DOC4). VoineyLab is an MVP prototype, not
+field-validated. "Now" is built and described in `docs/FEATURES.md`;
+everything under "Next" and "Later" is **not built** unless it says so.
+Dates and lane names of past decisions are in `docs/DECISIONS.md`.
 
-## Built since 2026-10-10 (each dated by its lane's merge)
+How to rank work: reliability, state integrity, safety gates and grounded
+answers first; then bench smoothness (latency, recovery, exports); then
+richer workflows and integrations.
 
-- **PL, 2026-10-13** — the pilot starts without an approved safety catalog as
-  `source_protocol_only` (human decision "B안"); a catalog that is there is
-  checked; an unset model role no longer falls back to xAI; a data deletion
-  tool; the HTTPS set-up guide (written, not run).
-- **SP1, 2026-10-11** — voice level setting, noisy mode, ignored-speech list
-  (synthetic tests only).
-- **RN, 2026-10-12** — "다시 분석"; the retry button's no-reaction cause.
-- **UI0 / UI2 / UI3, 2026-10-12–14** — the screen's before / during / after
-  views, the protocol list, the start check and source comparison, the
-  after-review, mobile layout and "add to home screen"; lane UI3 added the
-  upload of Word and photos, the reagent-table box, the `source_protocol_only`
-  notice on the start card and the safety box, and lane RA's fields on the
-  run view.
-- **AN, 2026-10-13** — a long document read in pieces (up to 400 pages); Word,
-  photo (HEIC optional) and reagent-table sources (server side); the
-  remaining evidence-check failures (EV4).
-- **RV, 2026-10-14** — analyses with items the source does not hold wait
-  for review ("검토 대기"); review decisions, the reviewer's name and review
-  versions v1, v2, ... (the latest runs); the review view on the screen; the
-  voice and the report say what a reviewer entered.
-- **RA, 2026-10-14** — the router-first switch `VOINEY_LAB_ROUTER_FIRST`,
-  built and **off**.
+## Now (built)
 
-## Next lanes
+- Bringing a protocol in: PDF, Word, photo, reagent table; public Google
+  Drive/Docs/Sheets links (server route only).
+- OCR with two engines compared place by place; long documents in pieces up
+  to 400 pages; automatic retries; reanalysis; Korean translation.
+- Source-evidence check with requote; confirmation cards; review versions;
+  safety statements never rewritten.
+- Start wizard with the two-question start check and the safety statements;
+  facility safety catalog optional (`source_protocol_only`).
+- Voice loop: calibration and loudness filter, noisy-place mode, noise
+  endpoint, emergency gate, front rules, LLM router (off) and router-first
+  switch (off).
+- Steps, completion, timers with notices, "그거" re-asks, outside-PDF
+  explanation, source figures, drawn diagrams and web explanations (off by
+  default).
+- Records, notebook questions, the lab-notebook report and exports (Word,
+  Markdown, JSON, CSV on screen; PDF, lab-meeting summary, xlsx on the
+  server), the PI "확인함".
+- Accounts with invites, the five-tab screen, connection-loss recovery,
+  pilot metrics and rating, account and data deletion, backups.
+- A store-app shell (Android, debug build only).
 
-- **Review: what is left after lane RV.** Making review mandatory (OCR pages,
-  repaired answers and long documents are about a third of today's passes,
-  lane RV report §5); turning a long document's disagreeing overlap page into
-  a review item instead of a failed document; a way to start a new experiment
-  on an older review version inside the same revision; `--target-desk` in
-  `index.html` is used by five rules and defined nowhere. The review tab
-  itself is built (above). It replaces the PI/administrator approval, which
-  is gone (2026-10-08) and does not come back.
-- **Filtering other people's speech, step 2** — telling speakers apart; step 1
-  (loudness) is built.
-- **Mobile web on a real phone** over HTTPS (`docs/PILOT_HTTPS_SETUP.md`); a
-  native app later.
-- **Understanding led by the LLM router** — decide whether to turn
-  `VOINEY_LAB_ROUTER_FIRST` on, after a person's voice test; the front rules
-  stay, within the one routing line of AGENTS rule 3.
-- **Long documents** — the three documents over 60 pages measured on
-  2026-10-13 all ended as "일부 조각 분석 실패"; waiting before a piece's
-  retry or lowering the number of pieces in flight (HTTP 429 under load) is
-  not done.
-- **Later** — Moss again, for searching past records and manuals (its
-  approved-catalog reranker was deleted on 2026-10-10, lane CL).
+## In progress (other lanes, 2026-10-20)
+
+- Screen structure, steps 2 and 3 (sheets and tabs).
+- Analysis finishing work.
+- Further notebook, starter-pack and Drive-link work, and a quality sweep.
+
+Their documentation lands with stage 2 of the documentation rewrite.
+
+## Next — waiting on a person's decision or a short lane
+
+| Item | State now | Decision or work needed |
+|---|---|---|
+| Make review mandatory for some analyses | Optional; a fully passed analysis has no cards | Whether OCR pages, pieced documents and repaired answers must be reviewed |
+| Turn the router (and router-first) on | Built, off | A person's voice test first |
+| Telling speakers apart | Loudness only; speaker verification not built | Build or not; legal review of training data and biometric consent; real recordings |
+| End-of-speech silence | 1000 ms | Re-measure on real recordings before changing |
+| Screens for server-only features | Drive link import, PDF / lab-meeting / xlsx exports, "확인함", past reports after reload have no screen | Screen work |
+| Store app connected to the screen | `native-bridge.js` not loaded; bundled build cannot reach a server | Wire it; test on a real phone; store registration |
+| Mobile web over HTTPS | Guide and script written, not run | Choose a domain, run it, test on a phone |
+| Plain-words rewrite of screen and voice text | Rules and glossary written; strings not changed | Stage 2 go-ahead |
+| Broken diagnostic scripts | Ten scripts in `scripts/` fail (deleted modules) | Fix or delete |
+| Start check enforced by the server | Wizard order only | Whether the server should refuse a start without it |
+| Missed repeats and values | Reason codes kept, no detector on the live path | Whether to rebuild a check |
+| Long documents | Over 60 pages measured as failing (2026-10-13), since then failed pieces become items | Re-measure |
 
 ## Before a pilot
 
-- Actual-browser upload/review/session/error recovery checks in CI.
-- OIDC/SSO login, CSRF policy, rate limits, and centralized secret management;
-  replace the shared admin token.
-- Encryption, backup, retention, deletion, incident response, DPA, and each
-  provider's data-handling terms.
-- Noisy-lab/accent evaluations with real target users
-  (`docs/VOICE_FIELD_EVALUATION_PLAN.md`): correction, task-completion,
-  interruption, and latency distributions.
-- Every model role's provider and model set explicitly (the setting table
-  says "설정 필요", and the code no longer falls back to xai, so an unset role
-  is refused by name).
-- The external-AI notice text (`docs/PILOT_GUIDE.md` §4) settled by ethics and
-  legal review, the HTTPS domain decided and set up, and each provider's
-  retention terms checked.
-- The Word report's opening sentence for `source_protocol_only` runs
-  (`institution_safety_notice` in the record is not yet written into it).
+- Every model role, STT and TTS provider set explicitly in `.env`.
+- The external-AI notice text settled with ethics/legal review, and each
+  provider's data-retention terms checked (`docs/PILOT_GUIDE.md`).
+- HTTPS domain chosen and set up; invite links made for the participants;
+  the admin token or an admin account for the metrics screen.
+- Backups scheduled; the deletion procedure rehearsed.
 
 ## Later
 
-- Durable monitoring/export for route, tool, latency, onboarding funnel, provider
-  spend, correction, abandonment, and blocked-step metrics.
-- Offline/degraded mode and lab-device/headset qualification.
-- Accessibility/usability validation for gloves, PPE, mobility, vision, and noisy
-  environments.
-- Reviewed execution semantics for conditionals, repeats, parallel work, reusable
-  subprocedures, multi-day continuation, and cross-shift handoff.
-- Multilingual terminology packs evaluated per language and facility.
-- Whether to write records to an ELN or LIMS is not decided; the product does
-  not replace either.
+- Field evaluation in a working lab with consenting participants: noise,
+  accents, gloves; correction, completion, interruption and latency
+  distributions (`.agent/testing_strategy.md`, "Field evaluation").
+- Searching past records and manuals.
+- Conditionals, recurring actions, parallel work, reusable subprocedures,
+  multi-day continuation and shift handoff in the guidance itself.
+- Offline/degraded mode; headset and device qualification; accessibility
+  validation for gloves, PPE and noise.
+- Monitoring and export beyond the pilot metrics; production identity
+  (OIDC/SSO), rate limits, secret management.
+- Whether to write records into an ELN or LIMS (the product replaces
+  neither).
 
 ## Removed and not planned
 
-- PI or administrator approval, reviewer and administrator screens, revision
-  approval, rejection and revocation, lab adaptations (2026-10-08, lane DI).
-- The eLabFTW export, the protocols.io / Drive / GitHub imports and the
-  dry-lab metadata lane (2026-10-08, lane DI).
-- The voice safety report and its hand-off, the approved-safety-manual and
-  lab-reference searches, and the Moss reranker (2026-10-10, lane CL).
+- PI or administrator approval, reviewer and administrator approval screens,
+  revision approval, rejection and revocation, lab adaptations.
+- The old protocols.io, Drive and GitHub connectors, the eLabFTW export and
+  the dry-lab metadata lane (a new, narrower Drive link import exists).
+- The voice safety report and its hand-off, the approved-manual and
+  lab-reference voice searches, the Moss reranker, the xAI web search.
 
-## Explicit non-goals until separately validated
+## Non-goals until separately validated
 
-- autonomous protocol approval or modification;
-- autonomous safety decisions or work-resume authorization;
-- clinical or medical decision support;
-- unsupervised equipment control;
-- replacing an ELN or LIMS;
-- claims of 21 CFR Part 11, GLP/GMP, ISO, or GxP compliance from architecture or
-  unit tests alone.
+Autonomous protocol approval or modification; autonomous safety decisions or
+work-resume authorisation; clinical or medical decision support; unsupervised
+equipment control; replacing an ELN or LIMS; any GLP/GMP/GxP, 21 CFR Part 11
+or ISO claim from architecture or tests alone.
