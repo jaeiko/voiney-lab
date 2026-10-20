@@ -11,7 +11,7 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 | `feature/<이름>-<작업>` | 기능 하나 | 예: `feature/jaejun-keyterms`, `feature/sujin-mobile-step` |
 | `fix/<이름>-<내용>` | 버그 수정 하나 | 예: `fix/sujin-ci-missing-pdf` |
 | `refactor/<이름>-<내용>` | 동작을 바꾸지 않는 정리 | 예: `refactor/jaejun-comment-cleanup` |
-| `docs/<이름>-<내용>` | 문서만 | 예: `docs/jaejun-docs-rewrite` |
+| `docs/<이름>-<내용>` | 문서만 | 코드를 바꾸지 않는다 |
 
 - 브랜치 하나에는 작업 하나만 담는다.
 - CI(`.github/workflows/ci.yml`)는 `main`·`dev`·`feature/**`·`fix/**`·`refactor/**` 로의 push 와 `dev`·`main` 으로의 PR 에서 돈다. `docs/**` 브랜치는 push 로는 돌지 않고 PR 을 열면 돈다.
