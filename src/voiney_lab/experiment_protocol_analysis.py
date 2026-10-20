@@ -21,8 +21,9 @@ import types
 import unicodedata
 from array import array
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from dataclasses import field as dataclass_field
 from difflib import SequenceMatcher
@@ -5635,6 +5636,16 @@ REQUOTE_OTHER_PASSAGE = "other_passage"
 REQUOTE_OUT_OF_ORDER = "words_out_of_order"
 REQUOTE_STILL_REFUSED = "still_refused"
 REQUOTE_CALL_FAILED = "call_failed"
+#: Lane AN5, decision 3: a person answered the card while it was asked about
+#: again, or its values on an OCR page would open a card of their own -- the
+#: item is left to its card.
+REQUOTE_ANSWERED_BY_PERSON = "answered_by_person"
+REQUOTE_OCR_VALUES = "ocr_values_unsettled"
+#: Lane AN5, decision 3 (human decision 2026-10-20): the re-ask's calls are
+#: waited for this long at most; a call not back by then leaves its items
+#: cards as they were.
+REQUOTE_TIME_LIMIT_SECONDS = 300.0
+REQUOTE_TIME_LIMIT_CODE = "requote_time_limit"
 
 
 @dataclass(frozen=True)
@@ -5682,6 +5693,12 @@ class RequoteResult:
     outcomes: dict[str, str]
     calls: tuple[dict[str, object], ...]
     check_seconds: float = 0.0
+    #: The draft asked about, what each usable answer would put in by item,
+    #: and the page each question's answer named -- so the answers can be
+    #: settled again without some items (``resettle_requote``).
+    asked: ProtocolAnalysisDraft | None = None
+    replacements: dict[str, dict[str, Any]] = dataclass_field(default_factory=dict)
+    pages: dict[str, int | None] = dataclass_field(default_factory=dict)
 
     @property
     def kept_items(self) -> tuple[str, ...]:
@@ -6055,6 +6072,7 @@ def requote_unverified_items(
     *,
     groups: Sequence[Sequence[int]] | None = None,
     concurrency: int = 1,
+    time_limit: float | None = None,
 ) -> RequoteResult:
     """Ask once about the items the evidence check refused; keep what then passes.
 
@@ -6065,6 +6083,10 @@ def requote_unverified_items(
     whole; an item that is still refused, or whose answer makes another item
     refused, is put back as the analysis wrote it and checked again, at most
     ``_REQUOTE_CHECK_ROUNDS`` times, after which nothing is kept.
+
+    ``time_limit`` (lane AN5, decision 3): the calls are waited for that many
+    seconds in all; one not back by then is a failed call
+    (``REQUOTE_TIME_LIMIT_CODE``) and is not waited for.
     """
 
     batches = requote_questions(draft, groups=groups)
@@ -6072,12 +6094,15 @@ def requote_unverified_items(
     outcomes: dict[str, str] = {}
     calls: list[dict[str, object]] = []
 
-    def ask(batch: tuple[RequoteQuestion, ...]) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    def call_of(batch: tuple[RequoteQuestion, ...]) -> dict[str, object]:
         pages = sorted({page for question in batch for page in question.pages})
-        call: dict[str, object] = {
+        return {
             "first_page": pages[0], "last_page": pages[-1], "pages": len(pages),
             "questions": len(batch),
         }
+
+    def ask(batch: tuple[RequoteQuestion, ...]) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+        call = call_of(batch)
         started = time.monotonic()
         try:
             raw = model.analyze(
@@ -6094,7 +6119,22 @@ def requote_unverified_items(
         call["seconds"] = round(time.monotonic() - started, 2)
         return call, found
 
-    if len(batches) > 1 and concurrency > 1:
+    if time_limit is not None and batches:
+        # The calls run beside this thread so it can stop waiting; a call
+        # still running at the limit is left to end by itself, unread.
+        pool = ThreadPoolExecutor(
+            max_workers=max(1, min(concurrency, len(batches))), thread_name_prefix="protocol-requote",
+        )
+        futures = [pool.submit(ask, batch) for batch in batches]
+        wait_for_futures(futures, timeout=time_limit)
+        pool.shutdown(wait=False, cancel_futures=True)
+        results = [
+            future.result() if future.done() and not future.cancelled() else (
+                {**call_of(batch), "status": "failed", "failure_code": REQUOTE_TIME_LIMIT_CODE,
+                 "seconds": round(time_limit, 2)}, {})
+            for batch, future in zip(batches, futures)
+        ]
+    elif len(batches) > 1 and concurrency > 1:
         with ThreadPoolExecutor(
             max_workers=min(concurrency, len(batches)), thread_name_prefix="protocol-requote",
         ) as pool:
@@ -6118,6 +6158,43 @@ def requote_unverified_items(
     for question in questions:
         if outcomes[question.question_id] != REQUOTE_KEPT:
             replacements.pop(question.item_id, None)
+    return _settled_requote(draft, questions, outcomes, tuple(calls), replacements, pages)
+
+
+def resettle_requote(
+    result: RequoteResult, without: Collection[str], *, outcome: str,
+) -> RequoteResult:
+    """The same answers settled again with these items left to their cards
+    (lane AN5, decision 3): their questions are recorded as ``outcome``."""
+
+    if result.asked is None or not set(without) & set(result.kept_items):
+        return result
+    outcomes = {
+        question.question_id: (
+            outcome if question.item_id in without
+            and result.outcomes.get(question.question_id) == REQUOTE_KEPT
+            else result.outcomes[question.question_id])
+        for question in result.questions
+    }
+    kept = set(result.kept_items) - set(without)
+    replacements = {item: changes for item, changes in result.replacements.items()
+                    if item in kept}
+    settled = _settled_requote(
+        result.asked, result.questions, outcomes, result.calls, replacements, result.pages)
+    return replace(settled, check_seconds=result.check_seconds + settled.check_seconds)
+
+
+def _settled_requote(
+    draft: ProtocolAnalysisDraft,
+    questions: tuple[RequoteQuestion, ...],
+    outcomes: dict[str, str],
+    calls: tuple[dict[str, object], ...],
+    replacements: dict[str, dict[str, Any]],
+    pages: dict[str, int | None],
+) -> RequoteResult:
+    """Put the usable answers in together and check the analysis again."""
+
+    outcomes = dict(outcomes)
     started = time.monotonic()
     result = draft
     before = {(flag.item_id, flag.field) for flag in draft.review_flags}
@@ -6165,8 +6242,9 @@ def requote_unverified_items(
             for question in questions if outcomes[question.question_id] == REQUOTE_KEPT
         )))
     return RequoteResult(
-        draft=result, questions=questions, outcomes=outcomes, calls=tuple(calls),
-        check_seconds=time.monotonic() - started,
+        draft=result, questions=questions, outcomes=outcomes, calls=calls,
+        check_seconds=time.monotonic() - started, asked=draft,
+        replacements=dict(replacements), pages=dict(pages),
     )
 
 
