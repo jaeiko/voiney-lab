@@ -2052,9 +2052,11 @@ def _margin_lines(page_texts: tuple[str, ...]) -> tuple[
                 found = _end_numbers(line)
             elif line in outermost[number - 1] and _near_line_key(line) in near_running:
                 words = line.split()
+                # A number of ASCII digits: "③" is a digit to isdigit() but no
+                # number int() reads (a Korean manual's margins print it).
                 found = tuple(
                     int(word) for word in (words[0], words[-1])
-                    if word.isdigit() and len(word) <= 4)
+                    if _BARE_PAGE_NUMBER.fullmatch(word))
             else:
                 continue
             offsets.update((value - number, number) for value in found)

@@ -177,3 +177,23 @@ class WhatStaysRefusedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CircledNumbersTests(unittest.TestCase):
+    """Found while measuring (lane AN5): a Korean manual prints "③ ..." lines in
+    its margins; "③" is a digit to Python's isdigit() but not a number int()
+    reads, and the margin rule failed every piece of the 315-page manual."""
+
+    def test_a_margin_line_opening_with_a_circled_number_is_read_without_failing(self) -> None:
+        pages = []
+        for number in range(1, 5):
+            lines = [f"③ 시험 방법 {number}", *filler(number), f"{WORDS[number]} 마지막 줄",
+                     f"③ 식품공전 미생물 시험법 {number}"]
+            pages.append("\n".join(lines) + "\n")
+        extraction = _extraction(pages)
+        edges = _page_edges(extraction)
+        self.assertTrue(edges.is_crossing_furniture("③ 식품공전 미생물 시험법 2", 2))
+        self.assertFalse(edges.is_crossing_furniture(f"{WORDS[2]} 마지막 줄", 2))
+        found = _verify(extraction, 2, f"{WORDS[2]} 마지막 줄 {filler(3)[0]}")
+        self.assertEqual((found.source_excerpt, found.continued_on_page_number, found.continued_excerpt),
+                         (f"{WORDS[2]} 마지막 줄", 3, filler(3)[0]))
