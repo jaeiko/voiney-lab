@@ -31,7 +31,8 @@ not know about; delete them too.
 **One account** (lane ON, decision ①, 2026-10-18): ``--account NAME`` previews
 and deletes what one account left -- its experiment sessions with their
 events, completed steps, observations and evidence (rows and files), the
-experiment records bound to it, its settings, access records and resource
+experiment records bound to it, its pilot metrics rows (turns, marks, protocol
+events, ratings; lane FX5), its settings, access records and resource
 ownership, and the account itself with its sessions and login attempts --
 through the same preview -> confirm -> delete -> record steps, inside the
 stores (the append-only triggers are lifted for the deletion and put back).
@@ -126,6 +127,7 @@ class RefusedError(RuntimeError):
 WORKSPACE_DB = "workspace/commercial_workspace.sqlite"
 ACCOUNTS_DB = "workspace/accounts.sqlite"
 REPORTS_DB = "experiment_reports.sqlite"
+METRICS_DB = "workspace/pilot_metrics.sqlite"
 #: Workspace tables emptied of the account's rows, in an order the foreign
 #: keys allow, with the column that names the account or its sessions.
 ACCOUNT_WORKSPACE_TABLES = (
@@ -147,6 +149,10 @@ ACCOUNT_TABLE_LABELS = {
     "accounts": "계정",
     "sessions": "로그인 세션",
     "login_attempts": "로그인 시도",
+    "pilot_turns": "지표 턴",
+    "pilot_marks": "지표 표시",
+    "pilot_protocol_events": "지표 프로토콜 사건",
+    "pilot_feedback": "지표 평점",
 }
 ACCOUNT_SHARED_RESOURCE_TYPES = ("experiment_session", "experiment_report")
 
@@ -187,6 +193,7 @@ def account_inventory(data_dir: Path, name: str, *, in_place: bool = False):
     """
 
     from voiney_lab import accounts as acc
+    from voiney_lab.pilot_metrics import PilotMetricsStore
 
     accounts_path = data_dir / ACCOUNTS_DB
     if not accounts_path.is_file():
@@ -292,6 +299,16 @@ def account_inventory(data_dir: Path, name: str, *, in_place: bool = False):
                 entries.append(reports)
             finally:
                 connection.close()
+        metrics_path = data_dir / METRICS_DB
+        if metrics_path.is_file():
+            metrics_store = PilotMetricsStore(metrics_path if in_place else _copy_of(metrics_path, temp))
+            found = metrics_store.account_row_ids(principal_id)
+            if found:
+                metrics = AccountEntry("pilot_metrics", "파일럿 지표 (턴·표시·프로토콜 사건·평점)")
+                for table, ids in found.items():
+                    metrics.rows[table] = len(ids)
+                    metrics.keys.extend(f"{table}:{key}" for key in ids)
+                entries.append(metrics)
         entries.append(accounts_entry)
         facts["report_ids"] = report_ids
         facts["sessions"] = sessions if workspace_path.is_file() else []
@@ -423,6 +440,17 @@ def delete_account_data(data_dir: Path, facts: dict, entries: list[AccountEntry]
                 record["error"] = type(exc).__name__
         finally:
             connection.close()
+        results.append(record)
+    if "pilot_metrics" in by_category:
+        from voiney_lab.pilot_metrics import PilotMetricsStore
+
+        record = {"category": "pilot_metrics", "entry": METRICS_DB, "rows": by_category["pilot_metrics"].rows}
+        try:
+            PilotMetricsStore(data_dir / METRICS_DB).delete_account_rows(principal_id)
+            record["result"] = "deleted"
+        except sqlite3.Error as exc:
+            record["result"] = "failed"
+            record["error"] = type(exc).__name__
         results.append(record)
     record = {"category": "account_store", "entry": ACCOUNTS_DB, "rows": by_category["account_store"].rows}
     store = acc.AccountStore.open(data_dir / ACCOUNTS_DB)
