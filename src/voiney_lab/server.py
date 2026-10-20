@@ -3969,14 +3969,17 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
                     upload_request(fetched,"/api/protocols"),filename=fetched.filename)
                 target=str(response["protocol"]["protocol_id"])
                 table_id=None
-        catalog,store=_open_protocol_catalog()
         try:
-            response["source_link"]=record_source_link(
-                store,target,fetched,
-                attached_as="reagent_table" if reagent_table else "protocol_source",
-                table_id=table_id)
-        finally:
-            store.close()
+            catalog,store=_open_protocol_catalog()
+            try:
+                response["source_link"]=record_source_link(
+                    store,target,fetched,
+                    attached_as="reagent_table" if reagent_table else "protocol_source",
+                    table_id=table_id)
+            finally:
+                store.close()
+        except Exception as exc:
+            raise _catalog_http_error(exc) from exc
         return response
     except LinkImportError as exc:
         raise HTTPException(status_code=exc.status_code,detail=exc.detail()) from exc
