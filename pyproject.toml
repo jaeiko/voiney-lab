@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "voiney-lab"
 version = "0.1.0"
-description = "Trusted laboratory protocol knowledge, voice execution, and auditable integration layer"
+description = "VoineyLab: hands-free voice guide that runs a lab's own uploaded protocol step by step (MVP prototype, not field-validated)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
