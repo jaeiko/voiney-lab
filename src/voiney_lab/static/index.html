@@ -4848,7 +4848,8 @@ function renderExperimentStart(){
  setText("experiment-start-title",plan.label);setText("experiment-start-sub",plan.sub);
  if(button?.dataset)button.dataset.start=plan.kind;
  // The state line names the button that shows: the tab's card before a run, the console's own button after one.
- if(visibleState==="IDLE"){const shown=screenView()==="before"?plan.label:String($("start")?.textContent||plan.label);const status=$("status");if(status)status.textContent=`준비됨 · '${shown}' 단추를 눌러 주세요.`;}
+ // Only this page's own 준비됨 sentence is rewritten: a message another handler put on the state line (a refused pause, an error) stays until the state changes.
+ if(visibleState==="IDLE"){const shown=screenView()==="before"?plan.label:String($("start")?.textContent||plan.label);const status=$("status");if(status&&String(status.textContent||"").startsWith("준비됨 · "))status.textContent=`준비됨 · '${shown}' 단추를 눌러 주세요.`;}
  return plan;
 }
 async function pressExperimentStart(){

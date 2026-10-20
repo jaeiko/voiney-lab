@@ -173,6 +173,21 @@ assert(wizard.open===true&&wizard.step==="start"&&primary().textContent==="실�
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_a_message_another_handler_puts_on_the_state_line_is_kept(self) -> None:
+        # CI on fcfe6ff (plain-words.spec.ts, lane U): the refused-pause sentence was overwritten by the 준비됨 line on the next redraw.
+        result = run(r"""
+await boot(base());
+go("#/experiment");
+assert(node("status").textContent.startsWith("준비됨 · '"),node("status").textContent);
+showWorkflowControlRefused({action:"pause",reason:"experiment_ended",status:"stopped"});
+assert(node("status").textContent.includes("실험이 이미 끝나"),`refused: ${node("status").textContent}`);
+renderExperimentContext();renderRoute();
+assert(node("status").textContent.includes("실험이 이미 끝나"),`after a redraw: ${node("status").textContent}`);
+renderState("IDLE");
+assert(node("status").textContent.startsWith("준비됨 · '")&&node("status").textContent.endsWith("' 단추를 눌러 주세요."),`after the state changed: ${node("status").textContent}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_no_other_words_point_at_the_hidden_console_button(self) -> None:
         html = INDEX.read_text(encoding="utf-8")
         self.assertNotIn("세션 시작을 한 번 눌러주세요", html.split("<script>", 1)[0])
