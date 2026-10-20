@@ -1,3 +1,5 @@
+> 보관: 2026-10-20 (줄 DOC4) — 옛 `.agent/product_improvement_strategy.md`. 지금 동작의 기준이 아니다. 우선순위를 매기는 규칙(신뢰성·상태·안전 먼저)은 `.agent/roadmap.md` 머리로 옮겼고, "검토본 v1/v2, 전자 서명·GLP/GMP 주장 없음"은 `docs/FEATURES.md` F6 과 `.agent/product_context.md` 에 있다. 출처 없는 숫자(소음 60–75 dB)는 옮기지 않았다.
+
 # Product Improvement Strategy & Prioritization Framework
 
 A generic rubric. The current direction and the next lanes are in
