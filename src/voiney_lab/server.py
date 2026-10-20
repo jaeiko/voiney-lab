@@ -13,6 +13,9 @@ from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -308,6 +311,16 @@ log=logging.getLogger("voiney_lab")
 _LOG_QUERY_KEY=re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _LOG_ANY_QUERY=re.compile(r"\?[^\s\"']+")
 _LOG_QUERY_REMOVED="?<query removed>"
+# Lane FX5, decision 4 (2026-10-20): the invite token is a path segment
+# (GET /api/auth/invites/<token>), which uvicorn's access line prints whole.
+_LOG_PATH_SECRET=re.compile(r"(/api/auth/invites/)[^/?#\s\"']+")
+_LOG_PATH_SECRET_REMOVED=r"\1<token removed>"
+
+
+def mask_path_secrets(value:object)->object:
+    """``value`` without the secret a URL path carries (an invite's token)."""
+
+    return _LOG_PATH_SECRET.sub(_LOG_PATH_SECRET_REMOVED,value) if isinstance(value,str) else value
 _UVICORN_ACCESS_LINE='%s - "%s %s HTTP/%s" %d'
 _UVICORN_WEBSOCKET_LINE='%s - "WebSocket %s"'
 
@@ -363,6 +376,12 @@ class UvicornQueryStringFilter(logging.Filter):
                     record.msg,record.args=strip(record.msg),()
             else:
                 record.msg=strip(record.msg)
+        # Whatever shape the record has, a path's secret is removed (decision 4).
+        if isinstance(record.args,tuple):
+            record.args=tuple(mask_path_secrets(value) for value in record.args)
+        elif isinstance(record.args,dict):
+            record.args={key:mask_path_secrets(value) for key,value in record.args.items()}
+        record.msg=mask_path_secrets(record.msg)
         return True
 
 
@@ -463,6 +482,22 @@ def _log_source_format_support()->None:
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_without_credentials(request:Request,exc:RequestValidationError):
+    """FastAPI's 422, but on the account routes without the value that was sent.
+
+    Lane FX5, decision 4 (2026-10-20): the default answer repeats each
+    rejected input, so a password (or a token) sent in a body of the wrong
+    shape -- a JSON list, say -- came straight back, into whatever keeps
+    responses. Every other route answers as FastAPI does.
+    """
+
+    if not request.url.path.startswith("/api/auth/"):
+        return await request_validation_exception_handler(request,exc)
+    errors=[{key:value for key,value in error.items() if key!="input"} for error in exc.errors()]
+    return JSONResponse(status_code=422,content={"detail":jsonable_encoder(errors)})
 
 
 @app.get("/healthz")

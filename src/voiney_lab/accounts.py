@@ -333,6 +333,18 @@ def _token_hash(token: object) -> str:
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
 
 
+def _attempt_key(key: str) -> str:
+    """What a failed login is kept under in place of the typed name (lane FX5, decision 4).
+
+    The name box may be filled with something that is not a name -- a pasted
+    invite or admin token, a password -- and a failed attempt would otherwise
+    keep it, in the clear, until the next failure sweeps it. The lock only
+    needs to recognise the same text again, so it keeps a digest of it.
+    """
+
+    return hashlib.sha256(("login-attempt\0" + key).encode("utf-8")).hexdigest()[:32]
+
+
 # --- Records --------------------------------------------------------------------
 
 
@@ -702,7 +714,7 @@ class AccountStore:
             counts["sessions"] = self._connection.execute(
                 "DELETE FROM sessions WHERE account_id=?", (account.account_id,)).rowcount
             counts["login_attempts"] = self._connection.execute(
-                "DELETE FROM login_attempts WHERE name_key=?", (name_key(account.name),)).rowcount
+                "DELETE FROM login_attempts WHERE name_key=?", (_attempt_key(name_key(account.name)),)).rowcount
             self._connection.execute(
                 "UPDATE invites SET used_by_account_id=NULL WHERE used_by_account_id=?", (account.account_id,))
             counts["accounts"] = self._connection.execute(
@@ -729,7 +741,10 @@ class AccountStore:
     def _check_lock(self, key: str, client: str) -> None:
         now = self._now()
         since = now - LOGIN_FAILURE_WINDOW
-        for column, value in (("name_key", key), ("client", client)):
+        # Failures past the window count for nothing; they are not kept either.
+        self._connection.execute("DELETE FROM login_attempts WHERE failed_at<=?", (self._stamp(since),))
+        self._connection.commit()
+        for column, value in (("name_key", _attempt_key(key)), ("client", client)):
             if value and self._failures(column, value, since) >= LOGIN_FAILURE_LIMIT:
                 oldest = self._oldest_failure(column, value, since) or now
                 remaining = (oldest + LOGIN_FAILURE_WINDOW) - now
@@ -741,7 +756,7 @@ class AccountStore:
         now = self._now()
         self._connection.execute(
             "INSERT INTO login_attempts(name_key,client,failed_at) VALUES(?,?,?)",
-            (key, client, self._stamp(now)))
+            (_attempt_key(key), client, self._stamp(now)))
         self._connection.execute(
             "DELETE FROM login_attempts WHERE failed_at<=?", (self._stamp(now - LOGIN_FAILURE_WINDOW),))
         self._connection.commit()
@@ -760,7 +775,7 @@ class AccountStore:
         account = self._account(row)
         if account.disabled:
             raise AccountDisabledError("The account is switched off.")
-        self._connection.execute("DELETE FROM login_attempts WHERE name_key=?", (key,))
+        self._connection.execute("DELETE FROM login_attempts WHERE name_key=?", (_attempt_key(key),))
         self._connection.commit()
         return account
 
@@ -1037,7 +1052,7 @@ def account_data_inventory(
             connection = store._connection  # noqa: SLF001 - the erasure reads the store it will delete from
             for table, column, value in (
                 ("sessions", "account_id", account.account_id),
-                ("login_attempts", "name_key", facts["name_key"]),
+                ("login_attempts", "name_key", _attempt_key(str(facts["name_key"]))),
             ):
                 keys = [str(row[0]) for row in connection.execute(
                     f"SELECT rowid FROM {table} WHERE {column}=? ORDER BY rowid", (value,))]
