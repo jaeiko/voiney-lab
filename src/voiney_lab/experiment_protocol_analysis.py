@@ -1781,6 +1781,26 @@ _NUMBERED_LINE = re.compile(
     r"\s*(?:step\s*)?\(?([0-9]{1,3})(?:\.(?![0-9])|\)|:)?\s+(?=[^\W\d_])",
     re.IGNORECASE,
 )
+#: Lane AN5, decision 2: a margin line of numbers and the marks between
+#: them only -- a page number, "200.8-24", "3 / 12" -- and its numbers.
+_NUMBERS_ONLY_LINE = re.compile(r"[0-9][0-9.\-‐‑‒–—−/: ]*")
+#: How many lines at each end of a page are read for its printed page number.
+_PAGE_NUMBER_LINES = 3
+#: How many lines at each end of a page a line printed alike on other pages
+#: may stand in: the margin proper.
+_MARGIN_LINES = 4
+#: The pages whose bottom margin may print the article's copyright or licence
+#: footer: the first, and the second after a cover page (STAR Protocols
+#: prints a graphical-abstract page first).
+_FRONT_PAGES = 2
+#: A copyright or licence footer: a copyright mark or word, "<year> The
+#: Authors", a Creative Commons or open-access licence.
+_LICENSE_FOOTER = re.compile(
+    r"©|ⓒ|\(c\)\s*(?:19|20)[0-9]{2}|\bcopyright\b|creative\s*commons|\bcc[\s-]?by\b"
+    r"|open[\s-]access\s+article|distributed\s+under|all\s+rights\s+reserved"
+    r"|(?:19|20)[0-9]{2},?\s+(?:the\s+)?authors?\b",
+    re.IGNORECASE,
+)
 
 
 def _line_key(line: str) -> str:
@@ -1789,6 +1809,20 @@ def _line_key(line: str) -> str:
     line on page 5 and on page 6)."""
 
     return _NUMBER_RUN.sub("#", " ".join(unicodedata.normalize("NFC", line).split()))
+
+
+def _near_line_key(line: str) -> str:
+    """A margin line as lane AN5's decision 2 compares it across pages: its
+    line key without the numbers that open or close it, case set aside --
+    "2 STAR Protocols 3, 101366, June 17, 2022" on one page and "STAR
+    Protocols 3, 101366, June 17, 2022 3" on the next are one line."""
+
+    words = _line_key(line).split()
+    while words and words[0].rstrip(",.:;)") in {"#", "(#"}:
+        words.pop(0)
+    while words and words[-1].rstrip(",.:;)") in {"#", "(#"}:
+        words.pop()
+    return " ".join(words).casefold()
 
 
 @dataclass(frozen=True)
@@ -1804,6 +1838,19 @@ class _PageEdges:
     #: of at least half the pages, and never between the edges: a header
     #: table's revision and date cells ("01", "15/08/24"; lane AN, EV4 a).
     running_exact: frozenset[str] = frozenset()
+    #: Lane AN5, decision 2: each page's margin lines -- the twelve non-blank
+    #: lines at each end, whitespace runs as one space -- and its bottom
+    #: margin's.
+    margins: tuple[frozenset[str], ...] = ()
+    bottoms: tuple[frozenset[str], ...] = ()
+    #: (offset, page): the page prints number page + offset at one of its
+    #: ends (a line of numbers, or a margin line printed on other pages too).
+    page_offsets: frozenset[tuple[int, int]] = frozenset()
+    #: ``_near_line_key`` of the lines with a letter printed among the four
+    #: outermost lines at the same end of two pages or more, and never
+    #: further in; each page's four outermost lines at each end.
+    near_running: frozenset[str] = frozenset()
+    outermost: tuple[frozenset[str], ...] = ()
 
     def is_furniture(self, line: str, page_number: int) -> bool:
         """Whether a line is blank, a running line or this page's number.
@@ -1834,6 +1881,51 @@ class _PageEdges:
             return int(page_and_count[1]) == page_number and int(
                 page_and_count[2]) == self.page_count
         return _line_key(text) in self.running
+
+    def is_crossing_furniture(self, line: str, page_number: int) -> bool:
+        """Whether the page-end rule skips a line judging a quote that runs on.
+
+        Lane AN5, decision 2 (human decision 2026-10-20): besides
+        ``is_furniture``, a line in the page's top or bottom margin that is
+        (a) a page number as the document numbers its pages -- a line of
+        numbers whose first or last number is this page's number plus an
+        offset two other pages print too ("200.8-24", a "1" on the PDF's
+        second page) -- or (b) printed nearly alike in the margin of another
+        page and never between the margins, or (c) the copyright or licence
+        footer of a front page. Only the page-end rule reads this: a page's
+        own text never leaves these lines out, and they are never part of a
+        quote.
+        """
+
+        if self.is_furniture(line, page_number):
+            return True
+        text = " ".join(line.split())
+        if not 1 <= page_number <= len(self.margins) or text not in self.margins[page_number - 1]:
+            return False
+        if _NUMBERS_ONLY_LINE.fullmatch(text) and any(
+            len({page for offset, page in self.page_offsets
+                 if offset == number - page_number} - {page_number}) >= 2
+            for number in _end_numbers(text)
+        ):
+            return True
+        if (
+            any(character.isalpha() for character in text)
+            and text in self.outermost[page_number - 1]
+            and _near_line_key(text) in self.near_running
+        ):
+            return True
+        return (
+            page_number <= _FRONT_PAGES
+            and text in self.bottoms[page_number - 1]
+            and _LICENSE_FOOTER.search(text) is not None
+        )
+
+
+def _end_numbers(text: str) -> tuple[int, ...]:
+    """The numbers that open and close a line, of up to four digits."""
+
+    numbers = [int(run) for run in _NUMBER_RUN.findall(text) if len(run) <= 4]
+    return tuple(dict.fromkeys((numbers[0], numbers[-1]))) if numbers else ()
 
 
 @functools.lru_cache(maxsize=32)
@@ -1889,6 +1981,7 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
         inside_exact.update(lines[_EDGE_LINES:-_EDGE_LINES])
     needed = max(3, -(-len(page_texts) // 2))
+    near_running, outermost, margins, bottoms, page_offsets = _margin_lines(page_texts)
     return _PageEdges(
         running=(
             frozenset(
@@ -1906,7 +1999,65 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
             )
             if len(page_texts) > 1 else frozenset()
         ),
+        margins=margins,
+        bottoms=bottoms,
+        page_offsets=page_offsets,
+        near_running=near_running,
+        outermost=outermost,
     )
+
+
+def _margin_lines(page_texts: tuple[str, ...]) -> tuple[
+    frozenset[str], tuple[frozenset[str], ...], tuple[frozenset[str], ...],
+    tuple[frozenset[str], ...], frozenset[tuple[int, int]],
+]:
+    """Lane AN5, decision 2: the lines printed nearly alike among the four
+    outermost lines at the same end of two pages or more (never further in,
+    never a numbered line), each page's outermost, margin and bottom-margin
+    lines, and the page-number offsets the pages print at their ends.
+
+    Only a page with body lines between its two ends has margins to compare:
+    on a page of a few lines every line is outermost, and a step printed on
+    two such pages is not a running line (lane EV2's two-page rule).
+    """
+
+    pages: dict[tuple[str, str], set[int]] = {}
+    inside: set[str] = set()
+    outermost: list[frozenset[str]] = []
+    margins: list[frozenset[str]] = []
+    bottoms: list[frozenset[str]] = []
+    lines_of: list[list[str]] = []
+    for number, text in enumerate(page_texts, start=1):
+        lines = [line for line in (" ".join(item.split()) for item in text.splitlines()) if line]
+        lines_of.append(lines)
+        margins.append(frozenset([*lines[:_EDGE_LINES], *lines[-_EDGE_LINES:]]))
+        bottoms.append(frozenset(lines[-_EDGE_LINES:]))
+        ends = (
+            (("top", lines[:_MARGIN_LINES]), ("bottom", lines[-_MARGIN_LINES:]))
+            if len(lines) > 2 * _MARGIN_LINES else ())
+        outermost.append(frozenset(line for _, end in ends for line in end))
+        for end, end_lines in ends:
+            for line in end_lines:
+                if any(character.isalpha() for character in line) and not _NUMBERED_LINE.match(line):
+                    pages.setdefault((end, _near_line_key(line)), set()).add(number)
+        inside.update(_near_line_key(line) for line in lines[_MARGIN_LINES:-_MARGIN_LINES])
+    near_running = frozenset(
+        key for (_, key), seen in pages.items() if key and len(seen) >= 2 and key not in inside
+    ) if len(page_texts) > 1 else frozenset()
+    offsets: set[tuple[int, int]] = set()
+    for number, lines in enumerate(lines_of, start=1):
+        for line in {*lines[:_PAGE_NUMBER_LINES], *lines[-_PAGE_NUMBER_LINES:]}:
+            if _NUMBERS_ONLY_LINE.fullmatch(line):
+                found = _end_numbers(line)
+            elif line in outermost[number - 1] and _near_line_key(line) in near_running:
+                words = line.split()
+                found = tuple(
+                    int(word) for word in (words[0], words[-1])
+                    if word.isdigit() and len(word) <= 4)
+            else:
+                continue
+            offsets.update((value - number, number) for value in found)
+    return near_running, tuple(outermost), tuple(margins), tuple(bottoms), frozenset(offsets)
 
 
 def _page_edges(extraction: ProtocolPdfExtraction) -> _PageEdges:
@@ -1954,7 +2105,7 @@ def _page_body_end(
     )
     edges = _page_edges(extraction)
     lines = page.text[:end].splitlines(keepends=True)
-    while lines and edges.is_furniture(lines[-1], page.source_page_number):
+    while lines and edges.is_crossing_furniture(lines[-1], page.source_page_number):
         end -= len(lines.pop())
     return end
 
@@ -1969,7 +2120,7 @@ def _page_body_start(
     edges = _page_edges(extraction)
     start = 0
     for line in page.text[:end].splitlines(keepends=True):
-        if not edges.is_furniture(line, page.source_page_number):
+        if not edges.is_crossing_furniture(line, page.source_page_number):
             break
         start += len(line)
     body = page.text[start:end]
@@ -1992,7 +2143,7 @@ def _is_furniture_block(
 
     edges = _page_edges(extraction)
     if all(
-        edges.is_furniture(line, page.source_page_number)
+        edges.is_crossing_furniture(line, page.source_page_number)
         for line in block.text.splitlines() or ("",)
     ):
         return True
@@ -2002,7 +2153,7 @@ def _is_furniture_block(
     first = text.rfind("\n", 0, span[0]) + 1
     last = text.find("\n", span[1])
     return all(
-        edges.is_furniture(line, page.source_page_number)
+        edges.is_crossing_furniture(line, page.source_page_number)
         for line in text[first : len(text) if last < 0 else last].splitlines() or ("",)
     )
 
