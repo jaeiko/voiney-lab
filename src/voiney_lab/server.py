@@ -3939,7 +3939,7 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
         protocol_id=body.get("protocol_id")
         reagent_table=protocol_id is not None
         if reagent_table and (not isinstance(protocol_id,str) or link.kind=="document"):
-            raise LinkImportError("link_unsupported_format")
+            raise LinkImportError("link_not_a_reagent_table")
         if link.kind=="spreadsheet" and not reagent_table:
             raise LinkImportError("link_sheet_needs_protocol")
         if reagent_table:

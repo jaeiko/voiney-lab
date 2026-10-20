@@ -125,7 +125,7 @@ LINK_EVENT_TYPE = "protocol_source_linked"
 
 
 class LinkImportError(Exception):
-    """Why a link was not brought in; ``code`` names it."""
+    """Why a link was not brought in: ``code`` for the screen, a sentence to show."""
 
     def __init__(self, code: str, *, limit_bytes: int | None = None) -> None:
         super().__init__(code)
@@ -134,13 +134,24 @@ class LinkImportError(Exception):
 
     @property
     def status_code(self) -> int:
-        return _STATUS[self.code]
+        return LINK_IMPORT_STATUS[self.code]
 
-    def detail(self) -> str:
-        return self.code
+    @property
+    def message(self) -> str:
+        if self.code == "link_too_large":
+            limit = self.limit_bytes or MAX_PROTOCOL_PDF_BYTES
+            what = "시약 표가" if limit == MAX_REAGENT_TABLE_BYTES else "파일이"
+            return (
+                f"{what} 너무 커서 가져올 수 없어요. {limit // (1024 * 1024)}MB 까지 "
+                "가져올 수 있어요. 파일 크기를 줄이거나 나눠서 올려 주세요."
+            )
+        return LINK_IMPORT_MESSAGES[self.code]
+
+    def detail(self) -> dict[str, str]:
+        return {"code": self.code, "message": self.message}
 
 
-_STATUS = {
+LINK_IMPORT_STATUS = {
     "link_sign_in_required": 401,
     "link_not_google_drive": 422,
     "link_not_a_file": 422,
@@ -149,9 +160,54 @@ _STATUS = {
     "link_not_found": 404,
     "link_too_large": 413,
     "link_unsupported_format": 415,
+    "link_not_a_reagent_table": 415,
     "link_redirect_refused": 502,
     "link_fetch_failed": 502,
     "link_timeout": 504,
+}
+#: The server's sentences (human decision 2 of 2026-10-20, 해요체); the
+#: private-file sentence is the decided one, word for word. A file too large
+#: names the limit it passed (``LinkImportError.message``).
+LINK_IMPORT_MESSAGES = {
+    "link_sign_in_required": "로그인한 뒤에 링크로 가져올 수 있어요.",
+    "link_not_google_drive": (
+        "구글 드라이브·구글 문서·구글 시트의 링크만 가져올 수 있어요. "
+        "주소가 https://drive.google.com 이나 https://docs.google.com 으로 "
+        "시작하는지 확인해 주세요."
+    ),
+    "link_not_a_file": (
+        "이 링크는 파일 하나를 가리키지 않아요. 폴더라면 폴더 안의 파일을 열고 "
+        "그 파일의 공유 링크를 넣어 주세요."
+    ),
+    "link_sheet_needs_protocol": (
+        "구글 시트는 프로토콜에 시약 표로만 붙일 수 있어요. 프로토콜을 연 뒤 "
+        "시약 표 자리에서 링크를 넣어 주세요."
+    ),
+    "link_private": (
+        "이 파일은 공유 설정이 '링크가 있는 모든 사용자'가 아니라서 가져올 수 없어요. "
+        "공유 설정을 바꾸거나 파일을 내려받아 올려 주세요."
+    ),
+    "link_not_found": (
+        "이 링크의 파일을 찾지 못했어요. 주소가 맞는지 확인하고, 공유 설정이 "
+        "'링크가 있는 모든 사용자'인지도 확인해 주세요."
+    ),
+    "link_unsupported_format": (
+        "이 파일은 PDF·Word 문서·사진(JPG·PNG·HEIC)이 아니라서 가져올 수 없어요. "
+        "이 형식으로 저장해 링크를 넣거나 파일을 올려 주세요."
+    ),
+    "link_not_a_reagent_table": (
+        "시약 표로는 구글 시트나 엑셀(.xlsx) 파일만 붙일 수 있어요. "
+        "링크가 시트를 가리키는지 확인해 주세요."
+    ),
+    "link_redirect_refused": (
+        "구글 드라이브가 허용하지 않은 주소로 넘겨줘서 가져오지 않았어요. "
+        "파일을 내려받아 올려 주세요."
+    ),
+    "link_fetch_failed": (
+        "구글 드라이브에서 파일을 받지 못했어요. 잠시 뒤 다시 하거나 "
+        "파일을 내려받아 올려 주세요."
+    ),
+    "link_timeout": "구글 드라이브가 제때 답하지 않아 가져오지 못했어요. 잠시 뒤 다시 해 주세요.",
 }
 
 
@@ -391,7 +447,7 @@ def safe_filename(name: str | None, media_type: str, file_id: str) -> str:
     return f"{stem[:200]}.{extension}"
 
 
-def _refusal_from_html(path: Path) -> LinkImportError:
+def _refusal_from_html(path: Path, limit: int) -> LinkImportError:
     """What a page Google answered with instead of the file means."""
 
     text = path.read_bytes()[:200_000].decode("utf-8", "replace").casefold()
@@ -400,7 +456,7 @@ def _refusal_from_html(path: Path) -> LinkImportError:
     if "virus" in text:
         # Drive asks before handing over a file too large to scan for viruses
         # (over 100 MB), which is past the upload limit anyway.
-        return LinkImportError("link_too_large")
+        return LinkImportError("link_too_large", limit_bytes=limit)
     if "quota" in text or "too many users" in text:
         return LinkImportError("link_fetch_failed")
     return LinkImportError("link_unsupported_format")
@@ -463,10 +519,10 @@ def fetch_google_link(
         raise LinkImportError("link_unsupported_format")
     media_type = sniff_media_type(destination)
     if media_type == _HTML_MEDIA_TYPE:
-        raise _refusal_from_html(destination)
+        raise _refusal_from_html(destination, limit)
     if reagent_table:
         if media_type != REAGENT_TABLE_MEDIA_TYPE:
-            raise LinkImportError("link_unsupported_format")
+            raise LinkImportError("link_not_a_reagent_table")
     elif media_type == REAGENT_TABLE_MEDIA_TYPE:
         raise LinkImportError("link_sheet_needs_protocol")
     elif media_type not in _PROTOCOL_MEDIA_TYPES:
