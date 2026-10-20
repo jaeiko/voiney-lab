@@ -82,3 +82,51 @@ curl -s http://127.0.0.1:8000/api/protocols/<protocol_id>/reagent-tables
 | `protocol_image_too_large` | 413 | 사진이 너무 큽니다(1억 픽셀 초과). 해상도를 낮춰 올려 주세요. |
 | `invalid_reagent_table` | 422 | 엑셀(.xlsx) 시약 표로 읽을 수 없습니다. |
 | `reagent_table_too_large` | 413 | 시약 표가 너무 큽니다(5 MB 또는 셀 20,000개 초과). |
+
+## 6. 구글 드라이브 링크로 가져오기(줄 DR, 사람 결정 2026-10-20)
+
+파일을 내려받아 올리는 대신 구글 드라이브·문서·시트의 **공유 링크**를 넣는다. 서버가 그 파일을 받아 **올리기 경로(`POST /api/protocols`, `POST /api/protocols/{id}/reagent-tables`)에 그대로 넘긴다** — 형식 확인, 크기 상한, Word·사진 변환, OCR, 분석, 원문 근거 검사가 올린 파일과 똑같다. 받은 주소는 그 프로토콜 원장에 `protocol_source_linked` 기록(주소, 링크 종류, 파일 ID, 받은 호스트, 형식, 체크섬, 크기, 파일 이름)으로 남는다.
+
+```bash
+# 로그인한 사람만(계정 모드의 세션 쿠키, 또는 작업공간 신원)
+curl -s -X POST http://127.0.0.1:8000/api/protocols/import-link \
+  -H 'Content-Type: application/json' -b 'voiney_session=…' \
+  -d '{"url":"https://drive.google.com/file/d/<파일ID>/view?usp=sharing"}'
+# 구글 시트 → 시약 표: 붙일 프로토콜을 함께 보낸다
+  -d '{"url":"https://docs.google.com/spreadsheets/d/<ID>/edit","protocol_id":"<protocol_id>"}'
+```
+
+| 링크 | 받는 곳 | 무엇으로 |
+|---|---|---|
+| `drive.google.com/file/d/<ID>/…`, `drive.google.com/open?id=<ID>`, `drive.google.com/uc?id=<ID>`, `drive.usercontent.google.com/download?id=<ID>` | `https://drive.usercontent.google.com/download?id=<ID>&export=download` | 내용이 PDF·Word·사진이면 프로토콜 원문 |
+| `docs.google.com/document/d/<ID>/…` | `…/document/d/<ID>/export?format=pdf` | PDF 로 내보내 프로토콜 원문 |
+| `docs.google.com/spreadsheets/d/<ID>/…` | `…/spreadsheets/d/<ID>/export?format=xlsx` | `protocol_id` 가 있을 때만 시약 표 |
+
+링크의 `resourcekey=` 는 함께 넘긴다(2021년 전에 공유한 파일). 폴더·구글 프레젠테이션·설문 링크는 받지 않는다.
+
+**보안.** 서버가 밖으로 요청을 보내는 길이므로 다음을 지킨다(`protocol_link_import.py`).
+
+- 링크는 `https` + `drive.google.com`·`docs.google.com`·`drive.usercontent.google.com` 만, 기본 포트, 주소 안의 사용자 이름·비밀번호 없음.
+- 넘겨주기(redirect)는 위 세 호스트와, 구글이 문서·시트 내보내기를 넘겨주는 `doc-<xx>-<xx>-{docs,docstext,sheets}.googleusercontent.com` 으로만 따라간다(2026-10-20 실측: 문서 → `doc-0g-3o-docstext…`, 시트 → `doc-08-4o-sheets…`). 이 모양은 링크 자체로는 받지 않는다. 구글 로그인(`accounts.google.com`)으로 넘겨주면 비공개 파일로 보고 멈춘다. 그 밖은 따라가지 않는다. 최대 5번.
+- 쿠키·자격 증명·Referer 를 보내지 않는다. 매 단계 새 요청이며, 앞 단계에서 구글이 준 쿠키는 버린다. 환경 변수의 프록시·`.netrc` 를 읽지 않는다.
+- 호스트 이름이 가리키는 주소가 모두 공인 주소여야 하고, 실제로 연결된 주소도 본문을 읽기 전에 다시 확인한다. 내부·루프백·링크 로컬(169.254.169.254 포함)·예약 주소로는 가지 않는다.
+- 크기 상한은 올리기와 같다: 원문 64 MB, 시약 표 5 MB. 받는 중 넘으면 끊고 아무것도 남기지 않는다. 전체 60 초(연결 10 초, 읽기 20 초).
+- 형식은 받은 바이트로 정한다(구글의 Content-Type·파일 이름은 쓰지 않는다).
+- 로그인해야 열리는 비공개 파일은 받지 않는다. 구글 계정 연결(OAuth)은 사람이 정할 때까지 하지 않는다.
+
+**실패 응답.** `detail` 이 `{"code": …, "message": …}` 이고, `message` 는 화면에 그대로 보여 줄 서버 문장이다. 받은 파일을 올리기 경로가 거절하면(`invalid_pdf`, `docx_conversion_unavailable` 등) 올리기와 같은 응답이 그대로 온다(5절 표).
+
+| 코드 | HTTP | 서버 문장 |
+|---|---|---|
+| `link_private` | 403 | 이 파일은 공유 설정이 '링크가 있는 모든 사용자'가 아니라서 가져올 수 없어요. 공유 설정을 바꾸거나 파일을 내려받아 올려 주세요. |
+| `link_too_large` | 413 | 파일이 너무 커서 가져올 수 없어요. 64MB 까지 가져올 수 있어요. 파일 크기를 줄이거나 나눠서 올려 주세요. (시약 표: "시약 표가 … 5MB 까지 …") |
+| `link_unsupported_format` | 415 | 이 파일은 PDF·Word 문서·사진(JPG·PNG·HEIC)이 아니라서 가져올 수 없어요. 이 형식으로 저장해 링크를 넣거나 파일을 올려 주세요. |
+| `link_not_google_drive` | 422 | 구글 드라이브·구글 문서·구글 시트의 링크만 가져올 수 있어요. 주소가 https://drive.google.com 이나 https://docs.google.com 으로 시작하는지 확인해 주세요. |
+| `link_not_a_file` | 422 | 이 링크는 파일 하나를 가리키지 않아요. 폴더라면 폴더 안의 파일을 열고 그 파일의 공유 링크를 넣어 주세요. |
+| `link_sheet_needs_protocol` | 422 | 구글 시트는 프로토콜에 시약 표로만 붙일 수 있어요. 프로토콜을 연 뒤 시약 표 자리에서 링크를 넣어 주세요. |
+| `link_not_a_reagent_table` | 415 | 시약 표로는 구글 시트나 엑셀(.xlsx) 파일만 붙일 수 있어요. 링크가 시트를 가리키는지 확인해 주세요. |
+| `link_not_found` | 404 | 이 링크의 파일을 찾지 못했어요. 주소가 맞는지 확인하고, 공유 설정이 '링크가 있는 모든 사용자'인지도 확인해 주세요. |
+| `link_redirect_refused` | 502 | 구글 드라이브가 허용하지 않은 주소로 넘겨줘서 가져오지 않았어요. 파일을 내려받아 올려 주세요. |
+| `link_fetch_failed` | 502 | 구글 드라이브에서 파일을 받지 못했어요. 잠시 뒤 다시 하거나 파일을 내려받아 올려 주세요. |
+| `link_timeout` | 504 | 구글 드라이브가 제때 답하지 않아 가져오지 못했어요. 잠시 뒤 다시 해 주세요. |
+| `link_sign_in_required` | 401 | 로그인한 뒤에 링크로 가져올 수 있어요. |
