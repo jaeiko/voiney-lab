@@ -137,6 +137,13 @@ from voiney_lab.protocol_catalog import (
     reagent_table_summary,
     review_version_suggestion,
 )
+from voiney_lab.protocol_link_import import (
+    LinkImportError,
+    fetch_google_link,
+    parse_google_link,
+    record_source_link,
+    upload_request,
+)
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
     ProtocolOcrError,
@@ -3912,6 +3919,70 @@ async def attach_protocol_reagent_table(
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
     return {"reagent_table":reagent_table_summary(table),"deduplicated":deduplicated}
+
+
+@app.post("/api/protocols/import-link",status_code=201)
+async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
+    """Bring a protocol in from a Google Drive, Docs or Sheets link (lane DR, decision 1).
+
+    For a signed-in person only. The file the link names is downloaded
+    (``protocol_link_import``: allowed Google hosts, no cookie, size and time
+    limits, format read from the bytes) and handed to the upload route itself;
+    a Sheets link is attached as a reagent table to ``protocol_id``. The
+    address is kept as the source in the protocol's ledger.
+    """
+
+    try:
+        if _request_account() is None and _REQUEST_PRINCIPAL.get() is None:
+            raise LinkImportError("link_sign_in_required")
+        link=parse_google_link(body.get("url"))
+        protocol_id=body.get("protocol_id")
+        reagent_table=protocol_id is not None
+        if reagent_table and (not isinstance(protocol_id,str) or link.kind=="document"):
+            raise LinkImportError("link_not_a_reagent_table")
+        if link.kind=="spreadsheet" and not reagent_table:
+            raise LinkImportError("link_sheet_needs_protocol")
+        if reagent_table:
+            # The protocol is there before anything is downloaded for it.
+            try:
+                _scope_catalog_resource(protocol_id)
+                catalog,store=_open_protocol_catalog()
+                try:
+                    catalog.get_entry(protocol_id)
+                finally:
+                    store.close()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise _catalog_http_error(exc) from exc
+        with tempfile.TemporaryDirectory(prefix="protocol-link-") as root:
+            fetched=await asyncio.to_thread(
+                fetch_google_link,link,Path(root),reagent_table=reagent_table)
+            if reagent_table:
+                response=await attach_protocol_reagent_table(
+                    upload_request(fetched,f"/api/protocols/{protocol_id}/reagent-tables"),
+                    protocol_id,filename=fetched.filename)
+                target=protocol_id
+                table_id=str(response["reagent_table"]["table_id"])
+            else:
+                response=await register_protocol_pdf(
+                    upload_request(fetched,"/api/protocols"),filename=fetched.filename)
+                target=str(response["protocol"]["protocol_id"])
+                table_id=None
+        try:
+            catalog,store=_open_protocol_catalog()
+            try:
+                response["source_link"]=record_source_link(
+                    store,target,fetched,
+                    attached_as="reagent_table" if reagent_table else "protocol_source",
+                    table_id=table_id)
+            finally:
+                store.close()
+        except Exception as exc:
+            raise _catalog_http_error(exc) from exc
+        return response
+    except LinkImportError as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail()) from exc
 
 
 @app.get("/api/protocols/{protocol_id}/reagent-tables")
