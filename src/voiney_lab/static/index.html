@@ -1127,14 +1127,14 @@
     <section id="tab-experiment" class="tab-panel" data-tab="experiment" aria-label="실험" tabindex="-1" hidden>
       <!-- Lane IA addendum (2026-10-19): before a run the experiment tab offers the start; lane ON's step-by-step screens open as a sheet over the page (#wizard-sheet, after the main). The voice console's own start and stop buttons wait for the 실험 후 view. -->
       <div id="experiment-start" class="experiment-start">
-        <button id="experiment-start-open" type="button" class="home-card" data-card="new-experiment"><b class="home-card-title">새 실험 시작</b><span class="home-card-sub">마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요</span></button>
+        <button id="experiment-start-open" type="button" class="home-card" data-card="new-experiment"><b id="experiment-start-title" class="home-card-title">새 실험 시작</b><span id="experiment-start-sub" class="home-card-sub">마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요</span></button>
       </div>
       <div class="prestart-side">
         <div class="voice-console" aria-live="polite">
           <div class="pulse" aria-hidden="true">●</div>
           <div class="voice-console-body">
             <div id="state">준비</div>
-            <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
+            <div id="status">준비됨 · '새 실험 시작' 단추를 눌러 주세요.</div>
             <!-- Lane UI0 decision 2: the one line of voice along the bottom of the run screen -- the last words said or heard. -->
             <p id="run-caption-text" class="run-caption-text" aria-live="off"></p>
             <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
@@ -1553,7 +1553,7 @@ function updateStartActionLabel(){const button=$("start");if(button)button.textC
 const webReferenceHistory=[];
 const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers=new Map(),toolEvents=new Map(),visualEvents=new Map(),researchEvents=new Map(),brainEvents=new Map(),greetingEvents=new Set(),audioRecoveryTurns=new Set();
 const UI={
- IDLE:["준비됨 · 세션 시작을 한 번 눌러주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
+ IDLE:["준비됨 · '새 실험 시작' 단추를 눌러 주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
  THINKING:["원문과 안전 자료를 확인하는 중…",true,false],SPEAKING:["Voiney Lab이 답변하고 있습니다…",true,false],ERROR:["세션이 중단됐습니다 · 다시 시작해주세요.",false,true],
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
@@ -1711,10 +1711,11 @@ function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
  const durable=`저장된 상태: 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
  const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`다시 불러오지 않는 것: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
- const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
+ const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
  node.textContent=`${lead} ${durable} ${omitted} ${next}`;appendDevCodeDetails(node,[["protocol_revision_id",revision||null]]);node.hidden=false;return true;
 }
 function renderExperimentContext(){
+ renderExperimentStart();
  const selected=$("protocol-id")?.value||"",entry=protocolCatalog.get(selected),sessionRevision=currentExperimentProtocolRevision,stateInfo=sessionStateBadgeInfo(currentExperimentSessionStatus),step=curatedProtocolState?.attached===true&&curatedProtocolState.current_step_label?curatedProtocolState.current_step_label:currentExperimentStepLabel;
  setText("experiment-context-name",entry?.title||"프로토콜을 선택해 주세요.");
  const oldRevision=Boolean(sessionRevision&&entry&&entry.revision_id!==sessionRevision);
@@ -2143,7 +2144,7 @@ async function restartExperimentFromCheckpoint(){
   const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(currentExperimentSessionId)}/checkpoint-restart`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkpoint_step_id:stepId,expected_version:currentExperimentSessionVersion})}),data=await response.json();
   if(!response.ok||typeof data.session_id!=="string")throw new Error(researcherErrorMessage(data.detail,fallback));
   await loadExperimentSessions(data.session_id);
-  if(status)status.textContent=`체크포인트에서 새 실험 세션을 만들었습니다. ‘실험 이어하기’를 누르면 ${data.current_step_label||"—"}단계부터 시작합니다.`;
+  if(status)status.textContent=`체크포인트에서 새 실험 세션을 만들었습니다. 홈이나 실험 탭의 ‘실험 이어하기’를 누르면 ${data.current_step_label||"—"}단계부터 시작합니다.`;
   return true;
  }catch(error){if(status)status.textContent=researcherErrorMessage(error?.message,fallback);setDisabled(button,false);return false;}
 }
@@ -3355,7 +3356,7 @@ async function closeAudio(){
 }
 async function startSession(){
  const generation=sessionGeneration;
- stopVoicePreview();
+ stopVoicePreview();forgetSafetyRead();
  sessionActive=false;
  acceptedSessionConfiguration=null;
  const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),pending={configuration_id,mode:"cascade",language:"ko",protocol_id:$("protocol-id")?.value||null,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{})};
@@ -4051,6 +4052,7 @@ async function loadProtocolReview(protocolId=currentProtocolReviewId,options={})
 // summary (safety statements, notices, blockers) is always shown, and the
 // detailed review folds away when the protocol can already run.
 function onProtocolSelectionChanged(){
+ if(wizard?.checkedProtocolId&&wizard.checkedProtocolId!==($("protocol-id")?.value||""))forgetSafetyRead();
  renderSelectedProtocolContext();
  const protocolId=$("protocol-id")?.value||"";
  if(protocolId!==currentProtocolReviewId){stopProtocolAnalysisPolling();stopProtocolOcrPolling();}
@@ -4818,6 +4820,47 @@ $("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
 $("protocol-analysis-retry")?.addEventListener("click",async()=>{const protocolId=currentProtocolReviewId;if(!protocolId)return;const reanalysis=$("protocol-analysis-retry")?.dataset?.reanalysis==="true";if(reanalysis&&!confirmProtocolReanalysis())return;await analyzeRegisteredProtocol(protocolId,{reanalysis});await loadProtocolCatalog(protocolId);restoreProtocolAnalysisNotice();});
 // Lane IA addendum: the protocol's start opens the step-by-step sheet with that protocol picked, from the two questions; the wizard's last press is the one human confirmation (startReviewedProtocol).
 $("protocol-start")?.addEventListener("click",()=>{openStartForProtocol(currentProtocolReviewId);});
+// Lane IA bug ② (a person's finding on dev 096f506, 2026-10-20): with a protocol
+// picked the experiment tab said "세션 시작을 한 번 눌러주세요" while the console's
+// own start button was hidden by the 실험 전 view (the sheet is the start). The
+// tab's card now names the one start that shows -- [이 프로토콜로 시작] when the
+// picked protocol can run (the sheet at its two questions; straight to the start
+// when its safety check was read in this sheet already), [실험 이어하기] for a
+// saved experiment, [새 실험 시작] otherwise -- and the state line names that button.
+function rememberSafetyRead(){const entry=wizardSelectedProtocol();if(!entry||lastProtocolReview?.protocol_id!==entry.protocol_id)return false;wizard.checkedProtocolId=entry.protocol_id;wizard.checkedRevisionId=lastProtocolReview?.revision_id||null;renderExperimentStart();return true;}
+function forgetSafetyRead(){if(!wizard)return false;const had=Boolean(wizard.checkedProtocolId);wizard.checkedProtocolId=null;wizard.checkedRevisionId=null;if(had)renderExperimentStart();return had;}
+function safetyReadFor(protocolId){return Boolean(protocolId)&&wizard?.checkedProtocolId===protocolId&&lastProtocolReview?.protocol_id===protocolId&&(lastProtocolReview?.revision_id||null)===wizard.checkedRevisionId;}
+function experimentStartPlan(){
+ if(experimentIsResumable()){
+  const entry=protocolCatalog.get($("protocol-id")?.value),saved=Array.isArray(workspaceExperiments)?workspaceExperiments.find(item=>item?.session_id===currentExperimentSessionId):null,title=entry?.title||saved?.protocol_title||"";
+  return {kind:"resume",label:"실험 이어하기",sub:`${title?`${title} · `:""}${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계부터`:"저장된 단계부터"} 이어서 해요`};
+ }
+ const entry=wizardSelectedProtocol();
+ if(entry?.available_for_execution===true){
+  const checked=safetyReadFor(entry.protocol_id);
+  return {kind:"protocol",protocolId:entry.protocol_id,checked,label:"이 프로토콜로 시작",sub:`${entry.title} · ${checked?"안전 주의를 읽었어요 · 누르면 바로 시작해요":"핵심 값과 안전 주의를 확인하고 시작해요"}`};
+ }
+ return {kind:"new",label:"새 실험 시작",sub:"마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요"};
+}
+function renderExperimentStart(){
+ if(!wizard)return null;
+ const plan=experimentStartPlan(),button=$("experiment-start-open");
+ setText("experiment-start-title",plan.label);setText("experiment-start-sub",plan.sub);
+ if(button?.dataset)button.dataset.start=plan.kind;
+ // The state line names the button that shows: the tab's card before a run, the console's own button after one.
+ if(visibleState==="IDLE"){const shown=screenView()==="before"?plan.label:String($("start")?.textContent||plan.label);const status=$("status");if(status)status.textContent=`준비됨 · '${shown}' 단추를 눌러 주세요.`;}
+ return plan;
+}
+async function pressExperimentStart(){
+ const plan=experimentStartPlan();
+ if(plan.kind==="resume")return openWizardSheet("start");
+ if(plan.kind==="protocol"){
+  if(plan.checked&&!sessionActive){wizardRememberProtocol(plan.protocolId);await startReviewedProtocol();navigateTab("experiment",null,{replace:true});return true;}
+  if(openStartForProtocol(plan.protocolId))return true;
+  return openWizardSheet("protocol");
+ }
+ return openWizardSheet();
+}
 function openStartForProtocol(protocolId){
  // Only the protocol whose result is on screen, and only when the server says it can run (as the direct start did).
  if(typeof protocolId!=="string"||!protocolId||!protocolCatalog.has(protocolId))return false;
@@ -4847,7 +4890,7 @@ for(const [name,parts] of Object.entries(RUN_SHEETS)){$(parts.opener)?.addEventL
 $("run-sheet-backdrop")?.addEventListener("click",()=>{closeRunSheet();});
 function onWizardSheetKey(event){if(event?.key!=="Escape"||!wizard.open||authRequired())return false;closeWizardSheet();return true;}
 globalThis.document?.addEventListener?.("keydown",event=>{if(onWizardSheetKey(event))return;onRunSheetKey(event);});
-$("experiment-start-open")?.addEventListener("click",()=>{openWizardSheet();});
+$("experiment-start-open")?.addEventListener("click",()=>{void pressExperimentStart();});
 $("wizard-close")?.addEventListener("click",()=>{closeWizardSheet();});
 $("wizard-sheet-backdrop")?.addEventListener("click",()=>{closeWizardSheet();});
 globalThis.addEventListener?.("popstate",()=>{if(wizard.open)closeWizardSheet({fromHistory:true});else wizardSheetPushed=false;renderRoute();});
@@ -4907,7 +4950,7 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
 const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
-var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:""};
+var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null};
 var wizardSheetPushed=false,wizardOpener=null;
 const FIRST_SETUP_KEY="voiney-lab.first-setup";
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
@@ -4940,7 +4983,7 @@ function openWizardSheet(step=null,{mode="start"}={}){
 function closeWizardSheet({fromHistory=false,silent=false}={}){
  if(!wizard.open)return false;
  stopVoicePreview();
- wizard.open=false;wizard.mode="start";renderWizard();
+ wizard.open=false;wizard.mode="start";renderWizard();renderExperimentStart();
  const pushed=wizardSheetPushed;wizardSheetPushed=false;
  if(pushed&&!fromHistory&&!silent){try{globalThis.history?.back?.();}catch(_){}}
  const opener=wizardOpener;wizardOpener=null;opener?.focus?.();
@@ -5259,7 +5302,7 @@ async function wizardPrimary(){
  if(wizard.busy)return null;
  switch(wizard.step){
   case "login":return wizardSubmitLogin();
-  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}wizardNext();return true;}
+  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety")rememberSafetyRead();wizardNext();return true;}
   case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
   case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;}
   default:return null;
@@ -5317,6 +5360,7 @@ function renderRoute(){
  if(tab==="upload")renderUploadFlow();
  if(tab==="home")renderHome();
  if(tab==="settings")renderSettingsExtras();
+ if(tab==="experiment")renderExperimentStart();
  renderWizard();
  if(key!==lastRouteKey){lastRouteKey=key;stopVoicePreview();applyRouteSelections({entered:true});if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
  return tab;

@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route, TAB } from './routes';
+import { test, expect, type Page, type Route, TAB, protocolRoute } from './routes';
 
 // Lane IA, two bugs a person found on the dev server (dev 096f506, 2026-10-20),
 // on a phone and on a desktop. ① The agent-voice previews overlapped: another
@@ -136,5 +136,52 @@ test.describe('Bug ①: one agent-voice preview at a time (lane IA)', () => {
     await expect(page.locator('#start-wizard')).toBeHidden();
     expect(await page.evaluate(() => window.__audio.filter(audio => !audio.paused).length)).toBe(0);
     expect(await page.evaluate(() => window.__audio.length)).toBe(3);
+  });
+});
+
+test.describe('Bug ②: the experiment tab always shows one start (lane IA)', () => {
+  test('a picked protocol gets [이 프로토콜로 시작], the state line names it, and the press opens the sheet at its questions', async ({ page }) => {
+    await mock(page);
+    await page.goto(protocolRoute(PROTOCOL_ID));
+    await expect(page.locator('#protocol-detail-title')).toHaveText('Gamma (예시)');
+    await expect(page.locator('#protocol-start')).toBeVisible();
+
+    await page.locator('#tab-link-experiment').click();
+    await expect(page.locator('#tab-experiment')).toBeVisible();
+    const card = page.locator('#experiment-start-open');
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute('data-start', 'protocol');
+    await expect(page.locator('#experiment-start-title')).toHaveText('이 프로토콜로 시작');
+    await expect(page.locator('#experiment-start-sub')).toContainText('Gamma (예시)');
+    await expect(page.locator('#status')).toHaveText("준비됨 · '이 프로토콜로 시작' 단추를 눌러 주세요.");
+    // The console's own start button waits for the 실험 후 view: nothing on the tab points at it.
+    await expect(page.locator('#start')).toBeHidden();
+    await expect(page.locator('#tab-experiment')).not.toContainText('세션 시작을 한 번');
+
+    await card.click();
+    await expect(page.locator('#start-wizard')).toBeVisible();
+    await expect(page.locator('#wizard-title')).toHaveText('안전 주의');
+    await expect(page.locator('#wizard-body')).toContainText('장갑을 끼세요.');
+    await page.locator('#wizard-primary').click();
+    await expect(page.locator('#wizard-primary')).toHaveText('이 프로토콜로 시작');
+    await page.locator('#wizard-close').click();
+    await expect(page.locator('#start-wizard')).toBeHidden();
+    // The safety notice was read in this sheet: the card says the next press starts at once.
+    await expect(page.locator('#experiment-start-sub')).toContainText('바로 시작');
+    await expect(page.locator('#status')).toHaveText("준비됨 · '이 프로토콜로 시작' 단추를 눌러 주세요.");
+  });
+
+  test('with no protocol picked the card is [새 실험 시작] and the state line names it', async ({ page }) => {
+    await mock(page, { catalog: false });
+    await page.goto(TAB.experiment);
+    const card = page.locator('#experiment-start-open');
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute('data-start', 'new');
+    await expect(page.locator('#experiment-start-title')).toHaveText('새 실험 시작');
+    await expect(page.locator('#status')).toHaveText("준비됨 · '새 실험 시작' 단추를 눌러 주세요.");
+    await expect(page.locator('#start')).toBeHidden();
+    await card.click();
+    await expect(page.locator('#start-wizard')).toBeVisible();
+    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
   });
 });

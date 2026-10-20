@@ -10,13 +10,22 @@ or is stopped); the same button again stops; picking a voice, moving a step,
 closing the sheet or starting the experiment stops; a spent object URL is
 revoked; no preview while the experiment runs (its guidance speaks).
 
+② On the experiment tab, with an analysed protocol picked, the console said
+"준비됨 · 세션 시작을 한 번 눌러주세요." but no start button showed. Cause: the
+실험 전 view hides the console's [새 실험 시작]/[종료] (the sheet is the start),
+and the sentence still named it. Fix: the tab always shows one way to start --
+[이 프로토콜로 시작] when a runnable protocol is picked (the sheet from the two
+questions; straight to the start when the check before the start was already
+read), [실험 이어하기] for a saved experiment, [새 실험 시작] otherwise -- and
+the state line names the button that shows. Shares tests/test_lane_ia_tabs.py.
 """
 
 from __future__ import annotations
 
 import unittest
 
-from tests.test_lane_ia_tabs import run
+from tests.test_lane_ia_tabs import SETUP, run
+from tests.test_screen_cleanup import INDEX
 
 AUDIO = r"""
 class FakeAudio{constructor(src){this.src=src;this.paused=true;this.played=0;this.pauses=0;this.onended=null;this.onerror=null;FakeAudio.made.push(this);}
@@ -108,6 +117,66 @@ assert(FakeAudio.made.length===1&&!FakeAudio.made[0].paused,"the second sound di
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+class ExperimentStartTests(unittest.TestCase):
+    def test_the_tab_names_the_one_start_that_shows_and_the_state_line_matches(self) -> None:
+        result = run(r"""
+await boot(base());
+go("#/experiment");
+const startTitle=()=>node("experiment-start-title").textContent,startSub=()=>node("experiment-start-sub").textContent;
+assert(startTitle()==="새 실험 시작",`no protocol: ${startTitle()}`);
+assert(node("status").textContent==="준비됨 · '새 실험 시작' 단추를 눌러 주세요.",`state line: ${node("status").textContent}`);
+assert(!node("status").textContent.includes("세션 시작을 한 번"),"the state line still names the hidden button");
+pickProtocolFromList("p-1");await settle(8);
+assert(startTitle()==="이 프로토콜로 시작"&&startSub().includes("Gamma"),`picked: ${startTitle()} / ${startSub()}`);
+assert(node("experiment-start-open").dataset.start==="protocol",node("experiment-start-open").dataset.start);
+assert(node("status").textContent==="준비됨 · '이 프로토콜로 시작' 단추를 눌러 주세요.",`state line: ${node("status").textContent}`);
+node("experiment-start-open").dispatch("click");await settle(8);
+assert(wizard.open===true&&["check","safety"].includes(wizard.step)&&node("protocol-id").value==="p-1",`the press did not open the sheet at the questions: ${wizard.open} ${wizard.step}`);
+closeWizardSheet();
+// A protocol that cannot run is not offered as a start.
+pickProtocolFromList("p-2");await settle(8);
+assert(startTitle()==="새 실험 시작",`unrunnable pick: ${startTitle()}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_check_already_read_starts_at_once_and_a_saved_experiment_continues(self) -> None:
+        result = run(r"""
+let started=0;startReviewedProtocol=async()=>{started+=1;};
+await boot([["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
+go("#/experiment");
+pickProtocolFromList("p-1");await settle(8);
+openStartForProtocol("p-1");await settle(8);
+assert(wizard.step==="safety",`the sheet is not at the safety check: ${wizard.step}`);
+primary().dispatch("click");await settle(4);
+assert(wizard.step==="start"&&wizard.checkedProtocolId==="p-1",`the read safety check was not remembered: ${wizard.step} ${wizard.checkedProtocolId}`);
+closeWizardSheet();
+assert(node("experiment-start-sub").textContent.includes("바로 시작"),node("experiment-start-sub").textContent);
+node("experiment-start-open").dispatch("click");await settle(8);
+assert(started===1&&wizard.open===false,"a read check did not start at once");
+// Another protocol picked: the check must be read again.
+pickProtocolFromList("p-2");await settle(8);
+assert(wizard.checkedProtocolId===null,"the read check survived a change of protocol");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_saved_experiment_offers_to_continue(self) -> None:
+        result = run(r"""
+await boot(withExperiments([RESUMABLE]));
+go("#/experiment");
+pickProtocolFromList("p-1");chooseExperimentSession("s-9",{force:true});await settle(8);
+assert(experimentIsResumable(),"the saved experiment is not resumable in the fake");
+assert(node("experiment-start-title").textContent==="실험 이어하기"&&node("experiment-start-sub").textContent.includes("3단계"),`${node("experiment-start-title").textContent} / ${node("experiment-start-sub").textContent}`);
+assert(node("status").textContent==="준비됨 · '실험 이어하기' 단추를 눌러 주세요.",node("status").textContent);
+node("experiment-start-open").dispatch("click");await settle(8);
+assert(wizard.open===true&&wizard.step==="start"&&primary().textContent==="실험 이어하기",`${wizard.open} ${wizard.step} ${primary().textContent}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_no_other_words_point_at_the_hidden_console_button(self) -> None:
+        html = INDEX.read_text(encoding="utf-8")
+        self.assertNotIn("세션 시작을 한 번 눌러주세요", html.split("<script>", 1)[0])
+        self.assertIn("홈이나 실험 탭의 ‘실험 이어하기’를 누르면", html)
 
 
 if __name__ == "__main__":
