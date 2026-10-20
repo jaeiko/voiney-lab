@@ -7,7 +7,7 @@
 - 왜 그렇게 정했는지와 날짜는 `docs/DECISIONS.md`, 구조와 상태 권한은 `.agent/architecture.md`, 화면 쓰는 법은 `docs/USER_GUIDE.md`.
 - 설정 이름의 기본값과 뜻의 기준은 `src/voiney_lab/setting_names.py` 다. 여기 적은 기본값은 그 표의 값이다.
 - 공급자 시험은 모두 가짜 전송으로 한다(**contract-tested**). 실제 외부 호출이 이 저장소의 시험에서 성공한 것은 없다.
-  줄 보고서에 남은 실제 호출 기록은 README 4절에 날짜와 함께 있다.
+  줄 보고서에 남은 실제 호출 기록은 [F17](#f17-공급자와-설정)에 날짜와 함께 있다.
 
 목차: [F1 계정](#f1-계정과-로그인) · [F2 들여오기](#f2-프로토콜-들여오기) · [F3 OCR](#f3-사진-글자-읽기-ocr) · [F4 분석](#f4-분석) ·
 [F5 원문 근거 검사](#f5-원문-근거-검사) · [F6 확인 카드](#f6-확인-카드) · [F7 시작](#f7-시작-전-확인과-시작) · [F8 듣기](#f8-듣기) ·
@@ -181,13 +181,30 @@
 
 - **무엇**: 모델 역할은 `router`·`answer`·`translation`·`analysis`·`report`·`supplemental` 여섯이고, 역할마다 공급자(`xai`·`anthropic`·`openai`·`google`)·모델·추론 수준을 적는다. 기본값은 없다("설정 필요") — 빈 역할을 부르면 다른 공급자로 가지 않고 그 설정 이름을 적은 오류로 닫힌다. STT·TTS 공급자(`google_cloud`·`elevenlabs`·`xai`)도 같다.
   설정 이름은 모두 `VOINEY_LAB_` 로 시작한다(SDK 표준 이름 제외). 옛 이름이 셸이나 `.env` 에 있으면 서버·실행기·시험이 시작을 거부하고 이름만 알린다 — `python scripts/migrate_env.py --check` 로 보고 `--write` 로 바꾼다. 실행기의 기본값은 셸·`.env` 의 값을 덮지 않는다.
-- **어디**: `model_providers.py` (`ROLES`, `PROVIDERS`, `ROLE_SETTINGS`, `RoleModel`, `chat_client`, `RoleNotConfiguredError`); `voice_providers.py`; `setting_names.py` (`SETTINGS`, `refuse_old_setting_names`); `setting_renames.py`; `configuration.py` (`launcher_defaults`); `.env.example`(지금 쓰는 값 — README 4절).
+- **지금 쓰는 값**(`.env.example`; 키는 비워 두고 `.env` 에만 넣는다):
+
+  | 역할 | 하는 일 | 값 |
+  |---|---|---|
+  | 분석 `ANALYSIS` | 프로토콜 구조 분석 | `google` · `gemini-3.8-flash` · 추론 `low` |
+  | 번역 `TRANSLATION` | 버전 문장의 한국어 | `google` · `gemini-3.8-flash` · 추론 `low` |
+  | 라우터 `ROUTER` | 말 한 번마다(켰을 때) | `openai` · `gpt-6-luna` |
+  | 답변 `ANSWER` | 읽기 전용 Answer·Source·Visual 역할 | `openai` · `gpt-6-luna` |
+  | 보조 설명 `SUPPLEMENTAL` | "AI 일반 지식"(켰을 때) | `openai` · `gpt-6-luna` · 추론 `low` |
+  | 보고서 `REPORT` | 보고서의 AI 정리 | `google` · `gemini-3.8-flash` |
+  | 웹 설명·AI 그림 | 켰을 때 | `gpt-6-luna` (`OPENAI_API_KEY`) |
+  | STT | 말 → 글 | `elevenlabs` · `scribe_v2` |
+  | TTS | 글 → 말 | `google_cloud` (목소리 기본 `ko-KR-Chirp3-HD-Charon`) |
+  | OCR | 사진 글자 읽기 | `VOINEY_LAB_OCR_PROVIDERS` 에 `clova`,`google` |
+
+- **실제 호출 기록**(줄 보고서에 적힌 것, 이 저장소의 시험이 아님): OpenAI `gpt-6-luna` 라우터 평가 22회(2026-10-05); Google Gemini 분석·번역 222회(2026-10-10); 긴 문서·Word·사진 실측 Gemini 분석·Vision 504회 USD 9.49 와 CLOVA 18회(2026-10-13); 라우터 먼저 측정 OpenAI 833회 USD 0.57 · Google 417회 USD 1.80(2026-10-13); 스타터 팩 분석 Google(Gemini 분석·Vision) USD 1.014 와 CLOVA 27쪽(2026-10-19). 분석 시간은 추론 `low` 에서 p50 39 s · p90 112 s(25개 문서, 2026-10-10); 같은 25개를 다른 실행과 동시에 돌렸을 때 15개 통과, p50 110 s · p90 268 s, 요청 한도(429) 23회(2026-10-13).
+- **어디**: `model_providers.py` (`ROLES`, `PROVIDERS`, `ROLE_SETTINGS`, `RoleModel`, `chat_client`, `RoleNotConfiguredError`); `voice_providers.py`; `setting_names.py` (`SETTINGS`, `refuse_old_setting_names`); `setting_renames.py`; `configuration.py` (`launcher_defaults`); `.env.example`.
 - **시험**: `tests/test_setting_names.py`, `tests/test_lane_an_unset_roles.py`, `tests/test_migrate_env.py`.
 
 ## F18. 데이터 · 삭제 · 백업 · 점검
 
 - **무엇**:
   - 원본 PDF·분석·장부·작업공간·계정·지표는 모두 `data/runtime/` 아래 SQLite·파일에 둔다(git 이 무시). 원음은 저장하지 않는다(STT 진단 녹음을 켰을 때만 최대 20개).
+  - **밖으로 나가는 것**(F17 의 값 기준): 말소리 → STT 공급자, 말할 문장 → TTS 공급자, 글자 층 없는 쪽의 이미지 → OCR 엔진, 원문 글자 → 분석·번역 공급자, 말한 글과 지금 단계 문맥 → 라우터·답변·보조 설명 공급자(켰을 때), 웹 설명·그림 요청 → OpenAI(켰을 때), 실험 기록 → 보고서 공급자, Google 링크 가져오기 → Google. 공급자가 받은 데이터를 어떻게 두는지는 각 약관을 따른다 — 파일럿 전에 사람이 확인한다.
   - **파일럿 데이터 삭제**: `python scripts/pilot_data_delete.py` — 미리보기 → 확인 단어 → 삭제 → 기록 순서만 허용, 되돌릴 수 없음. `data/runtime/pilot` 과 파일럿 표시가 있는 폴더만 받는다. `--account NAME` 은 그 계정의 실험·기록·지표 행을 지운다(연구실이 함께 쓰는 프로토콜은 남긴다). 계정이 스스로 지울 때도 범위가 같다.
   - **백업**: `python scripts/pilot_state_backup.py create|verify|restore`(SQLite 온라인 백업, 원문·첨부만, 환경 파일·원음 제외).
   - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부).

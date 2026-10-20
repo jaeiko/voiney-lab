@@ -63,7 +63,7 @@ below are MVP controls, not production identity and access management.
 
 1. Do not send proprietary formulas, unpublished data or personal identifiers
    to third parties beyond what the configured roles need. What leaves the
-   machine, per role, is listed in README section 7; each provider's
+   machine, per role, is listed in `docs/FEATURES.md` F18; each provider's
    retention terms are checked by a person before a pilot.
 2. Raw audio is not kept. STT diagnostic recordings are opt-in
    (`VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`), capped, ignored by git and not for
