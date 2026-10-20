@@ -13,7 +13,9 @@ last step before and the first step after are one card -- does the second
 follow the first? [이어져요] lets the joined order run; [아니요] does not run the
 document and sends it to be read again (the server never reorders steps).
 The rule still holds within one reading: a document read at once, or one
-piece. Every model here is fake.
+piece -- until lane AN5, decision 1 (human decision 2026-10-20) let one
+reading hold both kinds too, with the same card at each seam (see
+test_lane_an5_mixed_numbering). Every model here is fake.
 """
 
 from __future__ import annotations
@@ -96,16 +98,17 @@ class TheRuleHoldsWithinOneReadingTests(_PiecesCase):
         self.assertIs(caught.exception.code, domain.ProtocolValidationCode.MISSING_SOURCE_LABEL)
         self.assertIn("sections[1].steps[0]", str(caught.exception))
 
-    def test_a_document_read_at_once_with_both_kinds_fails_as_before(self) -> None:
+    def test_a_document_read_at_once_with_both_kinds_waits_on_its_seams(self) -> None:
+        # Lane AN5, decision 1: no longer refused and sent again.
         payload = json.loads(self.answer(pages=(1, 2, 3)))
         unnumbered({"sections": payload["protocol"]["sections"][1:2]})
-        error, model = self.analyze(json.dumps(payload), json.dumps(payload))
-        self.assertIsInstance(error, ProtocolAnalysisResponseError)
-        self.assertIsInstance(error.__cause__, domain.ProtocolValidationError)
-        self.assertIs(error.__cause__.code, domain.ProtocolValidationCode.MISSING_SOURCE_LABEL)
-        self.assertEqual(model.calls, 2)  # the one automatic retry, as before
+        entry, model = self.analyze(json.dumps(payload), json.dumps(payload))
+        self.assertEqual(entry.analysis_status, "review_pending")
+        self.assertEqual(entry.review_pending["by_reason"], {REVIEW_REASON_NUMBERING_SEAM: 2})
+        self.assertEqual(model.calls, 1)
 
-    def test_a_piece_with_both_kinds_fails_as_a_piece(self) -> None:
+    def test_a_piece_with_both_kinds_is_kept_with_its_seams(self) -> None:
+        # Lane AN5, decision 1: a piece is one reading and may hold both kinds.
         def half(protocol: dict) -> None:
             unnumbered({"sections": [{"steps": protocol["sections"][0]["steps"][:1]}]})
 
@@ -113,7 +116,8 @@ class TheRuleHoldsWithinOneReadingTests(_PiecesCase):
         self.assertEqual(entry.analysis_status, "review_pending")
         failed = [event.payload for event in self.store.list_events(self.protocol_id)
                   if event.event_type == "protocol_chunk_analysis_failed"]
-        self.assertEqual([payload["ordinal"] for payload in failed], [2])
+        self.assertEqual([payload["ordinal"] for payload in failed], [])
+        self.assertIn(REVIEW_REASON_NUMBERING_SEAM, entry.review_pending["by_reason"])
 
 
 class SeamCardsTests(_PiecesCase):

@@ -19,8 +19,11 @@ import threading
 import time
 import types
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from array import array
+from collections import OrderedDict
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from dataclasses import field as dataclass_field
 from difflib import SequenceMatcher
@@ -1072,7 +1075,87 @@ _SCRIPT_DIGITS = {
 }
 
 
+#: Lane AN5, decision 4 (human decision 2026-10-20): a page-sized text put in
+#: a comparison form is kept and given back the next time the same text is
+#: asked for in the same form. Every quote is looked for on its page in every
+#: form, so an answer with many refused quotes put one page in one form again
+#: for each of them (lane AN4: 59 refusals, 61.1 s of CPU, nearly all here).
+#: The rules are untouched: what is given back is what the form gave.
+_NORMALIZED_CACHE_MIN_LENGTH = 400
+#: The kept texts' characters, all of them together; the least recently read
+#: is let go first. The bounds are kept as machine integers (8 bytes each).
+_NORMALIZED_CACHE_MAX_CHARACTERS = 2_000_000
+_normalized_cache: "OrderedDict[tuple[object, ...], tuple[str, array, array]]" = OrderedDict()
+_normalized_cache_characters = 0
+_normalized_cache_lock = threading.Lock()
+
+
+def clear_normalization_cache() -> None:
+    """Let every kept form go."""
+
+    global _normalized_cache_characters
+    with _normalized_cache_lock:
+        _normalized_cache.clear()
+        _normalized_cache_characters = 0
+
+
+def normalization_cache_size() -> tuple[int, int]:
+    """How many forms are kept, and their characters."""
+
+    with _normalized_cache_lock:
+        return len(_normalized_cache), _normalized_cache_characters
+
+
 def _normalized_text_with_bounds(
+    value: str,
+    *,
+    join_line_end_hyphens: bool = False,
+    join_hangul_line_breaks: bool = False,
+    skip_duration_widget_lines: bool = False,
+    drop_space_before_punctuation: bool = False,
+    script_forms: str | None = None,
+    skip_line: Callable[[str], bool] | None = None,
+) -> tuple[str, list[int], list[int]]:
+    """``_normalize_text_with_bounds``, a page-sized text's forms kept.
+
+    Only a line rule that names its page (``_FurnitureLine``) is a key; any
+    other is a function nothing else equals, so the text is put in the form
+    as it is. The bounds given back are the caller's own lists.
+    """
+
+    global _normalized_cache_characters
+    form = {
+        "join_line_end_hyphens": join_line_end_hyphens,
+        "join_hangul_line_breaks": join_hangul_line_breaks,
+        "skip_duration_widget_lines": skip_duration_widget_lines,
+        "drop_space_before_punctuation": drop_space_before_punctuation,
+        "script_forms": script_forms,
+        "skip_line": skip_line,
+    }
+    if len(value) < _NORMALIZED_CACHE_MIN_LENGTH or not (
+        skip_line is None or isinstance(skip_line, _FurnitureLine)
+    ):
+        return _normalize_text_with_bounds(value, **form)
+    key = (value, join_line_end_hyphens, join_hangul_line_breaks, skip_duration_widget_lines,
+           drop_space_before_punctuation, script_forms, skip_line)
+    with _normalized_cache_lock:
+        kept = _normalized_cache.get(key)
+        if kept is not None:
+            _normalized_cache.move_to_end(key)
+    if kept is not None:
+        return kept[0], list(kept[1]), list(kept[2])
+    normalized, starts, ends = _normalize_text_with_bounds(value, **form)
+    with _normalized_cache_lock:
+        if key not in _normalized_cache:
+            _normalized_cache[key] = (normalized, array("q", starts), array("q", ends))
+            _normalized_cache_characters += len(value)
+            while _normalized_cache_characters > _NORMALIZED_CACHE_MAX_CHARACTERS and _normalized_cache:
+                (dropped, *_), _ = _normalized_cache.popitem(last=False)
+                _normalized_cache_characters -= len(dropped)
+    return normalized, starts, ends
+
+
+def _normalize_text_with_bounds(
     value: str,
     *,
     join_line_end_hyphens: bool = False,
@@ -1699,6 +1782,26 @@ _NUMBERED_LINE = re.compile(
     r"\s*(?:step\s*)?\(?([0-9]{1,3})(?:\.(?![0-9])|\)|:)?\s+(?=[^\W\d_])",
     re.IGNORECASE,
 )
+#: Lane AN5, decision 2: a margin line of numbers and the marks between
+#: them only -- a page number, "200.8-24", "3 / 12" -- and its numbers.
+_NUMBERS_ONLY_LINE = re.compile(r"[0-9][0-9.\-‐‑‒–—−/: ]*")
+#: How many lines at each end of a page are read for its printed page number.
+_PAGE_NUMBER_LINES = 3
+#: How many lines at each end of a page a line printed alike on other pages
+#: may stand in: the margin proper.
+_MARGIN_LINES = 4
+#: The pages whose bottom margin may print the article's copyright or licence
+#: footer: the first, and the second after a cover page (STAR Protocols
+#: prints a graphical-abstract page first).
+_FRONT_PAGES = 2
+#: A copyright or licence footer: a copyright mark or word, "<year> The
+#: Authors", a Creative Commons or open-access licence.
+_LICENSE_FOOTER = re.compile(
+    r"©|ⓒ|\(c\)\s*(?:19|20)[0-9]{2}|\bcopyright\b|creative\s*commons|\bcc[\s-]?by\b"
+    r"|open[\s-]access\s+article|distributed\s+under|all\s+rights\s+reserved"
+    r"|(?:19|20)[0-9]{2},?\s+(?:the\s+)?authors?\b",
+    re.IGNORECASE,
+)
 
 
 def _line_key(line: str) -> str:
@@ -1707,6 +1810,20 @@ def _line_key(line: str) -> str:
     line on page 5 and on page 6)."""
 
     return _NUMBER_RUN.sub("#", " ".join(unicodedata.normalize("NFC", line).split()))
+
+
+def _near_line_key(line: str) -> str:
+    """A margin line as lane AN5's decision 2 compares it across pages: its
+    line key without the numbers that open or close it, case set aside --
+    "2 STAR Protocols 3, 101366, June 17, 2022" on one page and "STAR
+    Protocols 3, 101366, June 17, 2022 3" on the next are one line."""
+
+    words = _line_key(line).split()
+    while words and words[0].rstrip(",.:;)") in {"#", "(#"}:
+        words.pop(0)
+    while words and words[-1].rstrip(",.:;)") in {"#", "(#"}:
+        words.pop()
+    return " ".join(words).casefold()
 
 
 @dataclass(frozen=True)
@@ -1722,6 +1839,19 @@ class _PageEdges:
     #: of at least half the pages, and never between the edges: a header
     #: table's revision and date cells ("01", "15/08/24"; lane AN, EV4 a).
     running_exact: frozenset[str] = frozenset()
+    #: Lane AN5, decision 2: each page's margin lines -- the twelve non-blank
+    #: lines at each end, whitespace runs as one space -- and its bottom
+    #: margin's.
+    margins: tuple[frozenset[str], ...] = ()
+    bottoms: tuple[frozenset[str], ...] = ()
+    #: (offset, page): the page prints number page + offset at one of its
+    #: ends (a line of numbers, or a margin line printed on other pages too).
+    page_offsets: frozenset[tuple[int, int]] = frozenset()
+    #: ``_near_line_key`` of the lines with a letter printed among the four
+    #: outermost lines at the same end of two pages or more, and never
+    #: further in; each page's four outermost lines at each end.
+    near_running: frozenset[str] = frozenset()
+    outermost: tuple[frozenset[str], ...] = ()
 
     def is_furniture(self, line: str, page_number: int) -> bool:
         """Whether a line is blank, a running line or this page's number.
@@ -1752,6 +1882,51 @@ class _PageEdges:
             return int(page_and_count[1]) == page_number and int(
                 page_and_count[2]) == self.page_count
         return _line_key(text) in self.running
+
+    def is_crossing_furniture(self, line: str, page_number: int) -> bool:
+        """Whether the page-end rule skips a line judging a quote that runs on.
+
+        Lane AN5, decision 2 (human decision 2026-10-20): besides
+        ``is_furniture``, a line in the page's top or bottom margin that is
+        (a) a page number as the document numbers its pages -- a line of
+        numbers whose first or last number is this page's number plus an
+        offset two other pages print too ("200.8-24", a "1" on the PDF's
+        second page) -- or (b) printed nearly alike in the margin of another
+        page and never between the margins, or (c) the copyright or licence
+        footer of a front page. Only the page-end rule reads this: a page's
+        own text never leaves these lines out, and they are never part of a
+        quote.
+        """
+
+        if self.is_furniture(line, page_number):
+            return True
+        text = " ".join(line.split())
+        if not 1 <= page_number <= len(self.margins) or text not in self.margins[page_number - 1]:
+            return False
+        if _NUMBERS_ONLY_LINE.fullmatch(text) and any(
+            len({page for offset, page in self.page_offsets
+                 if offset == number - page_number} - {page_number}) >= 2
+            for number in _end_numbers(text)
+        ):
+            return True
+        if (
+            any(character.isalpha() for character in text)
+            and text in self.outermost[page_number - 1]
+            and _near_line_key(text) in self.near_running
+        ):
+            return True
+        return (
+            page_number <= _FRONT_PAGES
+            and text in self.bottoms[page_number - 1]
+            and _LICENSE_FOOTER.search(text) is not None
+        )
+
+
+def _end_numbers(text: str) -> tuple[int, ...]:
+    """The numbers that open and close a line, of up to four digits."""
+
+    numbers = [int(run) for run in _NUMBER_RUN.findall(text) if len(run) <= 4]
+    return tuple(dict.fromkeys((numbers[0], numbers[-1]))) if numbers else ()
 
 
 @functools.lru_cache(maxsize=32)
@@ -1807,6 +1982,7 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
         inside.update(_line_key(line) for line in lines[_EDGE_LINES:-_EDGE_LINES])
         inside_exact.update(lines[_EDGE_LINES:-_EDGE_LINES])
     needed = max(3, -(-len(page_texts) // 2))
+    near_running, outermost, margins, bottoms, page_offsets = _margin_lines(page_texts)
     return _PageEdges(
         running=(
             frozenset(
@@ -1824,7 +2000,67 @@ def _edges_of(page_texts: tuple[str, ...]) -> _PageEdges:
             )
             if len(page_texts) > 1 else frozenset()
         ),
+        margins=margins,
+        bottoms=bottoms,
+        page_offsets=page_offsets,
+        near_running=near_running,
+        outermost=outermost,
     )
+
+
+def _margin_lines(page_texts: tuple[str, ...]) -> tuple[
+    frozenset[str], tuple[frozenset[str], ...], tuple[frozenset[str], ...],
+    tuple[frozenset[str], ...], frozenset[tuple[int, int]],
+]:
+    """Lane AN5, decision 2: the lines printed nearly alike among the four
+    outermost lines at the same end of two pages or more (never further in,
+    never a numbered line), each page's outermost, margin and bottom-margin
+    lines, and the page-number offsets the pages print at their ends.
+
+    Only a page with body lines between its two ends has margins to compare:
+    on a page of a few lines every line is outermost, and a step printed on
+    two such pages is not a running line (lane EV2's two-page rule).
+    """
+
+    pages: dict[tuple[str, str], set[int]] = {}
+    inside: set[str] = set()
+    outermost: list[frozenset[str]] = []
+    margins: list[frozenset[str]] = []
+    bottoms: list[frozenset[str]] = []
+    lines_of: list[list[str]] = []
+    for number, text in enumerate(page_texts, start=1):
+        lines = [line for line in (" ".join(item.split()) for item in text.splitlines()) if line]
+        lines_of.append(lines)
+        margins.append(frozenset([*lines[:_EDGE_LINES], *lines[-_EDGE_LINES:]]))
+        bottoms.append(frozenset(lines[-_EDGE_LINES:]))
+        ends = (
+            (("top", lines[:_MARGIN_LINES]), ("bottom", lines[-_MARGIN_LINES:]))
+            if len(lines) > 2 * _MARGIN_LINES else ())
+        outermost.append(frozenset(line for _, end in ends for line in end))
+        for end, end_lines in ends:
+            for line in end_lines:
+                if any(character.isalpha() for character in line) and not _NUMBERED_LINE.match(line):
+                    pages.setdefault((end, _near_line_key(line)), set()).add(number)
+        inside.update(_near_line_key(line) for line in lines[_MARGIN_LINES:-_MARGIN_LINES])
+    near_running = frozenset(
+        key for (_, key), seen in pages.items() if key and len(seen) >= 2 and key not in inside
+    ) if len(page_texts) > 1 else frozenset()
+    offsets: set[tuple[int, int]] = set()
+    for number, lines in enumerate(lines_of, start=1):
+        for line in {*lines[:_PAGE_NUMBER_LINES], *lines[-_PAGE_NUMBER_LINES:]}:
+            if _NUMBERS_ONLY_LINE.fullmatch(line):
+                found = _end_numbers(line)
+            elif line in outermost[number - 1] and _near_line_key(line) in near_running:
+                words = line.split()
+                # A number of ASCII digits: "③" is a digit to isdigit() but no
+                # number int() reads (a Korean manual's margins print it).
+                found = tuple(
+                    int(word) for word in (words[0], words[-1])
+                    if _BARE_PAGE_NUMBER.fullmatch(word))
+            else:
+                continue
+            offsets.update((value - number, number) for value in found)
+    return near_running, tuple(outermost), tuple(margins), tuple(bottoms), frozenset(offsets)
 
 
 def _page_edges(extraction: ProtocolPdfExtraction) -> _PageEdges:
@@ -1843,9 +2079,20 @@ def _furniture_line(
     footer between two lines of a step.
     """
 
-    edges = _page_edges(extraction)
-    number = page.source_page_number
-    return lambda line: edges.is_furniture(line, number)
+    return _FurnitureLine(_page_edges(extraction), page.source_page_number)
+
+
+@dataclass(frozen=True)
+class _FurnitureLine:
+    """``_furniture_line``'s rule: equal for the same page of the same
+    document, so a page's forms that leave its furniture out are kept
+    (lane AN5, decision 4)."""
+
+    edges: _PageEdges
+    page_number: int
+
+    def __call__(self, line: str) -> bool:
+        return self.edges.is_furniture(line, self.page_number)
 
 
 def _page_body_end(
@@ -1861,7 +2108,7 @@ def _page_body_end(
     )
     edges = _page_edges(extraction)
     lines = page.text[:end].splitlines(keepends=True)
-    while lines and edges.is_furniture(lines[-1], page.source_page_number):
+    while lines and edges.is_crossing_furniture(lines[-1], page.source_page_number):
         end -= len(lines.pop())
     return end
 
@@ -1876,7 +2123,7 @@ def _page_body_start(
     edges = _page_edges(extraction)
     start = 0
     for line in page.text[:end].splitlines(keepends=True):
-        if not edges.is_furniture(line, page.source_page_number):
+        if not edges.is_crossing_furniture(line, page.source_page_number):
             break
         start += len(line)
     body = page.text[start:end]
@@ -1899,7 +2146,7 @@ def _is_furniture_block(
 
     edges = _page_edges(extraction)
     if all(
-        edges.is_furniture(line, page.source_page_number)
+        edges.is_crossing_furniture(line, page.source_page_number)
         for line in block.text.splitlines() or ("",)
     ):
         return True
@@ -1909,7 +2156,7 @@ def _is_furniture_block(
     first = text.rfind("\n", 0, span[0]) + 1
     last = text.find("\n", span[1])
     return all(
-        edges.is_furniture(line, page.source_page_number)
+        edges.is_crossing_furniture(line, page.source_page_number)
         for line in text[first : len(text) if last < 0 else last].splitlines() or ("",)
     )
 
@@ -3722,7 +3969,9 @@ def _validate_domain(
 
     ``one_reading``: the protocol is one reading of the source -- a document
     read at once, or one piece -- so its steps are labelled alike (lane P3;
-    lane AN3, decision B leaves a joined analysis out of it).
+    lane AN3, decision B leaves a joined analysis out of it). Lane AN5,
+    decision 1: only a reading without review holds to it; one read for
+    review asks at each seam instead (``_numbering_seam_flags``).
     """
 
     try:
@@ -4115,14 +4364,20 @@ def _draft_from_response(
             protocol, extraction, allowed_pages=allowed_pages)
     else:
         protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
+    # Lane AN5, decision 1 (human decision 2026-10-20): read for review, one
+    # reading may number some steps and not others, as the source prints
+    # them; each place the numbering changes is a card. Read without review
+    # (nothing to ask on) it may not.
+    one_reading = not review_unverified
     try:
         protocol = _repeat_counts_as_totals(protocol)
         _reject_deferred_state(protocol)
         if refused:
             readiness = validated_with_refused_quotes(
-                protocol, extraction, tuple(refused), capability_policy=capability_policy)
+                protocol, extraction, tuple(refused), capability_policy=capability_policy,
+                one_reading=one_reading)
         else:
-            _validate_domain(protocol, extraction)
+            _validate_domain(protocol, extraction, one_reading=one_reading)
             readiness = domain.assess_readiness(
                 protocol,
                 capability_policy=capability_policy,
@@ -4142,7 +4397,10 @@ def _draft_from_response(
         capability_policy=capability_policy,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
         verified_evidence_count=evidence_count,
-        review_flags=review_flags_for(protocol, extraction, refused),
+        review_flags=(
+            *review_flags_for(protocol, extraction, refused),
+            *(_numbering_seam_flags(protocol) if review_unverified else ()),
+        ),
     )
 
 
@@ -5034,7 +5292,7 @@ def _piece_of(step_id: str) -> int | None:
 
 
 def _numbering_seam_flags(protocol: domain.ExperimentProtocol) -> tuple[ReviewFlag, ...]:
-    """One item per seam where the joined steps' numbering changes (lane AN3, B).
+    """One item per seam where the steps' numbering changes (lane AN3, B; AN5, 1).
 
     Human decision 2026-10-16. Lane P3's rule -- the steps of one reading are
     all numbered or all unnumbered -- holds for each piece, but a long manual
@@ -5045,6 +5303,11 @@ def _numbering_seam_flags(protocol: domain.ExperimentProtocol) -> tuple[ReviewFl
     step before and the first step after are one item: does the second follow
     the first? [이어져요] lets the joined order run; [아니요] sends the
     document to be read again -- the server never reorders steps.
+
+    Lane AN5, decision 1 (human decision 2026-10-20): one reading too -- a
+    document read at once, or one piece -- may number some steps and not
+    others (Word protocols, manuals: lane AN4's largest cause of failed
+    answers), with the same card at each seam.
     """
 
     steps = [step for section in protocol.sections for step in section.steps]
@@ -5375,6 +5638,16 @@ REQUOTE_OTHER_PASSAGE = "other_passage"
 REQUOTE_OUT_OF_ORDER = "words_out_of_order"
 REQUOTE_STILL_REFUSED = "still_refused"
 REQUOTE_CALL_FAILED = "call_failed"
+#: Lane AN5, decision 3: a person answered the card while it was asked about
+#: again, or its values on an OCR page would open a card of their own -- the
+#: item is left to its card.
+REQUOTE_ANSWERED_BY_PERSON = "answered_by_person"
+REQUOTE_OCR_VALUES = "ocr_values_unsettled"
+#: Lane AN5, decision 3 (human decision 2026-10-20): the re-ask's calls are
+#: waited for this long at most; a call not back by then leaves its items
+#: cards as they were.
+REQUOTE_TIME_LIMIT_SECONDS = 300.0
+REQUOTE_TIME_LIMIT_CODE = "requote_time_limit"
 
 
 @dataclass(frozen=True)
@@ -5422,6 +5695,12 @@ class RequoteResult:
     outcomes: dict[str, str]
     calls: tuple[dict[str, object], ...]
     check_seconds: float = 0.0
+    #: The draft asked about, what each usable answer would put in by item,
+    #: and the page each question's answer named -- so the answers can be
+    #: settled again without some items (``resettle_requote``).
+    asked: ProtocolAnalysisDraft | None = None
+    replacements: dict[str, dict[str, Any]] = dataclass_field(default_factory=dict)
+    pages: dict[str, int | None] = dataclass_field(default_factory=dict)
 
     @property
     def kept_items(self) -> tuple[str, ...]:
@@ -5750,9 +6029,13 @@ def _answer_replacements(
 
 
 def _redrafted(
-    draft: ProtocolAnalysisDraft, replacements: dict[str, Any], *, one_reading: bool,
+    draft: ProtocolAnalysisDraft, replacements: dict[str, Any],
 ) -> ProtocolAnalysisDraft:
-    """The draft with these fields replaced, through every check again."""
+    """The draft with these fields replaced, through every check again.
+
+    As read for review: the steps may number one way and the other (lane
+    AN5, decision 1), their seams cards that stay as they were.
+    """
 
     extraction = draft.extraction
     protocol = replace_at_paths(draft.protocol, replacements)
@@ -5761,9 +6044,9 @@ def _redrafted(
     if refused:
         readiness = validated_with_refused_quotes(
             verified, extraction, tuple(refused),
-            capability_policy=draft.capability_policy, one_reading=one_reading)
+            capability_policy=draft.capability_policy, one_reading=False)
     else:
-        _validate_domain(verified, extraction, one_reading=one_reading)
+        _validate_domain(verified, extraction, one_reading=False)
         readiness = domain.assess_readiness(verified, capability_policy=draft.capability_policy)
     evidence_flags = review_flags_for(verified, extraction, refused)
     kept = tuple(
@@ -5790,8 +6073,8 @@ def requote_unverified_items(
     model: ProtocolAnalysisModel,
     *,
     groups: Sequence[Sequence[int]] | None = None,
-    one_reading: bool = True,
     concurrency: int = 1,
+    time_limit: float | None = None,
 ) -> RequoteResult:
     """Ask once about the items the evidence check refused; keep what then passes.
 
@@ -5802,6 +6085,10 @@ def requote_unverified_items(
     whole; an item that is still refused, or whose answer makes another item
     refused, is put back as the analysis wrote it and checked again, at most
     ``_REQUOTE_CHECK_ROUNDS`` times, after which nothing is kept.
+
+    ``time_limit`` (lane AN5, decision 3): the calls are waited for that many
+    seconds in all; one not back by then is a failed call
+    (``REQUOTE_TIME_LIMIT_CODE``) and is not waited for.
     """
 
     batches = requote_questions(draft, groups=groups)
@@ -5809,12 +6096,15 @@ def requote_unverified_items(
     outcomes: dict[str, str] = {}
     calls: list[dict[str, object]] = []
 
-    def ask(batch: tuple[RequoteQuestion, ...]) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    def call_of(batch: tuple[RequoteQuestion, ...]) -> dict[str, object]:
         pages = sorted({page for question in batch for page in question.pages})
-        call: dict[str, object] = {
+        return {
             "first_page": pages[0], "last_page": pages[-1], "pages": len(pages),
             "questions": len(batch),
         }
+
+    def ask(batch: tuple[RequoteQuestion, ...]) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+        call = call_of(batch)
         started = time.monotonic()
         try:
             raw = model.analyze(
@@ -5831,7 +6121,22 @@ def requote_unverified_items(
         call["seconds"] = round(time.monotonic() - started, 2)
         return call, found
 
-    if len(batches) > 1 and concurrency > 1:
+    if time_limit is not None and batches:
+        # The calls run beside this thread so it can stop waiting; a call
+        # still running at the limit is left to end by itself, unread.
+        pool = ThreadPoolExecutor(
+            max_workers=max(1, min(concurrency, len(batches))), thread_name_prefix="protocol-requote",
+        )
+        futures = [pool.submit(ask, batch) for batch in batches]
+        wait_for_futures(futures, timeout=time_limit)
+        pool.shutdown(wait=False, cancel_futures=True)
+        results = [
+            future.result() if future.done() and not future.cancelled() else (
+                {**call_of(batch), "status": "failed", "failure_code": REQUOTE_TIME_LIMIT_CODE,
+                 "seconds": round(time_limit, 2)}, {})
+            for batch, future in zip(batches, futures)
+        ]
+    elif len(batches) > 1 and concurrency > 1:
         with ThreadPoolExecutor(
             max_workers=min(concurrency, len(batches)), thread_name_prefix="protocol-requote",
         ) as pool:
@@ -5855,6 +6160,43 @@ def requote_unverified_items(
     for question in questions:
         if outcomes[question.question_id] != REQUOTE_KEPT:
             replacements.pop(question.item_id, None)
+    return _settled_requote(draft, questions, outcomes, tuple(calls), replacements, pages)
+
+
+def resettle_requote(
+    result: RequoteResult, without: Collection[str], *, outcome: str,
+) -> RequoteResult:
+    """The same answers settled again with these items left to their cards
+    (lane AN5, decision 3): their questions are recorded as ``outcome``."""
+
+    if result.asked is None or not set(without) & set(result.kept_items):
+        return result
+    outcomes = {
+        question.question_id: (
+            outcome if question.item_id in without
+            and result.outcomes.get(question.question_id) == REQUOTE_KEPT
+            else result.outcomes[question.question_id])
+        for question in result.questions
+    }
+    kept = set(result.kept_items) - set(without)
+    replacements = {item: changes for item, changes in result.replacements.items()
+                    if item in kept}
+    settled = _settled_requote(
+        result.asked, result.questions, outcomes, result.calls, replacements, result.pages)
+    return replace(settled, check_seconds=result.check_seconds + settled.check_seconds)
+
+
+def _settled_requote(
+    draft: ProtocolAnalysisDraft,
+    questions: tuple[RequoteQuestion, ...],
+    outcomes: dict[str, str],
+    calls: tuple[dict[str, object], ...],
+    replacements: dict[str, dict[str, Any]],
+    pages: dict[str, int | None],
+) -> RequoteResult:
+    """Put the usable answers in together and check the analysis again."""
+
+    outcomes = dict(outcomes)
     started = time.monotonic()
     result = draft
     before = {(flag.item_id, flag.field) for flag in draft.review_flags}
@@ -5864,8 +6206,7 @@ def requote_unverified_items(
             break
         try:
             candidate = _redrafted(
-                draft, {path: value for changes in kept.values() for path, value in changes.items()},
-                one_reading=one_reading)
+                draft, {path: value for changes in kept.values() for path, value in changes.items()})
         except (ProtocolAnalysisError, domain.ProtocolValidationError):
             kept = {}
             break
@@ -5903,8 +6244,9 @@ def requote_unverified_items(
             for question in questions if outcomes[question.question_id] == REQUOTE_KEPT
         )))
     return RequoteResult(
-        draft=result, questions=questions, outcomes=outcomes, calls=tuple(calls),
-        check_seconds=time.monotonic() - started,
+        draft=result, questions=questions, outcomes=outcomes, calls=calls,
+        check_seconds=time.monotonic() - started, asked=draft,
+        replacements=dict(replacements), pages=dict(pages),
     )
 
 
