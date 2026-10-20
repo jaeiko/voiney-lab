@@ -1,87 +1,72 @@
-# Troubleshooting Guide
+# 문제 해결 안내
 
-Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen),
-2026-10-10 (lane CL: role settings, the pilot launcher's catalog check) and
-2026-10-14 (lane DOC3: no role fallback, a pilot without a catalog)
+증상별로 상태를 지키며 복구하는 법이다. 2026-10-20 dev `e7c31c8` 기준.
 
-The safe default is always to preserve the last server-confirmed state. Do not
-repeat a state-changing command until the experiment timeline shows whether the
-first attempt committed. Do not repair production state by editing SQLite.
+언제나 **서버가 마지막으로 확인한 상태**를 지킨다. 상태를 바꾸는 명령은 첫 시도가 기록됐는지 기록(타임라인)에서 확인하기 전에 되풀이하지 않는다. 운영 데이터를 SQLite 를 직접 고쳐 고치지 않는다.
 
-## Experimenter symptoms
+## 1. 연구자가 보는 증상
 
-| Symptom | Meaning | Safe recovery |
+| 증상 | 뜻 | 안전한 복구 |
 |---|---|---|
-| Protocol list is loading or empty | Catalog may be disabled, empty, unavailable, or still loading | Wait once, refresh, then have an operator check `/readyz` and catalog configuration; do not select an invented revision |
-| "이 프로토콜로 시작" is not offered | The analysis has not finished, or it carries an execution blocker ("실행을 막는 사유": unreadable page, failed source-evidence check, no executable step, safety-critical conflict) | Read the blocker on the start screen and fix it at the source (a readable PDF, a resolved conflict); nothing on the screen overrides it |
-| Start screen shows "시작 전 알림" | Readiness found something that does not block (a missing value, an ambiguity, a construct without guidance) | Read it before starting; the step will read the source and ask for the value when it comes |
-| “Listening” never appears | Microphone permission, audio device, WebSocket, or configuration acceptance failed | Check browser microphone permission and device, reload once, then check service health; no experiment step changed |
-| Speech rejected / language uncertain | Empty, non-speech, or language-inconsistent transcript admission | Speak again clearly; first verify the current step if the command could mutate state |
-| Stale/conflict message | Another tab, voice turn, or user changed the session version | Reload the timeline and explicitly reselect the experiment; never overwrite the newer state |
-| Voice-turn processing failed | STT/model/TTS or bounded server processing failed | Assume no mutation unless the canonical timeline shows one; check current step and retry only after recovery |
-| Resume disclosure says items were not restored | Expected recovery boundary | Reconfirm any pending completion, restart timers intentionally, and ask again for prior conversational context if needed |
-| Evidence download fails | File missing, changed, linked, unauthorized, or hash/size-invalid | Preserve the timeline record, contact the operator, and restore/reattach only through an approved incident process |
+| 프로토콜 목록이 계속 불러오는 중이거나 비었다 | 카탈로그가 꺼졌거나 비었거나 읽는 중 | 한 번 기다리고 새로고침. 그래도면 운영자가 `/readyz` 와 안전 문서 범위 설정을 본다(4절) |
+| "이 프로토콜로 실험 시작"이 없다 | 분석이 안 끝났거나, "검토 대기"이거나, **실행을 막는 사유**(읽지 못한 쪽, 실행할 단계 없음, 안전에 중요한 충돌)가 있다 | 요약 카드의 사유를 읽는다. 검토 대기면 확인 카드를 끝내고 등록한다. 막는 사유는 원문(읽을 수 있는 PDF 등)에서 고친다. 화면에서 무시할 길은 없다 |
+| "시작 전 알림"이 보인다 | 막지 않는 사유(빠진 값, 애매함, 안내가 다루지 못하는 구조) | 읽고 시작한다. 그 단계에서 원문을 읽고 필요한 값을 묻는다 |
+| "검토 대기 · 확인 필요 n" 이고 카드가 없다 | 확인할 항목이 너무 많아(기본 12개 초과) 다시 분석했는데도 많다(`protocol_analysis_too_many_review_items`) | 더 읽기 쉬운 원문으로 다시 올리거나 "다시 분석" |
+| 핵심 값 확인에서 틀렸다 | 분석 값과 원문 조각이 다를 수 있다 | 원문 조각을 다시 본다. 분석이 틀렸으면 "분석 값이 틀렸어요"로 카드를 열어 고치고 등록한다 |
+| 확인 카드에서 안전 주의 글을 고칠 수 없다 | 의도된 동작: 안전 주의는 고치지 않는다 | 메모를 남기거나, 원문에 없는 문장이면 "원문에 없어요" |
+| "마이크 사용 가능"이 안 나오거나 "HTTPS 주소로 열어 주세요" | 브라우저 마이크 권한, 장치, https 가 아님 | 마이크 권한을 허용하고 https 주소로 연다. 설정 탭에서 마이크를 고른다. 실험 단계는 바뀌지 않았다 |
+| 말해도 반응이 없고 "다른 사람 말로 보여 듣지 않은 말"이 늘어난다 | 목소리 맞추기 기준보다 작게 말했다 | "목소리 다시 맞춰 줘" 또는 설정의 목소리 민감도를 낮춘다 |
+| 말을 버리거나 "다시 한 번 말씀해 주세요" | 빈 말·소음·언어가 맞지 않는 글로 들었다 | 또렷하게 다시. 상태를 바꾸는 명령이었다면 먼저 지금 단계를 확인한다 |
+| "지금 답하지 못했어요. 다시 말씀해 주세요." | 라우터 모델이 요청 한도에 걸렸다. 아무것도 바뀌지 않았다 | 잠시 뒤 다시 말한다 |
+| 빨간 띠 "연결이 끊겼어요 — 다시 연결 중" | 연결이 끊겼다. 화면은 보기만 되고 마이크는 멈췄다 | 화면을 켜 둔 채 기다린다. 타이머는 화면이 이어 센다. "n번 시도했어요"가 계속되면 와이파이를 확인한다. 다시 이어지면 서버 상태로 바뀐다 |
+| 오래된 상태·충돌 안내 | 다른 탭이나 말이 실험의 버전을 바꿨다 | 기록을 새로 읽고 실험을 다시 고른다. 새 상태를 덮어쓰지 않는다 |
+| 말 처리 실패 | STT·모델·TTS 나 서버 처리 실패 | 기록에 바뀐 것이 보이지 않으면 아무것도 바뀌지 않은 것이다. 지금 단계를 확인하고 다시 |
+| 로그인: "여러 번 틀려 잠시 막혔어요." | 15분 안에 5번 틀렸다 | 15분 뒤에 다시 |
+| 로그인: "꺼진 계정이에요." / "초대 링크가 만료되었거나 이미 쓰였어요." | 관리자가 계정을 껐거나 초대가 끝났다 | 연구실 담당에게 새 초대 링크를 받는다 |
+| "다시 로그인해 주세요." | 세션이 끝났다(30일, 비밀번호 바꿈, 로그아웃) | 다시 로그인 |
+| 끝난 뒤 보고서 링크가 비어 있다 | 실험 기록이 아직 오지 않았거나, 새로고침했다 | 끝난 화면에서 기다린다. 새로고침 뒤에는 화면에서 다시 받는 길이 없다 — 운영자가 `/api/experiment-reports/{id}.docx` 로 받는다 |
+| 첨부 내려받기 실패 | 파일이 없거나 바뀌었거나 크기·해시가 다르다 | 기록은 그대로 두고 운영자에게 알린다. 정해진 사고 절차로만 다시 붙인다 |
 
-## Operator symptoms
+## 2. 운영자가 보는 증상
 
-| Symptom | Meaning | Safe recovery |
+| 증상 | 뜻 | 안전한 복구 |
 |---|---|---|
-| `/readyz` returns 503 | Required local configuration did not parse | Read the non-secret exception class, inspect service configuration locally, correct it, and restart; do not add secrets to incident logs |
-| Operational identity configuration invalid | OIDC issuer/audience/JWKS is incomplete or malformed | Configure all OIDC values with HTTPS metadata; operational mode must not fall back to development identity |
-| OCR never finishes | The injected OCR provider is missing or failed | Check the provider configuration; the protocol stays blocked (`source_page_requires_ocr`) until the pages are read |
-| A model feature never answers (analysis, translation, the router, the "AI 일반 지식" explanation, report prose) | That role's provider or model is not set. The setting table says "설정 필요", and the code has no fallback (the old xai default was removed in lanes PL, AN and RA): an unset role fails closed, by the name of the missing setting | Set `VOINEY_LAB_<ROLE>_PROVIDER` and `_MODEL` in `.env` as in `.env.example` and restart; `./scripts/run_dev.sh --check-only` prints each role's provider and model |
-| `./scripts/run_pilot.sh` exits 1 before serving | A file is at `data/runtime/pilot/approved_safety_catalog.sqlite` but cannot serve as a pilot catalog: unreadable (not a catalog, or a folder or broken link there), a demo document in it, or no approved active `reference_only` document. (With **no** file there the launcher does not exit: it starts as `source_protocol_only`, "기관 안전 문서 없음 · 원문 안전 주의만", human decision of 2026-10-13.) Another cause is an old setting name set in the environment or `.env`, which the start-up guard refuses by name | Either build and audit the catalog as in `docs/APPROVED_DOCUMENT_OPERATIONS.md` §4, or move the file away to start without institution documents; read the `[ERROR]` line the launcher prints. `--check-only` must exit 0 before the pilot starts |
+| `/readyz` 가 503 | 설정 하나가 읽히지 않았다(`reason` 에 예외 이름) | 그 설정을 서버에서 고치고 다시 시작. 사고 기록에 비밀 값을 넣지 않는다 |
+| `/readyz` 는 200 인데 `/api/protocols` 가 500 | 안전 문서 범위·카탈로그 설정이 틀렸다(`/readyz` 는 이것을 보지 않는다) | `VOINEY_LAB_USAGE_SCOPE`·`VOINEY_LAB_SAFETY_CATALOG` 를 고친다. 파일럿은 실행기가 정하므로 `--check-only` 를 본다 |
+| `./scripts/run_pilot.sh` 가 1 로 끝난다 | `data/runtime/pilot/approved_safety_catalog.sqlite` 가 있는데 쓸 수 없다(읽을 수 없음, demo 문서, 승인된 `reference_only` 문서 없음), 또는 옛 설정 이름이 있다 | `[ERROR]` 줄을 읽는다. 카탈로그를 `docs/DEPLOYMENT_RUNBOOK.md` 3절대로 다시 만들거나 파일을 치운다(그러면 `source_protocol_only` 로 시작). 옛 이름은 `python scripts/migrate_env.py --check` → `--write` |
+| 모델 기능이 답하지 않는다(분석·번역·라우터·AI 일반 지식·보고서 문장) | 그 역할의 공급자·모델이 비었다("설정 필요"). 다른 공급자로 가지 않고 설정 이름을 적은 오류로 닫힌다 | `.env` 에 `VOINEY_LAB_<역할>_PROVIDER`·`_MODEL` 을 `.env.example` 처럼 적고 다시 시작. `./scripts/run_dev.sh --check-only` 가 역할마다 공급자·모델을 찍는다 |
+| 음성이 전혀 안 된다 | STT·TTS 공급자가 비었거나 키가 없다 | `VOINEY_LAB_STT_PROVIDER`·`VOINEY_LAB_TTS_PROVIDER` 와 키 |
+| `/ws` 가 연결하자마자 닫힌다 | 켠 기능에 필요한 키·역할이 없다(라우터 먼저인데 라우터 꺼짐, 웹 설명·그림인데 `OPENAI_API_KEY` 없음, 보조 설명인데 역할 없음) | 기능을 끄거나 빠진 설정을 넣는다 |
+| OCR 이 끝나지 않는다 | OCR 엔진이 없거나 실패했다 | `VOINEY_LAB_OCR_PROVIDERS` 와 엔진 키를 본다. 그 쪽은 읽힐 때까지 시작을 막는다(`source_page_requires_ocr`) |
+| Word 올리기가 `docx_conversion_unavailable`(503), 실행기가 `[WARN] LibreOffice (soffice) was not found.` | 서버에 LibreOffice 가 없다. 서버는 시작하고 Word 만 거절한다 | `docs/DEPLOYMENT_RUNBOOK.md` 1절대로 설치하고 `/readyz` 의 `docx_conversion_available` 확인. 또는 PDF 로 올린다 |
+| HEIC 가 `heic_support_unavailable`(503) | 선택 설치 pillow-heif 가 없다 | 설치하거나 JPEG·PNG 로 올린다 |
+| 긴 문서 올리기가 시간 초과 | 글자 추출이 30 s 안에 끝나지 않았다 | `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` |
+| 분석이 "일부 조각 분석 실패" 항목을 남기거나 요청 한도(429) | 긴 문서를 여러 개 한꺼번에 분석했다 | 하나씩 올리거나 `VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY` 를 낮춘다 |
+| 링크 가져오기 거절(`link_private`, `link_sign_in_required` …) | 비공개 파일, 로그인 안 함, Google 이 아닌 주소 | 서버가 돌려준 문장을 그대로 따른다(공유를 "링크가 있는 모든 사용자"로 바꾸거나 파일을 올린다) |
+| 관리자 지표: 503 "관리자 지표가 닫혀 있습니다." | `VOINEY_LAB_ADMIN_TOKEN` 이 없고 관리자 계정도 아니다 | 관리자 계정으로 로그인하거나 토큰을 설정 |
+| 평점·지표가 저장되지 않는다(`pilot_metrics_unavailable`, 기록 `pilot.metrics.failed`) | 작업공간이 꺼졌거나 쓰기 실패 | 작업공간을 켠다. 실험은 계속된다 |
+| 운영 범위의 신원 설정 오류 | OIDC 발급자·대상·JWKS 가 덜 됐다 | 셋을 모두 HTTPS 로 넣는다. 운영 범위는 개발 신원으로 내려가지 않는다 |
 
-| A Word (.docx) upload is refused with `docx_conversion_unavailable` (503); `./scripts/run_pilot.sh` printed `[WARN] LibreOffice (soffice) was not found.` | LibreOffice is not installed on the server (or `VOINEY_LAB_OFFICE_CONVERTER` names a file that is not there). The pilot starts anyway; only Word sources are refused (human decision of 2026-10-14) | `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum` as in `docs/SOURCE_FORMATS.md` §1, restart, and check `GET /readyz` `docx_conversion_available`; or upload the document as a PDF |
+## 3. 서비스와 저장소
 
-The reviewer and administrator screens were removed on 2026-10-08 (lane DI);
-there is no inbox, approval, connector or pilot-metrics symptom any more.
+**프로세스가 없다**: 서비스 관리자와 정리된 기록을 본다 → 데이터 경로의 디스크·권한 → 설정을 고친 뒤에만 다시 시작 → `/healthz`·`/readyz` 성공 확인 → 연구자는 새로고침하고 홈의 "이어서 하기"로 돌아간다. 처리 중이던 명령이 기록됐다고 짐작하지 않는다.
 
-## Service and storage
+**백업 실패** (`scripts/pilot_state_backup.py`):
+- 상대 경로·루트 → 절대 경로로.
+- 이미 있는 출력 → 새 이름으로(덮어쓰기는 일부러 거부한다).
+- 원본에 심볼릭 링크 → 승인된 저장소 변경으로 없앤다.
+- SQLite 검사 실패 → 서비스를 멈추고 파일을 보존한 채 보고한다. "성공한" 것처럼 보이는 묶음을 만들지 않는다.
+- 검증·체크섬 실패 → 그 묶음을 격리하고 멈춘 상태에서 새로 뜬다. 복구에 쓰지 않는다.
 
-### Process unavailable
+**복구 실패**: 대상은 없는 절대 경로여야 한다. 먼저 `verify`, 새 폴더에 `restore`, 시험용 서버로 확인한 뒤 옮긴다. 목록·체크섬·SQLite 검사 없이 풀기만 한 것은 복구가 아니다.
 
-1. Check the service manager and sanitized logs.
-2. Confirm disk capacity and permissions on protocol/workspace/report paths.
-3. Restart only after local configuration is corrected.
-4. Require `/healthz` and `/readyz` success.
-5. Have researchers reload and use the recovery disclosure; do not infer that an
-   in-flight command committed.
+## 4. 외부 공급자 실패
 
-### Backup fails
+- 실험은 서버가 확인한 지점에 둔다. 웹·외부 내용은 참고일 뿐 원문이나 기관 안전 문서를 넘지 않는다.
+- 진단은 가짜 공급자 시험으로 한다. 실제 공급자 시험은 일부러, 한도를 두고, 승인된 키로만 하고 키·연구실 문서·전체 프롬프트를 찍지 않는다.
+- 설정 확인, 계약 시험(contract-tested), 연결, 실제 호출 성공(live)을 따로 적는다.
 
-- Relative/root path: provide exact absolute component paths.
-- Existing output: choose a new archive name; the tool intentionally refuses
-  overwrite.
-- Symlink in source: remove the indirection through an approved storage change;
-  the backup tool refuses it.
-- SQLite quick-check failure: stop the service, preserve the files, and escalate;
-  do not create a misleading “successful” archive.
-- Verify/checksum failure: quarantine the archive and create a new stopped-
-  process backup. Never restore it.
+## 5. 사고 기록에 남길 것
 
-### Restore fails
-
-The destination must be an absolute path that does not exist. Verify the archive
-first, restore into a fresh directory, use a disposable service instance, and
-smoke-test before any promotion. A successful extraction without manifest,
-checksum, and SQLite verification is not a successful restore.
-
-## External provider failures
-
-- Keep the workflow at its server-confirmed checkpoint.
-- External source/web content is supplementary and cannot override the
-  protocol's source or the approved safety documents.
-- Use fake-backed automated tests for diagnosis. A real provider test must be
-  explicit, bounded, credential-authorized, and must not print credentials,
-  proprietary documents, or full prompts.
-- Classify configuration checks, contract tests, connectivity, and end-to-end
-  provider success separately.
-
-## Incident information to collect
-
-Collect timestamp, session ID, visible step/status, action attempted, response
-code or safe UI message, whether the timeline changed, browser/service version,
-and reproducible steps. Do not collect raw audio, full transcripts, bearer
-tokens, `.env`, credentials, model reasoning, evidence bytes, private protocol
-text, or user identifiers in ordinary logs/tickets.
+시각, 실험 세션 id, 화면의 단계·상태, 하려던 일, 응답 코드나 화면 문구, 기록이 바뀌었는지, 브라우저·서버 버전, 다시 일으키는 순서.
+남기지 않을 것: 원음, 말한 글 전체, 토큰, `.env`, 키, 모델 추론, 첨부 파일, 연구실 프로토콜 글, 사용자 식별자.
