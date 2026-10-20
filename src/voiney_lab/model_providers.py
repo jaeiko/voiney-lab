@@ -1228,6 +1228,81 @@ class _Retrying:
         return run
 
 
+#: The roles whose every send writes one line: how long it took and how fast
+#: the provider wrote (lane AN5, decision 5; human decision 2026-10-20). Lane
+#: AN4 saw Gemini write 22 output tokens a second for half an hour and 150-170
+#: before and after it, and nothing on the server told that hour apart.
+TIMED_ROLES = frozenset({"analysis", "translation"})
+_monotonic = time.monotonic
+
+
+def _call_line(
+    backend: Any, seconds: float, reply: Any = None, error: BaseException | None = None,
+) -> None:
+    """One send's line: provider, role, model, how it ended, seconds, output
+    tokens (reasoning included) and tokens a second. Never a word of the
+    request or the reply. ``provider_call`` on the record is the same, for a
+    measurement's ledger."""
+
+    usage = getattr(reply, "usage", None) if error is None else None
+    output = int(getattr(usage, "completion_tokens", 0) or 0) if usage is not None else None
+    if error is None:
+        status = "ok"
+    else:
+        kind = getattr(error, "kind", None) or type(error).__name__
+        code = getattr(error, "status_code", None)
+        status = f"{kind}:{code}" if code is not None else str(kind)
+    record = {
+        "provider": backend.provider, "role": backend.role_model.role,
+        "model": str(backend.role_model.model), "status": status,
+        "seconds": round(seconds, 2), "output_tokens": output,
+        "tokens_per_second": (
+            round(output / seconds, 1) if output is not None and seconds > 0 else None),
+        "finish": getattr(reply, "provider_finish_reason", None) if error is None else None,
+    }
+    _logger.info(
+        "provider.call provider=%s role=%s model=%s status=%s seconds=%.2f output_tokens=%s "
+        "tokens_per_second=%s finish=%s",
+        record["provider"], record["role"], record["model"], status, seconds,
+        output, record["tokens_per_second"], record["finish"],
+        extra={"provider_call": record},
+    )
+
+
+def _timed(backend: Any, create: Callable[..., Any], asynchronous: bool) -> Callable[..., Any]:
+    """``create`` with each send's line written (``_call_line``); a stream is
+    left as it is."""
+
+    if asynchronous:
+        async def arun(**kwargs: Any) -> Any:
+            if kwargs.get("stream"):
+                return await create(**kwargs)
+            started = _monotonic()
+            try:
+                reply = await create(**kwargs)
+            except Exception as exc:
+                _call_line(backend, _monotonic() - started, error=exc)
+                raise
+            _call_line(backend, _monotonic() - started, reply)
+            return reply
+
+        return arun
+
+    def run(**kwargs: Any) -> Any:
+        if kwargs.get("stream"):
+            return create(**kwargs)
+        started = _monotonic()
+        try:
+            reply = create(**kwargs)
+        except Exception as exc:
+            _call_line(backend, _monotonic() - started, error=exc)
+            raise
+        _call_line(backend, _monotonic() - started, reply)
+        return reply
+
+    return run
+
+
 class _Facade:
     """``client.chat.completions.create`` and ``client.responses.create``."""
 
@@ -1237,6 +1312,8 @@ class _Facade:
         self._backend = backend
         self.model = backend.role_model.model
         create = backend.acreate if asynchronous else backend.create
+        if backend.role_model.role in TIMED_ROLES:
+            create = _timed(backend, create, asynchronous)
         if retry_policy is not None and retry_policy.applies_to(backend.role_model.role):
             retrying = _Retrying(backend.role_model, backend.provider, retry_policy)
             create = retrying.asynchronous(create) if asynchronous else retrying.sync(create)
