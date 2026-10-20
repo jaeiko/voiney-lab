@@ -31,7 +31,8 @@
 | 2026-10-13 | 긴 문서는 15쪽(겹침 1쪽) 조각으로 400쪽까지 분석한다. 한 번에 읽는 한도는 60쪽. 옛 주장 조각(claim-chunk) 길은 지운다 | 긴 설명서가 통째로 실패했다 | AN | `experiment_protocol_analysis.py` `MAX_ANALYSIS_PAGES`, `ANALYSIS_PIECE_MAX_PAGES`, `MAX_PIECED_ANALYSIS_PAGES` | 옛 길을 쓰던 진단 스크립트 9개가 import 에서 실패한다(아래 "알려진 빈틈") |
 | 2026-10-14 | 분석·번역·보고서 호출은 429·일시적 5xx 에 최대 5번 다시 보낸다(기다림 최대 60 s). 조각은 8개씩 동시에, 429 가 오면 절반으로 | 조각 분석 중 요청 한도 | AN2 | `model_providers.py` `ProviderRetryPolicy`, `DEFAULT_PROVIDER_RETRY_MAX`; `experiment_protocol_analysis.py` `PieceConcurrencyGate` | — |
 | 2026-10-16 · 18 | 스캔 값은 두 OCR 엔진이 **자리마다** 같게 읽어야 정해진다. 한 쪽의 값은 카드 한 장. 숫자가 15 % 이상 다르거나 신뢰도가 0.90 미만인 쪽은 아무것도 자동으로 정하지 않는다. 안전 주의 속 숫자도 견준다. 조각 문서는 자동 다시 분석을 하지 않는다 | 실측에서 두 엔진이 나쁜 쪽을 똑같이 잘못 읽은 자동 통과 4건 | AN3 (PR #88·#91·#95) | `protocol_catalog.py` `OCR_PAGE_MAX_DIFFERING_SHARE`, `OCR_PAGE_MIN_CONFIDENCE`, `_ocr_page_gate` | 기준이 문서 하나에서 나왔다. 파일럿 자료로 다시 잴 것 |
-| 2026-10-19 | 첫 분석 뒤 근거 검사가 거부한 항목만 그 쪽 글과 함께 한 번 더 묻고, 받은 구간도 같은 검사를 거친다 | 카드 −14 %(154 → 133), 잘못 받아들인 것 0 | AN4 (PR #103) | `experiment_protocol_analysis.py` `requote_unverified_items`; 설정 `VOINEY_LAB_ANALYSIS_REQUOTE` | 시간 한도, 순서 검사 90 % |
+| 2026-10-19 | 첫 분석 뒤 근거 검사가 거부한 항목만 그 쪽 글과 함께 한 번 더 묻고, 받은 구간도 같은 검사를 거친다 | 카드 −14 %(154 → 133), 잘못 받아들인 것 0 | AN4 (PR #103) | `experiment_protocol_analysis.py` `requote_unverified_items`; 설정 `VOINEY_LAB_ANALYSIS_REQUOTE` | 순서 검사 90 % |
+| 2026-10-20 | 분석 마무리: 한 번 읽은 분석(또는 조각 하나)에도 번호 단계와 번호 없는 단계를 원문대로 받고 경계를 카드로 묻는다; 쪽 끝을 넘는 인용은 쪽 번호·머리말 같은 여백 줄을 건너 받는다; 되묻기는 분석을 저장한 뒤 300 s 안에 돌고 다시 찾은 카드를 서버가 닫는다; 분석·번역 호출마다 글 없는 기록 한 줄 | 카드를 띄운 채 기다리지 않게, 섞인 번호를 실패로 보지 않게 | AN5 (PR #109) | `experiment_protocol_analysis.py` `REQUOTE_TIME_LIMIT_SECONDS`; `docs/MIGRATION_NOTES.md` "Lane AN5". 이 문서의 나머지 반영은 문서 다시 쓰기 2단계 | — |
 
 ## 3. 확인 카드와 안전 주의
 

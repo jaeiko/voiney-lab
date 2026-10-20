@@ -64,10 +64,11 @@
 ## F5. 원문 근거 검사
 
 - **무엇**: 분석이 말한 모든 것(단계 문장·값·안전 주의·재료…)이 원문(또는 받아들인 OCR 글)에 실제로 있는지 서버가 기계적으로 대조한다. 찾지 못한 항목은 문서를 버리지 않고 "확인 필요" 항목이 된다. 원문이 확인하지 못한 메타데이터와 설명은 비운다. 뽑은 단계가 원문 번호 단계의 25 % 미만이면 "속 빈 통과"로 거부한다. 타이머는 그 단계의 원문 범위에 적힌 시간만 인정한다.
-  첫 분석 뒤 거부된 항목만 그 쪽 글과 함께 한 번 더 물어 원문 그대로의 구간을 받고(분석마다 한 번, 긴 문서는 조각마다), 받은 구간도 같은 검사를 거친다.
-- **어디**: `experiment_protocol_analysis.py` (`validate_protocol_analysis_evidence`, `_claim_is_supported`, `hollow_analysis_check`, `verify_step_timers`, `review_flags_for`, `requote_unverified_items`); `experiment_protocol.py` (`validate_protocol`, `assess_readiness`); 쪽 근거 조각 `protocol_claim_analysis.py` `generate_page_evidence_segments`.
+  거부된 항목만 그 쪽 글과 함께 한 번 더 물어 원문 그대로의 구간을 받고(분석마다 한 번, 긴 문서는 조각마다), 받은 구간도 같은 검사를 거친다. 이 되묻기는 분석을 "검토 대기"로 저장한 **뒤에** 돈다(한도 300 s, 요약에 "원문 위치를 다시 찾는 중"). 다시 찾은 항목의 카드는 서버가 닫고("원문 위치를 다시 찾아 확인했어요"), 사람이 아무것도 정하지 않은 채 모든 카드가 닫히면 분석은 통과로 저장된다.
+  번호 단계와 번호 없는 단계가 섞인 원문은 그대로 받고, 번호 방식이 바뀌는 경계를 확인 카드("이어져요")로 묻는다.
+- **어디**: `experiment_protocol_analysis.py` (`validate_protocol_analysis_evidence`, `_claim_is_supported`, `hollow_analysis_check`, `verify_step_timers`, `review_flags_for`, `requote_unverified_items`, `REQUOTE_TIME_LIMIT_SECONDS`); `experiment_protocol.py` (`validate_protocol`, `assess_readiness`); 쪽 근거 조각 `protocol_claim_analysis.py` `generate_page_evidence_segments`.
 - **설정**: `VOINEY_LAB_ANALYSIS_REQUOTE`(true).
-- **시험**: `tests/test_lane_ev_evidence_rules.py`, `tests/test_lane_ev2_hollow_pass.py`, `tests/test_lane_ev2_cross_page.py`, `tests/test_lane_an4_requote.py`.
+- **시험**: `tests/test_lane_ev_evidence_rules.py`, `tests/test_lane_ev2_hollow_pass.py`, `tests/test_lane_ev2_cross_page.py`, `tests/test_lane_an4_requote.py`, `tests/test_lane_an5_requote_after_cards.py`, `tests/test_lane_an5_mixed_numbering.py`, `tests/test_lane_an5_page_end_furniture.py`.
 - **한계**: 한 줄에 여러 값이 몰린 표, 번호 없는 글로 된 단계, 설명만 하는 번호 줄은 잘못 읽힐 수 있다(`.agent/architecture.md` "알려진 분석 한계").
 
 ## F6. 확인 카드
