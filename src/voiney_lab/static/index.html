@@ -1768,6 +1768,7 @@ function screenView(){
 }
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
+ if(view!=="before")stopVoicePreview();
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
  // Lane IA decision ①: the run opens the experiment tab once (replacing the entry, so the back button leaves the run's tab, not a tab before it); the route draws the tab, the band and the wizard.
  if(view!=="before"&&wizard.open)closeWizardSheet({silent:true});
@@ -3354,6 +3355,7 @@ async function closeAudio(){
 }
 async function startSession(){
  const generation=sessionGeneration;
+ stopVoicePreview();
  sessionActive=false;
  acceptedSessionConfiguration=null;
  const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),pending={configuration_id,mode:"cascade",language:"ko",protocol_id:$("protocol-id")?.value||null,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{})};
@@ -4937,6 +4939,7 @@ function openWizardSheet(step=null,{mode="start"}={}){
 }
 function closeWizardSheet({fromHistory=false,silent=false}={}){
  if(!wizard.open)return false;
+ stopVoicePreview();
  wizard.open=false;wizard.mode="start";renderWizard();
  const pushed=wizardSheetPushed;wizardSheetPushed=false;
  if(pushed&&!fromHistory&&!silent){try{globalThis.history?.back?.();}catch(_){}}
@@ -4979,7 +4982,7 @@ async function wizardAfterSignIn(){
  const settings=fetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
  await Promise.all([settings,loadAgentVoices()]);
 }
-function wizardGo(step){wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
+function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
 function wizardNext(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<0||index>=steps.length-1)return;wizardGo(steps[index+1]);}
 function wizardBack(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<=0)return;wizardGo(steps[index-1]);}
 function wizardField(label,id,type,autocomplete){const field=compareEl("label","wizard-field",label);let input=document.getElementById(id);if(!input){input=document.createElement("input");input.id=id;}input.type=type;if(autocomplete)input.setAttribute?.("autocomplete",autocomplete);field.appendChild(input);return field;}
@@ -5066,7 +5069,7 @@ function renderWizardAgent(host,primary){
  setText("wizard-lead",`안내하는 목소리를 골라요. [들어 보기]로 듣고 고르면 저장돼요.${list?.preview_text_ko?`\n들려주는 말: "${list.preview_text_ko}"`:""}`);
  const options=compareEl("ul","wizard-options");
  for(const voice of list?.voices||[]){
-  const aside=compareEl("button","wizard-option-aside",wizard.previewing===voice.voice_id?"듣는 중…":"들어 보기");aside.type="button";aside.disabled=wizard.busy;if(aside.dataset)aside.dataset.voiceId=voice.voice_id;
+  const aside=compareEl("button","wizard-option-aside",wizard.previewing===voice.voice_id?"듣는 중…":"들어 보기");aside.type="button";aside.disabled=wizard.busy||!voicePreviewAllowed();if(aside.dataset)aside.dataset.voiceId=voice.voice_id;
   aside.addEventListener("click",()=>{void wizardPreviewVoice(voice.voice_id);});
   const pick=wizardOption(voice.label_ko,voice.voice_id===list?.default_voice_id?"기본 목소리":"",voice.voice_id===chosen,()=>{void wizardPickVoice(voice.voice_id);},aside);
   if(pick.firstChild?.dataset)pick.firstChild.dataset.voiceId=voice.voice_id;
@@ -5075,18 +5078,50 @@ function renderWizardAgent(host,primary){
  host.appendChild(options);
  if(primary)primary.textContent="이 목소리로 할게요";
 }
+// Lane IA bug ① (a person's finding on dev 096f506, 2026-10-20): the previews
+// overlapped -- the page awaited only the start of play(), cleared "듣는 중…"
+// at once, made a new Audio without stopping the one before, and never
+// revoked the object URL. One preview player now: a new press stops the one
+// before (a press before the first sound arrived drops that sound); "듣는 중…"
+// lasts until the sound ends, fails or is stopped; the same button again
+// stops; picking a voice, moving a step, closing the sheet, leaving the tab
+// or starting the experiment stops; a spent object URL is revoked. While the
+// experiment runs its guidance speaks, so no preview then.
+var voicePreview={audio:null,url:null,token:0};
+function voicePreviewAllowed(){return screenView()==="before"&&!sessionActive&&["IDLE","ERROR"].includes(visibleState);}
+function stopVoicePreview(){
+ voicePreview.token+=1;
+ const audio=voicePreview.audio,url=voicePreview.url,was=wizard?.previewing||null;
+ voicePreview.audio=null;voicePreview.url=null;
+ if(audio){try{audio.onended=null;audio.onerror=null;audio.pause?.();}catch(_){}}
+ if(url){try{globalThis.URL?.revokeObjectURL?.(url);}catch(_){}}
+ if(wizard)wizard.previewing=null;
+ if(was||audio)renderVoicePreview();
+ return Boolean(was||audio);
+}
+function renderVoicePreview(){renderWizard();renderSettingsExtras();}
 async function wizardPreviewVoice(voiceId){
- if(wizard.previewing)return false;wizard.previewing=voiceId;renderWizard();
+ if(wizard.previewing===voiceId){stopVoicePreview();return false;}
+ if(!voicePreviewAllowed()){wizardNote("실험 중에는 안내 목소리가 말해요 · 들어 보기는 실험이 끝난 뒤에 해 주세요.","error");return false;}
+ stopVoicePreview();
+ const token=++voicePreview.token;wizard.previewing=voiceId;wizardNote("");renderVoicePreview();
  try{
   const response=await fetch("/api/voice/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice_id:voiceId}),redirect:"error"});
+  if(token!==voicePreview.token)return false;
   if(!response.ok)throw new Error("preview");
   const blob=await response.blob();
-  if(typeof globalThis.Audio==="function"&&globalThis.URL?.createObjectURL){const audio=new globalThis.Audio(globalThis.URL.createObjectURL(blob));await audio.play?.();}
-  wizardNote("");return true;
- }catch(_){wizardNote("들어 보기에 실패했어요. 잠시 뒤 다시 눌러 주세요.","error");return false;}
- finally{wizard.previewing=null;renderWizard();}
+  if(token!==voicePreview.token)return false;
+  if(typeof globalThis.Audio!=="function"||typeof globalThis.URL?.createObjectURL!=="function"){stopVoicePreview();return true;}
+  const url=globalThis.URL.createObjectURL(blob),audio=new globalThis.Audio(url);
+  voicePreview.audio=audio;voicePreview.url=url;
+  audio.onended=()=>{if(voicePreview.audio===audio)stopVoicePreview();};
+  audio.onerror=()=>{if(voicePreview.audio!==audio)return;stopVoicePreview();wizardNote("들어 보기에 실패했어요. 잠시 뒤 다시 눌러 주세요.","error");};
+  await audio.play?.();
+  return true;
+ }catch(_){if(token===voicePreview.token)stopVoicePreview();wizardNote("들어 보기에 실패했어요. 잠시 뒤 다시 눌러 주세요.","error");return false;}
 }
 async function wizardPickVoice(voiceId){
+ stopVoicePreview();
  const before=wizardSettings().agent_voice;wizard.settings={...wizardSettings(),agent_voice:voiceId};renderWizard();
  try{
   const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_voice:voiceId})});
@@ -5283,7 +5318,7 @@ function renderRoute(){
  if(tab==="home")renderHome();
  if(tab==="settings")renderSettingsExtras();
  renderWizard();
- if(key!==lastRouteKey){lastRouteKey=key;applyRouteSelections({entered:true});if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
+ if(key!==lastRouteKey){lastRouteKey=key;stopVoicePreview();applyRouteSelections({entered:true});if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
  return tab;
 }
 // The hash's own id: the protocol or the session it names, once the list that holds it is here.
@@ -5439,7 +5474,7 @@ function renderSettingsExtras(){
   list.replaceChildren();
   const voices=wizard?.voices,selected=String(wizardSettings().agent_voice||"default"),chosen=selected==="default"?voices?.default_voice_id:selected;
   for(const voice of voices?.voices||[]){
-   const aside=compareEl("button","wizard-option-aside",wizard.previewing===voice.voice_id?"듣는 중…":"들어 보기");aside.type="button";aside.disabled=Boolean(wizard.previewing);
+   const aside=compareEl("button","wizard-option-aside",wizard.previewing===voice.voice_id?"듣는 중…":"들어 보기");aside.type="button";aside.disabled=!voicePreviewAllowed();
    aside.addEventListener("click",()=>{void previewAgentVoiceFromSettings(voice.voice_id);});
    list.appendChild(wizardOption(voice.label_ko,voice.voice_id===voices?.default_voice_id?"기본 목소리":"",voice.voice_id===chosen,()=>{void pickAgentVoiceFromSettings(voice.voice_id);},aside));
   }
@@ -5453,7 +5488,7 @@ function renderSettingsExtras(){
  return accounts;
 }
 async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoice(voiceId);setText("settings-agent-voice-note",ok?"저장했어요 · 이 목소리로 안내해요.":"목소리를 저장하지 못했어요.");renderSettingsExtras();return ok;}
-async function previewAgentVoiceFromSettings(voiceId){const started=wizard.previewing===null;renderSettingsExtras();const ok=await wizardPreviewVoice(voiceId);if(started)setText("settings-agent-voice-note",ok?"":"들어 보기에 실패했어요. 잠시 뒤 다시 눌러 주세요.");renderSettingsExtras();return ok;}
+async function previewAgentVoiceFromSettings(voiceId){const ok=await wizardPreviewVoice(voiceId);setText("settings-agent-voice-note",wizard.noteKind==="error"?wizard.note:"");renderSettingsExtras();return ok;}
 async function logOutAccount(){
  const button=$("account-logout"),status=$("account-password-status");setDisabled(button,true);
  try{const response=await fetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("refused");}
