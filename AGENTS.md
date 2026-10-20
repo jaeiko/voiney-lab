@@ -199,7 +199,7 @@ git diff --check
   - **Condition B** — none present (CI, a fresh clone): the modules in
     `tests/conftest.py` `MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF` and other
     licensed-PDF tests are skipped.
-  The latest measured numbers, with dates, are in README section 7.
+  The latest measured numbers, with dates, are in README section 8.
 - Browser tests (`tests/e2e/`, Playwright) run in CI: `npm install && npx
   playwright install --with-deps chromium && npx playwright test`.
 
