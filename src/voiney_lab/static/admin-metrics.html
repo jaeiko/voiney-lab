@@ -6,13 +6,17 @@
 <meta name="robots" content="noindex">
 <title>파일럿 지표</title>
 <!-- Lane LOG, decision 4 (2026-10-18): the pilot's day table for administrators.
-     The numbers come from GET /api/admin/pilot-metrics, which needs the admin
-     token (VOINEY_LAB_ADMIN_TOKEN) or an admin account. Numbers, codes and
-     times only; the token stays in this page's memory and is sent as a header. -->
+     The numbers come from GET /api/admin/pilot-metrics, which needs an admin
+     account or the admin token (VOINEY_LAB_ADMIN_TOKEN). Numbers, codes and
+     times only; the token stays in this page's memory and is sent as a header.
+     Lane FX5, decision 3 (2026-10-20): the page asks the server on opening and
+     at "불러오기" with or without a token (the session cookie goes along), so an
+     admin account needs no token; only a 401 or 403 shows the token box. -->
 <style>
   :root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1d1b;--muted:#5d5d58;--line:#dcdcd6;--accent:#1f5fbf;--warn:#a33a1f}
   @media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1d1d1b;--ink:#ecece8;--muted:#a3a39c;--line:#3a3a36;--accent:#7aa7ef;--warn:#f08a6c}}
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
   main{max-width:1200px;margin:0 auto;padding:24px 16px}
   h1{font-size:1.4rem;margin:0 0 4px}
@@ -40,7 +44,7 @@
   <h1>파일럿 지표</h1>
   <p class="lead">하루별 실험·단계·타이머·끊김·평점. 숫자·코드·시각만 보여 줍니다 — 말한 글, 음성, 프로토콜 내용, 평점 메모는 없습니다.</p>
   <form id="metrics-form">
-    <label>관리자 토큰<input id="metrics-token" type="password" autocomplete="off" required></label>
+    <label id="metrics-token-label" hidden>관리자 토큰 (관리자 계정으로 로그인했다면 필요 없어요)<input id="metrics-token" type="password" autocomplete="off"></label>
     <label>시작 날짜<input id="metrics-from" type="date"></label>
     <label>끝 날짜<input id="metrics-to" type="date"></label>
     <label>계정 id (비우면 전체)<input id="metrics-account" type="text" autocomplete="off" spellcheck="false"></label>
@@ -67,7 +71,9 @@ const COLUMN_LABELS={
  analyses:"분석",analyses_passed:"통과",analyses_review_pending:"검토 대기",analyses_notice:"안내",analyses_failed:"실패"
 };
 const TOTAL_KEYS=["experiments","steps","hands_free_ratio","timer_alerts","disconnects","rating_mean","analyses"];
-const ERRORS={503:"관리자 지표가 닫혀 있습니다. 서버에 VOINEY_LAB_ADMIN_TOKEN 을 설정하세요.",403:"관리자 토큰이 맞지 않습니다.",400:"날짜나 계정 id 형식이 맞지 않습니다."};
+const ERRORS={503:"관리자 지표가 닫혀 있습니다. 관리자 계정으로 로그인하거나, 서버에 VOINEY_LAB_ADMIN_TOKEN 을 설정하세요.",400:"날짜나 계정 id 형식이 맞지 않습니다."};
+// 401: no session at the server's door (an account is needed first); 403: signed in but not an administrator, or a wrong token.
+const ASK_TOKEN={401:"로그인이 필요해요. 관리자 계정으로 로그인한 뒤 다시 열어 주세요. 관리자 토큰이 있으면 아래 칸에 넣어도 돼요.",403:"관리자 계정이 아니에요. 관리자 계정으로 로그인하거나, 관리자 토큰을 아래 칸에 넣어 주세요."};
 const $=id=>document.getElementById(id);
 function shown(key,value){
  if(value===null||value===undefined)return "";
@@ -86,17 +92,26 @@ function renderMetrics(payload){
  $("metrics-totals").replaceChildren(...TOTAL_KEYS.map(key=>{const box=document.createElement("div");box.className="total";box.append(cell("b",shown(key,totals[key])||"—"),cell("span",COLUMN_LABELS[key]));return box;}));
  setStatus(days.length?`${days.length}일`:"이 기간에 기록이 없습니다.");
 }
+function askForToken(text){
+ $("metrics-token-label").hidden=false;
+ setStatus(text,"error");
+ const box=$("metrics-token");if(box.focus)box.focus();
+}
 async function loadMetrics(){
  const token=$("metrics-token").value.trim();
- if(!token){setStatus("관리자 토큰을 넣으세요.","error");return;}
  const query=new URLSearchParams();
  for(const [name,id] of [["from","metrics-from"],["to","metrics-to"],["account","metrics-account"]]){const value=$(id).value.trim();if(value)query.set(name,value);}
  setStatus("불러오는 중…");
  let response;
- try{response=await fetch(`/api/admin/pilot-metrics?${query}`,{headers:{"X-Voice-Workflow-Admin-Token":token},cache:"no-store"});}
+ // With no token typed the request still goes: an admin account's session cookie is enough for the server.
+ try{response=await fetch(`/api/admin/pilot-metrics?${query}`,{headers:token?{"X-Voice-Workflow-Admin-Token":token}:{},credentials:"same-origin",cache:"no-store"});}
  catch{setStatus("서버에 닿지 못했습니다.","error");return;}
+ if(response.status===401||response.status===403){askForToken(token&&response.status===403?"관리자 토큰이 맞지 않습니다.":ASK_TOKEN[response.status]);return;}
  if(!response.ok){setStatus(ERRORS[response.status]||`불러오지 못했습니다 (${response.status}).`,"error");return;}
- renderMetrics(await response.json());
+ let payload;
+ try{payload=await response.json();}
+ catch{setStatus("불러오지 못했습니다.","error");return;}
+ renderMetrics(payload);
 }
 function defaultPeriod(now=new Date()){
  const day=offset=>{const date=new Date(now.getTime()+9*3600*1000-offset*86400*1000);return date.toISOString().slice(0,10);};
@@ -105,6 +120,7 @@ function defaultPeriod(now=new Date()){
 }
 $("metrics-form").addEventListener("submit",event=>{event.preventDefault();loadMetrics();});
 defaultPeriod();
+loadMetrics();
 </script>
 </body>
 </html>
