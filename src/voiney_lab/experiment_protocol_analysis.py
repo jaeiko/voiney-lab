@@ -19,6 +19,8 @@ import threading
 import time
 import types
 import unicodedata
+from array import array
+from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
@@ -1072,7 +1074,87 @@ _SCRIPT_DIGITS = {
 }
 
 
+#: Lane AN5, decision 4 (human decision 2026-10-20): a page-sized text put in
+#: a comparison form is kept and given back the next time the same text is
+#: asked for in the same form. Every quote is looked for on its page in every
+#: form, so an answer with many refused quotes put one page in one form again
+#: for each of them (lane AN4: 59 refusals, 61.1 s of CPU, nearly all here).
+#: The rules are untouched: what is given back is what the form gave.
+_NORMALIZED_CACHE_MIN_LENGTH = 400
+#: The kept texts' characters, all of them together; the least recently read
+#: is let go first. The bounds are kept as machine integers (8 bytes each).
+_NORMALIZED_CACHE_MAX_CHARACTERS = 2_000_000
+_normalized_cache: "OrderedDict[tuple[object, ...], tuple[str, array, array]]" = OrderedDict()
+_normalized_cache_characters = 0
+_normalized_cache_lock = threading.Lock()
+
+
+def clear_normalization_cache() -> None:
+    """Let every kept form go."""
+
+    global _normalized_cache_characters
+    with _normalized_cache_lock:
+        _normalized_cache.clear()
+        _normalized_cache_characters = 0
+
+
+def normalization_cache_size() -> tuple[int, int]:
+    """How many forms are kept, and their characters."""
+
+    with _normalized_cache_lock:
+        return len(_normalized_cache), _normalized_cache_characters
+
+
 def _normalized_text_with_bounds(
+    value: str,
+    *,
+    join_line_end_hyphens: bool = False,
+    join_hangul_line_breaks: bool = False,
+    skip_duration_widget_lines: bool = False,
+    drop_space_before_punctuation: bool = False,
+    script_forms: str | None = None,
+    skip_line: Callable[[str], bool] | None = None,
+) -> tuple[str, list[int], list[int]]:
+    """``_normalize_text_with_bounds``, a page-sized text's forms kept.
+
+    Only a line rule that names its page (``_FurnitureLine``) is a key; any
+    other is a function nothing else equals, so the text is put in the form
+    as it is. The bounds given back are the caller's own lists.
+    """
+
+    global _normalized_cache_characters
+    form = {
+        "join_line_end_hyphens": join_line_end_hyphens,
+        "join_hangul_line_breaks": join_hangul_line_breaks,
+        "skip_duration_widget_lines": skip_duration_widget_lines,
+        "drop_space_before_punctuation": drop_space_before_punctuation,
+        "script_forms": script_forms,
+        "skip_line": skip_line,
+    }
+    if len(value) < _NORMALIZED_CACHE_MIN_LENGTH or not (
+        skip_line is None or isinstance(skip_line, _FurnitureLine)
+    ):
+        return _normalize_text_with_bounds(value, **form)
+    key = (value, join_line_end_hyphens, join_hangul_line_breaks, skip_duration_widget_lines,
+           drop_space_before_punctuation, script_forms, skip_line)
+    with _normalized_cache_lock:
+        kept = _normalized_cache.get(key)
+        if kept is not None:
+            _normalized_cache.move_to_end(key)
+    if kept is not None:
+        return kept[0], list(kept[1]), list(kept[2])
+    normalized, starts, ends = _normalize_text_with_bounds(value, **form)
+    with _normalized_cache_lock:
+        if key not in _normalized_cache:
+            _normalized_cache[key] = (normalized, array("q", starts), array("q", ends))
+            _normalized_cache_characters += len(value)
+            while _normalized_cache_characters > _NORMALIZED_CACHE_MAX_CHARACTERS and _normalized_cache:
+                (dropped, *_), _ = _normalized_cache.popitem(last=False)
+                _normalized_cache_characters -= len(dropped)
+    return normalized, starts, ends
+
+
+def _normalize_text_with_bounds(
     value: str,
     *,
     join_line_end_hyphens: bool = False,
@@ -1843,9 +1925,20 @@ def _furniture_line(
     footer between two lines of a step.
     """
 
-    edges = _page_edges(extraction)
-    number = page.source_page_number
-    return lambda line: edges.is_furniture(line, number)
+    return _FurnitureLine(_page_edges(extraction), page.source_page_number)
+
+
+@dataclass(frozen=True)
+class _FurnitureLine:
+    """``_furniture_line``'s rule: equal for the same page of the same
+    document, so a page's forms that leave its furniture out are kept
+    (lane AN5, decision 4)."""
+
+    edges: _PageEdges
+    page_number: int
+
+    def __call__(self, line: str) -> bool:
+        return self.edges.is_furniture(line, self.page_number)
 
 
 def _page_body_end(
