@@ -3647,7 +3647,7 @@ class ProtocolCatalog:
         result = requote_unverified_items(
             draft, model,
             groups=[tuple(piece.page_numbers) for piece in pieces] or None,
-            one_reading=not pieces, concurrency=analysis_piece_concurrency())
+            concurrency=analysis_piece_concurrency())
         if not result.questions:
             return draft
         summary = result.summary()

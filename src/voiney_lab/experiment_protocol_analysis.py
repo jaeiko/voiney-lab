@@ -3815,7 +3815,9 @@ def _validate_domain(
 
     ``one_reading``: the protocol is one reading of the source -- a document
     read at once, or one piece -- so its steps are labelled alike (lane P3;
-    lane AN3, decision B leaves a joined analysis out of it).
+    lane AN3, decision B leaves a joined analysis out of it). Lane AN5,
+    decision 1: only a reading without review holds to it; one read for
+    review asks at each seam instead (``_numbering_seam_flags``).
     """
 
     try:
@@ -4208,14 +4210,20 @@ def _draft_from_response(
             protocol, extraction, allowed_pages=allowed_pages)
     else:
         protocol, evidence_count = _verify_clearing_unread_fields(protocol, extraction)
+    # Lane AN5, decision 1 (human decision 2026-10-20): read for review, one
+    # reading may number some steps and not others, as the source prints
+    # them; each place the numbering changes is a card. Read without review
+    # (nothing to ask on) it may not.
+    one_reading = not review_unverified
     try:
         protocol = _repeat_counts_as_totals(protocol)
         _reject_deferred_state(protocol)
         if refused:
             readiness = validated_with_refused_quotes(
-                protocol, extraction, tuple(refused), capability_policy=capability_policy)
+                protocol, extraction, tuple(refused), capability_policy=capability_policy,
+                one_reading=one_reading)
         else:
-            _validate_domain(protocol, extraction)
+            _validate_domain(protocol, extraction, one_reading=one_reading)
             readiness = domain.assess_readiness(
                 protocol,
                 capability_policy=capability_policy,
@@ -4235,7 +4243,10 @@ def _draft_from_response(
         capability_policy=capability_policy,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
         verified_evidence_count=evidence_count,
-        review_flags=review_flags_for(protocol, extraction, refused),
+        review_flags=(
+            *review_flags_for(protocol, extraction, refused),
+            *(_numbering_seam_flags(protocol) if review_unverified else ()),
+        ),
     )
 
 
@@ -5127,7 +5138,7 @@ def _piece_of(step_id: str) -> int | None:
 
 
 def _numbering_seam_flags(protocol: domain.ExperimentProtocol) -> tuple[ReviewFlag, ...]:
-    """One item per seam where the joined steps' numbering changes (lane AN3, B).
+    """One item per seam where the steps' numbering changes (lane AN3, B; AN5, 1).
 
     Human decision 2026-10-16. Lane P3's rule -- the steps of one reading are
     all numbered or all unnumbered -- holds for each piece, but a long manual
@@ -5138,6 +5149,11 @@ def _numbering_seam_flags(protocol: domain.ExperimentProtocol) -> tuple[ReviewFl
     step before and the first step after are one item: does the second follow
     the first? [이어져요] lets the joined order run; [아니요] sends the
     document to be read again -- the server never reorders steps.
+
+    Lane AN5, decision 1 (human decision 2026-10-20): one reading too -- a
+    document read at once, or one piece -- may number some steps and not
+    others (Word protocols, manuals: lane AN4's largest cause of failed
+    answers), with the same card at each seam.
     """
 
     steps = [step for section in protocol.sections for step in section.steps]
@@ -5843,9 +5859,13 @@ def _answer_replacements(
 
 
 def _redrafted(
-    draft: ProtocolAnalysisDraft, replacements: dict[str, Any], *, one_reading: bool,
+    draft: ProtocolAnalysisDraft, replacements: dict[str, Any],
 ) -> ProtocolAnalysisDraft:
-    """The draft with these fields replaced, through every check again."""
+    """The draft with these fields replaced, through every check again.
+
+    As read for review: the steps may number one way and the other (lane
+    AN5, decision 1), their seams cards that stay as they were.
+    """
 
     extraction = draft.extraction
     protocol = replace_at_paths(draft.protocol, replacements)
@@ -5854,9 +5874,9 @@ def _redrafted(
     if refused:
         readiness = validated_with_refused_quotes(
             verified, extraction, tuple(refused),
-            capability_policy=draft.capability_policy, one_reading=one_reading)
+            capability_policy=draft.capability_policy, one_reading=False)
     else:
-        _validate_domain(verified, extraction, one_reading=one_reading)
+        _validate_domain(verified, extraction, one_reading=False)
         readiness = domain.assess_readiness(verified, capability_policy=draft.capability_policy)
     evidence_flags = review_flags_for(verified, extraction, refused)
     kept = tuple(
@@ -5883,7 +5903,6 @@ def requote_unverified_items(
     model: ProtocolAnalysisModel,
     *,
     groups: Sequence[Sequence[int]] | None = None,
-    one_reading: bool = True,
     concurrency: int = 1,
 ) -> RequoteResult:
     """Ask once about the items the evidence check refused; keep what then passes.
@@ -5957,8 +5976,7 @@ def requote_unverified_items(
             break
         try:
             candidate = _redrafted(
-                draft, {path: value for changes in kept.values() for path, value in changes.items()},
-                one_reading=one_reading)
+                draft, {path: value for changes in kept.values() for path, value in changes.items()})
         except (ProtocolAnalysisError, domain.ProtocolValidationError):
             kept = {}
             break
