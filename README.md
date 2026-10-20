@@ -2,75 +2,41 @@
 
 [![CI](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml)
 
-**VoineyLab — 우리 랩이 올린 프로토콜 그대로, 시간은 대신 재고, 순서는 지켜 주고, 말한 것은 노트로 남기는 AI · MVP 시제품, 현장 미검증**
+> **VoineyLab** (by Voiney) is a hands-free voice guide that lets wet-lab researchers run their own uploaded protocol step by step.
+> It analyses the protocol, checks every value against the source, asks only what it must, then guides, times and records the run and writes a lab notebook.
+> Status: MVP prototype, not field-validated; the server owns all workflow state and models only propose. Coding agents: read [`AGENTS.md`](AGENTS.md) first.
 
-- 만든 곳: Voiney. 저장소: [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab). 파이썬 패키지 이름은 `voiney_lab` 이다.
-  코드와 옛 문서의 "Voice Workflow Agent" 는 같은 제품의 옛 이름이다.
-- 상태: **MVP 시제품 — 현장 미검증.** 사람이 말로 해 본 시험은 개발 서버에서 in-gel 프로토콜로 했다(마지막 2026-10-10).
-  실제 연구실(소음·장갑·여러 사람)에서 잰 숫자는 아직 없다. 검증된 GLP/GMP/임상 시스템이 아니다.
-- 이 저장소는 강의 저장소 [`jaeiko/voice-ai-course`](https://github.com/jaeiko/voice-ai-course) 에서 시작했다. 그 저장소는 기록으로만 남아 있다.
+## 1. 무엇인가 · 누구를 위한가
 
-## 1. 지금 흐름
+VoineyLab 은 화학·바이오 웻랩 연구자가 **장갑을 낀 채 손을 쓰지 않고** 자기 연구실의 프로토콜을 따라 실험하도록 돕는 음성 실험 가이드다. 만든 곳은 Voiney, 저장소는 [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab), 파이썬 패키지는 `voiney_lab` 이다.
 
-아래는 지금 코드가 하는 일이다. 아직 없는 것은 [9. 다음 계획](#9-다음-계획-아직-없는-것)에 따로 적었다.
+- 쓰는 사람: 벤치에서 실험하는 연구자(첫 파일럿은 석사생 두 명, 2026년 10월 말부터). 연구실 담당은 계정과 데이터를, PI 는 노트에 "확인함"을 남긴다.
+- 근거: 생명 분야 연구자 3명 현장 인터뷰(2026-10-07·08), 13명 설문(2026-10-19) — `.agent/product_context.md`.
 
-1. **업로드** — 실험자가 프로토콜 PDF 를 올린다. 원본 바이트와 SHA-256 을 그대로 보관한다. 같은 파일은 같은 프로토콜로 묶인다.
-   - PDF 말고 **Word(.docx)** 와 **사진(JPG·PNG·HEIC)** 도 받아 PDF 로 바꿔 같은 길로 보낸다. 엑셀(.xlsx)은 프로토콜에 붙는 **시약 표**로 저장하고 분석에는 쓰지 않는다. 화면의 올리기 칸이 이 형식들을 고르고, 시약 표는 고른 프로토콜의 칸에서 붙이고 열어 본다(줄 UI3, 2026-10-14 병합). Word 는 서버에 LibreOffice·나눔 글꼴이 있어야 하고, HEIC 는 선택 설치다 — 없으면 화면이 안내한다(`docs/SOURCE_FORMATS.md`).
-2. **글자 층 없는 쪽 자동 OCR** — 스캔·사진처럼 글자 층이 없는 쪽만 OCR 한다(NAVER CLOVA OCR, Google Cloud Vision 중 설정한 엔진). 결과는 자동으로 받아들이고 그 사실을 기록한다.
-3. **분석** — 분석 역할 모델이 단계·양·시간·온도·안전 주의를 구조로 뽑는다. 응답이 출력 한도에서 잘렸거나 구조가 깨졌을 때만 한 번 저절로 다시 시도한다. 그 밖의 실패는 사람이 "분석 다시 시도"를 누른다.
-   - **긴 문서 조각 분석**: 한 번의 호출 출력 예산(48k 토큰)을 넘을 것으로 보이는 긴 문서는 15쪽(겹침 1쪽)씩 조각 내어 8개까지 동시에 분석하고, 쪽 순서로 합친 뒤 문서 전체를 기준으로 다시 검사한다(최대 400쪽, 넘으면 호출 전에 거절). 조각 하나가 저절로 한 번 다시 시도한 뒤에도 실패하면 문서 전체가 실패한다 — **일부만 통과한 분석은 없다.** 측정(2026-10-13, Gemini 3.8 Flash 추론 `low`, 줄 AN): 60쪽 넘는 문서 세 개(88·197·315쪽)는 모두 "일부 조각 분석 실패 · n–m쪽"으로 끝났다(조각 통과 2/7·7/14·13/23, 혼자 돌렸을 때). 긴 문서가 통과한다는 뜻이 아니라, 어디서 실패했는지 말해 주고 거절하지 않는다는 뜻이다. 조각이 많은 문서는 글자 추출만 2분쯤 걸려 `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` 을 권한다(88쪽 문서 추출 121 s).
-   - **다시 분석**: 통과한 분석도 "다시 분석"으로 새로 분석할 수 있다(`POST /api/protocols/{id}/reanalysis`). 새 분석이 통과하기 전에는 지금 분석으로 계속 실행할 수 있다. 분석기가 개선되기 전에 한 분석에는 "분석기 개선 전 분석 · 다시 분석 권장"이 붙는다. 같은 단추를 연달아 눌러도 분석은 한 번만 돈다(줄 RN, 2026-10-12 병합).
-4. **원문 근거 검증** — 뽑은 값마다 인용한 쪽의 원문 글자와 맞대어 본다. 맞지 않으면 시작을 막는다.
-5. **시작 전 확인** — 단계 수, 원문 안전 주의(원문과 한국어를 나란히), 시작을 막는 사유와 할 일, 시작 전 알림을 보여 준다. 실험자가 "이 프로토콜로 시작"을 누르는 것이 유일한 사람 확인이다. 승인 단계는 없다(2026-10-08 결정).
-6. **음성 안내·타이머 알림·질문·그림**
-   - 말 한 번은 한 줄로 처리한다: 앞단 규칙 → (켜면) LLM 라우터 → 서버 검증. 단계 넘기기·완료·타이머 같은 상태는 서버만 바꾼다.
-   - **라우터 먼저 스위치** `VOINEY_LAB_ROUTER_FIRST`(**기본 꺼짐**, `VOINEY_LAB_LLM_ROUTER_ENABLED=true` 가 있어야 한다): 켜면 앞단 규칙은 시스템 정보·모호한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고 나머지는 LLM 라우터가 고른다. 켜는 것은 사람이 음성 시험을 한 뒤 사람이 정한다. 측정(평가 세트 567줄, 2026-10-13, 줄 RA, 모델 `gpt-6-luna`·추론 `none`): 알아들음 규칙 437줄(77.1 %) → 스위치 켜짐 469줄(82.7 %), **잘못 바뀐 상태 0**, 모델 지연 p50 1.52 s · p90 2.14 s. 평가 세트는 실제 연구실이 아니다.
-   - **목소리 맞추기·시끄러운 곳 모드**: 세션을 열면 서버가 "평소 목소리로 읽어 달라"고 하고 그 크기를 기준으로 잡는다. 기준보다 많이 작은 말(옆 사람)은 글로 옮기지 않고 무시한다(화면에 "다른 사람 말로 보여 듣지 않은 말 N개"). 설정의 "주변 소리: 시끄러움"을 고르면 다음·완료·타이머 시작 같은 상태 바꿈을 한 번 되묻는다. 시험대는 합성 목소리·합성 소음뿐이다(실제 사람 녹음 없음, 줄 SP1, 2026-10-11 병합) — 현장에서 잰 값이 아니다.
-   - 타이머: 1분 전과 끝에 알린다. "몇 분 남았어?"에는 타이머 상태로 답한다.
-   - "그거", "그 용액" 같은 말은 지금 단계의 원문 값으로 맞춘다.
-   - 질문: 원문에 있는 것은 원문으로 답한다. 용어 뜻처럼 원문에 없는 설명은 짧은 일반 설명을 붙이고 "AI 일반 지식"으로 표시한다(예: "HPLC water 가 뭐야?"). 이 설명은 켰을 때만 나온다 — 개발 실행기는 켜고, 파일럿 실행기는 꺼 둔다.
-   - 그림: 원문 그림을 띄운다. 원문에 그림이 없으면 바로 그려 준다(켰을 때, "AI 가 그린 그림" 표시). 웹 설명과 사진도 켜면 쓴다(출처 표시).
-7. **기록** — 말한 관찰·문제·메모는 지우지 않는 실험 장부에 남는다. "안 보임"처럼 부정이 든 말은 통째로 남긴다.
-8. **보고서** — 실험 장부에서 보고서를 만든다. Word(.docx)·Markdown·JSON·CSV 로 내려받는다. 보고서의 값은 실험자가 확인한다.
-9. **모바일 웹·홈 화면 추가** — 화면은 휴대폰 폭에서도 쓰고, 브라우저의 "홈 화면에 추가"로 앱처럼 둘 수 있다(`manifest.webmanifest`, 줄 UI2, 2026-10-13 병합). 설치·마이크·화면 꺼짐 방지는 **HTTPS(또는 localhost)** 에서만 된다(`docs/PILOT_HTTPS_SETUP.md`, 아직 실행하지 않음). 실제 휴대폰에서 잰 것은 없다.
-10. **검토 탭**(줄 RV, 2026-10-14 병합) — 근거·주장·단계 번호 대조에 실패한 값을 버리지 않고 "확인 필요 항목"으로 두고, 그런 분석은 "검토 대기"로 실행하지 않는다(근거가 하나도 맞지 않는 분석은 지금처럼 실패). 검토 화면은 항목을 먼저 보이고 원문 쪽의 번호 붙은 줄을 나란히 둔다. 고를 수 있는 것은 서버가 허락한 단추뿐이다: 확인·고침·입력·"원문에 없음으로 비움"·메모·되돌리기(근거를 못 찾은 항목은 사람이 짚은 원문 줄이 있어야 확인·고침; **안전 주의 글은 고칠 수 없다**, 단계는 비울 수 없다). 검토자 이름을 적고 "검토 완료하고 등록"하면 검토본 v1·v2…가 덧붙고(고친 값은 "검토자 입력", AI 제안 줄은 "AI 제안"), 최신 검토본이 실행된다. 같은 PDF 를 다시 올리면 검토본을 제안한다. 단계에 처음 올 때 음성이 "검토자가 넣은 값이에요: …"를 한 번 말하고, 보고서에 "원문 대비 검토자 수정 n건" 표가 생긴다.
+## 2. 지금 상태
 
-## 2. 값과 설명의 원칙
+**MVP 시제품 — 현장 미검증.** 사람이 말로 해 본 시험은 개발 서버에서 in-gel 프로토콜로 했고(마지막 2026-10-10), 실제 연구실(소음·장갑·여러 사람)에서 잰 숫자는 아직 없다. 소리 관련 기준값은 합성 목소리·합성 소음으로 정했다. 검증된 GLP/GMP/임상 시스템이 아니다.
 
-- **값과 안전은 원문 또는 사람이 확인한 값만 쓴다.** 지금은 원문 근거 검증을 통과한 값과 실험자가 확인한 값이다.
-- **용어 설명처럼 원문만으로는 불친절한 내용은 일반 지식을 허용하고 표시한다.** 화면에는 "AI 일반 지식", 말로는 "PDF에는 따로 설명이 없어요. 일반적으로는 …". 숫자·방법·양이 든 설명은 서버가 빼고, 원문이 답하는 양 질문에는 일반 지식을 붙이지 않는다.
-- **안전 주의와 완료 기준은 AI 가 새로 써 넣지 않는다.**
-- **모델의 말은 상태를 바꾸지 않는다.** 모델은 바꾸기를 제안만 하고, 서버가 검증한 뒤 같은 상태 기계(`CuratedProtocolSession`)가 바꾼다. 묻기만 한 말은 상태를 바꾸지 않는다.
-- 검토에서 고친 값은 "검토자 입력", AI 가 제안한 값은 "AI 제안", 원문의 것은 "원문"으로 표시하고, 사람이 확인해야 실행 값이 된다(줄 RV, 2026-10-14 병합; 아래 1절 10).
+## 3. 사용자 흐름
 
-## 3. 하지 않는 것
+1. **프로토콜 올리기** — PDF·Word·사진(서버가 PDF 로 바꾼다). 공개 Google Drive·Docs·Sheets 링크도 서버에서 받는다(화면 단추는 아직 없음). 엑셀은 시약 표로 붙는다.
+2. **분석과 원문 근거 검사** — 글자를 읽을 수 없는 쪽은 자동 OCR, 분석 모델이 단계·값·안전 주의를 뽑고, 서버가 값마다 원문과 맞대어 본다.
+3. **확인 카드** — 원문에서 확인하지 못한 것만 카드 한 장씩 묻는다. 다 확인된 분석은 카드가 없다. 안전 주의 글은 고칠 수 없다.
+4. **실험 시작** — 시작 마법사(내 목소리 → 안내 목소리 → 프로토콜 → 핵심 값 2문항 → 안전 주의 → **이 프로토콜로 시작**). 승인 단계는 없다.
+5. **단계별 음성 안내** — 단계 읽기, 타이머와 알림, 질문에 원문으로 답하기, "그거" 되묻기, 말로 기록하기, 실험 노트 질문. 단계·완료·타이머는 서버만 바꾼다.
+6. **실험 노트·보고서** — 지우지 않는 기록에서 실험 노트 모양의 보고서(Word·Markdown·JSON·CSV)를 만든다. 확인하지 않은 값은 "[미확인]".
 
-- **ELN/LIMS 를 대신하지 않는다.** 실험 기록의 공식 저장소(system of record)가 아니다.
-- **PI·관리자 승인이 없다.** 리비전 승인·반려·회수, 검토자·관리자 화면은 2026-10-08 에 없앴다.
-- **규제 준수를 주장하지 않는다.** GLP/GMP, 21 CFR Part 11, HIPAA, ISO 등.
-- 안전 판단, 작업 재개 허가, 장비 제어를 하지 않는다. 응급 상황에는 정해진 문장으로 작업을 멈추고 연구실의 비상 연락 절차를 따르라고만 한다.
+기능마다 자세한 동작은 [`docs/FEATURES.md`](docs/FEATURES.md), 화면 쓰는 법은 [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
-## 4. 역할별 공급자 — 지금 쓰는 값
+## 4. 하지 않는 것
 
-`.env.example` 에 적힌 값이다. 키 값은 비워 두었고 `.env` 에만 넣는다.
+- ELN·LIMS 를 대신하지 않는다. 실험 기록의 공식 저장소가 아니다.
+- 승인하지 않는다: PI·관리자 승인, 리비전 승인·반려·회수가 없다. 관리자의 "확인함"은 기록일 뿐 시작을 막지 않는다.
+- 값과 안전 주의를 새로 만들지 않는다. 원문에 없는 용어 뜻은 짧은 일반 설명을 "AI 일반 지식"으로 표시해서만 붙인다.
+- 안전 판단, 작업 재개 허가, 장비 제어, 자율 실험을 하지 않는다. 응급 말에는 정해진 문장으로 멈추고 연락하라고만 한다.
+- 규제 준수(GLP/GMP, 21 CFR Part 11, HIPAA, ISO)나 완전한 외부 연동을 주장하지 않는다.
 
-| 역할 | 하는 일 | 지금 값 |
-|---|---|---|
-| 분석 (`ANALYSIS`) | PDF 프로토콜 구조 분석 | `google` · `gemini-3.8-flash` · 추론 `low` |
-| 번역 (`TRANSLATION`) | 리비전 한국어, 단계 읽기 번역 | `google` · `gemini-3.8-flash` · 추론 `low` |
-| 라우터 (`ROUTER`) | 말 한 번마다 LLM 라우터 호출(켰을 때) | `openai` · `gpt-6-luna` |
-| 답변 (`ANSWER`) | 답변 역할(Answer·Source·Visual) | `openai` · `gpt-6-luna` |
-| 보조 설명 (`SUPPLEMENTAL`) | PDF 밖 일반 설명("AI 일반 지식", 켜기 `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`) | `openai` · `gpt-6-luna` |
-| 보고서 서술 (`REPORT`) | 실험 보고서 문장 | `google` · `gemini-3.8-flash` |
-| 웹 설명·사진, AI 도식 | 줄 WV 기능(켜기 두 줄) | `gpt-6-luna` (`OPENAI_API_KEY`) |
-| 음성 인식 (STT) | 말 → 글 | ElevenLabs `scribe_v2` |
-| 음성 합성 (TTS) | 글 → 말 | Google Cloud Chirp 3 HD (`ko-KR-Chirp3-HD-Charon`) |
-
-- 역할별 공급자·모델의 기본값은 **"설정 필요"** 다(`src/voiney_lab/setting_names.py`). 코드에도 옛 기본(공급자 `xai`, `grok` 모델)은 없다 — 줄 PL(2026-10-13)·줄 AN·줄 RA 가 `model_providers.py`·`voice_providers.py`·`multi_brain.py`·`llm_router.py` 에서 없앴다. 비워 둔 역할(음성 인식·합성 포함)은 다른 공급자로 가지 않고, 그 설정의 이름을 적은 오류로 닫힌다. 모든 역할을 `.env` 에 적는다.
-- 실제 호출 기록(줄 보고서 기준): OpenAI `gpt-6-luna` 로 라우터 평가 줄을 22회 호출(줄 XO, 2026-10-05), Google Gemini 로 분석·번역 222회 호출(줄 AQ, 2026-10-10), 긴 문서·Word·사진 실측 Gemini 분석·Vision 504회 USD 9.49 와 CLOVA 18회(줄 AN, 2026-10-13), 라우터 먼저 측정 OpenAI 833회 USD 0.57 · Google 417회 USD 1.80(줄 RA, 2026-10-13). 분석 시간은 추론 `low` 에서 p50 39 s, p90 112 s(25개 문서, 줄 AQ, 2026-10-10); 같은 25개 회귀 세트를 줄 AN 의 최종 코드로 다른 실행과 동시에 돌렸을 때는 15개 통과, p50 110 s, p90 268 s, 요청 한도(HTTP 429) 23회(2026-10-13) — 여러 긴 문서가 한꺼번에 올라오면 한도에 걸릴 수 있다. 이 저장소의 테스트는 공급자를 가짜 SDK 로만 부른다(contract-tested); 그 밖의 실제 호출 기록은 각 줄 보고서에 있다(예: 음성 공급자는 줄 SV).
-- 설정 이름 표 전체는 `src/voiney_lab/setting_names.py`, 옛 이름 바꾸기는 `python scripts/migrate_env.py --check` / `--write`.
-
-## 5. 실행 방법
+## 5. 빠른 시작
 
 Python 3.12 이상.
 
@@ -80,100 +46,103 @@ pip install -e '.[test]'
 cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 ```
 
-- 서버에는 **LibreOffice 와 한국어 글꼴**도 설치한다(Word 원문을 PDF 로 바꿈, 사람 결정 2026-10-13): Ubuntu 는 `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`. HEIC 사진은 선택(`pip install -e '.[heic]'`, pillow-heif 바퀴가 GPLv2 라서 선택으로 둔다 — 사람 결정 2026-10-14). 받는 파일 형식과 확인 방법은 `docs/SOURCE_FORMATS.md`. LibreOffice 가 없어도 서버는 시작하고, Word 를 올릴 때만 `docx_conversion_unavailable`(503)로 거절한다(`GET /readyz` 의 `docx_conversion_available`). **파일럿 실행기도 LibreOffice 가 없으면 `[WARN]` 몇 줄만 찍고 시작을 막지 않는다**(사람 결정 2026-10-14): PDF 만 올리는 파일럿은 필요 없다.
+- `.env` 에 모든 모델 역할과 STT·TTS 공급자를 적는다(비어 있으면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 설정 이름 전체는 `src/voiney_lab/setting_names.py`.
+- 서버에는 LibreOffice 와 한국어 글꼴이 필요하다(Word 원문, 보고서 PDF): `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`. HEIC 사진은 선택(`pip install -e '.[heic]'`). 자세히는 `docs/DEPLOYMENT_RUNBOOK.md` 1절.
 
-### 개발 서버
+### 5-1. 개발 서버
 
 ```bash
 ./scripts/run_dev.sh              # 127.0.0.1:8000
-./scripts/run_dev.sh --check-only # 설정만 보여 주고 data/runtime 은 건드리지 않음
+./scripts/run_dev.sh --check-only # 설정만 보여 주고 data/runtime 은 건드리지 않는다
 ```
 
-- in-gel 개발 프로토콜과 그 원본 PDF(`data/runtime/candidate-a-source/in-gel-digestion.pdf`, 외부 라이선스라 커밋하지 않음)를 SHA-256 으로 확인하고 올린다.
-- 상태는 `data/runtime/candidate-a-live-acceptance/` 에 둔다.
-- 승인 안전 문서 카탈로그(`VOINEY_LAB_SAFETY_CATALOG`)와 사용 범위(`VOINEY_LAB_USAGE_SCOPE`)는 `.env` 에서 읽는다. 카탈로그를 읽는 범위(`operational`·`demo`·`reference_only`·`test_only`)에서 카탈로그가 없으면 서버가 프로토콜 목록에 답하지 않는다. `source_protocol_only` 는 카탈로그를 읽지 않는다.
+- 외부 라이선스라 커밋하지 않은 in-gel 원본 PDF(`data/runtime/candidate-a-source/in-gel-digestion.pdf`)가 있으면 개발용 프로토콜을 SHA-256 으로 확인하고 넣는다. 없으면 `[WARN]` 을 찍고 빈 목록으로 시작한다.
+- 상태는 `data/runtime/candidate-a-live-acceptance/` 에 둔다. 안전 문서 범위(`VOINEY_LAB_USAGE_SCOPE`)와 카탈로그(`VOINEY_LAB_SAFETY_CATALOG`)는 `.env` 에서 읽는다 — 기관 문서 없이 쓰려면 `VOINEY_LAB_USAGE_SCOPE=source_protocol_only`.
 
-### 파일럿
+### 5-2. 계정 모드와 초대 링크
+
+- 기본(`VOINEY_LAB_AUTH_MODE=dev`)은 로그인 없이 개발 신원 한 사람이다. `accounts` 로 두면 모든 화면과 API 가 로그인을 요구하고, 가입은 초대 링크로만 된다(작업공간이 켜져 있어야 한다).
+- 초대 링크는 서버에서 만든다:
+  ```bash
+  python scripts/pilot_invite.py --admin --base-url https://<서버 주소>   # 관리자 한 명
+  python scripts/pilot_invite.py --base-url https://<서버 주소>           # 참여자
+  python scripts/pilot_invite.py --list                                    # 열린 초대
+  ```
+  링크는 한 번만 쓰이고 기본 72시간 뒤 만료된다. 계정 끄기·켜기는 `--disable NAME`·`--enable NAME`. 개발 서버의 작업공간을 쓰려면 `--data-dir data/runtime/candidate-a-live-acceptance/workspace`.
+
+### 5-3. 파일럿 실행기
 
 ```bash
-./scripts/run_pilot.sh              # 127.0.0.1:8080
 ./scripts/run_pilot.sh --check-only
+./scripts/run_pilot.sh              # 127.0.0.1:8080, 로그인(accounts) 켜짐
 ```
 
-- 상태는 `data/runtime/pilot/` 에 둔다. 승인 안전 카탈로그는 실행기가 `data/runtime/pilot/approved_safety_catalog.sqlite`, 범위는 `reference_only` 로 고정한다.
-- **승인 안전 카탈로그 파일이 없어도 파일럿 실행기는 시작한다**(2026-10-13 결정, "B안"). 사용 범위는 `source_protocol_only` 가 되고, 업로드한 PDF 의 원문 안전 주의만 쓴다. 화면·기록·시작 점검 배너가 "기관 안전 문서 없음 · 원문 안전 주의만" 이라고 말한다.
-- 시작 점검(`--check-only`)은 `--- Source formats ---` 아래에 `word_sources(libreoffice): available (<경로>)` 또는 `unavailable` 과 `[WARN]` 을 보여 준다. 서버와 같은 방법(`VOINEY_LAB_OFFICE_CONVERTER`, `PATH`, 기본 설치 위치)으로 찾는다.
-- 카탈로그 파일이 **있으면** 범위는 `reference_only` 이고 실행기가 점검한다. 그 파일이 읽을 수 없거나, demo 문서가 섞였거나, 승인된 `reference_only` 문서가 하나도 없으면 "없음"으로 치지 않고 시작을 거부한다(종료 코드 1). 기관 문서 없이 열려면 그 파일을 치운다. 자세한 것은 `docs/PILOT_GUIDE.md` 1절.
+- 상태는 `data/runtime/pilot/` 에 둔다. 기관 안전 카탈로그 파일이 없으면 `source_protocol_only`(원문 안전 주의만)로, 있으면 점검해서 `reference_only` 로 연다.
+- 휴대폰 마이크에는 HTTPS 가 필요하다: `docs/PILOT_HTTPS_SETUP.md`. 파일럿을 여는 순서·고지·데이터 삭제는 `docs/PILOT_GUIDE.md`, 서버 운영은 `docs/DEPLOYMENT_RUNBOOK.md`.
 
-## 6. 테스트 기준 (Verification)
+## 6. 구조 한눈에
+
+```text
+ 연구자 (장갑, 휴대폰·태블릿·PC 브라우저 / 스토어 앱 껍데기)
+   │ 마이크 소리 16 kHz            ▲ 음성 안내 · 화면 이벤트
+   ▼                               │
+ ┌──────────────── server.py (FastAPI, 프로세스 하나) ────────────────┐
+ │ /ws 음성: 듣기(VAD·목소리 크기) → STT → 응급 → 앞단 규칙            │
+ │            → (켰을 때) LLM 라우터 = 제안만 → 서버 검증              │
+ │            → CuratedProtocolSession  ← 상태를 바꾸는 유일한 곳     │
+ │            → TTS                                                    │
+ │ HTTP: 올리기·링크 → OCR → 분석 → 원문 근거 검사 → 확인 카드         │
+ │       → 시작 판정 · 기록 · 보고서 · 계정 · 지표                     │
+ └──────────────────────────────┬──────────────────────────────────────┘
+                                │ SQLite + 원본 파일 (data/runtime/…)
+     프로토콜 장부 · 작업공간(실험·관찰) · 실험 기록 · 계정 · 파일럿 지표
+ 외부 AI(설정한 공급자): 분석·번역·보고서, 라우터·답변, STT·TTS, OCR
+```
+
+깊은 설명은 [`.agent/architecture.md`](.agent/architecture.md).
+
+## 7. 문서 지도
+
+**코딩 에이전트(Codex, Claude Code 등)는 [`AGENTS.md`](AGENTS.md) 를 먼저 읽는다.** Claude Code 는 [`CLAUDE.md`](CLAUDE.md) 가 그것을 불러온다.
+
+| 알고 싶은 것 | 문서 |
+|---|---|
+| 문서 전체 목록, 누가 언제 읽나 | [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md) |
+| 화면 쓰는 법(연구자) | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) |
+| 기능마다 코드가 하는 일 | [`docs/FEATURES.md`](docs/FEATURES.md) |
+| 왜 그렇게 정했나(날짜·줄) | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
+| 같은 것을 부르는 말들 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) |
+| 구조 | [`.agent/architecture.md`](.agent/architecture.md) |
+| 제품·사용자·근거, 다음 계획 | [`.agent/product_context.md`](.agent/product_context.md), [`.agent/roadmap.md`](.agent/roadmap.md) |
+| 서버 운영, 문제 해결, 파일럿 | [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md), [`docs/TROUBLESHOOTING_GUIDE.md`](docs/TROUBLESHOOTING_GUIDE.md), [`docs/PILOT_GUIDE.md`](docs/PILOT_GUIDE.md) |
+| 브랜치·PR 규칙 | [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) |
+
+## 8. 검증
 
 ```bash
 python scripts/replay_turns.py
 VOINEY_LAB_MOSS_ENABLED=false \
 VOINEY_LAB_WORKSPACE_ENABLED=false \
 VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_LLM_ROUTER_ENABLED=false \
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check
 ```
 
-- 세 플래그는 셸이나 `.env` 의 값이 결과를 바꾸지 않게 끈다. 줄 보고서들은 `VOINEY_LAB_LLM_ROUTER_ENABLED=false` 도 함께 끈다.
-- 통과 수는 외부 라이선스 PDF 가 있느냐에 따라 다르다(두 기준, two baselines). **숫자를 말할 때는 조건을 함께 말한다.**
-  - 조건 A — 라이선스 PDF 4개가 있음(관리자 폴더): 이 문서에 실측값이 없다. 줄 보고서의 "원래 폴더 기대 passed" 를 본다.
-  - 조건 B — 라이선스 PDF 없음(CI, 새 clone): **2825 passed, 506 skipped, 실패 0** — 2026-10-14, dev `fdbc6f6`(줄 RV #83 병합 뒤; 머리 `5047d45` 의 CI, Playwright 78 passed, 줄 RV 보고서). 그 전: 2712 passed, 506 skipped — dev `297d69d`(줄 RA, 같은 날). 그 전 기록: 2418 passed, 559 skipped — 2026-10-10, `453c1cc`, CI 실행 `38056883162`(줄 CL). 줄이 테스트를 더하거나 지우면 바뀌므로 줄 보고서마다 적는다.
-- 테스트는 바깥 공급자에 닿지 않는다. 키를 테스트 프로세스에서 지우고 이 컴퓨터 밖으로의 연결을 막는다(`tests/conftest.py`).
-- 화면 시험(Playwright, `tests/e2e/`)은 CI 가 돌린다(2026-10-10 실행에서 72 passed): `npm install && npx playwright install --with-deps chromium && npx playwright test`.
+통과 수는 외부 라이선스 PDF 가 있느냐에 따라 다르다. **숫자를 말할 때는 조건을 함께 말한다**(조건의 뜻은 `AGENTS.md` "Verification").
 
-## 7. 데이터와 외부 AI 처리
+| 조건 | 결과 | 언제·어디서 |
+|---|---|---|
+| A 근처 — in-gel PDF 하나만 있는 작업 폴더 | 4223 passed · 16 skipped · 실패 0 | 2026-10-20, dev `e7c31c8`(줄 DOC4 측정). 라이선스 PDF 가 더 있는 원래 폴더는 몇 개 더 돈다 |
+| B — 라이선스 PDF 없음(CI) | 3581 passed · 506 skipped · 실패 0 | 2026-10-19, 줄 PK 의 PR 머리 CI(줄 PK 보고서) |
+| 화면 시험(Playwright, CI) | 108 passed | 2026-10-19, 줄 IA 의 CI |
 
-- **밖으로 나가는 것**(지금 값 기준): 말소리 → ElevenLabs(STT), 말할 문장 → Google Cloud(TTS), 글자 층 없는 쪽의 이미지 → 설정한 OCR 엔진, PDF 글자 → Google Gemini(분석·번역), 말한 글과 지금 단계 문맥 → OpenAI(라우터·답변·보조 설명), 켰을 때 웹 설명·도식 → OpenAI, 보고서 기록 → Google Gemini(보고서 서술).
-- **이 컴퓨터에 남는 것**: 원본 PDF, 분석 결과, 실험 장부, 보고서는 `data/runtime/` 아래 SQLite·파일(git 이 무시)에 둔다. 원음은 저장하지 않는다 — STT 진단 녹음(`VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`)을 켰을 때만 개수를 제한해 둔다.
-- **파일럿 데이터 삭제 도구**: 파일럿을 마치면 `python scripts/pilot_data_delete.py`(미리보기 → 확인 단어 → 삭제 → 기록 순서만 허용, 되돌릴 수 없음). `data/runtime/pilot` 만 받고 개발 데이터 폴더는 거부한다. 쓰는 법은 `docs/PILOT_GUIDE.md` 5절.
-- **기록(log)**: 말 내용은 남기지 않는다. 질의는 길이와 SHA-256 앞부분만 남긴다.
-- 키는 `.env` 에만 둔다. `.env`, `data/runtime/`, 원음, 연구실 PDF 는 커밋하지 않는다.
-- 공급자가 보낸 데이터를 어떻게 보관하는지는 각 공급자 약관을 따른다. 파일럿 전에 사람이 확인한다(이 저장소가 보증하지 않는다).
+시험은 바깥 공급자에 닿지 않는다: 키를 지우고 이 컴퓨터 밖으로의 연결을 막는다(`tests/conftest.py`). 공급자 시험은 모두 가짜 전송이다(contract-tested).
 
-## 8. 라이선스 메모
+## 9. 라이선스 메모
 
-- PDF 엔진 PyMuPDF 는 AGPL-3.0 과 상용 라이선스 중 하나로 쓴다. `src/voiney_lab/pdf_text_engine.py` 한 곳에서만 쓴다. 상용화 전에 상용 라이선스를 사거나 엔진을 그 한 모듈 뒤에서 바꾼다(2026-10-02·10-06 결정).
-- in-gel 개발 프로토콜의 원본 PDF 는 외부 라이선스라 저장소에 없다.
-
-## 9. 다음 계획 (아직 없는 것)
-
-1. **검토 의무화와 검토 탭의 남은 것(줄 RV 다음)** — 검토 탭은 있지만(1절 10) 검토는 의무가 아니다: 분석이 통과하면 검토 없이 시작할 수 있다. 의무로 할지(OCR 쪽·고친 응답·긴 문서는 통과의 약 1/3, 줄 RV 보고서 5절), 긴 문서에서 겹친 쪽을 두 조각이 다르게 읽은 것을 확인 필요 항목으로 바꿀지, 같은 리비전 안에서 예전 검토본으로 새 실험을 시작하는 길을 둘지는 사람이 정한다.
-2. **다른 사람 말 거르기 2단계** — 지금은 목소리 크기로만 거른다. 누구의 목소리인지 가려내는 것은 아직 없다.
-3. **모바일 웹 — 실제 기기** — 화면과 홈 화면 추가는 있지만 실제 휴대폰에서(HTTPS 주소로) 확인한 것이 없다. 앱은 나중.
-4. **알아듣기를 LLM 중심으로 — 켜기** — 라우터 먼저 스위치는 만들어 두었고 꺼져 있다. 켤지는 사람의 음성 시험 뒤 사람이 정한다.
-5. **긴 문서의 통과율** — 60쪽 넘는 문서는 지금 실패로 끝난다(위 측정). 조각 재시도 전 기다리기·동시 수 낮추기는 하지 않았다(요청 한도 429 대비).
-6. 그 밖: 지난 기록·매뉴얼 검색(MOSS 를 그때 다시 넣는다), 파일럿 데이터·고지 문안 확정(사람이 할 일, `docs/PILOT_GUIDE.md` 6절).
-
-## 10. 문서
-
-- [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md) — 문서 목록과 어느 것이 지금 동작을 설명하는지.
-- [`docs/BEHAVIOR_REFERENCE.md`](docs/BEHAVIOR_REFERENCE.md) — 지금 동작의 상세(영어, 옛 README 의 절들).
-- [`AGENTS.md`](AGENTS.md), [`.agent/`](.agent/) — 코드가 지켜야 할 규칙. [`CLAUDE.md`](CLAUDE.md) — 코딩 에이전트 작업 규칙. [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) — 브랜치·PR 규칙.
-
-## English summary
-
-VoineyLab (by Voiney) is an MVP prototype, not field-validated: an AI that
-runs a lab's own uploaded protocol as written, keeps the time, keeps the
-order, and turns what the experimenter says into notes. Flow: PDF upload →
-automatic OCR of pages without a text layer → structured analysis →
-source-evidence check → start screen (the experimenter's "start" is the one
-human confirmation; there is no PI/admin approval) → voice guidance with timer
-notices, questions and pictures → append-only record → report (.docx, .md,
-JSON, CSV). The server also takes Word and photo sources (it converts them
-to PDF) and keeps an Excel reagent table beside a protocol; a long document
-is analysed in pieces, and a document with one failed piece fails whole. The
-screen also runs on a phone and can be added to the home screen; it asks the
-experimenter to read a sentence so it can set its own level and ignore a
-speaker clearly quieter than that. An LLM-router-first switch exists and is
-off. The server alone changes workflow state; model output only proposes. Values and safety come from the source or from a person's
-confirmation; a term the source does not explain may get a short general
-explanation labelled "AI 일반 지식". It is not an ELN/LIMS and claims no
-regulatory compliance.
-
-PyMuPDF is used under its AGPL-3.0 / commercial dual licence, only through
-`src/voiney_lab/pdf_text_engine.py`; before commercialisation either a
-commercial PyMuPDF licence is bought or the engine is replaced behind that one
-module. Details: `docs/BEHAVIOR_REFERENCE.md`.
+- PDF 엔진 PyMuPDF 는 AGPL-3.0 과 상용 라이선스 중 하나로 쓰고, `src/voiney_lab/pdf_text_engine.py` 한 곳에서만 쓴다. 상용화 전에 상용 라이선스를 사거나 그 모듈 뒤에서 엔진을 바꾼다. 결정 기록(영어 원문): *PyMuPDF is used under its AGPL-3.0 / commercial dual licence, only through that one module; before commercialisation either a commercial PyMuPDF licence is bought or the engine is replaced behind that one module.*
+- HEIC 지원(pillow-heif)은 바퀴에 GPLv2 코드가 들어 있어 선택 설치다.
+- in-gel 개발 프로토콜의 원본 PDF 는 외부 라이선스라 저장소에 없다. 스타터 팩 목록(`scripts/pilot_starter_pack.csv`)은 CC BY·CC0·퍼블릭 도메인 문서만 받는다.
+- 이 저장소는 강의 저장소 [`jaeiko/voice-ai-course`](https://github.com/jaeiko/voice-ai-course) 에서 시작했다. 옛 이름 "Voice Workflow Agent" 는 코드 식별자와 보관 문서에만 남아 있다.

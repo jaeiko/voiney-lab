@@ -1,3 +1,5 @@
+> 보관: 2026-10-20 (줄 DOC4) — 옛 `.agent/evaluation_strategy.md`. 지금 동작의 기준이 아니다. 지금도 맞는 내용(출시 기준표, 지연 가설, 재생 검사)은 `.agent/testing_strategy.md` 3·4절로 옮겼다. 여기 적힌 A–G 재생 문장은 지금의 `replay_turns.DEFAULT_TURNS` 와 다르다.
+
 # Evaluation strategy
 
 ## Release gates

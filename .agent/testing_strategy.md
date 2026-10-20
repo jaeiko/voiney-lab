@@ -1,66 +1,128 @@
-# Testing Strategy & Quality Assurance
+# Testing and evaluation strategy
 
-## 1. Testing Philosophy
+Rewritten 2026-10-20 (lane DOC4); it now also holds what the old
+`evaluation_strategy.md` and the voice field evaluation plan said that is
+still true (lane DOC4 moved both to `docs/archive/`). The commands and the two
+pass-count conditions are in `AGENTS.md`, "Verification"; this file says what
+the tests must prove.
 
-In a wet-lab AI workflow copilot, software reliability is directly tied to experimental integrity and human safety.
-Our testing pyramid spans 5 layers:
-1. **Unit Tests**: Deterministic validation of intent classifiers, VAD windowing, sentence chunkers, audio converters, and schema validators.
-2. **State Machine & Gate Tests**: Verification of the experiment session's step lifecycle, timer countdowns, observation validation, and completion gates.
-3. **Multi-Brain & Grounding Tests**: Validation of prompt schemas, evidence extraction, citation enforcement, and unsupported fallback.
-4. **WebSocket & Integration Tests**: End-to-end simulation of full voice turns, tool execution loops, barge-in cancellation, and session recovery.
-5. **Frontend Regression Tests**: DOM rendering, timer widget countdowns, badge status updates, and audio worklet streaming.
+## 1. What the tests prove
 
----
+In a wet-lab copilot a software error is an experiment error. The suite
+(`tests/`, run with pytest) is layered:
 
-## 2. Test Categories & Execution
+1. **Units**: classifiers, VAD windows, sentence chunking, audio, schema and
+   evidence validators.
+2. **State machine and gates**: step lifecycle, completion and endpoint
+   questions, timers, observations, the execution rule.
+3. **Model boundaries**: the router's tool validation, answer checks, the
+   outside-PDF explanation, report-writer checks — with fake models.
+4. **Production boundary**: full voice turns through `/ws` and the HTTP API
+   with `fastapi.testclient`, barge-in, reconnection, recovery.
+5. **Screen**: JavaScript run against the real `static/` files from Python
+   tests, and browser acceptance tests in `tests/e2e/` (Playwright, desktop
+   and mobile Chrome; CI runs them).
 
-### Running Tests
-```bash
-# Run all tests
-.venv/bin/pytest -q
+Rules:
 
-# Run specific domain test suites
-.venv/bin/pytest tests/test_curated_protocol_cascade.py
-.venv/bin/pytest tests/test_completion_intent.py
-.venv/bin/pytest tests/test_experiment_reports.py
-.venv/bin/pytest tests/test_multi_brain.py
-.venv/bin/pytest tests/test_vad.py
-.venv/bin/pytest tests/test_candidate_a_websocket_integration.py
-```
+- Add a production-boundary test, not only a helper test, for routing,
+  provider and screen changes. Helper-only classification tests do not prove
+  production routing.
+- Provider calls are always fake-backed. `tests/conftest.py` removes provider
+  keys and blocks outside connections; router models are faked in
+  `tests/router_fakes.py`. A test that needs live credentials is not added.
+  Say "contract-tested" for these, never "live-tested".
+- A test that needs an externally licensed source PDF is skipped when it is
+  absent (`tests/conftest.py` `MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF` and
+  per-test checks). That is why the pass count depends on the condition.
+- Never weaken or delete a regression test to make a change pass. When a
+  decision changes the behaviour a test expected, change only that part of
+  the assertion and say so in the pull request.
 
----
+## 2. What each area must keep
 
-## 3. Required Test Suites & Verification Criteria
+| Area | Must hold | Pinned by (examples) |
+|---|---|---|
+| Execution rule | An analysis with an execution blocker cannot start; a review-pending analysis has no path to run; the start is the one human confirmation | `tests/test_lane_di_execution_rule.py`, `tests/test_lane_rv_no_path_to_run.py` |
+| Completion | Forward words, step-named completion, the completion and endpoint questions; negations, questions and hypotheticals never complete | `tests/test_completion_intent.py`, `tests/test_lane_vx_forward.py`, `tests/test_endpoint_observation_gate.py` |
+| Router line | One proposal per turn, verbatim evidence, current step only, refusals take the rules' route, a 429 stops the turn, read-only requests leave checkpoints equal | `tests/test_llm_router.py`, `tests/test_llm_router_wiring.py`, `tests/test_lane_fx3_router_unavailable.py`, `tests/test_rule_parity.py` |
+| Grounded answers | Numbers and units only from the cited source; "PDF에서 확인할 수 없어요." for what the source lacks; outside-PDF explanation labelled and without numbers or methods; ungrounded safety instructions removed | `tests/test_router_answer_checks.py`, `tests/test_answer_checks.py`, `tests/test_lane_r6_voice_followups.py` |
+| Records | Append-only; the speaker's words kept verbatim, negation kept; corrections appended | `tests/test_lane_n_ledger_verbatim.py`, `tests/test_lane_ts_record_negation.py`, `tests/test_experiment_reports.py` |
+| Reports | Exports carry the same record; AI notes pass the checks or are dropped; unconfirmed values marked | `tests/test_lab_report.py`, `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py` |
+| Analysis | Evidence rules, hollow pass, pieces, retries, requote, review cards, safety statements never rewritten | `tests/test_lane_ev_evidence_rules.py`, `tests/test_lane_an2_piece_concurrency.py`, `tests/test_lane_an4_requote.py`, `tests/test_lane_rv2_safety_statements.py` |
+| PDF lifecycle | Success, corrupt or unsupported input, long-running status, missing values, unsupported constructs, the execution rule | `tests/test_experiment_protocol_analysis.py`, `tests/test_lane_an_source_formats.py` |
+| Listening | VAD endpoint (1000 ms everywhere it is stated), level gate, noise endpoint, self-echo, emergency | `tests/test_vad.py`, `tests/test_lane_fx3_endpoint_pause.py`, `tests/test_lane_sp2_level_endpoint.py`, `tests/test_emergency.py` |
+| Accounts and data | Invite-only sign-up, login lock, deletion scope shared by the tool and the account, secrets not kept | `tests/test_lane_on_auth_api.py`, `tests/test_lane_fx5_account_erasure.py`, `tests/test_lane_fx5_secrets_not_kept.py` |
+| Privacy of metrics | Aggregates and pilot metrics hold no words, audio or titles | `tests/test_runtime_metrics.py`, `tests/test_lane_log_summaries.py` |
+| Settings | The code reads exactly the table's names; no old name anywhere | `tests/test_setting_names.py`, `tests/test_migrate_env.py` |
+| Documents | Links, setting names, repository paths and script options in every document outside the archives exist; guide sections the code relies on say what the code does | `tests/test_docs_consistency.py`, `tests/test_lane_log_guide.py`, `tests/test_lane_pk_starter_pack.py`, `tests/test_lane_fx5_guide.py`, `tests/test_lane_px_pymupdf_rules.py` |
 
-### 1. Workflow Completion & State Machine Tests
-- **Valid Transition**: Progression from Step 1 -> Step 2 -> Step 3 -> Completed under valid conditions.
-- **Missing Observation Gate**: Attempting step completion when required observation is missing must fail with `observation_required`.
-- **Premature Timer Gate**: Attempting step completion before fixed timer reaches 0 must fail with `timer_not_elapsed`.
-- **Observation Evidence Mismatch**: Verbatim checking ensures model cannot pass truncated or fabricated observation values (e.g., passing `A-17` when user said `A-170` must fail with `observation_evidence_mismatch`).
-- **Execution Rule**: An analysis carrying an execution blocker (failed source-evidence check, no executable step, a page still needing OCR, a safety-critical conflict) cannot start; the experimenter's start is the one human confirmation (`test_lane_di_execution_rule.py`). (The safety report's `blocked_for_handoff` was deleted with the report tools on 2026-10-10, lane CL.)
+Wording is load-bearing: some server sentences are parsed by code and pinned
+by tests (`docs/VOICE_AND_TONE.md` section 7). Change a sentence and its test
+together.
 
-### 2. Intent Classification & Guardrail Tests (`test_completion_intent.py`)
-- **Positive Current Step Completion**: "현재 단계를 완료했습니다", "이 단계 완료했어요", "다 했어", "여기까지 마쳤어".
-- **Positive Explicit Numbered Completion**: "1단계 완료", "step 2 is done", "삼단계 다 했어".
-- **Negative & Question Rejection**:
-  - Questions: "완료 기준이 뭐야?", "다 끝난 건가요?", "완료해야 하나요?".
-  - Negations: "아직 완료 못했어", "끝내지 않았습니다".
-  - Future/Hypothetical: "완료할 예정이야", "끝나면 알려줘", "완료했다고 치면".
+## 3. Replay and evaluators
 
-### 3. Voice Activity Detection & Turn-Taking Tests (`test_vad.py`)
-- **Silence & Noise Immunity**: Lab fume hood and background fan noise must not trigger false speech onsets.
-- **Prefix Buffering**: Ensure initial unvoiced consonants (e.g. "p", "t", "s") are preserved in prefix buffer.
-- **Endpoint Detection**: Verification of silence threshold before triggering turn completion.
-- **Barge-In Interruption**: Simulating incoming audio while in `PLAYBACK` must immediately trigger `playback.cancel` and abort pending TTS chunks.
+- `python scripts/replay_turns.py` sends seven fixed sentences
+  (`replay_turns.DEFAULT_TURNS`: why a step, the protocol version, continue
+  yesterday's run, will this succeed, explain-and-next, cautions, a picture
+  request) through the production rules boundary (router off) and fails when
+  a turn produces no route, action, router or answer origin, or a
+  non-boolean mutation flag. CI runs it.
+- `scripts/evaluate_candidate_a_grounded_qa.py` and
+  `scripts/evaluate_candidate_a_hardening.py` check routing invariants on the
+  in-gel protocol with the evaluation sets in `data/fixtures/evaluation/`.
+  They need the licensed in-gel PDF, so CI skips them; on 2026-10-01 three of
+  the hardening set's 100 cases failed and CI runs it for visibility only.
+- The router evaluation set used to measure the router-first switch (567
+  lines) is kept outside this repository with the lane's report.
 
-### 4. Grounded QA & Unsupported Handling Tests (`test_protocol_grounded_answers.py`, `test_answer_checks.py`, `test_lane_r6_voice_followups.py`, `test_lane_cl_kept_features.py`)
-- **Supported Fact Grounding**: Questions about a protocol step are answered from its source with exact numbers and units.
-- **Unsupported Query Detection**: What the source does not say is answered as such ("PDF에서 확인할 수 없어요."); substitutions and off-protocol use are not invented.
-- **Outside-PDF Explanation**: A term the source does not explain may get a short general explanation after the rules' answer, labelled "AI 일반 지식"; one carrying numbers, methods or quantities is dropped, and a quantity the source answers never gets one.
-- **Zero Hallucination Guarantee**: Assert that LLM responses do not invent phone numbers, legal regulations, or safety classifications.
-- (The approved-reference and Moss tests left with that code on 2026-10-10, lane CL.)
+## 4. Release gates (targets, not measurements)
 
-### 5. Experiment Record & Report Tests (`test_experiment_reports.py`, `test_lab_report.py`)
-- **Append-only Ledger**: Workflow, observation, value-confirmation and recovery events are only ever added.
-- **Exports**: JSON, Markdown, CSV and DOCX carry the same record, in the researcher's time zone and plain words.
-- (The safety report hand-off worker and its tests were deleted on 2026-10-10, lane CL.)
+| Area | Evidence | Target |
+|---|---|---|
+| Routing | Replay plus the real `run_turn` boundary | expected route; zero accidental mutation |
+| Workflow | Checkpoint comparison on every read-only family | zero unauthorised transitions |
+| Grounding | Exact number, unit, timer and source preservation fixtures | zero invented values |
+| PDF onboarding | Simple, multi-step, ambiguous, conditional, corrupt, encrypted, long | fail closed unless the analysis passes with no blocker |
+| Voice | STT admission, VAD, interruption, stale generation, TTS | no stale audio; p95 reported, not hidden |
+| Privacy | Log, event and admin projections | no secrets, transcripts, audio, free text or ids in aggregates |
+| Screen | Real browser, desktop and phone widths | no blocking console errors; upload, cards, recovery usable |
+| Regression | Full suite, compileall, replay, `git diff --check` | all pass |
+
+Latency targets are hypotheses until measured in a lab: status feedback under
+250 ms after the endpoint; first playable audio p95 under 1.5 s for rule-only
+turns and under 3 s for provider turns; barge-in to silence p95 under 300 ms;
+no provider call on a completion-only turn. Runtime metrics
+(`runtime_metrics.py`) report p50/p95 where samples suffice; never drop slow
+or failed samples to improve a number.
+
+## 5. Field evaluation (not run)
+
+Nothing has been measured in a working lab. The bench measurements so far
+(voice level, noise endpoint, speaker verification) used synthetic voices and
+noise and must not be presented as bench performance.
+
+- **Measure**: word error rate, intent accuracy, workflow-command accuracy,
+  false-mutation rate, VAD start/end error, endpoint and barge-in latency,
+  correction/repeat rate — overall and per condition: room noise (clean, fan,
+  centrifuge-like, background talk), SNR (clean, 20, 10, 5 dB), face covering,
+  microphone distance (30, 60, 120 cm), Korean regional variation and speed,
+  ordinary turn vs interruption vs correction. The false-mutation gate for
+  language-mismatched completion, stop, resume, observation, confirmation and
+  protocol selection is zero.
+- **Synthetic first**: licensed or generated clean commands with opaque ids,
+  noise mixed locally at the declared SNR (no audio in git unless its licence
+  allows), run through the production microphone/STT/routing boundary, results
+  in a local manifest, then `voiney-evaluate <results.json>`
+  (`voice_evaluation.py`, `EvaluationCase`; no audio paths or bytes).
+- **Consented recordings only**: documented consent, purpose, access,
+  encryption, region, deletion and retention ≤ 365 days, a store outside the
+  application's data; never the STT diagnostic capture as a substitute. The
+  harness refuses a field case without a consent id and bounded retention and
+  outputs aggregates only.
+- **Triage**: at least two devices; randomised condition order; network and
+  provider incidents logged apart from acoustic errors; every false mutation
+  reproduced with a synthetic fixture where possible, fixed on the production
+  WebSocket path, then the whole matrix re-run. Report an untested cell as
+  "not tested", never as zero errors.

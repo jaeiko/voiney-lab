@@ -1,3 +1,5 @@
+> 보관: 2026-10-20 (줄 DOC4) — 옛 `docs/VOICE_FIELD_EVALUATION_PLAN.md`. 지금 동작의 기준이 아니다. 현장 음성 평가 계획(실행하지 않음)이었다. 측정 항목·합성 평가·동의 녹음·분류 방법은 `.agent/testing_strategy.md` 5절로 옮겼다.
+
 # Voice Field Evaluation Plan
 
 Status (2026-10-10): not run yet. VoineyLab is an MVP prototype, not

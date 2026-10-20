@@ -1,3 +1,5 @@
+> 보관: 2026-10-20 (줄 DOC4) — 옛 `docs/ARCHITECTURE_MAP.md`. 지금 동작의 기준이 아니다. Laboratory Workflow OS 이전의 스냅샷이다. 지금도 맞는 음성 파이프라인 구성 요소는 `.agent/architecture.md` 1·3절로, 지운 모듈의 이력은 `docs/DECISIONS.md` 로 옮겼다. 여기 적힌 `procedures.py`·`protocol_sources.py`·`eln_connectors.py`·`drylab_workflows.py` 는 지금 없다.
+
 # Voice Workflow Agent Architecture Map
 
 Snapshot: `071669702767b0441ad3d9e2dd2836318a31494f` on

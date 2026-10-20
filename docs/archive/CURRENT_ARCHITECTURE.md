@@ -1,3 +1,5 @@
+> 보관: 2026-10-20 (줄 DOC4) — 옛 `docs/CURRENT_ARCHITECTURE.md`. 지금 동작의 기준이 아니다. 지금도 맞는 사실(누가 무엇을 가지나, 저장소와 스키마 — 작업공간은 지금 스키마 11, 실패 처리)은 `.agent/architecture.md` 2·6·11절로 옮겼다. 여기 적힌 "schema 6", "저장소 셋", "Drive 어댑터 없음"은 지금 코드와 다르다.
+
 # Current Architecture — VoineyLab
 
 Date: 2026-08-24  
