@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -45,6 +46,42 @@ class ContentCacheTests(unittest.TestCase):
 
 
 class PreparedVoiceTests(VoiceNotesHarness, unittest.TestCase):
+    def test_fake_provider_turn_has_no_synchronous_slice_over_250ms(self) -> None:
+        real_to_thread = asyncio.to_thread
+        real_vocabulary = cp.ProtocolVocabulary.from_fixture
+
+        def expensive(fixture):
+            time.sleep(0.3)
+            return real_vocabulary(fixture)
+
+        async def scenario(socket, listener, say):
+            gaps: list[float] = []
+            done = False
+
+            async def heartbeat():
+                previous = time.monotonic()
+                while not done:
+                    await asyncio.sleep(0)
+                    now = time.monotonic()
+                    gaps.append(now - previous)
+                    previous = now
+
+            beat = asyncio.create_task(heartbeat())
+            await asyncio.sleep(0)
+            try:
+                await say(1, "현재 몇 단계야?")
+            finally:
+                done = True
+                await beat
+            self.assertTrue(socket.for_turn(1, "turn.done"))
+            self.assertLess(max(gaps), 0.250)
+
+        self.voice(
+            scenario,
+            patch("voiney_lab.server.asyncio.to_thread", side_effect=real_to_thread),
+            patch.object(cp.ProtocolVocabulary, "from_fixture", side_effect=expensive),
+        )
+
     def test_first_vocabulary_is_prepared_off_loop_and_turn_only_reads_it(self) -> None:
         real_to_thread = asyncio.to_thread
         real_vocabulary = cp.ProtocolVocabulary.from_fixture

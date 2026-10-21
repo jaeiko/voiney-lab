@@ -22,6 +22,31 @@ from voiney_lab.protocol_catalog import ProtocolCatalog
 
 
 class WorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_upload_worker_finishes_before_source_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source.pdf"
+            source.write_bytes(b"test source owned by the upload")
+            entered = threading.Event()
+            released = threading.Event()
+            observed: list[bytes] = []
+
+            def work(catalog):
+                entered.set()
+                released.wait(1)
+                observed.append(source.read_bytes())
+
+            with patch.object(server, "_open_protocol_catalog", return_value=(object(), unittest.mock.Mock())):
+                worker = asyncio.create_task(server._catalog_in_worker(work))
+                while not entered.is_set():
+                    await asyncio.sleep(0)
+                worker.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(worker.done())
+                released.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await worker
+            self.assertEqual(observed, [b"test source owned by the upload"])
+
     async def test_upload_yields_to_health_and_other_loop_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             data = Path(root)
