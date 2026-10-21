@@ -87,5 +87,59 @@ assert(document.body.dataset.view==="after","closing the sheet left the end scre
         self.assertNotIn('body[data-view="after"] #tab-experiment{display', html)
         self.assertIn('body[data-view="after"] #tab-experiment:not([hidden]){display:grid;', html)
 
+
+class StopTests(unittest.TestCase):
+    """QA-10 and QA-95: [종료] ends on the server's word; an ended experiment is not 진행 중."""
+
+    def test_the_stop_waits_for_the_servers_answer_and_shows_the_end(self) -> None:
+        result = run3(r"""
+let list=[{...RESUMABLE,status:"in_progress"}];
+await boot([["/api/workspace/experiments/s-9/timeline",()=>TIMELINE(list[0].status)],["/api/workspace/experiments",()=>({experiments:list})],...base()]);
+go("#/experiment");pickProtocolFromList("p-1");chooseExperimentSession("s-9",{force:true});await settle(8);
+const ws=running();
+assert(document.body.dataset.view==="during",document.body.dataset.view);
+const stopping=stopSession();await settle(2);
+assert(sentTypes(ws).includes("session.stop"),`sent: ${sentTypes(ws)}`);
+assert(ws.readyState===1,"the socket was closed before the server answered the stop");
+list=[{...RESUMABLE,status:"stopped"}];
+await deliver(ws,{type:"experiment.session.state",state:{session_id:"s-9",version:5,status:"stopped"}});
+await deliver(ws,{type:"session.stopped",state:"IDLE"});
+await stopping;await settle(10);
+assert(document.body.dataset.view==="after",`view after the stop: ${document.body.dataset.view}`);
+assert(node("procedure-status").textContent.startsWith("실험이 종료되었습니다"),node("procedure-status").textContent);
+assert(ws.readyState===3&&sessionActive===false,"the socket stayed open after the answer");
+assert(!experimentIsResumable(),"the stopped experiment is still offered to continue");
+go("#/home");
+assert(!cards().some(card=>card.dataset.card==="resume"),`home: ${cardWords()}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_no_answer_lets_go_after_a_while_and_rereads_the_list(self) -> None:
+        result = run3(r"""
+await boot(withExperiments([{...RESUMABLE,status:"in_progress"}]));
+go("#/experiment");pickProtocolFromList("p-1");await settle(8);
+STOP_ANSWER_MS=40;
+const ws=running();calls.length=0;
+await stopSession();await settle(6);
+assert(ws.readyState===3&&sessionActive===false,"no answer kept the socket");
+assert(document.body.dataset.view==="before",`view: ${document.body.dataset.view}`);
+assert(calls.some(call=>call.url.endsWith("/api/workspace/experiments")),"the list was not read again");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_voice_end_rereads_the_list_so_home_does_not_offer_it(self) -> None:
+        result = run3(r"""
+let list=[{...RESUMABLE,status:"in_progress"}];
+await boot([["/api/workspace/experiments/s-9/timeline",()=>TIMELINE(list[0].status)],["/api/workspace/experiments",()=>({experiments:list})],...base()]);
+go("#/experiment");pickProtocolFromList("p-1");chooseExperimentSession("s-9",{force:true});await settle(8);
+const ws=running();
+list=[{...RESUMABLE,status:"completed"}];
+await deliver(ws,{type:"experiment.ended",configuration_id:5,status:"completed",report:"saved"});await settle(10);
+go("#/home");
+assert(!cards().some(card=>card.dataset.card==="resume"),`home still offers the ended experiment: ${cardWords()}`);
+assert(!experimentIsResumable(),"the ended experiment is resumable");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 if __name__ == "__main__":
     unittest.main()

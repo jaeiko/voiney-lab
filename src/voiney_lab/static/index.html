@@ -1547,7 +1547,7 @@ let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false
 const protocolCatalog=new Map();
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
-const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]);
+const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
 function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus);}
 function updateStartActionLabel(){const button=$("start");if(button)button.textContent=experimentIsResumable()?"실험 이어하기":"새 실험 시작";renderExperimentContext();}
 const webReferenceHistory=[];
@@ -1629,6 +1629,8 @@ function showExperimentEnded(message){
  renderAfterHead(message);
  renderScreenView();
  globalThis.VoineyFeedback?.ended(lastReportId);
+ // QA-95: the lists read again, so no tab offers the ended experiment as 진행 중.
+ void loadExperimentSessions(currentExperimentSessionId);
 }
 // Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, set once at the
 // server's end and kept until a new session: how it ended, the badge of the
@@ -4655,7 +4657,25 @@ function clearExperimentResumeSelection(){
  updateSessionStateBadge(null);updateStartActionLabel();renderResumeDisclosure();
 }
 function newUser(){if(!sessionActive)return;sendControl("session.reset");}
-async function stopSession(){const wasActive=sessionActive;sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
+// Lane IA QA-10 (lane QA, 2026-10-20): [종료] during the run sent session.stop and closed the socket at once,
+// so the server's answer -- the experiment's state, now stopped, then session.stopped -- never arrived: the
+// screen fell back to 실험 전 with "실험 이어하기" while the server had ended it. The stop now waits for that
+// answer (STOP_ANSWER_MS at most), shows the end screen when the server says the experiment ended, and reads
+// the experiment list again either way (QA-95).
+var STOP_ANSWER_MS=3000;let stopRequest=null;
+async function stopSession(){
+ const wasActive=sessionActive,current=socket,running=wasActive&&screenView()==="during"&&current?.readyState===WebSocket.OPEN;let ended=null;
+ if(running){
+  sessionActive=false;
+  const request={socket:current,resolve:null,ended:null},answered=new Promise(resolve=>{request.resolve=resolve;});stopRequest=request;
+  sendControl("session.stop");
+  let timer=null;await Promise.race([answered,new Promise(resolve=>{timer=setTimeout(resolve,STOP_ANSWER_MS);})]);clearTimeout(timer);
+  stopRequest=null;ended=request.ended;
+ }
+ sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive&&!running)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");
+ // The end screen once the session is let go (the step card was reset with it); the lists read again either way.
+ if(running){if(ended&&!experimentEndedOnScreen)showExperimentEnded({status:ended});else void loadExperimentSessions(currentExperimentSessionId);}
+}
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
 async function playLastReplayableAudio(statusNode){if(!lastReplayableAudio||!playContext){if(statusNode)statusNode.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";return false;}if(playing||activeSource||replaySource){if(statusNode)statusNode.textContent="다른 음성이 재생 중입니다. 끝난 뒤 한 번 더 눌러 주세요.";return false;}try{await playContext.resume();const input=new Int16Array(lastReplayableAudio.slice(0)),audio=playContext.createBuffer(1,input.length,16000),samples=audio.getChannelData(0);for(let i=0;i<input.length;i++)samples[i]=input[i]/32768;const source=playContext.createBufferSource();replaySource=source;source.buffer=audio;source.connect(playContext.destination);source.onended=()=>{if(replaySource===source)replaySource=null;if(statusNode)statusNode.textContent="답변을 한 번 다시 재생했습니다.";};source.start();if(statusNode)statusNode.textContent="마지막 답변을 다시 재생 중입니다.";return true;}catch(_){replaySource=null;if(statusNode)statusNode.textContent="재생하지 못했습니다. 브라우저의 오디오 권한과 출력 장치를 확인해 주세요.";return false;}}
 
@@ -4744,6 +4764,7 @@ async function onMessage(e,generation,current){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
   pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
  }
+ if(m.type==="session.stopped"&&stopRequest?.socket===current)stopRequest.resolve();
  if(m.type==="session.stopped"){hideVoiceCalibration();voiceReferenceMeasured=false;sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);}
@@ -4754,7 +4775,7 @@ async function onMessage(e,generation,current){
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="experiment.ended"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showExperimentEnded(m);
  if(m.type==="workflow.control.refused"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showWorkflowControlRefused(m);
- if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;void loadExperimentSessions(currentExperimentSessionId);}
+ if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;if(typeof m.state.status==="string")currentExperimentSessionStatus=m.state.status;if(stopRequest?.socket===current&&ENDED_EXPERIMENT_STATUSES.has(m.state.status))stopRequest.ended=m.state.status;void loadExperimentSessions(currentExperimentSessionId);}
  if(m.type==="experiment.session.error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
  if(m.type==="protocol.visual.state")applyGeneratedVisualState(m,generation);
  if(m.type==="protocol.figures.state")applySourceFiguresState(m);
