@@ -1385,10 +1385,13 @@ def _transition_workspace_experiment(
         return None
     principal,store=_commercial_workspace()
     try:
+        curated=session.curated_protocol_session
         state=store.transition_experiment(
             principal,session.session_id,action=action,
             expected_version=session.experiment_state_version,
             event_key=event_key,reason=reason,
+            expected_voice_connection_id=session.voice_connection_id,
+            expected_step_id=(curated.fixture.steps[curated.current_index].step_id if curated else None),
         )
         session.experiment_state_version=int(state["version"])
         return state

@@ -1559,6 +1559,8 @@ class WorkspaceStore:
         expected_version: int,
         event_key: str,
         reason: str | None = None,
+        expected_voice_connection_id: str | None = None,
+        expected_step_id: str | None = None,
     ) -> dict[str, object]:
         row = self._experiment_row(principal, session_id, write=True)
         target = {
@@ -1576,11 +1578,23 @@ class WorkspaceStore:
             reason = _text(reason, "Experiment transition reason", maximum=2000)
         event_key = _identifier(event_key, "Experiment event key")
         now = _now()
-        target_version = expected_version + 1
         paused_at = now if target == "paused" else None
         ended_at = now if target in {"completed", "stopped"} else None
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            # A manual note/photo increments version without moving the voice
+            # projection. Only its current connection at the same step may
+            # use the latest version, checked inside this write transaction.
+            row = self._experiment_row(principal, session_id, write=True)
+            if expected_voice_connection_id is not None:
+                if (row["last_voice_connection_id"] != expected_voice_connection_id
+                        or row["current_step_id"] != expected_step_id
+                        or int(row["version"]) < expected_version):
+                    raise WorkspaceConflictError("Experiment voice connection or step changed.")
+                expected_version = int(row["version"])
+            if target not in _EXPERIMENT_TRANSITIONS[row["status"]]:
+                raise WorkspaceConflictError("Experiment transition is not allowed.")
+            target_version = expected_version + 1
             cursor = self._connection.execute(
                 """UPDATE experiment_sessions SET status=?,paused_at=?,ended_at=?,
                 updated_at=?,version=? WHERE session_id=? AND organization_id=?

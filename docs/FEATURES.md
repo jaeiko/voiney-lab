@@ -140,6 +140,7 @@
 - **무엇**: 말한 관찰·측정·편차·메모와 이상 사항("시약을 엎질렀어")은 그 사람의 말 그대로 지우지 않는 장부에 남고, 서버가 되읽어 준다. "안 보임"처럼 부정이 든 말은 통째로 남는다. "방금 기록 고쳐 줘, X가 아니라 Y"는 한 번 묻고 고침을 덧붙인다(원래 것은 남는다). 소수점이 분명하지 않은 값은 다시 묻는다.
   **실험 노트 질문**(한국어, 상태를 바꾸지 않음, "넘어가"로 건너뜀): 시작 뒤 "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요.", 관찰 대상이 있는 단계를 설명 없이 마치면 "관찰한 것 있으면 말씀해 주세요.", 끝나면 "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요." "목적 고쳐: …"로 고친다. 명령이나 질문은 답이 아니라 명령으로 처리된다.
   기록 탭에서 손으로 관찰을 적고 사진·문서(최대 32 MiB, 해석하지 않음)를 붙일 수 있다.
+  화면에서 메모·사진을 저장한 뒤에도 열린 음성 연결의 일시정지·재개·종료는 서버의 최신 버전으로 처리한다. 연결과 현재 단계가 같은지 거래 안에서 확인하며, 다른 탭이 넘겨받았거나 단계가 바뀌면 거절한다. HTTP가 직접 보내는 버전 검사는 그대로 적용한다.
 - **어디**: `curated_protocol.py` (앞단 규칙 `note_record`, `anomaly_report`, `record_fix`; `PURPOSE_QUESTION_KO`, `OBSERVATION_QUESTION_KO`, `RESULT_QUESTION_KO`, `open_notebook_question`); `tools.py` `record_value_keeping_negation`; `server.py` `_record_experiment_report_plan`, `_notebook_end_question`; 장부 `experiment_reports.py` `ExperimentReportStore.append_event`; 작업공간 `workspace_store.py`(`experiment_session_events`, `experiment_observations`, `experiment_evidence`).
 - **설정**: `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED`, `VOINEY_LAB_EXPERIMENT_REPORT_DB`, `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION`(true, 관찰 질문만 끔).
 - **시험**: `tests/test_lane_n_voice_notes.py`, `tests/test_lane_n_ledger_verbatim.py`, `tests/test_lane_ts_record_negation.py`, `tests/test_lane_rp3_voice_questions.py`.
