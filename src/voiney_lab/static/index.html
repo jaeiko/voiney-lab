@@ -2064,7 +2064,15 @@ function renderExperimentReportList(reports){const container=$("experiment-repor
 const reportEventTimes=new Map();
 function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();reportEventTimes.clear();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;if(typeof event.event_key==="string"&&typeof event.created_at==="string")reportEventTimes.set(event.event_key,event.created_at);const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const amended=event.amended&&typeof event.amended==="object"?event.amended:null;const wording=amended&&typeof amended.text==="string"&&amended.text?amended.text:event.user_wording;const bits=[event.created_at,wording].filter(item=>typeof item==="string"&&item.trim());if(amended&&typeof amended.status==="string")bits.push(amended.status==="정정됨"&&typeof event.user_wording==="string"?`정정됨 (처음: ${event.user_wording})`:amended.status);if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 // Lane DI (2026-10-08): the page sends no identity of its own choosing; the server knows who is at the bench.
-function workspaceFetch(url,options={}){return fetch(url,options);}
+// Lane IA decision ⑨ (2026-10-21): every server address is read here -- the requests, the links to the
+// server's pictures and files, and the socket. The values are as before (this page's own server: a path
+// alone, and the socket at the page's host); an app shell that serves the page from elsewhere changes
+// serverOrigin() alone (docs/APP_PLAN.md 9.2). A full address (https:, data:, blob:) passes as it is.
+function serverOrigin(){return "";}
+function serverUrl(path){const value=String(path??"");return /^[a-z][a-z0-9+.-]*:/i.test(value)?value:`${serverOrigin()}${value}`;}
+function serverSocketUrl(path="/ws"){const origin=serverOrigin();if(origin)return `${origin.replace(/^http/i,"ws")}${path}`;const loc=globalThis.location;return `${loc?.protocol==="https:"?"wss":"ws"}://${loc?.host||""}${path}`;}
+function serverFetch(path,options={}){return fetch(serverUrl(path),options);}
+function workspaceFetch(url,options={}){return serverFetch(url,options);}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  authentication_required:"연구자 세션을 확인할 수 없습니다. 다시 로그인한 뒤 실험 상태를 새로고침해 주세요.",
  authorization_denied:"이 실험 기록에 접근할 권한이 없습니다. 올바른 연구자 계정인지 확인해 주세요.",
@@ -2102,7 +2110,7 @@ function renderExperimentTimeline(payload){
   if(event.observation&&typeof event.observation.content==="string")content.textContent=observationRecordText(event);
   else if(event.evidence)content.textContent=`${event.evidence.original_filename||"첨부"} · ${event.evidence.media_type||"파일"} · 자동 해석 안 함`;
   else if(event.payload?.comment)content.textContent=String(event.payload.comment);
-  row.append(title,detail);if(content.textContent)row.appendChild(content);appendDevCodeDetails(row,[["event_type",experimentEventLabel(event.event_type)==="이벤트"?event.event_type:null],["category",typeof event.observation?.category==="string"?event.observation.category:null],["actor",typeof event.actor_principal_id==="string"?event.actor_principal_id:null],["created_at",typeof event.created_at==="string"?event.created_at:null]]);if(event.evidence&&typeof event.evidence.evidence_id==="string"&&typeof payload?.session?.session_id==="string"){const link=document.createElement("a");link.className="experiment-evidence-download";link.href=`/api/workspace/experiments/${encodeURIComponent(payload.session.session_id)}/evidence/${encodeURIComponent(event.evidence.evidence_id)}`;link.textContent="원본 증거 다운로드";link.download="";row.appendChild(link);}target.appendChild(row);
+  row.append(title,detail);if(content.textContent)row.appendChild(content);appendDevCodeDetails(row,[["event_type",experimentEventLabel(event.event_type)==="이벤트"?event.event_type:null],["category",typeof event.observation?.category==="string"?event.observation.category:null],["actor",typeof event.actor_principal_id==="string"?event.actor_principal_id:null],["created_at",typeof event.created_at==="string"?event.created_at:null]]);if(event.evidence&&typeof event.evidence.evidence_id==="string"&&typeof payload?.session?.session_id==="string"){const link=document.createElement("a");link.className="experiment-evidence-download";link.href=serverUrl(`/api/workspace/experiments/${encodeURIComponent(payload.session.session_id)}/evidence/${encodeURIComponent(event.evidence.evidence_id)}`);link.textContent="원본 증거 다운로드";link.download="";row.appendChild(link);}target.appendChild(row);
  }
  if(!items.length)target.appendChild(workspaceRow("아직 기록 없음","실험을 시작하거나 관찰을 남기면 여기에 나옵니다."));
  const session=payload?.session;
@@ -2398,9 +2406,9 @@ function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["sou
 // document and points at the same-origin figure route.
 function safeSourceFigure(value,state){if(!value||typeof value!=="object"||value.kind!=="source_figure"||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||typeof value.figure_id!=="string"||!/^source-figure-[1-9][0-9]*-[1-9][0-9]*$/.test(value.figure_id)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.caption!=="string"||typeof value.label!=="string"||!value.label||!["image/png","image/jpeg"].includes(value.mime_type)||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/figures/${encodeURIComponent(value.figure_id)}`)return null;return value;}
 function sourceFiguresOf(state,screen){if(!screen||typeof screen!=="object"||!("source_figures" in screen))return [];if(screen.source_figures===null)return null;if(!Array.isArray(screen.source_figures))return [];return screen.source_figures.map(item=>safeSourceFigure(item,state)).filter(Boolean);}
-function renderSourceFigures(container,state,figures,current){const pageUrl=page=>`/api/protocols/${encodeURIComponent(state.protocol_id)}/revisions/${encodeURIComponent(state.revision_id)}/source-pages/${page}`;const head=document.createElement("div");head.className="visual-status";head.textContent=figures.length===1?"원문 그림":`원문 그림 ${figures.length}장`;container.appendChild(head);if(current)$("source-visual-state").textContent=head.textContent;for(const figure of figures){const block=document.createElement("figure");block.className="source-figure";const status=document.createElement("div");status.className="visual-status";status.textContent=normalizePresentationText(figure.label);const image=document.createElement("img");image.alt=normalizePresentationText(figure.caption||figure.label);image.loading="lazy";image.src=figure.url;image.addEventListener?.("error",()=>{status.textContent="원문 그림을 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";image.remove();});block.appendChild(status);block.appendChild(image);if(figure.caption){const caption=document.createElement("figcaption");caption.textContent=`원문 캡션 · ${normalizePresentationText(figure.caption)}`;block.appendChild(caption);}// Lane VF decision 8: the cut figure itself, large, and the whole source page as an image.
-const links=document.createElement("div");links.className="source-figure-links";const large=document.createElement("a");large.href=figure.url;large.target="_blank";large.rel="noopener";large.textContent="그림 크게 보기";links.appendChild(large);const page=document.createElement("a");page.href=`${pageUrl(figure.source_page)}/image`;page.target="_blank";page.rel="noopener";page.textContent="원본 쪽 보기";links.appendChild(page);block.appendChild(links);container.appendChild(block);if(current)noteRunFigure(`figure:${figure.figure_id}`);}}
-function renderStepVisual(container,state,screen){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const figures=state?sourceFiguresOf(state,screen):[];if(figures===null){const text=document.createElement("div");text.className="visual-status";text.textContent="원문 그림 확인 중…";container.appendChild(text);if(current)$("source-visual-state").textContent="원문 그림 확인 중";return;}if(figures.length){renderSourceFigures(container,state,figures,current);return;}const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;if(current)noteRunFigure(`asset:${asset.asset_id}`);const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=asset.url;image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=legacy?asset.url:asset.source_page_url;link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
+function renderSourceFigures(container,state,figures,current){const pageUrl=page=>`/api/protocols/${encodeURIComponent(state.protocol_id)}/revisions/${encodeURIComponent(state.revision_id)}/source-pages/${page}`;const head=document.createElement("div");head.className="visual-status";head.textContent=figures.length===1?"원문 그림":`원문 그림 ${figures.length}장`;container.appendChild(head);if(current)$("source-visual-state").textContent=head.textContent;for(const figure of figures){const block=document.createElement("figure");block.className="source-figure";const status=document.createElement("div");status.className="visual-status";status.textContent=normalizePresentationText(figure.label);const image=document.createElement("img");image.alt=normalizePresentationText(figure.caption||figure.label);image.loading="lazy";image.src=serverUrl(figure.url);image.addEventListener?.("error",()=>{status.textContent="원문 그림을 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";image.remove();});block.appendChild(status);block.appendChild(image);if(figure.caption){const caption=document.createElement("figcaption");caption.textContent=`원문 캡션 · ${normalizePresentationText(figure.caption)}`;block.appendChild(caption);}// Lane VF decision 8: the cut figure itself, large, and the whole source page as an image.
+const links=document.createElement("div");links.className="source-figure-links";const large=document.createElement("a");large.href=serverUrl(figure.url);large.target="_blank";large.rel="noopener";large.textContent="그림 크게 보기";links.appendChild(large);const page=document.createElement("a");page.href=serverUrl(`${pageUrl(figure.source_page)}/image`);page.target="_blank";page.rel="noopener";page.textContent="원본 쪽 보기";links.appendChild(page);block.appendChild(links);container.appendChild(block);if(current)noteRunFigure(`figure:${figure.figure_id}`);}}
+function renderStepVisual(container,state,screen){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const figures=state?sourceFiguresOf(state,screen):[];if(figures===null){const text=document.createElement("div");text.className="visual-status";text.textContent="원문 그림 확인 중…";container.appendChild(text);if(current)$("source-visual-state").textContent="원문 그림 확인 중";return;}if(figures.length){renderSourceFigures(container,state,figures,current);return;}const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;if(current)noteRunFigure(`asset:${asset.asset_id}`);const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=serverUrl(asset.url);image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=serverUrl(legacy?asset.url:asset.source_page_url);link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
 
 
 // Lane WV, decision 1: the step's figures, cut after the state was drawn.
@@ -2432,7 +2440,7 @@ function renderWebLookupResult(container,message){
  const note=document.createElement("p");note.className="web-lookup-note";note.textContent="설명과 사진만 웹에서 가져왔어요. 양·시간·온도·농도·횟수와 안전 지시는 원문만 따릅니다.";block.appendChild(note);
  if(typeof message.screen==="string"&&message.screen.trim()){const text=document.createElement("p");text.className="web-lookup-text";text.textContent=normalizePresentationText(message.screen);block.appendChild(text);}
  const photo=safeWebPhoto(message.photo);
- if(photo){const figure=document.createElement("figure");figure.className="web-photo";const image=document.createElement("img");image.alt=normalizePresentationText(photo.title);image.loading="lazy";image.src=photo.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`웹 자료 · 출처 Wikimedia Commons · ${normalizePresentationText(photo.title)}${photo.author?` · 작성자 ${normalizePresentationText(photo.author)}`:""} · ${normalizePresentationText(photo.licence)} · 실험 PDF 원문 사진이 아니에요`;figure.appendChild(caption);const link=document.createElement("a");link.href=photo.page_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="원본 페이지 · 라이선스 보기";figure.appendChild(link);block.appendChild(figure);}
+ if(photo){const figure=document.createElement("figure");figure.className="web-photo";const image=document.createElement("img");image.alt=normalizePresentationText(photo.title);image.loading="lazy";image.src=serverUrl(photo.url);image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`웹 자료 · 출처 Wikimedia Commons · ${normalizePresentationText(photo.title)}${photo.author?` · 작성자 ${normalizePresentationText(photo.author)}`:""} · ${normalizePresentationText(photo.licence)} · 실험 PDF 원문 사진이 아니에요`;figure.appendChild(caption);const link=document.createElement("a");link.href=photo.page_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="원본 페이지 · 라이선스 보기";figure.appendChild(link);block.appendChild(figure);}
  const citations=Array.isArray(message.citations)?message.citations.map(safeWebCitation).filter(Boolean):[];
  if(citations.length){const list=document.createElement("div");list.className="web-lookup-sources";const label=document.createElement("div");label.className="visual-status";label.textContent=`출처 (${citations.length})`;list.appendChild(label);for(const item of citations){const line=document.createElement("div");const link=document.createElement("a");link.href=item.url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`${normalizePresentationText(item.title||item.domain||item.url)} · ${item.domain||""}`;line.appendChild(link);list.appendChild(line);}block.appendChild(list);}
  if(Number.isInteger(message.removed_count)&&message.removed_count>0){const removed=document.createElement("p");removed.className="visual-status";removed.textContent=`값이나 안전 지시가 섞인 문장 ${message.removed_count}개는 뺐어요.`;block.appendChild(removed);}
@@ -2476,7 +2484,7 @@ function applyDrawingResult(message,browserGeneration=sessionGeneration){
  const diagram=message.status==="success"?safeDrawnDiagram(message.diagram,curatedProtocolState):null;
  if(diagram){
   const panel=$("procedure-drawing");
-  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=diagram.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);noteRunFigure(`drawing:${diagram.asset_id}`);}
+  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=serverUrl(diagram.url);image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);noteRunFigure(`drawing:${diagram.asset_id}`);}
   if(outcome){outcome.hidden=false;const line=document.createElement("div");line.className="visual-status drawn-line";line.textContent=`${normalizePresentationText(diagram.label)} · 오른쪽 '원문 PDF 그림' 칸에 띄웠어요`;outcome.appendChild(line);}
   announceMilestone("AI가 그린 그림을 화면에 띄웠습니다.");
  }else if(outcome){
@@ -3158,7 +3166,7 @@ function cascadeTurnInterrupted(message){return Number.isInteger(message?.turn_i
 function currentCascadeMessage(message){return message.turn_id===activeTurn&&(!Number.isInteger(message.generation)||activeCascadeGeneration===null||message.generation===activeCascadeGeneration);}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
 
-async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",current=new WebSocket(scheme+"://"+location.host+"/ws");socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
+async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const current=new WebSocket(serverSocketUrl("/ws"));socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
 function resamplePcm16(input,sourceRate,targetRate){
  const length=Math.max(1,Math.round(input.length*targetRate/sourceRate)),output=new Int16Array(length);
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
@@ -3379,7 +3387,7 @@ async function loadProtocolCatalog(preferredProtocolId=null){
  $("protocol-readiness").textContent="카탈로그 불러오는 중";
  if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
  try{
-  const response=await fetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
+  const response=await serverFetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
   if(!response.ok)throw new Error("catalog unavailable");
   const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
   protocolCatalog.clear();selector.replaceChildren();
@@ -3451,7 +3459,7 @@ const HEIC_UNAVAILABLE_HINT="이 서버는 HEIC 사진을 받지 않습니다 ·
 const HEIC_REFUSED_BESIDE_HINT="이 서버는 HEIC 사진을 읽지 못합니다 · 아래 안내대로 JPG 사진을 올려 주세요.";
 function showHeicHint(shown){const hint=$("protocol-heic-hint");if(!hint)return false;hint.textContent=shown?HEIC_UNAVAILABLE_HINT:"";hint.hidden=!shown;return shown;}
 async function loadSourceFormats(){
- try{const response=await fetch("/readyz",{cache:"no-store"});const payload=await safeProtocolUploadPayload(response);const heic=response.ok?payload?.capabilities?.heic_photos_available:undefined;if(typeof heic!=="boolean"){showHeicHint(false);return null;}showHeicHint(heic===false);return heic;}
+ try{const response=await serverFetch("/readyz",{cache:"no-store"});const payload=await safeProtocolUploadPayload(response);const heic=response.ok?payload?.capabilities?.heic_photos_available:undefined;if(typeof heic!=="boolean"){showHeicHint(false);return null;}showHeicHint(heic===false);return heic;}
  catch(_){showHeicHint(false);return null;}
 }
 async function safeProtocolUploadPayload(response){
@@ -3637,12 +3645,12 @@ function renderExperimenterSettings(settings){
  if(sensitivity&&["high","normal","low"].includes(settings.speaker_sensitivity))sensitivity.value=settings.speaker_sensitivity;
 }
 async function loadExperimenterSettings(){
- try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);}}catch(_){}
+ try{const response=await serverFetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);}}catch(_){}
 }
 async function saveExperimenterSetting(name,value){
  const status=$("experimenter-settings-status");
  try{
-  const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({[name]:value})});
+  const response=await serverFetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({[name]:value})});
   if(!response.ok)throw new Error("refused");
   const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);
   if(status)status.textContent="저장했습니다 · 다음 실험부터 적용됩니다.";
@@ -3808,7 +3816,7 @@ async function loadReagentTables(protocolId){
  const list=$("reagent-table-list");if(!list||typeof protocolId!=="string"||!protocolId)return null;
  if(reagentTablesProtocolId!==protocolId)reagentTableOpenId=null;
  reagentTablesProtocolId=protocolId;
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(reagentTablesProtocolId!==protocolId)return null;const tables=response.ok&&Array.isArray(payload?.reagent_tables)?payload.reagent_tables.filter(table=>table&&typeof table==="object"):null;renderReagentTables(tables);return tables;}
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(reagentTablesProtocolId!==protocolId)return null;const tables=response.ok&&Array.isArray(payload?.reagent_tables)?payload.reagent_tables.filter(table=>table&&typeof table==="object"):null;renderReagentTables(tables);return tables;}
  catch(_){if(reagentTablesProtocolId===protocolId)renderReagentTables(null);return null;}
 }
 function renderReagentTables(tables){
@@ -3871,7 +3879,7 @@ async function attachReagentTable(){
  isAttachingReagentTable=true;input?.setAttribute?.("aria-busy","true");say("시약 표를 읽어 붙이는 중…");
  try{
   let response;
-  try{response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  try{response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){say(reagentTableErrorMessage("network_error"));return null;}
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){say(reagentTableErrorMessage(typeof payload?.detail==="string"?payload.detail:"unexpected_server_error"));return null;}
@@ -4009,7 +4017,7 @@ function renderCompareSource(steps){
  const runnable=compareReview?.available_for_execution===true&&typeof compareReview.protocol_id==="string"&&typeof compareReview.revision_id==="string";
  for(const page of [...new Set(lines.map(line=>line.page))].sort((a,b)=>a-b)){
   const block=compareEl("div","compare-page"),head=compareEl("div","compare-page-head");head.appendChild(compareEl("b","",`원문 p.${page}`));
-  if(runnable){const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(compareReview.protocol_id)}/revisions/${encodeURIComponent(compareReview.revision_id)}/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);}
+  if(runnable){const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=serverUrl(`/api/protocols/${encodeURIComponent(compareReview.protocol_id)}/revisions/${encodeURIComponent(compareReview.revision_id)}/source-pages/${page}/image`);link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);}
   block.appendChild(head);
   for(const line of lines.filter(item=>item.page===page)){const row=compareEl("p",`compare-line${line.linked?" is-linked":""}`,line.text);if(line.linked)row.setAttribute?.("aria-label",`이 단계의 원문 · ${line.text}`);block.appendChild(row);if(line.next)block.appendChild(compareEl("p","compare-line-next",`p.${line.next.page} 에서 이어짐${nonemptyText(line.next.text)?` · ${line.next.text}`:""}`));}
   host.appendChild(block);
@@ -4043,7 +4051,7 @@ async function loadProtocolReview(protocolId=currentProtocolReviewId,options={})
  if(screenRoute.tab==="protocols")syncProtocolRoute(protocolId);
  // The start button acts on currentProtocolReviewId, so an answer that
  // arrives after the person picked another protocol must not be rendered.
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);showReviewEditor(protocolId,payload);
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);showReviewEditor(protocolId,payload);
   // Lane RN decision 1: a run that goes is watched again when its protocol is picked.
   if(protocolAnalysisRunning(payload)&&protocolAnalysisPollHandle===null){startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);}
   return payload;}catch(_){if(currentProtocolReviewId===protocolId&&status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
@@ -4133,7 +4141,7 @@ function choiceFigures(pictures){
  const strip=compareEl("div","choice-card-images");
  for(const picture of pictures.slice(0,6)){
   const figure=compareEl("figure","choice-card-image"),image=document.createElement("img");
-  image.src=picture.src;image.alt=picture.alt||"원문 그림 조각";image.loading="lazy";
+  image.src=serverUrl(picture.src);image.alt=picture.alt||"원문 그림 조각";image.loading="lazy";
   figure.appendChild(image);if(nonemptyText(picture.caption))figure.appendChild(compareEl("figcaption","",picture.caption));
   strip.appendChild(figure);
  }
@@ -4222,7 +4230,7 @@ function renderChoiceCard(host,card,options={}){
   box.appendChild(list);
   // Lane IA decision ⑧ (lane AN3's finding ③): a card of a page's values opens the whole page.
   const pageNumber=Number.isInteger(card.page)?card.page:card.source?.page,pageHref=typeof options.pageLink==="function"?options.pageLink(card,pageNumber):null;
-  if(nonemptyText(pageHref)){const link=compareEl("a","compare-page-link",`원본 쪽 보기${Number.isInteger(pageNumber)?` (p.${pageNumber})`:""}`);link.href=pageHref;link.target="_blank";link.rel="noopener";box.appendChild(link);}
+  if(nonemptyText(pageHref)){const link=compareEl("a","compare-page-link",`원본 쪽 보기${Number.isInteger(pageNumber)?` (p.${pageNumber})`:""}`);link.href=serverUrl(pageHref);link.target="_blank";link.rel="noopener";box.appendChild(link);}
  }
  if(typeof options.slot==="function"){const slot=compareEl("div","choice-card-slot");options.slot(slot,card);box.appendChild(slot);}
  const writing=options.writing&&!options.writing.valueId?(Array.isArray(card.choices)?card.choices:[]).find(choice=>choice?.choice_id===options.writing.choiceId):null;
@@ -4250,7 +4258,7 @@ async function loadReviewDraft(protocolId=reviewProtocolId,options={}){
  if(protocolId!==reviewProtocolId){reviewCardIndex=null;reviewCardWriting=null;reviewCardPicked=null;reviewCardPage=null;reviewPages.clear();}
  reviewProtocolId=protocolId;
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);if(reviewProtocolId!==protocolId)return null;
   if(!response.ok||!payload)throw new Error("review draft unavailable");
   renderReviewEditor(payload,options);return payload;
@@ -4331,7 +4339,7 @@ async function reviewSourcePage(page){
  const key=`${reviewProtocolId}|${page}`;
  if(reviewPages.has(key))return reviewPages.get(key);
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;
   reviewPages.set(key,payload);return payload;
  }catch(_){return null;}
@@ -4358,7 +4366,7 @@ async function renderReviewCardLines(host,card){
   for(const [label,to] of [["앞 쪽",page-1],["다음 쪽",page+1]]){const button=compareEl("button","",label);button.type="button";if(button.dataset)button.dataset.page=String(to);button.disabled=to<1||to>count;button.addEventListener("click",()=>{reviewCardPage={cardId:card.card_id,page:to};void renderReviewCardLines(host,card);});turn.appendChild(button);}
   head.appendChild(turn);
  }
- const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);
+ const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=serverUrl(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/image`);link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);
  host.appendChild(head);
  const suggested=source.suggested_lines?.page===page?reviewLineSpan(source.suggested_lines):null;
  const picked=reviewCardPicked?.cardId===card.card_id&&reviewCardPicked.page===page?[reviewCardPicked.first,reviewCardPicked.last]:null;
@@ -4414,7 +4422,7 @@ async function chooseReviewCard(card,choice,fields={}){
  if(typeof fetch!=="function")return null;
  reviewBusy=true;const protocolId=reviewProtocolId;renderReviewCards();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){
    reviewBusy=false;
@@ -4466,7 +4474,7 @@ async function registerReview(){
  if(reviewBusy||typeof fetch!=="function"||!reviewProtocolId)return null;
  reviewBusy=true;const protocolId=reviewProtocolId;renderReviewRegister();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,target:reviewDraft?.target}),redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,target:reviewDraft?.target}),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){if(status){status.textContent=reviewErrorWords(typeof payload?.detail==="string"?payload.detail:"");if(status.dataset)status.dataset.result="refused";}if(payload?.detail==="review_target_changed")await loadReviewDraft(protocolId);return null;}
   const version=payload?.review_version||{};
@@ -4494,7 +4502,7 @@ function renderReviewHistory(){
 async function showReviewVersion(number){
  const host=$("review-history-changes");if(!host||typeof fetch!=="function"||!reviewProtocolId)return null;
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-versions/${number}`,{headers:{Accept:"application/json"},redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-versions/${number}`,{headers:{Accept:"application/json"},redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;
   renderReviewVersionChanges(payload);return payload;
  }catch(_){return null;}
@@ -4514,7 +4522,7 @@ function renderReviewVersionChanges(version){
 async function pollProtocolAnalysisStatus(protocolId){
  if(protocolAnalysisPollBusy)return null;protocolAnalysisPollBusy=true;
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis/status`,{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)return null;const run=await response.json();if(currentProtocolReviewId!==protocolId)return null;
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis/status`,{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)return null;const run=await response.json();if(currentProtocolReviewId!==protocolId)return null;
   const terminal=new Set(["review_required","analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled","ocr_required","review_pending"]);
   const parts=Number.isInteger(run.total_chunks)&&run.total_chunks>0?` · 부분 ${run.completed_chunks||0} / ${run.total_chunks} 완료${run.failed_chunks?` · 실패 ${run.failed_chunks}`:""}`:"";
   const again=run.reanalysis===true,runWord=again?"다시 분석":"분석";
@@ -4543,7 +4551,7 @@ async function pollProtocolAnalysisStatus(protocolId){
 function startProtocolAnalysisPolling(protocolId){stopProtocolAnalysisPolling();protocolAnalysisPollHandle=setInterval(()=>{void pollProtocolAnalysisStatus(protocolId);},1000);protocolAnalysisPollHandle?.unref?.();}
 async function pollProtocolOcrStatus(protocolId){
  if(protocolOcrPollBusy)return null;protocolOcrPollBusy=true;
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent=`OCR 중 · 글자 층이 없는 쪽을 읽고 있습니다${ocrElapsedText()} · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.`;}else{stopProtocolOcrPolling();if(payload.state==="accepted_for_analysis"){
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent=`OCR 중 · 글자 층이 없는 쪽을 읽고 있습니다${ocrElapsedText()} · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.`;}else{stopProtocolOcrPolling();if(payload.state==="accepted_for_analysis"){
    // Lane PX decision 3: upload-time OCR is accepted automatically and the
    // server starts the analysis itself; the page only follows it.
    const pages=ocrPageNumbers(payload);showProtocolAnalysisNotice(protocolId,`OCR 끝${pages.length?` · OCR 쪽 p.${pages.join(", ")}`:""} · 분석을 시작합니다 · 실행 전 확인 한 번에 OCR 글도 포함됩니다.`,"분석 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음");protocolAnalysisStartedAt=Date.now();startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);return payload;}
@@ -4555,13 +4563,13 @@ function ocrPageNumbers(payload){const pages=Array.isArray(payload?.pages)?paylo
 function startProtocolOcrPolling(protocolId){stopProtocolOcrPolling();protocolOcrStartedAt=Date.now();protocolOcrPollHandle=setInterval(()=>{void pollProtocolOcrStatus(protocolId);},1000);protocolOcrPollHandle?.unref?.();}
 async function runProtocolOcr(){
  const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-ocr-run");if(!protocolId||isRegisteringProtocol)return null;if(button)button.disabled=true;if(status)status.textContent="OCR 요청을 검증하고 있습니다…";
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
 }
 async function analyzeRegisteredProtocol(protocolId,{reanalysis=false}={}){
  const watchedSince=protocolAnalysisStartedAt,runWord=reanalysis?"다시 분석":"분석";
  currentProtocolReviewId=protocolId;protocolAnalysisStartedAt=Date.now();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,true);showProtocolAnalysisNotice(protocolId,reanalysis?PROTOCOL_REANALYSIS_RUNNING_NOTICE:PROTOCOL_ANALYSIS_RUNNING_NOTICE,`${runWord} 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음`);startProtocolAnalysisPolling(protocolId);
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
   if(!response.ok){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(code),"");await loadProtocolReview(protocolId);return null;}
   if(!payload){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("unexpected_server_error"),"");return null;}
   const run=payload.analysis_run||{},running=["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(run.state||payload.analysis_status),pending=payload.analysis_request_accepted===true||running;
@@ -4596,7 +4604,7 @@ async function registerSelectedProtocol(){
  if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
  try{
   let response;
-  try{response=await fetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
@@ -4761,7 +4769,7 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
@@ -5009,23 +5017,23 @@ function wizardStepIndex(){return wizardSteps().indexOf(wizard.step);}
 function wizardSelectedProtocol(){const id=$("protocol-id")?.value||"";return id&&protocolCatalog.get(id)?protocolCatalog.get(id):null;}
 function wizardNote(text,kind=""){wizard.note=text||"";wizard.noteKind=kind;const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=kind;}}
 async function loadAuthSession(){
- try{const response=await fetch("/api/auth/session",{cache:"no-store"});if(!response.ok)return null;const payload=await response.json();wizard.auth=payload&&typeof payload==="object"?payload:null;if(wizard.auth?.account?.name)wizard.reviewerName=String(wizard.auth.account.name);return wizard.auth;}catch(_){return null;}
+ try{const response=await serverFetch("/api/auth/session",{cache:"no-store"});if(!response.ok)return null;const payload=await response.json();wizard.auth=payload&&typeof payload==="object"?payload:null;if(wizard.auth?.account?.name)wizard.reviewerName=String(wizard.auth.account.name);return wizard.auth;}catch(_){return null;}
 }
 async function loadAgentVoices(){
- try{const response=await fetch("/api/voice/voices",{cache:"no-store"});if(!response.ok){wizard.voices=null;return null;}const payload=await response.json();wizard.voices=payload&&typeof payload==="object"&&Array.isArray(payload.voices)?payload:null;return wizard.voices;}catch(_){wizard.voices=null;return null;}
+ try{const response=await serverFetch("/api/voice/voices",{cache:"no-store"});if(!response.ok){wizard.voices=null;return null;}const payload=await response.json();wizard.voices=payload&&typeof payload==="object"&&Array.isArray(payload.voices)?payload:null;return wizard.voices;}catch(_){wizard.voices=null;return null;}
 }
 async function openStartWizard(){
  if(sessionActive){wizard.active=false;renderRoute();return false;}
  wizard.active=true;wizard.open=false;wizard.invite=wizardInviteToken();
  await loadAuthSession();
- if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
+ if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await serverFetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
  await wizardAfterSignIn();
  // A sheet the experimenter already opened keeps its step: the settings and the voices can arrive after the first press (a slow server, found by CI on 32b2585).
  if(!wizard.open||!wizardSteps().includes(wizard.step))wizard.step=wizardSteps()[0];
  renderRoute();return true;
 }
 async function wizardAfterSignIn(){
- const settings=fetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
+ const settings=serverFetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
  await Promise.all([settings,loadAgentVoices()]);
 }
 function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
@@ -5152,7 +5160,7 @@ async function wizardPreviewVoice(voiceId){
  stopVoicePreview();
  const token=++voicePreview.token;wizard.previewing=voiceId;wizardNote("");renderVoicePreview();
  try{
-  const response=await fetch("/api/voice/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice_id:voiceId}),redirect:"error"});
+  const response=await serverFetch("/api/voice/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice_id:voiceId}),redirect:"error"});
   if(token!==voicePreview.token)return false;
   if(!response.ok)throw new Error("preview");
   const blob=await response.blob();
@@ -5170,7 +5178,7 @@ async function wizardPickVoice(voiceId){
  stopVoicePreview();
  const before=wizardSettings().agent_voice;wizard.settings={...wizardSettings(),agent_voice:voiceId};renderWizard();
  try{
-  const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_voice:voiceId})});
+  const response=await serverFetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_voice:voiceId})});
   if(!response.ok)throw new Error("refused");
   const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);wizardNote("저장했어요 · 이 목소리로 안내해요.");return true;
  }catch(_){wizard.settings={...wizardSettings(),agent_voice:before};wizardNote("목소리를 저장하지 못했어요.","error");renderWizard();return false;}
@@ -5201,7 +5209,7 @@ async function wizardLoadCheck(){
  const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
  wizard.check=null;wizard.question=0;wizard.busy=true;renderWizard();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable"};
  }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable"};}
@@ -5244,7 +5252,7 @@ async function wizardAnswer(choice){
  const question=wizardQuestion(),entry=wizardSelectedProtocol();if(!question||!entry||wizard.busy||!choice?.request)return null;
  wizard.busy=true;renderWizard();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/answers`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(choice.request),redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/answers`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(choice.request),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   wizard.busy=false;
   if(!response.ok||!payload){wizardNote("답을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
@@ -5264,9 +5272,9 @@ async function wizardCardChoice(choice,fields={}){
  try{
   const draft=await loadReviewDraft(entry.protocol_id);
   const body={...request,...(text?{text}:{}),reviewer_name:name,...(draft?.target?{target:draft.target}:{})};
-  const decided=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const decided=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
   if(!decided.ok){const payload=await safeProtocolUploadPayload(decided);wizard.busy=false;wizardNote(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""),"error");renderWizard();return null;}
-  const registered=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,...(draft?.target?{target:draft.target}:{})}),redirect:"error"});
+  const registered=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,...(draft?.target?{target:draft.target}:{})}),redirect:"error"});
   if(!registered.ok){const payload=await safeProtocolUploadPayload(registered);wizard.busy=false;wizardNote(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""),"error");renderWizard();return null;}
   if(wizard.auth?.mode!=="accounts")storeReviewerName(name);
   wizard.busy=false;wizard.card=null;wizard.cardText=null;wizard.wrong=null;
@@ -5538,7 +5546,7 @@ async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoic
 async function previewAgentVoiceFromSettings(voiceId){const ok=await wizardPreviewVoice(voiceId);setText("settings-agent-voice-note",wizard.noteKind==="error"?wizard.note:"");renderSettingsExtras();return ok;}
 async function logOutAccount(){
  const button=$("account-logout"),status=$("account-password-status");setDisabled(button,true);
- try{const response=await fetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("refused");}
+ try{const response=await serverFetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("refused");}
  catch(_){setDisabled(button,false);if(status)status.textContent="로그아웃하지 못했어요. 다시 해 주세요.";return false;}
  setDisabled(button,false);
  // The page's lists belong to the account that left: a reload starts clean at the login.
@@ -5551,7 +5559,7 @@ async function changeAccountPassword(event){
  if(!current||!next){if(status)status.textContent="지금 비밀번호와 새 비밀번호를 적어 주세요.";return false;}
  setDisabled($("account-password-send"),true);
  try{
-  const response=await fetch("/api/auth/password",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({current,new:next}),redirect:"error"});
+  const response=await serverFetch("/api/auth/password",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({current,new:next}),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){if(status)status.textContent=ACCOUNT_PASSWORD_WORDS[typeof payload?.detail==="string"?payload.detail:""]||"비밀번호를 바꾸지 못했어요. 지금 비밀번호를 확인해 주세요.";return false;}
   if(status)status.textContent="비밀번호를 바꿨어요 · 다른 기기는 로그아웃돼요.";
