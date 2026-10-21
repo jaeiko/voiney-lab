@@ -944,7 +944,7 @@ def validate_tool_proposal(
     )
     if fence is not None:
         return refuse(fence)
-    if proposal.tool == CHANGE_STATE and facts.control_question:
+    if facts.control_question:
         return refuse("interrogative_not_authorized")
     if rule.has_word is not None and not rule.has_word(evidence):
         return refuse(str(rule.missing_word))

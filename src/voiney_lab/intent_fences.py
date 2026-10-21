@@ -38,6 +38,45 @@ _POLITE_ACTION_REQUEST = re.compile(
     re.IGNORECASE,
 )
 
+# Clause endings, not STT punctuation, decide whether an observation was
+# asserted. Boundaries keep connective -으니 and noun suffixes inside a word
+# from being read as a question. Standalone 아니 is a negative reply.
+_QUESTION_ENDING = re.compile(
+    r"(?<=[가-힣])(?:나요|나|니|냐|까요?|려나|을라나|던가요?"
+    r"|는지|은지|인지|한지|된지|건지|던지|은가요?|는가요?|한가요?|건가요?)"
+    r"(?=$|[.,!?。？！~]|\s+(?:보(?:다|여)|봐|모르|몰라|싶|그런데|근데))"
+    r"|(?:된|한|진|인|는|은)\s*거야(?=$|[.,!?~])"
+    r"|(?:건|인|한|된|은|는)가요?(?=$|[.,!?~])"
+    r"|(?:했|됐|졌|었|았|였|하|되|맞|있|없|갔|왔)(?:지요?|죠)(?=$|[.,!?~])"
+)
+_SPECULATION = re.compile(
+    r"모르(?:겠|는)|몰라|잘\s*모르|(?:것|거|듯)\s*같|듯(?:해|하|싶)|같기도"
+    r"|아마|혹시|글쎄|애매|헷갈"
+    r"|\b(?:not\s+sure|unsure|maybe|perhaps|probably|might|whether|should)\b"
+    r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b"
+)
+
+
+def is_question_or_speculation(text: str, *, punctuation: bool = True) -> bool:
+    """A question/hedge cannot attest a workflow action or observation.
+
+    ``punctuation=False`` selects the grammatical guard before the existing
+    informational routing, which already answers punctuated questions. The
+    same grammar is used at the model-proposal boundary, with punctuation.
+    This is deliberately conservative for ambiguous conversational endings.
+    """
+
+    said = normalize_semantic_utterance(text).casefold()
+    if punctuation and re.search(r"[?？]", said):
+        return True
+    # A request to preserve the spoken uncertainty is still a command to
+    # record it; the uncertainty itself never attests endpoint completion.
+    if re.search(r"(?:메모|기록)\s*해\s*(?:줘|주세요)[.!~]*$", said):
+        return False
+    # These whole words are replies or nouns, not predicate endings.
+    grammatical = re.sub(r"(?<![가-힣])(?:아니|하나|바나나)(?![가-힣])", "", said)
+    return bool(_QUESTION_ENDING.search(grammatical) or _SPECULATION.search(said))
+
 
 def normalize_semantic_utterance(value: str) -> str:
     """Normalize width/spacing only; punctuation and case-bearing text survive.
@@ -82,7 +121,7 @@ def evidence_fence_rejection(
     if not evidence or evidence.casefold() not in utterance.casefold():
         return "evidence_not_verbatim"
     if (
-        _INTERROGATIVE_EVIDENCE.search(utterance)
+        (is_question_or_speculation(utterance) or _INTERROGATIVE_EVIDENCE.search(utterance))
         and not (bounded_control and _POLITE_ACTION_REQUEST.search(utterance))
     ):
         return "interrogative_not_authorized"

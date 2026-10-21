@@ -63,7 +63,7 @@ from voiney_lab.llm_router import (
     tool_value_rule,
     validate_tool_proposals,
 )
-from voiney_lab.intent_fences import has_completion_evidence
+from voiney_lab.intent_fences import has_completion_evidence, is_question_or_speculation
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -3199,7 +3199,7 @@ def forward_step_request(transcript: str) -> bool:
     ("3단계 끝났어") is the targeted completion's, not this.
     """
 
-    if _QUESTION_MARKERS.search(transcript or ""):
+    if is_question_or_speculation(transcript) or _QUESTION_MARKERS.search(transcript or ""):
         return False
     key = normalize_conversational_utterance(re.sub(r"[.…,]+", " ", transcript or ""))
     return bool(key) and _FORWARD_STEP.fullmatch(key) is not None
@@ -3394,7 +3394,7 @@ def _reply_withholds_assent(transcript: str) -> bool:
     """True when the spoken reply asks a question or hedges."""
 
     raw = " ".join(str(transcript).casefold().split())
-    return bool(_QUESTION_MARKERS.search(raw) or _UNCERTAIN_MARKERS.search(raw))
+    return bool(is_question_or_speculation(raw) or _QUESTION_MARKERS.search(raw) or _UNCERTAIN_MARKERS.search(raw))
 
 
 def _frame_negated(key: str, match: re.Match[str]) -> bool:
@@ -3865,7 +3865,7 @@ def _asked(transcript: str) -> bool:
     as the router's server ruling already did (interrogative_not_authorized).
     """
 
-    return bool(_CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
+    return bool(is_question_or_speculation(transcript) or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
 END_CONFIRMATION_QUESTION = {
     "ko": "실험을 종료할까요?",
     "en": "Do you want to end the experiment?",
@@ -3957,7 +3957,7 @@ def _front_control_intent(transcript: str, language: str) -> CuratedControlInten
     """Pause, end-request and end commands, read before any other rule."""
 
     key = _utterance_key(transcript)
-    if not key or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())):
+    if not key or _asked(transcript):
         return None
     if _FRONT_PAUSE_COMMAND.fullmatch(key):
         return CuratedControlIntent(
@@ -3983,6 +3983,8 @@ def _front_control_intent(transcript: str, language: str) -> CuratedControlInten
 #: names are the ones the lane R evaluation set uses. F1, the emergency gate,
 #: runs in server.py before any planning and is not listed here.
 FRONT_RULES: dict[str, str] = {
+    "question_or_speculation": "a Korean question or speculative ending never "
+                               "asserts an action or consumes an open question",
     "stt_unreliable": "F2 the transcript cannot be trusted: provider quality, "
                       "a reply in another language, a word that needs repair",
     "pause": "F3 a pause word, or wanting to stop without saying 종료",
@@ -4699,7 +4701,7 @@ def note_request(transcript: str) -> tuple[str | None, str | None] | None:
     """
 
     said = " ".join(transcript.split()).strip()
-    if not said or _CONTROL_QUESTION.search(said):
+    if not said or _asked(said):
         return None
     if _NOTE_BARE.fullmatch(said):
         return None, None
@@ -5609,7 +5611,7 @@ def _spill_reading(key: str, transcript: str) -> str | None:
 
     if not _SPILL_WORD.search(key):
         return None
-    if _SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript):
+    if is_question_or_speculation(transcript) or _SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript):
         return "not_reported"
     return "reported" if _SPILL_REPORT.search(key) else None
 
@@ -7570,9 +7572,7 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
-    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS) and not _CONTROL_QUESTION.search(
-        " ".join(transcript.casefold().split())
-    ):
+    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS) and not _asked(transcript):
         return CuratedControlIntent(
             intent_kind="pause_workflow",
             action=CuratedProtocolAction.PAUSE,
@@ -17839,6 +17839,29 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        if (
+            language == "ko" and transcript_quality is None
+            and is_question_or_speculation(transcript, punctuation=False)
+            and not re.search(r"뭐|무엇|무슨|어디|언제|누가|왜|어떻게|얼마|몇", transcript)
+        ):
+            # Read before any pending-answer reader: a question about having
+            # done something is not an answer to the question already open.
+            self._last_front_rule = "question_or_speculation"
+            words = "질문이나 추측으로 들었어요. 실제로 하거나 관찰한 내용을 말씀해 주세요."
+            if self.active and re.search(r"다음|넘어|완료|끝", transcript):
+                words = _completion_question(self.fixture.steps[self.current_index].source_label)
+            if "타이머" in transcript:
+                timer = self.timer_status()
+                if timer.get("state") == "running":
+                    remaining = int(timer.get("remaining_seconds") or 0)
+                    words = f"타이머가 실행 중이에요. {remaining // 60}분 {remaining % 60}초 남았어요."
+                elif timer.get("state") == "expired":
+                    words = "타이머가 끝났어요."
+                else:
+                    words = "이 단계 타이머는 시작하지 않았어요. 시작하려면 '타이머 시작해 줘'라고 말씀해 주세요."
+            planned = self._words_plan(words, intent_kind="question_or_speculation")
+            self._replay[turn_id] = planned
+            return planned
         # Lane RA, decision (f): what the screen is told about the last reply
         # belongs to this turn now.
         self._clarify_candidates = []
@@ -18944,7 +18967,7 @@ class CuratedProtocolSession:
                     and self._pause_state != "paused"
                     and _SHORT_COMPLETION.fullmatch(command_key)
                     # "끝났어?" asks; it is not a report.
-                    and not _CONTROL_QUESTION.search(transcript)
+                    and not _asked(transcript)
                 ):
                     # Read as "끝났어" always was: a completion naming no
                     # step, asked about once below ("N단계 완료하셨나요?"),
@@ -22377,7 +22400,7 @@ class CuratedProtocolSession:
                 and timer.get("step_index") == self.current_index
             ),
             control_question=bool(
-                _CONTROL_QUESTION.search(" ".join(transcript.casefold().split()))
+                _asked(transcript)
             ),
             transcript_unreliable=transcript_quality is not None,
             router_first=bool(getattr(self, "router_first", False)),
