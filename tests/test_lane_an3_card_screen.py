@@ -127,7 +127,8 @@ assert(text.split("번호 방식이 바뀌는 경계").length===2,`the reason is
 const steps=walk(card()).filter(el=>el.tagName==="li").map(visibleText);
 assert(steps.length===2,`steps: ${steps.join(" || ")}`);
 assert(steps[0].includes("Incubate for 10 min at 37 C.")&&steps[0].includes("원문 p.1 4줄"),steps[0]);
-assert(steps[1].startsWith("3. ")&&steps[1].includes("Wash the pellet twice.")&&steps[1].includes("원문 p.2 2줄"),steps[1]);
+// Lane IA decision ⑧ (lane AN3 ②): the second piece prints no numbers, so its given number is in brackets.
+assert(steps[1].startsWith("[3] ")&&steps[1].includes("Wash the pellet twice.")&&steps[1].includes("원문 p.2 2줄"),steps[1]);
 assert(JSON.stringify(labels(card()).filter(label=>label!=="메모 남기기"))===JSON.stringify(["이어져요","아니요"]),`buttons: ${labels(card())}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)

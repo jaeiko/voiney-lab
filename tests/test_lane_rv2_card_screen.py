@@ -241,12 +241,14 @@ assert(JSON.stringify(posts()[1].body)===JSON.stringify({item_id:"ocr_page:3",ac
 serve([["/review-decisions",answer([decided(readings,"choose")],null)],["/review-draft",draft({cards:[readings],next_card:0})]]);
 await loadReviewDraft("p-1");await tick();
 const columns=walk(card()).filter(el=>el.className==="choice-card-reading").map(visibleText);
-assert(columns.length===2&&columns[0].includes("이쪽(앞 조각)")&&columns[0].includes("4. 4. Spin at 500 x g · 원문 p.2 3줄")&&columns[1].includes("저쪽(뒤 조각)")&&columns[1].includes("Spin at 500 x g for 5 min."),columns.join(" || "));
+// Lane IA decision ⑧ (lane AN3 ①): a number already at the start of the text is not said twice.
+assert(columns.length===2&&columns[0].includes("이쪽(앞 조각)")&&columns[0].includes("4. Spin at 500 x g · 원문 p.2 3줄")&&!columns[0].includes("4. 4.")&&columns[1].includes("저쪽(뒤 조각)")&&columns[1].includes("Spin at 500 x g for 5 min."),columns.join(" || "));
 await press(card(),"저쪽으로 읽기");
 assert(JSON.stringify(posts()[0].body)===JSON.stringify({item_id:"step:p1.s4",action:"choose",reading:"b",target}),JSON.stringify(posts()[0].body));
 renderReviewEditor(draft({next_card:4}));
 const steps=walk(card()).filter(el=>el.tagName==="li").map(visibleText);
-assert(steps.length===2&&steps[0].includes("12. 12. Wash twice. · 원문 p.14 3줄")&&steps[1].includes("13. Dry the pellet. · 원문 p.15 1줄"),steps.join(" || "));
+// Lane IA decision ⑧ (lane AN3 ①·②): the printed number once; a number the source does not print in brackets.
+assert(steps.length===2&&steps[0].includes("12. Wash twice. · 원문 p.14 3줄")&&!steps[0].includes("12. 12.")&&steps[1].includes("[13] Dry the pellet. · 원문 p.15 1줄"),steps.join(" || "));
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 

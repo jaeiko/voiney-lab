@@ -78,11 +78,14 @@ class StartCardMarkupTests(unittest.TestCase):
         for ident in ("protocol-start-summary-title", "protocol-start-basis", "protocol-start-outdated"):
             self.assertIn(f'id="{ident}"', head, ident)
         body = card[card.index('id="protocol-start-body"'):]
+        # Lane IA decision ③ (2026-10-19): the start button stands in the protocol screen's head, above the card.
         order = [body.index(f'id="{ident}"') for ident in (
             "protocol-start-overview", "protocol-execution-blockers", "protocol-safety-notices",
             "protocol-step-timers", "protocol-execution-notices", "protocol-start-cleared",
-            "protocol-start-repeat-checks", "protocol-start")]
+            "protocol-start-repeat-checks")]
         self.assertEqual(order, sorted(order))
+        html = INDEX.read_text(encoding="utf-8")
+        self.assertLess(html.index('<button id="protocol-start" type="button" hidden>'), begin)
 
     def test_the_start_is_a_64px_button_and_the_safety_box_is_never_folded(self) -> None:
         rule = re.search(r"\.protocol-start-summary #protocol-start\{([^}]*)\}", self.style).group(1)
