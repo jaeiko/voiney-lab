@@ -161,5 +161,23 @@ assert(document.body.dataset.view==="before",`view with no question: ${document.
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+class TurnErrorTests(unittest.TestCase):
+    """QA-13: a turn's error the server survives leaves the session on."""
+
+    def test_a_turn_error_keeps_the_session_and_another_error_still_stops(self) -> None:
+        result = run3(r"""
+await boot(base());
+go("#/experiment");pickProtocolFromList("p-1");await settle(8);
+let closed=0;closeAudio=async()=>{closed+=1;};
+const ws=running();
+await deliver(ws,{type:"error",turn_id:3,generation:2,message:"voice turn processing failed"});await settle(2);
+assert(sessionActive===true&&closed===0&&visibleState!=="ERROR",`a turn error ended the session: active ${sessionActive} closed ${closed} state ${visibleState}`);
+assert(String(turnNode(3).querySelector(".error")?.textContent||"").length>0,"the turn does not say it failed");
+await deliver(ws,{type:"error",message:"session is not active"});await settle(2);
+assert(sessionActive===false&&visibleState==="ERROR","an error with no turn did not stop");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 if __name__ == "__main__":
     unittest.main()
