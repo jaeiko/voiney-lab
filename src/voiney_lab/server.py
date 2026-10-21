@@ -2980,6 +2980,7 @@ def log_protocol_catalog_runtime_configuration()->None:
             catalog,store=_open_protocol_catalog()
             try:
                 catalog.prepare_source_metadata()
+                catalog.warm_analysis_records()
                 catalog.recover_interrupted_ocr(frozenset(
                     protocol_id for protocol_id,task in _PROTOCOL_OCR_TASKS.items()
                     if not task.done()))

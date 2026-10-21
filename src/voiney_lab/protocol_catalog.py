@@ -14,9 +14,11 @@ import os
 import queue
 import re
 import secrets
+import threading
 import time
 import unicodedata
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from collections import OrderedDict
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -1528,6 +1530,13 @@ def _safe_evidence_failure(
     return exc.diagnostic.privacy_safe_dict()
 
 
+_ANALYSIS_RECORDS_LOCK = threading.Lock()
+_ANALYSIS_RECORDS: OrderedDict[tuple[str, int, int, str], tuple[AnalysisRevisionRecord, int]] = OrderedDict()
+_ANALYSIS_RECORD_CACHE_ENTRIES = 128
+_ANALYSIS_RECORD_CACHE_BYTES = 16 * 1024 * 1024
+_analysis_record_cache_bytes = 0
+
+
 class ProtocolCatalog:
     """Catalog facade over immutable source and analysis records.
 
@@ -1583,13 +1592,88 @@ class ProtocolCatalog:
         """The latest analysis the analyser made; a registered review version
         (lane RV, decision c) is a person's, read by ``_review_versions``."""
 
-        analyses = [
-            analysis for analysis in self.store.list_analysis_revisions(
-                revision.experiment_id, revision.revision_number
-            )
-            if not analysis.analysis_id.startswith(REVIEW_VERSION_ANALYSIS_PREFIX)
-        ]
-        return analyses[-1] if analyses else None
+        # Find the immutable reference first; listing does not need to decode
+        # every historical analysis just to choose the most recent one.
+        row = self.store._connection.execute(
+            """SELECT analysis_revision_number FROM analysis_revisions
+            WHERE experiment_id=? AND protocol_revision_number=?
+              AND substr(analysis_id,1,?) != ?
+            ORDER BY analysis_revision_number DESC LIMIT 1""",
+            (revision.experiment_id, revision.revision_number,
+             len(REVIEW_VERSION_ANALYSIS_PREFIX), REVIEW_VERSION_ANALYSIS_PREFIX),
+        ).fetchone()
+        return self._analysis_record(revision, row["analysis_revision_number"]) if row is not None else None
+
+    def _analysis_record(
+        self, revision: ProtocolRevisionRecord, analysis_revision_number: int,
+    ) -> AnalysisRevisionRecord:
+        """Reuse only bytes the store already decoded and verified.
+
+        The source, revision, complete envelope and actual payload bytes form
+        the key. Reading them again detects even out-of-band corruption after
+        a cache hit. A miss always uses the store's sole decoder/validator;
+        this cache owns no execution verdict. The savepoint keeps those two
+        reads on one SQLite snapshot without committing a caller's work.
+        """
+        global _analysis_record_cache_bytes
+        connection = self.store._connection
+        connection.execute("SAVEPOINT catalog_analysis_read")
+        try:
+            row = connection.execute(
+                """SELECT ar.*,ap.payload_json FROM analysis_revisions ar
+                JOIN analysis_payloads ap ON ap.payload_sha256=ar.payload_sha256
+                WHERE ar.experiment_id=? AND ar.protocol_revision_number=?
+                  AND ar.analysis_revision_number=?""",
+                (revision.experiment_id, revision.revision_number, analysis_revision_number),
+            ).fetchone()
+            if row is None:
+                return self.store.get_analysis_revision(
+                    revision.experiment_id, revision.revision_number, analysis_revision_number)
+            content = json.dumps(tuple(row), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            content_hash = hashlib.sha256(content).hexdigest()
+            key = (revision.pdf_checksum, revision.revision_number, analysis_revision_number, content_hash)
+            with _ANALYSIS_RECORDS_LOCK:
+                cached = _ANALYSIS_RECORDS.get(key)
+                if cached is not None:
+                    _ANALYSIS_RECORDS.move_to_end(key)
+                    return cached[0]
+            record = self.store.get_analysis_revision(
+                revision.experiment_id, revision.revision_number, analysis_revision_number)
+            # Retired coverage payloads can contain mutable dictionaries.
+            # Keep their original fresh-read behavior, rather than sharing
+            # one caller's mutable legacy object with another request.
+            immutable = not record.page_coverage
+            try:
+                hash(record.protocol)
+                hash(record.readiness)
+            except TypeError:
+                immutable = False
+            # Bound retained serialized input as well as the number of
+            # records. Oversized records are still verified and returned.
+            if immutable and len(content) <= _ANALYSIS_RECORD_CACHE_BYTES:
+                with _ANALYSIS_RECORDS_LOCK:
+                    previous = _ANALYSIS_RECORDS.pop(key, None)
+                    if previous is not None:
+                        _analysis_record_cache_bytes -= previous[1]
+                    _ANALYSIS_RECORDS[key] = (record, len(content))
+                    _analysis_record_cache_bytes += len(content)
+                    while (
+                        len(_ANALYSIS_RECORDS) > _ANALYSIS_RECORD_CACHE_ENTRIES
+                        or _analysis_record_cache_bytes > _ANALYSIS_RECORD_CACHE_BYTES
+                    ):
+                        _, (_, size) = _ANALYSIS_RECORDS.popitem(last=False)
+                        _analysis_record_cache_bytes -= size
+            return record
+        finally:
+            connection.execute("RELEASE catalog_analysis_read")
+
+    def _review_version_events(self, revision: ProtocolRevisionRecord) -> tuple[Any, ...]:
+        return tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.event_type == _REVIEW_VERSION_EVENT
+            and event.protocol_revision_number == revision.revision_number
+            and event.analysis_revision_number is not None
+        )
 
     def _review_versions(
         self, revision: ProtocolRevisionRecord,
@@ -1597,17 +1681,8 @@ class ProtocolCatalog:
         """Every registered review version of the revision, v1 first (lane RV, c)."""
 
         versions = []
-        for event in self.store.list_events(revision.experiment_id):
-            if (
-                event.event_type != _REVIEW_VERSION_EVENT
-                or event.protocol_revision_number != revision.revision_number
-                or event.analysis_revision_number is None
-            ):
-                continue
-            versions.append((event, self.store.get_analysis_revision(
-                revision.experiment_id, revision.revision_number,
-                event.analysis_revision_number,
-            )))
+        for event in self._review_version_events(revision):
+            versions.append((event, self._analysis_record(revision, event.analysis_revision_number)))
         return versions
 
     def _reanalysis_requested(self, revision: ProtocolRevisionRecord) -> bool:
@@ -2449,12 +2524,13 @@ class ProtocolCatalog:
             analysis.analysis_revision_number if analysis else None,
         )
         shown = analysis
-        versions = self._review_versions(revision)
+        versions = self._review_version_events(revision)
         if versions:
             # Lane RV, decision c: the latest registered review version runs,
             # whatever the analyser made after it; it was registered only
             # without an execution blocker.
-            event, shown = versions[-1]
+            event = versions[-1]
+            shown = self._analysis_record(revision, event.analysis_revision_number)
             revision_id = str(event.payload["revision_id"])
             readiness = shown.readiness_status
             blocker_codes = ()
@@ -2490,7 +2566,7 @@ class ProtocolCatalog:
                 if pending is not None else None),
             review_versions=tuple(
                 _review_version_summary(event, self.store.list_events(revision.experiment_id))
-                for event, _ in versions),
+                for event in versions),
         )
 
     def _review_pending_event(self, revision: ProtocolRevisionRecord) -> Any | None:
@@ -2643,6 +2719,19 @@ class ProtocolCatalog:
                 revision.revision_number, _OCR_FAILED_EVENT,
                 {"ocr_id": ocr_id, "status": "failed", "failure_code": "protocol_ocr_interrupted"},
             )
+
+    def warm_analysis_records(self) -> None:
+        """Prepare immutable records off-loop before the first list request.
+
+        No entry or execution decision is cached. Visibility is still applied
+        before constructing a request's entries, against current ledger data.
+        """
+        for experiment in self.store.list_experiments():
+            revision = self._latest_protocol_revision(experiment.experiment_id)
+            self._latest_analysis(revision)
+            versions = self._review_version_events(revision)
+            if versions:
+                self._analysis_record(revision, versions[-1].analysis_revision_number)
 
     def list_entries(
         self, protocol_ids: frozenset[str] | None = None,
