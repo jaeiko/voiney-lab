@@ -159,6 +159,8 @@
 
 ## F14. 연결 끊김
 
+계정 모드에서는 로그아웃·비밀번호 변경·계정 끄기·계정 삭제 시 그 계정의 열린 음성 연결을 모두 닫는다. 다른 계정의 연결은 계속된다. 계정 삭제는 연결의 작업이 끝난 뒤 진행한다. 만료나 운영자 도구의 세션 회수도 주기적으로 확인한다.
+
 - **무엇**: 화면은 1초마다 서버와 신호를 주고받아 **3초 안에** 끊김을 알아챈다. 빨간 띠와 소리·진동으로 알리고, 화면을 읽기 전용으로 바꾸고, 마이크를 멈춘다. 끊긴 동안 화면은 서버 시각으로 단계 타이머를 이어 세고 1분 전·끝 알림을 낸다. 1·2·4·8초, 그 뒤 15초마다 다시 이어 **같은 실험**을 계속하고, 서버 상태로 화면을 바꾼다. 놓친 타이머 알림을 전하고 끊긴 시간을 내용 없는 사건으로 남긴다.
 - **어디**: `static/connection.js` (`SILENT_LOST_MS`, `resumable()`); `server.py` `_send_heartbeats`, `_restore_lost_connection`, `_restore_standing_timer`, `_reconnect_timer_notices`, `_record_connection_restored`.
 - **시험**: `tests/test_lane_net_reconnect.py`, `tests/test_lane_net_screen_timer.py`.

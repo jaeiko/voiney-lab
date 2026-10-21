@@ -595,6 +595,40 @@ def _workspace_settings()->WorkspaceSettings:
 #: The account behind this request, when the door is accounts; None otherwise.
 _REQUEST_ACCOUNT:contextvars.ContextVar[Account|None]=contextvars.ContextVar(
     "voice_workflow_request_account",default=None)
+_ACCOUNT_VOICE_CONNECTIONS:dict[str,dict[asyncio.Task,WebSocket]]={}
+
+
+async def _close_account_voice_connections(account_id:str)->None:
+    """Finish voice tasks before account erasure can remove their stores."""
+
+    connections=list(_ACCOUNT_VOICE_CONNECTIONS.pop(account_id,{}).items())
+    current=asyncio.current_task()
+    pending=[task for task,_ in connections if task is not current]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending,return_exceptions=True)
+    for _,socket in connections:
+        try:
+            await socket.close(code=1008,reason="authentication required")
+        except (RuntimeError,WebSocketDisconnect):
+            pass  # Already disconnected.
+
+
+async def _watch_account_voice_session(token:str,task:asyncio.Task,websocket:WebSocket)->None:
+    """Also notice expiry and account changes made by an operator's tool."""
+
+    while True:
+        await asyncio.sleep(1)
+        try:
+            await asyncio.to_thread(_account_for_cookie,token)
+        except Exception:
+            try:
+                await websocket.close(code=1008,reason="authentication required")
+            except (RuntimeError,WebSocketDisconnect):
+                pass
+            task.cancel()
+            return
 #: /api paths that answer without a session: the session question itself,
 #: logging in, joining, reading an invite, and the admin metrics (own token).
 _ACCOUNT_OPEN_PATHS=frozenset({
@@ -3186,6 +3220,9 @@ async def post_auth_logout(request:Request)->Response:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+    account=_REQUEST_ACCOUNT.get()
+    if account is not None:
+        await _close_account_voice_connections(account.account_id)
     response=JSONResponse(status_code=200,content={"signed_out":True})
     _clear_session_cookie(response,request)
     return response
@@ -3210,6 +3247,7 @@ async def post_auth_password(request:Request,body:dict[str,Any]=Body(...))->dict
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
     log.info("auth.password_changed account_id=%s",account.account_id)
+    await _close_account_voice_connections(account.account_id)
     return {"changed":True}
 
 
@@ -3261,6 +3299,8 @@ async def post_auth_account_disabled(
         raise _workspace_http_error(exc) from exc
     log.info("auth.account_disabled account_id=%s disabled=%s by=%s",
              account_id,changed.disabled,account.account_id)
+    if changed.disabled:
+        await _close_account_voice_connections(account_id)
     return {"account":changed.public_dict()}
 
 
@@ -3335,6 +3375,7 @@ async def post_auth_delete_account(request:Request,body:dict[str,Any]=Body(...))
     except Exception as exc:
         log.info("auth.account_delete_refused reason=%s",getattr(exc,"code",type(exc).__name__))
         raise _workspace_http_error(exc) from exc
+    await _close_account_voice_connections(account.account_id)
     try:
         results=await asyncio.to_thread(
             accounts_module.erase_account_data,locations,account.account_id)
@@ -12544,6 +12585,21 @@ async def voice_socket(websocket:WebSocket):
                                         "persona":"professor",
                                     },
                                     research_capabilities=research_capabilities))
+    account_watch=None
+    voice_task=asyncio.current_task()
+    voice_account=_REQUEST_ACCOUNT.get()
+    if auth.accounts and voice_account is not None and voice_task is not None:
+        # Recheck after setup awaits, before registering a connection.
+        try:
+            _account_for_cookie(token)
+        except Exception:
+            timer_notices.cancel()
+            heartbeats.cancel()
+            await asyncio.gather(timer_notices,heartbeats,return_exceptions=True)
+            await websocket.close(code=1008,reason="authentication required")
+            return
+        _ACCOUNT_VOICE_CONNECTIONS.setdefault(voice_account.account_id,{})[voice_task]=websocket
+        account_watch=asyncio.create_task(_watch_account_voice_session(token,voice_task,websocket))
     try:
         while True:
             message=await websocket.receive()
@@ -13515,6 +13571,14 @@ async def voice_socket(websocket:WebSocket):
                 type(send_exc).__name__,
             )
     finally:
+        if voice_account is not None and voice_task is not None:
+            connections=_ACCOUNT_VOICE_CONNECTIONS.get(voice_account.account_id,{})
+            connections.pop(voice_task,None)
+            if not connections:
+                _ACCOUNT_VOICE_CONNECTIONS.pop(voice_account.account_id,None)
+        if account_watch is not None:
+            account_watch.cancel()
+            await asyncio.gather(account_watch,return_exceptions=True)
         if task and not task.done():
             task.cancel()
             try: await task
@@ -13540,6 +13604,8 @@ async def voice_socket(websocket:WebSocket):
         session.stop()
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
+        if account_context_token is not None:
+            _REQUEST_ACCOUNT.reset(account_context_token)
 
 # Lane UI2 decision 5 (2026-10-13): the web app manifest is served under its
 # registered type whatever the host's own type table says, so a browser
