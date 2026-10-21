@@ -207,11 +207,15 @@ class AskedAgainAndKeptTests(_RequoteCase):
         # One request for both items, with both pages.
         (request,) = model.requests
         self.assertEqual([page["source_page_number"] for page in request["pages"]], [1, 2])
+        # Lane AN5, decision 3: the cards are shown before the re-ask; the one
+        # it settled stays in its place, closed, and the record it closed it
+        # with holds the settlement.
         cards = self.catalog.review_draft(self.protocol_id)["cards"]
-        self.assertEqual([card["item_id"] for card in cards], ["step:s4"])
-        (pending,) = self.events("protocol_analysis_review_pending")
+        self.assertEqual([(card["item_id"], card["decided"]) for card in cards],
+                         [("step:s2", True), ("step:s4", False)])
+        (closing,) = self.events("protocol_analysis_review_cards_closed")
         self.assertEqual(
-            [entry["item"] for entry in pending["auto_resolved"]
+            [entry["item"] for entry in closing["auto_resolved"]
              if entry["reason"] == "evidence_requoted"], ["step:s2"])
         (event,) = self.events("protocol_analysis_evidence_requote")
         self.assertEqual(event["by_outcome"], {"requoted": 1, "model_found_nothing": 1})

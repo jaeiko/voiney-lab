@@ -1,5 +1,8 @@
 # Coding Rules & Engineering Standards
 
+Revised 2026-10-20 (lane DOC4). The invariant rules are in `AGENTS.md`; this file
+is how code is written here.
+
 ## 1. Prime Coding Directives
 
 1. **Preserve Existing Behavior & Test Contracts**:
@@ -14,6 +17,7 @@
 4. **Spoken Voice Text Cleanliness**:
    - Voice agent spoken text outputs must NEVER contain Markdown, asterisks, hash headers, bullet points, HTML tags, URLs, or code blocks.
    - Spoken text must be concise (1-3 sentences), front-loaded with the key answer/instruction.
+   - New screen and voice wording follows `docs/VOICE_AND_TONE.md` (해요체, one meaning per sentence, no internal words — see `docs/GLOSSARY.md`). Some server sentences are parsed by code and pinned by tests: change the sentence and its test together.
 
 ---
 
@@ -41,12 +45,13 @@
 ## 3. Database & File Persistence Rules
 
 1. **SQLite Practices**:
-   - Always enable `PRAGMA foreign_keys = ON`.
+   - Enable `PRAGMA foreign_keys = ON` (the protocol, workspace, report, account and safety-catalog stores do).
+   - Keep append-only tables append-only: add events, never update or delete them (`AGENTS.md`, rule 7).
    - Use parameterized queries (`?`) for all SQL operations to prevent SQL injection.
    - Ensure tables have `schema_version` verification on startup.
    - Use atomic transactions for multi-row state transitions.
 2. **File Operations**:
-   - When writing JSON status files or exports, write to temporary files first (`.filename.tmp`) and atomically rename (`os.replace`) to prevent partial reads by concurrent processes.
+   - Publish files atomically so no reader sees a partial file: write a temporary file in the same folder, flush it, then link or rename it into place (protocol source bytes: `experiment_protocol_files.ProtocolFileStore`).
    - Store all runtime files in configured directories (`data/runtime/` and the configured data paths), never hardcoding paths outside the project root.
 
 ---
@@ -58,5 +63,6 @@
 2. **Zero Inferred UI State**:
    - The UI must render workflow state exclusively from server-emitted canonical state events (e.g. `turn.state`, `experiment.report.state`), never guessing state from assistant speech transcripts.
 3. **Accessibility & Responsive Design**:
-   - The Cockpit dashboard must support desktop wide screens (grid layout) and tablet/mobile screens with zero horizontal overflow.
+   - The screen (`static/index.html`, five tabs and sheets) must work at desktop and phone widths with zero horizontal overflow.
+   - Insert text with `textContent`, never `innerHTML` with server or model text.
    - Colors must meet WCAG AA contrast standards, with high-visibility indicators for timer countdowns and emergency alerts.

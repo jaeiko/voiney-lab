@@ -1372,9 +1372,11 @@ temporary copy or open the file read-only. A write that fails is logged as
 `pilot.metrics.failed` and dropped.
 
 Deleting pilot data: the whole-folder path of `scripts/pilot_data_delete.py`
-deletes the file with the rest of the workspace folder. The `--account NAME`
-path does not read or change `pilot_metrics.sqlite` (that account's metric
-rows stay until the folder is deleted).
+deletes the file with the rest of the workspace folder. Until lane FX5
+(2026-10-20) the `--account NAME` path did not read or change
+`pilot_metrics.sqlite` (that account's metric rows stayed until the folder
+was deleted); since lane FX5 it lists, confirms and deletes them (see "Lane
+FX5" below).
 
 ### Reading older data
 
@@ -1386,6 +1388,72 @@ time before it are empty, not wrong. Nothing is filled in after the fact.
 
 Code from before lane LOG does not open the file; it stays in the folder,
 unread, and does no harm. Delete it by hand if it should go.
+
+## Lane FX5 (2026-10-20): an account's metrics deleted with it, an account that deletes itself, no credential kept
+
+No schema change (workspace schema 11, accounts schema 1 stay) and no stored
+row rewritten by the upgrade itself.
+
+- **Deleting one account.** `scripts/pilot_data_delete.py --account NAME`
+  now also lists, binds into its confirmation word and deletes that
+  account's rows in `pilot_metrics.sqlite` (`pilot_turns`, `pilot_marks`,
+  `pilot_protocol_events`, `pilot_feedback`, the rating's memo included; the
+  rows are found by `account_id` = the account's principal id). It also
+  rewrites, to `(삭제된 계정)`, the account's name where a record the lab
+  shares carries it: `reviewer_name` and `decided_by` of review decisions
+  and review versions (the catalog's `protocol_events` payloads, the
+  append-only update trigger lifted and put back in one transaction) and
+  the `name` of a PI confirmation on a review version (catalog) or on
+  someone else's notebook (`experiment_report_events`, `pi_confirmed`).
+  Only those name fields are rewritten; words a person typed are not. The
+  rewritten payloads are compact canonical JSON (sorted keys, no spaces).
+  Every deleting connection sets `PRAGMA secure_delete=ON`. An identity row
+  (`principals`) that something still points at -- a shared protocol, or the
+  lab's `organization_settings.updated_by_principal_id` -- is blanked, not
+  deleted (`display_name='(삭제된 계정)'`, hashed `subject`).
+- **One scope, two callers.** The inventory and the deletion moved from the
+  tool into `voiney_lab.accounts` (`AccountDataLocations`,
+  `account_data_inventory`, `delete_account_data`, `erase_account_data`,
+  `write_deletion_log`); the tool keeps the preview text, the confirmation
+  word, the open-file check and its log, and calls them. A deletion record
+  (`deletion_log.jsonl`, beside the pilot folder's other records) gains
+  `"via"`: `"tool"` or `"app"`; older lines have none. A record's overall
+  `result` is `deleted`, `partial` or (new) `failed` when no store deleted.
+- **`POST /api/auth/delete-account`** `{"password"}`: accounts mode,
+  signed in. `AccountStore.switch_off_for_deletion` checks the password as a
+  login is checked (the failure counts toward the lock), refuses the lab's
+  last active administrator (`409 last_admin` with `message_ko`) and switches
+  the account off with its sessions in one `BEGIN IMMEDIATE`; the server then
+  calls `erase_account_data` and appends the record. A failure leaves the
+  account switched off (`500 account_delete_incomplete`); the tool finishes it.
+- **Credentials.** `login_attempts.name_key` holds
+  `sha256("login-attempt\0" + name key)[:32]` instead of the typed name, so a
+  token or password pasted into the name box is not kept; attempts past the
+  15-minute window are deleted at the next login check. The uvicorn
+  access/WebSocket log filter also masks the invite token in
+  `/api/auth/invites/<token>` (`mask_path_secrets`), and `/api/auth/*`
+  validation errors (422) no longer repeat the rejected `input`.
+- The admin metrics page (`static/admin-metrics.html`) no longer refuses to
+  ask the server while its token box is empty; it shows the box after a 401
+  or 403.
+
+### Reading older data
+
+`login_attempts` rows written before this version are keyed by the plain
+name; they match no digest, so they count for nothing and are removed at the
+next login check (they were at most 15 minutes old to count anyway). Earlier
+deletion records lack `"via"`. Metrics rows of an account deleted by the
+older `--account` path are not recoverable and not orphaned (the folder
+deletion removes them); a metrics row written for an account id that no
+longer exists (a turn on a voice connection that was already open when the
+account was deleted) stays until the folder is deleted.
+
+### Going back
+
+Code from before this version does not delete metrics or rename shared
+names, and finds failed logins by the plain name: the lock does not see
+attempts made under digests (they are gone within 15 minutes). The route
+does not exist there. Nothing else reads the new record key.
 
 ## Lane DOC3 (2026-10-14): the xAI web reference search deleted
 
@@ -1565,3 +1633,77 @@ written; nothing waits on them and nothing is changed by them.
   starts).
 
 Going back: code from before this version ignores both event types.
+
+## Lane AN5 (2026-10-20): analysis finish -- one reading's mixed numbering, page-margin furniture, the re-ask after the cards
+
+No schema change and no stored row rewritten; protocol store
+(`protocol_workspace.sqlite`) only. Human decisions of 2026-10-20 (1-5).
+
+- Decision 1: an analysis read at once (or one piece of a long document)
+  may hold numbered and unnumbered steps, as the source prints them. Its
+  review-pending payload's `flags` then hold lane AN3's seam items
+  `{"item_id": "seam:<step>+<step>", "reason": "numbering_seam",
+  "reason_code": "step_labelling_differs", ...}` for a single reading too
+  (step ids without the `p<n>.` prefix); its review versions hold steps of
+  both kinds, as AN3's joined documents' do. Nothing else is recorded.
+- Decision 2: a quote that runs from one page's end onto the next may now be
+  accepted past a page-margin line (a printed page number with the
+  document's page offset, "200.8-24"; a line printed nearly alike in the
+  outermost lines of another page; the copyright or licence footer of page
+  1 or 2). It is stored in lane PA's form -- `source_excerpt` on its page,
+  `continued_on_page_number` / `continued_excerpt` on the next -- each piece
+  its own page's characters, the margin line in neither.
+- Decision 3: the re-ask of lane AN4 runs after the analysis is stored.
+  New append-only events:
+  - `protocol_analysis_evidence_requote_started`: `{"status": "running",
+    "analysis_id", "review_pending_event": <event id>, "time_limit_seconds":
+    300}`, written right after the review-pending event; the summary's line
+    ends " · 원문 위치를 다시 찾는 중" until the requote event below names the
+    same `analysis_id` (or 420 s have passed: a server stopped under it).
+  - `protocol_analysis_evidence_requote` (lane AN4's) gains
+    `"review_pending_event"`, `"closed": "some" | "all" | "superseded"`
+    when it closed cards (or found the target registered or read again
+    meanwhile) and `"answered_by_person": [item ids]`; outcomes gain
+    `answered_by_person`, `ocr_values_unsettled`; a call not back within the
+    limit is `{"status": "failed", "failure_code": "requote_time_limit"}`.
+    An analysis with more items than its cards may be is still asked about
+    first, as lane AN4 did (no started event then).
+  - `protocol_analysis_review_cards_closed`: `{"review_pending_event",
+    "analysis_id", "closed": [{"item", "field", "page", "reason":
+    "evidence_requoted", "reason_ko": "원문 위치를 다시 찾아 확인했어요"}]}`
+    plus the record the review reads from then on, in the review-pending
+    payload's own keys (`flags`, `needs_review_count`, `protocol`,
+    `readiness`, `source_pages`, `auto_resolved`, ...). The review-pending
+    event itself is not changed. `review_draft()` keeps each closed item's
+    card in its place as `{"type": "requoted", "decided": true, "choices":
+    [], "closed_ko": "원문 위치를 다시 찾아 확인했어요", "decision": {"action":
+    "requoted", ...}}` (a person's own decision on it shows instead); the
+    item carries `"closed": {"by": "server", ...}`. The protocol summary's
+    `review_pending` gains `requoting`/`requoting_ko` while it runs and
+    `closed_by_requote` after.
+  - When the re-ask closes every card and nobody decided or wrote a memo
+    on any, the analysis is stored as passed (`protocol_analysis_ready`,
+    with the `evidence_requoted` entries in `auto_resolved`), as lane AN4
+    stored it.
+- Decision 5: each send of the analysis and translation roles writes one
+  log line `provider.call provider=… role=… model=… status=… seconds=…
+  output_tokens=… tokens_per_second=… finish=…` (no text). Nothing stored.
+
+### Reading older data
+
+Nothing older is read differently: an analysis stored before has no
+started or closed event, and its cards are as they were. Checked on a copy
+of `data/runtime/candidate-a-live-acceptance` (sqlite through the backup
+API, objects hard-linked; the original only read): all seven protocols
+list and review and the three that run load (`pdf-1-analysis-10` for the
+in-gel fixture), the same as the code before this version.
+
+### Going back
+
+Code from before this version ignores the started and closed events: a
+review-pending analysis whose cards the re-ask closed shows those cards
+open again (as the analysis first read them); answering them registers as
+before. A single reading's seam items and mixed review versions read as
+lane AN3's do. A quote accepted past a margin line stays valid (each piece
+is its page's own characters); only a step timer whose sentence runs past
+such a page end is refused by the older timer check.

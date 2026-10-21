@@ -10,8 +10,11 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 | `dev` | 매일 작업을 합치는 곳 | 기능 브랜치는 여기서 따고, 여기로 합친다 |
 | `feature/<이름>-<작업>` | 기능 하나 | 예: `feature/jaejun-keyterms`, `feature/sujin-mobile-step` |
 | `fix/<이름>-<내용>` | 버그 수정 하나 | 예: `fix/sujin-ci-missing-pdf` |
+| `refactor/<이름>-<내용>` | 동작을 바꾸지 않는 정리 | 예: `refactor/jaejun-comment-cleanup` |
+| `docs/<이름>-<내용>` | 문서만 | 코드를 바꾸지 않는다 |
 
 - 브랜치 하나에는 작업 하나만 담는다.
+- CI(`.github/workflows/ci.yml`)는 `main`·`dev`·`feature/**`·`fix/**`·`refactor/**` 로의 push 와 `dev`·`main` 으로의 PR 에서 돈다. `docs/**` 브랜치는 push 로는 돌지 않고 PR 을 열면 돈다.
 - 합친 브랜치는 바로 삭제한다. 삭제는 사람이 한다.
 
 ## 작업 흐름
@@ -33,16 +36,10 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 
 ## PR 전 확인
 
-아래 명령이 통과해야 한다. 플래그 세 개를 빼면 `.env` 영향으로 무관한 실패 28건이 나온다.
+`AGENTS.md` 의 "Verification" 명령이 통과해야 한다(플래그를 붙인 `python -m pytest -q`, `scripts/replay_turns.py`, `compileall`, `git diff --check`). 플래그는 셸에 남은 설정 값이 결과를 바꾸지 않게 끈다.
 
-```bash
-VOINEY_LAB_MOSS_ENABLED=false \
-VOINEY_LAB_WORKSPACE_ENABLED=false \
-VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
-python -m pytest -q
-```
-
-- PR 설명에 통과 수를 적고, 라이선스 PDF 가 있는 환경(조건 A)인지 없는 환경(조건 B)인지 밝힌다.
+- PR 설명에 통과 수를 적고, 라이선스 PDF 가 있는 환경(조건 A)인지 없는 환경(조건 B)인지 밝힌다. 두 조건의 뜻은 `AGENTS.md` 에 있다.
+- 문서를 고쳤으면 `tests/test_docs_consistency.py` 가 링크·설정 이름·경로·스크립트 옵션을 확인한다.
 - 통과 수가 기준보다 줄었으면 PR 을 열지 않는다.
 
 ## 파일 담당

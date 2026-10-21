@@ -1,210 +1,137 @@
-# User Guide — Controlled Pilot
+# 사용 안내 — 연구자용
 
-Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen),
-2026-10-10 (lane CL: what the 10/10 voice test used) and 2026-10-14 (lane
-DOC3: long documents, re-analysis, voice level and noisy mode, phone use)
+VoineyLab 은 올린 프로토콜을 말로 안내하는 실험 도우미다. 장갑을 낀 채 화면을 만지지 않고 단계·타이머·기록을 따라간다.
+**MVP 시제품 — 현장 미검증**이다. 값과 안전 주의는 원문(또는 내가 확인한 값)에서만 온다. 연구실의 공식 기록 시스템(ELN·LIMS)을 대신하지 않는다.
 
-VoineyLab is an MVP prototype, not field-validated.
+화면은 다섯 탭이다: **홈 · 프로토콜 · 실험 · 기록 · 설정**. 휴대폰에서는 아래, 넓은 화면에서는 왼쪽에 있다. 실험하는 동안과 로그인 전에는 탭이 숨는다.
+이 문서는 2026-10-20 화면(`src/voiney_lab/static/index.html`)을 기준으로 썼다. 기능의 자세한 동작은 `docs/FEATURES.md`.
 
-This guide covers the experimenter's screen, the only one since 2026-10-08.
-It does not replace a laboratory SOP, safety training, or emergency
-procedure. Stop and follow facility policy whenever the protocol and the
-physical situation differ.
+## 0. 처음 열 때
 
-## Experimenter
+- **로그인**: 연구실이 계정을 쓰면 "로그인" 화면이 먼저 나온다. 연구실 담당에게 받은 이름과 비밀번호를 넣는다.
+  처음이면 받은 **초대 링크**를 연다 → "가입하기"에서 이름(2–40자)과 비밀번호(8자 이상)를 정하고 **가입하고 시작**.
+  - 5번 틀리면 15분 동안 막힌다("여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.").
+  - 초대 링크가 만료됐거나 이미 쓰였으면 담당에게 새 링크를 받는다.
+- **첫 설정**: 로그인 직후 한 번, 마이크·내 목소리·안내 목소리를 고르는 시트가 뜬다. "다 됐어요"로 닫고, 나중에 설정 탭에서 바꿀 수 있다.
+- 마이크는 **https 주소(또는 내 컴퓨터의 localhost)** 에서만 켜진다. "이 브라우저에서는 마이크를 쓸 수 없어요. HTTPS 주소로 열어 주세요."가 보이면 주소를 확인한다.
 
-### Upload a protocol
+## 1. 홈
 
-1. Upload the protocol PDF. The server reads it, runs OCR by itself for pages
-   without a text layer, and analyses it. Nothing is asked of you until the
-   analysis is done.
-2. When the analysis is in, the start screen ("시작 전 확인 · 분석 결과
-   요약") shows the step count, every safety statement the source declares
-   beside its Korean, "실행을 막는 사유" with what to do, and "시작 전 알림"
-   for things the guidance cannot handle yet (parallel work, a recurring
-   step, a reusable subprocedure -- those are said once at their step and
-   the source is read).
-3. A blocked analysis (an unreadable page, a failed source-evidence check, no
-   executable step, a safety-critical conflict) has to be fixed at the
-   source. Do not work around the block.
+"프로토콜을 확인하고, 손을 쓰지 않고 진행하세요." 아래에 큰 카드가 있다.
 
-What the upload box takes: a **PDF**, a Word file (.docx) or a photo (JPG,
-PNG, HEIC); an Excel reagent table (.xlsx) is attached to the picked protocol
-in its box and can be opened there (lane UI3) -- see `SOURCE_FORMATS.md`. A
-reagent table is kept beside the protocol and is not used by the analysis. A Word file needs
-LibreOffice on the server (without it the server answers
-`docx_conversion_unavailable`); a HEIC photo needs an optional package
-(`heic_support_unavailable`; on an iPhone, "Settings → Camera → Formats → Most
-Compatible" takes JPEG instead). A photo is read by OCR; a number read from
-handwriting is not trusted until a person checks it against the picture.
+- **이어서 하기** — 가장 최근에 하던 실험으로 돌아간다(시작 마법사의 마지막 단계로).
+- **새 실험 시작** — 마이크·목소리·프로토콜·안전 주의를 한 화면씩 확인하고 시작한다(3절 "시작 마법사").
+- **확인할 프로토콜 n개** — 확인 카드가 남은 프로토콜이 있을 때.
+- **새 프로토콜 올리기** — 프로토콜 탭으로.
+- 아직 프로토콜이 없으면 "먼저 프로토콜을 올려 주세요" 한 장만 보인다. 실험 중이면 "실험 중 · 돌아가기".
+- 아래 띠는 말해 볼 수 있는 예시다: "프로토콜을 시작해 줘.", "현재 단계를 알려 줘.", "다시 말해 줘.", "AMBIC이 뭐야?"
 
-A long document: the server reads a document too long for one analysis call
-in pieces of 15 pages, joins them and checks the whole again, up to 400 pages.
-The progress line says "긴 문서를 조각 … 로 나눠 분석 중입니다". If any piece
-fails, the whole analysis fails and the line says which pages ("일부 조각 분석
-실패 · n–m쪽"); nothing starts on a partly analysed document. In the lane AN
-measurement of 2026-10-13 all three documents over 60 pages (88, 197 and 315)
-ended that way, so expect a long document to need a retry or a shorter
-source. Extracting the text of such a document can take two minutes or more.
+## 2. 프로토콜
 
-Analyse again: a finished analysis can be analysed afresh with **다시 분석**.
-Until the new one passes, the experiment can still start on the current one;
-"다시 분석 통과 · 다음 실험부터 새 분석으로 실행합니다" says when the new one
-is in. An analysis made before the analyser was improved is marked "분석기 개선
-전 분석 · 다시 분석 권장". Pressing the button again while an analysis runs
-does not start a second one ("이미 분석 중").
+### 올리기
+- **원문 파일 선택** — PDF, Word(.docx), 사진(JPG·PNG·HEIC). Word·사진은 서버가 PDF 로 바꿔 같은 방법으로 분석한다. 같은 파일은 다시 등록되지 않는다.
+  - 서버에 Word 변환 프로그램이 없으면 Word 만 거절된다. HEIC 를 받지 않는 서버면 안내가 보인다.
+  - Google Drive 링크로 가져오기는 서버에는 있지만 **화면 단추는 아직 없다**.
+- 올리면 "처리 중" 목록에 들어가고, 글자를 읽을 수 없는 쪽은 자동으로 OCR 한 뒤 분석한다. 따로 누를 것이 없다.
 
-### Review an analysis
+### 목록
+- 열: 이름 · 상태 · 단계 · 올린 날짜. 상태 예: "분석 통과", "분석 중", "분석 실패", "검토 대기 · 확인 필요 n", "검토본 vN".
+- 위에 "프로토콜 n개 · 실행 가능 m개".
 
-When the source-evidence check cannot confirm a value -- a quotation it cannot
-find, a claim, a step number -- the server no longer throws the analysis away:
-it keeps the value as an item "확인 필요" and the protocol shows "검토 대기 ·
-확인 필요 n". Such an analysis does **not** run. (An analysis whose evidence
-fails everywhere still just fails.) Review is optional for an analysis that
-passed.
+### 고른 프로토콜
+- **시작 전 확인 · 분석 결과 요약**: 원문의 안전 주의 n건(원문과 번역을 나란히), 단계 타이머 n개, 시작 전 알림 n건, 실행을 막는 사유 n건. 시작할 수 있으면 "바로 쓸 수 있어요 · …" 문장과 **이 프로토콜로 실험 시작** 단추 — 누르면 시작 마법사가 "핵심 값 확인"부터 열린다.
+- **원문 대조 보기**: 단계마다 원문과 분석이 뽑은 단계·수치·출처를 나란히. "원본 쪽 보기"로 원문 쪽 그림을 연다.
+- **분석 결과 새로고침**, **분석 다시 시도**(실패했을 때), **다시 분석**(통과한 분석을 새로 만들 때 — 진행 중인 실험은 그대로). "분석기 개선 전 분석 · 다시 분석 권장"이 보이면 다시 분석을 권한다. 긴 문서는 나눠서 분석하므로 몇 분 걸릴 수 있다.
+- **시약 표(.xlsx) 붙이기** — 엑셀 시약 표를 붙이고 **열어 보기**로 본다. 분석에는 쓰지 않는다.
 
-1. Open the protocol: the review view lists the items first, and beside them
-   the numbered lines of the source page. A dashed line is the server's
-   guess ("AI 제안"); a "?" marks a line the OCR read poorly. You can turn the
-   page, and for a photo the piece of the picture a value was read from is shown.
-2. For an item, only the buttons the server allows appear: confirm, correct,
-   enter a value, "원문에 없음으로 비움" (leave it out), note, undo. An item
-   whose quotation was not found needs the source line **you** point at before
-   it can be confirmed or corrected. A safety statement cannot be edited (a
-   note can be added); a step cannot be left out -- analyse again instead.
-3. Write the reviewer's name and press **검토 완료하고 등록**. It is refused
-   while an item is undecided. The result is review version v1 (then v2, ...),
-   kept beside the analysis; the latest review version is the one that runs,
-   even after a later re-analysis. Uploading the same PDF again offers the
-   existing review version.
-4. A value marked "검토자 입력" came from you or a colleague, "AI 제안" from
-   the AI, "원문" from the source. In the experiment the voice says "검토자가
-   넣은 값이에요: …" once, when the step first comes; the report lists "원문
-   대비 검토자 수정 n건".
+### 확인 카드 (검토)
+분석이 원문에서 다 확인하지 못한 값이 있으면 그 프로토콜은 "검토 대기"가 되고 **실행되지 않는다**. "검토" 상자를 열면 카드가 한 장씩 나온다("확인할 것 n / m").
+- 카드마다 서버가 준 단추만 있다: 예) **맞아요**, **직접 고칠게요**, **원문에 없어요**, **다른 줄이에요**(원문 줄을 고른다, **앞 쪽**/**다음 쪽**), **다시 분석**. 한 쪽의 사진 글자 값은 한 장으로 묶여 "모두 맞아요"를 누를 수 있다.
+- **← 이전**, **다음 →**, 키보드 ←·→·숫자 1–9. **메모 남기기**도 된다.
+- **안전 주의 글은 고칠 수 없다**(메모만). 단계는 비울 수 없다(다시 분석).
+- 마지막에 "검토자 이름"을 적고 **검토 완료하고 등록** → 검토본 vN 이 생기고 최신 검토본으로 실험한다. 값 옆에 "원문 · AI 제안 · 검토자 입력"으로 출처가 표시된다.
 
-### Start an experiment
+## 3. 시작 마법사
 
-1. Read the safety statements. Pressing **이 프로토콜로 시작** is the one
-   human confirmation; it is written to the experiment record as "안전 주의
-   확인".
-2. Before starting, verify the context card shows the expected protocol,
-   "분석 통과 · 실행 가능", the current step and the available actions.
-3. If an open experiment is explicitly selected, the action changes to
-   **Resume experiment** and shows what will and will not be restored.
-4. Start the voice session. The visible voice states mean Ready, Listening,
-   Understanding request, and Providing guidance.
+홈·실험 탭의 **새 실험 시작**이나 프로토콜 탭의 **이 프로토콜로 실험 시작**으로 연다. 위의 점과 "n / N"이 지금 단계다. **← 이전**으로 돌아가고 ×·Esc 로 닫는다.
 
-### Work hands-free
+1. **로그인** — 계정을 쓰는 서버에서 로그인하지 않았을 때만.
+2. **내 목소리** — **마이크 켜서 확인** → "마이크 사용 가능". ☑"실험을 시작할 때 문장 하나를 읽어 목소리를 맞출게요". **다음**.
+3. **안내 목소리** — 목소리를 고르고 **들어 보기**, **이 목소리로 할게요**(목소리가 하나뿐이면 건너뛴다).
+4. **프로토콜** — 통과한 것만 고를 수 있다. **이 프로토콜로 할게요**. 여기서 **원문 올리기**도 된다.
+5. **핵심 값 확인** — "원문의 값을 확인해 주세요". 원문 조각을 보고 적힌 값을 고른다(2문항, 시간·온도·속도·양 중). 틀리면 원문 조각을 다시 보라고 하고, "분석 값이 틀렸어요"를 고르면 그 값의 확인 카드가 열린다. 숫자 값이 없으면 건너뛴다.
+6. **안전 주의** — "원문에 적힌 안전 주의 n건이에요." 원문과 한국어를 나란히 읽고 **읽었어요**. 기관 안전 문서가 없는 서버면 "기관 안전 문서 없음 · 원문 안전 주의만"이 함께 보인다.
+7. **시작할 준비가 됐어요** — "시작하면 마이크가 켜지고 음성 안내가 시작돼요. 안전 주의를 확인한 것으로 기록돼요." **이 프로토콜로 시작**(하던 실험이면 **실험 이어하기**). 이 단추가 사람의 시작 확인이다.
 
-Useful commands include:
+**지난번 설정으로 바로 시작**은 지난번 프로토콜이 지금도 실행 가능할 때 첫 화면 아래에 보인다.
 
-- “Start the protocol.”
-- “What is the current step?”
-- “Why do I do this step?”
-- “What are the warnings?”
-- “Start the step timer.”
-- “I completed this step.”
-- “Pause the workflow.”
+## 4. 실험
 
-What the 2026-10-10 voice test used, as it works now:
+### 실험 중 화면
+- 위 줄: 프로토콜과 "지금 기준", "n단계 / N", 연결("연결됨"), 마이크("마이크 켜짐"), **대화 보기**, **그림 보기**, **설정**, **일시정지**, **종료**.
+- **지금 할 일** 카드: 이 단계의 할 일(한국어, 원문은 접힌 **원문**), 다음 단계, 서버의 질문, 안전 주의.
+- **타이머**: 남은 시간, "1분 남음"(5분 이상 타이머), 끝나면 짧은 소리.
+- **답 카드**: 방금 답, 출처 배지("원문 p.N", "AI 일반 지식", "웹 참고 자료"), 되묻기 후보(누르거나 말해서 고른다).
+- 실험 중에는 화면이 꺼지지 않게 요청한다(지원하는 브라우저만).
+- 다른 탭에 가 있으면 아래 띠 "실험 중 · n단계 · **돌아가기**".
 
-- **Timers** — the step timer tells you one minute before its end and at its
-  end, on the screen and aloud (after you stop talking, if you are). "몇 분
-  남았어?" / "언제 끝나?" are answered from the timer; with none running,
-  "지금 도는 타이머는 없어요."
-- **"그거"** — "그거 얼마나 넣어?" and the like are matched to the current
-  step's own values.
-- **Questions** — what the source says is answered from the source. A term
-  the source does not explain ("HPLC water 가 뭐야?") may get a short general
-  explanation after that answer, said as "PDF에는 따로 설명이 없어요. 일반적으로는
-  …" and shown as "AI 일반 지식" (when the outside-PDF explanation is on). It
-  never carries values, methods or safety guidance.
-- **Pictures** — "그림 보여줘" shows the source's figure of the step, with
-  "그림 크게 보기" and "원본 쪽 보기". When the source has none and drawing is
-  on, a drawing is made at once and marked "AI 가 그린 그림". With the web
-  explanation on, "○○ 사진 보여줘" looks the thing up on the web, with sources.
-- **Notes** — "침전물 안 보임 남겨 줘" records what you said; a sentence with a
-  negation is kept whole.
+### 말로 하기 (예)
+| 하고 싶은 것 | 이렇게 말한다 |
+|---|---|
+| 다음으로 | "다음", "완료했어", "3단계 완료" |
+| 다시 듣기 | "다시 말해 줘" |
+| 값 묻기 | "그거 얼마나 넣어?", "몇 도야?", "남은 시간?" |
+| 타이머 | "타이머 시작" (원문에 적힌 시간만) |
+| 기록 | "메모해 줘, 시료가 약간 탁해", "시약을 엎질렀어"(이상 사항), "방금 기록 고쳐 줘, 5가 아니라 6" |
+| 되돌리기 | "이전 단계로", "방금 완료 취소" |
+| 멈추기·계속·끝 | "잠깐", "재개", "종료"(한 번 묻는다) |
+| 뜻 묻기 | "HPLC water 가 뭐야?" — 원문에 설명이 없으면 "PDF에는 따로 설명이 없어요. 일반적으로는 …" (AI 일반 지식, 켠 서버에서만) |
+| 그림 | "그림 보여 줘"(원문 그림), "그림으로 그려 줘"(AI 가 그린 그림, 켠 서버에서만) |
+| 목소리 | "목소리 다시 맞춰 줘", "시끄러운 곳 모드로 해 줘" |
 
-**Your own voice level and a noisy room (lane SP1)**
+- 단계는 **말로만** 넘긴다(화면에 "다음" 단추는 없다). 관찰할 것이 남았거나, 타이머가 돌고 있거나, 마지막 단계면 "N단계 끝났나요?"를 먼저 묻는다.
+- 실험 노트 질문: 시작 뒤 "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요.", 관찰할 것이 있는 단계를 마치면 "관찰한 것 있으면 말씀해 주세요.", 끝나면 "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요." 답하기 싫으면 "넘어가". 실험은 그대로 진행된다.
+- "도와주세요", "불났어요" 같은 응급 말에는 작업을 멈추고 위험에서 떨어져 연구실 안전 담당에게 연락하라는 정해진 말만 한다.
 
-- When a session opens, the server asks you to read the sentence on the screen
-  in your usual voice ("목소리를 맞출게요 …"). Its level becomes the reference
-  for this session only (it is not saved). Say "건너뛰기" to skip, or "목소리
-  다시 맞춰 줘" to set it again; the settings' "세션 시작 때 한 번" turns the
-  request off. While it is set, a speaker clearly quieter than you -- someone
-  at the next bench -- is not sent to speech recognition, is not recorded, and
-  appears only as a line in the folded list "다른 사람 말로 보여 듣지 않은 말
-  N개" (no words, a time only). A quiet voice does not interrupt an answer
-  either.
-- "목소리 민감도" (높음 / 보통 / 낮음) says how much quieter than the
-  reference counts as someone else; a higher setting filters more, and earbuds
-  suit the higher one.
-- Settings → "주변 소리: 시끄러움" makes the server ask once before it acts on
-  a state change: "3단계 완료하고 4단계로 갈까요?" or "3단계 타이머를 시작할까요?".
-  Only "응/네" on the next turn does it; "아니" leaves things as they are. Notes
-  are read back too ("'밴드가 흐릿해' 이렇게 기록할까요?"). In a room set to
-  quiet, after three or more voices were taken for other people's within a
-  minute, the server asks once "주변이 시끄러워 보여요. 시끄러운 곳 모드로
-  바꿀까요?" (at most every ten minutes); it only asks, and your answer is what
-  changes the mode.
-- Limits: this filters by loudness only. If the room's noise is nearly as
-  loud as speech, loudness cannot tell your voice from the next person's --
-  use the noisy mode there. The only tests are synthetic voices and noise
-  (lane SP1, 2026-10-11); nothing has been measured in a working laboratory.
-- Sounds that are only fillers ("음", "어 어") are ignored without an answer.
+### 목소리 맞추기와 시끄러운 곳
+- 시작 때 "목소리를 맞출게요. 지금 이 문장을 평소처럼 읽어 주세요."가 나오면 평소 목소리로 읽는다("건너뛰기"도 된다). 그 뒤 내 목소리보다 많이 작은 말은 다른 사람 말로 보고 듣지 않는다 — 대화 보기에 "다른 사람 말로 보여 듣지 않은 말 n개".
+- 시끄러운 곳 모드에서는 다음·완료·타이머 시작과 기록을 한 번 되묻고 "네"에만 한다.
 
-A completion request may ask for explicit confirmation. Confirm only after the
-physical work is actually complete. Explanations, warnings, protocol audits,
-history, and previews must not change the step.
+### 연결이 끊기면
+빨간 띠 "연결이 끊겼어요 — 다시 연결 중"이 뜨고 소리·진동이 난다. 화면은 **보기만** 되고 마이크는 멈춘다. 단계 타이머는 화면이 계속 센다("연결 끊김 중 화면 타이머"). 다시 이어지면 초록 "다시 연결됐어요 — 서버 상태로 바꿨어요". **화면을 켜 두라** — 화면이 꺼지거나 다른 앱으로 가면 화면 타이머 알림이 울리지 않을 수 있다.
 
-If recognition is empty, non-speech, language-inconsistent, or ambiguous, the
-system keeps the current step and asks for another request. Check the current
-step before retrying any state-changing command.
+### 끝난 뒤
+- "실험 기록 검토": 보고서 상태("보고서 준비 중", "보고서 준비됨 — …")와 **보고서 문장 다시 만들기**.
+- **보고서에 넣을 값 확인**: 아직 확인하지 않은 값마다 **✓ 확인** 또는 **고치기** → **고쳐서 확인**. 확인하지 않은 값은 보고서에 "[미확인]"으로 남는다.
+- 내려받기: **보고서 만들기 (Word)**, **Markdown 내보내기**, **JSON 내보내기**, **CSV 내보내기**. Word·Markdown 은 실험 노트 모양이다. 링크는 실험이 끝난 그 화면에서만 채워진다(새로고침 뒤에는 화면에서 다시 받을 수 없다).
+- "이번 실험에 도움이 됐나요?" 1–5 와 한 줄 메모(선택), **보내기** 또는 **건너뛰기**.
 
-### Record observations and evidence
+## 5. 기록
 
-- Add a voice or manual observation to the current step. It is labeled
-  observation-only and cannot modify the protocol's instructions.
-- A value the protocol needs ("몇 번 반복하셨나요?") is asked and the answer
-  recorded; the report lists the values to confirm.
-- Attach a JPEG, PNG, WebP, PDF, or DOCX up to 32 MiB. It is stored as
-  not-interpreted evidence.
-- Use **Download original evidence** in the timeline. A missing, changed, or
-  invalid stored object is refused rather than returned unchecked.
+"실험 진행 · 관찰 기록". 실험을 고르면 단계별 기록이 보인다(실험 중에는 실험 탭 아래에 함께 보인다).
+- 손으로 적기: 관찰 유형(메모·외관·측정·편차·기타)과 내용 → **현재 단계에 기록**.
+- 사진·문서 붙이기(jpeg·png·webp·pdf·docx, 32 MiB 까지, 자동 해석 안 함) → **현재 단계에 첨부**. 붙인 것은 **원본 증거 다운로드**로 다시 받는다.
+- 끝난 실험은 체크포인트를 골라 **체크포인트에서 새 실험**을 시작할 수 있다.
+- 기록은 지워지지 않는다. 고친 것은 고침으로 덧붙는다.
 
-### On a phone
+## 6. 설정
 
-The screen fits a phone's width and can be added to the home screen ("홈 화면에
-추가", or "VoineyLab 설치" when the browser offers it; the guide is in the bar
-at the top). Installing it, keeping the screen awake and using the microphone
-all need an **HTTPS** address (or localhost) -- on a plain `http://` address
-the guide only says "https 필요", and the microphone does not open (see
-`PILOT_HTTPS_SETUP.md`, not yet carried out). No test on a real phone has been
-made.
+바꾼 것은 "저장했습니다 · 다음 실험부터 적용됩니다."
+- **프로토콜**: 실행할 프로토콜, 조건 분기·반복 횟수 질문(시작 전에 묻기 / 실험 중에 묻기).
+- **음성 입력**: 입력 언어(한국어·자동 감지·English), 마이크, 마이크 자동 음량, **지금 목소리 맞추기**와 ☑"세션 시작 때 한 번", 목소리 민감도(높음 9 dB · 보통 12 dB · 낮음 18 dB), 주변 소리(조용함 / 시끄러움).
+- **안내 방식**: 수치 확인 방식(되읽기 · 바로 확인 · 조용히), 먼저 알려 주기(모두 · 필요한 것만 · 끄기), 웹 찾아보기(켬 · 끔).
+- **안내 목소리**: 목록과 **들어 보기**.
+- **계정**(계정을 쓰는 서버): 이름·연구실, **비밀번호 바꾸기**(다른 기기는 로그아웃된다), **로그아웃**.
+- **홈 화면에 추가**: 브라우저가 제안하면 **VoineyLab 설치**. 아이폰은 Safari 공유 → "홈 화면에 추가", 안드로이드는 Chrome 메뉴 → "홈 화면에 추가". https 주소에서만 되고 오프라인으로는 쓸 수 없다.
+- 마이크 장치·자동 음량·"세션 시작 때 한 번"은 이 브라우저에만 저장된다.
 
-### Pause, refresh, and resume
+## 7. 관리자
 
-1. Pause before intentionally leaving the bench session.
-2. After a refresh or reconnect, select the exact open experiment.
-3. Read the recovery disclosure. The server restores the protocol/revision,
-   contiguous completed steps, and current step.
-4. Pending confirmations, prior conversation, and active timers are not restored.
-   Re-establish those intentionally if needed.
-5. If the UI reports stale state, refresh the timeline and reselect the session;
-   do not assume the last command succeeded.
+- **파일럿 지표**: 주소창에 `/admin-metrics.html`(화면에 링크 없음). 관리자 계정이면 그대로 **불러오기**, 아니면 관리자 토큰을 넣는다. 날짜별 실험·단계·타이머·끊김·평점 — 숫자·코드·시각만 보인다.
+- 초대 링크 만들기, 계정 끄기·켜기는 서버에서 `scripts/pilot_invite.py` 로 한다(`docs/PILOT_GUIDE.md`).
 
-## End a pilot session
+## 8. 알아 둘 것
 
-1. Confirm the final experiment status and timeline.
-2. Export the required report format. CSV is available for structured transfer;
-   JSON/Markdown/DOCX are also supported. The report's "프로토콜 상태" reads
-   "분석 통과 · 실험자가 시작함".
-3. Ask the operator to create and verify the post-session backup.
-4. Record issues using the incident template in `PILOT_READINESS_PACKAGE.md`.
-
-The reviewer and laboratory-administrator screens, protocol approval, lab
-adaptations and the eLabFTW export were removed on 2026-10-08 (lane DI). The
-voice answer from approved lab references and the voice safety report were
-removed on 2026-10-10 (lane CL). The review tab (lane RV, merged 2026-10-14) is described under "Review an
-analysis" above.
+- 다른 사람 말은 **목소리 크기로만** 거른다. 같은 크기로 가까이서 말하면 들릴 수 있다.
+- 실제 휴대폰에서 HTTPS 로 확인한 기록은 아직 없다. 앱은 준비 중이다.
+- 화면 문구 일부는 쉬운 말로 바꾸는 중이다(`docs/VOICE_AND_TONE.md`). 같은 것을 부르는 다른 말은 `docs/GLOSSARY.md`.

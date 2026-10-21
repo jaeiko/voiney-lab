@@ -1,137 +1,109 @@
 # Product context
 
-Revised 2026-10-10 (lane CL) to the human decisions of that day, and
-2026-10-14 (lane DOC3) to what the lanes since then built.
+Rewritten 2026-10-20 (lane DOC4). What the product is, who it is for, what
+evidence the team has, and how success is measured. What the code does is in
+`docs/FEATURES.md`; what comes next is in `roadmap.md`; why things were
+decided is in `docs/DECISIONS.md`.
 
-## Product promise
+## What it is
 
-**VoineyLab** (the company is Voiney; "Voice Workflow Agent" is the old name
-still found in code and older documents):
+**VoineyLab** (the company is Voiney) is a voice guide for running a lab's own
+protocol. Chemistry and biology wet-lab researchers wearing gloves follow
+their protocol without touching a screen:
 
-> 우리 랩이 올린 프로토콜 그대로, 시간은 대신 재고, 순서는 지켜 주고, 말한 것은
-> 노트로 남기는 AI.
+1. bring a protocol in — PDF, Word or a photo (also a public Google Drive,
+   Docs or Sheets link, server-side only for now);
+2. the server analyses it and checks every value against the source, and asks
+   only what it must, as confirmation cards;
+3. the experimenter starts it (the start wizard's last button);
+4. step-by-step voice guidance — timers, questions, records, re-asks;
+5. a lab notebook and report from what was recorded.
 
 Status: **MVP prototype, not field-validated** ("MVP 시제품 — 현장 미검증").
 People have spoken to it only on the development server; nothing has been
 measured in a working laboratory.
 
-It is a bench execution layer for the laboratory's own uploaded protocol: it
-keeps the protocol's order, runs its timers, answers from its source, and turns
-what the experimenter says into an append-only record and a report. It helps a
-scientist keep hands and attention on the experiment.
+The server owns workflow state; models only propose. Values and safety
+statements come only from the source or from a value a person confirmed; a
+term the source leaves unexplained may get a short general explanation,
+always labelled "AI 일반 지식". Safety precautions and completion criteria are
+never written by the AI.
 
-The product is not an autonomous scientist, a safety authority, a protocol
-approver, an ELN/LIMS, or a system of record. It claims no regulatory
-compliance.
+## What it is not
 
-## What exists now and what is planned
+Not an ELN or LIMS and not a system of record (whether to write records into
+one is undecided). Not an autonomous scientist, a safety authority, a
+protocol approver or an equipment controller; it does not authorise resuming
+work. It claims no GLP, GMP, clinical, 21 CFR Part 11, HIPAA or ISO
+compliance, and no complete external integration. An emergency phrase gets a
+fixed instruction to stop and contact the lab's emergency channel, nothing
+more.
 
-Now: PDF upload (also Word, photo and an Excel reagent table, which the
-screen's upload box and the picked protocol's box take, lane UI3) → automatic OCR of pages
-without a text layer → structured analysis (a long document, up to 400 pages,
-in pieces; "다시 분석" to analyse afresh) → source-evidence check → the start
-screen (the experimenter's "이 프로토콜로 시작" is the one human confirmation;
-there is no PI or administrator approval and no revision approval, rejection
-or revocation, decision of 2026-10-08) → voice guidance with timer notices,
-questions and pictures → the record → the report (.docx and others). Around
-that:
+## Users and jobs
 
-- **The pilot launcher** starts without an approved safety catalog, as
-  `source_protocol_only`: the uploaded PDF's own safety statements only, and
-  the screen, the safety answers and the record say "기관 안전 문서 없음 ·
-  원문 안전 주의만" (human decision of 2026-10-13). A catalog file that is
-  there is checked and an unusable one stops the start.
-- **Your own voice level** is set by reading a sentence; a clearly quieter
-  voice is ignored and listed ("다른 사람 말로 보여 듣지 않은 말"), and a
-  "noisy room" setting asks before a state change (lane SP1, synthetic tests
-  only).
-- **Mobile web**: the screen fits a phone and can be added to the home screen
-  (lane UI2); it needs HTTPS, which is not set up yet, and no real phone has
-  been tried.
-- **An LLM-router-first switch** (`VOINEY_LAB_ROUTER_FIRST`, lane RA) exists
-  and is **off**; whether to turn it on is decided by a person after a voice
-  test.
-- **A pilot data deletion tool** (`scripts/pilot_data_delete.py`, lane PL).
-- **The review tab** (lane RV): an analysis the source-evidence check cannot
-  fully confirm waits as "검토 대기" with its "확인 필요" items (it does not
-  run); a person confirms, corrects or leaves out each item against the
-  source lines, enters the reviewer's name and registers review version
-  v1, v2, ...; the latest review version runs. A value is shown as "원문",
-  "AI 제안" or "검토자 입력", and only a person's confirmation makes it a run
-  value. Safety statements cannot be edited and steps cannot be left out.
+Researchers at the bench (the pilot: two master's students, from late October
+2026). Their jobs, as the interviews put them:
 
-Still planned, in this order of lanes (none of it is built):
+- "Tell me the exact current action without making me touch a screen."
+- "Keep the time for me — I must not miss a timing."
+- "Do simple commands at once; only confirm the important data."
+- "Use the protocol I uploaded, not different conditions."
+- "Record only what I actually said, and not other people's voices."
+- After the run: a notebook that helps a researcher, not a voice-test log.
 
-- **Making review mandatory** — the review tab exists (above) but review is
-  optional: a passed analysis can start without it. Whether to require it is
-  for a person to decide (lane RV report, §5).
-- **Telling speakers apart** — filtering today is by loudness only.
-- **Understanding led by the LLM router** — turning the router-first switch
-  on, behind the front rules (AGENTS rule 3).
-- Moss returns for searching past records and manuals.
+A lab also needs: bringing its own protocol in without code changes, seeing
+why a protocol cannot start, a traceable export (Word, Markdown, JSON, CSV)
+into its existing notebook, and — for a PI — a way to say "확인함" without an
+approval gate.
 
-## Values and explanations
+## Evidence
 
-- Values and safety come only from the source or from a value a person
-  confirmed.
-- What the source leaves unfriendly -- a term's meaning, say -- may get a
-  short general explanation, always labelled ("AI 일반 지식").
-- Safety precautions and completion criteria are never written by the AI.
+Counts and dates below are as written in the lane records; the raw interview
+and survey records are **not in this repository** (interview and pilot
+records belong to the owner named in `docs/GIT_WORKFLOW.md`).
 
-## Initial customer and use case
+| Evidence | What is recorded | Used for |
+|---|---|---|
+| Field interviews, 2026-10-07/08 | Three life-science researchers (cell culture, PCR, Western blot). Quotes: "타이밍을 놓치면 안 된다"; "단순한 명령은 바로 수행하고, 중요한 데이터만 확인해 달라"; worry about conditions different from the uploaded protocol; "0.5 mL 를 5 mL 로 읽으면 어떡하나"; worry that other people's speech is recorded; most-sought information: reagent amounts and reaction times | Confirmation modes, forward-by-words, source-only timers, decimal-point rule, source-first pictures, loudness filter |
+| Survey, 2026-10-19 | 13 respondents: materials/battery 6, life sciences 5, semiconductors 2. Google Drive the most common place for protocols (5). A request for PI review; "할 일 없이 기다릴 때가 힘들다" | Drive link import, starter-pack fields, the non-blocking "확인함" |
+| Advisor comments, 2026-09-22 and 10-02 | Repetitive work and proactive interventions; ambiguous references ("그거 얼마나 넣어?") re-asked mechanically | Timer notices, "그거" re-asks |
+| Voice tests | Development server, in-gel protocol, last 2026-10-10. A café test the same day with borrowed earphones picked up bystanders and could not be completed | Voice calibration and loudness filter |
+| Report evaluation, 2026-10-19 | The report read as a voice-test log and did not help a researcher | The lab-notebook report |
+| Synthetic benches | Voice level, noise endpoint and speaker-verification measurements on synthetic voices and noise only | Thresholds marked "to re-measure" |
 
-The recommended initial customer is a small biotech, CRO team, university core
-facility, or training lab with 5–20 bench users and one repetitive, low-hazard,
-multi-step protocol currently run from PDF/paper with delayed data entry. The
-first pilot should avoid clinical decisions, controlled substances, autonomous
-equipment control, and high-hazard or regulated release workflows.
+The initial-customer profile below is a hypothesis, not evidence.
 
-Primary user jobs:
+## Initial customer (hypothesis)
 
-- “Tell me the exact current action without making me touch a screen.”
-- “Explain why this step exists without changing my workflow.”
-- “Keep the timer and record only what I actually observed.”
-- “Show the source page or a clearly labeled picture.”
-- “Let me interrupt, repeat, pause, or ask a side question without losing state.”
+A university lab, core facility, small biotech or CRO team with 5–20 bench
+users and one repetitive, low-hazard, multi-step protocol run from PDF or
+paper with delayed data entry. The first pilot avoids clinical decisions,
+controlled substances, equipment control, and high-hazard or regulated
+release work.
 
-Laboratory jobs:
+## Principles
 
-- Upload the laboratory's own protocol (PDF; Word or photo through the server)
-  without code changes and see why it cannot start, if it cannot.
-- Review the analysis and register a reviewed version with the reviewer's
-  name (lane RV, merged 2026-10-14).
-- Export a traceable record (.docx, Markdown, JSON, CSV) into the existing
-  notebook or informatics stack.
-- See aggregate adoption, completion, latency and blocked-step counts without
-  exposing research content (`GET /api/admin/metrics`).
-
-## Product principles
-
-1. Reliability over personality. The professor persona is calm and concise, but
-   bounded truth and stable workflow behavior matter more than conversational
-   fluency.
-2. Preview before mutation. Explanations, audits, history, uncertainty, and
-   visuals are read-only. Ambiguous combined requests require confirmation.
-3. Evidence is visible. Source file, hash, revision, pages, citations, rights, and
-   limitations must survive every projection.
-4. Adoption is a workflow problem. Support noisy environments, accents, careful
-   protocol deviation, interruptions, multimodal displays, and quick recovery.
-5. Analytics are privacy-minimized. Aggregate operational metadata, not audio,
-   transcripts, private titles, identities, or model reasoning.
+1. Reliability over personality: bounded truth and stable workflow over
+   conversational fluency.
+2. Preview before mutation: explanations, history and pictures are
+   read-only; an ambiguous combined request asks first.
+3. Evidence is visible: source file, page, revision and "where this value
+   came from" (원문 · AI 제안 · 검토자 입력) survive every projection.
+4. Adoption is a bench problem: noise, gloves, interruptions, a lost
+   connection, quick recovery.
+5. Analytics are privacy-minimised: numbers, codes and times, not audio,
+   words, titles or model output.
 
 ## Success measures
 
-- Time from PDF upload to a protocol that can start (analysis time is
-  measured in README §4; the review tab's old target of about one minute
-  has not been measured).
-- Percent of required steps/quantities/timers/observations preserved.
-- Zero unauthorized state transitions.
-- First-playable-audio and total-turn p50/p95.
-- Speech rejection and correction rate by controlled test corpus.
-- Documentation completeness and time saved versus baseline.
-- Pilot weekly active users, completed workflows, blocked-step distribution, and
-  the laboratory's intent to continue.
+The pilot measures, decided 2026-10-16 (`src/voiney_lab/pilot_metrics.py`):
+experiments a week and returning users, steps finished without hands,
+records and deviations, time to a report, how often an uploaded protocol ran
+at once or after review and how long review took, **wrong state changes:
+zero**, usability, and willingness to pay. Engineering measures beside them:
+first audio and whole-turn latency (p50/p95), speech rejection and
+correction rates, analysis pass rate and time.
 
-Do not claim readiness for operational or regulated use from offline test success
-alone. Production readiness requires customer validation, identity and access
-controls, approved data handling, and workflow-specific safety review.
+Offline test success is never a claim of readiness for operational or
+regulated use. That needs customer validation, identity and access
+controls, approved data handling and a workflow-specific safety review.

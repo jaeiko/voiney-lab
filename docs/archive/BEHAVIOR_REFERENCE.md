@@ -1,3 +1,5 @@
+> 보관: 2026-10-20 (줄 DOC4) — 옛 `docs/BEHAVIOR_REFERENCE.md`. 지금 동작의 기준이 아니다. 줄 이름 순서로 쓴 동작 이야기였다. 지금도 맞는 동작은 기능 단위로 `docs/FEATURES.md` 에, 결정·날짜는 `docs/DECISIONS.md` 에 다시 썼다. 여기의 계정 없음·Drive 없음·옛 보고서 구조·주장 조각 경로·"시작이 유일한 사람 확인" 같은 문장은 지금 코드와 다르다.
+
 # Behavior reference — VoineyLab
 
 Detail of what the code does now, in English. Written on 2026-10-10 (lane CL)

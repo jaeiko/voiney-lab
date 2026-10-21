@@ -1,58 +1,57 @@
-# Deployment Runbook — Controlled Pilot
+# 배포·운영 안내 — 파일럿 서버
 
-This documents the reproducible deployment path that already exists in this
-repository (`scripts/run_dev.sh` plus a directly-invoked `uvicorn`
-process), rather than introducing a new orchestration platform. It is scoped
-to a controlled research pilot, not a regulated GxP/clinical release — see
-`README.md` §3 ("하지 않는 것"). The product is an MVP prototype, not
-field-validated. The controlled pilot itself runs `scripts/run_pilot.sh`: it
-starts as `source_protocol_only` (the uploaded PDF's own safety statements,
-no institution safety documents, and it says so) when there is no approved
-safety catalog at its fixed path, and checks the catalog, refusing to start on
-an unusable one, when there is (`docs/PILOT_GUIDE.md` §1,
-`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4); it also warns, and still starts,
-when LibreOffice is missing (below). HTTPS for a phone is
-`docs/PILOT_HTTPS_SETUP.md`; deleting the pilot's data afterwards is
-`docs/PILOT_GUIDE.md` §5.
+서버를 준비하고, 띄우고, 점검하고, 백업하는 순서다. 2026-10-20 dev `e7c31c8` 기준.
+VoineyLab 은 **MVP 시제품 — 현장 미검증**이고, 이 안내는 통제된 연구 파일럿용이다(규제 대상 GxP·임상 배포가 아니다).
 
-## What the server needs installed (system packages, set-up values)
+- 파일럿을 여는 순서·참여자 안내·데이터 처리·고지 문안: `docs/PILOT_GUIDE.md`
+- 휴대폰에서 마이크를 쓰기 위한 HTTPS: `docs/PILOT_HTTPS_SETUP.md`
+- 증상별 복구: `docs/TROUBLESHOOTING_GUIDE.md`
+- 설정 이름 전체: `src/voiney_lab/setting_names.py`
 
-Human decisions of 2026-10-13 and 2026-10-14 (lane AN's measurements,
-2026-10-13). These are not Python packages: `pip install -e .` does not bring
-them, so they are part of preparing every server.
+## 1. 서버에 설치할 것
 
-| What | Why | How | If it is missing |
+`pip install -e .` 가 가져오지 않는 것들이다. 서버마다 사람이 설치한다.
+
+| 무엇 | 왜 | 설치·확인 | 없으면 |
 |---|---|---|---|
-| **LibreOffice** (`libreoffice-writer-nogui`) and the Korean fonts **`fonts-nanum`** | a Word (.docx) source is turned into a PDF by LibreOffice; without the Korean fonts a Korean document's text layer loses its spaces and fails the source-evidence check | `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`; check `soffice --version`, `fc-match NanumGothic`, and `GET /readyz` → `capabilities.docx_conversion_available: true`. A `soffice` elsewhere: `VOINEY_LAB_OFFICE_CONVERTER=/path/to/soffice` | the server still starts (a warning in its log, `protocol.source_formats docx=unavailable`); a .docx upload is refused with `docx_conversion_unavailable` (503). `scripts/run_pilot.sh` prints a `[WARN]` and starts too |
-| **HEIC support** (optional) | iPhone photos in HEIC | `pip install -e '.[heic]'` (pillow-heif), restart, check `capabilities.heic_photos_available`. The wheel carries GPLv2 code, so the organisation's licence owner decides; the repository does not install it by default (human decision of 2026-10-14) | a HEIC upload is refused with `heic_support_unavailable` (503); JPEG and PNG still work |
-| **A longer PDF-reading time**, `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` | reading the text of a long document runs in a child process with a time limit (default 30 s, allowed 1–600). The 88-page `usgs_twri_5a3_organic` took 121 s for the extraction alone (lane AN, 2026-10-13), so with the default its upload timed out | write it in the service's `EnvironmentFile` (`.env`) and restart | a long document's upload is refused as a time-out; the measured slowest document (about 1.4 s a page) fits 400 pages inside 600 s |
+| Python 3.12 이상, 저장소의 `.venv` | 실행기가 `.venv/bin/activate` 를 쓴다 | `python -m venv .venv && .venv/bin/pip install -e .` | 실행기가 `[ERROR] venv not found` 로 멈춘다 |
+| **LibreOffice**(`libreoffice-writer-nogui`)와 한국어 글꼴 **`fonts-nanum`** | Word 원문을 PDF 로 바꾸고, 보고서 PDF 를 만든다. 한국어 글꼴이 없으면 한국어 문서의 글자 층이 띄어쓰기를 잃어 근거 검사에서 떨어진다 | `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`; `soffice --version`, `fc-match NanumGothic`, `GET /readyz` → `docx_conversion_available: true`. 다른 곳의 `soffice` 는 `VOINEY_LAB_OFFICE_CONVERTER` | 서버는 시작한다. Word 올리기만 `docx_conversion_unavailable`(503), 보고서 PDF 는 503. `scripts/run_pilot.sh` 는 `[WARN]` 만 찍는다 |
+| **HEIC 지원**(선택) | 아이폰 HEIC 사진 | `pip install -e '.[heic]'` 후 다시 시작, `heic_photos_available: true` 확인. 바퀴에 GPLv2 코드가 들어 있어 기관의 라이선스 담당이 정한다 | HEIC 만 `heic_support_unavailable`(503). JPEG·PNG 는 된다 |
+| **긴 PDF 읽기 시간** `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` | 글자 추출은 시간 한도가 있는 자식 프로세스에서 돈다(기본 30 s, 1–600). 88쪽 문서의 추출만 121 s 걸렸다(2026-10-13 측정) | `.env` 에 적고 다시 시작 | 긴 문서 올리기가 시간 초과로 거절된다 |
 
-The staging server that `.github/workflows/deploy-staging.yml` reaches over
-ssh (it runs the host's own `deploy` command after a green CI on `dev`) is a
-server like any other: the same `apt-get install` has to be run on it by a
-person. Nothing in this repository installs system packages, and this lane did
-not log in to that host, so whether it has them is not known from here. The
-Python side (Pillow for photos, openpyxl for reagent tables) comes with
-`pip install -e .`. Details and the error codes: `docs/SOURCE_FORMATS.md`.
+`.github/workflows/deploy-staging.yml` 은 `dev` 에 push 한 CI 가 성공하면 ssh 로 스테이징 서버의 `deploy` 명령을 부른다. 그 서버에서 `deploy` 가 무엇을 하는지와 위 패키지가 깔렸는지는 저장소에서 알 수 없다(확인 안 됨).
 
-## Process model
+## 2. 띄우기
 
-The application is a single stateless-except-for-SQLite FastAPI process. No
-container runtime was available to build/validate in this environment, so no
-Dockerfile is included; a systemd unit around the existing launcher is the
-smallest reproducible path that could actually be tested here:
+파일럿은 **`scripts/run_pilot.sh` 로만** 띄운다(손으로 uvicorn 을 부르면 실행기가 고정하는 것들이 빠진다).
+
+```bash
+./scripts/run_pilot.sh --check-only   # 설정만 보여 주고 끝낸다
+./scripts/run_pilot.sh                # 127.0.0.1:8080
+./scripts/run_pilot.sh --dev-identity # 로그인 없이(개발 신원) — 파일럿에는 쓰지 않는다
+```
+
+실행기가 고정하는 것:
+- 데이터 위치: `data/runtime/pilot/`(프로토콜·원문·실험 기록), `data/runtime/pilot/workspace/`(작업공간·계정·지표), 시작 직전에 파일럿 표시 파일 `.voiney-pilot-data`.
+- 로그인: `VOINEY_LAB_AUTH_MODE=accounts`(셸·`.env` 의 다른 값은 `[WARN]` 과 함께 무시). 초대 링크는 `python scripts/pilot_invite.py`(`docs/PILOT_GUIDE.md` 7절).
+- 안전 문서 범위: `data/runtime/pilot/approved_safety_catalog.sqlite` 가 없으면 `source_protocol_only`, 있으면 `reference_only` 로 점검하고 쓸 수 없으면 시작을 거부한다(3절).
+- PDF 밖 일반 설명은 끈다. 작업공간이 꺼졌거나 `VOINEY_LAB_ADMIN_TOKEN` 이 비었거나 LibreOffice 가 없으면 `[WARN]`.
+- 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy)를 앞에 두고 연다 — `docs/PILOT_HTTPS_SETUP.md`. `HOST=0.0.0.0` 으로 그냥 열지 않는다.
+
+모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 README 4절, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
+
+### systemd 로 두기 (예시, 이 줄에서 실행해 보지 않음)
 
 ```ini
 [Unit]
-Description=Voice Workflow Agent
+Description=VoineyLab pilot
 After=network.target
 
 [Service]
 Type=simple
-User=voice-workflow-agent
-WorkingDirectory=/opt/voice-workflow-agent
-EnvironmentFile=/opt/voice-workflow-agent/.env
-ExecStart=/opt/voice-workflow-agent/.venv/bin/uvicorn voiney_lab.server:app --host 0.0.0.0 --port 8000
+User=voineylab
+WorkingDirectory=/opt/voineylab
+ExecStart=/opt/voineylab/scripts/run_pilot.sh
 Restart=on-failure
 RestartSec=5
 
@@ -60,118 +59,79 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Use a dedicated non-root system user and an `EnvironmentFile` (not a
-committed file) for secrets, matching the "no fake external validation" and
-"never commit `.env`" rules in `AGENTS.md`/`CLAUDE.md`.
+- 저장소를 `/opt/voineylab` 에 두고, 그 안에 `.venv` 와 `.env`(커밋하지 않음, 키는 여기만)를 둔다. 실행기가 `exec` 로 uvicorn 을 띄우므로 systemd 가 그 프로세스를 그대로 본다.
+- 전용 비루트 사용자로 돌린다. 데이터는 저장소 안 `data/runtime/pilot/` 이다.
 
-## Health and readiness
+## 3. 기관 안전 문서 카탈로그 (선택)
 
-- `GET /healthz` — liveness only. A monitoring/orchestration layer should
-  restart the process if this stops responding.
-- `GET /readyz` — configuration readiness. Returns `503` if identity,
-  workspace, protocol-catalog, or report configuration fails to parse (for
-  example, operational scope without complete OIDC settings); returns `200`
-  with non-secret identity mode and capability flags (`workspace_enabled`,
-  `protocol_catalog_enabled`, `experiment_reports_enabled`,
-  `docx_conversion_available` -- LibreOffice found, required on the server --
-  and `heic_photos_available` -- the optional pillow-heif installed, lane AN
-  2026-10-13; `moss_enabled` left with the Moss connection on 2026-10-10,
-  lane CL) otherwise. Neither file-format flag makes the server not ready. This does
-  **not** verify live reachability of any external provider — no local probe
-  should make a billable provider call.
+파일럿에는 없어도 된다(`source_protocol_only`: 올린 원문의 안전 주의만, 화면·답·기록이 "기관 안전 문서 없음 · 원문 안전 주의만"). 기관의 SOP·SDS·장비 설명서를 쓰려면:
 
-## Durable state and backup
+1. **검토한 목록(manifest) 만들기** — 골라 낸 문서마다 고정 id·제목·버전·SHA-256·언어·종류·출처 권한·승인 상태·사용 범위·유효일과 검토일·절. 폐기·대체된 버전은 `active: false`. 쓰기 전에 검사한다:
+   ```bash
+   .venv/bin/python -B scripts/audit_approved_catalog.py --manifest /abs/path/reviewed-manifest.json
+   ```
+2. **새 경로에 후보 카탈로그 만들기**(운영 파일을 직접 고치지 않는다):
+   ```bash
+   candidate="$(mktemp -d)/approved-lab-catalog.sqlite"
+   .venv/bin/python -B scripts/ingest_safety_documents.py --manifest /abs/path/reviewed-manifest.json --db "$candidate"
+   .venv/bin/python -B scripts/audit_approved_catalog.py --db "$candidate" --scope reference_only --query "2단계 acetonitrile 주의사항"
+   ```
+   검사는 id 와 점수만 찍고 본문은 찍지 않는다. 의도한 질문이 승인된 활성 문서를 돌려줘야 한다.
+3. **서버를 멈춘 사이에 옮기기**:
+   ```bash
+   cp "$candidate" data/runtime/pilot/approved_safety_catalog.sqlite
+   ./scripts/run_pilot.sh --check-only   # 0 으로 끝나야 한다
+   ```
+   파일럿 카탈로그의 모든 문서는 `usage_scope: reference_only`, `approval_status: approved`, `active: true`, `test_fixture` 가 아닌 출처, 제목에 "fictional" 없음이어야 한다. 하나라도 demo 문서가 있거나, 승인된 `reference_only` 문서가 없거나, 파일을 읽을 수 없으면 실행기가 거부한다(종료 코드 1). 기관 문서 없이 열려면 파일을 치운다.
+4. **폐기·교체**는 새 목록으로 한다: 옛 문서를 `active: false`, `approval_status: superseded`(또는 `rejected`)로 하고 새 버전을 더해 2–3 을 다시 한다. 돌고 있는 SQLite 를 고치지 않는다.
 
-Durable pilot metadata is stored in SQLite, rooted under the directories named by
-`VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_WORKSPACE_DATA_DIR`,
-and `VOINEY_LAB_EXPERIMENT_REPORT_DB`. There is no object-store
-backend in this build — evidence/asset bytes referenced from these databases
-also live under the same data directories (`objects/sha256/` and `evidence/`),
-so a backup must capture the allowlisted files as well as the `.sqlite` files.
+카탈로그는 단계 안전 카드에만 쓰이고 프로토콜을 바꾸지 않는다. 개발 서버(`scripts/run_dev.sh`)는 `VOINEY_LAB_SAFETY_CATALOG`·`VOINEY_LAB_USAGE_SCOPE` 를 `.env` 에서 읽는다. CI 는 가상 demo 문서(`data/moss_demo/approved_documents.ko.json`)로 카탈로그를 만든다.
 
-Use `scripts/pilot_state_backup.py`; its allowlist includes SQLite databases,
-protocol objects, and explicitly attached evidence, while excluding `.env`,
-raw audio, and unallowlisted files. It uses SQLite's backup API, runs
-`PRAGMA quick_check` on source and copied databases, hashes every archived
-file, and writes a versioned manifest. Stop the process for a point-in-time
-snapshot across all three stores and their object files:
+## 4. 점검
 
-```bash
-systemctl stop voice-workflow-agent
-sudo -u voice-workflow-agent /opt/voice-workflow-agent/.venv/bin/python \
-  /opt/voice-workflow-agent/scripts/pilot_state_backup.py create \
-  --protocol-data-dir /var/lib/voice-workflow-agent/protocol \
-  --workspace-data-dir /var/lib/voice-workflow-agent/workspace \
-  --report-database /var/lib/voice-workflow-agent/reports/experiment_reports.sqlite \
-  --output /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
-/opt/voice-workflow-agent/.venv/bin/python \
-  /opt/voice-workflow-agent/scripts/pilot_state_backup.py verify \
-  /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
-systemctl start voice-workflow-agent
-curl --fail http://127.0.0.1:8000/healthz
-curl --fail http://127.0.0.1:8000/readyz
-```
+- `GET /healthz` — 살아 있는지만. 답하지 않으면 다시 띄운다.
+- `GET /readyz` — 설정이 읽히는지. 신원·작업공간·프로토콜 저장소·실험 기록·앱 출처·로그인 방식 설정 중 하나라도 읽을 수 없으면 503(`reason` 에 예외 이름). 200 이면 `identity_mode`(`accounts`·`oidc`·`development`), `workspace_enabled`, `protocol_catalog_enabled`, `experiment_reports_enabled`, `docx_conversion_available`, `heic_photos_available`.
+- `/readyz` 가 **보지 않는 것**: 안전 카탈로그와 사용 범위(이것이 틀리면 `/readyz` 가 200 이어도 `/api/protocols` 가 500), 공급자 키와 모델, 외부 연결. 점검이 돈이 드는 공급자 호출을 하지 않게 했다.
+- 설정이 틀리면 조용히 기본값으로 가지 않는다: 작업공간이 켜졌는데 절대 경로가 없거나, `operational` 범위인데 OIDC 설정이 덜 됐거나, 계정 모드인데 작업공간이 없으면 시작이나 첫 요청에서 거부한다. 옛 설정 이름이 있으면 서버·실행기가 시작을 거부한다.
 
-The command refuses relative source paths, filesystem roots, output overwrite,
-symlinks in a source tree, corrupt SQLite files, unsafe archive entries, and
-checksum mismatches. Store the archive on organization-approved encrypted
-storage with access controls and retention matching the pilot agreement. Take
-one backup immediately before and after each pilot session; periodically
-exercise restoration rather than treating archive creation as proof of
-recoverability.
+## 5. 데이터와 백업·복구
 
-Restore only into a fresh absolute directory, verify it, point a disposable
-instance at the restored component paths, and run a smoke test before any
-promotion:
+| 무엇 | 파일럿 위치 |
+|---|---|
+| 프로토콜 장부, 원문 | `data/runtime/pilot/protocol_workspace.sqlite`, `data/runtime/pilot/objects/sha256/…` |
+| 실험 기록 | `data/runtime/pilot/experiment_reports.sqlite` |
+| 작업공간(실험·관찰·첨부) | `data/runtime/pilot/workspace/commercial_workspace.sqlite`, `…/workspace/evidence/…` |
+| 계정, 파일럿 지표 | `data/runtime/pilot/workspace/accounts.sqlite`, `…/workspace/pilot_metrics.sqlite` |
+| 기관 안전 카탈로그(있으면) | `data/runtime/pilot/approved_safety_catalog.sqlite` |
+
+`scripts/pilot_state_backup.py` 는 모든 `.sqlite`(SQLite 백업 API, 원본·사본 `PRAGMA quick_check`)와 `objects/`·`evidence/` 의 허용한 원문·첨부만 담고, `.env`·원음·그 밖의 파일은 뺀다. 모든 파일의 SHA-256 을 목록에 남긴다. 절대 경로만 받는다. 시점을 맞추려면 서버를 멈추고 뜬다:
 
 ```bash
-/opt/voice-workflow-agent/.venv/bin/python \
-  /opt/voice-workflow-agent/scripts/pilot_state_backup.py restore \
-  /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz \
-  /var/lib/voice-workflow-agent-restore-001
-/opt/voice-workflow-agent/.venv/bin/python \
-  /opt/voice-workflow-agent/scripts/pilot_state_backup.py verify \
-  /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
-
-export VOINEY_LAB_PROTOCOL_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/protocol
-export VOINEY_LAB_WORKSPACE_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/workspace
-export VOINEY_LAB_EXPERIMENT_REPORT_DB=/var/lib/voice-workflow-agent-restore-001/reports/experiment_reports.sqlite
+P="$PWD/data/runtime/pilot"
+sudo systemctl stop voineylab
+.venv/bin/python scripts/pilot_state_backup.py create \
+  --protocol-data-dir "$P" \
+  --workspace-data-dir "$P/workspace" \
+  --report-database "$P/experiment_reports.sqlite" \
+  --output /var/backups/voineylab/pilot-before-session-001.tar.gz
+.venv/bin/python scripts/pilot_state_backup.py verify /var/backups/voineylab/pilot-before-session-001.tar.gz
+sudo systemctl start voineylab
+curl --fail http://127.0.0.1:8080/healthz && curl --fail http://127.0.0.1:8080/readyz
 ```
 
-The automated test suite exercises create, verify, restore, collision refusal,
-privacy exclusions, a corrupt archive, and SQLite/object/evidence integrity.
-No live pilot dataset was available here, so an operator must still perform a
-deployment-specific restore drill before the first participant session.
+- 백업에는 계정(비밀번호 해시)과 연구 기록이 들어 있다. 기관이 승인한 암호화 저장소에, 파일럿 약속에 맞는 기간만 둔다.
+- 세션 전후에 한 번씩 뜨고, 복구를 실제로 해 본다. 만든 것만으로 복구된다고 보지 않는다.
+- 복구는 **새 빈 절대 경로**에만 한다: `pilot_state_backup.py restore <archive> /var/lib/voineylab-restore-001`, 그 경로로 가리킨 시험용 서버에서 확인한 뒤 옮긴다. 상대 경로·루트·덮어쓰기·심볼릭 링크·깨진 SQLite·위험한 묶음 항목·체크섬 불일치는 거부한다.
+- 파일럿을 마치고 지우는 것은 `scripts/pilot_data_delete.py`(`docs/PILOT_GUIDE.md` 5절). 실제 파일럿 데이터로 복구를 연습한 기록은 아직 없다.
 
-## Configuration fails closed
+## 6. 지켜볼 것
 
-`ServerConfigurationError`/`WorkspaceError`/`ProtocolConfigurationError`
-already raise at startup or first use for invalid combinations (e.g.
-workspace enabled without an absolute data directory, curated-protocol paths
-partially set). Development identity is only reachable outside `operational`
-scope — `VOINEY_LAB_USAGE_SCOPE=operational` requires a complete
-OIDC configuration; there is no silent fallback from operational to
-development identity.
+- `/healthz` 응답, `/readyz` 의 200 아닌 응답, 다시 시작한 횟수, 디스크, 백업 검사 실패.
+- 파일럿 지표: 관리자 화면 `/admin-metrics.html`(관리자 계정 또는 토큰), CSV 는 `python scripts/pilot_metrics.py experiments|analyses|days|notes`. 숫자·코드·시각만 있다.
+- 집계: `GET /api/admin/metrics`(머리글 `X-Voice-Workflow-Admin-Token` = `VOINEY_LAB_ADMIN_TOKEN`, 없으면 503) — 경로·도구·지연 집계와 실험 기록 수·완료율·이상·차단 수.
+- 서버 기록(log)의 `pilot.metrics.failed`(지표 쓰기 실패, 실험은 계속된다).
 
-## Observability
+## 7. 사고가 나면
 
-`runtime_metrics.py` records bounded, content-free route/tool/latency
-aggregates. `GET /api/admin/metrics` (the shared `VOINEY_LAB_ADMIN_TOKEN`)
-returns them with the experiment reports' aggregate counts (reports,
-completion rate, workflow events, anomalies and blocked steps). The tenant
-admin analytics page and `GET /api/workspace/admin/pilot-metrics` were
-removed on 2026-10-08 (lane DI). Nothing returned includes raw audio,
-transcripts, identities, free text, credential values, or model reasoning.
-
-Monitor at minimum:
-
-- `/healthz` availability and `/readyz` non-200 responses;
-- the report aggregates of `/api/admin/metrics`: completion rate, anomalies
-  and blocked steps per controlled pilot window;
-- service restart frequency, disk capacity, and backup verification failures.
-
-On a mutation failure, leave the workflow at its last server-confirmed state,
-ask the researcher to refresh the timeline, and preserve the sanitized service
-log plus the session identifier in the incident record. Never copy raw audio,
-transcripts, bearer tokens, `.env`, evidence bytes, or internal database paths
-into logs or tickets.
+- 상태를 바꾸다 실패하면 마지막으로 서버가 확인한 상태에 둔다. 연구자에게 기록을 새로 읽게 한다.
+- 정리된 서버 기록과 실험 세션 id 만 사고 기록에 남긴다. 원음·말한 글·토큰·`.env`·첨부 파일·내부 DB 경로는 기록이나 티켓에 붙이지 않는다.

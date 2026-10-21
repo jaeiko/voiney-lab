@@ -1479,6 +1479,11 @@ def validate_step_labelling(protocol: ExperimentProtocol) -> ExperimentProtocol:
     of ``validate_protocol`` -- a joined analysis, its stored record and its
     review versions hold steps of both kinds -- and the analysis applies it
     to each reading of the source.
+
+    Human decision 2026-10-20 (lane AN5, decision 1): a reading checked for
+    review may hold both kinds as well -- a document read at once or one
+    piece -- with a card at each seam; only a reading with no card to ask
+    on is still held to this rule.
     """
 
     labelled_first: bool | None = None
