@@ -596,6 +596,47 @@ def _workspace_settings()->WorkspaceSettings:
 _REQUEST_ACCOUNT:contextvars.ContextVar[Account|None]=contextvars.ContextVar(
     "voice_workflow_request_account",default=None)
 _ACCOUNT_VOICE_CONNECTIONS:dict[str,dict[asyncio.Task,WebSocket]]={}
+_ACCOUNT_VOICE_REPORT_WRITES:dict[str,set[asyncio.Task]]={}
+
+
+async def _voice_report_write(function:Callable[...,Any],*args:Any,**kwargs:Any)->Any:
+    """Keep an already-started report write alive until account erasure can join it.
+
+    Cancelling the voice coroutine does not stop its worker thread. Shield and
+    track only that existing write, not another turn or a workflow authority.
+    """
+
+    account=_REQUEST_ACCOUNT.get()
+    if account is None:
+        return await asyncio.to_thread(function,*args,**kwargs)
+    account_id=account.account_id
+
+    async def run()->tuple[Any,Exception|None]:
+        try:
+            return await asyncio.to_thread(function,*args,**kwargs),None
+        except Exception as exc:
+            # A cancelled shield can log an inner exception's raw message on
+            # Python 3.14. Keep it as data until the live caller can raise it.
+            return None,exc
+
+    worker=asyncio.create_task(run())
+    _ACCOUNT_VOICE_REPORT_WRITES.setdefault(account_id,set()).add(worker)
+
+    def finished(completed:asyncio.Task)->None:
+        pending=_ACCOUNT_VOICE_REPORT_WRITES.get(account_id,set())
+        pending.discard(completed)
+        if not pending:
+            _ACCOUNT_VOICE_REPORT_WRITES.pop(account_id,None)
+        if not completed.cancelled():
+            _,failure=completed.result()
+            if failure is not None:
+                log.warning("voice.report_write_failed error=%s",type(failure).__name__)
+
+    worker.add_done_callback(finished)
+    result,failure=await asyncio.shield(worker)
+    if failure is not None:
+        raise failure
+    return result
 
 
 async def _close_account_voice_connections(account_id:str)->None:
@@ -614,6 +655,11 @@ async def _close_account_voice_connections(account_id:str)->None:
             await socket.close(code=1008,reason="authentication required")
         except (RuntimeError,WebSocketDisconnect):
             pass  # Already disconnected.
+    # The voice tasks cannot start new writes now. Finish existing worker
+    # threads before erasure takes its inventory, otherwise a late open_report
+    # could recreate an owner's row after that inventory was deleted.
+    while writes:=tuple(_ACCOUNT_VOICE_REPORT_WRITES.get(account_id,())):
+        await asyncio.gather(*(asyncio.shield(write) for write in writes),return_exceptions=True)
 
 
 async def _watch_account_voice_session(token:str,task:asyncio.Task,websocket:WebSocket)->None:
@@ -7957,7 +8003,7 @@ async def _queue_curated_research(
                 **outside_pdf_fields,
             )
             if session.experiment_report_store is not None:
-                report=await asyncio.to_thread(
+                report=await _voice_report_write(
                     _record_experiment_report_plan,
                     session,curated,research_plan,
                     turn_id=turn_id,generation=generation,
@@ -10884,7 +10930,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     )
                 elif session.experiment_report_store is not None:
                     try:
-                        report=await asyncio.to_thread(
+                        report=await _voice_report_write(
                             _record_experiment_report_plan,
                             session,curated,plan,
                             turn_id=turn_id,generation=generation,
@@ -11053,7 +11099,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         session,plan,turn_id=turn_id,generation=generation,
                     )
                     if session.experiment_report_store is not None:
-                        fix_report=await asyncio.to_thread(
+                        fix_report=await _voice_report_write(
                             _record_experiment_report_plan,
                             session,curated,plan,
                             turn_id=turn_id,generation=generation,
@@ -11095,7 +11141,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 )
             ):
                 try:
-                    report=await asyncio.to_thread(
+                    report=await _voice_report_write(
                         _record_experiment_report_plan,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
@@ -11364,7 +11410,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 and not report_prepared
             ):
                 try:
-                    report=await asyncio.to_thread(
+                    report=await _voice_report_write(
                         _record_experiment_report_plan,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
