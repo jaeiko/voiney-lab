@@ -75,7 +75,8 @@ test.describe('Five tabs (lane IA)', () => {
     await expect(page.locator('#experiment-start-open')).toBeVisible();
     await expect(page.locator('#start-wizard')).toBeHidden();
     await page.locator('#tab-link-records').click();
-    await expect(page.locator('#experiment-session-ledger')).toBeVisible();
+    // Lane IA decision ⑤ (2026-10-21): the records open on the list of past experiments.
+    await expect(page.locator('#records-list-view')).toBeVisible();
   });
 
   test('the step-by-step screens open as a sheet over the page and close by ×, outside, Esc and back', async ({ page }) => {

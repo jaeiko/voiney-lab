@@ -4,9 +4,10 @@ test.describe.configure({ timeout: 45_000 });
 
 test.describe('Empty and loading states', () => {
   test('timeline shows guidance text when no experiment session exists', async ({ page }) => {
+    // Lane IA decision ⑤ (2026-10-21): the records tab opens on the list of past experiments; one record holds the timeline.
     await page.goto(TAB.records);
-    await expect(page.locator('#experiment-event-timeline')).toBeVisible();
-    await expect(page.locator('#experiment-event-timeline')).not.toHaveText('');
+    await expect(page.locator('#records-list')).toBeVisible();
+    await expect(page.locator('#records-list')).not.toHaveText('');
   });
 
   test('protocol selector shows a loading state before the catalog resolves, then settles', async ({ page }) => {
@@ -44,6 +45,9 @@ test.describe('Responsive layout', () => {
       expect(horizontalOverflow, tab).toBeLessThanOrEqual(1);
     }
     await page.locator('#tab-link-records').click();
+    // Lane IA decision ⑤: the ledger is one record's screen (#/records/<id>).
+    await page.evaluate(() => navigateTab('records', 'layout-check'));
+    await expect(page.locator('#experiment-session-ledger')).toBeVisible();
     const ledgerColumns = await page.locator('.experiment-ledger-grid').evaluate(
       (el) => getComputedStyle(el).gridTemplateColumns,
     );

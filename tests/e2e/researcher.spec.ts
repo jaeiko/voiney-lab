@@ -1,4 +1,4 @@
-import { test, expect, type Page, TAB } from './routes';
+import { test, expect, type Page, TAB, recordRoute } from './routes';
 
 test.describe.configure({ timeout: 45_000 });
 
@@ -45,6 +45,9 @@ test.describe('Researcher / Bench workspace', () => {
 
     // Experiment ledger / timeline empty state on the records tab before any session exists
     await page.locator('#tab-link-records').click();
+    // Lane IA decision ⑤ (2026-10-21): the list of past experiments first; one record holds the ledger.
+    await expect(page.locator('#records-list-view')).toBeVisible();
+    await page.evaluate(() => navigateTab('records', 'empty-check'));
     await expect(page.locator('#experiment-session-ledger')).toBeVisible();
     await expect(page.locator('#experiment-event-timeline')).toBeVisible();
   });
@@ -55,7 +58,8 @@ test.describe('Researcher / Bench workspace', () => {
   });
 
   test('evidence and observation capture controls are present with non-blank guidance text', async ({ page }) => {
-    await page.goto(TAB.records);
+    // Lane IA decision ⑤: the capture controls are on one record's screen.
+    await page.goto(recordRoute('capture-check'));
     await expect(page.locator('#manual-observation-content')).toBeVisible();
     await expect(page.locator('#experiment-evidence-file')).toBeVisible();
     const captureStatus = page.locator('#experiment-capture-status');
@@ -102,7 +106,8 @@ test.describe('Researcher / Bench workspace', () => {
     // Lane IA: the conversation lives on the experiment tab now (a sheet during
     // the run, beside the record after it), so only the ledger is measured here.
     const startupDone = experimentSessionsLoaded(page);
-    await page.goto(TAB.records);
+    // Lane IA decision ⑤ (2026-10-21): the ledger is one record's screen.
+    await page.goto(recordRoute('experiment-layout-audit'));
     await startupDone;
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
     await page.evaluate(() => {
