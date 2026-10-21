@@ -119,6 +119,22 @@ assert(FakeAudio.made.length===1&&!FakeAudio.made[0].paused,"the second sound di
 
 
 class ExperimentStartTests(unittest.TestCase):
+    def test_an_open_sheet_keeps_its_step_when_the_start_data_arrives_late(self) -> None:
+        # CI on 32b2585 (bugs-ia.spec.ts, first test of the run): the sheet was opened and moved on before the
+        # page's own load finished, and the load put it back on its first step.
+        result = run(r"""
+let release=null;
+serve([["/api/voice/voices",()=>new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>VOICES})})],...base()]);
+await loadProtocolCatalog();await loadWorkspaceSession();
+const loading=openStartWizard();await settle(2);
+openWizardSheet("voice");wizardGo("protocol");
+assert(wizard.open===true&&wizard.step==="protocol",`before the load: ${wizard.open} ${wizard.step}`);
+release();await loading;await settle(4);
+assert(wizard.step==="protocol",`the late load moved the open sheet back to: ${wizard.step}`);
+closeWizardSheet();
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_the_tab_names_the_one_start_that_shows_and_the_state_line_matches(self) -> None:
         result = run(r"""
 await boot(base());

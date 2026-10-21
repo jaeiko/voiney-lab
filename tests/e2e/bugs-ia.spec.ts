@@ -37,6 +37,8 @@ const CHECK = { enabled: true, protocol_id: PROTOCOL_ID, target: { kind: 'analys
 type FakeAudioRecord = { src: string; paused: boolean; played: number; pauses: number };
 declare global {
   interface Window { __audio: FakeAudioRecord[]; __revoked: string[] }
+  // The page's own top-level var (index.html).
+  var wizard: { settings: object | null; voices: { voices?: object[] } | null };
 }
 
 async function mock(page: Page, { catalog = true } = {}) {
@@ -67,8 +69,14 @@ async function fakeAudio(page: Page) {
   });
 }
 
+// The page has loaded what the sheet's steps are built from (the settings and the voices) -- as a person sees the list.
+async function pageReady(page: Page) {
+  await page.waitForFunction(() => typeof wizard === 'object' && wizard.settings !== null && (wizard.voices?.voices?.length ?? 0) === 2);
+}
+
 async function openAgentStep(page: Page) {
   await page.goto(TAB.experiment);
+  await pageReady(page);
   await page.locator('#experiment-start-open').click();
   await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
   await page.locator('#wizard-primary').click();
@@ -143,6 +151,7 @@ test.describe('Bug ②: the experiment tab always shows one start (lane IA)', ()
   test('a picked protocol gets [이 프로토콜로 시작], the state line names it, and the press opens the sheet at its questions', async ({ page }) => {
     await mock(page);
     await page.goto(protocolRoute(PROTOCOL_ID));
+    await pageReady(page);
     await expect(page.locator('#protocol-detail-title')).toHaveText('Gamma (예시)');
     await expect(page.locator('#protocol-start')).toBeVisible();
 
@@ -174,6 +183,7 @@ test.describe('Bug ②: the experiment tab always shows one start (lane IA)', ()
   test('with no protocol picked the card is [새 실험 시작] and the state line names it', async ({ page }) => {
     await mock(page, { catalog: false });
     await page.goto(TAB.experiment);
+    await pageReady(page);
     const card = page.locator('#experiment-start-open');
     await expect(card).toBeVisible();
     await expect(card).toHaveAttribute('data-start', 'new');

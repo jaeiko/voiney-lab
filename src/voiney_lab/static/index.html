@@ -5020,7 +5020,9 @@ async function openStartWizard(){
  await loadAuthSession();
  if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
  await wizardAfterSignIn();
- wizard.step=wizardSteps()[0];renderRoute();return true;
+ // A sheet the experimenter already opened keeps its step: the settings and the voices can arrive after the first press (a slow server, found by CI on 32b2585).
+ if(!wizard.open||!wizardSteps().includes(wizard.step))wizard.step=wizardSteps()[0];
+ renderRoute();return true;
 }
 async function wizardAfterSignIn(){
  const settings=fetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
