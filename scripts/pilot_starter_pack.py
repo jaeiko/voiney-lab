@@ -710,7 +710,8 @@ def run_pack(
                     pdf, conversion = _prepare_pdf(path, Path(work))
                     registration = catalog.register(
                         pdf, source_filename=_display_name(entry.title), media_type="application/pdf",
-                        converted_from=conversion)
+                        converted_from=conversion, organization_id=principal.organization_id,
+                        visible_protocol_ids=workspace.resource_ids(principal, "protocol_catalog"))
                 protocol_id = registration.entry.protocol_id
                 row.protocol_id = protocol_id
                 row.deduplicated = registration.deduplicated

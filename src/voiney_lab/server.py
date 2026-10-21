@@ -4023,10 +4023,16 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             catalog,store=_open_protocol_catalog()
             try:
                 converted=None
+                principal=_REQUEST_PRINCIPAL.get()
+                registration_scope={}
+                visible_protocols=_visible_catalog_resource_ids()
+                if principal is not None and visible_protocols is not None:
+                    registration_scope={"organization_id":principal.organization_id,
+                                        "visible_protocol_ids":visible_protocols}
                 # A Word document or photo uploaded before is found by its own
                 # checksum and not converted again.
                 result=(
-                    catalog.find_converted_upload(file_sha256(original))
+                    catalog.find_converted_upload(file_sha256(original),visible_protocol_ids=visible_protocols)
                     if original is not None else None
                 )
                 if result is None:
@@ -4042,6 +4048,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                             filename if converted is None else pdf_filename(filename)),
                         media_type=PDF_MEDIA_TYPE,
                         converted_from=converted,
+                        **registration_scope,
                     )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 _record_workspace_metric(

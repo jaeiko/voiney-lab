@@ -18,6 +18,12 @@ prose regeneration require the owner. The administrator may append only PI
 confirmation to another person's notebook. Unavailable records return 404
 (socket: `report_not_found`), including records from another lab.
 
+Protocol registration now scopes checksum deduplication to the server's lab.
+Existing bound protocol ids stay valid. A newly registered lab/source pair uses
+a deterministic scoped id and its own registration event; the original PDF
+checksum and content-addressed bytes stay identical. No catalog schema changes.
+The starter pack uses the same registration scope.
+
 ## Commercial workspace schema 1 → 2
 
 Schema 2 adds the persistent experiment-session foundation:

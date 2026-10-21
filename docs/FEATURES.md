@@ -31,7 +31,7 @@
 
 ## F2. 프로토콜 들여오기
 
-- **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다.
+- **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 연구실 안에서 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다. 다른 연구실이 같은 파일을 올리면 별도의 카탈로그 항목으로 등록한다. 원문 바이트는 공유할 수 있지만 분석·검토·소유 범위는 연구실마다 따로 남는다. 스타터 팩 도구도 같은 규칙을 쓴다.
   엑셀(.xlsx)은 원문이 아니라 고른 프로토콜에 붙는 **시약 표**로 저장하고 분석에 쓰지 않는다.
   **공개 Google Drive·Docs·Sheets 링크**도 받는다: 서버가 내려받아 올리기와 같은 길로 넘기고(Docs 는 PDF 로, Sheets 는 있는 프로토콜의 시약 표로), 링크 주소를 장부에 출처로 남긴다. 비공개 파일은 "공유 설정을 바꾸거나 파일을 내려받아 올려 주세요"라는 서버 문장으로 거절한다.
 - **어디**: `server.py` `register_protocol_pdf`, `attach_protocol_reagent_table`, `import_protocol_link`; `experiment_protocol_pdf.py` (`SOURCE_MEDIA_TYPES`, `convert_source_to_pdf`, `docx_to_pdf`, `image_to_pdf`, `find_office_converter`); `protocol_link_import.py` (`parse_google_link`, `fetch_google_link`, `ALLOWED_LINK_HOSTS`, `MAX_REDIRECTS`, `sniff_media_type`, `LINK_IMPORT_MESSAGES`); `protocol_catalog.py` (`ProtocolCatalog.register`, `read_reagent_workbook`, `review_version_suggestion`); 저장은 `experiment_protocol_files.py`(`objects/sha256/…`)와 `experiment_protocol_store.py`.

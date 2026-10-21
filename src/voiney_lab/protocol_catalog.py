@@ -3398,6 +3398,8 @@ class ProtocolCatalog:
         source_filename: str,
         media_type: str,
         converted_from: SourceConversion | None = None,
+        organization_id: str | None = None,
+        visible_protocol_ids: frozenset[str] | None = None,
     ) -> ProtocolRegistration:
         """Register one source PDF, or find the one already registered.
 
@@ -3413,20 +3415,28 @@ class ProtocolCatalog:
             )
         source = Path(source_pdf)
         extraction = extract_protocol_pdf(source)
-        existing = self.store.find_protocol_revision_by_checksum(
-            extraction.sha256
-        )
+        registration_key=extraction.sha256
+        if organization_id is None:
+            existing = self.store.find_protocol_revision_by_checksum(extraction.sha256)
+        else:
+            # Only registration is scoped here. Source bytes remain addressed
+            # by their original checksum; analyses/events belong to this lab.
+            registration_key=hashlib.sha256(f"{organization_id}\x1f{extraction.sha256}".encode()).hexdigest()
+            candidates=set(visible_protocol_ids or ()) | {_protocol_id(registration_key)}
+            existing=next((revision for identifier in sorted(candidates)
+                for revision in self.store.list_protocol_revisions(identifier)
+                if revision.pdf_checksum==extraction.sha256),None)
         if existing is not None:
             return ProtocolRegistration(
                 self._entry_for_revision(existing), deduplicated=True
             )
-        protocol_id = _protocol_id(extraction.sha256)
+        protocol_id = _protocol_id(registration_key)
         creation = self.store.create_experiment(
             protocol_id, source, original_filename=filename
         )
         status = _analysis_state(extraction)
         self.store.append_event(
-            f"registered-{extraction.sha256[:40]}",
+            f"registered-{registration_key[:40]}",
             protocol_id,
             creation.protocol_revision.revision_number,
             "protocol_registered",
@@ -3491,7 +3501,9 @@ class ProtocolCatalog:
             if event.event_type == _REAGENT_TABLE_EVENT and isinstance(event.payload, dict)
         ]
 
-    def find_converted_upload(self, sha256: str) -> ProtocolRegistration | None:
+    def find_converted_upload(
+        self, sha256: str, *, visible_protocol_ids: frozenset[str] | None = None,
+    ) -> ProtocolRegistration | None:
         """The protocol a Word document or photo with this checksum made, if any.
 
         Lane AN, FM: LibreOffice writes the time into each PDF it prints, so
@@ -3499,15 +3511,19 @@ class ProtocolCatalog:
         its own checksum before it is converted again.
         """
 
-        revision = self._revision_converted_from(sha256)
+        revision = self._revision_converted_from(sha256,visible_protocol_ids=visible_protocol_ids)
         if revision is None:
             return None
         return ProtocolRegistration(self._entry_for_revision(revision), deduplicated=True)
 
-    def _revision_converted_from(self, sha256: str) -> ProtocolRevisionRecord | None:
+    def _revision_converted_from(
+        self, sha256: str, *, visible_protocol_ids: frozenset[str] | None = None,
+    ) -> ProtocolRevisionRecord | None:
         """The revision registered from the upload with this checksum, if any."""
 
         for experiment in self.store.list_experiments():
+            if visible_protocol_ids is not None and experiment.experiment_id not in visible_protocol_ids:
+                continue
             for event in self.store.list_events(experiment.experiment_id):
                 if event.event_type != "protocol_registered" or not isinstance(
                     event.payload, dict
