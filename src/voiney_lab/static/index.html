@@ -651,7 +651,7 @@
     body[data-view="after"] .after-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
     .after-title{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
     .after-experimenter{color:var(--ink-muted);font-size:.875rem;font-weight:600}
-    body[data-view="after"] #tab-experiment{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);grid-template-areas:"work chat" "setup setup";align-items:start}
+    body[data-view="after"] #tab-experiment:not([hidden]){display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);grid-template-areas:"work chat" "setup setup";align-items:start}
     body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}
     body[data-view="after"] #tab-experiment .timeline{grid-area:chat}
     body[data-view="after"] #tab-experiment .prestart-side{grid-area:setup}
@@ -1772,7 +1772,7 @@ function renderScreenView(){
  if(view!=="before")stopVoicePreview();
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
  // Lane IA decision ①: the run opens the experiment tab once (replacing the entry, so the back button leaves the run's tab, not a tab before it); the route draws the tab, the band and the wizard.
- if(view!=="before"&&wizard.open)closeWizardSheet({silent:true});
+ if(view==="during"&&wizard.open)closeWizardSheet({silent:true});
  if(view==="during"&&lastScreenView!=="during"&&shownTab()!=="experiment"){lastScreenView=view;navigateTab("experiment",null,{replace:true});}
  else{lastScreenView=view;renderRoute();}
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
@@ -4814,7 +4814,7 @@ $("mic-device")?.addEventListener("change",async event=>{const value=event.targe
 $("mic-reconnect")?.addEventListener("click",()=>{void reconnectMic(sessionGeneration,"manual");});
 globalThis.navigator?.mediaDevices?.addEventListener?.("devicechange",()=>{void renderMicDevices();if(micWorkletNode)scheduleMicReconnect("devicechange");});
 void renderMicDevices();
-$("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
+$("start").addEventListener("click",()=>{void pressConsoleStart();});$("stop").addEventListener("click",stopSession);init();
 $("rail-new-session")?.addEventListener("click",confirmNewSession);
 $("rail-pause-session")?.addEventListener("click",togglePauseSession);
 $("workflow-resume-button")?.addEventListener("click",()=>{if(workflowPaused)togglePauseSession();});
@@ -4870,6 +4870,11 @@ async function pressExperimentStart(){
  }
  return openWizardSheet();
 }
+// Lane IA QA-01 (lane QA, 2026-10-20): the 실험 후 view's console [새 실험 시작] sent session.start with no
+// questions and no safety notice, which the server then recorded as a start after the safety notice. Every
+// start goes through the sheet: the console's button opens it (over the end screen, which stays until the
+// sheet's own start), as the tab's card does.
+function pressConsoleStart(){if(sessionActive)return false;return pressExperimentStart();}
 function openStartForProtocol(protocolId){
  // Only the protocol whose result is on screen, and only when the server says it can run (as the direct start did).
  if(typeof protocolId!=="string"||!protocolId||!protocolCatalog.has(protocolId))return false;
@@ -5050,7 +5055,7 @@ function renderWizard(){
  if(!wizard)return false;
  const body=globalThis.document?.body,section=$("start-wizard"),sheet=$("wizard-sheet");
  // Lane IA addendum: a sheet over the page while it is open and no run is on; the login's page of its own whatever the hash.
- const page=authRequired(),on=page||(wizard.open===true&&screenView()==="before");
+ const page=authRequired(),on=page||(wizard.open===true&&screenView()!=="during");
  if(!on&&wizard.open)wizard.open=false;
  if(body?.dataset)body.dataset.wizard=on?"on":"off";
  if(sheet){sheet.hidden=!on;if(sheet.dataset)sheet.dataset.mode=page?"page":"sheet";}
@@ -5142,7 +5147,7 @@ function renderWizardAgent(host,primary){
 // or starting the experiment stops; a spent object URL is revoked. While the
 // experiment runs its guidance speaks, so no preview then.
 var voicePreview={audio:null,url:null,token:0};
-function voicePreviewAllowed(){return screenView()==="before"&&!sessionActive&&["IDLE","ERROR"].includes(visibleState);}
+function voicePreviewAllowed(){return screenView()!=="during"&&!sessionActive&&["IDLE","ERROR"].includes(visibleState);}
 function stopVoicePreview(){
  voicePreview.token+=1;
  const audio=voicePreview.audio,url=voicePreview.url,was=wizard?.previewing||null;

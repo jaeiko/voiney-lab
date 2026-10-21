@@ -59,5 +59,33 @@ assert(serverSocketUrl()==="ws://test/ws",serverSocketUrl());
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+class StartThroughTheSheetTests(unittest.TestCase):
+    """QA-01: every start goes through the sheet; the after view keeps to its tab."""
+
+    def test_the_after_views_start_opens_the_sheet_and_sends_nothing(self) -> None:
+        result = run3(r"""
+await boot(base());
+go("#/experiment");pickProtocolFromList("p-1");await settle(8);
+const ws=running();
+await deliver(ws,{type:"experiment.ended",configuration_id:5,status:"completed",report:"saved"});await settle(4);
+assert(document.body.dataset.view==="after",`view: ${document.body.dataset.view}`);
+// As lane QA did it: [종료] on the end screen, then the console's [새 실험 시작].
+await stopSession();await settle(4);
+assert(document.body.dataset.view==="after"&&node("start").disabled!==true,`the end screen or its start is gone: ${document.body.dataset.view}`);
+const before=made,sent=ws.sent.length;
+node("start").dispatch("click");await settle(8);
+assert(made===before&&ws.sent.length===sent,`the console start opened a session: sockets ${made-before}, sent ${ws.sent.slice(sent)}`);
+assert(wizard.open===true&&document.body.dataset.wizard==="on",`the sheet did not open: ${wizard.open} ${document.body.dataset.wizard}`);
+closeWizardSheet();
+assert(document.body.dataset.view==="after","closing the sheet left the end screen");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_after_views_panel_keeps_to_the_experiment_tab(self) -> None:
+        html = INDEX.read_text(encoding="utf-8")
+        self.assertNotIn('body[data-view="after"] #tab-experiment{display', html)
+        self.assertIn('body[data-view="after"] #tab-experiment:not([hidden]){display:grid;', html)
+
 if __name__ == "__main__":
     unittest.main()
