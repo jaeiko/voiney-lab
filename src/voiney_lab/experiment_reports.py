@@ -438,7 +438,7 @@ class ExperimentReportStore:
                 f"""
                 SELECT report_id,session_id,protocol_id,protocol_title,status,started_at,ended_at,
                        anomaly_count,blocker_count,finalization_version,
-                       development_only
+                       development_only,organization_id,owner_principal_id
                   FROM experiment_reports {where}
                  ORDER BY started_at,report_id
                 """,
@@ -460,14 +460,18 @@ class ExperimentReportStore:
         """
 
         day = str(report["started_at"])[:10]
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return {"day_sequence": 1, "day_sequence_date": day}
         with self._connect() as connection:
             sequence = connection.execute(
                 """
                 SELECT COUNT(*) FROM experiment_reports
                  WHERE substr(started_at,1,10)=?
+                   AND protocol_id=? AND organization_id IS ? AND owner_principal_id IS ?
                    AND (started_at<? OR (started_at=? AND report_id<=?))
                 """,
-                (day, report["started_at"], report["started_at"], report["report_id"]),
+                (day, report["protocol_id"], report.get("organization_id"), report.get("owner_principal_id"),
+                 report["started_at"], report["started_at"], report["report_id"]),
             ).fetchone()[0]
         return {"day_sequence": sequence, "day_sequence_date": day}
 
@@ -732,13 +736,16 @@ class ExperimentReportStore:
         is the one answered after the run before it started.
         """
 
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return None
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT MAX(started_at) FROM experiment_reports
                  WHERE protocol_id=? AND started_at<?
+                   AND organization_id IS ? AND owner_principal_id IS ?
                 """,
-                (report["protocol_id"], report["started_at"]),
+                (report["protocol_id"], report["started_at"], report.get("organization_id"), report.get("owner_principal_id")),
             ).fetchone()
         return row[0] if row and row[0] else None
 
@@ -749,14 +756,18 @@ class ExperimentReportStore:
         Same protocol, any revision; a run still in progress is not "지난번".
         """
 
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return None
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT report_id FROM experiment_reports
                  WHERE protocol_id=? AND started_at<? AND ended_at IS NOT NULL AND report_id<>?
+                   AND organization_id IS ? AND owner_principal_id IS ?
                  ORDER BY started_at DESC, report_id DESC LIMIT 1
                 """,
-                (report["protocol_id"], report["started_at"], report["report_id"]),
+                (report["protocol_id"], report["started_at"], report["report_id"],
+                 report.get("organization_id"), report.get("owner_principal_id")),
             ).fetchone()
         return self.get_report(row[0]) if row else None
 
@@ -2709,6 +2720,14 @@ def report_start_check_answers(
     except Exception as exc:  # noqa: BLE001 -- said on the report, never raised
         log.warning("report start check not read error=%s", type(exc).__name__)
         return None
+    owner=report_data.get("owner_principal_id")
+    # Identified records never inherit anonymous or other people's answers.
+    if owner is not None:
+        events=[item for item in events if (
+            item.get("payload", {}) if isinstance(item, Mapping) else getattr(item, "payload", {})
+        ).get("actor_principal_id")==owner]
+    elif report_data.get("organization_id") is not None:
+        return []  # Quarantined legacy record: the experimenter is unknown.
     return start_check_answers_between(events, since=since, until=str(report_data.get("started_at") or ""))
 
 
