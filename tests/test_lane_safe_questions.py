@@ -92,3 +92,9 @@ def test_an_explicit_record_command_keeps_uncertain_words_without_releasing_endp
     assert plan.reported_observation
     assert plan.observation_outcome == "밴드가 투명해진 것 같아" or "투명해진 것 같아" in plan.observation_outcome
     assert not session._endpoint_observations
+
+
+def test_a_request_to_record_uncertainty_does_not_authorize_a_workflow_tool():
+    assert evidence_fence_rejection(
+        utterance="타이머 시작했나 메모해 줘", evidence="타이머 시작했나", bounded_control=True,
+    ) == "interrogative_not_authorized"

@@ -3857,7 +3857,7 @@ _CONTROL_QUESTION = re.compile(
 )
 
 
-def _asked(transcript: str) -> bool:
+def _asked(transcript: str, *, literal_record: bool = False) -> bool:
     """The words ask about a command rather than give it ("시작해?", "재개해도 돼?").
 
     The pause and end words have read questions this way since 2026-10-02;
@@ -3865,7 +3865,8 @@ def _asked(transcript: str) -> bool:
     as the router's server ruling already did (interrogative_not_authorized).
     """
 
-    return bool(is_question_or_speculation(transcript) or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
+    return bool(is_question_or_speculation(transcript, literal_record=literal_record)
+                or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
 END_CONFIRMATION_QUESTION = {
     "ko": "실험을 종료할까요?",
     "en": "Do you want to end the experiment?",
@@ -4701,7 +4702,7 @@ def note_request(transcript: str) -> tuple[str | None, str | None] | None:
     """
 
     said = " ".join(transcript.split()).strip()
-    if not said or _asked(said):
+    if not said or _asked(said, literal_record=True):
         return None
     if _NOTE_BARE.fullmatch(said):
         return None, None
@@ -17848,7 +17849,7 @@ class CuratedProtocolSession:
         arbitration = arbitration or arbitrate_request(transcript)
         if (
             language == "ko" and transcript_quality is None
-            and is_question_or_speculation(transcript, punctuation=False)
+            and is_question_or_speculation(transcript, punctuation=False, literal_record=True)
             and arbitration.intent not in {
                 RequestIntent.LEARNING, RequestIntent.PROTOCOL_AUDIT,
                 RequestIntent.HISTORY_RESUME, RequestIntent.UNCERTAINTY,

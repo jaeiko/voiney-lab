@@ -57,12 +57,16 @@ _SPECULATION = re.compile(
 )
 
 
-def is_question_or_speculation(text: str, *, punctuation: bool = True) -> bool:
+def is_question_or_speculation(
+    text: str, *, punctuation: bool = True, literal_record: bool = False,
+) -> bool:
     """A question/hedge cannot attest a workflow action or observation.
 
     ``punctuation=False`` selects the grammatical guard before the existing
     informational routing, which already answers punctuated questions. The
     same grammar is used at the model-proposal boundary, with punctuation.
+    ``literal_record`` is only for the deterministic reader of an explicit
+    record command's payload; it never authorizes a workflow tool proposal.
     This is deliberately conservative for ambiguous conversational endings.
     """
 
@@ -75,7 +79,7 @@ def is_question_or_speculation(text: str, *, punctuation: bool = True) -> bool:
         return False
     # A request to preserve the spoken uncertainty is still a command to
     # record it; the uncertainty itself never attests endpoint completion.
-    if re.search(r"(?:메모|기록)\s*해\s*(?:줘|주세요)(?=$|[\s,.!~])", said):
+    if literal_record and re.search(r"(?:메모|기록)\s*해\s*(?:줘|주세요)(?=$|[\s,.!~])", said):
         return False
     # These whole words are replies or nouns, not predicate endings.
     grammatical = re.sub(r"(?<![가-힣])(?:아니|하나|바나나|얼마나)(?![가-힣])", "", said)
