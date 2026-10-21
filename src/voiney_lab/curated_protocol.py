@@ -17841,10 +17841,16 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        arbitration = arbitration or arbitrate_request(transcript)
         if (
             language == "ko" and transcript_quality is None
             and is_question_or_speculation(transcript, punctuation=False)
-            and not re.search(r"뭐|무엇|무슨|어디|언제|누가|왜|어떻게|얼마|몇", transcript)
+            and arbitration.intent not in {
+                RequestIntent.LEARNING, RequestIntent.PROTOCOL_AUDIT,
+                RequestIntent.HISTORY_RESUME, RequestIntent.UNCERTAINTY,
+                RequestIntent.VISUAL, RequestIntent.CURRENT_STEP, RequestIntent.GENERAL_QA,
+                RequestIntent.COMBINED_LEARNING_NEXT,
+            }
         ):
             # Read before any pending-answer reader: a question about having
             # done something is not an answer to the question already open.
