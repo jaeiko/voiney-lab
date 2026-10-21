@@ -8053,8 +8053,8 @@ def _open_experiment_report(
             protocol_sha256=curated.fixture.source_pdf_sha256 or "",
             readiness_status=curated.fixture.draft.readiness.status.value,
             development_only=curated.fixture.development_only,
-            organization_id=principal.organization_id if principal is not None else None,
-            owner_principal_id=principal.principal_id if principal is not None else None,
+            organization_id=getattr(principal,"organization_id",None),
+            owner_principal_id=getattr(principal,"principal_id",None),
         )
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
