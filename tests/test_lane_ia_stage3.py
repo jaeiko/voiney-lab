@@ -29,7 +29,7 @@ let made=0;const RealWS=globalThis.WebSocket;globalThis.WebSocket=class extends 
 function running(id="s-9"){socket=new WebSocket("ws://test/ws");acceptedSessionConfiguration={configuration_id:5,mode:"cascade",language:"ko",protocol_id:"p-1",revision_id:"pdf-1",experiment_session_id:id};sessionActive=true;curatedProtocolState=runState();renderScreenView();return socket;}
 const sentTypes=ws=>ws.sent.map(value=>JSON.parse(value).type);
 const deliver=(ws,message)=>onMessage({data:JSON.stringify(message)},sessionGeneration,ws);
-const unauthorized=()=>({ok:false,status:401,headers:{get:()=>"application/json"},json:async()=>({detail:"authentication_required"})});
+const unauthorized=(detail="authentication_required")=>{const answer={ok:false,status:401,headers:{get:()=>"application/json"},json:async()=>({detail}),clone:()=>answer};return answer;};
 """
 
 

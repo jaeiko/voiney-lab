@@ -1791,7 +1791,8 @@ function screenView(){
 function prestartQuestionOpen(){const open=curatedScreenFields?.open_question;return Boolean(open&&typeof open==="object"&&open.kind==="prestart"&&nonemptyText(open.text));}
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
- if(view!=="before")stopVoicePreview();
+ // The preview is allowed whenever no run is on (lane IA review F2: the sheet opens over the end screen too).
+ if(view==="during")stopVoicePreview();
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
  // Lane IA decision ①: the run opens the experiment tab once (replacing the entry, so the back button leaves the run's tab, not a tab before it); the route draws the tab, the band and the wizard.
  if(view==="during"&&wizard.open)closeWizardSheet({silent:true});
@@ -2095,9 +2096,12 @@ function serverUrl(path){const value=String(path??"");return /^[a-z][a-z0-9+.-]*
 function serverSocketUrl(path="/ws"){const origin=serverOrigin();if(origin)return `${origin.replace(/^http/i,"ws")}${path}`;const loc=globalThis.location;return `${loc?.protocol==="https:"?"wss":"ws"}://${loc?.host||""}${path}`;}
 // Lane IA QA-17 (lane QA, 2026-10-20): a 401 (the session expired, the password changed elsewhere, the account
 // was turned off) was handled nowhere -- the reconnecting tried every 15 s for ever, every button stayed
-// locked. Any request answered 401, other than the login's own routes, sends the page to the login.
+// locked. A request answered 401 by the server's gate (detail "authentication_required"), other than the
+// login's own routes, sends the page to the login. A 401 for a wrong password ("login_refused", the
+// password change answers so) is not a lost session (lane IA review F1).
 const AUTH_OWN_ROUTE=/^\/api\/auth\/(login|signup|session|invites)(?:[\/?]|$)/;
-function serverFetch(path,options={}){return fetch(serverUrl(path),options).then(response=>{if(response?.status===401&&!AUTH_OWN_ROUTE.test(String(path??"")))signOutOnScreen();return response;});}
+async function sessionGoneAnswer(response){try{const payload=await response.clone().json();return payload?.detail==="authentication_required";}catch(_){return false;}}
+function serverFetch(path,options={}){return fetch(serverUrl(path),options).then(async response=>{if(response?.status===401&&!AUTH_OWN_ROUTE.test(String(path??""))&&await sessionGoneAnswer(response))signOutOnScreen();return response;});}
 function workspaceFetch(url,options={}){return serverFetch(url,options);}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  authentication_required:"연구자 세션을 확인할 수 없습니다. 다시 로그인한 뒤 실험 상태를 새로고침해 주세요.",
@@ -4688,6 +4692,8 @@ function newUser(){if(!sessionActive)return;sendControl("session.reset");}
 // the experiment list again either way (QA-95).
 var STOP_ANSWER_MS=3000;let stopRequest=null;
 async function stopSession(){
+ // A second [종료] while the first waits for the server's answer would close the socket and lose it (lane IA review F3).
+ if(stopRequest)return false;
  const wasActive=sessionActive,current=socket,running=wasActive&&screenView()==="during"&&current?.readyState===WebSocket.OPEN;let ended=null;
  if(running){
   sessionActive=false;
@@ -5359,7 +5365,9 @@ function renderWizardStart(host,primary){
  if(voice)host.appendChild(compareEl("p","wizard-done",`안내 목소리 · ${voice.label_ko}`));
  // Lane IA decision ⑦: a saved experiment picked in the records (or from the home's card) continues from here -- the start sends the session the server named, as the voice console's '실험 이어하기' did.
  const resuming=experimentIsResumable();
- if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 기록 탭에서 실험 선택을 비우세요.`));
+ if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 아래 [이어하지 않고 새로 시작]을 눌러 주세요.`));
+ // Lane IA review F4: decision ⑤ moved the records tab's experiment select into one record's screen; the step clears the pick itself.
+ if(resuming){const fresh=compareEl("button","wizard-back","이어하지 않고 새로 시작");fresh.type="button";fresh.addEventListener("click",()=>{clearExperimentResumeSelection();renderWizard();});host.appendChild(fresh);}
  if(primary){primary.textContent=resuming?"실험 이어하기":"이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
 }
 async function wizardPrimary(){
