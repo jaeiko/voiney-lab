@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.parse import quote, unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
@@ -1821,6 +1821,33 @@ class ServerConfig:
 
 def _protocol_store_settings()->ProtocolPersistenceSettings:
     return ProtocolPersistenceSettings.from_environment()
+
+
+_CatalogResult=TypeVar("_CatalogResult")
+
+
+async def _catalog_in_worker(
+    operation:Callable[[ProtocolCatalog],_CatalogResult],
+)->_CatalogResult:
+    """Open, use and close SQLite on the same worker thread.
+
+    Wait for that thread before cancelling the caller: its source may live
+    in the caller's temporary directory, which must outlive all PDF work.
+    """
+    def run()->_CatalogResult:
+        catalog,store=_open_protocol_catalog()
+        try:
+            return operation(catalog)
+        finally:
+            store.close()
+    task=asyncio.create_task(asyncio.to_thread(run))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        finally:
+            raise
 
 
 def _install_protocol_ocr_provider(environ=None)->None:
@@ -3883,7 +3910,7 @@ async def _spool_protocol_pdf_upload(
                 if byte_size>limit:
                     raise HTTPException(
                         status_code=413,detail="protocol_pdf_too_large")
-                stream.write(chunk)
+                await asyncio.to_thread(stream.write,chunk)
     except HTTPException:
         destination.unlink(missing_ok=True)
         raise
@@ -3966,8 +3993,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             original=Path(root)/"upload.source"
             await _spool_protocol_pdf_upload(request,original)
         try:
-            catalog,store=_open_protocol_catalog()
-            try:
+            def register(catalog:ProtocolCatalog)->tuple[Any,dict[str,object]]:
                 converted=None
                 # A Word document or photo uploaded before is found by its own
                 # checksum and not converted again.
@@ -3978,8 +4004,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                 if result is None:
                     if original is not None:
                         converted=replace(
-                            await asyncio.to_thread(
-                                convert_source_to_pdf,original,media_type,temporary),
+                            convert_source_to_pdf(original,media_type,temporary),
                             filename=filename,
                         )
                     result=catalog.register(
@@ -4000,10 +4025,10 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                         "status":"stored",
                     },
                 )
-                ocr=_automatic_ocr_on_upload(catalog,result.entry)
-                return _registration_response(result,ocr)
-            finally:
-                store.close()
+                return result,catalog.ocr_status(result.entry.protocol_id,include_text=False)
+            result,status=await _catalog_in_worker(register)
+            ocr=_automatic_ocr_on_upload(None,result.entry,status=status)
+            return _registration_response(result,ocr)
         except HTTPException:
             raise
         except Exception as exc:
@@ -4094,11 +4119,7 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
             # The protocol is there before anything is downloaded for it.
             try:
                 _scope_catalog_resource(protocol_id)
-                catalog,store=_open_protocol_catalog()
-                try:
-                    catalog.get_entry(protocol_id)
-                finally:
-                    store.close()
+                await _catalog_in_worker(lambda catalog:catalog.get_entry(protocol_id))
             except HTTPException:
                 raise
             except Exception as exc:
@@ -4118,14 +4139,11 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
                 target=str(response["protocol"]["protocol_id"])
                 table_id=None
         try:
-            catalog,store=_open_protocol_catalog()
-            try:
-                response["source_link"]=record_source_link(
-                    store,target,fetched,
+            response["source_link"]=await _catalog_in_worker(
+                lambda catalog:record_source_link(
+                    catalog.store,target,fetched,
                     attached_as="reagent_table" if reagent_table else "protocol_source",
-                    table_id=table_id)
-            finally:
-                store.close()
+                    table_id=table_id))
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
         return response
@@ -4149,7 +4167,8 @@ def list_protocol_reagent_tables(protocol_id:str)->dict[str,object]:
 
 
 def _automatic_ocr_on_upload(
-    catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
+    catalog:ProtocolCatalog|None,entry:ProtocolCatalogEntry,
+    *,status:dict[str,object]|None=None,
 )->dict[str,object]:
     """Start OCR for the pages without a usable text layer, if any (lane PX 3).
 
@@ -4165,7 +4184,9 @@ def _automatic_ocr_on_upload(
     """
 
     try:
-        status=catalog.ocr_status(entry.protocol_id,include_text=False)
+        if status is None:
+            assert catalog is not None
+            status=catalog.ocr_status(entry.protocol_id,include_text=False)
     except Exception as exc:  # noqa: BLE001 - the upload itself succeeded
         log.warning("protocol.ocr.status_failed protocol_id=%s error=%s",
                     entry.protocol_id,type(exc).__name__)
@@ -4303,20 +4324,14 @@ async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
         provider=_protocol_ocr_provider()
         running=_PROTOCOL_OCR_TASKS.get(protocol_id)
         if running is not None and not running.done():
-            catalog,store=_open_protocol_catalog()
-            try:
-                current=catalog.ocr_status(protocol_id,include_text=False)
-            finally:
-                store.close()
+            current=await _catalog_in_worker(
+                lambda catalog:catalog.ocr_status(protocol_id,include_text=False))
             current["request_deduplicated"]=True
             if current.get("state")=="ocr_required":
                 current["state"]="queued"
             return current
-        catalog,store=_open_protocol_catalog()
-        try:
-            current=catalog.ocr_status(protocol_id,include_text=False)
-        finally:
-            store.close()
+        current=await _catalog_in_worker(
+            lambda catalog:catalog.ocr_status(protocol_id,include_text=False))
         if current.get("state") in {
             "in_progress","review_required","accepted_for_analysis",
         }:
@@ -12756,7 +12771,7 @@ async def voice_socket(websocket:WebSocket):
                         else:
                             if trusted_config.curated_protocol_fixture_path is not None:
                                 configuration_stage="curated_protocol_fixture"
-                                curated_fixture=curated_fixture or load_curated_protocol_fixture(
+                                curated_fixture=curated_fixture or await asyncio.to_thread(load_curated_protocol_fixture,
                                     trusted_config.curated_protocol_fixture_path,
                                     trusted_config.curated_protocol_provenance_path,
                                     trusted_config.curated_protocol_source_pdf_path,
@@ -12769,9 +12784,9 @@ async def voice_socket(websocket:WebSocket):
                                     # with every readiness gate blocked; it now
                                     # asks the same question the catalog branch
                                     # below asks, and refuses on the same terms.
-                                    if _candidate_fixture_execution_state(
+                                    if (await asyncio.to_thread(_candidate_fixture_execution_state,
                                         curated_fixture,
-                                    )["available_for_execution"]:
+                                    ))["available_for_execution"]:
                                         selected_curated_fixture=curated_fixture
                                         selected_revision_id=getattr(
                                             curated_fixture,"revision_id",
@@ -12788,8 +12803,13 @@ async def voice_socket(websocket:WebSocket):
                                 settings=_protocol_store_settings()
                                 if settings.enabled:
                                     configuration_stage="protocol_catalog"
-                                    catalog,protocol_store=_open_protocol_catalog()
-                                    try:
+                                    def select(catalog:ProtocolCatalog)->tuple[
+                                        CuratedProtocolFixture|None,str|None,str|None,dict[str,object]|None,
+                                    ]:
+                                        selected=None
+                                        revision_id=None
+                                        failure=None
+                                        basis=None
                                         try:
                                             entry=catalog.get_entry(requested_protocol_id)
                                         except ProtocolCatalogNotFoundError:
@@ -12800,27 +12820,26 @@ async def voice_socket(websocket:WebSocket):
                                                 control.get("experiment_session_id"))
                                             if entry is not None else None)
                                         if recovered is not None:
-                                            (selected_curated_fixture,
-                                             selected_revision_id,
-                                             selection_failure)=recovered
+                                            selected,revision_id,failure=recovered
                                         elif entry is not None:
                                             if entry.available_for_execution:
-                                                selected_curated_fixture=(
+                                                selected=(
                                                     catalog.load_executable_fixture(
                                                         requested_protocol_id))
-                                                selected_revision_id=entry.revision_id
+                                                revision_id=entry.revision_id
                                             else:
-                                                selection_failure=(
+                                                failure=(
                                                     "protocol_selection_unavailable")
-                                        if selected_curated_fixture is not None:
-                                            selected_basis_entry={
+                                        if selected is not None:
+                                            basis={
                                                 "source_filename":getattr(
                                                     entry,"source_filename",None),
                                                 "created_at":getattr(
                                                     entry,"created_at",None),
                                             }
-                                    finally:
-                                        protocol_store.close()
+                                        return selected,revision_id,failure,basis
+                                    (selected_curated_fixture,selected_revision_id,
+                                     selection_failure,selected_basis_entry)=await _catalog_in_worker(select)
                             if selected_curated_fixture is None:
                                 # A refusal already recorded upstream is the
                                 # true one.  Overwriting it made a protocol the
@@ -12877,7 +12896,7 @@ async def voice_socket(websocket:WebSocket):
                                 selected_revision_id,
                                 bool(trusted_config.catalog_path),
                             )
-                            safety_pack = resolve_safety_pack(
+                            safety_pack = await asyncio.to_thread(resolve_safety_pack,
                                 selected_curated_fixture.draft.protocol,
                                 catalog_path=trusted_config.catalog_path,
                                 facility_id=trusted_config.facility_id,

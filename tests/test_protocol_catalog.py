@@ -674,6 +674,11 @@ class ProtocolCatalogTests(unittest.TestCase):
 
         socket = Socket()
         store_handle = Mock()
+        def open_catalog_in_worker():
+            store = initialize_protocol_store(
+                ProtocolPersistenceSettings(True, self.root / "catalog"))
+            store_handle.close.side_effect = store.close
+            return ProtocolCatalog(store), store_handle
         with patch(
             "voiney_lab.server.server_config", return_value=config
         ), patch(
@@ -684,7 +689,7 @@ class ProtocolCatalogTests(unittest.TestCase):
             return_value=SimpleNamespace(enabled=True),
         ), patch(
             "voiney_lab.server._open_protocol_catalog",
-            return_value=(self.catalog, store_handle),
+            side_effect=open_catalog_in_worker,
         ), patch(
             "voiney_lab.server.OpenAICompatibleProtocolAnalysisModel"
         ) as analysis_model:
