@@ -7,8 +7,8 @@ a proposal may never redirect a change onto another step. The LLM router's tool
 validation (``llm_router.py``) applies these fences to every tool proposal, and
 the session rules read ``has_completion_evidence`` for a spoken observation.
 
-These functions came verbatim from the removed xAI-only semantic-intent helper
-(lane DI, 2026-10-08); the fences and the words they look for are unchanged.
+The grammatical question/speculation reader is shared by deterministic
+rules and proposal validation so STT punctuation cannot authorize a change.
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ _SPECULATION = re.compile(
     r"|아마|혹시|글쎄|애매|헷갈"
     r"|\b(?:not\s+sure|unsure|maybe|perhaps|probably|might|whether|should)\b"
     r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b"
+    r"|(?:도|면)\s*(?:돼|되|될|괜찮)|해야"
 )
 
 
@@ -65,8 +66,8 @@ def is_question_or_speculation(
     ``punctuation=False`` selects the grammatical guard before the existing
     informational routing, which already answers punctuated questions. The
     same grammar is used at the model-proposal boundary, with punctuation.
-    ``literal_record`` is only for the deterministic reader of an explicit
-    record command's payload; it never authorizes a workflow tool proposal.
+    ``literal_record`` preserves an explicit record command's payload in
+    record readers and proposal checks; it never authorizes a workflow tool.
     This is deliberately conservative for ambiguous conversational endings.
     """
 
@@ -79,7 +80,7 @@ def is_question_or_speculation(
         return False
     # A request to preserve the spoken uncertainty is still a command to
     # record it; the uncertainty itself never attests endpoint completion.
-    if literal_record and re.search(r"(?:메모|기록)\s*해\s*(?:줘|주세요)(?=$|[\s,.!~])", said):
+    if literal_record and re.search(r"(?:메모|기록)\s*(?:좀\s*)?해\s*(?:줘|주세요)(?=$|[\s,.!~])", said):
         return False
     # These whole words are replies or nouns, not predicate endings.
     grammatical = re.sub(r"(?<![가-힣])(?:아니|하나|바나나|얼마나)(?![가-힣])", "", said)
@@ -119,6 +120,7 @@ def evidence_fence_rejection(
     utterance: str,
     evidence: str,
     bounded_control: bool,
+    literal_record: bool = False,
 ) -> str | None:
     """The first evidence fence a proposed change fails, or ``None``.
 
@@ -132,10 +134,10 @@ def evidence_fence_rejection(
 
     if not evidence or evidence.casefold() not in utterance.casefold():
         return "evidence_not_verbatim"
-    if is_question_or_speculation(utterance, punctuation=False):
+    if is_question_or_speculation(utterance, punctuation=False, literal_record=literal_record):
         return "interrogative_not_authorized"
     if (
-        (is_question_or_speculation(utterance) or _INTERROGATIVE_EVIDENCE.search(utterance))
+        is_question_or_speculation(utterance, literal_record=literal_record)
         and not (bounded_control and _POLITE_ACTION_REQUEST.search(utterance))
     ):
         return "interrogative_not_authorized"

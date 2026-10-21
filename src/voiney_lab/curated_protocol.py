@@ -5607,12 +5607,31 @@ _SPILL_ASKED = re.compile(
 )
 
 
+def _asserted_spill_clause(transcript: str) -> bool:
+    """An asserted spill can precede a separate question ("흘렸는데 어떡해")."""
+
+    said = " ".join(transcript.split())
+    for match in _SPILL_REPORT.finditer(said):
+        ending = re.match(
+            r"(?:어(?:요)?|습니다|다|는데|지만|고)(?=$|[\s,.!]|어떡|어떻게|괜찮)",
+            said[match.end():],
+        )
+        if ending is None:
+            continue
+        end = match.end() + ending.end()
+        if (not is_question_or_speculation(said[:end])
+                and not _UNCERTAIN_MARKERS.search(said[end:])):
+            return True
+    return False
+
+
 def _spill_reading(key: str, transcript: str) -> str | None:
     """"reported" or "not_reported" as above; None leaves the words as they were."""
 
     if not _SPILL_WORD.search(key):
         return None
-    if is_question_or_speculation(transcript) or _SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript):
+    if (_SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript)
+            or (is_question_or_speculation(transcript) and not _asserted_spill_clause(transcript))):
         return "not_reported"
     return "reported" if _SPILL_REPORT.search(key) else None
 
@@ -17856,10 +17875,20 @@ class CuratedProtocolSession:
                 RequestIntent.VISUAL, RequestIntent.CURRENT_STEP, RequestIntent.GENERAL_QA,
                 RequestIntent.COMBINED_LEARNING_NEXT,
             }
+            and not _asserted_spill_clause(transcript)
         ):
             # Read before any pending-answer reader: a question about having
             # done something is not an answer to the question already open.
             self._last_front_rule = "question_or_speculation"
+            key = _utterance_key(transcript)
+            if (any(pattern.search(key) for pattern in _TIMER_QUERY_PATTERNS)
+                    and not any(pattern.search(key) for pattern in _TIMER_START_PATTERNS)):
+                self._last_front_rule = "timer_remaining"
+                planned = self._words_plan(
+                    self._remaining_answer(language), intent_kind="step_timer_status",
+                    action=CuratedProtocolAction.TIMER_STATUS)
+                self._replay[turn_id] = planned
+                return planned
             words = "질문이나 추측으로 들었어요. 실제로 하거나 관찰한 내용을 말씀해 주세요."
             if self.active and re.search(r"다음|넘어|완료|끝", transcript):
                 words = _completion_question(self.fixture.steps[self.current_index].source_label)

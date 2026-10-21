@@ -122,7 +122,7 @@ class RoutingTests(unittest.TestCase):
         session = _session()
         client = FakeRouterClient(answer_reply("4단계입니다.", source_kind="server_state"))
         history = [{"at_step": "3", "status": "active", "user": "다음 단계", "handled_by": "llm"}]
-        _route(session, "어디까지 했지?", client, history=history)
+        _route(session, "어디까지 했어?", client, history=history)
         request = client.requests[0]
         self.assertEqual(request["model"], "fake-router-model")
         self.assertEqual([tool["function"]["name"] for tool in request["tools"]],
@@ -137,7 +137,7 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(request["messages"][2]["content"].startswith("SERVER SNAPSHOT"))
         self.assertIn('"current_step":"4"', request["messages"][2]["content"])
         self.assertIn("다음 단계", request["messages"][3]["content"])
-        self.assertEqual(request["messages"][4]["content"], "어디까지 했지?")
+        self.assertEqual(request["messages"][4]["content"], "어디까지 했어?")
 
     def test_a_proposal_that_passes_runs_through_the_sessions_branches(self) -> None:
         session = _session()

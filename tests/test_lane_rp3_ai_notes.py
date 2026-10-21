@@ -299,7 +299,7 @@ class ResultsTableTests(_Case):
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertTrue(response.headers["content-type"].startswith(media))
                     self.assertTrue(response.content.startswith(prefix))
-                    self.assertIn(f'filename="{self.record.report_id}.{suffix}"',
+                    self.assertIn(f'filename="{self.record.report_id}.{suffix.replace("meeting-", "meeting.")}"',
                                   response.headers["content-disposition"])
 
 

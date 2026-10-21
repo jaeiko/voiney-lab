@@ -171,10 +171,11 @@ class FirstStepStartTests(unittest.TestCase):
                 session = _session(None)
                 plan = _front(session, said, turn_id=1)
                 self.assertIsNotNone(plan, "handed on to the model")
-                self.assertIs(plan.action, CuratedProtocolAction.START)
-                self.assertEqual(session.last_front_rule, "start_command")
-                self.assertTrue(plan.state_changed)
-                self.assertEqual((session.active, session.current_index), (True, 0))
+                questioning = said in FIRST_STEP_STARTS[:2]
+                self.assertIs(plan.action, CuratedProtocolAction.DECLINE_COMPLETION if questioning else CuratedProtocolAction.START)
+                self.assertEqual(session.last_front_rule, "question_or_speculation" if questioning else "start_command")
+                self.assertEqual(plan.state_changed, not questioning)
+                self.assertEqual((session.active, session.current_index), (not questioning, 0))
 
     def test_once_running_it_starts_nothing_again(self) -> None:
         for said in FIRST_STEP_STARTS:
@@ -186,7 +187,7 @@ class FirstStepStartTests(unittest.TestCase):
                 self.assertEqual((session.active, session.current_index), (True, at))
                 self.assertNotEqual(session.last_front_rule, "start_command")
 
-    def test_a_model_start_with_these_words_is_accepted(self) -> None:
+    def test_a_model_start_question_does_not_authorize_start(self) -> None:
         said = "자 이제 1단계부터 해볼까"
         facts = RouterTurnFacts(
             utterance=said, language="ko", turn_id=1, generation=1, workflow_revision=0,
@@ -200,7 +201,7 @@ class FirstStepStartTests(unittest.TestCase):
             [ToolProposal(tool="change_state", action="start", evidence="1단계부터 해볼까")],
             facts, ProposalBasis(turn_id=1, generation=1, workflow_revision=0, step_id=None),
         )
-        self.assertEqual((verdict.effect, verdict.reason_code), ("execute", "accepted"))
+        self.assertEqual((verdict.effect, verdict.reason_code), ("refuse", "interrogative_not_authorized"))
 
 
 if __name__ == "__main__":

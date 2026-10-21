@@ -72,6 +72,7 @@ from voiney_lab.model_providers import ModelProviderError, RoleModel
 from voiney_lab.intent_fences import (
     evidence_fence_rejection,
     has_completion_evidence,
+    is_question_or_speculation,
     normalize_semantic_utterance,
     targets_current_step,
 )
@@ -941,10 +942,14 @@ def validate_tool_proposal(
         utterance=utterance,
         evidence=evidence,
         bounded_control=rule.bounded_control,
+        literal_record=proposal.tool == RECORD_LOG,
     )
     if fence is not None:
         return refuse(fence)
-    if facts.control_question:
+    if facts.control_question and (
+        proposal.tool != RECORD_LOG
+        or is_question_or_speculation(utterance, literal_record=True)
+    ):
         return refuse("interrogative_not_authorized")
     if rule.has_word is not None and not rule.has_word(evidence):
         return refuse(str(rule.missing_word))
