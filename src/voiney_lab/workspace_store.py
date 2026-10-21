@@ -1437,7 +1437,7 @@ class WorkspaceStore:
         ``protocol_title`` is the protocol family's title where the revision
         is one of this workspace's (None otherwise; the server fills it from
         the protocol catalog). ``day_sequence`` is the experiment's place
-        among the organization's experiments started the same UTC day
+        among the owner's runs of this protocol started the same UTC day
         (``day_sequence_date``), counted in start order: 1 for the first.
         """
 
@@ -1450,9 +1450,9 @@ class WorkspaceStore:
         day = str(row["started_at"])[:10]
         sequence = self._connection.execute(
             """SELECT COUNT(*) FROM experiment_sessions
-            WHERE organization_id=? AND substr(started_at,1,10)=?
+            WHERE organization_id=? AND owner_principal_id=? AND protocol_id=? AND substr(started_at,1,10)=?
               AND (started_at<? OR (started_at=? AND session_id<=?))""",
-            (row["organization_id"], day, row["started_at"], row["started_at"],
+            (row["organization_id"], row["owner_principal_id"], row["protocol_id"], day, row["started_at"], row["started_at"],
              row["session_id"]),
         ).fetchone()[0]
         return {

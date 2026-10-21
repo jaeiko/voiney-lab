@@ -104,6 +104,7 @@ def test_unknown_legacy_owner_is_only_visible_to_its_lab_admin(records):
     for who, status in (("owner", 404), ("peer", 404), ("admin", 200), ("outside", 404)):
         assert devices[who].get(f"/api/experiment-reports/{report['report_id']}.json").status_code == status
     assert store.get_report(report["report_id"])["owner_principal_id"] is None
+    assert store.get_report(report["report_id"])["day_sequence"] is None
 
 
 def test_schema_one_upgrades_without_rewriting_events(tmp_path):
@@ -115,6 +116,7 @@ def test_schema_one_upgrades_without_rewriting_events(tmp_path):
     store.append_event(report["report_id"], event_key="kept", event_type="observation", user_wording="exact 3 µL")
     with sqlite3.connect(store.path) as connection:
         before = connection.execute("SELECT * FROM experiment_report_events").fetchall()
+        connection.execute("DROP INDEX IF EXISTS experiment_report_owner_history")
         for column in ("organization_id", "owner_principal_id", "ownership_migrated"):
             connection.execute(f"ALTER TABLE experiment_reports DROP COLUMN {column}")
         connection.execute("UPDATE experiment_report_metadata SET schema_version=1")
@@ -135,6 +137,54 @@ def test_reopening_report_cannot_change_owner(tmp_path):
     with pytest.raises(ValueError, match="ownership"):
         store.open_report(**{**fields, "owner_principal_id": "peer"})
     assert store.get_report(first["report_id"])["owner_principal_id"] == "owner"
+
+
+def test_startup_backfills_legacy_metadata(records):
+    from fastapi.testclient import TestClient
+    devices, store, rid = records
+    with TestClient(srv.app) as client:
+        assert client.get("/healthz").status_code == 200
+    report = store.get_report(rid)
+    owner = srv._account_for_cookie(devices["owner"].session_cookie).principal()
+    assert report["owner_principal_id"] == owner.principal_id
+    assert report["organization_id"] == owner.organization_id
+
+
+def test_workspace_sequence_uses_same_account_and_protocol(records):
+    devices, _, _ = records
+    workspace = initialize_workspace_store(srv._workspace_settings())
+    try:
+        for who, sid, protocol in (("peer", "peer-first", "protocol-shared"),
+                                   ("owner", "other-protocol", "another-protocol"),
+                                   ("owner", "owner-second", "protocol-shared")):
+            principal = srv._account_for_cookie(devices[who].session_cookie).principal()
+            workspace.bootstrap_principal(principal)
+            workspace.start_experiment(principal, session_id=sid, protocol_id=protocol, protocol_revision_id="revision-one")
+    finally:
+        workspace.close()
+    response = devices["owner"].get("/api/workspace/experiments")
+    assert response.status_code == 200
+    rows = {item["session_id"]: item for item in response.json()["experiments"]}
+    assert rows["owner-second"]["day_sequence"] == 2
+    assert rows["other-protocol"]["day_sequence"] == 1
+
+
+def test_pi_confirmation_hides_other_lab_from_non_admin(records):
+    devices, store, rid = records
+    outsider = Device()
+    outsider.sign_up(_invite(store.path.parent, organization_id="lab-b"), "outside-peer")
+    response = outsider.post(f"/api/experiment-reports/{rid}/pi-confirmations", json={})
+    assert response.status_code == 404
+    assert devices["owner"].post(f"/api/experiment-reports/{rid}/pi-confirmations", json={}).status_code == 403
+
+
+def test_admin_export_does_not_regenerate_prose(records, monkeypatch):
+    devices, _, rid = records
+    calls = []
+    monkeypatch.setattr(srv, "_prepare_report_prose", lambda *args, **kwargs: calls.append(args) or "ready")
+    response = devices["admin"].get(f"/api/experiment-reports/{rid}.md")
+    assert response.status_code == 200, response.text
+    assert calls == []
 
 
 @pytest.mark.parametrize("who,allowed", [("owner", True), ("peer", False), ("admin", True), ("outside", False)])

@@ -206,6 +206,8 @@ class ExperimentReportStore:
             connection.execute("ALTER TABLE experiment_reports ADD COLUMN organization_id TEXT")
             connection.execute("ALTER TABLE experiment_reports ADD COLUMN owner_principal_id TEXT")
             connection.execute("ALTER TABLE experiment_reports ADD COLUMN ownership_migrated INTEGER NOT NULL DEFAULT 0")
+        connection.execute("CREATE INDEX IF NOT EXISTS experiment_report_owner_history "
+                           "ON experiment_reports(organization_id,owner_principal_id,protocol_id,started_at,report_id)")
         connection.commit()
         return connection
 
@@ -461,7 +463,7 @@ class ExperimentReportStore:
 
         day = str(report["started_at"])[:10]
         if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
-            return {"day_sequence": 1, "day_sequence_date": day}
+            return {"day_sequence": None, "day_sequence_date": day}
         with self._connect() as connection:
             sequence = connection.execute(
                 """
@@ -2723,9 +2725,12 @@ def report_start_check_answers(
     owner=report_data.get("owner_principal_id")
     # Identified records never inherit anonymous or other people's answers.
     if owner is not None:
-        events=[item for item in events if (
-            item.get("payload", {}) if isinstance(item, Mapping) else getattr(item, "payload", {})
-        ).get("actor_principal_id")==owner]
+        own_events=[]
+        for item in events:
+            payload=item.get("payload") if isinstance(item, Mapping) else getattr(item, "payload", None)
+            if isinstance(payload,Mapping) and payload.get("actor_principal_id")==owner:
+                own_events.append(item)
+        events=own_events
     elif report_data.get("organization_id") is not None:
         return []  # Quarantined legacy record: the experimenter is unknown.
     return start_check_answers_between(events, since=since, until=str(report_data.get("started_at") or ""))

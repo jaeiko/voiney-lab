@@ -605,7 +605,8 @@ async def _close_account_voice_connections(account_id:str)->None:
     current=asyncio.current_task()
     pending=[task for task,_ in connections if task is not current]
     for task in pending:
-        task.cancel()
+        if not task.cancelling():
+            task.cancel()
     if pending:
         await asyncio.gather(*pending,return_exceptions=True)
     for _,socket in connections:
@@ -623,6 +624,8 @@ async def _watch_account_voice_session(token:str,task:asyncio.Task,websocket:Web
         try:
             await asyncio.to_thread(_account_for_cookie,token)
         except Exception:
+            if task.cancelling():
+                return
             try:
                 await websocket.close(code=1008,reason="authentication required")
             except (RuntimeError,WebSocketDisconnect):
@@ -4032,7 +4035,8 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                 # A Word document or photo uploaded before is found by its own
                 # checksum and not converted again.
                 result=(
-                    catalog.find_converted_upload(file_sha256(original),visible_protocol_ids=visible_protocols)
+                    (catalog.find_converted_upload(file_sha256(original),visible_protocol_ids=visible_protocols)
+                     if visible_protocols is not None else catalog.find_converted_upload(file_sha256(original)))
                     if original is not None else None
                 )
                 if result is None:
@@ -5534,6 +5538,7 @@ def post_experiment_report_pi_confirmation(
     event that blocks nothing and changes no record. Anyone else is refused.
     """
 
+    _scope_tenant_resource("experiment_report",report_id)
     if not _account_is_admin():
         raise HTTPException(status_code=403,detail="pi_confirmation_admin_only")
     comment=_pi_confirmation_body(body)

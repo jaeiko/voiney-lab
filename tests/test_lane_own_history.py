@@ -59,6 +59,7 @@ def test_start_check_only_uses_owner_answers(tmp_path, monkeypatch):
     events = [SimpleNamespace(event_type=START_CHECK_EVENT,
         payload={"recorded_at": "2026-10-20T03:00:00+00:00", "answer": who,
                  "actor_principal_id": who}) for who in ("owner", "peer", None)]
+    events.append(SimpleNamespace(event_type="protocol_registered", payload=None))
     ledger = SimpleNamespace(list_events=lambda _: events, close=lambda: None)
     monkeypatch.setattr(server, "_open_protocol_catalog", lambda: (None, ledger))
     answers = er.report_start_check_answers(mine, since=None)
