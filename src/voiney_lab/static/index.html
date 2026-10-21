@@ -1730,7 +1730,7 @@ function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
  const durable=`저장된 상태: 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
  const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`다시 불러오지 않는 것: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
- const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
+ const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
  node.textContent=`${lead} ${durable} ${omitted} ${next}`;appendDevCodeDetails(node,[["protocol_revision_id",revision||null]]);node.hidden=false;return true;
 }
 function renderExperimentContext(){

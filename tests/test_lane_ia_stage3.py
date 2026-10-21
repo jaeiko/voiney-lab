@@ -265,6 +265,12 @@ assert(node("records-detail-head").hidden===true,"the run's record repeats a hea
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_the_checkpoint_line_names_the_tab_its_button_is_on(self) -> None:
+        # QA-57 (lane QA): "‘체크포인트에서 새 실험’을 누르세요" pointed at a button on another tab.
+        html = INDEX.read_text(encoding="utf-8")
+        self.assertNotIn("다음 작업: 체크포인트를 고르고", html)
+        self.assertIn("기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요", html)
+
     def test_the_markup_keeps_the_ledger_inside_the_detail(self) -> None:
         html = INDEX.read_text(encoding="utf-8")
         start = html.index('<section id="tab-records"')
