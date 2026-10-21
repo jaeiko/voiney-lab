@@ -46,8 +46,7 @@ class WorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(server, "_open_protocol_catalog", side_effect=open_catalog):
                 worker = asyncio.create_task(server._catalog_in_worker(work))
                 try:
-                    while not entered.is_set():
-                        await asyncio.sleep(0)
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 2), "worker did not start")
                     for _ in range(2):
                         worker.cancel()
                         await asyncio.sleep(0.01)
@@ -70,8 +69,7 @@ class WorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(server, "_open_protocol_catalog", return_value=(object(), unittest.mock.Mock())):
             worker = asyncio.create_task(server._catalog_in_worker(work))
             try:
-                while not entered.is_set():
-                    await asyncio.sleep(0)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2), "worker did not start")
                 worker.cancel()
                 await asyncio.sleep(0)
             finally:
@@ -106,8 +104,7 @@ class WorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(Path, "open", return_value=stream):
             worker = asyncio.create_task(server._spool_protocol_pdf_upload(Request(), Path("unused")))
             try:
-                while not entered.is_set():
-                    await asyncio.sleep(0)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2), "write did not start")
                 for _ in range(2):
                     worker.cancel()
                     await asyncio.sleep(0.01)
@@ -135,8 +132,7 @@ class WorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
             with patch.object(server, "_open_protocol_catalog", return_value=(object(), unittest.mock.Mock())):
                 worker = asyncio.create_task(server._catalog_in_worker(work))
-                while not entered.is_set():
-                    await asyncio.sleep(0)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2), "worker did not start")
                 worker.cancel()
                 await asyncio.sleep(0)
                 self.assertFalse(worker.done())
@@ -171,8 +167,7 @@ class WorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
             ):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://testserver") as client:
                     upload = asyncio.create_task(client.post("/api/protocols?filename=perf.pdf", content=body, headers={"content-type": "application/pdf"}))
-                    while not entered.is_set():
-                        await asyncio.sleep(0.001)
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 2), "registration did not start")
                     health = await client.get("/healthz")
                     self.assertEqual(health.status_code, 200)
                     self.assertFalse(upload.done(), "upload held the event loop for its whole registration")

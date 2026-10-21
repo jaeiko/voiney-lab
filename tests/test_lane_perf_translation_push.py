@@ -33,8 +33,7 @@ class TranslationPushTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(server, "with_stored_translations", side_effect=prepare):
             first = asyncio.create_task(server._apply_translations(subscriber, translation_revision_key(fixture), ["first"]))
             try:
-                while not entered.is_set():
-                    await asyncio.sleep(0)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2), "translation worker did not start")
                 second = asyncio.create_task(server._apply_translations(subscriber, translation_revision_key(fixture), ["second"]))
                 await asyncio.sleep(0.02)
             finally:
@@ -59,8 +58,7 @@ class TranslationPushTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(server, "with_stored_translations", side_effect=prepare):
             worker = asyncio.create_task(server._apply_translations(subscriber, translation_revision_key(fixture), ["first"]))
             try:
-                while not entered.is_set():
-                    await asyncio.sleep(0)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2), "translation worker did not start")
                 session.accepted_configuration_id = 2
             finally:
                 released.set()
