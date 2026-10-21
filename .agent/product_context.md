@@ -19,9 +19,7 @@ their protocol without touching a screen:
 4. step-by-step voice guidance — timers, questions, records, re-asks;
 5. a lab notebook and report from what was recorded.
 
-Status: **MVP prototype, not field-validated** ("MVP 시제품 — 현장 미검증").
-People have spoken to it only on the development server; nothing has been
-measured in a working laboratory.
+**Not yet validated in the field:** people have spoken to it only on the development server, nothing has been measured in a working laboratory, and no document or report may present it as validated (this is the one place that says so; the README carries no status label).
 
 The server owns workflow state; models only propose. Values and safety
 statements come only from the source or from a value a person confirmed; a
