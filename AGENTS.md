@@ -281,17 +281,20 @@ agents:
   mechanically only. Otherwise open the pull request, do not merge, and say
   why at the top of the report. If a merge command is refused by a
   permission check, stop and report; do not work around it.
-- Only a person opens or merges a pull request into `main`, force-pushes,
-  deletes a branch (`gh pr merge --delete-branch` included), or renames or
-  transfers the repository.
+- Only a person opens or merges a pull request into `main`, force-pushes
+  (`--force` and `--force-with-lease` alike), deletes a branch (local or
+  remote; `gh pr merge --delete-branch` included), or renames or transfers
+  the repository.
 - No destructive shortcuts: no `git reset --hard`, `git clean -fd` or force
   push unless a person asks for that exact action. Investigate unfamiliar
   state instead of discarding it.
 - Commit messages and pull request bodies carry no AI-tool attribution: no
   `Co-Authored-By:` line naming an AI model, no "Generated with …" line, no
-  tool or session link such as `claude.ai/code` or `Claude-Session:`. A local
-  `commit-msg` hook in one checkout strips some of these from commits only, so
-  check both before `gh pr create`; neither command may print anything:
+  tool or session link such as `claude.ai/code` or `Claude-Session:`. A
+  `commit-msg` hook in this machine's clone (`.git/hooks/`, not versioned, so
+  other clones lack it) strips some of these lines from commit messages; it
+  leaves `claude.ai/code` links and never sees a pull request body. So check
+  both before `gh pr create`; neither command may print anything:
 
   ```bash
   grep -niE "co-authored-by: *claude|generated with \[claude code\]|claude\.ai/code|claude-session" <PR body file>
