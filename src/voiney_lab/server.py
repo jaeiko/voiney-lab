@@ -12710,7 +12710,42 @@ async def voice_socket(websocket:WebSocket):
                 continue
             control=parse_control(message["text"])
             if control["type"]=="session.start":
-                if session.active:raise ProtocolError("session already active")
+                if session.active:
+                    same_configuration=(
+                        control["configuration_id"]==session.accepted_configuration_id
+                        and control["mode"]==session.accepted_mode
+                        and control["language"]==session.accepted_language
+                        and control["protocol_id"]==session.accepted_protocol_id
+                        and normalize_input_language_preference(
+                            control.get("input_language",control["language"]))
+                        ==session.accepted_input_language
+                        and control.get("experiment_session_id",session.session_id)
+                        ==session.session_id)
+                    if not same_configuration:
+                        await websocket.send_text(event(
+                            "error",message="session configuration conflicts with active session",
+                            code="session_configuration_conflict",recoverable=True,
+                            message_ko="이미 다른 설정으로 연결돼 있어요. 현재 실험을 계속해 주세요.",
+                            configuration_id=session.accepted_configuration_id,
+                            generation=session.generation))
+                        continue
+                    await websocket.send_text(event(
+                        "session.ready",configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,mode=session.accepted_mode,
+                        language=session.accepted_language,
+                        input_language=session.accepted_input_language.value,
+                        protocol_id=session.accepted_protocol_id,
+                        revision_id=session.accepted_revision_id,
+                        experiment_session_id=session.session_id,
+                        experiment_session_version=session.experiment_state_version,
+                        research_capabilities=research_capabilities))
+                    if session.curated_protocol_session is not None:
+                        await websocket.send_text(event(
+                            "protocol.fixture.state",action="attached",
+                            configuration_id=session.accepted_configuration_id,
+                            state=session.curated_protocol_session.state(),
+                            screen=curated_screen_fields(session.curated_protocol_session)))
+                    continue
                 requested_mode=control["mode"]
                 configuration_id=control["configuration_id"]
                 requested_protocol_id=control["protocol_id"]
@@ -13178,6 +13213,23 @@ async def voice_socket(websocket:WebSocket):
                             "experiment.session.state",state=experiment_state))
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
+            elif control["type"]=="workflow.resume" and (
+                not session.active or session.curated_protocol_session is None
+                or session.curated_protocol_session._experiment_started_at is None
+                or type(control.get("configuration_id")) is not int
+                or type(control.get("generation")) is not int
+                or control["configuration_id"]!=session.accepted_configuration_id
+                or control["generation"]!=session.generation
+            ):
+                not_started=(session.curated_protocol_session is not None
+                             and session.curated_protocol_session._experiment_started_at is None)
+                await websocket.send_text(event(
+                    "workflow.control.refused",action="resume",
+                    configuration_id=session.accepted_configuration_id,
+                    generation=session.generation,
+                    reason="experiment_not_started" if not_started else "stale_configuration",
+                    message_ko=("아직 실험을 시작하지 않았어요. 시작 화면에서 프로토콜로 시작해 주세요."
+                                if not_started else "현재 연결의 설정으로 다시 요청해 주세요.")))
             elif control["type"] in {"workflow.pause","workflow.resume"} and (
                 session.active and session.curated_protocol_session is not None
                 and session.curated_protocol_session.experiment_ended
@@ -13192,6 +13244,7 @@ async def voice_socket(websocket:WebSocket):
                     configuration_id=session.accepted_configuration_id,
                     action=control["type"].partition(".")[2],
                     reason="experiment_ended",
+                    message_ko="이 실험은 이미 끝났어요. 새 실험은 시작 화면에서 골라 주세요.",
                     status=session.curated_protocol_session.workflow_status,
                 ))
             elif control["type"]=="workflow.pause":

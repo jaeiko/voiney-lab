@@ -17860,8 +17860,11 @@ class CuratedProtocolSession:
                 elif timer.get("state") == "expired":
                     words = "타이머가 끝났어요."
                 else:
-                    words = "이 단계 타이머는 시작하지 않았어요. 시작하려면 '타이머 시작해 줘'라고 말씀해 주세요."
-            planned = self._words_plan(words, intent_kind="question_or_speculation")
+                    words = "이 질문만으로는 타이머를 시작하지 않았습니다. 시작하려면 '타이머 시작해 줘'라고 말씀해 주세요."
+            planned = self._words_plan(
+                words, intent_kind="question_or_speculation",
+                action=(CuratedProtocolAction.TIMER_STATUS if "타이머" in transcript
+                        else CuratedProtocolAction.DECLINE_COMPLETION))
             self._replay[turn_id] = planned
             return planned
         # Lane RA, decision (f): what the screen is told about the last reply

@@ -92,6 +92,8 @@
 - **시험**: `tests/test_lane_di_execution_rule.py`, `tests/test_lane_on_start_check.py`, `tests/test_lane_on_wizard_screen.py`, `tests/test_lane_pl_source_protocol_only.py`, `tests/test_safety_pack.py`.
 - **한계**: 핵심 값 확인은 **화면의 순서로만** 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
 
+화면의 재개 제어는 시작한 실험이며 현재 설정 번호와 세대가 일치할 때만 허용한다. 같은 소켓에서 시작 요청을 다시 받으면 같은 설정은 현재 세션을 알리고, 다른 설정은 연결을 유지한 채 오류를 보낸다.
+
 ## F8. 듣기
 
 - **무엇**: 화면이 마이크 소리를 16 kHz PCM 으로 보내고, 서버가 20 ms 마다 WebRTC VAD 로 듣는다. **1초(1000 ms) 조용하면** 그 말을 끝으로 보고 한 번에 글로 옮긴다(15초가 넘으면 자른다). 답은 문장마다 음성 합성으로 보낸다. 말하는 도중에 끼어들면 안내를 멈춘다. 자기 목소리가 마이크로 되돌아온 것(최근 3초, 12자 이상, 80 % 겹침)은 버린다.
