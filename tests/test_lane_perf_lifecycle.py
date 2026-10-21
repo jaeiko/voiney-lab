@@ -72,6 +72,27 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             future.cancel()
 
+    async def test_crossing_ocr_requests_schedule_one_worker(self) -> None:
+        protocol_id = self.register(scanned=True)
+        tasks: list[asyncio.Task] = []
+
+        def schedule(protocol_id, *args, **kwargs):
+            task = asyncio.create_task(asyncio.sleep(1))
+            server._PROTOCOL_OCR_TASKS[protocol_id] = task
+            tasks.append(task)
+            return task
+
+        with patch.object(server, "_protocol_ocr_provider", return_value=object()), patch.object(server, "_schedule_ocr_then_analysis", side_effect=schedule) as scheduled:
+            try:
+                answers = await asyncio.gather(server.trigger_protocol_ocr(protocol_id), server.trigger_protocol_ocr(protocol_id))
+                self.assertEqual(scheduled.call_count, 1)
+                self.assertEqual(sum(answer.get("request_accepted") is True for answer in answers), 1)
+                self.assertEqual(sum(answer.get("request_deduplicated") is True for answer in answers), 1)
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
     async def test_startup_recovers_abandoned_ocr_and_duplicate_upload_can_retry(self) -> None:
         protocol_id = self.register(scanned=True)
         self.abandoned_ocr(protocol_id)

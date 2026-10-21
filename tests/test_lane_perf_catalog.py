@@ -6,6 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import os
+
+from fastapi.testclient import TestClient
 
 from tests.test_protocol_catalog import write_text_pdf
 from voiney_lab import server
@@ -29,6 +32,24 @@ class CatalogMetadataTests(unittest.TestCase):
             source = root / f"source-{number}.pdf"
             write_text_pdf(source, f"Fictional protocol {number}. 1. Add buffer to tube.", title=f"Title {number}")
             self.entries.append(self.catalog.register(source, source_filename=source.name, media_type="application/pdf").entry)
+
+    def test_http_list_after_cache_eviction_starts_no_pdf_workers(self) -> None:
+        def open_catalog():
+            store = initialize_protocol_store(self.settings)
+            return ProtocolCatalog(store), store
+
+        clear_protocol_pdf_cache()
+        with (
+            patch.dict(os.environ, {"VOINEY_LAB_AUTH_MODE": "dev", "VOINEY_LAB_WORKSPACE_ENABLED": "false"}),
+            patch.object(server, "server_config"),
+            patch.object(server, "_configured_candidate_fixture", return_value=None),
+            patch.object(server, "_protocol_store_settings", return_value=self.settings),
+            patch.object(server, "_open_protocol_catalog", open_catalog),
+            patch("voiney_lab.pdf_text_engine.read_document", side_effect=AssertionError("HTTP list started PDF worker")),
+        ):
+            response = TestClient(server.app).get("/api/protocols")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["protocols"]), 2)
 
     def test_cold_list_and_run_status_extract_zero_pdfs_and_keep_bytes(self) -> None:
         expected = [entry.public_dict() for entry in self.catalog.list_entries()]

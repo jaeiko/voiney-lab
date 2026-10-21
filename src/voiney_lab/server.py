@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from urllib.parse import quote, unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
@@ -561,7 +561,7 @@ STATIC_DIR=Path(__file__).with_name("static")
 #: The analysis a worker holds for a protocol, or the slot reserved for
 #: one that is being recorded (lane RN, decision 1).
 _PROTOCOL_ANALYSIS_TASKS:dict[str,asyncio.Future[None]]={}
-_PROTOCOL_OCR_TASKS:dict[str,asyncio.Task[None]]={}
+_PROTOCOL_OCR_TASKS:dict[str,asyncio.Future[None]]={}
 _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar(
     "voice_workflow_request_principal",default=None)
 
@@ -2857,8 +2857,10 @@ def _candidate_fixture_execution_state(
         state["available_for_execution"]=bool(entry.available_for_execution)
         # Materialization above proves this is the stored analysis. These
         # reason projections use that same analysis without reopening its PDF.
-        state["execution_blockers"]=catalog._execution_reasons(fixture.draft,blocking=True)
-        state["execution_notices"]=catalog._execution_reasons(fixture.draft,blocking=False)
+        versions=catalog._review_versions(catalog._latest_protocol_revision(fixture.protocol_id))
+        shown=versions[-1][1] if versions else fixture.draft
+        state["execution_blockers"]=catalog._execution_reasons(shown,blocking=True)
+        state["execution_notices"]=catalog._execution_reasons(shown,blocking=False)
         state["blocked_reason"]=(
             None if entry.available_for_execution else "execution_blocked")
     except Exception:  # noqa: BLE001 - see the docstring: unreadable is a no
@@ -4335,6 +4337,7 @@ def _development_fixture_allowed() -> bool:
 async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
     """Run one trusted OCR adapter outside the voice path and await review."""
 
+    reservation:asyncio.Future[None]|None=None
     try:
         _scope_catalog_resource(protocol_id)
         provider=_protocol_ocr_provider()
@@ -4346,6 +4349,10 @@ async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
             if current.get("state")=="ocr_required":
                 current["state"]="queued"
             return current
+        # Reserve before yielding to source/status work, just as analysis
+        # does. Crossing requests must not schedule two OCR providers.
+        reservation=asyncio.get_running_loop().create_future()
+        _PROTOCOL_OCR_TASKS[protocol_id]=reservation
         current=await _catalog_in_worker(
             lambda catalog:catalog.ocr_status(protocol_id,include_text=False))
         if current.get("state") in {
@@ -4372,6 +4379,10 @@ async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
         }
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+    finally:
+        if reservation is not None and _PROTOCOL_OCR_TASKS.get(protocol_id) is reservation:
+            _PROTOCOL_OCR_TASKS.pop(protocol_id,None)
+            reservation.cancel()
 
 
 @app.get("/api/protocols/{protocol_id}/ocr")
