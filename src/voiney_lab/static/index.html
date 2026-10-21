@@ -1663,14 +1663,16 @@ function renderAfterHead(message){
 }
 function clearAfterHead(){for(const id of ["after-state","after-basis"]){const badge=$(id);if(badge){badge.textContent="";badge.hidden=true;}}setText("after-experimenter","");}
 function showWorkflowControlRefused(message){
- const text=message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
+ // The server's own sentence when it sends one (lane SAFE; lane IA review F6).
+ const text=nonemptyText(message?.message_ko)?String(message.message_ko):message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
  setText("status",text);appendDevCodeDetails($("status"),[["refused_action",typeof message?.action==="string"?message.action:null],["reason",typeof message?.reason==="string"?message.reason:null]]);
  if(message?.reason==="experiment_ended")showExperimentEnded({status:message.status});
 }
 function togglePauseSession(){
  if(!sessionActive||!socket||socket.readyState!==WebSocket.OPEN)return;
  const action=workflowPaused?"workflow.resume":"workflow.pause";
- socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:sessionGeneration}));
+ // The server compares the generation it sent with session.ready (lane SAFE; lane IA review F5), not this page's own count.
+ socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:acceptedSessionConfiguration?.server_generation}));
 }
 
 function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAttribute?.("aria-disabled",String(value));}
@@ -4857,7 +4859,7 @@ async function onMessage(e,generation,current){
  // Lane IA QA-13 (lane QA, 2026-10-20): a turn's error (it names its turn and generation) is one the server
  // keeps the session through -- its state.changed follows. The turn says it failed; the session, the
  // microphone and the socket stay. Any other error still ends the session on screen.
- if(m.type==="error"){const turnError=Number.isInteger(m.turn_id)&&Number.isInteger(m.generation);if(turnError)turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);if(turnError&&sessionActive){const line=turnNode(m.turn_id)?.querySelector?.(".error");if(line)line.textContent=`${researcherErrorMessage(m.message)} · 다시 말해 주세요.`;return;}fail(researcherErrorMessage(m.message),m.turn_id);}
+ if(m.type==="error"){const turnError=Number.isInteger(m.turn_id)&&Number.isInteger(m.generation);if(turnError)turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);if(m.recoverable===true){/* lane SAFE: refused, the connection and the session kept (lane IA review F7) */const words=nonemptyText(m.message_ko)?String(m.message_ko):researcherErrorMessage(m.code||m.message);$("session-configuration-status").textContent=words;if(pendingSessionConfiguration&&!acceptedSessionConfiguration){pendingSessionConfiguration=null;renderState("IDLE",words);}return;}if(turnError&&sessionActive){const line=turnNode(m.turn_id)?.querySelector?.(".error");if(line)line.textContent=`${researcherErrorMessage(m.message)} · 다시 말해 주세요.`;return;}fail(researcherErrorMessage(m.message),m.turn_id);}
  renderRunViewMessage(m,generation);
 }
 

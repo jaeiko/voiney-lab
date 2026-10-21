@@ -6,6 +6,8 @@ F2 the voice preview the sheet allows over the end screen was cut at the next re
 F3 a second [종료] while the first waited for the server's answer closed the socket and lost it.
 F4 the start step pointed at the records tab's experiment select, which decision ⑤ moved into
    one record's screen; the step has its own [이어하지 않고 새로 시작].
+F5–F7 lane SAFE's contract (~/reports/safe/HANDOFF_IA.md): pause and resume carry the server's
+   generation; a refused control shows the server's sentence; a recoverable error keeps the session.
 """
 
 from __future__ import annotations
@@ -78,6 +80,37 @@ fresh.dispatch("click");await settle(4);
 assert(!experimentIsResumable()&&primary().textContent==="이 프로토콜로 시작",`after: ${experimentIsResumable()} ${primary().textContent}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_f5_pause_and_resume_carry_the_servers_generation(self) -> None:
+        result = run_review(r"""
+await boot(base());
+const ws=running();acceptedSessionConfiguration={...acceptedSessionConfiguration,server_generation:4};sessionGeneration=11;
+togglePauseSession();
+const sent=JSON.parse(ws.sent.at(-1));
+assert(sent.type==="workflow.pause"&&sent.configuration_id===5&&sent.generation===4,`sent: ${JSON.stringify(sent)}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_f6_a_refused_control_shows_the_servers_sentence(self) -> None:
+        result = run_review(r"""
+await boot(base());
+const ws=running();
+await deliver(ws,{type:"workflow.control.refused",configuration_id:5,action:"resume",reason:"experiment_not_started",message_ko:"아직 실험을 시작하지 않았어요. 시작 화면에서 프로토콜로 시작해 주세요."});
+assert(node("status").textContent.startsWith("아직 실험을 시작하지 않았어요."),node("status").textContent);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_f7_a_recoverable_error_keeps_the_session(self) -> None:
+        result = run_review(r"""
+await boot(base());
+let closed=0;closeAudio=async()=>{closed+=1;};
+const ws=running();
+await deliver(ws,{type:"error",code:"session_configuration_conflict",recoverable:true,message:"session configuration conflict",message_ko:"이미 다른 설정으로 시작된 세션이에요."});
+assert(sessionActive===true&&closed===0&&visibleState!=="ERROR",`a recoverable error ended the session: ${sessionActive} ${closed} ${visibleState}`);
+assert(node("session-configuration-status").textContent==="이미 다른 설정으로 시작된 세션이에요.",node("session-configuration-status").textContent);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
