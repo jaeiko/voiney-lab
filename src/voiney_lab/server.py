@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
@@ -1826,6 +1826,31 @@ def _protocol_store_settings()->ProtocolPersistenceSettings:
 _CatalogResult=TypeVar("_CatalogResult")
 
 
+async def _worker_until_complete(operation:Callable[[],_CatalogResult])->_CatalogResult:
+    """Keep caller-owned files alive through repeated cancellation requests.
+
+    Shield the executor future itself (not another task that shutdown may
+    cancel). Copy request identity just as ``to_thread`` does. Cancellation
+    remains the caller's outcome, even if the worker subsequently fails.
+    """
+    future=asyncio.get_running_loop().run_in_executor(None,contextvars.copy_context().run,operation)
+    cancellation:asyncio.CancelledError|None=None
+    while not future.done():
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError as exc:
+            cancellation=exc
+        except BaseException:
+            break  # Retrieve the worker's exception below, exactly once.
+    if cancellation is not None:
+        try:
+            future.result()
+        except BaseException as exc:
+            log.warning("protocol.worker.failed_after_cancel error=%s",type(exc).__name__)
+        raise cancellation
+    return future.result()
+
+
 async def _catalog_in_worker(
     operation:Callable[[ProtocolCatalog],_CatalogResult],
 )->_CatalogResult:
@@ -1840,14 +1865,7 @@ async def _catalog_in_worker(
             return operation(catalog)
         finally:
             store.close()
-    task=asyncio.create_task(asyncio.to_thread(run))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        try:
-            await task
-        finally:
-            raise
+    return await _worker_until_complete(run)
 
 
 def _install_protocol_ocr_provider(environ=None)->None:
@@ -1946,6 +1964,7 @@ class _TranslationSubscriber:
     session:Any
     sender:Any
     loop:asyncio.AbstractEventLoop
+    updates:asyncio.Lock=field(default_factory=asyncio.Lock)
 
 
 #: translation key (protocol id / revision id) -> the open sessions showing
@@ -2010,6 +2029,19 @@ def _translation_pending(fixture:Any)->bool:
 async def _apply_translations(
     subscriber:_TranslationSubscriber,key:str,rows:list[Any],
     glossary:Any=(),
+)->None:
+    # Batches published from the generator's thread are scheduled, not
+    # awaited, on this session's loop. Serialize their read/prepare/install
+    # cycle so yielding to a worker cannot drop another checked batch.
+    configuration_id=subscriber.session.accepted_configuration_id
+    async with subscriber.updates:
+        if subscriber.session.accepted_configuration_id!=configuration_id:
+            return
+        await _apply_translation_batch(subscriber,key,rows,glossary)
+
+
+async def _apply_translation_batch(
+    subscriber:_TranslationSubscriber,key:str,rows:list[Any],glossary:Any,
 )->None:
     """Put a stored batch on an open session's fixture and redraw its card.
 
@@ -3928,7 +3960,8 @@ async def _spool_protocol_pdf_upload(
     limit=MAX_PROTOCOL_PDF_BYTES if max_bytes is None else max_bytes
     byte_size=0
     try:
-        with destination.open("xb") as stream:
+        stream=destination.open("xb")
+        try:
             async for chunk in request.stream():
                 if not chunk:
                     continue
@@ -3936,7 +3969,11 @@ async def _spool_protocol_pdf_upload(
                 if byte_size>limit:
                     raise HTTPException(
                         status_code=413,detail="protocol_pdf_too_large")
-                await asyncio.to_thread(stream.write,chunk)
+                await _worker_until_complete(lambda:stream.write(chunk))
+        finally:
+            # Closing also flushes buffered bytes. It must wait for the
+            # current write and must not hold the event loop on disk I/O.
+            await _worker_until_complete(stream.close)
     except HTTPException:
         destination.unlink(missing_ok=True)
         raise
@@ -4044,7 +4081,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                         "status":"stored",
                     },
                 )
-                return result,catalog.ocr_status(result.entry.protocol_id,include_text=False)
+                return result,_upload_ocr_status(catalog,result.entry)
             result,status=await _catalog_in_worker(register)
             ocr=_automatic_ocr_on_upload(None,result.entry,status=status)
             return _registration_response(result,ocr)
@@ -4185,6 +4222,16 @@ def list_protocol_reagent_tables(protocol_id:str)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
+def _upload_ocr_status(catalog:ProtocolCatalog,entry:ProtocolCatalogEntry)->dict[str,object]:
+    """A status failure must not turn an already stored upload into a failure."""
+    try:
+        return catalog.ocr_status(entry.protocol_id,include_text=False)
+    except Exception as exc:  # noqa: BLE001 - the upload itself succeeded
+        log.warning("protocol.ocr.status_failed protocol_id=%s error=%s",
+                    entry.protocol_id,type(exc).__name__)
+        return {"state":"unknown","automatic":False,"blocked":"protocol_ocr_status_failed"}
+
+
 def _automatic_ocr_on_upload(
     catalog:ProtocolCatalog|None,entry:ProtocolCatalogEntry,
     *,status:dict[str,object]|None=None,
@@ -4202,14 +4249,11 @@ def _automatic_ocr_on_upload(
     needed, whether it started, and why not when it did not.
     """
 
-    try:
-        if status is None:
-            assert catalog is not None
-            status=catalog.ocr_status(entry.protocol_id,include_text=False)
-    except Exception as exc:  # noqa: BLE001 - the upload itself succeeded
-        log.warning("protocol.ocr.status_failed protocol_id=%s error=%s",
-                    entry.protocol_id,type(exc).__name__)
-        return {"state":"unknown","automatic":False,"blocked":"protocol_ocr_status_failed"}
+    if status is None:
+        assert catalog is not None
+        status=_upload_ocr_status(catalog,entry)
+    if status.get("blocked")=="protocol_ocr_status_failed":
+        return status
     state=str(status.get("state"))
     if state=="not_required":
         return {"state":state,"automatic":False}
