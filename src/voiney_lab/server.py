@@ -2978,6 +2978,9 @@ def log_protocol_catalog_runtime_configuration()->None:
             catalog,store=_open_protocol_catalog()
             try:
                 catalog.prepare_source_metadata()
+                catalog.recover_interrupted_ocr(frozenset(
+                    protocol_id for protocol_id,task in _PROTOCOL_OCR_TASKS.items()
+                    if not task.done()))
             finally:
                 store.close()
         entries,settings,candidate_protocol_id=(
@@ -4407,7 +4410,7 @@ async def trigger_protocol_analysis(
                 catalog.request_analysis(protocol_id,analysis_id)
             try:
                 model=_protocol_analysis_model()
-            except RuntimeError as exc:
+            except (RuntimeError,ValueError) as exc:
                 catalog.fail_analysis_request(
                     protocol_id,analysis_id,
                     failure_code="provider_configuration_missing",
@@ -4450,7 +4453,7 @@ async def trigger_protocol_analysis(
                 protocol_id,"analysis",principal=metric_principal,public=completed,
                 started=started)
             return completed
-        deferred=_analysis_deferred_for_ocr(protocol_id)
+        deferred=await _analysis_deferred_for_ocr(protocol_id)
         if deferred is not None:
             return deferred
         return await _begin_background_analysis(
@@ -4472,7 +4475,7 @@ async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
 
     _scope_catalog_resource(protocol_id)
     try:
-        deferred=_analysis_deferred_for_ocr(protocol_id)
+        deferred=await _analysis_deferred_for_ocr(protocol_id)
         if deferred is not None:
             return deferred
         return await _begin_background_analysis(
@@ -4481,7 +4484,7 @@ async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
-def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
+async def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
     """The answer while the upload-time OCR chain holds the protocol, else None.
 
     Lane PX decision 3: the OCR chain starts the analysis itself once the OCR
@@ -4491,14 +4494,12 @@ def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
     ocr_running=_PROTOCOL_OCR_TASKS.get(protocol_id)
     if ocr_running is None or ocr_running.done():
         return None
-    catalog,store=_open_protocol_catalog()
-    try:
+    def project(catalog:ProtocolCatalog)->dict[str,object]:
         public=catalog.get_entry(protocol_id).public_dict()
         public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
         public["analysis_request_deferred"]="ocr_in_progress"
         return public
-    finally:
-        store.close()
+    return await _catalog_in_worker(project)
 
 
 async def _begin_background_analysis(
@@ -4531,7 +4532,7 @@ async def _begin_background_analysis(
         try:
             try:
                 model=_protocol_analysis_model()
-            except RuntimeError as exc:
+            except (RuntimeError,ValueError) as exc:
                 catalog.fail_analysis_request(
                     protocol_id,analysis_id,
                     failure_code="provider_configuration_missing",
@@ -4608,14 +4609,12 @@ async def _begin_background_analysis(
                 protocol_id,"analysis",principal=principal,failed=True,started=started)
 
     if _analysis_worker_running(protocol_id):
-        catalog,store=_open_protocol_catalog()
-        try:
+        def project(catalog:ProtocolCatalog)->dict[str,object]:
             public=catalog.get_entry(protocol_id).public_dict()
             public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
             public["analysis_request_deduplicated"]=True
             return public
-        finally:
-            store.close()
+        return await _catalog_in_worker(project)
     # Lane RN decision 1 (2026-10-11): the slot is taken before the ledger
     # is written, so a second request that crosses this one finds the run
     # going and starts nothing. Until the task exists the slot holds a bare
@@ -4661,7 +4660,9 @@ def _analysis_run_public(catalog:ProtocolCatalog,protocol_id:str)->dict[str,obje
     """
 
     status=catalog.analysis_run_status(protocol_id).public_dict()
-    status["worker_running"]=_analysis_worker_running(protocol_id)
+    ocr=_PROTOCOL_OCR_TASKS.get(protocol_id)
+    status["worker_running"]=(
+        _analysis_worker_running(protocol_id) or (ocr is not None and not ocr.done()))
     # Lane RN decision 4: the catalog's own stage line travels with the run
     # status, so the screen says an automatic retry in the server's words
     # (a cut answer, the reasoning level asked) instead of its own sentence.

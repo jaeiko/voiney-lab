@@ -43,6 +43,7 @@
 
 ## F3. 사진 글자 읽기 (OCR)
 
+- **작업 상태**: 서버 재시작으로 끊긴 OCR은 `protocol_ocr_interrupted` 실패로 기록하며 다시 올리기나 OCR 요청으로 재시도할 수 있다. OCR 작업이 살아 있는 동안 분석 상태도 작업 중임을 알린다. 분석 모델 클라이언트의 설정 오류는 실패로 기록해 대기 상태에 남기지 않는다.
 - **무엇**: 글자 층이 없거나 읽을 수 없는 **쪽만** OCR 한다. 올리기 직후 자동으로 OCR → 자동 수락 → 분석까지 이어진다(사람의 승인 단계 없음).
   엔진은 NAVER CLOVA OCR 과 Google Cloud Vision. 둘 다 설정하면 둘 다 읽고, 한글이 30 % 이상인 쪽은 CLOVA 의 글을 쓴다. 숫자 값은 두 엔진이 **같은 자리에서 같게** 읽어야 자동으로 정해지고, 다르게 읽은 값은 그 쪽의 확인 카드가 된다. 숫자가 15 % 이상 다르거나 신뢰도가 0.90 미만인 쪽은 같게 읽은 값도 묻는다.
 - **어디**: `experiment_protocol_pdf.page_ocr_reason`(어느 쪽이 OCR 이 필요한지), `server.py` `_automatic_ocr_on_upload`, `_schedule_ocr_then_analysis`; `protocol_ocr.py`(`validate_ocr_result`, 결과는 원본 SHA-256 과 쪽마다 정확히 한 번); `protocol_ocr_providers.py`(`ClovaOcrRecognizer`, `GoogleVisionRecognizer`, `DualEngineOcrProvider`, `select_page_text`, `readings_by_place`); `protocol_catalog.py` `_ocr_page_gate`.

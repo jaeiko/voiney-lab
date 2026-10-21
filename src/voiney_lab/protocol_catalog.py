@@ -2613,11 +2613,36 @@ class ProtocolCatalog:
         for experiment in self.store.list_experiments():
             revision = self._latest_protocol_revision(experiment.experiment_id)
             try:
-                self._source_metadata(revision, self._latest_analysis(revision))
+                self._source_metadata(revision, None)
             except ProtocolCatalogUnavailableError as exc:
                 if str(exc) != "Source metadata needs startup preparation.":
                     raise
-                self._record_source_metadata(revision, self._source_extraction(revision))
+                analysis = self._latest_analysis(revision)
+                self._record_source_metadata(revision, (
+                    analysis.protocol.metadata.pdf if analysis is not None
+                    else self._source_extraction(revision)))
+
+    def recover_interrupted_ocr(self, active_protocol_ids: frozenset[str] = frozenset()) -> None:
+        """At process startup, end only OCR requests with no terminal event.
+
+        This never resumes a provider or changes a protocol's analysis. A
+        later upload or explicit OCR request may start a new bounded run.
+        """
+        for experiment in self.store.list_experiments():
+            if experiment.experiment_id in active_protocol_ids:
+                continue
+            revision = self._latest_protocol_revision(experiment.experiment_id)
+            events = self._latest_ocr_events(revision)
+            if not events or any(event.event_type in {
+                _OCR_COMPLETED_EVENT, _OCR_FAILED_EVENT, _OCR_REVIEWED_EVENT,
+            } for event in events):
+                continue
+            ocr_id = events[0].payload["ocr_id"]
+            self.store.append_event(
+                f"ocr-failed-{ocr_id}", revision.experiment_id,
+                revision.revision_number, _OCR_FAILED_EVENT,
+                {"ocr_id": ocr_id, "status": "failed", "failure_code": "protocol_ocr_interrupted"},
+            )
 
     def list_entries(
         self, protocol_ids: frozenset[str] | None = None,
