@@ -31,7 +31,7 @@ globalThis.history={replaced:[],pushed:[],backs:0,replaceState(_,__,path){global
 const go=hash=>{globalThis.location.hash=hash;return renderRoute();};
 const tab=()=>document.body.dataset.tab;
 const panelShown=name=>node(`tab-${name}`).hidden===false;
-const shownPanels=()=>["home","protocols","experiment","records","settings"].filter(panelShown);
+const shownPanels=()=>["home","protocols","upload","experiment","records","settings"].filter(panelShown);
 const hasClass=(el,name)=>String(el.className||"").split(" ").includes(name);
 const cards=()=>walk(node("home-cards")).filter(el=>hasClass(el,"home-card"));
 const cardWords=()=>cards().map(card=>card.textContent);
@@ -59,7 +59,7 @@ def panel(html: str, name: str) -> str:
 PLACES = {
     "home": ("page-title",),
     "protocols": ("protocol-library", "protocol-list", "protocol-review-panel", "protocol-reagent-tables",
-                  "protocol-pdf", "protocol-queue", "protocol-start-summary", "protocol-start",
+                  "protocol-queue", "protocol-start-summary", "protocol-start",
                   "protocol-compare", "protocol-review-editor", "review-card", "review-register", "review-history-fold"),
     "experiment": ("experiment-start-open", "state", "status", "start", "stop", "run-caption-text", "mic-recovery",
                    "voice-calibration", "experiment-context-name", "experiment-resume-disclosure", "mic-check",
@@ -67,6 +67,7 @@ PLACES = {
                    "figures-sheet", "procedure-visual", "task-web-reference-panel", "after-state",
                    "report-review-checklist", "export-report-docx", "pilot-feedback", "procedure-report-details",
                    "conversation-sheet", "log", "ignored-speech"),
+    "upload": ("protocol-pdf", "protocol-pdf-pick", "protocol-upload-status", "protocol-heic-hint", "protocol-duplicate-notice"),
     "records": ("experiment-session-ledger", "experiment-session-select", "experiment-checkpoint-restart",
                 "manual-observation-content", "experiment-evidence-file", "experiment-event-timeline"),
     "settings": ("settings-sheet", "protocol-id", "question-timing", "mic-device", "confirm-mode", "web-lookup",
@@ -84,10 +85,11 @@ class TabMarkupTests(unittest.TestCase):
     def test_five_panels_in_order_inside_the_workspace(self) -> None:
         main = self.html[self.html.index('<main id="researcher-workspace"'):self.html.index("</main>")]
         found = re.findall(r'<section id="tab-([a-z]+)" class="tab-panel"[^>]*data-tab="([a-z]+)"', main)
-        self.assertEqual(found, [(name, name) for name in ("home", "protocols", "experiment", "records", "settings")])
+        # Lane IA decision ③: the upload is a panel of its own under the protocols link.
+        self.assertEqual(found, [(name, name) for name in ("home", "protocols", "upload", "experiment", "records", "settings")])
         self.assertEqual(self.html.count('id="start-wizard"'), 1)
         # Only the home panel is open before the script runs; a page without its script shows the home.
-        for name in ("protocols", "experiment", "records", "settings"):
+        for name in ("protocols", "upload", "experiment", "records", "settings"):
             self.assertRegex(main, rf'<section id="tab-{name}" class="tab-panel"[^>]*\bhidden>')
         self.assertNotRegex(main, r'<section id="tab-home" class="tab-panel"[^>]*\bhidden>')
         self.assertIn('<body data-view="before">', self.html)
@@ -177,11 +179,11 @@ assert(routePath("protocols","p 1")==="#/protocols/p%201","the path is not encod
     def test_each_route_shows_its_panel_alone(self) -> None:
         result = run(r"""
 await boot(base());
-for(const [hash,name] of [["#/protocols","protocols"],["#/experiment","experiment"],["#/records","records"],["#/settings","settings"],["#/home","home"],["#/upload","protocols"]]){
+for(const [hash,name,link] of [["#/protocols","protocols","protocols"],["#/experiment","experiment","experiment"],["#/records","records","records"],["#/settings","settings","settings"],["#/home","home","home"],["#/upload","upload","protocols"]]){
  go(hash);
  assert(tab()===name,`${hash} → ${tab()}`);
  assert(shownPanels().join()===name,`${hash} panels: ${shownPanels()}`);
- assert(node(`tab-link-${name}`).getAttribute("aria-current")==="page",`${hash}: link not current`);
+ assert(node(`tab-link-${link}`).getAttribute("aria-current")==="page",`${hash}: link not current`);
 }
 assert(document.body.dataset.route==="#/upload","the route is not kept on the body");
 """)

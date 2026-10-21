@@ -129,7 +129,8 @@ test.describe('Five tabs (lane IA)', () => {
     await page.goto('/');
     await page.locator('#home-cards .home-card[data-card="first"]').click();
     await expect(page).toHaveURL(/#\/upload$/);
-    await expect(page.locator('#tab-protocols')).toBeVisible();
+    await expect(page.locator('#tab-upload')).toBeVisible();
+    await expect(page.locator('#upload-step-pick')).toBeVisible();
     await expect(page.locator('#protocol-pdf-pick')).toBeVisible();
     await expect(page.locator('#protocol-pdf-pick')).toBeFocused();
     await expect(page.locator('#tab-link-protocols')).toHaveAttribute('aria-current', 'page');
