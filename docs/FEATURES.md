@@ -90,7 +90,7 @@
 - **어디**: `experiment_protocol.py` (`EXECUTION_BLOCKING_REASON_CODES`, `execution_blocking_reasons`, `execution_notice_reasons`); `protocol_catalog.py` (`available_for_execution`, `load_executable_fixture`, `READINESS_REASON_KO`); `start_check.py` (`StartCheck`, `build_questions`, `QUESTION_COUNT`); `server.py` (`get_protocol_start_check`, `server_config`, `_source_protocol_only`); `safety_pack.py` (`resolve_safety_pack`, `SOURCE_PROTOCOL_ONLY_SCOPE`); 화면 `static/index.html` 의 `#wizard-sheet`.
 - **설정**: `VOINEY_LAB_START_CHECK_ENABLED`(true), `VOINEY_LAB_USAGE_SCOPE`, `VOINEY_LAB_SAFETY_CATALOG`, `VOINEY_LAB_FACILITY_ID`.
 - **시험**: `tests/test_lane_di_execution_rule.py`, `tests/test_lane_on_start_check.py`, `tests/test_lane_on_wizard_screen.py`, `tests/test_lane_pl_source_protocol_only.py`, `tests/test_safety_pack.py`.
-- **한계**: 핵심 값 확인은 **화면의 순서로만** 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
+- **서버 시작 확인**: `available_for_execution`에 더해, 같은 계정이 지금 실행할 분석·검토본의 핵심 값을 확인하고 안전 주의를 읽었다는 장부 기록을 요구한다. 안전 확인은 `/api/protocols/{protocol_id}/start-check/safety`에 현재 `target`을 보내 기록한다. 기록이 없거나 다른 계정·다른 분석의 기록이면 시작을 거절하고 할 일을 알린다. 핵심 값이 없는 원문도 안전 확인은 필요하다. 재연결은 원래 실행 버전의 확인을 읽는다. `VOINEY_LAB_START_CHECK_ENABLED=false`이면 기존 시작 길을 유지한다.
 
 화면의 재개 제어는 시작한 실험이며 현재 설정 번호와 세대가 일치할 때만 허용한다. 같은 소켓에서 시작 요청을 다시 받으면 같은 설정은 현재 세션을 알리고, 다른 설정은 연결을 유지한 채 오류를 보낸다.
 

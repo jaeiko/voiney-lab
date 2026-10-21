@@ -231,7 +231,7 @@ from voiney_lab.vad import (
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
-from voiney_lab.start_check import StartCheck, StartCheckError
+from voiney_lab.start_check import StartCheck, StartCheckError, start_check_enabled
 from voiney_lab.accounts import (
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
@@ -4761,17 +4761,57 @@ def post_protocol_start_check_answer(
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            principal=_REQUEST_PRINCIPAL.get()
             return StartCheck(catalog).answer(
                 protocol_id,body.get("question_id"),
                 choice_id=body.get("choice_id"),action=body.get("action"),
-                actor_principal_id=principal.principal_id if principal is not None else None)
+                actor_principal_id=_start_check_principal_id())
         finally:
             store.close()
     except StartCheckError as exc:
         raise HTTPException(status_code=422,detail=exc.code) from exc
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/start-check/safety")
+def post_protocol_start_safety(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """Record the experimenter's explicit acknowledgement of this target's safety notices."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return StartCheck(catalog).acknowledge_safety(
+                protocol_id,target=body.get("target"),
+                actor_principal_id=_start_check_principal_id())
+        finally:
+            store.close()
+    except StartCheckError as exc:
+        raise HTTPException(status_code=422,detail=exc.code) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+def _start_check_principal_id()->str|None:
+    principal=_REQUEST_PRINCIPAL.get()
+    if (principal is None and not _auth_settings().accounts
+            and not _workspace_settings().enabled and _runtime_usage_scope()!="operational"):
+        principal=DevIdentityProvider.from_environment().authenticate()
+    return principal.principal_id if principal is not None else None
+
+
+def _protocol_start_readiness(protocol_id:str,revision_id:str|None)->dict[str,Any]:
+    if not start_check_enabled():
+        return {"ready":True,"reason":None}
+    catalog,store=_open_protocol_catalog()
+    try:
+        return StartCheck(catalog).readiness(
+            protocol_id,revision_id=revision_id,
+            actor_principal_id=_start_check_principal_id())
+    finally:
+        store.close()
 
 
 @app.get("/api/protocols/{protocol_id}/review-versions/{version}")
@@ -12893,6 +12933,21 @@ async def voice_socket(websocket:WebSocket):
                             reason=selection_failure,
                         ))
                         continue
+                    if selected_curated_fixture is not None:
+                        configuration_stage="start_confirmation"
+                        readiness=await asyncio.to_thread(
+                            _protocol_start_readiness,requested_protocol_id,selected_revision_id)
+                        if not readiness["ready"]:
+                            await websocket.send_text(event(
+                                "session.configuration_required",configuration_id=configuration_id,
+                                mode=requested_mode,language=context.language,
+                                protocol_id=requested_protocol_id,reason=readiness["reason"],
+                                message_ko=("핵심 값을 먼저 확인해 주세요."
+                                            if readiness["reason"]=="start_check_required"
+                                            else "안전 주의를 읽고 확인해 주세요."
+                                            if readiness["reason"]=="safety_acknowledgement_required"
+                                            else "시작 화면에서 현재 프로토콜의 확인을 마쳐 주세요.")))
+                            continue
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     if selected_curated_fixture is not None:

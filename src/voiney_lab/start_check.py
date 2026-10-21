@@ -27,7 +27,7 @@ import re
 import secrets
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -59,6 +59,27 @@ _UNIT_TOKENS = {"ul": "µl", "ug": "µg", "um": "µm", "xg": "×g", "x g": "×g"
 
 class StartCheckError(RuntimeError):
     code = "start_check_invalid"
+
+
+@dataclass(frozen=True)
+class StartTarget:
+    """Immutable identity of the analysis/review whose values and safety were read."""
+
+    kind: str | None = None
+    version: int | None = None
+    event_id: str | None = None
+    analysis_id: str | None = None
+    revision_id: str | None = None
+    analysis_revision_number: int | None = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> StartTarget:
+        fields = {key: value.get(key) for key in cls.__dataclass_fields__}
+        for key, item in fields.items():
+            expected = int if key in {"version", "analysis_revision_number"} else str
+            if item is not None and (type(item) is not expected or (expected is int and item < 1)):
+                raise StartCheckError("The start confirmation target is invalid.")
+        return cls(**fields)
 
 
 def start_check_enabled(environment: Mapping[str, str] | None = None) -> bool:
@@ -314,6 +335,25 @@ class StartCheck:
         draft = self.catalog.review_draft(protocol_id)
         target = draft.get("target") if isinstance(draft.get("target"), dict) else None
         items = [item for item in draft.get("items") or () if isinstance(item, Mapping)]
+        if target is None and draft.get("available_for_execution"):
+            # Materialized development and older stored analyses may have no
+            # editable review draft. Read their immutable executable analysis.
+            revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
+            source = next((event for event in reversed(self.catalog.store.list_events(protocol_id))
+                           if event.event_type == "development_fixture_materialized"), None)
+            fixture = self.catalog.load_executable_fixture(protocol_id)
+            analysis = self.catalog._latest_analysis(revision)  # noqa: SLF001
+            if analysis is not None:
+                target = {"kind": "development_fixture" if source is not None else "analysis",
+                          "revision_id": source.payload["revision_id"] if source is not None else fixture.revision_id,
+                          "analysis_id": analysis.analysis_id,
+                          "analysis_revision_number": analysis.analysis_revision_number}
+                items = [{"item_id": f"step:{step.step_id}", "kind": "step", "step_id": step.step_id,
+                          "step_label": step.source_label, "text": step.instruction_source_text,
+                          "source": {"page": step.evidence.source_page_number,
+                                     "excerpt": step.evidence.source_excerpt}}
+                         for step in fixture.steps]
+                draft = {**draft, "target": target, "items": items}
         by_id = {str(item.get("item_id")): item for item in items}
         if target is None or not draft.get("available_for_execution"):
             return draft, [], by_id
@@ -345,6 +385,92 @@ class StartCheck:
             "questions": [public_question(question) for question in built],
             "skipped_reason": skipped,
         }
+
+    @staticmethod
+    def _target_identity(target: Mapping[str, Any]) -> dict[str, Any]:
+        return asdict(StartTarget.from_mapping(target))
+
+    def readiness(
+        self, protocol_id: str, *, actor_principal_id: str | None,
+        revision_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read account/revision-bound receipts; client claims grant nothing."""
+
+        if not self.enabled:
+            return {"ready": True, "reason": None, "target": None}
+        draft, questions, _ = self._built(protocol_id)
+        target = draft.get("target") or {}
+        revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
+        events = [event for event in self.catalog.store.list_events(protocol_id)
+                  if event.protocol_revision_number == revision.revision_number]
+        identity = self._target_identity(target)
+        safety = None
+        executable = bool(draft.get("available_for_execution"))
+        for event in events:
+            payload = event.payload
+            if (event.event_type == "protocol_start_safety_acknowledged"
+                    and actor_principal_id is not None
+                    and payload.get("actor_principal_id") == actor_principal_id
+                    and self._target_identity(payload.get("target") or {}) == identity):
+                safety = payload
+        # Recovery stays on its original analysed/reviewed revision. Its own
+        # receipt supplies the exact questions checked then, never a new draft.
+        if revision_id is not None and revision_id != identity.get("revision_id"):
+            safety = next((event.payload for event in reversed(events)
+                           if event.event_type == "protocol_start_safety_acknowledged"
+                           and actor_principal_id is not None
+                           and event.payload.get("actor_principal_id") == actor_principal_id
+                           and (event.payload.get("target") or {}).get("revision_id") == revision_id), None)
+            target = safety.get("target", {}) if safety else {}
+            identity = self._target_identity(target)
+            questions = safety.get("questions", []) if safety else []
+            executable = safety is not None
+        latest: dict[str, Any] = {}
+        for event in events:
+            payload = event.payload
+            held = payload.get("target") or {}
+            if (event.event_type == START_CHECK_EVENT
+                    and actor_principal_id is not None
+                    and payload.get("actor_principal_id") == actor_principal_id
+                    and payload.get("analysis_id") == identity.get("analysis_id")
+                    and all(held.get(key) == identity.get(key) for key in ("kind", "version", "event_id"))):
+                latest[str(payload.get("question_id"))] = payload
+        missing = [question["question_id"] for question in questions
+                   if not ((answer := latest.get(question["question_id"]))
+                           and answer.get("value") == question["value"]
+                           and answer.get("item_id") == question["item_id"]
+                           and (answer.get("correct") is True or answer.get("action") == "accept"))]
+        reason = ("start_check_unavailable" if not target or not executable
+                  else "start_check_identity_required" if actor_principal_id is None
+                  else "start_check_required" if missing
+                  else "safety_acknowledgement_required" if safety is None else None)
+        return {"ready": reason is None, "reason": reason, "target": target,
+                "missing_question_ids": missing, "safety_acknowledged": safety is not None}
+
+    def acknowledge_safety(
+        self, protocol_id: str, *, target: object, actor_principal_id: str | None,
+    ) -> dict[str, Any]:
+        """Append an explicit safety receipt only for the currently shown target."""
+
+        status = self.readiness(protocol_id, actor_principal_id=actor_principal_id)
+        if not self.enabled or status.get("reason") not in {None, "safety_acknowledgement_required"}:
+            raise StartCheckError("Complete the current key-value check first.")
+        if (not isinstance(target, Mapping)
+                or self._target_identity(target) != self._target_identity(status["target"])):
+            raise StartCheckError("The safety confirmation target is stale.")
+        if status["safety_acknowledged"]:
+            return status
+        _, questions, _ = self._built(protocol_id)
+        revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
+        self.catalog.store.append_event(
+            "start-safety-" + secrets.token_hex(12), protocol_id, revision.revision_number,
+            "protocol_start_safety_acknowledged",
+            {"actor_principal_id": actor_principal_id,
+             "target": self._target_identity(status["target"]),
+             "questions": [{key: question[key] for key in ("question_id", "item_id", "value")}
+                           for question in questions]},
+        )
+        return self.readiness(protocol_id, actor_principal_id=actor_principal_id)
 
     def answer(
         self, protocol_id: str, question_id: object, *, choice_id: object = None, action: object = None,
