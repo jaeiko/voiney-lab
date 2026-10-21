@@ -17502,6 +17502,10 @@ class CuratedProtocolSession:
 
         if planned is None or language != "ko" or not planned.state_changed:
             return planned
+        if self._notebook_question is not None and not self._notebook_question_valid():
+            # Moving away ends the question. A later return to the same step
+            # must not revive it; a pause/resume at that step keeps it valid.
+            self._notebook_question = None
         words: str | None = None
         if planned.action is CuratedProtocolAction.RESUME and self._notebook_question_valid():
             assert self._notebook_question is not None
