@@ -200,9 +200,10 @@ class CatalogAndPollingTests(unittest.TestCase):
         result = run_page_script(SETUP + r"""
 const pending={protocol_id:"p-1",analysis_status:"review_pending",lifecycle_state:"review_pending",available_for_execution:false,review_pending:{needs_review_count:3}};
 assert(catalogStatusWord(pending).label.startsWith("검토 대기"),catalogStatusWord(pending).label);
-assert(protocolListBadges(pending).map(badge=>`${badge.kind}:${badge.text}`).join("|")==="missing:검토 대기|warning:검토 대기 · 확인 필요 3",protocolListBadges(pending).map(badge=>`${badge.kind}:${badge.text}`).join("|"));
+// Lane IA decision ③: one plain badge for what waits for a person.
+assert(protocolListBadges(pending).map(badge=>`${badge.kind}:${badge.text}`).join("|")==="warning:확인할 것 3개",protocolListBadges(pending).map(badge=>`${badge.kind}:${badge.text}`).join("|"));
 const versioned={protocol_id:"p-2",available_for_execution:true,current_review_version:{version_ko:"검토본 v2"}};
-assert(protocolListBadges(versioned).map(badge=>badge.text).join("|")==="분석 통과|검토본 v2",protocolListBadges(versioned).map(badge=>badge.text).join("|"));
+assert(protocolListBadges(versioned).map(badge=>badge.text).join("|")==="바로 쓸 수 있음|검토본 v2",protocolListBadges(versioned).map(badge=>badge.text).join("|"));
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
@@ -247,7 +248,8 @@ class ReviewMarkupTests(unittest.TestCase):
         for word in ("승인", "반려", "PI"):
             self.assertNotIn(word, editor)
         # The compare view stays read only (lane UI2's own test reads it too).
-        compare = self.html[self.html.index('<details id="protocol-compare"'):begin]
+        # Lane IA decision ③: the reagent tables (an input of their own) stand between the compare view and the editor.
+        compare = self.html[self.html.index('<details id="protocol-compare"'):self.html.index('<details id="protocol-detail-reagents"')]
         self.assertNotIn("<input", compare)
 
     def test_one_column_on_a_phone_three_on_a_wide_screen(self) -> None:

@@ -23,7 +23,8 @@ class StartCardScopeTests(unittest.TestCase):
 
     def test_the_start_card_says_the_server_sentence_above_the_safety_statements(self) -> None:
         html = INDEX.read_text(encoding="utf-8")
-        body = html[html.index('id="protocol-start-body"'):html.index('id="protocol-start"')]
+        # Lane IA decision ③: the start button stands in the protocol screen's head, above the card.
+        body = html[html.index('id="protocol-start-body"'):html.index('id="protocol-start-repeat-checks"')]
         self.assertIn('<p id="protocol-safety-scope" class="safety-scope-line" role="note" hidden></p>', body)
         self.assertLess(body.index('id="protocol-safety-scope"'), body.index('id="protocol-safety-notices"'))
         result = run_page_script(REVIEW + r"""
