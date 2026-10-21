@@ -1495,6 +1495,14 @@ def _record_workspace_observation(
     else:
         category="other"
     step=curated.fixture.steps[pre_transition_index]
+    notebook=getattr(plan,"notebook_record",None)
+    if notebook is not None and notebook.get("kind")=="observation":
+        observed_step=next((candidate for candidate in curated.fixture.steps
+                            if candidate.step_id==notebook.get("step_id")
+                            and candidate.source_label==notebook.get("step_label")),None)
+        if observed_step is None:
+            raise WorkspaceError("Notebook observation step is unavailable.")
+        step=observed_step
     principal,store=_commercial_workspace()
     try:
         store.record_observation(
@@ -5341,7 +5349,21 @@ async def answer_experiment_report_review(report_id:str,item_id:str,request:Requ
     if item is None or action not in {"confirm","correct"}:
         raise HTTPException(status_code=404,detail="report value unavailable")
     text=" ".join(str(payload.get("text") or "").split())
-    key=f"screen-review-{secrets.token_hex(8)}"
+    desired=text if action=="correct" and text else item["text"]
+    if item["confirmed"] and desired==item["text"]:
+        items=report_review_items(report["events"])
+        return {"report_id":report_id,"items":items,
+                "unconfirmed":sum(1 for entry in items if not entry["confirmed"]),
+                "prose":REPORT_PROSE.status(store,report_id)}
+    # A stable basis distinguishes a later correction back to an earlier
+    # value, while simultaneous/retried submissions share one event key.
+    basis=item["source_key"]
+    for entry in report["events"]:
+        fix=(entry.get("payload") or {}).get("record_fix") or {}
+        if fix.get("target_event_key")==item["source_key"]:
+            basis=entry["event_key"]
+    key="screen-review-"+hashlib.sha256(
+        json.dumps([item_id,basis,desired],ensure_ascii=False).encode("utf-8")).hexdigest()
     try:
         if action=="correct" and text and text!=item["text"]:
             if len(text)>800:
@@ -5462,10 +5484,9 @@ def post_experiment_report_pi_confirmation(
         report=store.get_report(report_id)
     except (ValueError,KeyError,sqlite3.Error) as exc:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
-    count=sum(1 for event in report["events"] if event.get("event_type")=="pi_confirmed")
     try:
         store.append_event(
-            report_id,event_key=f"pi-confirmed-{count+1}",event_type="pi_confirmed",
+            report_id,event_key=f"pi-confirmed-{secrets.token_hex(16)}",event_type="pi_confirmed",
             user_wording=comment or None,
             payload={"name":_pi_name(),"comment":comment,"source":"screen"},
         )
@@ -5563,7 +5584,7 @@ def export_experiment_report(report_id:str,format_name:str):
         content=content,media_type=media_type,
         headers={
             "Cache-Control":"no-store",
-            "Content-Disposition":f'attachment; filename="{report_id}.{format_name}"',
+            "Content-Disposition":f'attachment; filename="{report_id}.{format_name.replace("meeting-", "meeting.")}"',
             "X-Content-Type-Options":"nosniff",
         },
     )
@@ -7690,6 +7711,16 @@ async def _queue_curated_research(
     if not session.owns_research_result(turn_id,generation,configuration_id):
         return
 
+    async def report_state(report:dict)->None:
+        public=_public_experiment_report_state(report)
+        store=session.experiment_report_store
+        public["reports"]=(await asyncio.to_thread(store.list_reports,session_id=session.session_id)
+                           if store is not None else [])
+        if session.owns_research_result(turn_id,generation,configuration_id):
+            await sender.text(
+                "experiment.report.state",turn_id=turn_id,generation=generation,
+                configuration_id=configuration_id,session_id=session.session_id,report=public)
+
     async def worker() -> None:
         research_plan=None
         ctx=context
@@ -7878,7 +7909,7 @@ async def _queue_curated_research(
                     turn_id=turn_id,generation=generation,
                     pre_transition_index=pre_transition_index,
                 )
-                await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+                await report_state(report)
         elif session.owns_research_result(turn_id,generation,configuration_id):
             status=(
                 supplemental_result.get("status","disabled")
@@ -7905,7 +7936,7 @@ async def _queue_curated_research(
                     confirmation_state="server_observed",
                     payload={"status":status,"state_mutation":False},
                 )
-                await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+                await report_state(report)
             if not announced:
                 # Nothing was shown as pending, so nothing is shown as
                 # unfinished: the rules' answer stands alone (decision 8).
