@@ -231,5 +231,48 @@ assert(replaced===null,"a refused login reloaded the page");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+class RecordsTests(unittest.TestCase):
+    """⑤ the records tab: the list of past experiments, then one experiment's record."""
+
+    def test_the_list_then_one_record_and_back(self) -> None:
+        result = run3(r"""
+await boot(withExperiments([RESUMABLE,ENDED]));
+go("#/records");
+assert(node("records-list-view").hidden===false&&node("records-detail-view").hidden===true,"the list is not shown first");
+const rows=()=>walk(node("records-list")).filter(el=>hasClass(el,"records-row"));
+assert(rows().length===2,`rows: ${rows().length}`);
+assert(rows()[0].textContent.includes("Gamma")&&rows()[0].textContent.includes("일시정지")&&rows()[0].textContent.includes("3단계"),rows()[0].textContent);
+assert(rows()[1].textContent.includes("종료됨")&&rows()[1].textContent.includes("5단계"),rows()[1].textContent);
+rows()[0].dispatch("click");await settle(8);
+assert(globalThis.location.hash==="#/records/s-9",`route: ${globalThis.location.hash}`);
+assert(node("records-detail-view").hidden===false&&node("records-list-view").hidden===true,"the record did not open");
+assert(node("records-detail-title").textContent.includes("Gamma")&&node("records-detail-line").textContent.includes("일시정지"),`${node("records-detail-title").textContent} / ${node("records-detail-line").textContent}`);
+assert(currentExperimentSessionId==="s-9","the record is not the picked experiment");
+go("#/records");
+assert(node("records-list-view").hidden===false,"back did not return to the list");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_empty_list_says_so_and_the_run_shows_its_own_record(self) -> None:
+        result = run3(r"""
+await boot(withExperiments([]));
+go("#/records");
+assert(node("records-list").textContent.includes("아직 기록이 없어요"),node("records-list").textContent);
+go("#/experiment");running();
+assert(node("tab-records").hidden===false&&node("records-detail-view").hidden===false&&node("records-list-view").hidden===true,"the run does not show its own record under the experiment");
+assert(node("records-detail-head").hidden===true,"the run's record repeats a head above the ledger's own title");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_markup_keeps_the_ledger_inside_the_detail(self) -> None:
+        html = INDEX.read_text(encoding="utf-8")
+        start = html.index('<section id="tab-records"')
+        records = html[start:html.index('<section id="tab-settings"', start)]
+        detail = records[records.index('<div id="records-detail-view"'):]
+        for ident in ("experiment-session-ledger", "experiment-session-select", "experiment-event-timeline", "manual-observation-save"):
+            self.assertIn(f'id="{ident}"', detail, ident)
+        self.assertIn('id="records-list-view"', records)
+
 if __name__ == "__main__":
     unittest.main()

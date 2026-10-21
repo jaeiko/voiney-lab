@@ -827,6 +827,10 @@
     body[data-auth="required"] .topbar,body[data-auth="required"] .sticky-rail,body[data-auth="required"] .shell{display:none}
     body[data-wizard="on"]:not([data-auth="required"]){overflow:hidden}
     .experiment-start{display:grid}
+    .records-list{list-style:none;margin:var(--space-3) 0 0;padding:0;display:grid;gap:var(--space-2)}
+    .records-list .home-card{text-decoration:none}
+    .records-detail-head{display:grid;gap:var(--space-1);margin-bottom:var(--space-3)}
+    .records-detail-back{justify-self:start;min-height:44px;display:inline-flex;align-items:center;color:var(--ink);font-weight:700}
     body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
     body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}
     @media (min-width:900px){
@@ -1305,6 +1309,18 @@
     </section>
     <!-- Lane IA decision ①: the records -- the experiments and their timelines (lane ON: an administrator sees the lab's). While the experiment runs this panel stays under the run view, as lane UI0 left it, so the run's own observations and attachments are reached while the bar is hidden. -->
     <section id="tab-records" class="tab-panel" data-tab="records" aria-labelledby="experiment-ledger-title" tabindex="-1" hidden>
+      <!-- Lane IA decision ⑤ (2026-10-21): the past experiments as a list (#/records); one tapped opens its record (#/records/<id>) -- the timeline, the observations and attachments below. While the experiment runs, its own record shows here under the run view. -->
+      <div id="records-list-view" class="records-list-view">
+        <h2 id="records-list-title" class="records-list-title">실험 기록</h2>
+        <p class="records-list-lead">지난 실험을 누르면 단계별 기록이 열려요.</p>
+        <ul id="records-list" class="records-list"></ul>
+      </div>
+      <div id="records-detail-view" class="records-detail-view" hidden>
+      <div id="records-detail-head" class="records-detail-head">
+        <a id="records-detail-back" class="records-detail-back" href="#/records">← 실험 기록</a>
+        <h2 id="records-detail-title" class="records-detail-title"></h2>
+        <p id="records-detail-line" class="records-detail-line"></p>
+      </div>
       <section id="experiment-session-ledger" class="panel experiment-ledger" aria-labelledby="experiment-ledger-title">
         <div class="experiment-ledger-head">
           <div>
@@ -1338,6 +1354,7 @@
           </div>
         </div>
       </section>
+      </div>
     </section>
     <!-- Lane IA decision ⑥: the settings -- lane UI0's sheet (voice input, guidance; the protocol group as before), the agent's voice (lane ON), the account (lane ON), the home-screen guide (lane UI2) and, in dev mode only, the developer details. -->
     <section id="tab-settings" class="tab-panel" data-tab="settings" aria-labelledby="settings-sheet-title" tabindex="-1" hidden>
@@ -2205,7 +2222,7 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
   }
   const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";const loaded=selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
   // Lane IA decision ②: the list is kept for the home's cards; a session named by the hash is picked once the list holds it.
-  workspaceExperiments=experiments;renderHome();applyRouteSelections();return loaded;
+  workspaceExperiments=experiments;renderHome();renderRecordsViews();applyRouteSelections();return loaded;
  }catch(error){
   if(seq!==experimentLoadSeq)return false;
   select.replaceChildren();const option=document.createElement("option");option.value="";option.textContent="실험 세션 로드 실패";select.appendChild(option);setText("experiment-capture-status",researcherErrorMessage(error?.message,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));return false;
@@ -5407,6 +5424,7 @@ function renderRoute(){
  if(tab==="upload")renderUploadFlow();
  if(tab==="home")renderHome();
  if(tab==="settings")renderSettingsExtras();
+ renderRecordsViews();
  if(tab==="experiment")renderExperimentStart();
  renderWizard();
  if(key!==lastRouteKey){lastRouteKey=key;stopVoicePreview();applyRouteSelections({entered:true});if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
@@ -5423,6 +5441,34 @@ function applyRouteSelections({entered=false}={}){
 function applyProtocolRoute(protocolId){if(!protocolCatalog.has(protocolId))return false;if($("protocol-id")?.value===protocolId&&currentProtocolReviewId===protocolId)return true;return pickProtocolFromList(protocolId);}
 // Lane IA decision ③: a row tapped on the list pushes the protocol's route (the back button returns to the list); from one protocol's screen to another's, the entry is replaced.
 function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenRoute.id===protocolId)return false;navigateTab("protocols",protocolId,{replace:nonemptyText(screenRoute.id)});return true;}
+// Lane IA decision ⑤ (2026-10-21): the records tab -- the list of past experiments from the server's list
+// (title, when, the server's state in words, the step), one tapped opens its record; during the run the
+// run's own record.
+function recordsDetailId(){return screenRoute.tab==="records"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
+function recordTitle(item){return serverProtocolTitle(item)||protocolCatalog.get(item?.protocol_id)?.title||"실험";}
+function recordLine(item){const state=sessionStateBadgeInfo(item?.status);return [item?.started_at?localDateTimeText(item.started_at):"",state?.label||"상태 확인",nonemptyText(item?.current_step_label)?`${item.current_step_label}단계`:""].filter(Boolean).join(" · ");}
+function renderRecordsList(){
+ const host=$("records-list");if(!host)return 0;host.replaceChildren();
+ const items=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).filter(item=>item&&typeof item.session_id==="string");
+ if(!items.length){host.appendChild(compareEl("li","records-empty","아직 기록이 없어요 · 실험을 하면 여기에 남아요."));return 0;}
+ for(const item of items){
+  const row=compareEl("li","records-item"),link=compareEl("a","home-card records-row");link.href=routePath("records",item.session_id);
+  link.appendChild(compareEl("b","home-card-title",recordTitle(item)));link.appendChild(compareEl("span","home-card-sub",recordLine(item)));
+  link.addEventListener("click",event=>{event?.preventDefault?.();navigateTab("records",item.session_id);});
+  row.appendChild(link);host.appendChild(row);
+ }
+ return items.length;
+}
+function renderRecordsViews(){
+ const id=recordsDetailId(),during=screenView()==="during",detail=Boolean(id)||during;
+ const list=$("records-list-view"),view=$("records-detail-view");if(list)list.hidden=detail;if(view)view.hidden=!detail;
+ if(!detail){renderRecordsList();return false;}
+ const shown=id||currentExperimentSessionId,item=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).find(entry=>entry?.session_id===shown);
+ setText("records-detail-title",item?recordTitle(item):during?"지금 하는 실험":"기록을 불러오는 중…");setText("records-detail-line",item?recordLine(item):"");
+ // During the run the ledger's own title names it; the head is for a record picked from the list.
+ const head=$("records-detail-head");if(head)head.hidden=during&&!id;
+ return true;
+}
 function protocolDetailId(){return screenRoute.tab==="protocols"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
 function renderProtocolViews(){
  const id=protocolDetailId(),list=$("protocol-list-view"),detail=$("protocol-detail-view");
