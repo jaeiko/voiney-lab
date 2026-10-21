@@ -4794,7 +4794,7 @@ async function onMessage(e,generation,current){
  }
  if(m.type==="session.configuration_required"){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
-  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
+  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};const refusedWords=nonemptyText(m.message_ko)?String(m.message_ko):reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";$("session-configuration-status").textContent=refusedWords;renderState("IDLE",refusedWords);if(Object.prototype.hasOwnProperty.call(START_REFUSAL_STEPS,m.reason))returnToStartStep(m.reason,refusedWords);
  }
  if(m.type==="session.stopped"&&stopRequest?.socket===current)stopRequest.resolve();
  if(m.type==="session.stopped"){hideVoiceCalibration();voiceReferenceMeasured=false;sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
@@ -5266,6 +5266,40 @@ async function wizardPickProtocol(protocolId){
  try{await loadProtocolReview(protocolId);}finally{wizard.busy=false;}
  wizardRememberProtocol(protocolId);renderWizard();return true;
 }
+// Lane IA + lane SAFE (2026-10-21, ~/reports/safe/HANDOFF_IA.md): the server starts a protocol only after
+// this account finished the key-value check of that analysis (or review version) and acknowledged its
+// safety notices. [읽었어요] leaves that acknowledgement -- the whole target the GET start-check returned --
+// and a refusal shows the server's sentence and goes no further. With the check off (or not read) nothing
+// is sent; the server's own word at the start decides.
+const START_CHECK_WORDS=Object.freeze({start_check_invalid:"핵심 값 확인이 끝나지 않았거나 화면이 오래됐어요. 핵심 값 확인부터 다시 해 주세요."});
+function startCheckRefusalWords(payload){
+ if(nonemptyText(payload?.message_ko))return String(payload.message_ko);
+ if(nonemptyText(payload?.detail?.message_ko))return String(payload.detail.message_ko);
+ const code=typeof payload?.detail==="string"?payload.detail:typeof payload?.detail?.code==="string"?payload.detail.code:"";
+ return START_CHECK_WORDS[code]||"안전 확인을 남기지 못했어요. 다시 눌러 주세요.";
+}
+async function acknowledgeStartSafety(){
+ const entry=wizardSelectedProtocol(),check=wizard.check;
+ if(!entry)return false;
+ if(!check||check.enabled!==true||!check.target||typeof check.target!=="object")return true;
+ wizardSetBusy(true);
+ try{
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/safety`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({target:check.target}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(response.ok&&payload?.ready!==false)return true;
+  wizardNote(startCheckRefusalWords(payload),"error");return false;
+ }catch(_){wizardNote("안전 확인을 서버에 남기지 못했어요. 다시 눌러 주세요.","error");return false;}
+ finally{wizardSetBusy(false);}
+}
+// A start the server refused for the check: its sentence, and the sheet again at the step it names.
+const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null});
+function returnToStartStep(reason,words){
+ forgetSafetyRead();
+ const step=START_REFUSAL_STEPS[reason];
+ if(!step||screenView()==="during"||authRequired())return false;
+ openWizardSheet(wizardSteps().includes(step)?step:null);wizardNote(words,"error");renderWizard();
+ return true;
+}
 async function wizardLoadCheck(){
  const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
  wizard.check=null;wizard.question=0;wizard.busy=true;renderWizard();
@@ -5376,7 +5410,7 @@ async function wizardPrimary(){
  if(wizard.busy)return null;
  switch(wizard.step){
   case "login":return wizardSubmitLogin();
-  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety")rememberSafetyRead();wizardNext();return true;}
+  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety"){if(!await acknowledgeStartSafety())return null;rememberSafetyRead();}wizardNext();return true;}
   case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
   case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;}
   default:return null;
