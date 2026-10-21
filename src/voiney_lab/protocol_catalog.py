@@ -1376,7 +1376,20 @@ def _review_value(value: object) -> object:
     return value
 
 
-def _ocr_needed(extraction: ProtocolPdfExtraction) -> bool:
+@dataclass(frozen=True)
+class _SourceMetadata:
+    """Source facts recorded once in the existing append-only catalog ledger."""
+
+    title: str | None
+    analysis_status: str
+    ocr_needed: bool
+
+    @classmethod
+    def from_extraction(cls, extraction: ProtocolPdfExtraction) -> _SourceMetadata:
+        return cls(extraction.metadata.title, _analysis_state(extraction), _ocr_needed(extraction))
+
+
+def _ocr_needed(extraction: ProtocolPdfExtraction | _SourceMetadata) -> bool:
     """Whether any page of this source has to come from OCR.
 
     Wider than ``_analysis_state(...) == "ocr_required"``, which is the whole
@@ -1388,6 +1401,8 @@ def _ocr_needed(extraction: ProtocolPdfExtraction) -> bool:
     pages and keeps every other page's text layer.
     """
 
+    if isinstance(extraction, _SourceMetadata):
+        return extraction.ocr_needed
     return (
         _analysis_state(extraction) == "ocr_required"
         or bool(extraction.ocr_required_page_numbers)
@@ -1717,7 +1732,7 @@ class ProtocolCatalog:
     def _ocr_projection(
         self,
         revision: ProtocolRevisionRecord,
-        extraction: ProtocolPdfExtraction,
+        extraction: ProtocolPdfExtraction | _SourceMetadata,
         *,
         include_text: bool,
     ) -> dict[str, object]:
@@ -2317,16 +2332,13 @@ class ProtocolCatalog:
             raise ProtocolCatalogUnavailableError(
                 "Protocol source object is unavailable."
             )
-        source_path = self.store.file_store.object_path(
-            revision.pdf_checksum, expected_size=pdf_object.byte_size
-        )
-        extraction = extract_protocol_pdf(source_path)
-        analysis_status = "review_required" if analysis else _analysis_state(extraction)
+        source_metadata = self._source_metadata(revision, analysis)
+        analysis_status = "review_required" if analysis else source_metadata.analysis_status
         lifecycle_state = "review_required" if analysis else "uploaded"
         if analysis is None:
             if analysis_status == "ocr_required":
                 ocr_state = self._ocr_projection(
-                    revision, extraction, include_text=False
+                    revision, source_metadata, include_text=False
                 )["state"]
                 analysis_status, lifecycle_state = {
                     "ocr_required": ("ocr_required", "blocked"),
@@ -2429,7 +2441,7 @@ class ProtocolCatalog:
         title = (
             analysis.protocol.metadata.title
             if analysis is not None and analysis.protocol.metadata.title
-            else extraction.metadata.title or Path(revision.original_filename).stem
+            else source_metadata.title or Path(revision.original_filename).stem
         )
         pending = self._review_pending_event(revision)
         revision_id = _revision_id(
@@ -2560,9 +2572,60 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         ))
 
-    def list_entries(self) -> tuple[ProtocolCatalogEntry, ...]:
+    def _record_source_metadata(
+        self, revision: ProtocolRevisionRecord, extraction: ProtocolPdfExtraction,
+    ) -> None:
+        metadata = _SourceMetadata.from_extraction(extraction)
+        self.store.append_event(
+            f"source-metadata-{revision.experiment_id}-{revision.revision_number}",
+            revision.experiment_id, revision.revision_number, "protocol_source_metadata",
+            {"source_sha256": revision.pdf_checksum, "title": metadata.title,
+             "analysis_status": metadata.analysis_status, "ocr_needed": metadata.ocr_needed},
+        )
+
+    def _source_metadata(
+        self, revision: ProtocolRevisionRecord, analysis: AnalysisRevisionRecord | None,
+    ) -> _SourceMetadata:
+        for event in self.store.list_events(revision.experiment_id):
+            if event.event_type == "protocol_source_metadata" and event.protocol_revision_number == revision.revision_number:
+                payload = event.payload
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("source_sha256") != revision.pdf_checksum
+                    or not isinstance(payload.get("analysis_status"), str)
+                    or not isinstance(payload.get("ocr_needed"), bool)
+                    or (payload.get("title") is not None and not isinstance(payload.get("title"), str))
+                ):
+                    raise ProtocolCatalogUnavailableError("Stored source metadata is invalid.")
+                return _SourceMetadata(payload.get("title"), payload["analysis_status"], payload["ocr_needed"])
+        if analysis is not None:
+            # Old catalogs already retain exact source metadata in analyses.
+            # No PDF bytes, parser or write is needed for this projection.
+            return _SourceMetadata.from_extraction(analysis.protocol.metadata.pdf)
+        raise ProtocolCatalogUnavailableError("Source metadata needs startup preparation.")
+
+    def prepare_source_metadata(self) -> None:
+        """Backfill pre-metadata uploads once, before serving, on a worker.
+
+        Existing events remain unchanged. Normal list requests never extract
+        PDFs or create records, including after extraction-cache eviction.
+        """
+        for experiment in self.store.list_experiments():
+            revision = self._latest_protocol_revision(experiment.experiment_id)
+            try:
+                self._source_metadata(revision, self._latest_analysis(revision))
+            except ProtocolCatalogUnavailableError as exc:
+                if str(exc) != "Source metadata needs startup preparation.":
+                    raise
+                self._record_source_metadata(revision, self._source_extraction(revision))
+
+    def list_entries(
+        self, protocol_ids: frozenset[str] | None = None,
+    ) -> tuple[ProtocolCatalogEntry, ...]:
         entries = []
         for experiment in self.store.list_experiments():
+            if protocol_ids is not None and experiment.experiment_id not in protocol_ids:
+                continue
             entries.append(
                 self._entry_for_revision(
                     self._latest_protocol_revision(experiment.experiment_id)
@@ -3424,6 +3487,7 @@ class ProtocolCatalog:
         creation = self.store.create_experiment(
             protocol_id, source, original_filename=filename
         )
+        self._record_source_metadata(creation.protocol_revision, extraction)
         status = _analysis_state(extraction)
         self.store.append_event(
             f"registered-{extraction.sha256[:40]}",

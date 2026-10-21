@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 from urllib.parse import quote, unquote_plus
@@ -2800,11 +2800,22 @@ def frame_complete_audio(pcm:bytes)->list[bytes]:
 def _configured_candidate_fixture(config:ServerConfig)->CuratedProtocolFixture|None:
     if config.curated_protocol_fixture_path is None:
         return None
-    return load_curated_protocol_fixture(
-        config.curated_protocol_fixture_path,
-        config.curated_protocol_provenance_path,
-        config.curated_protocol_source_pdf_path,
-    )
+    paths=(config.curated_protocol_fixture_path,config.curated_protocol_provenance_path,
+           config.curated_protocol_source_pdf_path)
+    fixture_file=Path(paths[0])
+    checked=(*paths,*(fixture_file.with_name(f"{fixture_file.stem}.{suffix}")
+                     for suffix in ("localization.ko.json","visuals.json","timers.json")))
+    digests=tuple(file_sha256(path) if path is not None and Path(path).is_file() else None for path in checked)
+    return _cached_candidate_fixture(paths,digests,load_curated_protocol_fixture)
+
+
+@lru_cache(maxsize=4)
+def _cached_candidate_fixture(
+    paths:tuple[Path,Path|None,Path|None],digests:tuple[str|None,...],
+    loader:Callable[...,CuratedProtocolFixture],
+)->CuratedProtocolFixture:
+    """Cache verified development inputs by bytes, including every sidecar."""
+    return loader(*paths)
 
 
 def _candidate_fixture_execution_state(
@@ -2843,10 +2854,11 @@ def _candidate_fixture_execution_state(
         if not catalog.development_fixture_is_materialized(fixture):
             return state
         entry=catalog.get_entry(fixture.protocol_id)
-        review=catalog.review(fixture.protocol_id)
         state["available_for_execution"]=bool(entry.available_for_execution)
-        state["execution_blockers"]=review.get("execution_blockers") or []
-        state["execution_notices"]=review.get("execution_notices") or []
+        # Materialization above proves this is the stored analysis. These
+        # reason projections use that same analysis without reopening its PDF.
+        state["execution_blockers"]=catalog._execution_reasons(fixture.draft,blocking=True)
+        state["execution_notices"]=catalog._execution_reasons(fixture.draft,blocking=False)
         state["blocked_reason"]=(
             None if entry.available_for_execution else "execution_blocked")
     except Exception:  # noqa: BLE001 - see the docstring: unreadable is a no
@@ -2930,7 +2942,9 @@ def _public_protocol_catalog_entries(
         return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
-        for item in catalog.list_entries():
+        visible=_visible_catalog_resource_ids()
+        selected=(visible|{candidate_protocol_id} if visible is not None and candidate_protocol_id is not None else visible)
+        for item in (catalog.list_entries() if selected is None else catalog.list_entries(frozenset(selected))):
             if candidate is not None and item.protocol_id==candidate.protocol_id:
                 try:
                     materialized=catalog.development_fixture_is_materialized(candidate)
@@ -2960,6 +2974,12 @@ def log_protocol_catalog_runtime_configuration()->None:
     """Log only sanitized protocol backend identity and visible entry count."""
 
     try:
+        if _protocol_store_settings().enabled:
+            catalog,store=_open_protocol_catalog()
+            try:
+                catalog.prepare_source_metadata()
+            finally:
+                store.close()
         entries,settings,candidate_protocol_id=(
             _public_protocol_catalog_entries()
         )
@@ -3926,13 +3946,6 @@ def list_protocol_catalog()->dict[str,object]:
 
     try:
         entries,_,candidate_protocol_id=_public_protocol_catalog_entries()
-        visible=_visible_catalog_resource_ids()
-        if visible is not None:
-            entries=[
-                item for item in entries
-                if item.get("protocol_id") in visible
-                or item.get("protocol_id")==candidate_protocol_id
-            ]
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
     return {"protocols":entries}

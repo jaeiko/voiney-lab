@@ -372,7 +372,7 @@ class ProtocolCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             {event.event_type for event in self.store.list_events(entry.protocol_id)},
-            {"protocol_registered"},
+            {"protocol_registered", "protocol_source_metadata"},
         )
 
     def test_analysis_endpoint_owns_store_in_worker_and_status_is_read_only(self):
