@@ -2076,7 +2076,11 @@ function renderExperimentReportEvents(events){const container=$("experiment-repo
 function serverOrigin(){return "";}
 function serverUrl(path){const value=String(path??"");return /^[a-z][a-z0-9+.-]*:/i.test(value)?value:`${serverOrigin()}${value}`;}
 function serverSocketUrl(path="/ws"){const origin=serverOrigin();if(origin)return `${origin.replace(/^http/i,"ws")}${path}`;const loc=globalThis.location;return `${loc?.protocol==="https:"?"wss":"ws"}://${loc?.host||""}${path}`;}
-function serverFetch(path,options={}){return fetch(serverUrl(path),options);}
+// Lane IA QA-17 (lane QA, 2026-10-20): a 401 (the session expired, the password changed elsewhere, the account
+// was turned off) was handled nowhere -- the reconnecting tried every 15 s for ever, every button stayed
+// locked. Any request answered 401, other than the login's own routes, sends the page to the login.
+const AUTH_OWN_ROUTE=/^\/api\/auth\/(login|signup|session|invites)(?:[\/?]|$)/;
+function serverFetch(path,options={}){return fetch(serverUrl(path),options).then(response=>{if(response?.status===401&&!AUTH_OWN_ROUTE.test(String(path??"")))signOutOnScreen();return response;});}
 function workspaceFetch(url,options={}){return serverFetch(url,options);}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  authentication_required:"연구자 세션을 확인할 수 없습니다. 다시 로그인한 뒤 실험 상태를 새로고침해 주세요.",
@@ -5576,14 +5580,29 @@ function renderSettingsExtras(){
 }
 async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoice(voiceId);setText("settings-agent-voice-note",ok?"저장했어요 · 이 목소리로 안내해요.":"목소리를 저장하지 못했어요.");renderSettingsExtras();return ok;}
 async function previewAgentVoiceFromSettings(voiceId){const ok=await wizardPreviewVoice(voiceId);setText("settings-agent-voice-note",wizard.noteKind==="error"?wizard.note:"");renderSettingsExtras();return ok;}
+// Lane IA QA-16/QA-17 (lane QA, 2026-10-20): signed out on screen at once -- the session, the socket and the
+// reconnecting stop (a new generation) -- and the page starts again at its own address: not the spent
+// invite link it was opened with (?invite=), which trapped the person on "초대 링크가 만료되었거나 이미 쓰였어요".
+function leaveForLogin(){
+ const loc=globalThis.location,path=typeof loc?.pathname==="string"&&loc.pathname?loc.pathname:"/";
+ try{if(typeof loc?.replace==="function"){loc.replace(path);return true;}if(typeof loc?.reload==="function"){loc.reload();return true;}}catch(_){}
+ return false;
+}
+function signOutOnScreen(){
+ if(wizard?.auth?.mode!=="accounts"||wizard.auth.signed_in!==true)return false;
+ sessionGeneration++;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;
+ const current=socket;socket=null;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();
+ try{if(current&&current.readyState<WebSocket.CLOSING)current.close(1000,"signed out");}catch(_){}
+ wizard.auth={mode:"accounts",signed_in:false,account:null};wizard.active=true;wizard.open=false;wizard.step="login";
+ renderRoute();leaveForLogin();return true;
+}
 async function logOutAccount(){
  const button=$("account-logout"),status=$("account-password-status");setDisabled(button,true);
- try{const response=await serverFetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("refused");}
+ try{const response=await serverFetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(response.status===401){setDisabled(button,false);signOutOnScreen();return true;}if(!response.ok)throw new Error("refused");}
  catch(_){setDisabled(button,false);if(status)status.textContent="로그아웃하지 못했어요. 다시 해 주세요.";return false;}
  setDisabled(button,false);
- // The page's lists belong to the account that left: a reload starts clean at the login.
- if(typeof globalThis.location?.reload==="function"){try{globalThis.location.reload();return true;}catch(_){}}
- wizard.auth={mode:"accounts",signed_in:false,account:null};wizard.active=true;wizard.step="login";renderRoute();return true;
+ // The page's lists belong to the account that left: it starts clean at the login.
+ signOutOnScreen();return true;
 }
 async function changeAccountPassword(event){
  event?.preventDefault?.();

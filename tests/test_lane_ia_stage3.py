@@ -179,5 +179,57 @@ assert(sessionActive===false&&visibleState==="ERROR","an error with no turn did 
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+class AccountTests(unittest.TestCase):
+    """QA-16 and QA-17: the way out of an account leads to the login."""
+
+    LOCATION = r"""
+let replaced=null,reloaded=0;
+Object.assign(globalThis.location,{pathname:"/",search:"?invite=spent-token",replace(url){replaced=url;},reload(){reloaded+=1;}});
+"""
+
+    def test_a_logout_lands_on_the_login_not_on_the_spent_invite(self) -> None:
+        result = run3(self.LOCATION + r"""
+await boot([["/api/auth/logout",{signed_out:true}],...base(ACCOUNT_SESSION(true))]);
+go("#/settings");
+await logOutAccount();await settle(4);
+assert(replaced==="/"&&reloaded===0,`left for: ${replaced} reloads ${reloaded}`);
+assert(document.body.dataset.auth==="required","the screen did not go to the login");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_logout_answered_401_is_already_signed_out(self) -> None:
+        result = run3(self.LOCATION + r"""
+await boot([["/api/auth/logout",unauthorized],...base(ACCOUNT_SESSION(true))]);
+go("#/settings");
+await logOutAccount();await settle(4);
+assert(replaced==="/",`a 401 logout stayed: ${replaced} · ${node("account-password-status").textContent}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_401_sends_the_page_to_the_login_and_stops_the_session(self) -> None:
+        result = run3(self.LOCATION + r"""
+let refuse=false;
+await boot([["/api/workspace/experiments",()=>refuse?unauthorized():{experiments:[]}],...base(ACCOUNT_SESSION(true))]);
+go("#/experiment");pickProtocolFromList("p-1");await settle(8);
+const ws=running(),generation=sessionGeneration;
+refuse=true;
+await loadExperimentSessions();await settle(4);
+assert(document.body.dataset.auth==="required",`auth: ${document.body.dataset.auth}`);
+assert(sessionActive===false&&sessionGeneration!==generation&&ws.readyState===3,"the session kept going after a 401 (the reconnecting would never stop)");
+assert(replaced==="/","the page did not leave for the login");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_refused_login_is_not_a_signed_out_session(self) -> None:
+        result = run3(self.LOCATION + r"""
+await boot([["/api/auth/login",unauthorized],...base(ACCOUNT_SESSION(false))]);
+assert(document.body.dataset.auth==="required");
+calls.length=0;
+await serverFetch("/api/auth/login",{method:"POST"});await settle(2);
+assert(replaced===null,"a refused login reloaded the page");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 if __name__ == "__main__":
     unittest.main()
