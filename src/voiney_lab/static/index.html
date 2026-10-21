@@ -1767,8 +1767,11 @@ function onScreenVisibilityChange(){if(globalThis.document?.visibilityState==="v
 function screenView(){
  if(experimentEndedOnScreen)return "after";
  const state=curatedProtocolState;
- return sessionActive&&state?.attached===true&&state.active===true?"during":"before";
+ // Lane IA QA-12 (lane QA, 2026-10-20): the questions the server asks before the start (the experiment not
+ // yet started, so not active) are heard while the session is on: the run view shows them.
+ return sessionActive&&state?.attached===true&&(state.active===true||prestartQuestionOpen())?"during":"before";
 }
+function prestartQuestionOpen(){const open=curatedScreenFields?.open_question;return Boolean(open&&typeof open==="object"&&open.kind==="prestart"&&nonemptyText(open.text));}
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
  if(view!=="before")stopVoicePreview();
@@ -2597,7 +2600,7 @@ function nonemptyText(v){return typeof v==="string"&&v.trim().length>0;}
 // words it; nothing when none is open.
 function renderOpenQuestion(){
  const box=$("procedure-open-question");if(!box)return;
- const open=curatedScreenFields?.open_question,shown=curatedProtocolState?.attached===true&&curatedProtocolState.active===true;
+ const open=curatedScreenFields?.open_question,shown=curatedProtocolState?.attached===true&&(curatedProtocolState.active===true||prestartQuestionOpen());
  const text=shown&&open&&typeof open==="object"&&nonemptyText(open.text)?normalizePresentationText(open.text):"";
  box.textContent=text?`서버 질문 · ${text}`:"";box.hidden=!text;
 }

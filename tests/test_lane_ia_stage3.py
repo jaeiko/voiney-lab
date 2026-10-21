@@ -141,5 +141,25 @@ assert(!experimentIsResumable(),"the ended experiment is resumable");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+
+class PrestartQuestionTests(unittest.TestCase):
+    """QA-12: while the server asks its questions before the start, the screen shows the question."""
+
+    def test_the_question_before_the_start_is_on_the_run_view(self) -> None:
+        result = run3(r"""
+await boot(base());
+go("#/experiment");pickProtocolFromList("p-1");await settle(8);
+running();
+renderCuratedProtocolState({configuration_id:5,state:{...runState(),active:false,workflow_status:"preview",revision:7},screen:{open_question:{kind:"prestart",text:"7단계 조건에 해당하나요? 네 · 아니요 · 나중에"}}});
+renderScreenView();
+assert(document.body.dataset.view==="during",`view while the question is asked: ${document.body.dataset.view}`);
+const box=node("procedure-open-question");
+assert(box.hidden===false&&box.textContent.includes("7단계 조건에 해당하나요?"),`question: ${box.hidden} ${box.textContent}`);
+// The server's state before the start is "preview" (curated_protocol.workflow_status). No question: still before the start.
+renderCuratedProtocolState({configuration_id:5,state:{...runState(),active:false,workflow_status:"preview",revision:8},screen:{}});renderScreenView();
+assert(document.body.dataset.view==="before",`view with no question: ${document.body.dataset.view}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 if __name__ == "__main__":
     unittest.main()
