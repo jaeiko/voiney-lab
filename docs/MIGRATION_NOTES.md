@@ -24,6 +24,11 @@ a deterministic scoped id and its own registration event; the original PDF
 checksum and content-addressed bytes stay identical. No catalog schema changes.
 The starter pack uses the same registration scope.
 
+Account/password confirmation lockout is now per account name, not per shared
+network address. Password changes reuse the login failure budget. The invite
+tool follows the pilot launcher's fixed workspace unless `--data-dir` is
+explicitly supplied; shell workspace settings no longer redirect its writes.
+
 ## Commercial workspace schema 1 → 2
 
 Schema 2 adds the persistent experiment-session foundation:

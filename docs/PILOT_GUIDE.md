@@ -80,8 +80,7 @@ VoineyLab 은 MVP 시제품이고 현장에서 검증하지 않았다. 검증된
    ```
 4. **휴대폰** — 휴대폰 브라우저는 HTTPS(또는 localhost)에서만 마이크를 쓴다. 서버는 `127.0.0.1` 에서만 듣는다.
    도메인이 정해진 뒤 [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) 순서로 HTTPS 와 접속 비밀번호를 둔다.
-   `HOST=0.0.0.0` 으로 서버를 직접 열지 않는다. 참가자마다 계정으로 로그인하게 하려면 7절(`VOINEY_LAB_AUTH_MODE=accounts`)을
-   먼저 한다 — 기본값 `dev` 에서는 로그인이 없고 모든 요청이 개발 신원 한 명이다.
+   `HOST=0.0.0.0` 으로 서버를 직접 열지 않는다. 파일럿은 계정이 기본이다. 참가자를 초대하는 순서는 7절을 따른다.
 5. **멈춤** — 서버 프로세스를 멈춘다. 파일럿을 마치면 5절의 삭제로 간다.
 
 ## 3. 데이터 처리
@@ -358,7 +357,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
 - 세션은 쿠키 `voiney_session` 하나다: HttpOnly, SameSite=Lax, HTTPS(또는 `X-Forwarded-Proto: https` 를 붙이는 Caddy) 뒤에서는
   Secure, 30일. 서버에는 세션 토큰의 SHA-256 만 있다.
 - 비밀번호는 표준 라이브러리 scrypt 해시(소금 16바이트, N=2¹⁴)로만 저장한다. 8–200자.
-- 로그인 실패가 15분 안에 5번이면 그 이름(그리고 그 접속 주소)의 로그인을 15분 막는다(`429 login_locked`, `Retry-After`). 실패 기록에는 친 이름이
+- 로그인 실패가 15분 안에 5번이면 그 이름의 로그인을 15분 막는다(`429 login_locked`, `Retry-After`). 같은 Wi-Fi의 다른 계정은 잠그지 않는다. 비밀번호 변경의 현재 비밀번호 확인에도 같은 횟수 제한을 적용한다. 실패 기록에는 친 이름이
   아니라 그 요약값만 남는다(7-8절), 15분이 지난 기록은 다음 로그인 때 지운다.
 - 계정에는 "이용 권한" 칸 하나가 있고 값은 `pilot` 뿐이다(결제는 만들지 않았다).
 - 실험·기록·검토본에 계정이 남는다: 실험 세션의 소유자, 실험 기록의 실험자 이름, 검토 결정과 검토본의 검토자 이름은 **계정 이름으로
@@ -374,7 +373,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
    python scripts/pilot_invite.py --base-url https://pilot.<도메인> --hours 48 --note "참가자 A"   # 참가자
    ```
    출력 예: `초대 링크 (지금 한 번만 보입니다 · 48시간 뒤 만료 · 한 번 쓰면 끝): https://pilot.<도메인>/?invite=…`.
-   폴더는 파일럿 실행기가 쓰는 `data/runtime/pilot/workspace`(셸의 `VOINEY_LAB_WORKSPACE_DATA_DIR` 이 있으면 그것). 다른 연구실은 `--lab <id>`.
+   폴더는 파일럿 실행기가 쓰는 `data/runtime/pilot/workspace`다. 셸의 작업공간 경로는 무시한다. 별도 서버 폴더는 `--data-dir <폴더>`를 명시하고, 다른 연구실은 `--lab <id>`를 쓴다.
    `--list` 가 초대 목록(열림/사용됨/취소됨/만료됨), `--revoke <초대 id>` 가 취소.
 2. **가입**: 참가자가 링크를 열면 화면이 이름·비밀번호를 묻는다(단계 ② 화면; 그 전에는 `POST /api/auth/signup`
    `{"invite": 토큰, "name": 이름, "password": 비밀번호}` → 201, 쿠키). 이름은 2–40자, 대소문자·띄어쓰기를 무시하고 하나뿐이다.

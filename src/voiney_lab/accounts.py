@@ -744,7 +744,7 @@ class AccountStore:
         # Failures past the window count for nothing; they are not kept either.
         self._connection.execute("DELETE FROM login_attempts WHERE failed_at<=?", (self._stamp(since),))
         self._connection.commit()
-        for column, value in (("name_key", _attempt_key(key)), ("client", client)):
+        for column, value in (("name_key", _attempt_key(key)),):
             if value and self._failures(column, value, since) >= LOGIN_FAILURE_LIMIT:
                 oldest = self._oldest_failure(column, value, since) or now
                 remaining = (oldest + LOGIN_FAILURE_WINDOW) - now
@@ -785,10 +785,7 @@ class AccountStore:
         """Set a new password after the current one; every other session ends."""
 
         account = self.account(account_id)
-        row = self._connection.execute(
-            "SELECT password_hash FROM accounts WHERE account_id=?", (account.account_id,)).fetchone()
-        if not verify_password(str(current if current is not None else ""), row["password_hash"]):
-            raise LoginRefusedError("The current password is wrong.")
+        self.log_in(account.name, current)
         secret = _checked_password(new)
         now = self._stamp(self._now())
         self._connection.execute("BEGIN IMMEDIATE")

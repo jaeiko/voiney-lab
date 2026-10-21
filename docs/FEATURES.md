@@ -21,13 +21,13 @@
 ## F1. 계정과 로그인
 
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
-  비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름이나 같은 곳에서 15분 안에 5번 틀리면 잠긴다(429).
+  비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.
   관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 스스로 지울 수 있다(마지막 관리자는 안 됨).
   파일럿 실행기는 기본으로 `accounts` 로 연다(`--dev-identity` 를 주면 `dev`).
 - **어디**: `accounts.py` (`AUTH_MODES`, `AccountStore.create_invite`, `sign_up`, `LOGIN_FAILURE_LIMIT`, `SESSION_LIFETIME`), `server.py` (`commercial_identity_boundary` 미들웨어, `_ACCOUNT_OPEN_PATHS`, `/api/auth/*` 경로, `POST /api/auth/delete-account`, `_account_is_admin`), `identity.py` (`DevIdentityProvider`, OIDC), `scripts/pilot_invite.py`.
 - **설정**: `VOINEY_LAB_AUTH_MODE`, `VOINEY_LAB_APP_ORIGINS`(앱 출처에 토큰 로그인), `VOINEY_LAB_WORKSPACE_ENABLED`·`VOINEY_LAB_WORKSPACE_DATA_DIR`(계정은 작업공간이 있어야 한다), OIDC 는 `VOINEY_LAB_OIDC_ISSUER` 등.
 - **시험**: `tests/test_lane_on_accounts_store.py`, `tests/test_lane_on_auth_api.py`, `tests/test_lane_fx4_pilot_login.py`, `tests/test_lane_fx5_account_erasure.py`, `tests/test_lane_fx5_delete_account_route.py`.
-- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 `X-Forwarded-For` 의 첫 값을 믿으므로 그 머리를 정하는 프록시 뒤에서만 의미가 있다. OIDC 는 가짜 검증기로만 시험했다.
+- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 계정 이름 기준이며 전달 주소 머리글로 우회할 수 없다. OIDC 는 가짜 검증기로만 시험했다.
 
 ## F2. 프로토콜 들여오기
 

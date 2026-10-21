@@ -2174,11 +2174,11 @@ class WorkspaceStore:
         return dict(stored)
 
     def evidence_for_download(
-        self, principal: Principal, session_id: str, evidence_id: str
+        self, principal: Principal, session_id: str, evidence_id: str, *, every_owner: bool = False,
     ) -> dict[str, object]:
         """Return tenant-scoped evidence metadata including its server-only path."""
 
-        self._experiment_row(principal, session_id)
+        self._experiment_row(principal, session_id, every_owner=every_owner)
         selected_id = _identifier(evidence_id, "Evidence identifier")
         row = self._connection.execute(
             """SELECT evidence_id,session_id,evidence_kind,original_filename,

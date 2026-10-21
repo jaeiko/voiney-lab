@@ -4,7 +4,7 @@
 With ``VOINEY_LAB_AUTH_MODE=accounts`` nobody can join the pilot without an
 invite link, and this tool is the only thing that makes one. It works on the
 account store beside the pilot's workspace (``accounts.sqlite`` in
-``VOINEY_LAB_WORKSPACE_DATA_DIR``, by default ``data/runtime/pilot/workspace``)
+``data/runtime/pilot/workspace``, or an explicit ``--data-dir``)
 and never on anything else.
 
     python scripts/pilot_invite.py --base-url https://pilot.example.org
@@ -24,24 +24,19 @@ sessions at once; an administrator can do the same from the screen.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / "data" / "runtime" / "pilot" / "workspace"
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
-DATA_DIR_ENV = "VOINEY_LAB_WORKSPACE_DATA_DIR"
 
 
 def data_dir_from(argument: str | None) -> Path:
-    """The folder named on the command line, else the shell's, else the pilot's."""
+    """The explicit folder, otherwise the pilot launcher's fixed workspace."""
 
     if argument:
         return Path(argument).expanduser().resolve()
-    from_shell = os.environ.get(DATA_DIR_ENV, "").strip()
-    if from_shell:
-        return Path(from_shell).expanduser().resolve()
     return DEFAULT_DATA_DIR
 
 
@@ -61,7 +56,7 @@ def invite_state(invite, now) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="파일럿 초대 링크를 만들고, 계정을 보고 끈다.")
-    parser.add_argument("--data-dir", help=f"작업공간 데이터 폴더 (기본: ${DATA_DIR_ENV} 또는 {DEFAULT_DATA_DIR})")
+    parser.add_argument("--data-dir", help=f"작업공간 데이터 폴더 (기본: {DEFAULT_DATA_DIR}; 셸 설정은 쓰지 않음)")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
                         help=f"링크의 주소 앞부분 (기본 {DEFAULT_BASE_URL}; HTTPS 를 두면 그 주소)")
     parser.add_argument("--lab", default=None, help="가입할 연구실 id (기본 lab-pilot)")

@@ -732,11 +732,8 @@ def _account_is_admin()->bool:
 
 
 def _request_client(request:Request)->str:
-    """Who is asking, for the login lock: the proxy's X-Forwarded-For first value, else the peer."""
+    """The transport peer; a caller-supplied forwarding header has no authority."""
 
-    forwarded=request.headers.get("x-forwarded-for","")
-    if forwarded.strip():
-        return forwarded.split(",")[0].strip()[:200]
     client=getattr(request,"client",None)
     return str(getattr(client,"host","") or "")[:200]
 
@@ -3774,7 +3771,7 @@ def download_workspace_experiment_evidence(
         principal,store=_commercial_workspace()
         try:
             evidence=store.evidence_for_download(
-                principal,session_id,evidence_id)
+                principal,session_id,evidence_id,every_owner=_account_is_admin())
             settings=_workspace_settings()
             if settings.data_dir is None:
                 raise WorkspaceNotFoundError(
