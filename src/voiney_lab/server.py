@@ -5398,12 +5398,19 @@ async def answer_experiment_report_review(report_id:str,item_id:str,request:Requ
     # A stable basis distinguishes a later correction back to an earlier
     # value, while simultaneous/retried submissions share one event key.
     basis=item["source_key"]
+    latest_fix=None
     for entry in report["events"]:
         fix=(entry.get("payload") or {}).get("record_fix") or {}
         if fix.get("target_event_key")==item["source_key"]:
             basis=entry["event_key"]
-    key="screen-review-"+hashlib.sha256(
-        json.dumps([item_id,basis,desired],ensure_ascii=False).encode("utf-8")).hexdigest()
+            latest_fix=fix
+    if (latest_fix is not None and latest_fix.get("text_after")==desired
+            and basis.startswith("screen-review-") and basis.endswith("-fix")):
+        # A retry can arrive after the correction but before its confirmation.
+        key=basis[:-4]
+    else:
+        key="screen-review-"+hashlib.sha256(
+            json.dumps([item_id,basis,desired],ensure_ascii=False).encode("utf-8")).hexdigest()
     try:
         if action=="correct" and text and text!=item["text"]:
             if len(text)>800:

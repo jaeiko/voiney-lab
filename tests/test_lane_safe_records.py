@@ -66,6 +66,37 @@ class ReportRouteTests(unittest.TestCase):
         assert len([e for e in events if e["event_type"] == "record_corrected"]) == 1
         assert len([e for e in events if e["event_type"] == er.REVIEW_CONFIRMED]) == 1
 
+    def test_retry_between_correction_and_confirmation_uses_the_same_event(self):
+        item = er.report_review_items(self.record.doc()["events"])[0]
+        path = f'/api/experiment-reports/{self.record.report_id}/review/{item["item_id"]}'
+        real_append = self.record.store.append_event
+        fixed, second_confirmed = threading.Event(), threading.Event()
+        local = threading.local()
+
+        def append(*args, **kwargs):
+            if kwargs["event_type"] == er.REVIEW_CONFIRMED and not getattr(local, "second", False):
+                assert second_confirmed.wait(10)
+            result = real_append(*args, **kwargs)
+            if kwargs["event_type"] == "record_corrected":
+                fixed.set()
+            if kwargs["event_type"] == er.REVIEW_CONFIRMED and getattr(local, "second", False):
+                second_confirmed.set()
+            return result
+
+        def submit(second):
+            local.second = second
+            return self.request("POST", path, {"action": "correct", "text": "세척액 460 µL"})
+
+        with patch.object(self.record.store, "append_event", side_effect=append), ThreadPoolExecutor(2) as executor:
+            first = executor.submit(submit, False)
+            assert fixed.wait(10)
+            second = executor.submit(submit, True)
+            assert first.result(timeout=20).status_code == 200
+            assert second.result(timeout=20).status_code == 200
+        events = self.record.doc()["events"]
+        assert len([e for e in events if e["event_type"] == "record_corrected"]) == 1
+        assert len([e for e in events if e["event_type"] == er.REVIEW_CONFIRMED]) == 1
+
     def test_meeting_exports_keep_openable_filename_extensions(self):
         with patch.object(server, "_scope_tenant_resource"), \
              patch.object(server.ExperimentReportSettings, "from_environment", return_value=er.ExperimentReportSettings(True, self.record.store.path)), \
