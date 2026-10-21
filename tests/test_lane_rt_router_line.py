@@ -563,20 +563,14 @@ class SpillFrontRuleTests(unittest.TestCase):
                 self.assertTrue(outcome.plan.reported_anomaly)
                 self.assertEqual(outcome.plan.anomaly_text, said)
 
-    def test_a_spill_question_never_attests_a_report(self) -> None:
+    def test_a_spill_asked_supposed_or_denied_is_still_handed_on(self) -> None:
         for said in ("흘려도 돼?", "쏟으면 어떡해?", "시료를 흘렸어?", "흘리지 않게 조심해야 돼?",
                      "안 흘렸어", "흘린 거 아니야"):
             with self.subTest(said=said):
                 session = _miniprep(3)
-                plan = session.front_plan(
+                self.assertIsNone(session.front_plan(
                     said, turn_id=2, language="ko", configuration_id=1, generation=1,
-                )
-                if said in {"흘려도 돼?", "흘리지 않게 조심해야 돼?"}:
-                    self.assertIs(plan.action, CuratedProtocolAction.DECLINE_COMPLETION)
-                    self.assertFalse(plan.state_changed)
-                    self.assertFalse(plan.reported_anomaly)
-                else:
-                    self.assertIsNone(plan)
+                ))
 
     def test_other_problems_stay_with_the_router(self) -> None:
         # Only lane R7's spill reading moved to the front rules.

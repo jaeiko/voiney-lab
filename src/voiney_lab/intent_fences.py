@@ -54,8 +54,15 @@ _SPECULATION = re.compile(
     r"|아마|혹시|글쎄|애매|헷갈"
     r"|\b(?:not\s+sure|unsure|maybe|perhaps|probably|might|whether|should)\b"
     r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b"
-    r"|(?:도|면)\s*(?:돼|되|될|괜찮)|해야"
 )
+
+
+def is_literal_record_command(text: str) -> bool:
+    """An explicit command can preserve a payload containing uncertainty."""
+
+    return bool(re.search(
+        r"(?:메모|기록)\s*(?:좀\s*)?해\s*(?:줘|주세요)(?=$|[\s,.!~])", text,
+    ))
 
 
 def is_question_or_speculation(
@@ -80,7 +87,7 @@ def is_question_or_speculation(
         return False
     # A request to preserve the spoken uncertainty is still a command to
     # record it; the uncertainty itself never attests endpoint completion.
-    if literal_record and re.search(r"(?:메모|기록)\s*(?:좀\s*)?해\s*(?:줘|주세요)(?=$|[\s,.!~])", said):
+    if literal_record and is_literal_record_command(said):
         return False
     # These whole words are replies or nouns, not predicate endings.
     grammatical = re.sub(r"(?<![가-힣])(?:아니|하나|바나나|얼마나)(?![가-힣])", "", said)
