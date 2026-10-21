@@ -22,6 +22,12 @@ CONTROL_QUESTIONS = (
     "타이머 시작합니까", "타이머 시작했습니까", "타이머 시작됐는가", "타이머 얼마야",
     "시약 엎질렀지",
 )
+EXPLANATORY_QUESTIONS = (
+    "이 단계 설명해 줘 다음 단계 넘어갔나",
+    "왜 이렇게 하는지 알려줘 그리고 다음 단계 넘어갔나",
+    "다 했나 설명해 줘",
+    "다 했나 다음 단계 설명해 줘",
+)
 
 
 def workflow_checkpoint(session):
@@ -59,6 +65,20 @@ def test_router_evidence_cannot_authorize_question_or_speculation(words):
     ) == "interrogative_not_authorized"
 
 
+@pytest.mark.parametrize("words", EXPLANATORY_QUESTIONS)
+def test_an_explanatory_question_preserves_the_open_endpoint_checkpoint(words):
+    from voiney_lab.runtime_routing import route_curated_runtime_turn
+    session = session_at(4)
+    session.plan("5단계 완료했어", turn_id=3, language="ko", configuration_id=1, generation=1)
+    before = workflow_checkpoint(session)
+    plan = route_curated_runtime_turn(
+        session, words, turn_id=4, language="ko", configuration_id=1, generation=1,
+    ).plan
+    assert not plan.state_changed
+    assert not plan.reported_completion
+    assert workflow_checkpoint(session) == before
+
+
 class ServedQuestionTests(VoiceNotesHarness, unittest.TestCase):
     def test_timer_spill_resume_and_forward_questions_keep_both_ledgers(self):
         async def scenario(socket, listener, say):
@@ -77,6 +97,28 @@ class ServedQuestionTests(VoiceNotesHarness, unittest.TestCase):
             before = workflow_checkpoint(listener.curated_protocol_session)
             await say(31, "재개했나")
             assert workflow_checkpoint(listener.curated_protocol_session) == before
+        self.voice(scenario)
+
+    def test_explanatory_questions_keep_the_endpoint_and_execution_records(self):
+        async def scenario(socket, listener, say):
+            for turn_id, words in enumerate((
+                "프로토콜 시작해줘", "넘어가", "1단계 완료했어", "2단계 완료했어",
+                "네", "3단계 완료했어", "4단계 완료했어", "5단계 완료했어",
+            ), 1):
+                await say(turn_id, words)
+            assert listener.curated_protocol_session.pending_observation_confirmation is not None
+            for turn_id, words in enumerate(EXPLANATORY_QUESTIONS, 9):
+                before = workflow_checkpoint(listener.curated_protocol_session)
+                experiment = self.experiment(listener.session_id)
+                events = self.report()["events"]
+                await say(turn_id, words)
+                assert workflow_checkpoint(listener.curated_protocol_session) == before, words
+                assert self.experiment(listener.session_id) == experiment, words
+                # Reading the source may append its existing presentation
+                # event, but cannot invent execution or observation records.
+                added = self.report()["events"][len(events):]
+                assert all(event["event_type"] in {"step_presented", "source_presented"}
+                           for event in added), added
         self.voice(scenario)
 
 

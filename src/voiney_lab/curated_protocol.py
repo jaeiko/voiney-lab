@@ -17454,6 +17454,7 @@ class CuratedProtocolSession:
         """Plan one turn by the rules: the front rules, then all the others."""
 
         pre_index, pre_active = self.current_index, self.active
+        question_checkpoint = self._question_checkpoint(transcript, language)
         planned = self._plan(
             transcript,
             turn_id=turn_id,
@@ -17468,8 +17469,41 @@ class CuratedProtocolSession:
         )
         if planned is None:
             raise CuratedProtocolFixtureError("A turn was left unplanned.")
-        return self._with_notebook_question(
+        planned = self._with_notebook_question(
             planned, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language)
+        return self._preserve_question_checkpoint(question_checkpoint, planned, turn_id)
+
+    def _question_checkpoint(self, transcript: str, language: str) -> tuple[Any, ...] | None:
+        if (language == "ko"
+                and is_question_or_speculation(transcript, punctuation=False, literal_record=True)
+                and not _asserted_spill_clause(transcript)):
+            return self._checkpoint()
+        return None
+
+    def _preserve_question_checkpoint(
+        self, held: tuple[Any, ...] | None, planned: CuratedProtocolTurnPlan | None, turn_id: int,
+    ) -> CuratedProtocolTurnPlan | None:
+        """Informational routing may answer, but cannot renew or clear a gate."""
+
+        if held is None:
+            return planned
+        after = self._checkpoint()
+        restored = list(held)
+        # Replay and discourse may remember an answer; all workflow fields,
+        # including one-turn confirmation identities, remain exactly held.
+        for index in (4, 5, 6, 7, 8, 11):
+            restored[index] = after[index]
+        self._restore(tuple(restored))
+        if planned is not None:
+            if (planned.state_changed or planned.reported_completion or planned.reported_observation
+                    or planned.reported_anomaly or planned.step_record or planned.note_record
+                    or planned.notebook_record or planned.record_fix):
+                self._last_front_rule = "question_or_speculation"
+                planned = self._words_plan(
+                    "질문이나 추측으로 들었어요. 실제로 하거나 관찰한 내용을 말씀해 주세요.",
+                    intent_kind="question_or_speculation", action=CuratedProtocolAction.DECLINE_COMPLETION)
+            self._replay[turn_id] = planned
+        return planned
 
     # --- The notebook's questions (lane RP3, decision ②) -------------------------
 
@@ -17703,6 +17737,7 @@ class CuratedProtocolSession:
         """
 
         pre_index, pre_active = self.current_index, self.active
+        question_checkpoint = self._question_checkpoint(transcript, language)
         planned = self._plan(
             transcript,
             turn_id=turn_id,
@@ -17716,8 +17751,9 @@ class CuratedProtocolSession:
             front_only=True,
             hand_on=ROUTER_FIRST_HANDED_ON if router_first else frozenset(),
         )
-        return self._with_notebook_question(
+        planned = self._with_notebook_question(
             planned, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language)
+        return self._preserve_question_checkpoint(question_checkpoint, planned, turn_id)
 
     #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
     _MIXED_REPLY_LEAD = {
