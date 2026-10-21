@@ -17485,8 +17485,7 @@ class CuratedProtocolSession:
         if held["kind"] == "result":
             return not self.active and self._report_review is None
         return bool(
-            self.active and self.current_index == held["step_index"]
-            and self._revision == held["revision"])
+            self.active and self.current_index == held["step_index"])
 
     def _with_notebook_question(
         self, planned: CuratedProtocolTurnPlan | None, *, pre_index: int, pre_active: bool,
@@ -17504,7 +17503,10 @@ class CuratedProtocolSession:
         if planned is None or language != "ko" or not planned.state_changed:
             return planned
         words: str | None = None
-        if (
+        if planned.action is CuratedProtocolAction.RESUME and self._notebook_question_valid():
+            assert self._notebook_question is not None
+            words = _NOTEBOOK_QUESTIONS[str(self._notebook_question["kind"])]
+        elif (
             planned.action is CuratedProtocolAction.START and not pre_active and self.active
             and self.open_server_question() is None
         ):

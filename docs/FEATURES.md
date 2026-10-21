@@ -149,6 +149,7 @@
 ## F13. 실험 노트와 보고서
 
 - **무엇**: 실험이 끝나면 장부에서 보고서를 만든다. Word·Markdown 보고서는 연구자의 **실험 노트** 모양이다: 제목은 말한 목적, 1 시료와 조건 … 원문 값과 실제 쓴 값, 단계·시료별 관찰, 결과와 다음에 바꿀 점, 원문과 다른 점, 같은 프로토콜의 지난 실험과 비교, 확인, 부록. 숫자는 모두 기록에서 서버가 만든다.
+  대답하지 않은 실험 노트 질문은 일시정지·재개 뒤에도 유지하고 재개할 때 다시 묻는다. 그 질문이 열린 동안의 "넘어가"는 질문만 건너뛴다.
   보고서 모델은 끝난 뒤 한 번 불러 관찰 문장과 결과 한 단락만 쓰게 하고, 기록·원문에 없는 값·숫자·추측·안전 지시·인용을 검사해 통과한 것만 "AI 정리"로 넣는다(모델이 없으면 서버 문장만). 실험자가 아직 확인하지 않은 값은 "[미확인]"으로 표시하고 화면에서 하나씩 확인하거나 고친다.
   내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
