@@ -455,6 +455,7 @@ async def lifespan(_: FastAPI):
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
+    await asyncio.to_thread(_migrate_report_ownership)
     _install_protocol_ocr_provider()
     _log_source_format_support()
     yield
@@ -973,8 +974,22 @@ def _scope_catalog_resource(
     _scope_tenant_resource("protocol_catalog",protocol_id,bind=bind)
 
 
+def _migrate_report_ownership()->None:
+    settings=ExperimentReportSettings.from_environment()
+    workspace_settings=_workspace_settings()
+    if not settings.enabled or settings.database_path is None or not workspace_settings.enabled:
+        return
+    workspace=initialize_workspace_store(workspace_settings)
+    try:
+        counts=ExperimentReportStore(settings.database_path).backfill_ownership(workspace.report_ownership)
+        log.info("report.ownership_migrated owned=%d admin_only=%d unscoped=%d",
+                 counts["owned"],counts["admin_only"],counts["unscoped"])
+    finally:
+        workspace.close()
+
+
 def _scope_tenant_resource(
-    resource_type:str,resource_id:str,*,bind:bool=False
+    resource_type:str,resource_id:str,*,bind:bool=False,write:bool=False
 )->None:
     settings=_workspace_settings()
     if not settings.enabled:
@@ -983,6 +998,19 @@ def _scope_tenant_resource(
     try:
         if bind:
             store.bind_resource(principal,resource_type,resource_id)
+        elif resource_type=="experiment_report":
+            report_settings=ExperimentReportSettings.from_environment()
+            if not report_settings.enabled or report_settings.database_path is None:
+                raise WorkspaceNotFoundError("Experiment report is not available.")
+            reports=ExperimentReportStore(report_settings.database_path)
+            reports.backfill_ownership(store.report_ownership)
+            try:
+                reports.require_access(
+                    resource_id,organization_id=principal.organization_id,
+                    owner_principal_id=principal.principal_id,
+                    every_owner=not write and _account_is_admin())
+            except KeyError as exc:
+                raise WorkspaceNotFoundError("Experiment report is not available.") from exc
         else:
             store.require_resource(principal,resource_type,resource_id)
     finally:
@@ -5220,7 +5248,7 @@ async def post_pilot_feedback(request:Request)->dict[str,object]:
     if store is None:
         raise HTTPException(status_code=503,detail="pilot_metrics_unavailable")
     try:
-        _scope_tenant_resource("experiment_report",answer.report_id)
+        _scope_tenant_resource("experiment_report",answer.report_id,write=True)
         report_settings=ExperimentReportSettings.from_environment()
         if report_settings.enabled and report_settings.database_path is not None:
             ExperimentReportStore(report_settings.database_path).get_report(answer.report_id)
@@ -5268,8 +5296,8 @@ def _prepare_report_prose(store:ExperimentReportStore,report_id:str,*,again:bool
         return "failed"
 
 
-def _report_prose_store(report_id:str)->ExperimentReportStore:
-    _scope_tenant_resource("experiment_report",report_id)
+def _report_prose_store(report_id:str,*,write:bool=False)->ExperimentReportStore:
+    _scope_tenant_resource("experiment_report",report_id,write=write)
     settings=ExperimentReportSettings.from_environment()
     if not settings.enabled or settings.database_path is None:
         raise HTTPException(status_code=404,detail="experiment report unavailable")
@@ -5291,7 +5319,7 @@ def get_experiment_report_prose(report_id:str):
 def regenerate_experiment_report_prose(report_id:str):
     """Write the report's prose again -- only when a person asks (decision 9)."""
 
-    store=_report_prose_store(report_id)
+    store=_report_prose_store(report_id,write=True)
     try:
         _prepare_report_prose(store,report_id,again=True)
         return REPORT_PROSE.status(store,report_id)
@@ -5327,7 +5355,7 @@ async def answer_experiment_report_review(report_id:str,item_id:str,request:Requ
 
     payload=await _json_object(request)
     action=str(payload.get("action") or "")
-    store=_report_prose_store(report_id)
+    store=_report_prose_store(report_id,write=True)
     try:
         report=store.get_report(report_id)
     except (ValueError,KeyError,sqlite3.Error) as exc:
@@ -5407,6 +5435,10 @@ def _prepared_report_prose(store:ExperimentReportStore,report_id:str)->None:
     report still in progress gets the server's own sentences.
     """
 
+    try:
+        _scope_tenant_resource("experiment_report",report_id,write=True)
+    except WorkspaceNotFoundError:
+        return  # Administrator exports use the existing prose or deterministic text.
     if _prepare_report_prose(store,report_id)=="preparing":
         REPORT_PROSE.wait(
             store,report_id,
@@ -7958,6 +7990,8 @@ def _open_experiment_report(
     if store is None:
         raise RuntimeError("experiment reports are disabled")
     if session.experiment_report_id is None:
+        _migrate_report_ownership()
+        principal=_REQUEST_PRINCIPAL.get() if _workspace_settings().enabled else None
         report=store.open_report(
             session_id=session.session_id,
             protocol_id=curated.fixture.protocol_id,
@@ -7966,6 +8000,8 @@ def _open_experiment_report(
             protocol_sha256=curated.fixture.source_pdf_sha256 or "",
             readiness_status=curated.fixture.draft.readiness.status.value,
             development_only=curated.fixture.development_only,
+            organization_id=principal.organization_id if principal is not None else None,
+            owner_principal_id=principal.principal_id if principal is not None else None,
         )
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
@@ -13437,8 +13473,9 @@ async def voice_socket(websocket:WebSocket):
                                 code="report_id_missing"))
                         else:
                             try:
+                                _scope_tenant_resource("experiment_report",report_id)
                                 report = store.get_report(report_id)
-                            except (KeyError, ValueError):
+                            except (KeyError, ValueError, WorkspaceNotFoundError):
                                 await websocket.send_text(event(
                                     "experiment.report.error",
                                     configuration_id=session.accepted_configuration_id,

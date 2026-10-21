@@ -1158,6 +1158,26 @@ class WorkspaceStore:
         except AuthorizationDeniedError as exc:
             raise WorkspaceNotFoundError("The resource is not available.") from exc
 
+    def report_ownership(
+        self, report_id: str, session_id: str, protocol_id: str,
+    ) -> tuple[str | None, str | None]:
+        """Legacy reports inherit their session's owner; bindings only identify a lab."""
+
+        row = self._connection.execute(
+            "SELECT organization_id,owner_principal_id FROM experiment_sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if row is not None:
+            return row["organization_id"], row["owner_principal_id"]
+        for kind, identifier in (("experiment_report", report_id), ("protocol_catalog", protocol_id)):
+            row = self._connection.execute(
+                "SELECT organization_id FROM resource_bindings WHERE resource_type=? AND resource_id=?",
+                (kind, identifier),
+            ).fetchone()
+            if row is not None:
+                return row["organization_id"], None
+        return None, None
+
     def resource_ids(
         self, principal: Principal, resource_type: str
     ) -> frozenset[str]:
