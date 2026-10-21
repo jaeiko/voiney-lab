@@ -52,6 +52,7 @@ from voiney_lab.curated_protocol import (
     TimerNotice,
     josa_ro,
     load_curated_protocol_fixture,
+    ProtocolVocabulary,
     photo_asked,
     plan_without_internal_names,
     question_dimensions as _question_dimensions,
@@ -1994,10 +1995,24 @@ async def _apply_translations(
     curated=getattr(session,"curated_protocol_session",None)
     if curated is None or translation_revision_key(curated.fixture)!=key:
         return
-    updated=with_stored_translations(curated.fixture,rows,glossary)
+    original=curated.fixture
+    configuration_id=session.accepted_configuration_id
+    def prepare()->tuple[CuratedProtocolFixture,ProtocolVocabulary]:
+        updated=with_stored_translations(original,rows,glossary)
+        # Keep the expensive first calculation off the loop even when a
+        # newly arrived glossary changes the vocabulary's content key.
+        return updated,ProtocolVocabulary.from_fixture(updated)
+    updated,vocabulary=await asyncio.to_thread(prepare)
+    if (
+        session.curated_protocol_session is not curated
+        or curated.fixture is not original
+        or session.accepted_configuration_id!=configuration_id
+    ):
+        return
     if updated is curated.fixture:
         return
     curated.fixture=updated
+    curated._vocabulary_cache=(updated,vocabulary)
     if not session.active or session.accepted_configuration_id is None:
         return
     try:
@@ -12830,7 +12845,7 @@ async def voice_socket(websocket:WebSocket):
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     if selected_curated_fixture is not None:
-                        selected_curated_fixture=_with_revision_translations(
+                        selected_curated_fixture=await asyncio.to_thread(_with_revision_translations,
                             selected_curated_fixture)
                     # The experimenter's press of start is the one human
                     # confirmation (decision of 2026-10-08). The source's
@@ -12840,6 +12855,9 @@ async def voice_socket(websocket:WebSocket):
                         fixture_safety_notices(selected_curated_fixture)
                         if selected_curated_fixture is not None else None)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
+                    if session.curated_protocol_session is not None:
+                        await asyncio.to_thread(
+                            session.curated_protocol_session._protocol_vocabulary)
                     _subscribe_translations(session,sender)
                     recovery_session_id=control.get("experiment_session_id")
                     recovery_version=control.get("experiment_session_version")
