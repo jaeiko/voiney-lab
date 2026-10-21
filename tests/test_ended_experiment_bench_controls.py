@@ -129,11 +129,12 @@ class EndedSessionControlTests(unittest.TestCase):
 class EndedExperimentBenchControlVoiceTests(VoiceSessionHarness, unittest.TestCase):
     """Over the WebSocket, with the workspace and the report store on."""
 
-    async def _press(self, socket, kind: str) -> None:
+    async def _press(self, socket, kind: str, listener) -> None:
         """Press a bench button and wait until the server has handled it."""
 
         before = len(socket.sent)
-        socket.control({"type": kind})
+        socket.control({"type": kind, "configuration_id": listener.accepted_configuration_id,
+                        "generation": listener.generation})
         for _ in range(500):
             if any(
                 item["type"] in {
@@ -158,7 +159,7 @@ class EndedExperimentBenchControlVoiceTests(VoiceSessionHarness, unittest.TestCa
             seen["ended"] = self._snapshot(listener)
             seen["ended_projection"] = _projection(listener.curated_protocol_session)
             for kind in press:
-                await self._press(socket, kind)
+                await self._press(socket, kind, listener)
                 seen[kind] = self._snapshot(listener)
                 seen[kind + ".projection"] = _projection(listener.curated_protocol_session)
 

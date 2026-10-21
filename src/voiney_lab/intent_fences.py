@@ -47,7 +47,7 @@ _QUESTION_ENDING = re.compile(
     r"(?=$|[\s.,!?。？！~]|(?:보(?:다|여|네)|봐))"
     r"|(?:된|한|진|인|는|은)\s*거야(?=$|[\s.,!?~])"
     r"|(?:건|인|한|된|은|는)가요?(?=$|[\s.,!?~])"
-    r"|(?:했|됐|졌|었|았|였|되|맞|있|없|갔|왔)(?:지요?|죠)(?=$|[\s.,!?~])"
+    r"|(?:되|맞|있|없)(?:지요?|죠)(?=$|[\s.,!?~])"
 )
 _SPECULATION = re.compile(
     r"모르(?:겠|는)|몰라|잘\s*모르|(?:것|거|듯)\s*같|듯(?:해|하|싶)|같기도"
@@ -83,7 +83,7 @@ def is_question_or_speculation(
         return True
     # A standalone "I don't know" is a reply the server explicitly offers
     # for a branch/count question, not a guessed observation or action.
-    if re.fullmatch(r"(?:(?:아직|잘|지금은?)\s*)?(?:모르겠(?:어|어요)|몰라(?:요)?|글쎄(?:요)?)[.!~]*", said):
+    if re.fullmatch(r"(?:(?:음|어)\s*)?(?:(?:아직|잘|지금은?)\s*)?(?:모르겠(?:어|어요|네|네요)|몰라(?:요)?|글쎄(?:요)?)[.!~]*", said):
         return False
     # A request to preserve the spoken uncertainty is still a command to
     # record it; the uncertainty itself never attests endpoint completion.
@@ -93,8 +93,11 @@ def is_question_or_speculation(
     grammatical = re.sub(r"(?<![가-힣])(?:아니|하나|바나나|얼마나)(?![가-힣])", "", said)
     # -ㅂ니까 attaches to any predicate syllable ending in jongseong ㅂ;
     # NFD distinguishes it from the connective -으니까 without a verb list.
-    formal_question = re.search("ᆸ니까(?=$|[\\s.,!?。？！~])", unicodedata.normalize("NFD", said))
-    return bool(_QUESTION_ENDING.search(grammatical) or _SPECULATION.search(said) or formal_question
+    decomposed = unicodedata.normalize("NFD", said)
+    formal_question = re.search("ᆸ니까(?=$|[\\s.,!?。？！~])", decomposed)
+    # Past -았/었/였- and irregular -렀/렸/웠- all carry jongseong ㅆ.
+    past_question = re.search("ᆻ(?:지(?:요)?|죠)(?=$|[\\s.,!?。？！~])", decomposed)
+    return bool(_QUESTION_ENDING.search(grammatical) or _SPECULATION.search(said) or formal_question or past_question
                 or (punctuation and _INTERROGATIVE_EVIDENCE.search(said)))
 
 

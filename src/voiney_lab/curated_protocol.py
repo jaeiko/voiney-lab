@@ -17527,7 +17527,8 @@ class CuratedProtocolSession:
             # must not revive it; a pause/resume at that step keeps it valid.
             self._notebook_question = None
         words: str | None = None
-        if planned.action is CuratedProtocolAction.RESUME and self._notebook_question_valid():
+        if (planned.action is CuratedProtocolAction.RESUME and self._notebook_question_valid()
+                and self.confirm_question() is None):
             assert self._notebook_question is not None
             words = _NOTEBOOK_QUESTIONS[str(self._notebook_question["kind"])]
         elif (
@@ -17876,10 +17877,34 @@ class CuratedProtocolSession:
                 RequestIntent.COMBINED_LEARNING_NEXT,
             }
             and not _asserted_spill_clause(transcript)
+            and not (
+                _TERM_QUESTION_CUE.search(transcript)
+                and self.confirm_question() is None
+                and not _WORKFLOW_CUE.search(transcript)
+                and not _SPILL_WORD.search(transcript)
+                and self.deterministic_control_intent(
+                    transcript, language=language, arbitration=arbitration,
+                ).action in _OBSERVATION_PROMPT_READ_ONLY
+            )
+            and not (
+                self._pause_state != "paused"
+                and self.notebook_question_open() is None and self.confirm_question() is None
+                and not _WORKFLOW_CUE.search(transcript) and not _SPILL_WORD.search(transcript)
+                and self.deterministic_control_intent(
+                    transcript, language=language, arbitration=arbitration,
+                ).action is CuratedProtocolAction.OFF_TOPIC
+            )
         ):
             # Read before any pending-answer reader: a question about having
             # done something is not an answer to the question already open.
             self._last_front_rule = "question_or_speculation"
+            if self._pause_state == "paused" and self._paused_notice_spoken:
+                planned = replace(self._words_plan(
+                    "현재 일시정지 상태입니다. 재개하려면 '재개'라고 말씀해 주세요.",
+                    intent_kind="question_or_speculation", action=CuratedProtocolAction.PAUSE,
+                ), speech_text="", speech_policy="silent")
+                self._replay[turn_id] = planned
+                return planned
             key = _utterance_key(transcript)
             if (any(pattern.search(key) for pattern in _TIMER_QUERY_PATTERNS)
                     and not any(pattern.search(key) for pattern in _TIMER_START_PATTERNS)):
@@ -22735,10 +22760,20 @@ class CuratedProtocolSession:
         verdict = validate_tool_proposals(proposals, facts, basis)
         self._last_front_rule = None
         if verdict.effect == "refuse" and facts.open_question is not None:
+            # Re-asking is presentation. A question cannot refresh a held
+            # checkpoint's turn/generation or consume it on a refused tool.
+            held = self._checkpoint() if is_question_or_speculation(transcript) else None
             plan = self._ask_open_question_again(
                 facts.open_question, turn_id=turn_id, generation=generation,
                 language=language,
             )
+            if held is not None:
+                self._restore(held)
+                self._replay[turn_id] = plan
+            return AppliedToolProposal(verdict, plan)
+        if verdict.effect == "refuse" and is_question_or_speculation(transcript):
+            plan = self._refused_proposal_plan(verdict, facts, language=language)
+            self._replay[turn_id] = plan
             return AppliedToolProposal(verdict, plan)
         # No question is open for this turn: whatever is left over has gone
         # stale and lapses, as it does when plan() reads a turn.

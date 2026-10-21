@@ -457,8 +457,10 @@ class ApplyToolProposalTests(unittest.TestCase):
         self.assertEqual(verdict.reason_code, "pending_gate_owns_turn")
         self.assertEqual(plan.speech_text, "먼저 질문에 답해 주세요. 4단계 완료하셨나요?")
         self.assertEqual(session.current_index, 3)
-        self.assertTrue(_say(session, 4, "네").state_changed)
-        self.assertEqual(session.current_index, 4)
+        # The question neither refreshes the held checkpoint nor extends
+        # its existing one-turn fence. A later bare yes cannot advance.
+        self.assertFalse(_say(session, 4, "네").state_changed)
+        self.assertEqual(session.current_index, 3)
 
     def test_late_or_doubled_proposals_change_nothing(self) -> None:
         session = _session(self.fixture)

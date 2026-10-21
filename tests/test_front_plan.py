@@ -191,11 +191,10 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "다 했어", "완료했어",
             "5단계 완료", "자 이제 다음 거 하자",
             "자세히 알려줘", "타이머 시작해줘", "버퍼 1은 뭐야?",
-            "오늘 점심 뭐 먹지",
+            "오늘 점심 뭐 먹지", "어디까지 했지?",
         ):
             with self.subTest(said=said):
                 self.assert_handed_on((said,), step_index=3)
-        self.assert_front(("어디까지 했지?",), "question_or_speculation", step_index=3)
         # Lane VX, decision 1: words that move on are the front rules'.
         for said in ("다음 단계", "다음 단계로 넘어가자", "넘어가"):
             with self.subTest(said=said):

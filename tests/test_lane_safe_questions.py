@@ -20,6 +20,7 @@ CONTROL_QUESTIONS = (
     "타이머 시작했나 모르겠네", "시약 엎질렀나", "시약 엎질렀으려나",
     "시약 엎질렀나 보다", "다음 단계 넘어갔나", "이거 기록해야 되나",
     "타이머 시작합니까", "타이머 시작했습니까", "타이머 시작됐는가", "타이머 얼마야",
+    "시약 엎질렀지",
 )
 
 
@@ -98,3 +99,20 @@ def test_a_request_to_record_uncertainty_does_not_authorize_a_workflow_tool():
     assert evidence_fence_rejection(
         utterance="타이머 시작했나 메모해 줘", evidence="타이머 시작했나", bounded_control=True,
     ) == "interrogative_not_authorized"
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_a_refused_question_proposal_preserves_held_checkpoints(pending):
+    from voiney_lab.llm_router import ToolProposal
+    session = session_at(4)
+    if pending:
+        session.plan("5단계 완료했어", turn_id=3, language="ko", configuration_id=1, generation=1)
+    before = workflow_checkpoint(session)
+    outcome = session.apply_tool_proposal(
+        [ToolProposal(tool="record_log", log_type="anomaly", value="시약 엎질렀나", evidence="시약 엎질렀나")],
+        transcript="시약 엎질렀나", basis=session.proposal_basis(turn_id=4, generation=1),
+        turn_id=4, language="ko", configuration_id=1, generation=1,
+    )
+    assert outcome.verdict.effect == "refuse"
+    assert not outcome.plan.reported_anomaly
+    assert workflow_checkpoint(session) == before

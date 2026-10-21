@@ -124,13 +124,12 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
             turn_id=10,
             generation=1,
         )
-        self.assertEqual(plan_10.action, CuratedProtocolAction.REPORT_ANOMALY)
-        self.assertTrue(plan_10.reported_anomaly)
-        self.assertEqual(plan_10.anomaly_category, "protocol_block")
-        self.assertIn("이상 사항", plan_10.speech_text)
-        self.assertIn("색", plan_10.speech_text)
+        self.assertEqual(plan_10.action, CuratedProtocolAction.DECLINE_COMPLETION)
+        self.assertFalse(plan_10.reported_anomaly)
+        self.assertFalse(plan_10.state_changed)
+        self.assertIsNone(plan_10.anomaly_category)
         self.assertEqual(session.current_index, 2)
-        self.assertIsNotNone(session._pending_anomaly)
+        self.assertIsNone(session._pending_anomaly)
 
         # Turn 11: "지금 약간 이상 상황이 발생한 것 같아요."
         plan_11 = session.plan(
@@ -139,9 +138,9 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
             turn_id=11,
             generation=1,
         )
-        self.assertEqual(plan_11.action, CuratedProtocolAction.REPORT_ANOMALY)
-        self.assertTrue(plan_11.reported_anomaly)
-        self.assertIn("이상 사항", plan_11.speech_text)
+        self.assertEqual(plan_11.action, CuratedProtocolAction.DECLINE_COMPLETION)
+        self.assertFalse(plan_11.reported_anomaly)
+        self.assertFalse(plan_11.state_changed)
         self.assertEqual(session.current_index, 2)
 
     def test_procedure_state_single_run_consistency(self) -> None:
