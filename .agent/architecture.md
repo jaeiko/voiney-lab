@@ -1,7 +1,6 @@
 # Current architecture
 
-VoineyLab (the company is Voiney) is an MVP prototype, not field-validated.
-This is the one deep description of how the code is built. It was rewritten
+VoineyLab (the company is Voiney): this is the one deep description of how the code is built. It was rewritten
 on 2026-10-20 (lane DOC4) against dev `e7c31c8`; every name below is in that
 code. The per-module one-liners are in `AGENTS.md`, the feature-by-feature
 behaviour in `docs/FEATURES.md`, and the reasons and dates in

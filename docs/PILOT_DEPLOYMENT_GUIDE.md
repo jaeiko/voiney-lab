@@ -3,8 +3,6 @@
 Date: 2026-08-24, revised 2026-10-13 (lane PL)\
 Audience: Technical owner and laboratory pilot owner
 
-VoineyLab is an MVP prototype, not field-validated.
-
 This guide is the release checklist for one controlled, supervised pilot. The
 tested topology is one FastAPI/Uvicorn process and local SQLite/object storage.
 It is not a regulated production or high-availability deployment.
@@ -21,8 +19,8 @@ Before installation, record:
 - whether provider-backed voice will be used;
 - incident owner, abort criteria, and restore objective.
 
-The README's provider section (§4) records the values in use and which
-provider calls were live-tested, and when. (`CAPABILITY_MATRIX.md` was
+`docs/FEATURES.md` (F17) records the values in use and which provider
+calls were live-tested, and when. (`CAPABILITY_MATRIX.md` was
 archived on 2026-10-10.)
 
 ## 2. Prepare the host
