@@ -248,10 +248,11 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
                 opening = session.current_index
                 session.plan(
                     "Guide me to the next step."
-                    if language == "en" else "다음 단계로 넘어가도 돼?",
+                    if language == "en" else "완료했어",
                     turn_id=1, language=language,
                     configuration_id=index, generation=4,
                 )
+                self.assertIsNotNone(session.pending_completion_confirmation)
                 accepted = session.plan(
                     reply, turn_id=2, language=language,
                     configuration_id=index, generation=4,

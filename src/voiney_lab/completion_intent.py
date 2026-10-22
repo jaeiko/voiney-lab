@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Literal
+from voiney_lab.intent_fences import is_question_or_speculation
 
 from voiney_lab.intent_arbitration import (
     RequestIntent,
@@ -168,8 +169,8 @@ def resolve_korean_completion_decision(
     if not raw:
         return CompletionIntentDecision(is_completion=False, target_kind="none")
 
-    # If ending with a question mark in the original utterance, reject immediately
-    if raw.endswith("?") or raw.endswith("？"):
+    # A question or speculation never attests completion, with or without STT punctuation.
+    if is_question_or_speculation(raw):
         return CompletionIntentDecision(
             is_completion=False,
             target_kind="none",

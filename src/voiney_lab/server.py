@@ -232,7 +232,7 @@ from voiney_lab.vad import (
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
-from voiney_lab.start_check import StartCheck, StartCheckError
+from voiney_lab.start_check import StartCheck, StartCheckError, start_check_enabled
 from voiney_lab.accounts import (
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
@@ -1607,6 +1607,14 @@ def _record_workspace_observation(
     else:
         category="other"
     step=curated.fixture.steps[pre_transition_index]
+    notebook=getattr(plan,"notebook_record",None)
+    if notebook is not None and notebook.get("kind")=="observation":
+        observed_step=next((candidate for candidate in curated.fixture.steps
+                            if candidate.step_id==notebook.get("step_id")
+                            and candidate.source_label==notebook.get("step_label")),None)
+        if observed_step is None:
+            raise WorkspaceError("Notebook observation step is unavailable.")
+        step=observed_step
     principal,store=_commercial_workspace()
     try:
         store.record_observation(
@@ -4979,17 +4987,57 @@ def post_protocol_start_check_answer(
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            principal=_REQUEST_PRINCIPAL.get()
             return StartCheck(catalog).answer(
                 protocol_id,body.get("question_id"),
                 choice_id=body.get("choice_id"),action=body.get("action"),
-                actor_principal_id=principal.principal_id if principal is not None else None)
+                actor_principal_id=_start_check_principal_id())
         finally:
             store.close()
     except StartCheckError as exc:
         raise HTTPException(status_code=422,detail=exc.code) from exc
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/start-check/safety")
+def post_protocol_start_safety(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """Record the experimenter's explicit acknowledgement of this target's safety notices."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return StartCheck(catalog).acknowledge_safety(
+                protocol_id,target=body.get("target"),
+                actor_principal_id=_start_check_principal_id())
+        finally:
+            store.close()
+    except StartCheckError as exc:
+        raise HTTPException(status_code=422,detail=exc.code) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+def _start_check_principal_id()->str|None:
+    principal=_REQUEST_PRINCIPAL.get()
+    if (principal is None and not _auth_settings().accounts
+            and not _workspace_settings().enabled and _runtime_usage_scope()!="operational"):
+        principal=DevIdentityProvider.from_environment().authenticate()
+    return principal.principal_id if principal is not None else None
+
+
+def _protocol_start_readiness(protocol_id:str,revision_id:str|None)->dict[str,Any]:
+    if not start_check_enabled():
+        return {"ready":True,"reason":None}
+    catalog,store=_open_protocol_catalog()
+    try:
+        return StartCheck(catalog).readiness(
+            protocol_id,revision_id=revision_id,
+            actor_principal_id=_start_check_principal_id())
+    finally:
+        store.close()
 
 
 @app.get("/api/protocols/{protocol_id}/review-versions/{version}")
@@ -5567,7 +5615,28 @@ async def answer_experiment_report_review(report_id:str,item_id:str,request:Requ
     if item is None or action not in {"confirm","correct"}:
         raise HTTPException(status_code=404,detail="report value unavailable")
     text=" ".join(str(payload.get("text") or "").split())
-    key=f"screen-review-{secrets.token_hex(8)}"
+    desired=text if action=="correct" and text else item["text"]
+    if item["confirmed"] and desired==item["text"]:
+        items=report_review_items(report["events"])
+        return {"report_id":report_id,"items":items,
+                "unconfirmed":sum(1 for entry in items if not entry["confirmed"]),
+                "prose":REPORT_PROSE.status(store,report_id)}
+    # A stable basis distinguishes a later correction back to an earlier
+    # value, while simultaneous/retried submissions share one event key.
+    basis=item["source_key"]
+    latest_fix=None
+    for entry in report["events"]:
+        fix=(entry.get("payload") or {}).get("record_fix") or {}
+        if fix.get("target_event_key")==item["source_key"]:
+            basis=entry["event_key"]
+            latest_fix=fix
+    if (latest_fix is not None and latest_fix.get("text_after")==desired
+            and basis.startswith("screen-review-") and basis.endswith("-fix")):
+        # A retry can arrive after the correction but before its confirmation.
+        key=basis[:-4]
+    else:
+        key="screen-review-"+hashlib.sha256(
+            json.dumps([item_id,basis,desired],ensure_ascii=False).encode("utf-8")).hexdigest()
     try:
         if action=="correct" and text and text!=item["text"]:
             if len(text)>800:
@@ -5693,10 +5762,9 @@ def post_experiment_report_pi_confirmation(
         report=store.get_report(report_id)
     except (ValueError,KeyError,sqlite3.Error) as exc:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
-    count=sum(1 for event in report["events"] if event.get("event_type")=="pi_confirmed")
     try:
         store.append_event(
-            report_id,event_key=f"pi-confirmed-{count+1}",event_type="pi_confirmed",
+            report_id,event_key=f"pi-confirmed-{secrets.token_hex(16)}",event_type="pi_confirmed",
             user_wording=comment or None,
             payload={"name":_pi_name(),"comment":comment,"source":"screen"},
         )
@@ -5794,7 +5862,7 @@ def export_experiment_report(report_id:str,format_name:str):
         content=content,media_type=media_type,
         headers={
             "Cache-Control":"no-store",
-            "Content-Disposition":f'attachment; filename="{report_id}.{format_name}"',
+            "Content-Disposition":f'attachment; filename="{report_id}.{format_name.replace("meeting-", "meeting.")}"',
             "X-Content-Type-Options":"nosniff",
         },
     )
@@ -7921,6 +7989,16 @@ async def _queue_curated_research(
     if not session.owns_research_result(turn_id,generation,configuration_id):
         return
 
+    async def report_state(report:dict)->None:
+        public=_public_experiment_report_state(report)
+        store=session.experiment_report_store
+        public["reports"]=(await asyncio.to_thread(store.list_reports,session_id=session.session_id)
+                           if store is not None else [])
+        if session.owns_research_result(turn_id,generation,configuration_id):
+            await sender.text(
+                "experiment.report.state",turn_id=turn_id,generation=generation,
+                configuration_id=configuration_id,session_id=session.session_id,report=public)
+
     async def worker() -> None:
         research_plan=None
         ctx=context
@@ -8109,7 +8187,7 @@ async def _queue_curated_research(
                     turn_id=turn_id,generation=generation,
                     pre_transition_index=pre_transition_index,
                 )
-                await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+                await report_state(report)
         elif session.owns_research_result(turn_id,generation,configuration_id):
             status=(
                 supplemental_result.get("status","disabled")
@@ -8136,7 +8214,7 @@ async def _queue_curated_research(
                     confirmation_state="server_observed",
                     payload={"status":status,"state_mutation":False},
                 )
-                await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+                await report_state(report)
             if not announced:
                 # Nothing was shown as pending, so nothing is shown as
                 # unfinished: the rules' answer stands alone (decision 8).
@@ -12960,7 +13038,42 @@ async def voice_socket(websocket:WebSocket):
                 continue
             control=parse_control(message["text"])
             if control["type"]=="session.start":
-                if session.active:raise ProtocolError("session already active")
+                if session.active:
+                    same_configuration=(
+                        control["configuration_id"]==session.accepted_configuration_id
+                        and control["mode"]==session.accepted_mode
+                        and control["language"]==session.accepted_language
+                        and control["protocol_id"]==session.accepted_protocol_id
+                        and normalize_input_language_preference(
+                            control.get("input_language",control["language"]))
+                        ==session.accepted_input_language
+                        and control.get("experiment_session_id",session.session_id)
+                        ==session.session_id)
+                    if not same_configuration:
+                        await websocket.send_text(event(
+                            "error",message="session configuration conflicts with active session",
+                            code="session_configuration_conflict",recoverable=True,
+                            message_ko="이미 다른 설정으로 연결돼 있어요. 현재 실험을 계속해 주세요.",
+                            configuration_id=session.accepted_configuration_id,
+                            generation=session.generation))
+                        continue
+                    await websocket.send_text(event(
+                        "session.ready",configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,mode=session.accepted_mode,
+                        language=session.accepted_language,
+                        input_language=session.accepted_input_language.value,
+                        protocol_id=session.accepted_protocol_id,
+                        revision_id=session.accepted_revision_id,
+                        experiment_session_id=session.session_id,
+                        experiment_session_version=session.experiment_state_version,
+                        research_capabilities=research_capabilities))
+                    if session.curated_protocol_session is not None:
+                        await websocket.send_text(event(
+                            "protocol.fixture.state",action="attached",
+                            configuration_id=session.accepted_configuration_id,
+                            state=session.curated_protocol_session.state(),
+                            screen=curated_screen_fields(session.curated_protocol_session)))
+                    continue
                 requested_mode=control["mode"]
                 configuration_id=control["configuration_id"]
                 requested_protocol_id=control["protocol_id"]
@@ -13081,6 +13194,21 @@ async def voice_socket(websocket:WebSocket):
                             reason=selection_failure,
                         ))
                         continue
+                    if selected_curated_fixture is not None:
+                        configuration_stage="start_confirmation"
+                        readiness=await asyncio.to_thread(
+                            _protocol_start_readiness,requested_protocol_id,selected_revision_id)
+                        if not readiness["ready"]:
+                            await websocket.send_text(event(
+                                "session.configuration_required",configuration_id=configuration_id,
+                                mode=requested_mode,language=context.language,
+                                protocol_id=requested_protocol_id,reason=readiness["reason"],
+                                message_ko=("핵심 값을 먼저 확인해 주세요."
+                                            if readiness["reason"]=="start_check_required"
+                                            else "안전 주의를 읽고 확인해 주세요."
+                                            if readiness["reason"]=="safety_acknowledgement_required"
+                                            else "시작 화면에서 현재 프로토콜의 확인을 마쳐 주세요.")))
+                            continue
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     if selected_curated_fixture is not None:
@@ -13435,6 +13563,23 @@ async def voice_socket(websocket:WebSocket):
                             "experiment.session.state",state=experiment_state))
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
+            elif control["type"]=="workflow.resume" and (
+                not session.active or session.curated_protocol_session is None
+                or session.curated_protocol_session._experiment_started_at is None
+                or type(control.get("configuration_id")) is not int
+                or type(control.get("generation")) is not int
+                or control["configuration_id"]!=session.accepted_configuration_id
+                or control["generation"]!=session.generation
+            ):
+                not_started=(session.curated_protocol_session is not None
+                             and session.curated_protocol_session._experiment_started_at is None)
+                await websocket.send_text(event(
+                    "workflow.control.refused",action="resume",
+                    configuration_id=session.accepted_configuration_id,
+                    generation=session.generation,
+                    reason="experiment_not_started" if not_started else "stale_configuration",
+                    message_ko=("아직 실험을 시작하지 않았어요. 시작 화면에서 프로토콜로 시작해 주세요."
+                                if not_started else "현재 연결의 설정으로 다시 요청해 주세요.")))
             elif control["type"] in {"workflow.pause","workflow.resume"} and (
                 session.active and session.curated_protocol_session is not None
                 and session.curated_protocol_session.experiment_ended
@@ -13449,6 +13594,7 @@ async def voice_socket(websocket:WebSocket):
                     configuration_id=session.accepted_configuration_id,
                     action=control["type"].partition(".")[2],
                     reason="experiment_ended",
+                    message_ko="이 실험은 이미 끝났어요. 새 실험은 시작 화면에서 골라 주세요.",
                     status=session.curated_protocol_session.workflow_status,
                 ))
             elif control["type"]=="workflow.pause":

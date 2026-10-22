@@ -159,8 +159,11 @@ class NoteByModeTests(unittest.TestCase):
     def test_confirm_the_question_lasts_one_turn(self) -> None:
         turns = self.started("confirm")
         turns.say("실험노트에 적어 줘, 0.5 mL")
+        held = turns.session.pending_note_confirmation.copy()
         turns.say("지금 몇 단계야")
-        self.assertIsNone(turns.session.pending_note_confirmation)
+        # A question preserves the checkpoint, including its old turn id;
+        # the later yes still fails the existing one-turn validity fence.
+        self.assertEqual(turns.session.pending_note_confirmation, held)
         plan = turns.say("네")
         self.assertIsNone(plan.note_record)
 

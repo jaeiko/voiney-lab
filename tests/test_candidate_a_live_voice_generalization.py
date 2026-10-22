@@ -196,13 +196,13 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
 
     def test_owned_binary_frames_accept_natural_answers_but_never_unowned_or_so(self) -> None:
         session = self.session("1")
-        session.plan("다음 단계로 넘어가도 돼?", turn_id=2, language="ko")
+        session.plan("완료했어", turn_id=2, language="ko")
         accepted = session.plan("어, 다 했어", turn_id=3, language="ko")
         self.assertEqual(accepted.intent_kind, "pending_completion_confirmed")
         self.assertTrue(accepted.state_changed)
 
         paraphrase = self.session("1")
-        paraphrase.plan("다음 단계로 넘어가도 돼?", turn_id=2, language="ko")
+        paraphrase.plan("완료했어", turn_id=2, language="ko")
         accepted = paraphrase.plan("응, 모두 마쳤어요", turn_id=3, language="ko")
         self.assertTrue(accepted.state_changed)
 
@@ -212,7 +212,7 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         self.assertFalse(unowned.state_changed)
 
         unclear = self.session("1")
-        unclear.plan("다음 단계로 넘어가도 돼?", turn_id=2, language="ko")
+        unclear.plan("완료했어", turn_id=2, language="ko")
         retry = unclear.plan("So", turn_id=3, language="ko")
         self.assertEqual(retry.action, CuratedProtocolAction.TRANSCRIPT_UNRELIABLE)
         self.assertFalse(retry.state_changed)

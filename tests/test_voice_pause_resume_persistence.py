@@ -447,7 +447,9 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
         async def scenario(socket, listener, say):
             await say(1, "프로토콜 시작해줘")
             await say(2, "정지")
-            socket.control({"type": "workflow.resume"})
+            socket.control({"type": "workflow.resume",
+                            "configuration_id": listener.accepted_configuration_id,
+                            "generation": listener.generation})
             await socket.wait_for(
                 lambda item: item["type"] == "protocol.fixture.state"
                 and item.get("action") == "resume"

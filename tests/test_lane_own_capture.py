@@ -24,7 +24,9 @@ class CaptureThenControlTests(VoiceNotesHarness, unittest.TestCase):
                 self.assertEqual(response.status_code, 201, response.text)
             for command, status in (("workflow.pause", "paused"), ("workflow.resume", "in_progress"), ("session.stop", "stopped")):
                 offset = len(socket.sent)
-                socket.control({"type": command})
+                socket.control({"type": command,
+                                "configuration_id": listener.accepted_configuration_id,
+                                "generation": listener.generation})
                 await socket.wait_for(lambda e: e["type"] in {"experiment.session.state", "error"}
                                       and e in socket.sent[offset:])
                 fresh = socket.sent[offset:]

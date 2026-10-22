@@ -92,7 +92,9 @@
 - **어디**: `experiment_protocol.py` (`EXECUTION_BLOCKING_REASON_CODES`, `execution_blocking_reasons`, `execution_notice_reasons`); `protocol_catalog.py` (`available_for_execution`, `load_executable_fixture`, `READINESS_REASON_KO`); `start_check.py` (`StartCheck`, `build_questions`, `QUESTION_COUNT`); `server.py` (`get_protocol_start_check`, `server_config`, `_source_protocol_only`); `safety_pack.py` (`resolve_safety_pack`, `SOURCE_PROTOCOL_ONLY_SCOPE`); 화면 `static/index.html` 의 `#wizard-sheet`.
 - **설정**: `VOINEY_LAB_START_CHECK_ENABLED`(true), `VOINEY_LAB_USAGE_SCOPE`, `VOINEY_LAB_SAFETY_CATALOG`, `VOINEY_LAB_FACILITY_ID`.
 - **시험**: `tests/test_lane_di_execution_rule.py`, `tests/test_lane_on_start_check.py`, `tests/test_lane_on_wizard_screen.py`, `tests/test_lane_pl_source_protocol_only.py`, `tests/test_safety_pack.py`.
-- **한계**: 핵심 값 확인은 **화면의 순서로만** 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
+- **서버 시작 확인**: `available_for_execution`에 더해, 같은 계정이 지금 실행할 분석·검토본의 핵심 값을 확인하고 안전 주의를 읽었다는 장부 기록을 요구한다. 안전 확인은 `/api/protocols/{protocol_id}/start-check/safety`에 현재 `target`을 보내 기록한다. 기록이 없거나 다른 계정·다른 분석의 기록이면 시작을 거절하고 할 일을 알린다. 핵심 값이 없는 원문도 안전 확인은 필요하다. 재연결은 원래 실행 버전의 확인을 읽는다. `VOINEY_LAB_START_CHECK_ENABLED=false`이면 기존 시작 길을 유지한다.
+
+화면의 재개 제어는 시작한 실험이며 현재 설정 번호와 세대가 일치할 때만 허용한다. 같은 소켓에서 시작 요청을 다시 받으면 같은 설정은 현재 세션을 알리고, 다른 설정은 연결을 유지한 채 오류를 보낸다.
 
 ## F8. 듣기
 
@@ -110,6 +112,7 @@
 ## F9. 말 한 번의 길
 
 - **무엇**: 글로 옮긴 말은 한 줄로 간다. ① 응급 판정(`server.py`) → ② **앞단 규칙**(모델을 기다리지 않음: 글자 품질, 멈춤·"종료", 열린 질문의 예/아니요, 끝점 질문에 대한 답, 남은 시간, "그거", 다시 말해 줘, 지금 단계를 이름 댄 완료, 시작 등) → ③ (켰을 때) **LLM 라우터**: 답하거나 `change_state`·`record_log` 도구로 바꾸기를 **제안** → ④ **서버 검증**: 이 말의 글자 그대로의 근거, 질문·가정이 아님, 지금 단계만, 열린 서버 질문이 없을 것 → 같은 상태 기계(`CuratedProtocolSession`)가 바꾼다.
+  한국어 의문·추측 어미와 물음표는 규칙과 라우터 검사에서 같은 함수로 읽는다. "투명해졌나", "타이머 시작했나", "재개했나", "투명해질지", "타이머 시작할지" 같은 말은 관찰·완료·타이머 시작·재개·이상 사항 기록을 허용하지 않고, 열린 질문도 소비하지 않는다. 설명을 함께 요청해 기존 답변 경로로 들어가도 완료 확인을 갱신하거나 지우지 않는다. 분명한 진술·명령과 "다음"·"다음 단계"·"넘어가"의 진행 동작은 유지한다.
   모델이 늦거나·실패하거나·거부되거나·답이 검사에 걸리면 같은 말을 규칙 길로 처리한다(두 번째 결정이 아니다). 라우터 모델이 요청 한도(429)에 걸리면 그 말을 멈추고 "지금 답하지 못했어요. 다시 말씀해 주세요."라고 한다.
   모델이 쓴 답은 서버 검사를 통과해야 쓴다: 숫자는 인용한 원문에서만, 상태를 바꿨다는 말 금지, 화면 라벨 금지, 서버 값은 정확히, 근거 없는 안전 지시는 빼고 "이 상황의 안전 안내는 원문에 없어요."를 붙인다.
   **라우터 먼저**(꺼짐)를 켜면 앞단 규칙은 시스템 정보·애매한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고, 라우터가 읽기 전용 도구(`show_visual`, `clarify`, `not_for_me`)도 쓴다.
@@ -152,8 +155,10 @@
 ## F13. 실험 노트와 보고서
 
 - **무엇**: 실험이 끝나면 장부에서 보고서를 만든다. Word·Markdown 보고서는 연구자의 **실험 노트** 모양이다: 제목은 말한 목적, 1 시료와 조건 … 원문 값과 실제 쓴 값, 단계·시료별 관찰, 결과와 다음에 바꿀 점, 원문과 다른 점, 같은 프로토콜의 지난 실험과 비교, 확인, 부록. 숫자는 모두 기록에서 서버가 만든다.
+  대답하지 않은 실험 노트 질문은 일시정지·재개 뒤에도 유지하고 재개할 때 다시 묻는다. 그 질문이 열린 동안의 "넘어가"는 질문만 건너뛴다.
   보고서 모델은 끝난 뒤 한 번 불러 관찰 문장과 결과 한 단락만 쓰게 하고, 기록·원문에 없는 값·숫자·추측·안전 지시·인용을 검사해 통과한 것만 "AI 정리"로 넣는다(모델이 없으면 서버 문장만). 실험자가 아직 확인하지 않은 값은 "[미확인]"으로 표시하고 화면에서 하나씩 확인하거나 고친다.
-  내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
+  관찰 질문에 대한 답은 질문이 가리킨 완료 단계에 저장한다. 같은 값 확인을 다시 보내도 확인 사건은 하나만 남기며, 동시에 온 PI 확인은 각각 남긴다. 조사 뒤 보고서 갱신에도 현재 연결의 설정 식별자를 붙인다.
+  내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 회의용 파일 이름도 `.meeting.docx`·`.meeting.pdf`로 실제 형식에 맞춘다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
   기록의 소유 계정과 연구실은 서버가 정한다. HTTP·음성 소켓 조회와 내보내기는 본인 또는 같은 연구실 관리자만 가능하다. 값 확인·정정·평점·보고서 재생성은 본인만 가능하며, 관리자가 남의 기록에 쓸 수 있는 것은 PI 확인뿐이다. 다른 연구실 기록과 권한 없는 기록은 없는 것처럼 응답한다. 옛 기록의 소유자는 작업공간 세션으로 채우며, 소유자를 모르면 해당 연구실 관리자만 읽는다.
   지난 실행 비교·시작 전 확인 답·하루의 실행 순번은 같은 소유 계정·연구실·프로토콜 안에서만 구한다. 소유자가 불명인 옛 기록에는 다른 사람의 시작 전 답을 넣지 않으며 순번을 비워 둔다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.

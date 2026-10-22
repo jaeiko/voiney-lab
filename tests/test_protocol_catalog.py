@@ -634,6 +634,18 @@ class ProtocolCatalogTests(unittest.TestCase):
 
     def test_catalog_revision_is_acknowledged_and_frozen_for_one_listener(self):
         approved = self._approve(self.alpha, "alpha.pdf")
+        from tests.identity_support import development_principal
+        from voiney_lab.start_check import StartCheck
+        check = StartCheck(self.catalog)
+        actor = development_principal().principal_id
+        for question in check._built(approved.protocol_id)[1]:
+            check.answer(approved.protocol_id, question["question_id"], action="accept", actor_principal_id=actor)
+        check.acknowledge_safety(approved.protocol_id, target=check.questions(approved.protocol_id)["target"],
+                                 actor_principal_id=actor)
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
         placeholder = self.root / "offline-catalog.sqlite"
         config = ServerConfig(
             placeholder,
@@ -692,7 +704,7 @@ class ProtocolCatalogTests(unittest.TestCase):
             side_effect=open_catalog_in_worker,
         ), patch(
             "voiney_lab.server.OpenAICompatibleProtocolAnalysisModel"
-        ) as analysis_model:
+        ) as analysis_model, patch("voiney_lab.server.asyncio.to_thread", side_effect=immediate):
             asyncio.run(voice_socket(socket))
 
         ready = next(item for item in socket.sent if item["type"] == "session.ready")
@@ -706,7 +718,7 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertEqual(projected["state"]["source_filename"], "alpha.pdf")
         self.assertEqual(projected["state"]["source_sha256"], approved.source_sha256)
         analysis_model.assert_not_called()
-        store_handle.close.assert_called_once()
+        self.assertEqual(store_handle.close.call_count, 2)
 
 
 class CandidateDevelopmentBootstrapTests(unittest.TestCase):

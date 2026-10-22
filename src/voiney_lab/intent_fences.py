@@ -7,8 +7,8 @@ a proposal may never redirect a change onto another step. The LLM router's tool
 validation (``llm_router.py``) applies these fences to every tool proposal, and
 the session rules read ``has_completion_evidence`` for a spoken observation.
 
-These functions came verbatim from the removed xAI-only semantic-intent helper
-(lane DI, 2026-10-08); the fences and the words they look for are unchanged.
+The grammatical question/speculation reader is shared by deterministic
+rules and proposal validation so STT punctuation cannot authorize a change.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ _COMPLETION_EVIDENCE = re.compile(
     re.IGNORECASE,
 )
 _INTERROGATIVE_EVIDENCE = re.compile(
-    r"[?？]|뭐|무엇|무슨|뭔지|어떻게|어떤|어디|언제|누가|왜|"
+    r"[?？]|뭐|무엇|무슨|뭔지|어떻게|어떤|어디|언제|누가|왜|얼마|몇|어떡|"
     r"\bwhat\b|\bwhy\b|\bhow\b|\bwhen\b|\bwhere\b|\bwhich\b|\bwho\b",
     re.IGNORECASE,
 )
@@ -37,6 +37,71 @@ _POLITE_ACTION_REQUEST = re.compile(
     r"\b(?:please|could\s+you|would\s+you)\b",
     re.IGNORECASE,
 )
+
+# Clause endings, not STT punctuation, decide whether an observation was
+# asserted. Boundaries keep connective -으니 and noun suffixes inside a word
+# from being read as a question. Standalone 아니 is a negative reply.
+_QUESTION_ENDING = re.compile(
+    r"(?<=[가-힣])(?:나요|나|(?<!으)니|냐|(?<![니아])까요?|려나|을라나|던가요?"
+    r"|는지|은지|인지|한지|된지|건지|던지|은가요?|는가요?|한가요?|건가요?)"
+    r"(?=$|[\s.,!?。？！~]|(?:보(?:다|여|네)|봐))"
+    r"|(?:된|한|진|인|는|은)\s*거야(?=$|[\s.,!?~])"
+    r"|(?:건|인|한|된|은|는)가요?(?=$|[\s.,!?~])"
+    r"|(?:되|맞|있|없)(?:지요?|죠)(?=$|[\s.,!?~])"
+)
+_SPECULATION = re.compile(
+    r"모르(?:겠|는)|몰라|잘\s*모르|(?:것|거|듯)\s*같|듯(?:해|하|싶)|같기도"
+    r"|아마|혹시|글쎄|애매|헷갈"
+    r"|\b(?:not\s+sure|unsure|maybe|perhaps|probably|might|whether|should)\b"
+    r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b"
+)
+
+
+def is_literal_record_command(text: str) -> bool:
+    """An explicit command can preserve a payload containing uncertainty."""
+
+    return bool(re.search(
+        r"(?:메모|기록)\s*(?:좀\s*)?해\s*(?:줘|주세요)(?=$|[\s,.!~])", text,
+    ))
+
+
+def is_question_or_speculation(
+    text: str, *, punctuation: bool = True, literal_record: bool = False,
+) -> bool:
+    """A question/hedge cannot attest a workflow action or observation.
+
+    ``punctuation=False`` selects the grammatical guard before the existing
+    informational routing, which already answers punctuated questions. The
+    same grammar is used at the model-proposal boundary, with punctuation.
+    ``literal_record`` preserves an explicit record command's payload in
+    record readers and proposal checks; it never authorizes a workflow tool.
+    This is deliberately conservative for ambiguous conversational endings.
+    """
+
+    said = normalize_semantic_utterance(text).casefold()
+    if punctuation and re.search(r"[?？]", said):
+        return True
+    # A standalone "I don't know" is a reply the server explicitly offers
+    # for a branch/count question, not a guessed observation or action.
+    if re.fullmatch(r"(?:(?:음|어)\s*)?(?:(?:아직|잘|지금은?)\s*)?(?:모르겠(?:어|어요|네|네요)|몰라(?:요)?|글쎄(?:요)?)[.!~]*", said):
+        return False
+    # A request to preserve the spoken uncertainty is still a command to
+    # record it; the uncertainty itself never attests endpoint completion.
+    if literal_record and is_literal_record_command(said):
+        return False
+    # These whole words are replies or nouns, not predicate endings.
+    grammatical = re.sub(r"(?<![가-힣])(?:아니|하나|바나나|얼마나)(?![가-힣])", "", said)
+    # -ㅂ니까 attaches to any predicate syllable ending in jongseong ㅂ;
+    # NFD distinguishes it from the connective -으니까 without a verb list.
+    decomposed = unicodedata.normalize("NFD", said)
+    formal_question = re.search("ᆸ니까(?=$|[\\s.,!?。？！~])", decomposed)
+    # Past -았/었/였- and irregular -렀/렸/웠- all carry jongseong ㅆ.
+    past_question = re.search("ᆻ(?:지(?:요)?|죠)(?=$|[\\s.,!?。？！~])", decomposed)
+    # Interrogative -ㄹ지/-을지 attaches to any predicate carrying final ㄹ.
+    future_question = re.search("ᆯ지(?:요)?(?=$|[\\s.,!?。？！~])", decomposed)
+    return bool(_QUESTION_ENDING.search(grammatical) or _SPECULATION.search(said)
+                or formal_question or past_question or future_question
+                or (punctuation and _INTERROGATIVE_EVIDENCE.search(said)))
 
 
 def normalize_semantic_utterance(value: str) -> str:
@@ -68,6 +133,7 @@ def evidence_fence_rejection(
     utterance: str,
     evidence: str,
     bounded_control: bool,
+    literal_record: bool = False,
 ) -> str | None:
     """The first evidence fence a proposed change fails, or ``None``.
 
@@ -81,8 +147,10 @@ def evidence_fence_rejection(
 
     if not evidence or evidence.casefold() not in utterance.casefold():
         return "evidence_not_verbatim"
+    if is_question_or_speculation(utterance, punctuation=False, literal_record=literal_record):
+        return "interrogative_not_authorized"
     if (
-        _INTERROGATIVE_EVIDENCE.search(utterance)
+        is_question_or_speculation(utterance, literal_record=literal_record)
         and not (bounded_control and _POLITE_ACTION_REQUEST.search(utterance))
     ):
         return "interrogative_not_authorized"

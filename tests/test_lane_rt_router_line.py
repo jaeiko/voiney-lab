@@ -176,7 +176,9 @@ class ServerHistoryTests(VoiceSessionHarness, unittest.TestCase):
             await socket.wait_for(lambda item: (
                 item["type"] == "protocol.fixture.state" and item.get("action") == "pause"
             ))
-            socket.control({"type": "workflow.resume"})
+            socket.control({"type": "workflow.resume",
+                            "configuration_id": listener.accepted_configuration_id,
+                            "generation": listener.generation})
             await socket.wait_for(lambda item: (
                 item["type"] == "protocol.fixture.state" and item.get("action") == "resume"
             ))
@@ -301,7 +303,7 @@ class HistoryBundleTests(unittest.TestCase):
             screen_history_turn(session, before, control="pause", changed=True)
         )
         client = FakeRouterClient(answer_call_reply("지금은 일시정지 중이에요.", source_kind="server_state"))
-        _routed(session, "지금 어디까지 했지?", client, turn_id=3, history=history.router_history())
+        _routed(session, "지금 어디까지 했어?", client, turn_id=3, history=history.router_history())
         shown = _recent_turns(client.requests[0])
         self.assertEqual(shown[0]["handled_by"], "front:targeted_completion")
         self.assertEqual(shown[0]["server"]["state_after"]["step"], "5")
@@ -374,7 +376,7 @@ class AllowListTests(unittest.TestCase):
             ("change_state", "next", "이제 다음 거 하자", 3, CuratedProtocolAction.CLARIFY_COMPLETION),
             ("change_state", "stop", "오늘은 이쯤에서 종료하는 게 좋겠어", 3, CuratedProtocolAction.STOP),
             ("change_state", "pause", "잠깐 쉬었다 할게", 3, CuratedProtocolAction.PAUSE),
-            ("change_state", "start", "자 이제 실험 시작해 볼까", None, CuratedProtocolAction.START),
+            ("change_state", "start", "자 이제 실험 시작해 줘", None, CuratedProtocolAction.START),
             # Lane N, decision 1: "관찰 기록해줘 …" is now the note rule's; the
             # router is asked in words the front rules leave to it.
             ("record_log", "observation", "침전이 생겼어 남겨 줘", 3, CuratedProtocolAction.RECORD_OBSERVATION),
@@ -394,7 +396,7 @@ class AllowListTests(unittest.TestCase):
                 outcome = _routed(
                     session, said, FakeRouterClient(tool_reply((tool, arguments))), turn_id=2,
                 )
-                self.assertEqual(outcome.handled_by, "llm+tool")
+                self.assertEqual(outcome.handled_by, "front:start_command" if value == "start" else "llm+tool")
                 self.assertIs(outcome.plan.action, expected)
 
     def test_resume_and_the_timer_run_as_the_rules_own_action(self) -> None:
@@ -502,11 +504,11 @@ class RuleConflictTests(unittest.TestCase):
                 self.assertEqual(session.workflow_status, "paused")
 
     def test_the_decided_first_step_start_is_kept(self) -> None:
-        # Lane R3, decision 8: "자 이제 1단계부터 해볼까" starts the experiment.
+        # A speculative -ㄹ까 does not attest a start.
         session = _fresh()
         plan = _said(session, "자 이제 1단계부터 해볼까")
-        self.assertIs(plan.action, CuratedProtocolAction.START)
-        self.assertTrue(session.active)
+        self.assertFalse(plan.state_changed)
+        self.assertFalse(session.active)
 
     def test_no_timer_starts_after_the_experiment_ended(self) -> None:
         session = _miniprep(3)

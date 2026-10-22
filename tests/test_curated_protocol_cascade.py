@@ -677,9 +677,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         )
         self.assertEqual(
             ambiguous.action,
-            CuratedProtocolAction.CLARIFY_COMPLETION,
+            CuratedProtocolAction.DECLINE_COMPLETION,
         )
-        self.assertIn("상태는 변경하지 않았습니다", ambiguous.display_text)
+        self.assertFalse(ambiguous.state_changed)
         self.assertEqual(session.current_index, 1)
 
         for turn_id, phrase in enumerate((
@@ -1442,7 +1442,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         plan = ambiguous.plan(
             "거의 끝난 것 같아.", turn_id=920, language="ko"
         )
-        self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertEqual(plan.action, CuratedProtocolAction.DECLINE_COMPLETION)
         self.assertEqual(ambiguous.state(), opening)
         for turn_id, index in enumerate((6, 8, 19), 921):
             with self.subTest(step=index + 1):
@@ -1988,7 +1988,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
 
             self.assertEqual(session.curated_protocol_session.current_index, 1)
-            self.assertIsNotNone(
+            self.assertIsNone(
                 session.curated_protocol_session.pending_completion_confirmation
             )
             self.assertEqual(session.experiment_report_store.list_reports(), [])
