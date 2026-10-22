@@ -11,7 +11,7 @@ def test_same_pdf_upload_is_scoped_by_lab(monkeypatch, tmp_path):
     monkeypatch.setenv("VOINEY_LAB_PROTOCOL_ENABLED", "true")
     monkeypatch.setenv("VOINEY_LAB_PROTOCOL_DATA_DIR", str(tmp_path / "catalog"))
     monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", "source_protocol_only")
-    monkeypatch.setattr(srv, "_automatic_ocr_on_upload", lambda *args: {"state": "not_needed"})
+    monkeypatch.setattr(srv, "_automatic_ocr_on_upload", lambda *args, **kwargs: {"state": "not_needed"})
     first, same_lab, other_lab = Device(), Device(), Device()
     for device, name, lab in ((first, "first", "lab-a"), (same_lab, "peer", "lab-a"), (other_lab, "other", "lab-b")):
         device.sign_up(_invite(tmp_path / "workspace", organization_id=lab), name)
