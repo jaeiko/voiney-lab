@@ -161,6 +161,7 @@ class ObservationPromptHoldTests(unittest.TestCase):
         for question in ("탈색이 뭐야?", "완전히 탈색되려면 얼마나 걸려?"):
             with self.subTest(question=question):
                 session = self._prompted_at("7")
+                held = session.pending_observation_confirmation
                 answered = self._turn(session, question, 2)
                 # Lane VX, decision 5: "얼마나 걸려?" is the step-time question
                 # on the in-gel sidecar too, read-only like the others.
@@ -171,10 +172,12 @@ class ObservationPromptHoldTests(unittest.TestCase):
                 self.assertIsNotNone(pending)
                 # Answering a question is not asking again.
                 self.assertEqual(pending.reprompt_count, 0)
+                self.assertEqual(pending, held)
 
                 released = self._turn(session, "네", 3)
-                self.assertEqual(released.intent_kind, "pending_observation_confirmed")
-                self.assertEqual(session.current_index, self.index["7"] + 1)
+                self.assertFalse(released.reported_observation)
+                self.assertFalse(released.state_changed)
+                self.assertEqual(session.current_index, self.index["7"])
 
     def test_control_commands_go_through_as_before(self):
         for command in ("일시정지", "그만", "타이머 시작"):

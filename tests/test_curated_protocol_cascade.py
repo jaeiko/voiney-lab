@@ -1988,7 +1988,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
 
             self.assertEqual(session.curated_protocol_session.current_index, 1)
-            self.assertIsNotNone(
+            self.assertIsNone(
                 session.curated_protocol_session.pending_completion_confirmation
             )
             self.assertEqual(session.experiment_report_store.list_reports(), [])
