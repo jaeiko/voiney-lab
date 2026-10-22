@@ -21,17 +21,17 @@
 ## F1. 계정과 로그인
 
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
-  비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름이나 같은 곳에서 15분 안에 5번 틀리면 잠긴다(429).
+  비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.
   관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 스스로 지울 수 있다(마지막 관리자는 안 됨).
   파일럿 실행기는 기본으로 `accounts` 로 연다(`--dev-identity` 를 주면 `dev`).
 - **어디**: `accounts.py` (`AUTH_MODES`, `AccountStore.create_invite`, `sign_up`, `LOGIN_FAILURE_LIMIT`, `SESSION_LIFETIME`), `server.py` (`commercial_identity_boundary` 미들웨어, `_ACCOUNT_OPEN_PATHS`, `/api/auth/*` 경로, `POST /api/auth/delete-account`, `_account_is_admin`), `identity.py` (`DevIdentityProvider`, OIDC), `scripts/pilot_invite.py`.
 - **설정**: `VOINEY_LAB_AUTH_MODE`, `VOINEY_LAB_APP_ORIGINS`(앱 출처에 토큰 로그인), `VOINEY_LAB_WORKSPACE_ENABLED`·`VOINEY_LAB_WORKSPACE_DATA_DIR`(계정은 작업공간이 있어야 한다), OIDC 는 `VOINEY_LAB_OIDC_ISSUER` 등.
 - **시험**: `tests/test_lane_on_accounts_store.py`, `tests/test_lane_on_auth_api.py`, `tests/test_lane_fx4_pilot_login.py`, `tests/test_lane_fx5_account_erasure.py`, `tests/test_lane_fx5_delete_account_route.py`.
-- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 `X-Forwarded-For` 의 첫 값을 믿으므로 그 머리를 정하는 프록시 뒤에서만 의미가 있다. OIDC 는 가짜 검증기로만 시험했다.
+- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 계정 이름 기준이며 전달 주소 머리글로 우회할 수 없다. OIDC 는 가짜 검증기로만 시험했다.
 
 ## F2. 프로토콜 들여오기
 
-- **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다.
+- **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 연구실 안에서 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다. 다른 연구실이 같은 파일을 올리면 별도의 카탈로그 항목으로 등록한다. 원문 바이트는 공유할 수 있지만 분석·검토·소유 범위는 연구실마다 따로 남는다. 스타터 팩 도구도 같은 규칙을 쓴다.
   엑셀(.xlsx)은 원문이 아니라 고른 프로토콜에 붙는 **시약 표**로 저장하고 분석에 쓰지 않는다.
   **공개 Google Drive·Docs·Sheets 링크**도 받는다: 서버가 내려받아 올리기와 같은 길로 넘기고(Docs 는 PDF 로, Sheets 는 있는 프로토콜의 시약 표로), 링크 주소를 장부에 출처로 남긴다. 비공개 파일은 "공유 설정을 바꾸거나 파일을 내려받아 올려 주세요"라는 서버 문장으로 거절한다.
   원문 저장·변환·PDF 추출과 OCR 상태 조회는 작업 스레드에서 실행한다. 업로드가 취소돼도 진행 중인 쓰기·등록이 끝난 뒤 임시 파일을 닫고 정리한다. 등록 뒤 OCR 상태만 읽지 못하면 등록 성공은 유지하고 OCR 상태 조회 실패를 알린다. 목록은 연구실 범위를 먼저 거르고 저장된 원문 메타데이터·분석·원장으로 만들며 PDF를 다시 추출하지 않는다. 예전 업로드의 누락된 메타데이터는 서버 시작 때 한 번 보충한다. 검증된 불변 분석 개정은 원문·개정·레코드 바이트를 기준으로 재사용하고, 바이트가 달라지면 저장소의 검증을 다시 거친다.
@@ -143,6 +143,7 @@
 - **무엇**: 말한 관찰·측정·편차·메모와 이상 사항("시약을 엎질렀어")은 그 사람의 말 그대로 지우지 않는 장부에 남고, 서버가 되읽어 준다. "안 보임"처럼 부정이 든 말은 통째로 남는다. "방금 기록 고쳐 줘, X가 아니라 Y"는 한 번 묻고 고침을 덧붙인다(원래 것은 남는다). 소수점이 분명하지 않은 값은 다시 묻는다.
   **실험 노트 질문**(한국어, 상태를 바꾸지 않음, "넘어가"로 건너뜀): 시작 뒤 "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요.", 관찰 대상이 있는 단계를 설명 없이 마치면 "관찰한 것 있으면 말씀해 주세요.", 끝나면 "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요." "목적 고쳐: …"로 고친다. 명령이나 질문은 답이 아니라 명령으로 처리된다.
   기록 탭에서 손으로 관찰을 적고 사진·문서(최대 32 MiB, 해석하지 않음)를 붙일 수 있다.
+  화면에서 메모·사진을 저장한 뒤에도 열린 음성 연결의 일시정지·재개·종료는 서버의 최신 버전으로 처리한다. 연결과 현재 단계가 같은지 거래 안에서 확인하며, 다른 탭이 넘겨받았거나 단계가 바뀌면 거절한다. HTTP가 직접 보내는 버전 검사는 그대로 적용한다.
 - **어디**: `curated_protocol.py` (앞단 규칙 `note_record`, `anomaly_report`, `record_fix`; `PURPOSE_QUESTION_KO`, `OBSERVATION_QUESTION_KO`, `RESULT_QUESTION_KO`, `open_notebook_question`); `tools.py` `record_value_keeping_negation`; `server.py` `_record_experiment_report_plan`, `_notebook_end_question`; 장부 `experiment_reports.py` `ExperimentReportStore.append_event`; 작업공간 `workspace_store.py`(`experiment_session_events`, `experiment_observations`, `experiment_evidence`).
 - **설정**: `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED`, `VOINEY_LAB_EXPERIMENT_REPORT_DB`, `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION`(true, 관찰 질문만 끔).
 - **시험**: `tests/test_lane_n_voice_notes.py`, `tests/test_lane_n_ledger_verbatim.py`, `tests/test_lane_ts_record_negation.py`, `tests/test_lane_rp3_voice_questions.py`.
@@ -153,12 +154,16 @@
 - **무엇**: 실험이 끝나면 장부에서 보고서를 만든다. Word·Markdown 보고서는 연구자의 **실험 노트** 모양이다: 제목은 말한 목적, 1 시료와 조건 … 원문 값과 실제 쓴 값, 단계·시료별 관찰, 결과와 다음에 바꿀 점, 원문과 다른 점, 같은 프로토콜의 지난 실험과 비교, 확인, 부록. 숫자는 모두 기록에서 서버가 만든다.
   보고서 모델은 끝난 뒤 한 번 불러 관찰 문장과 결과 한 단락만 쓰게 하고, 기록·원문에 없는 값·숫자·추측·안전 지시·인용을 검사해 통과한 것만 "AI 정리"로 넣는다(모델이 없으면 서버 문장만). 실험자가 아직 확인하지 않은 값은 "[미확인]"으로 표시하고 화면에서 하나씩 확인하거나 고친다.
   내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
+  기록의 소유 계정과 연구실은 서버가 정한다. HTTP·음성 소켓 조회와 내보내기는 본인 또는 같은 연구실 관리자만 가능하다. 값 확인·정정·평점·보고서 재생성은 본인만 가능하며, 관리자가 남의 기록에 쓸 수 있는 것은 PI 확인뿐이다. 다른 연구실 기록과 권한 없는 기록은 없는 것처럼 응답한다. 옛 기록의 소유자는 작업공간 세션으로 채우며, 소유자를 모르면 해당 연구실 관리자만 읽는다.
+  지난 실행 비교·시작 전 확인 답·하루의 실행 순번은 같은 소유 계정·연구실·프로토콜 안에서만 구한다. 소유자가 불명인 옛 기록에는 다른 사람의 시작 전 답을 넣지 않으며 순번을 비워 둔다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
 - **설정**: `VOINEY_LAB_REPORT_PROVIDER`·`_MODEL`·`_REASONING`, `VOINEY_LAB_REPORT_WRITER_ENABLED`(true), `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`(25), `VOINEY_LAB_REPORT_TIMEZONE`(Asia/Seoul), `VOINEY_LAB_OFFICE_CONVERTER`.
 - **시험**: `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`.
 - **한계**: 새로고침 뒤에는 지난 보고서를 화면에서 다시 받는 길이 없다(링크는 실험이 끝날 때만 채워진다). PDF·랩미팅·xlsx·"확인함"은 화면 단추가 없다.
 
 ## F14. 연결 끊김
+
+계정 모드에서는 로그아웃·비밀번호 변경·계정 끄기·계정 삭제 시 그 계정의 열린 음성 연결을 모두 닫는다. 다른 계정의 연결은 계속된다. 계정 경로는 이미 시작된 음성 보고서 저장 스레드도 완료를 기다리며, 계정 삭제는 그 뒤 삭제 목록을 만들어 늦은 저장이 기록을 다시 남기지 않게 한다. 만료나 운영자 도구의 세션 회수도 주기적으로 확인한다.
 
 - **무엇**: 화면은 1초마다 서버와 신호를 주고받아 **3초 안에** 끊김을 알아챈다. 빨간 띠와 소리·진동으로 알리고, 화면을 읽기 전용으로 바꾸고, 마이크를 멈춘다. 끊긴 동안 화면은 서버 시각으로 단계 타이머를 이어 세고 1분 전·끝 알림을 낸다. 1·2·4·8초, 그 뒤 15초마다 다시 이어 **같은 실험**을 계속하고, 서버 상태로 화면을 바꾼다. 놓친 타이머 알림을 전하고 끊긴 시간을 내용 없는 사건으로 남긴다.
 - **어디**: `static/connection.js` (`SILENT_LOST_MS`, `resumable()`); `server.py` `_send_heartbeats`, `_restore_lost_connection`, `_restore_standing_timer`, `_reconnect_timer_notices`, `_record_connection_restored`.

@@ -456,6 +456,7 @@ async def lifespan(_: FastAPI):
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
+    await asyncio.to_thread(_migrate_report_ownership)
     _install_protocol_ocr_provider()
     _log_source_format_support()
     yield
@@ -595,6 +596,89 @@ def _workspace_settings()->WorkspaceSettings:
 #: The account behind this request, when the door is accounts; None otherwise.
 _REQUEST_ACCOUNT:contextvars.ContextVar[Account|None]=contextvars.ContextVar(
     "voice_workflow_request_account",default=None)
+_ACCOUNT_VOICE_CONNECTIONS:dict[str,dict[asyncio.Task,WebSocket]]={}
+_ACCOUNT_VOICE_REPORT_WRITES:dict[str,set[asyncio.Task]]={}
+
+
+async def _voice_report_write(function:Callable[...,Any],*args:Any,**kwargs:Any)->Any:
+    """Keep an already-started report write alive until account erasure can join it.
+
+    Cancelling the voice coroutine does not stop its worker thread. Shield and
+    track only that existing write, not another turn or a workflow authority.
+    """
+
+    account=_REQUEST_ACCOUNT.get()
+    if account is None:
+        return await asyncio.to_thread(function,*args,**kwargs)
+    account_id=account.account_id
+
+    async def run()->tuple[Any,Exception|None]:
+        try:
+            return await asyncio.to_thread(function,*args,**kwargs),None
+        except Exception as exc:
+            # A cancelled shield can log an inner exception's raw message on
+            # Python 3.14. Keep it as data until the live caller can raise it.
+            return None,exc
+
+    worker=asyncio.create_task(run())
+    _ACCOUNT_VOICE_REPORT_WRITES.setdefault(account_id,set()).add(worker)
+
+    def finished(completed:asyncio.Task)->None:
+        pending=_ACCOUNT_VOICE_REPORT_WRITES.get(account_id,set())
+        pending.discard(completed)
+        if not pending:
+            _ACCOUNT_VOICE_REPORT_WRITES.pop(account_id,None)
+        if not completed.cancelled():
+            _,failure=completed.result()
+            if failure is not None:
+                log.warning("voice.report_write_failed error=%s",type(failure).__name__)
+
+    worker.add_done_callback(finished)
+    result,failure=await asyncio.shield(worker)
+    if failure is not None:
+        raise failure
+    return result
+
+
+async def _close_account_voice_connections(account_id:str)->None:
+    """Finish voice tasks before account erasure can remove their stores."""
+
+    connections=list(_ACCOUNT_VOICE_CONNECTIONS.pop(account_id,{}).items())
+    current=asyncio.current_task()
+    pending=[task for task,_ in connections if task is not current]
+    for task in pending:
+        if not task.cancelling():
+            task.cancel()
+    if pending:
+        await asyncio.gather(*pending,return_exceptions=True)
+    for _,socket in connections:
+        try:
+            await socket.close(code=1008,reason="authentication required")
+        except (RuntimeError,WebSocketDisconnect):
+            pass  # Already disconnected.
+    # The voice tasks cannot start new writes now. Finish existing worker
+    # threads before erasure takes its inventory, otherwise a late open_report
+    # could recreate an owner's row after that inventory was deleted.
+    while writes:=tuple(_ACCOUNT_VOICE_REPORT_WRITES.get(account_id,())):
+        await asyncio.gather(*(asyncio.shield(write) for write in writes),return_exceptions=True)
+
+
+async def _watch_account_voice_session(token:str,task:asyncio.Task,websocket:WebSocket)->None:
+    """Also notice expiry and account changes made by an operator's tool."""
+
+    while True:
+        await asyncio.sleep(1)
+        try:
+            await asyncio.to_thread(_account_for_cookie,token)
+        except Exception:
+            if task.cancelling():
+                return
+            try:
+                await websocket.close(code=1008,reason="authentication required")
+            except (RuntimeError,WebSocketDisconnect):
+                pass
+            task.cancel()
+            return
 #: /api paths that answer without a session: the session question itself,
 #: logging in, joining, reading an invite, and the admin metrics (own token).
 _ACCOUNT_OPEN_PATHS=frozenset({
@@ -698,11 +782,8 @@ def _account_is_admin()->bool:
 
 
 def _request_client(request:Request)->str:
-    """Who is asking, for the login lock: the proxy's X-Forwarded-For first value, else the peer."""
+    """The transport peer; a caller-supplied forwarding header has no authority."""
 
-    forwarded=request.headers.get("x-forwarded-for","")
-    if forwarded.strip():
-        return forwarded.split(",")[0].strip()[:200]
     client=getattr(request,"client",None)
     return str(getattr(client,"host","") or "")[:200]
 
@@ -974,8 +1055,22 @@ def _scope_catalog_resource(
     _scope_tenant_resource("protocol_catalog",protocol_id,bind=bind)
 
 
+def _migrate_report_ownership()->None:
+    settings=ExperimentReportSettings.from_environment()
+    workspace_settings=_workspace_settings()
+    if not settings.enabled or settings.database_path is None or not workspace_settings.enabled:
+        return
+    workspace=initialize_workspace_store(workspace_settings)
+    try:
+        counts=ExperimentReportStore(settings.database_path).backfill_ownership(workspace.report_ownership)
+        log.info("report.ownership_migrated owned=%d admin_only=%d unscoped=%d",
+                 counts["owned"],counts["admin_only"],counts["unscoped"])
+    finally:
+        workspace.close()
+
+
 def _scope_tenant_resource(
-    resource_type:str,resource_id:str,*,bind:bool=False
+    resource_type:str,resource_id:str,*,bind:bool=False,write:bool=False
 )->None:
     settings=_workspace_settings()
     if not settings.enabled:
@@ -984,6 +1079,19 @@ def _scope_tenant_resource(
     try:
         if bind:
             store.bind_resource(principal,resource_type,resource_id)
+        elif resource_type=="experiment_report":
+            report_settings=ExperimentReportSettings.from_environment()
+            if not report_settings.enabled or report_settings.database_path is None:
+                raise WorkspaceNotFoundError("Experiment report is not available.")
+            reports=ExperimentReportStore(report_settings.database_path)
+            reports.backfill_ownership(store.report_ownership)
+            try:
+                reports.require_access(
+                    resource_id,organization_id=principal.organization_id,
+                    owner_principal_id=principal.principal_id,
+                    every_owner=not write and _account_is_admin())
+            except KeyError as exc:
+                raise WorkspaceNotFoundError("Experiment report is not available.") from exc
         else:
             store.require_resource(principal,resource_type,resource_id)
     finally:
@@ -1324,10 +1432,13 @@ def _transition_workspace_experiment(
         return None
     principal,store=_commercial_workspace()
     try:
+        curated=session.curated_protocol_session
         state=store.transition_experiment(
             principal,session.session_id,action=action,
             expected_version=session.experiment_state_version,
             event_key=event_key,reason=reason,
+            expected_voice_connection_id=session.voice_connection_id,
+            expected_step_id=(curated.fixture.steps[curated.current_index].step_id if curated else None),
         )
         session.experiment_state_version=int(state["version"])
         return state
@@ -3258,6 +3369,9 @@ async def post_auth_logout(request:Request)->Response:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+    account=_REQUEST_ACCOUNT.get()
+    if account is not None:
+        await _close_account_voice_connections(account.account_id)
     response=JSONResponse(status_code=200,content={"signed_out":True})
     _clear_session_cookie(response,request)
     return response
@@ -3282,6 +3396,7 @@ async def post_auth_password(request:Request,body:dict[str,Any]=Body(...))->dict
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
     log.info("auth.password_changed account_id=%s",account.account_id)
+    await _close_account_voice_connections(account.account_id)
     return {"changed":True}
 
 
@@ -3333,6 +3448,8 @@ async def post_auth_account_disabled(
         raise _workspace_http_error(exc) from exc
     log.info("auth.account_disabled account_id=%s disabled=%s by=%s",
              account_id,changed.disabled,account.account_id)
+    if changed.disabled:
+        await _close_account_voice_connections(account_id)
     return {"account":changed.public_dict()}
 
 
@@ -3407,6 +3524,7 @@ async def post_auth_delete_account(request:Request,body:dict[str,Any]=Body(...))
     except Exception as exc:
         log.info("auth.account_delete_refused reason=%s",getattr(exc,"code",type(exc).__name__))
         raise _workspace_http_error(exc) from exc
+    await _close_account_voice_connections(account.account_id)
     try:
         results=await asyncio.to_thread(
             accounts_module.erase_account_data,locations,account.account_id)
@@ -3802,7 +3920,7 @@ def download_workspace_experiment_evidence(
         principal,store=_commercial_workspace()
         try:
             evidence=store.evidence_for_download(
-                principal,session_id,evidence_id)
+                principal,session_id,evidence_id,every_owner=_account_is_admin())
             settings=_workspace_settings()
             if settings.data_dir is None:
                 raise WorkspaceNotFoundError(
@@ -4051,10 +4169,17 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
         try:
             def register(catalog:ProtocolCatalog)->tuple[Any,dict[str,object]]:
                 converted=None
+                principal=_REQUEST_PRINCIPAL.get()
+                registration_scope={}
+                visible_protocols=_visible_catalog_resource_ids()
+                if principal is not None and visible_protocols is not None:
+                    registration_scope={"organization_id":principal.organization_id,
+                                        "visible_protocol_ids":visible_protocols}
                 # A Word document or photo uploaded before is found by its own
                 # checksum and not converted again.
                 result=(
-                    catalog.find_converted_upload(file_sha256(original))
+                    (catalog.find_converted_upload(file_sha256(original),visible_protocol_ids=visible_protocols)
+                     if visible_protocols is not None else catalog.find_converted_upload(file_sha256(original)))
                     if original is not None else None
                 )
                 if result is None:
@@ -4069,6 +4194,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                             filename if converted is None else pdf_filename(filename)),
                         media_type=PDF_MEDIA_TYPE,
                         converted_from=converted,
+                        **registration_scope,
                     )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 _record_workspace_metric(
@@ -5320,7 +5446,7 @@ async def post_pilot_feedback(request:Request)->dict[str,object]:
     if store is None:
         raise HTTPException(status_code=503,detail="pilot_metrics_unavailable")
     try:
-        _scope_tenant_resource("experiment_report",answer.report_id)
+        _scope_tenant_resource("experiment_report",answer.report_id,write=True)
         report_settings=ExperimentReportSettings.from_environment()
         if report_settings.enabled and report_settings.database_path is not None:
             ExperimentReportStore(report_settings.database_path).get_report(answer.report_id)
@@ -5368,8 +5494,8 @@ def _prepare_report_prose(store:ExperimentReportStore,report_id:str,*,again:bool
         return "failed"
 
 
-def _report_prose_store(report_id:str)->ExperimentReportStore:
-    _scope_tenant_resource("experiment_report",report_id)
+def _report_prose_store(report_id:str,*,write:bool=False)->ExperimentReportStore:
+    _scope_tenant_resource("experiment_report",report_id,write=write)
     settings=ExperimentReportSettings.from_environment()
     if not settings.enabled or settings.database_path is None:
         raise HTTPException(status_code=404,detail="experiment report unavailable")
@@ -5391,7 +5517,7 @@ def get_experiment_report_prose(report_id:str):
 def regenerate_experiment_report_prose(report_id:str):
     """Write the report's prose again -- only when a person asks (decision 9)."""
 
-    store=_report_prose_store(report_id)
+    store=_report_prose_store(report_id,write=True)
     try:
         _prepare_report_prose(store,report_id,again=True)
         return REPORT_PROSE.status(store,report_id)
@@ -5427,7 +5553,7 @@ async def answer_experiment_report_review(report_id:str,item_id:str,request:Requ
 
     payload=await _json_object(request)
     action=str(payload.get("action") or "")
-    store=_report_prose_store(report_id)
+    store=_report_prose_store(report_id,write=True)
     try:
         report=store.get_report(report_id)
     except (ValueError,KeyError,sqlite3.Error) as exc:
@@ -5507,6 +5633,10 @@ def _prepared_report_prose(store:ExperimentReportStore,report_id:str)->None:
     report still in progress gets the server's own sentences.
     """
 
+    try:
+        _scope_tenant_resource("experiment_report",report_id,write=True)
+    except WorkspaceNotFoundError:
+        return  # Administrator exports use the existing prose or deterministic text.
     if _prepare_report_prose(store,report_id)=="preparing":
         REPORT_PROSE.wait(
             store,report_id,
@@ -5554,6 +5684,7 @@ def post_experiment_report_pi_confirmation(
     event that blocks nothing and changes no record. Anyone else is refused.
     """
 
+    _scope_tenant_resource("experiment_report",report_id)
     if not _account_is_admin():
         raise HTTPException(status_code=403,detail="pi_confirmation_admin_only")
     comment=_pi_confirmation_body(body)
@@ -7972,7 +8103,7 @@ async def _queue_curated_research(
                 **outside_pdf_fields,
             )
             if session.experiment_report_store is not None:
-                report=await asyncio.to_thread(
+                report=await _voice_report_write(
                     _record_experiment_report_plan,
                     session,curated,research_plan,
                     turn_id=turn_id,generation=generation,
@@ -8058,6 +8189,8 @@ def _open_experiment_report(
     if store is None:
         raise RuntimeError("experiment reports are disabled")
     if session.experiment_report_id is None:
+        _migrate_report_ownership()
+        principal=_REQUEST_PRINCIPAL.get() if _workspace_settings().enabled else None
         report=store.open_report(
             session_id=session.session_id,
             protocol_id=curated.fixture.protocol_id,
@@ -8066,6 +8199,8 @@ def _open_experiment_report(
             protocol_sha256=curated.fixture.source_pdf_sha256 or "",
             readiness_status=curated.fixture.draft.readiness.status.value,
             development_only=curated.fixture.development_only,
+            organization_id=getattr(principal,"organization_id",None),
+            owner_principal_id=getattr(principal,"principal_id",None),
         )
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
@@ -10895,7 +11030,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     )
                 elif session.experiment_report_store is not None:
                     try:
-                        report=await asyncio.to_thread(
+                        report=await _voice_report_write(
                             _record_experiment_report_plan,
                             session,curated,plan,
                             turn_id=turn_id,generation=generation,
@@ -11064,7 +11199,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         session,plan,turn_id=turn_id,generation=generation,
                     )
                     if session.experiment_report_store is not None:
-                        fix_report=await asyncio.to_thread(
+                        fix_report=await _voice_report_write(
                             _record_experiment_report_plan,
                             session,curated,plan,
                             turn_id=turn_id,generation=generation,
@@ -11106,7 +11241,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 )
             ):
                 try:
-                    report=await asyncio.to_thread(
+                    report=await _voice_report_write(
                         _record_experiment_report_plan,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
@@ -11375,7 +11510,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 and not report_prepared
             ):
                 try:
-                    report=await asyncio.to_thread(
+                    report=await _voice_report_write(
                         _record_experiment_report_plan,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
@@ -12608,6 +12743,21 @@ async def voice_socket(websocket:WebSocket):
                                         "persona":"professor",
                                     },
                                     research_capabilities=research_capabilities))
+    account_watch=None
+    voice_task=asyncio.current_task()
+    voice_account=_REQUEST_ACCOUNT.get()
+    if auth.accounts and voice_account is not None and voice_task is not None:
+        # Recheck after setup awaits, before registering a connection.
+        try:
+            _account_for_cookie(token)
+        except Exception:
+            timer_notices.cancel()
+            heartbeats.cancel()
+            await asyncio.gather(timer_notices,heartbeats,return_exceptions=True)
+            await websocket.close(code=1008,reason="authentication required")
+            return
+        _ACCOUNT_VOICE_CONNECTIONS.setdefault(voice_account.account_id,{})[voice_task]=websocket
+        account_watch=asyncio.create_task(_watch_account_voice_session(token,voice_task,websocket))
     try:
         while True:
             message=await websocket.receive()
@@ -13544,8 +13694,9 @@ async def voice_socket(websocket:WebSocket):
                                 code="report_id_missing"))
                         else:
                             try:
+                                _scope_tenant_resource("experiment_report",report_id)
                                 report = store.get_report(report_id)
-                            except (KeyError, ValueError):
+                            except (KeyError, ValueError, WorkspaceNotFoundError):
                                 await websocket.send_text(event(
                                     "experiment.report.error",
                                     configuration_id=session.accepted_configuration_id,
@@ -13585,6 +13736,14 @@ async def voice_socket(websocket:WebSocket):
                 type(send_exc).__name__,
             )
     finally:
+        if voice_account is not None and voice_task is not None:
+            connections=_ACCOUNT_VOICE_CONNECTIONS.get(voice_account.account_id,{})
+            connections.pop(voice_task,None)
+            if not connections:
+                _ACCOUNT_VOICE_CONNECTIONS.pop(voice_account.account_id,None)
+        if account_watch is not None:
+            account_watch.cancel()
+            await asyncio.gather(account_watch,return_exceptions=True)
         if task and not task.done():
             task.cancel()
             try: await task
@@ -13610,6 +13769,8 @@ async def voice_socket(websocket:WebSocket):
         session.stop()
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
+        if account_context_token is not None:
+            _REQUEST_ACCOUNT.reset(account_context_token)
 
 # Lane UI2 decision 5 (2026-10-13): the web app manifest is served under its
 # registered type whatever the host's own type table says, so a browser

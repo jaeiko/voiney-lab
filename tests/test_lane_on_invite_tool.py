@@ -73,14 +73,15 @@ class InviteToolTests(unittest.TestCase):
             again.close()
 
     def test_the_default_link_and_lab_and_the_shells_folder(self):
-        result = run_tool(env={"VOINEY_LAB_WORKSPACE_DATA_DIR": str(self.folder)})
+        # The folder is now explicit; never let this subprocess write runtime.
+        result = run_tool("--data-dir", str(self.folder), env={"VOINEY_LAB_WORKSPACE_DATA_DIR": str(self.folder)})
         self.assertEqual(result.returncode, 0, result.stderr)
         base, _ = LINK.search(result.stdout).groups()
         self.assertEqual(base, "http://127.0.0.1:8080")
         self.assertIn("72시간 뒤 만료", result.stdout)
         self.assertIn("연구실 lab-pilot", result.stdout)
         self.assertIn("관리자 아니오", result.stdout)
-        self.assertTrue(self.db.is_file(), "the shell's folder was used")
+        self.assertTrue(self.db.is_file(), "the explicitly selected folder was used")
 
     def test_listing_revoking_and_switching_accounts_off_and_on(self):
         first = run_tool("--data-dir", str(self.folder), "--note", "최수진")
