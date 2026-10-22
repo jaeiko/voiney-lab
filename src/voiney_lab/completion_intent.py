@@ -169,7 +169,7 @@ def resolve_korean_completion_decision(
     if not raw:
         return CompletionIntentDecision(is_completion=False, target_kind="none")
 
-    # If ending with a question mark in the original utterance, reject immediately
+    # A question or speculation never attests completion, with or without STT punctuation.
     if is_question_or_speculation(raw):
         return CompletionIntentDecision(
             is_completion=False,

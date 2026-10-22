@@ -27,6 +27,11 @@ class ObservationTests(VoiceNotesHarness, unittest.TestCase):
                     if entry["content"] == "밴드가 투명하고 깨끗해"]
         assert len(observed) == 1
         assert observed[0]["protocol_step_id"] == "step-5"
+        reported = [entry for entry in self.report()["events"]
+                    if entry["event_type"] == "observation"
+                    and entry["user_wording"] == "밴드가 투명하고 깨끗해"]
+        assert len(reported) == 1
+        assert (reported[0]["step_id"], reported[0]["step_label"]) == ("step-5", "5")
 
 
 class ReportRouteTests(unittest.TestCase):
@@ -143,3 +148,7 @@ class ResearchEventTests(unittest.TestCase):
         assert events
         assert all(event["configuration_id"] == 41 and event["generation"] == session.generation
                    and event["turn_id"] == 1 for event in events)
+        assert all(event["session_id"] == session.session_id for event in events)
+        assert all(isinstance(event["report"]["reports"], list) for event in events)
+        assert all(any(report["report_id"] == session.experiment_report_id
+                       for report in event["report"]["reports"]) for event in events)

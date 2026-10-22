@@ -79,6 +79,25 @@ def test_an_explanatory_question_preserves_the_open_endpoint_checkpoint(words):
     assert workflow_checkpoint(session) == before
 
 
+@pytest.mark.parametrize("words", [
+    "넘어가도 돼?", "타이머 시작해?", "투명해졌어?", "넘어가도 돼? 시료를 흘렸어",
+])
+def test_punctuated_questions_do_not_renew_the_endpoint_checkpoint(words):
+    from voiney_lab.runtime_routing import route_curated_runtime_turn
+    session = session_at(4)
+    session.plan("5단계 완료했어", turn_id=3, language="ko", configuration_id=1, generation=1)
+    assert session._open_questions(turn_id=4, configuration_id=1, generation=1).first_open is not None
+    before = workflow_checkpoint(session)
+    plan = route_curated_runtime_turn(
+        session, words, turn_id=4, language="ko", configuration_id=1, generation=1,
+    ).plan
+    assert not plan.state_changed
+    assert not plan.reported_completion
+    assert not plan.reported_observation
+    assert not plan.reported_anomaly
+    assert workflow_checkpoint(session) == before
+
+
 class ServedQuestionTests(VoiceNotesHarness, unittest.TestCase):
     def test_timer_spill_resume_and_forward_questions_keep_both_ledgers(self):
         async def scenario(socket, listener, say):

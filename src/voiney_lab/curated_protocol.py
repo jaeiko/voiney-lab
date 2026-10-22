@@ -17475,7 +17475,7 @@ class CuratedProtocolSession:
 
     def _question_checkpoint(self, transcript: str, language: str) -> tuple[Any, ...] | None:
         if (language == "ko"
-                and is_question_or_speculation(transcript, punctuation=False, literal_record=True)
+                and is_question_or_speculation(transcript, literal_record=True)
                 and not _asserted_spill_clause(transcript)):
             return self._checkpoint()
         return None

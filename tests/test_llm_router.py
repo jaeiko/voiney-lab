@@ -410,8 +410,10 @@ class ApplyToolProposalTests(unittest.TestCase):
         session._restore(checkpoint)
         self.assertFalse(session.awaiting_server_confirmation)
         _propose(session, 2, "10분 재줘", _change("start_timer", "10분 재줘"))
+        held = session._pending_timer_confirmation.copy()
         _say(session, 3, "버퍼 1은 뭐야?")
-        self.assertFalse(session.awaiting_server_confirmation)
+        self.assertTrue(session.awaiting_server_confirmation)
+        self.assertEqual(session._pending_timer_confirmation, held)
         self.assertFalse(_say(session, 4, "네").state_changed)
         self.assertEqual(session.timer_status()["state"], "not_started")
 

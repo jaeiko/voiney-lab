@@ -105,10 +105,9 @@ class NextStepWordsTests(unittest.TestCase):
                                  if said == "다음 단계 진행할까?" else CuratedProtocolAction.CLARIFY_COMPLETION)
                 self.assertFalse(plan.state_changed)
                 self.assertEqual(session.current_index, at)
-                if said == "다음 단계 진행할까?":
-                    self.assertIsNone(session.pending_completion_confirmation)
-                else:
-                    self.assertIsNotNone(session.pending_completion_confirmation)
+                self.assertIsNone(session.pending_completion_confirmation)
+                self.assertFalse(self.say(session, "네").state_changed)
+                self.assertEqual(session.current_index, at)
 
     def test_a_yes_after_a_description_is_not_a_completion(self) -> None:
         session = self.open_at("3")
