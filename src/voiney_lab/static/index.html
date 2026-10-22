@@ -651,7 +651,7 @@
     body[data-view="after"] .after-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3)}
     .after-title{margin:0 var(--space-2) 0 0;color:var(--ink);font-size:1.5rem;line-height:2rem;font-weight:700}
     .after-experimenter{color:var(--ink-muted);font-size:.875rem;font-weight:600}
-    body[data-view="after"] #tab-experiment{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);grid-template-areas:"work chat" "setup setup";align-items:start}
+    body[data-view="after"] #tab-experiment:not([hidden]){display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);grid-template-areas:"work chat" "setup setup";align-items:start}
     body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}
     body[data-view="after"] #tab-experiment .timeline{grid-area:chat}
     body[data-view="after"] #tab-experiment .prestart-side{grid-area:setup}
@@ -827,6 +827,10 @@
     body[data-auth="required"] .topbar,body[data-auth="required"] .sticky-rail,body[data-auth="required"] .shell{display:none}
     body[data-wizard="on"]:not([data-auth="required"]){overflow:hidden}
     .experiment-start{display:grid}
+    .records-list{list-style:none;margin:var(--space-3) 0 0;padding:0;display:grid;gap:var(--space-2)}
+    .records-list .home-card{text-decoration:none}
+    .records-detail-head{display:grid;gap:var(--space-1);margin-bottom:var(--space-3)}
+    .records-detail-back{justify-self:start;min-height:44px;display:inline-flex;align-items:center;color:var(--ink);font-weight:700}
     body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
     body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}
     @media (min-width:900px){
@@ -1305,6 +1309,18 @@
     </section>
     <!-- Lane IA decision ①: the records -- the experiments and their timelines (lane ON: an administrator sees the lab's). While the experiment runs this panel stays under the run view, as lane UI0 left it, so the run's own observations and attachments are reached while the bar is hidden. -->
     <section id="tab-records" class="tab-panel" data-tab="records" aria-labelledby="experiment-ledger-title" tabindex="-1" hidden>
+      <!-- Lane IA decision ⑤ (2026-10-21): the past experiments as a list (#/records); one tapped opens its record (#/records/<id>) -- the timeline, the observations and attachments below. While the experiment runs, its own record shows here under the run view. -->
+      <div id="records-list-view" class="records-list-view">
+        <h2 id="records-list-title" class="records-list-title">실험 기록</h2>
+        <p class="records-list-lead">지난 실험을 누르면 단계별 기록이 열려요.</p>
+        <ul id="records-list" class="records-list"></ul>
+      </div>
+      <div id="records-detail-view" class="records-detail-view" hidden>
+      <div id="records-detail-head" class="records-detail-head">
+        <a id="records-detail-back" class="records-detail-back" href="#/records">← 실험 기록</a>
+        <h2 id="records-detail-title" class="records-detail-title"></h2>
+        <p id="records-detail-line" class="records-detail-line"></p>
+      </div>
       <section id="experiment-session-ledger" class="panel experiment-ledger" aria-labelledby="experiment-ledger-title">
         <div class="experiment-ledger-head">
           <div>
@@ -1338,6 +1354,7 @@
           </div>
         </div>
       </section>
+      </div>
     </section>
     <!-- Lane IA decision ⑥: the settings -- lane UI0's sheet (voice input, guidance; the protocol group as before), the agent's voice (lane ON), the account (lane ON), the home-screen guide (lane UI2) and, in dev mode only, the developer details. -->
     <section id="tab-settings" class="tab-panel" data-tab="settings" aria-labelledby="settings-sheet-title" tabindex="-1" hidden>
@@ -1547,7 +1564,7 @@ let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false
 const protocolCatalog=new Map();
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
-const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]);
+const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
 function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus);}
 function updateStartActionLabel(){const button=$("start");if(button)button.textContent=experimentIsResumable()?"실험 이어하기":"새 실험 시작";renderExperimentContext();}
 const webReferenceHistory=[];
@@ -1629,6 +1646,8 @@ function showExperimentEnded(message){
  renderAfterHead(message);
  renderScreenView();
  globalThis.VoineyFeedback?.ended(lastReportId);
+ // QA-95: the lists read again, so no tab offers the ended experiment as 진행 중.
+ void loadExperimentSessions(currentExperimentSessionId);
 }
 // Lane UI2 decision 4 (2026-10-13): the 실험 후 view's head, set once at the
 // server's end and kept until a new session: how it ended, the badge of the
@@ -1644,14 +1663,16 @@ function renderAfterHead(message){
 }
 function clearAfterHead(){for(const id of ["after-state","after-basis"]){const badge=$(id);if(badge){badge.textContent="";badge.hidden=true;}}setText("after-experimenter","");}
 function showWorkflowControlRefused(message){
- const text=message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
+ // The server's own sentence when it sends one (lane SAFE; lane IA review F6).
+ const text=nonemptyText(message?.message_ko)?String(message.message_ko):message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
  setText("status",text);appendDevCodeDetails($("status"),[["refused_action",typeof message?.action==="string"?message.action:null],["reason",typeof message?.reason==="string"?message.reason:null]]);
  if(message?.reason==="experiment_ended")showExperimentEnded({status:message.status});
 }
 function togglePauseSession(){
  if(!sessionActive||!socket||socket.readyState!==WebSocket.OPEN)return;
  const action=workflowPaused?"workflow.resume":"workflow.pause";
- socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:sessionGeneration}));
+ // The server compares the generation it sent with session.ready (lane SAFE; lane IA review F5), not this page's own count.
+ socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:acceptedSessionConfiguration?.server_generation}));
 }
 
 function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAttribute?.("aria-disabled",String(value));}
@@ -1711,7 +1732,7 @@ function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
  const durable=`저장된 상태: 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
  const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`다시 불러오지 않는 것: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
- const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
+ const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
  node.textContent=`${lead} ${durable} ${omitted} ${next}`;appendDevCodeDetails(node,[["protocol_revision_id",revision||null]]);node.hidden=false;return true;
 }
 function renderExperimentContext(){
@@ -1765,14 +1786,18 @@ function onScreenVisibilityChange(){if(globalThis.document?.visibilityState==="v
 function screenView(){
  if(experimentEndedOnScreen)return "after";
  const state=curatedProtocolState;
- return sessionActive&&state?.attached===true&&state.active===true?"during":"before";
+ // Lane IA QA-12 (lane QA, 2026-10-20): the questions the server asks before the start (the experiment not
+ // yet started, so not active) are heard while the session is on: the run view shows them.
+ return sessionActive&&state?.attached===true&&(state.active===true||prestartQuestionOpen())?"during":"before";
 }
+function prestartQuestionOpen(){const open=curatedScreenFields?.open_question;return Boolean(open&&typeof open==="object"&&open.kind==="prestart"&&nonemptyText(open.text));}
 function renderScreenView(){
  const view=screenView(),body=globalThis.document?.body;
- if(view!=="before")stopVoicePreview();
+ // The preview is allowed whenever no run is on (lane IA review F2: the sheet opens over the end screen too).
+ if(view==="during")stopVoicePreview();
  if(body?.dataset&&body.dataset.view!==view)body.dataset.view=view;
  // Lane IA decision ①: the run opens the experiment tab once (replacing the entry, so the back button leaves the run's tab, not a tab before it); the route draws the tab, the band and the wizard.
- if(view!=="before"&&wizard.open)closeWizardSheet({silent:true});
+ if(view==="during"&&wizard.open)closeWizardSheet({silent:true});
  if(view==="during"&&lastScreenView!=="during"&&shownTab()!=="experiment"){lastScreenView=view;navigateTab("experiment",null,{replace:true});}
  else{lastScreenView=view;renderRoute();}
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
@@ -2064,7 +2089,22 @@ function renderExperimentReportList(reports){const container=$("experiment-repor
 const reportEventTimes=new Map();
 function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();reportEventTimes.clear();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;if(typeof event.event_key==="string"&&typeof event.created_at==="string")reportEventTimes.set(event.event_key,event.created_at);const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const amended=event.amended&&typeof event.amended==="object"?event.amended:null;const wording=amended&&typeof amended.text==="string"&&amended.text?amended.text:event.user_wording;const bits=[event.created_at,wording].filter(item=>typeof item==="string"&&item.trim());if(amended&&typeof amended.status==="string")bits.push(amended.status==="정정됨"&&typeof event.user_wording==="string"?`정정됨 (처음: ${event.user_wording})`:amended.status);if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 // Lane DI (2026-10-08): the page sends no identity of its own choosing; the server knows who is at the bench.
-function workspaceFetch(url,options={}){return fetch(url,options);}
+// Lane IA decision ⑨ (2026-10-21): every server address is read here -- the requests, the links to the
+// server's pictures and files, and the socket. The values are as before (this page's own server: a path
+// alone, and the socket at the page's host); an app shell that serves the page from elsewhere changes
+// serverOrigin() alone (docs/APP_PLAN.md 9.2). A full address (https:, data:, blob:) passes as it is.
+function serverOrigin(){return "";}
+function serverUrl(path){const value=String(path??"");return /^[a-z][a-z0-9+.-]*:/i.test(value)?value:`${serverOrigin()}${value}`;}
+function serverSocketUrl(path="/ws"){const origin=serverOrigin();if(origin)return `${origin.replace(/^http/i,"ws")}${path}`;const loc=globalThis.location;return `${loc?.protocol==="https:"?"wss":"ws"}://${loc?.host||""}${path}`;}
+// Lane IA QA-17 (lane QA, 2026-10-20): a 401 (the session expired, the password changed elsewhere, the account
+// was turned off) was handled nowhere -- the reconnecting tried every 15 s for ever, every button stayed
+// locked. A request answered 401 by the server's gate (detail "authentication_required"), other than the
+// login's own routes, sends the page to the login. A 401 for a wrong password ("login_refused", the
+// password change answers so) is not a lost session (lane IA review F1).
+const AUTH_OWN_ROUTE=/^\/api\/auth\/(login|signup|session|invites)(?:[\/?]|$)/;
+async function sessionGoneAnswer(response){try{const payload=await response.clone().json();return payload?.detail==="authentication_required";}catch(_){return false;}}
+function serverFetch(path,options={}){return fetch(serverUrl(path),options).then(async response=>{if(response?.status===401&&!AUTH_OWN_ROUTE.test(String(path??""))&&await sessionGoneAnswer(response))signOutOnScreen();return response;});}
+function workspaceFetch(url,options={}){return serverFetch(url,options);}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  authentication_required:"연구자 세션을 확인할 수 없습니다. 다시 로그인한 뒤 실험 상태를 새로고침해 주세요.",
  authorization_denied:"이 실험 기록에 접근할 권한이 없습니다. 올바른 연구자 계정인지 확인해 주세요.",
@@ -2102,7 +2142,7 @@ function renderExperimentTimeline(payload){
   if(event.observation&&typeof event.observation.content==="string")content.textContent=observationRecordText(event);
   else if(event.evidence)content.textContent=`${event.evidence.original_filename||"첨부"} · ${event.evidence.media_type||"파일"} · 자동 해석 안 함`;
   else if(event.payload?.comment)content.textContent=String(event.payload.comment);
-  row.append(title,detail);if(content.textContent)row.appendChild(content);appendDevCodeDetails(row,[["event_type",experimentEventLabel(event.event_type)==="이벤트"?event.event_type:null],["category",typeof event.observation?.category==="string"?event.observation.category:null],["actor",typeof event.actor_principal_id==="string"?event.actor_principal_id:null],["created_at",typeof event.created_at==="string"?event.created_at:null]]);if(event.evidence&&typeof event.evidence.evidence_id==="string"&&typeof payload?.session?.session_id==="string"){const link=document.createElement("a");link.className="experiment-evidence-download";link.href=`/api/workspace/experiments/${encodeURIComponent(payload.session.session_id)}/evidence/${encodeURIComponent(event.evidence.evidence_id)}`;link.textContent="원본 증거 다운로드";link.download="";row.appendChild(link);}target.appendChild(row);
+  row.append(title,detail);if(content.textContent)row.appendChild(content);appendDevCodeDetails(row,[["event_type",experimentEventLabel(event.event_type)==="이벤트"?event.event_type:null],["category",typeof event.observation?.category==="string"?event.observation.category:null],["actor",typeof event.actor_principal_id==="string"?event.actor_principal_id:null],["created_at",typeof event.created_at==="string"?event.created_at:null]]);if(event.evidence&&typeof event.evidence.evidence_id==="string"&&typeof payload?.session?.session_id==="string"){const link=document.createElement("a");link.className="experiment-evidence-download";link.href=serverUrl(`/api/workspace/experiments/${encodeURIComponent(payload.session.session_id)}/evidence/${encodeURIComponent(event.evidence.evidence_id)}`);link.textContent="원본 증거 다운로드";link.download="";row.appendChild(link);}target.appendChild(row);
  }
  if(!items.length)target.appendChild(workspaceRow("아직 기록 없음","실험을 시작하거나 관찰을 남기면 여기에 나옵니다."));
  const session=payload?.session;
@@ -2188,7 +2228,7 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
   }
   const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";const loaded=selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
   // Lane IA decision ②: the list is kept for the home's cards; a session named by the hash is picked once the list holds it.
-  workspaceExperiments=experiments;renderHome();applyRouteSelections();return loaded;
+  workspaceExperiments=experiments;renderHome();renderRecordsViews();applyRouteSelections();return loaded;
  }catch(error){
   if(seq!==experimentLoadSeq)return false;
   select.replaceChildren();const option=document.createElement("option");option.value="";option.textContent="실험 세션 로드 실패";select.appendChild(option);setText("experiment-capture-status",researcherErrorMessage(error?.message,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));return false;
@@ -2398,9 +2438,9 @@ function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["sou
 // document and points at the same-origin figure route.
 function safeSourceFigure(value,state){if(!value||typeof value!=="object"||value.kind!=="source_figure"||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||typeof value.figure_id!=="string"||!/^source-figure-[1-9][0-9]*-[1-9][0-9]*$/.test(value.figure_id)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.caption!=="string"||typeof value.label!=="string"||!value.label||!["image/png","image/jpeg"].includes(value.mime_type)||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/figures/${encodeURIComponent(value.figure_id)}`)return null;return value;}
 function sourceFiguresOf(state,screen){if(!screen||typeof screen!=="object"||!("source_figures" in screen))return [];if(screen.source_figures===null)return null;if(!Array.isArray(screen.source_figures))return [];return screen.source_figures.map(item=>safeSourceFigure(item,state)).filter(Boolean);}
-function renderSourceFigures(container,state,figures,current){const pageUrl=page=>`/api/protocols/${encodeURIComponent(state.protocol_id)}/revisions/${encodeURIComponent(state.revision_id)}/source-pages/${page}`;const head=document.createElement("div");head.className="visual-status";head.textContent=figures.length===1?"원문 그림":`원문 그림 ${figures.length}장`;container.appendChild(head);if(current)$("source-visual-state").textContent=head.textContent;for(const figure of figures){const block=document.createElement("figure");block.className="source-figure";const status=document.createElement("div");status.className="visual-status";status.textContent=normalizePresentationText(figure.label);const image=document.createElement("img");image.alt=normalizePresentationText(figure.caption||figure.label);image.loading="lazy";image.src=figure.url;image.addEventListener?.("error",()=>{status.textContent="원문 그림을 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";image.remove();});block.appendChild(status);block.appendChild(image);if(figure.caption){const caption=document.createElement("figcaption");caption.textContent=`원문 캡션 · ${normalizePresentationText(figure.caption)}`;block.appendChild(caption);}// Lane VF decision 8: the cut figure itself, large, and the whole source page as an image.
-const links=document.createElement("div");links.className="source-figure-links";const large=document.createElement("a");large.href=figure.url;large.target="_blank";large.rel="noopener";large.textContent="그림 크게 보기";links.appendChild(large);const page=document.createElement("a");page.href=`${pageUrl(figure.source_page)}/image`;page.target="_blank";page.rel="noopener";page.textContent="원본 쪽 보기";links.appendChild(page);block.appendChild(links);container.appendChild(block);if(current)noteRunFigure(`figure:${figure.figure_id}`);}}
-function renderStepVisual(container,state,screen){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const figures=state?sourceFiguresOf(state,screen):[];if(figures===null){const text=document.createElement("div");text.className="visual-status";text.textContent="원문 그림 확인 중…";container.appendChild(text);if(current)$("source-visual-state").textContent="원문 그림 확인 중";return;}if(figures.length){renderSourceFigures(container,state,figures,current);return;}const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;if(current)noteRunFigure(`asset:${asset.asset_id}`);const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=asset.url;image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=legacy?asset.url:asset.source_page_url;link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
+function renderSourceFigures(container,state,figures,current){const pageUrl=page=>`/api/protocols/${encodeURIComponent(state.protocol_id)}/revisions/${encodeURIComponent(state.revision_id)}/source-pages/${page}`;const head=document.createElement("div");head.className="visual-status";head.textContent=figures.length===1?"원문 그림":`원문 그림 ${figures.length}장`;container.appendChild(head);if(current)$("source-visual-state").textContent=head.textContent;for(const figure of figures){const block=document.createElement("figure");block.className="source-figure";const status=document.createElement("div");status.className="visual-status";status.textContent=normalizePresentationText(figure.label);const image=document.createElement("img");image.alt=normalizePresentationText(figure.caption||figure.label);image.loading="lazy";image.src=serverUrl(figure.url);image.addEventListener?.("error",()=>{status.textContent="원문 그림을 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";image.remove();});block.appendChild(status);block.appendChild(image);if(figure.caption){const caption=document.createElement("figcaption");caption.textContent=`원문 캡션 · ${normalizePresentationText(figure.caption)}`;block.appendChild(caption);}// Lane VF decision 8: the cut figure itself, large, and the whole source page as an image.
+const links=document.createElement("div");links.className="source-figure-links";const large=document.createElement("a");large.href=serverUrl(figure.url);large.target="_blank";large.rel="noopener";large.textContent="그림 크게 보기";links.appendChild(large);const page=document.createElement("a");page.href=serverUrl(`${pageUrl(figure.source_page)}/image`);page.target="_blank";page.rel="noopener";page.textContent="원본 쪽 보기";links.appendChild(page);block.appendChild(links);container.appendChild(block);if(current)noteRunFigure(`figure:${figure.figure_id}`);}}
+function renderStepVisual(container,state,screen){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const figures=state?sourceFiguresOf(state,screen):[];if(figures===null){const text=document.createElement("div");text.className="visual-status";text.textContent="원문 그림 확인 중…";container.appendChild(text);if(current)$("source-visual-state").textContent="원문 그림 확인 중";return;}if(figures.length){renderSourceFigures(container,state,figures,current);return;}const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;if(current)noteRunFigure(`asset:${asset.asset_id}`);const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=serverUrl(asset.url);image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=serverUrl(legacy?asset.url:asset.source_page_url);link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
 
 
 // Lane WV, decision 1: the step's figures, cut after the state was drawn.
@@ -2432,7 +2472,7 @@ function renderWebLookupResult(container,message){
  const note=document.createElement("p");note.className="web-lookup-note";note.textContent="설명과 사진만 웹에서 가져왔어요. 양·시간·온도·농도·횟수와 안전 지시는 원문만 따릅니다.";block.appendChild(note);
  if(typeof message.screen==="string"&&message.screen.trim()){const text=document.createElement("p");text.className="web-lookup-text";text.textContent=normalizePresentationText(message.screen);block.appendChild(text);}
  const photo=safeWebPhoto(message.photo);
- if(photo){const figure=document.createElement("figure");figure.className="web-photo";const image=document.createElement("img");image.alt=normalizePresentationText(photo.title);image.loading="lazy";image.src=photo.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`웹 자료 · 출처 Wikimedia Commons · ${normalizePresentationText(photo.title)}${photo.author?` · 작성자 ${normalizePresentationText(photo.author)}`:""} · ${normalizePresentationText(photo.licence)} · 실험 PDF 원문 사진이 아니에요`;figure.appendChild(caption);const link=document.createElement("a");link.href=photo.page_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="원본 페이지 · 라이선스 보기";figure.appendChild(link);block.appendChild(figure);}
+ if(photo){const figure=document.createElement("figure");figure.className="web-photo";const image=document.createElement("img");image.alt=normalizePresentationText(photo.title);image.loading="lazy";image.src=serverUrl(photo.url);image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`웹 자료 · 출처 Wikimedia Commons · ${normalizePresentationText(photo.title)}${photo.author?` · 작성자 ${normalizePresentationText(photo.author)}`:""} · ${normalizePresentationText(photo.licence)} · 실험 PDF 원문 사진이 아니에요`;figure.appendChild(caption);const link=document.createElement("a");link.href=photo.page_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="원본 페이지 · 라이선스 보기";figure.appendChild(link);block.appendChild(figure);}
  const citations=Array.isArray(message.citations)?message.citations.map(safeWebCitation).filter(Boolean):[];
  if(citations.length){const list=document.createElement("div");list.className="web-lookup-sources";const label=document.createElement("div");label.className="visual-status";label.textContent=`출처 (${citations.length})`;list.appendChild(label);for(const item of citations){const line=document.createElement("div");const link=document.createElement("a");link.href=item.url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`${normalizePresentationText(item.title||item.domain||item.url)} · ${item.domain||""}`;line.appendChild(link);list.appendChild(line);}block.appendChild(list);}
  if(Number.isInteger(message.removed_count)&&message.removed_count>0){const removed=document.createElement("p");removed.className="visual-status";removed.textContent=`값이나 안전 지시가 섞인 문장 ${message.removed_count}개는 뺐어요.`;block.appendChild(removed);}
@@ -2476,7 +2516,7 @@ function applyDrawingResult(message,browserGeneration=sessionGeneration){
  const diagram=message.status==="success"?safeDrawnDiagram(message.diagram,curatedProtocolState):null;
  if(diagram){
   const panel=$("procedure-drawing");
-  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=diagram.url;image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);noteRunFigure(`drawing:${diagram.asset_id}`);}
+  if(panel){panel.replaceChildren();panel.hidden=false;const head=document.createElement("div");head.className="visual-status drawn-label";head.textContent=normalizePresentationText(diagram.label);panel.appendChild(head);const figure=document.createElement("figure");figure.className="drawn-figure";const image=document.createElement("img");image.alt=normalizePresentationText(diagram.label);image.src=serverUrl(diagram.url);image.addEventListener?.("error",()=>{image.remove();});figure.appendChild(image);const caption=document.createElement("figcaption");caption.textContent=`${normalizePresentationText(diagram.label)} · ${diagram.step_label}단계 원문의 말로 그림 · 값은 원문과 같을 때만 적힘${Array.isArray(diagram.removed_numbers)&&diagram.removed_numbers.length?` · 원문에 없는 숫자 ${diagram.removed_numbers.length}개는 뺐어요`:""}`;figure.appendChild(caption);panel.appendChild(figure);noteRunFigure(`drawing:${diagram.asset_id}`);}
   if(outcome){outcome.hidden=false;const line=document.createElement("div");line.className="visual-status drawn-line";line.textContent=`${normalizePresentationText(diagram.label)} · 오른쪽 '원문 PDF 그림' 칸에 띄웠어요`;outcome.appendChild(line);}
   announceMilestone("AI가 그린 그림을 화면에 띄웠습니다.");
  }else if(outcome){
@@ -2587,7 +2627,7 @@ function nonemptyText(v){return typeof v==="string"&&v.trim().length>0;}
 // words it; nothing when none is open.
 function renderOpenQuestion(){
  const box=$("procedure-open-question");if(!box)return;
- const open=curatedScreenFields?.open_question,shown=curatedProtocolState?.attached===true&&curatedProtocolState.active===true;
+ const open=curatedScreenFields?.open_question,shown=curatedProtocolState?.attached===true&&(curatedProtocolState.active===true||prestartQuestionOpen());
  const text=shown&&open&&typeof open==="object"&&nonemptyText(open.text)?normalizePresentationText(open.text):"";
  box.textContent=text?`서버 질문 · ${text}`:"";box.hidden=!text;
 }
@@ -3158,7 +3198,7 @@ function cascadeTurnInterrupted(message){return Number.isInteger(message?.turn_i
 function currentCascadeMessage(message){return message.turn_id===activeTurn&&(!Number.isInteger(message.generation)||activeCascadeGeneration===null||message.generation===activeCascadeGeneration);}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
 
-async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",current=new WebSocket(scheme+"://"+location.host+"/ws");socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
+async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const current=new WebSocket(serverSocketUrl("/ws"));socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
 function resamplePcm16(input,sourceRate,targetRate){
  const length=Math.max(1,Math.round(input.length*targetRate/sourceRate)),output=new Int16Array(length);
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
@@ -3379,7 +3419,7 @@ async function loadProtocolCatalog(preferredProtocolId=null){
  $("protocol-readiness").textContent="카탈로그 불러오는 중";
  if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
  try{
-  const response=await fetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
+  const response=await serverFetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
   if(!response.ok)throw new Error("catalog unavailable");
   const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
   protocolCatalog.clear();selector.replaceChildren();
@@ -3451,7 +3491,7 @@ const HEIC_UNAVAILABLE_HINT="이 서버는 HEIC 사진을 받지 않습니다 ·
 const HEIC_REFUSED_BESIDE_HINT="이 서버는 HEIC 사진을 읽지 못합니다 · 아래 안내대로 JPG 사진을 올려 주세요.";
 function showHeicHint(shown){const hint=$("protocol-heic-hint");if(!hint)return false;hint.textContent=shown?HEIC_UNAVAILABLE_HINT:"";hint.hidden=!shown;return shown;}
 async function loadSourceFormats(){
- try{const response=await fetch("/readyz",{cache:"no-store"});const payload=await safeProtocolUploadPayload(response);const heic=response.ok?payload?.capabilities?.heic_photos_available:undefined;if(typeof heic!=="boolean"){showHeicHint(false);return null;}showHeicHint(heic===false);return heic;}
+ try{const response=await serverFetch("/readyz",{cache:"no-store"});const payload=await safeProtocolUploadPayload(response);const heic=response.ok?payload?.capabilities?.heic_photos_available:undefined;if(typeof heic!=="boolean"){showHeicHint(false);return null;}showHeicHint(heic===false);return heic;}
  catch(_){showHeicHint(false);return null;}
 }
 async function safeProtocolUploadPayload(response){
@@ -3637,12 +3677,12 @@ function renderExperimenterSettings(settings){
  if(sensitivity&&["high","normal","low"].includes(settings.speaker_sensitivity))sensitivity.value=settings.speaker_sensitivity;
 }
 async function loadExperimenterSettings(){
- try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);}}catch(_){}
+ try{const response=await serverFetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);}}catch(_){}
 }
 async function saveExperimenterSetting(name,value){
  const status=$("experimenter-settings-status");
  try{
-  const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({[name]:value})});
+  const response=await serverFetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({[name]:value})});
   if(!response.ok)throw new Error("refused");
   const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);
   if(status)status.textContent="저장했습니다 · 다음 실험부터 적용됩니다.";
@@ -3808,7 +3848,7 @@ async function loadReagentTables(protocolId){
  const list=$("reagent-table-list");if(!list||typeof protocolId!=="string"||!protocolId)return null;
  if(reagentTablesProtocolId!==protocolId)reagentTableOpenId=null;
  reagentTablesProtocolId=protocolId;
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(reagentTablesProtocolId!==protocolId)return null;const tables=response.ok&&Array.isArray(payload?.reagent_tables)?payload.reagent_tables.filter(table=>table&&typeof table==="object"):null;renderReagentTables(tables);return tables;}
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(reagentTablesProtocolId!==protocolId)return null;const tables=response.ok&&Array.isArray(payload?.reagent_tables)?payload.reagent_tables.filter(table=>table&&typeof table==="object"):null;renderReagentTables(tables);return tables;}
  catch(_){if(reagentTablesProtocolId===protocolId)renderReagentTables(null);return null;}
 }
 function renderReagentTables(tables){
@@ -3871,7 +3911,7 @@ async function attachReagentTable(){
  isAttachingReagentTable=true;input?.setAttribute?.("aria-busy","true");say("시약 표를 읽어 붙이는 중…");
  try{
   let response;
-  try{response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  try{response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/reagent-tables?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){say(reagentTableErrorMessage("network_error"));return null;}
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){say(reagentTableErrorMessage(typeof payload?.detail==="string"?payload.detail:"unexpected_server_error"));return null;}
@@ -4009,7 +4049,7 @@ function renderCompareSource(steps){
  const runnable=compareReview?.available_for_execution===true&&typeof compareReview.protocol_id==="string"&&typeof compareReview.revision_id==="string";
  for(const page of [...new Set(lines.map(line=>line.page))].sort((a,b)=>a-b)){
   const block=compareEl("div","compare-page"),head=compareEl("div","compare-page-head");head.appendChild(compareEl("b","",`원문 p.${page}`));
-  if(runnable){const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(compareReview.protocol_id)}/revisions/${encodeURIComponent(compareReview.revision_id)}/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);}
+  if(runnable){const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=serverUrl(`/api/protocols/${encodeURIComponent(compareReview.protocol_id)}/revisions/${encodeURIComponent(compareReview.revision_id)}/source-pages/${page}/image`);link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);}
   block.appendChild(head);
   for(const line of lines.filter(item=>item.page===page)){const row=compareEl("p",`compare-line${line.linked?" is-linked":""}`,line.text);if(line.linked)row.setAttribute?.("aria-label",`이 단계의 원문 · ${line.text}`);block.appendChild(row);if(line.next)block.appendChild(compareEl("p","compare-line-next",`p.${line.next.page} 에서 이어짐${nonemptyText(line.next.text)?` · ${line.next.text}`:""}`));}
   host.appendChild(block);
@@ -4043,7 +4083,7 @@ async function loadProtocolReview(protocolId=currentProtocolReviewId,options={})
  if(screenRoute.tab==="protocols")syncProtocolRoute(protocolId);
  // The start button acts on currentProtocolReviewId, so an answer that
  // arrives after the person picked another protocol must not be rendered.
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);showReviewEditor(protocolId,payload);
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);showReviewEditor(protocolId,payload);
   // Lane RN decision 1: a run that goes is watched again when its protocol is picked.
   if(protocolAnalysisRunning(payload)&&protocolAnalysisPollHandle===null){startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);}
   return payload;}catch(_){if(currentProtocolReviewId===protocolId&&status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
@@ -4133,7 +4173,7 @@ function choiceFigures(pictures){
  const strip=compareEl("div","choice-card-images");
  for(const picture of pictures.slice(0,6)){
   const figure=compareEl("figure","choice-card-image"),image=document.createElement("img");
-  image.src=picture.src;image.alt=picture.alt||"원문 그림 조각";image.loading="lazy";
+  image.src=serverUrl(picture.src);image.alt=picture.alt||"원문 그림 조각";image.loading="lazy";
   figure.appendChild(image);if(nonemptyText(picture.caption))figure.appendChild(compareEl("figcaption","",picture.caption));
   strip.appendChild(figure);
  }
@@ -4222,7 +4262,7 @@ function renderChoiceCard(host,card,options={}){
   box.appendChild(list);
   // Lane IA decision ⑧ (lane AN3's finding ③): a card of a page's values opens the whole page.
   const pageNumber=Number.isInteger(card.page)?card.page:card.source?.page,pageHref=typeof options.pageLink==="function"?options.pageLink(card,pageNumber):null;
-  if(nonemptyText(pageHref)){const link=compareEl("a","compare-page-link",`원본 쪽 보기${Number.isInteger(pageNumber)?` (p.${pageNumber})`:""}`);link.href=pageHref;link.target="_blank";link.rel="noopener";box.appendChild(link);}
+  if(nonemptyText(pageHref)){const link=compareEl("a","compare-page-link",`원본 쪽 보기${Number.isInteger(pageNumber)?` (p.${pageNumber})`:""}`);link.href=serverUrl(pageHref);link.target="_blank";link.rel="noopener";box.appendChild(link);}
  }
  if(typeof options.slot==="function"){const slot=compareEl("div","choice-card-slot");options.slot(slot,card);box.appendChild(slot);}
  const writing=options.writing&&!options.writing.valueId?(Array.isArray(card.choices)?card.choices:[]).find(choice=>choice?.choice_id===options.writing.choiceId):null;
@@ -4250,7 +4290,7 @@ async function loadReviewDraft(protocolId=reviewProtocolId,options={}){
  if(protocolId!==reviewProtocolId){reviewCardIndex=null;reviewCardWriting=null;reviewCardPicked=null;reviewCardPage=null;reviewPages.clear();}
  reviewProtocolId=protocolId;
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);if(reviewProtocolId!==protocolId)return null;
   if(!response.ok||!payload)throw new Error("review draft unavailable");
   renderReviewEditor(payload,options);return payload;
@@ -4331,7 +4371,7 @@ async function reviewSourcePage(page){
  const key=`${reviewProtocolId}|${page}`;
  if(reviewPages.has(key))return reviewPages.get(key);
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-draft/source-pages/${page}`,{headers:{Accept:"application/json"},cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;
   reviewPages.set(key,payload);return payload;
  }catch(_){return null;}
@@ -4358,7 +4398,7 @@ async function renderReviewCardLines(host,card){
   for(const [label,to] of [["앞 쪽",page-1],["다음 쪽",page+1]]){const button=compareEl("button","",label);button.type="button";if(button.dataset)button.dataset.page=String(to);button.disabled=to<1||to>count;button.addEventListener("click",()=>{reviewCardPage={cardId:card.card_id,page:to};void renderReviewCardLines(host,card);});turn.appendChild(button);}
   head.appendChild(turn);
  }
- const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/image`;link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);
+ const link=compareEl("a","compare-page-link","원본 쪽 보기");link.href=serverUrl(`/api/protocols/${encodeURIComponent(protocolId)}/review-draft/source-pages/${page}/image`);link.target="_blank";link.rel="noopener noreferrer";head.appendChild(link);
  host.appendChild(head);
  const suggested=source.suggested_lines?.page===page?reviewLineSpan(source.suggested_lines):null;
  const picked=reviewCardPicked?.cardId===card.card_id&&reviewCardPicked.page===page?[reviewCardPicked.first,reviewCardPicked.last]:null;
@@ -4414,7 +4454,7 @@ async function chooseReviewCard(card,choice,fields={}){
  if(typeof fetch!=="function")return null;
  reviewBusy=true;const protocolId=reviewProtocolId;renderReviewCards();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){
    reviewBusy=false;
@@ -4466,7 +4506,7 @@ async function registerReview(){
  if(reviewBusy||typeof fetch!=="function"||!reviewProtocolId)return null;
  reviewBusy=true;const protocolId=reviewProtocolId;renderReviewRegister();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,target:reviewDraft?.target}),redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,target:reviewDraft?.target}),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){if(status){status.textContent=reviewErrorWords(typeof payload?.detail==="string"?payload.detail:"");if(status.dataset)status.dataset.result="refused";}if(payload?.detail==="review_target_changed")await loadReviewDraft(protocolId);return null;}
   const version=payload?.review_version||{};
@@ -4494,7 +4534,7 @@ function renderReviewHistory(){
 async function showReviewVersion(number){
  const host=$("review-history-changes");if(!host||typeof fetch!=="function"||!reviewProtocolId)return null;
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-versions/${number}`,{headers:{Accept:"application/json"},redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(reviewProtocolId)}/review-versions/${number}`,{headers:{Accept:"application/json"},redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;
   renderReviewVersionChanges(payload);return payload;
  }catch(_){return null;}
@@ -4514,7 +4554,7 @@ function renderReviewVersionChanges(version){
 async function pollProtocolAnalysisStatus(protocolId){
  if(protocolAnalysisPollBusy)return null;protocolAnalysisPollBusy=true;
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis/status`,{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)return null;const run=await response.json();if(currentProtocolReviewId!==protocolId)return null;
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis/status`,{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)return null;const run=await response.json();if(currentProtocolReviewId!==protocolId)return null;
   const terminal=new Set(["review_required","analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled","ocr_required","review_pending"]);
   const parts=Number.isInteger(run.total_chunks)&&run.total_chunks>0?` · 부분 ${run.completed_chunks||0} / ${run.total_chunks} 완료${run.failed_chunks?` · 실패 ${run.failed_chunks}`:""}`:"";
   const again=run.reanalysis===true,runWord=again?"다시 분석":"분석";
@@ -4543,7 +4583,7 @@ async function pollProtocolAnalysisStatus(protocolId){
 function startProtocolAnalysisPolling(protocolId){stopProtocolAnalysisPolling();protocolAnalysisPollHandle=setInterval(()=>{void pollProtocolAnalysisStatus(protocolId);},1000);protocolAnalysisPollHandle?.unref?.();}
 async function pollProtocolOcrStatus(protocolId){
  if(protocolOcrPollBusy)return null;protocolOcrPollBusy=true;
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent=`OCR 중 · 글자 층이 없는 쪽을 읽고 있습니다${ocrElapsedText()} · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.`;}else{stopProtocolOcrPolling();if(payload.state==="accepted_for_analysis"){
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent=`OCR 중 · 글자 층이 없는 쪽을 읽고 있습니다${ocrElapsedText()} · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.`;}else{stopProtocolOcrPolling();if(payload.state==="accepted_for_analysis"){
    // Lane PX decision 3: upload-time OCR is accepted automatically and the
    // server starts the analysis itself; the page only follows it.
    const pages=ocrPageNumbers(payload);showProtocolAnalysisNotice(protocolId,`OCR 끝${pages.length?` · OCR 쪽 p.${pages.join(", ")}`:""} · 분석을 시작합니다 · 실행 전 확인 한 번에 OCR 글도 포함됩니다.`,"분석 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음");protocolAnalysisStartedAt=Date.now();startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);return payload;}
@@ -4555,13 +4595,13 @@ function ocrPageNumbers(payload){const pages=Array.isArray(payload?.pages)?paylo
 function startProtocolOcrPolling(protocolId){stopProtocolOcrPolling();protocolOcrStartedAt=Date.now();protocolOcrPollHandle=setInterval(()=>{void pollProtocolOcrStatus(protocolId);},1000);protocolOcrPollHandle?.unref?.();}
 async function runProtocolOcr(){
  const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-ocr-run");if(!protocolId||isRegisteringProtocol)return null;if(button)button.disabled=true;if(status)status.textContent="OCR 요청을 검증하고 있습니다…";
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
+ try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
 }
 async function analyzeRegisteredProtocol(protocolId,{reanalysis=false}={}){
  const watchedSince=protocolAnalysisStartedAt,runWord=reanalysis?"다시 분석":"분석";
  currentProtocolReviewId=protocolId;protocolAnalysisStartedAt=Date.now();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,true);showProtocolAnalysisNotice(protocolId,reanalysis?PROTOCOL_REANALYSIS_RUNNING_NOTICE:PROTOCOL_ANALYSIS_RUNNING_NOTICE,`${runWord} 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음`);startProtocolAnalysisPolling(protocolId);
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
   if(!response.ok){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(code),"");await loadProtocolReview(protocolId);return null;}
   if(!payload){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("unexpected_server_error"),"");return null;}
   const run=payload.analysis_run||{},running=["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(run.state||payload.analysis_status),pending=payload.analysis_request_accepted===true||running;
@@ -4596,7 +4636,7 @@ async function registerSelectedProtocol(){
  if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
  try{
   let response;
-  try{response=await fetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
@@ -4647,7 +4687,27 @@ function clearExperimentResumeSelection(){
  updateSessionStateBadge(null);updateStartActionLabel();renderResumeDisclosure();
 }
 function newUser(){if(!sessionActive)return;sendControl("session.reset");}
-async function stopSession(){const wasActive=sessionActive;sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
+// Lane IA QA-10 (lane QA, 2026-10-20): [종료] during the run sent session.stop and closed the socket at once,
+// so the server's answer -- the experiment's state, now stopped, then session.stopped -- never arrived: the
+// screen fell back to 실험 전 with "실험 이어하기" while the server had ended it. The stop now waits for that
+// answer (STOP_ANSWER_MS at most), shows the end screen when the server says the experiment ended, and reads
+// the experiment list again either way (QA-95).
+var STOP_ANSWER_MS=3000;let stopRequest=null;
+async function stopSession(){
+ // A second [종료] while the first waits for the server's answer would close the socket and lose it (lane IA review F3).
+ if(stopRequest)return false;
+ const wasActive=sessionActive,current=socket,running=wasActive&&screenView()==="during"&&current?.readyState===WebSocket.OPEN;let ended=null;
+ if(running){
+  sessionActive=false;
+  const request={socket:current,resolve:null,ended:null},answered=new Promise(resolve=>{request.resolve=resolve;});stopRequest=request;
+  sendControl("session.stop");
+  let timer=null;await Promise.race([answered,new Promise(resolve=>{timer=setTimeout(resolve,STOP_ANSWER_MS);})]);clearTimeout(timer);
+  stopRequest=null;ended=request.ended;
+ }
+ sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive&&!running)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");
+ // The end screen once the session is let go (the step card was reset with it); the lists read again either way.
+ if(running){if(ended&&!experimentEndedOnScreen)showExperimentEnded({status:ended});else void loadExperimentSessions(currentExperimentSessionId);}
+}
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
 async function playLastReplayableAudio(statusNode){if(!lastReplayableAudio||!playContext){if(statusNode)statusNode.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";return false;}if(playing||activeSource||replaySource){if(statusNode)statusNode.textContent="다른 음성이 재생 중입니다. 끝난 뒤 한 번 더 눌러 주세요.";return false;}try{await playContext.resume();const input=new Int16Array(lastReplayableAudio.slice(0)),audio=playContext.createBuffer(1,input.length,16000),samples=audio.getChannelData(0);for(let i=0;i<input.length;i++)samples[i]=input[i]/32768;const source=playContext.createBufferSource();replaySource=source;source.buffer=audio;source.connect(playContext.destination);source.onended=()=>{if(replaySource===source)replaySource=null;if(statusNode)statusNode.textContent="답변을 한 번 다시 재생했습니다.";};source.start();if(statusNode)statusNode.textContent="마지막 답변을 다시 재생 중입니다.";return true;}catch(_){replaySource=null;if(statusNode)statusNode.textContent="재생하지 못했습니다. 브라우저의 오디오 권한과 출력 장치를 확인해 주세요.";return false;}}
 
@@ -4734,8 +4794,9 @@ async function onMessage(e,generation,current){
  }
  if(m.type==="session.configuration_required"){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
-  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
+  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};const refusedWords=nonemptyText(m.message_ko)?String(m.message_ko):reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";$("session-configuration-status").textContent=refusedWords;renderState("IDLE",refusedWords);if(Object.prototype.hasOwnProperty.call(START_REFUSAL_STEPS,m.reason))returnToStartStep(m.reason,refusedWords);
  }
+ if(m.type==="session.stopped"&&stopRequest?.socket===current)stopRequest.resolve();
  if(m.type==="session.stopped"){hideVoiceCalibration();voiceReferenceMeasured=false;sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);}
@@ -4746,7 +4807,7 @@ async function onMessage(e,generation,current){
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="experiment.ended"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showExperimentEnded(m);
  if(m.type==="workflow.control.refused"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showWorkflowControlRefused(m);
- if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;void loadExperimentSessions(currentExperimentSessionId);}
+ if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;if(typeof m.state.status==="string")currentExperimentSessionStatus=m.state.status;if(stopRequest?.socket===current&&ENDED_EXPERIMENT_STATUSES.has(m.state.status))stopRequest.ended=m.state.status;void loadExperimentSessions(currentExperimentSessionId);}
  if(m.type==="experiment.session.error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
  if(m.type==="protocol.visual.state")applyGeneratedVisualState(m,generation);
  if(m.type==="protocol.figures.state")applySourceFiguresState(m);
@@ -4761,7 +4822,7 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
@@ -4795,7 +4856,10 @@ async function onMessage(e,generation,current){
  if(m.type==="audio.replay.request"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){const node=turnNode(m.turn_id,generation),status=node.querySelector(".replay-status");if(lastReplayableAudio){pendingVoiceReplay=true;if(status)status.textContent="현재 안내 뒤에 마지막 답변을 한 번 다시 재생합니다.";pump(generation);}else if(status)status.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";}
  if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;const isGreeting=m.route==="server_greeting"||Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const statsEl=turnNode(m.turn_id,generation).querySelector(".stats");if(statsEl){statsEl.textContent=isGreeting?(m.route==="server_notice"?"경로 server_notice · 먼저 알림":"경로 server_greeting · 세션 안내"):`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;}if(Number.isInteger(m.generation)){const serverKey=turnProgressKey(m.turn_id,m.generation);turnHold(serverKey).done={route:m.route,result_kind:m.result_kind,speech_mode:m.speech_mode};const progress=turnProgress.get(serverKey);if(progress?.state==="blocked")renderTurnState(turnNode(m.turn_id,generation),"blocked",progress.route,serverKey);}if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
  if(m.type==="playback.completed"&&!cascadeTurnInterrupted(m)&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const isGreeting=Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(stats&&!isGreeting&&!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
- if(m.type==="error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(researcherErrorMessage(m.message),m.turn_id);}
+ // Lane IA QA-13 (lane QA, 2026-10-20): a turn's error (it names its turn and generation) is one the server
+ // keeps the session through -- its state.changed follows. The turn says it failed; the session, the
+ // microphone and the socket stay. Any other error still ends the session on screen.
+ if(m.type==="error"){const turnError=Number.isInteger(m.turn_id)&&Number.isInteger(m.generation);if(turnError)turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);if(m.recoverable===true){/* lane SAFE: refused, the connection and the session kept (lane IA review F7) */const words=nonemptyText(m.message_ko)?String(m.message_ko):researcherErrorMessage(m.code||m.message);$("session-configuration-status").textContent=words;if(pendingSessionConfiguration&&!acceptedSessionConfiguration){pendingSessionConfiguration=null;renderState("IDLE",words);}return;}if(turnError&&sessionActive){const line=turnNode(m.turn_id)?.querySelector?.(".error");if(line)line.textContent=`${researcherErrorMessage(m.message)} · 다시 말해 주세요.`;return;}fail(researcherErrorMessage(m.message),m.turn_id);}
  renderRunViewMessage(m,generation);
 }
 
@@ -4806,7 +4870,7 @@ $("mic-device")?.addEventListener("change",async event=>{const value=event.targe
 $("mic-reconnect")?.addEventListener("click",()=>{void reconnectMic(sessionGeneration,"manual");});
 globalThis.navigator?.mediaDevices?.addEventListener?.("devicechange",()=>{void renderMicDevices();if(micWorkletNode)scheduleMicReconnect("devicechange");});
 void renderMicDevices();
-$("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
+$("start").addEventListener("click",()=>{void pressConsoleStart();});$("stop").addEventListener("click",stopSession);init();
 $("rail-new-session")?.addEventListener("click",confirmNewSession);
 $("rail-pause-session")?.addEventListener("click",togglePauseSession);
 $("workflow-resume-button")?.addEventListener("click",()=>{if(workflowPaused)togglePauseSession();});
@@ -4862,6 +4926,11 @@ async function pressExperimentStart(){
  }
  return openWizardSheet();
 }
+// Lane IA QA-01 (lane QA, 2026-10-20): the 실험 후 view's console [새 실험 시작] sent session.start with no
+// questions and no safety notice, which the server then recorded as a start after the safety notice. Every
+// start goes through the sheet: the console's button opens it (over the end screen, which stays until the
+// sheet's own start), as the tab's card does.
+function pressConsoleStart(){if(sessionActive)return false;return pressExperimentStart();}
 function openStartForProtocol(protocolId){
  // Only the protocol whose result is on screen, and only when the server says it can run (as the direct start did).
  if(typeof protocolId!=="string"||!protocolId||!protocolCatalog.has(protocolId))return false;
@@ -5009,23 +5078,23 @@ function wizardStepIndex(){return wizardSteps().indexOf(wizard.step);}
 function wizardSelectedProtocol(){const id=$("protocol-id")?.value||"";return id&&protocolCatalog.get(id)?protocolCatalog.get(id):null;}
 function wizardNote(text,kind=""){wizard.note=text||"";wizard.noteKind=kind;const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=kind;}}
 async function loadAuthSession(){
- try{const response=await fetch("/api/auth/session",{cache:"no-store"});if(!response.ok)return null;const payload=await response.json();wizard.auth=payload&&typeof payload==="object"?payload:null;if(wizard.auth?.account?.name)wizard.reviewerName=String(wizard.auth.account.name);return wizard.auth;}catch(_){return null;}
+ try{const response=await serverFetch("/api/auth/session",{cache:"no-store"});if(!response.ok)return null;const payload=await response.json();wizard.auth=payload&&typeof payload==="object"?payload:null;if(wizard.auth?.account?.name)wizard.reviewerName=String(wizard.auth.account.name);return wizard.auth;}catch(_){return null;}
 }
 async function loadAgentVoices(){
- try{const response=await fetch("/api/voice/voices",{cache:"no-store"});if(!response.ok){wizard.voices=null;return null;}const payload=await response.json();wizard.voices=payload&&typeof payload==="object"&&Array.isArray(payload.voices)?payload:null;return wizard.voices;}catch(_){wizard.voices=null;return null;}
+ try{const response=await serverFetch("/api/voice/voices",{cache:"no-store"});if(!response.ok){wizard.voices=null;return null;}const payload=await response.json();wizard.voices=payload&&typeof payload==="object"&&Array.isArray(payload.voices)?payload:null;return wizard.voices;}catch(_){wizard.voices=null;return null;}
 }
 async function openStartWizard(){
  if(sessionActive){wizard.active=false;renderRoute();return false;}
  wizard.active=true;wizard.open=false;wizard.invite=wizardInviteToken();
  await loadAuthSession();
- if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await fetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
+ if(wizard.auth?.mode==="accounts"&&wizard.auth.signed_in!==true){wizard.step="login";if(wizard.invite){try{const response=await serverFetch(`/api/auth/invites/${encodeURIComponent(wizard.invite)}`);wizard.inviteValid=response.ok?await response.json():{valid:false};}catch(_){wizard.inviteValid={valid:false};}}renderRoute();return true;}
  await wizardAfterSignIn();
  // A sheet the experimenter already opened keeps its step: the settings and the voices can arrive after the first press (a slow server, found by CI on 32b2585).
  if(!wizard.open||!wizardSteps().includes(wizard.step))wizard.step=wizardSteps()[0];
  renderRoute();return true;
 }
 async function wizardAfterSignIn(){
- const settings=fetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
+ const settings=serverFetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
  await Promise.all([settings,loadAgentVoices()]);
 }
 function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
@@ -5042,7 +5111,7 @@ function renderWizard(){
  if(!wizard)return false;
  const body=globalThis.document?.body,section=$("start-wizard"),sheet=$("wizard-sheet");
  // Lane IA addendum: a sheet over the page while it is open and no run is on; the login's page of its own whatever the hash.
- const page=authRequired(),on=page||(wizard.open===true&&screenView()==="before");
+ const page=authRequired(),on=page||(wizard.open===true&&screenView()!=="during");
  if(!on&&wizard.open)wizard.open=false;
  if(body?.dataset)body.dataset.wizard=on?"on":"off";
  if(sheet){sheet.hidden=!on;if(sheet.dataset)sheet.dataset.mode=page?"page":"sheet";}
@@ -5134,7 +5203,7 @@ function renderWizardAgent(host,primary){
 // or starting the experiment stops; a spent object URL is revoked. While the
 // experiment runs its guidance speaks, so no preview then.
 var voicePreview={audio:null,url:null,token:0};
-function voicePreviewAllowed(){return screenView()==="before"&&!sessionActive&&["IDLE","ERROR"].includes(visibleState);}
+function voicePreviewAllowed(){return screenView()!=="during"&&!sessionActive&&["IDLE","ERROR"].includes(visibleState);}
 function stopVoicePreview(){
  voicePreview.token+=1;
  const audio=voicePreview.audio,url=voicePreview.url,was=wizard?.previewing||null;
@@ -5152,7 +5221,7 @@ async function wizardPreviewVoice(voiceId){
  stopVoicePreview();
  const token=++voicePreview.token;wizard.previewing=voiceId;wizardNote("");renderVoicePreview();
  try{
-  const response=await fetch("/api/voice/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice_id:voiceId}),redirect:"error"});
+  const response=await serverFetch("/api/voice/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice_id:voiceId}),redirect:"error"});
   if(token!==voicePreview.token)return false;
   if(!response.ok)throw new Error("preview");
   const blob=await response.blob();
@@ -5170,7 +5239,7 @@ async function wizardPickVoice(voiceId){
  stopVoicePreview();
  const before=wizardSettings().agent_voice;wizard.settings={...wizardSettings(),agent_voice:voiceId};renderWizard();
  try{
-  const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_voice:voiceId})});
+  const response=await serverFetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_voice:voiceId})});
   if(!response.ok)throw new Error("refused");
   const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);wizardNote("저장했어요 · 이 목소리로 안내해요.");return true;
  }catch(_){wizard.settings={...wizardSettings(),agent_voice:before};wizardNote("목소리를 저장하지 못했어요.","error");renderWizard();return false;}
@@ -5197,11 +5266,45 @@ async function wizardPickProtocol(protocolId){
  try{await loadProtocolReview(protocolId);}finally{wizard.busy=false;}
  wizardRememberProtocol(protocolId);renderWizard();return true;
 }
+// Lane IA + lane SAFE (2026-10-21, ~/reports/safe/HANDOFF_IA.md): the server starts a protocol only after
+// this account finished the key-value check of that analysis (or review version) and acknowledged its
+// safety notices. [읽었어요] leaves that acknowledgement -- the whole target the GET start-check returned --
+// and a refusal shows the server's sentence and goes no further. With the check off (or not read) nothing
+// is sent; the server's own word at the start decides.
+const START_CHECK_WORDS=Object.freeze({start_check_invalid:"핵심 값 확인이 끝나지 않았거나 화면이 오래됐어요. 핵심 값 확인부터 다시 해 주세요."});
+function startCheckRefusalWords(payload){
+ if(nonemptyText(payload?.message_ko))return String(payload.message_ko);
+ if(nonemptyText(payload?.detail?.message_ko))return String(payload.detail.message_ko);
+ const code=typeof payload?.detail==="string"?payload.detail:typeof payload?.detail?.code==="string"?payload.detail.code:"";
+ return START_CHECK_WORDS[code]||"안전 확인을 남기지 못했어요. 다시 눌러 주세요.";
+}
+async function acknowledgeStartSafety(){
+ const entry=wizardSelectedProtocol(),check=wizard.check;
+ if(!entry)return false;
+ if(!check||check.enabled!==true||!check.target||typeof check.target!=="object")return true;
+ wizardSetBusy(true);
+ try{
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/safety`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({target:check.target}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(response.ok&&payload?.ready!==false)return true;
+  wizardNote(startCheckRefusalWords(payload),"error");return false;
+ }catch(_){wizardNote("안전 확인을 서버에 남기지 못했어요. 다시 눌러 주세요.","error");return false;}
+ finally{wizardSetBusy(false);}
+}
+// A start the server refused for the check: its sentence, and the sheet again at the step it names.
+const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null});
+function returnToStartStep(reason,words){
+ forgetSafetyRead();
+ const step=START_REFUSAL_STEPS[reason];
+ if(!step||screenView()==="during"||authRequired())return false;
+ openWizardSheet(wizardSteps().includes(step)?step:null);wizardNote(words,"error");renderWizard();
+ return true;
+}
 async function wizardLoadCheck(){
  const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
  wizard.check=null;wizard.question=0;wizard.busy=true;renderWizard();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable"};
  }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable"};}
@@ -5244,7 +5347,7 @@ async function wizardAnswer(choice){
  const question=wizardQuestion(),entry=wizardSelectedProtocol();if(!question||!entry||wizard.busy||!choice?.request)return null;
  wizard.busy=true;renderWizard();
  try{
-  const response=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/answers`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(choice.request),redirect:"error"});
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/answers`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(choice.request),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   wizard.busy=false;
   if(!response.ok||!payload){wizardNote("답을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
@@ -5264,9 +5367,9 @@ async function wizardCardChoice(choice,fields={}){
  try{
   const draft=await loadReviewDraft(entry.protocol_id);
   const body={...request,...(text?{text}:{}),reviewer_name:name,...(draft?.target?{target:draft.target}:{})};
-  const decided=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const decided=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-decisions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
   if(!decided.ok){const payload=await safeProtocolUploadPayload(decided);wizard.busy=false;wizardNote(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""),"error");renderWizard();return null;}
-  const registered=await fetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,...(draft?.target?{target:draft.target}:{})}),redirect:"error"});
+  const registered=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/review-versions`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({reviewer_name:name,...(draft?.target?{target:draft.target}:{})}),redirect:"error"});
   if(!registered.ok){const payload=await safeProtocolUploadPayload(registered);wizard.busy=false;wizardNote(reviewErrorWords(typeof payload?.detail==="string"?payload.detail:""),"error");renderWizard();return null;}
   if(wizard.auth?.mode!=="accounts")storeReviewerName(name);
   wizard.busy=false;wizard.card=null;wizard.cardText=null;wizard.wrong=null;
@@ -5298,14 +5401,16 @@ function renderWizardStart(host,primary){
  if(voice)host.appendChild(compareEl("p","wizard-done",`안내 목소리 · ${voice.label_ko}`));
  // Lane IA decision ⑦: a saved experiment picked in the records (or from the home's card) continues from here -- the start sends the session the server named, as the voice console's '실험 이어하기' did.
  const resuming=experimentIsResumable();
- if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 기록 탭에서 실험 선택을 비우세요.`));
+ if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 아래 [이어하지 않고 새로 시작]을 눌러 주세요.`));
+ // Lane IA review F4: decision ⑤ moved the records tab's experiment select into one record's screen; the step clears the pick itself.
+ if(resuming){const fresh=compareEl("button","wizard-back","이어하지 않고 새로 시작");fresh.type="button";fresh.addEventListener("click",()=>{clearExperimentResumeSelection();renderWizard();});host.appendChild(fresh);}
  if(primary){primary.textContent=resuming?"실험 이어하기":"이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
 }
 async function wizardPrimary(){
  if(wizard.busy)return null;
  switch(wizard.step){
   case "login":return wizardSubmitLogin();
-  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety")rememberSafetyRead();wizardNext();return true;}
+  case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety"){if(!await acknowledgeStartSafety())return null;rememberSafetyRead();}wizardNext();return true;}
   case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
   case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;}
   default:return null;
@@ -5363,6 +5468,7 @@ function renderRoute(){
  if(tab==="upload")renderUploadFlow();
  if(tab==="home")renderHome();
  if(tab==="settings")renderSettingsExtras();
+ renderRecordsViews();
  if(tab==="experiment")renderExperimentStart();
  renderWizard();
  if(key!==lastRouteKey){lastRouteKey=key;stopVoicePreview();applyRouteSelections({entered:true});if(typeof globalThis.scrollTo==="function"){try{globalThis.scrollTo(0,0);}catch(_){}}}
@@ -5379,6 +5485,34 @@ function applyRouteSelections({entered=false}={}){
 function applyProtocolRoute(protocolId){if(!protocolCatalog.has(protocolId))return false;if($("protocol-id")?.value===protocolId&&currentProtocolReviewId===protocolId)return true;return pickProtocolFromList(protocolId);}
 // Lane IA decision ③: a row tapped on the list pushes the protocol's route (the back button returns to the list); from one protocol's screen to another's, the entry is replaced.
 function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenRoute.id===protocolId)return false;navigateTab("protocols",protocolId,{replace:nonemptyText(screenRoute.id)});return true;}
+// Lane IA decision ⑤ (2026-10-21): the records tab -- the list of past experiments from the server's list
+// (title, when, the server's state in words, the step), one tapped opens its record; during the run the
+// run's own record.
+function recordsDetailId(){return screenRoute.tab==="records"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
+function recordTitle(item){return serverProtocolTitle(item)||protocolCatalog.get(item?.protocol_id)?.title||"실험";}
+function recordLine(item){const state=sessionStateBadgeInfo(item?.status);return [item?.started_at?localDateTimeText(item.started_at):"",state?.label||"상태 확인",nonemptyText(item?.current_step_label)?`${item.current_step_label}단계`:""].filter(Boolean).join(" · ");}
+function renderRecordsList(){
+ const host=$("records-list");if(!host)return 0;host.replaceChildren();
+ const items=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).filter(item=>item&&typeof item.session_id==="string");
+ if(!items.length){host.appendChild(compareEl("li","records-empty","아직 기록이 없어요 · 실험을 하면 여기에 남아요."));return 0;}
+ for(const item of items){
+  const row=compareEl("li","records-item"),link=compareEl("a","home-card records-row");link.href=routePath("records",item.session_id);
+  link.appendChild(compareEl("b","home-card-title",recordTitle(item)));link.appendChild(compareEl("span","home-card-sub",recordLine(item)));
+  link.addEventListener("click",event=>{event?.preventDefault?.();navigateTab("records",item.session_id);});
+  row.appendChild(link);host.appendChild(row);
+ }
+ return items.length;
+}
+function renderRecordsViews(){
+ const id=recordsDetailId(),during=screenView()==="during",detail=Boolean(id)||during;
+ const list=$("records-list-view"),view=$("records-detail-view");if(list)list.hidden=detail;if(view)view.hidden=!detail;
+ if(!detail){renderRecordsList();return false;}
+ const shown=id||currentExperimentSessionId,item=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).find(entry=>entry?.session_id===shown);
+ setText("records-detail-title",item?recordTitle(item):during?"지금 하는 실험":"기록을 불러오는 중…");setText("records-detail-line",item?recordLine(item):"");
+ // During the run the ledger's own title names it; the head is for a record picked from the list.
+ const head=$("records-detail-head");if(head)head.hidden=during&&!id;
+ return true;
+}
 function protocolDetailId(){return screenRoute.tab==="protocols"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
 function renderProtocolViews(){
  const id=protocolDetailId(),list=$("protocol-list-view"),detail=$("protocol-detail-view");
@@ -5536,14 +5670,29 @@ function renderSettingsExtras(){
 }
 async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoice(voiceId);setText("settings-agent-voice-note",ok?"저장했어요 · 이 목소리로 안내해요.":"목소리를 저장하지 못했어요.");renderSettingsExtras();return ok;}
 async function previewAgentVoiceFromSettings(voiceId){const ok=await wizardPreviewVoice(voiceId);setText("settings-agent-voice-note",wizard.noteKind==="error"?wizard.note:"");renderSettingsExtras();return ok;}
+// Lane IA QA-16/QA-17 (lane QA, 2026-10-20): signed out on screen at once -- the session, the socket and the
+// reconnecting stop (a new generation) -- and the page starts again at its own address: not the spent
+// invite link it was opened with (?invite=), which trapped the person on "초대 링크가 만료되었거나 이미 쓰였어요".
+function leaveForLogin(){
+ const loc=globalThis.location,path=typeof loc?.pathname==="string"&&loc.pathname?loc.pathname:"/";
+ try{if(typeof loc?.replace==="function"){loc.replace(path);return true;}if(typeof loc?.reload==="function"){loc.reload();return true;}}catch(_){}
+ return false;
+}
+function signOutOnScreen(){
+ if(wizard?.auth?.mode!=="accounts"||wizard.auth.signed_in!==true)return false;
+ sessionGeneration++;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;
+ const current=socket;socket=null;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();
+ try{if(current&&current.readyState<WebSocket.CLOSING)current.close(1000,"signed out");}catch(_){}
+ wizard.auth={mode:"accounts",signed_in:false,account:null};wizard.active=true;wizard.open=false;wizard.step="login";
+ renderRoute();leaveForLogin();return true;
+}
 async function logOutAccount(){
  const button=$("account-logout"),status=$("account-password-status");setDisabled(button,true);
- try{const response=await fetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("refused");}
+ try{const response=await serverFetch("/api/auth/logout",{method:"POST",headers:{Accept:"application/json"},redirect:"error"});if(response.status===401){setDisabled(button,false);signOutOnScreen();return true;}if(!response.ok)throw new Error("refused");}
  catch(_){setDisabled(button,false);if(status)status.textContent="로그아웃하지 못했어요. 다시 해 주세요.";return false;}
  setDisabled(button,false);
- // The page's lists belong to the account that left: a reload starts clean at the login.
- if(typeof globalThis.location?.reload==="function"){try{globalThis.location.reload();return true;}catch(_){}}
- wizard.auth={mode:"accounts",signed_in:false,account:null};wizard.active=true;wizard.step="login";renderRoute();return true;
+ // The page's lists belong to the account that left: it starts clean at the login.
+ signOutOnScreen();return true;
 }
 async function changeAccountPassword(event){
  event?.preventDefault?.();
@@ -5551,7 +5700,7 @@ async function changeAccountPassword(event){
  if(!current||!next){if(status)status.textContent="지금 비밀번호와 새 비밀번호를 적어 주세요.";return false;}
  setDisabled($("account-password-send"),true);
  try{
-  const response=await fetch("/api/auth/password",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({current,new:next}),redirect:"error"});
+  const response=await serverFetch("/api/auth/password",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({current,new:next}),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){if(status)status.textContent=ACCOUNT_PASSWORD_WORDS[typeof payload?.detail==="string"?payload.detail:""]||"비밀번호를 바꾸지 못했어요. 지금 비밀번호를 확인해 주세요.";return false;}
   if(status)status.textContent="비밀번호를 바꿨어요 · 다른 기기는 로그아웃돼요.";
