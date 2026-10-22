@@ -24,9 +24,10 @@ TABLE_FILES = {
     "src/voiney_lab/setting_renames.py",
 }
 #: Names no code reads and the table no longer lists, which a document must
-#: still spell: the flag the standard test command (CLAUDE.md, README,
-#: docs/GIT_WORKFLOW.md) switches off so that a stray .env cannot change a
-#: result. The table row was deleted in lane DOC3; the command is unchanged.
+#: still spell: the flag the standard test command (AGENTS.md, README)
+#: switches off so that a stray .env cannot change a result. The table row was
+#: deleted in lane DOC3; the command is unchanged. (Lane DOC4 moved the command
+#: from CLAUDE.md, now one import line, into AGENTS.md.)
 SPELLED_IN_TEST_COMMANDS = {"VOINEY_LAB_MOSS_ENABLED"}
 NAME = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 PREFIXED = re.compile(re.escape(NEW_PREFIX) + r"[A-Z0-9_]*[A-Z0-9]")

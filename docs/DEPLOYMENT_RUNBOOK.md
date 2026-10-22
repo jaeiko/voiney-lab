@@ -1,7 +1,7 @@
 # 배포·운영 안내 — 파일럿 서버
 
 서버를 준비하고, 띄우고, 점검하고, 백업하는 순서다. 2026-10-20 dev `e7c31c8` 기준.
-VoineyLab 은 **MVP 시제품 — 현장 미검증**이고, 이 안내는 통제된 연구 파일럿용이다(규제 대상 GxP·임상 배포가 아니다).
+이 안내는 통제된 연구 파일럿용이다(규제 대상 GxP·임상 배포가 아니다).
 
 - 파일럿을 여는 순서·참여자 안내·데이터 처리·고지 문안: `docs/PILOT_GUIDE.md`
 - 휴대폰에서 마이크를 쓰기 위한 HTTPS: `docs/PILOT_HTTPS_SETUP.md`
@@ -38,7 +38,7 @@ VoineyLab 은 **MVP 시제품 — 현장 미검증**이고, 이 안내는 통제
 - PDF 밖 일반 설명은 끈다. 작업공간이 꺼졌거나 `VOINEY_LAB_ADMIN_TOKEN` 이 비었거나 LibreOffice 가 없으면 `[WARN]`.
 - 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy)를 앞에 두고 연다 — `docs/PILOT_HTTPS_SETUP.md`. `HOST=0.0.0.0` 으로 그냥 열지 않는다.
 
-모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 README 4절, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
+모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
 
 ### systemd 로 두기 (예시, 이 줄에서 실행해 보지 않음)
 

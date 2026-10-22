@@ -16,6 +16,11 @@ are checked against the repository as it is:
 
 A document that falls behind the code then fails here instead of misleading
 the next reader. ``docs/demo_script.md`` belongs to a person and is never read.
+
+One more check guards the agents' contract itself: Claude Code reads only
+``CLAUDE.md`` at launch and gets ``AGENTS.md`` through its ``@AGENTS.md``
+import line, so that line (outside code, where an import is ignored) and the
+file it names must both be there.
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: Superseded or inherited records: read as history, never checked.
 SKIPPED_FOLDERS = ("docs/archive/", "docs/course-archive/")
-#: User-owned and untracked (CLAUDE.md); never read, never edited.
+#: User-owned and untracked (AGENTS.md, "File ownership"); never read, never edited.
 USER_OWNED = {"docs/demo_script.md"}
 #: The standard test command switches this flag off although no code reads it
 #: any more -- the same exception as tests/test_setting_names.py.
@@ -244,6 +249,25 @@ class PathTests(unittest.TestCase):
                         ):
                             missing.append(f"{document}: {path}")
         self.assertEqual(sorted(set(missing)), [])
+
+
+#: An import line as Claude Code reads it: "@path" alone on a line, or after a
+#: list marker. Inside backticks or a fenced block it is not an import.
+IMPORT_LINE = re.compile(r"^\s*(?:[-*]\s+)?@(\S+)\s*$", re.M)
+
+
+class AgentContractTests(unittest.TestCase):
+    def test_claude_md_imports_agents_md_and_agents_md_is_there(self):
+        claude = ROOT / "CLAUDE.md"
+        self.assertTrue(claude.is_file(), "CLAUDE.md is missing")
+        outside_code = INLINE_CODE.sub("", FENCE.sub("", claude.read_text(encoding="utf-8")))
+        self.assertIn("AGENTS.md", IMPORT_LINE.findall(outside_code))
+        self.assertTrue((ROOT / "AGENTS.md").is_file(), "AGENTS.md is missing")
+
+    def test_an_import_inside_code_does_not_count(self):
+        written = "`@AGENTS.md`\n```\n@AGENTS.md\n```\n"
+        outside_code = INLINE_CODE.sub("", FENCE.sub("", written))
+        self.assertEqual(IMPORT_LINE.findall(outside_code), [])
 
 
 class ScriptOptionTests(unittest.TestCase):

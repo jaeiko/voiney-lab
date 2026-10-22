@@ -91,6 +91,7 @@ class RetryOnceTests(_Case):
         self.assertIsNone(error)
         self.assertEqual(analyze.call_count, 2)
         self.assertEqual(self.event_types(), [
+            "protocol_source_metadata",
             "protocol_registered",
             "protocol_analysis_requested",
             "protocol_analysis_started",
