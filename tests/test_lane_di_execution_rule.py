@@ -148,7 +148,7 @@ class TheCatalogVerdictTests(unittest.TestCase):
         # Nothing was written to make it so: no approval, no activation.
         self.assertEqual(
             {event.event_type for event in self.store.list_events(self.protocol_id)},
-            {"protocol_registered"},
+            {"protocol_registered", "protocol_source_metadata"},
         )
         review = self.catalog.review(self.protocol_id)
         self.assertEqual(review["execution_blockers"], [])

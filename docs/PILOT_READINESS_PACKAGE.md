@@ -4,10 +4,9 @@ This documents what the product can support for a real, controlled wet-lab
 pilot, and what still requires a human field study. It does not claim any
 human field validation happened — none did in this environment.
 
-Revised 2026-10-10 (lane CL). VoineyLab is an MVP prototype, not
-field-validated. The counts and provider evidence in §1 and §4 are dated
-records; the current test baselines are in the README (§6) and the providers
-in use, with what was live-tested, in the README (§4).
+Revised 2026-10-10 (lane CL). The counts and provider evidence in §1 and §4
+are dated records; the current test baselines are in the README (§7) and the
+providers in use, with what was live-tested, in `docs/FEATURES.md` (F17).
 
 ## 1. Pilot flow — validated without bypassing workflow controls
 
@@ -127,7 +126,7 @@ never logged. See `docs/FEATURES.md` (F18, "밖으로 나가는 것") and
   full ELN/LIMS, not an autonomous scientist, not a safety authority.
 - OIDC against a real IdP and OCR have not been live-tested; the Drive,
   GitHub, protocols.io and eLabFTW integrations were removed on 2026-10-08
-  (lane DI). Of the providers in use (README §4), real calls are recorded for
+  (lane DI). Of the providers in use (`docs/FEATURES.md` F17), real calls are recorded for
   the gpt-6-luna router (lane XO, 2026-10-05) and Gemini analysis and
   translation (lane AQ, 2026-10-10). No speech-recognition accuracy has been
   measured for any provider. Section 4 below is the 2026-08 xAI record.
@@ -152,7 +151,7 @@ Stop the pilot session immediately if:
 ## 4. Voice acceptance — retained provider-backed evidence (2026-08, xAI)
 
 This is a dated record. The product no longer uses xAI by default; the
-providers in use are in the README (§4).
+providers in use are in `docs/FEATURES.md` (F17).
 
 Beyond the deterministic, provider-free evaluators, Commercialization Pass 4
 performed genuine live validation of the two capabilities a real pilot session

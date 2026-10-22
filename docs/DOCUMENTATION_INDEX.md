@@ -10,7 +10,7 @@
 
 | 문서 | 무엇 | 언제 |
 |---|---|---|
-| [`README.md`](../README.md) | 무엇인가, 지금 상태, 사용자 흐름, 하지 않는 것, 빠른 시작, 구조 그림, 검증 | 맨 먼저 |
+| [`README.md`](../README.md) | 무엇인가, 사용자 흐름, 하지 않는 것, 빠른 시작, 구조 그림, 검증과 날짜 적힌 기준 수 | 맨 먼저 |
 | [`FEATURES.md`](FEATURES.md) | 기능마다 무엇을 하고 코드 어디서 하나(파일·함수·설정·시험·한계), 공급자와 실제 호출 기록 | 기능을 알고 싶을 때 |
 | [`DECISIONS.md`](DECISIONS.md) | 주제별 결정: 날짜·결정·이유·관련 줄·코드 위치·남은 질문, 결정을 기다리는 코드 상태 | "왜 이렇게 됐지?" |
 | [`GLOSSARY.md`](GLOSSARY.md) | 사용자 말 ↔ 지금 화면 말 ↔ 코드 이름 | 말이 헷갈릴 때 |
@@ -27,8 +27,8 @@
 
 | 문서 | 무엇 |
 |---|---|
-| [`AGENTS.md`](../AGENTS.md) | **먼저 읽는다.** 모든 코딩 에이전트의 계약: 불변 규칙, 모듈 지도, 바꿀 때 지킬 것, 검증(조건 A/B), 파일 규칙, 용어, 문서 권위 |
-| [`CLAUDE.md`](../CLAUDE.md) | Claude Code 전용 운영(사전 점검, 작업 폴더와 줄, 무거운 실행 잠금, 커밋·PR·병합, 보고서). 첫 줄이 `AGENTS.md` 를 불러온다 |
+| [`AGENTS.md`](../AGENTS.md) | **먼저 읽는다.** 모든 코딩 에이전트의 유일한 계약: 불변 규칙, 모듈 지도, 바꿀 때 지킬 것, 검증(조건 A/B), 파일 규칙, 일하는 법(사전 점검·줄과 작업 폴더·무거운 실행 잠금·커밋·PR·병합·보고서), 용어, 문서 권위 |
+| [`CLAUDE.md`](../CLAUDE.md) | `@AGENTS.md` 한 줄뿐. Claude Code 는 시작할 때 `CLAUDE.md` 만 읽으므로 이 줄로 `AGENTS.md` 를 불러온다. 규칙을 여기에 쓰지 않는다(`tests/test_docs_consistency.py` 가 이 줄을 지킨다) |
 | [`../.agent/architecture.md`](../.agent/architecture.md) | 지금 구조의 유일한 깊은 설명 |
 | [`../.agent/coding_rules.md`](../.agent/coding_rules.md), [`../.agent/security_rules.md`](../.agent/security_rules.md), [`../.agent/testing_strategy.md`](../.agent/testing_strategy.md) | 코드 쓰는 법, 보안·개인정보·안전 규칙, 시험이 증명해야 할 것과 평가 |
 | [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md) | 브랜치·커밋·PR·병합, 파일 담당 |

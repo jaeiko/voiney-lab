@@ -221,15 +221,15 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
         # Decision 2 (2026-10-03): an explicit start of an experiment that
         # never started is a front rule.
         self.assert_front(("프로토콜 시작해줘",), "start_command", step_index=None)
-        # Decision 8 (lane R3): "1단계부터 해 볼까" before the start starts it.
-        self.assert_front(("자 이제 1단계부터 해볼까",), "start_command", step_index=None)
+        # A speculative -ㄹ까 ending does not authorize the start.
+        self.assert_front(("자 이제 1단계부터 해볼까",), "question_or_speculation", step_index=None)
         self.assert_front(("잠깐",), "pause", step_index=None)
 
     def test_an_unanswered_question_is_put_back(self) -> None:
-        # "버퍼 1은 뭐야?" does not answer "4단계 완료하셨나요?"; plan() lets the
-        # question go, but front_plan() hands the turn on with it still open.
+        # A question leaves the same held checkpoint in both rules paths.
         session = self.assert_handed_on(("완료했어", "버퍼 1은 뭐야?"), step_index=3)
-        self.assertIsNone(session.pending_completion_confirmation)
+        self.assertIsNotNone(session.pending_completion_confirmation)
+        self.assertEqual(session.pending_completion_confirmation.requested_turn_id, 2)
 
     def test_a_question_left_open_survives_a_front_hand_on(self) -> None:
         rules_only, front_first = self._twins(3)
@@ -255,6 +255,7 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
 
     def test_every_rule_is_described(self) -> None:
         self.assertEqual(set(FRONT_RULES), {
+            "question_or_speculation",
             "stt_unreliable", "pause", "end_command", "yes_no_open_question",
             "observation_reply", "timer_remaining", "coreference_clarify",
             "repeat_last_reply", "cancel_background_job", "targeted_completion",

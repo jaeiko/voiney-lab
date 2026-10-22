@@ -100,6 +100,8 @@
 | 2026-10-19 | 화면을 다섯 탭(홈·프로토콜·실험·기록·설정)과 떠오르는 시트로 나눈다 | 한 화면에 모든 것이 있었다 | IA (PR #100) | `static/index.html` `TAB_PANELS`, `TAB_ROUTE_PATTERN` | 단계 ②③ 은 진행 중 |
 | 2026-10-04 | 모든 환경 설정 이름에 `VOINEY_LAB_` 머리를 붙인다. 옛 `.env` 는 `scripts/migrate_env.py` 로 바꾼다. 옛 이름이 있으면 시작을 거부한다 | 이름 하나로 | V | `setting_renames.py`; `setting_names.py` `refuse_old_setting_names` | — |
 | 2026-10-20 | 사람이 읽는 글의 제품 이름은 VoineyLab(회사 Voiney). 옛 이름 "Voice Workflow Agent" 는 코드 식별자·설정 이름·보관 문서·옛 기록 인용에만 남긴다 | 문서와 제품 이름을 맞춘다 | DOC4 | 이 결정은 문서만 바꾼다 | — |
+| 2026-10-20 | 에이전트 규칙은 모두 `AGENTS.md` 한 곳에 쓴다(사전 점검, 줄과 작업 폴더, 무거운 실행 잠금, 다른 줄 프로세스, 병합 조건, AI 도구 표시 금지, 파괴적 git 금지, live/contract 구분 포함). `CLAUDE.md` 는 `@AGENTS.md` 한 줄 | 같은 규칙이 모든 에이전트에 필요하다. Claude Code 는 `AGENTS.md` 가 아니라 `CLAUDE.md` 를 읽고, `@경로` 줄로 다른 파일을 불러온다 | DOC4 | `CLAUDE.md`; `tests/test_docs_consistency.py` `AgentContractTests`(그 줄과 파일이 있는지) | — |
+| 2026-10-20 | README 와 문서에 상태 문구("MVP 시제품 — 현장 미검증")를 쓰지 않는다. 검증된 것처럼 쓰지도 않는다: 성능·정확도 숫자는 측정 날짜·조건과 함께, 상용·인증·규제 준수 주장은 없다. 현장 검증 전이라는 사실은 `.agent/product_context.md` 한 줄에만 | 과장도, 상태 딱지도 없이 사실만 | DOC4 | 문서만 바꾼다 | `docs/PILOT_GUIDE.md` 5줄(2단계), `docs/APP_PLAN.md` 의 스토어 문구 계획 |
 
 ## 알려진 빈틈 (결정을 기다리는 코드 상태)
 

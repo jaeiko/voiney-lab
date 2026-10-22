@@ -145,9 +145,10 @@ class SpillIsRecordedAsAnAnomalyTests(_Turns, unittest.TestCase):
                 self.open(2)
                 before = self.projection()
                 plan = self.say(said)
-                self.assertIs(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
-                self.assertTrue(plan.reported_anomaly)
-                self.assertEqual(plan.anomaly_text, said)
+                uncertain = said == "조금 흘린 것 같아"
+                self.assertIs(plan.action, CuratedProtocolAction.DECLINE_COMPLETION if uncertain else CuratedProtocolAction.REPORT_ANOMALY)
+                self.assertEqual(plan.reported_anomaly, not uncertain)
+                self.assertEqual(plan.anomaly_text, None if uncertain else said)
                 self.assertFalse(plan.state_changed)
                 self.assertEqual(self.projection(), before)
 

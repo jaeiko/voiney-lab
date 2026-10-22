@@ -182,8 +182,9 @@ class AnomalyQuestionTests(unittest.TestCase):
 
     def test_anything_else_lets_the_question_go(self) -> None:
         session = self._asked()
+        held = session._pending_anomaly_confirmation.copy()
         _say(session, 3, "버퍼 1은 뭐야?")
-        self.assertIsNone(session._pending_anomaly_confirmation)
+        self.assertEqual(session._pending_anomaly_confirmation, held)
         later = _say(session, 4, "네")
         self.assertFalse(later.reported_anomaly)
 

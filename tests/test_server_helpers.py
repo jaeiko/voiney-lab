@@ -17,6 +17,8 @@ from voiney_lab.tools import ToolContext
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_document_ingestion import operational_document
 from tests.runnable_fixture import runnable_fixture_assumed
+from tests.protocol_vocabulary_support import build_fixture
+from dataclasses import replace
 
 #: The xAI speech path written down, as a deployment writes its provider
 #: (lane PL: an unset VOINEY_LAB_STT_PROVIDER is "설정 필요", not xai).
@@ -371,23 +373,10 @@ class ServerTests(unittest.TestCase):
             placeholder,placeholder,placeholder,
         )
 
-        class Fixture:
-            def __init__(self):
-                self.protocol_id=protocol_id
-                self.revision_id="fixture-test-revision"
-                self.development_only=True
-                self.title="Candidate A development fixture"
-                self.steps=(SimpleNamespace(
-                    source_label="1",step_id="step-1",
-                    instruction_source_text="Exact source instruction.",
-                    evidence=SimpleNamespace(source_page_number=1),
-                    warnings=(),sub_actions=(),
-                ),)
-                self.draft=SimpleNamespace(readiness=SimpleNamespace(
-                    status=SimpleNamespace(value="analysis_required")))
-                # No verified timer manifest, so this fixture has no timers.
-                self.timer_manifest={}
-            def visual_for_step(self,index): return None
+        fixture=replace(build_fixture(
+            protocol_id=protocol_id,title="Candidate A development fixture",
+            steps=("Exact source instruction.",),
+        ),revision_id="fixture-test-revision",timer_manifest={})
 
         class Socket:
             def __init__(self):
@@ -409,7 +398,7 @@ class ServerTests(unittest.TestCase):
             "voiney_lab.server.server_config",return_value=config,
         ), patch(
             "voiney_lab.server.load_curated_protocol_fixture",
-            return_value=Fixture(),
+            return_value=fixture,
         ) as fixture_loader, runnable_fixture_assumed():
             # "Without persistence" is about the *session* not being written
             # down, not about the protocol's rule.  Since STEP 23 a

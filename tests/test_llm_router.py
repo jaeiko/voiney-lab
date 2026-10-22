@@ -166,8 +166,8 @@ class ValidationTests(unittest.TestCase):
              _facts("12단계로 넘어가자")),
             ("no_completion_word", [_change("next", "버퍼 1 넣었어")], _facts("버퍼 1 넣었어")),
             ("end_word_missing", [_change("stop", "그만 끝내자")], _facts("그만 끝내자")),
-            # "1단계부터 해볼까" is a start word since decision 8 (lane R3).
-            ("no_start_word", [_change("start", "이제 해볼까")],
+            # A speculative -ㄹ까 ending cannot authorize even a start.
+            ("interrogative_not_authorized", [_change("start", "이제 해볼까")],
              _facts("자 이제 해볼까", workflow_active=False, workflow_status="ready",
                     experiment_started=False, experiment_running=False)),
             ("no_start_word", [_change("start", "타이머 시작해줘")],
@@ -410,8 +410,10 @@ class ApplyToolProposalTests(unittest.TestCase):
         session._restore(checkpoint)
         self.assertFalse(session.awaiting_server_confirmation)
         _propose(session, 2, "10분 재줘", _change("start_timer", "10분 재줘"))
+        held = session._pending_timer_confirmation.copy()
         _say(session, 3, "버퍼 1은 뭐야?")
-        self.assertFalse(session.awaiting_server_confirmation)
+        self.assertTrue(session.awaiting_server_confirmation)
+        self.assertEqual(session._pending_timer_confirmation, held)
         self.assertFalse(_say(session, 4, "네").state_changed)
         self.assertEqual(session.timer_status()["state"], "not_started")
 
@@ -457,8 +459,10 @@ class ApplyToolProposalTests(unittest.TestCase):
         self.assertEqual(verdict.reason_code, "pending_gate_owns_turn")
         self.assertEqual(plan.speech_text, "먼저 질문에 답해 주세요. 4단계 완료하셨나요?")
         self.assertEqual(session.current_index, 3)
-        self.assertTrue(_say(session, 4, "네").state_changed)
-        self.assertEqual(session.current_index, 4)
+        # The question neither refreshes the held checkpoint nor extends
+        # its existing one-turn fence. A later bare yes cannot advance.
+        self.assertFalse(_say(session, 4, "네").state_changed)
+        self.assertEqual(session.current_index, 3)
 
     def test_late_or_doubled_proposals_change_nothing(self) -> None:
         session = _session(self.fixture)

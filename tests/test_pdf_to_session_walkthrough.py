@@ -89,7 +89,7 @@ class TheLoopStopsAtExecutionReadinessTests(unittest.TestCase):
         )
         self.assertEqual(
             {event.event_type for event in self.store.list_events(self.protocol_id)},
-            {"protocol_registered"},
+            {"protocol_registered", "protocol_source_metadata"},
         )
         fixture = self.catalog.load_executable_fixture(self.protocol_id)
         self.assertEqual(fixture.status, "analysis_passed")

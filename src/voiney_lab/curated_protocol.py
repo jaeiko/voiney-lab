@@ -15,6 +15,7 @@ import json
 import os
 import re
 import struct
+import threading
 import time
 import weakref
 import zlib
@@ -63,7 +64,7 @@ from voiney_lab.llm_router import (
     tool_value_rule,
     validate_tool_proposals,
 )
-from voiney_lab.intent_fences import has_completion_evidence
+from voiney_lab.intent_fences import has_completion_evidence, is_question_or_speculation
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -2349,6 +2350,40 @@ def _glossary_korean_names(
 
 
 @dataclass(frozen=True)
+class _FixtureContentKey:
+    """Exact immutable inputs, independent of a connection's fixture object.
+
+    Include the decoded protocol too: an analysis or OCR repair can change
+    text under the same source hash. Presentation translations are excluded;
+    glossary hearing names are part of the vocabulary's input.
+    """
+
+    source_sha256: str | None
+    fixture_sha256: str
+    revision_id: str
+    protocol: domain.ExperimentProtocol
+    glossary: tuple[tuple[str, str], ...]
+    fixture: CuratedProtocolFixture = field(compare=False, hash=False, repr=False)
+
+
+def _fixture_content_key(fixture: CuratedProtocolFixture) -> _FixtureContentKey:
+    return _FixtureContentKey(
+        fixture.source_pdf_sha256, fixture.fixture_sha256, fixture.revision_id,
+        fixture.draft.protocol, tuple(fixture.translation_glossary or ()), fixture,
+    )
+
+
+_VOCABULARY_LOCK = threading.RLock()
+
+
+@functools.lru_cache(maxsize=32)
+def _cached_protocol_vocabulary(
+    cls: type[ProtocolVocabulary], key: _FixtureContentKey,
+) -> ProtocolVocabulary:
+    return cls._from_fixture_uncached(key.fixture)
+
+
+@dataclass(frozen=True)
 class ProtocolVocabulary:
     """The technical terms one protocol's own text contains.
 
@@ -2625,6 +2660,11 @@ class ProtocolVocabulary:
 
     @classmethod
     def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
+        with _VOCABULARY_LOCK:
+            return _cached_protocol_vocabulary(cls, _fixture_content_key(fixture))
+
+    @classmethod
+    def _from_fixture_uncached(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
         protocol = fixture.draft.protocol
         section_titles = {
             step.step_id: section.title_source_text
@@ -3199,7 +3239,7 @@ def forward_step_request(transcript: str) -> bool:
     ("3단계 끝났어") is the targeted completion's, not this.
     """
 
-    if _QUESTION_MARKERS.search(transcript or ""):
+    if is_question_or_speculation(transcript) or _QUESTION_MARKERS.search(transcript or ""):
         return False
     key = normalize_conversational_utterance(re.sub(r"[.…,]+", " ", transcript or ""))
     return bool(key) and _FORWARD_STEP.fullmatch(key) is not None
@@ -3394,7 +3434,7 @@ def _reply_withholds_assent(transcript: str) -> bool:
     """True when the spoken reply asks a question or hedges."""
 
     raw = " ".join(str(transcript).casefold().split())
-    return bool(_QUESTION_MARKERS.search(raw) or _UNCERTAIN_MARKERS.search(raw))
+    return bool(is_question_or_speculation(raw) or _QUESTION_MARKERS.search(raw) or _UNCERTAIN_MARKERS.search(raw))
 
 
 def _frame_negated(key: str, match: re.Match[str]) -> bool:
@@ -3857,7 +3897,7 @@ _CONTROL_QUESTION = re.compile(
 )
 
 
-def _asked(transcript: str) -> bool:
+def _asked(transcript: str, *, literal_record: bool = False) -> bool:
     """The words ask about a command rather than give it ("시작해?", "재개해도 돼?").
 
     The pause and end words have read questions this way since 2026-10-02;
@@ -3865,7 +3905,8 @@ def _asked(transcript: str) -> bool:
     as the router's server ruling already did (interrogative_not_authorized).
     """
 
-    return bool(_CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
+    return bool(is_question_or_speculation(transcript, literal_record=literal_record)
+                or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
 END_CONFIRMATION_QUESTION = {
     "ko": "실험을 종료할까요?",
     "en": "Do you want to end the experiment?",
@@ -3957,7 +3998,7 @@ def _front_control_intent(transcript: str, language: str) -> CuratedControlInten
     """Pause, end-request and end commands, read before any other rule."""
 
     key = _utterance_key(transcript)
-    if not key or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())):
+    if not key or _asked(transcript):
         return None
     if _FRONT_PAUSE_COMMAND.fullmatch(key):
         return CuratedControlIntent(
@@ -3983,6 +4024,8 @@ def _front_control_intent(transcript: str, language: str) -> CuratedControlInten
 #: names are the ones the lane R evaluation set uses. F1, the emergency gate,
 #: runs in server.py before any planning and is not listed here.
 FRONT_RULES: dict[str, str] = {
+    "question_or_speculation": "a Korean question or speculative ending never "
+                               "asserts an action or consumes an open question",
     "stt_unreliable": "F2 the transcript cannot be trusted: provider quality, "
                       "a reply in another language, a word that needs repair",
     "pause": "F3 a pause word, or wanting to stop without saying 종료",
@@ -4699,7 +4742,7 @@ def note_request(transcript: str) -> tuple[str | None, str | None] | None:
     """
 
     said = " ".join(transcript.split()).strip()
-    if not said or _CONTROL_QUESTION.search(said):
+    if not said or _asked(said, literal_record=True):
         return None
     if _NOTE_BARE.fullmatch(said):
         return None, None
@@ -5604,12 +5647,31 @@ _SPILL_ASKED = re.compile(
 )
 
 
+def _asserted_spill_clause(transcript: str) -> bool:
+    """An asserted spill can precede a separate question ("흘렸는데 어떡해")."""
+
+    said = " ".join(transcript.split())
+    for match in _SPILL_REPORT.finditer(said):
+        ending = re.match(
+            r"(?:어(?:요)?|습니다|다|는데|지만|고)(?=$|[\s,.!]|어떡|어떻게|괜찮)",
+            said[match.end():],
+        )
+        if ending is None:
+            continue
+        end = match.end() + ending.end()
+        if (not is_question_or_speculation(said[:end])
+                and not _UNCERTAIN_MARKERS.search(said[end:])):
+            return True
+    return False
+
+
 def _spill_reading(key: str, transcript: str) -> str | None:
     """"reported" or "not_reported" as above; None leaves the words as they were."""
 
     if not _SPILL_WORD.search(key):
         return None
-    if _SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript):
+    if (_SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript)
+            or (is_question_or_speculation(transcript) and not _asserted_spill_clause(transcript))):
         return "not_reported"
     return "reported" if _SPILL_REPORT.search(key) else None
 
@@ -7570,9 +7632,7 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
-    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS) and not _CONTROL_QUESTION.search(
-        " ".join(transcript.casefold().split())
-    ):
+    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS) and not _asked(transcript):
         return CuratedControlIntent(
             intent_kind="pause_workflow",
             action=CuratedProtocolAction.PAUSE,
@@ -17434,6 +17494,7 @@ class CuratedProtocolSession:
         """Plan one turn by the rules: the front rules, then all the others."""
 
         pre_index, pre_active = self.current_index, self.active
+        question_checkpoint = self._question_checkpoint(transcript, language)
         planned = self._plan(
             transcript,
             turn_id=turn_id,
@@ -17448,8 +17509,41 @@ class CuratedProtocolSession:
         )
         if planned is None:
             raise CuratedProtocolFixtureError("A turn was left unplanned.")
-        return self._with_notebook_question(
+        planned = self._with_notebook_question(
             planned, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language)
+        return self._preserve_question_checkpoint(question_checkpoint, planned, turn_id)
+
+    def _question_checkpoint(self, transcript: str, language: str) -> tuple[Any, ...] | None:
+        if (language == "ko"
+                and is_question_or_speculation(transcript, literal_record=True)
+                and not _asserted_spill_clause(transcript)):
+            return self._checkpoint()
+        return None
+
+    def _preserve_question_checkpoint(
+        self, held: tuple[Any, ...] | None, planned: CuratedProtocolTurnPlan | None, turn_id: int,
+    ) -> CuratedProtocolTurnPlan | None:
+        """Informational routing may answer, but cannot renew or clear a gate."""
+
+        if held is None:
+            return planned
+        after = self._checkpoint()
+        restored = list(held)
+        # Replay and discourse may remember an answer; all workflow fields,
+        # including one-turn confirmation identities, remain exactly held.
+        for index in (4, 5, 6, 7, 8, 11):
+            restored[index] = after[index]
+        self._restore(tuple(restored))
+        if planned is not None:
+            if (planned.state_changed or planned.reported_completion or planned.reported_observation
+                    or planned.reported_anomaly or planned.step_record or planned.note_record
+                    or planned.notebook_record or planned.record_fix):
+                self._last_front_rule = "question_or_speculation"
+                planned = self._words_plan(
+                    "질문이나 추측으로 들었어요. 실제로 하거나 관찰한 내용을 말씀해 주세요.",
+                    intent_kind="question_or_speculation", action=CuratedProtocolAction.DECLINE_COMPLETION)
+            self._replay[turn_id] = planned
+        return planned
 
     # --- The notebook's questions (lane RP3, decision ②) -------------------------
 
@@ -17485,8 +17579,7 @@ class CuratedProtocolSession:
         if held["kind"] == "result":
             return not self.active and self._report_review is None
         return bool(
-            self.active and self.current_index == held["step_index"]
-            and self._revision == held["revision"])
+            self.active and self.current_index == held["step_index"])
 
     def _with_notebook_question(
         self, planned: CuratedProtocolTurnPlan | None, *, pre_index: int, pre_active: bool,
@@ -17503,8 +17596,16 @@ class CuratedProtocolSession:
 
         if planned is None or language != "ko" or not planned.state_changed:
             return planned
+        if self._notebook_question is not None and not self._notebook_question_valid():
+            # Moving away ends the question. A later return to the same step
+            # must not revive it; a pause/resume at that step keeps it valid.
+            self._notebook_question = None
         words: str | None = None
-        if (
+        if (planned.action is CuratedProtocolAction.RESUME and self._notebook_question_valid()
+                and self.confirm_question() is None):
+            assert self._notebook_question is not None
+            words = _NOTEBOOK_QUESTIONS[str(self._notebook_question["kind"])]
+        elif (
             planned.action is CuratedProtocolAction.START and not pre_active and self.active
             and self.open_server_question() is None
         ):
@@ -17676,6 +17777,7 @@ class CuratedProtocolSession:
         """
 
         pre_index, pre_active = self.current_index, self.active
+        question_checkpoint = self._question_checkpoint(transcript, language)
         planned = self._plan(
             transcript,
             turn_id=turn_id,
@@ -17689,8 +17791,9 @@ class CuratedProtocolSession:
             front_only=True,
             hand_on=ROUTER_FIRST_HANDED_ON if router_first else frozenset(),
         )
-        return self._with_notebook_question(
+        planned = self._with_notebook_question(
             planned, pre_index=pre_index, pre_active=pre_active, turn_id=turn_id, language=language)
+        return self._preserve_question_checkpoint(question_checkpoint, planned, turn_id)
 
     #: Lane FX2, decision 1: what a reply holding a yes and a no is told.
     _MIXED_REPLY_LEAD = {
@@ -17839,6 +17942,72 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        arbitration = arbitration or arbitrate_request(transcript)
+        if (
+            language == "ko" and transcript_quality is None
+            and is_question_or_speculation(transcript, punctuation=False, literal_record=True)
+            and arbitration.intent not in {
+                RequestIntent.LEARNING, RequestIntent.PROTOCOL_AUDIT,
+                RequestIntent.HISTORY_RESUME, RequestIntent.UNCERTAINTY,
+                RequestIntent.VISUAL, RequestIntent.CURRENT_STEP, RequestIntent.GENERAL_QA,
+                RequestIntent.COMBINED_LEARNING_NEXT,
+            }
+            and not _asserted_spill_clause(transcript)
+            and not (
+                _TERM_QUESTION_CUE.search(transcript)
+                and self.confirm_question() is None
+                and not _WORKFLOW_CUE.search(transcript)
+                and not _SPILL_WORD.search(transcript)
+                and self.deterministic_control_intent(
+                    transcript, language=language, arbitration=arbitration,
+                ).action in _OBSERVATION_PROMPT_READ_ONLY
+            )
+            and not (
+                self._pause_state != "paused"
+                and self.notebook_question_open() is None and self.confirm_question() is None
+                and not _WORKFLOW_CUE.search(transcript) and not _SPILL_WORD.search(transcript)
+                and self.deterministic_control_intent(
+                    transcript, language=language, arbitration=arbitration,
+                ).action is CuratedProtocolAction.OFF_TOPIC
+            )
+        ):
+            # Read before any pending-answer reader: a question about having
+            # done something is not an answer to the question already open.
+            self._last_front_rule = "question_or_speculation"
+            if self._pause_state == "paused" and self._paused_notice_spoken:
+                planned = replace(self._words_plan(
+                    "현재 일시정지 상태입니다. 재개하려면 '재개'라고 말씀해 주세요.",
+                    intent_kind="question_or_speculation", action=CuratedProtocolAction.PAUSE,
+                ), speech_text="", speech_policy="silent")
+                self._replay[turn_id] = planned
+                return planned
+            key = _utterance_key(transcript)
+            if (any(pattern.search(key) for pattern in _TIMER_QUERY_PATTERNS)
+                    and not any(pattern.search(key) for pattern in _TIMER_START_PATTERNS)):
+                self._last_front_rule = "timer_remaining"
+                planned = self._words_plan(
+                    self._remaining_answer(language), intent_kind="step_timer_status",
+                    action=CuratedProtocolAction.TIMER_STATUS)
+                self._replay[turn_id] = planned
+                return planned
+            words = "질문이나 추측으로 들었어요. 실제로 하거나 관찰한 내용을 말씀해 주세요."
+            if self.active and re.search(r"다음|넘어|완료|끝", transcript):
+                words = _completion_question(self.fixture.steps[self.current_index].source_label)
+            if "타이머" in transcript:
+                timer = self.timer_status()
+                if timer.get("state") == "running":
+                    remaining = int(timer.get("remaining_seconds") or 0)
+                    words = f"타이머가 실행 중이에요. {remaining // 60}분 {remaining % 60}초 남았어요."
+                elif timer.get("state") == "expired":
+                    words = "타이머가 끝났어요."
+                else:
+                    words = "이 질문만으로는 타이머를 시작하지 않았습니다. 시작하려면 '타이머 시작해 줘'라고 말씀해 주세요."
+            planned = self._words_plan(
+                words, intent_kind="question_or_speculation",
+                action=(CuratedProtocolAction.TIMER_STATUS if "타이머" in transcript
+                        else CuratedProtocolAction.DECLINE_COMPLETION))
+            self._replay[turn_id] = planned
+            return planned
         # Lane RA, decision (f): what the screen is told about the last reply
         # belongs to this turn now.
         self._clarify_candidates = []
@@ -18944,7 +19113,7 @@ class CuratedProtocolSession:
                     and self._pause_state != "paused"
                     and _SHORT_COMPLETION.fullmatch(command_key)
                     # "끝났어?" asks; it is not a report.
-                    and not _CONTROL_QUESTION.search(transcript)
+                    and not _asked(transcript)
                 ):
                     # Read as "끝났어" always was: a completion naming no
                     # step, asked about once below ("N단계 완료하셨나요?"),
@@ -22377,7 +22546,7 @@ class CuratedProtocolSession:
                 and timer.get("step_index") == self.current_index
             ),
             control_question=bool(
-                _CONTROL_QUESTION.search(" ".join(transcript.casefold().split()))
+                _asked(transcript)
             ),
             transcript_unreliable=transcript_quality is not None,
             router_first=bool(getattr(self, "router_first", False)),
@@ -22667,10 +22836,20 @@ class CuratedProtocolSession:
         verdict = validate_tool_proposals(proposals, facts, basis)
         self._last_front_rule = None
         if verdict.effect == "refuse" and facts.open_question is not None:
+            # Re-asking is presentation. A question cannot refresh a held
+            # checkpoint's turn/generation or consume it on a refused tool.
+            held = self._checkpoint() if is_question_or_speculation(transcript) else None
             plan = self._ask_open_question_again(
                 facts.open_question, turn_id=turn_id, generation=generation,
                 language=language,
             )
+            if held is not None:
+                self._restore(held)
+                self._replay[turn_id] = plan
+            return AppliedToolProposal(verdict, plan)
+        if verdict.effect == "refuse" and is_question_or_speculation(transcript):
+            plan = self._refused_proposal_plan(verdict, facts, language=language)
+            self._replay[turn_id] = plan
             return AppliedToolProposal(verdict, plan)
         # No question is open for this turn: whatever is left over has gone
         # stale and lapses, as it does when plan() reads a turn.

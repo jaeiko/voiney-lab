@@ -24,9 +24,11 @@ Tests that are *about* the rule must not use this.  See
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import voiney_lab.server as server_module
+from voiney_lab.start_check import StartCheck
 
 RUNNABLE_STATE: dict[str, object] = {
     "available_for_execution": True,
@@ -45,4 +47,39 @@ def runnable_fixture_assumed():
         "_candidate_fixture_execution_state",
         return_value=dict(RUNNABLE_STATE),
     ) as recorded:
-        yield recorded
+        def confirmed_start(protocol_id, revision_id):
+            # These turn-handling tests already assume a materialized source.
+            # Give that fixture an isolated fake ledger, but create the value
+            # and safety receipts through the real StartCheck before reading
+            # readiness. Tests of the start gate use a real catalog instead.
+            fixture = recorded.call_args.args[0]
+            principal_id = server_module._start_check_principal_id()
+            assert principal_id is not None
+            target = {"kind": "analysis", "analysis_id": fixture.revision_id,
+                      "revision_id": revision_id}
+            items = [{"item_id": f"step:{step.step_id}", "kind": "step",
+                      "step_id": step.step_id, "step_label": step.source_label,
+                      "text": step.instruction_source_text}
+                     for step in fixture.steps]
+            events = []
+
+            def append(event_id, protocol_id, revision_number, event_type, payload):
+                events.append(SimpleNamespace(event_type=event_type, payload=payload,
+                                              protocol_revision_number=revision_number))
+
+            catalog = SimpleNamespace(
+                review_draft=lambda pid: {"target": target, "items": items, "available_for_execution": True},
+                _latest_protocol_revision=lambda pid: SimpleNamespace(revision_number=1),
+                _ocr_pages=lambda revision: {},
+                store=SimpleNamespace(list_events=lambda pid: events, append_event=append))
+            checker = StartCheck(catalog, enabled=True)
+            for question in checker._built(protocol_id)[1]:
+                checker.answer(protocol_id, question["question_id"], action="accept",
+                               actor_principal_id=principal_id)
+            checker.acknowledge_safety(protocol_id, target=target,
+                                       actor_principal_id=principal_id)
+            return checker.readiness(protocol_id, actor_principal_id=principal_id,
+                                     revision_id=revision_id)
+
+        with patch.object(server_module, "_protocol_start_readiness", side_effect=confirmed_start):
+            yield recorded

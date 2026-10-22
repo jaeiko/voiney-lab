@@ -127,7 +127,7 @@ class TruncatedFirstAnswerTests(_Case):
         self.assertEqual(first["model"], second["model"])
         self.assertEqual(
             [e.event_type for e in self.store.list_events(self.protocol_id)],
-            ["protocol_registered", "protocol_analysis_requested", "protocol_analysis_started",
+            ["protocol_source_metadata", "protocol_registered", "protocol_analysis_requested", "protocol_analysis_started",
              "protocol_analysis_failed", "protocol_analysis_retry_started",
              "protocol_analysis_ready", "protocol_review_required"])
 
