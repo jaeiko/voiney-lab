@@ -1,7 +1,6 @@
 # Roadmap — now, next, later
 
-Rewritten 2026-10-20 (lane DOC4). VoineyLab is an MVP prototype, not
-field-validated. "Now" is built and described in `docs/FEATURES.md`;
+Rewritten 2026-10-20 (lane DOC4). "Now" is built and described in `docs/FEATURES.md`;
 everything under "Next" and "Later" is **not built** unless it says so.
 Dates and lane names of past decisions are in `docs/DECISIONS.md`.
 

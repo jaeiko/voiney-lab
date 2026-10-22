@@ -1,8 +1,8 @@
 # Security, privacy and safety rules
 
 Rules every change must keep. Revised 2026-10-20 (lane DOC4) against dev
-`e7c31c8`. VoineyLab is an MVP prototype, not field-validated; the controls
-below are MVP controls, not production identity and access management.
+`e7c31c8`. The controls below are for a supervised pilot; they are not
+production identity and access management.
 
 ## 1. Safety and knowledge boundary
 
