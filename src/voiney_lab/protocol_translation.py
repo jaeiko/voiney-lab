@@ -50,12 +50,15 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
 from voiney_lab.curated_protocol import (
     _SOURCE_UN_WORD,
+    _FixtureContentKey,
+    _fixture_content_key,
     _TRANSLATABLE_TERMS,
     PURPOSE_FACT_KEY,
     CuratedProtocolFixture,
@@ -307,9 +310,19 @@ def protocol_context(fixture: CuratedProtocolFixture) -> ProtocolContext:
     )
 
 
+_TRANSLATION_UNITS_LOCK = threading.RLock()
+
+
 def translation_units(fixture: CuratedProtocolFixture) -> tuple[TranslationUnit, ...]:
     """Every sentence the screen, the safety box and the answers draw."""
 
+    with _TRANSLATION_UNITS_LOCK:
+        return _cached_translation_units(_fixture_content_key(fixture))
+
+
+@functools.lru_cache(maxsize=32)
+def _cached_translation_units(key: _FixtureContentKey) -> tuple[TranslationUnit, ...]:
+    fixture = key.fixture
     vocabulary = ProtocolVocabulary.from_fixture(fixture)
 
     def terms(text: str) -> tuple[str, ...]:

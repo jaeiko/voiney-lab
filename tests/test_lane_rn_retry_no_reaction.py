@@ -139,7 +139,11 @@ class RequestWhileARunGoesTests(_ServerCase):
                 server.trigger_protocol_analysis(self.protocol_id),
                 server.trigger_protocol_analysis(self.protocol_id),
             )
-            await server._PROTOCOL_ANALYSIS_TASKS[self.protocol_id]
+            # The deduplicated projection now yields to a worker. The fake
+            # analysis may finish (and release its slot) before both replies.
+            task = server._PROTOCOL_ANALYSIS_TASKS.get(self.protocol_id)
+            if task is not None:
+                await task
             await asyncio.sleep(0)
             return answers
 

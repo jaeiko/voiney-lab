@@ -15,6 +15,7 @@ import json
 import os
 import re
 import struct
+import threading
 import time
 import weakref
 import zlib
@@ -2349,6 +2350,40 @@ def _glossary_korean_names(
 
 
 @dataclass(frozen=True)
+class _FixtureContentKey:
+    """Exact immutable inputs, independent of a connection's fixture object.
+
+    Include the decoded protocol too: an analysis or OCR repair can change
+    text under the same source hash. Presentation translations are excluded;
+    glossary hearing names are part of the vocabulary's input.
+    """
+
+    source_sha256: str | None
+    fixture_sha256: str
+    revision_id: str
+    protocol: domain.ExperimentProtocol
+    glossary: tuple[tuple[str, str], ...]
+    fixture: CuratedProtocolFixture = field(compare=False, hash=False, repr=False)
+
+
+def _fixture_content_key(fixture: CuratedProtocolFixture) -> _FixtureContentKey:
+    return _FixtureContentKey(
+        fixture.source_pdf_sha256, fixture.fixture_sha256, fixture.revision_id,
+        fixture.draft.protocol, tuple(fixture.translation_glossary or ()), fixture,
+    )
+
+
+_VOCABULARY_LOCK = threading.RLock()
+
+
+@functools.lru_cache(maxsize=32)
+def _cached_protocol_vocabulary(
+    cls: type[ProtocolVocabulary], key: _FixtureContentKey,
+) -> ProtocolVocabulary:
+    return cls._from_fixture_uncached(key.fixture)
+
+
+@dataclass(frozen=True)
 class ProtocolVocabulary:
     """The technical terms one protocol's own text contains.
 
@@ -2625,6 +2660,11 @@ class ProtocolVocabulary:
 
     @classmethod
     def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
+        with _VOCABULARY_LOCK:
+            return _cached_protocol_vocabulary(cls, _fixture_content_key(fixture))
+
+    @classmethod
+    def _from_fixture_uncached(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
         protocol = fixture.draft.protocol
         section_titles = {
             step.step_id: section.title_source_text

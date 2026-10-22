@@ -34,6 +34,7 @@
 - **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다.
   엑셀(.xlsx)은 원문이 아니라 고른 프로토콜에 붙는 **시약 표**로 저장하고 분석에 쓰지 않는다.
   **공개 Google Drive·Docs·Sheets 링크**도 받는다: 서버가 내려받아 올리기와 같은 길로 넘기고(Docs 는 PDF 로, Sheets 는 있는 프로토콜의 시약 표로), 링크 주소를 장부에 출처로 남긴다. 비공개 파일은 "공유 설정을 바꾸거나 파일을 내려받아 올려 주세요"라는 서버 문장으로 거절한다.
+  원문 저장·변환·PDF 추출과 OCR 상태 조회는 작업 스레드에서 실행한다. 업로드가 취소돼도 진행 중인 쓰기·등록이 끝난 뒤 임시 파일을 닫고 정리한다. 등록 뒤 OCR 상태만 읽지 못하면 등록 성공은 유지하고 OCR 상태 조회 실패를 알린다. 목록은 연구실 범위를 먼저 거르고 저장된 원문 메타데이터·분석·원장으로 만들며 PDF를 다시 추출하지 않는다. 예전 업로드의 누락된 메타데이터는 서버 시작 때 한 번 보충한다. 검증된 불변 분석 개정은 원문·개정·레코드 바이트를 기준으로 재사용하고, 바이트가 달라지면 저장소의 검증을 다시 거친다.
 - **어디**: `server.py` `register_protocol_pdf`, `attach_protocol_reagent_table`, `import_protocol_link`; `experiment_protocol_pdf.py` (`SOURCE_MEDIA_TYPES`, `convert_source_to_pdf`, `docx_to_pdf`, `image_to_pdf`, `find_office_converter`); `protocol_link_import.py` (`parse_google_link`, `fetch_google_link`, `ALLOWED_LINK_HOSTS`, `MAX_REDIRECTS`, `sniff_media_type`, `LINK_IMPORT_MESSAGES`); `protocol_catalog.py` (`ProtocolCatalog.register`, `read_reagent_workbook`, `review_version_suggestion`); 저장은 `experiment_protocol_files.py`(`objects/sha256/…`)와 `experiment_protocol_store.py`.
 - **한도(코드 값)**: 원문 64 MiB, 사진 1억 화소, 시약 표 5 MiB·셀 20,000개, Word 변환 120 s. 링크: 호스트 `drive.google.com`·`docs.google.com`·`drive.usercontent.google.com`, 리디렉션 5번, 공인 주소만, 전체 60 s.
 - **설정**: `VOINEY_LAB_PROTOCOL_ENABLED`, `VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_OFFICE_CONVERTER`(LibreOffice `soffice` 경로), `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS`(기본 30, 긴 문서는 300 권장 — `docs/DEPLOYMENT_RUNBOOK.md`). HEIC 는 선택 설치 `pip install -e '.[heic]'`.
@@ -42,6 +43,7 @@
 
 ## F3. 사진 글자 읽기 (OCR)
 
+- **작업 상태**: 서버 재시작으로 끊긴 OCR은 `protocol_ocr_interrupted` 실패로 기록하며 다시 올리기나 OCR 요청으로 재시도할 수 있다. OCR 작업이 살아 있는 동안 분석 상태도 작업 중임을 알린다. 분석 모델 클라이언트의 설정 오류는 실패로 기록해 대기 상태에 남기지 않는다.
 - **무엇**: 글자 층이 없거나 읽을 수 없는 **쪽만** OCR 한다. 올리기 직후 자동으로 OCR → 자동 수락 → 분석까지 이어진다(사람의 승인 단계 없음).
   엔진은 NAVER CLOVA OCR 과 Google Cloud Vision. 둘 다 설정하면 둘 다 읽고, 한글이 30 % 이상인 쪽은 CLOVA 의 글을 쓴다. 숫자 값은 두 엔진이 **같은 자리에서 같게** 읽어야 자동으로 정해지고, 다르게 읽은 값은 그 쪽의 확인 카드가 된다. 숫자가 15 % 이상 다르거나 신뢰도가 0.90 미만인 쪽은 같게 읽은 값도 묻는다.
 - **어디**: `experiment_protocol_pdf.page_ocr_reason`(어느 쪽이 OCR 이 필요한지), `server.py` `_automatic_ocr_on_upload`, `_schedule_ocr_then_analysis`; `protocol_ocr.py`(`validate_ocr_result`, 결과는 원본 SHA-256 과 쪽마다 정확히 한 번); `protocol_ocr_providers.py`(`ClovaOcrRecognizer`, `GoogleVisionRecognizer`, `DualEngineOcrProvider`, `select_page_text`, `readings_by_place`); `protocol_catalog.py` `_ocr_page_gate`.
@@ -55,7 +57,7 @@
   - **긴 문서**: 60쪽을 넘거나 출력이 한 번 호출 예산(48,000 토큰)을 넘을 것 같으면 15쪽(겹침 1쪽) 조각으로 나눠 기본 8개씩 동시에 분석하고 합친다(최대 400쪽, 넘으면 호출 전에 거절). 429 가 오면 남은 조각의 동시 수를 절반으로. 다시 시도해도 실패한 조각의 쪽은 "분석 실패 쪽" 확인 항목이 되고, 모든 조각이 실패해야 문서가 실패한다.
   - **자동으로 다시 하기**: 공급자 429·일시적 5xx 는 최대 5번 다시 보낸다. 출력 한도에서 잘린 답과 구조가 깨진 답은 요청마다 한 번 다시 분석한다(잘렸으면 추론 한 단계 아래로). 안전 필터가 막은 답은 바로 한 번 더 보낸다. 근거 검사 실패·시간 초과·설정 없음은 다시 하지 않는다.
   - **사람의 "다시 분석"**: 통과한 분석도 새로 만들 수 있다. 새 분석이 통과하기 전에는 지금 분석으로 계속 쓰고, 이미 시작한 실험은 시작한 버전으로 이어 간다. 같은 단추를 연달아 눌러도 한 번만 돈다. 옛 분석기로 만든 분석에는 "분석기 개선 전 분석 · 다시 분석 권장"이 붙는다.
-  - **번역**: 분석이 통과하면 그 버전의 문장을 번역 역할 모델로 한국어로 한 번 만들어 둔다(용어집 먼저, 시약·장비 이름은 영어 유지). 기계 검사를 통과한 문장만 보여 주고 아니면 원문을 보여 준다.
+  - **번역**: 분석이 통과하면 그 버전의 문장을 번역 역할 모델로 한국어로 한 번 만들어 둔다(용어집 먼저, 시약·장비 이름은 영어 유지). 기계 검사를 통과한 문장만 보여 주고 아니면 원문을 보여 준다. 어휘와 번역 검사 문장 목록은 원문·분석 내용·개정·용어집을 기준으로 재사용한다. 음성 세션은 첫 어휘 계산과 저장 번역 검사를 작업 스레드에서 준비하고 턴은 준비된 어휘를 읽는다. 열린 세션의 번역 묶음은 순서대로 합치고 준비 중 세션 구성이 바뀌면 그 결과를 버린다.
 - **어디**: `server.py` `_protocol_analysis_model`, `_begin_background_analysis`, `trigger_protocol_reanalysis`; `protocol_catalog.py` `ProtocolCatalog.analyze`, `_analyze_in_pieces`, `request_analysis`; `experiment_protocol_analysis.py` (`ANALYSIS_SYSTEM_PROMPT`, `analysis_pieces`, `MAX_ANALYSIS_PAGES`, `ANALYSIS_PIECE_MAX_PAGES`, `MAX_PIECED_ANALYSIS_PAGES`, `PieceConcurrencyGate`, `_repaired_response_structure`); `model_providers.py` (`ProviderRetryPolicy`, `BLOCKED_RESENDS`, `gemini_safety_settings`); 번역 `protocol_translation.py`, `server.py` `_revision_translation_runner`.
 - **설정**: `VOINEY_LAB_ANALYSIS_PROVIDER`·`_MODEL`(설정 필요), `VOINEY_LAB_ANALYSIS_REASONING`(**설정이 비면 `high`**; 쓰는 값은 `.env.example` 의 `low`), `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS`(600), `VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY`(8), `VOINEY_LAB_PROVIDER_RETRY_MAX`(5), `VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS`(60), `VOINEY_LAB_GEMINI_SAFETY`(relaxed), `VOINEY_LAB_ANALYSIS_RESPONSE_GRAMMAR`(false), 번역 `VOINEY_LAB_TRANSLATION_PROVIDER`·`_MODEL`·`_REASONING`.
 - **시험**: `tests/test_experiment_protocol_analysis.py`, `tests/test_lane_an2_piece_concurrency.py`, `tests/test_lane_an3_long_doc_limit.py`, `tests/test_lane_an_analysis_retry.py`, `tests/test_lane_rn_reanalysis.py`, `tests/test_lane_gm_safety.py`, `tests/test_revision_translations.py`.
@@ -94,6 +96,7 @@
 
 ## F8. 듣기
 
+- **세션 준비**: 프로토콜 PDF 읽기·실행 개정 선택·안전 문서 조회는 작업 스레드에서 끝낸 뒤 음성 세션을 시작한다. 재연결도 같은 준비 경로를 쓴다.
 - **무엇**: 화면이 마이크 소리를 16 kHz PCM 으로 보내고, 서버가 20 ms 마다 WebRTC VAD 로 듣는다. **1초(1000 ms) 조용하면** 그 말을 끝으로 보고 한 번에 글로 옮긴다(15초가 넘으면 자른다). 답은 문장마다 음성 합성으로 보낸다. 말하는 도중에 끼어들면 안내를 멈춘다. 자기 목소리가 마이크로 되돌아온 것(최근 3초, 12자 이상, 80 % 겹침)은 버린다.
   - **목소리 맞추기**: 시작 때(또는 "목소리 다시 맞춰 줘") 한 문장을 읽어 내 목소리 크기를 기준으로 삼는다. 기준보다 많이 작은 말(민감도 높음 9 dB · 보통 12 dB · 낮음 18 dB)은 다른 사람 말로 보고 글로 옮기지 않는다("다른 사람 말로 보여 듣지 않은 말 N개"). 기준은 세션에만 있고 저장하지 않는다.
   - **시끄러운 곳**: 맞춘 세션에서는 웅성거림·펌프 소리로 VAD 가 계속 말소리를 들어도 내 목소리 크기로 말 끝을 찾는다. "시끄러운 곳 모드"를 고르면 다음·완료·타이머 시작과 기록을 한 번 되묻는다. 1분 안에 무시한 말이 3번이면 그 모드를 권한다(10분에 한 번까지).
