@@ -70,13 +70,36 @@ class ConnectionRecordTests(ReconnectHarness, unittest.TestCase):
         session_id, durable = self.run_to_timer()
         server_module._HEARD_CONNECTIONS.pop(session_id, None)
         lost = self.clock.now + 30
+        lost_at_ms = lost * 1000
         self.clock.advance(12)
-        self.reconnect(session_id, durable, reconnect={"lost_at_ms": lost * 1000, "reason": "server_silent"})
+        self.reconnect(session_id, durable, reconnect={"lost_at_ms": lost_at_ms, "reason": "server_silent"})
         payload = self.gaps()[0]["payload"]
         self.assertEqual(payload["lost_at_source"], "screen")
-        self.assertEqual(payload["lost_at"], _iso(lost))
+        # The wire's milliseconds, not the pre-transmission seconds, are
+        # authoritative. Fractional milliseconds can lose a float bit when
+        # the test encodes them; the real page sends integer milliseconds.
+        self.assertEqual(payload["lost_at"], _iso(lost_at_ms / 1000))
         self.assertEqual(payload["reason"], "server_silent")
         self.assertEqual(payload["timers_ended"], 1)
+
+    def test_screen_time_at_microsecond_rounding_boundary(self) -> None:
+        # Fixed value reproducing the 2026-10-21 CI failure, independent of
+        # the wall clock used when this test runs.
+        self.clock.now = 1792561774.3114166
+        session_id, durable = self.run_to_timer()
+        server_module._HEARD_CONNECTIONS.pop(session_id, None)
+        lost = self.clock.now + 30
+        self.assertEqual(_iso(lost), "2026-10-21T05:50:04.311417+00:00")
+        lost_at_ms = lost * 1000
+        # Two seconds floats with distinct microsecond ISO renderings map
+        # to the same wire value: the server cannot recover the hidden one.
+        self.assertEqual(lost_at_ms, 1792561804.3114164 * 1000)
+        self.clock.advance(12)
+        self.reconnect(session_id, durable, reconnect={"lost_at_ms": lost_at_ms, "reason": "server_silent"})
+        payload = self.gaps()[0]["payload"]
+        self.assertEqual(payload["lost_at_source"], "screen")
+        self.assertEqual(payload["lost_at"], _iso(lost_at_ms / 1000))
+        self.assertEqual(payload["lost_at"], "2026-10-21T05:50:04.311416+00:00")
 
     def test_an_unknown_reason_or_moment_is_kept_as_unknown(self) -> None:
         session_id, durable = self.run_to_timer()
