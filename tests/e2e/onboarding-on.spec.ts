@@ -66,6 +66,9 @@ async function mock(page: Page) {
     await route.fulfill({ json: answer(body) });
   });
   await page.route('**/api/protocols/p-on-1/start-check', (route: Route) => route.fulfill({ json: CHECK }));
+  // Lane IA (2026-10-22): since lane SAFE (#115) the server keeps the start and the sheet's [읽었어요] leaves the
+  // safety acknowledgement at start-check/safety; this spec's protocol is a stand-in, so that answer is one too.
+  await page.route('**/api/protocols/p-on-1/start-check/safety', (route: Route) => route.fulfill({ json: { ready: true, reason: null, target: CHECK.target, missing_question_ids: [], safety_acknowledged: true } }));
   await page.route('**/api/protocols/p-on-1/review', (route: Route) => route.fulfill({ json: REVIEW }));
   await page.route('**/api/protocols/p-on-1/reagent-tables', (route: Route) => route.fulfill({ json: { tables: [] } }));
   await page.route('**/api/protocols/p-on-1/analysis/status', (route: Route) => route.fulfill({ json: { state: 'passed', worker_running: false } }));
