@@ -223,7 +223,7 @@ class AttachTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
         self.assertEqual(entry.analysis_status, self.status)
-        self.assertEqual(kinds, ["protocol_registered", "protocol_reagent_table_attached"])
+        self.assertEqual(kinds, ["protocol_source_metadata", "protocol_registered", "protocol_reagent_table_attached"])
 
     async def test_refusals_name_their_reason(self) -> None:
         async with self.client() as client:

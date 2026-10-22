@@ -1,5 +1,34 @@
 # Migration Notes
 
+## Experiment record schema 1 → 2
+
+The report store adds `organization_id`, `owner_principal_id` and
+`ownership_migrated`. Startup and the report access boundary fill old records
+from the matching workspace experiment session. If its owner cannot be found,
+the report/protocol binding identifies only the lab: only that lab's
+administrator may read it. A record with no identifiable lab stays inaccessible.
+No historical event or prose is rewritten. The migration is idempotent;
+new records receive ownership from the server principal, never request fields.
+Back up the report and workspace databases together before upgrading. Older
+servers refuse schema 2; restore the pair of backups to roll back.
+
+HTTP exports, report review/status and socket report reads allow the owner or
+the same lab's administrator. Corrections, value confirmation, ratings and
+prose regeneration require the owner. The administrator may append only PI
+confirmation to another person's notebook. Unavailable records return 404
+(socket: `report_not_found`), including records from another lab.
+
+Protocol registration now scopes checksum deduplication to the server's lab.
+Existing bound protocol ids stay valid. A newly registered lab/source pair uses
+a deterministic scoped id and its own registration event; the original PDF
+checksum and content-addressed bytes stay identical. No catalog schema changes.
+The starter pack uses the same registration scope.
+
+Account/password confirmation lockout is now per account name, not per shared
+network address. Password changes reuse the login failure budget. The invite
+tool follows the pilot launcher's fixed workspace unless `--data-dir` is
+explicitly supplied; shell workspace settings no longer redirect its writes.
+
 ## Commercial workspace schema 1 → 2
 
 Schema 2 adds the persistent experiment-session foundation:

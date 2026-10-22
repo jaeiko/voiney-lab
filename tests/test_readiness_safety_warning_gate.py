@@ -431,7 +431,7 @@ class ProviderClaimsAreShownNotJudgedTests(unittest.TestCase):
         self.assertTrue(self.entry.available_for_execution)
         self.assertEqual(
             {event.event_type for event in self.store.list_events(self.protocol_id)},
-            {"protocol_registered"},
+            {"protocol_registered", "protocol_source_metadata"},
         )
 
     def test_the_claim_itself_is_untouched(self) -> None:

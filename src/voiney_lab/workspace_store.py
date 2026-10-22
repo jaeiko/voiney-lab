@@ -1158,6 +1158,26 @@ class WorkspaceStore:
         except AuthorizationDeniedError as exc:
             raise WorkspaceNotFoundError("The resource is not available.") from exc
 
+    def report_ownership(
+        self, report_id: str, session_id: str, protocol_id: str,
+    ) -> tuple[str | None, str | None]:
+        """Legacy reports inherit their session's owner; bindings only identify a lab."""
+
+        row = self._connection.execute(
+            "SELECT organization_id,owner_principal_id FROM experiment_sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if row is not None:
+            return row["organization_id"], row["owner_principal_id"]
+        for kind, identifier in (("experiment_report", report_id), ("protocol_catalog", protocol_id)):
+            row = self._connection.execute(
+                "SELECT organization_id FROM resource_bindings WHERE resource_type=? AND resource_id=?",
+                (kind, identifier),
+            ).fetchone()
+            if row is not None:
+                return row["organization_id"], None
+        return None, None
+
     def resource_ids(
         self, principal: Principal, resource_type: str
     ) -> frozenset[str]:
@@ -1417,7 +1437,7 @@ class WorkspaceStore:
         ``protocol_title`` is the protocol family's title where the revision
         is one of this workspace's (None otherwise; the server fills it from
         the protocol catalog). ``day_sequence`` is the experiment's place
-        among the organization's experiments started the same UTC day
+        among the owner's runs of this protocol started the same UTC day
         (``day_sequence_date``), counted in start order: 1 for the first.
         """
 
@@ -1430,9 +1450,9 @@ class WorkspaceStore:
         day = str(row["started_at"])[:10]
         sequence = self._connection.execute(
             """SELECT COUNT(*) FROM experiment_sessions
-            WHERE organization_id=? AND substr(started_at,1,10)=?
+            WHERE organization_id=? AND owner_principal_id=? AND protocol_id=? AND substr(started_at,1,10)=?
               AND (started_at<? OR (started_at=? AND session_id<=?))""",
-            (row["organization_id"], day, row["started_at"], row["started_at"],
+            (row["organization_id"], row["owner_principal_id"], row["protocol_id"], day, row["started_at"], row["started_at"],
              row["session_id"]),
         ).fetchone()[0]
         return {
@@ -1539,6 +1559,8 @@ class WorkspaceStore:
         expected_version: int,
         event_key: str,
         reason: str | None = None,
+        expected_voice_connection_id: str | None = None,
+        expected_step_id: str | None = None,
     ) -> dict[str, object]:
         row = self._experiment_row(principal, session_id, write=True)
         target = {
@@ -1556,11 +1578,23 @@ class WorkspaceStore:
             reason = _text(reason, "Experiment transition reason", maximum=2000)
         event_key = _identifier(event_key, "Experiment event key")
         now = _now()
-        target_version = expected_version + 1
         paused_at = now if target == "paused" else None
         ended_at = now if target in {"completed", "stopped"} else None
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            # A manual note/photo increments version without moving the voice
+            # projection. Only its current connection at the same step may
+            # use the latest version, checked inside this write transaction.
+            row = self._experiment_row(principal, session_id, write=True)
+            if expected_voice_connection_id is not None:
+                if (row["last_voice_connection_id"] != expected_voice_connection_id
+                        or row["current_step_id"] != expected_step_id
+                        or int(row["version"]) < expected_version):
+                    raise WorkspaceConflictError("Experiment voice connection or step changed.")
+                expected_version = int(row["version"])
+            if target not in _EXPERIMENT_TRANSITIONS[row["status"]]:
+                raise WorkspaceConflictError("Experiment transition is not allowed.")
+            target_version = expected_version + 1
             cursor = self._connection.execute(
                 """UPDATE experiment_sessions SET status=?,paused_at=?,ended_at=?,
                 updated_at=?,version=? WHERE session_id=? AND organization_id=?
@@ -2140,11 +2174,11 @@ class WorkspaceStore:
         return dict(stored)
 
     def evidence_for_download(
-        self, principal: Principal, session_id: str, evidence_id: str
+        self, principal: Principal, session_id: str, evidence_id: str, *, every_owner: bool = False,
     ) -> dict[str, object]:
         """Return tenant-scoped evidence metadata including its server-only path."""
 
-        self._experiment_row(principal, session_id)
+        self._experiment_row(principal, session_id, every_owner=every_owner)
         selected_id = _identifier(evidence_id, "Evidence identifier")
         row = self._connection.execute(
             """SELECT evidence_id,session_id,evidence_kind,original_filename,

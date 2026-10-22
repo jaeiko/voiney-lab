@@ -450,4 +450,5 @@ def test_cross_tenant_report_idor(monkeypatch, tmp_path):
             profile="admin-a",
         )
     )
-    assert owner.status_code == 200
+    # A binding alone cannot establish a legacy report's session owner.
+    assert owner.status_code == 404

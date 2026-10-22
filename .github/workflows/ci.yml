@@ -21,6 +21,15 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      - name: Import server from a clean runtime install
+        run: |
+          python -m venv "$RUNNER_TEMP/runtime-venv"
+          mkdir "$RUNNER_TEMP/runtime-source"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/runtime-source"
+          cd "$RUNNER_TEMP/runtime-source"
+          "$RUNNER_TEMP/runtime-venv/bin/python" -m pip install .
+          "$RUNNER_TEMP/runtime-venv/bin/python" -c "import voiney_lab.server"
+
       - name: Install package with test extras
         run: python -m pip install -e '.[test]'
 

@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace as _replace_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from voiney_lab.report_projection import project_protocol_for_report, project_step_for_report
@@ -117,7 +117,7 @@ EVENT_NAMES_KO: dict[str, str] = {
 class ExperimentReportStore:
     """Small SQLite store with one report per procedure session."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -183,6 +183,7 @@ class ExperimentReportStore:
             );
             """
         )
+        connection.execute("BEGIN IMMEDIATE")
         rows = connection.execute(
             "SELECT schema_version FROM experiment_report_metadata"
         ).fetchall()
@@ -191,10 +192,56 @@ class ExperimentReportStore:
                 "INSERT INTO experiment_report_metadata(schema_version) VALUES (?)",
                 (self.SCHEMA_VERSION,),
             )
+        elif len(rows) == 1 and rows[0][0] == 1:
+            # Ownership is metadata; historical ledger events are never rewritten.
+            for column in ("organization_id TEXT", "owner_principal_id TEXT",
+                           "ownership_migrated INTEGER NOT NULL DEFAULT 0"):
+                connection.execute(f"ALTER TABLE experiment_reports ADD COLUMN {column}")
+            connection.execute("UPDATE experiment_report_metadata SET schema_version=?", (self.SCHEMA_VERSION,))
         elif len(rows) != 1 or rows[0][0] != self.SCHEMA_VERSION:
             connection.close()
             raise RuntimeError("experiment report schema is unsupported")
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(experiment_reports)")}
+        if "organization_id" not in columns:
+            connection.execute("ALTER TABLE experiment_reports ADD COLUMN organization_id TEXT")
+            connection.execute("ALTER TABLE experiment_reports ADD COLUMN owner_principal_id TEXT")
+            connection.execute("ALTER TABLE experiment_reports ADD COLUMN ownership_migrated INTEGER NOT NULL DEFAULT 0")
+        connection.execute("CREATE INDEX IF NOT EXISTS experiment_report_owner_history "
+                           "ON experiment_reports(organization_id,owner_principal_id,protocol_id,started_at,report_id)")
+        connection.commit()
         return connection
+
+    def backfill_ownership(
+        self, resolve: Callable[[str, str, str], tuple[str | None, str | None]],
+    ) -> dict[str, int]:
+        """Fill legacy metadata from workspace sessions, never from the caller."""
+
+        counts = {"owned": 0, "admin_only": 0, "unscoped": 0}
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT report_id,session_id,protocol_id FROM experiment_reports WHERE ownership_migrated=0"
+            ).fetchall()
+            for row in rows:
+                organization, owner = resolve(row["report_id"], row["session_id"], row["protocol_id"])
+                cursor = connection.execute(
+                    "UPDATE experiment_reports SET organization_id=?,owner_principal_id=?,ownership_migrated=1 "
+                    "WHERE report_id=? AND ownership_migrated=0",
+                    (organization, owner, row["report_id"]),
+                )
+                counts["owned" if owner else "admin_only" if organization else "unscoped"] += cursor.rowcount
+        return counts
+
+    def require_access(
+        self, report_id: str, *, organization_id: str, owner_principal_id: str,
+        every_owner: bool = False,
+    ) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT organization_id,owner_principal_id FROM experiment_reports WHERE report_id=?", (report_id,)
+            ).fetchone()
+        if (row is None or row["organization_id"] != organization_id
+                or (not every_owner and row["owner_principal_id"] != owner_principal_id)):
+            raise KeyError("experiment report not found")
 
     def open_report(
         self,
@@ -206,6 +253,8 @@ class ExperimentReportStore:
         protocol_sha256: str,
         readiness_status: str,
         development_only: bool,
+        organization_id: str | None = None,
+        owner_principal_id: str | None = None,
     ) -> dict[str, Any]:
         session_id = _clean_identifier(session_id, "session_id")
         protocol_id = _clean_identifier(protocol_id, "protocol_id")
@@ -214,6 +263,11 @@ class ExperimentReportStore:
             raise ValueError("protocol_sha256 is invalid")
         title = _clean_text(protocol_title, maximum=400)
         readiness = _clean_identifier(readiness_status, "readiness_status")
+        if owner_principal_id is not None and organization_id is None:
+            raise ValueError("report owner requires an organization")
+        for value, name in ((organization_id, "organization_id"), (owner_principal_id, "owner_principal_id")):
+            if value is not None:
+                _clean_identifier(value, name)
         report_id = "ER-" + hashlib.sha256(
             f"{session_id}\x1f{protocol_id}\x1f{protocol_revision}".encode()
         ).hexdigest()[:20].upper()
@@ -224,15 +278,21 @@ class ExperimentReportStore:
                 INSERT OR IGNORE INTO experiment_reports(
                   report_id,session_id,protocol_id,protocol_title,
                   protocol_revision,protocol_sha256,readiness_status,
-                  development_only,status,started_at,timezone
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                  development_only,status,started_at,timezone,organization_id,owner_principal_id,ownership_migrated
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     report_id, session_id, protocol_id, title,
                     protocol_revision, protocol_sha256, readiness,
                     int(bool(development_only)), "in_progress", now, "UTC",
+                    organization_id, owner_principal_id, int(organization_id is not None),
                 ),
             )
+            stored = connection.execute(
+                "SELECT organization_id,owner_principal_id FROM experiment_reports WHERE report_id=?", (report_id,)
+            ).fetchone()
+            if organization_id is not None and tuple(stored) != (organization_id, owner_principal_id):
+                raise ValueError("report ownership cannot change")
         return self.get_report(report_id)
 
     def append_event(
@@ -380,7 +440,7 @@ class ExperimentReportStore:
                 f"""
                 SELECT report_id,session_id,protocol_id,protocol_title,status,started_at,ended_at,
                        anomaly_count,blocker_count,finalization_version,
-                       development_only
+                       development_only,organization_id,owner_principal_id
                   FROM experiment_reports {where}
                  ORDER BY started_at,report_id
                 """,
@@ -402,14 +462,18 @@ class ExperimentReportStore:
         """
 
         day = str(report["started_at"])[:10]
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return {"day_sequence": None, "day_sequence_date": day}
         with self._connect() as connection:
             sequence = connection.execute(
                 """
                 SELECT COUNT(*) FROM experiment_reports
                  WHERE substr(started_at,1,10)=?
+                   AND protocol_id=? AND organization_id IS ? AND owner_principal_id IS ?
                    AND (started_at<? OR (started_at=? AND report_id<=?))
                 """,
-                (day, report["started_at"], report["started_at"], report["report_id"]),
+                (day, report["protocol_id"], report.get("organization_id"), report.get("owner_principal_id"),
+                 report["started_at"], report["started_at"], report["report_id"]),
             ).fetchone()[0]
         return {"day_sequence": sequence, "day_sequence_date": day}
 
@@ -674,13 +738,16 @@ class ExperimentReportStore:
         is the one answered after the run before it started.
         """
 
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return None
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT MAX(started_at) FROM experiment_reports
                  WHERE protocol_id=? AND started_at<?
+                   AND organization_id IS ? AND owner_principal_id IS ?
                 """,
-                (report["protocol_id"], report["started_at"]),
+                (report["protocol_id"], report["started_at"], report.get("organization_id"), report.get("owner_principal_id")),
             ).fetchone()
         return row[0] if row and row[0] else None
 
@@ -691,14 +758,18 @@ class ExperimentReportStore:
         Same protocol, any revision; a run still in progress is not "지난번".
         """
 
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return None
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT report_id FROM experiment_reports
                  WHERE protocol_id=? AND started_at<? AND ended_at IS NOT NULL AND report_id<>?
+                   AND organization_id IS ? AND owner_principal_id IS ?
                  ORDER BY started_at DESC, report_id DESC LIMIT 1
                 """,
-                (report["protocol_id"], report["started_at"], report["report_id"]),
+                (report["protocol_id"], report["started_at"], report["report_id"],
+                 report.get("organization_id"), report.get("owner_principal_id")),
             ).fetchone()
         return self.get_report(row[0]) if row else None
 
@@ -2651,6 +2722,17 @@ def report_start_check_answers(
     except Exception as exc:  # noqa: BLE001 -- said on the report, never raised
         log.warning("report start check not read error=%s", type(exc).__name__)
         return None
+    owner=report_data.get("owner_principal_id")
+    # Identified records never inherit anonymous or other people's answers.
+    if owner is not None:
+        own_events=[]
+        for item in events:
+            payload=item.get("payload") if isinstance(item, Mapping) else getattr(item, "payload", None)
+            if isinstance(payload,Mapping) and payload.get("actor_principal_id")==owner:
+                own_events.append(item)
+        events=own_events
+    elif report_data.get("organization_id") is not None:
+        return []  # Quarantined legacy record: the experimenter is unknown.
     return start_check_answers_between(events, since=since, until=str(report_data.get("started_at") or ""))
 
 

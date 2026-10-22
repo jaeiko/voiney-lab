@@ -4,13 +4,16 @@ VoineyLab (the company is Voiney) is a voice guide that lets wet-lab
 researchers run their own uploaded protocol hands-free: upload → analysis and
 source-evidence check → only the necessary confirmation cards → start → step
 by step voice guidance (timers, questions, records, re-asks) → lab notebook
-and report. It is an **MVP prototype, not field-validated**, not an ELN or
-LIMS, and not a validated GLP/GMP/clinical system. Its central authority is
+and report. It is not an ELN or LIMS and not a validated GLP/GMP/clinical
+system; what has and has not been measured is in
+`.agent/product_context.md`, and no document may claim more. Its central authority is
 deterministic server-owned workflow state and source-linked protocol
 evidence; models only propose.
 
-This file is the one contract every coding agent follows (Codex reads it
-directly; Claude Code imports it from `CLAUDE.md`). The deep architecture is
+This file is the one contract every coding agent follows, for the code and
+for how to work here. Codex reads it directly; Claude Code reads `CLAUDE.md`,
+which holds only the line `@AGENTS.md` and so loads this file at launch. Put
+every rule here, not in `CLAUDE.md`. The deep architecture is
 `.agent/architecture.md`; behaviour per feature is `docs/FEATURES.md`; the
 reasons and dates are `docs/DECISIONS.md`.
 
@@ -199,7 +202,7 @@ git diff --check
   - **Condition B** — none present (CI, a fresh clone): the modules in
     `tests/conftest.py` `MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF` and other
     licensed-PDF tests are skipped.
-  The latest measured numbers, with dates, are in README section 8.
+  The latest measured numbers, with dates, are in README section 7.
 - Browser tests (`tests/e2e/`, Playwright) run in CI: `npm install && npx
   playwright install --with-deps chromium && npx playwright test`.
 
@@ -215,6 +218,104 @@ People's areas (who to ask before changing a file) are in
 - Do not read `docs/archive/` or `docs/course-archive/` unless a person asks
   about a specific past decision; they are records, not instructions.
 - Change only the files a task allows; name any other file you had to touch.
+
+## How to work here
+
+### Before changing anything
+
+Run and read, in every new session:
+
+```bash
+pwd
+git branch --show-current
+git status --short
+git log --oneline --decorate -10
+```
+
+Look into any untracked file or folder you do not recognise before touching
+it — it may be someone's work in progress (`docs/demo_script.md` is the known
+case, see "File ownership").
+
+### Lanes and worktrees
+
+- Work arrives as a lane brief (줄): a name, a branch a person created from
+  `dev`, the files it may change and the decisions already taken. When a
+  decision needs a file outside the list, finish the change minimally and
+  name each such file in the report (what it does, what it cannot change, the
+  risk); do not merge until a person has read that note.
+- One worker per working tree. Each lane runs in its own git worktree; do not
+  work in another lane's tree or the main checkout.
+- Copies made for checking (a worktree at an older commit, say) go under
+  `~/reports/scratch/lane-<lane>/` and are removed when the lane ends.
+- The git stash is shared by every worktree: never use a bare
+  `git stash`/`git stash pop`; prefer a temporary commit.
+
+### Heavy runs and other lanes' processes
+
+- Several lanes share one machine. Wrap every full `pytest` run in the shared
+  lock: `flock ~/reports/.heavy.lock env … python -m pytest -q` (flags as in
+  "Verification"). Measure each commit with the tests it touches, without the
+  lock, and run the full suite once at the pull request's head.
+- Playwright (`tests/e2e/`) runs in CI, not locally, unless a brief says so.
+- Never stop another lane's process (pytest, a benchmark, a dev server). If
+  you must stop one, first check that `/proc/<pid>/cwd` is inside your own
+  worktree.
+- External calls (model, OCR, STT/TTS, web) only within the brief's limit;
+  count them in the report.
+
+### Commits, pull requests and merging
+
+People's branch, commit and pre-PR rules are in `docs/GIT_WORKFLOW.md`. For
+agents:
+
+- Branch from `dev`; open the pull request into `dev`
+  (`gh pr create --base dev`). `main` takes merges from `dev` only, by a
+  person. Commit each decision or phase separately with a message that says
+  what changed.
+- Measure the failing-test list before the work. You may merge your own pull
+  request as a merge commit (`gh pr merge <branch> --merge`) only when all
+  four hold: the failure list equals the one measured before and nothing new
+  fails; no decision is left for a person (anything you stopped on and
+  reported blocks the merge); only the files the brief allows changed; the
+  base is `dev`. Fetch `dev` just before merging and resolve overlaps
+  mechanically only. Otherwise open the pull request, do not merge, and say
+  why at the top of the report. If a merge command is refused by a
+  permission check, stop and report; do not work around it.
+- Only a person opens or merges a pull request into `main`, force-pushes
+  (`--force` and `--force-with-lease` alike), deletes a branch (local or
+  remote; `gh pr merge --delete-branch` included), or renames or transfers
+  the repository.
+- No destructive shortcuts: no `git reset --hard`, `git clean -fd` or force
+  push unless a person asks for that exact action. Investigate unfamiliar
+  state instead of discarding it.
+- Commit messages and pull request bodies carry no AI-tool attribution: no
+  `Co-Authored-By:` line naming an AI model, no "Generated with …" line, no
+  tool or session link such as `claude.ai/code` or `Claude-Session:`. A
+  `commit-msg` hook in this machine's clone (`.git/hooks/`, not versioned, so
+  other clones lack it) strips some of these lines from commit messages; it
+  leaves `claude.ai/code` links and never sees a pull request body. So check
+  both before `gh pr create`; neither command may print anything:
+
+  ```bash
+  grep -niE "co-authored-by: *claude|generated with \[claude code\]|claude\.ai/code|claude-session" <PR body file>
+  git log --format=%B dev..HEAD | grep -niE "co-authored-by: *claude|generated with \[claude code\]|claude-session"
+  ```
+- `gh pr edit` fails on this repository (a deprecated Projects field); edit a
+  body with `gh api -X PATCH repos/jaeiko/voiney-lab/pulls/<n> -F body=@<file>`.
+
+### Reports and pull request bodies
+
+- The lane report is `~/reports/lane_<lane>_report.md`. At the top: merged or
+  not (and why not), the pull request number, tests added, and the full-suite
+  count with its condition (A or B) and date. Then what the brief asked for,
+  what is left for a person, and anything marked "확인 안 됨".
+- The pull request body is written in Korean, appended to
+  `~/reports/pr_lane_<lane>.md`, so another team member can carry the work on
+  from it alone, with the sections `docs/GIT_WORKFLOW.md` lists.
+- Numbers only as measured, with date and condition; "live-tested" only as
+  rule 11 allows.
+
+If this file and `docs/GIT_WORKFLOW.md` disagree, stop and ask a person.
 
 ## Terminology (as the code uses it)
 
@@ -239,8 +340,9 @@ Code and tests first: where a document and the code disagree, the code is
 right and the document is fixed. Then, in order:
 
 1. `README.md` — what the product is, how to run it, the doc map.
-2. `AGENTS.md` (this file) and `.agent/*.md` — the contract;
-   `.agent/architecture.md` is the one deep description of the architecture.
+2. `AGENTS.md` (this file; `CLAUDE.md` only imports it) and `.agent/*.md` —
+   the contract; `.agent/architecture.md` is the one deep description of the
+   architecture.
 3. `docs/FEATURES.md`, `docs/DECISIONS.md`, `docs/GLOSSARY.md`, then the
    operating guides listed in `docs/DOCUMENTATION_INDEX.md`.
 4. `docs/MIGRATION_NOTES.md` — schema and setting history.

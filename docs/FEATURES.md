@@ -21,19 +21,20 @@
 ## F1. 계정과 로그인
 
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
-  비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름이나 같은 곳에서 15분 안에 5번 틀리면 잠긴다(429).
+  비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.
   관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 스스로 지울 수 있다(마지막 관리자는 안 됨).
   파일럿 실행기는 기본으로 `accounts` 로 연다(`--dev-identity` 를 주면 `dev`).
 - **어디**: `accounts.py` (`AUTH_MODES`, `AccountStore.create_invite`, `sign_up`, `LOGIN_FAILURE_LIMIT`, `SESSION_LIFETIME`), `server.py` (`commercial_identity_boundary` 미들웨어, `_ACCOUNT_OPEN_PATHS`, `/api/auth/*` 경로, `POST /api/auth/delete-account`, `_account_is_admin`), `identity.py` (`DevIdentityProvider`, OIDC), `scripts/pilot_invite.py`.
 - **설정**: `VOINEY_LAB_AUTH_MODE`, `VOINEY_LAB_APP_ORIGINS`(앱 출처에 토큰 로그인), `VOINEY_LAB_WORKSPACE_ENABLED`·`VOINEY_LAB_WORKSPACE_DATA_DIR`(계정은 작업공간이 있어야 한다), OIDC 는 `VOINEY_LAB_OIDC_ISSUER` 등.
 - **시험**: `tests/test_lane_on_accounts_store.py`, `tests/test_lane_on_auth_api.py`, `tests/test_lane_fx4_pilot_login.py`, `tests/test_lane_fx5_account_erasure.py`, `tests/test_lane_fx5_delete_account_route.py`.
-- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 `X-Forwarded-For` 의 첫 값을 믿으므로 그 머리를 정하는 프록시 뒤에서만 의미가 있다. OIDC 는 가짜 검증기로만 시험했다.
+- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 계정 이름 기준이며 전달 주소 머리글로 우회할 수 없다. OIDC 는 가짜 검증기로만 시험했다.
 
 ## F2. 프로토콜 들여오기
 
-- **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다.
+- **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 연구실 안에서 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다. 다른 연구실이 같은 파일을 올리면 별도의 카탈로그 항목으로 등록한다. 원문 바이트는 공유할 수 있지만 분석·검토·소유 범위는 연구실마다 따로 남는다. 스타터 팩 도구도 같은 규칙을 쓴다.
   엑셀(.xlsx)은 원문이 아니라 고른 프로토콜에 붙는 **시약 표**로 저장하고 분석에 쓰지 않는다.
   **공개 Google Drive·Docs·Sheets 링크**도 받는다: 서버가 내려받아 올리기와 같은 길로 넘기고(Docs 는 PDF 로, Sheets 는 있는 프로토콜의 시약 표로), 링크 주소를 장부에 출처로 남긴다. 비공개 파일은 "공유 설정을 바꾸거나 파일을 내려받아 올려 주세요"라는 서버 문장으로 거절한다.
+  원문 저장·변환·PDF 추출과 OCR 상태 조회는 작업 스레드에서 실행한다. 업로드가 취소돼도 진행 중인 쓰기·등록이 끝난 뒤 임시 파일을 닫고 정리한다. 등록 뒤 OCR 상태만 읽지 못하면 등록 성공은 유지하고 OCR 상태 조회 실패를 알린다. 목록은 연구실 범위를 먼저 거르고 저장된 원문 메타데이터·분석·원장으로 만들며 PDF를 다시 추출하지 않는다. 예전 업로드의 누락된 메타데이터는 서버 시작 때 한 번 보충한다. 검증된 불변 분석 개정은 원문·개정·레코드 바이트를 기준으로 재사용하고, 바이트가 달라지면 저장소의 검증을 다시 거친다.
 - **어디**: `server.py` `register_protocol_pdf`, `attach_protocol_reagent_table`, `import_protocol_link`; `experiment_protocol_pdf.py` (`SOURCE_MEDIA_TYPES`, `convert_source_to_pdf`, `docx_to_pdf`, `image_to_pdf`, `find_office_converter`); `protocol_link_import.py` (`parse_google_link`, `fetch_google_link`, `ALLOWED_LINK_HOSTS`, `MAX_REDIRECTS`, `sniff_media_type`, `LINK_IMPORT_MESSAGES`); `protocol_catalog.py` (`ProtocolCatalog.register`, `read_reagent_workbook`, `review_version_suggestion`); 저장은 `experiment_protocol_files.py`(`objects/sha256/…`)와 `experiment_protocol_store.py`.
 - **한도(코드 값)**: 원문 64 MiB, 사진 1억 화소, 시약 표 5 MiB·셀 20,000개, Word 변환 120 s. 링크: 호스트 `drive.google.com`·`docs.google.com`·`drive.usercontent.google.com`, 리디렉션 5번, 공인 주소만, 전체 60 s.
 - **설정**: `VOINEY_LAB_PROTOCOL_ENABLED`, `VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_OFFICE_CONVERTER`(LibreOffice `soffice` 경로), `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS`(기본 30, 긴 문서는 300 권장 — `docs/DEPLOYMENT_RUNBOOK.md`). HEIC 는 선택 설치 `pip install -e '.[heic]'`.
@@ -42,6 +43,7 @@
 
 ## F3. 사진 글자 읽기 (OCR)
 
+- **작업 상태**: 서버 재시작으로 끊긴 OCR은 `protocol_ocr_interrupted` 실패로 기록하며 다시 올리기나 OCR 요청으로 재시도할 수 있다. OCR 작업이 살아 있는 동안 분석 상태도 작업 중임을 알린다. 분석 모델 클라이언트의 설정 오류는 실패로 기록해 대기 상태에 남기지 않는다.
 - **무엇**: 글자 층이 없거나 읽을 수 없는 **쪽만** OCR 한다. 올리기 직후 자동으로 OCR → 자동 수락 → 분석까지 이어진다(사람의 승인 단계 없음).
   엔진은 NAVER CLOVA OCR 과 Google Cloud Vision. 둘 다 설정하면 둘 다 읽고, 한글이 30 % 이상인 쪽은 CLOVA 의 글을 쓴다. 숫자 값은 두 엔진이 **같은 자리에서 같게** 읽어야 자동으로 정해지고, 다르게 읽은 값은 그 쪽의 확인 카드가 된다. 숫자가 15 % 이상 다르거나 신뢰도가 0.90 미만인 쪽은 같게 읽은 값도 묻는다.
 - **어디**: `experiment_protocol_pdf.page_ocr_reason`(어느 쪽이 OCR 이 필요한지), `server.py` `_automatic_ocr_on_upload`, `_schedule_ocr_then_analysis`; `protocol_ocr.py`(`validate_ocr_result`, 결과는 원본 SHA-256 과 쪽마다 정확히 한 번); `protocol_ocr_providers.py`(`ClovaOcrRecognizer`, `GoogleVisionRecognizer`, `DualEngineOcrProvider`, `select_page_text`, `readings_by_place`); `protocol_catalog.py` `_ocr_page_gate`.
@@ -55,7 +57,7 @@
   - **긴 문서**: 60쪽을 넘거나 출력이 한 번 호출 예산(48,000 토큰)을 넘을 것 같으면 15쪽(겹침 1쪽) 조각으로 나눠 기본 8개씩 동시에 분석하고 합친다(최대 400쪽, 넘으면 호출 전에 거절). 429 가 오면 남은 조각의 동시 수를 절반으로. 다시 시도해도 실패한 조각의 쪽은 "분석 실패 쪽" 확인 항목이 되고, 모든 조각이 실패해야 문서가 실패한다.
   - **자동으로 다시 하기**: 공급자 429·일시적 5xx 는 최대 5번 다시 보낸다. 출력 한도에서 잘린 답과 구조가 깨진 답은 요청마다 한 번 다시 분석한다(잘렸으면 추론 한 단계 아래로). 안전 필터가 막은 답은 바로 한 번 더 보낸다. 근거 검사 실패·시간 초과·설정 없음은 다시 하지 않는다.
   - **사람의 "다시 분석"**: 통과한 분석도 새로 만들 수 있다. 새 분석이 통과하기 전에는 지금 분석으로 계속 쓰고, 이미 시작한 실험은 시작한 버전으로 이어 간다. 같은 단추를 연달아 눌러도 한 번만 돈다. 옛 분석기로 만든 분석에는 "분석기 개선 전 분석 · 다시 분석 권장"이 붙는다.
-  - **번역**: 분석이 통과하면 그 버전의 문장을 번역 역할 모델로 한국어로 한 번 만들어 둔다(용어집 먼저, 시약·장비 이름은 영어 유지). 기계 검사를 통과한 문장만 보여 주고 아니면 원문을 보여 준다.
+  - **번역**: 분석이 통과하면 그 버전의 문장을 번역 역할 모델로 한국어로 한 번 만들어 둔다(용어집 먼저, 시약·장비 이름은 영어 유지). 기계 검사를 통과한 문장만 보여 주고 아니면 원문을 보여 준다. 어휘와 번역 검사 문장 목록은 원문·분석 내용·개정·용어집을 기준으로 재사용한다. 음성 세션은 첫 어휘 계산과 저장 번역 검사를 작업 스레드에서 준비하고 턴은 준비된 어휘를 읽는다. 열린 세션의 번역 묶음은 순서대로 합치고 준비 중 세션 구성이 바뀌면 그 결과를 버린다.
 - **어디**: `server.py` `_protocol_analysis_model`, `_begin_background_analysis`, `trigger_protocol_reanalysis`; `protocol_catalog.py` `ProtocolCatalog.analyze`, `_analyze_in_pieces`, `request_analysis`; `experiment_protocol_analysis.py` (`ANALYSIS_SYSTEM_PROMPT`, `analysis_pieces`, `MAX_ANALYSIS_PAGES`, `ANALYSIS_PIECE_MAX_PAGES`, `MAX_PIECED_ANALYSIS_PAGES`, `PieceConcurrencyGate`, `_repaired_response_structure`); `model_providers.py` (`ProviderRetryPolicy`, `BLOCKED_RESENDS`, `gemini_safety_settings`); 번역 `protocol_translation.py`, `server.py` `_revision_translation_runner`.
 - **설정**: `VOINEY_LAB_ANALYSIS_PROVIDER`·`_MODEL`(설정 필요), `VOINEY_LAB_ANALYSIS_REASONING`(**설정이 비면 `high`**; 쓰는 값은 `.env.example` 의 `low`), `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS`(600), `VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY`(8), `VOINEY_LAB_PROVIDER_RETRY_MAX`(5), `VOINEY_LAB_PROVIDER_RETRY_MAX_WAIT_SECONDS`(60), `VOINEY_LAB_GEMINI_SAFETY`(relaxed), `VOINEY_LAB_ANALYSIS_RESPONSE_GRAMMAR`(false), 번역 `VOINEY_LAB_TRANSLATION_PROVIDER`·`_MODEL`·`_REASONING`.
 - **시험**: `tests/test_experiment_protocol_analysis.py`, `tests/test_lane_an2_piece_concurrency.py`, `tests/test_lane_an3_long_doc_limit.py`, `tests/test_lane_an_analysis_retry.py`, `tests/test_lane_rn_reanalysis.py`, `tests/test_lane_gm_safety.py`, `tests/test_revision_translations.py`.
@@ -96,6 +98,7 @@
 
 ## F8. 듣기
 
+- **세션 준비**: 프로토콜 PDF 읽기·실행 개정 선택·안전 문서 조회는 작업 스레드에서 끝낸 뒤 음성 세션을 시작한다. 재연결도 같은 준비 경로를 쓴다.
 - **무엇**: 화면이 마이크 소리를 16 kHz PCM 으로 보내고, 서버가 20 ms 마다 WebRTC VAD 로 듣는다. **1초(1000 ms) 조용하면** 그 말을 끝으로 보고 한 번에 글로 옮긴다(15초가 넘으면 자른다). 답은 문장마다 음성 합성으로 보낸다. 말하는 도중에 끼어들면 안내를 멈춘다. 자기 목소리가 마이크로 되돌아온 것(최근 3초, 12자 이상, 80 % 겹침)은 버린다.
   - **목소리 맞추기**: 시작 때(또는 "목소리 다시 맞춰 줘") 한 문장을 읽어 내 목소리 크기를 기준으로 삼는다. 기준보다 많이 작은 말(민감도 높음 9 dB · 보통 12 dB · 낮음 18 dB)은 다른 사람 말로 보고 글로 옮기지 않는다("다른 사람 말로 보여 듣지 않은 말 N개"). 기준은 세션에만 있고 저장하지 않는다.
   - **시끄러운 곳**: 맞춘 세션에서는 웅성거림·펌프 소리로 VAD 가 계속 말소리를 들어도 내 목소리 크기로 말 끝을 찾는다. "시끄러운 곳 모드"를 고르면 다음·완료·타이머 시작과 기록을 한 번 되묻는다. 1분 안에 무시한 말이 3번이면 그 모드를 권한다(10분에 한 번까지).
@@ -143,6 +146,7 @@
 - **무엇**: 말한 관찰·측정·편차·메모와 이상 사항("시약을 엎질렀어")은 그 사람의 말 그대로 지우지 않는 장부에 남고, 서버가 되읽어 준다. "안 보임"처럼 부정이 든 말은 통째로 남는다. "방금 기록 고쳐 줘, X가 아니라 Y"는 한 번 묻고 고침을 덧붙인다(원래 것은 남는다). 소수점이 분명하지 않은 값은 다시 묻는다.
   **실험 노트 질문**(한국어, 상태를 바꾸지 않음, "넘어가"로 건너뜀): 시작 뒤 "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요.", 관찰 대상이 있는 단계를 설명 없이 마치면 "관찰한 것 있으면 말씀해 주세요.", 끝나면 "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요." "목적 고쳐: …"로 고친다. 명령이나 질문은 답이 아니라 명령으로 처리된다.
   기록 탭에서 손으로 관찰을 적고 사진·문서(최대 32 MiB, 해석하지 않음)를 붙일 수 있다.
+  화면에서 메모·사진을 저장한 뒤에도 열린 음성 연결의 일시정지·재개·종료는 서버의 최신 버전으로 처리한다. 연결과 현재 단계가 같은지 거래 안에서 확인하며, 다른 탭이 넘겨받았거나 단계가 바뀌면 거절한다. HTTP가 직접 보내는 버전 검사는 그대로 적용한다.
 - **어디**: `curated_protocol.py` (앞단 규칙 `note_record`, `anomaly_report`, `record_fix`; `PURPOSE_QUESTION_KO`, `OBSERVATION_QUESTION_KO`, `RESULT_QUESTION_KO`, `open_notebook_question`); `tools.py` `record_value_keeping_negation`; `server.py` `_record_experiment_report_plan`, `_notebook_end_question`; 장부 `experiment_reports.py` `ExperimentReportStore.append_event`; 작업공간 `workspace_store.py`(`experiment_session_events`, `experiment_observations`, `experiment_evidence`).
 - **설정**: `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED`, `VOINEY_LAB_EXPERIMENT_REPORT_DB`, `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION`(true, 관찰 질문만 끔).
 - **시험**: `tests/test_lane_n_voice_notes.py`, `tests/test_lane_n_ledger_verbatim.py`, `tests/test_lane_ts_record_negation.py`, `tests/test_lane_rp3_voice_questions.py`.
@@ -155,12 +159,16 @@
   보고서 모델은 끝난 뒤 한 번 불러 관찰 문장과 결과 한 단락만 쓰게 하고, 기록·원문에 없는 값·숫자·추측·안전 지시·인용을 검사해 통과한 것만 "AI 정리"로 넣는다(모델이 없으면 서버 문장만). 실험자가 아직 확인하지 않은 값은 "[미확인]"으로 표시하고 화면에서 하나씩 확인하거나 고친다.
   관찰 질문에 대한 답은 질문이 가리킨 완료 단계에 저장한다. 같은 값 확인을 다시 보내도 확인 사건은 하나만 남기며, 동시에 온 PI 확인은 각각 남긴다. 조사 뒤 보고서 갱신에도 현재 연결의 설정 식별자를 붙인다.
   내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 회의용 파일 이름도 `.meeting.docx`·`.meeting.pdf`로 실제 형식에 맞춘다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
+  기록의 소유 계정과 연구실은 서버가 정한다. HTTP·음성 소켓 조회와 내보내기는 본인 또는 같은 연구실 관리자만 가능하다. 값 확인·정정·평점·보고서 재생성은 본인만 가능하며, 관리자가 남의 기록에 쓸 수 있는 것은 PI 확인뿐이다. 다른 연구실 기록과 권한 없는 기록은 없는 것처럼 응답한다. 옛 기록의 소유자는 작업공간 세션으로 채우며, 소유자를 모르면 해당 연구실 관리자만 읽는다.
+  지난 실행 비교·시작 전 확인 답·하루의 실행 순번은 같은 소유 계정·연구실·프로토콜 안에서만 구한다. 소유자가 불명인 옛 기록에는 다른 사람의 시작 전 답을 넣지 않으며 순번을 비워 둔다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
 - **설정**: `VOINEY_LAB_REPORT_PROVIDER`·`_MODEL`·`_REASONING`, `VOINEY_LAB_REPORT_WRITER_ENABLED`(true), `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`(25), `VOINEY_LAB_REPORT_TIMEZONE`(Asia/Seoul), `VOINEY_LAB_OFFICE_CONVERTER`.
 - **시험**: `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`.
 - **한계**: 새로고침 뒤에는 지난 보고서를 화면에서 다시 받는 길이 없다(링크는 실험이 끝날 때만 채워진다). PDF·랩미팅·xlsx·"확인함"은 화면 단추가 없다.
 
 ## F14. 연결 끊김
+
+계정 모드에서는 로그아웃·비밀번호 변경·계정 끄기·계정 삭제 시 그 계정의 열린 음성 연결을 모두 닫는다. 다른 계정의 연결은 계속된다. 계정 경로는 이미 시작된 음성 보고서 저장 스레드도 완료를 기다리며, 계정 삭제는 그 뒤 삭제 목록을 만들어 늦은 저장이 기록을 다시 남기지 않게 한다. 만료나 운영자 도구의 세션 회수도 주기적으로 확인한다.
 
 - **무엇**: 화면은 1초마다 서버와 신호를 주고받아 **3초 안에** 끊김을 알아챈다. 빨간 띠와 소리·진동으로 알리고, 화면을 읽기 전용으로 바꾸고, 마이크를 멈춘다. 끊긴 동안 화면은 서버 시각으로 단계 타이머를 이어 세고 1분 전·끝 알림을 낸다. 1·2·4·8초, 그 뒤 15초마다 다시 이어 **같은 실험**을 계속하고, 서버 상태로 화면을 바꾼다. 놓친 타이머 알림을 전하고 끊긴 시간을 내용 없는 사건으로 남긴다.
 - **어디**: `static/connection.js` (`SILENT_LOST_MS`, `resumable()`); `server.py` `_send_heartbeats`, `_restore_lost_connection`, `_restore_standing_timer`, `_reconnect_timer_notices`, `_record_connection_restored`.

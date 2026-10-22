@@ -92,7 +92,7 @@ class ExperimentListNameTests(unittest.TestCase):
             }
             store.close()
         self.assertEqual(items["experiment-1"]["day_sequence"], 1)
-        self.assertEqual(items["experiment-2"]["day_sequence"], 2)
+        self.assertEqual(items["experiment-2"]["day_sequence"], 1)
         self.assertEqual(
             items["experiment-2"]["day_sequence_date"],
             items["experiment-2"]["started_at"][:10],
