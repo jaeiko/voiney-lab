@@ -98,6 +98,26 @@ def test_punctuated_questions_do_not_renew_the_endpoint_checkpoint(words):
     assert workflow_checkpoint(session) == before
 
 
+@pytest.mark.parametrize("words,index", [
+    ("타이머 시작할지", 1), ("타이머 시작했을지", 1),
+    ("투명해질지", 4), ("투명해졌을지", 4),
+])
+def test_future_interrogative_ji_cannot_start_a_timer_or_attest_an_endpoint(words, index):
+    from voiney_lab.runtime_routing import route_curated_runtime_turn
+    session = session_at(index)
+    before = workflow_checkpoint(session)
+    plan = route_curated_runtime_turn(
+        session, words, turn_id=3, language="ko", configuration_id=1, generation=1,
+    ).plan
+    assert not plan.state_changed
+    assert not plan.reported_observation
+    assert not plan.reported_completion
+    assert workflow_checkpoint(session) == before
+    assert evidence_fence_rejection(
+        utterance=words, evidence=words, bounded_control=True,
+    ) == "interrogative_not_authorized"
+
+
 class ServedQuestionTests(VoiceNotesHarness, unittest.TestCase):
     def test_timer_spill_resume_and_forward_questions_keep_both_ledgers(self):
         async def scenario(socket, listener, say):

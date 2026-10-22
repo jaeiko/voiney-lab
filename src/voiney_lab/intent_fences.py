@@ -97,7 +97,10 @@ def is_question_or_speculation(
     formal_question = re.search("ᆸ니까(?=$|[\\s.,!?。？！~])", decomposed)
     # Past -았/었/였- and irregular -렀/렸/웠- all carry jongseong ㅆ.
     past_question = re.search("ᆻ(?:지(?:요)?|죠)(?=$|[\\s.,!?。？！~])", decomposed)
-    return bool(_QUESTION_ENDING.search(grammatical) or _SPECULATION.search(said) or formal_question or past_question
+    # Interrogative -ㄹ지/-을지 attaches to any predicate carrying final ㄹ.
+    future_question = re.search("ᆯ지(?:요)?(?=$|[\\s.,!?。？！~])", decomposed)
+    return bool(_QUESTION_ENDING.search(grammatical) or _SPECULATION.search(said)
+                or formal_question or past_question or future_question
                 or (punctuation and _INTERROGATIVE_EVIDENCE.search(said)))
 
 
