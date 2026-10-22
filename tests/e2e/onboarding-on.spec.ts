@@ -1,5 +1,10 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
 
+declare global {
+  // The page's own top-level var (index.html).
+  var wizard: { settings: object | null; voices: { voices?: object[] } | null };
+}
+
 // Lane ON stage ② (human decision 2026-10-16/18): the start, one thing per
 // screen -- the voice, the agent's voice, the protocol, two key values, the
 // safety check, the start. Lane IA (2026-10-19): the steps open as a sheet
@@ -69,10 +74,18 @@ async function mock(page: Page) {
   return answers;
 }
 
+// Lane IA (2026-10-22, handed over by lane SAFE: CI flaked at 5733fe1 on '← 이전'): the sheet's steps are built
+// from the settings and the voices the page loads at start; on a cold server the first press could come
+// before the voices, so the agent's step was not yet there. Wait for them, as a person sees the list.
+async function pageReady(page: Page) {
+  await page.waitForFunction(() => typeof wizard === 'object' && wizard.settings !== null && (wizard.voices?.voices?.length ?? 0) === 2);
+}
+
 test.describe('Start wizard (lane ON)', () => {
   test('opens one step at a time and walks to the start through the servers questions', async ({ page }) => {
     const answers = await mock(page);
     await page.goto('/#/experiment');
+    await pageReady(page);
     // Lane IA addendum: the steps open as a sheet from the experiment tab's start button.
     await page.locator('#experiment-start-open').click();
     await expect(page.locator('#start-wizard')).toBeVisible();
@@ -119,6 +132,7 @@ test.describe('Start wizard (lane ON)', () => {
   test('← 이전 goes back one step', async ({ page }) => {
     await mock(page);
     await page.goto('/#/experiment');
+    await pageReady(page);
     await page.locator('#experiment-start-open').click();
     await page.locator('#wizard-primary').click();
     await expect(page.locator('#wizard-title')).toHaveText('안내 목소리 고르기');
