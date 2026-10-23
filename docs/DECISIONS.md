@@ -61,7 +61,7 @@
 | 2026-10-13 | Word(.docx)는 서버의 LibreOffice(+ `fonts-nanum`)로 PDF 로 바꾼다. 없으면 Word 올리기만 거절하고 서버는 시작한다 | 연구실은 프로토콜을 Word 로 갖고 있다 | AN | `experiment_protocol_pdf.py` `docx_to_pdf`, `find_office_converter` | — |
 | 2026-10-13 | HEIC 사진은 선택 설치(`.[heic]`, pillow-heif) | pillow-heif 바퀴가 통째로 GPLv2 | AN | `pyproject.toml` `heic` | README 는 날짜를 10-14 로 적었었다. `pyproject.toml` 의 주석은 10-13 |
 | 2026-10-14 | 파일럿 실행기는 LibreOffice 가 없으면 `[WARN]` 만 찍고 시작한다 | PDF 만 올리는 파일럿에는 필요 없다 | DOC3 | `scripts/run_pilot.sh` 의 `--- Source formats ---` | — |
-| 2026-10-20 | 공개 Google Drive 파일·Docs(PDF 로)·Sheets(시약 표로, 있는 프로토콜에만) 링크로 가져온다. 호스트를 정해 두고, 리디렉션 5회, 공인 주소만, 올리기와 같은 크기 한도, 바이트로 형식 판단, 로그인 필요, 비공개 파일은 서버 문장으로 거절(OAuth 없음) | 설문(10-19, 13명)에서 프로토콜을 두는 곳으로 Google Drive 가 가장 많았다(5명) | DR (PR #107) | `protocol_link_import.py` `ALLOWED_LINK_HOSTS`, `MAX_REDIRECTS`; `server.py` `import_protocol_link`. 시험은 가짜 HTTP(contract-tested) | 화면 단추는 아직 없다. protocols.io 가져오기와 비공개 파일 OAuth 는 나중 결정 |
+| 2026-10-20 | 공개 Google Drive 파일·Docs(PDF 로)·Sheets(시약 표로, 있는 프로토콜에만) 링크로 가져온다. 호스트를 정해 두고, 리디렉션 5회, 공인 주소만, 올리기와 같은 크기 한도, 바이트로 형식 판단, 로그인 필요, 비공개 파일은 서버 문장으로 거절(OAuth 없음) | 설문(10-19, 13명)에서 프로토콜을 두는 곳으로 Google Drive 가 가장 많았다(5명) | DR (PR #107) | `protocol_link_import.py` `ALLOWED_LINK_HOSTS`, `MAX_REDIRECTS`; `server.py` `import_protocol_link`. 시험은 가짜 HTTP(contract-tested) | Drive·Docs 화면은 #116으로 연결했다. Sheets 화면·protocols.io·비공개 파일 OAuth는 나중 결정 |
 
 ## 6. 계정 · 파일럿 운영 · 지표
 
@@ -100,17 +100,47 @@
 | 2026-10-18 | 연결 끊김은 3초 안에 알아채고(1초 심장 박동, 2.8초 무응답), 소리·진동과 큰 띠로 알리고, 화면을 읽기 전용으로, 마이크를 멈춘다. 화면은 서버 시각으로 단계 타이머를 이어 세고, 1·2·4·8·15초 간격으로 다시 이어 같은 실험을 계속한다 | 와이파이가 끊겨도 안전해야 하고 타이머가 가장 중요하다 | NET (PR #92) | `server.py` `_send_heartbeats`, `_record_connection_restored`; `static/connection.js` | 웹에서는 화면 꺼짐을 막을 수 없다(앱 필요) |
 | 2026-10-18 | 웹이 쓸모를 보인 뒤 스토어 앱(Capacitor 8.5.3 하이브리드 + 백그라운드 마이크·정확한 알람 플러그인). 앱 로그인은 허용한 출처로 | 화면을 끄고 듣기, 앱 밖 타이머 알림 | APP0, APP1 (PR #96·#98) | `mobile/`; 설정 `VOINEY_LAB_APP_ORIGINS` | 스토어 등록, 결제, iOS, 실제 기기 시험 |
 | 2026-10-19 | 쉬운 말 규칙: 해요체 하나, 한 문장 한 뜻, 내부 말 금지(용어 사전), 단추는 동사, 오류 = 무엇이 일어났나 + 무엇을 하나. 숫자·단위·인용·안전 글은 그대로 | 사용자는 해요체와 합니다체를 섞어 듣는다(말하는 511줄 중 277 : 234) | WORD (PR #99) | 1단계는 문서만(`docs/VOICE_AND_TONE.md`). 코드 문구는 아직 바꾸지 않았다 | 2단계 진행 |
-| 2026-10-19 | 화면을 다섯 탭(홈·프로토콜·실험·기록·설정)과 떠오르는 시트로 나눈다 | 한 화면에 모든 것이 있었다 | IA (PR #100) | `static/index.html` `TAB_PANELS`, `TAB_ROUTE_PATTERN` | 단계 ②③ 은 진행 중 |
+| 2026-10-19 | 화면을 다섯 탭(홈·프로토콜·실험·기록·설정)과 떠오르는 시트로 나눈다 | 한 화면에 모든 것이 있었다 | IA (PR #100) | `static/index.html` `TAB_PANELS`, `TAB_ROUTE_PATTERN` | 단계 ②③도 #104·#113으로 병합. 후속은 파일럿 전 필수 범위만(UI4) |
 | 2026-10-04 | 모든 환경 설정 이름에 `VOINEY_LAB_` 머리를 붙인다. 옛 `.env` 는 `scripts/migrate_env.py` 로 바꾼다. 옛 이름이 있으면 시작을 거부한다 | 이름 하나로 | V | `setting_renames.py`; `setting_names.py` `refuse_old_setting_names` | — |
 | 2026-10-20 | 사람이 읽는 글의 제품 이름은 VoineyLab(회사 Voiney). 옛 이름 "Voice Workflow Agent" 는 코드 식별자·설정 이름·보관 문서·옛 기록 인용에만 남긴다 | 문서와 제품 이름을 맞춘다 | DOC4 | 이 결정은 문서만 바꾼다 | — |
 | 2026-10-20 | 에이전트 규칙은 모두 `AGENTS.md` 한 곳에 쓴다(사전 점검, 줄과 작업 폴더, 무거운 실행 잠금, 다른 줄 프로세스, 병합 조건, AI 도구 표시 금지, 파괴적 git 금지, live/contract 구분 포함). `CLAUDE.md` 는 `@AGENTS.md` 한 줄 | 같은 규칙이 모든 에이전트에 필요하다. Claude Code 는 `AGENTS.md` 가 아니라 `CLAUDE.md` 를 읽고, `@경로` 줄로 다른 파일을 불러온다 | DOC4 | `CLAUDE.md`; `tests/test_docs_consistency.py` `AgentContractTests`(그 줄과 파일이 있는지) | — |
-| 2026-10-20 | README 와 문서에 상태 문구("MVP 시제품 — 현장 미검증")를 쓰지 않는다. 검증된 것처럼 쓰지도 않는다: 성능·정확도 숫자는 측정 날짜·조건과 함께, 상용·인증·규제 준수 주장은 없다. 현장 검증 전이라는 사실은 `.agent/product_context.md` 한 줄에만 | 과장도, 상태 딱지도 없이 사실만 | DOC4 | 문서만 바꾼다 | `docs/PILOT_GUIDE.md` 5줄(2단계), `docs/APP_PLAN.md` 의 스토어 문구 계획 |
+| 2026-10-20 | README 와 문서에 상태 문구("MVP 시제품 — 현장 미검증")를 쓰지 않는다. 검증된 것처럼 쓰지도 않는다: 성능·정확도 숫자는 측정 날짜·조건과 함께, 상용·인증·규제 준수 주장은 없다. 현장 검증 전이라는 사실은 `.agent/product_context.md` 한 줄에만 | 과장도, 상태 딱지도 없이 사실만 | DOC4 | 문서만 바꾼다 | PILOT_GUIDE는 DOC4 2단계에서 반영. APP_PLAN의 스토어 문구 계획은 사람이 결정 |
+
+## 10. 작업 · 시험 · 파일럿 기준판 결정
+
+| 날짜 | 결정 | 이유·적용 | 코드·문서 위치 |
+|---|---|---|---|
+| 2026-10-21 · 22 | 교차 에이전트 검토 대기 대신 PR 전체 diff를 처음 보는 눈으로 스스로 다시 읽고 지적·조치를 줄별 검토 보고서에 남긴다 | 다른 줄의 검토 대기를 병합 전제로 삼지 않는다. 발견한 회귀를 고친 뒤 선행 줄·최신 dev·CI·네 조건을 확인한다 | `AGENTS.md`의 Commits, pull requests and merging |
+| 2026-10-22 · 23 | 이 줄이 바꾸지 않은 실패는 한 번 다시 실행한다. 통과하면 이름·실행 근거를 흔들리는 시험으로 기록한다. 다시 실패하면 dev 머리와 비교해 원래 실패는 기록하고 계속, 이 줄 회귀는 고친다 | 실패를 숨기거나 단언을 느슨하게 하지 않되 관계없는 실패 때문에 줄을 멈추지 않는다 | `AGENTS.md`의 Unrelated failures |
+| 2026-10-23 | UI4는 파일럿 전에 필요한 화면 연결·결함만 한다 | 서버 기능 전부를 화면에 늘리거나 낮은 우선순위 화면을 모두 고치는 범위가 아니다. 실제 반영은 병합 코드·USER_GUIDE 기준 | `docs/USER_GUIDE.md`, `docs/FEATURES.md` F19 |
+| 2026-10-23 | 파일럿 기준판은 **원래 폴더 조건 A 확인 → 사람의 음성 시험 → 사람의 태그·main 반영** 순서다 | 조건 B만 확인한 음성·서버 변경은 dev 병합 뒤 태그 전에 조건 A로 확인한다. dev 자동 배포가 음성 시험이나 기준판 지정은 아니다 | `AGENTS.md`, `docs/PILOT_GUIDE.md` 8절 |
+| 2026-10-23 | 파일럿 문서 넷을 PILOT_GUIDE 하나로 합치고 나머지 셋은 보관한다. PILOT_COMPARISON은 독립된 비교 절차로 둔다 | 로그인·안전 확인·데이터 처리·HTTPS·참가자 안내를 서로 다른 전제로 읽지 않게 한다 | `docs/PILOT_GUIDE.md`, `docs/DOCUMENTATION_INDEX.md` |
+
+## 11. 병합된 서버·기록·화면 결정
+
+| 날짜 | 결정 | 이유·줄 | 코드에서 |
+|---|---|---|---|
+| 2026-10-21 · 22 | 업로드·PDF 읽기·OCR 상태·세션 준비·어휘/번역 검사를 작업 스레드로 옮기고, 목록은 저장된 메타데이터와 검증된 불변 분석을 읽는다 | 음성 이벤트 루프를 막는 등록·목록 작업(PERF #112). 취소에도 파일·SQLite 수명을 지킨다 | `server.py`, `protocol_catalog.py`, `experiment_protocol_store.py` |
+| 2026-10-21 · 22 | 보고서 schema 2에 연구실·소유자를 두고 읽기/내보내기와 본인 쓰기·관리자 PI 확인을 구분한다. 비교·순번·시작 전 답도 같은 소유자로 한정한다 | 남의 기록 쓰기와 기록 혼합 차단(OWN #114) | `experiment_reports.py`, `.agent/security_rules.md` 권한 표 |
+| 2026-10-21 · 22 | 로그인과 현재 비밀번호의 실패 잠금은 이름별이다. 계정 회수는 그 계정의 열린 음성 연결도 닫고 삭제는 진행 중 쓰기를 기다린다 | 공용 Wi-Fi의 다른 계정 잠금·삭제 뒤 기록 재생성 방지(OWN #114) | `accounts.py`, `server.py` |
+| 2026-10-21 · 22 | 질문·추측은 원문 관찰/완료/타이머/재개의 허가가 아니다. 규칙과 제안 검사에 같은 판정을 쓰고 기존 질문의 checkpoint와 turn 소유를 보존한다 | 물음표 없는 한국어 의문·추측의 상태 변경 방지(SAFE #115) | `intent_fences.py`, `curated_protocol.py`, `llm_router.py` |
+| 2026-10-21 · 22 | 서버도 계정·원본 개정·분석·검토본에 맞는 값 확인과 명시적 안전 확인을 시작 전에 요구한다. 숫자가 없어도 안전 확인은 한다 | 화면 순서 우회 차단(SAFE #115). 관리자 PI 확인은 여전히 비차단 기록 | `start_check.py` `StartTarget`·`StartCheck.readiness`, `server.py` `post_protocol_start_safety` |
+| 2026-10-21 · 22 | 프로토콜 목록/상세/올리기와 기록 목록/상세를 나눈다. 모든 시작은 시트를 거치고 종료는 서버 사건 뒤 그린다. 로그아웃·세션 만료는 로그인으로, 서버 주소는 한 함수에서 읽는다 | 화면 단계 ②③(IA #104·#113) | `static/index.html` |
+| 2026-10-23 | 같은 과업으로 기존 방식·범용 음성 서비스와 비교하고 빈 양식에 실제 측정만 쓴다 | 비교 결과를 만들어 넣지 않는다(#116) | `docs/PILOT_COMPARISON.md`, `data/fixtures/evaluation/pilot_comparison_template.csv` |
+
+## 해결한 빈틈
+
+| 예전 빈틈 | 해결 · 남은 범위 |
+|---|---|
+| 핵심 값 확인이 화면 순서로만 지켜짐 | SAFE #115가 서버의 값·안전 receipt 관문으로 변경, IA #113이 화면 POST·거절 단계를 연결. 설정을 끄면 두 관문을 함께 끈다 |
+| 목소리 맞추기 대기 중 응급 말을 보정 샘플로 소비 | #116이 빈 입력·되울림 뒤 응급 관문을 먼저 실행. STT 전 소리 필터나 현장 인식 성능을 검증한 것은 아니다 |
+| 현재 분석 결과를 비교하는 도구가 지운 모듈을 호출 | #116이 `scripts/score_extraction.py`를 현재 파서·근거 검사로 복구. 실시간 누락 차단과 실행 판정을 추가한 것은 아니다 |
+| Drive 링크의 서버 기능에 화면이 없음 | #116이 Drive 파일·Docs를 공통 올리기 흐름에 연결. Sheets 시약 표·OAuth는 화면에 없음 |
 
 ## 알려진 빈틈 (결정을 기다리는 코드 상태)
 
-이 줄(DOC4)이 문서를 쓰며 코드에서 본 것이다. 코드는 고치지 않았다.
+코드·시험에 남아 있는 상태만 적는다. 해결된 항목은 위의 해결 표로 옮긴다.
 
-- `scripts/` 의 진단·측정 스크립트 9개가 import 또는 실행 중에 실패하는 것으로 기록돼 있다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. `score_extraction.py`는 위 결정으로 복구했다. 나머지를 고칠지 지울지 정한다.
-- 시작 전 핵심 값 확인(2문항)은 화면의 순서로만 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
+- `scripts/` 의 진단·측정 스크립트 9개가 import 또는 실행 중에 실패하는 것으로 기록돼 있다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. 나머지를 고칠지 지울지 정한다.
 - `GET /readyz` 는 안전 카탈로그·사용 범위를 보지 않는다. `/readyz` 가 200 이어도 `/api/protocols` 가 500 일 수 있다.
 - `VOINEY_LAB_USAGE_SCOPE` 가 비면 신원 판단(`server.py` `_runtime_usage_scope`)은 `demo` 로 읽고, 설정 검사(`server_config`)는 거부한다.

@@ -149,7 +149,7 @@ events, never derives state from prose), `connection.js` (lost connection),
 
 Elsewhere: `mobile/` (Capacitor store-app shell, device features only),
 `scripts/` (launchers `run_dev.sh`, `run_pilot.sh`, `run_ci_server.sh`; pilot
-tools; ten diagnostic scripts there currently fail — `docs/DECISIONS.md`,
+tools; legacy diagnostic scripts are listed in `docs/DECISIONS.md`,
 "알려진 빈틈"), `tests/` (pytest; `tests/e2e/` Playwright),
 `data/fixtures/` (development fixture and evaluation sets).
 
@@ -164,6 +164,10 @@ tools; ten diagnostic scripts there currently fail — `docs/DECISIONS.md`,
   status, missing values, unsupported constructs and the execution rule.
 - Use immutable typed models for durable domain objects; validate external
   data at ingress; parameterised SQL; frontend text through `textContent`.
+- Before each behaviour fix, add a reproducing test and observe it fail on
+  the code before the fix, then fix and commit that item. For documentation
+  scopes that exclude code and tests, run the existing documentation checks
+  and fix the documents.
 - Do not weaken or delete a regression test to make a change pass. When a
   decision changes expected behaviour, change only that assertion and say so.
 - Documents: code is the truth. A behaviour change updates
@@ -232,6 +236,12 @@ git status --short
 git log --oneline --decorate -10
 ```
 
+If a brief's facts or numbers disagree with executable code, trust the code
+and record the discrepancy in the lane report. If permissions, sandboxing or
+a command approval check refuses an action, stop that action and report it;
+never work around the refusal. Leave cleanup to a person if a removal command
+is refused.
+
 Look into any untracked file or folder you do not recognise before touching
 it — it may be someone's work in progress (`docs/demo_script.md` is the known
 case, see "File ownership").
@@ -256,12 +266,24 @@ case, see "File ownership").
   lock: `flock ~/reports/.heavy.lock env … python -m pytest -q` (flags as in
   "Verification"). Measure each commit with the tests it touches, without the
   lock, and run the full suite once at the pull request's head.
+- At each commit run the touched tests, `python scripts/replay_turns.py`,
+  `python -m compileall -q src tests scripts` and `git diff --check`.
 - Playwright (`tests/e2e/`) runs in CI, not locally, unless a brief says so.
 - Never stop another lane's process (pytest, a benchmark, a dev server). If
   you must stop one, first check that `/proc/<pid>/cwd` is inside your own
   worktree.
 - External calls (model, OCR, STT/TTS, web) only within the brief's limit;
   count them in the report.
+
+### Unrelated failures
+
+If a test or CI job this lane did not change fails, rerun that test or job
+once. If it passes, record its name and the execution link (or local log)
+as flaky and continue. If it fails again, run it at the current `dev` head:
+if it also fails there, record it as a pre-existing failure and continue;
+if it fails only in this lane, fix the regression. Do not loosen assertions
+or stop the lane solely because of an unrelated failure. Keep the evidence
+and the final failure list in the report.
 
 ### Commits, pull requests and merging
 
@@ -272,6 +294,16 @@ agents:
   (`gh pr create --base dev`). `main` takes merges from `dev` only, by a
   person. Commit each decision or phase separately with a message that says
   what changed.
+- Open one pull request for this lane only, with base `dev`. After opening
+  it, read the entire diff yourself afresh, write findings and actions to
+  `~/reports/review_<lane>.md`, and fix them before merging. Another agent's
+  review is not a prerequisite.
+- Confirm the preceding lane has merged using
+  `gh pr list --head <preceding-branch> --state merged`. If it has not,
+  record that fact in the report and stop at that handoff; the lane chain
+  will resume the work. Once it has, fetch and merge `origin/dev` (mechanical
+  overlap resolution only), run the locked full suite and replay, and wait
+  for green CI with `gh pr checks <number> --watch`.
 - Measure the failing-test list before the work. You may merge your own pull
   request as a merge commit (`gh pr merge <branch> --merge`) only when all
   four hold: the failure list equals the one measured before and nothing new
@@ -281,6 +313,15 @@ agents:
   mechanically only. Otherwise open the pull request, do not merge, and say
   why at the top of the report. If a merge command is refused by a
   permission check, stop and report; do not work around it.
+- After merging into `dev`, immediately update the report's top and the
+  pull request body to say merged, with UTC time, merge commit and final
+  measured test counts and condition, before ending the lane. A `dev` merge
+  triggers the development server's automatic deployment; do not equate
+  deployment success with a live voice or browser test.
+- Voice or server changes checked only under Condition B must be checked
+  under Condition A in the original checkout after merging and before the
+  pilot release tag. The pilot baseline sequence is Condition A verification,
+  then the human voice test, then a person promotes to `main` and tags the release.
 - Only a person opens or merges a pull request into `main`, force-pushes
   (`--force` and `--force-with-lease` alike), deletes a branch (local or
   remote; `gh pr merge --delete-branch` included), or renames or transfers
