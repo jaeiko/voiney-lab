@@ -1717,12 +1717,13 @@ function analysisStateLabel(entry){
  return catalogStatus(entry).label;
 }
 function experimenterLabel(){return workspaceDisplayName||"이름 기록 없음";}
-const experimentReportsSeen=new Map();
 // Lane U3 decision 1: a record is named by the server's protocol_title and
 // day_sequence. The server counts by the UTC day (day_sequence_date) and the
 // screen shows the researcher's local time, so its count is used only when
-// the two days are the same; otherwise, or without server values, the screen
-// counts what this browser has seen, as before.
+// the two days are the same. Lane UI4 (lane OWN's hand-over, 2026-10-22): the
+// server's count only -- without it (an older server, a record whose owner is
+// not known) or on another day, no number; the browser's own count of what it
+// had seen mixed accounts and protocols.
 function serverProtocolTitle(item){return typeof item?.protocol_title==="string"&&item.protocol_title.trim()?item.protocol_title.trim():"";}
 function serverDaySequence(item){
  if(!Number.isInteger(item?.day_sequence)||item.day_sequence<1||typeof item.day_sequence_date!=="string")return null;
@@ -1738,13 +1739,8 @@ function serverDayNumber(item,siblings,idKey){
 function experimentReportLabel(report,siblings=[]){
  // "실험 기록 · {프로토콜 제목} · {시작 날짜·시각}". Two records started on
  // the same day get a number, in start order.
- const id=report.report_id,title=serverProtocolTitle(report)||protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
- experimentReportsSeen.set(id,{title,day:parts?.day||"",started:report.started_at||""});
- let number=serverDayNumber(report,siblings,"report_id");
- if(number===null){
-  const same=[...experimentReportsSeen.entries()].filter(([,item])=>item.title===title&&item.day===(parts?.day||"")).sort(([a,x],[b,y])=>x.started<y.started?-1:x.started>y.started?1:a<b?-1:1);
-  number=same.length>1?` · ${same.findIndex(([key])=>key===id)+1}번째`:"";
- }
+ const title=serverProtocolTitle(report)||protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
+ const number=serverDayNumber(report,siblings,"report_id")??"";
  return ["실험 기록",title,parts?`${parts.day} ${parts.time}`:""].filter(Boolean).join(" · ")+number;
 }
 function setReportTitle(text,pairs=[]){setText("last-report-id",text);const dev=$("last-report-dev");if(dev){dev.replaceChildren();appendDevCodeDetails(dev,pairs);}}
