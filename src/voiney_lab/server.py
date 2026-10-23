@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import quote, unquote_plus
+from urllib.parse import quote, unquote_plus, urlsplit
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -974,12 +974,10 @@ async def app_origin_cors(request:Request,call_next):
 
 
 def _socket_origin_refusal(websocket:WebSocket)->str|None:
-    """Why /ws refuses this browser's origin, or None (lane APP1, decision 4).
+    """Allow the server's own browser origin or an explicitly listed app.
 
-    With VOINEY_LAB_APP_ORIGINS empty there is no check, as before. Once it
-    lists the app, a browser's socket must come from the server's own host
-    (Host, or the proxy's X-Forwarded-Host) or a listed app origin; a client
-    that sends no Origin is not a browser and still needs its login.
+    Browsers are checked even with no app allowlist. Clients without Origin
+    still need authentication. Compare the scheme, host and effective port.
     """
 
     try:
@@ -1006,9 +1004,19 @@ def _socket_origin_refusal(websocket:WebSocket)->str|None:
             for value in (headers.get("host",""),headers.get("x-forwarded-host",""))
             if value.strip()
         }
-        if any(normalized==normalize_origin(f"{scheme}://{host}") for host in own_hosts):
+        if any(_same_browser_origin(origin,f"{scheme}://{host}") for host in own_hosts):
             return None
     return "origin_not_allowed"
+
+
+def _same_browser_origin(first:str,second:str)->bool:
+    if normalize_origin(first) is None or normalize_origin(second) is None:
+        return False
+    def identity(value:str)->tuple[str,str,int|None]:
+        parsed=urlsplit(value.strip().casefold())
+        return (parsed.scheme,parsed.hostname or "",
+                parsed.port or {"http":80,"https":443}.get(parsed.scheme))
+    return identity(first)==identity(second)
 
 
 def _request_origin_allowed(request:Request,origin:str)->bool:
@@ -1017,7 +1025,7 @@ def _request_origin_allowed(request:Request,origin:str)->bool:
         return False
     scheme=request.headers.get("x-forwarded-proto",request.url.scheme).split(",")[0].strip()
     host=request.headers.get("x-forwarded-host",request.headers.get("host","")).split(",")[0].strip()
-    if normalized==normalize_origin(f"{scheme}://{host}"):
+    if _same_browser_origin(origin,f"{scheme}://{host}"):
         return True
     # App origins use bearer authentication; cookies never authorise a
     # cross-origin write, including one from an allowlisted app origin.
