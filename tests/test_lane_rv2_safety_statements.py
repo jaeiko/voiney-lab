@@ -17,7 +17,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from tests.test_lane_rv2_value_fix import with_values
-from tests.test_lane_rv_review_pending import _CatalogCase
+from tests.test_lane_rv_review_pending import _CatalogCase, other_cards
 from voiney_lab import server
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import ProtocolCatalog, ProtocolReviewError
@@ -82,7 +82,7 @@ class AWarningTheAiMadeUpTests(_SafetyCase):
         self.analyze(with_made_up_warning(self.answer()))
 
     def test_its_card_offers_no_rewrite(self) -> None:
-        (card,) = self.catalog.review_draft(self.protocol_id)["cards"]
+        (card,) = other_cards(self.catalog.review_draft(self.protocol_id)["cards"])
         self.assertEqual(card["kind"], "warning")
         self.assertNotIn("fix", [choice["choice_id"] for choice in card["choices"]])
         self.assertNotIn("fix", self.item("statement:gloves")["allowed_actions"])
@@ -91,6 +91,7 @@ class AWarningTheAiMadeUpTests(_SafetyCase):
 
     def test_left_empty_it_does_not_run(self) -> None:
         self.decide(item_id="statement:gloves", action="clear")
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
         fixture = self.catalog.load_executable_fixture(self.protocol_id)
         self.assertEqual(fixture.steps[1].warnings, ())
@@ -98,6 +99,7 @@ class AWarningTheAiMadeUpTests(_SafetyCase):
     def test_confirmed_it_runs_in_the_source_s_words(self) -> None:
         self.decide(item_id="statement:gloves", action="confirm",
                     source_lines={"page": 1, "first_line": 5, "last_line": 5})
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
         fixture = self.catalog.load_executable_fixture(self.protocol_id)
         self.assertEqual(fixture.steps[1].warnings[0].source_text, "Wear gloves.")

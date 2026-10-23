@@ -136,7 +136,9 @@ def _turn(settings: MultiBrainSettings, transcript: str):
         {"VOINEY_LAB_TRANSLATION_PROVIDER": "xai", "VOINEY_LAB_ANSWER_PROVIDER": "xai"},
     ):
         asyncio.run(run_turn(socket, session, b"\0\0", 1, session.generation))
-    return model, spoken
+    # Lane VOX: the turn's reply is synthesized sentence by sentence; this
+    # one turn said them as one line.
+    return model, ([" ".join(spoken)] if spoken else [])
 
 
 class SettingsTests(unittest.TestCase):

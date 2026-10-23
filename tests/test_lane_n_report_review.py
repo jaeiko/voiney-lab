@@ -115,7 +115,8 @@ class ServedReviewTests(VoiceNotesHarness, unittest.TestCase):
             "보고서에 넣을 중요 값 2개를 확인할게요. 첫째, 2단계 측정, pH 7.2. "
             "맞으면 '네'라고 해 주세요.",
         )
-        self.assertIn("첫째, 2단계 측정, 피에이치 칠 점 이.", self.spoken[6][-1])
+        # Lane VOX: the reply is synthesized sentence by sentence; what turn 6 said.
+        self.assertIn("첫째, 2단계 측정, 피에이치 칠 점 이.", " ".join(self.spoken[6]))
         self.assertEqual(self.snapshot, {"held": True, "state": "awaiting_review"})
 
     def test_each_yes_confirms_and_the_last_prepares_the_prose(self) -> None:

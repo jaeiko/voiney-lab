@@ -28,7 +28,7 @@ from voiney_lab.external_references import (
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.language import Transcription
-from voiney_lab.server import ListenerSession, run_turn
+from voiney_lab.server import ListenerSession, run_turn, speech_sentences
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import TurnState
 
@@ -145,12 +145,14 @@ class GeneralExplanationTests(unittest.TestCase):
         self.assertEqual(_Explainer.calls, ["HPLC water가 뭐야?"])
         reply = next(item for item in socket.text if item["type"] == "reply.delta")
         self.assertIn("HPLC water", reply["text"])
-        # The rules' answer is segment 0, the explanation segment 1.
+        # The rules' answer comes first, the explanation after it. Lane VOX:
+        # the answer is one segment per sentence, the explanation the next.
+        answer = len(speech_sentences(reply["speech_text"]))
         segments = [
             item["segment_index"] for item in socket.text
             if item["type"] == "audio.segment.start"
         ]
-        self.assertEqual(segments, [0, 1])
+        self.assertEqual(segments, [*range(answer), answer])
         (result,) = [item for item in socket.text if item["type"] == "research.result"]
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["source_label"], "AI 일반 지식")

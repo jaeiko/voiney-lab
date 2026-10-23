@@ -16,7 +16,10 @@ require it, with an explicit, honest reason, whenever it is not present.
 import ipaddress
 import os
 import socket
+import sys
 from pathlib import Path
+
+import pytest
 
 VOINEY_LAB_CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
@@ -87,6 +90,18 @@ def _guarded_connect_ex(self, address):
 
 socket.socket.connect = _guarded_connect
 socket.socket.connect_ex = _guarded_connect_ex
+
+
+# --- No sentence audio kept from another test (lane VOX, decision 3) ---------
+# The guidance's sentence audio is kept in the server process; a test that
+# runs the real TTS path starts with none of another test's fake audio.
+@pytest.fixture(autouse=True)
+def _no_kept_sentence_audio():
+    server = sys.modules.get("voiney_lab.server")
+    memory = getattr(server, "SENTENCE_AUDIO", None)
+    if memory is not None:
+        memory.clear()
+    yield
 
 MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
     "test_candidate_a_acceptance_phase2.py",

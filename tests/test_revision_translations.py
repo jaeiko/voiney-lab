@@ -501,7 +501,9 @@ def _turn_events(session, transcript: str, turn_id: int, model=None):
     screen = next(
         item["screen"] for item in socket.text if item["type"] == "protocol.fixture.state"
     )
-    return spoken, reply, screen
+    # Lane VOX: the turn's reply is synthesized sentence by sentence; this
+    # one turn said them as one line.
+    return ([" ".join(spoken)] if spoken else []), reply, screen
 
 
 def _stored_miniprep(keys: tuple[str, ...]):

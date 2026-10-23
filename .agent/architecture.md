@@ -140,6 +140,27 @@ generation is cancelled and its audio cleared (barge-in).
 6. Sentence TTS streams through generation-aware audio segments;
    `turn.route_decision` carries a compact projection (with a `router`
    block when the router ran); `turn.done` and `playback.completed` close it.
+   The curated reply's speech is cut by `server.speech_sentences`
+   (`brain.SentenceChunker`'s sentence ends, cut from the cleaned text only
+   where a space follows; a piece that `clean_speech_text` would change on
+   its own is joined to the one before, so the pieces are exactly the whole's
+   words). The whole is remembered once as said (echo check); the first
+   sentence is synthesized before playback starts, and `_say_answer` sends
+   it as segment 0 after the reply's events, then makes and sends each later
+   sentence while it plays, checking `is_current(turn_id, generation)` before
+   each request and each send. A barge-in cancels the rest; the turn's router
+   history, pilot row and workflow metric are still kept. A later sentence
+   that cannot be made ends the answer there (error signals, the turn still
+   ends through `playback.ended`). `audio.complete` and `turn.done` count the
+   segments; an outside-PDF or web explanation is the segment after them.
+   The screen text is not cut. The greeting, timer notices, clarifications
+   and the emergency reply are still synthesized whole.
+   `server.synthesize` keeps a sentence's audio (`SENTENCE_AUDIO`, bounded
+   by entries and bytes, keyed by provider, model, voice, language and the
+   cleaned sentence) only inside `sentence_audio_kept`: the curated plans
+   `_speech_kept` allows (protocol readings and fixed server sentences, not
+   records, repeats, answers to questions, model-written speech or the
+   experimenter's words) and the greeting. The emergency reply never is.
 
 The front rules and proposal checks share
 `intent_fences.is_question_or_speculation`: Korean question/speculation
@@ -171,8 +192,10 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
     two engines compared place by place, accepted automatically
   → one structured analysis (or pieces of ≤15 pages, ≤400 pages), background job
   → server-owned evidence check, requote of refused items, domain validation
-  → all confirmed: analysis revision
-    otherwise:     "review pending" ledger event + cards (never an analysis revision)
+  → lines no quote covers that read like an instruction (possibly_missed_places)
+  → all confirmed: analysis revision; those lines one start notice
+    otherwise:     "review pending" ledger event + cards, those lines cards too
+                   (never an analysis revision)
                    → decisions → registered review version vN (latest runs)
   → execution rule at read time: analysis (or review version) present and no
     execution blocker → available_for_execution
@@ -243,14 +266,35 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   last step is decided by position.
 - Known misses: values packed on one line share one segment; pages without
   end-of-line punctuation fall back to labels only; the model misses
-  unnumbered, value-free instructions (conditional notes, storage). There is
-  no deterministic lever for the last, and no word list should be added.
+  unnumbered, value-free instructions (conditional notes, storage).
 - Since 2026-10-13 nothing on the live path reports a repeat instruction or a
   value the model left out: `assess_readiness` keeps those reason codes, but
   no caller feeds them. `hollow_analysis_check` (≥ 20 source steps, < 25 %
-  kept) and the prompt are the only completeness checks. Some decode-only
-  names (`page_coverage`, `TextVerification`, `SOURCE_TEXT_CROSS_CHECK_*`)
-  remain so that old payloads still load.
+  kept, refuses) and the prompt are the blocking completeness checks. Some
+  decode-only names (`page_coverage`, `TextVerification`,
+  `SOURCE_TEXT_CROSS_CHECK_*`) remain so that old payloads still load.
+- Lines the model never kept (human decision 2026-10-23):
+  `possibly_missed_places` takes each page's text, sets aside every quote's
+  characters (any record's, wherever printed; of several equal places, the
+  whole lines), the furniture lines the page-end rule skips
+  (`_PageEdges.is_crossing_furniture`), a cover page, a references list and
+  copyright, licence, DOI and contents lines, and keeps the lines left that
+  read like an instruction. The shapes and their word lists are one constant
+  block in `experiment_protocol_analysis.py` (`MISSED_*`): a numbered or
+  bulleted sentence, an English imperative (after an opening clause too), a
+  Korean "~한다/~하세요/~할 것" ending. A value with a unit alone and a label
+  before no sentence are recorded but show nothing (they were most of the
+  false alarms measured). A review-pending analysis gets one card per place
+  that no other card asks about -- a failed piece's pages and a refused
+  quote's suggested lines are that card's (`possibly_missed_flags`, at most
+  `VOINEY_LAB_REVIEW_MAX_ITEMS`, put together by page and then by runs of
+  pages; never counted toward the bound that re-analyses or refuses); a
+  "단계가 아니에요" changes nothing in the version it is registered with, and
+  places nobody answered stay its start notice; a passed analysis stores the places in its
+  `protocol_analysis_ready` event and `review()` adds one non-blocking notice
+  (`source_text_possibly_missed`). It is no completeness guarantee: an
+  instruction in none of the shapes, or one another record's quote covers,
+  is not found.
 - The in-gel development fixture's timers come from
   `data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json`;
   no manifest, no timers.

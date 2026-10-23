@@ -125,7 +125,9 @@ class OutputStageTests(unittest.TestCase):
     def test_the_server_cleans_the_plan_right_before_it_is_shown_and_said(self) -> None:
         source = inspect.getsource(server_module.run_turn)
         cleaned = source.index("plan=plan_without_internal_names(plan,turn_language)")
-        self.assertLess(cleaned, source.index("pcm=await asyncio.to_thread(synthesize,said(speech_text),turn_language)"))
+        # Lane VOX: the speech is remembered whole and cut into sentences
+        # there, then synthesized sentence by sentence.
+        self.assertLess(cleaned, source.index("spoken_sentences=speech_sentences(said(speech_text))"))
         self.assertLess(cleaned, source.index('"reply.delta",turn_id=turn_id,segment_index=0,text=display_text'))
 
 
