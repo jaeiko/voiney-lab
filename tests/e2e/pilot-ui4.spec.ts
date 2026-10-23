@@ -90,4 +90,28 @@ test.describe('Screen items before the pilot (lane UI4)', () => {
     await expect(page.locator('#settings-sheet')).toBeHidden();
     await expect(page.locator('#tab-settings')).toBeHidden();
   });
+
+  test('the account is deleted from the settings after one more ask, and the login comes back', async ({ page }) => {
+    // The CI server runs in dev mode; the account session and the deletion are stand-ins.
+    let signedIn = true;
+    const account = { account_id: 'a-ui4', name: '김재준', admin: false, entitlement: 'pilot', organization_id: 'lab-pilot', disabled: false };
+    await mock(page);
+    await page.route('**/api/auth/session', route => route.fulfill({ json: signedIn ? { mode: 'accounts', signed_in: true, account } : { mode: 'accounts', signed_in: false, account: null } }));
+    const sent: object[] = [];
+    await page.route('**/api/auth/delete-account', async route => {
+      sent.push(route.request().postDataJSON());
+      signedIn = false;
+      await route.fulfill({ json: { deleted: true, message_ko: '계정과 그 계정이 남긴 기록을 지웠어요.', removed: {} } });
+    });
+    await page.goto(TAB.settings);
+    await expect(page.locator('#account-delete-open')).toBeVisible();
+    await expect(page.locator('#account-delete-form')).toBeHidden();
+    await page.locator('#account-delete-open').click();
+    await expect(page.locator('#account-delete-warning')).toContainText('되돌릴 수 없어요');
+    await page.locator('#account-delete-password').fill('correct horse');
+    await page.locator('#account-delete-send').click();
+    await expect(page.locator('body')).toHaveAttribute('data-auth', 'required');
+    await expect(page.locator('#wizard-name')).toBeVisible();
+    expect(sent).toEqual([{ password: 'correct horse' }]);
+  });
 });

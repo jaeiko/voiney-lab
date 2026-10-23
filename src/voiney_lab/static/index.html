@@ -810,6 +810,10 @@
     .settings-account-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
     .settings-account-actions button[hidden],.settings-account-form[hidden]{display:none}
     .settings-account-form{display:flex;flex-direction:column;gap:var(--space-3);max-width:28rem}
+    /* Lane UI4 (2026-10-23): the account deletion, in the danger colour. */
+    .settings-account-actions button.account-danger{border-color:var(--danger);color:var(--danger)}
+    .settings-account-actions button.account-danger[type="submit"]{background:var(--danger);color:#fff}
+    .settings-account-warning{margin:0;padding:var(--space-3);border-left:4px solid var(--danger);background:var(--danger-soft);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
     #settings-agent-voice-list .wizard-option-pick,#settings-agent-voice-list .wizard-option-aside{min-height:var(--target-desk)}
     body:not([data-dev="on"]) #dev-diagnostics{display:none}
     @media (min-width:900px){
@@ -1450,6 +1454,7 @@
         <div class="settings-account-actions">
           <button id="account-password-open" type="button" hidden>비밀번호 바꾸기</button>
           <button id="account-logout" type="button" hidden>로그아웃</button>
+          <button id="account-delete-open" type="button" class="account-danger" hidden>계정 지우기</button>
         </div>
         <form id="account-password-form" class="settings-account-form" hidden>
           <label class="wizard-field">지금 비밀번호<input id="account-password-current" type="password" autocomplete="current-password"></label>
@@ -1459,6 +1464,16 @@
             <button id="account-password-cancel" type="button">닫기</button>
           </div>
           <small id="account-password-status" class="mic-device-status" role="status" aria-live="polite"></small>
+        </form>
+        <!-- Lane UI4 (2026-10-23): lane FX5's account deletion, asked once more -- what it deletes, that it cannot be undone, and the password again, as the server asks. -->
+        <form id="account-delete-form" class="settings-account-form" hidden>
+          <p id="account-delete-warning" class="settings-account-warning">계정을 지우면 계정과 그 계정이 남긴 기록이 지워지고 되돌릴 수 없어요. 지우려면 비밀번호를 한 번 더 적어 주세요.</p>
+          <label class="wizard-field">비밀번호<input id="account-delete-password" type="password" autocomplete="current-password"></label>
+          <div class="settings-account-actions">
+            <button id="account-delete-send" type="submit" class="account-danger">계정 지우기</button>
+            <button id="account-delete-cancel" type="button">그만두기</button>
+          </div>
+          <small id="account-delete-status" class="mic-device-status" role="status" aria-live="polite"></small>
         </form>
       </section>
       <details id="install-guide" class="install-guide">
@@ -5581,7 +5596,7 @@ $("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
 // state: the view is the server's (screenView), the tab is where it is drawn.
 const TAB_ROUTE_PATTERN=/^#\/(home|protocols|upload|experiment|records|settings)(?:\/([^/?#]+))?\/?(?:\?[^#]*)?$/;
 const TAB_PANELS=Object.freeze(["home","protocols","upload","experiment","records","settings"]);
-var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading",accountPasswordOpen=false;
+var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading",accountPasswordOpen=false,accountDeleteOpen=false;
 function parseRoute(hash){const match=TAB_ROUTE_PATTERN.exec(String(hash||""));if(!match)return{tab:"home",id:null,path:"#/home"};let id=null;if(match[2]){try{id=decodeURIComponent(match[2]);}catch(_){id=match[2];}}return{tab:match[1],id,path:match[0]};}
 function routePath(tab,id=null){return `#/${tab}${nonemptyText(id)?`/${encodeURIComponent(id)}`:""}`;}
 function currentTab(){return screenRoute.tab;}
@@ -5809,9 +5824,10 @@ function renderSettingsExtras(){
  }
  const auth=wizard?.auth,accounts=auth?.mode==="accounts"&&auth.signed_in===true,name=$("settings-account-name");
  if(name)name.textContent=!auth?"계정 확인 중…":accounts?`${auth.account?.name||""} · 연구실 ${auth.account?.organization_id||""}${auth.account?.admin?" · 관리자":""}`:auth.mode==="accounts"?"로그인 전":`${auth.account?.name||"개발 로그인"} · 계정 없음 (개발 모드)`;
- for(const id of ["account-logout","account-password-open"]){const button=$(id);if(button)button.hidden=!accounts;}
- if(!accounts)accountPasswordOpen=false;
+ for(const id of ["account-logout","account-password-open","account-delete-open"]){const button=$(id);if(button)button.hidden=!accounts;}
+ if(!accounts){accountPasswordOpen=false;accountDeleteOpen=false;}
  const form=$("account-password-form");if(form)form.hidden=!accountPasswordOpen;
+ const ask=$("account-delete-form");if(ask)ask.hidden=!accountDeleteOpen;
  return accounts;
 }
 async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoice(voiceId);setText("settings-agent-voice-note",ok?"저장했어요 · 이 목소리로 안내해요.":"목소리를 저장하지 못했어요.");renderSettingsExtras();return ok;}
@@ -5855,8 +5871,33 @@ async function changeAccountPassword(event){
  }catch(_){if(status)status.textContent="서버에 연결할 수 없어요.";return false;}
  finally{setDisabled($("account-password-send"),false);}
 }
+// Lane UI4 (2026-10-23; lane FX5's route, lane IA's hand-over): the account deleted from its own settings --
+// asked once more (what it deletes, that it cannot be undone, the password again as the server asks),
+// then the login at once. A refusal says why, in the server's words when it sent some, and keeps the
+// account; a deletion that stopped halfway leaves the account switched off (lane FX5) and says so.
+const ACCOUNT_DELETE_WORDS=Object.freeze({login_refused:"비밀번호가 맞지 않아요.",password_invalid:"비밀번호를 한 번 더 적어 주세요.",login_locked:"비밀번호를 여러 번 틀렸어요. 잠시 뒤 다시 해 주세요.",deletion_log_unavailable:"지금은 계정을 지울 수 없어요. 연구실 담당에게 알려 주세요.",account_delete_incomplete:"계정은 꺼졌지만 기록을 다 지우지 못했어요. 연구실 담당에게 알려 주세요.",accounts_disabled:"이 서버에는 계정이 없어요(개발 모드)."});
+function closeAccountDelete(){accountDeleteOpen=false;const field=$("account-delete-password");if(field)field.value="";setText("account-delete-status","");renderSettingsExtras();}
+async function deleteAccount(event){
+ event?.preventDefault?.();
+ const field=$("account-delete-password"),password=String(field?.value||""),status=$("account-delete-status"),send=$("account-delete-send");
+ if(!password){if(status)status.textContent=ACCOUNT_DELETE_WORDS.password_invalid;return false;}
+ if(send?.disabled)return false;
+ setDisabled(send,true);
+ try{
+  const response=await serverFetch("/api/auth/delete-account",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({password}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(field)field.value="";
+  if(!response.ok){if(status)status.textContent=nonemptyText(payload?.message_ko)?String(payload.message_ko):ACCOUNT_DELETE_WORDS[typeof payload?.detail==="string"?payload.detail:""]||"계정을 지우지 못했어요. 다시 해 주세요.";return false;}
+  accountDeleteOpen=false;signOutOnScreen();return true;
+ }catch(_){if(status)status.textContent="서버에 연결할 수 없어요.";return false;}
+ finally{setDisabled(send,false);}
+}
 $("account-logout")?.addEventListener("click",()=>{void logOutAccount();});
-$("account-password-open")?.addEventListener("click",()=>{accountPasswordOpen=!accountPasswordOpen;renderSettingsExtras();if(accountPasswordOpen)$("account-password-current")?.focus?.();});
+$("account-password-open")?.addEventListener("click",()=>{accountPasswordOpen=!accountPasswordOpen;if(accountPasswordOpen)accountDeleteOpen=false;renderSettingsExtras();if(accountPasswordOpen)$("account-password-current")?.focus?.();});
+$("account-delete-open")?.addEventListener("click",()=>{if(accountDeleteOpen){closeAccountDelete();return;}accountDeleteOpen=true;accountPasswordOpen=false;renderSettingsExtras();$("account-delete-password")?.focus?.();});
+$("account-delete-cancel")?.addEventListener("click",()=>{closeAccountDelete();});
+$("account-delete-form")?.addEventListener("submit",event=>{void deleteAccount(event);});
+$("account-delete-send")?.addEventListener("click",event=>{void deleteAccount(event);});
 $("account-password-cancel")?.addEventListener("click",()=>{accountPasswordOpen=false;renderSettingsExtras();});
 $("account-password-form")?.addEventListener("submit",event=>{void changeAccountPassword(event);});
 $("account-password-send")?.addEventListener("click",event=>{void changeAccountPassword(event);});
