@@ -1014,8 +1014,9 @@ def _same_browser_origin(first:str,second:str)->bool:
         return False
     def identity(value:str)->tuple[str,str,int|None]:
         parsed=urlsplit(value.strip().casefold())
+        port=parsed.port
         return (parsed.scheme,parsed.hostname or "",
-                parsed.port or {"http":80,"https":443}.get(parsed.scheme))
+                port if port is not None else {"http":80,"https":443}.get(parsed.scheme))
     return identity(first)==identity(second)
 
 
