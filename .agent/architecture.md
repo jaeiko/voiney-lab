@@ -290,8 +290,9 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   extracting PDFs. Verified immutable analysis records are cached by source,
   revision and actual record bytes; changed bytes are validated again.
 - Report schema 1 migrates to 2 on open; startup/access backfills ownership
-  from the exact workspace session. A lab-only legacy record is admin-read
-  only; an unscoped one stays inaccessible. Historical events and prose are
+  from the exact workspace session. A lab-only legacy record allows same-lab
+  administrators to read/export and append PI confirmation, with no owner
+  write permission; an unscoped one stays inaccessible. Historical events and prose are
   preserved. Rollback requires the matching pre-migration backup (migration
   details in `docs/MIGRATION_NOTES.md`).
 - Observations are `observation_only` and evidence files `not_interpreted`:
