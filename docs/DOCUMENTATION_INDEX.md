@@ -43,6 +43,7 @@
 | [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | 서버에 설치할 것, `scripts/run_pilot.sh` 로 띄우기, 기관 안전 문서 카탈로그, 점검, 백업·복구, 지켜볼 것 |
 | [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | 증상별 안전한 복구 |
 | [`PILOT_GUIDE.md`](PILOT_GUIDE.md) | 파일럿을 여는 순서, 데이터 처리, 외부 AI 고지 초안, 지표, 데이터 삭제, 계정과 초대, 스타터 팩 |
+| [`PILOT_COMPARISON.md`](PILOT_COMPARISON.md) | 기존 방식·범용 음성 서비스와 같은 과업으로 비교하는 절차, 태블릿 확인, 빈 기록 양식, 저장된 분석 비교 |
 | [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) | 휴대폰 마이크를 위한 HTTPS(Caddy) 준비 — 아직 실제 서버에서 실행하지 않음 |
 | [`SOURCE_FORMATS.md`](SOURCE_FORMATS.md) | 올릴 수 있는 원문 형식, 서버에 필요한 것, 링크 가져오기, 오류 코드 |
 | [`PILOT_DEPLOYMENT_GUIDE.md`](PILOT_DEPLOYMENT_GUIDE.md), [`PILOT_READINESS_PACKAGE.md`](PILOT_READINESS_PACKAGE.md) | 파일럿 점검표·참여자 안내(영어). 문서 다시 쓰기 2단계에서 `PILOT_GUIDE.md` 하나로 합친다 |

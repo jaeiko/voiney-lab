@@ -114,6 +114,12 @@ or failed samples to improve a number.
 
 ## 5. Field evaluation (not run)
 
+For a same-task comparison with the existing document/timer/notebook workflow
+and general voice services, use `docs/PILOT_COMPARISON.md` and its blank CSV.
+Record setup and active work separately, keep failed/provider/network attempts
+in the denominator and distinguish an actual tablet from CI viewport coverage.
+The template contains no measured outcomes.
+
 Nothing has been measured in a working lab. The bench measurements so far
 (voice level, noise endpoint, speaker verification) used synthetic voices and
 noise and must not be presented as bench performance.
