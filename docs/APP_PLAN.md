@@ -135,8 +135,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 `https://localhost`(iOS 는 `capacitor://localhost`)를 넣으면 웹소켓·API 가 그 출처를 받고, 로그인은 쿠키 대신 토큰이다(9.5절; `SameSite=None` 쿠키는
 쓰지 않았다 — 교차 사이트 쿠키는 브라우저마다 막히고 CSRF 대비가 따로 필요하다). 묶은 화면의 서버 주소는 빌드할 때 `VOINEY_APP_API_URL`. 화면 고침을 심사 없이 내보내는 일(라이브 업데이트)은 이 줄에서 다루지 않는다.
 
-파일럿 서버는 HTTP 기본 인증 뒤에 있다(`docs/PILOT_HTTPS_SETUP.md`). Capacitor 웹뷰가 기본 인증 창을 띄우는지는 확인하지 않았다 —
-서버 주소 모드로 시험할 때 첫 번째로 볼 것이다(11.3절).
+파일럿 서버는 초대 계정 로그인이 기본이고 HTTPS 앞문의 기본 인증은 선택이다(`docs/PILOT_GUIDE.md` 9절). 앱 토큰 인증과 기본 인증은 함께 쓸 수 없다. Capacitor 웹뷰의 실제 서버 연결은 확인하지 않았다(11.3절).
 
 ## 6. 결제
 
@@ -340,9 +339,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
   3. `/ws` 는 쿠키가 없으면 첫 메시지 `{"type":"client.auth","token":…}` 를 최대 10초 기다린다. 다른 첫 메시지·잘못된 토큰·시간 초과는 `authentication_required` 후 1008.
   4. `/api`·`/readyz`·`/healthz` 에 CORS: 사전 요청(OPTIONS)은 세션을 묻기 전에 204, 모든 답(401·429 거절 포함)에 `Access-Control-Allow-Origin`(받은 출처),
      `Vary: Origin`, 노출 머리글 `Retry-After`·`Content-Disposition`. 허용 머리글 `Authorization, Content-Type, Accept`. **`Allow-Credentials` 는 보내지 않는다.**
-  5. `/ws` 출처 검사: 목록이 비면 지금처럼 검사 없음. 목록이 있으면 브라우저 소켓은 서버 자신의 호스트(`Host` 또는 프록시의 `X-Forwarded-Host`), 목록의 앱 출처,
-     또는 Origin 없음(브라우저가 아님 — 로그인은 여전히 필요)만 받고 그 밖은 `origin_not_allowed` 로 1008. **조사 결과: 줄 APP1 전까지 `/ws` 에는 출처 검사가
-     전혀 없었다**(결정 문장의 "출처 검사"는 새로 만든 것이다). 쿠키 소켓의 교차 사이트 도용은 지금 SameSite=Lax 가 막는다.
+  5. `/ws`는 목록이 비어 있어도 브라우저 출처를 검사한다. 서버 자신의 scheme·host·유효 포트 또는 목록의 앱 출처만 받고, 그 밖은 `origin_not_allowed`로 1008이다. Origin 없는 클라이언트도 로그인은 필요하다. 쓰기 HTTP는 다른 출처의 쿠키 요청을 거절하며, 앱 allowlist도 이를 허가하지 않는다. 앱은 Bearer 경로를 쓴다.
   6. 목록이 잘못되면(`*`, 경로, `null`) `/readyz` 가 503, CORS 없음, 소켓은 `configuration_invalid` 로 닫힌다.
 - **같은 세션**: 토큰은 쿠키와 같은 세션 표(`accounts.sqlite` 의 `sessions`, 토큰의 SHA-256 만)다. 수명 30일, 로그아웃·비밀번호 바꾸기(다른 기기 세션 끝)·
   관리자가 계정 끄기로 끝난다. 스키마는 바뀌지 않았다.

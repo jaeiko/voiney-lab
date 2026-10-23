@@ -1,6 +1,6 @@
 # 기능 설명 — VoineyLab
 
-지금 코드가 하는 일을 **기능 단위로** 적는다. 2026-10-20 dev `e7c31c8` 에서 확인했다.
+지금 코드가 하는 일을 **기능 단위로** 적는다.
 
 - 기능마다: 무엇을 하나 · 어디(파일과 함수) · 설정 · 그것을 지키는 시험 · 한계.
   파일 이름 앞에 경로가 없으면 `src/voiney_lab/` 아래다.
@@ -14,7 +14,7 @@
 [F9 말 한 번의 길](#f9-말-한-번의-길) · [F10 단계·타이머](#f10-단계-완료-타이머) · [F11 질문과 설명](#f11-질문과-설명) ·
 [F12 기록](#f12-실험-중-기록) · [F13 보고서](#f13-실험-노트와-보고서) · [F14 연결 끊김](#f14-연결-끊김) ·
 [F15 파일럿 지표](#f15-파일럿-지표와-평점) · [F16 모바일](#f16-모바일-웹과-스토어-앱) · [F17 공급자·설정](#f17-공급자와-설정) ·
-[F18 데이터·운영](#f18-데이터-삭제-백업-점검)
+[F18 데이터·운영](#f18-데이터-삭제-백업-점검) · [F19 화면](#f19-화면과-시작-및-종료)
 
 ---
 
@@ -24,7 +24,7 @@
 
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
   비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.
-  관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 스스로 지울 수 있다(마지막 관리자는 안 됨).
+  관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 설정 탭 **계정 지우기**에서 비밀번호를 다시 확인하고 스스로 지울 수 있다(마지막 관리자는 안 됨).
   파일럿 실행기는 기본으로 `accounts` 로 연다(`--dev-identity` 를 주면 `dev`).
 - **어디**: `accounts.py` (`AUTH_MODES`, `AccountStore.create_invite`, `sign_up`, `LOGIN_FAILURE_LIMIT`, `SESSION_LIFETIME`), `server.py` (`commercial_identity_boundary` 미들웨어, `_ACCOUNT_OPEN_PATHS`, `/api/auth/*` 경로, `POST /api/auth/delete-account`, `_account_is_admin`), `identity.py` (`DevIdentityProvider`, OIDC), `scripts/pilot_invite.py`.
 - **설정**: `VOINEY_LAB_AUTH_MODE`, `VOINEY_LAB_APP_ORIGINS`(앱 출처에 토큰 로그인), `VOINEY_LAB_WORKSPACE_ENABLED`·`VOINEY_LAB_WORKSPACE_DATA_DIR`(계정은 작업공간이 있어야 한다), OIDC 는 `VOINEY_LAB_OIDC_ISSUER` 등.
@@ -42,7 +42,7 @@
 - **어디**: `server.py` `register_protocol_pdf`, `attach_protocol_reagent_table`, `import_protocol_link`; `experiment_protocol_pdf.py` (`SOURCE_MEDIA_TYPES`, `convert_source_to_pdf`, `docx_to_pdf`, `image_to_pdf`, `find_office_converter`); `protocol_link_import.py` (`parse_google_link`, `fetch_google_link`, `ALLOWED_LINK_HOSTS`, `MAX_REDIRECTS`, `sniff_media_type`, `LINK_IMPORT_MESSAGES`); `protocol_catalog.py` (`ProtocolCatalog.register`, `read_reagent_workbook`, `review_version_suggestion`); 저장은 `experiment_protocol_files.py`(`objects/sha256/…`)와 `experiment_protocol_store.py`.
 - **한도(코드 값)**: 원문 64 MiB, 사진 1억 화소, 시약 표 5 MiB·셀 20,000개, Word 변환 120 s. 링크: 호스트 `drive.google.com`·`docs.google.com`·`drive.usercontent.google.com`, 리디렉션 5번, 공인 주소만, 전체 60 s.
 - **설정**: `VOINEY_LAB_PROTOCOL_ENABLED`, `VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_OFFICE_CONVERTER`(LibreOffice `soffice` 경로), `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS`(기본 30, 긴 문서는 300 권장 — `docs/DEPLOYMENT_RUNBOOK.md`). HEIC 는 선택 설치 `pip install -e '.[heic]'`.
-- **시험**: `tests/test_lane_an_source_formats.py`, `tests/test_lane_an_reagent_tables.py`, `tests/test_lane_dr_link_import.py`, `tests/test_lane_dr_link_security.py`(가짜 HTTP), `tests/test_lane_dr_link_messages.py`.
+- **시험**: `tests/test_lane_an_source_formats.py`, `tests/test_lane_an_reagent_tables.py`, `tests/test_lane_dr_link_import.py`, `tests/test_lane_dr_link_security.py`(가짜 HTTP), `tests/test_lane_dr_link_messages.py`, `tests/test_lane_perf_workers.py`, `tests/test_lane_perf_catalog.py`, `tests/test_lane_own_pdf.py`.
 - **화면**: 새 프로토콜 올리기의 **공개 링크로 가져오기**에 Drive 파일·Docs 주소를 넣는다. 기존 파일 등록과 같은 분석·OCR·중복 안내·결과 화면을 쓴다. 비공개·시간 초과 등은 서버가 준 이유를 표시하고 주소를 고칠 수 있다. 처리 중 중복 요청과 실험 중 요청은 막고, 브라우저 세대가 바뀐 뒤 도착한 가져오기 응답은 버린다. 가져오기만으로 실험을 시작하지 않는다.
 - **시험(화면)**: `tests/test_protocol_link_screen.py`, `tests/e2e/upload-ia.spec.ts`(브라우저는 CI).
 - **한계**: LibreOffice 가 없으면 Word 만 `docx_conversion_unavailable`(503)로 거절한다. 비공개 Google 계정 연결은 없고, Sheets 링크로 시약 표를 붙이는 화면은 아직 없다(서버 API만). 형식별 자세한 확인 방법은 `docs/SOURCE_FORMATS.md`.
@@ -98,7 +98,7 @@
   안전 문서: 기관이 승인한 안전 문서 카탈로그(SOP·SDS·장비 설명서)는 선택이다. 없으면 사용 범위 `source_protocol_only` 로 원문 안전 주의만 쓰고, 화면·답·기록이 "기관 안전 문서 없음 · 원문 안전 주의만"이라고 말한다.
 - **어디**: `experiment_protocol.py` (`EXECUTION_BLOCKING_REASON_CODES`, `execution_blocking_reasons`, `execution_notice_reasons`); `protocol_catalog.py` (`available_for_execution`, `load_executable_fixture`, `READINESS_REASON_KO`); `start_check.py` (`StartCheck`, `build_questions`, `QUESTION_COUNT`); `server.py` (`get_protocol_start_check`, `server_config`, `_source_protocol_only`); `safety_pack.py` (`resolve_safety_pack`, `SOURCE_PROTOCOL_ONLY_SCOPE`); 화면 `static/index.html` 의 `#wizard-sheet`.
 - **설정**: `VOINEY_LAB_START_CHECK_ENABLED`(true), `VOINEY_LAB_USAGE_SCOPE`, `VOINEY_LAB_SAFETY_CATALOG`, `VOINEY_LAB_FACILITY_ID`.
-- **시험**: `tests/test_lane_di_execution_rule.py`, `tests/test_lane_on_start_check.py`, `tests/test_lane_on_wizard_screen.py`, `tests/test_lane_pl_source_protocol_only.py`, `tests/test_safety_pack.py`.
+- **시험**: `tests/test_lane_di_execution_rule.py`, `tests/test_lane_on_start_check.py`, `tests/test_lane_on_wizard_screen.py`, `tests/test_lane_pl_source_protocol_only.py`, `tests/test_safety_pack.py`, `tests/test_lane_safe_start_gate.py`, `tests/test_lane_safe_socket_controls.py`, `tests/test_lane_ia_start_safety.py`.
 - **서버 시작 확인**: `available_for_execution`에 더해, 같은 계정이 지금 실행할 분석·검토본의 핵심 값을 확인하고 안전 주의를 읽었다는 장부 기록을 요구한다. 안전 확인은 `/api/protocols/{protocol_id}/start-check/safety`에 현재 `target`을 보내 기록한다. 기록이 없거나 다른 계정·다른 분석의 기록이면 시작을 거절하고 할 일을 알린다. 핵심 값이 없는 원문도 안전 확인은 필요하다. 재연결은 원래 실행 버전의 확인을 읽는다. `VOINEY_LAB_START_CHECK_ENABLED=false`이면 기존 시작 길을 유지한다.
 
 화면의 재개 제어는 시작한 실험이며 현재 설정 번호와 세대가 일치할 때만 허용한다. 같은 소켓에서 시작 요청을 다시 받으면 같은 설정은 현재 세션을 알리고, 다른 설정은 연결을 유지한 채 오류를 보낸다.
@@ -129,7 +129,7 @@
   모델의 되묻기 후보는 서버가 전달한 원문 용어만 허용한다. 후보를 눌렀을 때 명령이나 확인 응답이 새 사용자 말로 실행되는 것을 막는다.
 - **어디**: `curated_protocol.py` (`CuratedProtocolSession.front_plan`, `plan`, `FRONT_RULES`, `apply_tool_proposal`, `apply_router_answer`, `ROUTER_FIRST_HANDED_ON`); `llm_router.py` (`route_turn_with_llm_router`, `validate_tool_proposals`, `CHANGE_STATE_RULES`, `RECORD_LOG_RULES`, `answer_check_failures`, `ROUTER_MODEL_UNAVAILABLE_KINDS`); `answer_checks.py`; `runtime_routing.py` `route_curated_runtime_turn`; `intent_fences.py`; `brain.py` `ConversationHistory`(6턴·약 1,200 토큰); `server.py` `_route_with_llm_router`.
 - **설정**: `VOINEY_LAB_LLM_ROUTER_ENABLED`(false), `VOINEY_LAB_ROUTER_FIRST`(false, 라우터가 켜져 있어야 함), `VOINEY_LAB_ROUTER_PROVIDER`·`_MODEL`(설정 필요; 켰는데 비어 있으면 라우터를 끄고 이유를 알림), `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`(2.5).
-- **시험**: `tests/test_front_plan.py`, `tests/test_llm_router.py`, `tests/test_llm_router_wiring.py`, `tests/test_router_answer_checks.py`, `tests/test_lane_ra_router_first.py`, `tests/test_lane_fx3_router_unavailable.py`, `tests/test_rule_parity.py`. 말 맞추기 재생 `python scripts/replay_turns.py`(라우터 꺼짐, 규칙 길).
+- **시험**: `tests/test_front_plan.py`, `tests/test_llm_router.py`, `tests/test_llm_router_wiring.py`, `tests/test_router_answer_checks.py`, `tests/test_lane_ra_router_first.py`, `tests/test_lane_fx3_router_unavailable.py`, `tests/test_rule_parity.py`, `tests/test_lane_safe_questions.py`. 말 맞추기 재생 `python scripts/replay_turns.py`(라우터 꺼짐, 규칙 길).
 - **한계**: 라우터는 기본으로 꺼져 있다. 측정(평가 세트 567줄, 2026-10-13, 모델 `gpt-6-luna`·추론 `none`): 알아들음 규칙 77.1 % → 라우터 먼저 82.7 %, 잘못 바뀐 상태 0, 모델 지연 p50 1.52 s · p90 2.14 s. 평가 세트는 실제 연구실 녹음이 아니다.
 
 ## F10. 단계 · 완료 · 타이머
@@ -175,8 +175,9 @@
   `GET /api/workspace/experiments/{session_id}/reports`는 그 실험의 보고서 요약 목록(`session_id`, `reports`)을 준다. 본인 또는 같은 연구실 관리자만 읽으며, 보고서가 아직 없거나 기록 기능을 껐으면 빈 목록이다. 보고서를 생성하거나 실험 상태를 바꾸지 않는다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
 - **설정**: `VOINEY_LAB_REPORT_PROVIDER`·`_MODEL`·`_REASONING`, `VOINEY_LAB_REPORT_WRITER_ENABLED`(true), `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`(25), `VOINEY_LAB_REPORT_TIMEZONE`(Asia/Seoul), `VOINEY_LAB_OFFICE_CONVERTER`.
-- **시험**: `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`.
-- **한계**: 새로고침 뒤에는 지난 보고서를 화면에서 다시 받는 길이 없다(링크는 실험이 끝날 때만 채워진다). PDF·랩미팅·xlsx·"확인함"은 화면 단추가 없다.
+- **시험**: `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`, `tests/test_lane_own_reports.py`, `tests/test_lane_own_history.py`, `tests/test_lane_safe_records.py`.
+- **화면**: 기록 탭에서 한 실험을 열면 위 목록 경로로 보고서들을 읽어 Word·Markdown·JSON·CSV 링크를 보여 준다. 새로고침 뒤에도 다시 받을 수 있으며, 없거나 읽기에 실패하면 안내와 **기록 새로고침**을 쓴다. 이름의 순번은 서버 값만 표시한다.
+- **한계**: PDF·랩미팅·xlsx·"확인함"은 서버 API에만 있다. 권한 표는 `.agent/security_rules.md` 6절.
 
 ## F14. 연결 끊김
 
@@ -204,7 +205,7 @@
   `mobile/` 은 같은 웹 화면을 감싸는 Capacitor(안드로이드 먼저) 앱 뼈대다: 정확한 시각 알람, 화면을 꺼도 듣는 마이크 서비스, 기기에 봉한 로그인 토큰, 화면 켜 두기. 앱은 상태·타이머 권한을 갖지 않는다(서버의 타이머 시각을 복사해 알릴 뿐).
 - **어디**: `static/manifest.webmanifest`, `static/native-bridge.js`; `mobile/capacitor.config.js`, `mobile/scripts/prepare-web.mjs`, `mobile/README.md`(빌드), `docs/APP_PLAN.md`(계획); 서버 `VOINEY_LAB_APP_ORIGINS`(앱 출처의 토큰 로그인·CORS·`/ws` 출처).
 - **시험**: `tests/test_native_bridge.py`, `tests/test_lane_app1_app_login.py`, `tests/test_lane_app1_app_origins.py`.
-- **한계**: `native-bridge.js` 는 아직 `index.html` 이 불러오지 않는다 — 일반 화면에서는 기기 알림·화면 꺼도 듣기가 없다. 묶음 빌드는 아직 서버 주소를 받지 못한다. 실제 휴대폰·HTTPS 에서 확인한 기록은 없다. iOS 빌드 없음.
+- **한계**: `native-bridge.js` 는 아직 `index.html` 이 불러오지 않는다 — 일반 화면에서는 기기 알림·화면 꺼도 듣기가 없다. 화면 주소는 `serverOrigin` 한 곳에서 정해 HTTP·이미지·내보내기·웹소켓에 적용한다. 현재는 빈 값으로 같은 서버를 쓰며 앱 묶음의 서버 주소 주입은 아직 연결되지 않았다. 실제 기기 연결도 확인 안 됨. 실제 휴대폰·HTTPS 에서 확인한 기록은 없다. iOS 빌드 없음.
 
 ## F17. 공급자와 설정
 
@@ -244,3 +245,14 @@
 - **설정**: `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`, `VOINEY_LAB_STT_DIAGNOSTIC_MAX_FILES`(20), `VOINEY_LAB_ANALYTICS_RETENTION_DAYS`(90).
 - **시험**: `tests/test_lane_fx5_metrics_delete.py`, `tests/test_lane_fx5_secrets_not_kept.py`, `tests/test_pilot_backup.py`.
 - **한계**: `/readyz`는 공급자를 호출하지 않으며 외부 연결의 성공을 보장하지 않는다. 삭제 도구는 디스크 조각까지 지우지 않는다. 운영 순서는 `docs/DEPLOYMENT_RUNBOOK.md`, 파일럿의 데이터 처리와 고지는 `docs/PILOT_GUIDE.md`.
+
+
+## F19. 화면과 시작 및 종료
+
+- **무엇**: 홈·프로토콜·실험·기록·설정 다섯 탭과 시작 시트로 나눈다. 프로토콜 목록(`#/protocols`)의 항목은 상세(`#/protocols/<id>`)로, 새 올리기는 `#/upload`의 파일·공개 링크 선택 → 경과 시간과 작업 표시 → 결과로 이어진다. 상세에는 분석 요약·원문 대조·시약 표·검토본 기록·다시 분석이 접고 펼치는 묶음으로 있다. 번호 없는 단계는 화면이 붙인 번호임을 구분하고, 쪽 카드에서 원본 쪽을 열며, OCR 값 단추는 엔진 이름을 보여 준다.
+  실험 전 카드는 선택에 따라 **새 실험 시작**·**이 프로토콜로 시작**·**실험 이어하기**다. 모든 시작은 시트의 마지막 단추를 거친다. 안전 **읽었어요**는 서버에 현재 대상 확인을 남기며 거절 사유가 오면 해당 확인 단계로 돌아간다. 안내 목소리 미리듣기는 한 번에 하나, 같은 단추로 멈춘다. 마지막 시작을 보내지 못하면 시트를 닫지 않고 이유를 보여 준다. 핵심 값 불러오기에 실패하면 확인 단계의 **다시 불러오기**로 재시도한다.
+  기록 탭은 지난 실험 목록에서 하나의 기록(`#/records/<id>`)으로 들어간다. **종료**를 누른 뒤 서버가 끝났다고 보낼 때 끝 화면이 되고, 끝난 실험은 이어하기에서 빠진다. HTTP 세션 만료 401과 로그아웃은 소리·연결을 정리하고 이미 쓴 초대 링크 없이 로그인 화면으로 간다.
+  실험 중 홈은 돌아가기만 제안하고, 음성 연결 중 올리기가 잠겨 있으면 그 이유를 말한다. 레일의 **설정**은 실험 화면 위의 시트를 연다. 남의 실험은 이어하기 후보에서 빼고 목록·상세에 읽기 전용으로 표시하며, 기록·첨부·체크포인트·값 정정·평점·보고서 재생성 제어를 숨긴다. 소켓이 1008로 닫히면 계정을 다시 확인해 로그인이 끝났을 때 로그인 화면으로 간다. 원문 확인이 남은 카드는 서버의 상태·할 일을 그리고 등록 차단 이유를 보여 준다.
+- **어디**: `static/index.html`의 `renderProtocolViews`, `renderUploadFlow`, `renderRecordsViews`, `showExperimentEnded`, `signOutOnScreen`, `renderRecordReports`, `recheckAccountAfterClose`, `deleteAccount`; 주소는 `serverOrigin`·`serverUrl`·`serverSocketUrl`·`serverFetch`를 거친다. 화면은 서버 상태를 그리며 문장에서 상태를 추측하지 않는다.
+- **시험**: `tests/test_lane_ia_tabs.py`, `tests/e2e/upload-ia.spec.ts`, `tests/e2e/tabs-ia.spec.ts`, `tests/test_lane_ui4_record_reports.py`, `tests/test_lane_ui4_account.py`, `tests/e2e/pilot-ui4.spec.ts`(브라우저는 CI). 사용 순서는 `docs/USER_GUIDE.md`.
+- **한계**: PI 확인·추가 보고서 형식·계정 삭제 등 서버 기능의 화면 연결 범위는 각 기능 절에 적는다. 실제 기기·공급자 시험과 가짜 서버 화면 시험을 구분한다.
