@@ -899,6 +899,16 @@
     .wizard-safety p{margin:var(--space-1) 0 0;white-space:pre-wrap}
     .wizard-scope{margin:0;padding:var(--space-3);border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-weight:700}
     .wizard-done{margin:0;color:var(--ink-muted);font-weight:600}
+    /* Lane TAB decision 1 (2026-10-23): a tablet -- a touch screen (a coarse pointer) wider than a phone's
+       720 px and taller than a phone on its side -- gives every tap target at least the desk's 44 px
+       (--target-desk) on every screen: the rail's buttons before and after the run, the folds, the records'
+       fields, a checkbox's label. The phone and the desktop keep their sizes. */
+    @media (pointer:coarse) and (min-width:721px) and (min-height:600px){
+     button,select,summary,[role="button"],input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]){min-height:var(--target-desk)}
+     button,summary,[role="button"]{min-width:var(--target-desk)}
+     summary{align-content:center}
+     label:has(> input[type="checkbox"]),label:has(> input[type="radio"]){display:inline-flex;align-items:center;min-height:var(--target-desk)}
+    }
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
 </head>
