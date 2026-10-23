@@ -130,7 +130,8 @@ assert(document.body.dataset.sheet==="conversation","the conversation did not op
         html = INDEX.read_text(encoding="utf-8")
         style = html.split("<style>", 1)[1].split("</style>", 1)[0]
         self.assertIn('body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;', style)
-        self.assertIn("@media (orientation:landscape) and (min-width:1100px){", style)
+        # Lane TAB decision 2 (2026-10-23): the pictures' column is a mouse's wide screen only; a tablet on its side keeps two columns.
+        self.assertIn("@media (orientation:landscape) and (min-width:1100px) and (pointer:fine){", style)
         self.assertIn('grid-template-areas:"left timer fig" "more timer fig"', style)
         self.assertIn(".settings-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))", style)
         for ident in ("run-open-conversation", "run-open-figures", "run-open-settings"):

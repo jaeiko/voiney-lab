@@ -119,6 +119,12 @@
     body[data-view="during"] .run-caption-text{grid-area:caption;display:block;min-width:0;margin:0;padding-left:.75rem;border-left:1px solid var(--muted);overflow:hidden;font-size:1.375rem;line-height:1.875rem;font-weight:500;white-space:nowrap;text-overflow:ellipsis}
     body[data-view="during"] #audio-echo-notice:not([hidden]),body[data-view="during"] #mic-recovery:not([hidden]),body[data-view="during"] #voice-calibration:not([hidden]){position:fixed;left:1rem;right:1rem;bottom:calc(var(--run-bottom-h) + .5rem);z-index:96;margin:0;padding:1rem;border:2px solid var(--amber);border-radius:2px;background:var(--surface-raised);color:var(--ink)}
     body[data-view="during"] #voice-calibration:not([hidden]){z-index:97}
+    /* Lane TAB decision 3 (2026-10-23): the word asking for one touch when the browser holds the sound back; above the line of voice on the run screen. */
+    .audio-unlock{display:flex;align-items:center;flex-wrap:wrap;gap:.75rem;margin:.45rem 0 0;padding:.75rem 1rem;border:2px solid var(--amber);background:var(--warning-soft);color:var(--ink);font-size:1rem;font-weight:700;line-height:1.45}
+    .audio-unlock[hidden]{display:none}
+    .audio-unlock span{flex:1 1 12rem;min-width:0}
+    .audio-unlock button{flex:none;min-height:var(--target-run);padding:0 var(--space-6);border:0;border-radius:var(--radius-md);background:var(--ink);color:var(--on-ink);font:inherit;cursor:pointer}
+    body[data-view="during"] #audio-unlock:not([hidden]){position:fixed;left:1rem;right:1rem;bottom:calc(var(--run-bottom-h) + .5rem);z-index:98;margin:0}
     body[data-view="during"] #voice-calibration-notice:not([hidden]){position:fixed;left:1rem;right:1rem;bottom:calc(var(--run-bottom-h) + .5rem);z-index:96;margin:0}
     /* The step card: the step's column, the timer, and below them the source and a block. */
     body[data-view="during"] .procedure-card{display:grid;grid-template-columns:minmax(0,1fr) var(--run-timer-panel-w);grid-template-areas:"left timer" "more timer";grid-template-rows:minmax(0,1fr) auto;min-height:calc(100dvh - var(--run-statusbar-h) - var(--run-bottom-h));padding:0;border-width:0 0 1px;border-radius:0;box-shadow:none;overflow:visible;-webkit-backdrop-filter:none;backdrop-filter:none}
@@ -274,7 +280,8 @@
     @media (orientation:landscape){
      body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{top:0;left:auto;width:min(34rem,100%);max-height:none;border-top:0;border-left:2px solid var(--ink)}
     }
-    @media (orientation:landscape) and (min-width:1100px){
+    /* Lane TAB decision 2 (2026-10-23): a mouse's wide screen only -- a tablet on its side keeps two columns (below). */
+    @media (orientation:landscape) and (min-width:1100px) and (pointer:fine){
      body[data-view="during"]{--run-actions:4;--run-timer-panel-w:340px;--run-figures-w:22rem}
      body[data-view="during"] .procedure-card{grid-template-columns:minmax(0,1fr) var(--run-timer-panel-w) var(--run-figures-w);grid-template-areas:"left timer fig" "more timer fig"}
      body[data-view="during"] .task-body-right,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;flex-direction:column;gap:.75rem;grid-area:fig;position:sticky;top:var(--run-statusbar-h);z-index:auto;width:auto;max-height:calc(100dvh - var(--run-statusbar-h) - var(--run-bottom-h));padding:1rem;overflow:auto;border:0;border-left:1px solid var(--border);box-shadow:none;background:none}
@@ -899,6 +906,45 @@
     .wizard-safety p{margin:var(--space-1) 0 0;white-space:pre-wrap}
     .wizard-scope{margin:0;padding:var(--space-3);border-left:var(--stroke-current) solid var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink);font-weight:700}
     .wizard-done{margin:0;color:var(--ink-muted);font-weight:600}
+    /* Lane TAB decision 1 (2026-10-23): a tablet -- a touch screen (a coarse pointer) wider than a phone's
+       720 px and taller than a phone on its side -- gives every tap target at least the desk's 44 px
+       (--target-desk) on every screen: the rail's buttons before and after the run, the folds, the records'
+       fields, a checkbox's label. The phone and the desktop keep their sizes. */
+    @media (pointer:coarse) and (min-width:721px) and (min-height:600px){
+     button,select,summary,[role="button"],input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]){min-height:var(--target-desk)}
+     button,summary,[role="button"]{min-width:var(--target-desk)}
+     summary{align-content:center}
+     label:has(> input[type="checkbox"]),label:has(> input[type="radio"]){display:inline-flex;align-items:center;min-height:var(--target-desk)}
+    }
+    /* Lane TAB decision 2 (2026-10-23): the run screen on a tablet, read from 1.5 m and pressed with gloves.
+       The sizes are tokens, worked out for a 10-11" tablet, where a CSS px is about 0.19 mm (0.23 mm on
+       the larger ones, which only helps), and the usual screen-text sizes of ANSI/HFES 100-2007 (character
+       height 16' at least, 20'-22' preferred; at 1.5 m 20' is 8.7 mm):
+       --read-far-step  3.25rem: a Hangul glyph is about 0.9 em, 47 px, 8.9 mm -- 20' (a step of up to 120 characters)
+       --read-far-min   2.5rem : 36 px, 6.8 mm -- 16', the floor, for a longer step that must still fit
+       --read-far-timer 8rem   : a digit is about 0.72 em, 92 px, 17.5 mm -- 40', twice the reading size, read at a glance
+       --target-glove   80px   : about 15 mm, the primary buttons' height (pause or resume, stop) for a gloved finger
+       --gap-glove      24px   : about 4.6 mm of paper between the primary buttons, so a glove does not press both
+       The step's own sizes and the timer panel's width come from these; h:mm:ss digits shrink to the panel's width. */
+    :root{--read-far-step:3.25rem;--read-far-min:2.5rem;--read-far-timer:8rem;--target-glove:80px;--gap-glove:24px;}
+    @media (pointer:coarse) and (min-width:721px) and (min-height:600px){
+     body[data-view="during"]{--target-run:var(--target-glove);--run-primary-w:8rem}
+     body[data-view="during"] .procedure-card p.step-body{font-size:3.5rem;line-height:4rem}
+     body[data-view="during"] .procedure-card p.step-body[data-length="medium"]{font-size:var(--read-far-step);line-height:calc(var(--read-far-step) * 1.2)}
+     body[data-view="during"] .procedure-card p.step-body[data-length="long"]{font-size:var(--read-far-min);line-height:calc(var(--read-far-min) * 1.25)}
+     body[data-view="during"] .procedure-card .run-timer:not([data-digits="long"]) .run-timer-digits{font-size:max(var(--read-far-timer),min(9rem,34cqi))}
+     body[data-view="during"] .rail-right{background:var(--paper)}
+     body[data-view="during"] #rail-pause-session,body[data-view="during"] #rail-stop-session{margin-left:var(--gap-glove);font-size:1.125rem}
+    }
+    /* On its side: the step's column on the left and the timer on the right, one look for both; the panel is
+       as wide as 8rem digits need (34cqi of its content), the pictures open from 그림 보기 as on any landscape
+       screen, and the buttons are three sheet openers, then the two primary ones, each set apart. */
+    @media (orientation:landscape) and (pointer:coarse) and (min-width:721px) and (min-height:600px){
+     body[data-view="during"]{--run-timer-panel-w:calc(var(--read-far-timer) / .34 + 3rem);--run-action-w:96px;--run-bottom-h:var(--target-glove)}
+     body[data-view="during"] .run-timer{padding:1.5rem}
+     body[data-view="during"] #rail-pause-session,body[data-view="during"] #rail-stop-session{width:var(--run-primary-w)}
+     body[data-view="during"] .voice-console{right:calc(var(--run-action-w) * 3 + var(--run-primary-w) * 2 + var(--gap-glove) * 2)}
+    }
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
 </head>
@@ -1171,6 +1217,11 @@
             <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
               <span id="mic-recovery-text"></span>
               <button id="mic-reconnect" type="button">마이크 다시 연결</button>
+            </div>
+            <!-- Lane TAB decision 3 (2026-10-23): a tablet's browser holds the sound back until a touch (or stops it: a call, the screen locked); this asks for one, and any touch on the page will do. -->
+            <div id="audio-unlock" class="audio-unlock" role="alert" hidden>
+              <span id="audio-unlock-text">소리가 꺼져 있어요. 화면을 한 번 눌러 주세요.</span>
+              <button id="audio-unlock-button" type="button">소리 켜기</button>
             </div>
             <!-- Lane SP1 decision 1 (2026-10-10): the sentence the wearer reads once a session so their voice level is measured; a much quieter voice is then taken for someone else's and not heard. -->
             <div id="voice-calibration" class="voice-calibration" role="status" hidden>
@@ -1819,7 +1870,14 @@ const runFigureKeys=new Set(),runFigureKeysSeen=new Set(),RUN_CARD_LONG=120;
 // it; a browser without it, or a refusal, is passed over in silence. The
 // lock is let go when the run view ends, and asked for again when the page
 // comes back into view (a browser lets it go while the page is hidden).
-let screenWakeLock=null,screenWakeLockWanted=false,screenWakeLockAsking=null;
+// Lane TAB decision 3 (2026-10-23): a tablet's browser may grant the lock only
+// while a finger is on the screen, and a hands-free run may see no touch at
+// all. So the lock is asked for in the start press itself (primeRunStart) and
+// held while the start is under way (SCREEN_WAKE_START_MS), the request runs
+// in the same turn as the touch, and a tap during the run asks again for a
+// lock the browser let go.
+let screenWakeLock=null,screenWakeLockWanted=false,screenWakeLockAsking=null,screenWakeLockStartHold=0,screenWakeLockStartPresses=0;
+var SCREEN_WAKE_START_MS=20000;
 function keepScreenOn(on){
  screenWakeLockWanted=Boolean(on);
  if(!screenWakeLockWanted){const held=screenWakeLock;screenWakeLock=null;return held&&!held.released?Promise.resolve().then(()=>held.release()).then(()=>false,()=>false):Promise.resolve(false);}
@@ -1827,13 +1885,22 @@ function keepScreenOn(on){
  if(screenWakeLockAsking)return screenWakeLockAsking;
  const api=globalThis.navigator?.wakeLock;
  if(!api||typeof api.request!=="function"||globalThis.document?.visibilityState==="hidden")return Promise.resolve(false);
- screenWakeLockAsking=Promise.resolve().then(()=>api.request("screen")).then(lock=>{
+ screenWakeLockAsking=new Promise(resolve=>{resolve(api.request("screen"));}).then(lock=>{
   if(!screenWakeLockWanted){Promise.resolve().then(()=>lock?.release?.()).catch(()=>{});return false;}
   screenWakeLock=lock||null;lock?.addEventListener?.("release",()=>{if(screenWakeLock===lock)screenWakeLock=null;});return Boolean(lock);
  },()=>false).finally(()=>{screenWakeLockAsking=null;});
  return screenWakeLockAsking;
 }
 function onScreenVisibilityChange(){if(globalThis.document?.visibilityState==="visible"&&screenWakeLockWanted&&!screenWakeLock)return keepScreenOn(true);return Promise.resolve(Boolean(screenWakeLock));}
+// The start press: the screen kept on until the run view takes over, or let go when no run follows. The hold
+// is the latest press's own number, not a time read back: a timer may fire while Date.now() still reads a hair
+// under its deadline (a coarse or lagging clock), and the lock then stayed on.
+function keepScreenOnForStart(){
+ const hold=++screenWakeLockStartPresses;screenWakeLockStartHold=hold;
+ const timer=setTimeout(()=>{if(screenWakeLockStartHold!==hold)return;screenWakeLockStartHold=0;if(screenView()!=="during"&&screenWakeLockWanted)void keepScreenOn(false);},SCREEN_WAKE_START_MS);
+ timer?.unref?.();
+ return keepScreenOn(true);
+}
 function screenView(){
  if(experimentEndedOnScreen)return "after";
  const state=curatedProtocolState;
@@ -1852,7 +1919,9 @@ function renderScreenView(){
  if(view==="during"&&lastScreenView!=="during"&&shownTab()!=="experiment"){lastScreenView=view;navigateTab("experiment",null,{replace:true});}
  else{lastScreenView=view;renderRoute();}
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
- if((view==="during")!==screenWakeLockWanted)void keepScreenOn(view==="during");
+ if(view==="during")screenWakeLockStartHold=0;
+ const lockWanted=view==="during"||screenWakeLockStartHold!==0;
+ if(lockWanted!==screenWakeLockWanted)void keepScreenOn(lockWanted);
  return view;
 }
 // Lane UI0 decision 2 (2026-10-12): the 실험 중 view's own parts -- the status
@@ -3307,6 +3376,8 @@ async function renderMicDevices(inputs=null){
 }
 function currentMicTrack(){return micStream?.getAudioTracks?.()[0]||micStream?.getTracks?.()[0]||null;}
 async function openMicStream(){
+ // Lane TAB decision 3: a page opened without HTTPS (a tablet on the lab's network by its address) has no microphone at all.
+ if(typeof navigator.mediaDevices?.getUserMedia!=="function")throw new Error("이 주소에서는 마이크를 쓸 수 없어요. HTTPS 주소로 열어 주세요.");
  const supported=navigator.mediaDevices.getSupportedConstraints?.()||null,audioConstraints={channelCount:1};
  for(const name of ["echoCancellation","noiseSuppression","autoGainControl"]){if(!supported||supported[name]===true)audioConstraints[name]=true;}
  // Lane SP1 decision 2: "항상 끔" opens the microphone without automatic gain control; "목소리를 맞추면 끔" turns it off on the track once the voice is measured (applyAutoGainControl below).
@@ -3364,11 +3435,27 @@ function showMicRecovery(text){
 function hideMicRecovery(){const box=$("mic-recovery");if(box)box.hidden=true;setText("mic-recovery-text","");renderRunStatus();}
 function micErrorText(error){
  const name=error?.name||"";
- if(name==="NotAllowedError"||name==="SecurityError")return "브라우저가 마이크 사용을 막았습니다. 주소창의 마이크 권한을 허용한 뒤 다시 연결하세요.";
+ if(name==="NotAllowedError"||name==="SecurityError")return micBlockedWords(error)||"브라우저가 마이크 사용을 막았습니다. 주소창의 마이크 권한을 허용한 뒤 다시 연결하세요.";
  if(name==="NotFoundError"||name==="OverconstrainedError")return "연결된 마이크를 찾지 못했습니다. 마이크(아이폰·헤드셋)가 연결됐는지 확인한 뒤 다시 연결하세요.";
  if(name==="NotReadableError"||name==="AbortError")return "마이크가 응답하지 않습니다. 다른 앱이 마이크를 쓰고 있지 않은지 확인한 뒤 다시 연결하세요.";
  return "마이크를 다시 열지 못했습니다. 마이크 연결을 확인한 뒤 다시 연결하세요.";
 }
+// Lane TAB decision 3 (2026-10-23): a refused microphone is turned back on in a
+// different place on each device -- Safari's page menu on an iPad, the
+// Settings app for the home-screen app, the site's permissions in Chrome on
+// Android or the system's app settings when Android itself refused ("by
+// system"). The words name that place; a desktop keeps its sentence (null).
+function micDeviceKind(){const nav=globalThis.navigator||{},agent=String(nav.userAgent||"");if(/iPad|iPhone|iPod/.test(agent)||(/Macintosh/.test(agent)&&Number(nav.maxTouchPoints)>1))return "ios";return /Android/.test(agent)?"android":"desktop";}
+function homeScreenApp(){try{return globalThis.navigator?.standalone===true||globalThis.matchMedia?.("(display-mode: standalone)")?.matches===true;}catch(_){return false;}}
+function micBlockedWords(error){
+ const kind=micDeviceKind();
+ if(kind==="ios")return homeScreenApp()?"마이크가 막혀 있어요. 설정 앱 → Safari → 마이크를 ‘허용’으로 바꾼 뒤 앱을 다시 열어 주세요.":"마이크가 막혀 있어요. 주소창의 페이지 메뉴(aA) → 웹사이트 설정 → 마이크를 ‘허용’으로 바꾼 뒤 새로 고쳐 주세요.";
+ if(kind==="android")return /by system/i.test(String(error?.message||""))?"마이크가 막혀 있어요. 기기 설정 → 애플리케이션 → Chrome → 권한 → 마이크를 ‘허용’으로 바꿔 주세요.":"마이크가 막혀 있어요. 주소창 왼쪽 아이콘 → 권한 → 마이크를 ‘허용’으로 바꾼 뒤 새로 고쳐 주세요.";
+ return null;
+}
+// A microphone refused or missing at the start is said in these words, not the browser's own (English) message.
+const MIC_ERROR_NAMES=new Set(["NotAllowedError","SecurityError","NotFoundError","OverconstrainedError","NotReadableError","AbortError"]);
+function micStartError(error){return MIC_ERROR_NAMES.has(error?.name)?new Error(micErrorText(error)):error;}
 // "lost": the track ended or its device is gone. "switch": it works, but the
 // chosen device is back and differs. null: nothing to do.
 async function micReconnectNeed(){
@@ -3446,14 +3533,63 @@ async function ensureAudio(generation){
   }catch(error){await closeAudio();throw error;}
  }
  playContext||=new AudioContext();
+ watchAudioContext(micContext);watchAudioContext(playContext);
  if(!cascadeGain&&typeof playContext.createGain==="function"){cascadeGain=playContext.createGain();cascadeGain.gain.value=1;cascadeGain.connect(playContext.destination);}
- await Promise.all([micContext.resume(),playContext.resume()]);
- if(playContext.state==="running"&&acceptedSessionConfiguration){
-  sendControl("client.audio_ready",{configuration_id:acceptedSessionConfiguration.configuration_id,generation:acceptedSessionConfiguration.server_generation,audio_context_state:"running",sample_rate:playContext.sampleRate});
-  // Lane SP1 decision 1: the wearer's voice is measured once at the start, after the greeting, unless turned off here (it can be skipped by voice or button).
-  if(voiceCalibrationAtStart()&&!globalThis.voineyConnection?.reconnecting?.())requestVoiceCalibration("start");
+ await resumeAudioWithin([micContext,playContext],AUDIO_RESUME_WAIT_MS);
+ sendAudioReady();renderAudioUnlock();
+}
+// Lane TAB decision 3 (2026-10-23): a tablet's browser starts sound only from a
+// touch and may stop it again (a call, the screen locked). The start press makes
+// and resumes the playback context in the touch (primeRunStart); the session
+// waits for the contexts at most AUDIO_RESUME_WAIT_MS, so a context still held
+// back no longer stops it; the screen then asks for one touch, and any touch
+// resumes what is held and only then tells the server the audio is ready -- once
+// for each accepted start, as before.
+var AUDIO_RESUME_WAIT_MS=1500;
+let audioReadySentFor="";
+const watchedAudioContexts=new WeakSet();
+function watchAudioContext(context){
+ if(!context||typeof context.addEventListener!=="function"||watchedAudioContexts.has(context))return;
+ watchedAudioContexts.add(context);context.addEventListener("statechange",afterAudioResumed);
+}
+function resumeAudioWithin(contexts,ms){
+ let timer=null;const waited=new Promise(resolve=>{timer=setTimeout(resolve,ms);});
+ return Promise.race([Promise.all(contexts.map(context=>Promise.resolve().then(()=>context.resume()))),waited]).finally(()=>clearTimeout(timer));
+}
+function sendAudioReady(){
+ const accepted=acceptedSessionConfiguration;
+ if(!accepted||!micWorkletNode||playContext?.state!=="running")return false;
+ const key=`${accepted.configuration_id}:${accepted.server_generation}`;if(audioReadySentFor===key)return true;audioReadySentFor=key;
+ sendControl("client.audio_ready",{configuration_id:accepted.configuration_id,generation:accepted.server_generation,audio_context_state:"running",sample_rate:playContext.sampleRate});
+ // Lane SP1 decision 1: the wearer's voice is measured once at the start, after the greeting, unless turned off here (it can be skipped by voice or button).
+ if(voiceCalibrationAtStart()&&!globalThis.voineyConnection?.reconnecting?.())requestVoiceCalibration("start");
+ return true;
+}
+function audioHeld(){return [micContext,playContext].some(context=>context&&(context.state==="suspended"||context.state==="interrupted"));}
+function renderAudioUnlock(){const box=$("audio-unlock");if(!box)return false;const shown=Boolean(acceptedSessionConfiguration&&micWorkletNode)&&audioHeld();box.hidden=!shown;return shown;}
+function afterAudioResumed(){sendAudioReady();renderAudioUnlock();}
+function resumeHeldAudio(){
+ for(const context of [micContext,playContext]){
+  if(!context||typeof context.resume!=="function"||context.state==="running"||context.state==="closed")continue;
+  try{Promise.resolve(context.resume()).then(afterAudioResumed,()=>{});}catch(_){}
  }
 }
+// The start press, in the touch itself: the sound made and resumed, and the screen kept on.
+function primeRunStart(){
+ try{if(!playContext&&typeof AudioContext==="function")playContext=new AudioContext();}catch(_){playContext=null;}
+ watchAudioContext(playContext);resumeHeldAudio();void keepScreenOnForStart();
+}
+// A start that did not go: the sound made in its press rests (a suspended context costs nothing; the next press resumes it).
+function restPrimedAudio(){
+ if(sessionActive||micWorkletNode||playContext?.state!=="running"||typeof playContext.suspend!=="function")return false;
+ try{Promise.resolve(playContext.suspend()).catch(()=>{});}catch(_){}
+ return true;
+}
+// Any touch or key: the sound the browser holds back resumed, and a screen lock it let go during the run asked for again.
+function onUserGesture(){resumeHeldAudio();if(screenWakeLockWanted&&!screenWakeLock)void keepScreenOn(true);}
+function onAudioVisibilityChange(){if(globalThis.document?.visibilityState!=="visible")return false;resumeHeldAudio();return renderAudioUnlock();}
+for(const kind of ["pointerup","touchend","click","keydown"])globalThis.document?.addEventListener?.(kind,onUserGesture,{capture:true,passive:true});
+globalThis.document?.addEventListener?.("visibilitychange",onAudioVisibilityChange);
 async function closeAudio(){
  if(micReconnectTimer){clearTimeout(micReconnectTimer);micReconnectTimer=null;}
  if(micTrackWatched){try{micTrackWatched.removeEventListener?.("ended",onMicTrackEnded);}catch(_){}micTrackWatched=null;}
@@ -3468,6 +3604,7 @@ async function closeAudio(){
  if(micContext){try{await micContext.close();}catch(_){}micContext=null;}
  if(cascadeGain){try{cascadeGain.disconnect();}catch(_){}cascadeGain=null;}
  if(playContext){try{await playContext.close();}catch(_){}playContext=null;}
+ renderAudioUnlock();
 }
 async function startSession(){
  const generation=sessionGeneration;
@@ -4912,7 +5049,7 @@ async function onMessage(e,generation,current){
   pendingSessionConfiguration=null;
   if(acceptedSessionConfiguration.experiment_session_id&&acceptedSessionConfiguration.experiment_session_version!==null){currentExperimentSessionId=acceptedSessionConfiguration.experiment_session_id;currentExperimentSessionVersion=acceptedSessionConfiguration.experiment_session_version;void loadExperimentSessions(currentExperimentSessionId);}
   renderResearchCapabilities(m.research_capabilities);renderLanguageState(serverInputLanguage==="auto"?"auto":"manual",serverInputLanguage);$("protocol-id").value=m.protocol_id||"";renderSelectedProtocolContext();$("protocol-revision").textContent=m.revision_id||"—";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id} · ${m.revision_id}`:"서버 확인 완료 · 프로토콜 미선택";
-  try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
+  try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(micStartError(error));return;}
   if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=curatedProtocolState?.attached===true&&curatedProtocolState.workflow_status==="paused";resetIgnoredSpeech();renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
  }
  if(m.type==="session.greeting"){
@@ -4939,7 +5076,7 @@ async function onMessage(e,generation,current){
  }
  if(m.type==="session.configuration_required"){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
-  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};const refusedWords=nonemptyText(m.message_ko)?String(m.message_ko):reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";$("session-configuration-status").textContent=refusedWords;renderState("IDLE",refusedWords);if(Object.prototype.hasOwnProperty.call(START_REFUSAL_STEPS,m.reason))returnToStartStep(m.reason,refusedWords);
+  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;restPrimedAudio();removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};const refusedWords=nonemptyText(m.message_ko)?String(m.message_ko):reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";$("session-configuration-status").textContent=refusedWords;renderState("IDLE",refusedWords);if(Object.prototype.hasOwnProperty.call(START_REFUSAL_STEPS,m.reason))returnToStartStep(m.reason,refusedWords);
  }
  if(m.type==="session.stopped"&&stopRequest?.socket===current)stopRequest.resolve();
  if(m.type==="session.stopped"){hideVoiceCalibration();voiceReferenceMeasured=false;sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
@@ -5020,6 +5157,7 @@ $("rail-new-session")?.addEventListener("click",confirmNewSession);
 $("rail-pause-session")?.addEventListener("click",togglePauseSession);
 $("workflow-resume-button")?.addEventListener("click",()=>{if(workflowPaused)togglePauseSession();});
 $("rail-stop-session")?.addEventListener("click",stopSession);
+$("audio-unlock-button")?.addEventListener("click",()=>{resumeHeldAudio();});
 $("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-session-modal");if(m)m.hidden=true;await stopSession();clearExperimentResumeSelection();resetSessionUI();renderState("IDLE");announceMilestone("새 세션이 준비되었습니다.");});
 $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;});
 $("toggle-setup-btn")?.addEventListener("click",()=>{const hero=$("hero-setup"),btn=$("toggle-setup-btn");if(!hero||!btn)return;const c=hero.classList.toggle("collapsed");btn.textContent=c?"⚙️ 설정 열기":"⚙️ 설정 접기";btn.setAttribute("aria-expanded",String(!c));});
@@ -5066,10 +5204,10 @@ async function pressExperimentStart(){
  if(plan.kind==="resume")return openWizardSheet("start");
  if(plan.kind==="protocol"){
   if(plan.checked&&!sessionActive){
-   wizardRememberProtocol(plan.protocolId);
+   primeRunStart();wizardRememberProtocol(plan.protocolId);
    // Lane UI4 QA-14: a start that does not go is said in the sheet at its last step.
    const refused=await startReviewedProtocol();
-   if(typeof refused==="string"){openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
+   if(typeof refused==="string"){restPrimedAudio();openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
    navigateTab("experiment",null,{replace:true});return true;
   }
   if(openStartForProtocol(plan.protocolId))return true;
@@ -5329,7 +5467,7 @@ async function wizardCheckMic(){
   const media=globalThis.navigator?.mediaDevices;if(!media?.getUserMedia){wizardNote("이 브라우저에서는 마이크를 쓸 수 없어요. HTTPS 주소로 열어 주세요.","error");return false;}
   const stream=await media.getUserMedia({audio:true});const track=(stream.getTracks?.()||[])[0];wizard.mic=nonemptyText(track?.label)?track.label:"기본 마이크";for(const item of stream.getTracks?.()||[])item.stop?.();
   wizardNote("마이크가 켜져요. 다음으로 가 주세요.");renderWizard();return true;
- }catch(_){wizard.mic=null;wizardNote("마이크를 쓸 수 없어요. 브라우저의 마이크 권한을 허용해 주세요.","error");renderWizard();return false;}
+ }catch(error){wizard.mic=null;wizardNote((["NotAllowedError","SecurityError"].includes(error?.name)&&micBlockedWords(error))||"마이크를 쓸 수 없어요. 브라우저의 마이크 권한을 허용해 주세요.","error");renderWizard();return false;}
 }
 function renderWizardAgent(host,primary){
  const list=wizard.voices,selected=String(wizardSettings().agent_voice||"default"),chosen=selected==="default"?list?.default_voice_id:selected;
@@ -5579,12 +5717,14 @@ async function wizardPrimary(){
   case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety"){if(!await acknowledgeStartSafety())return null;rememberSafetyRead();}wizardNext();return true;}
   case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
   case "start":{
-   const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);
+   const entry=wizardSelectedProtocol();if(!entry)return null;
+   // Lane TAB decision 3: in the touch itself, before anything is awaited.
+   primeRunStart();wizardRememberProtocol(entry.protocol_id);
    // Lane UI4 QA-14: the start acts on the review on the screen, so the sheet's protocol's is read first when it is not that one
    // (the home's "이어서 하기" opens the sheet before it arrives; an upload that finished meanwhile shows its own).
    if(lastProtocolReview?.protocol_id!==entry.protocol_id||currentProtocolReviewId!==entry.protocol_id){wizardSetBusy(true);renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizardSetBusy(false);}}
    const refused=await startReviewedProtocol();
-   if(typeof refused==="string"){wizardNote(refused,"error");renderWizard();return null;}
+   if(typeof refused==="string"){restPrimedAudio();wizardNote(refused,"error");renderWizard();return null;}
    closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;
   }
   // Lane UI4 QA-15: [다시 불러오기] when the check failed to load.
