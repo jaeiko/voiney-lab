@@ -293,7 +293,7 @@ def test_experiment_lifecycle_persists_exact_revision_steps_and_events(tmp_path)
             protocol_revision_id="approved-revision-7",
             voice_connection_id="voice-connection-2",
         )
-        assert recovered["status"] == "in_progress"
+        assert recovered["status"] == "paused"
         assert recovered["current_step_id"] == "step-2"
         assert recovered["last_voice_connection_id"] == "voice-connection-2"
         assert recovered["completed_steps"][0]["step_id"] == "step-1"
@@ -302,14 +302,18 @@ def test_experiment_lifecycle_persists_exact_revision_steps_and_events(tmp_path)
             "protocol_started",
             "step_completed",
             "session_paused",
-            "session_resumed",
+            "session_recovered",
         ]
 
+        resumed = reopened.transition_experiment(
+            researcher, "experiment-session-1", action="resume",
+            expected_version=recovered["version"], event_key="explicit-resume",
+        )
         completed = reopened.transition_experiment(
             researcher,
             "experiment-session-1",
             action="complete",
-            expected_version=recovered["version"],
+            expected_version=resumed["version"],
             event_key="workflow-complete-1",
         )
         assert completed["status"] == "completed"
@@ -524,7 +528,7 @@ def test_progress_allows_same_voice_timeline_capture_but_fences_recovered_voice(
             ],
             "next_action": "resume_voice_session",
         }
-        with pytest.raises(WorkspaceConflictError, match="changed"):
+        with pytest.raises(WorkspaceConflictError, match="another voice connection"):
             store.record_experiment_progress(
                 researcher,
                 created["session_id"],

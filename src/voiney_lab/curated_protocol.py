@@ -9426,14 +9426,10 @@ def reader_translation_issue(
 class CuratedProtocolSession:
     """Server-owned in-memory state for one validated structured fixture.
 
-    There are two ways in, and only one is gated. ``ProtocolCatalog``'s
-    ``load_executable_fixture`` builds a fixture from a stored analysis and
-    refuses unless the Protocol is approved or development-activated, which
-    requires readiness to be clear. Direct construction, which the replay
-    harness and the demo path use, has no such check. Nothing produced by the
-    analysis pipeline has ever come through the gated route -- see
-    docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md -- so this is currently the
-    only route that carries anything at all.
+    ``ProtocolCatalog.load_executable_fixture`` checks the stored analysis or
+    latest review version for execution blockers before the server starts a
+    run. Direct construction is also used by offline replay and tests; it is
+    not an execution permission. See .agent/architecture.md, protocol lifecycle.
     """
 
     def __init__(self, fixture: CuratedProtocolFixture) -> None:

@@ -312,7 +312,7 @@ Removed in the same lane: `retrieval.search_safety_documents` (nothing in
 the `VOINEY_LAB_MOSS_ENABLED` export and the "moss_safety_documents" banner
 line in `run_pilot.sh`, `run_dev.sh` and `run_ci_server.sh`.
 `VOINEY_LAB_MOSS_ENABLED` is still in the setting table and in
-`scripts/collect_chunks.sh`; nothing reads it.
+the retired collector; nothing reads it. The collector was later deleted.
 
 Not changed by this lane (other lanes' files): the xai default and
 `DEFAULT_MODELS` in `model_providers.py`, the old defaults in `multi_brain.py`
@@ -632,7 +632,7 @@ under `data/` is rewritten.
   repository `.env`), the handoff worker (deleted on 2026-10-10, lane CL),
   `scripts/run_dev.sh`,
   `scripts/run_pilot.sh`, `scripts/run_ci_server.sh`,
-  `scripts/collect_chunks.sh` and pytest refuse to start while an old name is
+  pytest and the then-existing collector refuse to start while an old name is
   set, with "옛 설정 이름 N개: (names). scripts/migrate_env.py 를 실행하세요." The
   names are shown, never a value.
 
@@ -1498,7 +1498,7 @@ Deleted:
 | `XaiAuthoritativeWebSearch` (the Responses `web_search` adapter, its cache, citation checks and answer clean-up), `ExternalReferenceSettings`, and the helpers only they used | `external_references.py` |
 | The research path's second step, `search_authoritative_web` (its `tool.call` / `tool.result` events and the "authoritative_web" `research.state` phase), the "pending" announcement that went with it, and `ListenerSession.external_reference_settings` | `server.py` |
 | Thirteen setting-table rows: the switch `EXTERNAL_REFERENCES_ENABLED`, the six time and turn limits (`EXTERNAL_REFERENCE_TIMEOUT_SECONDS`, `_CONNECT_`, `_READ_`, `_ENRICHMENT_BUDGET_`, `_SERVICE_TIER`, `_MAX_TURNS`), and `EXTERNAL_REFERENCE_DOMAIN_PROFILE`, `_DOMAINS`, `_ALLOWED_DOMAINS`, `_MAX_CITATIONS`, `_CACHE_TTL_SECONDS`, `EXTERNAL_SEARCH_DISPLAY_MODE` (all with the `VOINEY_LAB_` prefix) | `setting_names.py`, `.env.example` |
-| The `VOINEY_LAB_MOSS_ENABLED` row (nothing has read it since lane CL) and the one `export` left in `scripts/collect_chunks.sh` | `setting_names.py`, `scripts/collect_chunks.sh` |
+| The `VOINEY_LAB_MOSS_ENABLED` row (nothing has read it since lane CL) and the collector's remaining `export` | `setting_names.py`, the then-existing collector |
 | The old-name entries whose new name is a deleted row (4 prefixed, 12 unprefixed) | `setting_renames.py` |
 | The diagnostic script for the search | `scripts/diagnose_candidate_a_research.py` |
 | The launchers' references: `run_dev.sh`'s eight defaults, its capability printout and import; `run_pilot.sh`'s default and banner line `external_references:`; `run_ci_server.sh`'s export | `scripts/` |
@@ -1522,7 +1522,7 @@ What changes for someone:
   reasoning setting through `model_providers`); its table default is now
   "(공급자 기본)" and its meaning "PDF 밖 설명 추론", where it said "low" and
   "외부 근거 검색 추론".
-- `docs/APPROVED_DOCUMENT_OPERATIONS.md` §6 no longer describes the search.
+- The safety-document operating guide no longer describes the search (current guide: `docs/DEPLOYMENT_RUNBOOK.md`).
   Documents that have to spell a deleted setting write it without the
   `VOINEY_LAB_` prefix (as earlier lanes did); the standard test command's
   `VOINEY_LAB_MOSS_ENABLED` (in `CLAUDE.md`, README and `docs/GIT_WORKFLOW.md`)

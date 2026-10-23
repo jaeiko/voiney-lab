@@ -190,7 +190,9 @@ class MarkupTests(unittest.TestCase):
         self.assertIn(".library-grid{display:grid;grid-template-columns:minmax(0,1fr);", self.style)
         row = re.search(r"\n    \.protocol-row\{([^}]*)\}", self.style).group(1)
         self.assertIn("min-height:var(--target-run)", row)
-        self.assertIn('body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}', self.style)
+        # Lane UI4 QA-18 (2026-10-23): the protocols tab keeps its list during the run; the microphone check still folds away.
+        self.assertIn('body[data-view="during"] .mic-check{display:none}', self.style)
+        self.assertNotIn('body[data-view="during"] .protocol-library', self.style)
 
     def test_every_badge_keeps_its_words_readable(self) -> None:
         tokens = _tokens(self.style)

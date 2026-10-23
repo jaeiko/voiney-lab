@@ -20,6 +20,8 @@
 
 ## F1. 계정과 로그인
 
+계정 모드의 API 문서(`/docs`, `/redoc`, `/openapi.json`)도 로그인이 필요하다. 상태를 바꾸는 브라우저 요청과 음성 소켓은 다른 Origin을 거부한다. 명시한 앱 Origin은 기존 bearer 경로를 쓰며 다른 Origin의 쿠키가 HTTP 쓰기를 허가하지 않는다.
+
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
   비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.
   관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 스스로 지울 수 있다(마지막 관리자는 안 됨).
@@ -30,6 +32,8 @@
 - **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 계정 이름 기준이며 전달 주소 머리글로 우회할 수 없다. OIDC 는 가짜 검증기로만 시험했다.
 
 ## F2. 프로토콜 들여오기
+
+개발용 고정 프로토콜도 본인 연구실에 연결된 항목만 목록에 나온다. 서버의 기동 준비는 계정 요청 문맥 없이 전체 카탈로그의 준비·개수 확인을 수행한다.
 
 - **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 연구실 안에서 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다. 다른 연구실이 같은 파일을 올리면 별도의 카탈로그 항목으로 등록한다. 원문 바이트는 공유할 수 있지만 분석·검토·소유 범위는 연구실마다 따로 남는다. 스타터 팩 도구도 같은 규칙을 쓴다.
   엑셀(.xlsx)은 원문이 아니라 고른 프로토콜에 붙는 **시약 표**로 저장하고 분석에 쓰지 않는다.
@@ -115,11 +119,14 @@
 
 ## F9. 말 한 번의 길
 
+턴 취소는 시작된 영구 저장의 결과를 기다린 뒤 처리한다. 완료가 저장됐으면 현재 단계와 보조 보고서를 같은 완료에 맞추고, 화면의 일시정지는 취소된 턴의 복원이 끝난 뒤 적용한다. 잘못된 제어 메시지는 복구 가능한 오류 하나로 답하며 음성 연결을 유지한다.
+
 - **무엇**: 글로 옮긴 말은 한 줄로 간다. ① 응급 판정(`server.py`) → ② **앞단 규칙**(모델을 기다리지 않음: 글자 품질, 멈춤·"종료", 열린 질문의 예/아니요, 끝점 질문에 대한 답, 남은 시간, "그거", 다시 말해 줘, 지금 단계를 이름 댄 완료, 시작 등) → ③ (켰을 때) **LLM 라우터**: 답하거나 `change_state`·`record_log` 도구로 바꾸기를 **제안** → ④ **서버 검증**: 이 말의 글자 그대로의 근거, 질문·가정이 아님, 지금 단계만, 열린 서버 질문이 없을 것 → 같은 상태 기계(`CuratedProtocolSession`)가 바꾼다.
   한국어 의문·추측 어미와 물음표는 규칙과 라우터 검사에서 같은 함수로 읽는다. "투명해졌나", "타이머 시작했나", "재개했나", "투명해질지", "타이머 시작할지" 같은 말은 관찰·완료·타이머 시작·재개·이상 사항 기록을 허용하지 않고, 열린 질문도 소비하지 않는다. 설명을 함께 요청해 기존 답변 경로로 들어가도 완료 확인을 갱신하거나 지우지 않는다. 분명한 진술·명령과 "다음"·"다음 단계"·"넘어가"의 진행 동작은 유지한다.
   모델이 늦거나·실패하거나·거부되거나·답이 검사에 걸리면 같은 말을 규칙 길로 처리한다(두 번째 결정이 아니다). 라우터 모델이 요청 한도(429)에 걸리면 그 말을 멈추고 "지금 답하지 못했어요. 다시 말씀해 주세요."라고 한다.
   모델이 쓴 답은 서버 검사를 통과해야 쓴다: 숫자는 인용한 원문에서만, 상태를 바꿨다는 말 금지, 화면 라벨 금지, 서버 값은 정확히, 근거 없는 안전 지시는 빼고 "이 상황의 안전 안내는 원문에 없어요."를 붙인다.
   **라우터 먼저**(꺼짐)를 켜면 앞단 규칙은 시스템 정보·애매한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고, 라우터가 읽기 전용 도구(`show_visual`, `clarify`, `not_for_me`)도 쓴다.
+  모델의 되묻기 후보는 서버가 전달한 원문 용어만 허용한다. 후보를 눌렀을 때 명령이나 확인 응답이 새 사용자 말로 실행되는 것을 막는다.
 - **어디**: `curated_protocol.py` (`CuratedProtocolSession.front_plan`, `plan`, `FRONT_RULES`, `apply_tool_proposal`, `apply_router_answer`, `ROUTER_FIRST_HANDED_ON`); `llm_router.py` (`route_turn_with_llm_router`, `validate_tool_proposals`, `CHANGE_STATE_RULES`, `RECORD_LOG_RULES`, `answer_check_failures`, `ROUTER_MODEL_UNAVAILABLE_KINDS`); `answer_checks.py`; `runtime_routing.py` `route_curated_runtime_turn`; `intent_fences.py`; `brain.py` `ConversationHistory`(6턴·약 1,200 토큰); `server.py` `_route_with_llm_router`.
 - **설정**: `VOINEY_LAB_LLM_ROUTER_ENABLED`(false), `VOINEY_LAB_ROUTER_FIRST`(false, 라우터가 켜져 있어야 함), `VOINEY_LAB_ROUTER_PROVIDER`·`_MODEL`(설정 필요; 켰는데 비어 있으면 라우터를 끄고 이유를 알림), `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`(2.5).
 - **시험**: `tests/test_front_plan.py`, `tests/test_llm_router.py`, `tests/test_llm_router_wiring.py`, `tests/test_router_answer_checks.py`, `tests/test_lane_ra_router_first.py`, `tests/test_lane_fx3_router_unavailable.py`, `tests/test_rule_parity.py`, `tests/test_lane_safe_questions.py`. 말 맞추기 재생 `python scripts/replay_turns.py`(라우터 꺼짐, 규칙 길).
@@ -165,12 +172,15 @@
   내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 회의용 파일 이름도 `.meeting.docx`·`.meeting.pdf`로 실제 형식에 맞춘다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
   기록의 소유 계정과 연구실은 서버가 정한다. HTTP·음성 소켓 조회와 내보내기는 본인 또는 같은 연구실 관리자만 가능하다. 값 확인·정정·평점·보고서 재생성은 본인만 가능하며, 관리자가 남의 기록에 쓸 수 있는 것은 PI 확인뿐이다. 다른 연구실 기록과 권한 없는 기록은 없는 것처럼 응답한다. 옛 기록의 소유자는 작업공간 세션으로 채우며, 소유자를 모르면 해당 연구실 관리자만 읽는다.
   지난 실행 비교·시작 전 확인 답·하루의 실행 순번은 같은 소유 계정·연구실·프로토콜 안에서만 구한다. 소유자가 불명인 옛 기록에는 다른 사람의 시작 전 답을 넣지 않으며 순번을 비워 둔다.
+  `GET /api/workspace/experiments/{session_id}/reports`는 그 실험의 보고서 요약 목록(`session_id`, `reports`)을 준다. 본인 또는 같은 연구실 관리자만 읽으며, 보고서가 아직 없거나 기록 기능을 껐으면 빈 목록이다. 보고서를 생성하거나 실험 상태를 바꾸지 않는다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
 - **설정**: `VOINEY_LAB_REPORT_PROVIDER`·`_MODEL`·`_REASONING`, `VOINEY_LAB_REPORT_WRITER_ENABLED`(true), `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`(25), `VOINEY_LAB_REPORT_TIMEZONE`(Asia/Seoul), `VOINEY_LAB_OFFICE_CONVERTER`.
 - **시험**: `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`, `tests/test_lane_own_reports.py`, `tests/test_lane_own_history.py`, `tests/test_lane_safe_records.py`.
 - **한계**: 기록 탭에서 지난 실험의 타임라인을 다시 열 수 있지만, 보고서 링크는 끝날 때 채워져 새로고침 뒤 지난 보고서를 다시 받는 화면 경로는 없다. PDF·랩미팅·xlsx·"확인함"은 서버 API에만 있다. 권한 표는 `.agent/security_rules.md` 6절.
 
 ## F14. 연결 끊김
+
+실험을 다시 연결할 때 `reconnect` 필드가 없어도 기존 일시정지·차단을 유지한다. 재개는 현재 설정·세대의 명시적인 음성/화면 제어로만 하며, HTTP 실험 `/transition`은 상태를 바꾸지 않고 409 `voice_control_required`로 응답한다. 다른 연결이 넘겨받으면 옛 연결의 음성 메모·완료는 거절하고 기존 `experiment.session.error` 사건의 `workspace_conflict` 코드로 알린다.
 
 계정 모드에서는 로그아웃·비밀번호 변경·계정 끄기·계정 삭제 시 그 계정의 열린 음성 연결을 모두 닫는다. 다른 계정의 연결은 계속된다. 계정 경로는 이미 시작된 음성 보고서 저장 스레드도 완료를 기다리며, 계정 삭제는 그 뒤 삭제 목록을 만들어 늦은 저장이 기록을 다시 남기지 않게 한다. 만료나 운영자 도구의 세션 회수도 주기적으로 확인한다.
 
@@ -183,6 +193,7 @@
 
 - **무엇**: 파일럿 지표는 **숫자·코드·시각만** 둔다(말한 글·소리·프로토콜 글·모델 출력 없음): 말 한 번(라우터 결과·지연), 표시(내보내기 등), 분석 결과, 끝 평점. 행마다 계정 id. 실험이 끝나면 화면이 "이번 실험에 도움이 됐나요?" 1–5 와 한 줄 메모(선택, 200자)를 묻는다.
   관리자 화면 `/admin-metrics.html` 이 날짜별 표를 보여 주고(관리자 계정이면 토큰 없이), `scripts/pilot_metrics.py` 가 CSV 로 낸다(메모는 `notes` 로만).
+  관리자 계정의 집계는 같은 연구실의 실험·분석·계정만 포함한다. 계정 필터로 다른 연구실 숫자를 읽을 수 없다. 서버 운영 토큰과 오프라인 도구의 전체 집계는 유지한다.
 - **어디**: `pilot_metrics.py` (`PilotMetricsStore`, `PilotRecorder`, `PILOT_METRICS_FILENAME`); `server.py` `get_admin_pilot_metrics`, `post_pilot_feedback`, `_require_pilot_admin`; `static/feedback.js`, `static/admin-metrics.html`; 집계 `GET /api/admin/metrics`(토큰만, `runtime_metrics.py`).
 - **설정**: `VOINEY_LAB_ADMIN_TOKEN`(없으면 토큰 경로는 닫힘). 작업공간이 없으면 저장하지 않는다.
 - **시험**: `tests/test_lane_log_summaries.py`, `tests/test_lane_log_feedback.py`, `tests/test_lane_fx5_admin_page.py`. 어떤 열이 무엇인지는 `docs/PILOT_GUIDE.md` 3-3절이 기준이다(`tests/test_lane_log_guide.py` 가 맞춘다).
@@ -199,6 +210,8 @@
 
 - **무엇**: 모델 역할은 `router`·`answer`·`translation`·`analysis`·`report`·`supplemental` 여섯이고, 역할마다 공급자(`xai`·`anthropic`·`openai`·`google`)·모델·추론 수준을 적는다. 기본값은 없다("설정 필요") — 빈 역할을 부르면 다른 공급자로 가지 않고 그 설정 이름을 적은 오류로 닫힌다. STT·TTS 공급자(`google_cloud`·`elevenlabs`·`xai`)도 같다.
   설정 이름은 모두 `VOINEY_LAB_` 로 시작한다(SDK 표준 이름 제외). 옛 이름이 셸이나 `.env` 에 있으면 서버·실행기·시험이 시작을 거부하고 이름만 알린다 — `python scripts/migrate_env.py --check` 로 보고 `--write` 로 바꾼다. 실행기의 기본값은 셸·`.env` 의 값을 덮지 않는다.
+  시작 확인과 작업공간의 boolean 오타는 해당 설정 이름을 적은 오류로 거부한다. 미설정·빈 사용 범위도 신원 판단과 서버 설정에서 똑같이 거부한다.
+  실행기는 실제 라우터 켜짐·라우터 먼저·PDF 작업 시간 제한을 출력한다. 개발 실행기에서 카탈로그·작업공간을 꺼 둔 값이 우선 적용되면 해당 설정 이름과 켜는 방법을 알린다. PDF 작업 기본 제한 30초는 유지하며, 긴 문서의 성공은 설정한 제한 안에서 읽을 수 있는 경우에 한한다.
 - **지금 쓰는 값**(`.env.example`; 키는 비워 두고 `.env` 에만 넣는다):
 
   | 역할 | 하는 일 | 값 |
@@ -225,12 +238,12 @@
   - **밖으로 나가는 것**(F17 의 값 기준): 말소리 → STT 공급자, 말할 문장 → TTS 공급자, 글자 층 없는 쪽의 이미지 → OCR 엔진, 원문 글자 → 분석·번역 공급자, 말한 글과 지금 단계 문맥 → 라우터·답변·보조 설명 공급자(켰을 때), 웹 설명·그림 요청 → OpenAI(켰을 때), 실험 기록 → 보고서 공급자, Google 링크 가져오기 → Google. 공급자가 받은 데이터를 어떻게 두는지는 각 약관을 따른다 — 파일럿 전에 사람이 확인한다.
   - **파일럿 데이터 삭제**: `python scripts/pilot_data_delete.py` — 미리보기 → 확인 단어 → 삭제 → 기록 순서만 허용, 되돌릴 수 없음. `data/runtime/pilot` 과 파일럿 표시가 있는 폴더만 받는다. `--account NAME` 은 그 계정의 실험·기록·지표 행을 지운다(연구실이 함께 쓰는 프로토콜은 남긴다). 계정이 스스로 지울 때도 범위가 같다.
   - **백업**: `python scripts/pilot_state_backup.py create|verify|restore`(SQLite 온라인 백업, 원문·첨부만, 환경 파일·원음 제외).
-  - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부).
+  - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부). 준비 점검은 사용 범위와 그 범위의 활성 안전 문서를 로컬에서 확인한다. 설정을 읽지 못하면 503과 이유 코드·설정 이름만 준다. `source_protocol_only`는 카탈로그를 읽지 않는다.
   - **기록(log)**: 말 내용은 남기지 않는다. 키는 `.env` 에만 둔다.
 - **어디**: `scripts/pilot_data_delete.py`, `accounts.py`(지우는 범위), `scripts/pilot_state_backup.py`, `server.py` `healthz`, `readyz`, `persist_stt_diagnostic`.
 - **설정**: `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`, `VOINEY_LAB_STT_DIAGNOSTIC_MAX_FILES`(20), `VOINEY_LAB_ANALYTICS_RETENTION_DAYS`(90).
 - **시험**: `tests/test_lane_fx5_metrics_delete.py`, `tests/test_lane_fx5_secrets_not_kept.py`, `tests/test_pilot_backup.py`.
-- **한계**: `/readyz` 는 안전 카탈로그·사용 범위·공급자 키를 보지 않는다. 삭제 도구는 디스크 조각까지 지우지 않는다. 운영 순서는 `docs/DEPLOYMENT_RUNBOOK.md`, 파일럿의 데이터 처리와 고지는 `docs/PILOT_GUIDE.md`.
+- **한계**: `/readyz`는 공급자를 호출하지 않으며 외부 연결의 성공을 보장하지 않는다. 삭제 도구는 디스크 조각까지 지우지 않는다. 운영 순서는 `docs/DEPLOYMENT_RUNBOOK.md`, 파일럿의 데이터 처리와 고지는 `docs/PILOT_GUIDE.md`.
 
 
 ## F19. 화면과 시작 및 종료

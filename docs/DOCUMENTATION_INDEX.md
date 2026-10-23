@@ -62,7 +62,7 @@
 | [`.agent` 의 `evaluation_strategy.md`](archive/AGENT_EVALUATION_STRATEGY.md) | `.agent/testing_strategy.md` 3·4절 |
 | [`.agent` 의 `product_improvement_strategy.md`](archive/AGENT_PRODUCT_IMPROVEMENT_STRATEGY.md) | `.agent/roadmap.md` 머리의 우선순위 규칙 |
 
-`docs/APPROVED_DOCUMENT_OPERATIONS.md` 와 `docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` 자리에는 짧은 안내만 남겼다 — 코드(`scripts/run_pilot.sh` 의 안내 문장, 두 주석)가 아직 그 경로를 가리킨다. 코드가 새 자리를 가리키면 지운다.
+코드의 안내 문장은 현재 운영 안내와 `.agent/architecture.md`를 가리킨다. 옛 경로의 안내 파일은 남겨 두지 않는다.
 
 ## 6. 기록으로만 두는 것
 

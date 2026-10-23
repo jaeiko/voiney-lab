@@ -181,8 +181,8 @@ def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned
             },
         )
     )
-    assert paused.status_code == 200
-    assert paused.json()["status"] == "paused"
+    assert paused.status_code == 409
+    assert paused.json()["detail"] == "voice_control_required"
     forbidden_completion = asyncio.run(
         _request(
             "POST",
@@ -190,7 +190,7 @@ def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned
             profile="researcher-a",
             json_body={
                 "action": "complete",
-                "expected_version": paused.json()["version"],
+                "expected_version": experiment["version"],
                 "event_key": "unsafe-dashboard-complete",
             },
         )

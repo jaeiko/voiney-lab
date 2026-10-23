@@ -43,7 +43,7 @@ class TheSearchIsGoneTests(unittest.TestCase):
     def test_the_table_and_the_launchers_name_none_of_the_deleted_settings(self) -> None:
         self.assertEqual(
             sorted(name for name in BY_NAME if DELETED_SETTING_WORDS.search(name)), [])
-        for script in ("run_dev.sh", "run_pilot.sh", "run_ci_server.sh", "collect_chunks.sh"):
+        for script in ("run_dev.sh", "run_pilot.sh", "run_ci_server.sh"):
             with self.subTest(script=script):
                 text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
                 self.assertIsNone(DELETED_SETTING_WORDS.search(text))

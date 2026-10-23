@@ -590,7 +590,7 @@ class ExperimentReportStore:
             reports = connection.execute(
                 """
                 SELECT report_id,session_id,protocol_id,development_only,status,
-                       started_at,ended_at
+                       started_at,ended_at,organization_id
                   FROM experiment_reports ORDER BY started_at,report_id
                 """
             ).fetchall()
@@ -648,6 +648,7 @@ class ExperimentReportStore:
                 "report_id": str(report["report_id"]),
                 "session_id": str(report["session_id"]),
                 "protocol_id": str(report["protocol_id"]),
+                "organization_id": report["organization_id"],
                 "development_only": bool(report["development_only"]),
                 "status": str(report["status"]),
                 "started_at": str(report["started_at"]),
