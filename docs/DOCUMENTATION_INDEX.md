@@ -1,6 +1,6 @@
 # 문서 지도 — VoineyLab
 
-2026-10-20 (줄 DOC4) 에 새로 썼다. 무엇을 · 누가 · 언제 읽나.
+무엇을 · 누가 · 언제 읽나.
 
 - **코드가 진실이다.** 문서가 코드와 다르면 코드가 맞고 문서를 고친다. 모든 문서(보관 문서 제외)의 링크·설정 이름·저장소 경로·스크립트 옵션은 `tests/test_docs_consistency.py` 가 확인한다.
 - 같은 내용은 한 곳에만 쓰고 다른 문서는 그곳을 가리킨다. 줄 이름과 날짜 같은 이력은 `docs/DECISIONS.md` 에만 쓴다.
@@ -42,18 +42,17 @@
 |---|---|
 | [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | 서버에 설치할 것, `scripts/run_pilot.sh` 로 띄우기, 기관 안전 문서 카탈로그, 점검, 백업·복구, 지켜볼 것 |
 | [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | 증상별 안전한 복구 |
-| [`PILOT_GUIDE.md`](PILOT_GUIDE.md) | 파일럿을 여는 순서, 데이터 처리, 외부 AI 고지 초안, 지표, 데이터 삭제, 계정과 초대, 스타터 팩 |
+| [`PILOT_GUIDE.md`](PILOT_GUIDE.md) | 파일럿을 여는 순서, 데이터 처리·고지·지표·삭제, 계정·스타터 팩, HTTPS, 기준판·복구 점검, 참가자 안내 |
 | [`PILOT_COMPARISON.md`](PILOT_COMPARISON.md) | 기존 방식·범용 음성 서비스와 같은 과업으로 비교하는 절차, 태블릿 확인, 빈 기록 양식, 저장된 분석 비교 |
-| [`PILOT_HTTPS_SETUP.md`](PILOT_HTTPS_SETUP.md) | 휴대폰 마이크를 위한 HTTPS(Caddy) 준비 — 아직 실제 서버에서 실행하지 않음 |
 | [`SOURCE_FORMATS.md`](SOURCE_FORMATS.md) | 올릴 수 있는 원문 형식, 서버에 필요한 것, 링크 가져오기, 오류 코드 |
-| [`PILOT_DEPLOYMENT_GUIDE.md`](PILOT_DEPLOYMENT_GUIDE.md), [`PILOT_READINESS_PACKAGE.md`](PILOT_READINESS_PACKAGE.md) | 파일럿 점검표·참여자 안내(영어). 문서 다시 쓰기 2단계에서 `PILOT_GUIDE.md` 하나로 합친다 |
 
 ## 5. 옮긴 문서
 
-2026-10-20 에 보관한 문서와 내용이 간 곳. 보관본(`docs/archive/`)은 맨 위 한 줄에 같은 안내가 있고, 지금 동작의 기준이 아니다.
+보관한 문서와 내용이 간 곳. 보관본(`docs/archive/`)은 맨 위 한 줄에 같은 안내가 있고, 지금 동작의 기준이 아니다.
 
 | 옛 문서 | 지금도 맞는 내용이 간 곳 |
 |---|---|
+| [`PILOT_DEPLOYMENT_GUIDE.md`](archive/PILOT_DEPLOYMENT_GUIDE.md), [`PILOT_READINESS_PACKAGE.md`](archive/PILOT_READINESS_PACKAGE.md), [`PILOT_HTTPS_SETUP.md`](archive/PILOT_HTTPS_SETUP.md) | `docs/PILOT_GUIDE.md` 2·8–11절(설치·검증·HTTPS·참가자·중단 기준) |
 | [`CURRENT_ARCHITECTURE.md`](archive/CURRENT_ARCHITECTURE.md) | `.agent/architecture.md` 2·6·11절(누가 무엇을 가지나, 저장소, 실패 처리) |
 | [`ARCHITECTURE_MAP.md`](archive/ARCHITECTURE_MAP.md) | `.agent/architecture.md` 1·3절(음성 파이프라인), 지운 모듈의 이력은 `docs/DECISIONS.md` |
 | [`BEHAVIOR_REFERENCE.md`](archive/BEHAVIOR_REFERENCE.md) | `docs/FEATURES.md`(기능 단위), `docs/DECISIONS.md`(결정·날짜) |

@@ -1,3 +1,5 @@
+> 보관 문서입니다. 현재 파일럿 준비·운영·HTTPS·참가자 안내는 [PILOT_GUIDE.md](../PILOT_GUIDE.md)로 옮겼습니다. 아래는 당시 기록이며 현재 동작의 기준이 아닙니다.
+
 # Wet-Lab Pilot Readiness Package
 
 This documents what the product can support for a real, controlled wet-lab

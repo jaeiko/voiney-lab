@@ -4,7 +4,7 @@
 이 안내는 통제된 연구 파일럿용이다(규제 대상 GxP·임상 배포가 아니다).
 
 - 파일럿을 여는 순서·참여자 안내·데이터 처리·고지 문안: `docs/PILOT_GUIDE.md`
-- 휴대폰에서 마이크를 쓰기 위한 HTTPS: `docs/PILOT_HTTPS_SETUP.md`
+- 휴대폰에서 마이크를 쓰기 위한 HTTPS: `docs/PILOT_GUIDE.md`
 - 증상별 복구: `docs/TROUBLESHOOTING_GUIDE.md`
 - 설정 이름 전체: `src/voiney_lab/setting_names.py`
 
@@ -36,7 +36,7 @@
 - 로그인: `VOINEY_LAB_AUTH_MODE=accounts`(셸·`.env` 의 다른 값은 `[WARN]` 과 함께 무시). 초대 링크는 `python scripts/pilot_invite.py`(`docs/PILOT_GUIDE.md` 7절).
 - 안전 문서 범위: `data/runtime/pilot/approved_safety_catalog.sqlite` 가 없으면 `source_protocol_only`, 있으면 `reference_only` 로 점검하고 쓸 수 없으면 시작을 거부한다(3절).
 - PDF 밖 일반 설명은 끈다. 작업공간이 꺼졌거나 `VOINEY_LAB_ADMIN_TOKEN` 이 비었거나 LibreOffice 가 없으면 `[WARN]`.
-- 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy)를 앞에 두고 연다 — `docs/PILOT_HTTPS_SETUP.md`. `HOST=0.0.0.0` 으로 그냥 열지 않는다.
+- 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy)를 앞에 두고 연다 — `docs/PILOT_GUIDE.md`. `HOST=0.0.0.0` 으로 그냥 열지 않는다.
 
 모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
 

@@ -74,7 +74,7 @@ cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 ```
 
 - 상태는 `data/runtime/pilot/` 에 둔다. 기관 안전 카탈로그 파일이 없으면 `source_protocol_only`(원문 안전 주의만)로, 있으면 점검해서 `reference_only` 로 연다.
-- 휴대폰 마이크에는 HTTPS 가 필요하다: `docs/PILOT_HTTPS_SETUP.md`. 파일럿을 여는 순서·고지·데이터 삭제는 `docs/PILOT_GUIDE.md`, 서버 운영은 `docs/DEPLOYMENT_RUNBOOK.md`.
+- 휴대폰 마이크에는 HTTPS 가 필요하다: `docs/PILOT_GUIDE.md` 9절. 파일럿을 여는 순서·고지·데이터 삭제는 `docs/PILOT_GUIDE.md`, 서버 운영은 `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## 5. 구조 한눈에
 
@@ -126,13 +126,15 @@ python -m compileall -q src tests scripts
 git diff --check
 ```
 
-통과 수는 외부 라이선스 PDF 가 있느냐에 따라 다르다. **숫자를 말할 때는 조건을 함께 말한다**(조건의 뜻은 `AGENTS.md` "Verification").
+통과 수는 외부 라이선스 PDF 가 있느냐에 따라 다르다. **숫자를 말할 때는 날짜·폴더·조건을 함께 말한다**(조건의 뜻은 `AGENTS.md` "Verification").
 
 | 조건 | 결과 | 언제·어디서 |
 |---|---|---|
-| A 근처 — in-gel PDF 하나만 있는 작업 폴더 | 4223 passed · 16 skipped · 실패 0 | 2026-10-20, dev `e7c31c8`(줄 DOC4 측정). 라이선스 PDF 가 더 있는 원래 폴더는 몇 개 더 돈다 |
-| B — 라이선스 PDF 없음(CI) | 3581 passed · 506 skipped · 실패 0 | 2026-10-19, 줄 PK 의 PR 머리 CI(줄 PK 보고서) |
-| 화면 시험(Playwright, CI) | 108 passed | 2026-10-19, 줄 IA 의 CI |
+| A — 외부 라이선스 원문이 있는 원래 폴더 | **4577 passed · 7 skipped · 실패 0** | 2026-10-23, dev `a6c263f` 실측 기준(작업 폴더와 구분) |
+| B — 라이선스 PDF 없음(CI) | 4079 passed · 507 skipped · 실패 0 | 2026-10-23, dev `a6c263f`, PR #116 병합 CI |
+| 화면 시험(Playwright, CI) | 134 passed | 2026-10-23, 같은 병합 CI |
+
+동시 작업의 전체 pytest 는 `AGENTS.md`의 공유 `flock` 명령으로 실행한다. 조건 B만 확인한 음성·서버 변경은 병합 뒤 태그 전에 원래 폴더에서 조건 A로 확인하고, 사람이 음성 시험을 한 뒤 태그·main 반영을 한다.
 
 시험은 바깥 공급자에 닿지 않는다: 키를 지우고 이 컴퓨터 밖으로의 연결을 막는다(`tests/conftest.py`). 공급자 시험은 모두 가짜 전송이다(contract-tested).
 

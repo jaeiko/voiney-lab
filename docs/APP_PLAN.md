@@ -135,8 +135,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 `https://localhost`(iOS 는 `capacitor://localhost`)를 넣으면 웹소켓·API 가 그 출처를 받고, 로그인은 쿠키 대신 토큰이다(9.5절; `SameSite=None` 쿠키는
 쓰지 않았다 — 교차 사이트 쿠키는 브라우저마다 막히고 CSRF 대비가 따로 필요하다). 묶은 화면의 서버 주소는 빌드할 때 `VOINEY_APP_API_URL`. 화면 고침을 심사 없이 내보내는 일(라이브 업데이트)은 이 줄에서 다루지 않는다.
 
-파일럿 서버는 HTTP 기본 인증 뒤에 있다(`docs/PILOT_HTTPS_SETUP.md`). Capacitor 웹뷰가 기본 인증 창을 띄우는지는 확인하지 않았다 —
-서버 주소 모드로 시험할 때 첫 번째로 볼 것이다(11.3절).
+파일럿 서버는 초대 계정 로그인이 기본이고 HTTPS 앞문의 기본 인증은 선택이다(`docs/PILOT_GUIDE.md` 9절). 앱 토큰 인증과 기본 인증은 함께 쓸 수 없다. Capacitor 웹뷰의 실제 서버 연결은 확인하지 않았다(11.3절).
 
 ## 6. 결제
 
