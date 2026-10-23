@@ -994,12 +994,19 @@ def _socket_origin_refusal(websocket:WebSocket)->str|None:
         return None
     normalized=normalize_origin(origin)
     if normalized is not None:
+        scheme=headers.get("x-forwarded-proto","").split(",")[0].strip().casefold()
+        if not scheme:
+            scheme=getattr(getattr(websocket,"url",None),"scheme","")
+        scheme={"ws":"http","wss":"https"}.get(scheme,scheme)
+        # Header-only test transports have no URL; real WebSockets carry
+        # their scheme. Compare normalized origins, including default ports.
+        scheme=scheme or normalized.split("://",1)[0]
         own_hosts={
             value.split(",")[0].strip().casefold()
             for value in (headers.get("host",""),headers.get("x-forwarded-host",""))
             if value.strip()
         }
-        if normalized.split("://",1)[1] in own_hosts:
+        if any(normalized==normalize_origin(f"{scheme}://{host}") for host in own_hosts):
             return None
     return "origin_not_allowed"
 
