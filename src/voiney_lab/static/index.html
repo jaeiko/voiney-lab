@@ -1574,12 +1574,18 @@ const turnProgress=new Map(),turnServerGenerations=new Map();
 let acknowledgedLanguageMode="manual",acknowledgedLanguage="ko";
 let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfiguration=null;
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
-let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="";
+let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="",workspacePrincipalId="";
 const protocolCatalog=new Map();
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
 const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
-function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus);}
+function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus)&&!experimentOfAnother(currentExperimentSessionId);}
+// Lane UI4 QA-22 (lane QA, 2026-10-20): an administrator's lists hold the lab's experiments (lane ON
+// decision ①), but only the owner may continue one -- the server refuses the rest. An experiment is
+// another person's when the server names its owner (the list's owner_principal_id) and that is not
+// who is signed in (/api/workspace/session's principal_id); an owner not named is not taken for another.
+function ownedByAnother(ownerId){return nonemptyText(ownerId)&&nonemptyText(workspacePrincipalId)&&String(ownerId)!==workspacePrincipalId;}
+function experimentOfAnother(sessionId){const item=nonemptyText(sessionId)&&Array.isArray(workspaceExperiments)?workspaceExperiments.find(entry=>entry?.session_id===sessionId):null;return ownedByAnother(item?.owner_principal_id);}
 function updateStartActionLabel(){const button=$("start");if(button)button.textContent=experimentIsResumable()?"실험 이어하기":"새 실험 시작";renderExperimentContext();}
 const webReferenceHistory=[];
 const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers=new Map(),toolEvents=new Map(),visualEvents=new Map(),researchEvents=new Map(),brainEvents=new Map(),greetingEvents=new Set(),audioRecoveryTurns=new Set();
@@ -2142,7 +2148,7 @@ const RESEARCHER_ERROR_MESSAGES=Object.freeze({
 });
 function researcherErrorMessage(value,fallback="요청을 처리하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요."){const code=typeof value==="string"?value:"",mapped=RESEARCHER_ERROR_MESSAGES[code];if(mapped)return mapped;if(Object.values(RESEARCHER_ERROR_MESSAGES).includes(code))return code;return fallback;}
 
-async function loadWorkspaceSession(){try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();workspaceDisplayName=typeof data.display_name==="string"?data.display_name.trim():"";renderExperimentContext();await loadExperimentSessions();return true;}catch{return false;}}
+async function loadWorkspaceSession(){try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();workspaceDisplayName=typeof data.display_name==="string"?data.display_name.trim():"";workspacePrincipalId=typeof data.principal_id==="string"?data.principal_id:"";renderExperimentContext();await loadExperimentSessions();return true;}catch{return false;}}
 function workspaceRow(title,detail){const row=document.createElement("div"),bold=document.createElement("b"),small=document.createElement("small");row.className="workspace-row";bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
 function experimentEventLabel(type){return {steps_skipped_carried_over:"건너뛴 단계 이어받음",observation_corrected:"기록 정정",observation_retracted:"기록 취소",session_restarted_from_checkpoint:"체크포인트에서 시작",step_completion_carried_over:"이전 세션 완료 이어받음",checkpoint_restart_created:"체크포인트로 새 세션 생성",session_started:"세션 생성",protocol_started:"프로토콜 시작",session_recovered:"세션 복구",session_resumed:"세션 재개",session_paused:"세션 일시정지",session_stopped:"세션 종료",session_completed:"실험 완료",step_completed:"단계 완료",step_advanced:"단계 이동",observation_recorded:"관찰 기록",evidence_attached:"근거 첨부",reviewer_action:"검토자 작업"}[type]||"이벤트";}
 function experimentEventKind(type){return {steps_skipped_carried_over:"step",observation_corrected:"observation",observation_retracted:"observation",session_restarted_from_checkpoint:"lifecycle",step_completion_carried_over:"step",checkpoint_restart_created:"lifecycle",session_started:"lifecycle",session_stopped:"lifecycle",session_recovered:"lifecycle",session_resumed:"resume",session_paused:"pause",session_completed:"completion",step_completed:"step",step_advanced:"step",observation_recorded:"observation",evidence_attached:"evidence",reviewer_action:"reviewer-action"}[type]||"other";}
@@ -5741,7 +5747,7 @@ function homeCard(kind,title,sub,href,onPick){
 }
 function latestResumableExperiment(){
  const when=item=>{const at=Date.parse(String(item?.started_at||""));return Number.isFinite(at)?at:-Infinity;};
- return workspaceExperiments.filter(item=>item&&typeof item.session_id==="string"&&RESUMABLE_EXPERIMENT_STATUSES.has(item.status)).sort((a,b)=>when(b)-when(a))[0]||null;
+ return workspaceExperiments.filter(item=>item&&typeof item.session_id==="string"&&RESUMABLE_EXPERIMENT_STATUSES.has(item.status)&&!ownedByAnother(item.owner_principal_id)).sort((a,b)=>when(b)-when(a))[0]||null;
 }
 // Lane UI4 QA-18 (lane QA, 2026-10-20): the home offers only what is open now. During the run that is the
 // way back to it; after it the upload waits while a voice session is still on (its file input and link
