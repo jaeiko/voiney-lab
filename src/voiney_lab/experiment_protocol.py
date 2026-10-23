@@ -177,6 +177,11 @@ class ReadinessReasonCode(str, Enum):
     )
     UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
+    #: Lane MISS, decision 4 (human decision 2026-10-23): source lines that
+    #: read like an instruction and that no quote of a passed analysis
+    #: covers. ``assess_readiness`` never makes it; the catalog says it before
+    #: the start from the analysis's ledger record. A notice, never a blocker.
+    SOURCE_TEXT_POSSIBLY_MISSED = "source_text_possibly_missed"
 
 
 class BranchKind(str, Enum):

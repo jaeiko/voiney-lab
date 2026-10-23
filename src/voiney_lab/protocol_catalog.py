@@ -80,6 +80,7 @@ from voiney_lab.experiment_protocol_analysis import (
     join_piece_analyses,
     possibly_missed_flags,
     possibly_missed_places,
+    possibly_missed_summary,
     prepare_protocol_analysis_request,
     replace_at_paths,
     requote_questions,
@@ -1027,6 +1028,9 @@ READINESS_REASON_KO: dict[str, str] = {
     "missing_execution_critical_value": (
         "실행에 꼭 필요한 값이 원문에 없습니다. 그 단계에서 원문을 그대로 읽어 드리니 "
         "실험자가 값을 정하세요."),
+    # Lane MISS, decision 4; the start screen's line is possibly_missed_notices'.
+    "source_text_possibly_missed": (
+        "분석에 없을 수 있는 원문이 {pages}쪽에 있어요. 시작 전에 원문을 확인해 주세요."),
 }
 #: What a person does about each execution blocker, for the pipeline line.
 _BLOCKER_ACTIONS: dict[str, str] = {
@@ -3054,6 +3058,9 @@ class ProtocolCatalog:
             # experimenter is told before starting. Empty before an analysis.
             "execution_blockers": [],
             "execution_notices": [],
+            # Lane MISS, decision 4: the places of the source that read like
+            # an instruction and that no quote of the analysis covers.
+            "possibly_missed": None,
             "safety_notice_sources": [],
             "timers": {"verified": [], "refused": []},
             # Lane EV2, decision 2: the fields emptied because the source did
@@ -3087,6 +3094,9 @@ class ProtocolCatalog:
             return base
 
         protocol = analysis.protocol
+        missed = (
+            version_payload.get("possibly_missed") if version_payload is not None
+            else _ready_possibly_missed(revision_events, analysis))
         declared_warning_count = domain.declared_safety_warning_count(protocol)
         metadata = {
             field.name: _review_value(getattr(protocol.metadata, field.name))
@@ -3121,9 +3131,11 @@ class ProtocolCatalog:
                 "execution_blockers": self._execution_reasons(
                     analysis, blocking=True
                 ),
-                "execution_notices": self._execution_reasons(
-                    analysis, blocking=False
-                ),
+                "execution_notices": [
+                    *self._execution_reasons(analysis, blocking=False),
+                    *possibly_missed_notices(missed),
+                ],
+                "possibly_missed": dict(missed) if isinstance(missed, dict) else None,
                 # The source's own safety statements, step by step, for the
                 # screen the experimenter reads before pressing start. The
                 # server adds the Korean beside each (it holds the
@@ -4510,6 +4522,14 @@ class ProtocolCatalog:
         if draft.auto_resolved:
             # Lane RV2, decision b: what the server settled itself, and why.
             ready_payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
+        places = possibly_missed_places(draft.protocol, draft.extraction)
+        if places:
+            # Lane MISS, decision 4: lines no quote covers that read like an
+            # instruction; told before the start, never a card or a blocker.
+            ready_payload["possibly_missed"] = possibly_missed_summary(places)
+            logging.getLogger(__name__).info(
+                "protocol.analysis.possibly_missed protocol_id=%s places=%d pages=%d",
+                protocol_id, len(places), len({place.page_number for place in places}))
         if draft.response_repair is not None:
             # Lane EV3, decision 1: the response was read after its brackets
             # were repaired in one of the two fixed shapes; every check above
@@ -6052,6 +6072,7 @@ class ProtocolCatalog:
             domain.P1_CAPABILITY_POLICY.profile_id,
         )
         revision_id = f"pdf-{revision.revision_number}-review-{version}"
+        missed = self._version_possibly_missed(revision, target, protocol, items, decisions)
         payload: dict[str, object] = {
             "status": "review_registered",
             "version": version,
@@ -6071,6 +6092,8 @@ class ProtocolCatalog:
             },
             "decision_event_ids": [str(decision["event_id"]) for decision in decisions.values()],
         }
+        if missed:
+            payload["possibly_missed"] = possibly_missed_summary(missed)
         event = self.store.append_event(
             f"review-version-{analysis_id}",
             protocol_id,
@@ -6097,6 +6120,30 @@ class ProtocolCatalog:
                 "changes": payload["changes"],
             },
         }
+
+    def _version_possibly_missed(
+        self, revision: ProtocolRevisionRecord, target: _ReviewTarget,
+        protocol: domain.ExperimentProtocol, items: Sequence[dict[str, object]],
+        decisions: dict[str, dict[str, object]],
+    ) -> list[Any]:
+        """The possibly-missed places a review version still tells before the
+        start (lane MISS, decision 4): those of its protocol that no person
+        answered on a card -- reviewed from a passed analysis, all of them;
+        from an earlier version, those it still told."""
+
+        places = _possibly_missed_answered(
+            possibly_missed_places(protocol, protocol.metadata.pdf), items, decisions)
+        if target.kind == "review_version":
+            versions = self._review_versions(revision)
+            told = (versions[-1][0].payload or {}).get("possibly_missed") if versions else None
+            seen = [place for place in (told or {}).get("places") or () if isinstance(place, dict)]
+            places = [
+                place for place in places
+                if any(item.get("page") == place.page_number
+                       and int(item.get("first_line") or 0) <= place.last_line
+                       and int(item.get("last_line") or 0) >= place.first_line for item in seen)
+            ]
+        return places
 
     def review_version(self, protocol_id: str, version: int) -> dict[str, object]:
         """One registered version with its changes against what it was
@@ -7290,6 +7337,80 @@ def _lines_asked_about(draft: ProtocolAnalysisDraft) -> dict[int, set[int]]:
             asked.setdefault(int(suggested["page"]), set()).update(
                 range(int(suggested["first_line"]), int(suggested["last_line"]) + 1))
     return asked
+
+
+#: Lane MISS, decision 4: the code of the start notice for lines no quote
+#: covers. A notice; never in ``EXECUTION_BLOCKING_REASON_CODES``.
+POSSIBLY_MISSED_NOTICE_CODE = domain.ReadinessReasonCode.SOURCE_TEXT_POSSIBLY_MISSED.value
+
+
+def _pages_ko(pages: Sequence[int]) -> str:
+    return "·".join(str(page) for page in pages)
+
+
+def _ready_possibly_missed(events: Sequence[Any], analysis: Any) -> object:
+    """What the ledger recorded beside this passed analysis (lane MISS, 4)."""
+
+    number = getattr(analysis, "analysis_revision_number", None)
+    for event in reversed(events):
+        if (event.event_type == _ANALYSIS_READY_EVENT and number is not None
+                and event.analysis_revision_number == number
+                and isinstance(event.payload, dict)):
+            return event.payload.get("possibly_missed")
+    return None
+
+
+def possibly_missed_notices(summary: object) -> list[dict[str, object]]:
+    """The start notice of a passed analysis's possibly-missed places (lane
+    MISS, decision 4): one line, "분석에 없을 수 있는 원문이 3곳 있어요(2·5쪽)",
+    with the places for the screen; nothing for no places."""
+
+    if not isinstance(summary, dict) or not summary.get("count"):
+        return []
+    count = int(summary["count"])
+    pages = [int(page) for page in summary.get("pages") or () if isinstance(page, int)]
+    return [{
+        "code": POSSIBLY_MISSED_NOTICE_CODE,
+        "message": (
+            f"{count} source passage(s) on page(s) {', '.join(map(str, pages))} read like "
+            "instructions and no analysis quote covers them."),
+        "message_ko": (
+            f"분석에 없을 수 있는 원문이 {count}곳 있어요({_pages_ko(pages)}쪽). "
+            "시작 전에 원문을 확인해 주세요."),
+        "kind": "source_note",
+        "source_page_number": pages[0] if pages else None,
+        "source_excerpt": None,
+        "step_id": None,
+        "pages": pages,
+        "places": [dict(place) for place in summary.get("places") or () if isinstance(place, dict)],
+    }]
+
+
+def _possibly_missed_answered(
+    places: Sequence[Any], items: Sequence[dict[str, object]],
+    decisions: dict[str, dict[str, object]],
+) -> list[Any]:
+    """The places a person has not answered on a card (lane MISS): a place
+    lies on an answered card when the card's places hold its lines, or on a
+    failed piece's pages a person said hold no step."""
+
+    answered = [
+        place for item in items if item["kind"] == "missed" and item["item_id"] in decisions
+        for place in item.get("places") or () if isinstance(place, dict)
+    ]
+    no_step_pages = {
+        page for item in items if item["kind"] == "pages" and item["item_id"] in decisions
+        and isinstance(item.get("first_page"), int)
+        for page in range(int(item["first_page"]), int(item.get("last_page") or item["first_page"]) + 1)
+    }
+    return [
+        place for place in places
+        if place.page_number not in no_step_pages and not any(
+            seen.get("page") == place.page_number
+            and int(seen.get("first_line") or 0) <= place.last_line
+            and int(seen.get("last_line") or 0) >= place.first_line
+            for seen in answered)
+    ]
 
 
 @dataclass(frozen=True)

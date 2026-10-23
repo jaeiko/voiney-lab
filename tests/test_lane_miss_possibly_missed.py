@@ -54,6 +54,8 @@ from voiney_lab.experiment_protocol_pdf import (
 )
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import (
+    POSSIBLY_MISSED_NOTICE_CODE,
+    READINESS_REASON_KO,
     ProtocolCatalog,
     ProtocolReviewError,
     ProtocolReviewItemsPendingError,
@@ -448,6 +450,11 @@ class AReviewPendingAnalysisAsksAboutTheLinesTests(_MissCase):
         fixture = self.catalog.load_executable_fixture(self.protocol_id)
         self.assertEqual([step.step_id for step in fixture.draft.protocol.sections[0].steps],
                          ["s1", "s2"])
+        review = self.catalog.review(self.protocol_id)
+        # A person answered every place: the version tells nothing more.
+        self.assertIsNone(review["possibly_missed"])
+        self.assertNotIn(POSSIBLY_MISSED_NOTICE_CODE,
+                         [notice["code"] for notice in review["execution_notices"]])
 
     def test_the_route_takes_the_card_s_decision_and_refuses_another(self) -> None:
         self.store.close()
@@ -496,6 +503,10 @@ class AFailedPieceTests(_MissCase):
     def test_its_pages_are_one_card_and_no_possibly_missed_one(self) -> None:
         self.assertEqual([card["item_id"] for card in self.draft()["cards"]], ["pages:2-2"])
 
+    def test_answered_no_step_its_pages_are_no_notice_of_the_version(self) -> None:
+        self.catalog.record_review_decision(self.protocol_id, {"item_id": "pages:2-2", "action": "confirm"})
+        self.catalog.register_review(self.protocol_id, {"reviewer_name": "검토자"})
+        self.assertIsNone(self.catalog.review(self.protocol_id)["possibly_missed"])
 
 
 class TheCardsAndTheLimitTests(_MissCase):
@@ -572,6 +583,77 @@ class TheCardsAndTheLimitTests(_MissCase):
         self.assertEqual(model.calls, 1)
         self.assertTrue(entry.available_for_execution)
         self.assertEqual(self.missed_cards(), [])
+        review = self.catalog.review(self.protocol_id)
+        self.assertEqual(review["possibly_missed"]["count"], 24)
+        self.assertNotIn("possibly_missed", [card["type"] for card in self.draft()["cards"]])
+        self.assertEqual(review["possibly_missed"]["pages"], list(range(1, 13)))
+
+
+class APassedAnalysisTellsItBeforeTheStartTests(_MissCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.entry, self.model = self.analyze(self.answer())
+
+    def test_it_is_not_sent_to_review_and_may_start(self) -> None:
+        self.assertTrue(self.entry.available_for_execution)
+        self.assertIsNone(self.entry.review_pending)
+        self.assertEqual(self.missed_cards(), [])
+        self.catalog.load_executable_fixture(self.protocol_id)
+        review = self.catalog.review(self.protocol_id)
+        self.assertEqual(review["execution_blockers"], [])
+
+    def test_the_notice_names_how_many_places_and_their_pages(self) -> None:
+        review = self.catalog.review(self.protocol_id)
+        notice = next(notice for notice in review["execution_notices"]
+                      if notice["code"] == POSSIBLY_MISSED_NOTICE_CODE)
+        self.assertEqual(notice["message_ko"],
+                         "분석에 없을 수 있는 원문이 2곳 있어요(2·3쪽). 시작 전에 원문을 확인해 주세요.")
+        self.assertEqual(notice["kind"], "source_note")
+        self.assertEqual(notice["pages"], [2, 3])
+        self.assertEqual([(place["page"], place["first_line"], place["last_line"])
+                          for place in notice["places"]], [(2, 2, 3), (3, 2, 3)])
+        self.assertEqual(review["possibly_missed"]["count"], 2)
+        (ready,) = self.events("protocol_analysis_ready")
+        self.assertEqual(ready["possibly_missed"]["pages"], [2, 3])
+        # Numbers and places only: the ledger keeps no copy of the lines.
+        self.assertNotIn("Wash", json.dumps(ready["possibly_missed"]))
+
+    def test_the_code_is_a_notice_with_a_korean_line_and_never_a_blocker(self) -> None:
+        code = domain.ReadinessReasonCode(POSSIBLY_MISSED_NOTICE_CODE)
+        self.assertNotIn(code, domain.EXECUTION_BLOCKING_REASON_CODES)
+        self.assertIn(POSSIBLY_MISSED_NOTICE_CODE, READINESS_REASON_KO)
+
+    def test_an_analysis_of_every_page_tells_nothing(self) -> None:
+        entry, _ = self.analyze(self.answer(pages=(1, 2, 3)), analysis_id="analysis-" + "b" * 32,
+                                reanalysis=True)
+        review = self.catalog.review(self.protocol_id)
+        self.assertIsNone(review["possibly_missed"])
+        self.assertNotIn(POSSIBLY_MISSED_NOTICE_CODE,
+                         [notice["code"] for notice in review["execution_notices"]])
+
+    def test_a_version_reviewed_from_it_keeps_telling_it(self) -> None:
+        self.catalog.register_review(self.protocol_id, {"reviewer_name": "검토자"})
+        review = self.catalog.review(self.protocol_id)
+        self.assertEqual(review["review_version"]["version"], 1)
+        self.assertEqual(review["possibly_missed"]["pages"], [2, 3])
+        self.catalog.register_review(self.protocol_id, {"reviewer_name": "검토자"})
+        self.assertEqual(self.catalog.review(self.protocol_id)["possibly_missed"]["pages"], [2, 3])
+
+    def test_the_review_route_carries_the_notice(self) -> None:
+        self.store.close()
+
+        def open_catalog():
+            opened = initialize_protocol_store(self.settings)
+            return ProtocolCatalog(opened), opened
+
+        try:
+            with patch.object(server, "_open_protocol_catalog", side_effect=open_catalog):
+                review = server.get_protocol_review(self.protocol_id)
+        finally:
+            self.store = initialize_protocol_store(self.settings)
+            self.catalog = ProtocolCatalog(self.store)
+        self.assertIn(POSSIBLY_MISSED_NOTICE_CODE,
+                      [notice["code"] for notice in review["execution_notices"]])
 
 
 class TheReaskThatClosesEveryOtherCardTests(_RequoteCase):
@@ -585,6 +667,8 @@ class TheReaskThatClosesEveryOtherCardTests(_RequoteCase):
         entry = self.run_analysis(model)
         self.assertTrue(entry.available_for_execution)
         self.assertIsNone(entry.review_pending)
+        review = self.catalog.review(self.protocol_id)
+        self.assertEqual(review["possibly_missed"]["pages"], [2, 3])
         # The paraphrased step's own line was its card's, never a second one.
         (pending,) = self.events("protocol_analysis_review_pending")
         self.assertEqual([flag["item_id"] for flag in pending["flags"]],
