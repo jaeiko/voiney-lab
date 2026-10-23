@@ -17,7 +17,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from tests.test_lane_rv_review_api import STEP_TWO
-from tests.test_lane_rv_review_pending import MADE_UP, _CatalogCase
+from tests.test_lane_rv_review_pending import MADE_UP, MISSED_PAGES_2_3, MISSED_WITH_MADE_UP, _CatalogCase
 from voiney_lab import experiment_protocol as domain
 from voiney_lab import server
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
@@ -63,6 +63,9 @@ class RegistrationTests(_VersionCase):
     def setUp(self) -> None:
         super().setUp()
         self.analyze(self.answer(step_two=MADE_UP))
+        # Lane MISS: the lines no quote covers (page 1's real step 2, pages
+        # 2-3's steps) are cards too; a person says they are no step.
+        self.assertEqual(self.confirm_possibly_missed(), MISSED_WITH_MADE_UP)
 
     def test_no_name_no_registration(self) -> None:
         self.decide(item_id="step:s2", action="confirm", source_lines=LINES_OF_STEP_TWO)
@@ -228,8 +231,10 @@ class FlaggedValuesTests(_VersionCase):
         }]
         self.analyze(json.dumps(payload))
         draft = self.catalog.review_draft(self.protocol_id)
-        self.assertEqual(draft["needs_review"], ["action:add-buffer/quantities/0"])
+        # Lane MISS: pages 2-3's steps, which this answer leaves out, too.
+        self.assertEqual(draft["needs_review"], ["action:add-buffer/quantities/0", *MISSED_PAGES_2_3])
         self.decide(item_id="action:add-buffer/quantities/0", action="clear")
+        self.confirm_possibly_missed()
         self.register()
         (action,) = self.catalog.load_executable_fixture(
             self.protocol_id).draft.protocol.sections[0].steps[0].sub_actions
@@ -249,8 +254,10 @@ class SourceWordsOnlyTests(_VersionCase):
             "Always wear two pairs of gloves.")
         self.analyze(json.dumps(payload))
         draft = self.catalog.review_draft(self.protocol_id)
-        self.assertEqual(draft["needs_review"], ["statement:gloves"])
+        # Lane MISS: pages 2-3's steps, which this answer leaves out, too.
+        self.assertEqual(draft["needs_review"], ["statement:gloves", *MISSED_PAGES_2_3])
         self.decide(item_id="statement:gloves", action="confirm")
+        self.confirm_possibly_missed()
         version = self.register()["review_version"]
         (change,) = version["changes"]
         self.assertEqual(
@@ -305,6 +312,10 @@ class RegistrationRouteTests(_VersionCase):
                          (422, "reviewer_name_required"))
         self.call(server.post_protocol_review_decision, self.protocol_id,
                   {"item_id": "step:s2", "action": "confirm", "source_lines": LINES_OF_STEP_TWO})
+        # Lane MISS: the possibly-missed cards are answered too.
+        for item_id in MISSED_WITH_MADE_UP:
+            self.call(server.post_protocol_review_decision, self.protocol_id,
+                      {"item_id": item_id, "action": "confirm"})
         registered = self.call(server.post_protocol_review_version, self.protocol_id,
                                {"reviewer_name": "김재준"})
         self.assertEqual(registered["protocol"]["revision_id"], "pdf-1-review-1")

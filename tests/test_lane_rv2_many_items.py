@@ -89,15 +89,16 @@ class TooManyItemsTests(_ManyCase):
         client = _Client(with_made_up_notes(self.answer(), 12))
         entry = self.analyze_with(client)
         self.assertEqual(client.levels, ["low"])
-        self.assertEqual(entry.review_pending["needs_review_count"], 12)
-        self.assertEqual(len(self.catalog.review_draft(self.protocol_id)["cards"]), 12)
+        # Lane MISS: and pages 2-3's steps, never counted toward the bound.
+        self.assertEqual(entry.review_pending["needs_review_count"], 14)
+        self.assertEqual(len(self.catalog.review_draft(self.protocol_id)["cards"]), 14)
         self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
 
     def test_thirteen_are_read_once_more_one_level_up_and_its_cards_kept(self) -> None:
         client = _Client(with_made_up_notes(self.answer(), 13), with_made_up_notes(self.answer(), 2))
         entry = self.analyze_with(client)
         self.assertEqual(client.levels, ["low", "medium"])
-        self.assertEqual(entry.review_pending["needs_review_count"], 2)
+        self.assertEqual(entry.review_pending["needs_review_count"], 4)  # lane MISS: +2
         (pending,) = self.events("protocol_analysis_review_pending")
         self.assertEqual(pending["analysis_id"], "analysis-" + "a" * 32 + "-more-1")
         started, ended = self.events("protocol_analysis_auto_reanalysis")
@@ -163,7 +164,7 @@ class TooManyItemsTests(_ManyCase):
         client = _Client(with_made_up_notes(self.answer(), 13))
         entry = self.analyze_with(client, env={"VOINEY_LAB_REVIEW_MAX_ITEMS": "20"})
         self.assertEqual(client.levels, ["low"])
-        self.assertEqual(entry.review_pending["needs_review_count"], 13)
+        self.assertEqual(entry.review_pending["needs_review_count"], 15)  # lane MISS: +2
 
     def test_a_call_cap_of_zero_sends_nothing_again(self) -> None:
         client = _Client(with_made_up_notes(self.answer(), 13))
