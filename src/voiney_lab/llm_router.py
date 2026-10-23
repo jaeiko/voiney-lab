@@ -338,6 +338,7 @@ CLARIFY_TOOL: dict[str, Any] = {
                 "candidates": {
                     "type": "array", "items": {"type": "string"},
                     "maxItems": CLARIFY_MAX_CANDIDATES,
+                    "description": "Exact entity names from protocol terms only; never commands or yes/no replies.",
                 },
                 "evidence": {
                     "type": "string", "minLength": 1, "maxLength": EVIDENCE_MAX_CHARS,
@@ -514,6 +515,25 @@ def validate_read_only_proposal(
             return refuse("clarify_rejected:number_not_in_source")
         if display_label_violations(spoken):
             return refuse("clarify_rejected:display_label")
+        # A tap becomes the next utterance. Offer only the source-linked
+        # entity names already supplied to this router, never model commands
+        # or assent that could answer a workflow confirmation.
+        names={" ".join(term.split()).casefold() for term in context.terms}
+        if any(" ".join(candidate.split()).casefold() not in names
+               for candidate in proposal.candidates):
+            return refuse("clarify_rejected:candidate_not_source_entity")
+        from voiney_lab.curated_protocol import (
+            _confirmation_no, _confirmation_yes, classify_curated_control_intent,
+        )
+        for candidate in proposal.candidates:
+            key=normalize_semantic_utterance(candidate).casefold()
+            action=classify_curated_control_intent(candidate,language=facts.language).action.value
+            if (_confirmation_yes(key) or _confirmation_no(key)
+                    or has_completion_evidence(candidate) or is_literal_record_command(candidate)
+                    or action in {"start","next","stop","pause","resume","start_timer",
+                                  "record_observation","report_anomaly","record_correction",
+                                  "operational_deviation","clarify_completion","report_review"}):
+                return refuse("clarify_rejected:candidate_command")
         return ProposalVerdict("execute", "accepted", None)
     if facts.open_question is not None:
         return refuse("pending_gate_owns_turn")
@@ -626,6 +646,8 @@ READ_ONLY_REFUSAL_REASONS: Mapping[str, str] = {
     "clarify_rejected:claims_state_change": "a clarifying question that says something was done",
     "clarify_rejected:number_not_in_source": "a clarifying question with a number the context does not hold",
     "clarify_rejected:display_label": "a clarifying question that writes a screen label",
+    "clarify_rejected:candidate_not_source_entity": "a candidate that is not one of the protocol's terms",
+    "clarify_rejected:candidate_command": "a candidate that could authorise a workflow or record change",
     "addressed_to_assistant": "not_for_me for words that carry a command, a record, a value, a picture, a term or the protocol",
 }
 
@@ -1222,7 +1244,7 @@ ROUTER_FIRST_PROMPT_ADDENDUM = """\
 
 With the router first, three more calls exist, all read-only:
 4. Call show_visual when the researcher asks to see a picture in THIS turn: kind "source_figure" for the step's own figure in the protocol PDF ("그림 보여 줘", "원문 그림 띄워 줘", "이 단계 그림 있어?"), "web_photo" for a photograph of a thing named ("X 사진", "실제 모습", put the thing in entity), "drawn_diagram" for "그림으로 그려 줘". When they ask for an explanation AND a picture in one breath ("AMBIC 설명해 주고 그림 보여 줘"), call answer AND show_visual together: both are done.
-5. Call clarify when the words are too ambiguous to answer or act on: which step, which substance, which value, what "그거" means. spoken = one short question (under 120 characters); candidates = the possible meanings from PROTOCOL CONTEXT (at most 4). Never a question only the server asks (whether a step is done, whether to end, record or move on).
+5. Call clarify when the words are too ambiguous to answer or act on: which step, which substance, which value, what "그거" means. spoken = one short question (under 120 characters); candidates = exact entity names from the protocol terms (at most 4), or leave candidates empty. Never offer commands or yes/no replies. Never a question only the server asks (whether a step is done, whether to end, record or move on).
 6. Call not_for_me when the words are not addressed to you: talk with another person in the room ("야 민수야 이거 좀 잡아줘"), a remark to oneself, lunch plans, unrelated chatter. Nothing is answered or recorded. Never for words that mention the protocol, a step, a value, a timer, a record, a picture, or carry any command or question to you.
 
 A note with values ("37.2도에서 790 rpm으로 했어, 메모해 줘", "OD가 0.12 나왔어, 기록해 줘", "특이사항으로 메모해 줘") is record_log: type "deviation" when a value differs from the protocol's value for this step, "measurement" when it matches or the protocol states none, "memo" for words without a value; value = their own words. A long turn with fillers ("어 그러니까 음 ...") is read for what it asks, the fillers ignored. Apart from answer beside show_visual, exactly one call.

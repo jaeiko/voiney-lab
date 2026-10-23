@@ -173,8 +173,8 @@ def test_the_new_session_resumes_where_the_protocol_revision_accepts_it(tmp_path
                 protocol_id=PROTOCOL, protocol_revision_id=REVISION,
                 voice_connection_id="voice-connection-2",
             )
-            assert resumed["status"] == "in_progress"
-            assert resumed["events"][-1]["event_type"] == "session_resumed"
+            assert resumed["status"] == "paused"
+            assert resumed["events"][-1]["event_type"] == "session_recovered"
             # What server.py hands the protocol session on recovery.
             session = CuratedProtocolSession(build_fixture(
                 protocol_id=PROTOCOL, title="Fictional four steps",
@@ -186,7 +186,9 @@ def test_the_new_session_resumes_where_the_protocol_revision_accepts_it(tmp_path
                     str(item["step_id"]) for item in resumed["completed_steps"]
                 ),
             )
+            session.pause_workflow()
             assert session.active
+            assert session.workflow_status == "paused"
             assert session.current_index == carried
     finally:
         store.close()
@@ -206,6 +208,11 @@ def test_a_continued_session_can_itself_be_stopped_and_continued(tmp_path):
             researcher, new["session_id"], expected_version=new["version"],
             protocol_id=PROTOCOL, protocol_revision_id=REVISION,
             voice_connection_id="voice-connection-2",
+        )
+        assert running["status"] == "paused"
+        running = store.transition_experiment(
+            researcher, new["session_id"], action="resume",
+            expected_version=running["version"], event_key="explicit-resume",
         )
         running = store.record_experiment_progress(
             researcher, new["session_id"], expected_version=running["version"],
@@ -473,5 +480,5 @@ class CheckpointVoiceRecoveryTests(unittest.TestCase):
                 original = store.get_experiment(principal, stopped["session_id"])
             finally:
                 store.close()
-            self.assertEqual(continued["status"], "in_progress")
+            self.assertEqual(continued["status"], "paused")
             self.assertEqual(original["status"], "stopped")

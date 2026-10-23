@@ -17,6 +17,17 @@ class ConfigurationError(ValueError):
     """A named environment setting is malformed or outside its safe range."""
 
 
+def boolean_setting(environment:Mapping[str,str],name:str,*,default:bool)->bool:
+    raw=environment.get(name,"").strip().casefold()
+    if not raw:
+        return default
+    if raw in {"1","true","yes","on"}:
+        return True
+    if raw in {"0","false","no","off"}:
+        return False
+    raise ConfigurationError(f"{name} must be a boolean")
+
+
 # --- What only xAI provides (lane XO, decision 2 of 2026-10-05) ----------------
 #: The features no other provider stands in for yet, by the setting that turns
 #: each on, with the name a refusal gives it. There is none today: the one it

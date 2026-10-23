@@ -283,6 +283,23 @@ else
   echo "[WARN] (or set VOINEY_LAB_OFFICE_CONVERTER to its soffice; see docs/SOURCE_FORMATS.md)."
 fi
 
+echo
+echo "--- Effective router and PDF worker settings ---"
+python -B - "$ROOT/.env" <<'PY'
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
+from voiney_lab.llm_router import LlmRouterSettings
+from voiney_lab.pdf_text_engine import _worker_timeout_seconds
+
+load_dotenv(Path(sys.argv[1]), override=False)
+router = LlmRouterSettings.from_environment()
+print("llm_router:", "enabled" if router.enabled else "disabled")
+print("router_first:", "enabled" if router.router_first else "disabled")
+print("pdf_worker_timeout_seconds:", _worker_timeout_seconds())
+print("Large PDFs remain bounded by VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS (1-600 seconds).")
+PY
+
 XAI_REFUSAL=""
 if ! python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env"; then
   XAI_REFUSAL="an xAI-only feature is on without XAI_API_KEY (see the line above)"
@@ -300,7 +317,7 @@ if [[ -n "$SAFETY_REFUSAL" ]]; then
   echo "[ERROR] $SAFETY_REFUSAL"
   echo "[ERROR] Refusing to start the pilot. Put a reviewed catalog with no demo"
   echo "[ERROR] document at the SAFETY_CATALOG path above (see"
-  echo "[ERROR] docs/APPROVED_DOCUMENT_OPERATIONS.md) and run this again -- or move"
+  echo "[ERROR] docs/DEPLOYMENT_RUNBOOK.md) and run this again -- or move"
   echo "[ERROR] that file away to start without institution safety documents"
   echo "[ERROR] (USAGE_SCOPE source_protocol_only: $NO_INSTITUTION_DOCUMENTS)."
   exit 1

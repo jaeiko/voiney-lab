@@ -243,6 +243,7 @@ def _text_flags(pymupdf) -> int:
         pymupdf.TEXTFLAGS_RAWDICT
         & ~pymupdf.TEXT_CID_FOR_UNKNOWN_UNICODE
         & ~pymupdf.TEXT_MEDIABOX_CLIP
+        & ~pymupdf.TEXT_PRESERVE_IMAGES
     )
 
 
@@ -306,7 +307,10 @@ def _page_text(page, pymupdf) -> EnginePage:
     raw = _raw_page(page, pymupdf)
     lines = _raw_lines(raw)
     blocks: list[PdfTextBlock] = []
-    images: list[PdfImageBox] = []
+    # rawdict with TEXT_PRESERVE_IMAGES encodes every embedded image as PNG.
+    # Text extraction needs only the placement boxes, not image bytes.
+    images = [PdfImageBox(*(round(float(value),2) for value in info["bbox"]))
+              for info in page.get_image_info()]
     for block in raw.get("blocks", ()):
         if block.get("type") == 1:
             x0, y0, x1, y1 = block["bbox"]

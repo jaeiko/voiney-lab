@@ -158,17 +158,24 @@ class ReconnectTests(ReconnectHarness, unittest.TestCase):
         self.assertEqual(continued["status"], "paused")
         self.assertIsNotNone(continued["paused_at"])
 
-    def test_the_experimenters_own_continue_is_unchanged(self) -> None:
+    def test_the_experimenters_continue_needs_an_explicit_resume(self) -> None:
         session_id, durable = self.run_to_timer("잠깐 멈춰")
-        socket = self.reconnect(session_id, durable, reconnect=False)
+
+        async def resume(socket, listener, say):
+            self.assertEqual(listener.curated_protocol_session.workflow_status, "paused")
+            socket.control({"type": "workflow.resume", "configuration_id": listener.accepted_configuration_id,
+                            "generation": listener.generation})
+            await socket.wait_for(lambda event: event["type"] == "protocol.fixture.state" and event.get("action") == "resume")
+
+        socket = self.reconnect(session_id, durable, reconnect=False, scenario=resume)
         self.assertIsNone(error_message(socket))
         self.assertNotIn("connection_restored", ready_event(socket))
         state = self.restored(socket)
-        self.assertNotEqual(state["workflow_status"], "paused")
+        self.assertEqual(state["workflow_status"], "paused")
         self.assertEqual(state["timers"]["step"]["state"], "not_started")
         continued = self.experiment(session_id)
         self.assertEqual(continued["status"], "in_progress")
-        self.assertEqual(continued["events"][-1]["event_type"], "session_resumed")
+        self.assertEqual(continued["events"][-1]["event_type"], "session_in_progress")
 
     def test_a_reconnection_is_not_greeted_and_keeps_the_measured_voice(self) -> None:
         async def measured(socket, listener, say):
@@ -256,12 +263,19 @@ class ReattachStoreTests(unittest.TestCase):
                 self.assertEqual(event["event_type"], "session_recovered")
                 self.assertEqual(event["payload"], {"previous_status": status, "reconnected": True})
 
-    def test_the_experimenters_resume_still_lifts_a_pause(self) -> None:
-        resumed = self.resume(self.started("paused"))
+    def test_recovery_preserves_a_pause_until_an_explicit_resume(self) -> None:
+        paused = self.started("paused")
+        recovered = self.resume(paused)
+        self.assertEqual(recovered["status"], "paused")
+        self.assertEqual(recovered["paused_at"], paused["paused_at"])
+        self.assertEqual(recovered["events"][-1]["event_type"], "session_recovered")
+        self.assertEqual(recovered["events"][-1]["payload"], {"previous_status": "paused"})
+        resumed = self.store.transition_experiment(
+            self.principal, recovered["session_id"], action="resume",
+            expected_version=recovered["version"], event_key="explicit-resume",
+        )
         self.assertEqual(resumed["status"], "in_progress")
         self.assertIsNone(resumed["paused_at"])
-        self.assertEqual(resumed["events"][-1]["event_type"], "session_resumed")
-        self.assertEqual(resumed["events"][-1]["payload"], {"previous_status": "paused"})
 
 
 if __name__ == "__main__":

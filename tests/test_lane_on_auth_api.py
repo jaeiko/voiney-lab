@@ -102,7 +102,9 @@ def test_without_a_signed_in_account_the_api_and_the_socket_are_closed(monkeypat
         assert response.json() == {"detail": "authentication_required"}
     # The health paths stay open, and say which door is in use.
     assert device.get("/healthz").status_code == 200
-    ready = device.get("/readyz")
+    with monkeypatch.context() as readiness:
+        readiness.setenv("VOINEY_LAB_USAGE_SCOPE", "source_protocol_only")
+        ready = device.get("/readyz")
     assert ready.status_code == 200
     assert ready.json()["capabilities"]["identity_mode"] == "accounts"
     # The session question is answered without a session.
