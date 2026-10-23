@@ -78,7 +78,9 @@ def test_answers_to_the_app_carry_the_origin_refusals_included(monkeypatch, tmp_
     assert refused.status_code == 401
     assert refused.headers["access-control-allow-origin"] == APP, "the app must be able to read why"
     assert "retry-after" in refused.headers["access-control-expose-headers"].lower()
-    ready = _request("GET", "/readyz", {"Origin": APP})
+    with monkeypatch.context() as readiness:
+        readiness.setenv("VOINEY_LAB_USAGE_SCOPE", "source_protocol_only")
+        ready = _request("GET", "/readyz", {"Origin": APP})
     assert ready.status_code == 200 and ready.headers["access-control-allow-origin"] == APP
     assert "access-control-allow-credentials" not in ready.headers
 
@@ -164,10 +166,11 @@ def test_the_socket_refuses_any_other_site_once_the_list_is_set(monkeypatch, tmp
     assert socket.closed == (1008, "origin not allowed")
 
 
-def test_with_the_list_empty_the_socket_checks_no_origin_as_before(monkeypatch, tmp_path):
+def test_with_the_list_empty_the_socket_still_refuses_foreign_origins(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path, app_origins=None)
     socket = _open({"origin": "https://evil.test", "host": "pilot.test"})
-    assert socket.sent[0]["type"] == "ready"
+    assert socket.sent == [{"type": "error", "message": "origin_not_allowed"}]
+    assert socket.closed == (1008, "origin not allowed")
 
 
 def test_an_invalid_list_closes_the_socket(monkeypatch, tmp_path):

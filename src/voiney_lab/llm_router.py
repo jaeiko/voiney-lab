@@ -514,6 +514,13 @@ def validate_read_only_proposal(
             return refuse("clarify_rejected:number_not_in_source")
         if display_label_violations(spoken):
             return refuse("clarify_rejected:display_label")
+        # A tap becomes the next utterance. Offer only the source-linked
+        # entity names already supplied to this router, never model commands
+        # or assent that could answer a workflow confirmation.
+        names={" ".join(term.split()).casefold() for term in context.terms}
+        if any(" ".join(candidate.split()).casefold() not in names
+               for candidate in proposal.candidates):
+            return refuse("clarify_rejected:candidate_not_source_entity")
         return ProposalVerdict("execute", "accepted", None)
     if facts.open_question is not None:
         return refuse("pending_gate_owns_turn")

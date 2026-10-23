@@ -865,9 +865,14 @@ def _workspace_http_error(exc:Exception)->HTTPException:
 async def commercial_identity_boundary(request:Request,call_next):
     """Authenticate every API request when the commercial workspace is enabled."""
 
-    if not request.url.path.startswith("/api/"):
+    if (not request.url.path.startswith("/api/")
+            and request.url.path not in {"/docs","/docs/oauth2-redirect","/redoc","/openapi.json"}):
         return await call_next(request)
     try:
+        if request.method not in {"GET","HEAD","OPTIONS"}:
+            origin=request.headers.get("origin")
+            if origin and not _request_origin_allowed(request,origin):
+                return JSONResponse(status_code=403,content={"detail":"origin_not_allowed"})
         auth=_auth_settings()
         settings=_workspace_settings()
         operational=_runtime_usage_scope()=="operational"
@@ -980,8 +985,6 @@ def _socket_origin_refusal(websocket:WebSocket)->str|None:
         settings=_app_access()
     except ConfigurationError:
         return "configuration_invalid"
-    if not settings.origins:
-        return None
     headers=getattr(websocket,"headers",{})
     origin=headers.get("origin")
     if origin is None:
@@ -998,6 +1001,19 @@ def _socket_origin_refusal(websocket:WebSocket)->str|None:
         if normalized.split("://",1)[1] in own_hosts:
             return None
     return "origin_not_allowed"
+
+
+def _request_origin_allowed(request:Request,origin:str)->bool:
+    normalized=normalize_origin(origin)
+    if normalized is None:
+        return False
+    scheme=request.headers.get("x-forwarded-proto",request.url.scheme).split(",")[0].strip()
+    host=request.headers.get("x-forwarded-host",request.headers.get("host","")).split(",")[0].strip()
+    if normalized==normalize_origin(f"{scheme}://{host}"):
+        return True
+    # App origins use bearer authentication; cookies never authorise a
+    # cross-origin write, including one from an allowlisted app origin.
+    return _app_access().allows(origin) and SESSION_COOKIE_NAME not in request.cookies
 
 
 def _commercial_workspace()->tuple[Principal,object]:
@@ -3090,16 +3106,16 @@ def _catalog_entry_projection(
 
 
 def _public_protocol_catalog_entries(
+    *,tenant_scoped:bool=True,
 )->tuple[list[dict[str,object]],ProtocolPersistenceSettings,str|None]:
     """Resolve visible catalog entries without analysis or approval side effects.
 
-    The third element is the configured development fixture's protocol_id (or
-    None). It is not tenant-owned, so callers that apply per-tenant resource
-    visibility must exempt this id the same way get_protocol_catalog_entry
-    already does for single-entry lookups.
+    The configured development fixture follows the same tenant visibility as
+    stored entries. Only process startup counts all entries without a caller.
     """
 
     config=server_config()
+    visible=_visible_catalog_resource_ids() if tenant_scoped else None
     # A development fixture that does not fit takes only itself out of the
     # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
     # read is left out, one the catalog does not match is shown as not
@@ -3111,6 +3127,8 @@ def _public_protocol_catalog_entries(
             "protocol.catalog.development_fixture_unavailable error=%s",
             type(exc).__name__)
         candidate=None
+    if candidate is not None and visible is not None and candidate.protocol_id not in visible:
+        candidate=None
     candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
     if candidate is not None:
@@ -3120,8 +3138,7 @@ def _public_protocol_catalog_entries(
         return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
-        visible=_visible_catalog_resource_ids()
-        selected=(visible|{candidate_protocol_id} if visible is not None and candidate_protocol_id is not None else visible)
+        selected=visible
         for item in (catalog.list_entries() if selected is None else catalog.list_entries(frozenset(selected))):
             if candidate is not None and item.protocol_id==candidate.protocol_id:
                 try:
@@ -3163,7 +3180,7 @@ def log_protocol_catalog_runtime_configuration()->None:
             finally:
                 store.close()
         entries,settings,candidate_protocol_id=(
-            _public_protocol_catalog_entries()
+            _public_protocol_catalog_entries(tenant_scoped=False)
         )
         development_fixture_enabled=candidate_protocol_id is not None
         if settings.enabled and settings.data_dir is not None:
@@ -5466,7 +5483,18 @@ def _pilot_sources()->PilotSources:
         report_settings=ExperimentReportSettings(False)
     if report_settings.enabled:
         reports_db=report_settings.database_path
-    return PilotSources(metrics_db=metrics_db,reports_db=reports_db,workspace_db=workspace_db)
+    allowed_accounts=None
+    account=_request_account()
+    if account is not None and _account_is_admin():
+        store=_account_store()
+        try:
+            allowed_accounts=frozenset(item.principal().principal_id
+                for item in store.list_accounts(account.organization_id))
+        finally:
+            store.close()
+    return PilotSources(metrics_db=metrics_db,reports_db=reports_db,workspace_db=workspace_db,
+                        allowed_accounts=allowed_accounts,
+                        organization_id=account.organization_id if allowed_accounts is not None else None)
 
 
 @app.get("/api/admin/pilot-metrics")

@@ -20,6 +20,8 @@
 
 ## F1. 계정과 로그인
 
+계정 모드의 API 문서(`/docs`, `/redoc`, `/openapi.json`)도 로그인이 필요하다. 상태를 바꾸는 브라우저 요청과 음성 소켓은 다른 Origin을 거부한다. 명시한 앱 Origin은 기존 bearer 경로를 쓰며 다른 Origin의 쿠키가 쓰기를 허가하지 않는다.
+
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
   비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.
   관리자 계정은 파일럿 지표를 보고, 실험 노트·검토본에 "확인함"을 남기고, 연구실 계정을 끄고 켠다. 계정은 스스로 지울 수 있다(마지막 관리자는 안 됨).
@@ -30,6 +32,8 @@
 - **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 로그인 잠금은 계정 이름 기준이며 전달 주소 머리글로 우회할 수 없다. OIDC 는 가짜 검증기로만 시험했다.
 
 ## F2. 프로토콜 들여오기
+
+개발용 고정 프로토콜도 본인 연구실에 연결된 항목만 목록에 나온다. 서버의 기동 준비는 계정 요청 문맥 없이 전체 카탈로그의 준비·개수 확인을 수행한다.
 
 - **무엇**: PDF·Word(.docx)·사진(JPG·PNG·HEIC)을 원문으로 받는다. Word 와 사진은 서버에서 PDF 로 바꿔 같은 길로 보낸다. 같은 연구실 안에서 같은 파일(SHA-256)은 다시 등록하지 않고, 같은 PDF 를 다시 올리면 그 프로토콜의 검토본을 제안한다. 다른 연구실이 같은 파일을 올리면 별도의 카탈로그 항목으로 등록한다. 원문 바이트는 공유할 수 있지만 분석·검토·소유 범위는 연구실마다 따로 남는다. 스타터 팩 도구도 같은 규칙을 쓴다.
   엑셀(.xlsx)은 원문이 아니라 고른 프로토콜에 붙는 **시약 표**로 저장하고 분석에 쓰지 않는다.
@@ -122,6 +126,7 @@
   모델이 늦거나·실패하거나·거부되거나·답이 검사에 걸리면 같은 말을 규칙 길로 처리한다(두 번째 결정이 아니다). 라우터 모델이 요청 한도(429)에 걸리면 그 말을 멈추고 "지금 답하지 못했어요. 다시 말씀해 주세요."라고 한다.
   모델이 쓴 답은 서버 검사를 통과해야 쓴다: 숫자는 인용한 원문에서만, 상태를 바꿨다는 말 금지, 화면 라벨 금지, 서버 값은 정확히, 근거 없는 안전 지시는 빼고 "이 상황의 안전 안내는 원문에 없어요."를 붙인다.
   **라우터 먼저**(꺼짐)를 켜면 앞단 규칙은 시스템 정보·애매한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고, 라우터가 읽기 전용 도구(`show_visual`, `clarify`, `not_for_me`)도 쓴다.
+  모델의 되묻기 후보는 서버가 전달한 원문 용어만 허용한다. 후보를 눌렀을 때 명령이나 확인 응답이 새 사용자 말로 실행되는 것을 막는다.
 - **어디**: `curated_protocol.py` (`CuratedProtocolSession.front_plan`, `plan`, `FRONT_RULES`, `apply_tool_proposal`, `apply_router_answer`, `ROUTER_FIRST_HANDED_ON`); `llm_router.py` (`route_turn_with_llm_router`, `validate_tool_proposals`, `CHANGE_STATE_RULES`, `RECORD_LOG_RULES`, `answer_check_failures`, `ROUTER_MODEL_UNAVAILABLE_KINDS`); `answer_checks.py`; `runtime_routing.py` `route_curated_runtime_turn`; `intent_fences.py`; `brain.py` `ConversationHistory`(6턴·약 1,200 토큰); `server.py` `_route_with_llm_router`.
 - **설정**: `VOINEY_LAB_LLM_ROUTER_ENABLED`(false), `VOINEY_LAB_ROUTER_FIRST`(false, 라우터가 켜져 있어야 함), `VOINEY_LAB_ROUTER_PROVIDER`·`_MODEL`(설정 필요; 켰는데 비어 있으면 라우터를 끄고 이유를 알림), `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`(2.5).
 - **시험**: `tests/test_front_plan.py`, `tests/test_llm_router.py`, `tests/test_llm_router_wiring.py`, `tests/test_router_answer_checks.py`, `tests/test_lane_ra_router_first.py`, `tests/test_lane_fx3_router_unavailable.py`, `tests/test_rule_parity.py`. 말 맞추기 재생 `python scripts/replay_turns.py`(라우터 꺼짐, 규칙 길).
@@ -188,6 +193,7 @@
 
 - **무엇**: 파일럿 지표는 **숫자·코드·시각만** 둔다(말한 글·소리·프로토콜 글·모델 출력 없음): 말 한 번(라우터 결과·지연), 표시(내보내기 등), 분석 결과, 끝 평점. 행마다 계정 id. 실험이 끝나면 화면이 "이번 실험에 도움이 됐나요?" 1–5 와 한 줄 메모(선택, 200자)를 묻는다.
   관리자 화면 `/admin-metrics.html` 이 날짜별 표를 보여 주고(관리자 계정이면 토큰 없이), `scripts/pilot_metrics.py` 가 CSV 로 낸다(메모는 `notes` 로만).
+  관리자 계정의 집계는 같은 연구실의 실험·분석·계정만 포함한다. 계정 필터로 다른 연구실 숫자를 읽을 수 없다. 서버 운영 토큰과 오프라인 도구의 전체 집계는 유지한다.
 - **어디**: `pilot_metrics.py` (`PilotMetricsStore`, `PilotRecorder`, `PILOT_METRICS_FILENAME`); `server.py` `get_admin_pilot_metrics`, `post_pilot_feedback`, `_require_pilot_admin`; `static/feedback.js`, `static/admin-metrics.html`; 집계 `GET /api/admin/metrics`(토큰만, `runtime_metrics.py`).
 - **설정**: `VOINEY_LAB_ADMIN_TOKEN`(없으면 토큰 경로는 닫힘). 작업공간이 없으면 저장하지 않는다.
 - **시험**: `tests/test_lane_log_summaries.py`, `tests/test_lane_log_feedback.py`, `tests/test_lane_fx5_admin_page.py`. 어떤 열이 무엇인지는 `docs/PILOT_GUIDE.md` 3-3절이 기준이다(`tests/test_lane_log_guide.py` 가 맞춘다).
