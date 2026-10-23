@@ -27,8 +27,8 @@ Browser / store-app WebView (static/index.html, connection.js, feedback.js)
                                                     │ utterance
                                        STT (voice_providers, provider setting)
                                                     │ transcript
-                          admission: empty / self-echo / filler / calibration /
-                          language → emergency gate (emergency.py)
+                          empty / self-echo → emergency gate (emergency.py)
+                          → fragment / filler / calibration / language admission
                                                     │
                      CuratedProtocolSession.front_plan  (front rules)
                           │ handled                    │ handed on
@@ -84,11 +84,16 @@ generation is cancelled and its audio cleared (barge-in).
 2. The waiting cue (`cascade_filler.CascadeFiller`) starts; STT returns one
    transcript per utterance.
 3. Admission, in this order (`server.run_turn`): empty and self-echo
-   (`ECHO_*` constants), fragment join (router-first only), non-speech and
-   filler-only, a pending calibration sentence, language contradiction, then
-   the **emergency gate** (`emergency.recognize_emergency`, fixed reply,
-   route `deterministic_emergency`). With a protocol the turn language is
-   Korean.
+   (`ECHO_*` constants), then the **emergency gate**
+   (`emergency.recognize_emergency`, fixed reply, route
+   `deterministic_emergency`). Recognized emergencies do not become calibration
+   samples or wait for language confirmation. Router-first recognizes the new
+   utterance before joining any held fragment; only a non-emergency is joined
+   and checked again, through this same fixed-response gate. Other turns continue through
+   fragment join (router-first only), non-speech/filler admission, a pending
+   calibration sentence and language confirmation. With a protocol the ordinary
+   turn language is Korean. Audio rejected before STT still cannot reach this
+   text gate; no change to acoustic recognition is implied.
 4. Routing, one line (AGENTS rule 3):
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",

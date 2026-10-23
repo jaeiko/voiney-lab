@@ -10437,6 +10437,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
+    # A recognized emergency uses the one fixed-response gate before soft
+    # admission or calibration can consume it. Empty input and self-echo
+    # are already refused above; this never authorizes a state change.
+    emergency=recognize_emergency(transcript)
     if session.llm_router_settings.router_first:
         # Lane RA, decision (d): words cut by the endpoint. A fragment held
         # by the turn before this one is joined with these words when they
@@ -10447,14 +10451,15 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             turn_id,generation,
             speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
         )
-        if held is not None:
+        if held is not None and emergency is None:
             transcript=f"{held} {transcript}".strip()
+            emergency=recognize_emergency(transcript)
             await current_text(
                 "turn.fragment_joined",turn_id=turn_id,text=transcript,
                 fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
         if (
             committed_at is not None
-            and recognize_emergency(transcript) is None
+            and emergency is None
             and incomplete_fragment(transcript)
         ):
             session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
@@ -10470,6 +10475,50 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 raise
             if not session.release_fragment(turn_id,generation):
                 return
+    if emergency is not None:
+        if not await current_text("transcript",turn_id=turn_id,text=transcript):
+            return
+        timings["route_started_ms"]=round((clock()-endpoint)*1000)
+        await progress("routing",timings_ms={"route_started":timings["route_started_ms"]})
+        _record_emergency_history(
+            session,transcript,turn_id=turn_id,generation=generation)
+        text=emergency.response
+        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
+        if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
+        try:
+            await progress("synthesizing",route="deterministic_emergency")
+            pcm=await asyncio.to_thread(synthesize,said(text),emergency.language)
+            frames=frame_complete_audio(pcm)
+            if filler is not None:await filler.primary_ready()
+        except Exception:
+            log.exception("emergency TTS failed")
+            await progress("error",route="deterministic_emergency")
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=0)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                               segment_count=0,input_frames=input_frames,
+                               output_frames=0,tools_used=[],
+                               route="deterministic_emergency")
+            if session.complete_without_playback(turn_id):
+                await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
+                                  cooldown_ms=session.detector.config.cooldown_ms)
+            return
+        if session.start_playback(turn_id):
+            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+            await progress(
+                "playing",route="deterministic_emergency",
+                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
+            await current_text("state.changed",state=session.state.value,turn_id=turn_id)
+            await sender.segment(turn_id,0,frames,generation)
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=1)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                               segment_count=1,input_frames=input_frames,
+                               output_frames=len(frames),tools_used=[],
+                               route="deterministic_emergency")
+        return
     input_decision=classify_input_event(
         transcription,
         keyterms=keyterm_dump_terms(stt_keyterms),
@@ -10616,47 +10665,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         )
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript):
-        return
-    emergency=recognize_emergency(transcript)
-    if emergency is not None:
-        _record_emergency_history(
-            session,transcript,turn_id=turn_id,generation=generation)
-        text=emergency.response
-        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
-        if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
-        try:
-            await progress("synthesizing",route="deterministic_emergency")
-            pcm=await asyncio.to_thread(synthesize,said(text),emergency.language)
-            frames=frame_complete_audio(pcm)
-            if filler is not None:await filler.primary_ready()
-        except Exception:
-            log.exception("emergency TTS failed")
-            await progress("error",route="deterministic_emergency")
-            await current_text("reply.complete",turn_id=turn_id,text=text)
-            await current_text("audio.complete",turn_id=turn_id,segment_count=0)
-            timings["total_ms"]=round((clock()-endpoint)*1000)
-            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
-                               segment_count=0,input_frames=input_frames,
-                               output_frames=0,tools_used=[],
-                               route="deterministic_emergency")
-            if session.complete_without_playback(turn_id):
-                await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
-                                  cooldown_ms=session.detector.config.cooldown_ms)
-            return
-        if session.start_playback(turn_id):
-            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-            await progress(
-                "playing",route="deterministic_emergency",
-                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
-            await current_text("state.changed",state=session.state.value,turn_id=turn_id)
-            await sender.segment(turn_id,0,frames,generation)
-            await current_text("reply.complete",turn_id=turn_id,text=text)
-            await current_text("audio.complete",turn_id=turn_id,segment_count=1)
-            timings["total_ms"]=round((clock()-endpoint)*1000)
-            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
-                               segment_count=1,input_frames=input_frames,
-                               output_frames=len(frames),tools_used=[],
-                               route="deterministic_emergency")
         return
     if session.curated_protocol_session is not None:
         turn_language="ko"

@@ -107,8 +107,9 @@
   - **응급**: "도와주세요", "불났어요", "가스 누출됐어요" 같은 말에는 정해진 문장으로 작업을 멈추고 위험에서 떨어져 연구실 안전 담당에게 연락하라고만 한다.
 - **어디**: `vad.py` (`EndpointDetector`, `VAD_END_SILENCE_MS`, `SpeakerLevelReference`, `NoiseFloor`, `SENSITIVITY_MARGINS_DB`); `server.py` (`ListenerSession`, `run_turn`, `_finish_voice_calibration`, `ignores_level`, `_suggest_noisy_mode`, `ECHO_TAIL_SECONDS`); `voice_providers.py` (`transcribe`, `synthesize`, `require_provider`); `cascade_filler.py` `CascadeFiller`; `emergency.py` `recognize_emergency`; `audio.py` `SAMPLE_RATE`; 화면 `static/mic-capture-worklet.js`.
 - **설정**: `VOINEY_LAB_STT_PROVIDER`·`VOINEY_LAB_TTS_PROVIDER`(설정 필요), `VOINEY_LAB_STT_MODEL`, `VOINEY_LAB_TTS_VOICE`, `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`(1000), `VOINEY_LAB_CASCADE_VAD_MAX_UTTERANCE_MS`(15000), `VOINEY_LAB_CASCADE_FILLER_MODE`(tone), `VOINEY_LAB_CASCADE_FILLER_DELAY_MS`(700), `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`(false). 실험자 설정 `speaker_sensitivity`, `ambient_mode`, `agent_voice`(설정 탭).
-- **시험**: `tests/test_vad.py`, `tests/test_lane_sp1_level_gate.py`, `tests/test_lane_sp1_noisy_mode.py`, `tests/test_lane_sp2_level_endpoint.py`, `tests/test_lane_fx3_endpoint_pause.py`, `tests/test_own_speech_echo.py`, `tests/test_emergency.py`, `tests/test_voice_providers.py`.
-- **한계**: 다른 사람 말은 **크기로만** 거른다(누구 목소리인지는 가리지 않는다). 소리 기준값은 합성 목소리·합성 소음 시험대에서 정했다. 응급 문장은 소음·필러 거르기, 목소리 맞추기 문장 대기, 언어 되묻기 **뒤에** 판정된다 — 목소리 맞추기 문장을 기다리는 동안의 "도와주세요"는 맞추기 문장으로 읽힌다(그 순서를 지키는 시험은 없다).
+- **응급 우선순위**: 빈 인식 결과와 자기 음성의 되울림을 거른 뒤, 인식된 응급 말은 필러·문장 이어 붙이기·목소리 맞추기·언어 확인보다 먼저 기존 고정 응답으로 처리한다. 보정 대기와 기존 목소리 기준은 유지하고, 실험 단계·관찰·타이머를 바꾸지 않는다. 음성 합성이 실패해도 고정 문장은 화면에 남는다.
+- **시험**: `tests/test_vad.py`, `tests/test_lane_sp1_level_gate.py`, `tests/test_lane_sp1_noisy_mode.py`, `tests/test_lane_sp2_level_endpoint.py`, `tests/test_lane_fx3_endpoint_pause.py`, `tests/test_own_speech_echo.py`, `tests/test_emergency.py`, `tests/test_emergency_admission_boundary.py`, `tests/test_voice_providers.py`.
+- **한계**: 다른 사람 말은 **크기로만** 거른다(누구 목소리인지는 가리지 않는다). 소리 기준값은 합성 목소리·합성 소음 시험대에서 정했다. STT 전에 음량 등으로 버린 소리나 인식하지 못한 말에는 텍스트 응급 판정이 적용되지 않는다. 가짜 음성 전송 시험은 현장 응급 인식 성능을 증명하지 않는다.
 
 ## F9. 말 한 번의 길
 
