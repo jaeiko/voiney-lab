@@ -5371,22 +5371,36 @@ function returnToStartStep(reason,words){
  openWizardSheet(wizardSteps().includes(step)?step:null);wizardNote(words,"error");renderWizard();
  return true;
 }
+// Lane UI4 QA-15 (lane QA, 2026-10-20): a check that failed to load was taken as "nothing to ask" and
+// skipped without a word. It is said where it is asked -- the server's sentence when it sent one --
+// with [다시 불러오기]; since lane SAFE the server would refuse the start without it anyway.
+function startCheckLoadWords(payload){
+ if(nonemptyText(payload?.message_ko))return String(payload.message_ko);
+ if(nonemptyText(payload?.detail?.message_ko))return String(payload.detail.message_ko);
+ return "서버가 핵심 값을 보내지 않았어요.";
+}
 async function wizardLoadCheck(){
  const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
  wizard.check=null;wizard.question=0;wizard.busy=true;renderWizard();
  try{
   const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
-  wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable"};
- }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable"};}
+  wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable",failure_ko:startCheckLoadWords(payload)};
+ }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable",failure_ko:"서버에 연결할 수 없어요. 네트워크를 확인해 주세요."};}
  finally{wizard.busy=false;}
- if(!wizard.check.questions.length){wizardNext();return wizard.check;}
+ if(!wizard.check.questions.length&&wizard.check.skipped_reason!=="unavailable"){wizardNext();return wizard.check;}
  renderWizard();return wizard.check;
 }
 function wizardQuestion(){return wizard.check?.questions?.[wizard.question]||null;}
 function renderWizardCheck(host,primary){
  const question=wizardQuestion();
  if(primary)primary.hidden=true;
+ if(!question&&!wizard.busy&&wizard.check?.skipped_reason==="unavailable"){
+  setText("wizard-title","핵심 값을 불러오지 못했어요");
+  setText("wizard-lead",`${wizard.check.failure_ko||"서버가 핵심 값을 보내지 않았어요."}\n시작하기 전에 원문의 값을 확인해야 해요. [다시 불러오기]를 눌러 주세요.`);
+  if(primary){primary.hidden=false;primary.textContent="다시 불러오기";}
+  return;
+ }
  if(!question){setText("wizard-lead",wizard.busy?"원문의 값을 불러오는 중…":"확인할 값을 불러오는 중…");return;}
  setText("wizard-kicker",`${wizardStepIndex()+1} / ${wizardSteps().length} · 핵심 값 확인 ${question.progress_ko||""}`);
  setText("wizard-title",question.question_ko||"원문의 값을 확인해 주세요");
@@ -5492,6 +5506,8 @@ async function wizardPrimary(){
    if(typeof refused==="string"){wizardNote(refused,"error");renderWizard();return null;}
    closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;
   }
+  // Lane UI4 QA-15: [다시 불러오기] when the check failed to load.
+  case "check":return wizard.check?.skipped_reason==="unavailable"?wizardLoadCheck():null;
   default:return null;
  }
 }
