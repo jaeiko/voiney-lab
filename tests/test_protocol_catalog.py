@@ -848,11 +848,9 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         # tearDown owns a live handle; reopen it after the endpoint closed its own.
         self.store = initialize_protocol_store(self.settings)
 
-    def test_public_catalog_exempts_candidate_from_tenant_rbac_filtering(self):
-        """Tenant resource-visibility filtering must not hide the shared
-        curated fixture, even though it is never bound via bind_resource
-        (regression: it was previously stripped out alongside unbound
-        tenant-owned protocols)."""
+    def test_public_catalog_requires_a_tenant_binding_for_candidate(self):
+        """The configured fixture follows the same tenant visibility as
+        uploaded protocols; it appears only with a visible binding."""
 
         pdf_path = self.root / "leaf-carbon.pdf"
         write_text_pdf(
@@ -884,22 +882,27 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             server_module,
             "_visible_catalog_resource_ids",
             return_value=frozenset(),
-        ), patch.object(
+        ) as visible, patch.object(
             server_module, "_protocol_analysis_model"
         ):
             payload = list_protocol_catalog()
+            visible.return_value = frozenset({self.fixture.protocol_id})
+            bound_payload = list_protocol_catalog()
 
         visible_ids = {item["protocol_id"] for item in payload["protocols"]}
-        self.assertIn(
+        self.assertNotIn(
             self.fixture.protocol_id,
             visible_ids,
-            "the shared curated fixture must stay visible even when no "
-            "tenant resource binding exists for it",
+            "an unbound curated fixture must stay RBAC-filtered",
         )
         self.assertNotIn(
             registered.entry.protocol_id,
             visible_ids,
             "an ordinary tenant-owned protocol must stay RBAC-filtered",
+        )
+        self.assertEqual(
+            {item["protocol_id"] for item in bound_payload["protocols"]},
+            {self.fixture.protocol_id},
         )
 
         # tearDown owns a live handle; reopen it after the endpoint closed its own.

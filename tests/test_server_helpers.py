@@ -545,6 +545,7 @@ class ServerTests(unittest.TestCase):
             async def send_text(self,value): self.sent.append(json.loads(value))
             async def receive(self): return next(self.messages)
         legacy_environment={
+            "VOINEY_LAB_USAGE_SCOPE":"test_only",
             "SAFEBRIDGE_SAFETY_CATALOG":"/old/catalog.sqlite",
             "SAFEBRIDGE_USAGE_SCOPE":"test_only",
             "XAI_API_KEY":"must-not-appear-in-logs",
@@ -1525,6 +1526,7 @@ class ServerTests(unittest.TestCase):
             ) as client:
                 return await client.get("/readyz")
         with patch.dict("os.environ", {
+            "VOINEY_LAB_USAGE_SCOPE": "source_protocol_only",
             "VOINEY_LAB_WORKSPACE_ENABLED": "true",
             "VOINEY_LAB_WORKSPACE_DATA_DIR": tempfile.mkdtemp(),
             "VOINEY_LAB_PROTOCOL_ENABLED": "false",

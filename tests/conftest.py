@@ -47,6 +47,10 @@ for _name in PROVIDER_SECRET_NAMES:
 # test of the unset case clears the environment itself.
 os.environ["VOINEY_LAB_STT_PROVIDER"] = "xai"
 os.environ["VOINEY_LAB_TTS_PROVIDER"] = "xai"
+# Identity tests name their non-operational scope explicitly, just as the
+# fake-backed speech tests name their providers. Unset/blank-scope tests clear
+# this setting themselves; runtime identity no longer defaults to demo.
+os.environ.setdefault("VOINEY_LAB_USAGE_SCOPE", "demo")
 
 
 class OutsideNetworkBlocked(ConnectionRefusedError):

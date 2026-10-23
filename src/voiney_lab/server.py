@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import quote, unquote_plus
+from urllib.parse import quote, unquote_plus, urlsplit
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -533,6 +533,8 @@ async def readyz()->JSONResponse:
         reports=ExperimentReportSettings.from_environment()
         # Lane APP1, decision 4: the app origins parse (exact origins only).
         _app_access()
+        start_check_enabled()
+        server_config()
         # Lane ON, decision ① (2026-10-18): "accounts" when the pilot's
         # login is on (VOINEY_LAB_AUTH_MODE=accounts).
         capabilities["identity_mode"]=(
@@ -548,6 +550,11 @@ async def readyz()->JSONResponse:
         capabilities["docx_conversion_available"]=_docx_conversion_available()
         capabilities["heic_photos_available"]=_heic_photos_available()
     except Exception as exc:
+        if isinstance(exc,ServerConfigurationError):
+            return JSONResponse(status_code=503,content={
+                "status":"not_ready","reason":"safety_configuration_invalid",
+                "fields":list(exc.field_names),
+            })
         return JSONResponse(status_code=503,content={
             "status":"not_ready",
             "reason":type(exc).__name__,
@@ -568,7 +575,11 @@ _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar
 
 
 def _runtime_usage_scope()->str:
-    return os.environ.get("VOINEY_LAB_USAGE_SCOPE","demo").strip() or "demo"
+    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
+    if scope not in {"operational","demo","reference_only","test_only","source_protocol_only"}:
+        raise ServerConfigurationError(
+            "VOINEY_LAB_USAGE_SCOPE must name a usage scope","VOINEY_LAB_USAGE_SCOPE")
+    return scope
 
 
 def _identity_resolver()->IdentityResolver:
@@ -842,7 +853,7 @@ def _workspace_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=exc.code)
     if isinstance(exc,(ApprovalReplayError,WorkspaceConflictError)):
         return HTTPException(status_code=409,detail=exc.code)
-    if isinstance(exc,(IdentityConfigurationError,ConfigurationError)):
+    if isinstance(exc,(IdentityConfigurationError,ConfigurationError,ServerConfigurationError)):
         return HTTPException(status_code=503,detail=getattr(exc,"code","configuration_invalid"))
     return HTTPException(
         status_code=400 if isinstance(exc,WorkspaceError) else 500,
@@ -854,9 +865,14 @@ def _workspace_http_error(exc:Exception)->HTTPException:
 async def commercial_identity_boundary(request:Request,call_next):
     """Authenticate every API request when the commercial workspace is enabled."""
 
-    if not request.url.path.startswith("/api/"):
+    if (not request.url.path.startswith("/api/")
+            and request.url.path not in {"/docs","/docs/oauth2-redirect","/redoc","/openapi.json"}):
         return await call_next(request)
     try:
+        if request.method not in {"GET","HEAD","OPTIONS"}:
+            origin=request.headers.get("origin")
+            if origin and not _request_origin_allowed(request,origin):
+                return JSONResponse(status_code=403,content={"detail":"origin_not_allowed"})
         auth=_auth_settings()
         settings=_workspace_settings()
         operational=_runtime_usage_scope()=="operational"
@@ -901,7 +917,8 @@ async def commercial_identity_boundary(request:Request,call_next):
     except Exception as exc:
         error=_workspace_http_error(exc)
         return JSONResponse(
-            status_code=error.status_code,content={"detail":error.detail},
+            status_code=error.status_code,content={"detail":error.detail,
+                **({"fields":list(exc.field_names)} if isinstance(exc,ServerConfigurationError) else {})},
             headers=error.headers or None)
 
 
@@ -957,20 +974,16 @@ async def app_origin_cors(request:Request,call_next):
 
 
 def _socket_origin_refusal(websocket:WebSocket)->str|None:
-    """Why /ws refuses this browser's origin, or None (lane APP1, decision 4).
+    """Allow the server's own browser origin or an explicitly listed app.
 
-    With VOINEY_LAB_APP_ORIGINS empty there is no check, as before. Once it
-    lists the app, a browser's socket must come from the server's own host
-    (Host, or the proxy's X-Forwarded-Host) or a listed app origin; a client
-    that sends no Origin is not a browser and still needs its login.
+    Browsers are checked even with no app allowlist. Clients without Origin
+    still need authentication. Compare the scheme, host and effective port.
     """
 
     try:
         settings=_app_access()
     except ConfigurationError:
         return "configuration_invalid"
-    if not settings.origins:
-        return None
     headers=getattr(websocket,"headers",{})
     origin=headers.get("origin")
     if origin is None:
@@ -979,14 +992,44 @@ def _socket_origin_refusal(websocket:WebSocket)->str|None:
         return None
     normalized=normalize_origin(origin)
     if normalized is not None:
+        scheme=headers.get("x-forwarded-proto","").split(",")[0].strip().casefold()
+        if not scheme:
+            scheme=getattr(getattr(websocket,"url",None),"scheme","")
+        scheme={"ws":"http","wss":"https"}.get(scheme,scheme)
+        if scheme not in {"http","https"}:
+            return "configuration_invalid"
         own_hosts={
             value.split(",")[0].strip().casefold()
             for value in (headers.get("host",""),headers.get("x-forwarded-host",""))
             if value.strip()
         }
-        if normalized.split("://",1)[1] in own_hosts:
+        if any(_same_browser_origin(origin,f"{scheme}://{host}") for host in own_hosts):
             return None
     return "origin_not_allowed"
+
+
+def _same_browser_origin(first:str,second:str)->bool:
+    if normalize_origin(first) is None or normalize_origin(second) is None:
+        return False
+    def identity(value:str)->tuple[str,str,int|None]:
+        parsed=urlsplit(value.strip().casefold())
+        port=parsed.port
+        return (parsed.scheme,parsed.hostname or "",
+                port if port is not None else {"http":80,"https":443}.get(parsed.scheme))
+    return identity(first)==identity(second)
+
+
+def _request_origin_allowed(request:Request,origin:str)->bool:
+    normalized=normalize_origin(origin)
+    if normalized is None:
+        return False
+    scheme=request.headers.get("x-forwarded-proto",request.url.scheme).split(",")[0].strip()
+    host=request.headers.get("x-forwarded-host",request.headers.get("host","")).split(",")[0].strip()
+    if _same_browser_origin(origin,f"{scheme}://{host}"):
+        return True
+    # App origins use bearer authentication; cookies never authorise a
+    # cross-origin write, including one from an allowlisted app origin.
+    return _app_access().allows(origin) and SESSION_COOKIE_NAME not in request.cookies
 
 
 def _commercial_workspace()->tuple[Principal,object]:
@@ -1628,10 +1671,24 @@ def _record_workspace_observation(
             category=category,
             capture_source="voice",
             protocol_step_id=step.step_id,
+            expected_voice_connection_id=session.voice_connection_id,
         )
         state=store.get_experiment(principal,session.session_id)
         session.experiment_state_version=int(state["version"])
         return state
+    finally:
+        store.close()
+
+
+def _require_current_voice_connection(session:ListenerSession)->None:
+    """A replaced connection cannot plan another workflow or record write."""
+    if session.experiment_state_version is None:
+        return
+    principal,store=_commercial_workspace()
+    try:
+        state=store.get_experiment(principal,session.session_id)
+        if state["last_voice_connection_id"]!=session.voice_connection_id:
+            raise WorkspaceConflictError("The experiment has another voice connection.")
     finally:
         store.close()
 
@@ -2378,7 +2435,7 @@ def validate_approved_catalog(catalog_path:Path,usage_scope:str)->None:
 def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
     catalog=os.environ.get("VOINEY_LAB_SAFETY_CATALOG","").strip()
-    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
+    scope=_runtime_usage_scope()
     catalog_path:Path|None=Path(catalog)
     if scope==SOURCE_PROTOCOL_ONLY_SCOPE:
         # The statement that no institution safety document exists (human
@@ -3065,16 +3122,16 @@ def _catalog_entry_projection(
 
 
 def _public_protocol_catalog_entries(
+    *,tenant_scoped:bool=True,
 )->tuple[list[dict[str,object]],ProtocolPersistenceSettings,str|None]:
     """Resolve visible catalog entries without analysis or approval side effects.
 
-    The third element is the configured development fixture's protocol_id (or
-    None). It is not tenant-owned, so callers that apply per-tenant resource
-    visibility must exempt this id the same way get_protocol_catalog_entry
-    already does for single-entry lookups.
+    The configured development fixture follows the same tenant visibility as
+    stored entries. Only process startup counts all entries without a caller.
     """
 
     config=server_config()
+    visible=_visible_catalog_resource_ids() if tenant_scoped else None
     # A development fixture that does not fit takes only itself out of the
     # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
     # read is left out, one the catalog does not match is shown as not
@@ -3086,6 +3143,8 @@ def _public_protocol_catalog_entries(
             "protocol.catalog.development_fixture_unavailable error=%s",
             type(exc).__name__)
         candidate=None
+    if candidate is not None and visible is not None and candidate.protocol_id not in visible:
+        candidate=None
     candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
     if candidate is not None:
@@ -3095,8 +3154,7 @@ def _public_protocol_catalog_entries(
         return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
-        visible=_visible_catalog_resource_ids()
-        selected=(visible|{candidate_protocol_id} if visible is not None and candidate_protocol_id is not None else visible)
+        selected=visible
         for item in (catalog.list_entries() if selected is None else catalog.list_entries(frozenset(selected))):
             if candidate is not None and item.protocol_id==candidate.protocol_id:
                 try:
@@ -3138,7 +3196,7 @@ def log_protocol_catalog_runtime_configuration()->None:
             finally:
                 store.close()
         entries,settings,candidate_protocol_id=(
-            _public_protocol_catalog_entries()
+            _public_protocol_catalog_entries(tenant_scoped=False)
         )
         development_fixture_enabled=candidate_protocol_id is not None
         if settings.enabled and settings.data_dir is not None:
@@ -3641,19 +3699,12 @@ async def transition_workspace_experiment(
                 or expected_version<=0
             ):
                 raise WorkspaceError("Experiment version is invalid.")
-            return store.transition_experiment(
-                principal,session_id,action=action,
-                expected_version=expected_version,
-                event_key=str(payload.get("event_key", "")),
-                reason=(
-                    str(payload["reason"])
-                    if payload.get("reason") is not None else None
-                ),
-            )
+            store.get_experiment(principal,session_id)
         finally:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+    raise HTTPException(status_code=409,detail="voice_control_required")
 
 
 @app.get("/api/workspace/experiments/{session_id}/timeline")
@@ -3665,6 +3716,24 @@ def get_workspace_experiment_timeline(session_id:str)->dict[str,object]:
                 principal,session_id,every_owner=_account_is_admin())
         finally:
             store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/experiments/{session_id}/reports")
+def get_workspace_experiment_reports(session_id:str)->dict[str,object]:
+    """Discover this experiment's reports through the same OWN read gates."""
+    get_workspace_experiment(session_id)
+    try:
+        settings=ExperimentReportSettings.from_environment()
+        reports=[]
+        if settings.enabled and settings.database_path is not None:
+            _migrate_report_ownership()
+            store=ExperimentReportStore(settings.database_path)
+            for report in store.list_reports(session_id=session_id):
+                _scope_tenant_resource("experiment_report",report["report_id"])
+                reports.append(report)
+        return {"session_id":session_id,"reports":reports}
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
 
@@ -5431,7 +5500,18 @@ def _pilot_sources()->PilotSources:
         report_settings=ExperimentReportSettings(False)
     if report_settings.enabled:
         reports_db=report_settings.database_path
-    return PilotSources(metrics_db=metrics_db,reports_db=reports_db,workspace_db=workspace_db)
+    allowed_accounts=None
+    account=_request_account()
+    if account is not None and _account_is_admin():
+        store=_account_store()
+        try:
+            allowed_accounts=frozenset(item.principal().principal_id
+                for item in store.list_accounts(account.organization_id))
+        finally:
+            store.close()
+    return PilotSources(metrics_db=metrics_db,reports_db=reports_db,workspace_db=workspace_db,
+                        allowed_accounts=allowed_accounts,
+                        organization_id=account.organization_id if allowed_accounts is not None else None)
 
 
 @app.get("/api/admin/pilot-metrics")
@@ -10735,6 +10815,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     request_arbitration=arbitrate_request(transcript)
     if session.curated_protocol_session is not None:
         curated=session.curated_protocol_session
+        try:
+            await asyncio.to_thread(_require_current_voice_connection,session)
+        except WorkspaceError as exc:
+            await current_text(
+                "experiment.session.error",turn_id=turn_id,
+                code=getattr(exc,"code","workspace_error"))
+            await finish_blocked_voice(
+                "다른 연결에서 이 실험을 이어하고 있어요. 상태 변경을 확정하지 않았습니다. 현재 연결을 확인해 주세요.",
+                "curated_protocol",outcome="blocked")
+            return
         checkpoint=curated._checkpoint()
         curated_tools_used=[]
         report_prepared=False
@@ -11327,12 +11417,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 )
             ):
                 try:
-                    report=await _voice_report_write(
+                    report_worker=asyncio.create_task(_voice_report_write(
                         _record_experiment_report_plan,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
                         pre_transition_index=pre_transition_index,
-                    )
+                    ))
+                    try:
+                        report=await asyncio.shield(report_worker)
+                    except asyncio.CancelledError:
+                        while not report_worker.done():
+                            try:
+                                await asyncio.shield(report_worker)
+                            except asyncio.CancelledError:
+                                continue
+                        report_worker.result()
+                        if plan.state_changed and session.experiment_state_version is None:
+                            workflow_mutation_committed=True
+                        raise
                     report_prepared=True
                     if (
                         plan.state_changed
@@ -11540,12 +11642,32 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 and plan.state_changed
             ):
                 try:
-                    experiment_state=await asyncio.to_thread(
+                    mutation_worker=asyncio.create_task(asyncio.to_thread(
                         _record_workspace_experiment_progress,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
                         pre_transition_index=pre_transition_index,
-                    )
+                    ))
+                    try:
+                        experiment_state=await asyncio.shield(mutation_worker)
+                    except asyncio.CancelledError:
+                        # The thread can already have committed. Join it before
+                        # any rollback or a bench control touches this checkpoint.
+                        while not mutation_worker.done():
+                            try:
+                                await asyncio.shield(mutation_worker)
+                            except asyncio.CancelledError:
+                                continue
+                        experiment_state=mutation_worker.result()
+                        if experiment_state is not None:
+                            workflow_mutation_committed=True
+                            if (session.experiment_report_store is not None
+                                    and _reportable(plan) and not report_prepared):
+                                await _voice_report_write(
+                                    _record_experiment_report_plan,session,curated,plan,
+                                    turn_id=turn_id,generation=generation,
+                                    pre_transition_index=pre_transition_index)
+                        raise
                     if experiment_state is None:
                         raise WorkspaceError(
                             "Experiment progress persistence is unavailable."
@@ -12754,6 +12876,11 @@ async def voice_socket(websocket:WebSocket):
                 workspace.close()
             workspace_context_token=_REQUEST_PRINCIPAL.set(principal)
     except Exception as exc:
+        if isinstance(exc,ServerConfigurationError):
+            await websocket.send_text(event(
+                "error",message="configuration_invalid",fields=list(exc.field_names)))
+            await websocket.close(code=1008,reason="invalid configuration")
+            return
         await websocket.send_text(event(
             "error",message=getattr(exc,"code","authentication_failed")))
         await websocket.close(code=1008,reason="authentication required")
@@ -13044,7 +13171,12 @@ async def voice_socket(websocket:WebSocket):
                     heartbeat.ping_seq,heartbeat.ping_sent_at_ms=ping["seq"],ping["sent_at_ms"]
                     heartbeat.ping_received_ms=round(_wall_clock()*1000)
                 continue
-            control=parse_control(message["text"])
+            try:
+                control=parse_control(message["text"])
+            except ProtocolError:
+                await websocket.send_text(event(
+                    "error",message="invalid control message",recoverable=True))
+                continue
             if control["type"]=="session.start":
                 if session.active:
                     same_configuration=(
@@ -13346,9 +13478,7 @@ async def voice_socket(websocket:WebSocket):
                         recovery_session_id is not None
                         and experiment_state is not None
                         and session.curated_protocol_session is not None
-                        and experiment_state["status"] in (
-                            {"in_progress","paused","blocked"}
-                            if reconnect is not None else {"in_progress"})
+                        and experiment_state["status"] in {"in_progress","paused","blocked"}
                     ):
                         restored_before=history_before(
                             session.curated_protocol_session)
@@ -13380,6 +13510,8 @@ async def voice_socket(websocket:WebSocket):
                                 session,session.curated_protocol_session,
                                 experiment_state,previous_connection,reconnect)
                             reconnect_notices=list(reconnection.notices)
+                        elif experiment_state["status"] in {"paused","blocked"}:
+                            session.curated_protocol_session.pause_workflow()
                     if reconnect is not None and experiment_state is not None:
                         restored_connection=True
                         if (
@@ -13501,6 +13633,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 session.set_tool_context(context)
                 await websocket.send_text(event("session.language_changed",state=session.state.value))
                 await websocket.send_text(event("session.language_state",mode="manual",
@@ -13521,6 +13654,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.reset":
@@ -13531,6 +13665,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 session.reset_sensitive_state()
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 if session.curated_protocol_session is not None:
@@ -13545,6 +13680,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 if session.experiment_state_version is not None:
                     try:
                         experiment_state=_transition_workspace_experiment(
@@ -13607,6 +13743,10 @@ async def voice_socket(websocket:WebSocket):
                 ))
             elif control["type"]=="workflow.pause":
                 if session.active and session.curated_protocol_session is not None:
+                    if task and not task.done():
+                        await _finish_all_research_operations(sender,session,"cancelled")
+                        task.cancel()
+                        await asyncio.gather(task,return_exceptions=True)
                     screen_before=history_before(session.curated_protocol_session)
                     changed=session.curated_protocol_session.pause_workflow()
                     if changed and session.experiment_state_version is not None:

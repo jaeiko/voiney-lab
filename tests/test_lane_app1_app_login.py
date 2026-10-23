@@ -9,8 +9,8 @@ cookie), takes it back in an ``Authorization: Bearer`` header on ``/api``,
 and as the first message on ``/ws`` (``{"type": "client.auth", "token": ...}``);
 never in a URL. It is the same session the cookie names: the same lifetime,
 logout and password change end it, an administrator switching the account off
-ends it. The web keeps its cookie exactly as before, and with the setting
-empty (the default) nothing changes at all. The token is never logged.
+ends it. The web keeps its cookie. An unlisted app origin cannot log in by
+cross-origin HTTP; its bearer is not accepted. The token is never logged.
 Provider calls: none. Network: this process only.
 """
 
@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -165,16 +166,17 @@ def test_the_web_keeps_its_cookie_and_never_sees_a_token(monkeypatch, tmp_path):
     assert browser.get("/api/workspace/session").status_code == 200
 
 
-def test_with_the_setting_empty_nothing_changes(monkeypatch, tmp_path):
+def test_with_empty_allowlist_foreign_login_is_refused_and_bearer_is_ignored(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path, app_origins=None)
-    _sign_up(tmp_path, Client())
+    browser = Client()
+    _sign_up(tmp_path, browser)
     phone = Client({"Origin": APP})
     login = phone.post("/api/auth/login", json={"name": "김재준", "password": PASSWORD})
-    assert login.status_code == 200
+    assert login.status_code == 403
     assert "app_session" not in login.json()
-    assert len(_set_cookies(login)) == 1
+    assert len(_set_cookies(login)) == 0
     # A bearer, even the cookie's own value, is not read.
-    token = phone.client.cookies.get(acc.SESSION_COOKIE_NAME)
+    token = browser.client.cookies.get(acc.SESSION_COOKIE_NAME)
     assert Client({"Origin": APP, "Authorization": f"Bearer {token}"}).get("/api/workspace/session").status_code == 401
 
 
@@ -226,6 +228,7 @@ class _Socket:
 
     def __init__(self, headers=None, messages=None, cookies=None, wait=False):
         self.headers = dict(headers or {})
+        self.url = SimpleNamespace(scheme="wss")
         self.cookies = dict(cookies or {})
         self.messages = list(messages or [])
         self.wait = wait

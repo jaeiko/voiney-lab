@@ -110,7 +110,7 @@
 
 이 줄(DOC4)이 문서를 쓰며 코드에서 본 것이다. 코드는 고치지 않았다.
 
-- `scripts/` 의 진단·측정 스크립트 9개가 import 또는 실행 중에 실패하는 것으로 기록돼 있다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. `score_extraction.py`는 위 결정으로 복구했다. 나머지를 고칠지 지울지 정한다.
-- 시작 전 핵심 값 확인(2문항)은 화면의 순서로만 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
-- `GET /readyz` 는 안전 카탈로그·사용 범위를 보지 않는다. `/readyz` 가 200 이어도 `/api/protocols` 가 500 일 수 있다.
-- `VOINEY_LAB_USAGE_SCOPE` 가 비면 신원 판단(`server.py` `_runtime_usage_scope`)은 `demo` 로 읽고, 설정 검사(`server_config`)는 거부한다.
+- 진단 도구 정리(2026-10-23, QA2): 지운 모듈을 부르던 Python 스크립트 9개와 그중 하나를 실행하던 `collect_chunks.sh`를 삭제했다. import 실패를 다시 확인했다. PR #116에서 복구한 `scripts/score_extraction.py`는 남겼다.
+- 시작 전 핵심 값과 안전 확인은 서버가 계정·실행 버전에 묶어 검사한다(SAFE `c86b0fe`, QA2 재확인). `available_for_execution`과 함께 통과해야 시작한다. 명시적으로 시작 확인을 끈 설정은 기존 경로를 유지한다.
+- `GET /readyz`는 사용 범위·안전 카탈로그를 로컬에서 검사하며, 읽을 수 없으면 이유 코드와 설정 이름만 담아 503으로 응답한다(2026-10-23, QA2). 공급자 호출은 하지 않는다.
+- 미설정·빈 `VOINEY_LAB_USAGE_SCOPE`는 신원·설정 양쪽에서 그 설정 이름으로 거부한다(2026-10-23, QA2). 기동 준비의 카탈로그 집계는 요청 신원을 요구하지 않는다.

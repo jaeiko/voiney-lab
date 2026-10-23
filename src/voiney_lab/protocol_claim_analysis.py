@@ -5,8 +5,7 @@ lane AN, decision 1; it lives in the git history). The claim DTOs, the claim
 prompt and schema, chunk planning, the chunk cache, the merge and the audits
 went with it. Only the segment generator stays, because two readers outside
 the analysis still cite segments by their ids: the in-gel development
-fixture's timer manifest (``curated_protocol._load_timer_manifest``, written by
-``scripts/derive_timer_manifest.py``) and the unread-page disclosure in
+fixture's timer manifest (``curated_protocol._load_timer_manifest``) and the unread-page disclosure in
 ``CuratedProtocolSession``. The ids are unchanged: the same version, identity
 fields and boundaries as before, so the manifest's handles still resolve.
 """

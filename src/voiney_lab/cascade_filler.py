@@ -25,6 +25,8 @@ status sentence twice in a row. The screen shows the state either way.
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import os
 from collections.abc import Awaitable, Callable, Mapping
@@ -287,6 +289,13 @@ class CascadeFiller:
                 self._outcome = "cancelled"
                 self._finished_ms = self._elapsed_ms()
             raise
+        except Exception as exc:
+            # A transport may disappear between the generation check and a
+            # send. Finish the cue locally; never leave an unobserved task.
+            self._outcome = "failed"
+            self._finished_ms = self._elapsed_ms()
+            logging.getLogger("voiney_lab").info(
+                "cascade.filler.failed error=%s", type(exc).__name__)
 
     async def _play_tone(self) -> None:
         """Ask the browser for the tone; the server sends no audio for it."""

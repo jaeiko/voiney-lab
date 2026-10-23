@@ -569,6 +569,8 @@ class PilotSources:
     metrics_db: Path | None
     reports_db: Path | None
     workspace_db: Path | None
+    allowed_accounts: frozenset[str] | None = None
+    organization_id: str | None = None
 
     @classmethod
     def from_data_dir(cls, data_dir: str | Path) -> "PilotSources":
@@ -630,7 +632,7 @@ def _snapshot(sources: PilotSources) -> _Snapshot:
         metrics = _copy(sources.metrics_db, folder, "metrics")
         workspace = _copy(sources.workspace_db, folder, "workspace")
         store = PilotMetricsStore(metrics) if metrics is not None else None
-        return _Snapshot(
+        snapshot = _Snapshot(
             ledger=ExperimentReportStore(reports).summary_rows() if reports else [],
             turns=store.turns() if store else [],
             marks=store.marks() if store else [],
@@ -639,6 +641,16 @@ def _snapshot(sources: PilotSources) -> _Snapshot:
             owners=_owners(workspace),
             metrics_present=store is not None,
         )
+        if sources.allowed_accounts is not None:
+            allowed=sources.allowed_accounts
+            snapshot.owners={key:value for key,value in snapshot.owners.items() if value in allowed}
+            snapshot.ledger=[row for row in snapshot.ledger
+                             if row["session_id"] in snapshot.owners
+                             or (sources.organization_id is not None
+                                 and row.get("organization_id")==sources.organization_id)]
+            for name in ("turns","marks","protocol_events","feedback"):
+                setattr(snapshot,name,[row for row in getattr(snapshot,name) if row["account_id"] in allowed])
+        return snapshot
 
 
 def _moment(value: Any) -> datetime | None:
