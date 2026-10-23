@@ -109,12 +109,25 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from voiney_lab.external_references import SupplementalKnowledgeSettings
+from voiney_lab.configuration import boolean_setting
+from voiney_lab.llm_router import LlmRouterSettings
 from voiney_lab.model_providers import ROLES, RoleModel
 from voiney_lab.multi_brain import MultiBrainSettings
+from voiney_lab.pdf_text_engine import _worker_timeout_seconds
 
 load_dotenv(Path.cwd() / ".env", override=False)
 supplemental = SupplementalKnowledgeSettings.from_environment()
 multi_brain = MultiBrainSettings.from_environment()
+router = LlmRouterSettings.from_environment()
+print("llm_router:", "enabled" if router.enabled else "disabled")
+print("router_first:", "enabled" if router.router_first else "disabled")
+print("pdf_worker_timeout_seconds:", _worker_timeout_seconds())
+for setting, label in (("VOINEY_LAB_PROTOCOL_ENABLED", "protocol_catalog"),
+                       ("VOINEY_LAB_WORKSPACE_ENABLED", "workspace")):
+    enabled = boolean_setting(os.environ, setting, default=False)
+    print(f"{label}:", "enabled" if enabled else "disabled")
+    if not enabled:
+        print(f"[WARN] {setting}=false; to enable it, set {setting}=true in the shell or configuration.")
 print("supplemental_model_knowledge:", "enabled" if supplemental.enabled else "disabled")
 print("hybrid_multi_brain:", "enabled" if multi_brain.enabled else "disabled")
 print("answer_brain:", "enabled" if multi_brain.answer_brain_enabled else "disabled")

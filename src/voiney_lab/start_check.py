@@ -38,7 +38,6 @@ START_CHECK_EVENT = "protocol_start_check_answered"
 QUESTION_COUNT = 2
 KINDS = ("time", "temperature", "speed", "amount")
 KIND_KO = {"time": "시간", "temperature": "온도", "speed": "속도", "amount": "양"}
-_ON = frozenset({"1", "true", "yes", "on"})
 LOOK_AGAIN_KO = "원문 조각을 다시 봐 주세요."
 ACCEPT_KO = "원문대로 이 값이 맞아요"
 OPEN_CARD_KO = "분석 값이 틀렸어요 → 검토 카드 열기"
@@ -268,7 +267,7 @@ def build_questions(
             "kind_ko": KIND_KO[value.kind],
             "step_label": step_label,
             "item_id": item.get("item_id"),
-            "question_ko": f"{where}{KIND_KO[value.kind]}은(는) 원문에 얼마로 적혀 있나요?",
+            "question_ko": f"{where}{KIND_KO[value.kind]}{'은' if value.kind in {'time', 'amount'} else '는'} 원문에 얼마로 적혀 있나요?",
             "source": {
                 "page": page,
                 "excerpt": source.get("excerpt") if isinstance(source, Mapping) else None,

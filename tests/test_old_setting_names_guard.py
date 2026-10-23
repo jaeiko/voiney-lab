@@ -154,8 +154,6 @@ class LauncherTests(unittest.TestCase):
             encoding="utf-8",
         )
         python.chmod(0o755)
-        self.source = self.root / "source.pdf"
-        self.source.write_bytes(b"%PDF-1.4\n")
 
     def tearDown(self):
         self._temp.cleanup()
