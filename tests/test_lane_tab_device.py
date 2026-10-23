@@ -51,6 +51,7 @@ let touched=false,contexts=[],gum=async()=>({getTracks:()=>[{stop(){}}],getAudio
 function device(userAgent,extra={}){Object.defineProperty(globalThis,"navigator",{value:{userAgent,maxTouchPoints:userAgent.includes("Macintosh")?5:0,...extra,mediaDevices:{getSupportedConstraints:()=>({}),getUserMedia:(...args)=>gum(...args),enumerateDevices:async()=>[]},wakeLock:{request:async kind=>{log.push(`request ${kind}`);lastLock=new FakeLock();return lastLock;}}},configurable:true});}
 globalThis.AudioContext=class{constructor(){this.state="suspended";this.sampleRate=48000;this.destination={};this.resumes=0;this.audioWorklet={addModule:async()=>{}};contexts.push(this);}
  resume(){this.resumes++;if(!touched)return new Promise(()=>{});this.state="running";return Promise.resolve();}
+ suspend(){this.suspends=(this.suspends||0)+1;this.state="suspended";return Promise.resolve();}
  createMediaStreamSource(){return {connect(){},disconnect(){}};}createGain(){return {gain:{value:1},connect(){},disconnect(){}};}close(){this.state="closed";return Promise.resolve();}};
 globalThis.AudioWorkletNode=class{constructor(){this.port={onmessage:null};}disconnect(){}};
 const sent=()=>socket.sent.filter(item=>typeof item==="string").map(item=>JSON.parse(item));
@@ -126,6 +127,21 @@ assert(!playContext,"a sound context before any press");
 touched=true;void wizardPrimary();
 assert(playContext&&contexts.length===1&&playContext.resumes===1,`not made and resumed in the touch: ${contexts.length} ${playContext?.resumes}`);
 assert(playContext.state==="running","the touch did not start the sound");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_a_start_that_does_not_go_lets_the_sound_made_in_its_press_rest(self) -> None:
+        # Lane TAB self-review: a running context left on the sheet keeps a tablet's audio awake.
+        result = run_page_script(SETUP + f"device({IPAD!r});" + r"""
+sheetAtStart();touched=true;
+startReviewedProtocol=async()=>{starts++;return START_NOT_SENT_WORDS.not_runnable;};
+await wizardPrimary();await settle();
+assert(starts===1&&playContext?.suspends===1&&playContext.state==="suspended",`the sound kept running after a refused start: ${playContext?.state} ${playContext?.suspends}`);
+assert(node("audio-unlock").hidden!==false,"asked for a touch with no session");
+// The next press resumes it, in the touch.
+startReviewedProtocol=()=>{starts++;return new Promise(()=>{});};
+void wizardPrimary();
+assert(playContext.state==="running"&&contexts.length===1,`the next press did not resume the same sound: ${playContext.state} ${contexts.length}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 

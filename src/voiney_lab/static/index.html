@@ -3577,6 +3577,12 @@ function primeRunStart(){
  try{if(!playContext&&typeof AudioContext==="function")playContext=new AudioContext();}catch(_){playContext=null;}
  watchAudioContext(playContext);resumeHeldAudio();void keepScreenOnForStart();
 }
+// A start that did not go: the sound made in its press rests (a suspended context costs nothing; the next press resumes it).
+function restPrimedAudio(){
+ if(sessionActive||micWorkletNode||playContext?.state!=="running"||typeof playContext.suspend!=="function")return false;
+ try{Promise.resolve(playContext.suspend()).catch(()=>{});}catch(_){}
+ return true;
+}
 // Any touch or key: the sound the browser holds back resumed, and a screen lock it let go during the run asked for again.
 function onUserGesture(){resumeHeldAudio();if(screenWakeLockWanted&&!screenWakeLock)void keepScreenOn(true);}
 function onAudioVisibilityChange(){if(globalThis.document?.visibilityState!=="visible")return false;resumeHeldAudio();return renderAudioUnlock();}
@@ -5068,7 +5074,7 @@ async function onMessage(e,generation,current){
  }
  if(m.type==="session.configuration_required"){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
-  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};const refusedWords=nonemptyText(m.message_ko)?String(m.message_ko):reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";$("session-configuration-status").textContent=refusedWords;renderState("IDLE",refusedWords);if(Object.prototype.hasOwnProperty.call(START_REFUSAL_STEPS,m.reason))returnToStartStep(m.reason,refusedWords);
+  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;restPrimedAudio();removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};const refusedWords=nonemptyText(m.message_ko)?String(m.message_ko):reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";$("session-configuration-status").textContent=refusedWords;renderState("IDLE",refusedWords);if(Object.prototype.hasOwnProperty.call(START_REFUSAL_STEPS,m.reason))returnToStartStep(m.reason,refusedWords);
  }
  if(m.type==="session.stopped"&&stopRequest?.socket===current)stopRequest.resolve();
  if(m.type==="session.stopped"){hideVoiceCalibration();voiceReferenceMeasured=false;sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
@@ -5199,7 +5205,7 @@ async function pressExperimentStart(){
    primeRunStart();wizardRememberProtocol(plan.protocolId);
    // Lane UI4 QA-14: a start that does not go is said in the sheet at its last step.
    const refused=await startReviewedProtocol();
-   if(typeof refused==="string"){openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
+   if(typeof refused==="string"){restPrimedAudio();openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
    navigateTab("experiment",null,{replace:true});return true;
   }
   if(openStartForProtocol(plan.protocolId))return true;
@@ -5716,7 +5722,7 @@ async function wizardPrimary(){
    // (the home's "이어서 하기" opens the sheet before it arrives; an upload that finished meanwhile shows its own).
    if(lastProtocolReview?.protocol_id!==entry.protocol_id||currentProtocolReviewId!==entry.protocol_id){wizardSetBusy(true);renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizardSetBusy(false);}}
    const refused=await startReviewedProtocol();
-   if(typeof refused==="string"){wizardNote(refused,"error");renderWizard();return null;}
+   if(typeof refused==="string"){restPrimedAudio();wizardNote(refused,"error");renderWizard();return null;}
    closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;
   }
   // Lane UI4 QA-15: [다시 불러오기] when the check failed to load.
