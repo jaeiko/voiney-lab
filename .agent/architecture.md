@@ -140,6 +140,27 @@ generation is cancelled and its audio cleared (barge-in).
 6. Sentence TTS streams through generation-aware audio segments;
    `turn.route_decision` carries a compact projection (with a `router`
    block when the router ran); `turn.done` and `playback.completed` close it.
+   The curated reply's speech is cut by `server.speech_sentences`
+   (`brain.SentenceChunker`'s sentence ends, cut from the cleaned text only
+   where a space follows; a piece that `clean_speech_text` would change on
+   its own is joined to the one before, so the pieces are exactly the whole's
+   words). The whole is remembered once as said (echo check); the first
+   sentence is synthesized before playback starts, and `_say_answer` sends
+   it as segment 0 after the reply's events, then makes and sends each later
+   sentence while it plays, checking `is_current(turn_id, generation)` before
+   each request and each send. A barge-in cancels the rest; the turn's router
+   history, pilot row and workflow metric are still kept. A later sentence
+   that cannot be made ends the answer there (error signals, the turn still
+   ends through `playback.ended`). `audio.complete` and `turn.done` count the
+   segments; an outside-PDF or web explanation is the segment after them.
+   The screen text is not cut. The greeting, timer notices, clarifications
+   and the emergency reply are still synthesized whole.
+   `server.synthesize` keeps a sentence's audio (`SENTENCE_AUDIO`, bounded
+   by entries and bytes, keyed by provider, model, voice, language and the
+   cleaned sentence) only inside `sentence_audio_kept`: the curated plans
+   `_speech_kept` allows (protocol readings and fixed server sentences, not
+   records, repeats, answers to questions, model-written speech or the
+   experimenter's words) and the greeting. The emergency reply never is.
 
 The front rules and proposal checks share
 `intent_fences.is_question_or_speculation`: Korean question/speculation
