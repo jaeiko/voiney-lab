@@ -50,6 +50,18 @@ from voiney_lab.protocol_catalog import (
 )
 
 MADE_UP = "1. Spin the tube at 20,000 x g for an hour."
+#: Lane MISS (human decision 2026-10-23): an analysis that waits for review
+#: also asks about the source lines that read like an instruction and that no
+#: quote covers. Gamma's answer reads page 1 only, and MADE_UP stands where
+#: page 1's step 2 is printed, so such an analysis also asks about those lines.
+MISSED_WITH_MADE_UP = ["missed:1:4-4", "missed:2:2-3", "missed:3:2-3"]
+MISSED_PAGES_2_3 = ["missed:2:2-3", "missed:3:2-3"]
+
+
+def other_cards(cards: list[dict]) -> list[dict]:
+    """The cards other than lane MISS's possibly-missed ones."""
+
+    return [card for card in cards if card["type"] != "possibly_missed"]
 
 
 def parse_for_review(payload: dict, extraction=None):
@@ -330,6 +342,17 @@ class _CatalogCase(unittest.TestCase):
         return [event.payload for event in self.store.list_events(self.protocol_id)
                 if event.event_type == event_type]
 
+    def confirm_possibly_missed(self) -> list[str]:
+        """Lane MISS: [단계가 아니에요] on every possibly-missed card, as a
+        person does before registering; the item ids answered."""
+
+        answered = []
+        for card in self.catalog.review_draft(self.protocol_id)["cards"]:
+            if card["type"] == "possibly_missed" and not card["decided"]:
+                self.catalog.record_review_decision(self.protocol_id, card["choices"][0]["request"])
+                answered.append(card["item_id"])
+        return answered
+
 
 class TheCatalogKeepsItForReviewTests(_CatalogCase):
     def test_an_analysis_with_an_item_waits_for_review_and_never_runs(self) -> None:
@@ -338,10 +361,13 @@ class TheCatalogKeepsItForReviewTests(_CatalogCase):
         self.assertEqual(entry.analysis_status, "review_pending")
         self.assertEqual(entry.lifecycle_state, "review_pending")
         self.assertFalse(entry.available_for_execution)
-        self.assertEqual(entry.review_pending["needs_review_count"], 1)
-        self.assertEqual(entry.review_pending["by_reason"], {"not_in_source": 1})
+        # Lane MISS: and the three places of the source no quote covers.
+        self.assertEqual(entry.review_pending["needs_review_count"], 4)
+        self.assertEqual(entry.review_pending["by_reason"],
+                         {"not_in_source": 1, "possibly_missed": 3})
         self.assertEqual(
-            entry.review_pending["message_ko"], "검토 대기 · 확인 필요 1건(원문에 없음 1)")
+            entry.review_pending["message_ko"],
+            "검토 대기 · 확인 필요 4건(원문에 없음 1 · 분석에 없는 원문일 수 있어요 3)")
         # Not an analysis revision: nothing that runs a protocol can read it.
         self.assertEqual(self.store.list_analysis_revisions(self.protocol_id, 1), ())
         with self.assertRaises(ProtocolCatalogUnavailableError):
@@ -354,11 +380,11 @@ class TheCatalogKeepsItForReviewTests(_CatalogCase):
         self.assertIsNone(run.failure_code)
         line = self.catalog.pipeline_status(self.protocol_id)
         self.assertEqual((line["stage"], line["stage_ko"], line["blocked"]), ("review", "검토", True))
-        self.assertIn("검토 대기 · 확인 필요 1건", line["message"])
+        self.assertIn("검토 대기 · 확인 필요 4건", line["message"])
         self.assertIn("검토 완료하고 등록", line["action"])
         review = self.catalog.review(self.protocol_id)
         self.assertFalse(review["analysis_available"])
-        self.assertEqual(review["review_pending"]["needs_review_count"], 1)
+        self.assertEqual(review["review_pending"]["needs_review_count"], 4)
         self.assertIsNone(review["analysis_failure"])
 
     def test_the_kept_analysis_reads_back_with_its_pages_and_items(self) -> None:
@@ -368,7 +394,7 @@ class TheCatalogKeepsItForReviewTests(_CatalogCase):
         self.assertEqual(protocol.metadata.pdf.page_count, 3)
         self.assertIn("1. Add 2 mL of buffer A.", protocol.metadata.pdf.pages[0].text)
         self.assertEqual(protocol.sections[0].steps[1].instruction_source_text, MADE_UP)
-        self.assertEqual([flag.item_id for flag in flags], ["step:s2"])
+        self.assertEqual([flag.item_id for flag in flags], ["step:s2", *MISSED_WITH_MADE_UP])
         self.assertIsInstance(readiness, domain.ReadinessAssessment)
         (pending,) = self.events("protocol_analysis_review_pending")
         # The pages are named by their checksums, not copied.
@@ -421,11 +447,11 @@ class TheCatalogKeepsItForReviewTests(_CatalogCase):
             self.answer(step_two=MADE_UP), analysis_id="analysis-" + "d" * 32, reanalysis=True)
         self.assertTrue(entry.available_for_execution)
         self.assertEqual(entry.revision_id, first.revision_id)
-        self.assertEqual(entry.review_pending["needs_review_count"], 1)
+        self.assertEqual(entry.review_pending["needs_review_count"], 4)
         self.catalog.load_executable_fixture(self.protocol_id)
         review = self.catalog.review(self.protocol_id)
         self.assertEqual(review["reanalysis"]["state"], "review_pending")
-        self.assertIn("다시 분석은 검토 대기 · 확인 필요 1건", review["pipeline"]["message"])
+        self.assertIn("다시 분석은 검토 대기 · 확인 필요 4건", review["pipeline"]["message"])
         self.assertIn("지금 분석으로 계속 실행할 수 있습니다", review["pipeline"]["message"])
 
     def test_a_repaired_answer_with_an_item_is_sent_again_and_kept_if_the_retry_fails(self) -> None:

@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 
 from tests.test_lane_rv_review_api import STEP_TWO
-from tests.test_lane_rv_review_pending import MADE_UP, _CatalogCase
+from tests.test_lane_rv_review_pending import MADE_UP, MISSED_PAGES_2_3, _CatalogCase
 from voiney_lab import server
 from voiney_lab.protocol_catalog import review_version_suggestion
 
@@ -25,6 +25,7 @@ class ReuseTests(_CatalogCase):
         self.analyze(self.answer(step_two=MADE_UP))
         self.catalog.record_review_decision(self.protocol_id, {
             "item_id": "step:s2", "action": "confirm", "source_lines": LINES_OF_STEP_TWO})
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
 
     def test_the_list_shows_the_versions_with_date_and_reviewer(self) -> None:
@@ -61,15 +62,17 @@ class ReuseTests(_CatalogCase):
         entry = self.catalog.get_entry(self.protocol_id)
         self.assertTrue(entry.available_for_execution)
         self.assertEqual(entry.revision_id, "pdf-1-review-1")
-        self.assertEqual(entry.review_pending["needs_review_count"], 1)
+        # Lane MISS: and pages 2-3's steps, which this answer leaves out.
+        self.assertEqual(entry.review_pending["needs_review_count"], 3)
         self.assertEqual(
             self.catalog.load_executable_fixture(self.protocol_id).revision_id, "pdf-1-review-1")
         draft = self.catalog.review_draft(self.protocol_id)
         self.assertEqual(draft["target"]["kind"], "review_pending")
-        self.assertEqual(draft["needs_review"], ["step:s2"])
+        self.assertEqual(draft["needs_review"], ["step:s2", *MISSED_PAGES_2_3])
         self.catalog.record_review_decision(self.protocol_id, {
             "item_id": "step:s2", "action": "fix", "text": STEP_TWO,
             "source_lines": LINES_OF_STEP_TWO})
+        self.confirm_possibly_missed()
         registered = self.catalog.register_review(self.protocol_id, {"reviewer_name": "최수진"})
         self.assertEqual(registered["review_version"]["revision_id"], "pdf-1-review-2")
         self.assertEqual(self.catalog.get_entry(self.protocol_id).revision_id, "pdf-1-review-2")

@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from tests.test_lane_rv_review_pending import MADE_UP, _CatalogCase
+from tests.test_lane_rv_review_pending import MADE_UP, MISSED_WITH_MADE_UP, _CatalogCase
 from voiney_lab import server
 from voiney_lab.experiment_protocol_pdf import ProtocolPdfPage
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
@@ -54,8 +54,9 @@ class AReviewPendingAnalysisTests(_ReviewCase):
     def test_the_flagged_item_is_an_ai_suggestion_waiting_with_its_reason(self) -> None:
         draft = self.draft()
         self.assertEqual(draft["target"]["kind"], "review_pending")
-        self.assertEqual(draft["needs_review"], ["step:s2"])
-        self.assertEqual(draft["counts"]["undecided"], 1)
+        # Lane MISS: and the places of the source no quote covers.
+        self.assertEqual(draft["needs_review"], ["step:s2", *MISSED_WITH_MADE_UP])
+        self.assertEqual(draft["counts"]["undecided"], 4)
         self.assertFalse(draft["registrable"])
         self.assertEqual(draft["registration_blockers"][0]["item_id"], "step:s2")
         flagged = self.item("step:s2", draft)
@@ -76,6 +77,7 @@ class AReviewPendingAnalysisTests(_ReviewCase):
         with self.assertRaises(ProtocolReviewError):
             self.decide(item_id="step:s2", action="confirm",
                         source_lines={"page": 1, "first_line": 40})
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         result = self.decide(item_id="step:s2", action="confirm",
                              source_lines={"page": 1, "first_line": 4, "last_line": 4})
         self.assertTrue(result["registrable"])
@@ -224,7 +226,8 @@ class ReviewRoutesTests(_ReviewCase):
     def test_the_routes_read_and_record_through_the_catalog(self) -> None:
         self.analyze(self.answer(step_two=MADE_UP))
         draft = self.call(server.get_protocol_review_draft, self.protocol_id)
-        self.assertEqual(draft["needs_review"], ["step:s2"])
+        self.assertEqual(draft["needs_review"], ["step:s2", *MISSED_WITH_MADE_UP])
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         result = self.call(
             server.post_protocol_review_decision, self.protocol_id,
             {"item_id": "step:s2", "action": "confirm", "target": draft["target"],

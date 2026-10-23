@@ -15,12 +15,22 @@ notice before the start, and the start is not held back.
 
 from __future__ import annotations
 
+import json
+import os
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import Mock, patch
 
+from fastapi import HTTPException
+
+from tests.test_lane_an4_requote import STEP_TWO, _AskingModel, _RequoteCase, answer_with, first_item, found
+from tests.test_lane_an5_requote_after_cards import elsewhere
+from tests.test_lane_rv_review_pending import MADE_UP, _CatalogCase, write_pages_pdf
 from voiney_lab import experiment_protocol as domain
+from voiney_lab import server
 from voiney_lab.experiment_protocol_analysis import (
+    AnalysisPiece,
     MISSED_LINES,
     MISSED_PAGE,
     MISSED_PAGES,
@@ -40,6 +50,13 @@ from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,
+    extract_protocol_pdf,
+)
+from voiney_lab.experiment_protocol_store import initialize_protocol_store
+from voiney_lab.protocol_catalog import (
+    ProtocolCatalog,
+    ProtocolReviewError,
+    ProtocolReviewItemsPendingError,
 )
 
 
@@ -351,6 +368,295 @@ class PlacesAndItemsTests(unittest.TestCase):
         self.assertEqual(sum(len(flag.extra["places"]) for flag in flags), 30)
         self.assertEqual([place["page"] for flag in flags for place in flag.extra["places"]],
                          list(range(1, 31)))
+
+
+# --- the catalog: cards, the cap, the start notice ---------------------------
+
+
+class _MissCase(_CatalogCase):
+    """Gamma's PDF (three pages, six steps); the default answer reads page 1."""
+
+    def draft(self) -> dict:
+        return self.catalog.review_draft(self.protocol_id)
+
+    def missed_cards(self, draft: dict | None = None) -> list[dict]:
+        return [card for card in (draft or self.draft())["cards"]
+                if card["type"] == "possibly_missed"]
+
+
+class AReviewPendingAnalysisAsksAboutTheLinesTests(_MissCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.entry, self.model = self.analyze(self.answer(step_two=MADE_UP))
+
+    def test_each_place_is_a_card_beside_the_refused_item(self) -> None:
+        self.assertEqual(self.entry.analysis_status, "review_pending")
+        cards = self.missed_cards()
+        # Step two's real line (made up in the answer), pages 2 and 3's steps.
+        self.assertEqual([card["item_id"] for card in cards],
+                         ["missed:1:4-4", "missed:2:2-3", "missed:3:2-3"])
+        card = cards[1]
+        self.assertEqual(card["kind_ko"], "분석에 없는 원문")
+        self.assertEqual(card["reasons_ko"], ["분석에 없는 원문일 수 있어요"])
+        self.assertEqual(card["question_ko"], "2쪽의 이 줄들이 실험할 단계인가요?")
+        self.assertEqual(card["shown"], "3. Wash the pellet twice.\n4. Spin at 500 x g for 5 min.")
+        self.assertEqual(card["source"]["lines"], {"page": 2, "first_line": 2, "last_line": 3})
+        self.assertEqual(self.entry.review_pending["needs_review_count"], 4)
+        self.assertIn("분석에 없는 원문일 수 있어요 3", self.entry.review_pending["message_ko"])
+        self.assertEqual(self.model.calls, 1)
+
+    def test_its_only_buttons_are_no_step_and_read_it_again(self) -> None:
+        for card in self.missed_cards():
+            with self.subTest(card=card["item_id"]):
+                self.assertEqual([(choice["choice_id"], choice["label_ko"]) for choice in card["choices"]],
+                                 [("confirm", "단계가 아니에요"), ("reanalysis", "다시 분석할게요")])
+                confirm, again = card["choices"]
+                self.assertEqual(confirm["request"], {"item_id": card["item_id"], "action": "confirm"})
+                self.assertIsNone(confirm["needs"])
+                self.assertEqual((again["route"], again["request"]), ("reanalysis", None))
+        item = next(item for item in self.draft()["items"] if item["item_id"] == "missed:2:2-3")
+        self.assertEqual(item["allowed_actions"], ["confirm", "memo", "reset"])
+
+    def test_no_decision_writes_the_lines_in_as_a_step(self) -> None:
+        for action, extra in (("fix", {"text": "3. Wash the pellet twice."}),
+                              ("enter", {"text": "3. Wash"}), ("clear", {}),
+                              ("confirm", {"source_lines": {"page": 2, "first_line": 2}})):
+            with self.subTest(action=action), self.assertRaises(ProtocolReviewError):
+                self.catalog.record_review_decision(
+                    self.protocol_id, {"item_id": "missed:2:2-3", "action": action, **extra})
+
+    def test_the_cards_must_be_answered_and_change_nothing_when_registered(self) -> None:
+        self.catalog.record_review_decision(self.protocol_id, {
+            "item_id": "step:s2", "action": "confirm",
+            "source_lines": {"page": 1, "first_line": 4, "last_line": 4}})
+        with self.assertRaises(ProtocolReviewItemsPendingError) as pending:
+            self.catalog.register_review(self.protocol_id, {"reviewer_name": "검토자"})
+        self.assertEqual(sorted(pending.exception.item_ids),
+                         ["missed:1:4-4", "missed:2:2-3", "missed:3:2-3"])
+        for card in self.missed_cards():
+            result = self.catalog.record_review_decision(self.protocol_id, card["choices"][0]["request"])
+        self.assertTrue(result["registrable"])
+        self.assertTrue(all(card["decided"] for card in self.missed_cards()))
+        version = self.catalog.register_review(self.protocol_id, {"reviewer_name": "검토자"})
+        # "단계가 아니에요" changes nothing in the version; the ledger's
+        # decision events keep the answers.
+        self.assertEqual([change["item_id"] for change in version["review_version"]["changes"]],
+                         ["step:s2"])
+        (registered,) = self.events("protocol_review_version_registered")
+        self.assertEqual(len(registered["decision_event_ids"]), 4)
+        self.assertNotIn("missed:2:2-3", registered["origins"])
+        fixture = self.catalog.load_executable_fixture(self.protocol_id)
+        self.assertEqual([step.step_id for step in fixture.draft.protocol.sections[0].steps],
+                         ["s1", "s2"])
+
+    def test_the_route_takes_the_card_s_decision_and_refuses_another(self) -> None:
+        self.store.close()
+
+        def open_catalog():
+            opened = initialize_protocol_store(self.settings)
+            return ProtocolCatalog(opened), opened
+
+        try:
+            with patch.object(server, "_open_protocol_catalog", side_effect=open_catalog):
+                draft = server.get_protocol_review_draft(self.protocol_id)
+                card = next(card for card in draft["cards"] if card["item_id"] == "missed:3:2-3")
+                result = server.post_protocol_review_decision(
+                    self.protocol_id, {**card["choices"][0]["request"], "target": draft["target"]})
+                self.assertEqual(result["item"]["decision"]["action"], "confirm")
+                with self.assertRaises(HTTPException) as refused:
+                    server.post_protocol_review_decision(
+                        self.protocol_id, {"item_id": "missed:2:2-3", "action": "fix",
+                                           "text": "3. Wash the pellet twice."})
+                self.assertEqual((refused.exception.status_code, refused.exception.detail),
+                                 (422, "review_decision_invalid"))
+        finally:
+            self.store = initialize_protocol_store(self.settings)
+            self.catalog = ProtocolCatalog(self.store)
+
+
+class AFailedPieceTests(_MissCase):
+    """A failed piece's pages are asked about whole on their own card; the
+    lines no quote covers there are not asked again (decision 3)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        pieces = (AnalysisPiece(1, 3, 1, 1), AnalysisPiece(2, 3, 2, 2), AnalysisPiece(3, 3, 3, 3))
+        broken = self.answer(pages=(2,)).replace('"steps":', '"stepz":', 1)
+        answers = {1: [self.answer(pages=(1,))], 2: [broken, broken], 3: [self.answer(pages=(3,))]}
+
+        def model_answer(*, system_prompt: str, input_json: str, response_schema: dict) -> str:
+            return answers[json.loads(input_json)["pages"][0]["source_page_number"]].pop(0)
+
+        model = Mock()
+        model.analyze.side_effect = model_answer
+        self.catalog.request_analysis(self.protocol_id, "analysis-" + "e" * 32)
+        with patch("voiney_lab.protocol_catalog.analysis_pieces", return_value=pieces):
+            self.catalog.analyze(self.protocol_id, model, analysis_id="analysis-" + "e" * 32)
+
+    def test_its_pages_are_one_card_and_no_possibly_missed_one(self) -> None:
+        self.assertEqual([card["item_id"] for card in self.draft()["cards"]], ["pages:2-2"])
+
+
+
+class TheCardsAndTheLimitTests(_MissCase):
+    def setUp(self) -> None:
+        super().setUp()
+        root = Path(self.temp.name)
+        self.pdf = root / "many.pdf"
+        # Twelve pages, each with a heading, a quoted step and two steps the
+        # answer leaves out, apart from each other.
+        # Each page its own words: lines printed alike on every page are
+        # running lines (furniture), not body.
+        words = ("amber", "basil", "cedar", "delta", "ember", "fjord", "garnet", "hazel",
+                 "indigo", "juniper", "kelp", "lilac")
+        self.many = [[f"Section {word}", f"{2 * n - 1}. Add {n} mL of the {word} buffer.",
+                      f"the {word} buffer is kept at room temperature",
+                      f"and the {word} one is mixed before use",
+                      f"{2 * n}. Wash the {word} pellet twice.", f"it stays {word} in the tube",
+                      f"as the {word} one did before", f"Transfer the {word} pellet to a new tube."]
+                     for n, word in enumerate(words, start=1)]
+        self.words = words
+        write_pages_pdf(self.pdf, self.many, title="Many")
+        self.sha256 = extract_protocol_pdf(self.pdf).sha256
+        self.protocol_id = self.catalog.register(
+            self.pdf, source_filename="many.pdf", media_type="application/pdf").entry.protocol_id
+
+    def many_answer(self, *, made_up: bool) -> str:
+        ev = lambda text, page: {"source_page_number": page, "source_excerpt": text}
+        steps = [{"step_id": f"s{n}", "source_label": str(2 * n - 1),
+                  "instruction_source_text": f"{2 * n - 1}. Add {n} mL of the {word} buffer.",
+                  "evidence": ev(f"{2 * n - 1}. Add {n} mL of the {word} buffer.", n)}
+                 for n, word in enumerate(self.words, start=1)]
+        if made_up:
+            steps[0] = {**steps[0], "instruction_source_text": MADE_UP, "evidence": ev(MADE_UP, 1)}
+        return json.dumps({
+            "analysis_schema_version": 1, "pdf_sha256": self.sha256,
+            "capability_policy_id": "p1-conservative",
+            "protocol": {
+                "protocol_id": "many",
+                "metadata": {"title": "Section amber", "original_language": "en",
+                             "evidence": ev("Section amber", 1)},
+                "before_start": [], "materials": [], "equipment": [],
+                "sections": [{"section_id": "all", "title_source_text": "Section amber",
+                              "evidence": ev("Section amber", 1), "steps": steps}],
+                "constructs": [], "description": None,
+            },
+        })
+
+    def test_the_places_never_count_toward_the_limit_or_ask_for_another_analysis(self) -> None:
+        # 24 places over 12 pages, with a limit of 12 cards: one card a page.
+        entry, model = self.analyze(self.many_answer(made_up=True))
+        self.assertEqual(model.calls, 1)
+        self.assertEqual(entry.analysis_status, "review_pending")
+        cards = self.missed_cards()
+        self.assertEqual(len(cards), 12)
+        # 3 places on page 1 (its step is made up), 2 on each other page: 25.
+        self.assertEqual(cards[0]["item_id"], "missed:1")
+        item = next(item for item in self.draft()["items"] if item["item_id"] == "missed:1")
+        self.assertEqual(len(item["places"]), 3)
+        self.assertEqual(cards[0]["question_ko"], "1쪽의 이 줄들이 실험할 단계인가요?")
+        self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
+
+    def test_a_smaller_limit_puts_pages_together(self) -> None:
+        with patch.dict(os.environ, {"VOINEY_LAB_REVIEW_MAX_ITEMS": "4"}):
+            entry, model = self.analyze(self.many_answer(made_up=True))
+        self.assertEqual(model.calls, 1)
+        cards = self.missed_cards()
+        self.assertEqual([card["item_id"] for card in cards],
+                         ["missed:1-3", "missed:4-6", "missed:7-9", "missed:10-12"])
+        self.assertEqual(cards[0]["question_ko"], "1–3쪽의 이 줄들이 실험할 단계인가요?")
+        self.assertIsNone(cards[0]["source"]["lines"])
+
+    def test_a_passed_analysis_with_many_places_still_passes(self) -> None:
+        entry, model = self.analyze(self.many_answer(made_up=False))
+        self.assertEqual(model.calls, 1)
+        self.assertTrue(entry.available_for_execution)
+        self.assertEqual(self.missed_cards(), [])
+
+
+class TheReaskThatClosesEveryOtherCardTests(_RequoteCase):
+    """Lane AN5's re-ask closes the refused item's card; the possibly-missed
+    cards are no reason to keep the analysis waiting (decision 4)."""
+
+    def test_lines_left_alone_pass_the_analysis_with_its_notice(self) -> None:
+        model = _AskingModel(
+            self.answer(step_two="2. Incubate 10 minutes at 37 C."),
+            requote=lambda request: answer_with(found(first_item(request)["id"], 1, STEP_TWO)))
+        entry = self.run_analysis(model)
+        self.assertTrue(entry.available_for_execution)
+        self.assertIsNone(entry.review_pending)
+        # The paraphrased step's own line was its card's, never a second one.
+        (pending,) = self.events("protocol_analysis_review_pending")
+        self.assertEqual([flag["item_id"] for flag in pending["flags"]],
+                         ["step:s2", "missed:2:2-3", "missed:3:2-3"])
+
+    def test_a_possibly_missed_card_a_person_answered_keeps_it_waiting(self) -> None:
+        def requote(request: dict) -> dict:
+            with elsewhere(self) as catalog:
+                catalog.record_review_decision(
+                    self.protocol_id, {"item_id": "missed:2:2-3", "action": "confirm"})
+            return answer_with(found(first_item(request)["id"], 1, STEP_TWO))
+
+        entry = self.run_analysis(_AskingModel(
+            self.answer(step_two="2. Incubate 10 minutes at 37 C."), requote=requote))
+        self.assertEqual(entry.analysis_status, "review_pending")
+        cards = {card["item_id"]: card for card in self.catalog.review_draft(self.protocol_id)["cards"]}
+        self.assertTrue(cards["missed:2:2-3"]["decided"])
+        self.assertFalse(cards["missed:3:2-3"]["decided"])
+
+
+class TheCardOnTheScreenTests(_MissCase):
+    """The review screen draws the server's card from its fields: the page's
+    script is not changed for it (lane RV2's one card function). Fake models,
+    the page's own script under node; nothing is "live-tested"."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.analyze(self.answer(step_two=MADE_UP))
+        draft = self.catalog.review_draft(self.protocol_id)
+        at = next(index for index, card in enumerate(draft["cards"])
+                  if card["item_id"] == "missed:2:2-3")
+        self.draft = {**draft, "next_card": at}
+        self.page = self.catalog.review_source_page(self.protocol_id, 2)
+
+    def run_screen(self, body: str):
+        from tests.test_lane_an3_card_screen import screen
+
+        page = json.dumps(self.page, ensure_ascii=False)
+        return screen(self.draft, f"const serverPage={page};\n" + body)
+
+    def test_it_shows_the_question_the_lines_and_only_its_two_buttons(self) -> None:
+        result = self.run_screen(r"""
+serve([["/review-draft/source-pages/2",serverPage],["/review-draft",serverDraft]]);
+await loadReviewDraft(serverDraft.protocol_id);await tick();
+assert(node("review-card-progress").textContent==="3 / 4",node("review-card-progress").textContent);
+const text=visibleText(card());
+for(const words of ["분석에 없는 원문","2쪽의 이 줄들이 실험할 단계인가요?","분석에 없는 원문일 수 있어요","3. Wash the pellet twice."])assert(text.includes(words),`${words}: ${text}`);
+assert(JSON.stringify(labels(card()).filter(label=>label!=="메모 남기기"))===JSON.stringify(["단계가 아니에요","다시 분석할게요"]),`buttons: ${labels(card())}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_no_step_is_a_decision_the_server_takes_and_read_again_is_an_analysis(self) -> None:
+        from tests.test_lane_an3_card_screen import posts_of
+
+        result = self.run_screen(r"""
+serve([["/review-decisions",answer(serverDraft.cards.map(each=>each.item_id==="missed:2:2-3"?{...each,decided:true}:each),3)],["/review-draft/source-pages",serverPage],["/review-draft",serverDraft]]);
+let asked=null;analyzeRegisteredProtocol=async(id,options)=>{asked={id,...options};};loadProtocolCatalog=async()=>{};
+globalThis.confirm=()=>true;
+await loadReviewDraft(serverDraft.protocol_id);await tick();
+await press(card(),"단계가 아니에요");
+assert(posts().length===1,`posts: ${posts().length}`);
+await press(card(),"다시 분석할게요");
+assert(posts().length===1,"다시 분석할게요 sent a decision");
+assert(asked&&asked.id===serverDraft.protocol_id&&asked.reanalysis===true,JSON.stringify(asked));
+""")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        (post,) = posts_of(result)
+        self.assertEqual({key: post["body"][key] for key in ("item_id", "action")},
+                         {"item_id": "missed:2:2-3", "action": "confirm"})
+        answer = self.catalog.record_review_decision(self.protocol_id, post["body"])
+        self.assertTrue(next(card for card in answer["cards"]
+                             if card["item_id"] == "missed:2:2-3")["decided"])
 
 
 @unittest.skipUnless(

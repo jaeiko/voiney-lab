@@ -63,6 +63,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REVIEW_REASON_NUMBERING_SEAM,
     REVIEW_REASON_OCR_VALUE,
     REVIEW_REASON_PIECE_FAILED,
+    REVIEW_REASON_POSSIBLY_MISSED,
     REVIEW_REASON_READ_TWO_WAYS,
     REVIEW_REASON_REFERENCE_MOVED,
     REVIEW_REASON_VALUE_CHANGED,
@@ -77,6 +78,8 @@ from voiney_lab.experiment_protocol_analysis import (
     check_analysis_page_count,
     check_pieced_page_count,
     join_piece_analyses,
+    possibly_missed_flags,
+    possibly_missed_places,
     prepare_protocol_analysis_request,
     replace_at_paths,
     requote_questions,
@@ -3893,6 +3896,7 @@ class ProtocolCatalog:
         elif model is not None and _items_by_reason(draft)[0] > review_max_items():
             draft, analysis_id = self._fewer_items(revision, draft, analysis_id, model=model)
         if draft.review_flags:
+            draft = self._with_possibly_missed_flags(revision, draft)
             entry = self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
             if asks:
                 self._requote_after_storing(
@@ -4051,9 +4055,14 @@ class ProtocolCatalog:
             for entry in closed_draft.auto_resolved
             if entry.get("reason") == AUTO_RESOLVED_REQUOTED
         ]
-        if not closed_draft.review_flags and not decisions and not memos:
+        if not any(
+            flag.reason != REVIEW_REASON_POSSIBLY_MISSED for flag in closed_draft.review_flags
+        ) and not decisions and not memos:
+            # Lane MISS, decision 4: what is left is only lines no quote
+            # covers; the analysis passes, and they are its start notice.
             self._record_requote(revision, analysis_id, result, **extra, closed="all")
-            self._store_passed_analysis(revision, closed_draft, analysis_id, pieces=pieces)
+            self._store_passed_analysis(
+                revision, replace(closed_draft, review_flags=()), analysis_id, pieces=pieces)
             return
         self.store.append_event(
             f"analysis-cards-closed-{analysis_id}",
@@ -4181,6 +4190,34 @@ class ProtocolCatalog:
         # attempt's id, whose failure the ledger already holds.
         self._record_analysis_failure(revision, f"{analysis_id}-too-many-items", too_many)
         raise too_many
+
+    def _with_possibly_missed_flags(
+        self, revision: ProtocolRevisionRecord, draft: ProtocolAnalysisDraft,
+    ) -> ProtocolAnalysisDraft:
+        """The draft with an item for the lines no quote covers (lane MISS, 3).
+
+        Human decision 2026-10-23: in an analysis that waits for review, each
+        place of the source that reads like an instruction and that no quote
+        covers (``possibly_missed_places``) is a card, "분석에 없는 원문일 수
+        있어요", whose only buttons are [단계가 아니에요] and [다시 분석할게요].
+        The lines another card already asks about -- a failed piece's pages,
+        where a refused quote's item may stand -- are left to that card
+        (``_lines_asked_about``). These items are made after the bound on
+        cards was applied (they
+        never send a document to be read again or refuse it); their own number
+        is held to ``review_max_items()`` by putting places of one page, then
+        of a run of pages, on one card (``possibly_missed_flags``).
+        """
+
+        places = possibly_missed_places(
+            draft.protocol, draft.extraction, asked_lines=_lines_asked_about(draft))
+        flags = possibly_missed_flags(places, limit=review_max_items())
+        if not flags:
+            return draft
+        logging.getLogger(__name__).info(
+            "protocol.analysis.possibly_missed protocol_id=%s places=%d items=%d",
+            revision.experiment_id, len(places), len(flags))
+        return replace(draft, review_flags=(*draft.review_flags, *flags))
 
     def _store_review_pending(
         self,
@@ -5190,8 +5227,10 @@ class ProtocolCatalog:
                 if (extra or {}).get("in_safety_statement") is True:
                     # Lane FX4, decision 5: no reading is the source's.
                     allowed.insert(2, "source_differs")
-            elif kind == "seam":
+            elif kind in {"seam", "missed"}:
                 # Lane AN3, decision B: [이어져요]; [아니요] is a re-analysis.
+                # Lane MISS, decision 3: [단계가 아니에요]; [다시 분석할게요]
+                # is a re-analysis, and no button writes a step.
                 allowed[:0] = ["confirm"]
             if any(flag.reason == REVIEW_REASON_READ_TWO_WAYS for flag in own):
                 # Lane RV2, decision e: this reading or the other piece's.
@@ -5317,6 +5356,9 @@ class ProtocolCatalog:
             if flag.reason == REVIEW_REASON_OCR_VALUE:
                 items.append(self._ocr_value_view(view, flag, extraction))
                 continue
+            if flag.reason == REVIEW_REASON_POSSIBLY_MISSED:
+                items.append(self._possibly_missed_view(view, flag, extraction))
+                continue
             if flag.reason == REVIEW_REASON_NUMBERING_SEAM:
                 # Lane AN3, decision B: the two steps that meet where the
                 # numbering changes, with their source lines and the numbers
@@ -5377,6 +5419,42 @@ class ProtocolCatalog:
                       if lines else None),
             "value_lines": lines,
             "value_boxes": list(extra.get("value_boxes") or ()),
+            "suggested_lines": None,
+        }
+        return item
+
+    @staticmethod
+    def _possibly_missed_view(
+        view: Callable[..., dict[str, object]], flag: ReviewFlag,
+        extraction: ProtocolPdfExtraction,
+    ) -> dict[str, object]:
+        """A possibly-missed item (lane MISS, decision 3): the lines no quote
+        covers, as the page prints them, with where they stand."""
+
+        extra = flag.extra or {}
+        places = [place for place in extra.get("places") or () if isinstance(place, dict)]
+        texts: list[str] = []
+        for place in places:
+            page = place.get("page")
+            if not isinstance(page, int) or not 1 <= page <= extraction.page_count:
+                continue
+            lines = extraction.pages[page - 1].text.split("\n")
+            first, last = int(place.get("first_line") or 1), int(place.get("last_line") or 1)
+            texts.append("\n".join(" ".join(line.split()) for line in lines[first - 1:last]
+                                   if line.strip()))
+        shown = "\n…\n".join(text for text in texts if text)
+        if len(shown) > _MAX_REVIEW_TEXT:
+            shown = shown[:_MAX_REVIEW_TEXT].rstrip() + "…"
+        first_page, last_page = extra.get("first_page"), extra.get("last_page")
+        item = view(flag.item_id, "missed", shown, extra={
+            "places": places, "first_page": first_page, "last_page": last_page,
+            "missed_scope": flag.reason_code})
+        one = places[0] if len(places) == 1 else None
+        item["source"] = {
+            "page": first_page, "excerpt": shown if one is not None else None,
+            "continued_page": None, "continued_excerpt": None, "verified": True,
+            "lines": ({"page": one["page"], "first_line": one["first_line"],
+                       "last_line": one["last_line"]} if one is not None else None),
             "suggested_lines": None,
         }
         return item
@@ -6131,6 +6209,8 @@ REVIEW_ITEM_KIND_KO: dict[str, str] = {
     "pages": "분석 실패 쪽",
     "ocr_value": "OCR 값",
     "seam": "조각 경계",
+    # Lane MISS, decision 3.
+    "missed": "분석에 없는 원문",
 }
 #: The review's actions: confirm, fix, leave empty (원문에 없음), enter a value
 #: the source does not print, a memo beside an item, and taking a draft
@@ -6923,6 +7003,19 @@ def _card_choices(
             _choice("confirm", "이 쪽엔 단계 없음", request("confirm"), primary=True),
             _choice("reanalysis", "다시 분석", None, route="reanalysis"),
         ], {}
+    if kind == "missed":
+        # Lane MISS, decision 3 (human decision 2026-10-23): lines no quote
+        # covers that read like an instruction. A person says they are no
+        # step, or the document is read again; no button puts them in as a
+        # step, since that would be a person writing values and safety words.
+        first, last = item.get("first_page"), item.get("last_page")
+        pages = (f"{first}쪽" if first == last else f"{first}–{last}쪽")
+        lines = "이 줄들이" if len(item.get("places") or ()) > 1 or "\n" in str(
+            item.get("text") or "") else "이 줄이"
+        return "possibly_missed", f"{pages}의 {lines} 실험할 단계인가요?", [
+            _choice("confirm", "단계가 아니에요", request("confirm")),
+            _choice("reanalysis", "다시 분석할게요", None, route="reanalysis"),
+        ], {}
     if kind == "seam":
         # Lane AN3, decision B (human decision 2026-10-16, "순서 확인"): where
         # the numbering changes between pieces, does the second step follow
@@ -7165,6 +7258,38 @@ def review_cards(items: Sequence[dict[str, object]]) -> list[dict[str, object]]:
             "current": item.get("current"),
         })
     return cards
+
+
+def _lines_asked_about(draft: ProtocolAnalysisDraft) -> dict[int, set[int]]:
+    """Lane MISS, decision 3: the source lines another card asks about -- a
+    failed piece's pages, and where the server suggests a refused quote's
+    item stands (``_suggested_lines``) -- so they are not asked about twice."""
+
+    asked: dict[int, set[int]] = {}
+    for flag in draft.review_flags:
+        if flag.field == "pages" and flag.first_page is not None:
+            # A failed or blocked piece's pages are asked about whole on
+            # their own card ("이 쪽엔 단계 없음").
+            for page in range(flag.first_page, (flag.last_page or flag.first_page) + 1):
+                if 1 <= page <= draft.extraction.page_count:
+                    asked.setdefault(page, set()).update(range(
+                        1, draft.extraction.pages[page - 1].text.count("\n") + 2))
+            continue
+        if flag.field != "evidence" or not flag.path:
+            continue
+        try:
+            evidence = _value_at_path(draft.protocol, flag.path)
+        except (AttributeError, IndexError, AssertionError):
+            continue
+        if not isinstance(evidence, domain.SourceEvidence):
+            continue
+        suggested = _suggested_lines(
+            str(evidence.source_excerpt or ""), draft.extraction,
+            (evidence.source_page_number, *flag.matching_source_pages))
+        if suggested is not None:
+            asked.setdefault(int(suggested["page"]), set()).update(
+                range(int(suggested["first_line"]), int(suggested["last_line"]) + 1))
+    return asked
 
 
 @dataclass(frozen=True)
@@ -7458,6 +7583,11 @@ def _apply_review(
             timers[step_id] = int(value["seconds"]) if action in {"fix", "enter"} else None
             reviewed = value.get("text") if action in {"fix", "enter"} else None
             spoken = value.get("text") if action in {"fix", "enter"} else None
+        elif kind == "missed":
+            # Lane MISS, decision 3: lines a person said are no step change
+            # nothing in the version; the decision events record the answer
+            # (``decision_event_ids``).
+            continue
         elif kind in {"pages", "ocr_value", "seam"}:
             # A check, not a record: a fixed OCR value changes the items that
             # state it through their own decisions (decision d); a seam a
