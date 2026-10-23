@@ -3669,6 +3669,23 @@ def get_workspace_experiment_timeline(session_id:str)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+@app.get("/api/workspace/experiments/{session_id}/reports")
+def get_workspace_experiment_reports(session_id:str)->dict[str,object]:
+    """Discover this experiment's reports through the same OWN read gates."""
+    get_workspace_experiment(session_id)
+    try:
+        settings=ExperimentReportSettings.from_environment()
+        reports=[]
+        if settings.enabled and settings.database_path is not None:
+            store=ExperimentReportStore(settings.database_path)
+            for report in store.list_reports(session_id=session_id):
+                _scope_tenant_resource("experiment_report",report["report_id"])
+                reports.append(report)
+        return {"session_id":session_id,"reports":reports}
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
 @app.post(
     "/api/workspace/experiments/{session_id}/checkpoint-restart",
     status_code=201,

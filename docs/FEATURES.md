@@ -165,6 +165,7 @@
   내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 회의용 파일 이름도 `.meeting.docx`·`.meeting.pdf`로 실제 형식에 맞춘다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
   기록의 소유 계정과 연구실은 서버가 정한다. HTTP·음성 소켓 조회와 내보내기는 본인 또는 같은 연구실 관리자만 가능하다. 값 확인·정정·평점·보고서 재생성은 본인만 가능하며, 관리자가 남의 기록에 쓸 수 있는 것은 PI 확인뿐이다. 다른 연구실 기록과 권한 없는 기록은 없는 것처럼 응답한다. 옛 기록의 소유자는 작업공간 세션으로 채우며, 소유자를 모르면 해당 연구실 관리자만 읽는다.
   지난 실행 비교·시작 전 확인 답·하루의 실행 순번은 같은 소유 계정·연구실·프로토콜 안에서만 구한다. 소유자가 불명인 옛 기록에는 다른 사람의 시작 전 답을 넣지 않으며 순번을 비워 둔다.
+  `GET /api/workspace/experiments/{session_id}/reports`는 그 실험의 보고서 요약 목록(`session_id`, `reports`)을 준다. 본인 또는 같은 연구실 관리자만 읽으며, 보고서가 아직 없거나 기록 기능을 껐으면 빈 목록이다. 보고서를 생성하거나 실험 상태를 바꾸지 않는다.
 - **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
 - **설정**: `VOINEY_LAB_REPORT_PROVIDER`·`_MODEL`·`_REASONING`, `VOINEY_LAB_REPORT_WRITER_ENABLED`(true), `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`(25), `VOINEY_LAB_REPORT_TIMEZONE`(Asia/Seoul), `VOINEY_LAB_OFFICE_CONVERTER`.
 - **시험**: `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`.
