@@ -121,9 +121,9 @@ class WorkspaceSettings:
         cls, environment: Mapping[str, str] | None = None
     ) -> WorkspaceSettings:
         env = os.environ if environment is None else environment
-        enabled = env.get(
-            "VOINEY_LAB_WORKSPACE_ENABLED", "false"
-        ).strip().casefold() in {"1", "true", "yes", "on"}
+        from voiney_lab.configuration import boolean_setting
+
+        enabled = boolean_setting(env,"VOINEY_LAB_WORKSPACE_ENABLED",default=False)
         raw_dir = env.get("VOINEY_LAB_WORKSPACE_DATA_DIR", "").strip()
         data_dir = Path(raw_dir) if raw_dir else None
         if enabled and (data_dir is None or not data_dir.is_absolute()):

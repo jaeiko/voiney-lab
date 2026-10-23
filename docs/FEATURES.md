@@ -204,6 +204,7 @@
 
 - **무엇**: 모델 역할은 `router`·`answer`·`translation`·`analysis`·`report`·`supplemental` 여섯이고, 역할마다 공급자(`xai`·`anthropic`·`openai`·`google`)·모델·추론 수준을 적는다. 기본값은 없다("설정 필요") — 빈 역할을 부르면 다른 공급자로 가지 않고 그 설정 이름을 적은 오류로 닫힌다. STT·TTS 공급자(`google_cloud`·`elevenlabs`·`xai`)도 같다.
   설정 이름은 모두 `VOINEY_LAB_` 로 시작한다(SDK 표준 이름 제외). 옛 이름이 셸이나 `.env` 에 있으면 서버·실행기·시험이 시작을 거부하고 이름만 알린다 — `python scripts/migrate_env.py --check` 로 보고 `--write` 로 바꾼다. 실행기의 기본값은 셸·`.env` 의 값을 덮지 않는다.
+  시작 확인과 작업공간의 boolean 오타는 해당 설정 이름을 적은 오류로 거부한다. 빈 사용 범위도 신원 판단과 서버 설정에서 똑같이 거부한다.
 - **지금 쓰는 값**(`.env.example`; 키는 비워 두고 `.env` 에만 넣는다):
 
   | 역할 | 하는 일 | 값 |
@@ -230,9 +231,9 @@
   - **밖으로 나가는 것**(F17 의 값 기준): 말소리 → STT 공급자, 말할 문장 → TTS 공급자, 글자 층 없는 쪽의 이미지 → OCR 엔진, 원문 글자 → 분석·번역 공급자, 말한 글과 지금 단계 문맥 → 라우터·답변·보조 설명 공급자(켰을 때), 웹 설명·그림 요청 → OpenAI(켰을 때), 실험 기록 → 보고서 공급자, Google 링크 가져오기 → Google. 공급자가 받은 데이터를 어떻게 두는지는 각 약관을 따른다 — 파일럿 전에 사람이 확인한다.
   - **파일럿 데이터 삭제**: `python scripts/pilot_data_delete.py` — 미리보기 → 확인 단어 → 삭제 → 기록 순서만 허용, 되돌릴 수 없음. `data/runtime/pilot` 과 파일럿 표시가 있는 폴더만 받는다. `--account NAME` 은 그 계정의 실험·기록·지표 행을 지운다(연구실이 함께 쓰는 프로토콜은 남긴다). 계정이 스스로 지울 때도 범위가 같다.
   - **백업**: `python scripts/pilot_state_backup.py create|verify|restore`(SQLite 온라인 백업, 원문·첨부만, 환경 파일·원음 제외).
-  - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부).
+  - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부). 준비 점검은 사용 범위와 그 범위의 활성 안전 문서를 로컬에서 확인한다. 설정을 읽지 못하면 503과 이유 코드·설정 이름만 준다. `source_protocol_only`는 카탈로그를 읽지 않는다.
   - **기록(log)**: 말 내용은 남기지 않는다. 키는 `.env` 에만 둔다.
 - **어디**: `scripts/pilot_data_delete.py`, `accounts.py`(지우는 범위), `scripts/pilot_state_backup.py`, `server.py` `healthz`, `readyz`, `persist_stt_diagnostic`.
 - **설정**: `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`, `VOINEY_LAB_STT_DIAGNOSTIC_MAX_FILES`(20), `VOINEY_LAB_ANALYTICS_RETENTION_DAYS`(90).
 - **시험**: `tests/test_lane_fx5_metrics_delete.py`, `tests/test_lane_fx5_secrets_not_kept.py`, `tests/test_pilot_backup.py`.
-- **한계**: `/readyz` 는 안전 카탈로그·사용 범위·공급자 키를 보지 않는다. 삭제 도구는 디스크 조각까지 지우지 않는다. 운영 순서는 `docs/DEPLOYMENT_RUNBOOK.md`, 파일럿의 데이터 처리와 고지는 `docs/PILOT_GUIDE.md`.
+- **한계**: `/readyz`는 공급자를 호출하지 않으며 외부 연결의 성공을 보장하지 않는다. 삭제 도구는 디스크 조각까지 지우지 않는다. 운영 순서는 `docs/DEPLOYMENT_RUNBOOK.md`, 파일럿의 데이터 처리와 고지는 `docs/PILOT_GUIDE.md`.

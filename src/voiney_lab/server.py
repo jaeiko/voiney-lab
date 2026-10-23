@@ -533,6 +533,8 @@ async def readyz()->JSONResponse:
         reports=ExperimentReportSettings.from_environment()
         # Lane APP1, decision 4: the app origins parse (exact origins only).
         _app_access()
+        start_check_enabled()
+        server_config()
         # Lane ON, decision ① (2026-10-18): "accounts" when the pilot's
         # login is on (VOINEY_LAB_AUTH_MODE=accounts).
         capabilities["identity_mode"]=(
@@ -548,6 +550,11 @@ async def readyz()->JSONResponse:
         capabilities["docx_conversion_available"]=_docx_conversion_available()
         capabilities["heic_photos_available"]=_heic_photos_available()
     except Exception as exc:
+        if isinstance(exc,ServerConfigurationError):
+            return JSONResponse(status_code=503,content={
+                "status":"not_ready","reason":"safety_configuration_invalid",
+                "fields":list(exc.field_names),
+            })
         return JSONResponse(status_code=503,content={
             "status":"not_ready",
             "reason":type(exc).__name__,
@@ -568,7 +575,11 @@ _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar
 
 
 def _runtime_usage_scope()->str:
-    return os.environ.get("VOINEY_LAB_USAGE_SCOPE","demo").strip() or "demo"
+    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","demo").strip()
+    if scope not in {"operational","demo","reference_only","test_only","source_protocol_only"}:
+        raise ServerConfigurationError(
+            "VOINEY_LAB_USAGE_SCOPE must name a usage scope","VOINEY_LAB_USAGE_SCOPE")
+    return scope
 
 
 def _identity_resolver()->IdentityResolver:
@@ -2392,7 +2403,7 @@ def validate_approved_catalog(catalog_path:Path,usage_scope:str)->None:
 def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
     catalog=os.environ.get("VOINEY_LAB_SAFETY_CATALOG","").strip()
-    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
+    scope=_runtime_usage_scope()
     catalog_path:Path|None=Path(catalog)
     if scope==SOURCE_PROTOCOL_ONLY_SCOPE:
         # The statement that no institution safety document exists (human
