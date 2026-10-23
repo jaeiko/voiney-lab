@@ -1,8 +1,8 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
 import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
-from collections.abc import Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from functools import lru_cache, partial
@@ -2896,6 +2896,82 @@ def stt_endpoint_label() -> str:
         voice_providers.ELEVENLABS:"elevenlabs:/v1/speech-to-text",
     }[provider]
 
+# --- Lane VOX, decision 3 (2026-10-23): a guidance sentence's audio kept -----
+#: At most this many sentences, and this many bytes of 16 kHz PCM (about 8.7
+#: minutes of speech), are kept in this process; the one used longest ago
+#: goes first.
+SENTENCE_AUDIO_MAX_ENTRIES=512
+SENTENCE_AUDIO_MAX_BYTES=16*1024*1024
+
+
+class SentenceAudioCache:
+    """Sentence audio by (provider, model, voice, language, sentence), bounded.
+
+    ``synthesize`` runs in worker threads, so every read and write holds the
+    lock. Audio larger than the whole memory is never kept.
+    """
+
+    def __init__(self,*,max_entries:int,max_bytes:int)->None:
+        self.max_entries=max_entries
+        self.max_bytes=max_bytes
+        self.bytes=0
+        self._audio:collections.OrderedDict[tuple[str,...],bytes]=collections.OrderedDict()
+        self._lock=threading.Lock()
+
+    def __len__(self)->int:
+        with self._lock:
+            return len(self._audio)
+
+    def get(self,key:tuple[str,...])->bytes|None:
+        with self._lock:
+            pcm=self._audio.get(key)
+            if pcm is not None:
+                self._audio.move_to_end(key)
+            return pcm
+
+    def put(self,key:tuple[str,...],pcm:bytes)->None:
+        if not pcm or len(pcm)>self.max_bytes:
+            return
+        with self._lock:
+            old=self._audio.pop(key,None)
+            if old is not None:
+                self.bytes-=len(old)
+            self._audio[key]=pcm
+            self.bytes+=len(pcm)
+            while len(self._audio)>self.max_entries or self.bytes>self.max_bytes:
+                _,dropped=self._audio.popitem(last=False)
+                self.bytes-=len(dropped)
+
+    def clear(self)->None:
+        with self._lock:
+            self._audio.clear()
+            self.bytes=0
+
+
+SENTENCE_AUDIO=SentenceAudioCache(
+    max_entries=SENTENCE_AUDIO_MAX_ENTRIES,max_bytes=SENTENCE_AUDIO_MAX_BYTES)
+_KEEP_SENTENCE_AUDIO:contextvars.ContextVar[bool]=contextvars.ContextVar(
+    "voiney_lab_keep_sentence_audio",default=False)
+
+
+@contextmanager
+def sentence_audio_kept(keep:bool=True)->Iterator[None]:
+    """Inside, ``synthesize`` says a sentence it made before from memory.
+
+    Only the guidance asks for it: the protocol's own sentences and the
+    server's fixed ones. ``asyncio.to_thread`` copies the context, so a
+    sentence made in a worker thread from inside is kept too. Everything
+    else -- the experimenter's words read back, a record, the emergency
+    reply -- is made anew each time.
+    """
+
+    token=_KEEP_SENTENCE_AUDIO.set(keep)
+    try:
+        yield
+    finally:
+        _KEEP_SENTENCE_AUDIO.reset(token)
+
+
 def synthesize(text:str,language:str|None=None)->bytes:
     clean_text = clean_speech_text(text)
     if not clean_text:
@@ -2905,6 +2981,26 @@ def synthesize(text:str,language:str|None=None)->bytes:
     chosen=_session_tts_voice()
     if chosen is not None:
         settings=replace(settings,voice=chosen)
+    # Lane VOX, decision 3: the same provider, model, voice, language and
+    # sentence give the same audio. An unset provider keeps nothing and
+    # fails below by its setting's name, as before.
+    key=(
+        (settings.provider,settings.model,settings.voice,language or "ko",clean_text)
+        if _KEEP_SENTENCE_AUDIO.get() and settings.provider else None
+    )
+    if key is not None:
+        kept=SENTENCE_AUDIO.get(key)
+        if kept is not None:
+            return kept
+    pcm=_provider_speech(clean_text,language,settings)
+    if key is not None:
+        SENTENCE_AUDIO.put(key,pcm)
+    return pcm
+
+
+def _provider_speech(clean_text:str,language:str|None,settings:TtsProviderSettings)->bytes:
+    """One request to the configured TTS provider for already cleaned text."""
+
     if settings.provider!=voice_providers.XAI:
         return voice_providers.synthesize(clean_text,language or "ko",settings)
     voice = settings.voice
@@ -9350,7 +9446,9 @@ async def _send_session_greeting(
     )
     try:
         log.info("session.greeting.tts_started greeting_id=%s",greeting_id)
-        pcm=await asyncio.to_thread(synthesize,said(greeting),language)
+        # Lane VOX, decision 3: the same greeting next session, from memory.
+        with sentence_audio_kept():
+            pcm=await asyncio.to_thread(synthesize,said(greeting),language)
         frames=frame_complete_audio(pcm)
         log.info(
             "session.greeting.tts_completed greeting_id=%s frame_count=%d",
@@ -10403,6 +10501,35 @@ async def _route_with_llm_router(
     )
 
 
+#: Lane VOX, decision 3: the plans whose sentences may be said from memory --
+#: readings of the protocol and the server's fixed sentences. Not the
+#: repeat of the last reply, a record, an answer to a question, nor anything
+#: that carries the experimenter's own words.
+_KEPT_SPEECH_ACTIONS=frozenset({
+    CuratedProtocolAction.START,CuratedProtocolAction.CURRENT,
+    CuratedProtocolAction.FULL_DETAIL,CuratedProtocolAction.NEXT_INFORMATION,
+    CuratedProtocolAction.COMPLETION_CRITERIA,CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE,CuratedProtocolAction.PROTOCOL_QUERY,
+    CuratedProtocolAction.CLARIFY_COMPLETION,CuratedProtocolAction.PAUSE,
+    CuratedProtocolAction.RESUME,CuratedProtocolAction.START_TIMER,
+})
+#: A plan's speech a model wrote.
+_MODEL_WRITTEN_SPEECH=frozenset({"answer_brain_grounded","grounded_model"})
+
+
+def _speech_kept(plan:Any)->bool:
+    """Whether this plan's sentences may be said from memory (lane VOX, decision 3)."""
+
+    return (
+        plan.action in _KEPT_SPEECH_ACTIONS
+        and not plan.transcript_corrections
+        and not plan.transcript_correction_note
+        and getattr(plan,"step_record",None) is None
+        and getattr(plan,"note_record",None) is None
+        and plan.translation_status not in _MODEL_WRITTEN_SPEECH
+    )
+
+
 @dataclass(frozen=True)
 class _SpokenAnswer:
     """What a turn's spoken answer sent (lane VOX, decision 2)."""
@@ -10419,7 +10546,7 @@ class _SpokenAnswer:
 async def _say_answer(
     session:ListenerSession,sender:LockedSender,*,turn_id:int,generation:int,
     first_frames:list[bytes],later:tuple[str,...],language:str,
-    clock:Callable[[],float],
+    clock:Callable[[],float],keep:bool=False,
 )->_SpokenAnswer:
     """Send the first sentence's audio, then make and send each later one.
 
@@ -10430,7 +10557,8 @@ async def _say_answer(
     coroutine (a sentence being made is dropped when it returns) and a piece
     of an older generation is never sent. A later sentence the provider
     cannot make ends the answer there; what was sent stays and nothing more
-    is asked for.
+    is asked for. ``keep``: the sentences may be said from memory
+    (decision 3).
     """
 
     def seconds(frames:list[bytes])->float:
@@ -10443,7 +10571,8 @@ async def _say_answer(
         if not session.is_current(turn_id,generation):
             break
         try:
-            pcm=await asyncio.to_thread(synthesize,sentence,language)
+            with sentence_audio_kept(keep):
+                pcm=await asyncio.to_thread(synthesize,sentence,language)
         except Exception:
             log.exception("curated protocol sentence TTS failed")
             return replace(spoken,failed=True)
@@ -11890,8 +12019,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 # at once; the later ones are made while it plays (below).
                 # The whole is remembered as said, for the echo check.
                 spoken_sentences=speech_sentences(said(speech_text))
-                pcm=await asyncio.to_thread(
-                    synthesize,spoken_sentences[0],turn_language)
+                # Decision 3: a reading of the protocol may come from memory.
+                speech_kept=_speech_kept(plan)
+                with sentence_audio_kept(speech_kept):
+                    pcm=await asyncio.to_thread(
+                        synthesize,spoken_sentences[0],turn_language)
                 frames=frame_complete_audio(pcm)
                 if filler is not None:await filler.primary_ready()
                 if not frames or not session.start_playback(turn_id):
@@ -11899,6 +12031,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             else:
                 frames=[]
                 spoken_sentences=()
+                speech_kept=False
                 if filler is not None:
                     await filler.cancel()
         except asyncio.CancelledError:
@@ -12064,7 +12197,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 spoken=await _say_answer(
                     session,sender,turn_id=turn_id,generation=generation,
                     first_frames=frames,later=spoken_sentences[1:],
-                    language=turn_language,clock=clock)
+                    language=turn_language,clock=clock,keep=speech_kept)
             except asyncio.CancelledError:
                 # Lane VOX: a barge-in while the later sentences are made.
                 # The turn did what it did; its history, pilot row and metric
