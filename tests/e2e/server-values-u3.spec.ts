@@ -82,13 +82,15 @@ test.describe('Server values on the screen (lane U3)', () => {
     await expect(page.locator('#last-report-id')).toHaveText('실험 기록 · In-gel digestion (서버 제목) · 2026-10-06 08:30');
   });
 
-  test('without server values the browser count is kept', async ({ page }) => {
+  // Lane UI4 (lane OWN's hand-over, 2026-10-22): the server's count only -- the browser no longer
+  // counts the records it has seen (they mixed accounts and protocols).
+  test('without server values the browser does not count', async ({ page }) => {
     await openPage(page);
     for (const [id, started] of [['ER-0000000000000000EEE1', '2026-10-06T01:00:00+00:00'], ['ER-0000000000000000EEE2', '2026-10-06T03:00:00+00:00']]) {
       await send(page, { type: 'experiment.report.state', configuration_id: 7, generation: 0,
         report: { report_id: id, status: 'in_progress', started_at: started, protocol_id: PROTOCOL_ID, anomaly_count: 0, blocker_count: 0, event_count: 0, events: [] } });
     }
-    await expect(page.locator('#last-report-id')).toHaveText('실험 기록 · In-gel digestion · 2026-10-06 12:00 · 2번째');
+    await expect(page.locator('#last-report-id')).toHaveText('실험 기록 · In-gel digestion · 2026-10-06 12:00');
   });
 
   test('the experiment list uses the server title and count', async ({ page }) => {

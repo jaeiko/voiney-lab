@@ -96,12 +96,13 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
     await page.locator('#experiment-context-version summary').click();
     await expect(page.locator('#experiment-context-version')).toContainText(REVISION_ID);
 
-    // Two records of the same protocol started the same day are numbered.
+    // A second record of the same protocol the same day, without the server's count: lane UI4 (lane
+    // OWN's hand-over) shows the server's count only, so the browser numbers nothing of its own.
     await page.evaluate(([pid]) => onMessage({ data: JSON.stringify({
       type: 'experiment.report.state', configuration_id: 7, generation: 0,
       report: { report_id: 'ER-0000000000000000BEEF', status: 'in_progress', started_at: '2026-10-05T06:40:00+00:00', protocol_id: pid, anomaly_count: 0, blocker_count: 0, event_count: 0, events: [] },
     }) }, sessionGeneration, socket), [PROTOCOL_ID]);
-    await expect(page.locator('#last-report-id')).toHaveText(/ · 2번째$/);
+    await expect(page.locator('#last-report-id')).toHaveText(/^실험 기록 · In-gel digestion · 2026-10-05 \d\d:\d\d$/);
   });
 
   test('the review panel keeps hashes and the revision id out of its body', async ({ page }) => {

@@ -127,9 +127,11 @@ class AfterViewMarkupTests(unittest.TestCase):
         self.assertIn('body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}', self.style)
         self.assertIn('body[data-view="after"] #tab-experiment .timeline{grid-area:chat}', self.style)
         self.assertIn('@media (max-width:980px){body[data-view="after"] #tab-experiment{grid-template-columns:minmax(0,1fr);grid-template-areas:"work" "chat" "setup"}}', self.style)
-        hidden = re.search(r'body\[data-view="after"\] #protocol-library,[^{]*\{display:none\}', self.style).group(0)
-        for part in ("#protocol-compare", "#protocol-start-summary", ".mic-check"):
-            self.assertIn(part, hidden)
+        # Lane UI4 QA-18 (2026-10-23): after the run the protocols tab keeps its list, comparison and summary; the microphone check folds away.
+        hidden = re.search(r'body\[data-view="after"\] \.mic-check,[^{]*\{display:none\}', self.style).group(0)
+        self.assertIn(".example-strip", hidden)
+        for part in ("#protocol-library", "#protocol-compare", "#protocol-start-summary"):
+            self.assertNotIn(f'body[data-view="after"] {part}', self.style)
         self.assertIn('body[data-view="after"] .after-head{display:flex;', self.style)
         self.assertIn(".after-head{display:none}", self.style)
 

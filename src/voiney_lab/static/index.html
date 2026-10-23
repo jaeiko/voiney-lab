@@ -92,7 +92,7 @@
     body[data-view="during"] .shell{max-width:none;padding:0;gap:0}
     body[data-view="during"] .workflow-grid{gap:0}
     body[data-view="during"] .tab-panel:not([hidden]){display:block}
-    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] #protocol-start-summary,body[data-view="during"] #protocol-review-panel,body[data-view="during"] .dev-diagnostics{display:none}
+    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] .dev-diagnostics{display:none}
     /* The status line: the basis badge, the protocol, the step, the connection and the microphone. */
     body[data-view="during"] .sticky-rail{min-height:var(--run-statusbar-h);padding:.25rem 1rem;gap:.75rem;flex-wrap:nowrap;-webkit-backdrop-filter:none;backdrop-filter:none;transition:none}
     body[data-view="during"] .rail-left{flex:1 1 auto;flex-wrap:nowrap;gap:.75rem;min-width:0}
@@ -261,6 +261,8 @@
     body[data-view="during"] .run-sheet-head{display:flex;align-items:center;gap:1rem;font-size:1.125rem}
     body[data-view="during"] .run-sheet-backdrop:not([hidden]){display:block;position:fixed;inset:0;z-index:140;background:rgba(0,0,0,.45)}
     body[data-view="during"] .timeline,body[data-view="during"] #settings-sheet{display:none}
+    /* Lane UI4 QA-19 (2026-10-23): the settings tab's panel shows over the run while its sheet is open -- only the sheet. */
+    body[data-view="during"][data-sheet="settings"]:not([data-tab="settings"]) #tab-settings>:not(#settings-sheet){display:none}
     body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;flex-direction:column;gap:.75rem;position:fixed;left:0;right:0;bottom:0;top:auto;z-index:150;width:auto;max-height:min(85dvh,calc(100dvh - 1rem));margin:0;padding:1rem;overflow:auto;overscroll-behavior:contain;border:0;border-top:2px solid var(--ink);border-radius:0;background:var(--surface-raised);box-shadow:var(--shadow)}
     body[data-view="during"][data-sheet="conversation"] .timeline{overflow:hidden}
     body[data-view="during"] .timeline-head{align-items:center}
@@ -660,7 +662,9 @@
     body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}
     body[data-view="after"] #tab-experiment .timeline{grid-area:chat}
     body[data-view="after"] #tab-experiment .prestart-side{grid-area:setup}
-    body[data-view="after"] #protocol-library,body[data-view="after"] #protocol-compare,body[data-view="after"] #protocol-start-summary,body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
+    /* Lane UI4 QA-18 (2026-10-23): the protocols tab is a place of its own, the same in every view -- the
+       one-page rules that hid its list, its comparison and its summary during and after the run are gone. */
+    body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
     body[data-view="after"] .procedure-card .run-left,body[data-view="after"] .spoken-summary,body[data-view="after"] .voice-command-hint,body[data-view="after"] .workflow-details-rows,body[data-view="after"] .task-body-right{display:none}
     body[data-view="after"] .procedure-card{padding:var(--space-6)}
     body[data-view="after"] .task-body-split{display:block;margin-top:0}
@@ -734,8 +738,7 @@
      body:not([data-view="during"]) .rail-right{flex-wrap:nowrap;gap:var(--space-2)}
      body:not([data-view="during"]) .rail-right button{flex:1 1 auto;min-width:0;min-height:44px;padding:0 var(--space-1);font-size:.8125rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     }
-    body[data-view="during"] #protocol-compare{display:none}
-    body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
+    body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart-side{display:contents}
     /* Lane IA decision ① (2026-10-19): five tabs. The shell is one column of
        panels, one shown at a time; the bar of five links is fixed below on a
@@ -807,6 +810,10 @@
     .settings-account-actions button{min-height:var(--target-desk);padding:0 var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--paper);color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
     .settings-account-actions button[hidden],.settings-account-form[hidden]{display:none}
     .settings-account-form{display:flex;flex-direction:column;gap:var(--space-3);max-width:28rem}
+    /* Lane UI4 (2026-10-23): the account deletion, in the danger colour. */
+    .settings-account-actions button.account-danger{border-color:var(--danger);color:var(--danger)}
+    .settings-account-actions button.account-danger[type="submit"]{background:var(--danger);color:#fff}
+    .settings-account-warning{margin:0;padding:var(--space-3);border-left:4px solid var(--danger);background:var(--danger-soft);color:var(--ink);font-size:.9375rem;line-height:1.5rem}
     #settings-agent-voice-list .wizard-option-pick,#settings-agent-voice-list .wizard-option-aside{min-height:var(--target-desk)}
     body:not([data-dev="on"]) #dev-diagnostics{display:none}
     @media (min-width:900px){
@@ -835,6 +842,14 @@
     .records-list{list-style:none;margin:var(--space-3) 0 0;padding:0;display:grid;gap:var(--space-2)}
     .records-list .home-card{text-decoration:none}
     .records-detail-head{display:grid;gap:var(--space-1);margin-bottom:var(--space-3)}
+    /* Lane UI4 self-review R1: another member's experiment is read only -- its timeline takes the width. */
+    .experiment-ledger-grid:has(> .experiment-ledger-capture[hidden]){grid-template-columns:minmax(0,1fr)}
+    /* Lane UI4 item 5 (2026-10-23): the record's reports, with the end screen's links. */
+    .records-detail-reports{display:grid;gap:var(--space-2);margin-bottom:var(--space-4)}
+    .records-detail-reports[hidden],.records-detail-reports p[hidden]{display:none}
+    .records-detail-reports h3{margin:0;color:var(--ink);font-size:1rem}
+    .records-report-list{display:grid;gap:var(--space-3);margin:0;padding:0;list-style:none}
+    .records-report .report-actions{margin-top:var(--space-2)}
     .records-detail-back{justify-self:start;min-height:44px;display:inline-flex;align-items:center;color:var(--ink);font-weight:700}
     body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
     body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}
@@ -1332,6 +1347,12 @@
         <h2 id="records-detail-title" class="records-detail-title"></h2>
         <p id="records-detail-line" class="records-detail-line"></p>
       </div>
+      <!-- Lane UI4 item 5 (2026-10-23): the picked experiment's reports (lane QA2's GET /api/workspace/experiments/{id}/reports), each with the end screen's links -- Word, Markdown, JSON, CSV -- and no other format. -->
+      <section id="records-detail-reports" class="records-detail-reports" aria-labelledby="records-detail-reports-title" hidden>
+        <h3 id="records-detail-reports-title">보고서</h3>
+        <p id="records-detail-reports-note" class="records-detail-line" role="status"></p>
+        <ul id="records-report-list" class="records-report-list"></ul>
+      </section>
       <section id="experiment-session-ledger" class="panel experiment-ledger" aria-labelledby="experiment-ledger-title">
         <div class="experiment-ledger-head">
           <div>
@@ -1349,7 +1370,7 @@
           </div>
         </div>
         <div class="experiment-ledger-grid">
-          <div class="experiment-ledger-capture">
+          <div id="experiment-ledger-capture" class="experiment-ledger-capture">
             <label class="workspace-field"><span>관찰 유형</span><select id="manual-observation-category"><option value="note">메모</option><option value="appearance">외관</option><option value="measurement">측정</option><option value="deviation">편차</option><option value="other">기타</option></select></label>
             <label class="workspace-field"><span>관찰 내용</span><textarea id="manual-observation-content" maxlength="4000" placeholder="예: 시료가 시작 시점보다 약간 탁해 보임"></textarea></label>
             <div class="workspace-actions"><button id="manual-observation-save" type="button">현재 단계에 기록</button></div>
@@ -1447,6 +1468,7 @@
         <div class="settings-account-actions">
           <button id="account-password-open" type="button" hidden>비밀번호 바꾸기</button>
           <button id="account-logout" type="button" hidden>로그아웃</button>
+          <button id="account-delete-open" type="button" class="account-danger" hidden>계정 지우기</button>
         </div>
         <form id="account-password-form" class="settings-account-form" hidden>
           <label class="wizard-field">지금 비밀번호<input id="account-password-current" type="password" autocomplete="current-password"></label>
@@ -1456,6 +1478,16 @@
             <button id="account-password-cancel" type="button">닫기</button>
           </div>
           <small id="account-password-status" class="mic-device-status" role="status" aria-live="polite"></small>
+        </form>
+        <!-- Lane UI4 (2026-10-23): lane FX5's account deletion, asked once more -- what it deletes, that it cannot be undone, and the password again, as the server asks. -->
+        <form id="account-delete-form" class="settings-account-form" hidden>
+          <p id="account-delete-warning" class="settings-account-warning">계정을 지우면 계정과 그 계정이 남긴 기록이 지워지고 되돌릴 수 없어요. 지우려면 비밀번호를 한 번 더 적어 주세요.</p>
+          <label class="wizard-field">비밀번호<input id="account-delete-password" type="password" autocomplete="current-password"></label>
+          <div class="settings-account-actions">
+            <button id="account-delete-send" type="submit" class="account-danger">계정 지우기</button>
+            <button id="account-delete-cancel" type="button">그만두기</button>
+          </div>
+          <small id="account-delete-status" class="mic-device-status" role="status" aria-live="polite"></small>
         </form>
       </section>
       <details id="install-guide" class="install-guide">
@@ -1571,12 +1603,22 @@ const turnProgress=new Map(),turnServerGenerations=new Map();
 let acknowledgedLanguageMode="manual",acknowledgedLanguage="ko";
 let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfiguration=null;
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
-let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="";
+let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="",workspacePrincipalId="";
 const protocolCatalog=new Map();
-let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
+let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null,reportReadOnly=false;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
 const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
-function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus);}
+function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus)&&!experimentOfAnother(currentExperimentSessionId);}
+// Lane UI4 QA-22 (lane QA, 2026-10-20): an administrator's lists hold the lab's experiments (lane ON
+// decision ①), but only the owner may continue one -- the server refuses the rest. An experiment is
+// another person's when the server names its owner (the list's owner_principal_id) and that is not
+// who is signed in (/api/workspace/session's principal_id); an owner not named is not taken for another.
+function ownedByAnother(ownerId){return nonemptyText(ownerId)&&nonemptyText(workspacePrincipalId)&&String(ownerId)!==workspacePrincipalId;}
+function experimentOfAnother(sessionId){const item=nonemptyText(sessionId)&&Array.isArray(workspaceExperiments)?workspaceExperiments.find(entry=>entry?.session_id===sessionId):null;return ownedByAnother(item?.owner_principal_id);}
+// Lane UI4 (lane OWN's hand-over, 2026-10-22): an administrator reads a member's record, but its values
+// (확인 · 정정), its rating and its written report (다시 만들기) stay the owner's -- the server refuses them.
+// A record is another person's when its experiment is, or when the record names its owner itself.
+function reportOfAnother(report){return ownedByAnother(report?.owner_principal_id)||experimentOfAnother(report?.session_id);}
 function updateStartActionLabel(){const button=$("start");if(button)button.textContent=experimentIsResumable()?"실험 이어하기":"새 실험 시작";renderExperimentContext();}
 const webReferenceHistory=[];
 const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers=new Map(),toolEvents=new Map(),visualEvents=new Map(),researchEvents=new Map(),brainEvents=new Map(),greetingEvents=new Set(),audioRecoveryTurns=new Set();
@@ -1656,7 +1698,7 @@ function showExperimentEnded(message){
  setText("procedure-status",`${status}${report}`);
  renderAfterHead(message);
  renderScreenView();
- globalThis.VoineyFeedback?.ended(lastReportId);
+ if(!reportReadOnly)globalThis.VoineyFeedback?.ended(lastReportId);
  // QA-95: the lists read again, so no tab offers the ended experiment as 진행 중.
  void loadExperimentSessions(currentExperimentSessionId);
 }
@@ -1704,12 +1746,13 @@ function analysisStateLabel(entry){
  return catalogStatus(entry).label;
 }
 function experimenterLabel(){return workspaceDisplayName||"이름 기록 없음";}
-const experimentReportsSeen=new Map();
 // Lane U3 decision 1: a record is named by the server's protocol_title and
 // day_sequence. The server counts by the UTC day (day_sequence_date) and the
 // screen shows the researcher's local time, so its count is used only when
-// the two days are the same; otherwise, or without server values, the screen
-// counts what this browser has seen, as before.
+// the two days are the same. Lane UI4 (lane OWN's hand-over, 2026-10-22): the
+// server's count only -- without it (an older server, a record whose owner is
+// not known) or on another day, no number; the browser's own count of what it
+// had seen mixed accounts and protocols.
 function serverProtocolTitle(item){return typeof item?.protocol_title==="string"&&item.protocol_title.trim()?item.protocol_title.trim():"";}
 function serverDaySequence(item){
  if(!Number.isInteger(item?.day_sequence)||item.day_sequence<1||typeof item.day_sequence_date!=="string")return null;
@@ -1725,13 +1768,8 @@ function serverDayNumber(item,siblings,idKey){
 function experimentReportLabel(report,siblings=[]){
  // "실험 기록 · {프로토콜 제목} · {시작 날짜·시각}". Two records started on
  // the same day get a number, in start order.
- const id=report.report_id,title=serverProtocolTitle(report)||protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
- experimentReportsSeen.set(id,{title,day:parts?.day||"",started:report.started_at||""});
- let number=serverDayNumber(report,siblings,"report_id");
- if(number===null){
-  const same=[...experimentReportsSeen.entries()].filter(([,item])=>item.title===title&&item.day===(parts?.day||"")).sort(([a,x],[b,y])=>x.started<y.started?-1:x.started>y.started?1:a<b?-1:1);
-  number=same.length>1?` · ${same.findIndex(([key])=>key===id)+1}번째`:"";
- }
+ const title=serverProtocolTitle(report)||protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
+ const number=serverDayNumber(report,siblings,"report_id")??"";
  return ["실험 기록",title,parts?`${parts.day} ${parts.time}`:""].filter(Boolean).join(" · ")+number;
 }
 function setReportTitle(text,pairs=[]){setText("last-report-id",text);const dev=$("last-report-dev");if(dev){dev.replaceChildren();appendDevCodeDetails(dev,pairs);}}
@@ -1739,11 +1777,13 @@ function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const node=$("experiment-resume-disclosure");if(!node)return false;
  if(!currentExperimentSessionId||!recovery||typeof recovery!=="object"){node.hidden=true;node.textContent="";return false;}
  const restored=recovery.restored&&typeof recovery.restored==="object"?recovery.restored:{},revision=typeof restored.protocol_revision_id==="string"?restored.protocol_revision_id:currentExperimentProtocolRevision,step=typeof restored.current_step_label==="string"?restored.current_step_label:currentExperimentStepLabel,count=Number.isInteger(restored.completed_step_count)&&restored.completed_step_count>=0?restored.completed_step_count:currentExperimentCompletedStepCount,wasRecovered=["session_recovered","session_resumed"].includes(recovery.last_event_type),eligible=recovery.eligible===true;
- const checkpoints=!eligible&&Array.isArray(recovery.checkpoints)?recovery.checkpoints.length:0;
- const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
+ // Lane UI4 self-review R1: another member's experiment (an administrator reads the lab's) is not continued or written from here.
+ const another=!sessionActive&&experimentOfAnother(currentExperimentSessionId);
+ const checkpoints=!eligible&&!another&&Array.isArray(recovery.checkpoints)?recovery.checkpoints.length:0;
+ const lead=another?"다른 사람의 실험을 골랐습니다.":checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
  const durable=`저장된 상태: 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
  const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`다시 불러오지 않는 것: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
- const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
+ const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":another?"이어하기와 관찰 기록·첨부·체크포인트는 실험한 사람만 할 수 있습니다.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
  node.textContent=`${lead} ${durable} ${omitted} ${next}`;appendDevCodeDetails(node,[["protocol_revision_id",revision||null]]);node.hidden=false;return true;
 }
 function renderExperimentContext(){
@@ -1967,8 +2007,15 @@ function renderRunSheets(){
  const body=globalThis.document?.body;if(body?.dataset)body.dataset.sheet=runSheet;
  for(const [name,parts] of Object.entries(RUN_SHEETS))$(parts.opener)?.setAttribute?.("aria-expanded",String(runSheet===name));
  const backdrop=$("run-sheet-backdrop");if(backdrop)backdrop.hidden=!runSheet;
+ // Lane UI4 QA-19: the settings sheet lives in the settings tab; its panel shows while the sheet is open over the run.
+ const settings=$("tab-settings");if(settings&&shownTab()!=="settings")settings.hidden=authRequired()||!runSettingsSheetOpen();
  renderRunFigureFlag();
 }
+// Lane UI4 QA-19 (lane QA, 2026-10-20): the rail's [설정] darkened the run and showed nothing -- lane IA
+// decision ⑥ moved the settings sheet into the settings tab, hidden while the run's tab shows, and a
+// fixed sheet cannot leave a hidden panel. The panel shows while that sheet is open (the CSS shows only
+// its sheet there) and is put away when the sheet closes or the run ends.
+function runSettingsSheetOpen(){return runSheet==="settings"&&screenView()==="during";}
 function openRunSheet(name){
  if(!Object.prototype.hasOwnProperty.call(RUN_SHEETS,name)||screenView()!=="during")return false;
  runSheet=name;if(name==="figures")for(const key of runFigureKeys)runFigureKeysSeen.add(key);
@@ -2132,7 +2179,7 @@ const RESEARCHER_ERROR_MESSAGES=Object.freeze({
 });
 function researcherErrorMessage(value,fallback="요청을 처리하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요."){const code=typeof value==="string"?value:"",mapped=RESEARCHER_ERROR_MESSAGES[code];if(mapped)return mapped;if(Object.values(RESEARCHER_ERROR_MESSAGES).includes(code))return code;return fallback;}
 
-async function loadWorkspaceSession(){try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();workspaceDisplayName=typeof data.display_name==="string"?data.display_name.trim():"";renderExperimentContext();await loadExperimentSessions();return true;}catch{return false;}}
+async function loadWorkspaceSession(){try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();workspaceDisplayName=typeof data.display_name==="string"?data.display_name.trim():"";workspacePrincipalId=typeof data.principal_id==="string"?data.principal_id:"";renderExperimentContext();await loadExperimentSessions();return true;}catch{return false;}}
 function workspaceRow(title,detail){const row=document.createElement("div"),bold=document.createElement("b"),small=document.createElement("small");row.className="workspace-row";bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
 function experimentEventLabel(type){return {steps_skipped_carried_over:"건너뛴 단계 이어받음",observation_corrected:"기록 정정",observation_retracted:"기록 취소",session_restarted_from_checkpoint:"체크포인트에서 시작",step_completion_carried_over:"이전 세션 완료 이어받음",checkpoint_restart_created:"체크포인트로 새 세션 생성",session_started:"세션 생성",protocol_started:"프로토콜 시작",session_recovered:"세션 복구",session_resumed:"세션 재개",session_paused:"세션 일시정지",session_stopped:"세션 종료",session_completed:"실험 완료",step_completed:"단계 완료",step_advanced:"단계 이동",observation_recorded:"관찰 기록",evidence_attached:"근거 첨부",reviewer_action:"검토자 작업"}[type]||"이벤트";}
 function experimentEventKind(type){return {steps_skipped_carried_over:"step",observation_corrected:"observation",observation_retracted:"observation",session_restarted_from_checkpoint:"lifecycle",step_completion_carried_over:"step",checkpoint_restart_created:"lifecycle",session_started:"lifecycle",session_stopped:"lifecycle",session_recovered:"lifecycle",session_resumed:"resume",session_paused:"pause",session_completed:"completion",step_completed:"step",step_advanced:"step",observation_recorded:"observation",evidence_attached:"evidence",reviewer_action:"reviewer-action"}[type]||"other";}
@@ -2181,7 +2228,9 @@ function renderExperimentTimeline(payload){
 // the list and checks the carried steps again when the voice session resumes.
 function renderCheckpointControls(recovery=currentExperimentRecovery){
  const select=$("experiment-checkpoint-select"),button=$("experiment-checkpoint-restart");if(!select||!button)return false;
- const checkpoints=currentExperimentSessionStatus==="stopped"&&Array.isArray(recovery?.checkpoints)?recovery.checkpoints.filter(item=>item&&typeof item.step_id==="string"):[];
+ const checkpoints=currentExperimentSessionStatus==="stopped"&&!experimentOfAnother(currentExperimentSessionId)&&Array.isArray(recovery?.checkpoints)?recovery.checkpoints.filter(item=>item&&typeof item.step_id==="string"):[];
+ // Lane UI4 self-review R1: the ledger's writes (a note, a file) are the owner's; another member's experiment is read only here.
+ const capture=$("experiment-ledger-capture");if(capture)capture.hidden=!sessionActive&&experimentOfAnother(currentExperimentSessionId);
  select.replaceChildren();
  for(const item of checkpoints){const option=document.createElement("option");option.value=item.step_id;option.textContent=`${item.step_label||"—"}단계부터 · 완료 ${Number(item.carried_step_count)||0}개 이어받음${item.stopped_here?" · 종료 지점":""}`;select.appendChild(option);}
  if(checkpoints.length)select.value=checkpoints[checkpoints.length-1].step_id;
@@ -2267,13 +2316,14 @@ function renderReportReview(reportId,items,status){
  const box=$("report-review-checklist");if(!box)return false;box.replaceChildren();
  const list=Array.isArray(items)?items.filter(item=>item&&typeof item.item_id==="string"):[];
  if(!list.length||typeof reportId!=="string"||status==="in_progress"){box.hidden=true;return false;}
- box.hidden=false;const open=list.filter(item=>!item.confirmed).length;
+ box.hidden=false;const open=list.filter(item=>!item.confirmed).length,readOnly=reportReadOnly&&reportId===lastReportId;
  const head=document.createElement("b");head.textContent=open?`보고서에 넣을 값 확인 · 남은 ${open}개`:`보고서에 넣을 값 ${list.length}개 · 모두 확인함`;box.appendChild(head);
  box.appendChild(reportReviewSummary(list));
+ if(readOnly){const note=document.createElement("p");note.className="report-review-owner";note.textContent="다른 사람의 기록이에요 · 값 확인과 정정, 평점은 기록한 사람만 할 수 있어요.";box.appendChild(note);}
  const pending=list.find(item=>!item.confirmed);
- if(pending){const card=document.createElement("div");card.className="report-pending";const title=document.createElement("b");title.className="report-pending-head";title.textContent=`미확인 기록 ${open}건`;card.appendChild(title);card.appendChild(reportReviewRow(reportId,pending,{withStep:true}));box.appendChild(card);}
+ if(pending){const card=document.createElement("div");card.className="report-pending";const title=document.createElement("b");title.className="report-pending-head";title.textContent=`미확인 기록 ${open}건`;card.appendChild(title);card.appendChild(reportReviewRow(reportId,pending,{withStep:true,readOnly}));box.appendChild(card);}
  const steps=new Map();for(const item of list){const label=typeof item.step_label==="string"?item.step_label:"";if(!steps.has(label))steps.set(label,[]);steps.get(label).push(item);}
- for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item));box.appendChild(group);}
+ for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item,{readOnly}));box.appendChild(group);}
  return true;
 }
 // Lane UI3 decision 5 (2026-10-14): a value the server lists as a deviation
@@ -2290,20 +2340,21 @@ function reportReviewSummary(list){
 // Lane FX3 decision 5: the source values a deviation differs from, as the
 // server recorded them with the note (none for a deviation said as such).
 function reportReviewSources(item){return Array.isArray(item?.deviations)?[...new Set(item.deviations.filter(found=>found&&typeof found==="object"&&nonemptyText(found.source)).map(found=>normalizePresentationText(found.source).replace(/\s+/g," ").trim()))]:[];}
-function reportReviewRow(reportId,item,{withStep=false}={}){
+function reportReviewRow(reportId,item,{withStep=false,readOnly=false}={}){
  const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
  const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
  const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
  const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;if(item.kind===REPORT_REVIEW_DEVIATION_KIND){text.append(" ");text.appendChild(uiBadge("기준치와 다름","warning"));row.dataset.deviation="true";const sources=reportReviewSources(item);if(sources.length){const source=document.createElement("span");source.className="report-review-source";source.textContent=` · 원문 ${sources.join(" · ")}`;text.appendChild(source);}}row.appendChild(text);
  if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
  row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
+ if(readOnly)return row;
  const actions=document.createElement("span");actions.className="report-review-actions";
  if(!item.confirmed){const ok=document.createElement("button");ok.type="button";ok.textContent="✓ 확인";ok.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"confirm"});});actions.appendChild(ok);}
  const fix=document.createElement("button");fix.type="button";fix.textContent="고치기";fix.addEventListener("click",()=>{const input=document.createElement("input");input.type="text";input.maxLength=800;input.value=typeof item.text==="string"?item.text:"";input.setAttribute("aria-label","고친 값");const save=document.createElement("button");save.type="button";save.textContent="고쳐서 확인";save.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"correct",text:input.value});});fix.replaceWith(input,save);input.focus();});actions.appendChild(fix);
  row.appendChild(actions);return row;
 }
 async function answerReportReview(reportId,itemId,body){try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/review/${encodeURIComponent(itemId)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error("report review");if(reportId!==lastReportId)return false;renderReportReview(reportId,data.items,lastReportStatus);void refreshReportProse(reportId);return true;}catch(_error){if(reportId===lastReportId&&$("report-prose-state"))$("report-prose-state").textContent="값 확인을 저장하지 못했습니다. 다시 시도해 주세요.";return false;}}
-async function refreshReportProse(reportId){stopReportProsePolling();const target=$("report-prose-state"),again=$("report-prose-again");if(!target||typeof reportId!=="string")return false;try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("report prose status");if(reportId!==lastReportId)return false;target.textContent=typeof data.label==="string"?data.label:"";if(again){again.hidden=data.state!=="ready";again.dataset.reportId=reportId;}if(data.state==="preparing")reportProseHandle=setTimeout(()=>{void refreshReportProse(reportId);},3000);return true;}catch(_error){if(reportId===lastReportId)target.textContent="보고서 준비 상태를 확인하지 못했습니다.";return false;}}
+async function refreshReportProse(reportId){stopReportProsePolling();const target=$("report-prose-state"),again=$("report-prose-again");if(!target||typeof reportId!=="string")return false;try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("report prose status");if(reportId!==lastReportId)return false;target.textContent=typeof data.label==="string"?data.label:"";if(again){again.hidden=data.state!=="ready"||reportReadOnly;again.dataset.reportId=reportId;}if(data.state==="preparing")reportProseHandle=setTimeout(()=>{void refreshReportProse(reportId);},3000);return true;}catch(_error){if(reportId===lastReportId)target.textContent="보고서 준비 상태를 확인하지 못했습니다.";return false;}}
 async function regenerateReportProse(){const button=$("report-prose-again"),reportId=button?.dataset?.reportId;if(!reportId)return false;button.disabled=true;try{await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{method:"POST"});}catch(_error){}finally{button.disabled=false;}return refreshReportProse(reportId);}
 function startReportPolling(reportId){
  if(typeof reportId!=="string"||!reportId)return;
@@ -2564,7 +2615,7 @@ function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크�
 function resetSessionUI(){
  experimentEndedOnScreen=false;workflowPaused=false;clearAfterHead();
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
- stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
+ stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;reportReadOnly=false;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  globalThis.VoineyFeedback?.reset();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
  turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
@@ -3210,7 +3261,19 @@ function cascadeTurnInterrupted(message){return Number.isInteger(message?.turn_i
 function currentCascadeMessage(message){return message.turn_id===activeTurn&&(!Number.isInteger(message.generation)||activeCascadeGeneration===null||message.generation===activeCascadeGeneration);}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
 
-async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const current=new WebSocket(serverSocketUrl("/ws"));socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
+// Lane UI4 (lane OWN's hand-over, 2026-10-22): the server closes every voice socket of an account it
+// signed out, switched off or deleted -- and on a password change -- with 1008. The page asks who is
+// signed in: signed out, it goes to the login at once, as a 401 does, so no reconnecting goes on with an
+// account that is gone; still signed in (this device's own password change), the close is a lost
+// connection as any other. connection.js's tries open their sockets here, so a try closed so is asked too.
+const ACCOUNT_SOCKET_CLOSE_CODE=1008;let accountRecheck=null;
+function recheckAccountAfterClose(){
+ if(wizard?.auth?.mode!=="accounts"||wizard.auth.signed_in!==true)return Promise.resolve(false);
+ if(accountRecheck)return accountRecheck;
+ accountRecheck=serverFetch("/api/auth/session",{cache:"no-store"}).then(async response=>{if(!response.ok)return false;const payload=await response.json();return payload&&typeof payload==="object"&&payload.mode==="accounts"&&payload.signed_in!==true?signOutOnScreen():false;}).catch(()=>false).finally(()=>{accountRecheck=null;});
+ return accountRecheck;
+}
+async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const current=new WebSocket(serverSocketUrl("/ws"));socket=current;globalThis.voineyConnection?.watch(current);current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=event=>{if(event?.code===ACCOUNT_SOCKET_CLOSE_CODE)void recheckAccountAfterClose();if(generation!==sessionGeneration||socket!==current)return;if(globalThis.voineyConnection?.lost?.(current,"socket_closed"))return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;if(!globalThis.voineyConnection?.lost?.(current,"socket_error"))fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
 function resamplePcm16(input,sourceRate,targetRate){
  const length=Math.max(1,Math.round(input.length*targetRate/sourceRate)),output=new Int16Array(length);
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
@@ -4137,6 +4200,8 @@ const REVIEW_ERROR_WORDS={
  review_items_pending:"확인할 카드를 모두 정해야 등록할 수 있습니다.",
  review_version_blocked:"이 검토본은 실행을 막는 사유가 남아 등록하지 않았습니다.",
  review_not_ready:"검토할 분석이 아직 없습니다.",
+ // Lane UI4 QA-21: lane FX4's [원문과 달라요] holds the version until the source is checked.
+ review_source_check_needed:"원문 확인 필요 항목이 있어 등록하지 않았습니다. 그 쪽을 더 선명하게 다시 찍어 올리거나 다시 분석해 주세요.",
 };
 // The two pieces' readings of a passage, in the order the server gives them.
 const CHOICE_READING_NAMES=["이쪽(앞 조각)","저쪽(뒤 조각)"];
@@ -4222,6 +4287,10 @@ function choiceButtons(card,choices,options,value){
  }
  return row;
 }
+// Lane UI4 QA-21 (lane QA, 2026-10-20): a value the server holds for the source (lane FX4's [원문과 달라요],
+// its source_check) says the server's state and what to do, not a green "정함".
+function choiceDecidedBadge(item){const held=item?.source_check&&typeof item.source_check==="object"&&nonemptyText(item.source_check.state_ko)?item.source_check:null;return held?uiBadge(String(held.state_ko),"warning"):uiBadge(REVIEW_DONE_WORDS[item?.decision?.action]||"정함","done");}
+function choiceSourceCheckNote(item){const words=item?.source_check&&typeof item.source_check==="object"?item.source_check.guidance_ko:null;return nonemptyText(words)?compareEl("p","choice-card-note",String(words)):null;}
 function renderChoiceCard(host,card,options={}){
  if(!host)return 0;
  host.replaceChildren();
@@ -4231,8 +4300,9 @@ function renderChoiceCard(host,card,options={}){
  const meta=compareEl("div","choice-card-meta");
  const about=[nonemptyText(card.step_label)?`${card.step_label}단계`:"",nonemptyText(card.kind_ko)?card.kind_ko:""].filter(Boolean).join(" · ");
  if(about)meta.appendChild(compareEl("span","choice-card-about",about));
- if(card.decided===true)meta.appendChild(uiBadge(REVIEW_DONE_WORDS[card.decision?.action]||"정함","done"));
+ if(card.decided===true)meta.appendChild(choiceDecidedBadge(card));
  if(meta.children.length)box.appendChild(meta);
+ const cardHeld=choiceSourceCheckNote(card);if(cardHeld)box.appendChild(cardHeld);
  if(nonemptyText(card.question_ko))box.appendChild(compareEl("p","choice-card-question",card.question_ko));
  const reasons=(Array.isArray(card.reasons_ko)?card.reasons_ko:[]).filter(nonemptyText);
  if(reasons.length){const strip=compareEl("div","choice-card-reasons");for(const reason of reasons)strip.appendChild(uiBadge(reason,"danger"));box.appendChild(strip);}
@@ -4260,8 +4330,9 @@ function renderChoiceCard(host,card,options={}){
    const row=document.createElement("li");row.className="choice-card-values-row";if(row.dataset){row.dataset.valueId=String(value.item_id||"");row.dataset.decided=String(value.decided===true);}
    const head=compareEl("div","choice-card-values-head");
    head.appendChild(compareEl("span","choice-card-value-text",reviewItemText(value.shown)));
-   if(value.decided===true)head.appendChild(uiBadge(REVIEW_DONE_WORDS[value.decision?.action]||"정함","done"));
+   if(value.decided===true)head.appendChild(choiceDecidedBadge(value));
    row.appendChild(head);
+   const held=choiceSourceCheckNote(value);if(held)row.appendChild(held);
    if(nonemptyText(value.reason_ko))row.appendChild(compareEl("p","choice-card-note",value.reason_ko));
    const readsAs=(Array.isArray(value.readings)?value.readings:[]).filter(reading=>reading&&nonemptyText(String(reading.text??"")));
    if(readsAs.length)row.appendChild(compareEl("p","choice-card-note",readsAs.map(reading=>`${CHOICE_ENGINE_NAMES[reading.engine]||reading.engine||"OCR"} · ${reading.text}`).join("  /  ")));
@@ -4503,13 +4574,23 @@ function reviewCardKey(event){
  if(card&&Number.isInteger(number)&&number>=1){const choice=(Array.isArray(card.choices)?card.choices:[])[number-1];if(choice){void chooseReviewCard(card,choice);return true;}}
  return false;
 }
+// Lane UI4 QA-21: why the version cannot be registered -- the cards left, then the server's own blockers
+// (a value held for the source says what to do); the server's words alone when no card is left.
+function reviewRegisterBlockedWords(){
+ const blockers=(Array.isArray(reviewDraft?.registration_blockers)?reviewDraft.registration_blockers:[]).filter(item=>item&&typeof item==="object"&&nonemptyText(item.message_ko));
+ const undecided=Number(reviewDraft?.counts?.undecided)||0,words=[];
+ if(undecided>0)words.push(`확인 필요 항목 ${undecided}건을 정하면 등록할 수 있습니다.`);
+ words.push(...new Set(blockers.filter(item=>item.source_check===true).map(item=>String(item.message_ko))));
+ if(!words.length)words.push(...new Set(blockers.map(item=>String(item.message_ko))));
+ return words.length?words.join(" "):`확인 필요 항목 ${undecided}건을 정하면 등록할 수 있습니다.`;
+}
 function renderReviewRegister(){
  const button=$("review-register"),status=$("review-register-status");if(!button)return false;
  const name=($("reviewer-name")?.value||"").trim(),ready=reviewDraft?.registrable===true;
  // After the last card (lane RV2): shown once no card waits.
  const block=$("review-register-block");if(block)block.hidden=reviewCardNow()!==null;
  button.disabled=reviewBusy||!ready||!name;
- if(status&&!status.dataset?.result)status.textContent=!ready?`확인 필요 항목 ${Number(reviewDraft?.counts?.undecided)||0}건을 정하면 등록할 수 있습니다.`:!name?"검토자 이름을 적으면 등록할 수 있습니다.":"검토 완료하고 등록하면 이 검토본으로 실행합니다(이전 기록은 남습니다).";
+ if(status&&!status.dataset?.result)status.textContent=!ready?reviewRegisterBlockedWords():!name?"검토자 이름을 적으면 등록할 수 있습니다.":"검토 완료하고 등록하면 이 검토본으로 실행합니다(이전 기록은 남습니다).";
  return !button.disabled;
 }
 async function registerReview(){
@@ -4626,13 +4707,26 @@ async function analyzeRegisteredProtocol(protocolId,{reanalysis=false}={}){
   await loadProtocolReview(protocolId);return payload;
  }catch(_){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("network_error"),"");await loadProtocolReview(protocolId);return null;}
 }
+// Lane UI4 QA-14 (lane QA, 2026-10-20): a start that does not go returns the words that say why
+// (nothing when it went), so the sheet stays open with them instead of closing on nothing.
+const START_NOT_SENT_WORDS=Object.freeze({
+ no_protocol:"시작할 프로토콜을 골라 주세요.",
+ uploading:"원문을 올리는 중이에요 · 올리기가 끝난 뒤 다시 눌러 주세요.",
+ running:"이미 실험이 진행 중이에요.",
+ no_review:"분석 결과를 불러오지 못했어요 · 잠시 뒤 다시 눌러 주세요.",
+ not_runnable:"이 프로토콜은 아직 실행할 수 없습니다. 분석 결과를 새로고침해 주세요.",
+});
 async function startReviewedProtocol(){
  // Lane DI (2026-10-08): the one human confirmation. The protocol whose
  // analysis result is on screen is selected and the session starts; the
  // server records the safety statements shown with the experiment report.
- const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-start");if(!protocolId||isRegisteringProtocol||sessionActive)return;
- if(lastProtocolReview?.protocol_id!==protocolId||lastProtocolReview?.available_for_execution!==true){if(button)button.hidden=true;return;}
- const select=$("protocol-id");if(!select||protocolCatalog.get(protocolId)?.available_for_execution!==true){if(status)status.textContent="이 프로토콜은 아직 실행할 수 없습니다. 분석 결과를 새로고침해 주세요.";return;}
+ const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-start");
+ if(!protocolId)return START_NOT_SENT_WORDS.no_protocol;
+ if(isRegisteringProtocol)return START_NOT_SENT_WORDS.uploading;
+ if(sessionActive)return START_NOT_SENT_WORDS.running;
+ if(lastProtocolReview?.protocol_id!==protocolId){if(button)button.hidden=true;return START_NOT_SENT_WORDS.no_review;}
+ if(lastProtocolReview?.available_for_execution!==true){if(button)button.hidden=true;return START_NOT_SENT_WORDS.not_runnable;}
+ const select=$("protocol-id");if(!select||protocolCatalog.get(protocolId)?.available_for_execution!==true){if(status)status.textContent=START_NOT_SENT_WORDS.not_runnable;return START_NOT_SENT_WORDS.not_runnable;}
  if(button)button.disabled=true;if(status)status.textContent="안전 주의를 확인했습니다 · 실험을 시작합니다.";
  try{select.value=protocolId;renderSelectedProtocolContext();await startSession();}finally{if(button)button.disabled=false;}
 }
@@ -4873,7 +4967,7 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;reportReadOnly=reportOfAnother(report);if(reportReadOnly)globalThis.VoineyFeedback?.reset();else globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
@@ -4971,7 +5065,13 @@ async function pressExperimentStart(){
  const plan=experimentStartPlan();
  if(plan.kind==="resume")return openWizardSheet("start");
  if(plan.kind==="protocol"){
-  if(plan.checked&&!sessionActive){wizardRememberProtocol(plan.protocolId);await startReviewedProtocol();navigateTab("experiment",null,{replace:true});return true;}
+  if(plan.checked&&!sessionActive){
+   wizardRememberProtocol(plan.protocolId);
+   // Lane UI4 QA-14: a start that does not go is said in the sheet at its last step.
+   const refused=await startReviewedProtocol();
+   if(typeof refused==="string"){openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
+   navigateTab("experiment",null,{replace:true});return true;
+  }
   if(openStartForProtocol(plan.protocolId))return true;
   return openWizardSheet("protocol");
  }
@@ -5000,7 +5100,7 @@ $("protocol-review-editor")?.addEventListener("toggle",()=>{if($("protocol-revie
 $("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!startSummaryOpened;foldStartSummary();});
 $("report-prose-again")?.addEventListener("click",()=>{void regenerateReportProse();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
-$("experiment-timeline-refresh")?.addEventListener("click",()=>{void loadExperimentSessions(currentExperimentSessionId);});
+$("experiment-timeline-refresh")?.addEventListener("click",()=>{recordReports.sessionId=null;void loadExperimentSessions(currentExperimentSessionId);});
 // Lane FX3 decision 7: the experimenter may put the noisy-room notice away (the screen only).
 $("voice-calibration-notice-close")?.addEventListener("click",()=>{const notice=$("voice-calibration-notice");if(notice)notice.hidden=true;renderMicCheck();});
 $("experiment-checkpoint-restart")?.addEventListener("click",()=>{void restartExperimentFromCheckpoint();});
@@ -5352,22 +5452,36 @@ function returnToStartStep(reason,words){
  openWizardSheet(wizardSteps().includes(step)?step:null);wizardNote(words,"error");renderWizard();
  return true;
 }
+// Lane UI4 QA-15 (lane QA, 2026-10-20): a check that failed to load was taken as "nothing to ask" and
+// skipped without a word. It is said where it is asked -- the server's sentence when it sent one --
+// with [다시 불러오기]; since lane SAFE the server would refuse the start without it anyway.
+function startCheckLoadWords(payload){
+ if(nonemptyText(payload?.message_ko))return String(payload.message_ko);
+ if(nonemptyText(payload?.detail?.message_ko))return String(payload.detail.message_ko);
+ return "서버가 핵심 값을 보내지 않았어요.";
+}
 async function wizardLoadCheck(){
  const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
  wizard.check=null;wizard.question=0;wizard.busy=true;renderWizard();
  try{
   const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check`,{cache:"no-store",redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
-  wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable"};
- }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable"};}
+  wizard.check=response.ok&&payload&&Array.isArray(payload.questions)?payload:{enabled:false,questions:[],skipped_reason:"unavailable",failure_ko:startCheckLoadWords(payload)};
+ }catch(_){wizard.check={enabled:false,questions:[],skipped_reason:"unavailable",failure_ko:"서버에 연결할 수 없어요. 네트워크를 확인해 주세요."};}
  finally{wizard.busy=false;}
- if(!wizard.check.questions.length){wizardNext();return wizard.check;}
+ if(!wizard.check.questions.length&&wizard.check.skipped_reason!=="unavailable"){wizardNext();return wizard.check;}
  renderWizard();return wizard.check;
 }
 function wizardQuestion(){return wizard.check?.questions?.[wizard.question]||null;}
 function renderWizardCheck(host,primary){
  const question=wizardQuestion();
  if(primary)primary.hidden=true;
+ if(!question&&!wizard.busy&&wizard.check?.skipped_reason==="unavailable"){
+  setText("wizard-title","핵심 값을 불러오지 못했어요");
+  setText("wizard-lead",`${wizard.check.failure_ko||"서버가 핵심 값을 보내지 않았어요."}\n시작하기 전에 원문의 값을 확인해야 해요. [다시 불러오기]를 눌러 주세요.`);
+  if(primary){primary.hidden=false;primary.textContent="다시 불러오기";}
+  return;
+ }
  if(!question){setText("wizard-lead",wizard.busy?"원문의 값을 불러오는 중…":"확인할 값을 불러오는 중…");return;}
  setText("wizard-kicker",`${wizardStepIndex()+1} / ${wizardSteps().length} · 핵심 값 확인 ${question.progress_ko||""}`);
  setText("wizard-title",question.question_ko||"원문의 값을 확인해 주세요");
@@ -5464,7 +5578,17 @@ async function wizardPrimary(){
   case "login":return wizardSubmitLogin();
   case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety"){if(!await acknowledgeStartSafety())return null;rememberSafetyRead();}wizardNext();return true;}
   case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
-  case "start":{const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);await startReviewedProtocol();closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;}
+  case "start":{
+   const entry=wizardSelectedProtocol();if(!entry)return null;wizardRememberProtocol(entry.protocol_id);
+   // Lane UI4 QA-14: the start acts on the review on the screen, so the sheet's protocol's is read first when it is not that one
+   // (the home's "이어서 하기" opens the sheet before it arrives; an upload that finished meanwhile shows its own).
+   if(lastProtocolReview?.protocol_id!==entry.protocol_id||currentProtocolReviewId!==entry.protocol_id){wizardSetBusy(true);renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizardSetBusy(false);}}
+   const refused=await startReviewedProtocol();
+   if(typeof refused==="string"){wizardNote(refused,"error");renderWizard();return null;}
+   closeWizardSheet({silent:true});navigateTab("experiment",null,{replace:true});return true;
+  }
+  // Lane UI4 QA-15: [다시 불러오기] when the check failed to load.
+  case "check":return wizard.check?.skipped_reason==="unavailable"?wizardLoadCheck():null;
   default:return null;
  }
 }
@@ -5490,7 +5614,7 @@ $("wizard-quick")?.addEventListener("click",()=>{void wizardQuickStart();});
 // state: the view is the server's (screenView), the tab is where it is drawn.
 const TAB_ROUTE_PATTERN=/^#\/(home|protocols|upload|experiment|records|settings)(?:\/([^/?#]+))?\/?(?:\?[^#]*)?$/;
 const TAB_PANELS=Object.freeze(["home","protocols","upload","experiment","records","settings"]);
-var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading",accountPasswordOpen=false;
+var screenRoute={tab:"home",id:null,path:"#/home"},lastScreenView="before",lastRouteKey="",workspaceExperiments=[],catalogState="loading",accountPasswordOpen=false,accountDeleteOpen=false;
 function parseRoute(hash){const match=TAB_ROUTE_PATTERN.exec(String(hash||""));if(!match)return{tab:"home",id:null,path:"#/home"};let id=null;if(match[2]){try{id=decodeURIComponent(match[2]);}catch(_){id=match[2];}}return{tab:match[1],id,path:match[0]};}
 function routePath(tab,id=null){return `#/${tab}${nonemptyText(id)?`/${encodeURIComponent(id)}`:""}`;}
 function currentTab(){return screenRoute.tab;}
@@ -5513,7 +5637,7 @@ function renderRoute(){
  const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",page=authRequired(),key=`${tab}|${screenRoute.path}|${page}`;
  if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(page?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
  // Before a login no panel shows: the login is a page of its own (the sheet in page mode).
- for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during));}
+ for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during)||(name==="settings"&&runSettingsSheetOpen()));}
  for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tabLinkFor(tab)?"page":"false");
  renderRunReturnBand();
  if(tab==="protocols")renderProtocolViews();
@@ -5542,7 +5666,8 @@ function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenR
 // run's own record.
 function recordsDetailId(){return screenRoute.tab==="records"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
 function recordTitle(item){return serverProtocolTitle(item)||protocolCatalog.get(item?.protocol_id)?.title||"실험";}
-function recordLine(item){const state=sessionStateBadgeInfo(item?.status);return [item?.started_at?localDateTimeText(item.started_at):"",state?.label||"상태 확인",nonemptyText(item?.current_step_label)?`${item.current_step_label}단계`:""].filter(Boolean).join(" · ");}
+// Lane UI4 self-review R1: an administrator's list holds the lab's experiments; another member's says so (read only).
+function recordLine(item){const state=sessionStateBadgeInfo(item?.status);return [item?.started_at?localDateTimeText(item.started_at):"",state?.label||"상태 확인",nonemptyText(item?.current_step_label)?`${item.current_step_label}단계`:"",ownedByAnother(item?.owner_principal_id)?"다른 사람의 실험 · 읽기만":""].filter(Boolean).join(" · ");}
 function renderRecordsList(){
  const host=$("records-list");if(!host)return 0;host.replaceChildren();
  const items=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).filter(item=>item&&typeof item.session_id==="string");
@@ -5558,12 +5683,45 @@ function renderRecordsList(){
 function renderRecordsViews(){
  const id=recordsDetailId(),during=screenView()==="during",detail=Boolean(id)||during;
  const list=$("records-list-view"),view=$("records-detail-view");if(list)list.hidden=detail;if(view)view.hidden=!detail;
+ if(id&&!during&&recordReports?.sessionId!==id)void loadRecordReports(id);else renderRecordReports();
  if(!detail){renderRecordsList();return false;}
  const shown=id||currentExperimentSessionId,item=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).find(entry=>entry?.session_id===shown);
  setText("records-detail-title",item?recordTitle(item):during?"지금 하는 실험":"기록을 불러오는 중…");setText("records-detail-line",item?recordLine(item):"");
  // During the run the ledger's own title names it; the head is for a record picked from the list.
  const head=$("records-detail-head");if(head)head.hidden=during&&!id;
  return true;
+}
+// Lane UI4 item 5 (2026-10-23): one experiment's record names its reports -- lane QA2's
+// GET /api/workspace/experiments/{session_id}/reports, behind the experiment's own read gates (the owner
+// and the lab's administrator) -- by the end screen's names, each with the end screen's links and only
+// those formats. Read once per record; [기록 새로고침] reads them again. Not during the run (the
+// records tab is then the run's own record).
+const RECORD_REPORT_LINKS=Object.freeze([["docx","보고서 만들기 (Word)","report-make"],["md","Markdown 내보내기",""],["json","JSON 내보내기",""],["csv","CSV 내보내기",""]]);
+var recordReports={sessionId:null,state:"idle",reports:[]};
+async function loadRecordReports(sessionId){
+ recordReports={sessionId,state:"loading",reports:[]};renderRecordReports();
+ try{
+  const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(sessionId)}/reports`,{cache:"no-store"}),data=await response.json();
+  if(recordReports.sessionId!==sessionId)return false;
+  if(!response.ok)throw new Error("record reports");
+  recordReports={sessionId,state:"ready",reports:(Array.isArray(data?.reports)?data.reports:[]).filter(report=>report&&typeof report.report_id==="string"&&/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))};
+ }catch(_){if(recordReports.sessionId!==sessionId)return false;recordReports={sessionId,state:"failed",reports:[]};}
+ renderRecordReports();return recordReports.state==="ready";
+}
+function renderRecordReports(){
+ const section=$("records-detail-reports"),list=$("records-report-list"),id=screenView()==="during"?null:recordsDetailId(),shown=Boolean(id)&&recordReports?.sessionId===id;
+ if(section)section.hidden=!shown;
+ if(!shown||!list)return 0;
+ list.replaceChildren();
+ setText("records-detail-reports-note",recordReports.state==="loading"?"보고서를 불러오는 중…":recordReports.state==="failed"?"보고서를 불러오지 못했어요 · [기록 새로고침]을 눌러 주세요.":recordReports.reports.length?"":"이 실험의 보고서가 아직 없어요.");
+ const note=$("records-detail-reports-note");if(note)note.hidden=!nonemptyText(note.textContent);
+ for(const report of recordReports.reports){
+  const row=compareEl("li","records-report");row.appendChild(compareEl("b","",`${experimentReportLabel(report,recordReports.reports)} · ${serverCodeText("experiment_report_status",report.status)}`));
+  const actions=compareEl("div","report-actions");
+  for(const [format,label,kind] of RECORD_REPORT_LINKS){const link=compareEl("a",kind,label);link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute?.("aria-disabled","false");actions.appendChild(link);}
+  row.appendChild(actions);list.appendChild(row);
+ }
+ return recordReports.reports.length;
 }
 function protocolDetailId(){return screenRoute.tab==="protocols"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
 function renderProtocolViews(){
@@ -5670,22 +5828,25 @@ function homeCard(kind,title,sub,href,onPick){
 }
 function latestResumableExperiment(){
  const when=item=>{const at=Date.parse(String(item?.started_at||""));return Number.isFinite(at)?at:-Infinity;};
- return workspaceExperiments.filter(item=>item&&typeof item.session_id==="string"&&RESUMABLE_EXPERIMENT_STATUSES.has(item.status)).sort((a,b)=>when(b)-when(a))[0]||null;
+ return workspaceExperiments.filter(item=>item&&typeof item.session_id==="string"&&RESUMABLE_EXPERIMENT_STATUSES.has(item.status)&&!ownedByAnother(item.owner_principal_id)).sort((a,b)=>when(b)-when(a))[0]||null;
 }
+// Lane UI4 QA-18 (lane QA, 2026-10-20): the home offers only what is open now. During the run that is the
+// way back to it; after it the upload waits while a voice session is still on (its file input and link
+// are off outside IDLE/ERROR), and a line says so.
+function protocolUploadOpen(){return ["IDLE","ERROR"].includes(visibleState);}
 function renderHome(){
  const host=$("home-cards");if(!host)return 0;host.replaceChildren();
  const view=screenView(),entries=[...protocolCatalog.values()];
- if(view==="during"){const label=curatedProtocolState?.current_step_label,name=curatedProtocolState?.display_name;host.appendChild(homeCard("running","실험 중 · 돌아가기",[nonemptyText(name)?name:"",nonemptyText(label)?`${label}단계`:""].filter(Boolean).join(" · "),"#/experiment"));}
+ if(view==="during"){const label=curatedProtocolState?.current_step_label,name=curatedProtocolState?.display_name;host.appendChild(homeCard("running","실험 중 · 돌아가기",[nonemptyText(name)?name:"",nonemptyText(label)?`${label}단계`:""].filter(Boolean).join(" · "),"#/experiment"));return host.children.length;}
  if(catalogState==="loading"&&!entries.length){host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오는 중…"));return host.children.length;}
  if(catalogState==="ready"&&!entries.length){host.appendChild(homeCard("first","먼저 프로토콜을 올려 주세요","PDF · Word · 사진을 올리면 분석이 시작돼요","#/upload"));return host.children.length;}
- if(view!=="during"){
-  const resume=sessionActive?null:latestResumableExperiment();
-  if(resume)host.appendChild(homeCard("resume","이어서 하기",[serverProtocolTitle(resume)||protocolCatalog.get(resume.protocol_id)?.title||"실험",`${nonemptyText(resume.current_step_label)?resume.current_step_label:"—"}단계`,sessionStateBadgeInfo(resume.status)?.label||""].filter(Boolean).join(" · "),null,()=>{void resumeExperimentFromHome(resume);}));
-  host.appendChild(homeCard("new-experiment","새 실험 시작","마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요",null,()=>{openWizardSheet();}));
- }
+ const resume=sessionActive?null:latestResumableExperiment();
+ if(resume)host.appendChild(homeCard("resume","이어서 하기",[serverProtocolTitle(resume)||protocolCatalog.get(resume.protocol_id)?.title||"실험",`${nonemptyText(resume.current_step_label)?resume.current_step_label:"—"}단계`,sessionStateBadgeInfo(resume.status)?.label||""].filter(Boolean).join(" · "),null,()=>{void resumeExperimentFromHome(resume);}));
+ host.appendChild(homeCard("new-experiment","새 실험 시작","마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요",null,()=>{openWizardSheet();}));
  const pending=entries.filter(entry=>Number.isInteger(entry?.review_pending?.needs_review_count)).length;
  if(pending)host.appendChild(homeCard("review",`확인할 프로토콜 ${pending}개`,"분석이 읽은 값을 사람이 한 번 확인해야 해요","#/protocols"));
- host.appendChild(homeCard("upload","새 프로토콜 올리기","PDF · Word · 사진","#/upload"));
+ if(protocolUploadOpen())host.appendChild(homeCard("upload","새 프로토콜 올리기","PDF · Word · 사진","#/upload"));
+ else host.appendChild(compareEl("p","home-note","음성 연결이 끝나면 새 프로토콜을 올릴 수 있어요."));
  if(catalogState==="failed")host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오지 못했어요 · 새로고침해 주세요"));
  return host.children.length;
 }
@@ -5715,9 +5876,10 @@ function renderSettingsExtras(){
  }
  const auth=wizard?.auth,accounts=auth?.mode==="accounts"&&auth.signed_in===true,name=$("settings-account-name");
  if(name)name.textContent=!auth?"계정 확인 중…":accounts?`${auth.account?.name||""} · 연구실 ${auth.account?.organization_id||""}${auth.account?.admin?" · 관리자":""}`:auth.mode==="accounts"?"로그인 전":`${auth.account?.name||"개발 로그인"} · 계정 없음 (개발 모드)`;
- for(const id of ["account-logout","account-password-open"]){const button=$(id);if(button)button.hidden=!accounts;}
- if(!accounts)accountPasswordOpen=false;
+ for(const id of ["account-logout","account-password-open","account-delete-open"]){const button=$(id);if(button)button.hidden=!accounts;}
+ if(!accounts){accountPasswordOpen=false;accountDeleteOpen=false;}
  const form=$("account-password-form");if(form)form.hidden=!accountPasswordOpen;
+ const ask=$("account-delete-form");if(ask)ask.hidden=!accountDeleteOpen;
  return accounts;
 }
 async function pickAgentVoiceFromSettings(voiceId){const ok=await wizardPickVoice(voiceId);setText("settings-agent-voice-note",ok?"저장했어요 · 이 목소리로 안내해요.":"목소리를 저장하지 못했어요.");renderSettingsExtras();return ok;}
@@ -5761,8 +5923,33 @@ async function changeAccountPassword(event){
  }catch(_){if(status)status.textContent="서버에 연결할 수 없어요.";return false;}
  finally{setDisabled($("account-password-send"),false);}
 }
+// Lane UI4 (2026-10-23; lane FX5's route, lane IA's hand-over): the account deleted from its own settings --
+// asked once more (what it deletes, that it cannot be undone, the password again as the server asks),
+// then the login at once. A refusal says why, in the server's words when it sent some, and keeps the
+// account; a deletion that stopped halfway leaves the account switched off (lane FX5) and says so.
+const ACCOUNT_DELETE_WORDS=Object.freeze({login_refused:"비밀번호가 맞지 않아요.",password_invalid:"비밀번호를 한 번 더 적어 주세요.",login_locked:"비밀번호를 여러 번 틀렸어요. 잠시 뒤 다시 해 주세요.",deletion_log_unavailable:"지금은 계정을 지울 수 없어요. 연구실 담당에게 알려 주세요.",account_delete_incomplete:"계정은 꺼졌지만 기록을 다 지우지 못했어요. 연구실 담당에게 알려 주세요.",accounts_disabled:"이 서버에는 계정이 없어요(개발 모드)."});
+function closeAccountDelete(){accountDeleteOpen=false;const field=$("account-delete-password");if(field)field.value="";setText("account-delete-status","");renderSettingsExtras();}
+async function deleteAccount(event){
+ event?.preventDefault?.();
+ const field=$("account-delete-password"),password=String(field?.value||""),status=$("account-delete-status"),send=$("account-delete-send");
+ if(!password){if(status)status.textContent=ACCOUNT_DELETE_WORDS.password_invalid;return false;}
+ if(send?.disabled)return false;
+ setDisabled(send,true);
+ try{
+  const response=await serverFetch("/api/auth/delete-account",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({password}),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(field)field.value="";
+  if(!response.ok){if(status)status.textContent=nonemptyText(payload?.message_ko)?String(payload.message_ko):ACCOUNT_DELETE_WORDS[typeof payload?.detail==="string"?payload.detail:""]||"계정을 지우지 못했어요. 다시 해 주세요.";return false;}
+  accountDeleteOpen=false;signOutOnScreen();return true;
+ }catch(_){if(status)status.textContent="서버에 연결할 수 없어요.";return false;}
+ finally{setDisabled(send,false);}
+}
 $("account-logout")?.addEventListener("click",()=>{void logOutAccount();});
-$("account-password-open")?.addEventListener("click",()=>{accountPasswordOpen=!accountPasswordOpen;renderSettingsExtras();if(accountPasswordOpen)$("account-password-current")?.focus?.();});
+$("account-password-open")?.addEventListener("click",()=>{accountPasswordOpen=!accountPasswordOpen;if(accountPasswordOpen)accountDeleteOpen=false;renderSettingsExtras();if(accountPasswordOpen)$("account-password-current")?.focus?.();});
+$("account-delete-open")?.addEventListener("click",()=>{if(accountDeleteOpen){closeAccountDelete();return;}accountDeleteOpen=true;accountPasswordOpen=false;renderSettingsExtras();$("account-delete-password")?.focus?.();});
+$("account-delete-cancel")?.addEventListener("click",()=>{closeAccountDelete();});
+$("account-delete-form")?.addEventListener("submit",event=>{void deleteAccount(event);});
+$("account-delete-send")?.addEventListener("click",event=>{void deleteAccount(event);});
 $("account-password-cancel")?.addEventListener("click",()=>{accountPasswordOpen=false;renderSettingsExtras();});
 $("account-password-form")?.addEventListener("submit",event=>{void changeAccountPassword(event);});
 $("account-password-send")?.addEventListener("click",event=>{void changeAccountPassword(event);});
