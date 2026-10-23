@@ -842,6 +842,8 @@
     .records-list{list-style:none;margin:var(--space-3) 0 0;padding:0;display:grid;gap:var(--space-2)}
     .records-list .home-card{text-decoration:none}
     .records-detail-head{display:grid;gap:var(--space-1);margin-bottom:var(--space-3)}
+    /* Lane UI4 self-review R1: another member's experiment is read only -- its timeline takes the width. */
+    .experiment-ledger-grid:has(> .experiment-ledger-capture[hidden]){grid-template-columns:minmax(0,1fr)}
     .records-detail-back{justify-self:start;min-height:44px;display:inline-flex;align-items:center;color:var(--ink);font-weight:700}
     body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
     body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}
@@ -1356,7 +1358,7 @@
           </div>
         </div>
         <div class="experiment-ledger-grid">
-          <div class="experiment-ledger-capture">
+          <div id="experiment-ledger-capture" class="experiment-ledger-capture">
             <label class="workspace-field"><span>관찰 유형</span><select id="manual-observation-category"><option value="note">메모</option><option value="appearance">외관</option><option value="measurement">측정</option><option value="deviation">편차</option><option value="other">기타</option></select></label>
             <label class="workspace-field"><span>관찰 내용</span><textarea id="manual-observation-content" maxlength="4000" placeholder="예: 시료가 시작 시점보다 약간 탁해 보임"></textarea></label>
             <div class="workspace-actions"><button id="manual-observation-save" type="button">현재 단계에 기록</button></div>
@@ -1763,11 +1765,13 @@ function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const node=$("experiment-resume-disclosure");if(!node)return false;
  if(!currentExperimentSessionId||!recovery||typeof recovery!=="object"){node.hidden=true;node.textContent="";return false;}
  const restored=recovery.restored&&typeof recovery.restored==="object"?recovery.restored:{},revision=typeof restored.protocol_revision_id==="string"?restored.protocol_revision_id:currentExperimentProtocolRevision,step=typeof restored.current_step_label==="string"?restored.current_step_label:currentExperimentStepLabel,count=Number.isInteger(restored.completed_step_count)&&restored.completed_step_count>=0?restored.completed_step_count:currentExperimentCompletedStepCount,wasRecovered=["session_recovered","session_resumed"].includes(recovery.last_event_type),eligible=recovery.eligible===true;
- const checkpoints=!eligible&&Array.isArray(recovery.checkpoints)?recovery.checkpoints.length:0;
- const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
+ // Lane UI4 self-review R1: another member's experiment (an administrator reads the lab's) is not continued or written from here.
+ const another=!sessionActive&&experimentOfAnother(currentExperimentSessionId);
+ const checkpoints=!eligible&&!another&&Array.isArray(recovery.checkpoints)?recovery.checkpoints.length:0;
+ const lead=another?"다른 사람의 실험을 골랐습니다.":checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
  const durable=`저장된 상태: 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
  const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`다시 불러오지 않는 것: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
- const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
+ const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":another?"이어하기와 관찰 기록·첨부·체크포인트는 실험한 사람만 할 수 있습니다.":eligible?"다음 작업: 실험 탭의 ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 기록 탭의 이 실험 기록에서 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 분석을 통과한 프로토콜로 새 실험을 시작하세요.";
  node.textContent=`${lead} ${durable} ${omitted} ${next}`;appendDevCodeDetails(node,[["protocol_revision_id",revision||null]]);node.hidden=false;return true;
 }
 function renderExperimentContext(){
@@ -2212,7 +2216,9 @@ function renderExperimentTimeline(payload){
 // the list and checks the carried steps again when the voice session resumes.
 function renderCheckpointControls(recovery=currentExperimentRecovery){
  const select=$("experiment-checkpoint-select"),button=$("experiment-checkpoint-restart");if(!select||!button)return false;
- const checkpoints=currentExperimentSessionStatus==="stopped"&&Array.isArray(recovery?.checkpoints)?recovery.checkpoints.filter(item=>item&&typeof item.step_id==="string"):[];
+ const checkpoints=currentExperimentSessionStatus==="stopped"&&!experimentOfAnother(currentExperimentSessionId)&&Array.isArray(recovery?.checkpoints)?recovery.checkpoints.filter(item=>item&&typeof item.step_id==="string"):[];
+ // Lane UI4 self-review R1: the ledger's writes (a note, a file) are the owner's; another member's experiment is read only here.
+ const capture=$("experiment-ledger-capture");if(capture)capture.hidden=!sessionActive&&experimentOfAnother(currentExperimentSessionId);
  select.replaceChildren();
  for(const item of checkpoints){const option=document.createElement("option");option.value=item.step_id;option.textContent=`${item.step_label||"—"}단계부터 · 완료 ${Number(item.carried_step_count)||0}개 이어받음${item.stopped_here?" · 종료 지점":""}`;select.appendChild(option);}
  if(checkpoints.length)select.value=checkpoints[checkpoints.length-1].step_id;
@@ -5648,7 +5654,8 @@ function syncProtocolRoute(protocolId){if(screenRoute.tab!=="protocols"||screenR
 // run's own record.
 function recordsDetailId(){return screenRoute.tab==="records"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
 function recordTitle(item){return serverProtocolTitle(item)||protocolCatalog.get(item?.protocol_id)?.title||"실험";}
-function recordLine(item){const state=sessionStateBadgeInfo(item?.status);return [item?.started_at?localDateTimeText(item.started_at):"",state?.label||"상태 확인",nonemptyText(item?.current_step_label)?`${item.current_step_label}단계`:""].filter(Boolean).join(" · ");}
+// Lane UI4 self-review R1: an administrator's list holds the lab's experiments; another member's says so (read only).
+function recordLine(item){const state=sessionStateBadgeInfo(item?.status);return [item?.started_at?localDateTimeText(item.started_at):"",state?.label||"상태 확인",nonemptyText(item?.current_step_label)?`${item.current_step_label}단계`:"",ownedByAnother(item?.owner_principal_id)?"다른 사람의 실험 · 읽기만":""].filter(Boolean).join(" · ");}
 function renderRecordsList(){
  const host=$("records-list");if(!host)return 0;host.replaceChildren();
  const items=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).filter(item=>item&&typeof item.session_id==="string");
