@@ -183,6 +183,12 @@ function measure(): Measured {
   return { overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, small: Array.from(new Set(small)), sheets };
 }
 
+// The rail's buttons ease into their run-view sizes (app.css: transition all .15s); measure once no CSS
+// transition is running, or a box is caught half-way (CI at a80ac39: a 22 px gap of a 24 px one).
+async function settled(page: Page) {
+  await page.waitForFunction(() => document.getAnimations().every(animation => !(animation instanceof CSSTransition)));
+}
+
 type RunBoxes = { step: DOMRect; stepFont: number; digits: DOMRect; digitsFont: number; timer: DOMRect; settings: DOMRect; pause: DOMRect; stop: DOMRect; tokens: Record<string, number> };
 
 // Decision 2: the run screen read from 1.5 m and pressed with gloves -- the boxes and sizes, with the page's own tokens in px.
@@ -201,6 +207,7 @@ async function runBoxes(page: Page): Promise<RunBoxes> {
 }
 
 async function expectRunReadFromAfar(page: Page) {
+  await settled(page);
   const run = await runBoxes(page);
   const viewport = page.viewportSize()!;
   expect(run.tokens).toEqual({ step: 52, timer: 128, glove: 80, gap: 24 });
@@ -225,6 +232,7 @@ async function expectRunReadFromAfar(page: Page) {
 }
 
 async function expectTabletScreen(page: Page, screen: string) {
+  await settled(page);
   const measured = await page.evaluate(measure);
   expect(measured.overflow, `${screen}: horizontal overflow`).toBe(0);
   expect(measured.small, `${screen}: tap targets under 44 px`).toEqual([]);
