@@ -1628,10 +1628,24 @@ def _record_workspace_observation(
             category=category,
             capture_source="voice",
             protocol_step_id=step.step_id,
+            expected_voice_connection_id=session.voice_connection_id,
         )
         state=store.get_experiment(principal,session.session_id)
         session.experiment_state_version=int(state["version"])
         return state
+    finally:
+        store.close()
+
+
+def _require_current_voice_connection(session:ListenerSession)->None:
+    """A replaced connection cannot plan another workflow or record write."""
+    if session.experiment_state_version is None:
+        return
+    principal,store=_commercial_workspace()
+    try:
+        state=store.get_experiment(principal,session.session_id)
+        if state["last_voice_connection_id"]!=session.voice_connection_id:
+            raise WorkspaceConflictError("The experiment has another voice connection.")
     finally:
         store.close()
 
@@ -3641,19 +3655,12 @@ async def transition_workspace_experiment(
                 or expected_version<=0
             ):
                 raise WorkspaceError("Experiment version is invalid.")
-            return store.transition_experiment(
-                principal,session_id,action=action,
-                expected_version=expected_version,
-                event_key=str(payload.get("event_key", "")),
-                reason=(
-                    str(payload["reason"])
-                    if payload.get("reason") is not None else None
-                ),
-            )
+            store.get_experiment(principal,session_id)
         finally:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+    raise HTTPException(status_code=409,detail="voice_control_required")
 
 
 @app.get("/api/workspace/experiments/{session_id}/timeline")
@@ -10752,6 +10759,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     request_arbitration=arbitrate_request(transcript)
     if session.curated_protocol_session is not None:
         curated=session.curated_protocol_session
+        try:
+            await asyncio.to_thread(_require_current_voice_connection,session)
+        except WorkspaceError:
+            await finish_blocked_voice(
+                "다른 연결에서 이 실험을 이어하고 있어요. 현재 연결을 확인해 주세요.",
+                "curated_protocol",outcome="blocked")
+            return
         checkpoint=curated._checkpoint()
         curated_tools_used=[]
         report_prepared=False
@@ -11557,12 +11571,32 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 and plan.state_changed
             ):
                 try:
-                    experiment_state=await asyncio.to_thread(
+                    mutation_worker=asyncio.create_task(asyncio.to_thread(
                         _record_workspace_experiment_progress,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
                         pre_transition_index=pre_transition_index,
-                    )
+                    ))
+                    try:
+                        experiment_state=await asyncio.shield(mutation_worker)
+                    except asyncio.CancelledError:
+                        # The thread can already have committed. Join it before
+                        # any rollback or a bench control touches this checkpoint.
+                        while not mutation_worker.done():
+                            try:
+                                await asyncio.shield(mutation_worker)
+                            except asyncio.CancelledError:
+                                continue
+                        experiment_state=mutation_worker.result()
+                        if experiment_state is not None:
+                            workflow_mutation_committed=True
+                            if (session.experiment_report_store is not None
+                                    and _reportable(plan) and not report_prepared):
+                                await _voice_report_write(
+                                    _record_experiment_report_plan,session,curated,plan,
+                                    turn_id=turn_id,generation=generation,
+                                    pre_transition_index=pre_transition_index)
+                        raise
                     if experiment_state is None:
                         raise WorkspaceError(
                             "Experiment progress persistence is unavailable."
@@ -13061,7 +13095,12 @@ async def voice_socket(websocket:WebSocket):
                     heartbeat.ping_seq,heartbeat.ping_sent_at_ms=ping["seq"],ping["sent_at_ms"]
                     heartbeat.ping_received_ms=round(_wall_clock()*1000)
                 continue
-            control=parse_control(message["text"])
+            try:
+                control=parse_control(message["text"])
+            except ProtocolError:
+                await websocket.send_text(event(
+                    "error",message="invalid control message",recoverable=True))
+                continue
             if control["type"]=="session.start":
                 if session.active:
                     same_configuration=(
@@ -13363,9 +13402,7 @@ async def voice_socket(websocket:WebSocket):
                         recovery_session_id is not None
                         and experiment_state is not None
                         and session.curated_protocol_session is not None
-                        and experiment_state["status"] in (
-                            {"in_progress","paused","blocked"}
-                            if reconnect is not None else {"in_progress"})
+                        and experiment_state["status"] in {"in_progress","paused","blocked"}
                     ):
                         restored_before=history_before(
                             session.curated_protocol_session)
@@ -13397,6 +13434,8 @@ async def voice_socket(websocket:WebSocket):
                                 session,session.curated_protocol_session,
                                 experiment_state,previous_connection,reconnect)
                             reconnect_notices=list(reconnection.notices)
+                        elif experiment_state["status"] in {"paused","blocked"}:
+                            session.curated_protocol_session.pause_workflow()
                     if reconnect is not None and experiment_state is not None:
                         restored_connection=True
                         if (
@@ -13518,6 +13557,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 session.set_tool_context(context)
                 await websocket.send_text(event("session.language_changed",state=session.state.value))
                 await websocket.send_text(event("session.language_state",mode="manual",
@@ -13538,6 +13578,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.reset":
@@ -13548,6 +13589,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 session.reset_sensitive_state()
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 if session.curated_protocol_session is not None:
@@ -13562,6 +13604,7 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
                 if session.experiment_state_version is not None:
                     try:
                         experiment_state=_transition_workspace_experiment(
@@ -13624,6 +13667,10 @@ async def voice_socket(websocket:WebSocket):
                 ))
             elif control["type"]=="workflow.pause":
                 if session.active and session.curated_protocol_session is not None:
+                    if task and not task.done():
+                        await _finish_all_research_operations(sender,session,"cancelled")
+                        task.cancel()
+                        await asyncio.gather(task,return_exceptions=True)
                     screen_before=history_before(session.curated_protocol_session)
                     changed=session.curated_protocol_session.pause_workflow()
                     if changed and session.experiment_state_version is not None:

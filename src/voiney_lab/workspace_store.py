@@ -1498,12 +1498,8 @@ class WorkspaceStore:
         if not isinstance(expected_version, int) or isinstance(expected_version, bool):
             raise WorkspaceError("Experiment version is invalid.")
         target_version = expected_version + 1
-        target_status = (
-            row["status"] if reattach
-            else "in_progress" if row["status"] in {"paused", "blocked"}
-            else row["status"]
-        )
-        paused_at = row["paused_at"] if reattach else None
+        target_status = row["status"]
+        paused_at = row["paused_at"]
         now = _now()
         event_key = f"voice-recovery-v{target_version}"
         self._connection.execute("BEGIN IMMEDIATE")
@@ -1531,11 +1527,7 @@ class WorkspaceStore:
                 principal,
                 session_id=session_id,
                 event_key=event_key,
-                event_type=(
-                    "session_resumed"
-                    if row["status"] == "paused" and not reattach
-                    else "session_recovered"
-                ),
+                event_type="session_recovered",
                 step_id=row["current_step_id"],
                 step_label=row["current_step_label"],
                 payload={
@@ -1693,6 +1685,9 @@ class WorkspaceStore:
             ).fetchone()
             assert row is not None
             current_version = int(row["version"])
+            if (expected_voice_connection_id is not None
+                    and row["last_voice_connection_id"] != expected_voice_connection_id):
+                raise WorkspaceConflictError("The experiment has another voice connection.")
             if current_version != expected_version:
                 same_voice_projection = bool(
                     expected_voice_connection_id is not None
@@ -1805,6 +1800,7 @@ class WorkspaceStore:
         category: str,
         capture_source: str,
         protocol_step_id: str | None = None,
+        expected_voice_connection_id: str | None = None,
     ) -> dict[str, object]:
         """Persist researcher wording without changing approved knowledge."""
 
@@ -1828,6 +1824,11 @@ class WorkspaceStore:
         now = _now()
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            current = self._experiment_row(principal, session_id, write=True)
+            self._capture_allowed(current)
+            if (expected_voice_connection_id is not None
+                    and current["last_voice_connection_id"] != expected_voice_connection_id):
+                raise WorkspaceConflictError("The experiment has another voice connection.")
             existing_event = self._connection.execute(
                 """SELECT event_type,payload_json FROM experiment_session_events
                 WHERE session_id=? AND event_key=?""",
