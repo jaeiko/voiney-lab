@@ -277,7 +277,10 @@ class EndpointWithAProblemVoiceTests(VoiceSessionHarness, unittest.TestCase):
                 )
                 done = socket.for_turn(20, "turn.done")
                 self.assertEqual(len(done), 1)
-                self.assertEqual(done[0]["segment_count"], 1)
+                # Lane VOX: spoken, one audio segment per sentence.
+                self.assertEqual(
+                    done[0]["segment_count"],
+                    len(server_module.speech_sentences(RECORDED_REASK["7"])))
                 self.assertEqual(seen["after"]["step_index"], at)
                 self.assertEqual(seen["after"]["durable"]["current_step_label"], "7")
                 self.assertIsNotNone(seen["held"])

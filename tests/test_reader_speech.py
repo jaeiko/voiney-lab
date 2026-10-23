@@ -132,7 +132,9 @@ def _turn(session: ListenerSession, transcript: str, turn_id: int, model=None):
     state = next(
         item["state"] for item in socket.text if item["type"] == "protocol.fixture.state"
     )
-    return spoken, reply, state
+    # Lane VOX: the turn's reply is synthesized sentence by sentence; this
+    # one turn said them as one line.
+    return ([" ".join(spoken)] if spoken else []), reply, state
 
 
 @unittest.skipUnless(

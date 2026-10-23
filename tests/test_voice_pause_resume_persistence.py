@@ -287,9 +287,11 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
                 self.assertTrue(decision["state_mutation"])
                 resumed = socket.for_turn(3, "turn.done")[-1]
                 self.assertEqual(resumed["result_kind"], "resume")
-                self.assertEqual(resumed["segment_count"], 1)
-                self.assertEqual(self._errors(socket), [])
                 spoken = socket.for_turn(3, "reply.delta")[-1]["speech_text"]
+                # Lane VOX: spoken, one audio segment per sentence.
+                self.assertEqual(
+                    resumed["segment_count"], len(server_module.speech_sentences(spoken)))
+                self.assertEqual(self._errors(socket), [])
                 self.assertIn("워크플로를 재개합니다. 현재 1단계입니다", spoken)
                 self.assertIn("1단계", socket.reply(3))
                 self.assertNotIn("저장하지 못해", socket.reply(3))
@@ -380,7 +382,11 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
             seen["active_turn_id"] = listener.active_turn_id
 
         socket, _ = self._session(scenario)
-        self.assertEqual(socket.for_turn(3, "turn.done")[-1]["segment_count"], 1)
+        # Lane VOX: spoken, one audio segment per sentence.
+        self.assertEqual(
+            socket.for_turn(3, "turn.done")[-1]["segment_count"],
+            len(server_module.speech_sentences(
+                socket.for_turn(3, "reply.delta")[-1]["speech_text"])))
         done = socket.for_turn(4, "turn.done")
         self.assertEqual(len(done), 1)
         self.assertEqual(done[0]["result_kind"], "pause")
