@@ -399,6 +399,11 @@
     .upload-step .btn-file-select:hover,.library-side .btn-file-select:hover{background:var(--blurple-hover);color:var(--on-ink)}
     .upload-step .selected-file-name,.library-side .selected-file-name{max-width:100%;color:var(--ink-muted);text-align:center}
     .upload-step .protocol-register small,.library-side .protocol-register small{max-width:100%;color:var(--ink);font-size:.875rem;line-height:1.375rem;overflow-wrap:anywhere}
+    .protocol-link-form{display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-4);padding:var(--space-4);border:1px solid var(--line);background:var(--paper)}
+    .protocol-link-form label{font-weight:700}
+    .protocol-link-form input{box-sizing:border-box;width:100%;min-width:0;min-height:var(--target-run);padding:var(--space-2);font:inherit;border:1px solid var(--line-strong);border-radius:var(--radius-md)}
+    .protocol-link-form button{min-height:var(--target-run);font:inherit;font-weight:700}
+    .protocol-link-form p{margin:0;color:var(--ink-muted);font-size:.875rem;line-height:1.5;overflow-wrap:anywhere}
     .protocol-queue{border:1px solid var(--line);background:var(--paper)}
     .protocol-queue[hidden]{display:none}
     .protocol-queue h3{margin:0;padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--line);color:var(--ink-muted);font-size:.8125rem;line-height:1.125rem;font-weight:600}
@@ -1113,6 +1118,12 @@
             <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
             <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
           </div>
+          <form id="protocol-link-form" class="protocol-link-form">
+            <label for="protocol-link-url">공개 링크로 가져오기</label>
+            <p id="protocol-link-help">공개된 구글 드라이브 파일이나 구글 문서 링크를 넣어 주세요. 비공개 파일은 내려받아 위에서 올릴 수 있어요.</p>
+            <input id="protocol-link-url" type="url" inputmode="url" autocomplete="off" placeholder="https://drive.google.com/…" aria-describedby="protocol-link-help protocol-upload-status" required>
+            <button id="protocol-link-import" type="submit">링크로 가져오기</button>
+          </form>
         </section>
         <section id="upload-step-progress" class="upload-step" aria-labelledby="upload-progress-title" hidden>
           <h2 id="upload-progress-title" class="upload-title">분석하고 있어요</h2>
@@ -2001,6 +2012,7 @@ function renderState(state,detail=""){
  updatePauseState(workflowPaused);
  const configurationLocked=!["IDLE","ERROR"].includes(visibleState);
  for(const id of ["protocol-id","protocol-pdf","register-protocol","input-language"]){setDisabled($(id),configurationLocked);}
+ renderProtocolLinkControls();
  $("protocol-id")?.setAttribute?.("aria-busy",String(visibleState==="CONNECTING"));
  const active=curatedProtocolState?.attached===true&&curatedProtocolState.active===true;
  setDisabled($("repeat-step"),!active);setDisabled($("next-step"),!active);
@@ -4624,23 +4636,8 @@ async function startReviewedProtocol(){
  if(button)button.disabled=true;if(status)status.textContent="안전 주의를 확인했습니다 · 실험을 시작합니다.";
  try{select.value=protocolId;renderSelectedProtocolContext();await startSession();}finally{if(button)button.disabled=false;}
 }
-async function registerSelectedProtocol(){
- const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
- if(!file){if(status)status.textContent="등록할 원문 파일(PDF, Word, 사진)을 선택해 주세요.";return;}
- const mediaType=protocolSourceMediaType(file);
- if(!PROTOCOL_SOURCE_MEDIA_TYPES.has(mediaType)){if(status)status.textContent=protocolUploadErrorMessage("unsupported_pdf_media_type");if(input)input.value="";return;}
- if(isRegisteringProtocol)return;
- const duplicate=$("protocol-duplicate-notice");if(duplicate){duplicate.hidden=true;duplicate.textContent="";}
- isRegisteringProtocol=true;renderUploadFlow();
- if(input)input.setAttribute?.("aria-busy","true");
- if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
- try{
-  let response;
-  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
-  catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
-  const payload=await safeProtocolUploadPayload(response);
-  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
-  if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
+async function acceptRegisteredProtocol(payload){
+ const status=$("protocol-upload-status"),duplicate=$("protocol-duplicate-notice");
   const registered=payload.protocol&&typeof payload.protocol==="object"?payload.protocol:null,protocolId=typeof registered?.protocol_id==="string"?registered.protocol_id:null;
   if(!protocolId){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}
   currentProtocolReviewId=protocolId;uploadFlowFollow(protocolId);
@@ -4666,7 +4663,61 @@ async function registerSelectedProtocol(){
   else if(failed){const review=await loadProtocolReview(protocolId);showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(review?.analysis_failure?.code||registered.analysis_status),"");}
   else{const text=registered.analysis_status==="ocr_required"?protocolUploadErrorMessage("ocr_required"):"등록 완료 · 분석은 이미 끝났습니다. 아래 검토 결과를 확인해 주세요.";showProtocolAnalysisNotice(protocolId,text,"");await loadProtocolReview(protocolId);}
   await loadProtocolCatalog(protocolId);restoreProtocolAnalysisNotice();
- }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;renderUploadFlow();}
+ return protocolId;
+}
+function renderProtocolLinkControls(){
+ const locked=isRegisteringProtocol||sessionActive||!["IDLE","ERROR"].includes(visibleState);
+ for(const id of ["protocol-link-url","protocol-link-import"]){setDisabled($(id),locked);}
+}
+async function registerProtocolLink(){
+ const input=$("protocol-link-url"),status=$("protocol-upload-status"),url=String(input?.value||"").trim();
+ if(isRegisteringProtocol||sessionActive||!["IDLE","ERROR"].includes(visibleState))return null;
+ if(!url){if(status)status.textContent="가져올 공개 링크를 넣어 주세요.";return null;}
+ const generation=sessionGeneration,duplicate=$("protocol-duplicate-notice");
+ if(duplicate){duplicate.hidden=true;duplicate.textContent="";}
+ isRegisteringProtocol=true;uploadFlow.protocolId=null;renderProtocolLinkControls();
+ if(input)input.setAttribute?.("aria-busy","true");
+ if(status)status.textContent="공개 링크의 원문을 가져오고 있어요…";
+ renderUploadFlow();
+ try{
+  let response;
+  try{response=await serverFetch("/api/protocols/import-link",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({url}),redirect:"error"});}
+  catch(_){if(generation===sessionGeneration&&status)status.textContent=protocolUploadErrorMessage("network_error");return null;}
+  const payload=await safeProtocolUploadPayload(response);
+  if(generation!==sessionGeneration)return null;
+  if(!response.ok){
+   const detail=payload?.detail;
+   if(status)status.textContent=nonemptyText(detail?.message)?detail.message:protocolUploadErrorMessage(typeof detail==="string"?detail:"unexpected_server_error");
+   return null;
+  }
+  if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return null;}
+  const protocolId=await acceptRegisteredProtocol(payload);
+  if(protocolId&&input)input.value="";
+  return protocolId||null;
+ }finally{
+  isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");
+  renderProtocolLinkControls();renderUploadFlow();
+ }
+}
+async function registerSelectedProtocol(){
+ const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
+ if(!file){if(status)status.textContent="등록할 원문 파일(PDF, Word, 사진)을 선택해 주세요.";return;}
+ const mediaType=protocolSourceMediaType(file);
+ if(!PROTOCOL_SOURCE_MEDIA_TYPES.has(mediaType)){if(status)status.textContent=protocolUploadErrorMessage("unsupported_pdf_media_type");if(input)input.value="";return;}
+ if(isRegisteringProtocol)return;
+ const duplicate=$("protocol-duplicate-notice");if(duplicate){duplicate.hidden=true;duplicate.textContent="";}
+ isRegisteringProtocol=true;renderProtocolLinkControls();renderUploadFlow();
+ if(input)input.setAttribute?.("aria-busy","true");
+ if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
+ try{
+  let response;
+  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
+  if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
+  await acceptRegisteredProtocol(payload);
+ }finally{isRegisteringProtocol=false;renderProtocolLinkControls();if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;renderUploadFlow();}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode=mode;acknowledgedLanguage=language;const names={auto:"자동 감지",ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","입력 · "+(names[language]||"한국어"));}
 // Lane FX3 decision 3: the web search's entry is gone from the server; the
@@ -4973,6 +5024,7 @@ $("protocol-pdf-pick")?.addEventListener("keydown",event=>{openFileChooserFromKe
 $("reagent-table-pick")?.addEventListener("keydown",event=>{openFileChooserFromKey(event,"reagent-table-file");});
 $("reagent-table-file")?.addEventListener("change",()=>{void attachReagentTable();});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
+$("protocol-link-form")?.addEventListener("submit",event=>{event?.preventDefault?.();void registerProtocolLink();});
 $("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
 $("question-timing")?.addEventListener("change",event=>{void saveExperimenterSetting("question_timing",event.target.value);});
 $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting("web_lookup",event.target.value);});
@@ -5542,7 +5594,7 @@ function chooseExperimentSession(sessionId,{force=false}={}){
 // here decides a state.
 var uploadFlow={protocolId:null};
 function uploadFlowFollow(protocolId){uploadFlow.protocolId=typeof protocolId==="string"&&protocolId?protocolId:null;renderUploadFlow();return uploadFlow.protocolId;}
-function uploadFlowReset(){uploadFlow.protocolId=null;const input=$("protocol-pdf");if(input)input.value="";setText("selected-file-name","선택된 파일 없음");renderUploadFlow();return "pick";}
+function uploadFlowReset(){uploadFlow.protocolId=null;const input=$("protocol-pdf");if(input)input.value="";const link=$("protocol-link-url");if(link)link.value="";setText("selected-file-name","선택된 파일 없음");renderUploadFlow();return "pick";}
 function uploadFlowEnter(){if(uploadFlowStep()==="result")uploadFlowReset();else renderUploadFlow();const pick=$("protocol-pdf-pick");pick?.focus?.();return Boolean(pick);}
 function uploadFlowStep(){
  const id=uploadFlow.protocolId;

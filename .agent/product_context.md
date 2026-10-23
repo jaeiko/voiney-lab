@@ -11,8 +11,9 @@ decided is in `docs/DECISIONS.md`.
 protocol. Chemistry and biology wet-lab researchers wearing gloves follow
 their protocol without touching a screen:
 
-1. bring a protocol in — PDF, Word or a photo (also a public Google Drive,
-   Docs or Sheets link, server-side only for now);
+1. bring a protocol in — PDF, Word or a photo, or a public Google Drive file
+   or Docs link on the upload screen (Sheets links attach reagent tables
+   through the server API only);
 2. the server analyses it and checks every value against the source, and asks
    only what it must, as confirmation cards;
 3. the experimenter starts it (the start wizard's last button);

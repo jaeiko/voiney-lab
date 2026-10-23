@@ -39,7 +39,9 @@
 - **한도(코드 값)**: 원문 64 MiB, 사진 1억 화소, 시약 표 5 MiB·셀 20,000개, Word 변환 120 s. 링크: 호스트 `drive.google.com`·`docs.google.com`·`drive.usercontent.google.com`, 리디렉션 5번, 공인 주소만, 전체 60 s.
 - **설정**: `VOINEY_LAB_PROTOCOL_ENABLED`, `VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_OFFICE_CONVERTER`(LibreOffice `soffice` 경로), `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS`(기본 30, 긴 문서는 300 권장 — `docs/DEPLOYMENT_RUNBOOK.md`). HEIC 는 선택 설치 `pip install -e '.[heic]'`.
 - **시험**: `tests/test_lane_an_source_formats.py`, `tests/test_lane_an_reagent_tables.py`, `tests/test_lane_dr_link_import.py`, `tests/test_lane_dr_link_security.py`(가짜 HTTP), `tests/test_lane_dr_link_messages.py`.
-- **한계**: LibreOffice 가 없으면 Word 만 `docx_conversion_unavailable`(503)로 거절한다. 링크 가져오기는 **화면 단추가 없다**(서버 경로뿐). 형식별 자세한 확인 방법은 `docs/SOURCE_FORMATS.md`.
+- **화면**: 새 프로토콜 올리기의 **공개 링크로 가져오기**에 Drive 파일·Docs 주소를 넣는다. 기존 파일 등록과 같은 분석·OCR·중복 안내·결과 화면을 쓴다. 비공개·시간 초과 등은 서버가 준 이유를 표시하고 주소를 고칠 수 있다. 처리 중 중복 요청과 실험 중 요청은 막고, 브라우저 세대가 바뀐 뒤 도착한 가져오기 응답은 버린다. 가져오기만으로 실험을 시작하지 않는다.
+- **시험(화면)**: `tests/test_protocol_link_screen.py`, `tests/e2e/upload-ia.spec.ts`(브라우저는 CI).
+- **한계**: LibreOffice 가 없으면 Word 만 `docx_conversion_unavailable`(503)로 거절한다. 비공개 Google 계정 연결은 없고, Sheets 링크로 시약 표를 붙이는 화면은 아직 없다(서버 API만). 형식별 자세한 확인 방법은 `docs/SOURCE_FORMATS.md`.
 
 ## F3. 사진 글자 읽기 (OCR)
 
@@ -72,6 +74,7 @@
 - **설정**: `VOINEY_LAB_ANALYSIS_REQUOTE`(true).
 - **시험**: `tests/test_lane_ev_evidence_rules.py`, `tests/test_lane_ev2_hollow_pass.py`, `tests/test_lane_ev2_cross_page.py`, `tests/test_lane_an4_requote.py`, `tests/test_lane_an5_requote_after_cards.py`, `tests/test_lane_an5_mixed_numbering.py`, `tests/test_lane_an5_page_end_furniture.py`.
 - **한계**: 한 줄에 여러 값이 몰린 표, 번호 없는 글로 된 단계, 설명만 하는 번호 줄은 잘못 읽힐 수 있다(`.agent/architecture.md` "알려진 분석 한계").
+- **분석 결과 비교**: `scripts/score_extraction.py`는 같은 PDF의 저장된 분석 JSON과 사람이 만든 기준 JSON을 현재 파서로 읽어 단계 누락·추가·순서·문장 속 값 차이와 원문 근거가 연결된 구조 항목 차이를 따로 보고한다. 한글을 보존하고, 번호가 없거나 겹치면 쪽·원문 인용으로 비교한다. 모델 호출·카탈로그 쓰기·실행 판정은 하지 않는다. 기준 자체가 불완전할 수 있고, 원문 인용이 다르면 추측해서 맞추지 않는다. 명령과 한계는 `.agent/testing_strategy.md` 3절.
 
 ## F6. 확인 카드
 
@@ -106,8 +109,9 @@
   - **응급**: "도와주세요", "불났어요", "가스 누출됐어요" 같은 말에는 정해진 문장으로 작업을 멈추고 위험에서 떨어져 연구실 안전 담당에게 연락하라고만 한다.
 - **어디**: `vad.py` (`EndpointDetector`, `VAD_END_SILENCE_MS`, `SpeakerLevelReference`, `NoiseFloor`, `SENSITIVITY_MARGINS_DB`); `server.py` (`ListenerSession`, `run_turn`, `_finish_voice_calibration`, `ignores_level`, `_suggest_noisy_mode`, `ECHO_TAIL_SECONDS`); `voice_providers.py` (`transcribe`, `synthesize`, `require_provider`); `cascade_filler.py` `CascadeFiller`; `emergency.py` `recognize_emergency`; `audio.py` `SAMPLE_RATE`; 화면 `static/mic-capture-worklet.js`.
 - **설정**: `VOINEY_LAB_STT_PROVIDER`·`VOINEY_LAB_TTS_PROVIDER`(설정 필요), `VOINEY_LAB_STT_MODEL`, `VOINEY_LAB_TTS_VOICE`, `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`(1000), `VOINEY_LAB_CASCADE_VAD_MAX_UTTERANCE_MS`(15000), `VOINEY_LAB_CASCADE_FILLER_MODE`(tone), `VOINEY_LAB_CASCADE_FILLER_DELAY_MS`(700), `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`(false). 실험자 설정 `speaker_sensitivity`, `ambient_mode`, `agent_voice`(설정 탭).
-- **시험**: `tests/test_vad.py`, `tests/test_lane_sp1_level_gate.py`, `tests/test_lane_sp1_noisy_mode.py`, `tests/test_lane_sp2_level_endpoint.py`, `tests/test_lane_fx3_endpoint_pause.py`, `tests/test_own_speech_echo.py`, `tests/test_emergency.py`, `tests/test_voice_providers.py`.
-- **한계**: 다른 사람 말은 **크기로만** 거른다(누구 목소리인지는 가리지 않는다). 소리 기준값은 합성 목소리·합성 소음 시험대에서 정했다. 응급 문장은 소음·필러 거르기, 목소리 맞추기 문장 대기, 언어 되묻기 **뒤에** 판정된다 — 목소리 맞추기 문장을 기다리는 동안의 "도와주세요"는 맞추기 문장으로 읽힌다(그 순서를 지키는 시험은 없다).
+- **응급 우선순위**: 빈 인식 결과와 자기 음성의 되울림을 거른 뒤, 인식된 응급 말은 필러·문장 이어 붙이기·목소리 맞추기·언어 확인보다 먼저 기존 고정 응답으로 처리한다. 보정 대기와 기존 목소리 기준은 유지하고, 실험 단계·관찰·타이머를 바꾸지 않는다. 음성 합성이 실패해도 고정 문장은 화면에 남는다.
+- **시험**: `tests/test_vad.py`, `tests/test_lane_sp1_level_gate.py`, `tests/test_lane_sp1_noisy_mode.py`, `tests/test_lane_sp2_level_endpoint.py`, `tests/test_lane_fx3_endpoint_pause.py`, `tests/test_own_speech_echo.py`, `tests/test_emergency.py`, `tests/test_emergency_admission_boundary.py`, `tests/test_voice_providers.py`.
+- **한계**: 다른 사람 말은 **크기로만** 거른다(누구 목소리인지는 가리지 않는다). 소리 기준값은 합성 목소리·합성 소음 시험대에서 정했다. STT 전에 음량 등으로 버린 소리나 인식하지 못한 말에는 텍스트 응급 판정이 적용되지 않는다. 가짜 음성 전송 시험은 현장 응급 인식 성능을 증명하지 않는다.
 
 ## F9. 말 한 번의 길
 

@@ -43,6 +43,43 @@ async function mockUpload(page: Page, ends: 'ready' | 'review') {
 }
 
 test.describe('Upload, one screen at a time (lane IA)', () => {
+  test('a public document link uses the same analysis flow at tablet width', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await mockUpload(page, 'ready');
+    const url = 'https://docs.google.com/document/d/synthetic-public/view';
+    let imports = 0;
+    await page.route('**/api/protocols/import-link', async (route: Route) => {
+      expect(route.request().method()).toBe('POST');
+      expect(route.request().postDataJSON()).toEqual({ url });
+      imports += 1;
+      await route.fulfill({ status: 201, json: { protocol: entry('running'), deduplicated: false } });
+    });
+    await page.goto(TAB.upload);
+    await page.getByLabel('공개 링크로 가져오기').fill(url);
+    await page.getByRole('button', { name: '링크로 가져오기', exact: true }).click();
+    await expect(page.locator('#upload-step-progress')).toBeVisible();
+    await expect(page.locator('#upload-result-title')).toHaveText('바로 쓸 수 있어요', { timeout: 10_000 });
+    expect(imports).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect(page.locator('#wizard-sheet')).toBeHidden();
+  });
+
+  test('a private link shows the server refusal and allows correction', async ({ page }) => {
+    const message = '이 파일은 비공개라 가져올 수 없어요. 파일을 내려받아 올려 주세요.';
+    await page.route('**/api/protocols/import-link', (route: Route) => route.fulfill({
+      status: 403, json: { detail: { code: 'link_private', message } },
+    }));
+    await page.goto(TAB.upload);
+    const field = page.getByLabel('공개 링크로 가져오기');
+    const url = 'https://drive.google.com/file/d/synthetic-private/view';
+    await field.fill(url);
+    await page.getByRole('button', { name: '링크로 가져오기', exact: true }).click();
+    await expect(page.locator('#protocol-upload-status')).toHaveText(message);
+    await expect(page.locator('#upload-step-pick')).toBeVisible();
+    await expect(field).toHaveValue(url);
+    await expect(field).toBeEnabled();
+  });
+
   test('the file, the analysis, then "바로 쓸 수 있어요" and the start', async ({ page }) => {
     await mockUpload(page, 'ready');
     await page.goto(TAB.upload);

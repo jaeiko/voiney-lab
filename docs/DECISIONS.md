@@ -22,6 +22,7 @@
 
 | 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
 |---|---|---|---|---|---|
+| 2026-10-23 | 분석 비교 도구를 현재 분석 JSON 파서로 복구한다. 한글을 보존하고, 번호가 없거나 겹치는 단계는 쪽·원문 인용으로 비교한다. 모델 ID를 비교 근거로 쓰지 않는다. 원문 근거 검사 결과와 누락·추가 차이는 별도이며 실행 판정은 만들지 않는다 | 지운 주장 조각 캐시를 읽던 도구가 실행되지 않았고, 번호만으로 비교하면 항목이 겹쳤다 | pilot-foundation | `scripts/score_extraction.py`, `protocol_extraction_accuracy.py` | 기준은 사람이 만든 비교 자료이고 완전성을 보증하지 않는다. 실시간 누락 검사는 바꾸지 않는다 |
 | 2026-10-10, 10-16 | 분석 역할은 Google `gemini-3.8-flash`, 추론 `low`. 번역도 `low`. 보고서 서술은 `gemini-3.8-flash`. 라우터·답변·보조 설명은 OpenAI `gpt-6-luna` | 선택 규칙 "p50 ≤ 120 s, p90 ≤ 300 s 안에서 통과가 가장 많은 것": 25개 문서에서 3.8 Flash `low` 만 안에 들었다(p50 30.8 s, p90 221.6 s, 통과 14) | AQ, M3, GM | `.env.example` 의 역할 값. **코드는 설정이 비면 추론을 `high` 로 읽는다**(`server.py` `_protocol_analysis_model`, `setting_names.py` 의 기본값) | 줄 M3 은 `medium` 을 권했다. 지금 값은 GM 권고(`low`) |
 | 2026-10-16 | Gemini 4 는 분석에 쓰지 않는다 | 지연 규칙을 넘고 비용이 약 4배, 통과 12 대 14 | GM | `.env.example` 에 없음 | 권고. 사람 결정 기록 확인 안 됨 |
 | 2026-10-10 · 13 | 모든 모델 역할과 STT·TTS 공급자는 직접 적는다("설정 필요"). 빈 역할은 다른 공급자로 가지 않고 그 설정 이름을 적은 오류로 닫힌다 | 아무도 고르지 않은 공급자로 요청이 가면 안 된다 | CL, PL, AN, RA | `setting_names.py` `_SET_ME`; `model_providers.py` `DEFAULT_MODELS`, `RoleNotConfiguredError` | — |
@@ -76,6 +77,7 @@
 
 | 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
 |---|---|---|---|---|---|
+| 2026-10-23 | 인식된 응급 말은 빈 입력·되울림을 거른 뒤 기존 고정 응답 관문에서 처리하고, 보정·언어 확인·필러 분류가 먼저 소비하지 않는다. 이미 인식된 응급 말에는 앞 발화 조각을 붙이지 않고, 조각을 붙여 완성된 응급 말도 같은 관문으로 간다 | 보정 대기 중의 응급 말이 보정 입력이 됐다 | pilot-foundation | `server.py` `run_turn`, `tests/test_emergency_admission_boundary.py` | STT 전에 버린 소리와 현장 인식 성능은 이 변경으로 검증되지 않는다 |
 | 2026-10-15 (권고) | 말 끝 침묵은 **1초(1000 ms)를 유지**한다. 부족하면 1200 ms 가 가장 싼 다음 단계, 1500 ms 이상은 권하지 않는다 | 1500 ms 는 모든 말을 약 0.5 초 늦춘다 | SP2, FX3 | `vad.py` `VAD_END_SILENCE_MS = 1000`; 설정 `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`. 1.2 s 를 2026-10-16 에 해 보고 같은 날 되돌림(`tests/test_lane_fx3_endpoint_pause.py`) | 권고로 기록됨. 실제 녹음으로 다시 잴 것 |
 | 2026-10-15 (권고) | **목소리 등록(화자 확인)은 보류**한다. 다른 사람 말은 목소리 크기로만 거른다 | 합성 목소리 측정: EER 9.5 %(조용) · 20–21 %(웅성거림), 1초 미만 명령은 27–42 % — "다음"을 가를 수 없다. 학습 데이터 권리·생체정보 동의는 법률 검토가 필요 | SP1, SP2 | 등록 코드 없음. `server.py` `LEVEL_ENDPOINT_FLOOR_GAP_DB`, `ROOM_VOICED_SHARE`; `vad.py` `SpeakerLevelReference` | 만들지, 법률 검토, 동의한 팀원의 실제 녹음으로 다시 잴 것 |
 | 2026-10-15 | 목소리를 맞춘 세션에서는 VAD 가 계속 말소리를 들어도(웅성거림·펌프) 착용자 목소리 크기로 말 끝을 찾고, 주변 소음 안내는 10분에 한 번까지 | 합성 시험대에서 명령이 97–100 % 사라졌다 | SP2 (PR #85) | `vad.py` `EndpointDetector`, `NoiseFloor` | 모든 기준값을 실제 카페·연구실 녹음으로 다시 |
@@ -94,6 +96,7 @@
 
 | 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
 |---|---|---|---|---|---|
+| 2026-10-23 | 공개 Drive 파일·Docs 링크 입력을 새 프로토콜 올리기에 연결하고, 등록 응답·분석·OCR·중복·결과 표시를 파일 올리기와 공유한다. Sheets 시약 표는 API로 남긴다 | 기존 자료를 내려받아 다시 올리는 수고를 줄인다 | pilot-foundation | `static/index.html` `registerProtocolLink`, `acceptRegisteredProtocol`; `tests/test_protocol_link_screen.py` | 실제 태블릿·Google 다운로드는 별도 시험. 브라우저 시험은 CI |
 | 2026-10-18 | 연결 끊김은 3초 안에 알아채고(1초 심장 박동, 2.8초 무응답), 소리·진동과 큰 띠로 알리고, 화면을 읽기 전용으로, 마이크를 멈춘다. 화면은 서버 시각으로 단계 타이머를 이어 세고, 1·2·4·8·15초 간격으로 다시 이어 같은 실험을 계속한다 | 와이파이가 끊겨도 안전해야 하고 타이머가 가장 중요하다 | NET (PR #92) | `server.py` `_send_heartbeats`, `_record_connection_restored`; `static/connection.js` | 웹에서는 화면 꺼짐을 막을 수 없다(앱 필요) |
 | 2026-10-18 | 웹이 쓸모를 보인 뒤 스토어 앱(Capacitor 8.5.3 하이브리드 + 백그라운드 마이크·정확한 알람 플러그인). 앱 로그인은 허용한 출처로 | 화면을 끄고 듣기, 앱 밖 타이머 알림 | APP0, APP1 (PR #96·#98) | `mobile/`; 설정 `VOINEY_LAB_APP_ORIGINS` | 스토어 등록, 결제, iOS, 실제 기기 시험 |
 | 2026-10-19 | 쉬운 말 규칙: 해요체 하나, 한 문장 한 뜻, 내부 말 금지(용어 사전), 단추는 동사, 오류 = 무엇이 일어났나 + 무엇을 하나. 숫자·단위·인용·안전 글은 그대로 | 사용자는 해요체와 합니다체를 섞어 듣는다(말하는 511줄 중 277 : 234) | WORD (PR #99) | 1단계는 문서만(`docs/VOICE_AND_TONE.md`). 코드 문구는 아직 바꾸지 않았다 | 2단계 진행 |
@@ -107,7 +110,7 @@
 
 이 줄(DOC4)이 문서를 쓰며 코드에서 본 것이다. 코드는 고치지 않았다.
 
-- `scripts/` 의 진단·측정 스크립트 10개가 지금 dev 에서 import 또는 실행 중에 실패한다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `score_extraction.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. 고칠지 지울지 정한다.
+- `scripts/` 의 진단·측정 스크립트 9개가 import 또는 실행 중에 실패하는 것으로 기록돼 있다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. `score_extraction.py`는 위 결정으로 복구했다. 나머지를 고칠지 지울지 정한다.
 - 시작 전 핵심 값 확인(2문항)은 화면의 순서로만 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
 - `GET /readyz` 는 안전 카탈로그·사용 범위를 보지 않는다. `/readyz` 가 200 이어도 `/api/protocols` 가 500 일 수 있다.
 - `VOINEY_LAB_USAGE_SCOPE` 가 비면 신원 판단(`server.py` `_runtime_usage_scope`)은 `demo` 로 읽고, 설정 검사(`server_config`)는 거부한다.

@@ -27,8 +27,8 @@ Browser / store-app WebView (static/index.html, connection.js, feedback.js)
                                                     │ utterance
                                        STT (voice_providers, provider setting)
                                                     │ transcript
-                          admission: empty / self-echo / filler / calibration /
-                          language → emergency gate (emergency.py)
+                          empty / self-echo → emergency gate (emergency.py)
+                          → fragment / filler / calibration / language admission
                                                     │
                      CuratedProtocolSession.front_plan  (front rules)
                           │ handled                    │ handed on
@@ -84,11 +84,16 @@ generation is cancelled and its audio cleared (barge-in).
 2. The waiting cue (`cascade_filler.CascadeFiller`) starts; STT returns one
    transcript per utterance.
 3. Admission, in this order (`server.run_turn`): empty and self-echo
-   (`ECHO_*` constants), fragment join (router-first only), non-speech and
-   filler-only, a pending calibration sentence, language contradiction, then
-   the **emergency gate** (`emergency.recognize_emergency`, fixed reply,
-   route `deterministic_emergency`). With a protocol the turn language is
-   Korean.
+   (`ECHO_*` constants), then the **emergency gate**
+   (`emergency.recognize_emergency`, fixed reply, route
+   `deterministic_emergency`). Recognized emergencies do not become calibration
+   samples or wait for language confirmation. Router-first recognizes the new
+   utterance before joining any held fragment; only a non-emergency is joined
+   and checked again, through this same fixed-response gate. Other turns continue through
+   fragment join (router-first only), non-speech/filler admission, a pending
+   calibration sentence and language confirmation. With a protocol the ordinary
+   turn language is Korean. Audio rejected before STT still cannot reach this
+   text gate; no change to acoustic recognition is implied.
 4. Routing, one line (AGENTS rule 3):
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",
@@ -204,6 +209,13 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 - The in-gel development fixture's timers come from
   `data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json`;
   no manifest, no timers.
+- Offline only: `scripts/score_extraction.py` compares saved current-format
+  analysis responses with a hand-built baseline against the same PDF. It uses
+  the existing parser/evidence checks and `protocol_extraction_accuracy` to
+  report step and typed source-record differences. Model ids do not establish
+  matches; blank/repeated labels use their page and exact quote. No model,
+  protocol store or workflow state is opened and no execution verdict is made.
+  This evaluator does not close the live completeness gap described above.
 
 ## 5. Evidence and provider boundaries
 
@@ -285,6 +297,11 @@ from assistant prose, and text is inserted with `textContent`.
 `connection.js` (loss and reconnection), `feedback.js` (end-of-run rating)
 and `mic-capture-worklet.js` (capture) load with it; `native-bridge.js` does
 not yet. `admin-metrics.html` is a separate page.
+The upload screen's public Drive/Docs form calls `/api/protocols/import-link`
+and shares the file upload's response handling, analysis/OCR polling and
+result display. Link errors display server text through `textContent`.
+Import is disabled during registration or a running session; stale-generation
+responses are discarded. Sheets reagent-table attachment remains API-only.
 
 ## 10. Store-app shell
 
