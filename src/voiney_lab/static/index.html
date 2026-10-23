@@ -92,7 +92,7 @@
     body[data-view="during"] .shell{max-width:none;padding:0;gap:0}
     body[data-view="during"] .workflow-grid{gap:0}
     body[data-view="during"] .tab-panel:not([hidden]){display:block}
-    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] #protocol-start-summary,body[data-view="during"] #protocol-review-panel,body[data-view="during"] .dev-diagnostics{display:none}
+    body[data-view="during"] .voice-copy,body[data-view="during"] .experiment-context-card,body[data-view="during"] .setup-col-left,body[data-view="during"] .dev-diagnostics{display:none}
     /* The status line: the basis badge, the protocol, the step, the connection and the microphone. */
     body[data-view="during"] .sticky-rail{min-height:var(--run-statusbar-h);padding:.25rem 1rem;gap:.75rem;flex-wrap:nowrap;-webkit-backdrop-filter:none;backdrop-filter:none;transition:none}
     body[data-view="during"] .rail-left{flex:1 1 auto;flex-wrap:nowrap;gap:.75rem;min-width:0}
@@ -660,7 +660,9 @@
     body[data-view="after"] #tab-experiment .workflow-grid{grid-area:work}
     body[data-view="after"] #tab-experiment .timeline{grid-area:chat}
     body[data-view="after"] #tab-experiment .prestart-side{grid-area:setup}
-    body[data-view="after"] #protocol-library,body[data-view="after"] #protocol-compare,body[data-view="after"] #protocol-start-summary,body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
+    /* Lane UI4 QA-18 (2026-10-23): the protocols tab is a place of its own, the same in every view -- the
+       one-page rules that hid its list, its comparison and its summary during and after the run are gone. */
+    body[data-view="after"] .mic-check,body[data-view="after"] .example-strip{display:none}
     body[data-view="after"] .procedure-card .run-left,body[data-view="after"] .spoken-summary,body[data-view="after"] .voice-command-hint,body[data-view="after"] .workflow-details-rows,body[data-view="after"] .task-body-right{display:none}
     body[data-view="after"] .procedure-card{padding:var(--space-6)}
     body[data-view="after"] .task-body-split{display:block;margin-top:0}
@@ -734,8 +736,7 @@
      body:not([data-view="during"]) .rail-right{flex-wrap:nowrap;gap:var(--space-2)}
      body:not([data-view="during"]) .rail-right button{flex:1 1 auto;min-width:0;min-height:44px;padding:0 var(--space-1);font-size:.8125rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     }
-    body[data-view="during"] #protocol-compare{display:none}
-    body[data-view="during"] .protocol-library,body[data-view="during"] .mic-check{display:none}
+    body[data-view="during"] .mic-check{display:none}
     body[data-view="during"] .prestart-side{display:contents}
     /* Lane IA decision ① (2026-10-19): five tabs. The shell is one column of
        panels, one shown at a time; the bar of five links is fixed below on a
@@ -5715,20 +5716,23 @@ function latestResumableExperiment(){
  const when=item=>{const at=Date.parse(String(item?.started_at||""));return Number.isFinite(at)?at:-Infinity;};
  return workspaceExperiments.filter(item=>item&&typeof item.session_id==="string"&&RESUMABLE_EXPERIMENT_STATUSES.has(item.status)).sort((a,b)=>when(b)-when(a))[0]||null;
 }
+// Lane UI4 QA-18 (lane QA, 2026-10-20): the home offers only what is open now. During the run that is the
+// way back to it; after it the upload waits while a voice session is still on (its file input and link
+// are off outside IDLE/ERROR), and a line says so.
+function protocolUploadOpen(){return ["IDLE","ERROR"].includes(visibleState);}
 function renderHome(){
  const host=$("home-cards");if(!host)return 0;host.replaceChildren();
  const view=screenView(),entries=[...protocolCatalog.values()];
- if(view==="during"){const label=curatedProtocolState?.current_step_label,name=curatedProtocolState?.display_name;host.appendChild(homeCard("running","실험 중 · 돌아가기",[nonemptyText(name)?name:"",nonemptyText(label)?`${label}단계`:""].filter(Boolean).join(" · "),"#/experiment"));}
+ if(view==="during"){const label=curatedProtocolState?.current_step_label,name=curatedProtocolState?.display_name;host.appendChild(homeCard("running","실험 중 · 돌아가기",[nonemptyText(name)?name:"",nonemptyText(label)?`${label}단계`:""].filter(Boolean).join(" · "),"#/experiment"));return host.children.length;}
  if(catalogState==="loading"&&!entries.length){host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오는 중…"));return host.children.length;}
  if(catalogState==="ready"&&!entries.length){host.appendChild(homeCard("first","먼저 프로토콜을 올려 주세요","PDF · Word · 사진을 올리면 분석이 시작돼요","#/upload"));return host.children.length;}
- if(view!=="during"){
-  const resume=sessionActive?null:latestResumableExperiment();
-  if(resume)host.appendChild(homeCard("resume","이어서 하기",[serverProtocolTitle(resume)||protocolCatalog.get(resume.protocol_id)?.title||"실험",`${nonemptyText(resume.current_step_label)?resume.current_step_label:"—"}단계`,sessionStateBadgeInfo(resume.status)?.label||""].filter(Boolean).join(" · "),null,()=>{void resumeExperimentFromHome(resume);}));
-  host.appendChild(homeCard("new-experiment","새 실험 시작","마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요",null,()=>{openWizardSheet();}));
- }
+ const resume=sessionActive?null:latestResumableExperiment();
+ if(resume)host.appendChild(homeCard("resume","이어서 하기",[serverProtocolTitle(resume)||protocolCatalog.get(resume.protocol_id)?.title||"실험",`${nonemptyText(resume.current_step_label)?resume.current_step_label:"—"}단계`,sessionStateBadgeInfo(resume.status)?.label||""].filter(Boolean).join(" · "),null,()=>{void resumeExperimentFromHome(resume);}));
+ host.appendChild(homeCard("new-experiment","새 실험 시작","마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요",null,()=>{openWizardSheet();}));
  const pending=entries.filter(entry=>Number.isInteger(entry?.review_pending?.needs_review_count)).length;
  if(pending)host.appendChild(homeCard("review",`확인할 프로토콜 ${pending}개`,"분석이 읽은 값을 사람이 한 번 확인해야 해요","#/protocols"));
- host.appendChild(homeCard("upload","새 프로토콜 올리기","PDF · Word · 사진","#/upload"));
+ if(protocolUploadOpen())host.appendChild(homeCard("upload","새 프로토콜 올리기","PDF · Word · 사진","#/upload"));
+ else host.appendChild(compareEl("p","home-note","음성 연결이 끝나면 새 프로토콜을 올릴 수 있어요."));
  if(catalogState==="failed")host.appendChild(compareEl("p","home-note","프로토콜 목록을 불러오지 못했어요 · 새로고침해 주세요"));
  return host.children.length;
 }
