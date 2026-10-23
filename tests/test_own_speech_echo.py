@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -127,7 +128,16 @@ class OwnSpeechMemoryTests(unittest.TestCase):
         import voiney_lab.server as server
 
         source = inspect.getsource(server)
-        self.assertNotRegex(source, r"to_thread\(\s*synthesize,(?!\s*said\()")
+        # Lane VOX: a curated reply is remembered whole and then synthesized
+        # sentence by sentence; its pieces, cut from the remembered whole,
+        # are the only TTS text not wrapped in said() at the call.
+        self.assertNotRegex(
+            source,
+            r"to_thread\(\s*synthesize,(?!\s*(?:said\(|spoken_sentences\[0\],|sentence,))")
+        self.assertEqual(source.count("spoken_sentences=speech_sentences(said(speech_text))"), 1)
+        self.assertEqual(len(re.findall(r"to_thread\(\s*synthesize,\s*sentence,", source)), 1)
+        self.assertRegex(inspect.getsource(server._say_answer), r"to_thread\(\s*synthesize,\s*sentence,")
+        self.assertIn("later=spoken_sentences[1:]", inspect.getsource(server.run_turn))
 
 
 class Socket:

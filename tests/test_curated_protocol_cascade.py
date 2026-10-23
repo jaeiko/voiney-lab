@@ -53,6 +53,7 @@ from voiney_lab.server import (
     get_protocol_visual_asset,
     run_turn,
     run_turn_safely,
+    speech_sentences,
     voice_socket,
 )
 from voiney_lab.tools import ToolContext
@@ -125,6 +126,25 @@ class GroundedClient:
         self.chat = SimpleNamespace(
             completions=GroundedCompletions(payload, error)
         )
+
+
+def said_calls(tts) -> list[str]:
+    """Each text one patched TTS was asked for, in order."""
+
+    return [call.args[0] for call in tts.call_args_list]
+
+
+def said_aloud(tts) -> str:
+    """What a turn said. Lane VOX: the reply is synthesized sentence by sentence."""
+
+    return " ".join(said_calls(tts))
+
+
+def reply_sentences(socket) -> list[str]:
+    """The turn's one reply as it is synthesized, once: its sentences (lane VOX)."""
+
+    (delta,) = [item for item in socket.text if item["type"] == "reply.delta"]
+    return list(speech_sentences(delta["speech_text"]))
 
 
 class Socket:
@@ -1818,7 +1838,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
 
         self.assertEqual(session.curated_protocol_session.current_index, 2)
-        self.assertEqual(tts.call_count, 1)
+        self.assertEqual(said_calls(tts), reply_sentences(socket))
         done = next(item for item in socket.text if item["type"] == "turn.done")
         self.assertEqual(done["intent_kind"], "report_completion")
         self.assertTrue(done["reported_completion"])
@@ -1943,7 +1963,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
         self.assertGreaterEqual(completions.maximum_active, 3)
         self.assertEqual(session.curated_protocol_session.state(), opening)
-        self.assertEqual(tts.call_count, 1)
+        self.assertEqual(said_calls(tts), reply_sentences(socket))
         states = [item for item in socket.text if item["type"] == "brain.state"]
         self.assertEqual(states[0]["roles"], ["answer", "source", "visual"])
         self.assertEqual(states[-1]["status"], "complete")
@@ -2087,8 +2107,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
 
             self.assertEqual(session.curated_protocol_session.current_index, 1)
-            self.assertIn("저장하지 못해", tts.call_args.args[0])
-            self.assertNotIn("기록에 반영", tts.call_args.args[0])
+            self.assertIn("저장하지 못해", said_aloud(tts))
+            self.assertNotIn("기록에 반영", said_aloud(tts))
             reply = next(
                 item["text"] for item in socket.text
                 if item["type"] == "reply.delta"
@@ -2129,7 +2149,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             curated = session.curated_protocol_session
             self.assertFalse(curated.active)
             self.assertEqual(curated.workflow_status, "ready")
-            self.assertIn("상태 변경을 확정하지 않았습니다", tts.call_args.args[0])
+            self.assertIn("상태 변경을 확정하지 않았습니다", said_aloud(tts))
             self.assertEqual(
                 session.turn_terminal_outcome(1, session.generation), "blocked"
             )
@@ -2272,8 +2292,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 2, 1))
                 self.assertEqual(curated.current_index, index)
-                self.assertIn("저장하지 못해", tts.call_args.args[0])
-                self.assertNotIn("실험 기록에 반영", tts.call_args.args[0])
+                self.assertIn("저장하지 못해", said_aloud(tts))
+                self.assertNotIn("실험 기록에 반영", said_aloud(tts))
 
     def test_anomaly_acknowledgement_requires_report_persistence(self):
         async def immediate(function, *args, **kwargs):
@@ -2308,13 +2328,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
                 if failure:
-                    self.assertIn("저장하지 못해", tts.call_args.args[0])
-                    self.assertNotIn("기록에 남겼습니다", tts.call_args.args[0])
+                    self.assertIn("저장하지 못해", said_aloud(tts))
+                    self.assertNotIn("기록에 남겼습니다", said_aloud(tts))
                     self.assertEqual(
                         session.experiment_report_store.list_reports(), []
                     )
                 else:
-                    self.assertIn("기록에 남겼습니다", tts.call_args.args[0])
+                    self.assertIn("기록에 남겼습니다", said_aloud(tts))
                     report = session.experiment_report_store.get_report(
                         session.experiment_report_id
                     )
@@ -2668,12 +2688,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("reply.complete",[item["type"] for item in socket.text])
         self.assertIn("turn.done",[item["type"] for item in socket.text])
         self.assertEqual(
-            tts.call_args.args[0],
+            said_aloud(tts),
             "현재 1단계입니다. 안내를 화면에 표시했습니다.")
         display=next(item["text"] for item in socket.text
                      if item["type"]=="reply.delta")
         self.assertIn(self.fixture.steps[0].instruction_source_text,display)
-        self.assertNotEqual(display,tts.call_args.args[0])
+        self.assertNotEqual(display,said_aloud(tts))
 
         self.assertTrue(session.playback_ended(1))
         terminal=session.advance_turn_progress(
@@ -2743,7 +2763,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertIn(self.fixture.steps[0].instruction_source_text, display)
         self.assertEqual(
-            tts.call_args.args[0],
+            said_aloud(tts),
             "실험을 시작합니다. 현재 1단계입니다. "
             "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
             "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다."
@@ -2834,7 +2854,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertNotIn("허용된 답변이 없습니다", next_reply)
         self.assertIn(self.fixture.steps[1].instruction_source_text, next_reply)
         self.assertEqual(
-            next_tts.call_args.args[0],
+            said_aloud(next_tts),
             MOVED_TO_2_SAID,
         )
         self.assertEqual(next_client.chat.completions.calls, [])
@@ -3077,9 +3097,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         stt.assert_called_once()
         llm.assert_not_called()
         self.assertEqual(client.chat.completions.calls, [])
-        tts.assert_called_once()
+        self.assertEqual(said_calls(tts), reply_sentences(socket))
         self.assertEqual(
-            tts.call_args.args[0],
+            said_aloud(tts),
             self.fixture.localized_fact(
                 self.fixture.steps[2].step_id, "current_step"
             ),
@@ -3111,7 +3131,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         step = self.fixture.steps[0]
         current_task = self.fixture.localized_fact(step.step_id, "current_step")
-        spoken = tts.call_args.args[0]
+        spoken = said_aloud(tts)
 
         llm.assert_not_called()
         self.assertEqual(client.chat.completions.calls, [])
@@ -3143,7 +3163,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         step = self.fixture.steps[6]
         expected = self.fixture.localized_fact(step.step_id, "expected_result_1")
-        spoken = tts.call_args.args[0]
+        spoken = said_aloud(tts)
 
         llm.assert_not_called()
         self.assertEqual(client.chat.completions.calls, [])
@@ -3184,7 +3204,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             client=client,
             transcript="달의 질량은?",
         )
-        spoken = tts.call_args.args[0]
+        spoken = said_aloud(tts)
         llm.assert_not_called()
         self.assertEqual(len(client.chat.completions.calls), 0)
         self.assertIn("관련 실험실 자료", spoken)
@@ -3215,7 +3235,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(len(client.chat.completions.calls), 0)
         llm.assert_not_called()
         # The step read out (lane XO), not a sentence about the answer.
-        self.assertTrue(tts.call_args.args[0].startswith("3단계 내용입니다."))
+        self.assertTrue(said_aloud(tts).startswith("3단계 내용입니다."))
         reply = next(item for item in socket.text if item["type"] == "reply.delta")
         self.assertEqual(reply["answer_origin"], "current_protocol")
         self.assertIn(4, reply["source_pages"])
@@ -3232,7 +3252,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.current_index, 5)
         llm.assert_not_called()
         self.assertEqual(len(client.chat.completions.calls), 0)
-        self.assertIn("총 25단계", tts.call_args.args[0])
+        self.assertIn("총 25단계", said_aloud(tts))
         reply = next(item for item in socket.text if item["type"] == "reply.delta")
         self.assertIn("현재: 6/25", reply["text"])
         self.assertIn("남은 단계: 19", reply["text"])
@@ -3293,10 +3313,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
     def test_verified_fact_question_never_constructs_or_calls_an_llm(self):
         client = RecordingClient(error=AssertionError("LLM must not run"))
-        session, _, _, _, tts, llm = self.run_question(client=client)
+        session, socket, _, _, tts, llm = self.run_question(client=client)
         llm.assert_not_called()
         self.assertEqual(client.chat.completions.calls, [])
-        tts.assert_called_once()
+        self.assertEqual(said_calls(tts), reply_sentences(socket))
         self.assertEqual(session.curated_protocol_session.current_index, 2)
 
     def test_tts_failure_is_reported_without_corrupting_workflow_state(self):
@@ -3442,7 +3462,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
             self.assertEqual(session.curated_protocol_session.current_index, 1)
             self.assertEqual(
-                tts.call_args_list[0].args[0],
+                said_aloud(tts),
                 MOVED_TO_2_SAID,
             )
             self.assertIn(
@@ -3629,7 +3649,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(client.chat.completions.calls, [])
         self.assertEqual(session.curated_protocol_session.current_index, 1)
         self.assertEqual(
-            tts.call_args.args[0],
+            said_aloud(tts),
             MOVED_TO_2_SAID,
         )
         closing_state = session.curated_protocol_session.state(
@@ -3656,7 +3676,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertTrue(socket.binary)
         done = next(item for item in socket.text if item["type"] == "turn.done")
         self.assertEqual(done["route"], "curated_protocol")
-        self.assertEqual(done["segment_count"], 1)
+        # Lane VOX: one audio segment per sentence said.
+        self.assertEqual(done["segment_count"], len(speech_sentences(MOVED_TO_2_SAID)))
         self.assertEqual(done["speech_mode"], "control")
 
     def test_text_driven_curated_sequence_has_exact_server_owned_states(self):
@@ -3910,12 +3931,11 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         step_one = self.fixture.steps[0].instruction_source_text
         step_two = self.fixture.steps[1].instruction_source_text
-        spoken = [call.args[0] for call in tts.call_args_list]
         # Property: the exact sequence of spoken control lines, the greeting
         # first and verbatim, with no source step text among the first five.
         # Only the greeting's name literal moved; the ordering and the
         # assertNotIn leak checks below do not mention a name.
-        self.assertEqual(spoken, [
+        spoken = [
             f"Voiney Lab입니다. 선택한 {self.fixture.title} "
             "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
             "실험을 시작합니다. 현재 1단계입니다. "
@@ -3936,6 +3956,11 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요.",
             "실험을 종료할까요?",
             "2단계에서 실험을 종료했습니다.",
+        ]
+        # Lane VOX: each turn's line is synthesized sentence by sentence (the
+        # greeting still whole), so the TTS calls are these lines' sentences.
+        self.assertEqual(said_calls(tts), [
+            spoken[0], *(piece for line in spoken[1:] for piece in speech_sentences(line)),
         ])
         self.assertNotIn(step_one, spoken[:5])
         self.assertNotIn(step_two, spoken[:5])

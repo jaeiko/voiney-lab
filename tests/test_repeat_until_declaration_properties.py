@@ -359,8 +359,10 @@ class ObservationWithoutARecordTests(unittest.TestCase):
                     asyncio.run(run_turn(socket, session, b"\0\0", 2, 1))
                 self.assertEqual(workflow.current_index, index)
                 self.assertEqual(workflow.endpoint_observations(), {})
+                # Lane VOX: the reply is synthesized sentence by sentence.
                 self.assertIn(
-                    "실험 세션 기록이 활성화되지 않아", tts.call_args.args[0]
+                    "실험 세션 기록이 활성화되지 않아",
+                    " ".join(call.args[0] for call in tts.call_args_list),
                 )
                 self.assertTrue(
                     workflow.endpoint_observation_outstanding(index)

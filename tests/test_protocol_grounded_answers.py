@@ -374,7 +374,9 @@ class ServerBoundaryTests(unittest.TestCase):
             "voiney_lab.server.asyncio.to_thread", side_effect=immediate,
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, session.generation))
-        return spoken, socket.text
+        # Lane VOX: the turn's reply is synthesized sentence by sentence; this
+        # one turn said them as one line.
+        return ([" ".join(spoken)] if spoken else []), socket.text
 
     def test_another_protocols_tube_question_is_answered_and_spoken(self) -> None:
         fixture = miniprep_fixture()

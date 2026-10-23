@@ -43,7 +43,7 @@ from voiney_lab.external_references import (
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.language import Transcription
-from voiney_lab.server import ListenerSession, run_turn
+from voiney_lab.server import ListenerSession, run_turn, speech_sentences
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import TurnState
 
@@ -455,15 +455,23 @@ class ServerOutsidePdfExplanationTests(unittest.TestCase):
     def _of(socket, kind):
         return [item for item in socket.text if item["type"] == kind]
 
+    @classmethod
+    def _answer_segments(cls, socket) -> int:
+        """Lane VOX: the rules' answer is one audio segment per sentence."""
+
+        (delta,) = cls._of(socket, "reply.delta")
+        return len(speech_sentences(delta["speech_text"]))
+
     def test_an_explanation_is_said_after_the_rules_answer(self) -> None:
         session = self._session(2, supplemental=True)
         explainer = self._explainer("유기 용매로, 젤 조각의 물을 빼는 데 흔히 쓰여요.")
         socket = self._turn(session, "acetonitrile이 뭐야?", explainer)
         self.assertEqual(len(explainer.calls), 1)
+        answer = self._answer_segments(socket)
         segments = [item["segment_index"] for item in self._of(socket, "audio.segment.start")]
-        self.assertEqual(segments, [0, 1])
+        self.assertEqual(segments, [*range(answer), answer])
         complete = self._of(socket, "audio.complete")
-        self.assertEqual([item["segment_count"] for item in complete], [2])
+        self.assertEqual([item["segment_count"] for item in complete], [answer + 1])
         (result,) = self._of(socket, "research.result")
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["source_label"], "AI 일반 지식")
@@ -475,10 +483,12 @@ class ServerOutsidePdfExplanationTests(unittest.TestCase):
     def test_an_explanation_that_fails_d4_is_dropped(self) -> None:
         session = self._session(2, supplemental=True)
         socket = self._turn(session, "acetonitrile이 뭐야?", self._explainer("보통 500 µL 넣으세요."))
+        answer = self._answer_segments(socket)
         self.assertEqual(
-            [item["segment_index"] for item in self._of(socket, "audio.segment.start")], [0])
+            [item["segment_index"] for item in self._of(socket, "audio.segment.start")],
+            list(range(answer)))
         self.assertEqual(
-            [item["segment_count"] for item in self._of(socket, "audio.complete")], [1])
+            [item["segment_count"] for item in self._of(socket, "audio.complete")], [answer])
         self.assertEqual(self._of(socket, "research.result"), [])
         self.assertEqual(self._of(socket, "research.state"), [])
 
@@ -488,10 +498,12 @@ class ServerOutsidePdfExplanationTests(unittest.TestCase):
             session, "acetonitrile이 뭐야?",
             self._explainer("유기 용매로 흔히 쓰여요.", delay=0.6),
         )
+        answer = self._answer_segments(socket)
         self.assertEqual(
-            [item["segment_index"] for item in self._of(socket, "audio.segment.start")], [0])
+            [item["segment_index"] for item in self._of(socket, "audio.segment.start")],
+            list(range(answer)))
         self.assertEqual(
-            [item["segment_count"] for item in self._of(socket, "audio.complete")], [1])
+            [item["segment_count"] for item in self._of(socket, "audio.complete")], [answer])
         self.assertEqual(self._of(socket, "research.result"), [])
 
     def test_a_quantity_question_gets_no_model_knowledge(self) -> None:

@@ -22,6 +22,7 @@ from openai import AsyncOpenAI, OpenAI
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     ConversationHistory,
+    SentenceChunker,
     answer_curated_protocol_question,
 )
 from voiney_lab.configuration import (
@@ -3003,6 +3004,47 @@ def frame_complete_audio(pcm:bytes)->list[bytes]:
     buffer=FrameBuffer(); frames=buffer.push(pcm); tail=buffer.finish(pad=True)
     if tail is not None: frames.append(tail)
     return frames
+
+
+# --- Lane VOX (2026-10-23): the guidance said sentence by sentence -----------
+
+def speech_sentences(text:str)->tuple[str,...]:
+    """The pieces ``text`` is said in, one sentence or more each (decision 2).
+
+    The sentence ends are ``brain.SentenceChunker``'s: a period between two
+    digits, after an abbreviation such as "Fig." or ending a piece shorter
+    than four characters ends no sentence, so a number keeps its decimals and
+    its unit. The pieces are cut from the text as the TTS hears it
+    (``clean_speech_text``) and only where a space follows, and a piece that
+    the same cleaning would change when it stands alone -- "0.5 mL" or
+    "-20 °C" at its start read as a list mark -- is joined to the one before
+    it, so the pieces said one after another are exactly the words the whole
+    would have been. ``(text,)`` itself when it is one piece or cannot be
+    cut so.
+    """
+
+    whole=clean_speech_text(text)
+    chunker=SentenceChunker()
+    found=[item.text for item in (*chunker.feed(whole),*chunker.flush())]
+    spans:list[list[int]]=[]
+    position=0
+    for sentence in found:
+        start=whole.find(sentence,position)
+        if start<0 or whole[position:start].strip():
+            return (text,)
+        end=start+len(sentence)
+        if spans and (start==position or clean_speech_text(sentence)!=sentence):
+            spans[-1][1]=end
+        else:
+            spans.append([start,end])
+        position=end
+    pieces=tuple(whole[start:end] for start,end in spans)
+    if (
+        len(pieces)<2 or " ".join(pieces)!=whole
+        or any(clean_speech_text(piece)!=piece for piece in pieces)
+    ):
+        return (text,)
+    return pieces
 
 
 def _configured_candidate_fixture(config:ServerConfig)->CuratedProtocolFixture|None:
@@ -7612,7 +7654,7 @@ def _record_web_reference(
 async def _run_web_lookup(
     *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
     curated:CuratedProtocolSession,plan:Any,transcript:str,language:str,
-    speak_by:float|None,clock:Callable[[],float],
+    speak_by:float|None,clock:Callable[[],float],answer_segments:int=1,
 )->None:
     """Ask the web about the thing named, after the rules' answer (lane WV, decision 2).
 
@@ -7662,8 +7704,10 @@ async def _run_web_lookup(
                 frames and session.is_current(turn_id,generation)
                 and (turn_id,generation) in session.held_audio_complete
             ):
-                await sender.segment(turn_id,1,frames,generation)
-                await _release_held_audio(sender,session,turn_id,generation,2)
+                # Lane VOX: after every sentence of the answer.
+                await sender.segment(turn_id,answer_segments,frames,generation)
+                await _release_held_audio(
+                    sender,session,turn_id,generation,answer_segments+1)
                 spoken_aloud=True
         await sender.text(
             "protocol.web.result",
@@ -7701,7 +7745,7 @@ async def _run_web_lookup(
         # The held answer audio is let go whatever happened; a page that
         # closed meanwhile cannot be sent to, and that is not an error here.
         try:
-            await _release_held_audio(sender,session,turn_id,generation,1)
+            await _release_held_audio(sender,session,turn_id,generation,answer_segments)
         except Exception:  # noqa: BLE001
             pass
 
@@ -8184,8 +8228,10 @@ async def _queue_curated_research(
                     frames and session.is_current(turn_id,generation)
                     and (turn_id,generation) in session.held_audio_complete
                 ):
-                    await sender.segment(turn_id,1,frames,generation)
-                    await _release_held_audio(sender,session,turn_id,generation,2)
+                    # Lane VOX: after every sentence of the answer.
+                    after=int(ctx.get("answer_segments",1))
+                    await sender.segment(turn_id,after,frames,generation)
+                    await _release_held_audio(sender,session,turn_id,generation,after+1)
                     research_plan=explained
                     spoken_explanation=True
             else:
@@ -8313,7 +8359,9 @@ async def _queue_curated_research(
         try:
             await worker()
         finally:
-            await _release_held_audio(sender,session,turn_id,generation,1)
+            await _release_held_audio(
+                sender,session,turn_id,generation,
+                int(context.get("answer_segments",1)))
 
     task=asyncio.create_task(worker_releasing_held_audio())
     session.track_visual_task(task)
@@ -10355,6 +10403,64 @@ async def _route_with_llm_router(
     )
 
 
+@dataclass(frozen=True)
+class _SpokenAnswer:
+    """What a turn's spoken answer sent (lane VOX, decision 2)."""
+
+    segments:int
+    frames:int
+    #: When the page, playing the segments one after another as they came,
+    #: ends the last one.
+    ends_at:float
+    #: A later sentence could not be made; the answer stopped there.
+    failed:bool=False
+
+
+async def _say_answer(
+    session:ListenerSession,sender:LockedSender,*,turn_id:int,generation:int,
+    first_frames:list[bytes],later:tuple[str,...],language:str,
+    clock:Callable[[],float],
+)->_SpokenAnswer:
+    """Send the first sentence's audio, then make and send each later one.
+
+    Lane VOX, decision 2: the page plays a turn's segments in order as they
+    come, so the first sentence is heard while the rest are made. Before a
+    later sentence is asked for and again before its audio is sent, the turn
+    must still be current in its generation: a barge-in cancels this
+    coroutine (a sentence being made is dropped when it returns) and a piece
+    of an older generation is never sent. A later sentence the provider
+    cannot make ends the answer there; what was sent stays and nothing more
+    is asked for.
+    """
+
+    def seconds(frames:list[bytes])->float:
+        return sum(len(frame) for frame in frames)/32000
+
+    sent_at=clock()
+    await sender.segment(turn_id,0,first_frames,generation)
+    spoken=_SpokenAnswer(1,len(first_frames),sent_at+seconds(first_frames))
+    for sentence in later:
+        if not session.is_current(turn_id,generation):
+            break
+        try:
+            pcm=await asyncio.to_thread(synthesize,sentence,language)
+        except Exception:
+            log.exception("curated protocol sentence TTS failed")
+            return replace(spoken,failed=True)
+        frames=frame_complete_audio(pcm)
+        if not frames:
+            continue
+        if not session.is_current(turn_id,generation):
+            break
+        sent_at=clock()
+        await sender.segment(turn_id,spoken.segments,frames,generation)
+        spoken=_SpokenAnswer(
+            spoken.segments+1,spoken.frames+len(frames),
+            max(spoken.ends_at,sent_at)+seconds(frames),
+        )
+    return spoken
+
+
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,
                    retained_prefix_frames:int=0,
@@ -11780,13 +11886,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     raise RuntimeError("curated protocol produced no speech text")
                 timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
                 await progress("synthesizing",route="curated_protocol")
-                pcm=await asyncio.to_thread(synthesize,said(speech_text),turn_language)
+                # Lane VOX, decision 2: the first sentence is made and plays
+                # at once; the later ones are made while it plays (below).
+                # The whole is remembered as said, for the echo check.
+                spoken_sentences=speech_sentences(said(speech_text))
+                pcm=await asyncio.to_thread(
+                    synthesize,spoken_sentences[0],turn_language)
                 frames=frame_complete_audio(pcm)
                 if filler is not None:await filler.primary_ready()
                 if not frames or not session.start_playback(turn_id):
                     raise RuntimeError("curated protocol produced no playable audio")
             else:
                 frames=[]
+                spoken_sentences=()
                 if filler is not None:
                     await filler.cancel()
         except asyncio.CancelledError:
@@ -11936,8 +12048,58 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             development_note=None)
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
+        def record_turn_metric()->None:
+            _record_workspace_metric(
+                category="workflow",metric_name="turn",
+                metric_value=float(timings.get("total_ms",0)),
+                dimensions={
+                    "event_kind":plan.action.value,
+                    "status":"mutated" if plan.state_changed else "read_only",
+                    "route":"curated_protocol",
+                    "answer_origin":plan.answer_origin,
+                },
+            )
         if speech_policy=="speak":
-            await sender.segment(turn_id,0,frames,generation)
+            try:
+                spoken=await _say_answer(
+                    session,sender,turn_id=turn_id,generation=generation,
+                    first_frames=frames,later=spoken_sentences[1:],
+                    language=turn_language,clock=clock)
+            except asyncio.CancelledError:
+                # Lane VOX: a barge-in while the later sentences are made.
+                # The turn did what it did; its history, pilot row and metric
+                # are kept as when the whole answer was made before it was
+                # heard and a barge-in came only after the turn had ended.
+                if brain_run is not None:
+                    brain_run.cancel()
+                if router_outcome is not None and router_before is not None:
+                    _record_router_history(
+                        session,curated,router_outcome,router_before,
+                        user=transcript,plan=plan,turn_id=turn_id,
+                        generation=generation,said=speech_text,
+                    )
+                timings["total_ms"]=round((clock()-endpoint)*1000)
+                _pilot_turn_event(session,turn_id,"turn.done",{"timings_ms":dict(timings)})
+                record_turn_metric()
+                raise
+            if spoken.failed:
+                # The same signals as a turn whose audio could not be made,
+                # but the turn still ends below: the sentences sent play and
+                # the page's playback.ended ends the turn, so the session
+                # never listens to its own voice as a new turn.
+                _record_workspace_metric(
+                    category="voice",metric_name="command_failure",
+                    dimensions={"status":"failed","reason_code":"turn_processing_failed"},
+                )
+                await progress("error",route="curated_protocol")
+                await current_text(
+                    "error",turn_id=turn_id,message="voice turn processing failed")
+        else:
+            spoken=_SpokenAnswer(0,0,clock())
+        if research_context is not None:
+            # Lane VOX: a follow-up's segment comes after every sentence of
+            # the answer, and the audio.complete it holds counts them.
+            research_context["answer_segments"]=spoken.segments
         await current_text(
             "reply.complete",turn_id=turn_id,text=display_text,
             # Lane F, decision 3: the delta's document again, so the screen
@@ -11954,7 +12116,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # Lane WV, decision 2: the web's one or two sentences the same
             # way, within the lookup's own time limit.
             session.held_audio_complete.add((turn_id,generation))
-            answer_ends=clock()+sum(len(frame) for frame in frames)/32000+0.3
+            answer_ends=max(clock(),spoken.ends_at)+0.3
             if research_context is not None and research_context.get("outside_pdf") is not None:
                 research_context["speak_by"]=answer_ends
             if web_lookup_now:
@@ -11962,17 +12124,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     15.0,session.web_explanation_settings.timeout_seconds)
             async def release_when_answer_ends(deadline:float)->None:
                 await asyncio.sleep(max(0.0,deadline-clock()))
-                await _release_held_audio(sender,session,turn_id,generation,1)
+                await _release_held_audio(
+                    sender,session,turn_id,generation,spoken.segments)
             session.track_visual_task(asyncio.create_task(
                 release_when_answer_ends(web_speak_by or answer_ends)))
         else:
             await current_text(
-                "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
+                "audio.complete",turn_id=turn_id,segment_count=spoken.segments)
         if web_lookup_now:
             session.track_visual_task(asyncio.create_task(_run_web_lookup(
                 session=session,sender=sender,turn_id=turn_id,generation=generation,
                 curated=curated,plan=plan,transcript=transcript,language=turn_language,
-                speak_by=web_speak_by,clock=clock)))
+                speak_by=web_speak_by,clock=clock,answer_segments=spoken.segments)))
         if drawing_now:
             session.track_visual_task(asyncio.create_task(_run_drawing(
                 session=session,sender=sender,turn_id=turn_id,generation=generation,
@@ -11998,8 +12161,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         timings["total_ms"]=round((clock()-endpoint)*1000)
         await current_text(
             "turn.done",turn_id=turn_id,timings_ms=timings,
-            segment_count=1 if speech_policy=="speak" else 0,input_frames=input_frames,
-            output_frames=len(frames),tools_used=curated_tools_used,
+            segment_count=spoken.segments,input_frames=input_frames,
+            output_frames=spoken.frames,tools_used=curated_tools_used,
             route="curated_protocol",result_kind=plan.action.value,
             fact_id=plan.fact_id,speech_mode=plan.speech_mode.value,
             critical_warning_present=plan.critical_warning_text is not None,
@@ -12021,16 +12184,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # is no playback.ended to carry it there.
             await progress(session.turn_terminal_outcome(turn_id,generation))
             session.complete_without_playback(turn_id)
-        _record_workspace_metric(
-            category="workflow",metric_name="turn",
-            metric_value=float(timings.get("total_ms",0)),
-            dimensions={
-                "event_kind":plan.action.value,
-                "status":"mutated" if plan.state_changed else "read_only",
-                "route":"curated_protocol",
-                "answer_origin":plan.answer_origin,
-            },
-        )
+        record_turn_metric()
         # Lane RA, decision (b): with the router first the roles ran beside
         # the router; their outputs go where they went before.
         source_output=(
