@@ -20,7 +20,7 @@
 
 ## F1. 계정과 로그인
 
-계정 모드의 API 문서(`/docs`, `/redoc`, `/openapi.json`)도 로그인이 필요하다. 상태를 바꾸는 브라우저 요청과 음성 소켓은 다른 Origin을 거부한다. 명시한 앱 Origin은 기존 bearer 경로를 쓰며 다른 Origin의 쿠키가 쓰기를 허가하지 않는다.
+계정 모드의 API 문서(`/docs`, `/redoc`, `/openapi.json`)도 로그인이 필요하다. 상태를 바꾸는 브라우저 요청과 음성 소켓은 다른 Origin을 거부한다. 명시한 앱 Origin은 기존 bearer 경로를 쓰며 다른 Origin의 쿠키가 HTTP 쓰기를 허가하지 않는다.
 
 - **무엇**: `VOINEY_LAB_AUTH_MODE` 가 `dev`(기본)면 로그인 없이 개발 신원 한 사람으로 쓴다. `accounts` 면 모든 `/api` 요청과 `/ws` 가 로그인을 요구하고, 가입은 **초대 링크로만** 된다(한 번, 기본 72시간).
   비밀번호는 scrypt 해시, 세션은 HttpOnly·SameSite=Lax 쿠키(HTTPS 요청이면 Secure), 30일. 같은 이름으로 15분 안에 5번 틀리면 그 이름이 잠긴다(429). 같은 Wi-Fi의 다른 계정은 잠기지 않으며 현재 비밀번호를 확인하는 변경 요청에도 같은 제한을 적용한다.

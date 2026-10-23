@@ -47,3 +47,13 @@ def test_ws_origin_uses_the_actual_scheme_and_normalizes_default_ports(monkeypat
         assert socket.sent[0]["type"] == "ready"
     else:
         assert socket.closed == (1008, "origin not allowed")
+
+
+def test_ws_does_not_derive_its_own_scheme_from_the_presented_origin(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path, mode="dev")
+    monkeypatch.delenv("VOINEY_LAB_APP_ORIGINS", raising=False)
+    socket = _Socket({"origin": "https://test", "host": "test"})
+    socket.url = SimpleNamespace(scheme="")
+    asyncio.run(srv.voice_socket(socket))
+    assert socket.sent == [{"type": "error", "message": "configuration_invalid"}]
+    assert socket.closed == (1008, "invalid configuration")

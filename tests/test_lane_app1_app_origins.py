@@ -1,14 +1,14 @@
 """Lane APP1, decision 4 (2026-10-19): letting the app's origin in.
 
-``VOINEY_LAB_APP_ORIGINS`` (empty by default: nothing changes) lists the
+``VOINEY_LAB_APP_ORIGINS`` (empty by default) lists the
 origins of the app's bundled screen. For them ``/api`` (and the health paths
 the screen reads) answers CORS -- the preflight without a session, the
 answer's ``Access-Control-Allow-Origin`` echoing the origin, never
 ``Allow-Credentials`` (the app sends a bearer, not cookies) -- and ``/ws``
-accepts them. Once the list is set, ``/ws`` checks the browser's Origin: the
+accepts them. ``/ws`` checks the browser's Origin even with an empty list: the
 server's own host, a listed app origin, or no Origin at all (not a browser)
-pass; any other site is refused before anything else. Before this lane
-``/ws`` had no origin check at all; with the list empty it still has none.
+pass; any other site is refused before anything else. The scheme comes from
+the transport or trusted proxy; the browser's header cannot choose it.
 Provider calls: none. Network: this process only.
 """
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -117,6 +118,7 @@ def test_an_invalid_list_is_not_ready_and_lets_no_app_in(monkeypatch, tmp_path):
 class _Socket:
     def __init__(self, headers):
         self.headers = dict(headers)
+        self.url = SimpleNamespace(scheme="wss")
         self.cookies = {}
         self.sent = []
         self.closed = None

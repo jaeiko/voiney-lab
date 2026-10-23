@@ -996,9 +996,8 @@ def _socket_origin_refusal(websocket:WebSocket)->str|None:
         if not scheme:
             scheme=getattr(getattr(websocket,"url",None),"scheme","")
         scheme={"ws":"http","wss":"https"}.get(scheme,scheme)
-        # Header-only test transports have no URL; real WebSockets carry
-        # their scheme. Compare normalized origins, including default ports.
-        scheme=scheme or normalized.split("://",1)[0]
+        if scheme not in {"http","https"}:
+            return "configuration_invalid"
         own_hosts={
             value.split(",")[0].strip().casefold()
             for value in (headers.get("host",""),headers.get("x-forwarded-host",""))
