@@ -183,6 +183,47 @@ function measure(): Measured {
   return { overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, small: Array.from(new Set(small)), sheets };
 }
 
+type RunBoxes = { step: DOMRect; stepFont: number; digits: DOMRect; digitsFont: number; timer: DOMRect; settings: DOMRect; pause: DOMRect; stop: DOMRect; tokens: Record<string, number> };
+
+// Decision 2: the run screen read from 1.5 m and pressed with gloves -- the boxes and sizes, with the page's own tokens in px.
+async function runBoxes(page: Page): Promise<RunBoxes> {
+  return page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement), rem = parseFloat(root.fontSize);
+    const px = (name: string) => { const value = root.getPropertyValue(name).trim(); return value.endsWith('rem') ? parseFloat(value) * rem : parseFloat(value); };
+    const box = (id: string) => document.getElementById(id)!.getBoundingClientRect().toJSON() as DOMRect;
+    const font = (id: string) => parseFloat(getComputedStyle(document.getElementById(id)!).fontSize);
+    return {
+      step: box('procedure-primary'), stepFont: font('procedure-primary'), digits: box('run-timer-digits'), digitsFont: font('run-timer-digits'), timer: box('run-timer'),
+      settings: box('run-open-settings'), pause: box('rail-pause-session'), stop: box('rail-stop-session'),
+      tokens: { step: px('--read-far-step'), timer: px('--read-far-timer'), glove: px('--target-glove'), gap: px('--gap-glove') },
+    };
+  });
+}
+
+async function expectRunReadFromAfar(page: Page) {
+  const run = await runBoxes(page);
+  const viewport = page.viewportSize()!;
+  expect(run.tokens).toEqual({ step: 52, timer: 128, glove: 80, gap: 24 });
+  // The step and the timer digits at the reading sizes, both on the first screen.
+  expect(run.stepFont).toBeGreaterThanOrEqual(run.tokens.step);
+  expect(run.digitsFont).toBeGreaterThanOrEqual(run.tokens.timer);
+  for (const item of [run.step, run.digits]) expect(item.bottom).toBeLessThanOrEqual(viewport.height - run.tokens.glove);
+  if (viewport.width > viewport.height) {
+    // On its side: two columns, the step's on the left and the timer's on the right, side by side.
+    expect(run.timer.left).toBeGreaterThanOrEqual(run.step.right);
+    expect(run.digits.right).toBeLessThanOrEqual(viewport.width);
+    expect(run.digits.top).toBeLessThan(run.step.bottom + viewport.height / 2);
+    await expect(page.locator('#run-open-figures')).toBeVisible();
+  }
+  // The primary buttons: big for a glove, and set apart from each other and from the sheet openers.
+  for (const button of [run.pause, run.stop]) {
+    expect(button.height).toBeGreaterThanOrEqual(run.tokens.glove);
+    expect(button.width).toBeGreaterThanOrEqual(run.tokens.glove);
+  }
+  expect(run.stop.left - run.pause.right).toBeGreaterThanOrEqual(run.tokens.gap);
+  expect(run.pause.left - run.settings.right).toBeGreaterThanOrEqual(run.tokens.gap);
+}
+
 async function expectTabletScreen(page: Page, screen: string) {
   const measured = await page.evaluate(measure);
   expect(measured.overflow, `${screen}: horizontal overflow`).toBe(0);
@@ -246,6 +287,7 @@ test.describe('One experiment on a tablet (lane TAB)', () => {
     await expect(page.locator('#rail-pause-session')).toBeEnabled();
     expect(server.received).toContain('client.audio_ready');
     await expectTabletScreen(page, 'run');
+    await expectRunReadFromAfar(page);
 
     // A pause and the resume, by the rail's button and the card's.
     await page.locator('#rail-pause-session').tap();

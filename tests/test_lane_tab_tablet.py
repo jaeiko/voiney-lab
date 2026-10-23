@@ -92,6 +92,56 @@ class TabletTargetTests(unittest.TestCase):
                 self.assertFalse(_matches(query, screen), f"@media {query} reaches {screen}")
 
 
+def _root_tokens(style: str) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for block in re.findall(r"(?m)^    :root\{([^}]*)\}", style):
+        tokens.update(dict(re.findall(r"(--[a-z0-9-]+):([^;]+);", block)))
+    return tokens
+
+
+class TabletRunScreenTests(unittest.TestCase):
+    """Decision 2: the run screen on a tablet, read from 1.5 m and pressed with gloves."""
+
+    def setUp(self) -> None:
+        self.style = _style()
+        self.tokens = _root_tokens(self.style)
+        self.blocks = _tablet_blocks(self.style)
+
+    def test_the_reading_and_glove_sizes_are_tokens(self) -> None:
+        self.assertEqual(self.tokens.get("--read-far-step"), "3.25rem")
+        self.assertEqual(self.tokens.get("--read-far-min"), "2.5rem")
+        self.assertEqual(self.tokens.get("--read-far-timer"), "8rem")
+        self.assertEqual(self.tokens.get("--target-glove"), "80px")
+        self.assertEqual(self.tokens.get("--gap-glove"), "24px")
+        # The comment says how each was worked out (the distance, the angle, the millimetres).
+        for words in ("1.5 m", "ANSI/HFES 100-2007", "20'", "16'", "40'", "15 mm", "4.6 mm"):
+            self.assertIn(words, self.style)
+
+    def test_both_tablets_read_the_step_and_the_timer_at_the_token_sizes(self) -> None:
+        both = "".join(body for query, body in self.blocks if _matches(query, TABLET_PORTRAIT) and _matches(query, TABLET_LANDSCAPE))
+        self.assertIn('body[data-view="during"]{--target-run:var(--target-glove);--run-primary-w:8rem}', both)
+        self.assertIn('p.step-body[data-length="medium"]{font-size:var(--read-far-step);', both)
+        self.assertIn('p.step-body[data-length="long"]{font-size:var(--read-far-min);', both)
+        self.assertIn('.run-timer:not([data-digits="long"]) .run-timer-digits{font-size:max(var(--read-far-timer),min(9rem,34cqi))}', both)
+        # A short step is larger still (3.5rem, the existing tablet scale), never under the token.
+        self.assertIn('body[data-view="during"] .procedure-card p.step-body{font-size:3.5rem;', both)
+        self.assertIn('#rail-pause-session,body[data-view="during"] #rail-stop-session{margin-left:var(--gap-glove);', both)
+        self.assertIn('body[data-view="during"] .rail-right{background:var(--paper)}', both)
+
+    def test_a_tablet_on_its_side_has_two_columns_and_set_apart_buttons(self) -> None:
+        side = "".join(body for query, body in self.blocks if _matches(query, TABLET_LANDSCAPE) and not _matches(query, TABLET_PORTRAIT))
+        # The timer panel is as wide as 8rem digits need: its content (the panel less 1.5rem each side) times .34 is the token.
+        self.assertIn("--run-timer-panel-w:calc(var(--read-far-timer) / .34 + 3rem)", side)
+        self.assertIn('body[data-view="during"] .run-timer{padding:1.5rem}', side)
+        self.assertIn("right:calc(var(--run-action-w) * 3 + var(--run-primary-w) * 2 + var(--gap-glove) * 2)", side)
+        # The three columns (step, timer, pictures) are a mouse's wide screen only: never a tablet's, still the desktop's.
+        query = re.search(r"@media ([^{]*min-width:1100px[^{]*)\{\n     body\[data-view=\"during\"\]\{--run-actions:4;", self.style)
+        self.assertIsNotNone(query)
+        self.assertFalse(_matches(query.group(1), TABLET_LANDSCAPE))
+        self.assertTrue(_matches(query.group(1), DESKTOP))
+        self.assertTrue(_matches(query.group(1), WIDE_DESKTOP))
+
+
 class TabletProjectTests(unittest.TestCase):
 
     def test_both_configs_run_the_tablet_spec_on_two_touch_tablets_only(self) -> None:

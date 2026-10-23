@@ -274,7 +274,8 @@
     @media (orientation:landscape){
      body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{top:0;left:auto;width:min(34rem,100%);max-height:none;border-top:0;border-left:2px solid var(--ink)}
     }
-    @media (orientation:landscape) and (min-width:1100px){
+    /* Lane TAB decision 2 (2026-10-23): a mouse's wide screen only -- a tablet on its side keeps two columns (below). */
+    @media (orientation:landscape) and (min-width:1100px) and (pointer:fine){
      body[data-view="during"]{--run-actions:4;--run-timer-panel-w:340px;--run-figures-w:22rem}
      body[data-view="during"] .procedure-card{grid-template-columns:minmax(0,1fr) var(--run-timer-panel-w) var(--run-figures-w);grid-template-areas:"left timer fig" "more timer fig"}
      body[data-view="during"] .task-body-right,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;flex-direction:column;gap:.75rem;grid-area:fig;position:sticky;top:var(--run-statusbar-h);z-index:auto;width:auto;max-height:calc(100dvh - var(--run-statusbar-h) - var(--run-bottom-h));padding:1rem;overflow:auto;border:0;border-left:1px solid var(--border);box-shadow:none;background:none}
@@ -908,6 +909,35 @@
      button,summary,[role="button"]{min-width:var(--target-desk)}
      summary{align-content:center}
      label:has(> input[type="checkbox"]),label:has(> input[type="radio"]){display:inline-flex;align-items:center;min-height:var(--target-desk)}
+    }
+    /* Lane TAB decision 2 (2026-10-23): the run screen on a tablet, read from 1.5 m and pressed with gloves.
+       The sizes are tokens, worked out for a 10-11" tablet, where a CSS px is about 0.19 mm (0.23 mm on
+       the larger ones, which only helps), and the usual screen-text sizes of ANSI/HFES 100-2007 (character
+       height 16' at least, 20'-22' preferred; at 1.5 m 20' is 8.7 mm):
+       --read-far-step  3.25rem: a Hangul glyph is about 0.9 em, 47 px, 8.9 mm -- 20' (a step of up to 120 characters)
+       --read-far-min   2.5rem : 36 px, 6.8 mm -- 16', the floor, for a longer step that must still fit
+       --read-far-timer 8rem   : a digit is about 0.72 em, 92 px, 17.5 mm -- 40', twice the reading size, read at a glance
+       --target-glove   80px   : about 15 mm, the primary buttons' height (pause or resume, stop) for a gloved finger
+       --gap-glove      24px   : about 4.6 mm of paper between the primary buttons, so a glove does not press both
+       The step's own sizes and the timer panel's width come from these; h:mm:ss digits shrink to the panel's width. */
+    :root{--read-far-step:3.25rem;--read-far-min:2.5rem;--read-far-timer:8rem;--target-glove:80px;--gap-glove:24px;}
+    @media (pointer:coarse) and (min-width:721px) and (min-height:600px){
+     body[data-view="during"]{--target-run:var(--target-glove);--run-primary-w:8rem}
+     body[data-view="during"] .procedure-card p.step-body{font-size:3.5rem;line-height:4rem}
+     body[data-view="during"] .procedure-card p.step-body[data-length="medium"]{font-size:var(--read-far-step);line-height:calc(var(--read-far-step) * 1.2)}
+     body[data-view="during"] .procedure-card p.step-body[data-length="long"]{font-size:var(--read-far-min);line-height:calc(var(--read-far-min) * 1.25)}
+     body[data-view="during"] .procedure-card .run-timer:not([data-digits="long"]) .run-timer-digits{font-size:max(var(--read-far-timer),min(9rem,34cqi))}
+     body[data-view="during"] .rail-right{background:var(--paper)}
+     body[data-view="during"] #rail-pause-session,body[data-view="during"] #rail-stop-session{margin-left:var(--gap-glove);font-size:1.125rem}
+    }
+    /* On its side: the step's column on the left and the timer on the right, one look for both; the panel is
+       as wide as 8rem digits need (34cqi of its content), the pictures open from 그림 보기 as on any landscape
+       screen, and the buttons are three sheet openers, then the two primary ones, each set apart. */
+    @media (orientation:landscape) and (pointer:coarse) and (min-width:721px) and (min-height:600px){
+     body[data-view="during"]{--run-timer-panel-w:calc(var(--read-far-timer) / .34 + 3rem);--run-action-w:96px;--run-bottom-h:var(--target-glove)}
+     body[data-view="during"] .run-timer{padding:1.5rem}
+     body[data-view="during"] #rail-pause-session,body[data-view="during"] #rail-stop-session{width:var(--run-primary-w)}
+     body[data-view="during"] .voice-console{right:calc(var(--run-action-w) * 3 + var(--run-primary-w) * 2 + var(--gap-glove) * 2)}
     }
     @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   </style>
