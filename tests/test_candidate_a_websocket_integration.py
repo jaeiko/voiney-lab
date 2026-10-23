@@ -843,13 +843,19 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                         "LLM must not run for current-step control"
                     ),
                 ):
-                    await run_turn(
-                        second, listener, b"\0\0", 1, 1,
-                        accepted_transcription=Transcription(
-                            "현재 단계 알려줘", "ko"
-                        ),
-                        accepted_stt_ms=1,
-                    )
+                    # This turn is invoked by the harness's task, outside
+                    # voice_socket's authenticated child-task context.
+                    token = server_module._REQUEST_PRINCIPAL.set(principal)
+                    try:
+                        await run_turn(
+                            second, listener, b"\0\0", 1, 1,
+                            accepted_transcription=Transcription(
+                                "현재 단계 알려줘", "ko"
+                            ),
+                            accepted_stt_ms=1,
+                        )
+                    finally:
+                        server_module._REQUEST_PRINCIPAL.reset(token)
                 second.disconnect.set()
                 await task
 

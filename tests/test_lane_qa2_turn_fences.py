@@ -131,6 +131,11 @@ class TurnFenceTests(VoiceNotesHarness, unittest.TestCase):
             self.assertEqual(after["version"], before["version"])
             self.assertEqual(after["current_step_id"], "step-2")
             self.assertEqual(self.report()["events"], report_before)
+            self.assertEqual(
+                [(item["turn_id"], item["code"]) for item in socket.sent
+                 if item["type"] == "experiment.session.error"],
+                [(4, "workspace_conflict"), (5, "workspace_conflict")],
+            )
         self.voice(scenario)
 
     def test_bad_controls_leave_the_connection_and_checkpoint_alive(self):

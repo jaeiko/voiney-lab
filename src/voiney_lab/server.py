@@ -10817,9 +10817,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         curated=session.curated_protocol_session
         try:
             await asyncio.to_thread(_require_current_voice_connection,session)
-        except WorkspaceError:
+        except WorkspaceError as exc:
+            await current_text(
+                "experiment.session.error",turn_id=turn_id,
+                code=getattr(exc,"code","workspace_error"))
             await finish_blocked_voice(
-                "다른 연결에서 이 실험을 이어하고 있어요. 현재 연결을 확인해 주세요.",
+                "다른 연결에서 이 실험을 이어하고 있어요. 상태 변경을 확정하지 않았습니다. 현재 연결을 확인해 주세요.",
                 "curated_protocol",outcome="blocked")
             return
         checkpoint=curated._checkpoint()
