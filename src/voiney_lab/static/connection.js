@@ -44,11 +44,12 @@ const SCREEN_TIMER_WORDS={
 // server refusing the run REFUSALS_LIMIT times ends the trying.
 const RETRY_DELAYS_MS=[1000,2000,4000,8000,15000],ATTEMPT_LIMIT_MS=12000,REFUSALS_LIMIT=3;
 const RESTORED_TITLE="다시 연결됐어요 — 서버 상태로 바꿨어요",RESTORED_SHOWN_MS=4000;
-// When the run cannot be continued: the page ends the session and says why.
+// When the run cannot be continued: the page ends the session and says why. Lane UI4 (QA-57's rest,
+// 2026-10-23): by the screen's own names -- the records tab, the home tab's "이어서 하기" card.
 const GIVEN_UP_WORDS={
  ended:"다시 연결됐지만 이 실험은 이미 끝났어요. 실험 기록에서 확인해 주세요.",
- not_available:"다시 연결됐지만 이 실험을 찾지 못했어요. 처음 화면에서 실험을 다시 골라 주세요.",
- refused:"다시 연결됐지만 서버가 이 실험을 이어 받지 않았어요. 처음 화면에서 '실험 이어하기'를 눌러 확인해 주세요.",
+ not_available:"다시 연결됐지만 이 실험을 찾지 못했어요. 기록 탭에서 실험을 다시 골라 주세요.",
+ refused:"다시 연결됐지만 서버가 이 실험을 이어 받지 않았어요. 홈 탭의 '이어서 하기'를 눌러 확인해 주세요.",
 };
 
 const net={socket:null,heardAt:0,pingSeq:0,pingHandle:null,checkHandle:null,lost:null,tick:null,band:null,
