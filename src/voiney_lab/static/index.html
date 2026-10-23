@@ -1876,7 +1876,7 @@ const runFigureKeys=new Set(),runFigureKeysSeen=new Set(),RUN_CARD_LONG=120;
 // held while the start is under way (SCREEN_WAKE_START_MS), the request runs
 // in the same turn as the touch, and a tap during the run asks again for a
 // lock the browser let go.
-let screenWakeLock=null,screenWakeLockWanted=false,screenWakeLockAsking=null,screenWakeLockStartUntil=0;
+let screenWakeLock=null,screenWakeLockWanted=false,screenWakeLockAsking=null,screenWakeLockStartHold=0,screenWakeLockStartPresses=0;
 var SCREEN_WAKE_START_MS=20000;
 function keepScreenOn(on){
  screenWakeLockWanted=Boolean(on);
@@ -1892,10 +1892,12 @@ function keepScreenOn(on){
  return screenWakeLockAsking;
 }
 function onScreenVisibilityChange(){if(globalThis.document?.visibilityState==="visible"&&screenWakeLockWanted&&!screenWakeLock)return keepScreenOn(true);return Promise.resolve(Boolean(screenWakeLock));}
-// The start press: the screen kept on until the run view takes over, or let go when no run follows.
+// The start press: the screen kept on until the run view takes over, or let go when no run follows. The hold
+// is the latest press's own number, not a time read back: a timer may fire while Date.now() still reads a hair
+// under its deadline (a coarse or lagging clock), and the lock then stayed on.
 function keepScreenOnForStart(){
- screenWakeLockStartUntil=Date.now()+SCREEN_WAKE_START_MS;
- const timer=setTimeout(()=>{if(screenView()!=="during"&&screenWakeLockWanted&&Date.now()>=screenWakeLockStartUntil){screenWakeLockStartUntil=0;void keepScreenOn(false);}},SCREEN_WAKE_START_MS);
+ const hold=++screenWakeLockStartPresses;screenWakeLockStartHold=hold;
+ const timer=setTimeout(()=>{if(screenWakeLockStartHold!==hold)return;screenWakeLockStartHold=0;if(screenView()!=="during"&&screenWakeLockWanted)void keepScreenOn(false);},SCREEN_WAKE_START_MS);
  timer?.unref?.();
  return keepScreenOn(true);
 }
@@ -1917,8 +1919,8 @@ function renderScreenView(){
  if(view==="during"&&lastScreenView!=="during"&&shownTab()!=="experiment"){lastScreenView=view;navigateTab("experiment",null,{replace:true});}
  else{lastScreenView=view;renderRoute();}
  if(view!=="during"&&runSheet){runSheet="";renderRunSheets();}
- if(view==="during")screenWakeLockStartUntil=0;
- const lockWanted=view==="during"||Date.now()<screenWakeLockStartUntil;
+ if(view==="during")screenWakeLockStartHold=0;
+ const lockWanted=view==="during"||screenWakeLockStartHold!==0;
  if(lockWanted!==screenWakeLockWanted)void keepScreenOn(lockWanted);
  return view;
 }

@@ -78,26 +78,40 @@ class ScreenOnTests(unittest.TestCase):
 
     def test_the_start_press_asks_for_the_screen_in_the_touch_and_lets_it_go_when_no_run_follows(self) -> None:
         result = run_page_script(SETUP + f"device({IPAD!r});" + r"""
-SCREEN_WAKE_START_MS=40;sheetAtStart();
+SCREEN_WAKE_START_MS=250;sheetAtStart();
 void wizardPrimary();
 // In the press itself, before anything was awaited.
 assert(JSON.stringify(log)==='["request screen"]',`not asked in the touch: ${log}`);
 assert(starts===1,"the start was not sent");
 await settle();
 assert(document.body.dataset.view!=="during"&&!log.includes("release"),`let go before the start could answer: ${log}`);
-await later(80);
+await later(500);
 assert(JSON.stringify(log)==='["request screen","release"]',`a start with no run kept the screen on: ${log}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_a_clock_behind_the_timer_still_lets_the_screen_go(self) -> None:
+        # CI (PR run 39970097561): the hold's timer fired while Date.now() still read a hair under its deadline,
+        # so the lock was never let go. A clock that lags the timers (or a coarse one) must not keep the screen on.
+        result = run_page_script(SETUP + f"device({IPAD!r});" + r"""
+SCREEN_WAKE_START_MS=40;sheetAtStart();
+void wizardPrimary();
+const realNow=Date.now;Date.now=()=>realNow()-25;
+await later(80);
+Date.now=realNow;
+assert(JSON.stringify(log)==='["request screen","release"]',`a lagging clock kept the screen on: ${log}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_a_run_that_follows_keeps_the_lock_asked_for_in_the_touch(self) -> None:
         result = run_page_script(SETUP + f"device({IPAD!r});" + r"""
-SCREEN_WAKE_START_MS=40;sheetAtStart();
-void wizardPrimary();await settle();
+SCREEN_WAKE_START_MS=250;sheetAtStart();
+void wizardPrimary();
+// The server's answer comes within the hold (no timer is waited for before it).
 socket=new WS();acceptedSessionConfiguration={configuration_id,mode:"cascade",language:"ko",server_generation:2,protocol_id:"p-tab",revision_id:"pdf-1"};sessionActive=true;
 await say({type:"protocol.fixture.state",configuration_id,action:"start",state:state()});await settle();
 assert(document.body.dataset.view==="during","no run view");
-await later(80);
+await later(500);
 assert(JSON.stringify(log)==='["request screen"]',`the run asked again or let the lock go: ${log}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
