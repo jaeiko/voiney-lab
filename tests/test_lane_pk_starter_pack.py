@@ -206,9 +206,10 @@ class RunTests(_Case):
         self.assertEqual(by_id["good"].state, tool.STATE_READY)
         self.assertEqual(by_id["good"].steps, 6)
         self.assertEqual(by_id["odd"].state, tool.STATE_REVIEW)
-        self.assertEqual(by_id["odd"].cards, 1)
-        self.assertIn("확인 필요 1건", by_id["odd"].reasons)
-        self.assertEqual(by_id["odd"].label, "확인할 것 1장")
+        # Lane MISS: the made-up step, and page 1's real step 2 no quote covers.
+        self.assertEqual(by_id["odd"].cards, 2)
+        self.assertIn("확인 필요 2건", by_id["odd"].reasons)
+        self.assertEqual(by_id["odd"].label, "확인할 것 2장")
         # Nothing was confirmed for the person: the waiting analysis never runs.
         store = initialize_protocol_store(ProtocolPersistenceSettings(True, self.data))
         try:
@@ -216,7 +217,7 @@ class RunTests(_Case):
         finally:
             store.close()
         self.assertFalse(entry.available_for_execution)
-        self.assertEqual(entry.review_pending["needs_review_count"], 1)
+        self.assertEqual(entry.review_pending["needs_review_count"], 2)
 
     def test_a_failed_analysis_is_reported_with_its_code_and_the_catalog_line(self) -> None:
         bad = self.entry("bad", 3)
@@ -452,17 +453,18 @@ class OutputTests(_Case):
 
     def test_the_table_counts_ready_cards_failures_and_skips(self) -> None:
         counts = tool.summary_counts(self.rows)
+        # Lane MISS: odd's made-up step and page 1's real step 2 are 2 cards.
         self.assertEqual((counts["ready"], counts["review"], counts["failed"], counts["skipped"], counts["cards"]),
-                         (1, 1, 1, 1, 1))
+                         (1, 1, 1, 1, 2))
         text = tool.report_text(self.rows, self.meter)
-        for expected in ("바로 쓸 수 있음", "확인할 것 1장", "실패 · protocol_analysis_invalid_response",
+        for expected in ("바로 쓸 수 있음", "확인할 것 2장", "실패 · protocol_analysis_invalid_response",
                          "건너뜀 · 라이선스가 재사용 가능한 것이 아님"):
             self.assertIn(expected, text)
-        self.assertIn("바로 쓸 수 있음 1 · 확인할 것 있음 1(카드 1장) · 실패 1 · 건너뜀 1", text)
+        self.assertIn("바로 쓸 수 있음 1 · 확인할 것 있음 1(카드 2장) · 실패 1 · 건너뜀 1", text)
 
     def test_the_human_list_names_what_waits_and_what_failed_and_confirms_nothing(self) -> None:
         text = tool.human_checks(self.rows)
-        self.assertIn("Gamma odd | 1 |", text)
+        self.assertIn("Gamma odd | 2 |", text)  # lane MISS: +1 card
         self.assertIn("Gamma bad", text)
         self.assertNotIn("Gamma good", text)
         self.assertIn("어떤 카드도 대신 확인하지 않았다", text)
@@ -478,7 +480,7 @@ class OutputTests(_Case):
             "starter_pack_human_checks.md", "starter_pack_result.json", "starter_pack_result.md",
             "starter_pack_sources.md"])
         data = json.loads((folder / "starter_pack_result.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["summary"]["cards"], 1)
+        self.assertEqual(data["summary"]["cards"], 2)  # lane MISS: +1 card
         self.assertNotIn("Add 2 mL of buffer A", "".join(path.read_text(encoding="utf-8") for path in paths))
 
 
@@ -528,7 +530,7 @@ class CommandTests(_Case):
             "--data-dir", str(self.data), "--list", str(self.write_list([good, odd])), "--source-dir", str(self.sources),
             "--report-dir", str(report), env=environment(model), model_env={"VOINEY_LAB_ANALYSIS_MODEL": "gemini-3.8-flash"})
         self.assertEqual(code, 0)
-        self.assertIn("확인할 것 1장", out)
+        self.assertIn("확인할 것 2장", out)  # lane MISS: +1 card
         self.assertIn("사람이 확인할 목록", out)
         self.assertIn("good: 바로 쓸 수 있음", err)
         self.assertTrue((report / "starter_pack_result.md").is_file())

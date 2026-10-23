@@ -29,6 +29,7 @@ from tests.test_lane_rv_review_pending import (
     MADE_UP,
     _CatalogCase,
     _RawModel,
+    other_cards,
     write_pages_pdf,
 )
 from tests.test_protocol_ocr_providers import PNG, _FakeEngine
@@ -273,7 +274,8 @@ class SuggestedLineTests(_CatalogCase):
     def test_lines_that_narrow_to_one_place_are_one_press(self) -> None:
         near = "2. Incubate it for 10 min at 37 C."
         self.analyze(self.answer(step_two=near))
-        (card,) = self.catalog.review_draft(self.protocol_id)["cards"]
+        (card,) = other_cards(self.catalog.review_draft(self.protocol_id)["cards"])
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.assertEqual(card["type"], "evidence_suggested")
         self.assertEqual(card["question_ko"], "이 단계의 근거는 원문 1쪽 4번째 줄인가요?")
         self.assertEqual([choice["label_ko"] for choice in card["choices"]],
@@ -283,7 +285,8 @@ class SuggestedLineTests(_CatalogCase):
         result = self.catalog.record_review_decision(self.protocol_id, press)
         self.assertTrue(result["registrable"])
         (decision,) = [event.payload for event in self.store.list_events(self.protocol_id)
-                       if event.event_type == "protocol_review_decision_recorded"]
+                       if event.event_type == "protocol_review_decision_recorded"
+                       and event.payload["item_id"] == "step:s2"]
         self.assertTrue(decision["source_lines"]["suggested_by_server"])
 
     def test_lines_a_person_picks_elsewhere_are_not_marked_as_the_server_s(self) -> None:
@@ -297,7 +300,7 @@ class SuggestedLineTests(_CatalogCase):
 
     def test_words_like_no_line_or_like_two_places_get_no_one_press_card(self) -> None:
         self.analyze(self.answer(step_two=MADE_UP))
-        (card,) = self.catalog.review_draft(self.protocol_id)["cards"]
+        (card,) = other_cards(self.catalog.review_draft(self.protocol_id)["cards"])
         self.assertEqual(card["type"], "evidence")
         self.assertNotIn("confirm_suggested", [choice["choice_id"] for choice in card["choices"]])
 

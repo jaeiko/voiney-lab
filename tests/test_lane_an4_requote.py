@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from tests.test_lane_ev2_cross_page import evidence, response, source, step
 from tests.test_lane_rv2_many_items import with_made_up_notes
-from tests.test_lane_rv_review_pending import _CatalogCase
+from tests.test_lane_rv_review_pending import MISSED_PAGES_2_3, _CatalogCase
 from voiney_lab.experiment_protocol_analysis import (
     ANALYSIS_REQUOTE_SETTING,
     AnalysisPiece,
@@ -241,7 +241,9 @@ class AskedAgainAndKeptTests(_RequoteCase):
         model = _AskingModel(json.dumps(payload), requote=requote)
         entry = self.run_analysis(model)
         self.assertEqual(model.analyses, 1)
-        self.assertEqual(entry.review_pending["needs_review_count"], 11)
+        # Lane MISS: 11 notes and pages 2-3's steps, which are never counted
+        # toward the bound (nothing was read again).
+        self.assertEqual(entry.review_pending["needs_review_count"], 13)
         self.assertEqual(self.events("protocol_analysis_auto_reanalysis"), [])
 
 
@@ -254,7 +256,13 @@ class LeftAsACardTests(_RequoteCase):
 
     def assert_still_a_card(self, entry, outcome: str) -> None:
         self.assertEqual(entry.analysis_status, "review_pending")
-        (flag,) = self.catalog.review_pending_analysis(self.protocol_id)[2]
+        flags = self.catalog.review_pending_analysis(self.protocol_id)[2]
+        # Lane MISS: pages 2-3's steps, which this answer leaves out, too (and
+        # page 1's step 2 where the written words are another passage's).
+        self.assertLessEqual(
+            set(MISSED_PAGES_2_3),
+            {flag.item_id for flag in flags if flag.reason == "possibly_missed"})
+        (flag,) = [flag for flag in flags if flag.reason != "possibly_missed"]
         self.assertEqual((flag.item_id, flag.field, flag.reason),
                          ("step:s2", "evidence", "not_in_source"))
         (event,) = self.events("protocol_analysis_evidence_requote")
@@ -340,7 +348,10 @@ class LeftAsACardTests(_RequoteCase):
         entry = self.run_analysis(model)
         self.assertEqual(entry.analysis_status, "review_pending")
         flags = self.catalog.review_pending_analysis(self.protocol_id)[2]
-        self.assertEqual([(flag.item_id, flag.field) for flag in flags], [("action:warm", "evidence")])
+        # Lane MISS: and pages 2-3's steps, which this answer leaves out.
+        self.assertEqual([(flag.item_id, flag.field) for flag in flags],
+                         [("action:warm", "evidence"),
+                          *((item_id, "source_lines") for item_id in MISSED_PAGES_2_3)])
         (event,) = self.events("protocol_analysis_evidence_requote")
         self.assertEqual(event["by_outcome"], {"still_refused": 1})
 
@@ -388,7 +399,8 @@ class OnceAndOnlyWhenAskedTests(_RequoteCase):
         entry = self.run_analysis(OpenAICompatibleProtocolAnalysisModel(client, "model-test", "low"))
         self.assertEqual(levels, ["low", "low", "medium"])
         self.assertEqual(asked, ["low"])
-        self.assertEqual(entry.review_pending["needs_review_count"], 2)
+        # Lane MISS: two notes and pages 2-3's steps.
+        self.assertEqual(entry.review_pending["needs_review_count"], 4)
         (event,) = self.events("protocol_analysis_evidence_requote")
         self.assertEqual((event["questions"], event["items_requoted"]), (13, 0))
 

@@ -4548,6 +4548,493 @@ def hollow_analysis_check(
     }
 
 
+# --- Source lines no quote covers (lane MISS) --------------------------------
+#
+# Human decision 2026-10-23. The evidence check asks only whether what the
+# model kept is in the source. An instruction the model never kept raised
+# nothing: the 10/23 diagnosis made up an analysis holding one of a source's
+# four steps, and it had no card and no blocker. The hollow check above moves
+# only from 20 numbered source steps and a 25 % share, and
+# ``scripts/score_extraction.py`` needs a hand-built reference. This check
+# needs neither. On every page it sets aside the characters the analysis's
+# quotes cover -- every quote, of a step, an action, a warning, a note, an
+# expected result, a value, a material, the title (decision 1) -- and the
+# page's furniture, a cover page, references and copyright lines, and keeps
+# the lines left that read like something to do (decision 2, the shapes
+# below). A person is shown them: as cards in an analysis that waits for
+# review (decision 3), as one notice before the start in an analysis that
+# passed (decision 4). Nothing here blocks a start, adds a step or claims the
+# analysis is complete: an instruction in none of the shapes, or one a quote
+# of something else happens to cover, is not found (lane MISS report).
+#
+# Decision 2: a line left uncovered is shown when it has at least one of
+# these shapes. They are the whole rule, kept in one place; no document,
+# sentence or step count has a rule of its own.
+
+#: Why a review item waits: lines no quote covers that read like an
+#: instruction (decision 3; the screen says "분석에 없는 원문일 수 있어요").
+REVIEW_REASON_POSSIBLY_MISSED = "possibly_missed"
+REVIEW_REASONS_KO[REVIEW_REASON_POSSIBLY_MISSED] = "분석에 없는 원문일 수 있어요"
+#: The reason codes of its items: lines close together on one page, every
+#: such line of one page, or of a run of pages (decision 3: when the places
+#: are more than the cards may be, they are put together by page).
+MISSED_LINES = "uncovered_instruction_lines"
+MISSED_PAGE = "uncovered_instruction_page"
+MISSED_PAGES = "uncovered_instruction_pages"
+
+#: Shape names, recorded with each line.
+MISSED_SHAPE_VALUE = "value_with_unit"
+MISSED_SHAPE_LIST = "numbered_or_bulleted"
+MISSED_SHAPE_LABEL = "label_alone"
+MISSED_SHAPE_IMPERATIVE = "english_imperative"
+MISSED_SHAPE_KOREAN = "korean_instruction_ending"
+
+#: (1) A number with a unit of time, temperature, volume, concentration or
+#: speed -- what a step is done for, at, with or how fast: "10 min", "37 °C",
+#: "500 µL", "50 mM", "12,000 x g", "10분", "37도". The units are those five
+#: kinds only (the decision's list): a mass ("5 g") is as often a material's
+#: amount as a step's, and a count ("3 tubes") is everywhere. A speed in g
+#: needs its "x"/"×", or a number of four digits or more ("16,000 g"), since
+#: "5 g" is a mass.
+MISSED_VALUE_UNITS: dict[str, tuple[str, ...]] = {
+    "time": ("s", "sec", "secs", "second", "seconds", "min", "mins", "minute", "minutes",
+             "h", "hr", "hrs", "hour", "hours", "d", "day", "days", "week", "weeks"),
+    "temperature": ("°C", "° C", "ºC", "℃", "°F", "℉"),
+    "volume": ("µL", "μL", "uL", "µl", "μl", "ul", "mL", "ml", "nL", "nl", "dL", "L"),
+    "concentration": ("M", "mM", "µM", "μM", "uM", "nM", "pM", "%", "X", "x",
+                      "mg/mL", "mg/ml", "µg/mL", "μg/mL", "ug/mL", "µg/ml", "μg/ml", "ng/µL",
+                      "ng/μL", "ng/uL", "ng/mL", "g/L", "mg/L", "mol/L", "mmol/L", "U/mL",
+                      "U/µL", "U/μL", "w/v", "v/v"),
+    "speed": ("rpm", "RPM", "r.p.m.", "x g", "× g", "xg", "×g", "X g", "rcf", "RCF"),
+}
+#: Korean units take a particle straight after them ("10분간", "37도에서"),
+#: so they are read without the word boundary the others need.
+MISSED_KOREAN_UNITS: tuple[str, ...] = (
+    "초", "분", "시간", "일", "주", "도", "마이크로리터", "밀리리터", "리터", "몰",
+)
+_MISSED_NUMBER = r"(?<![\w.,])[0-9]+(?:[.,][0-9]+)*(?:\s*(?:[-–~～]|to)\s*[0-9]+(?:[.,][0-9]+)*)?"
+_MISSED_VALUE = re.compile(
+    rf"{_MISSED_NUMBER}\s?(?:"
+    + "|".join(sorted(
+        (re.escape(unit) for units in MISSED_VALUE_UNITS.values() for unit in units),
+        key=len, reverse=True))
+    + r")(?![^\W_])"
+    + rf"|(?:[0-9]{{1,3}}(?:,[0-9]{{3}})+|[0-9]{{4,}})\s?g(?![^\W_])"
+    + rf"|{_MISSED_NUMBER}\s?(?:" + "|".join(MISSED_KOREAN_UNITS) + ")"
+)
+#: A number that names a figure, a table or a step ("Figure 3h", "Table 2 d")
+#: or a date ("3월 1일") is no value.
+_MISSED_NOT_A_VALUE_BEFORE = re.compile(
+    r"(?:\bfig(?:ure)?s?|\btables?|\bpanels?|\bsteps?)\.?\s*$|월\s*$", re.IGNORECASE)
+#: (2) A numbered or bulleted line: how a procedure lists what to do. A
+#: label of one to three digits, not opening with 0 ("3.", "3)", "(3)", "3:",
+#: "Step 3", "2.1"; "0.6." is a value broken onto its line),
+#: or such a number alone before a capital or Hangul ("4 Discard") -- not
+#: before a unit or a small letter ("1.5 M NaCl", "5 g", "24 crucibles",
+#: lane EV2's known false step); a lettered or Korean label ("a)", "가."), a
+#: circled number, or a bullet mark.
+MISSED_LIST_MARKS = "•◦▪▫●○■□◆◇►▶▸➢➤✓✔‣⁃∙·*"
+_MISSED_LIST_LINE = re.compile(
+    rf"\s*(?:[{re.escape(MISSED_LIST_MARKS)}]|[-–]\s|[①-⑳]|\(?[a-z][.)]\s|[가-하][.)]\s)"
+)
+_MISSED_STEP_LABEL = re.compile(
+    r"\s*(?:[Ss]tep\s*)?\(?[1-9][0-9]{0,2}(?:\.[0-9]{1,3})*"
+    r"(?:(?:\.(?![0-9])|\)|:)\s*(?=[^\W\d_])|\s+(?=[A-Z가-힣]))"
+)
+#: (3) An English sentence that opens with a verb a protocol tells someone to
+#: do: the imperative a procedure is written in ("Add", "Incubate", "Store").
+#: A heading or a material name may open with the same word ("Wash buffer",
+#: "Stop solution"), so the sentence must hold three words or more or end in
+#: a full stop.
+MISSED_IMPERATIVE_VERBS: frozenset[str] = frozenset("""
+add adjust aliquot allow analyse analyze apply aspirate assemble assess attach autoclave
+avoid bake blot boil block bring calculate cap centrifuge change check chill choose clean click
+close collect combine confirm connect cool count cover cut decant degas dehydrate determine
+digest dilute discard dispense dispose dissociate dissolve distribute drain dry elute empty
+ensure enter equilibrate evaporate examine extract fill filter fix flush freeze grind harvest
+heat homogenize homogenise image immerse incubate inject inoculate insert inspect invert keep
+label leave let load look lyse maintain make mark measure melt mix monitor mount neutralize
+neutralise observe open pass pellet perform permeabilize pipette pipet place plate pour
+prewarm pre-warm precipitate prepare press proceed pulse purge quench read record refrigerate
+remove repeat replace resuspend return rinse rotate run save scan scrape seal seed select
+separate set shake sonicate spin split spread stain start sterilize sterilise stir stop store
+streak submerge supplement swirl switch take tap thaw tilt titrate transfer treat triturate
+trypsinize turn type use verify vortex wait warm wash wear weigh wipe withdraw wrap
+""".split())
+#: The verb may follow a clause that opens the sentence and says when, if
+#: or with what ("After 10 min, add", "If needed, repeat", "Using a pipette,
+#: remove" -- the clause ends at its comma; "To verify the yield, we ..." is
+#: a purpose, not an instruction), or a word that says when or how ("Then
+#: add", "Gently remove").
+MISSED_OPENING_CLAUSE_WORDS: frozenset[str] = frozenset("""
+after before during for if once to under until upon using when where while with
+""".split())
+MISSED_OPENING_ADVERBS: frozenset[str] = frozenset("""
+afterwards again also alternatively briefly carefully finally first gently immediately
+meanwhile next now optionally quickly second slowly subsequently then third thoroughly
+""".split())
+#: A verb word followed this closely by one of these is a noun the sentence
+#: is about ("Image J was used", "Wash buffer is", "Stop solution should").
+MISSED_SUBJECT_FOLLOWERS: frozenset[str] = frozenset("""
+are can could did does had has have is may might must shall should was were will would
+""".split())
+_MISSED_SENTENCE_START = re.compile(r"(?:^|(?<=[.!?;:]\s))[\s\"'“‘(]*([A-Za-z][A-Za-z-]*)")
+_MISSED_AFTER_OPENING = re.compile(
+    r"(?:^|(?<=[.!?;:]\s))[\s\"'“‘(]*([A-Za-z]+)\b([^.!?;]{0,80}?,)?\s+([A-Za-z][A-Za-z-]*)")
+_MISSED_WORD = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*")
+#: (4) A Korean sentence that ends as an instruction does: "~한다" (a verb
+#: stem ending in ㄴ before 다: 넣는다, 보관한다, 둔다), "~하세요"/"~하십시오",
+#: "~할 것" (a verb ending in ㄹ before 것). A description ends otherwise
+#: ("~이다", "~있다", "~였다", "~할 것이다").
+_MISSED_KOREAN_END = r"(?=[\s.!?。)\]\"'”’:;,]|$)"
+_MISSED_KOREAN_DA = re.compile(rf"([가-힣])다{_MISSED_KOREAN_END}")
+_MISSED_KOREAN_POLITE = re.compile(rf"(?:세요|십시오|시오){_MISSED_KOREAN_END}")
+_MISSED_KOREAN_GEOT = re.compile(rf"([가-힣])\s?것{_MISSED_KOREAN_END}")
+_HANGUL_FINAL_NIEUN = 4
+_HANGUL_FINAL_RIEUL = 8
+#: Decision 5 (lane MISS report): the shapes that show a line. A value with
+#: its unit alone, and a label before words that read as no sentence, are
+#: recorded beside a line but show none.
+_MISSED_SHOWN_SHAPES = frozenset({
+    MISSED_SHAPE_LIST, MISSED_SHAPE_IMPERATIVE, MISSED_SHAPE_KOREAN})
+#: A line whose words are fewer letters than this is no instruction ("3.", "ii").
+_MISSED_MIN_LETTERS = 3
+#: Two candidate lines on one page are one place when no quote covers a line
+#: between them and at most this many other text lines stand between them.
+_MISSED_JOIN_GAP = 1
+#: Decision 1: lines that are never an instruction -- a DOI (a reference or
+#: the article's own identity), an open-access funding or licence line
+#: beside ``_LICENSE_FOOTER``'s, and a table of contents line (a run of
+#: leader dots before its page number).
+_MISSED_NOT_AN_INSTRUCTION = re.compile(
+    r"\bdoi\b|\bopen[\s-]access\b|(?:\.\s?){4,}|…{2,}", re.IGNORECASE)
+#: A references heading, numbered as a section or not ("10.0 REFERENCES").
+_MISSED_REFERENCES = re.compile(
+    rf"(?:[0-9]{{1,2}}(?:\.[0-9]{{1,2}})*\.?\s*)?(?:{_BACK_MATTER.pattern})", re.IGNORECASE)
+
+
+def _hangul_final(character: str) -> int | None:
+    if "가" <= character <= "힣":
+        return (ord(character) - ord("가")) % 28
+    return None
+
+
+def _missed_label(text: str) -> re.Match[str] | None:
+    """The list mark or step label a line opens with (shape 2), or None."""
+
+    return _MISSED_LIST_LINE.match(text) or (
+        _MISSED_STEP_LABEL.match(text)
+        if not _MISSED_VALUE.match(text.lstrip(" \t([")) else None)
+
+
+def _reads_as_sentence(text: str) -> bool:
+    """Whether the words after a label read as a sentence rather than a
+    heading, a table row, an affiliation or an address: three words or more,
+    at least half of those after the first in small letters (a Korean word
+    counts so), no more digits than letters and no e-mail address."""
+
+    words = _MISSED_WORD.findall(text)
+    if len(words) < 3 or "@" in text:
+        return False
+    if sum(character.isdigit() for character in text) > sum(
+            character.isalpha() for character in text):
+        return False
+    rest = words[1:]
+    return 2 * sum(1 for word in rest if not word[0].isupper()) >= len(rest)
+
+
+def missed_line_shapes(text: str) -> tuple[str, ...]:
+    """Which instruction shapes (decision 2) one line's uncovered words have."""
+
+    shapes: list[str] = []
+    if sum(1 for character in text if character.isalpha()) < _MISSED_MIN_LETTERS:
+        return ()
+    if any(
+        not _MISSED_NOT_A_VALUE_BEFORE.search(text[max(0, match.start() - 12):match.start()])
+        for match in _MISSED_VALUE.finditer(text)
+    ):
+        shapes.append(MISSED_SHAPE_VALUE)
+    mark = _missed_label(text)
+    body = text[mark.end():] if mark is not None else text
+    if mark is not None:
+        shapes.append(MISSED_SHAPE_LIST if _reads_as_sentence(body) else MISSED_SHAPE_LABEL)
+    labelled = body is not text
+    verbs = [
+        match.start(1) for match in _MISSED_SENTENCE_START.finditer(body)
+        if match[1].casefold() in MISSED_IMPERATIVE_VERBS
+        # A line that goes on with a sentence begun above opens in lower
+        # case; a sentence of its own, or one after a label, does not.
+        and (match[1][0].isupper() or (match.start(1) == 0 and labelled))
+    ] + [
+        match.start(1) for match in _MISSED_AFTER_OPENING.finditer(body)
+        if (match[1].casefold() in MISSED_OPENING_CLAUSE_WORDS and match[2]
+            or match[1].casefold() in MISSED_OPENING_ADVERBS)
+        and (match[1][0].isupper() or (match.start(1) == 0 and labelled))
+        and match[3].casefold() in MISSED_IMPERATIVE_VERBS
+    ]
+    for start in verbs:
+        sentence = re.split(r"(?<=[.!?])\s", body[start:], maxsplit=1)[0]
+        words = _MISSED_WORD.findall(sentence)
+        verb_at = next((index for index, word in enumerate(words)
+                        if word.casefold() in MISSED_IMPERATIVE_VERBS), 0)
+        after = words[verb_at + 1:]
+        if any(word.casefold() in MISSED_SUBJECT_FOLLOWERS for word in after[:2]):
+            continue
+        ends = sentence.rstrip().endswith((".", "!"))
+        # A table's header row ("Plate Blank Well OD Mean") is capitals only.
+        if not ends and after and all(word[0].isupper() for word in after):
+            continue
+        if (start == 0 and labelled) or len(words) >= 3 or ends:
+            shapes.append(MISSED_SHAPE_IMPERATIVE)
+            break
+    if (
+        any(_hangul_final(match[1]) == _HANGUL_FINAL_NIEUN
+            for match in _MISSED_KOREAN_DA.finditer(text))
+        or _MISSED_KOREAN_POLITE.search(text)
+        or any(_hangul_final(match[1]) == _HANGUL_FINAL_RIEUL
+               for match in _MISSED_KOREAN_GEOT.finditer(text))
+    ):
+        shapes.append(MISSED_SHAPE_KOREAN)
+    return tuple(shapes)
+
+
+def missed_line_reads_as_instruction(shapes: Sequence[str]) -> bool:
+    """Whether a line with these shapes is shown (decisions 2 and 5)."""
+
+    return bool(_MISSED_SHOWN_SHAPES.intersection(shapes))
+
+
+@dataclass(frozen=True)
+class PossiblyMissedPlace:
+    """Lines of one page no quote covers that read like an instruction.
+
+    Lines are numbered from 1 by their place in the page text, blank lines
+    counted, as the review screen numbers them.
+    """
+
+    page_number: int
+    first_line: int
+    last_line: int
+    shapes: tuple[str, ...]
+
+    def public_dict(self) -> dict[str, object]:
+        return {"page": self.page_number, "first_line": self.first_line,
+                "last_line": self.last_line, "shapes": list(self.shapes)}
+
+
+def _quote_spans(
+    page: ProtocolPdfPage, excerpt: object, extraction: ProtocolPdfExtraction,
+) -> list[tuple[int, int]]:
+    """Where a quote stands on its page: every place it is printed as it is
+    -- of several, those that are a whole line, when any is (a heading
+    "Incubate" quoted as a section's title is its own line, not the word in
+    "18 Incubate at 37 °C") -- or else where the evidence check's comparison
+    forms find it. A quote the page does not hold (a refused one) covers
+    nothing."""
+
+    if not isinstance(excerpt, str) or not excerpt.strip():
+        return []
+    text = page.text
+    spans: list[tuple[int, int]] = []
+    start = text.find(excerpt)
+    while start >= 0:
+        spans.append((start, start + len(excerpt)))
+        start = text.find(excerpt, start + 1)
+    if len(spans) > 1:
+        whole = [
+            (begin, end) for begin, end in spans
+            if not text[text.rfind("\n", 0, begin) + 1:begin].strip()
+            and not text[end:(text.find("\n", end) + 1 or len(text) + 1) - 1].strip()]
+        return whole or spans
+    if spans:
+        return spans
+    return list(_canonical_match_spans(
+        text, excerpt, ocr_derived=_hangul_breaks_joined(page),
+        skip_line=_furniture_line(page, extraction)))
+
+
+def _covered_by_quotes(
+    protocol: domain.ExperimentProtocol, extraction: ProtocolPdfExtraction,
+) -> tuple[dict[int, list[tuple[int, int]]], set[int]]:
+    """The characters each page's quotes cover (decision 1), and the pages a
+    quote other than the document's title, authors and summary stands on."""
+
+    covered: dict[int, list[tuple[int, int]]] = {}
+    body_pages: set[int] = set()
+    for path, evidence in _evidence_with_paths(protocol):
+        front = path.startswith(("protocol.metadata", "protocol.description"))
+        for page_number, excerpt in (
+            (evidence.source_page_number, evidence.source_excerpt),
+            (evidence.continued_on_page_number, evidence.continued_excerpt),
+        ):
+            if not isinstance(page_number, int) or not 1 <= page_number <= extraction.page_count:
+                continue
+            spans = _quote_spans(extraction.pages[page_number - 1], excerpt, extraction)
+            if spans:
+                covered.setdefault(page_number, []).extend(spans)
+                if not front:
+                    body_pages.add(page_number)
+    return covered, body_pages
+
+
+def _uncovered_text(line_start: int, line: str, spans: Sequence[tuple[int, int]]) -> str:
+    """The words of a line no quote covers, the covered parts as one space."""
+
+    end = line_start + len(line)
+    kept = [True] * len(line)
+    for start, stop in spans:
+        for index in range(max(start, line_start), min(stop, end)):
+            kept[index - line_start] = False
+    return " ".join("".join(
+        character if keep else " " for character, keep in zip(line, kept)).split())
+
+
+def _is_cover_page(
+    number: int, body_pages: Collection[int], lines: Sequence[str], edges: _PageEdges,
+) -> bool:
+    """Decision 1's cover page: one of the first ``_FRONT_PAGES`` with no
+    quote but the document's title, authors or summary, and no numbered line
+    that reads as a step -- a step the analysis left out on its first page
+    keeps that page from being a cover. A bullet (a highlight) or a numbered
+    affiliation does not."""
+
+    return number <= _FRONT_PAGES and number not in body_pages and not any(
+        _MISSED_STEP_LABEL.match(line) and not edges.is_crossing_furniture(line, number)
+        and missed_line_reads_as_instruction(missed_line_shapes(" ".join(line.split())))
+        for line in lines)
+
+
+def possibly_missed_places(
+    protocol: domain.ExperimentProtocol,
+    extraction: ProtocolPdfExtraction | None = None,
+    *,
+    asked_lines: Mapping[int, Collection[int]] | None = None,
+) -> tuple[PossiblyMissedPlace, ...]:
+    """The places of the source no quote covers that read like an instruction.
+
+    Lane MISS, decisions 1 and 2. Set aside on every page: the characters a
+    quote of the analysis covers, wherever on its page it is printed; the
+    running header and footer, the page number and the margin lines lane
+    AN5's page-end rule skips (``_PageEdges.is_crossing_furniture``); a
+    cover page (``_is_cover_page``); a references list (from its heading to
+    the next line a quote covers, or the end); and a copyright, licence, DOI
+    or contents line. Of the lines left, those with an instruction shape
+    (``missed_line_shapes``, ``missed_line_reads_as_instruction``) are kept;
+    lines close together on one page (``_MISSED_JOIN_GAP``) with no quote
+    between them are one place. ``asked_lines`` (page: line numbers) are
+    lines another card already asks about -- a failed piece's pages, where a
+    refused quote's item may stand -- and are read as covered.
+    """
+
+    extraction = extraction or protocol.metadata.pdf
+    covered, body_pages = _covered_by_quotes(protocol, extraction)
+    edges = _page_edges(extraction)
+    places: list[PossiblyMissedPlace] = []
+    in_references = False
+    for page in extraction.pages:
+        number = page.source_page_number
+        spans = covered.get(number, [])
+        lines: list[tuple[int, str]] = []
+        start = 0
+        for line in page.text.split("\n"):
+            lines.append((start, line))
+            start += len(line) + 1
+        cover = _is_cover_page(number, body_pages, [line for _, line in lines], edges)
+        current: list[tuple[int, tuple[str, ...]]] = []
+        gap = 0
+
+        def close() -> None:
+            if current:
+                places.append(PossiblyMissedPlace(
+                    number, current[0][0], current[-1][0],
+                    tuple(dict.fromkeys(shape for _, shapes in current for shape in shapes))))
+            current.clear()
+
+        asked = (asked_lines or {}).get(number, ())
+        for index, (line_start, line) in enumerate(lines, start=1):
+            text = " ".join(line.split())
+            if index in asked:
+                in_references = False
+                close()
+                continue
+            touched = any(
+                start < line_start + len(line) and stop > line_start for start, stop in spans)
+            if _MISSED_REFERENCES.fullmatch(text):
+                in_references = True
+                close()
+                continue
+            if touched:
+                in_references = False
+            if not text or edges.is_crossing_furniture(line, number):
+                continue
+            left = _uncovered_text(line_start, line, spans) if touched else text
+            shapes = (
+                () if cover or in_references or _LICENSE_FOOTER.search(text)
+                or _MISSED_NOT_AN_INSTRUCTION.search(text) else missed_line_shapes(left))
+            if missed_line_reads_as_instruction(shapes):
+                if current and gap > _MISSED_JOIN_GAP:
+                    close()
+                current.append((index, shapes))
+                gap = 0
+            elif touched:
+                close()
+            elif current:
+                gap += 1
+        close()
+    return tuple(places)
+
+
+def possibly_missed_summary(places: Sequence[PossiblyMissedPlace]) -> dict[str, object]:
+    """What the ledger and the start screen keep of the places (decision 4)."""
+
+    return {
+        "count": len(places),
+        "pages": sorted({place.page_number for place in places}),
+        "places": [place.public_dict() for place in places],
+    }
+
+
+def possibly_missed_flags(
+    places: Sequence[PossiblyMissedPlace], *, limit: int,
+) -> tuple[ReviewFlag, ...]:
+    """The review items of the places (decision 3), at most ``limit`` of them.
+
+    One item per place while they are no more than ``limit``; else one per
+    page that has places; else the pages, in order, as ``limit`` runs of
+    pages next to each other in the list (each run holds its pages' places).
+    """
+
+    if not places:
+        return ()
+    limit = max(1, limit)
+
+    def flag(item_id: str, code: str, group: Sequence[PossiblyMissedPlace]) -> ReviewFlag:
+        first, last = group[0].page_number, group[-1].page_number
+        return ReviewFlag(
+            item_id=item_id, reason=REVIEW_REASON_POSSIBLY_MISSED, field="source_lines",
+            reason_code=code, page_number=first,
+            extra={"first_page": first, "last_page": last,
+                   "places": [place.public_dict() for place in group]})
+
+    if len(places) <= limit:
+        return tuple(
+            flag(f"missed:{place.page_number}:{place.first_line}-{place.last_line}",
+                 MISSED_LINES, (place,))
+            for place in places)
+    by_page: dict[int, list[PossiblyMissedPlace]] = {}
+    for place in places:
+        by_page.setdefault(place.page_number, []).append(place)
+    pages = list(by_page)
+    if len(pages) <= limit:
+        return tuple(flag(f"missed:{page}", MISSED_PAGE, by_page[page]) for page in pages)
+    runs = [pages[len(pages) * part // limit: len(pages) * (part + 1) // limit]
+            for part in range(limit)]
+    return tuple(
+        flag(f"missed:{run[0]}-{run[-1]}", MISSED_PAGES,
+             [place for page in run for place in by_page[page]])
+        for run in runs if run)
+
+
 def check_analysis_page_count(extraction: ProtocolPdfExtraction) -> None:
     """Refuse a document longer than one analysis reads, before any model call.
 

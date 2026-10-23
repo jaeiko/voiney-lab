@@ -15,7 +15,7 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from tests.test_lane_rv_review_pending import MADE_UP, _CatalogCase
+from tests.test_lane_rv_review_pending import MADE_UP, MISSED_WITH_MADE_UP, _CatalogCase, other_cards
 from voiney_lab import server
 from voiney_lab.experiment_protocol_analysis import AnalysisPiece
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
@@ -55,10 +55,13 @@ class OneCardPerItemTests(_CardCase):
 
     def test_the_made_up_step_is_the_one_card_and_says_what_is_asked(self) -> None:
         draft = self.draft()
-        (card,) = draft["cards"]
+        # Lane MISS: the possibly-missed cards come after it.
+        (card,) = other_cards(draft["cards"])
+        self.assertEqual([each["item_id"] for each in draft["cards"]],
+                         ["step:s2", *MISSED_WITH_MADE_UP])
         self.assertEqual(draft["next_card"], 0)
         self.assertEqual((card["item_id"], card["position"], card["total"], card["progress_ko"]),
-                         ("step:s2", 1, 1, "1 / 1"))
+                         ("step:s2", 1, 4, "1 / 4"))
         self.assertEqual(card["type"], "evidence")
         self.assertEqual(card["shown"], MADE_UP)
         self.assertEqual(card["reasons_ko"], ["원문에 없음"])
@@ -74,10 +77,11 @@ class OneCardPerItemTests(_CardCase):
 
     def test_the_card_s_button_is_a_decision_the_server_takes(self) -> None:
         card = self.draft()["cards"][0]
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         result = self.decide(self.choice(card, "confirm_lines")["request"],
                              source_lines=STEP_TWO_LINES)
         self.assertTrue(result["registrable"])
-        (after,) = result["cards"]
+        (after,) = other_cards(result["cards"])
         self.assertTrue(after["decided"])
         self.assertEqual(after["decision"]["action"], "confirm")
         self.assertIsNone(result["next_card"])
@@ -97,7 +101,8 @@ class ChoicesFollowWhatTheServerAllowsTests(_CardCase):
             source_text="Wear a face shield.",
             evidence={"source_page_number": 1, "source_excerpt": "Wear a face shield."})
         self.analyze(json.dumps(answer))
-        (card,) = self.draft()["cards"]
+        (card,) = other_cards(self.draft()["cards"])
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.assertEqual(card["kind"], "warning")
         # A safety statement's words are never changed: no "직접 고칠게요".
         self.assertEqual([choice["choice_id"] for choice in card["choices"]],
@@ -131,12 +136,13 @@ class ChoicesFollowWhatTheServerAllowsTests(_CardCase):
         answer["protocol"]["sections"][0]["steps"][0]["instruction_source_text"] = (
             "1. Add 3 mL of buffer A.")
         self.analyze(json.dumps(answer))
-        (card,) = self.draft()["cards"]
+        (card,) = other_cards(self.draft()["cards"])
         self.assertEqual(card["type"], "claim")
         self.assertEqual(card["question_ko"], "이 단계가 원문과 같나요?")
         self.assertEqual([choice["choice_id"] for choice in card["choices"]],
                          ["confirm", "fix", "reanalysis"])
         self.assertEqual(self.choice(card, "fix")["needs"], "text")
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         result = self.decide(self.choice(card, "fix")["request"], text="1. Add 2 mL of buffer A.")
         self.assertTrue(result["registrable"])
 

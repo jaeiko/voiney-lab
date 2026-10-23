@@ -186,9 +186,13 @@ class APersonAnsweredFirstTests(_RequoteCase):
         entry = self.run_analysis(_AskingModel(self.answer(step_two=PARAPHRASE), requote=requote))
         self.assertEqual(entry.analysis_status, "review_pending")
         draft = self.catalog.review_draft(self.protocol_id)
+        # Lane MISS: pages 2-3's steps, which this answer leaves out, wait too.
         self.assertEqual([(card["item_id"], card["type"]) for card in draft["cards"]],
-                         [("step:s2", "requoted")])
-        self.assertTrue(draft["registrable"])
+                         [("step:s2", "requoted"), ("missed:2:2-3", "possibly_missed"),
+                          ("missed:3:2-3", "possibly_missed")])
+        self.assertFalse(draft["registrable"])
+        self.confirm_possibly_missed()
+        self.assertTrue(self.catalog.review_draft(self.protocol_id)["registrable"])
 
     def test_a_review_registered_meanwhile_is_not_touched(self) -> None:
         def requote(request: dict) -> dict:
@@ -261,7 +265,8 @@ class OverTheCapTests(_RequoteCase):
                 for item in request["items"])))
         entry = self.run_analysis(model)
         self.assertEqual(model.analyses, 1)
-        self.assertEqual(entry.review_pending["needs_review_count"], 12)
+        # Lane MISS: and pages 2-3's steps, never counted toward the bound.
+        self.assertEqual(entry.review_pending["needs_review_count"], 14)
         types = [event.event_type for event in self.store.list_events(self.protocol_id)]
         self.assertLess(types.index("protocol_analysis_evidence_requote"),
                         types.index("protocol_analysis_review_pending"))

@@ -81,6 +81,7 @@ class NoPathToRunTests(_CatalogCase):
         self.catalog.record_review_decision(self.protocol_id, {
             "item_id": "step:s2", "action": "fix", "text": STEP_TWO,
             "source_lines": LINES_OF_STEP_TWO})
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
         fixture = self.catalog.load_executable_fixture(self.protocol_id)
         read = everything_a_session_reads(fixture)
@@ -94,6 +95,7 @@ class NoPathToRunTests(_CatalogCase):
     def test_a_confirmed_suggestion_runs_only_with_the_lines_a_person_pointed_at(self) -> None:
         self.catalog.record_review_decision(self.protocol_id, {
             "item_id": "step:s2", "action": "confirm", "source_lines": LINES_OF_STEP_TWO})
+        self.confirm_possibly_missed()  # lane MISS: its other cards
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
         step = self.catalog.load_executable_fixture(self.protocol_id).steps[1]
         # The AI's reading, confirmed by a person, quoted by the page's own line.

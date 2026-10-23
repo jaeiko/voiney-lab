@@ -36,6 +36,9 @@ class _ReviewedCase(_CatalogCase):
         # The AI's reading of step 2 printed no time: the reviewer enters one.
         decide(item_id="timer:s2", action="enter", seconds=900)
         decide(item_id="statement:gloves", action="memo", memo="니트릴 장갑")
+        # Lane MISS: pages 2-3's steps are not in this answer; a person says
+        # they are no step before registering.
+        self.confirm_possibly_missed()
         self.catalog.register_review(self.protocol_id, {"reviewer_name": "김재준"})
         self.fixture = self.catalog.load_executable_fixture(self.protocol_id)
 
