@@ -6,10 +6,8 @@ exports (nothing reads the name), Moss mentions in ``safety_pack.py`` and
 ``retrieval.py``, ``retrieval.search_safety_documents`` (nothing in ``src``
 calls it) and ``scripts/setup_moss_demo.py``. These tests pin them gone.
 
-``VOINEY_LAB_MOSS_ENABLED`` itself stays in the setting table and in
-``scripts/collect_chunks.sh``: the table may change only by lane PL's new
-usage-scope line, and ``tests/test_setting_names.py`` wants every table name
-spelled by some script.
+The retired ``VOINEY_LAB_MOSS_ENABLED`` survives only as an explicit exception
+for standard test commands in ``tests/test_setting_names.py``.
 """
 
 from __future__ import annotations

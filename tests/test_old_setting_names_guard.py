@@ -135,7 +135,7 @@ class LauncherTests(unittest.TestCase):
     """
 
     SERVE_MARKER = "stand-in python: the launcher tried to serve"
-    LAUNCHERS = ("run_dev.sh", "run_pilot.sh", "run_ci_server.sh", "collect_chunks.sh")
+    LAUNCHERS = ("run_dev.sh", "run_pilot.sh", "run_ci_server.sh")
 
     def setUp(self):
         self._temp = tempfile.TemporaryDirectory()
@@ -162,13 +162,12 @@ class LauncherTests(unittest.TestCase):
 
     def test_every_launcher_refuses_before_it_does_anything(self):
         for name in self.LAUNCHERS:
-            arguments = [str(self.source), "0"] if name == "collect_chunks.sh" else []
             with self.subTest(launcher=name):
                 env = clean_environment(**{OLD_PREFIXED: SECRET, "HOST": "127.0.0.1",
                                            "PORT": "0"})
                 env.pop("VIRTUAL_ENV", None)
                 result = subprocess.run(
-                    ["bash", str(self.root / "scripts" / name), *arguments],
+                    ["bash", str(self.root / "scripts" / name)],
                     cwd=self.root, env=env, text=True, capture_output=True,
                     timeout=120, check=False,
                 )
