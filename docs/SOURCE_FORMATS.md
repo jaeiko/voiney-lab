@@ -87,6 +87,8 @@ curl -s http://127.0.0.1:8000/api/protocols/<protocol_id>/reagent-tables
 
 파일을 내려받아 올리는 대신 구글 드라이브·문서·시트의 **공유 링크**를 넣는다. 서버가 그 파일을 받아 **올리기 경로(`POST /api/protocols`, `POST /api/protocols/{id}/reagent-tables`)에 그대로 넘긴다** — 형식 확인, 크기 상한, Word·사진 변환, OCR, 분석, 원문 근거 검사가 올린 파일과 똑같다. 받은 주소는 그 프로토콜 원장에 `protocol_source_linked` 기록(주소, 링크 종류, 파일 ID, 받은 호스트, 형식, 체크섬, 크기, 파일 이름)으로 남는다.
 
+화면에서는 **새 프로토콜 올리기 → 공개 링크로 가져오기**로 Drive 파일·Docs를 가져온다. 주소를 넣고 **링크로 가져오기**를 누르면 파일 올리기와 같은 분석 결과를 보여 준다. Sheets 시약 표는 아래 API로만 붙일 수 있다.
+
 ```bash
 # 로그인한 사람만(계정 모드의 세션 쿠키, 또는 작업공간 신원)
 curl -s -X POST http://127.0.0.1:8000/api/protocols/import-link \

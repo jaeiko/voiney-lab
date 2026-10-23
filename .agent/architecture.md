@@ -297,6 +297,11 @@ from assistant prose, and text is inserted with `textContent`.
 `connection.js` (loss and reconnection), `feedback.js` (end-of-run rating)
 and `mic-capture-worklet.js` (capture) load with it; `native-bridge.js` does
 not yet. `admin-metrics.html` is a separate page.
+The upload screen's public Drive/Docs form calls `/api/protocols/import-link`
+and shares the file upload's response handling, analysis/OCR polling and
+result display. Link errors display server text through `textContent`.
+Import is disabled during registration or a running session; stale-generation
+responses are discarded. Sheets reagent-table attachment remains API-only.
 
 ## 10. Store-app shell
 

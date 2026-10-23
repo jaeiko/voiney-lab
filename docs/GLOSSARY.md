@@ -15,7 +15,7 @@
 |---|---|---|---|
 | 프로토콜 · 원문 | 프로토콜, 원문, 원문 파일 | `ProtocolCatalog` 의 항목; 원본 바이트 `ProtocolFileStore` | 연구실이 올린 문서. 원본 바이트와 SHA-256 을 그대로 둔다 |
 | 시약 표 | 시약 표(.xlsx) | reagent table — `ProtocolCatalog.attach_reagent_table` | 프로토콜에 붙인 엑셀. 분석에 쓰지 않는다 |
-| (링크로 가져오기) | 화면 없음 | `protocol_link_import.py`, `POST /api/protocols/import-link` | 공개 Google Drive·Docs·Sheets 링크로 가져오기 |
+| 링크로 가져오기 | 공개 링크로 가져오기 · 링크로 가져오기 | `protocol_link_import.py`, `POST /api/protocols/import-link` | Drive 파일·Docs는 화면, Sheets 시약 표는 API로 가져오기 |
 | 사진 글자 읽기 | OCR, OCR 텍스트 추출 | `protocol_ocr.py`, `protocol_ocr_providers.py` | 글자 층이 없거나 읽을 수 없는 쪽만 읽는다 |
 | 분석 | 분석, 구조 분석 | analysis — `experiment_protocol_analysis.py`, `ProtocolCatalog.analyze` | 모델이 단계·값·안전 주의를 구조로 뽑는다 |
 | 나눠 분석한 부분 | 조각 | analysis piece — `analysis_pieces`, `ANALYSIS_PIECE_MAX_PAGES` | 긴 문서를 15쪽씩 나눈 것 |

@@ -39,7 +39,9 @@
 - **한도(코드 값)**: 원문 64 MiB, 사진 1억 화소, 시약 표 5 MiB·셀 20,000개, Word 변환 120 s. 링크: 호스트 `drive.google.com`·`docs.google.com`·`drive.usercontent.google.com`, 리디렉션 5번, 공인 주소만, 전체 60 s.
 - **설정**: `VOINEY_LAB_PROTOCOL_ENABLED`, `VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_OFFICE_CONVERTER`(LibreOffice `soffice` 경로), `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS`(기본 30, 긴 문서는 300 권장 — `docs/DEPLOYMENT_RUNBOOK.md`). HEIC 는 선택 설치 `pip install -e '.[heic]'`.
 - **시험**: `tests/test_lane_an_source_formats.py`, `tests/test_lane_an_reagent_tables.py`, `tests/test_lane_dr_link_import.py`, `tests/test_lane_dr_link_security.py`(가짜 HTTP), `tests/test_lane_dr_link_messages.py`.
-- **한계**: LibreOffice 가 없으면 Word 만 `docx_conversion_unavailable`(503)로 거절한다. 링크 가져오기는 **화면 단추가 없다**(서버 경로뿐). 형식별 자세한 확인 방법은 `docs/SOURCE_FORMATS.md`.
+- **화면**: 새 프로토콜 올리기의 **공개 링크로 가져오기**에 Drive 파일·Docs 주소를 넣는다. 기존 파일 등록과 같은 분석·OCR·중복 안내·결과 화면을 쓴다. 비공개·시간 초과 등은 서버가 준 이유를 표시하고 주소를 고칠 수 있다. 처리 중 중복 요청과 실험 중 요청은 막고, 브라우저 세대가 바뀐 뒤 도착한 가져오기 응답은 버린다. 가져오기만으로 실험을 시작하지 않는다.
+- **시험(화면)**: `tests/test_protocol_link_screen.py`, `tests/e2e/upload-ia.spec.ts`(브라우저는 CI).
+- **한계**: LibreOffice 가 없으면 Word 만 `docx_conversion_unavailable`(503)로 거절한다. 비공개 Google 계정 연결은 없고, Sheets 링크로 시약 표를 붙이는 화면은 아직 없다(서버 API만). 형식별 자세한 확인 방법은 `docs/SOURCE_FORMATS.md`.
 
 ## F3. 사진 글자 읽기 (OCR)
 
