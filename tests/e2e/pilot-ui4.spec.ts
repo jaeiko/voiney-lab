@@ -73,4 +73,21 @@ test.describe('Screen items before the pilot (lane UI4)', () => {
     await expect(page.locator('#protocol-list')).toBeVisible();
     await expect(page.locator('#protocol-list')).toContainText('Western blot');
   });
+
+  test('QA-19: the run\'s [설정] shows the settings sheet over the run, and only it', async ({ page }) => {
+    await mock(page);
+    await page.goto(TAB.experiment);
+    await acceptRun(page, STATE);
+    await expect(page.locator('body')).toHaveAttribute('data-view', 'during');
+    await expect(page.locator('#settings-sheet')).toBeHidden();
+    await page.locator('#run-open-settings').click();
+    await expect(page.locator('body')).toHaveAttribute('data-sheet', 'settings');
+    await expect(page.locator('#settings-sheet')).toBeVisible();
+    await expect(page.locator('#mic-device')).toBeVisible();
+    await expect(page.locator('#settings-account')).toBeHidden();
+    await expect(page.locator('#settings-agent-voice')).toBeHidden();
+    await page.locator('#run-close-settings').click();
+    await expect(page.locator('#settings-sheet')).toBeHidden();
+    await expect(page.locator('#tab-settings')).toBeHidden();
+  });
 });

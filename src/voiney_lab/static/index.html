@@ -261,6 +261,8 @@
     body[data-view="during"] .run-sheet-head{display:flex;align-items:center;gap:1rem;font-size:1.125rem}
     body[data-view="during"] .run-sheet-backdrop:not([hidden]){display:block;position:fixed;inset:0;z-index:140;background:rgba(0,0,0,.45)}
     body[data-view="during"] .timeline,body[data-view="during"] #settings-sheet{display:none}
+    /* Lane UI4 QA-19 (2026-10-23): the settings tab's panel shows over the run while its sheet is open -- only the sheet. */
+    body[data-view="during"][data-sheet="settings"]:not([data-tab="settings"]) #tab-settings>:not(#settings-sheet){display:none}
     body[data-view="during"][data-sheet="settings"] #settings-sheet,body[data-view="during"][data-sheet="conversation"] .timeline,body[data-view="during"][data-sheet="figures"] .task-body-right{display:flex;flex-direction:column;gap:.75rem;position:fixed;left:0;right:0;bottom:0;top:auto;z-index:150;width:auto;max-height:min(85dvh,calc(100dvh - 1rem));margin:0;padding:1rem;overflow:auto;overscroll-behavior:contain;border:0;border-top:2px solid var(--ink);border-radius:0;background:var(--surface-raised);box-shadow:var(--shadow)}
     body[data-view="during"][data-sheet="conversation"] .timeline{overflow:hidden}
     body[data-view="during"] .timeline-head{align-items:center}
@@ -1968,8 +1970,15 @@ function renderRunSheets(){
  const body=globalThis.document?.body;if(body?.dataset)body.dataset.sheet=runSheet;
  for(const [name,parts] of Object.entries(RUN_SHEETS))$(parts.opener)?.setAttribute?.("aria-expanded",String(runSheet===name));
  const backdrop=$("run-sheet-backdrop");if(backdrop)backdrop.hidden=!runSheet;
+ // Lane UI4 QA-19: the settings sheet lives in the settings tab; its panel shows while the sheet is open over the run.
+ const settings=$("tab-settings");if(settings&&shownTab()!=="settings")settings.hidden=authRequired()||!runSettingsSheetOpen();
  renderRunFigureFlag();
 }
+// Lane UI4 QA-19 (lane QA, 2026-10-20): the rail's [설정] darkened the run and showed nothing -- lane IA
+// decision ⑥ moved the settings sheet into the settings tab, hidden while the run's tab shows, and a
+// fixed sheet cannot leave a hidden panel. The panel shows while that sheet is open (the CSS shows only
+// its sheet there) and is put away when the sheet closes or the run ends.
+function runSettingsSheetOpen(){return runSheet==="settings"&&screenView()==="during";}
 function openRunSheet(name){
  if(!Object.prototype.hasOwnProperty.call(RUN_SHEETS,name)||screenView()!=="during")return false;
  runSheet=name;if(name==="figures")for(const key of runFigureKeys)runFigureKeysSeen.add(key);
@@ -5557,7 +5566,7 @@ function renderRoute(){
  const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",page=authRequired(),key=`${tab}|${screenRoute.path}|${page}`;
  if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(page?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
  // Before a login no panel shows: the login is a page of its own (the sheet in page mode).
- for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during));}
+ for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during)||(name==="settings"&&runSettingsSheetOpen()));}
  for(const name of TAB_PANELS)$(`tab-link-${name}`)?.setAttribute?.("aria-current",name===tabLinkFor(tab)?"page":"false");
  renderRunReturnBand();
  if(tab==="protocols")renderProtocolViews();
