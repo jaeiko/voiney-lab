@@ -1576,7 +1576,7 @@ let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfig
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
 let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="",workspacePrincipalId="";
 const protocolCatalog=new Map();
-let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
+let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null,reportReadOnly=false;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
 const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
 function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&currentExperimentSessionVersion!==null&&RESUMABLE_EXPERIMENT_STATUSES.has(currentExperimentSessionStatus)&&!experimentOfAnother(currentExperimentSessionId);}
@@ -1586,6 +1586,10 @@ function experimentIsResumable(){return Boolean(currentExperimentSessionId)&&cur
 // who is signed in (/api/workspace/session's principal_id); an owner not named is not taken for another.
 function ownedByAnother(ownerId){return nonemptyText(ownerId)&&nonemptyText(workspacePrincipalId)&&String(ownerId)!==workspacePrincipalId;}
 function experimentOfAnother(sessionId){const item=nonemptyText(sessionId)&&Array.isArray(workspaceExperiments)?workspaceExperiments.find(entry=>entry?.session_id===sessionId):null;return ownedByAnother(item?.owner_principal_id);}
+// Lane UI4 (lane OWN's hand-over, 2026-10-22): an administrator reads a member's record, but its values
+// (확인 · 정정), its rating and its written report (다시 만들기) stay the owner's -- the server refuses them.
+// A record is another person's when its experiment is, or when the record names its owner itself.
+function reportOfAnother(report){return ownedByAnother(report?.owner_principal_id)||experimentOfAnother(report?.session_id);}
 function updateStartActionLabel(){const button=$("start");if(button)button.textContent=experimentIsResumable()?"실험 이어하기":"새 실험 시작";renderExperimentContext();}
 const webReferenceHistory=[];
 const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers=new Map(),toolEvents=new Map(),visualEvents=new Map(),researchEvents=new Map(),brainEvents=new Map(),greetingEvents=new Set(),audioRecoveryTurns=new Set();
@@ -1665,7 +1669,7 @@ function showExperimentEnded(message){
  setText("procedure-status",`${status}${report}`);
  renderAfterHead(message);
  renderScreenView();
- globalThis.VoineyFeedback?.ended(lastReportId);
+ if(!reportReadOnly)globalThis.VoineyFeedback?.ended(lastReportId);
  // QA-95: the lists read again, so no tab offers the ended experiment as 진행 중.
  void loadExperimentSessions(currentExperimentSessionId);
 }
@@ -2283,13 +2287,14 @@ function renderReportReview(reportId,items,status){
  const box=$("report-review-checklist");if(!box)return false;box.replaceChildren();
  const list=Array.isArray(items)?items.filter(item=>item&&typeof item.item_id==="string"):[];
  if(!list.length||typeof reportId!=="string"||status==="in_progress"){box.hidden=true;return false;}
- box.hidden=false;const open=list.filter(item=>!item.confirmed).length;
+ box.hidden=false;const open=list.filter(item=>!item.confirmed).length,readOnly=reportReadOnly&&reportId===lastReportId;
  const head=document.createElement("b");head.textContent=open?`보고서에 넣을 값 확인 · 남은 ${open}개`:`보고서에 넣을 값 ${list.length}개 · 모두 확인함`;box.appendChild(head);
  box.appendChild(reportReviewSummary(list));
+ if(readOnly){const note=document.createElement("p");note.className="report-review-owner";note.textContent="다른 사람의 기록이에요 · 값 확인과 정정, 평점은 기록한 사람만 할 수 있어요.";box.appendChild(note);}
  const pending=list.find(item=>!item.confirmed);
- if(pending){const card=document.createElement("div");card.className="report-pending";const title=document.createElement("b");title.className="report-pending-head";title.textContent=`미확인 기록 ${open}건`;card.appendChild(title);card.appendChild(reportReviewRow(reportId,pending,{withStep:true}));box.appendChild(card);}
+ if(pending){const card=document.createElement("div");card.className="report-pending";const title=document.createElement("b");title.className="report-pending-head";title.textContent=`미확인 기록 ${open}건`;card.appendChild(title);card.appendChild(reportReviewRow(reportId,pending,{withStep:true,readOnly}));box.appendChild(card);}
  const steps=new Map();for(const item of list){const label=typeof item.step_label==="string"?item.step_label:"";if(!steps.has(label))steps.set(label,[]);steps.get(label).push(item);}
- for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item));box.appendChild(group);}
+ for(const [label,stepItems] of steps){const group=document.createElement("section");group.className="report-review-step";const title=document.createElement("h4");title.textContent=label?`${label}단계`:"단계 밖 기록";group.appendChild(title);for(const item of stepItems)group.appendChild(reportReviewRow(reportId,item,{readOnly}));box.appendChild(group);}
  return true;
 }
 // Lane UI3 decision 5 (2026-10-14): a value the server lists as a deviation
@@ -2306,20 +2311,21 @@ function reportReviewSummary(list){
 // Lane FX3 decision 5: the source values a deviation differs from, as the
 // server recorded them with the note (none for a deviation said as such).
 function reportReviewSources(item){return Array.isArray(item?.deviations)?[...new Set(item.deviations.filter(found=>found&&typeof found==="object"&&nonemptyText(found.source)).map(found=>normalizePresentationText(found.source).replace(/\s+/g," ").trim()))]:[];}
-function reportReviewRow(reportId,item,{withStep=false}={}){
+function reportReviewRow(reportId,item,{withStep=false,readOnly=false}={}){
  const row=document.createElement("div");row.className="report-review-row";row.dataset.confirmed=item.confirmed?"true":"false";
  const at=localDateParts(reportEventTimes.get(item.source_key))?.time||"";
  const time=document.createElement("span");time.className="report-review-time";time.textContent=at;row.appendChild(time);
  const text=document.createElement("span");text.className="report-review-text";text.textContent=`${withStep&&item.step_label?`${item.step_label}단계 `:""}${typeof item.kind==="string"?item.kind:""}: ${typeof item.text==="string"?item.text:""}`;if(item.kind===REPORT_REVIEW_DEVIATION_KIND){text.append(" ");text.appendChild(uiBadge("기준치와 다름","warning"));row.dataset.deviation="true";const sources=reportReviewSources(item);if(sources.length){const source=document.createElement("span");source.className="report-review-source";source.textContent=` · 원문 ${sources.join(" · ")}`;text.appendChild(source);}}row.appendChild(text);
  if(item.corrected){const history=document.createElement("span");history.className="report-review-history";history.textContent=`정정됨 (처음: ${typeof item.original==="string"?item.original:""})`;row.appendChild(history);}
  row.appendChild(uiBadge(item.confirmed?"✓ 실험자 확인":"미확인",item.confirmed?"quiet":"provisional"));
+ if(readOnly)return row;
  const actions=document.createElement("span");actions.className="report-review-actions";
  if(!item.confirmed){const ok=document.createElement("button");ok.type="button";ok.textContent="✓ 확인";ok.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"confirm"});});actions.appendChild(ok);}
  const fix=document.createElement("button");fix.type="button";fix.textContent="고치기";fix.addEventListener("click",()=>{const input=document.createElement("input");input.type="text";input.maxLength=800;input.value=typeof item.text==="string"?item.text:"";input.setAttribute("aria-label","고친 값");const save=document.createElement("button");save.type="button";save.textContent="고쳐서 확인";save.addEventListener("click",()=>{void answerReportReview(reportId,item.item_id,{action:"correct",text:input.value});});fix.replaceWith(input,save);input.focus();});actions.appendChild(fix);
  row.appendChild(actions);return row;
 }
 async function answerReportReview(reportId,itemId,body){try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/review/${encodeURIComponent(itemId)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error("report review");if(reportId!==lastReportId)return false;renderReportReview(reportId,data.items,lastReportStatus);void refreshReportProse(reportId);return true;}catch(_error){if(reportId===lastReportId&&$("report-prose-state"))$("report-prose-state").textContent="값 확인을 저장하지 못했습니다. 다시 시도해 주세요.";return false;}}
-async function refreshReportProse(reportId){stopReportProsePolling();const target=$("report-prose-state"),again=$("report-prose-again");if(!target||typeof reportId!=="string")return false;try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("report prose status");if(reportId!==lastReportId)return false;target.textContent=typeof data.label==="string"?data.label:"";if(again){again.hidden=data.state!=="ready";again.dataset.reportId=reportId;}if(data.state==="preparing")reportProseHandle=setTimeout(()=>{void refreshReportProse(reportId);},3000);return true;}catch(_error){if(reportId===lastReportId)target.textContent="보고서 준비 상태를 확인하지 못했습니다.";return false;}}
+async function refreshReportProse(reportId){stopReportProsePolling();const target=$("report-prose-state"),again=$("report-prose-again");if(!target||typeof reportId!=="string")return false;try{const response=await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("report prose status");if(reportId!==lastReportId)return false;target.textContent=typeof data.label==="string"?data.label:"";if(again){again.hidden=data.state!=="ready"||reportReadOnly;again.dataset.reportId=reportId;}if(data.state==="preparing")reportProseHandle=setTimeout(()=>{void refreshReportProse(reportId);},3000);return true;}catch(_error){if(reportId===lastReportId)target.textContent="보고서 준비 상태를 확인하지 못했습니다.";return false;}}
 async function regenerateReportProse(){const button=$("report-prose-again"),reportId=button?.dataset?.reportId;if(!reportId)return false;button.disabled=true;try{await workspaceFetch(`/api/experiment-reports/${encodeURIComponent(reportId)}/prose`,{method:"POST"});}catch(_error){}finally{button.disabled=false;}return refreshReportProse(reportId);}
 function startReportPolling(reportId){
  if(typeof reportId!=="string"||!reportId)return;
@@ -2580,7 +2586,7 @@ function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크�
 function resetSessionUI(){
  experimentEndedOnScreen=false;workflowPaused=false;clearAfterHead();
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
- stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
+ stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;reportReadOnly=false;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  globalThis.VoineyFeedback?.reset();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
  turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
@@ -4920,7 +4926,7 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;reportReadOnly=reportOfAnother(report);if(reportReadOnly)globalThis.VoineyFeedback?.reset();else globalThis.VoineyFeedback?.report(report.report_id);setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);renderReportReview(report.report_id,report.review,report.status);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute("aria-disabled","false");}void refreshReportProse(report.report_id);
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
