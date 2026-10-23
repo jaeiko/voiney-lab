@@ -2,6 +2,7 @@
 import pytest
 
 from tests.test_lane_own_reports import records
+from voiney_lab import server as srv
 
 
 @pytest.mark.parametrize("who,status", [("owner", 200), ("admin", 200), ("peer", 404), ("outside", 404)])
@@ -15,6 +16,9 @@ def test_session_report_links(records, who, status):
         assert payload["session_id"] == "session-owned"
         assert [row["report_id"] for row in payload["reports"]] == [rid]
         assert payload["reports"][0]["status"] == "completed"
+        owner = srv._account_for_cookie(devices["owner"].session_cookie).principal()
+        assert payload["reports"][0]["owner_principal_id"] == owner.principal_id
+        assert payload["reports"][0]["organization_id"] == owner.organization_id
     assert store.get_report(rid)["events"] == before
 
 

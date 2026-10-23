@@ -545,6 +545,7 @@ class ServerTests(unittest.TestCase):
             async def send_text(self,value): self.sent.append(json.loads(value))
             async def receive(self): return next(self.messages)
         legacy_environment={
+            "VOINEY_LAB_USAGE_SCOPE":"test_only",
             "SAFEBRIDGE_SAFETY_CATALOG":"/old/catalog.sqlite",
             "SAFEBRIDGE_USAGE_SCOPE":"test_only",
             "XAI_API_KEY":"must-not-appear-in-logs",

@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from tests.test_lane_on_auth_api import Device
+from tests.test_lane_app1_app_origins import _open
 from voiney_lab import server as srv
 from voiney_lab.document_store import CATALOG_SCHEMA_VERSION
 from voiney_lab.start_check import start_check_enabled
@@ -57,6 +58,30 @@ def test_an_approved_catalog_is_ready(safety):
         connection.execute("CREATE TABLE documents(usage_scope TEXT,approval_status TEXT,active INTEGER)")
         connection.execute("INSERT INTO documents VALUES('demo','approved',1)")
     assert Device().get("/readyz").status_code == 200
+
+
+def test_an_unset_scope_is_refused_by_name(safety, monkeypatch):
+    monkeypatch.delenv("VOINEY_LAB_USAGE_SCOPE", raising=False)
+    with pytest.raises(srv.ServerConfigurationError) as failure:
+        srv._runtime_usage_scope()
+    assert failure.value.field_names == ("VOINEY_LAB_USAGE_SCOPE",)
+    response = Device().get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["fields"] == ["VOINEY_LAB_USAGE_SCOPE"]
+
+
+@pytest.mark.parametrize("scope", [None, " "])
+def test_missing_scope_names_the_setting_at_http_and_socket_boundaries(safety, monkeypatch, scope):
+    if scope is None:
+        monkeypatch.delenv("VOINEY_LAB_USAGE_SCOPE", raising=False)
+    else:
+        monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", scope)
+    response = Device().get("/api/auth/session")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "configuration_invalid", "fields": ["VOINEY_LAB_USAGE_SCOPE"]}
+    socket = _open({})
+    assert socket.sent == [{"type": "error", "message": "configuration_invalid", "fields": ["VOINEY_LAB_USAGE_SCOPE"]}]
+    assert socket.closed == (1008, "invalid configuration")
 
 
 @pytest.mark.parametrize("read,name", [(start_check_enabled, "VOINEY_LAB_START_CHECK_ENABLED"),

@@ -575,7 +575,7 @@ _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar
 
 
 def _runtime_usage_scope()->str:
-    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","demo").strip()
+    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
     if scope not in {"operational","demo","reference_only","test_only","source_protocol_only"}:
         raise ServerConfigurationError(
             "VOINEY_LAB_USAGE_SCOPE must name a usage scope","VOINEY_LAB_USAGE_SCOPE")
@@ -853,7 +853,7 @@ def _workspace_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=exc.code)
     if isinstance(exc,(ApprovalReplayError,WorkspaceConflictError)):
         return HTTPException(status_code=409,detail=exc.code)
-    if isinstance(exc,(IdentityConfigurationError,ConfigurationError)):
+    if isinstance(exc,(IdentityConfigurationError,ConfigurationError,ServerConfigurationError)):
         return HTTPException(status_code=503,detail=getattr(exc,"code","configuration_invalid"))
     return HTTPException(
         status_code=400 if isinstance(exc,WorkspaceError) else 500,
@@ -917,7 +917,8 @@ async def commercial_identity_boundary(request:Request,call_next):
     except Exception as exc:
         error=_workspace_http_error(exc)
         return JSONResponse(
-            status_code=error.status_code,content={"detail":error.detail},
+            status_code=error.status_code,content={"detail":error.detail,
+                **({"fields":list(exc.field_names)} if isinstance(exc,ServerConfigurationError) else {})},
             headers=error.headers or None)
 
 
@@ -3712,6 +3713,7 @@ def get_workspace_experiment_reports(session_id:str)->dict[str,object]:
         settings=ExperimentReportSettings.from_environment()
         reports=[]
         if settings.enabled and settings.database_path is not None:
+            _migrate_report_ownership()
             store=ExperimentReportStore(settings.database_path)
             for report in store.list_reports(session_id=session_id):
                 _scope_tenant_resource("experiment_report",report["report_id"])
@@ -11397,12 +11399,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 )
             ):
                 try:
-                    report=await _voice_report_write(
+                    report_worker=asyncio.create_task(_voice_report_write(
                         _record_experiment_report_plan,
                         session,curated,plan,
                         turn_id=turn_id,generation=generation,
                         pre_transition_index=pre_transition_index,
-                    )
+                    ))
+                    try:
+                        report=await asyncio.shield(report_worker)
+                    except asyncio.CancelledError:
+                        while not report_worker.done():
+                            try:
+                                await asyncio.shield(report_worker)
+                            except asyncio.CancelledError:
+                                continue
+                        report_worker.result()
+                        if plan.state_changed and session.experiment_state_version is None:
+                            workflow_mutation_committed=True
+                        raise
                     report_prepared=True
                     if (
                         plan.state_changed
@@ -12844,6 +12858,11 @@ async def voice_socket(websocket:WebSocket):
                 workspace.close()
             workspace_context_token=_REQUEST_PRINCIPAL.set(principal)
     except Exception as exc:
+        if isinstance(exc,ServerConfigurationError):
+            await websocket.send_text(event(
+                "error",message="configuration_invalid",fields=list(exc.field_names)))
+            await websocket.close(code=1008,reason="invalid configuration")
+            return
         await websocket.send_text(event(
             "error",message=getattr(exc,"code","authentication_failed")))
         await websocket.close(code=1008,reason="authentication required")

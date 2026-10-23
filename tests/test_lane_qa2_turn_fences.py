@@ -79,6 +79,37 @@ class TurnFenceTests(VoiceNotesHarness, unittest.TestCase):
                                 for e in self.report()["events"]))
         self.voice(scenario, patch.object(srv.asyncio, "to_thread", side_effect=thread))
 
+    def test_report_only_commit_also_survives_turn_cancellation(self):
+        self.environment["VOINEY_LAB_WORKSPACE_ENABLED"] = "false"
+        original = srv._record_experiment_report_plan
+        committed = None
+        release = None
+        armed = False
+
+        async def thread(function, *args, **kwargs):
+            result = function(*args, **kwargs)
+            if armed and function is original:
+                committed.set()
+                await release.wait()
+            return result
+
+        async def scenario(socket, listener, say):
+            nonlocal committed, release, armed
+            committed, release = asyncio.Event(), asyncio.Event()
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "넘어가")
+            armed = True
+            turn = asyncio.create_task(say(3, "1단계 완료했어"))
+            await asyncio.wait_for(committed.wait(), 3)
+            turn.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await turn
+            self.assertEqual(listener.curated_protocol_session.current_index, 1)
+            self.assertTrue(any(e["event_type"] == "step_completed" and e["step_label"] == "1"
+                                for e in self.report()["events"]))
+        self.voice(scenario, patch.object(srv.asyncio, "to_thread", side_effect=thread))
+
     def test_old_connection_cannot_reclaim_a_session_with_a_memo(self):
         async def scenario(socket, listener, say):
             await say(1, "프로토콜 시작해줘")
