@@ -16,9 +16,13 @@ and the document is reported rather than scored against the extraction.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum
 
 from voiney_lab import experiment_protocol as domain
 
@@ -38,7 +42,7 @@ def normalize(text: str) -> str:
 
     folded = unicodedata.normalize("NFKC", text).casefold()
     folded = folded.replace("µ", "μ")
-    folded = re.sub(r"[^0-9a-zμ%.:/-]+", " ", folded)
+    folded = re.sub(r"[^\w%.:/-]+", " ", folded)
     # A separator only carries meaning between digits: 0.5, 00:15:00, 2-7 and
     # w/v all matter, a trailing full stop does not.
     folded = re.sub(r"(?<![0-9])[.:/-]|[.:/-](?![0-9])", " ", folded)
@@ -95,6 +99,7 @@ class StepComparison:
     text_similarity: float
     reference_values: dict[str, tuple[str, ...]]
     candidate_values: dict[str, tuple[str, ...]]
+    source_key: str = ""
 
     @property
     def values_match(self) -> bool:
@@ -197,7 +202,7 @@ class AccuracyReport:
         }
 
 
-def _steps(protocol: domain.ExperimentProtocol):
+def _steps(protocol: domain.ExperimentProtocol) -> list[domain.ProtocolSourceStep]:
     return [
         step for section in protocol.sections for step in section.steps
     ]
@@ -207,6 +212,34 @@ def _step_text(step: domain.ProtocolSourceStep) -> str:
     parts = [step.instruction_source_text]
     parts.extend(action.instruction_source_text for action in step.sub_actions)
     return " ".join(part for part in parts if part)
+
+
+def _step_keys(
+    steps: list[domain.ProtocolSourceStep], ambiguous: set[str],
+) -> list[str]:
+    """Keep unique source labels; otherwise use the page and exact quote.
+
+    Unnumbered and repeated labels never align by their position in a list:
+    omitting its first entry would shift every subsequent comparison. A
+    different quotation is reported on each side, not matched approximately.
+    An occurrence suffix preserves duplicate records of the same passage.
+    These are comparison addresses, never labels written into the Protocol.
+    """
+
+    seen: Counter[str] = Counter()
+    result: list[str] = []
+    for step in steps:
+        label = step.source_label
+        if label and label not in ambiguous:
+            result.append(label)
+            continue
+        evidence = step.evidence
+        quote = " ".join(evidence.source_excerpt.split())
+        digest = hashlib.sha256(quote.encode("utf-8")).hexdigest()
+        anchor = f"p{evidence.source_page_number}:{label or 'unnumbered'}:{digest}"
+        seen[anchor] += 1
+        result.append(f"{anchor}:{seen[anchor]}")
+    return result
 
 
 def score_extraction(
@@ -219,19 +252,26 @@ def score_extraction(
 
     reference_steps = _steps(reference)
     candidate_steps = _steps(candidate)
-    by_label = {step.source_label: step for step in candidate_steps}
-    reference_labels = [step.source_label for step in reference_steps]
-    candidate_labels = [step.source_label for step in candidate_steps]
+    repeated = {
+        label for steps in (reference_steps, candidate_steps)
+        for label, count in Counter(step.source_label for step in steps).items()
+        if count > 1
+    }
+    reference_labels = _step_keys(reference_steps, repeated)
+    candidate_labels = _step_keys(candidate_steps, repeated)
+    reference_by_label = dict(zip(reference_labels, reference_steps, strict=True))
+    by_label = dict(zip(candidate_labels, candidate_steps, strict=True))
     shared = [label for label in reference_labels if label in by_label]
     compared = tuple(
         StepComparison(
-            source_label=label,
+            source_label=reference_by_label[label].source_label,
+            source_key=label,
             text_similarity=_similarity(
-                _step_text(next(s for s in reference_steps if s.source_label == label)),
+                _step_text(reference_by_label[label]),
                 _step_text(by_label[label]),
             ),
             reference_values=_values(
-                _step_text(next(s for s in reference_steps if s.source_label == label))
+                _step_text(reference_by_label[label])
             ),
             candidate_values=_values(_step_text(by_label[label])),
         )
@@ -253,6 +293,75 @@ def score_extraction(
         compared=compared,
         reference_notes=reference_notes,
     )
+
+
+def _source_records(protocol: domain.ExperimentProtocol) -> Counter[tuple[str, int, str]]:
+    """Count evidence-bearing typed records without relying on model ids.
+
+    Direct scalar fields and exact evidence text identify a record. Child
+    records are counted separately; renaming an id cannot create a difference.
+    This measures source content presence, not semantic correctness or the
+    correctness of dependencies between records.
+    """
+
+    counts: Counter[tuple[str, int, str]] = Counter()
+
+    def visit(value: object, owner_evidence: domain.SourceEvidence | None = None) -> None:
+        if isinstance(value, domain.SourceEvidence):
+            return
+        if isinstance(value, tuple):
+            for item in value:
+                visit(item, owner_evidence)
+            return
+        if not is_dataclass(value) or isinstance(value, type):
+            return
+        evidence = getattr(value, "evidence", None) or owner_evidence
+        if isinstance(evidence, domain.SourceEvidence):
+            content: dict[str, object] = {
+                "quote": " ".join(evidence.source_excerpt.split()),
+                "continued_page": evidence.continued_on_page_number,
+                "continued_quote": " ".join((evidence.continued_excerpt or "").split()),
+            }
+            for item in fields(value):
+                if item.name.endswith(("_id", "_ids")):
+                    continue
+                scalar = getattr(value, item.name)
+                if isinstance(scalar, Enum):
+                    scalar = scalar.value
+                if scalar is None or isinstance(scalar, (str, int, float, bool)):
+                    content[item.name] = scalar
+            digest = hashlib.sha256(json.dumps(
+                content, ensure_ascii=False, sort_keys=True, allow_nan=False,
+            ).encode("utf-8")).hexdigest()
+            counts[(type(value).__name__, evidence.source_page_number, digest)] += 1
+        for item in fields(value):
+            # The source PDF is input evidence, not a proposed protocol record.
+            if item.name not in {"pdf", "evidence"}:
+                visit(getattr(value, item.name), evidence)
+
+    visit(protocol)
+    return counts
+
+
+def source_record_differences(
+    reference: domain.ExperimentProtocol, candidate: domain.ExperimentProtocol,
+) -> dict[str, object]:
+    """Report omitted/added source records separately, never as a verdict."""
+
+    left, right = _source_records(reference), _source_records(candidate)
+
+    def differences(counts: Counter[tuple[str, int, str]]) -> list[dict[str, object]]:
+        return [
+            {"kind": kind, "source_page_number": page, "source_key": key, "count": count}
+            for (kind, page, key), count in sorted(counts.items())
+        ]
+
+    return {
+        "reference_count": sum(left.values()),
+        "candidate_count": sum(right.values()),
+        "in_reference_only": differences(left - right),
+        "in_candidate_only": differences(right - left),
+    }
 
 
 def audit_reference(

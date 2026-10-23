@@ -76,6 +76,21 @@ together.
   the hardening set's 100 cases failed and CI runs it for visibility only.
 - The router evaluation set used to measure the router-first switch (567
   lines) is kept outside this repository with the lane's report.
+- `scripts/score_extraction.py SOURCE.pdf --reference reference.json
+  --candidate candidate.json` compares two saved responses in the current
+  analysis JSON format. Both are parsed against that exact source with the
+  production evidence checks, without a provider or a catalog. It reports
+  missing/extra steps, order, text-derived values and counts of source-linked
+  typed records (including notes, warnings and constructs). Blank or repeated
+  labels use the page and exact quote; ids assigned by the model do not align
+  records. Different quotes are reported separately, not guessed into a match.
+  Korean text is retained in comparisons. The reference is a hand-built
+  baseline, not ground truth; evidence findings and extraction differences
+  stay separate and neither becomes an execution verdict. Text-derived value
+  parsing covers the existing English time/temperature/volume forms; the
+  typed-record comparison preserves other declared values as source strings.
+  This does not detect omissions on the live analysis path. `--output` may
+  create a report file and refuses to overwrite any existing file.
 
 ## 4. Release gates (targets, not measurements)
 

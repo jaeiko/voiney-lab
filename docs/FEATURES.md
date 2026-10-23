@@ -72,6 +72,7 @@
 - **설정**: `VOINEY_LAB_ANALYSIS_REQUOTE`(true).
 - **시험**: `tests/test_lane_ev_evidence_rules.py`, `tests/test_lane_ev2_hollow_pass.py`, `tests/test_lane_ev2_cross_page.py`, `tests/test_lane_an4_requote.py`, `tests/test_lane_an5_requote_after_cards.py`, `tests/test_lane_an5_mixed_numbering.py`, `tests/test_lane_an5_page_end_furniture.py`.
 - **한계**: 한 줄에 여러 값이 몰린 표, 번호 없는 글로 된 단계, 설명만 하는 번호 줄은 잘못 읽힐 수 있다(`.agent/architecture.md` "알려진 분석 한계").
+- **분석 결과 비교**: `scripts/score_extraction.py`는 같은 PDF의 저장된 분석 JSON과 사람이 만든 기준 JSON을 현재 파서로 읽어 단계 누락·추가·순서·문장 속 값 차이와 원문 근거가 연결된 구조 항목 차이를 따로 보고한다. 한글을 보존하고, 번호가 없거나 겹치면 쪽·원문 인용으로 비교한다. 모델 호출·카탈로그 쓰기·실행 판정은 하지 않는다. 기준 자체가 불완전할 수 있고, 원문 인용이 다르면 추측해서 맞추지 않는다. 명령과 한계는 `.agent/testing_strategy.md` 3절.
 
 ## F6. 확인 카드
 

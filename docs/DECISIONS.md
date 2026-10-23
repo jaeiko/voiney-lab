@@ -22,6 +22,7 @@
 
 | 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
 |---|---|---|---|---|---|
+| 2026-10-23 | 분석 비교 도구를 현재 분석 JSON 파서로 복구한다. 한글을 보존하고, 번호가 없거나 겹치는 단계는 쪽·원문 인용으로 비교한다. 모델 ID를 비교 근거로 쓰지 않는다. 원문 근거 검사 결과와 누락·추가 차이는 별도이며 실행 판정은 만들지 않는다 | 지운 주장 조각 캐시를 읽던 도구가 실행되지 않았고, 번호만으로 비교하면 항목이 겹쳤다 | pilot-foundation | `scripts/score_extraction.py`, `protocol_extraction_accuracy.py` | 기준은 사람이 만든 비교 자료이고 완전성을 보증하지 않는다. 실시간 누락 검사는 바꾸지 않는다 |
 | 2026-10-10, 10-16 | 분석 역할은 Google `gemini-3.8-flash`, 추론 `low`. 번역도 `low`. 보고서 서술은 `gemini-3.8-flash`. 라우터·답변·보조 설명은 OpenAI `gpt-6-luna` | 선택 규칙 "p50 ≤ 120 s, p90 ≤ 300 s 안에서 통과가 가장 많은 것": 25개 문서에서 3.8 Flash `low` 만 안에 들었다(p50 30.8 s, p90 221.6 s, 통과 14) | AQ, M3, GM | `.env.example` 의 역할 값. **코드는 설정이 비면 추론을 `high` 로 읽는다**(`server.py` `_protocol_analysis_model`, `setting_names.py` 의 기본값) | 줄 M3 은 `medium` 을 권했다. 지금 값은 GM 권고(`low`) |
 | 2026-10-16 | Gemini 4 는 분석에 쓰지 않는다 | 지연 규칙을 넘고 비용이 약 4배, 통과 12 대 14 | GM | `.env.example` 에 없음 | 권고. 사람 결정 기록 확인 안 됨 |
 | 2026-10-10 · 13 | 모든 모델 역할과 STT·TTS 공급자는 직접 적는다("설정 필요"). 빈 역할은 다른 공급자로 가지 않고 그 설정 이름을 적은 오류로 닫힌다 | 아무도 고르지 않은 공급자로 요청이 가면 안 된다 | CL, PL, AN, RA | `setting_names.py` `_SET_ME`; `model_providers.py` `DEFAULT_MODELS`, `RoleNotConfiguredError` | — |
@@ -107,7 +108,7 @@
 
 이 줄(DOC4)이 문서를 쓰며 코드에서 본 것이다. 코드는 고치지 않았다.
 
-- `scripts/` 의 진단·측정 스크립트 10개가 지금 dev 에서 import 또는 실행 중에 실패한다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `score_extraction.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. 고칠지 지울지 정한다.
+- `scripts/` 의 진단·측정 스크립트 9개가 import 또는 실행 중에 실패하는 것으로 기록돼 있다(지운 모듈을 부름): `audit_claim_semantics.py`, `derive_timer_manifest.py`, `diagnose_figure_label_chunk.py`, `diagnose_full_document_run.py`, `diagnose_hazard_claim_chunk.py`, `diagnose_protocol_claim_latency.py`, `diagnose_provider_chunk.py`, `prototype_claim_chunks.py`, `walk_pdf_end_to_end.py`. `scripts/collect_chunks.sh` 도 그중 하나를 부른다. `score_extraction.py`는 위 결정으로 복구했다. 나머지를 고칠지 지울지 정한다.
 - 시작 전 핵심 값 확인(2문항)은 화면의 순서로만 지켜진다. 서버의 세션 시작은 `available_for_execution` 만 본다.
 - `GET /readyz` 는 안전 카탈로그·사용 범위를 보지 않는다. `/readyz` 가 200 이어도 `/api/protocols` 가 500 일 수 있다.
 - `VOINEY_LAB_USAGE_SCOPE` 가 비면 신원 판단(`server.py` `_runtime_usage_scope`)은 `demo` 로 읽고, 설정 검사(`server_config`)는 거부한다.

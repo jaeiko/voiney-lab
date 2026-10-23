@@ -204,6 +204,13 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 - The in-gel development fixture's timers come from
   `data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json`;
   no manifest, no timers.
+- Offline only: `scripts/score_extraction.py` compares saved current-format
+  analysis responses with a hand-built baseline against the same PDF. It uses
+  the existing parser/evidence checks and `protocol_extraction_accuracy` to
+  report step and typed source-record differences. Model ids do not establish
+  matches; blank/repeated labels use their page and exact quote. No model,
+  protocol store or workflow state is opened and no execution verdict is made.
+  This evaluator does not close the live completeness gap described above.
 
 ## 5. Evidence and provider boundaries
 
