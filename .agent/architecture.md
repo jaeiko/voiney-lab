@@ -52,6 +52,9 @@ HTTP API: protocol catalog (upload, link, OCR, analysis, review cards,
 start check), workspace, reports, accounts, admin, health.
 ```
 
+The waiting cue ends locally as failed if its transport disappears, logging
+only the exception type; it leaves no unobserved task failure.
+
 Only the Cascade path exists (`ready` advertises `pipelines:["cascade"]`).
 There is no Realtime/Native transport, and no "general brain" for a session
 without a protocol: a voice session refuses to start without one.
@@ -129,7 +132,9 @@ generation is cancelled and its audio cleared (barge-in).
      router): the front rules keep system information, ambiguous-reference
      re-asks, short clear commands and replies to server questions
      (`ROUTER_FIRST_HANDED_ON` hands the rest on), and the router may also
-     call the read-only `show_visual`, `clarify` and `not_for_me`.
+     call the read-only `show_visual`, `clarify` and `not_for_me`. Clarify
+     candidates must be source term names, and commands/completion/assent
+     candidates are rejected even when a source term has that spelling.
 5. Read-only roles (`multi_brain`), outside-PDF explanation, pictures and web
    lookups run after the answer and never change state.
 6. Sentence TTS streams through generation-aware audio segments;
@@ -145,6 +150,12 @@ Its original turn ownership and stale fences remain. An explicit literal
 record command may preserve uncertain words, but those words cannot authorize
 a workflow change. Notebook questions survive pause/resume and expire on
 step or revision movement rather than reopening when the user returns.
+
+Cancellation joins already started durable writes before rollback or a new
+bench control. If the worker committed, memory keeps that committed state
+and the corresponding report instead of restoring an older checkpoint. A
+replaced voice connection is refused before planning and again inside
+observation/progress transactions (`workspace_conflict`).
 
 A read-only request leaves every checkpoint equal before and after. A
 combined "explain + next" request stages a completion confirmation; only a
@@ -174,6 +185,11 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   "확인함" are events in `protocol_workspace.sqlite`. A reanalysis adds a
   revision; a run continues on the revision it started with
   (`load_fixture_for_revision`).
+- PDF text extraction suppresses image-byte encoding in raw text output and
+  uses PyMuPDF image-info for geometry. It keeps the same scientific strings
+  and image boxes; the bounded child-process timeout is unchanged (default
+  30 seconds). Launchers show the effective limit; long-document success is
+  still conditional on completing within it.
 - HTTP callers cannot choose an OCR provider; the server injects one
   (`_install_protocol_ocr_provider`). OCR results must match the source's
   SHA-256 and cover every page once, in order.
@@ -327,6 +343,11 @@ voice sockets; the HTTP session scope still follows the account operation.
 Account erasure drains in-flight voice report writes before inventory/deletion
 so a late worker cannot recreate a deleted report.
 
+An account administrator sees only that lab's pilot aggregates; server-token
+and offline aggregation retain their whole-store scope. The development
+fixture follows the same tenant visibility as other catalog items. API
+documentation endpoints require login in accounts mode.
+
 ## 8. Connection loss and timers
 
 `server._send_heartbeats` beats once a second; `static/connection.js`
@@ -336,6 +357,11 @@ reconnects (1, 2, 4, 8, then every 15 s) with `session.start` carrying the
 experiment id and a `reconnect` block. The server restores the same
 experiment (`_restore_lost_connection`, `_restore_standing_timer`), delivers
 missed timer notices and records a content-free `connection_restored` event.
+Recovering a paused or blocked run preserves that state even without a
+`reconnect` block; only explicit current voice/bench resume can lift it.
+Direct HTTP experiment `/transition` returns 409 `voice_control_required`
+after access/input checks, with no workflow change. Unknown socket controls
+return a recoverable error and preserve the connection and checkpoints.
 Timer notices are driven by a per-connection task (`_watch_timer_notices`);
 the store app copies the server's timer times into device alarms and decides
 nothing.
@@ -361,7 +387,13 @@ responses are discarded. Sheets reagent-table attachment remains API-only.
 `#/upload` follows pick → progress (elapsed time/current work) → result.
 Detail groups analysis, source comparison, reagent tables, review history
 and reanalysis in expandable sections. `#/records` lists server-provided
-experiments; `#/records/<id>` opens one timeline. The experiment tab's start
+experiments; `#/records/<id>` opens one timeline and reads
+`GET /api/workspace/experiments/{id}/reports` for existing report summaries.
+Experiment and report read gates both apply, no report is generated by this
+read, and the screen offers Word/Markdown/JSON/CSV for each report. Failed
+loads can be retried with record refresh. Another owner's experiment is
+read-only, with capture/restart and report write controls hidden. Only the
+server's run number is displayed. The experiment tab's start
 card follows the selected/resumable experiment; every start goes through the
 wizard's final button. Clicking end waits for the server's ended state before
 showing the after screen, and ended experiments are not offered for resume.
@@ -372,7 +404,13 @@ same-origin requests. A store-app origin still needs wiring here; these function
 workflow authority. An authenticated request's session-expiry 401 calls
 `signOutOnScreen`, as does logout: clear the used invite, stop microphone and
 connection state, and show login. Own authentication failures (such as a
-wrong current password) are handled by their account screen.
+wrong current password) are handled by their account screen. A 1008 socket
+close also rechecks the account before continuing reconnection. Home resume
+candidates are the current owner's runs; while running, home offers return
+only. Start failures keep the sheet open with a reason, and a failed
+key-value load stays on its step with retry. Source-check/registration
+blockers remain visible. Settings opens as a sheet over the run; account
+erasure asks for the password again and returns to login on success.
 
 ## 10. Store-app shell
 
@@ -395,7 +433,8 @@ Everything fails closed and visibly, and none of it mutates workflow state:
 | Router HTTP 429 | The turn stops and says so; nothing changes |
 | Analysis failure | Recorded with a failure code; the previous revision stays usable |
 | Old setting name present | Server, launchers and tests refuse to start, naming it |
-| Safety scope needs a catalog that is missing or unusable | `server_config` refuses protocol requests (`/readyz` does not check this) |
+| Safety scope needs a catalog that is missing or unusable | `server_config` refuses; `/readyz` returns 503 `safety_configuration_invalid` with setting names only |
+| Usage scope missing/blank, or malformed start-check/workspace boolean | Configuration error naming the setting; no silent scope/boolean fallback |
 
 ## 12. Audio constants
 

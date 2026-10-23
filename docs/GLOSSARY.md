@@ -82,7 +82,7 @@
 |---|---|---|---|
 | 기록 | 실험 기록, 타임라인, 체크포인트 | experiment report ledger `experiment_report_events`; 작업공간 `experiment_session_events` | 지우지 않고 덧붙이기만 하는 장부 |
 | 저장해 둔 지점 | 체크포인트 | checkpoint — `POST …/checkpoint-restart` | 끝난 실험의 그 지점에서 새 실험 |
-| 지난 실험 기록 | 기록 탭의 목록 → 한 실험 기록 | `#/records`, `#/records/<id>`, `renderRecordsViews` | 서버의 목록에서 타임라인 하나를 연다 |
+| 지난 실험 기록 | 기록 탭의 목록 → 한 실험 기록 | `#/records`, `#/records/<id>`, `renderRecordsViews` | 서버의 목록에서 타임라인과 보고서 링크를 연다. 남의 실험은 읽기만 |
 | 실험 노트 | 실험 노트 | `experiment_reports.LabNotebook`, `NOTEBOOK_SUBTITLE` | Word·Markdown 보고서의 모양 |
 | 보고서 | 보고서 만들기 (Word), Markdown·JSON·CSV 내보내기 | `GET /api/experiment-reports/{id}.{형식}` | PDF·랩미팅·xlsx 는 서버에만 있고 화면 링크가 없다 |
 | AI 정리 | AI 정리 | report writer — `check_ai_notes` | 검사를 통과한 AI 문장만 |
@@ -93,7 +93,7 @@
 
 | 사용자 말 | 지금 화면·서버 말 | 코드 이름 | 뜻 |
 |---|---|---|---|
-| 계정 지우기 | (서버 API; 화면 연결은 사용 안내 기준) | `POST /api/auth/delete-account` | 현재 비밀번호 재확인, 마지막 관리자 삭제 불가 |
+| 계정 지우기 | 설정 탭의 계정 지우기 | `POST /api/auth/delete-account` | 현재 비밀번호 재확인, 마지막 관리자 삭제 불가 |
 | 로그인 · 가입 | 로그인, 가입하기 | `VOINEY_LAB_AUTH_MODE=accounts`, `accounts.py` | 계정 모드에서만 |
 | 초대 링크 | 초대 링크 | invite — `AccountStore.create_invite`, `scripts/pilot_invite.py` | 서버 셸에서 만든다 |
 | 관리자 | · 관리자 | account `admin` flag, `server._account_is_admin` | 지표 화면·확인함·계정 끄기 |

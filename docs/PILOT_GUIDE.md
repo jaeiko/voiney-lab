@@ -79,7 +79,7 @@
 4. **휴대폰** — 휴대폰 브라우저는 HTTPS(또는 localhost)에서만 마이크를 쓴다. 서버는 `127.0.0.1` 에서만 듣는다.
    도메인이 정해진 뒤 9절 순서로 HTTPS를 둔다. 계정 로그인이 기본이고 프록시 기본 인증은 선택이다.
    `HOST=0.0.0.0` 으로 서버를 직접 열지 않는다. 파일럿은 계정이 기본이다. 참가자를 초대하는 순서는 7절을 따른다.
-5. **확인** — 8절의 기준판·복구·실험 대본을 확인한다. `/healthz`는 살아 있음을, `/readyz`는 로컬 설정을 알린다. 공급자 응답·실제 마이크·프록시 웹소켓 성공은 따로 확인한다.
+5. **확인** — 8절의 기준판·복구·실험 대본을 확인한다. `/healthz`는 살아 있음을, `/readyz`는 사용 범위·안전 카탈로그를 포함한 로컬 설정을 검사한다. 공급자 응답·실제 마이크·프록시 웹소켓 성공은 따로 확인한다.
 6. **멈춤** — 서버 프로세스를 멈춘다. 파일럿을 마치면 5절의 삭제로 간다.
 
 ## 3. 데이터 처리
@@ -180,7 +180,7 @@ pilot.turn turn_id=7 router=fallback reason=timeout action=next changed=1 step=1
 나온다. 건너뛸 수 있고, 같은 기기에서 같은 실험을 다시 묻지 않는다. 마지막 답이 그 실험의 평점이다. **메모는 지표가 아니다** —
 관리자 화면과 지표 CSV 에는 나오지 않고, 아래 `notes` 로만 꺼낸다.
 
-**관리자 화면.** 관리자 계정으로 로그인한 브라우저에서 `https://<서버>/admin-metrics.html`을 열면 토큰 없이 읽는다(7-6절).
+**관리자 화면.** 관리자 계정으로 로그인한 브라우저에서 `https://<서버>/admin-metrics.html`을 열면 같은 연구실 지표를 토큰 없이 읽는다(7-6절). 서버 운영 토큰과 오프라인 도구의 전체 집계는 유지한다.
 기간(기본 최근 14일)·계정 id를 고른다. 관리자 토큰(`VOINEY_LAB_ADMIN_TOKEN`) 경로도 있고, 토큰은 페이지 메모리에서만 요청 머리글(`X-Voice-Workflow-Admin-Token`)로 보낸다.
 서버 경로는 `GET /api/admin/pilot-metrics?from=YYYY-MM-DD&to=YYYY-MM-DD&account=<id>`. 관리자 계정도 없고 토큰 설정도 없으면 닫힌다.
 
@@ -346,7 +346,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
 구분하지 못한다)은 `bash scripts/run_pilot.sh --dev-identity` 로만 켠다(`--check-only` 의 "Sign-in" 칸이 어느 쪽인지 보여 준다). 실행기를 거치지 않고
 서버를 직접 띄우면(개발) 설정값의 기본은 `dev` 이다. 계정 모드는 작업공간(`VOINEY_LAB_WORKSPACE_ENABLED=true`, 파일럿 실행기가 켠다)이 필요하다. 그러면:
 
-- 모든 `/api` 요청과 음성 연결(`/ws`)에 로그인한 계정이 필요하다. 예외는 건강 확인(`/healthz`, `/readyz`), 세션 질문
+- 모든 `/api` 요청과 음성 연결(`/ws`), API 문서(`/docs`·`/redoc`·`/openapi.json`)에 로그인한 계정이 필요하다. 예외는 건강 확인(`/healthz`, `/readyz`), 세션 질문
   (`GET /api/auth/session`), 로그인·가입·초대 확인, 그리고 제 토큰을 쓰는 관리자 지표(`/api/admin/metrics`)뿐이다.
   로그인 없이 부르면 `401 authentication_required`.
 - 세션은 쿠키 `voiney_session` 하나다: HttpOnly, SameSite=Lax, HTTPS(또는 `X-Forwarded-Proto: https` 를 붙이는 Caddy) 뒤에서는
@@ -409,7 +409,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
   `VOINEY_LAB_APP_ORIGINS=https://localhost,capacitor://localhost` 처럼 적으면 그 출처에서만: 로그인·가입 답에 세션 토큰(쿠키 없음),
   `/api` 는 `Authorization: Bearer`, `/ws` 는 첫 메시지 `{"type":"client.auth","token":…}`(10초 안), `/api`·`/readyz` 에 CORS(자격 증명 없음).
   토큰은 쿠키와 같은 세션이라 로그아웃·비밀번호 바꾸기·계정 끄기(7-2절)로 끝난다. URL 과 로그에는 싣지 않는다.
-- 목록을 적으면 `/ws` 가 브라우저의 출처도 본다: 서버 자신의 주소, 목록의 앱, 출처 없음(브라우저가 아님)만 받는다. 목록이 비면 지금처럼 보지 않는다.
+- `/ws`는 목록이 비어 있어도 브라우저 출처를 검사한다. 서버 자신의 scheme·host·유효 포트 또는 목록의 앱만 받는다. 출처가 없는 클라이언트도 로그인은 필요하다. 쓰기 HTTP의 다른 출처 쿠키 요청은 허용한 앱에서도 거절하며 앱은 Bearer 경로를 쓴다.
 - 잘못 적으면(`*`, 경로, `null`) `/readyz` 가 `not_ready`(`ConfigurationError`)다.
 - **Caddy 기본 인증(9절)과 함께 쓸 수 없다** — 둘 다 `Authorization` 머리글을 쓰고, 앱의 사전 요청(OPTIONS)은 인증 정보를 싣지 않는다.
   앱을 실제 서버에 붙이는 날에는 7-3절의 "기본 인증을 둘지, 계정 로그인으로 갈음할지" 를 계정 로그인으로 정해야 한다.
@@ -443,7 +443,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
 **이 절차가 하지 않는 것**: 백업·내보낸 보고서 같은 복사본, 외부 AI 업체 쪽 보관(3-2절), 다른 사람이 말하거나 적은 글 안의 이름, 서버 로그의
 `auth.*` 줄(계정 id 만 있고 이름·비밀은 없다).
 
-**A. 계정이 스스로 지우기** — 서버 API `POST /api/auth/delete-account` `{"password": 현재 비밀번호}`가 있다. 화면 연결 범위는 `USER_GUIDE.md`의 계정 절을 따른다. 서버가 차례로 한다:
+**A. 계정이 스스로 지우기** — 설정 탭 계정의 **계정 지우기**를 누르면 범위·되돌릴 수 없다는 안내와 비밀번호 재입력이 나온다. **그만두기**로 닫거나 **계정 지우기**로 확정한다. 화면은 `POST /api/auth/delete-account` `{"password": 현재 비밀번호}`를 보내며 성공하면 로그인 화면으로 돌아가고 거절 이유는 같은 칸에 보여 준다. 서버가 차례로 한다:
 
 1. 비밀번호를 다시 받아 로그인처럼 확인한다. 틀리면 `401 login_refused`(로그인 실패로 세어 5번이면 잠금 `429`), 비었거나 문자열이 아니면 `422 password_invalid`.
    아무것도 지우지 않는다.
@@ -451,7 +451,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
    다른 관리자가 있어야 한다(꺼 둔 관리자는 세지 않는다). 먼저 `python scripts/pilot_invite.py --admin` 으로 한 명을 더 초대한다. 두 관리자가 동시에 눌러도
    한 쪽만 지워진다.
 3. 계정을 끄고(열린 세션이 그 자리에서 끝난다) 위 표의 데이터를 지운 뒤 계정 자체를 지우고, 쿠키를 지우는 `200 {"deleted": true, "message_ko": …,
-   "removed": {범주: 개수}}` 로 답한다. 진행 중인 실험도 함께 지워지므로 화면이 먼저 사람에게 확인을 받아야 한다.
+   "removed": {범주: 개수}}` 로 답한다. 진행 중인 실험도 함께 지워지므로 화면이 먼저 삭제 안내와 비밀번호로 확인을 받는다.
 4. 삭제 기록 한 줄을 `deletion_log.jsonl` 에 덧붙인다(작업공간 폴더의 바로 위 폴더 — 파일럿에서는 `data/runtime/pilot/`, 5절의 도구가 쓰는 곳):
    언제(UTC)·범주·개수·`"via": "app"`·결과뿐이고 이름·계정 id·비밀번호는 없다. 이 기록을 쓸 수 없으면 아무것도 지우지 않고 `503 deletion_log_unavailable`.
 5. 어느 저장소에서 실패하면 `500 account_delete_incomplete` — 계정은 **꺼진 채** 남아 로그인할 수 없고, 기록에는 `result: failed` 또는 `partial` 이 남는다.
@@ -493,7 +493,7 @@ python scripts/pilot_data_delete.py --account "김재준" --delete --confirm 3FA
 1. **정확한 커밋 확인** — `AGENTS.md` 검증 명령과 공유 잠금으로 pytest·음성 문장 재생·compileall·공백 검사를 실행하고, Playwright는 CI에서 확인한다.
    날짜·커밋·폴더·조건 A/B·실패/건너뜀 목록을 보고서에 적는다. 조건 B만 확인한 음성·서버 변경은 병합 뒤 **태그 전에 원래 폴더에서 조건 A**로 확인한다.
 2. **음성 시험 뒤 기준판 지정** — 조건 A 확인 → 사람이 허용한 기기·공급자로 음성 시험 → 사람이 태그·main 반영 순서다. 가짜 전송 시험이나 dev 자동 배포는 실제 음성 시험을 대신하지 않는다.
-3. **설정 확인** — `./scripts/run_pilot.sh --check-only` 종료 0, 의도한 안전 범위와 계정 모드, 사용할 공급자·역할을 확인한다. 실제 공급자·모델과 바깥 전송 고지는 3-2절을 맞춘다. 개발용 고정 프로토콜 설정을 비우고 STT 진단 녹음은 약속 없이 켜지 않는다.
+3. **설정 확인** — `./scripts/run_pilot.sh --check-only` 종료 0, 의도한 안전 범위와 계정 모드, 실제 라우터·라우터 먼저·PDF 작업 제한을 확인한다. PDF 기본 30초는 긴 문서의 성공 보장이 아니다. 사용할 공급자·역할을 확인한다. 실제 공급자·모델과 바깥 전송 고지는 3-2절을 맞춘다. 개발용 고정 프로토콜 설정을 비우고 STT 진단 녹음은 약속 없이 켜지 않는다.
 4. **프로토콜 확인** — 올린 뒤 OCR·분석이 끝나고, 필요한 카드만 사람이 확인해 검토본을 등록한다. 시작 차단 사유가 없어야 한다. 단계 목록을 원문과 훑고 핵심 값·안전 주의를 확인한다. 관리자 "확인함"은 실행을 허가하는 승인이 아니다.
 5. **복구 준비** — 실험 전 서버를 멈추고 `DEPLOYMENT_RUNBOOK.md`의 백업 create·verify 명령으로 사본을 만든다. 보호된 별도 위치에 두고 새 폴더로 한 번 복원해 본다. 복사본도 삭제 약속에 포함한다.
 6. **낮은 위험의 대본 한 번** — 올리기/공개 링크 → 값·안전 확인 → 시작 → 현재 단계 질문 → 완료 확인 → 원문 타이머 → 말·화면 관찰/증거 → 일시정지·재개 → 새로고침·연결 복구 → 종료·값 확인·노트 내보내기를 확인한다. 질문·추측은 상태를 바꾸지 않아야 한다. 모델 실패·옛 버전·증거 누락도 확인한다. 실제 연구자의 결과는 `PILOT_COMPARISON.md`의 양식으로 따로 잰다.

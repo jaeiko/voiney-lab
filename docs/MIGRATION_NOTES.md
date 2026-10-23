@@ -1807,3 +1807,27 @@ for server end, and sends addresses through `serverUrl`/`serverSocketUrl`/
 invite. Public Drive/Docs uses the same upload lifecycle. Sheets remains an
 API-only reagent table attachment. Offline extraction scoring and the blank
 pilot comparison template write no workflow state and alter no execution rule.
+
+
+### Pilot boundary follow-up: QA2 and UI4 (2026-10-23)
+
+No stored schema version changes. Experiment recovery now preserves paused or
+blocked status even when `reconnect` is absent and records recovery as
+`session_recovered`; resume requires an explicit current control. Direct HTTP
+experiment transitions return 409 `voice_control_required` after access/input
+checks. Cancellation joins in-flight durable writes before rollback or another
+control. Replaced voice connections cannot write observations or progress.
+
+Browser origin checks now also apply with an empty app allowlist and compare
+scheme, host and effective port. Cross-origin cookie writes are refused even
+from app origins; the allowlisted bearer path remains. Accounts mode protects
+API documentation as well. Account-admin metrics are lab-scoped; offline and
+server-token whole-store summaries remain available. Missing usage scope and
+malformed start-check/workspace booleans fail with the setting name.
+
+`GET /api/workspace/experiments/{session_id}/reports` discovers existing reports
+through both read gates without generating one. UI4 uses it for Word, Markdown,
+JSON and CSV links in record detail. Account erasure is now connected to the
+settings screen with password confirmation. Read-only records hide write
+controls, and report numbering uses server values only. Extra export formats
+and PI confirmation remain server-only.

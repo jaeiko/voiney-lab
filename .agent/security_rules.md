@@ -104,7 +104,14 @@ they are not production identity and access management.
    including current-password verification. Shared client addresses do not lock
    other accounts, and changing `X-Forwarded-For` cannot bypass a name lock. App origins in
    `VOINEY_LAB_APP_ORIGINS` may use a bearer token.
-4. Use parameterised SQL and validate external data at ingress.
+4. Cookie-authenticated browser writes with an Origin require the server's
+   origin (scheme, host
+   and effective port). Cross-origin cookie writes are rejected, including
+   allowlisted apps; apps use their bearer path. Browser WebSockets are
+   checked even with an empty app allowlist, against the same server origin
+   or an allowed app. Origin-less clients still authenticate. Forwarded
+   host/scheme values must come from the configured reverse proxy.
+5. Use parameterised SQL and validate external data at ingress.
 
 ## 6. Record permissions
 
@@ -120,6 +127,11 @@ with 404; the voice socket uses `report_not_found`.
 | Other lab, including admins | No | No | No | No |
 | Legacy record with lab but unknown owner | That lab's admins only | No | That lab's admins only | Existing session permission |
 | Legacy record with unknown lab | No | No | No | Existing session permission |
+
+Pilot aggregates from an account administrator are limited to that lab.
+Server-token and offline whole-store summaries retain their scope. Report
+discovery under an experiment checks both existing read gates and creates
+no report or workflow event.
 
 Admin export uses existing or deterministic prose and does not start prose
 regeneration. Workflow changes, observations and evidence uploads remain owner

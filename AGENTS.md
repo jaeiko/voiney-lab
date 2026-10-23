@@ -120,7 +120,7 @@ Protocols
 - `protocol_ocr_providers.py`: NAVER CLOVA and Google Vision engines, place-by-place comparison.
 - `protocol_claim_analysis.py`: page evidence segments (what is left of the claim path).
 - `protocol_translation.py`: Korean translation of a revision's sentences with checks.
-- `protocol_extraction_accuracy.py`: scores an extraction against a hand-built reference (tests only today).
+- `protocol_extraction_accuracy.py`: scores saved analyses against a hand-built reference (offline CLI and tests).
 - `start_check.py`: the two key values asked before the start.
 - `safety_pack.py`: the step safety card from the facility safety catalog, usage scopes, `source_protocol_only`.
 - `safety_documents.py`: safety-document manifest models.
@@ -149,8 +149,7 @@ events, never derives state from prose), `connection.js` (lost connection),
 
 Elsewhere: `mobile/` (Capacitor store-app shell, device features only),
 `scripts/` (launchers `run_dev.sh`, `run_pilot.sh`, `run_ci_server.sh`; pilot
-tools; legacy diagnostic scripts are listed in `docs/DECISIONS.md`,
-"알려진 빈틈"), `tests/` (pytest; `tests/e2e/` Playwright),
+tools; retired diagnostic tools are recorded in `docs/DECISIONS.md`), `tests/` (pytest; `tests/e2e/` Playwright),
 `data/fixtures/` (development fixture and evaluation sets).
 
 ## Required change discipline

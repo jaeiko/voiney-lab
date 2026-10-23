@@ -53,6 +53,8 @@ cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 ```
 
 - 외부 라이선스라 커밋하지 않은 in-gel 원본 PDF(`data/runtime/candidate-a-source/in-gel-digestion.pdf`)가 있으면 개발용 프로토콜을 SHA-256 으로 확인하고 넣는다. 없으면 `[WARN]` 을 찍고 빈 목록으로 시작한다.
+- 개발 실행기의 기본 켜짐은 셸·설정 파일에 값이 없을 때만 적용된다. `.env.example`의 명시적인 false를 덮지 않는다. 카탈로그·작업공간이 꺼져 있으면 해당 설정 이름과 켜는 방법을 출력한다.
+- 실행기는 실제 라우터·라우터 먼저·PDF 작업 제한을 출력한다. PDF 기본 제한 30초가 모든 긴 문서의 성공을 보장하지는 않는다.
 - 상태는 `data/runtime/candidate-a-live-acceptance/` 에 둔다. 안전 문서 범위(`VOINEY_LAB_USAGE_SCOPE`)와 카탈로그(`VOINEY_LAB_SAFETY_CATALOG`)는 `.env` 에서 읽는다 — 기관 문서 없이 쓰려면 `VOINEY_LAB_USAGE_SCOPE=source_protocol_only`.
 
 ### 4-2. 계정 모드와 초대 링크

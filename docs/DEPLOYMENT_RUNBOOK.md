@@ -91,7 +91,9 @@ WantedBy=multi-user.target
 
 - `GET /healthz` — 살아 있는지만. 답하지 않으면 다시 띄운다.
 - `GET /readyz` — 설정이 읽히는지. 신원·작업공간·프로토콜 저장소·실험 기록·앱 출처·로그인 방식 설정 중 하나라도 읽을 수 없으면 503(`reason` 에 예외 이름). 200 이면 `identity_mode`(`accounts`·`oidc`·`development`), `workspace_enabled`, `protocol_catalog_enabled`, `experiment_reports_enabled`, `docx_conversion_available`, `heic_photos_available`.
-- `/readyz` 가 **보지 않는 것**: 안전 카탈로그와 사용 범위(이것이 틀리면 `/readyz` 가 200 이어도 `/api/protocols` 가 500), 공급자 키와 모델, 외부 연결. 점검이 돈이 드는 공급자 호출을 하지 않게 했다.
+- `/readyz`는 사용 범위와 그 범위에 맞는 활성 안전 카탈로그도 검사한다. 안전 설정 오류는 503 `safety_configuration_invalid`와 설정 이름(`fields`)만 보여 준다. `source_protocol_only`는 카탈로그 없이 가능하다. 공급자를 호출하지 않으며 실제 모델·음성·외부 연결 성공을 보장하지 않는다.
+- 실행기는 실제 라우터·라우터 먼저·PDF 작업 제한을 출력한다. 개발 실행기의 기본 켜짐은 명시한 셸·설정 파일 값을 덮지 않는다. 카탈로그·작업공간이 꺼져 있으면 그 설정 이름과 켜는 방법을 출력한다. PDF 기본 30초 안에서 모든 긴 문서가 성공하는 것은 아니다.
+- 사용 범위의 미설정·공백과 시작 확인·작업공간 boolean 오타도 설정 이름으로 거절한다.
 - 설정이 틀리면 조용히 기본값으로 가지 않는다: 작업공간이 켜졌는데 절대 경로가 없거나, `operational` 범위인데 OIDC 설정이 덜 됐거나, 계정 모드인데 작업공간이 없으면 시작이나 첫 요청에서 거부한다. 옛 설정 이름이 있으면 서버·실행기가 시작을 거부한다.
 
 ## 5. 데이터와 백업·복구
