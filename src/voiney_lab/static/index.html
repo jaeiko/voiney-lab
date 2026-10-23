@@ -4147,6 +4147,8 @@ const REVIEW_ERROR_WORDS={
  review_items_pending:"확인할 카드를 모두 정해야 등록할 수 있습니다.",
  review_version_blocked:"이 검토본은 실행을 막는 사유가 남아 등록하지 않았습니다.",
  review_not_ready:"검토할 분석이 아직 없습니다.",
+ // Lane UI4 QA-21: lane FX4's [원문과 달라요] holds the version until the source is checked.
+ review_source_check_needed:"원문 확인 필요 항목이 있어 등록하지 않았습니다. 그 쪽을 더 선명하게 다시 찍어 올리거나 다시 분석해 주세요.",
 };
 // The two pieces' readings of a passage, in the order the server gives them.
 const CHOICE_READING_NAMES=["이쪽(앞 조각)","저쪽(뒤 조각)"];
@@ -4232,6 +4234,10 @@ function choiceButtons(card,choices,options,value){
  }
  return row;
 }
+// Lane UI4 QA-21 (lane QA, 2026-10-20): a value the server holds for the source (lane FX4's [원문과 달라요],
+// its source_check) says the server's state and what to do, not a green "정함".
+function choiceDecidedBadge(item){const held=item?.source_check&&typeof item.source_check==="object"&&nonemptyText(item.source_check.state_ko)?item.source_check:null;return held?uiBadge(String(held.state_ko),"warning"):uiBadge(REVIEW_DONE_WORDS[item?.decision?.action]||"정함","done");}
+function choiceSourceCheckNote(item){const words=item?.source_check&&typeof item.source_check==="object"?item.source_check.guidance_ko:null;return nonemptyText(words)?compareEl("p","choice-card-note",String(words)):null;}
 function renderChoiceCard(host,card,options={}){
  if(!host)return 0;
  host.replaceChildren();
@@ -4241,8 +4247,9 @@ function renderChoiceCard(host,card,options={}){
  const meta=compareEl("div","choice-card-meta");
  const about=[nonemptyText(card.step_label)?`${card.step_label}단계`:"",nonemptyText(card.kind_ko)?card.kind_ko:""].filter(Boolean).join(" · ");
  if(about)meta.appendChild(compareEl("span","choice-card-about",about));
- if(card.decided===true)meta.appendChild(uiBadge(REVIEW_DONE_WORDS[card.decision?.action]||"정함","done"));
+ if(card.decided===true)meta.appendChild(choiceDecidedBadge(card));
  if(meta.children.length)box.appendChild(meta);
+ const cardHeld=choiceSourceCheckNote(card);if(cardHeld)box.appendChild(cardHeld);
  if(nonemptyText(card.question_ko))box.appendChild(compareEl("p","choice-card-question",card.question_ko));
  const reasons=(Array.isArray(card.reasons_ko)?card.reasons_ko:[]).filter(nonemptyText);
  if(reasons.length){const strip=compareEl("div","choice-card-reasons");for(const reason of reasons)strip.appendChild(uiBadge(reason,"danger"));box.appendChild(strip);}
@@ -4270,8 +4277,9 @@ function renderChoiceCard(host,card,options={}){
    const row=document.createElement("li");row.className="choice-card-values-row";if(row.dataset){row.dataset.valueId=String(value.item_id||"");row.dataset.decided=String(value.decided===true);}
    const head=compareEl("div","choice-card-values-head");
    head.appendChild(compareEl("span","choice-card-value-text",reviewItemText(value.shown)));
-   if(value.decided===true)head.appendChild(uiBadge(REVIEW_DONE_WORDS[value.decision?.action]||"정함","done"));
+   if(value.decided===true)head.appendChild(choiceDecidedBadge(value));
    row.appendChild(head);
+   const held=choiceSourceCheckNote(value);if(held)row.appendChild(held);
    if(nonemptyText(value.reason_ko))row.appendChild(compareEl("p","choice-card-note",value.reason_ko));
    const readsAs=(Array.isArray(value.readings)?value.readings:[]).filter(reading=>reading&&nonemptyText(String(reading.text??"")));
    if(readsAs.length)row.appendChild(compareEl("p","choice-card-note",readsAs.map(reading=>`${CHOICE_ENGINE_NAMES[reading.engine]||reading.engine||"OCR"} · ${reading.text}`).join("  /  ")));
@@ -4513,13 +4521,23 @@ function reviewCardKey(event){
  if(card&&Number.isInteger(number)&&number>=1){const choice=(Array.isArray(card.choices)?card.choices:[])[number-1];if(choice){void chooseReviewCard(card,choice);return true;}}
  return false;
 }
+// Lane UI4 QA-21: why the version cannot be registered -- the cards left, then the server's own blockers
+// (a value held for the source says what to do); the server's words alone when no card is left.
+function reviewRegisterBlockedWords(){
+ const blockers=(Array.isArray(reviewDraft?.registration_blockers)?reviewDraft.registration_blockers:[]).filter(item=>item&&typeof item==="object"&&nonemptyText(item.message_ko));
+ const undecided=Number(reviewDraft?.counts?.undecided)||0,words=[];
+ if(undecided>0)words.push(`확인 필요 항목 ${undecided}건을 정하면 등록할 수 있습니다.`);
+ words.push(...new Set(blockers.filter(item=>item.source_check===true).map(item=>String(item.message_ko))));
+ if(!words.length)words.push(...new Set(blockers.map(item=>String(item.message_ko))));
+ return words.length?words.join(" "):`확인 필요 항목 ${undecided}건을 정하면 등록할 수 있습니다.`;
+}
 function renderReviewRegister(){
  const button=$("review-register"),status=$("review-register-status");if(!button)return false;
  const name=($("reviewer-name")?.value||"").trim(),ready=reviewDraft?.registrable===true;
  // After the last card (lane RV2): shown once no card waits.
  const block=$("review-register-block");if(block)block.hidden=reviewCardNow()!==null;
  button.disabled=reviewBusy||!ready||!name;
- if(status&&!status.dataset?.result)status.textContent=!ready?`확인 필요 항목 ${Number(reviewDraft?.counts?.undecided)||0}건을 정하면 등록할 수 있습니다.`:!name?"검토자 이름을 적으면 등록할 수 있습니다.":"검토 완료하고 등록하면 이 검토본으로 실행합니다(이전 기록은 남습니다).";
+ if(status&&!status.dataset?.result)status.textContent=!ready?reviewRegisterBlockedWords():!name?"검토자 이름을 적으면 등록할 수 있습니다.":"검토 완료하고 등록하면 이 검토본으로 실행합니다(이전 기록은 남습니다).";
  return !button.disabled;
 }
 async function registerReview(){
