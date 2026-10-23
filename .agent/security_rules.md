@@ -1,8 +1,7 @@
 # Security, privacy and safety rules
 
-Rules every change must keep. Revised 2026-10-20 (lane DOC4) against dev
-`e7c31c8`. The controls below are for a supervised pilot; they are not
-production identity and access management.
+Rules every change must keep. The controls below are for a supervised pilot;
+they are not production identity and access management.
 
 ## 1. Safety and knowledge boundary
 
@@ -24,7 +23,9 @@ production identity and access management.
    reference context only; they never override the protocol's safety
    statements or the facility's approved safety documents (the SOP corpus).
 5. **Emergency precedence.** An emergency phrase (fire, gas, injury, "도와주세요")
-   gets a fixed reply: stop, step away from the hazard, contact the lab's
+   is handled after empty/self-echo filtering and before calibration, held
+   fragments, filler and language admission. It gets a fixed reply: stop, step
+   away from the hazard, contact the lab's
    emergency channel (`emergency.recognize_emergency`). The product makes no
    safety decision and never authorises resuming work.
 
@@ -34,9 +35,21 @@ production identity and access management.
    last button; a step completes only on the experimenter's confirmation;
    model output only proposes a change, which the server validates and the
    one state machine carries out (`AGENTS.md`, rules 2–4).
-2. There is no approval gate. An administrator's "확인함" on a notebook or a
+2. With the start check enabled, the server also requires the same account's
+   current key-value answers and explicit safety receipt for the exact source,
+   analysis and review target (`StartTarget`). The safety POST is
+   `/api/protocols/{id}/start-check/safety`; no numeric values does not waive
+   safety acknowledgement. A failed check sends `session.configuration_required`
+   before starting or writing a report. Recovery cannot invent old receipts;
+   `workflow.resume` requires an already started experiment plus current
+   configuration and generation.
+3. Questions and speculation, including Korean endings without a question
+   mark, cannot authorize mutations. Read-only answers preserve every open
+   checkpoint and do not refresh its turn ownership. Explicit record commands
+   preserve the speaker's uncertain words without making them execution evidence.
+4. There is no approval gate. An administrator's "확인함" on a notebook or a
    review version is a record and blocks nothing.
-3. No autonomous restart: model or voice output never lifts a pause or
+5. No autonomous restart: model or voice output never lifts a pause or
    resumes a blocked experiment on its own.
 
 ## 3. Secrets
@@ -87,13 +100,39 @@ production identity and access management.
    cookies, auth or proxy settings carried, the same size limits as upload,
    format judged from the bytes (`protocol_link_import.py`).
 3. **Accounts**: invite-only sign-up; HttpOnly, SameSite=Lax cookie, Secure
-   over HTTPS; login lock after 5 failures in 15 minutes per name and per
-   client (the client is the first `X-Forwarded-For` value when present, so
-   this holds only behind a proxy that sets it). App origins in
+   over HTTPS; login lock after 5 failures in 15 minutes per normalized name,
+   including current-password verification. Shared client addresses do not lock
+   other accounts, and changing `X-Forwarded-For` cannot bypass a name lock. App origins in
    `VOINEY_LAB_APP_ORIGINS` may use a bearer token.
 4. Use parameterised SQL and validate external data at ingress.
 
-## 6. Audit trail
+## 6. Record permissions
+
+The server derives lab and owner from authenticated identity and the workspace
+session, never from submitted display names. HTTP denies unavailable records
+with 404; the voice socket uses `report_not_found`.
+
+| Caller | Read/export report | Confirm/correct values, rate, regenerate prose | Append PI confirmation | Read evidence |
+|---|---|---|---|---|
+| Owner | Yes | Yes | Only if admin | Yes |
+| Same-lab non-admin, another owner's record | No | No | No | No |
+| Same-lab admin, another owner's record | Yes | No | Yes | Yes |
+| Other lab, including admins | No | No | No | No |
+| Legacy record with lab but unknown owner | That lab's admins only | No | That lab's admins only | Existing session permission |
+| Legacy record with unknown lab | No | No | No | Existing session permission |
+
+Admin export uses existing or deterministic prose and does not start prose
+regeneration. Workflow changes, observations and evidence uploads remain owner
+operations. Previous-run comparisons, start-check answers and daily run numbers
+stay within the same owner/lab/protocol; unknown owners get no guessed history.
+
+Logout, password change, disable and erasure close all the account's open voice
+connections, with periodic checks for expired/tool-revoked sessions. Other
+accounts continue. Erasure waits for already running voice report writes before
+building its deletion inventory. Shared protocols remain, with account display
+names anonymized as described in `docs/PILOT_GUIDE.md` 7-7.
+
+## 7. Audit trail
 
 The experiment record (`experiment_report_events`) and the workspace session
 events (`experiment_session_events`) are append-only. The workspace enforces

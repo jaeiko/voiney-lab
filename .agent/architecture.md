@@ -1,8 +1,8 @@
 # Current architecture
 
-VoineyLab (the company is Voiney): this is the one deep description of how the code is built. It was rewritten
-on 2026-10-20 (lane DOC4) against dev `e7c31c8`; every name below is in that
-code. The per-module one-liners are in `AGENTS.md`, the feature-by-feature
+VoineyLab (the company is Voiney): this is the one deep description of how
+the code is built. Every name below refers to the executable code. The
+per-module one-liners are in `AGENTS.md`, the feature-by-feature
 behaviour in `docs/FEATURES.md`, and the reasons and dates in
 `docs/DECISIONS.md`. Paths without a folder are under `src/voiney_lab/`.
 
@@ -13,8 +13,12 @@ One FastAPI/Uvicorn process (`server.py`) serves the web screen
 `voice_socket`). State lives in SQLite files and content-addressed source
 files under the configured data folders (`data/runtime/…` in the launchers).
 Protocol analysis and report writing run as background jobs inside the same
-process, so there is no horizontal scaling or failover: one process, one
-data folder.
+process. Blocking source conversion/extraction, catalog registration and reads,
+OCR status, session preparation, vocabulary and translation checks run in
+worker threads. Each SQLite connection is opened, used and closed in the
+same worker; cancellation waits for work still using an upload before
+cleaning its temporary files. These workers share the process and stores,
+so there is no horizontal scaling or failover: one process, one data folder.
 
 ```text
 Browser / store-app WebView (static/index.html, connection.js, feedback.js)
@@ -132,6 +136,16 @@ generation is cancelled and its audio cleared (barge-in).
    `turn.route_decision` carries a compact projection (with a `router`
    block when the router ran); `turn.done` and `playback.completed` close it.
 
+The front rules and proposal checks share
+`intent_fences.is_question_or_speculation`: Korean question/speculation
+endings and question marks cannot authorize observation, completion, timer,
+resume or anomaly mutations. Existing read-only answers still run; an open
+server question is neither consumed nor refreshed by asking a question.
+Its original turn ownership and stale fences remain. An explicit literal
+record command may preserve uncertain words, but those words cannot authorize
+a workflow change. Notebook questions survive pause/resume and expire on
+step or revision movement rather than reopening when the user returns.
+
 A read-only request leaves every checkpoint equal before and after. A
 combined "explain + next" request stages a completion confirmation; only a
 later explicit confirmation advances.
@@ -170,8 +184,23 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   (parallel work, a recurring reminder or action, a reusable subprocedure)
   is said once at its step before the source is read. There is no approval,
   revocation, reviewer gate or development activation.
-- The start check (`start_check.StartCheck`) is enforced by the wizard's
-  order only; the session start checks `available_for_execution`.
+- Catalog executability and personal start confirmation are distinct.
+  With `VOINEY_LAB_START_CHECK_ENABLED` enabled (default), `session.start`
+  also calls `start_check.StartCheck.readiness`: the current principal must
+  have answered the current key-value questions and acknowledged safety for
+  the exact source revision, analysis and review version (`StartTarget`).
+  `GET /api/protocols/{id}/start-check` supplies that target; after the values,
+  `POST /api/protocols/{id}/start-check/safety` records it as
+  `protocol_start_safety_acknowledged`. Even a source without numeric values
+  needs the safety receipt. Another account's receipt, an older target or an
+  earlier correct answer followed by a wrong one grants nothing.
+  Refusal is `session.configuration_required` with a reason and `message_ko`,
+  before creating workflow, timer or report-start state. The screen shows
+  that reason and returns to the required wizard step. When the setting is
+  false, the value and safety receipt checks are disabled together.
+  Recovery uses the original execution revision's own receipt; no missing
+  historical receipt is invented. `workflow.resume` needs an already started
+  experiment and the current configuration id and generation.
 - Review cards never rewrite a safety statement (`_FIXABLE_KINDS` has no
   `warning`).
 
@@ -248,13 +277,23 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 |---|---|---|---|---|
 | Protocol catalog | `<protocol dir>/protocol_workspace.sqlite` + `objects/sha256/…` | 1 | `experiment_protocol_store`, `protocol_catalog` | events: yes; sources immutable |
 | Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 11 | `workspace_store` | session events, completed steps, observations, evidence — SQL triggers refuse UPDATE/DELETE |
-| Experiment record | `<protocol dir>/experiment_reports.sqlite` | 1 | `experiment_reports` | events by stable key (`INSERT OR IGNORE`); no triggers — enforced by code; prose is replaceable |
+| Experiment record | `<protocol dir>/experiment_reports.sqlite` | 2 | `experiment_reports` | events by stable key (`INSERT OR IGNORE`); no triggers — enforced by code; prose is replaceable |
 | Accounts | `<workspace>/accounts.sqlite` | 1 | `accounts` | no (sessions end; only hashes stored) |
 | Pilot metrics | `<workspace>/pilot_metrics.sqlite` | — | `pilot_metrics` | rows of numbers, codes and times |
 | Safety catalog | path in `VOINEY_LAB_SAFETY_CATALOG` | 2 | `scripts/ingest_safety_documents.py` | read-only at runtime |
 
 - Stores are separate files; cross-store operations use exact identities and
   fail closed; there is no distributed transaction.
+- Source metadata is appended as `protocol_source_metadata` during
+  registration. Startup backfills missing metadata once. Lists filter tenant
+  ownership first, then read metadata, analyses and ledger summaries without
+  extracting PDFs. Verified immutable analysis records are cached by source,
+  revision and actual record bytes; changed bytes are validated again.
+- Report schema 1 migrates to 2 on open; startup/access backfills ownership
+  from the exact workspace session. A lab-only legacy record is admin-read
+  only; an unscoped one stays inaccessible. Historical events and prose are
+  preserved. Rollback requires the matching pre-migration backup (migration
+  details in `docs/MIGRATION_NOTES.md`).
 - Observations are `observation_only` and evidence files `not_interpreted`:
   neither becomes protocol knowledge.
 - The workspace keeps tables that nothing writes any more (approvals,
@@ -272,6 +311,20 @@ it needs the workspace. In `operational` usage scope, `identity.py` demands
 OIDC bearer tokens. `_account_is_admin` is the one administrator judgment
 (pilot metrics, "확인함", disabling accounts). App origins
 (`VOINEY_LAB_APP_ORIGINS`) may log in with a bearer token.
+
+Report reads/exports and evidence reads require the owner or a same-lab
+administrator; value confirmation, correction, feedback and prose regeneration
+require the owner. An administrator may append PI confirmation to a same-lab
+record, without granting execution. Other-lab/unauthorized reports appear
+absent. The full permission matrix is in `.agent/security_rules.md`.
+Previous-run comparisons, start-check answers and daily run numbers are scoped
+to the same owner, lab and protocol; unknown owners receive no guessed number.
+Login and current-password failures lock the normalized name after five
+failures in fifteen minutes, without locking other names on the same network.
+Logout, password change, disable and deletion close all that account's open
+voice sockets; the HTTP session scope still follows the account operation.
+Account erasure drains in-flight voice report writes before inventory/deletion
+so a late worker cannot recreate a deleted report.
 
 ## 8. Connection loss and timers
 
@@ -302,6 +355,23 @@ and shares the file upload's response handling, analysis/OCR polling and
 result display. Link errors display server text through `textContent`.
 Import is disabled during registration or a running session; stale-generation
 responses are discarded. Sheets reagent-table attachment remains API-only.
+
+`#/protocols` is the list, `#/protocols/<id>` its own detail screen, and
+`#/upload` follows pick → progress (elapsed time/current work) → result.
+Detail groups analysis, source comparison, reagent tables, review history
+and reanalysis in expandable sections. `#/records` lists server-provided
+experiments; `#/records/<id>` opens one timeline. The experiment tab's start
+card follows the selected/resumable experiment; every start goes through the
+wizard's final button. Clicking end waits for the server's ended state before
+showing the after screen, and ended experiments are not offered for resume.
+
+All server URLs go through `serverOrigin`, `serverUrl`, `serverSocketUrl`
+and `serverFetch`. The current `serverOrigin()` returns an empty string for
+same-origin requests. A store-app origin still needs wiring here; these functions add no
+workflow authority. An authenticated request's session-expiry 401 calls
+`signOutOnScreen`, as does logout: clear the used invite, stop microphone and
+connection state, and show login. Own authentication failures (such as a
+wrong current password) are handled by their account screen.
 
 ## 10. Store-app shell
 

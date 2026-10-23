@@ -3,8 +3,8 @@
 같은 것을 세 곳에서 다르게 부른다. 이 표가 그 셋을 잇는다.
 
 - **사용자 말**: 연구자에게 쓸 말. `docs/VOICE_AND_TONE.md` 5절 "용어 사전"이 정한 말이고, 그 문서가 문구 규칙의 기준이다.
-  지금 화면과 서버 문구는 아직 이 말로 바꾸지 않았다(문구 바꾸기는 2단계, `docs/DECISIONS.md` 9절).
-- **지금 화면·서버 말**: 2026-10-20 dev 의 `src/voiney_lab/static/index.html` 과 서버 문장에 실제로 있는 말.
+  현재 화면·서버 말 전체를 이 사용자 말로 통일한 것은 아니다. 결정 이력은 `docs/DECISIONS.md` 9절을 본다.
+- **지금 화면·서버 말**: 현재 `src/voiney_lab/static/index.html` 과 서버 문장에 실제로 있는 말.
 - **코드 이름**: 그 개념을 담은 이름. 문서와 코드 리뷰에서는 이 이름을 쓴다.
 - 영어 문서에서는 "Source Protocol", "Protocol", "Protocol Revision", "Analysed Protocol" 을 쓴다.
   "SOP" 는 기관이 관리하는 안전 문서 묶음(`safety_pack.py`)에만 쓴다. 분석을 통과한 프로토콜은 SOP 가 아니다.
@@ -23,7 +23,7 @@
 | 버전 | 리비전(서버 일부) | protocol revision, analysis revision | 분석 하나하나. 시작한 실험은 시작한 버전으로 이어 간다 |
 | 원문과 맞춰 보기 | 원문 근거 검사, 원문 대조 | source-evidence check — `validate_protocol_analysis_evidence` | 뽑은 값마다 인용한 쪽의 원문 글자와 맞대어 보기 |
 | 원문 위치 | 근거 | evidence (page, quote) | 값이 원문 어디에 있는지 |
-| 바로 쓸 수 있어요 | 분석 통과 | 분석 리비전이 있고 실행을 막는 사유가 없음 | |
+| 바로 쓸 수 있어요 | 바로 쓸 수 있음 · 분석 통과 | 분석 리비전이 있고 실행을 막는 사유가 없음 | |
 | 실험 시작 가능 / 아직 시작할 수 없어요 | 실행 가능 / 실행 불가 | `available_for_execution` | 서버가 읽을 때마다 판정한다 |
 | 시작을 막는 사유 | 실행을 막는 사유 | `execution_blockers` — `experiment_protocol.EXECUTION_BLOCKING_REASON_CODES` | 이것이 있으면 시작할 수 없다 |
 | 시작 전 알림 | 시작 전 알림 | `execution_notices` — `execution_notice_reasons` | 알리기만 하고 시작은 막지 않는다 |
@@ -34,14 +34,15 @@
 
 | 사용자 말 | 지금 화면·서버 말 | 코드 이름 | 뜻 |
 |---|---|---|---|
-| 확인할 것 n개 | 검토 대기 · 확인 필요 n | `review_pending` — `protocol_catalog._REVIEW_PENDING_EVENT` | 근거 검사가 다 확인하지 못한 분석. 실행 경로가 읽지 못한다 |
+| 확인할 것 n개 | 확인할 것 n개 · 검토 대기 · 확인 필요 n | `review_pending` — `protocol_catalog._REVIEW_PENDING_EVENT` | 근거 검사가 다 확인하지 못한 분석. 실행 경로가 읽지 못한다 |
 | 확인 카드 | 검토 카드, "확인할 것 n / m" | `review_cards`, `review_draft` 의 `cards` | 서버가 물어야 할 항목 하나에 한 장 |
 | 확인할 것 | 확인 필요 항목 | `ReviewFlag`, 사유 `REVIEW_REASONS_KO` | 카드가 되는 항목. 화면의 상태 말 "확인 필요"(오류)와는 다른 뜻 |
 | 확인한 사람 | 검토자 | reviewer name(계정 모드에서는 계정 이름) | |
 | 확인한 버전 | 검토본 vN | review version — `REVIEW_VERSION_ANALYSIS_PREFIX = "review-v"` | 최신 검토본이 실행본 |
 | 확인 끝내고 저장하기 | 검토 완료하고 등록 | `ProtocolCatalog.register_review` | |
 | 원문 · AI 제안 · 직접 고친 값 | 원문 · AI 제안 · 검토자 입력 | `REVIEW_ORIGIN_KO` | 값이 어디서 왔는지 |
-| 핵심 값 확인 | 핵심 값 확인 · "원문의 값을 확인해 주세요" | start check — `start_check.py` `StartCheck` | 시작 전 객관식 2문항 |
+| 핵심 값 확인 | 핵심 값 확인 · "원문의 값을 확인해 주세요" | start check — `start_check.py` `StartCheck` | 최대 2문항. 서버가 계정과 현재 실행 대상의 답을 검사한다 |
+| 안전 주의 읽기 확인 | 읽었어요 | `StartTarget`, `protocol_start_safety_acknowledged` | 값 확인 뒤 현재 대상에 대해 서버에 남기는 확인. 마지막 시작 단추와 구분 |
 | 안전 주의 | 안전 주의 | 분석의 `warning` 항목; 시작 화면 `safety_notices` | 원문에 적힌 안전 문장. AI 가 쓰지 않고 검토가 고치지 않는다 |
 | 시작 | 이 프로토콜로 실험 시작(프로토콜 탭 단추, 시작 마법사를 연다) · 이 프로토콜로 시작(마법사의 마지막 단추) | 시작 사건 `protocol_started`; 안전 주의 확인 기록 `safety_notices_acknowledged` | 마지막 단추가 사람의 시작 확인이다 |
 | 실험 이어하기 · 이어서 하기 | 실험 이어하기, 이어서 하기 | 작업공간 실험 세션 다시 잇기 | |
@@ -81,6 +82,7 @@
 |---|---|---|---|
 | 기록 | 실험 기록, 타임라인, 체크포인트 | experiment report ledger `experiment_report_events`; 작업공간 `experiment_session_events` | 지우지 않고 덧붙이기만 하는 장부 |
 | 저장해 둔 지점 | 체크포인트 | checkpoint — `POST …/checkpoint-restart` | 끝난 실험의 그 지점에서 새 실험 |
+| 지난 실험 기록 | 기록 탭의 목록 → 한 실험 기록 | `#/records`, `#/records/<id>`, `renderRecordsViews` | 서버의 목록에서 타임라인 하나를 연다 |
 | 실험 노트 | 실험 노트 | `experiment_reports.LabNotebook`, `NOTEBOOK_SUBTITLE` | Word·Markdown 보고서의 모양 |
 | 보고서 | 보고서 만들기 (Word), Markdown·JSON·CSV 내보내기 | `GET /api/experiment-reports/{id}.{형식}` | PDF·랩미팅·xlsx 는 서버에만 있고 화면 링크가 없다 |
 | AI 정리 | AI 정리 | report writer — `check_ai_notes` | 검사를 통과한 AI 문장만 |
@@ -91,6 +93,7 @@
 
 | 사용자 말 | 지금 화면·서버 말 | 코드 이름 | 뜻 |
 |---|---|---|---|
+| 계정 지우기 | (서버 API; 화면 연결은 사용 안내 기준) | `POST /api/auth/delete-account` | 현재 비밀번호 재확인, 마지막 관리자 삭제 불가 |
 | 로그인 · 가입 | 로그인, 가입하기 | `VOINEY_LAB_AUTH_MODE=accounts`, `accounts.py` | 계정 모드에서만 |
 | 초대 링크 | 초대 링크 | invite — `AccountStore.create_invite`, `scripts/pilot_invite.py` | 서버 셸에서 만든다 |
 | 관리자 | · 관리자 | account `admin` flag, `server._account_is_admin` | 지표 화면·확인함·계정 끄기 |

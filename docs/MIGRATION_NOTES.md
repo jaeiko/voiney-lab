@@ -368,7 +368,7 @@ No schema change and no migration; nothing already stored is read differently.
 - **New tools and documents**: `scripts/pilot_data_delete.py` (preview, confirm,
   delete, record; appends to `data/runtime/pilot/deletion_log.jsonl`),
   `scripts/pilot_https_setup.sh` with `scripts/pilot_https/Caddyfile.example`
-  (written, not run), `docs/PILOT_GUIDE.md`, `docs/PILOT_HTTPS_SETUP.md`.
+  (written, not run), `docs/PILOT_GUIDE.md`, `docs/archive/PILOT_HTTPS_SETUP.md`.
 - `setting_names.py` lists the new scope on the `VOINEY_LAB_USAGE_SCOPE` row. No
   setting was added or removed.
 - **`.env.example` rebuilt** (human instruction of 2026-10-13: it had not been
@@ -1736,3 +1736,74 @@ before. A single reading's seam items and mixed review versions read as
 lane AN3's do. A quote accepted past a margin line stays valid (each piece
 is its page's own characters); only a step timer whose sentence runs past
 such a page end is refused by the older timer check.
+
+
+## 2026-10-21–23: source metadata, report ownership and start receipts
+
+### Protocol catalog metadata (PERF)
+
+The protocol store stays at schema 1. Registration appends
+`protocol_source_metadata` with source identity and presentation metadata.
+Startup fills absent metadata once; list reads do not append events, extract
+PDFs or create another lab's entries. Existing sources and checksums remain
+immutable. Verified immutable analysis records may be cached by source,
+revision and record bytes; this is derived memory, not a second store.
+Interrupted OCR is recorded as `protocol_ocr_interrupted`, permitting explicit
+retry instead of leaving a permanent running status.
+
+### Experiment report schema 1 → 2 (OWN)
+
+The existing "Experiment record schema 1 → 2" section above is the
+migration and rollback contract. The history index includes lab, owner,
+protocol and start time; daily numbers, previous-run comparisons and
+start-check answer projection share that scope. Unknown owners receive no
+guessed history. `.agent/security_rules.md` 6절 holds the full permission
+matrix. Workspace stays at schema 11, accounts and protocol catalog at 1.
+
+### Account limits and erasure (OWN)
+
+No account schema change. Login/current-password failures are counted by the
+normalized name digest rather than a shared client address. The same network
+does not lock other names, and forwarded address changes do not bypass a
+name lock. Logout, password change, disable and deletion close all that
+account's open voice connections. HTTP login-session scope remains specific
+to each operation. Erasure drains in-flight voice report writes before making
+the deletion inventory; no late worker is allowed to recreate deleted data.
+Shared protocol bytes may be reused, while each lab's catalog/analysis/review
+identity is separate. This also applies to starter packs.
+
+### Account/revision-bound start confirmation (SAFE)
+
+The protocol schema remains 1; answers still append
+`protocol_start_check_answered`. New `protocol_start_safety_acknowledged`
+receipts store the principal, the immutable `StartTarget` (source/analysis/
+review identity), and the questions checked at that target. The browser gets
+`target` from `GET /api/protocols/{protocol_id}/start-check` and submits it to
+`POST /api/protocols/{protocol_id}/start-check/safety` after the value answers.
+Invalid target types, stale targets and safety before completed values are
+rejected. No numeric questions still requires safety acknowledgement.
+
+With `VOINEY_LAB_START_CHECK_ENABLED` enabled (default), `session.start`
+checks these receipts as well as catalog executability. Missing/wrong or
+other-account receipts yield `session.configuration_required` with a reason
+and Korean message before workflow/timer/report-start mutation. A later wrong
+answer invalidates an earlier correct one. Recovery reads the original
+execution revision's receipt; it never manufactures missing historical
+receipts. Such an old run may need a new confirmed start. Disabling the setting
+bypasses both value and safety receipt requirements. PI confirmation grants
+no execution permission.
+
+`workflow.resume` requires an already started run, matching configuration id
+and generation. Repeated `session.start` on the same socket/configuration
+keeps the run; a different configuration is visibly refused without closing
+the socket. No event schema is inferred from prose.
+
+### UI stages ②③ and pilot foundation
+
+No database schema change. The screen consumes the safety target/receipt
+contract, routes list/detail/upload and record list/detail separately, waits
+for server end, and sends addresses through `serverUrl`/`serverSocketUrl`/
+`serverFetch`. Logout or an expired session returns to login without a spent
+invite. Public Drive/Docs uses the same upload lifecycle. Sheets remains an
+API-only reagent table attachment. Offline extraction scoring and the blank
+pilot comparison template write no workflow state and alter no execution rule.
