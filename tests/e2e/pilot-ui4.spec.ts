@@ -114,4 +114,23 @@ test.describe('Screen items before the pilot (lane UI4)', () => {
     await expect(page.locator('#wizard-name')).toBeVisible();
     expect(sent).toEqual([{ password: 'correct horse' }]);
   });
+
+  test('item 5: a record picked in the records tab links to its reports as the end screen does', async ({ page }) => {
+    const experiment = { session_id: 's-ui4-1', protocol_id: PROTOCOL_ID, protocol_title: 'In-gel digestion', status: 'stopped', current_step_label: '5', started_at: '2026-10-20T01:00:00+00:00' };
+    const report = { report_id: 'ER-0000000000000000UI41', session_id: 's-ui4-1', protocol_id: PROTOCOL_ID, protocol_title: 'In-gel digestion', status: 'completed',
+      started_at: '2026-10-20T01:00:00+00:00', ended_at: '2026-10-20T02:00:00+00:00', anomaly_count: 0, blocker_count: 0, finalization_version: 1, development_only: false };
+    await mock(page, [experiment]);
+    await page.route('**/api/workspace/experiments/s-ui4-1/reports', route => route.fulfill({ json: { session_id: 's-ui4-1', reports: [report] } }));
+    await page.goto(TAB.records);
+    await expect(page.locator('#records-detail-reports')).toBeHidden();
+    await page.locator('#records-list .records-row').first().click();
+    await expect(page).toHaveURL(/#\/records\/s-ui4-1$/);
+    const row = page.locator('#records-report-list .records-report');
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText('실험 기록 · In-gel digestion');
+    const links = row.locator('.report-actions a');
+    await expect(links).toHaveText(['보고서 만들기 (Word)', 'Markdown 내보내기', 'JSON 내보내기', 'CSV 내보내기']);
+    await expect(links.first()).toHaveAttribute('href', `/api/experiment-reports/${report.report_id}.docx`);
+    await expect(links.first()).toBeVisible();
+  });
 });

@@ -844,6 +844,12 @@
     .records-detail-head{display:grid;gap:var(--space-1);margin-bottom:var(--space-3)}
     /* Lane UI4 self-review R1: another member's experiment is read only -- its timeline takes the width. */
     .experiment-ledger-grid:has(> .experiment-ledger-capture[hidden]){grid-template-columns:minmax(0,1fr)}
+    /* Lane UI4 item 5 (2026-10-23): the record's reports, with the end screen's links. */
+    .records-detail-reports{display:grid;gap:var(--space-2);margin-bottom:var(--space-4)}
+    .records-detail-reports[hidden],.records-detail-reports p[hidden]{display:none}
+    .records-detail-reports h3{margin:0;color:var(--ink);font-size:1rem}
+    .records-report-list{display:grid;gap:var(--space-3);margin:0;padding:0;list-style:none}
+    .records-report .report-actions{margin-top:var(--space-2)}
     .records-detail-back{justify-self:start;min-height:44px;display:inline-flex;align-items:center;color:var(--ink);font-weight:700}
     body:not([data-view="before"]) #experiment-start,body[data-view="before"] #tab-experiment .voice-console .controls{display:none}
     body[data-view="before"] #tab-experiment .workflow-grid,body[data-view="before"] #tab-experiment .timeline{display:none}
@@ -1341,6 +1347,12 @@
         <h2 id="records-detail-title" class="records-detail-title"></h2>
         <p id="records-detail-line" class="records-detail-line"></p>
       </div>
+      <!-- Lane UI4 item 5 (2026-10-23): the picked experiment's reports (lane QA2's GET /api/workspace/experiments/{id}/reports), each with the end screen's links -- Word, Markdown, JSON, CSV -- and no other format. -->
+      <section id="records-detail-reports" class="records-detail-reports" aria-labelledby="records-detail-reports-title" hidden>
+        <h3 id="records-detail-reports-title">보고서</h3>
+        <p id="records-detail-reports-note" class="records-detail-line" role="status"></p>
+        <ul id="records-report-list" class="records-report-list"></ul>
+      </section>
       <section id="experiment-session-ledger" class="panel experiment-ledger" aria-labelledby="experiment-ledger-title">
         <div class="experiment-ledger-head">
           <div>
@@ -5088,7 +5100,7 @@ $("protocol-review-editor")?.addEventListener("toggle",()=>{if($("protocol-revie
 $("protocol-start-review")?.addEventListener("click",()=>{startSummaryOpened=!startSummaryOpened;foldStartSummary();});
 $("report-prose-again")?.addEventListener("click",()=>{void regenerateReportProse();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
-$("experiment-timeline-refresh")?.addEventListener("click",()=>{void loadExperimentSessions(currentExperimentSessionId);});
+$("experiment-timeline-refresh")?.addEventListener("click",()=>{recordReports.sessionId=null;void loadExperimentSessions(currentExperimentSessionId);});
 // Lane FX3 decision 7: the experimenter may put the noisy-room notice away (the screen only).
 $("voice-calibration-notice-close")?.addEventListener("click",()=>{const notice=$("voice-calibration-notice");if(notice)notice.hidden=true;renderMicCheck();});
 $("experiment-checkpoint-restart")?.addEventListener("click",()=>{void restartExperimentFromCheckpoint();});
@@ -5671,12 +5683,45 @@ function renderRecordsList(){
 function renderRecordsViews(){
  const id=recordsDetailId(),during=screenView()==="during",detail=Boolean(id)||during;
  const list=$("records-list-view"),view=$("records-detail-view");if(list)list.hidden=detail;if(view)view.hidden=!detail;
+ if(id&&!during&&recordReports?.sessionId!==id)void loadRecordReports(id);else renderRecordReports();
  if(!detail){renderRecordsList();return false;}
  const shown=id||currentExperimentSessionId,item=(Array.isArray(workspaceExperiments)?workspaceExperiments:[]).find(entry=>entry?.session_id===shown);
  setText("records-detail-title",item?recordTitle(item):during?"지금 하는 실험":"기록을 불러오는 중…");setText("records-detail-line",item?recordLine(item):"");
  // During the run the ledger's own title names it; the head is for a record picked from the list.
  const head=$("records-detail-head");if(head)head.hidden=during&&!id;
  return true;
+}
+// Lane UI4 item 5 (2026-10-23): one experiment's record names its reports -- lane QA2's
+// GET /api/workspace/experiments/{session_id}/reports, behind the experiment's own read gates (the owner
+// and the lab's administrator) -- by the end screen's names, each with the end screen's links and only
+// those formats. Read once per record; [기록 새로고침] reads them again. Not during the run (the
+// records tab is then the run's own record).
+const RECORD_REPORT_LINKS=Object.freeze([["docx","보고서 만들기 (Word)","report-make"],["md","Markdown 내보내기",""],["json","JSON 내보내기",""],["csv","CSV 내보내기",""]]);
+var recordReports={sessionId:null,state:"idle",reports:[]};
+async function loadRecordReports(sessionId){
+ recordReports={sessionId,state:"loading",reports:[]};renderRecordReports();
+ try{
+  const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(sessionId)}/reports`,{cache:"no-store"}),data=await response.json();
+  if(recordReports.sessionId!==sessionId)return false;
+  if(!response.ok)throw new Error("record reports");
+  recordReports={sessionId,state:"ready",reports:(Array.isArray(data?.reports)?data.reports:[]).filter(report=>report&&typeof report.report_id==="string"&&/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))};
+ }catch(_){if(recordReports.sessionId!==sessionId)return false;recordReports={sessionId,state:"failed",reports:[]};}
+ renderRecordReports();return recordReports.state==="ready";
+}
+function renderRecordReports(){
+ const section=$("records-detail-reports"),list=$("records-report-list"),id=screenView()==="during"?null:recordsDetailId(),shown=Boolean(id)&&recordReports?.sessionId===id;
+ if(section)section.hidden=!shown;
+ if(!shown||!list)return 0;
+ list.replaceChildren();
+ setText("records-detail-reports-note",recordReports.state==="loading"?"보고서를 불러오는 중…":recordReports.state==="failed"?"보고서를 불러오지 못했어요 · [기록 새로고침]을 눌러 주세요.":recordReports.reports.length?"":"이 실험의 보고서가 아직 없어요.");
+ const note=$("records-detail-reports-note");if(note)note.hidden=!nonemptyText(note.textContent);
+ for(const report of recordReports.reports){
+  const row=compareEl("li","records-report");row.appendChild(compareEl("b","",`${experimentReportLabel(report,recordReports.reports)} · ${serverCodeText("experiment_report_status",report.status)}`));
+  const actions=compareEl("div","report-actions");
+  for(const [format,label,kind] of RECORD_REPORT_LINKS){const link=compareEl("a",kind,label);link.href=serverUrl(`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`);link.setAttribute?.("aria-disabled","false");actions.appendChild(link);}
+  row.appendChild(actions);list.appendChild(row);
+ }
+ return recordReports.reports.length;
 }
 function protocolDetailId(){return screenRoute.tab==="protocols"&&nonemptyText(screenRoute.id)?screenRoute.id:null;}
 function renderProtocolViews(){
