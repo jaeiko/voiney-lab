@@ -15,6 +15,7 @@
 | 무엇 | 왜 | 설치·확인 | 없으면 |
 |---|---|---|---|
 | Python 3.12 이상, 저장소의 `.venv` | 실행기가 `.venv/bin/activate` 를 쓴다 | `python -m venv .venv && .venv/bin/pip install -e .` | 실행기가 `[ERROR] venv not found` 로 멈춘다 |
+| **Node.js 22 이상**(npm 포함) | 새 화면(`web/`, `/app/`)을 실행기가 빌드한다(`web/build.sh`: `npm ci` 와 Vite 빌드, 결과는 `src/voiney_lab/static/app/`). 바깥 CDN 없이 글꼴까지 서버가 제공한다 | `node --version` 이 22 이상; 실행기 출력에 `[OK] new screen built` | 서버는 시작한다. 실행기가 `[WARN]` 을 찍고 새 화면만 꺼진다(`/app/` 은 "아직 준비되지 않았어요", `/` 는 지금 화면). `VOINEY_LAB_NEW_UI=true` 여도 `/` 는 지금 화면 |
 | **LibreOffice**(`libreoffice-writer-nogui`)와 한국어 글꼴 **`fonts-nanum`** | Word 원문을 PDF 로 바꾸고, 보고서 PDF 를 만든다. 한국어 글꼴이 없으면 한국어 문서의 글자 층이 띄어쓰기를 잃어 근거 검사에서 떨어진다 | `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`; `soffice --version`, `fc-match NanumGothic`, `GET /readyz` → `docx_conversion_available: true`. 다른 곳의 `soffice` 는 `VOINEY_LAB_OFFICE_CONVERTER` | 서버는 시작한다. Word 올리기만 `docx_conversion_unavailable`(503), 보고서 PDF 는 503. `scripts/run_pilot.sh` 는 `[WARN]` 만 찍는다 |
 | **HEIC 지원**(선택) | 아이폰 HEIC 사진 | `pip install -e '.[heic]'` 후 다시 시작, `heic_photos_available: true` 확인. 바퀴에 GPLv2 코드가 들어 있어 기관의 라이선스 담당이 정한다 | HEIC 만 `heic_support_unavailable`(503). JPEG·PNG 는 된다 |
 | **긴 PDF 읽기 시간** `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` | 글자 추출은 시간 한도가 있는 자식 프로세스에서 돈다(기본 30 s, 1–600). 88쪽 문서의 추출만 121 s 걸렸다(2026-10-13 측정) | `.env` 에 적고 다시 시작 | 긴 문서 올리기가 시간 초과로 거절된다 |
@@ -36,6 +37,7 @@
 - 로그인: `VOINEY_LAB_AUTH_MODE=accounts`(셸·`.env` 의 다른 값은 `[WARN]` 과 함께 무시). 초대 링크는 `python scripts/pilot_invite.py`(`docs/PILOT_GUIDE.md` 7절).
 - 안전 문서 범위: `data/runtime/pilot/approved_safety_catalog.sqlite` 가 없으면 `source_protocol_only`, 있으면 `reference_only` 로 점검하고 쓸 수 없으면 시작을 거부한다(3절).
 - PDF 밖 일반 설명은 끈다. 작업공간이 꺼졌거나 `VOINEY_LAB_ADMIN_TOKEN` 이 비었거나 LibreOffice 가 없으면 `[WARN]`.
+- 새 화면: 시작 전에 `web/build.sh` 로 빌드해 `/app/` 에서 제공한다. `.env` 의 `VOINEY_LAB_NEW_UI=true` 가 `/` 를 `/app/` 으로 보낸다(기본은 지금 화면). node 가 없으면 `[WARN]` 과 함께 새 화면만 꺼진다.
 - 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy)를 앞에 두고 연다 — `docs/PILOT_GUIDE.md`. `HOST=0.0.0.0` 으로 그냥 열지 않는다.
 
 모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
