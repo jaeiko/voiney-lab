@@ -16,6 +16,7 @@ server-value checks are new for the lane R answer structure
 
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 from collections.abc import Callable, Iterable
@@ -180,6 +181,9 @@ DISPLAY_LABELS: tuple[str, ...] = (
     "주의 ·",
     "PDF 밖",
     "PDF에는 따로 설명이 없어요",
+    # Lane KNOW (decision 6): the public-material mark is the server's.
+    "공개 자료 ·",
+    "일반 참고 —",
 )
 #: A line that is nothing but a label ("출처", "원문", "Sources") is a label too.
 _LABEL_LINE = re.compile(
@@ -711,4 +715,97 @@ def server_value_violations(text: str, values: ServerValues) -> tuple[str, ...]:
         if not stated.startswith(values.title):
             violations.append("title_not_server_value")
             break
+    return tuple(violations)
+
+
+# --- Public material in an answer (lane KNOW, decision 6) ----------------------------
+
+#: The longest spoken sentence grounded in public material: a short
+#: paraphrase, never a reading of the source (human decision 2026-10-24, 6).
+PUBLIC_REFERENCE_MAX_CHARS = 160
+#: A run of the source's own words this long is a reading, not a paraphrase.
+PUBLIC_REFERENCE_QUOTE_CHARS = 60
+#: "계속해도 돼요", "진행하셔도 됩니다", "you can continue": only the source
+#: and the lab's rules say whether a run goes on; public material never does.
+_CONTINUE_PERMISSION = re.compile(
+    r"(?:(?:계속|진행|그대로|그냥)\s*(?:해도|하셔도|하여도|해두어도|써도|쓰셔도)"
+    r"|(?:다음\s*단계로\s*)?(?:넘어가|넘어가셔|지나가|지나가셔|가|가셔)도"
+    r"|(?:계속|진행)(?:해|하셔)도)\s*"
+    r"(?:돼|되|됩|괜찮|좋|무방|문제\s*없)"
+    r"|\b(?:you\s+)?(?:can|may|could)\s+(?:safely\s+|just\s+)?(?:continue|proceed|go\s+on|move\s+on|carry\s+on|keep\s+going)\b"
+    r"|\b(?:it(?:'|’)s|it\s+is)\s+(?:safe|fine|ok(?:ay)?)\s+to\s+(?:continue|proceed|go\s+on|keep\s+going)\b"
+    r"|\bsafe\s+to\s+(?:continue|proceed)\b",
+    re.I,
+)
+#: A value said against the source's: "대신 50 mL", "30분으로 바꾸세요",
+#: "instead of 15 min", "should be 37 °C".
+_VALUE_OVERRIDE = re.compile(
+    r"(?:대신|말고|보다는)\s*[0-9０-９]"
+    r"|[0-9０-９][^.!?\n]{0,12}(?:으로|로)\s*(?:바꾸|바꿔|변경|줄이|줄여|늘리|늘려|조정|고치|고쳐|맞추|맞춰)"
+    r"|(?:원문|프로토콜)\s*(?:의\s*)?(?:값|수치|조건)\s*(?:은|는|이|가)?\s*(?:틀|잘못|맞지\s*않)"
+    r"|\binstead\s+of\s+(?:the\s+)?[0-9]"
+    r"|\brather\s+than\s+(?:the\s+)?[0-9]"
+    r"|\b(?:change|set|adjust|reduce|increase|raise|lower)\s+(?:it|this|that|the\s+\w+)\s+to\s+[0-9]"
+    r"|\bshould\s+(?:really\s+)?be\s+[0-9]"
+    r"|\bthe\s+protocol(?:'|’)s\s+\w+\s+is\s+(?:wrong|incorrect|too)",
+    re.I,
+)
+_URL = re.compile(r"https?://", re.I)
+
+
+def _longest_shared_run(answer: str, evidence: str) -> int:
+    """Characters of the longest stretch ``answer`` repeats from ``evidence``, spacing and case aside."""
+
+    a = " ".join(answer.casefold().split())
+    b = " ".join(evidence.casefold().split())
+    if not a or not b:
+        return 0
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    match = matcher.find_longest_match(0, len(a), 0, len(b))
+    return match.size
+
+
+def public_reference_violations(
+    answer: str,
+    *,
+    evidence: str,
+    max_chars: int = PUBLIC_REFERENCE_MAX_CHARS,
+    step_labels: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Why a sentence grounded in public material may not be used; empty when it may.
+
+    Human decision 2026-10-24 (lane KNOW, 6): public material is a general
+    reference beside the source. The sentence is a short paraphrase; its
+    numbers are only those the cited piece (``evidence``) states; it states a
+    fact ("아세토니트릴은 인화점이 낮은 물질로 알려져 있어요"), not an
+    instruction; it never says a run may go on, never sets a value against the
+    source's, never permits anything about a hazard; and the server, not the
+    model, adds the "공개 자료 · 일반 참고 — <출처>" mark.
+    """
+
+    violations: list[str] = []
+    body = " ".join(answer.split()).strip()
+    if not body:
+        return ("empty_answer",)
+    if len(body) > max_chars:
+        violations.append("answer_too_long")
+    if introduces_bare_numbers(body, evidence, step_labels=step_labels):
+        violations.append("answer_has_number_not_in_evidence")
+    if claims_state_change(body) or asks_server_question(body):
+        violations.append("answer_claims_state_change")
+    if _CONTINUE_PERMISSION.search(body):
+        violations.append("answer_permits_continuing")
+    if _VALUE_OVERRIDE.search(body):
+        violations.append("answer_overrides_source_value")
+    if _URL.search(body):
+        violations.append("answer_has_url")
+    sentences = [part for part in _SENTENCE_END.split(body) if part.strip()]
+    if any(_DIRECTIVE.search(sentence) for sentence in sentences):
+        violations.append("answer_gives_instruction")
+    if any(permissive_hazard_topics(sentence) for sentence in sentences):
+        violations.append("answer_permits_hazard")
+    if _longest_shared_run(body, evidence) >= PUBLIC_REFERENCE_QUOTE_CHARS:
+        violations.append("answer_reads_source_at_length")
+    if display_label_violations(body):
+        violations.append("answer_has_display_label")
     return tuple(violations)
