@@ -92,7 +92,8 @@ go("#/experiment");
 pickProtocolFromList("p-1");await settle(8);
 openStartForProtocol("p-1");await settle(10);
 primary().dispatch("click");await settle(6);
-assert(wizard.step==="start"&&wizard.checkedProtocolId==="p-1",`not read: ${wizard.step}`);
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" now follows the safety check.
+assert(wizard.step==="changes"&&wizard.checkedProtocolId==="p-1",`not read: ${wizard.step}`);
 closeWizardSheet();
 isRegisteringProtocol=true;
 node("experiment-start-open").dispatch("click");await settle(8);

@@ -165,7 +165,8 @@ pickProtocolFromList("p-1");await settle(8);
 openStartForProtocol("p-1");await settle(8);
 assert(wizard.step==="safety",`the sheet is not at the safety check: ${wizard.step}`);
 primary().dispatch("click");await settle(4);
-assert(wizard.step==="start"&&wizard.checkedProtocolId==="p-1",`the read safety check was not remembered: ${wizard.step} ${wizard.checkedProtocolId}`);
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" now follows the safety check.
+assert(wizard.step==="changes"&&wizard.checkedProtocolId==="p-1",`the read safety check was not remembered: ${wizard.step} ${wizard.checkedProtocolId}`);
 closeWizardSheet();
 assert(node("experiment-start-sub").textContent.includes("바로 시작"),node("experiment-start-sub").textContent);
 node("experiment-start-open").dispatch("click");await settle(8);
