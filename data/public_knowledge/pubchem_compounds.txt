@@ -18,26 +18,26 @@ methanol
 ethanol
 acetic acid
 urea
-guanidine hydrochloride
-2-mercaptoethanol
+guanidine hydrochloride	enwiki:Guanidinium chloride
+2-mercaptoethanol	enwiki:2-Mercaptoethanol
 iodoacetic acid
-tris(2-carboxyethyl)phosphine
+tris(2-carboxyethyl)phosphine	enwiki:TCEP
 sodium deoxycholate
 # electrophoresis and blotting
 sodium dodecyl sulfate
-tromethamine
+tromethamine	enwiki:Tris
 glycine
 acrylamide
-N,N'-methylenebisacrylamide
+N,N'-methylenebisacrylamide	enwiki:N,N'-Methylenebisacrylamide
 ammonium persulfate
-N,N,N',N'-tetramethylethylenediamine
+N,N,N',N'-tetramethylethylenediamine	enwiki:Tetramethylethylenediamine
 bromophenol blue
-Coomassie brilliant blue R-250
+Coomassie brilliant blue R-250	enwiki:Coomassie brilliant blue
 Ponceau S
 ethidium bromide
 agarose
 boric acid
-edetic acid
+edetic acid	enwiki:Ethylenediaminetetraacetic acid
 glycerol
 # buffers, salts, detergents
 sodium chloride
@@ -47,18 +47,18 @@ calcium chloride
 ammonium sulfate
 sodium bicarbonate
 sodium carbonate
-sodium phosphate dibasic
-potassium phosphate monobasic
+sodium phosphate dibasic	enwiki:Disodium phosphate
+potassium phosphate monobasic	enwiki:Monopotassium phosphate
 HEPES
 MOPS
 imidazole
 sucrose
-D-glucose
+D-glucose	enwiki:Glucose
 Triton X-100
 polysorbate 20
 sodium azide
 # molecular biology and cell culture
-isopropyl beta-D-1-thiogalactopyranoside
+isopropyl beta-D-1-thiogalactopyranoside	enwiki:Isopropyl β-D-1-thiogalactopyranoside
 ampicillin
 kanamycin
 chloramphenicol
@@ -80,12 +80,12 @@ nitric acid
 phosphoric acid
 perchloric acid
 hydrofluoric acid
-ammonium hydroxide
+ammonium hydroxide	enwiki:Ammonia solution
 citric acid
 oxalic acid
 picric acid
 # solvents
-2-propanol
+2-propanol	enwiki:Isopropyl alcohol
 acetone
 toluene
 xylene
@@ -96,10 +96,10 @@ tetrahydrofuran
 dichloromethane
 ethyl acetate
 diethyl ether
-1,4-dioxane
+1,4-dioxane	enwiki:1,4-Dioxane
 pyridine
-N,N-dimethylformamide
-N-methyl-2-pyrrolidone
+N,N-dimethylformamide	enwiki:Dimethylformamide
+N-methyl-2-pyrrolidone	enwiki:N-Methyl-2-pyrrolidone
 acetaldehyde
 # oxidisers, reducers, reactive reagents
 hydrogen peroxide

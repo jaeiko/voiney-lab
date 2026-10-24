@@ -1112,7 +1112,10 @@ def resolve_cids_from_wikidata(
     """
 
     found: dict[str, int] = {}
-    for batch in _batches(list(dict.fromkeys(titles)), 50):
+    # wbgetentities matches a sitelink title exactly (no normalisation for
+    # several titles), and Wikipedia titles start with a capital.
+    canonical = list(dict.fromkeys(title[:1].upper() + title[1:] for title in titles))
+    for batch in _batches(canonical, 50):
         url = _api(WIKIDATA_API, {
             "action": "wbgetentities", "sites": "enwiki", "titles": "|".join(batch), "props": "claims|sitelinks",
             "sitefilter": "enwiki", "format": "json", "maxlag": WIKIDATA_MAXLAG,
