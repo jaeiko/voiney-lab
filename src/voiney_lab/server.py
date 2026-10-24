@@ -142,6 +142,12 @@ from voiney_lab.protocol_catalog import (
     reagent_table_summary,
     review_version_suggestion,
 )
+from voiney_lab.public_knowledge import (
+    KnowledgeUnavailable as PublicKnowledgeUnavailable,
+    PublicKnowledgeConfigurationError,
+    PublicKnowledgeSettings,
+    start_public_knowledge,
+)
 from voiney_lab.protocol_link_import import (
     LinkImportError,
     fetch_google_link,
@@ -448,11 +454,15 @@ def log_cascade_filler_configuration()->None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    """Log the effective configuration and install the OCR provider.
+async def lifespan(application: FastAPI):
+    """Log the effective configuration, install the OCR provider, load public knowledge.
 
-    The Moss in-memory retrieval this used to warm was deleted on 2026-10-10
-    (lane CL).
+    The Moss retrieval of approved manuals this used to warm was deleted on
+    2026-10-10 (lane CL) and is not back: what loads here (lane KNOW, human
+    decision 2026-10-24) is the licence-checked public knowledge index, a
+    different purpose, and only when ``VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED``
+    says so. Its failure is its own: the server starts without that tier and
+    says which setting is missing.
     """
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
@@ -460,7 +470,93 @@ async def lifespan(_: FastAPI):
     await asyncio.to_thread(_migrate_report_ownership)
     _install_protocol_ocr_provider()
     _log_source_format_support()
-    yield
+    await _start_public_knowledge(application)
+    try:
+        yield
+    finally:
+        await _stop_public_knowledge(application)
+
+
+def _public_knowledge_cache_dir()->str|None:
+    """Where Moss keeps the downloaded index between starts: beside the protocol catalog."""
+
+    try:
+        settings=_protocol_store_settings()
+    except Exception:  # noqa: BLE001 - the catalog's own start reports its settings
+        return None
+    if settings.enabled and settings.data_dir is not None:
+        return str(settings.data_dir/"public-knowledge-cache")
+    return None
+
+
+async def _start_public_knowledge(application:FastAPI)->None:
+    """Load the public knowledge index once at start (lane KNOW, decision 4).
+
+    Off: nothing is built. On without ``MOSS_PROJECT_ID``/``MOSS_PROJECT_KEY``,
+    or with a load that fails: this tier alone stays off, the reason is the
+    setting's name (never a value), and everything else runs. No other
+    provider is tried in its place.
+    """
+
+    application.state.public_knowledge=None
+    status:dict[str,object]={"enabled":False,"loaded":False,"index":None,"reason":None}
+    try:
+        settings=PublicKnowledgeSettings.from_environment(cache_dir=_public_knowledge_cache_dir())
+    except PublicKnowledgeConfigurationError as exc:
+        status.update(enabled=True,reason=str(exc))
+        application.state.public_knowledge_status=status
+        log.warning("public_knowledge.unavailable reason=configuration detail=%s",exc)
+        return
+    status["enabled"]=settings.enabled
+    if not settings.enabled:
+        application.state.public_knowledge_status=status
+        log.info("public_knowledge disabled (%s)","VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED")
+        return
+    status["index"]=settings.index_name
+    try:
+        source=await start_public_knowledge(settings)
+    except PublicKnowledgeUnavailable as exc:
+        status["reason"]=exc.setting
+        application.state.public_knowledge_status=status
+        log.warning("public_knowledge.unavailable setting=%s",exc.setting)
+        return
+    application.state.public_knowledge=source
+    report=source.load_report if source is not None else None
+    status.update(loaded=True,load_ms=report.elapsed_ms if report else None,
+                  glossary_terms=report.glossary_terms if report else 0)
+    application.state.public_knowledge_status=status
+    log.info("public_knowledge.loaded index=%s load_ms=%s glossary_terms=%s",
+             settings.index_name,status["load_ms"],status["glossary_terms"])
+
+
+async def _stop_public_knowledge(application:FastAPI)->None:
+    source=getattr(application.state,"public_knowledge",None)
+    application.state.public_knowledge=None
+    if source is None:
+        return
+    try:
+        await source.close()
+    except Exception as exc:  # noqa: BLE001 - shutting down; the type is enough
+        log.warning("public_knowledge.close_failed error=%s",type(exc).__name__)
+
+
+def _public_knowledge_capability()->dict[str,object]:
+    """The content-free state of the public tier for ``ready`` and ``/readyz``."""
+
+    status=getattr(app.state,"public_knowledge_status",None) or {"enabled":False,"loaded":False,
+                                                                  "index":None,"reason":None}
+    if not status.get("enabled"):
+        state="disabled"
+    elif status.get("loaded"):
+        state="enabled"
+    else:
+        state="unavailable"
+    return {
+        "status":state,
+        "authority":"public_reference",
+        "index":status.get("index") if state=="enabled" else None,
+        "reason":status.get("reason"),
+    }
 
 
 def _docx_conversion_available()->bool:
@@ -550,6 +646,9 @@ async def readyz()->JSONResponse:
         # optional pillow-heif. Reported, not required for readiness.
         capabilities["docx_conversion_available"]=_docx_conversion_available()
         capabilities["heic_photos_available"]=_heic_photos_available()
+        # Lane KNOW (2026-10-24): disabled, enabled (loaded) or unavailable
+        # (on, but the credentials or the load are missing) -- never required.
+        capabilities["public_knowledge"]=_public_knowledge_capability()["status"]
     except Exception as exc:
         if isinstance(exc,ServerConfigurationError):
             return JSONResponse(status_code=503,content={
@@ -13193,6 +13292,8 @@ async def voice_socket(websocket:WebSocket):
         "multi_brain":multi_brain_settings.public_capability(),
         "web_explanation":web_explanation_settings.public_capability(),
         "drawn_diagram":drawn_diagram_settings.public_capability(),
+        # Lane KNOW (2026-10-24): the public knowledge tier, as loaded at start.
+        "public_knowledge":_public_knowledge_capability(),
     }
     if llm_router_settings.enabled:
         research_capabilities["llm_router"]=llm_router_settings.public_capability()

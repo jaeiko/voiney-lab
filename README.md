@@ -114,6 +114,7 @@ cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
 | 제품·사용자·근거, 다음 계획 | [`.agent/product_context.md`](.agent/product_context.md), [`.agent/roadmap.md`](.agent/roadmap.md) |
 | 서버 운영, 문제 해결, 파일럿 | [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md), [`docs/TROUBLESHOOTING_GUIDE.md`](docs/TROUBLESHOOTING_GUIDE.md), [`docs/PILOT_GUIDE.md`](docs/PILOT_GUIDE.md) |
 | 브랜치·PR 규칙 | [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) |
+| 공개 자료 묶음 모으기·Moss 올리기 | [`docs/PUBLIC_KNOWLEDGE.md`](docs/PUBLIC_KNOWLEDGE.md) |
 
 ## 7. 검증
 

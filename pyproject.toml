@@ -50,6 +50,14 @@ dependencies = [
   # openpyxl: an .xlsx attached to a protocol as its reagent table, read
   # cell by cell (lane AN, FM, 2026-10-13). MIT.
   "openpyxl==3.1.5",
+  # moss: the in-process search runtime for the public knowledge tier (lane
+  # KNOW, human decision 2026-10-24). Pinned to 1.15.1 (released 2026-10-06,
+  # more than two weeks before the pin) with its native core
+  # inferedge-moss-core 0.28.1. Licence: PolyForm Shield 1.0.0 for both (not
+  # OSI open source: use and changes are allowed for any purpose except a
+  # product that competes with Moss; the notice must travel with copies).
+  # Imported only inside voiney_lab.public_knowledge when the tier is on.
+  "moss==1.15.1",
 ]
 
 [project.scripts]
