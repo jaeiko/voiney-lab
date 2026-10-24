@@ -5772,6 +5772,13 @@ function renderWizardChanges(host,primary){
  if(changes.failed){setText("wizard-lead",`${changes.failure_ko||"값 목록을 불러오지 못했어요."}\n[다시 불러오기]를 눌러 주세요.`);if(primary)primary.textContent="다시 불러오기";return;}
  if(!changes.values.length){setText("wizard-lead","이 분석에는 바꿀 수 있는 값(시간·온도·속도·부피·농도)이 없어요.");if(primary)primary.textContent="다음";return;}
  setText("wizard-lead","원문과 다르게 할 값만 새 값을 적어 주세요. 같은 종류의 단위만 쓸 수 있어요. 없으면 비운 채로 다음을 눌러요.");
+ const last=Array.isArray(changes.last_time?.changes)?changes.last_time.changes:[];
+ if(last.length){
+  const again=compareEl("button","wizard-back",`지난번처럼 (${last.length}개)`);again.type="button";again.id="wizard-changes-last-time";
+  again.addEventListener("click",()=>{const inputs={};for(const item of last)inputs[item.item_id]=item.shown_ko;wizard.changeInputs=inputs;wizard.changeSource="last_time";renderWizard();});
+  host.appendChild(again);
+  host.appendChild(compareEl("p","wizard-option-sub",`지난번(${changes.last_time.when_ko||"지난 실험"}): ${last.map(item=>`${item.step_label}단계 ${item.kind_ko} ${item.shown_ko}`).join(" · ")}`));
+ }
  const list=compareEl("ul","wizard-changes");list.id="wizard-changes-list";
  for(const value of changes.values){
   const row=compareEl("li","wizard-change");
@@ -5790,7 +5797,7 @@ async function wizardSubmitChanges(){
  const typed=wizard.changes?.values?.length?wizardTypedChanges():[];
  wizard.busy=true;renderWizard();
  try{
-  const body={target:wizard.changes?.target||null,changes:typed,source:"wizard"};
+  const body={target:wizard.changes?.target||null,changes:typed,source:typed.length&&wizard.changeSource==="last_time"?"last_time":"wizard"};
   const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/changes`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   wizard.busy=false;

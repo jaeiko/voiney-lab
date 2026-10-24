@@ -908,6 +908,32 @@ class RunChanges:
         return {"protocol_id": protocol_id, "target": target, "revision_id": fixture.revision_id,
                 "values": [value.public_dict() for value in values], "limit": RUN_CHANGE_LIMIT}
 
+    @staticmethod
+    def last_time(values: Sequence[Mapping[str, Any]], last: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """The last run's values (lane EASY, decision 3: "지난번처럼") on today's list.
+
+        A value of the last run comes back only where today's analysis states
+        the same value at a step of the same label and kind; its new value is
+        offered as it was, for a person to keep or change before the start
+        checks it again.
+        """
+
+        found: list[dict[str, Any]] = []
+        for item in last:
+            match = next((value for value in values
+                          if str(value.get("step_label")) == str(item.get("step_label"))
+                          and value.get("kind") == item.get("kind")
+                          and _same_value(str(value.get("number")), str(value.get("unit")),
+                                          str(item.get("source_number")), str(item.get("source_unit")))), None)
+            if match is None or any(entry["item_id"] == match["item_id"] for entry in found):
+                continue
+            try:
+                change = RunChange.from_mapping({**item, "item_id": match["item_id"], "step_id": match["step_id"]})
+            except RunChangeError:
+                continue
+            found.append({**change.public_dict(), "item_id": match["item_id"]})
+        return found
+
     def choose(
         self, protocol_id: str, changes: object, *, target: object, actor_principal_id: str | None,
         source: object = "wizard",

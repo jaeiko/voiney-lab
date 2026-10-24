@@ -104,6 +104,7 @@ from voiney_lab.experiment_reports import (
     pi_confirmations,
     record_amendments,
     report_review_items,
+    report_timezone,
     sample_in_text,
     ReportNarrative,
     ReportPdfError,
@@ -5330,9 +5331,17 @@ def get_protocol_run_changes(protocol_id:str)->dict[str,object]:
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return RunChanges(catalog).options(protocol_id)
+            options=RunChanges(catalog).options(protocol_id)
         finally:
             store.close()
+        # Lane EASY, decision 3: "지난번처럼" -- the same account's last run of
+        # this protocol, its changed values on today's list.
+        last=_last_run_values(protocol_id)
+        matched=RunChanges.last_time(options["values"],(last or {}).get("changes") or ())
+        options["last_time"]=({"changes":matched,"report_id":last.get("report_id"),
+                               "when_ko":_local_day_words(last.get("started_at"))}
+                              if matched else None)
+        return options
     except RunChangeError as exc:
         raise HTTPException(status_code=422,detail={"code":exc.code,"message_ko":exc.message_ko}) from exc
     except Exception as exc:
@@ -5361,6 +5370,32 @@ def post_protocol_run_changes(
         raise HTTPException(status_code=422,detail={"code":exc.code,"message_ko":exc.message_ko}) from exc
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+def _last_run_values(protocol_id:str)->dict[str,Any]|None:
+    """The signed-in person's last run of the protocol, as the records'
+    ownership rule lets them read it (lane EASY, decision 3); None without a
+    known owner or the records."""
+
+    settings=ExperimentReportSettings.from_environment()
+    principal=_REQUEST_PRINCIPAL.get() if _workspace_settings().enabled else None
+    if principal is None or not settings.enabled or settings.database_path is None:
+        return None
+    try:
+        return ExperimentReportStore(settings.database_path).last_run_values(
+            protocol_id=protocol_id,organization_id=getattr(principal,"organization_id",None),
+            owner_principal_id=getattr(principal,"principal_id",None))
+    except Exception as exc:  # noqa: BLE001 - no last time is no button, never a refusal
+        log.warning("run_changes.last_time_unavailable error=%s",type(exc).__name__)
+        return None
+
+
+def _local_day_words(moment:object)->str:
+    try:
+        when=datetime.fromisoformat(str(moment)).astimezone(report_timezone())
+    except (TypeError,ValueError):
+        return ""
+    return f"{when.month}월 {when.day}일"
 
 
 def _start_run_changes(

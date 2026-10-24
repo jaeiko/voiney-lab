@@ -752,6 +752,34 @@ class ExperimentReportStore:
             ).fetchone()
         return row[0] if row and row[0] else None
 
+    def last_run_values(
+        self, *, protocol_id: str, organization_id: str | None, owner_principal_id: str | None,
+    ) -> dict[str, Any] | None:
+        """The values the owner's latest run of this protocol used in place of
+        the source's (lane EASY, decision 3: "지난번처럼"), or None.
+
+        The record's own owner only (the ownership rule of the records): an
+        unknown owner gets nothing; any revision, finished or not.
+        """
+
+        if owner_principal_id is None:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT report_id FROM experiment_reports
+                 WHERE protocol_id=? AND organization_id IS ? AND owner_principal_id=?
+                 ORDER BY started_at DESC, report_id DESC LIMIT 1
+                """,
+                (protocol_id, organization_id, owner_principal_id),
+            ).fetchone()
+        if row is None:
+            return None
+        report = self.get_report(row[0])
+        return {"report_id": report["report_id"], "started_at": report.get("started_at"),
+                "protocol_revision": report.get("protocol_revision"),
+                "changes": run_values(report.get("events") or ())}
+
     def previous_finished_report(self, report: Mapping[str, Any]) -> dict[str, Any] | None:
         """The finished run of the same protocol that started last before this
         one, with its events, or None (lane RP3, decision ① (6): "지난번").
