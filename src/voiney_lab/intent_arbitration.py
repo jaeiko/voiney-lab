@@ -143,13 +143,16 @@ _PROBLEM_NOT_DOING = (
     r"|생겨|생기|생겼|퍼져|퍼지|들어가|들어갔|돌아가|돌아|맞아|맞|덮여|덮어|덮이|덮|변해|변하|변했|바뀌"
     r"|움직|돼|되|됐|된)"
 )
+#: The same without the plain "안 돼/됐어", for a thing the list below does not
+#: name ("시간이 안 됐어" is the time not yet, not a problem).
+_PROBLEM_NOT_DOING_ACTION = _PROBLEM_NOT_DOING.replace("|돼|되|됐|된)", ")")
 #: Words between a thing and its "안": "다 안", "잘 안", "전혀 안".
 _PROBLEM_ADVERBS = r"(?:(?:다|잘|전혀|아예|계속|아직|거의|좀|조금|도무지|영)\s*)*"
 #: The things of an experiment a problem is said about.
 _PROBLEM_SUBJECTS = (
     r"(?:색|색깔|젤|겔|밴드|용액|시료|샘플|세포|펠릿|펠렛|상층액|단백질|결정|가루|분말|시약|막|멤브레인|배지|미디어"
     r"|신호|형광|피크|콜로니|조각|플러그|온도|장비|기계|기포|거품|증폭|커브|곡선|검량선|표준\s*곡선|흡광도|측정값|값|수치"
-    r"|항체|버퍼|웰|용량|부피|양|시간)"
+    r"|항체|버퍼|웰|용량|부피|양)"
 )
 _PROBLEM_SHAPES = (
     # Still in a state it should have left: "아직 파래", "여전히 투명해".
@@ -174,7 +177,7 @@ _PROBLEM_SHAPES = (
     # A thing of the experiment does not do it: "색이 안 빠져", "세포가 안 떨어져".
     ("not_doing", _PROBLEM_SUBJECTS + r"(?:이|가|은|는|도|을|를)?\s*(?:\S+\s*){0,2}?" + _PROBLEM_NOT_DOING),
     # Any named thing that does not do it: "master mix가 안 녹아", "흙이 다 안 풀려".
-    ("thing_not_doing", r"(?:[가-힣A-Za-z0-9]+)(?:이|가)\s+" + _PROBLEM_ADVERBS + _PROBLEM_NOT_DOING),
+    ("thing_not_doing", r"(?:[가-힣A-Za-z0-9]+)(?:이|가)\s+" + _PROBLEM_ADVERBS + _PROBLEM_NOT_DOING_ACTION),
     # Too much of a state: "너무 뜨거워", "여과가 너무 느려", "세포가 너무 빽빽해".
     ("too", r"너무\s*(?:많|적|진해|진하|연해|연하|뜨거|차가|느려|느리|빨라|빠르|오래|짧|길어|빽빽|묽|걸쭉|되직|약해|약하"
             r"|높|낮|커|작아|두꺼|얇|탁|흐려|흐릿|끈적|뻑뻑|세게|강해|빨리|늦|더디)"),
@@ -223,6 +226,7 @@ _NOT_A_PROBLEM = (
     r"|들려|들리|소리|목소리|화면|그림|사진|이미지|영상|글자|타이머|앱|마이크|이어폰|연결"
     r"|(?:으|하)?면\s*안\s*(?:돼|되)|지\s*마|말아|안\s*해도|도\s*(?:돼|되|괜찮)"
     r"|(?:분|초|시간)\s*(?:이|가)?\s*남|(?:으|하)?면\s*(?:어떡|어떻게|어쩌|뭐|왜)|\bif\b|\bwould\b|\bcould\b"
+    r"|(?:시간|차례|순서|때|점심|밥)\S*\s*(?:이|가)?\s*(?:아직\s*)?안\s*(?:돼|됐|되|맞)"
     r"|아니야|아니에요|아닌|않았|라고\s*(?:말|하면)"
     # A move or a step command with it ("덜 됐는데 그냥 다음 단계 가자") is
     # the command's: the completion gates rule on it (D7).

@@ -912,20 +912,21 @@ def _first_sentence(text: str) -> str:
     return match.group(1) if match else text
 
 
-def _spoken_quote(hit: KnowledgeHit, language: str) -> str:
-    """How a protocol line is said: its checked Korean reading, or the page only."""
+def _spoken_quote(hit: KnowledgeHit, language: str) -> tuple[str, str]:
+    """How a protocol line is said -- its checked Korean reading, or the page
+    only -- and the part of the source's words it says (a quote too)."""
 
     page = hit.detail("page")
     reading = hit.detail("reading")
     if language != "ko":
         sentence = _first_sentence(hit.text)
-        return f"The protocol, page {page}: {sentence}"
+        return f"The protocol, page {page}: {sentence}", sentence
     if not reading:
-        return f"원문 {page}쪽에 관련 문장이 있어요. 화면에서 확인해 주세요."
+        return f"원문 {page}쪽에 관련 문장이 있어요. 화면에서 확인해 주세요.", ""
     said = reading if len(reading) <= SPOKEN_QUOTE_CHARS else _first_sentence(reading)
     machine = " 자동 번역이에요." if hit.detail("reading_source") == "machine" else ""
     rest = " 나머지는 화면에 있어요." if said != reading else ""
-    return f"원문 {page}쪽: {said}{machine}{rest}"
+    return f"원문 {page}쪽: {said}{machine}{rest}", said
 
 
 def _spoken_history(hit: KnowledgeHit, language: str) -> str:
@@ -970,7 +971,9 @@ def compose_problem_help(
         quoted += [hit.text, hit.detail("reading")]
     spoken_protocol = SPOKEN_PROTOCOL_WITH_HISTORY if history else SPOKEN["protocol"]
     for hit in protocol[:spoken_protocol]:
-        said.append(_spoken_quote(hit, language))
+        sentence, part = _spoken_quote(hit, language)
+        said.append(sentence)
+        quoted.append(part)
     for hit in history:
         after = [value for key, value in hit.details if key == "after"]
         shown.append(f"{TIER_LABELS['history']} · {hit.locator}\n“{hit.text}”"

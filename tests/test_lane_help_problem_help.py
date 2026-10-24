@@ -229,6 +229,19 @@ class ComposeAndCheckTests(unittest.TestCase):
         self.assertTrue(shown.endswith(CLOSING_KO))
         self.assertEqual(problem_help_violations(f"{shown}\n{said}", quoted=help_.quoted_text.splitlines()), ())
 
+    def test_a_long_reading_said_in_part_keeps_its_numbers_as_quoted(self) -> None:
+        # A reading too long to say whole is said by its first sentence; the
+        # source's number in that sentence is the source's, not the frame's.
+        reading = ("젤 조각의 염색이 진하면 세척 버퍼 부피를 1000 µL로 올릴 수 있습니다. "
+                   "37C 배양에는 Eppendorf Thermomixer를 사용할 수 있고, 대안으로 실온에서 흔들 수 있습니다.")
+        note = KnowledgeHit("protocol", "2단계 노트", "Note If strongly stained ... 1000 µL.", "p.1 · 2단계", details=(
+            ("kind", "note"), ("page", "1"), ("step_label", "2"), ("reading", reading),
+            ("reading_source", "reviewed")))
+        help_ = compose_problem_help((note,), language="ko")
+        self.assertIn("1000 µL로 올릴 수 있습니다. 나머지는 화면에 있어요.", help_.spoken)
+        self.assertEqual(problem_help_violations(
+            f"{help_.shown}\n{help_.spoken}", quoted=help_.quoted_text.splitlines()), ())
+
     def test_closing_held_for_possible_causes(self) -> None:
         help_ = compose_problem_help((), language="ko", causes_follow=True)
         self.assertEqual(help_.spoken, NOTHING_FOUND["ko"])
