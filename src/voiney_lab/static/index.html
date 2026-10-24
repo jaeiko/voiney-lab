@@ -1644,7 +1644,7 @@ function sanitizeExternalResearchAnswer(text){
    .trim();
 }
 let socket,micContext,micWorkletNode,micSource,micStream,playContext,cascadeGain,sessionActive=false;
-let receiving=null,receivedFrames=[],receivingFiller=null,fillerFrames=[],fillerSource=null,fillerIdentity=null,activeTurn=null,activeCascadeGeneration=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,replaySource=null,lastReplayableAudio=null,pendingVoiceReplay=false,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
+let receiving=null,receivedFrames=[],receivingFiller=null,fillerFrames=[],fillerSource=null,fillerIdentity=null,activeTurn=null,activeCascadeGeneration=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,replaySource=null,lastReplayableAudio=null,replayTurnKey=null,replayTurnFull=false,pendingVoiceReplay=false,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
 let pipelineMode="cascade";
 let micSignalSeen=false;
 const interruptedTurns=new Set();
@@ -2683,7 +2683,7 @@ function updateVoiceProcessing(_stage){}
 function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크에 “${text}”라고 말씀해 주세요.`;}
 function resetSessionUI(){
  experimentEndedOnScreen=false;workflowPaused=false;clearAfterHead();
- clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
+ clearPlayback();lastReplayableAudio=null;replayTurnKey=null;replayTurnFull=false;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;reportReadOnly=false;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  globalThis.VoineyFeedback?.reset();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();webEvents.clear();drawingEvents.clear();
@@ -4993,11 +4993,21 @@ async function stopSession(){
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
 async function playLastReplayableAudio(statusNode){if(!lastReplayableAudio||!playContext){if(statusNode)statusNode.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";return false;}if(playing||activeSource||replaySource){if(statusNode)statusNode.textContent="다른 음성이 재생 중입니다. 끝난 뒤 한 번 더 눌러 주세요.";return false;}try{await playContext.resume();const input=new Int16Array(lastReplayableAudio.slice(0)),audio=playContext.createBuffer(1,input.length,16000),samples=audio.getChannelData(0);for(let i=0;i<input.length;i++)samples[i]=input[i]/32768;const source=playContext.createBufferSource();replaySource=source;source.buffer=audio;source.connect(playContext.destination);source.onended=()=>{if(replaySource===source)replaySource=null;if(statusNode)statusNode.textContent="답변을 한 번 다시 재생했습니다.";};source.start();if(statusNode)statusNode.textContent="마지막 답변을 다시 재생 중입니다.";return true;}catch(_){replaySource=null;if(statusNode)statusNode.textContent="재생하지 못했습니다. 브라우저의 오디오 권한과 출력 장치를 확인해 주세요.";return false;}}
 
+// Lane FIXV decision 1: "다시 들려줘" replays the whole last turn, not its last sentence. Each piece a turn plays is
+// kept after the ones before it; a new turn's first piece starts over; the turn that asked for the replay keeps nothing.
+// The kept sound stops at 120 s of 16 kHz PCM16: a piece that would pass it is left out whole, and so is every piece after.
+const REPLAY_AUDIO_MAX_BYTES=120*16000*2;
+function keepReplayableAudio(key,item){
+ if(key!==replayTurnKey||!lastReplayableAudio){replayTurnKey=key;replayTurnFull=item.byteLength>REPLAY_AUDIO_MAX_BYTES;lastReplayableAudio=item.slice(0,REPLAY_AUDIO_MAX_BYTES);return;}
+ if(replayTurnFull)return;
+ if(lastReplayableAudio.byteLength+item.byteLength>REPLAY_AUDIO_MAX_BYTES){replayTurnFull=true;return;}
+ lastReplayableAudio=join([lastReplayableAudio,item]);
+}
 async function pump(generation=sessionGeneration){
  if(generation!==sessionGeneration)return;
  if(playing)return;const item=queued.get(nextSegment);if(!item){if(audioComplete&&turnComplete&&activeTurn!==null&&queued.size===0){if(pendingVoiceReplay&&lastReplayableAudio){pendingVoiceReplay=false;queued.set(nextSegment,lastReplayableAudio.slice(0));pump(generation);return;}sendControl("playback.ended",{turn_id:activeTurn});clearPlayback();renderState("LISTENING");}return;}
  const epoch=playbackEpoch;queued.delete(nextSegment);playing=true;await playContext.resume();if(generation!==sessionGeneration||epoch!==playbackEpoch)return;const input=new Int16Array(item),audio=playContext.createBuffer(1,input.length,16000),samples=audio.getChannelData(0);for(let i=0;i<input.length;i++)samples[i]=input[i]/32768;
- if(!audioRecoveryTurns.has(cascadeTurnKey(activeTurn,activeCascadeGeneration)))lastReplayableAudio=item.slice(0);
+ const playedKey=cascadeTurnKey(activeTurn,activeCascadeGeneration);if(!audioRecoveryTurns.has(playedKey))keepReplayableAudio(playedKey,item);
  const source=playContext.createBufferSource();activeSource=source;source.buffer=audio;source.connect(cascadeGain||playContext.destination);source.onended=()=>{if(generation!==sessionGeneration||epoch!==playbackEpoch||activeSource!==source)return;activeSource=null;playing=false;nextSegment++;pump(generation);};source.start();if(generation===sessionGeneration&&epoch===playbackEpoch&&activeSource===source)renderState("SPEAKING");
 }
 async function playFiller(data,meta,generation=sessionGeneration){if(generation!==sessionGeneration||!currentCascadeMessage(meta)||cascadeTurnInterrupted(meta)||playing||activeSource||!sessionActive||!data.byteLength)return;clearFillerPlayback();const epoch=playbackEpoch,input=new Int16Array(data),audio=playContext.createBuffer(1,input.length,16000),samples=audio.getChannelData(0);for(let i=0;i<input.length;i++)samples[i]=input[i]/32768;await playContext.resume();if(generation!==sessionGeneration||epoch!==playbackEpoch||playing||activeSource)return;const source=playContext.createBufferSource();fillerSource=source;fillerIdentity={turn_id:meta.turn_id,generation:meta.generation};source.buffer=audio;source.connect(cascadeGain||playContext.destination);source.onended=()=>{if(fillerSource!==source)return;fillerSource=null;fillerIdentity=null;};source.start();}
