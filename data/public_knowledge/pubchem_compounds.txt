@@ -1,0 +1,143 @@
+# PubChem compounds taken into the public bundle (lane KNOW): the reagents the
+# pilot's protocols (in-gel digestion, the starter pack) and common bench work
+# name. One name per line, as PubChem's name lookup understands it; the
+# pipeline resolves each to a CID once and keeps the CID in its state. A name
+# PubChem does not know is recorded as a failure, not guessed.
+
+# in-gel digestion and proteomics
+ammonium bicarbonate
+acetonitrile
+dithiothreitol
+iodoacetamide
+formic acid
+trifluoroacetic acid
+methanol
+ethanol
+acetic acid
+urea
+guanidine hydrochloride
+2-mercaptoethanol
+iodoacetic acid
+tris(2-carboxyethyl)phosphine
+sodium deoxycholate
+# electrophoresis and blotting
+sodium dodecyl sulfate
+tromethamine
+glycine
+acrylamide
+N,N'-methylenebisacrylamide
+ammonium persulfate
+N,N,N',N'-tetramethylethylenediamine
+bromophenol blue
+Coomassie brilliant blue R-250
+Ponceau S
+ethidium bromide
+agarose
+boric acid
+edetic acid
+glycerol
+# buffers, salts, detergents
+sodium chloride
+potassium chloride
+magnesium chloride
+calcium chloride
+ammonium sulfate
+sodium bicarbonate
+sodium carbonate
+sodium phosphate dibasic
+potassium phosphate monobasic
+HEPES
+MOPS
+imidazole
+sucrose
+D-glucose
+Triton X-100
+polysorbate 20
+sodium azide
+# molecular biology and cell culture
+isopropyl beta-D-1-thiogalactopyranoside
+ampicillin
+kanamycin
+chloramphenicol
+paraformaldehyde
+formaldehyde
+glutaraldehyde
+diethyl pyrocarbonate
+phenol
+chloroform
+isoamyl alcohol
+dimethyl sulfoxide
+trypan blue
+# acids and bases
+hydrochloric acid
+sodium hydroxide
+potassium hydroxide
+sulfuric acid
+nitric acid
+phosphoric acid
+perchloric acid
+hydrofluoric acid
+ammonium hydroxide
+citric acid
+oxalic acid
+picric acid
+# solvents
+2-propanol
+acetone
+toluene
+xylene
+benzene
+hexane
+cyclohexane
+tetrahydrofuran
+dichloromethane
+ethyl acetate
+diethyl ether
+1,4-dioxane
+pyridine
+N,N-dimethylformamide
+N-methyl-2-pyrrolidone
+acetaldehyde
+# oxidisers, reducers, reactive reagents
+hydrogen peroxide
+sodium hypochlorite
+potassium permanganate
+silver nitrate
+osmium tetroxide
+sodium borohydride
+lithium aluminium hydride
+hydrazine
+sodium dithionite
+# battery and materials
+lithium
+lithium hexafluorophosphate
+lithium bis(trifluoromethanesulfonyl)imide
+lithium hydroxide
+lithium carbonate
+lithium cobalt oxide
+lithium iron phosphate
+ethylene carbonate
+dimethyl carbonate
+diethyl carbonate
+propylene carbonate
+fluoroethylene carbonate
+vinylene carbonate
+sodium hexafluorophosphate
+graphite
+cobalt(II) chloride
+nickel(II) chloride
+copper(II) sulfate
+zinc chloride
+iron(III) chloride
+manganese dioxide
+titanium dioxide
+silicon dioxide
+aluminium oxide
+# gases
+nitrogen
+argon
+oxygen
+hydrogen
+carbon dioxide
+carbon monoxide
+helium

@@ -1,0 +1,422 @@
+# Public knowledge sources (lane KNOW, human decision 2026-10-24).
+#
+# scripts/public_knowledge_pipeline.py reads this file: each [[source]] is
+# fetched, cut into pieces and put into the public bundle under
+# data/runtime/public-knowledge/ (never committed). Add a source here and the
+# next `collect` run takes it in; a source whose material has not changed is
+# not fetched again.
+#
+# What may be listed (decision 1): public domain, CC0, CC BY and CC BY-SA
+# only, with the licence evidence URL, the date it was read, and the terms of
+# use that bind the fetch (rate limit, robots.txt). NC and ND material,
+# copyrighted books and web articles and anything behind a login are not
+# listed as a source; the candidates that were looked at and left out are the
+# [[excluded]] entries at the end, each with its reason.
+#
+# grade (additional decision 3): "A" = public institution, standard or
+# peer-reviewed article; "B" = open textbook; "C" = wiki. The answer uses a
+# higher grade first and says so when a wiki is the only ground.
+
+version = 1
+# Wikimedia's User-Agent policy wants a descriptive agent with a way to reach
+# the operator; the repository address is that contact.
+user_agent = "VoineyLabPublicKnowledge/0.1 (https://github.com/jaeiko/voiney-lab)"
+
+# ---------------------------------------------------------------------------
+# Safety, from public institutions (grade A)
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "niosh-npg"
+name = "NIOSH Pocket Guide to Chemical Hazards"
+kind = "niosh_npg"
+grade = "A"
+domains = ["chemistry", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.cdc.gov/other/agencymaterials.html"
+license_checked = "2026-10-24"
+license_note = "CDC: most information on the CDC website is not subject to copyright and may be freely used or reproduced; logos excepted."
+terms = "https://www.cdc.gov/robots.txt disallows only /niosh/archive/ (no Crawl-delay); one request per second with the contact User-Agent."
+index_url = "https://www.cdc.gov/niosh/npg/npgdcas.html"
+base_url = "https://www.cdc.gov/niosh/npg/"
+requests_per_second = 1.0
+
+[[source]]
+id = "cdc-bmbl6"
+name = "Biosafety in Microbiological and Biomedical Laboratories (BMBL), 6th edition"
+kind = "pdf"
+grade = "A"
+domains = ["biology", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.cdc.gov/other/agencymaterials.html"
+license_checked = "2026-10-24"
+terms = "CDC robots.txt allows /labs/; one file."
+url = "https://www.cdc.gov/labs/media/pdfs/2025/08/SF__19a_308133-A_BMBL6_00-BOOK-WEB-final-3.pdf"
+page_url = "https://www.cdc.gov/labs/bmbl/index.html"
+version = "6th edition (CDC/NIH; file dated 2025-08)"
+skip_pages_before = 17
+requests_per_second = 1.0
+
+[[source]]
+id = "niosh-2007-107"
+name = "NIOSH School Chemistry Laboratory Safety Guide (2007-107)"
+kind = "pdf"
+grade = "A"
+domains = ["chemistry", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.cdc.gov/other/agencymaterials.html"
+license_checked = "2026-10-24"
+terms = "CDC robots.txt allows /niosh/docs/; one file."
+url = "https://www.cdc.gov/niosh/docs/2007-107/pdfs/2007-107.pdf"
+page_url = "https://www.cdc.gov/niosh/docs/2007-107/"
+version = "DHHS (NIOSH) Publication 2007-107, October 2006"
+skip_pages_before = 7
+requests_per_second = 1.0
+
+[[source]]
+id = "cdc-mmwr-su6101"
+name = "Guidelines for Safe Work Practices in Human and Animal Medical Diagnostic Laboratories (MMWR 2012)"
+kind = "html"
+grade = "A"
+domains = ["biology", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.cdc.gov/other/agencymaterials.html"
+license_checked = "2026-10-24"
+terms = "CDC robots.txt allows /mmwr/; one page."
+url = "https://www.cdc.gov/mmwr/preview/mmwrhtml/su6101a1.htm"
+version = "MMWR Suppl 2012;61(1)"
+requests_per_second = 1.0
+
+# ---------------------------------------------------------------------------
+# Chemicals (grade A): PubChem records, kept only where the record's own
+# reference is a source whose terms were read.
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "pubchem"
+name = "PubChem (NIH/NLM) compound records"
+kind = "pubchem"
+grade = "A"
+domains = ["chemistry", "safety"]
+language = "en"
+license = "Public domain (NLM; per-reference sources below)"
+license_url = "https://www.nlm.nih.gov/web_policies.html"
+license_checked = "2026-10-24"
+license_note = "NLM: works produced by the U.S. government are not subject to copyright; third-party content keeps its own terms. Each PubChem statement names its reference source; only the references listed in allowed_references are kept (their licence URL is the one PubChem's source table gives: https://pubchem.ncbi.nlm.nih.gov/rest/pug/sourcetable/all/JSON, read 2026-10-24)."
+terms = "https://pubchem.ncbi.nlm.nih.gov/robots.txt allows /rest/ and /compound/; PubChem's dynamic throttling (X-Throttling-Control header; at most 5 requests per second) is obeyed: two requests per second here, and a pause when the header is not Green."
+base_url = "https://pubchem.ncbi.nlm.nih.gov/rest/"
+compounds_file = "pubchem_compounds.txt"
+requests_per_second = 2.0
+# Reference source names exactly as PubChem prints them, each with the licence
+# its source-table row names.
+allowed_references = [
+  "PubChem",
+  "Hazardous Substances Data Bank (HSDB)",
+  "The National Institute for Occupational Safety and Health (NIOSH)",
+  "NIOSH Manual of Analytical Methods",
+  "Occupational Safety and Health Administration (OSHA)",
+  "ILO-WHO International Chemical Safety Cards (ICSCs)",
+  "DTP/NCI",
+  "NCI Thesaurus (NCIt)",
+  "Drugs@FDA",
+  "FDA Global Substance Registration System (GSRS)",
+  "EPA Chemicals under the TSCA",
+  "EPA DSSTox",
+  "EPA Hazardous Air Pollutants",
+  "EPA Acute Exposure Guideline Levels (AEGLs)",
+  "NTP Technical Reports",
+  "Medical Subject Headings (MeSH)",
+]
+# Licences of the allowed references (as PubChem's source table states them):
+#   HSDB, MeSH, PubChem      NLM, public domain  https://www.nlm.nih.gov/web_policies.html
+#   NIOSH, NMAM              CDC, public domain  https://www.cdc.gov/other/agencymaterials.html
+#   OSHA                     DOL, public domain  https://www.dol.gov/general/aboutdol/copyright
+#   ILO ICSC                 CC BY 4.0           https://www.ilo.org/global/copyright/lang--en/index.htm
+#   DTP/NCI, NCIt            NCI, free of copyright  https://www.cancer.gov/policies/copyright-reuse
+#   Drugs@FDA, GSRS          FDA, public domain  https://www.fda.gov/about-fda/about-website/website-policies#linking
+#   EPA (TSCA, DSSTox, HAPs, AEGLs), NTP   U.S. Government works
+# Headings kept (PubChem TOC names); everything else in a record is left out.
+headings = [
+  "Record Description",
+  "Molecular Formula",
+  "Molecular Weight",
+  "IUPAC Name",
+  "Physical Description",
+  "Color/Form",
+  "Odor",
+  "Boiling Point",
+  "Melting Point",
+  "Flash Point",
+  "Solubility",
+  "Density",
+  "Vapor Pressure",
+  "Autoignition Temperature",
+  "Decomposition",
+  "Corrosivity",
+  "pH",
+  "Stability/Shelf Life",
+  "Hazards Summary",
+  "Fire Hazards",
+  "Explosive Limits and Potential",
+  "Fire Potential",
+  "Reactivity Profile",
+  "Health Hazards",
+  "Fire Fighting",
+  "First Aid",
+  "Inhalation First Aid",
+  "Skin First Aid",
+  "Eye First Aid",
+  "Ingestion First Aid",
+  "Personal Protective Equipment (PPE)",
+  "Protective Equipment and Clothing",
+  "Exposure Routes",
+  "Symptoms",
+  "Target Organs",
+  "Incompatibilities",
+  "Incompatible Materials",
+  "Storage Conditions",
+  "Safe Storage",
+  "Spillage Disposal",
+  "Cleanup Methods",
+  "Disposal Methods",
+  "Preventive Measures",
+  "Exposure Limits",
+  "NIOSH Recommendations",
+  "Immediately Dangerous to Life or Health (IDLH)",
+  "Permissible Exposure Limit (PEL)",
+  "Recommended Exposure Limit (REL)",
+]
+
+# ---------------------------------------------------------------------------
+# Open textbooks (grade B): OpenStax first editions, CC BY 4.0. The current
+# second editions moved to CC BY-NC-SA 4.0 and are excluded below.
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "openstax-chemistry-1e"
+name = "OpenStax Chemistry (1st edition, 2015)"
+kind = "pdf"
+grade = "B"
+domains = ["chemistry", "materials"]
+language = "en"
+license = "CC BY 4.0"
+license_url = "https://openstax.org/apps/cms/api/v2/pages/?type=books.Book&slug=chemistry&fields=title,license_name,license_version,license_url,book_state"
+license_checked = "2026-10-24"
+license_note = "OpenStax CMS record: license_name 'Creative Commons Attribution License' 4.0, book_state 'retired' (the licence is irrevocable; the edition is no longer updated)."
+terms = "https://openstax.org/robots.txt disallows /contents and /apps/archive for crawlers, so the book is taken as the one PDF the CMS record points to on assets.openstax.org (no robots.txt there); one file."
+url = "https://assets.openstax.org/oscms-prodcms/media/documents/Chemistry-OP_XdqVZpQ.pdf"
+page_url = "https://openstax.org/details/books/chemistry"
+version = "published 2015-03-11 (retired edition)"
+attribution = "Chemistry by OpenStax (Rice University), CC BY 4.0, https://openstax.org/details/books/chemistry"
+skip_pages_before = 9
+requests_per_second = 0.5
+
+[[source]]
+id = "openstax-biology-1e"
+name = "OpenStax Biology (1st edition, 2016)"
+kind = "pdf"
+grade = "B"
+domains = ["biology"]
+language = "en"
+license = "CC BY 4.0"
+license_url = "https://openstax.org/apps/cms/api/v2/pages/?type=books.Book&slug=biology&fields=title,license_name,license_version,license_url,book_state"
+license_checked = "2026-10-24"
+license_note = "OpenStax CMS record: license_name 'Creative Commons Attribution License' 4.0, book_state 'retired'."
+terms = "As openstax-chemistry-1e: one PDF from assets.openstax.org."
+url = "https://assets.openstax.org/oscms-prodcms/media/documents/Biology-OP_xQoZM8Z.pdf"
+page_url = "https://openstax.org/details/books/biology"
+version = "published 2016-10-21 (retired edition)"
+attribution = "Biology by OpenStax (Rice University), CC BY 4.0, https://openstax.org/details/books/biology"
+skip_pages_before = 9
+requests_per_second = 0.5
+
+# ---------------------------------------------------------------------------
+# Peer-reviewed open-access articles (grade A): Europe PMC, CC BY only,
+# checked twice (the search record's licence and the article XML's own
+# <license> element).
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "europepmc-ccby"
+name = "Europe PMC open-access articles (CC BY)"
+kind = "europepmc"
+grade = "A"
+domains = ["biology", "chemistry", "materials", "equipment"]
+language = "en"
+license = "CC BY (per article; recorded on each piece)"
+license_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=LICENSE%3A%22cc%20by%22&format=json&resultType=core&pageSize=1"
+license_checked = "2026-10-24"
+license_note = "Each article's licence is read from the Europe PMC record (license field) and again from the full-text XML <license> element; only CC BY and CC0 are kept, CC BY-SA too; NC and ND never."
+terms = "https://www.ebi.ac.uk/robots.txt sets no rule for /europepmc/webservices/ (User-agent: * has no Disallow for it); one request per second with the contact User-Agent."
+base_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/"
+requests_per_second = 1.0
+max_per_query = 3
+# A query is run again on each collect; new CC BY hits are added, bounded by
+# max_per_query per query.
+queries = [
+  "in-gel digestion protocol mass spectrometry",
+  "SDS-PAGE troubleshooting",
+  "western blot troubleshooting",
+  "PCR troubleshooting guide",
+  "MIQE guidelines quantitative PCR",
+  "agarose gel electrophoresis DNA method",
+  "protein quantification Bradford BCA assay comparison",
+  "cell culture contamination mycoplasma detection",
+  "bacterial transformation competent cells protocol",
+  "plasmid DNA extraction alkaline lysis",
+  "coin cell assembly lithium-ion best practices",
+  "electrode slurry casting lithium-ion battery",
+  "cyclic voltammetry practical guide",
+  "electrochemical impedance spectroscopy tutorial",
+  "powder X-ray diffraction sample preparation",
+  "scanning electron microscopy sample preparation biological",
+  "mass spectrometry sample preparation keratin contamination",
+  "laboratory chemical safety training",
+  "buffer preparation pH laboratory",
+  "pipetting accuracy calibration",
+]
+pmcids = []
+
+# ---------------------------------------------------------------------------
+# Wikipedia (grade C), CC BY-SA 4.0; one article per request.
+# ---------------------------------------------------------------------------
+
+[[source]]
+id = "wikipedia-en"
+name = "Wikipedia (English)"
+kind = "wikipedia"
+grade = "C"
+domains = ["equipment", "chemistry", "biology", "materials", "safety"]
+language = "en"
+license = "CC BY-SA 4.0"
+license_url = "https://en.wikipedia.org/wiki/Wikipedia:Reusing_Wikipedia_content"
+license_checked = "2026-10-24"
+license_note = "Text may be reused under CC BY-SA 4.0 with a link to the article; changes must stay under the same licence (the bundle keeps the text as written)."
+terms = "https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy (descriptive User-Agent with contact) and https://www.mediawiki.org/wiki/API:Etiquette (requests in series, maxlag=5); robots.txt leaves api.php to such clients. One request per second, one article per request."
+api_url = "https://en.wikipedia.org/w/api.php"
+titles_file = "wikipedia_titles.en.txt"
+requests_per_second = 1.0
+
+[[source]]
+id = "wikipedia-ko"
+name = "위키백과 (한국어)"
+kind = "wikipedia"
+grade = "C"
+domains = ["equipment", "chemistry", "biology", "materials", "safety"]
+language = "ko"
+license = "CC BY-SA 4.0"
+license_url = "https://ko.wikipedia.org/wiki/위키백과:저작권"
+license_checked = "2026-10-24"
+license_note = "Same terms as the English edition (Wikimedia Terms of Use)."
+terms = "As wikipedia-en."
+api_url = "https://ko.wikipedia.org/w/api.php"
+titles_file = "wikipedia_titles.ko.txt"
+# Korean titles of the English list's articles come from Wikidata's sitelinks
+# (CC0) and are fetched as well.
+sitelinks_from = "wikipedia-en"
+requests_per_second = 1.0
+
+# Wikidata labels (CC0): the Korean and English names of every article item
+# above, kept as the glossary that joins a Korean question to English text
+# (data/public_knowledge/glossary.json). No pieces come from it.
+[[source]]
+id = "wikidata-glossary"
+name = "Wikidata labels (ko/en glossary)"
+kind = "wikidata_glossary"
+grade = "A"
+domains = ["glossary"]
+language = "ko"
+license = "CC0 1.0"
+license_url = "https://www.wikidata.org/wiki/Wikidata:Copyright"
+license_checked = "2026-10-24"
+license_note = "All structured data from the main namespace is CC0."
+terms = "As wikipedia-en (User-Agent policy, API etiquette); 50 titles per request."
+api_url = "https://www.wikidata.org/w/api.php"
+from_sources = ["wikipedia-en"]
+extra_terms_file = "glossary_terms.txt"
+requests_per_second = 1.0
+
+# ---------------------------------------------------------------------------
+# Candidates looked at and left out (decision 1 and additional decision 5)
+# ---------------------------------------------------------------------------
+
+[[excluded]]
+id = "openstax-2e"
+name = "OpenStax Chemistry 2e, Chemistry: Atoms First 2e, Biology 2e, Microbiology, Anatomy and Physiology 2e, College Physics 2e, Organic Chemistry"
+reason = "The live editions are CC BY-NC-SA 4.0 (NC): the OpenStax CMS record and the books' collection.xml both say so. The CC BY first editions are used instead (openstax-chemistry-1e, openstax-biology-1e)."
+evidence_url = "https://openstax.org/apps/cms/api/v2/pages/?type=books.Book&fields=title,license_name,license_version,license_url,book_state&limit=100"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "protocols-io"
+name = "protocols.io public protocols"
+reason = "Reading even public protocols through the API needs a client access token issued to a registered account (login required); the HTML pages are not taken without the API."
+evidence_url = "https://apidoc.protocols.io/"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "materials-project"
+name = "Materials Project"
+reason = "The API needs a per-account API key (login required), although the data licence is CC BY 4.0."
+evidence_url = "https://docs.materialsproject.org/downloading-data/using-the-api/getting-started"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "osha"
+name = "OSHA laboratory safety publications (osha.gov)"
+reason = "Public domain by the Department of Labor's policy, but osha.gov refuses the pipeline's requests (HTTP 403 for robots.txt and the publications; the copyright page answers 404), so nothing can be fetched in keeping with the site's rules. Left for a person to download by hand if wanted."
+evidence_url = "https://www.dol.gov/general/aboutdol/copyright"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "echa"
+name = "European Chemicals Agency (ECHA) C&L Inventory, including the GHS classifications PubChem cites from it"
+reason = "ECHA's legal notice could not be read by the pipeline (HTTP 403); reproductions of it say reuse requires written notification to ECHA. Unverified, so PubChem statements whose reference is ECHA or the EU CLP regulation are dropped."
+evidence_url = "https://echa.europa.eu/legal-notice"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "cameo-chemicals"
+name = "CAMEO Chemicals (NOAA/EPA), including PubChem statements referencing it"
+reason = "Its terms say data from the contributing organisations shall not be duplicated without their written permission."
+evidence_url = "https://cameochemicals.noaa.gov/help/reference/terms_and_conditions.htm?d_f=false"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "pubchem-other-references"
+name = "PubChem statements from NITE-CMC, HCIS (Safe Work Australia), Haz-Map, DrugBank, HMDB, T3DB, ChEBI, CAS Common Chemistry, AICIS, EU Food Improvement Agents and others not in allowed_references"
+reason = "No licence read (NITE, HCIS, AICIS, ChEBI), copyrighted (Haz-Map), NC (DrugBank, CAS Common Chemistry) or commercial use restricted (HMDB). Wikipedia-referenced statements are left out because the Wikipedia source above holds the same text."
+evidence_url = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/sourcetable/all/JSON"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "kosha-msds"
+name = "안전보건공단 화학물질정보 (MSDS)"
+reason = "저작권정책: 무단 복제·배포 금지, 공익 목적이라도 별도 협의·허락 필요; Open API 는 공공데이터포털 활용신청(로그인) 필요. 공공누리 유형 표시 없음."
+evidence_url = "https://msds.kosha.or.kr/MSDSInfo/kcic/copyright.do"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "korean-public-portals"
+name = "국가법령정보센터·국가연구안전정보시스템 등 한국어 공공 자료"
+reason = "Open API 가 인증키(회원가입) 를 요구하고, 사이트 화면은 스크립트로만 열려 공공누리 유형을 자동으로 확인할 수 없었다. 공공누리 제1유형이 확인된 문서를 사람이 지정하면 다음 실행에 'html'/'pdf' 출처로 더할 수 있다."
+evidence_url = "https://www.kogl.or.kr/info/license.do"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "ncbi-bookshelf"
+name = "NCBI Bookshelf books"
+reason = "Licence is per book and none of the laboratory-safety titles looked at carries an open licence that could be verified in this run (the BMBL is taken from CDC directly)."
+evidence_url = "https://www.ncbi.nlm.nih.gov/books/about/copyright/"
+checked = "2026-10-24"
+
+[[excluded]]
+id = "pmc-nc-nd"
+name = "PMC / Europe PMC articles under CC BY-NC, CC BY-ND or publisher-specific licences"
+reason = "NC or ND; the europepmc-ccby source keeps only CC BY, CC BY-SA and CC0 articles."
+evidence_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=LICENSE%3A%22cc%20by-nc%22&format=json&pageSize=1"
+checked = "2026-10-24"

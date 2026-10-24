@@ -1,0 +1,590 @@
+# English Wikipedia articles taken into the public bundle (lane KNOW).
+# One title per line; a line starting with "# " names the domain of the lines
+# after it until the next such line. The pipeline follows redirects and
+# records a title that does not exist as a failure.
+
+# equipment
+Centrifuge
+Microcentrifuge
+Centrifuge tube
+Vortex mixer
+Pipette
+Air displacement pipette
+Mouth pipetting
+Autoclave
+Laminar flow cabinet
+Biosafety cabinet
+Fume hood
+Glovebox
+Schlenk line
+Spectrophotometer
+Plate reader
+Microplate
+Thermal cycler
+Transilluminator
+Incubator (culture)
+Shaker (laboratory)
+Water bath
+Heating mantle
+Hot plate
+Magnetic stirrer
+Rotary evaporator
+Vacuum pump
+Desiccator
+Analytical balance
+pH meter
+Conductivity meter
+Freeze-drying
+Sonication
+Ultrasonic cleaning
+Homogenizer
+French pressure cell press
+Hemocytometer
+Flow cytometry
+Optical microscope
+Fluorescence microscope
+Confocal microscopy
+Electron microscope
+Scanning electron microscope
+Transmission electron microscopy
+Atomic force microscopy
+X-ray crystallography
+Powder diffraction
+X-ray photoelectron spectroscopy
+Fourier-transform infrared spectroscopy
+Raman spectroscopy
+Nuclear magnetic resonance spectroscopy
+UV–visible spectroscopy
+Atomic absorption spectroscopy
+Inductively coupled plasma mass spectrometry
+Mass spectrometry
+Tandem mass spectrometry
+Matrix-assisted laser desorption/ionization
+Electrospray ionization
+Liquid chromatography–mass spectrometry
+Gas chromatography–mass spectrometry
+High-performance liquid chromatography
+Gas chromatography
+Thin-layer chromatography
+Column chromatography
+Size-exclusion chromatography
+Ion chromatography
+Affinity chromatography
+Immobilized metal affinity chromatography
+Dialysis (biochemistry)
+Ultrafiltration
+Syringe filter
+Filter paper
+Büchner funnel
+Separatory funnel
+Burette
+Volumetric flask
+Erlenmeyer flask
+Beaker (laboratory equipment)
+Graduated cylinder
+Cuvette
+Petri dish
+Test tube
+Laboratory glassware
+Cryogenic storage dewar
+Ultra-low temperature freezer
+Laboratory oven
+Muffle furnace
+Tube furnace
+Ball mill
+Spin coating
+Tape casting
+Sputter deposition
+Chemical vapor deposition
+Atomic layer deposition
+Potentiostat
+Thermogravimetric analysis
+Differential scanning calorimetry
+Dynamic light scattering
+Zeta potential
+Contact angle
+Brunauer–Emmett–Teller theory
+Four-terminal sensing
+Van der Pauw method
+Ellipsometry
+Profilometer
+Titration
+Karl Fischer titration
+Melting-point apparatus
+Refractometer
+Polarimeter
+Viscometer
+Rheometer
+Gas cylinder
+Pressure regulator
+Pressure vessel
+Calibration
+Serological pipette
+Dropper
+Wash bottle
+Bunsen burner
+Inoculation loop
+Spectrofluorometer
+Gel electrophoresis
+Agarose gel electrophoresis
+Polyacrylamide gel electrophoresis
+SDS-PAGE
+Isoelectric focusing
+Two-dimensional gel electrophoresis
+Western blot
+Electroblotting
+Capillary electrophoresis
+
+# chemistry
+Acetonitrile
+Methanol
+Ethanol
+Isopropyl alcohol
+Acetone
+Chloroform
+Phenol
+Dimethyl sulfoxide
+Dimethylformamide
+N-Methyl-2-pyrrolidone
+Glycerol
+Hydrochloric acid
+Sodium hydroxide
+Potassium hydroxide
+Sulfuric acid
+Nitric acid
+Acetic acid
+Formic acid
+Trifluoroacetic acid
+Hydrofluoric acid
+Phosphoric acid
+Hydrogen peroxide
+Sodium hypochlorite
+Sodium azide
+2-Mercaptoethanol
+Dithiothreitol
+Iodoacetamide
+Ammonium bicarbonate
+Urea
+Guanidinium chloride
+Ethylenediaminetetraacetic acid
+Tris (buffer)
+Glycine
+HEPES
+MOPS (buffer)
+Phosphate-buffered saline
+Tris-buffered saline
+Buffer solution
+Sodium dodecyl sulfate
+Tween 20
+Triton X-100
+Acrylamide
+N,N'-Methylenebisacrylamide
+Polyacrylamide
+Ammonium persulfate
+Tetramethylethylenediamine
+Coomassie brilliant blue
+Silver staining
+Ponceau S
+Bromophenol blue
+Ethidium bromide
+SYBR Green I
+DAPI
+Agarose
+Sodium chloride
+Potassium chloride
+Magnesium chloride
+Calcium chloride
+Ammonium sulfate
+Sodium bicarbonate
+Imidazole
+Isopropyl β-D-1-thiogalactopyranoside
+X-gal
+Ampicillin
+Kanamycin
+Chloramphenicol
+Paraformaldehyde
+Formaldehyde
+Glutaraldehyde
+Xylene
+Toluene
+Benzene
+Hexane
+Cyclohexane
+Tetrahydrofuran
+Dichloromethane
+Ethyl acetate
+Diethyl ether
+1,4-Dioxane
+Pyridine
+Piranha solution
+Aqua regia
+Lithium aluminium hydride
+Sodium borohydride
+Potassium permanganate
+Silver nitrate
+Osmium tetroxide
+Liquid nitrogen
+Dry ice
+Argon
+Nitrogen
+Hydrogen
+Oxygen
+Carbon dioxide
+Carbon monoxide
+Solvent
+Polar aprotic solvent
+Molarity
+Molality
+Mass concentration (chemistry)
+Serial dilution
+Dilution (equation)
+Solubility
+Supersaturation
+Precipitation (chemistry)
+Recrystallization (chemistry)
+Distillation
+Reflux
+Extraction (chemistry)
+Liquid–liquid extraction
+Filtration
+Drying agent
+Desiccant
+Inert gas
+Air-free technique
+Vacuum distillation
+pH
+pKa
+Acid dissociation constant
+Henderson–Hasselbalch equation
+Beer–Lambert law
+Absorbance
+Limit of detection
+Standard curve
+Calibration curve
+Significant figures
+Measurement uncertainty
+Stoichiometry
+Limiting reagent
+Yield (chemistry)
+Exothermic reaction
+Endothermic reaction
+Catalysis
+Oxidation state
+Redox
+Electronegativity
+Hydrogen bond
+Vapor pressure
+Boiling point
+Melting point
+Density
+Viscosity
+Surface tension
+Hygroscopy
+Deliquescence
+Peroxide
+Organic peroxide
+Pyrophoricity
+Water-reactive substances
+Oxidizing agent
+Reducing agent
+
+# biology
+Polymerase chain reaction
+Primer (molecular biology)
+Reverse transcription polymerase chain reaction
+Real-time polymerase chain reaction
+DNA extraction
+Phenol–chloroform extraction
+Ethanol precipitation
+RNA extraction
+TRIzol
+Plasmid preparation
+Restriction enzyme
+Ligation (molecular biology)
+Transformation (genetics)
+Transfection
+Electroporation
+Competence (biology)
+Cell culture
+Aseptic technique
+Bacterial growth
+Lysogeny broth
+Agar plate
+Streaking (microbiology)
+Colony-forming unit
+Gram stain
+Optical density
+Bradford protein assay
+Bicinchoninic acid assay
+Lowry protein assay
+ELISA
+Immunoprecipitation
+Co-immunoprecipitation
+Immunofluorescence
+Immunohistochemistry
+Chromatin immunoprecipitation
+Northern blot
+Southern blot
+Dot blot
+Protein purification
+Polyhistidine-tag
+Protein precipitation
+Trichloroacetic acid
+DNA sequencing
+Sanger sequencing
+Gel extraction
+Trypsin
+In-gel digestion
+Proteomics
+Peptide mass fingerprinting
+Bottom-up proteomics
+Protein mass spectrometry
+Bovine serum albumin
+Fetal bovine serum
+Penicillin
+Streptomycin
+Trypan blue
+Cell counting
+Cryopreservation
+Mycoplasma
+Contamination
+Cell line
+HeLa
+Escherichia coli
+Lysis
+Lysis buffer
+Sonication
+Cell disruption
+Centrifugation
+Differential centrifugation
+Ultracentrifuge
+Pellet (biology)
+Supernatant
+Denaturation (biochemistry)
+Protein folding
+Enzyme kinetics
+Enzyme assay
+Michaelis–Menten kinetics
+Spectrophotometry
+Fluorescence
+Luciferase
+Green fluorescent protein
+Antibody
+Primary and secondary antibodies
+Blocking (protein)
+Nitrocellulose
+Polyvinylidene fluoride
+Chemiluminescence
+Horseradish peroxidase
+Alkaline phosphatase
+Loading control
+Molecular-weight size marker
+Isoelectric point
+Buffer solution
+
+# materials
+Lithium-ion battery
+Lithium iron phosphate battery
+Lithium cobalt oxide
+Lithium nickel manganese cobalt oxides
+Lithium hexafluorophosphate
+Ethylene carbonate
+Dimethyl carbonate
+Diethyl carbonate
+Propylene carbonate
+Fluoroethylene carbonate
+Vinylene carbonate
+Lithium bis(trifluoromethanesulfonyl)imide
+Lithium
+Lithium metal battery
+Graphite
+Silicon
+Solid-state battery
+Sodium-ion battery
+Button cell
+Electrolyte
+Separator (electricity)
+Anode
+Cathode
+Current collector
+Solid electrolyte interphase
+Electrochemical cell
+Galvanic cell
+Electrolytic cell
+Working electrode
+Reference electrode
+Counter electrode
+Standard hydrogen electrode
+Silver chloride electrode
+Saturated calomel electrode
+Cyclic voltammetry
+Electrochemical impedance spectroscopy
+Chronoamperometry
+Linear sweep voltammetry
+Galvanostat
+Nernst equation
+Faraday's laws of electrolysis
+Coulombic efficiency
+C-rate
+Depth of discharge
+State of charge
+Thermal runaway
+Dendrite (metal)
+Electrolysis of water
+Fuel cell
+Supercapacitor
+Electrodeposition
+Electroplating
+Corrosion
+Passivation (chemistry)
+Crystal structure
+Bragg's law
+Scherrer equation
+Nanoparticle
+Nanomaterials
+Thin film
+Sol–gel process
+Hydrothermal synthesis
+Solvothermal synthesis
+Calcination
+Sintering
+Annealing (materials science)
+Quenching
+Polymer
+Polyvinylidene fluoride
+Carbon black
+Carbon nanotube
+Graphene
+Titanium dioxide
+Silicon dioxide
+Aluminium oxide
+Zinc oxide
+Perovskite (structure)
+Metal–organic framework
+Zeolite
+Porosity
+Specific surface area
+Particle size analysis
+Sieve analysis
+Hardness
+Tensile testing
+Young's modulus
+Glass transition
+Thermal conductivity
+Electrical resistivity and conductivity
+Semiconductor
+Band gap
+Doping (semiconductor)
+Photolithography
+Cleanroom
+Wafer (electronics)
+Argon
+Glovebox
+
+# safety
+Laboratory safety
+Chemical hazard
+Hazard
+Globally Harmonized System of Classification and Labelling of Chemicals
+GHS hazard statements
+GHS precautionary statements
+GHS hazard pictograms
+Safety data sheet
+Hazard Communication Standard
+NFPA 704
+Hazardous Materials Identification System
+Personal protective equipment
+Medical glove
+Nitrile rubber
+Eye protection
+Goggles
+Face shield
+White coat
+Respirator
+Dust mask
+Eyewash station
+Emergency eyewash and safety shower station
+Fire extinguisher
+Fire class
+Fire blanket
+Flash point
+Autoignition temperature
+Flammability limit
+Flammable liquid
+Combustibility and flammability
+Explosive
+Corrosive substance
+Toxicity
+Acute toxicity
+Chronic toxicity
+Carcinogen
+Mutagen
+Teratogen
+Median lethal dose
+Permissible exposure limit
+Recommended exposure limit
+Threshold limit value
+Immediately dangerous to life or health
+Occupational exposure limit
+Chemical burn
+Hydrofluoric acid burn
+Calcium gluconate
+Frostbite
+Asphyxiant gas
+Oxygen deficiency
+Inhalation
+Dermal absorption
+Ingestion
+Routes of administration
+Hazardous waste
+Sharps waste
+Biomedical waste
+Waste management
+Spill containment
+Absorbent
+Biological hazard
+Biosafety
+Biosafety level
+Biosafety cabinet
+Blood-borne disease
+Needlestick injury
+Decontamination
+Disinfectant
+Antiseptic
+Sterilization (microbiology)
+Ultraviolet germicidal irradiation
+Ultraviolet
+Laser safety
+Radiation protection
+Ionizing radiation
+Electrical injury
+Lockout–tagout
+Static electricity
+Dust explosion
+Implosion
+Compressed air
+Cryogenics
+Risk assessment
+Hierarchy of hazard controls
+Engineering controls
+Administrative controls
+First aid
+Cardiopulmonary resuscitation
+Automated external defibrillator
+Emergency evacuation
+Emergency exit
+Incident report
+Near miss (safety)
+Occupational safety and health
+Occupational Safety and Health Administration
+National Institute for Occupational Safety and Health
+Chemical storage
+Flammable liquid storage cabinet
+Fume hood
+Ventilation (architecture)
+Thermal runaway
+Peroxide-forming compound
+Chemical incompatibility
+Mixing of chemicals
+Ergonomics
+Hearing protection
