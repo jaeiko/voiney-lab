@@ -156,11 +156,18 @@ generation is cancelled and its audio cleared (barge-in).
    The screen text is not cut. The greeting, timer notices, clarifications
    and the emergency reply are still synthesized whole.
    `server.synthesize` keeps a sentence's audio (`SENTENCE_AUDIO`, bounded
-   by entries and bytes, keyed by provider, model, voice, language and the
-   cleaned sentence) only inside `sentence_audio_kept`: the curated plans
+   by entries and bytes, keyed by the speaking lab's organisation id
+   (`_speaking_organization`, from the request or voice connection's
+   principal; empty with no workspace), provider, model, voice, language and
+   the cleaned sentence) only inside `sentence_audio_kept`: the curated plans
    `_speech_kept` allows (protocol readings and fixed server sentences, not
    records, repeats, answers to questions, model-written speech or the
    experimenter's words) and the greeting. The emergency reply never is.
+   The page keeps every segment one turn played, in order, for "다시
+   들려줘" (`keepReplayableAudio`, at most 120 s; the replay turn's own
+   reply is not kept). A step's Korean begins with its own "N단계: "; the
+   previews, range summary and lab-equipment reading leave that prefix out of
+   `speech_text` only.
 
 The front rules and proposal checks share
 `intent_fences.is_question_or_speculation`: Korean question/speculation
@@ -455,6 +462,16 @@ only. Start failures keep the sheet open with a reason, and a failed
 key-value load stays on its step with retry. Source-check/registration
 blockers remain visible. Settings opens as a sheet over the run; account
 erasure asks for the password again and returns to login on success.
+
+Tablet rules apply only under `(pointer:coarse) and (min-width:721px) and
+(min-height:600px)`: 44 px targets, a two-column landscape run (step |
+timer, figures in a sheet), far-reading and glove tokens (`--read-far-*`,
+`--target-glove`, `--gap-glove`). The start press itself asks for the screen
+wake lock (held while the start is pending, `keepScreenOnForStart`) and
+resumes the playback context (`primeRunStart`); a context the browser still
+holds back shows `#audio-unlock`, and `client.audio_ready` is sent once,
+after that touch. A refused microphone names the device's own setting
+(`micBlockedWords`). Phone and desktop layouts are unchanged.
 
 ## 10. Store-app shell
 
