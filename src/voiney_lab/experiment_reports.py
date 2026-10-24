@@ -774,6 +774,33 @@ class ExperimentReportStore:
             ).fetchone()
         return self.get_report(row[0]) if row else None
 
+    def earlier_reports(
+        self, report_id: str, *, limit: int = 20,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """This record and the runs of the same protocol that started before
+        it, newest first, with their events (lane HELP, decision 2 ②).
+
+        The scope is ``previous_finished_report``'s: the same protocol (any
+        revision), organisation and owner; a run still going counts too. A
+        lab-only record (an organisation and no owner) has none.
+        """
+
+        report = self.get_report(report_id)
+        if report.get("organization_id") is not None and report.get("owner_principal_id") is None:
+            return report, []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT report_id FROM experiment_reports
+                 WHERE protocol_id=? AND started_at<? AND report_id<>?
+                   AND organization_id IS ? AND owner_principal_id IS ?
+                 ORDER BY started_at DESC, report_id DESC LIMIT ?
+                """,
+                (report["protocol_id"], report["started_at"], report["report_id"],
+                 report.get("organization_id"), report.get("owner_principal_id"), int(limit)),
+            ).fetchall()
+        return report, [self.get_report(row[0]) for row in rows]
+
     def save_prose(
         self, report_id: str, *, writer: str, reply: Mapping[str, Any] | None,
         failure: str, event_count: int,
