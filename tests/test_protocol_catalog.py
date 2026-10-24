@@ -718,7 +718,10 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertEqual(projected["state"]["source_filename"], "alpha.pdf")
         self.assertEqual(projected["state"]["source_sha256"], approved.source_sha256)
         analysis_model.assert_not_called()
-        self.assertEqual(store_handle.close.call_count, 2)
+        # Lane EASY, decision 2 (2026-10-24): the start also reads the person's
+        # values for today from the catalog (_start_run_changes) -- one more
+        # worker-opened store, closed like the selection's and the check's.
+        self.assertEqual(store_handle.close.call_count, 3)
 
 
 class CandidateDevelopmentBootstrapTests(unittest.TestCase):
