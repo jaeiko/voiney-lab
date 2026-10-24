@@ -190,13 +190,13 @@ class TierSearchTests(unittest.TestCase):
         hit = KnowledgeHit("protocol", "1단계", "line", "p.1")
         found = asyncio.run(search_tiers(
             [Source("protocol", hits=(hit,)),
-             Source("public", raise_=KnowledgeUnavailable("VOINEY_LAB_PUBLIC_KNOWLEDGE_PROVIDER")),
+             Source("public", raise_=KnowledgeUnavailable("PUBLIC_SOURCE_SETTING")),
              Source("history", raise_=RuntimeError("boom")),
              Source("lab", delay=0.5)],
             "q", context=KnowledgeContext(None, None, "p", None, None), timeout_seconds=0.05,
         ))
         self.assertEqual(found.hits, (hit,))
-        self.assertEqual(found.unavailable, ("VOINEY_LAB_PUBLIC_KNOWLEDGE_PROVIDER",))
+        self.assertEqual(found.unavailable, ("PUBLIC_SOURCE_SETTING",))
         self.assertIn("history:RuntimeError", found.failed)
         self.assertIn("lab:TimeoutError", found.failed)
         self.assertEqual(set(found.elapsed_ms), {"protocol", "public", "history", "lab"})
