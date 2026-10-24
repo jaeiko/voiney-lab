@@ -105,8 +105,8 @@ generation is cancelled and its audio cleared (barge-in).
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",
      yes/no to an open question, replies to an endpoint question, time left,
-     "그거", repeat, cancel, completion naming the current step, start, and
-     the rest of the table).
+     "그거", repeat, cancel, completion naming the current step, start, a
+     problem at the bench (`problem_help`), and the rest of the table).
    - Router off (`VOINEY_LAB_LLM_ROUTER_ENABLED`, default false): the rules'
      own route (`route_curated_runtime_turn` → `plan`).
    - Router on: `llm_router.route_turn_with_llm_router` makes one streamed
@@ -324,6 +324,33 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   (`web_explanations`). Each is labelled, checked by the server (numbers,
   safety, state claims removed) and read-only; none can supply a value or a
   safety statement. Web images are proxied same-origin, never hotlinked.
+- Help with a problem (`knowledge.py`, front rule `problem_help`): a problem
+  said or asked at the bench (`intent_arbitration.problem_reading`; label
+  `RequestIntent.TROUBLESHOOTING`) is answered read-only. A problem said as
+  having happened is first recorded as an anomaly (the existing read-back);
+  one asked, or the step's repeat-until state "not yet", is not recorded; the
+  step's own endpoint words and move commands stay with the endpoint readers
+  and the completion gates. The plan carries a `problem_help` marker; the
+  server (`_with_problem_help`) searches the tiers at once
+  (`search_tiers`, 1.5 s each) and puts the help after the reply:
+  ① `ProtocolKnowledge` -- the step ± 1 and its section's notes, expected
+  results, warnings, repeat/branch conditions and unclaimed troubleshooting
+  page lines, the source's words with page and step, said by their checked
+  Korean reading; ② `HistoryKnowledge` -- `ExperimentReportStore.earlier_reports`
+  (same protocol, organisation and owner; a lab-only record has none), the
+  same step's anomalies and observations and what followed them; ③ a public
+  source (`session.public_knowledge`, none in this code) or, with the
+  supplemental role on and no safety category, possible causes
+  (`explain_possible_causes`) said after the answer by `_queue_problem_causes`,
+  which holds ④ the closing sentence (`knowledge.CLOSING`) until then and says
+  ④ alone when ③ is late, fails or fails `possible_cause_violations`. Both
+  searches are in-process SQLite FTS5 over prepared terms (values with units,
+  English stems, Korean words without particles, concept terms joining the
+  two languages); nothing leaves the process. The help is composed from the
+  sources' words and fixed sentences only (`compose_problem_help`, checked by
+  `problem_help_violations`) and recorded as a `problem_help` event with its
+  places, not its text. A source that cannot be used raises
+  `KnowledgeUnavailable` (its setting) and is skipped; none replaces it.
 - Model roles (`model_providers.ROLES`): `router`, `answer`, `translation`,
   `analysis`, `report`, `supplemental`, each with a provider (`xai`,
   `anthropic`, `openai`, `google`), model and reasoning level and no default.

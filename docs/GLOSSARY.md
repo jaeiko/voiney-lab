@@ -63,6 +63,8 @@
 | 다시 물어봐요 | 되묻기 | clarify — `clarify_candidates`, 라우터 먼저의 `clarify` 도구 | "그거"처럼 가리키는 말이 애매할 때 |
 | 원문과 다른 점 | 편차 | `deviation` | 기록 종류 |
 | 이상 사항 | 이상 사항, 이상 | `anomaly` | 기록 종류 |
+| 문제 도움 | 문제 도움 · 도움 | `problem_help` (앞단 규칙·계획 표시·기록 사건), `CuratedProtocolAction.PROBLEM_HELP`, `knowledge.py` | 실험 중 문제에 원문·지난 기록·(켰을 때) AI 일반 지식으로 답하기. 아무것도 바꾸지 않는다 |
+| 지난 기록 | 지난 기록 | `HistoryKnowledge`, `ExperimentReportStore.earlier_reports` | 같은 계정·연구실·프로토콜의 앞선 실험 기록 |
 | 목소리 맞추기 | 목소리 맞추기 | voice calibration — `SpeakerLevelReference` | 내 목소리 크기를 기준으로 삼기 |
 | 다른 사람 말로 보여 듣지 않은 말 | 같음 | `speech.ignored` (`other_speaker_level`) | 기준보다 많이 작은 말 |
 | 시끄러운 곳 모드 | 주변 소리: 시끄러움 | 실험자 설정 `ambient_mode` = `noisy` | 상태를 바꾸는 말과 기록을 한 번 되묻는다 |
