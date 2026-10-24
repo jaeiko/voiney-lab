@@ -100,6 +100,17 @@ assert(lastReplayableAudio===null,"a new session kept the last session's answer"
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_a_new_connection_starts_over_even_when_its_turn_ids_repeat(self) -> None:
+        # Each connection is a new server session: its turn ids and
+        # generations start again, so "9:3" on the next socket is a new turn.
+        result = run_page_script(SETUP + r"""
+await turn(3,[[1,1],[2]]);
+socket=new WS();
+await turn(3,[[7,7]]);
+assert(same(values(lastReplayableAudio),[7,7]),`the next connection's turn was added to the last one: ${values(lastReplayableAudio)}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_the_kept_sound_stops_at_its_bound_with_whole_pieces(self) -> None:
         result = run_page_script(SETUP + r"""
 assert(REPLAY_AUDIO_MAX_BYTES===120*16000*2,`the bound is ${REPLAY_AUDIO_MAX_BYTES}`);
