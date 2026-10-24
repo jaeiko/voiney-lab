@@ -159,7 +159,7 @@ assert(startTitle()==="새 실험 시작",`unrunnable pick: ${startTitle()}`);
     def test_a_check_already_read_starts_at_once_and_a_saved_experiment_continues(self) -> None:
         result = run(r"""
 let started=0;startReviewedProtocol=async()=>{started+=1;};
-await boot([["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
+await boot([["/start-check/changes",call=>call.method==="POST"?{change_set_id:"run-changes-"+"1".repeat(24),source:"wizard",changes:[]}:{values:[],target:{kind:"analysis"}}],["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
 go("#/experiment");
 pickProtocolFromList("p-1");await settle(8);
 openStartForProtocol("p-1");await settle(8);
@@ -167,6 +167,8 @@ assert(wizard.step==="safety",`the sheet is not at the safety check: ${wizard.st
 primary().dispatch("click");await settle(4);
 // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" now follows the safety check.
 assert(wizard.step==="changes"&&wizard.checkedProtocolId==="p-1",`the read safety check was not remembered: ${wizard.step} ${wizard.checkedProtocolId}`);
+// Human decision 2026-10-24: the card starts at once only after that step was passed too.
+primary().dispatch("click");await settle(8);
 closeWizardSheet();
 assert(node("experiment-start-sub").textContent.includes("바로 시작"),node("experiment-start-sub").textContent);
 node("experiment-start-open").dispatch("click");await settle(8);

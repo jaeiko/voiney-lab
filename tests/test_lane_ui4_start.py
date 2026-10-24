@@ -87,13 +87,15 @@ assert(wizard.open===false&&tab()==="experiment",`${wizard.open} ${tab()}`);
 
     def test_the_tabs_card_says_why_through_the_sheet(self) -> None:
         result = run_start(r"""
-await boot([["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
+await boot([["/start-check/changes",call=>call.method==="POST"?{change_set_id:"run-changes-"+"1".repeat(24),source:"wizard",changes:[]}:{values:[],target:{kind:"analysis"}}],["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
 go("#/experiment");
 pickProtocolFromList("p-1");await settle(8);
 openStartForProtocol("p-1");await settle(10);
 primary().dispatch("click");await settle(6);
 // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" now follows the safety check.
 assert(wizard.step==="changes"&&wizard.checkedProtocolId==="p-1",`not read: ${wizard.step}`);
+// Human decision 2026-10-24: the card starts at once only after that step was passed too.
+primary().dispatch("click");await settle(8);
 closeWizardSheet();
 isRegisteringProtocol=true;
 node("experiment-start-open").dispatch("click");await settle(8);

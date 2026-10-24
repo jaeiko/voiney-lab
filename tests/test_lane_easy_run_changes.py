@@ -53,6 +53,9 @@ from voiney_lab.start_check import (
 )
 
 
+STALE_ID = "run-changes-" + "a" * 24
+
+
 def timed_session(confirm_mode: str = "readback"):
     """The agitation protocol at step 1 (15 min · 37°C · 800 rpm), its timer 15 min."""
 
@@ -141,42 +144,42 @@ class TheWizardsChoiceTests(_CatalogCase):
         self.assertEqual(event["actor_principal_id"], principal)
         self.assertEqual(event["target"]["kind"], "analysis")
         self.assertEqual(event["revision_id"], self.options["revision_id"])
-        set_id, changes = self.changes.for_start(
-            self.protocol_id, actor_principal_id=principal, revision_id=self.options["revision_id"])
-        self.assertEqual(set_id, chosen["change_set_id"])
+        # Decision of 2026-10-24: a start finds a choice by the id it names, never by time.
+        set_id = chosen["change_set_id"]
+        revisions = (self.options["revision_id"],)
+        changes = self.changes.for_start(
+            self.protocol_id, set_id, actor_principal_id=principal, revision_ids=revisions)
         self.assertEqual([change.number for change in changes], ["20"])
         # Another account, or another revision, gets nothing of it.
-        self.assertEqual(self.changes.for_start(
-            self.protocol_id, actor_principal_id="person-b", revision_id=self.options["revision_id"]), (None, ()))
-        self.assertEqual(self.changes.for_start(
-            self.protocol_id, actor_principal_id=principal, revision_id="other-revision"), (None, ()))
+        for actor, named in (("person-b", revisions), (principal, ("other-revision",))):
+            with self.subTest(actor=actor, revisions=named), self.assertRaises(RunChangeError) as caught:
+                self.changes.for_start(self.protocol_id, set_id, actor_principal_id=actor, revision_ids=named)
+            self.assertEqual(caught.exception.code, "run_changes_stale")
         self.changes.mark_applied(self.protocol_id, set_id, experiment_session_id="exp-1",
                                   actor_principal_id=principal)
-        self.assertEqual(self.changes.for_start(
-            self.protocol_id, actor_principal_id=principal, revision_id=self.options["revision_id"]), (None, ()))
+        with self.assertRaises(RunChangeError):
+            self.changes.for_start(self.protocol_id, set_id, actor_principal_id=principal, revision_ids=revisions)
         self.assertEqual([change.number for change in self.changes.applied_to(self.protocol_id, "exp-1")], ["20"])
         self.assertEqual(len(self.events(RUN_CHANGES_APPLIED_EVENT)), 1)
 
-    def test_a_choice_older_than_today_is_never_applied(self) -> None:
-        chosen = self.changes.choose(
-            self.protocol_id, [{"item_id": self.item("2", "time"), "value": "20분"}],
-            target=self.options["target"], actor_principal_id="person-a")
-        later = datetime.now(timezone.utc) + timedelta(hours=13)
-        self.assertEqual(self.changes.for_start(
-            self.protocol_id, actor_principal_id="person-a", revision_id=self.options["revision_id"],
-            now=later), (None, ()))
-        self.assertEqual(self.changes.for_start(
-            self.protocol_id, actor_principal_id="person-a", revision_id=self.options["revision_id"],
-            now=datetime.now(timezone.utc) + timedelta(hours=11))[0], chosen["change_set_id"])
+    def test_a_choice_is_used_only_by_the_start_that_names_it(self) -> None:
+        # Replaces the 12-hour rule (removed by the decision of 2026-10-24):
+        # an unknown id is refused, and no other choice is looked up for it.
+        self.changes.choose(self.protocol_id, [{"item_id": self.item("2", "time"), "value": "20분"}],
+                            target=self.options["target"], actor_principal_id="person-a")
+        with self.assertRaises(RunChangeError) as caught:
+            self.changes.for_start(self.protocol_id, "run-changes-" + "0" * 24, actor_principal_id="person-a",
+                                   revision_ids=(self.options["revision_id"],))
+        self.assertEqual(caught.exception.code, "run_changes_stale")
 
     def test_skipping_the_step_is_a_choice_that_changes_nothing(self) -> None:
         self.changes.choose(self.protocol_id, [{"item_id": self.item("2", "time"), "value": "20분"}],
                             target=self.options["target"], actor_principal_id="person-a")
         skipped = self.changes.choose(self.protocol_id, [], target=self.options["target"],
                                       actor_principal_id="person-a")
-        set_id, changes = self.changes.for_start(
-            self.protocol_id, actor_principal_id="person-a", revision_id=self.options["revision_id"])
-        self.assertEqual((set_id, changes), (skipped["change_set_id"], ()))
+        self.assertEqual(self.changes.for_start(
+            self.protocol_id, skipped["change_set_id"], actor_principal_id="person-a",
+            revision_ids=(self.options["revision_id"],)), ())
 
     def test_a_wrong_kind_an_unknown_item_or_a_stale_target_is_refused_with_its_sentence(self) -> None:
         cases = (
@@ -435,7 +438,7 @@ class TheStartAppliesTheChoiceTests(_CatalogCase):
         self.fixture = self.catalog.load_executable_fixture(self.protocol_id)
         self.principal = development_principal()
 
-    def start_socket(self):
+    def start_socket(self, run_change_set_id=None):
         placeholder = Path("/tmp/offline-easy")
         config = server.ServerConfig(placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
                                      placeholder, placeholder, placeholder)
@@ -449,8 +452,11 @@ class TheStartAppliesTheChoiceTests(_CatalogCase):
             token = server._REQUEST_PRINCIPAL.set(self.principal)
             try:
                 task = asyncio.create_task(server.voice_socket(socket))
-                socket.control({"type": "session.start", "configuration_id": 1, "mode": "cascade",
-                                "language": "ko", "protocol_id": self.protocol_id})
+                control = {"type": "session.start", "configuration_id": 1, "mode": "cascade",
+                           "language": "ko", "protocol_id": self.protocol_id}
+                if run_change_set_id is not None:
+                    control["run_change_set_id"] = run_change_set_id
+                socket.control(control)
                 result = await socket.wait_for(lambda e: e["type"] in {
                     "session.ready", "session.configuration_required", "error"})
                 socket.disconnect()
@@ -481,26 +487,29 @@ class TheStartAppliesTheChoiceTests(_CatalogCase):
         options = changes.options(self.protocol_id)
         item = next(value["item_id"] for value in options["values"]
                     if value["step_label"] == "2" and value["kind"] == "time")
-        changes.choose(self.protocol_id, [{"item_id": item, "value": "20분"}], target=options["target"],
-                       actor_principal_id=self.principal.principal_id)
-        result, sent = self.start_socket()
+        chosen = changes.choose(self.protocol_id, [{"item_id": item, "value": "20분"}], target=options["target"],
+                                actor_principal_id=self.principal.principal_id)
+        # Decision of 2026-10-24: the start names the choice it uses.
+        result, sent = self.start_socket(chosen["change_set_id"])
         self.assertEqual(result["type"], "session.ready")
         self.assertEqual([change["words_ko"] for change in self.attached_state(sent).get("run_changes", [])],
                          ["20분(오늘 바꾼 값 · 원문 10분)"])
         (applied,) = self.events(RUN_CHANGES_APPLIED_EVENT)
         self.assertTrue(applied["experiment_session_id"])
-        # The next start has nothing left to apply.
-        _, again = self.start_socket()
-        self.assertEqual(self.attached_state(again).get("run_changes"), [])
+        # The same choice is not used twice; a start naming none (start check off) gets none.
+        again, _ = self.start_socket(chosen["change_set_id"])
+        self.assertEqual(again["reason"], "run_changes_stale")
+        _, plain = self.start_socket()
+        self.assertEqual(self.attached_state(plain).get("run_changes"), [])
 
     def test_a_choice_whose_value_is_no_longer_the_fixtures_refuses_the_start(self) -> None:
         stale = RunChange("s2#1", "s2", "2", "time", "99", "min", "99 min", "20", "min").public_dict()
         revision = self.catalog._latest_protocol_revision(self.protocol_id)  # noqa: SLF001
-        self.store.append_event("run-changes-stale", self.protocol_id, revision.revision_number, RUN_CHANGES_EVENT, {
-            "change_set_id": "run-changes-stale", "actor_principal_id": self.principal.principal_id,
+        self.store.append_event(STALE_ID, self.protocol_id, revision.revision_number, RUN_CHANGES_EVENT, {
+            "change_set_id": STALE_ID, "actor_principal_id": self.principal.principal_id,
             "revision_id": self.fixture.revision_id, "changes": [stale], "target": {},
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-        result, _ = self.start_socket()
+        result, _ = self.start_socket(STALE_ID)
         self.assertEqual(result["type"], "session.configuration_required")
         self.assertEqual(result["reason"], "run_changes_stale")
         self.assertTrue(result["message_ko"])
@@ -524,16 +533,16 @@ class TheConfiguredFixturesStartTests(_CatalogCase):
         changes = RunChanges(self.catalog)
         options = changes.options(self.protocol_id)
         item = next(value["item_id"] for value in options["values"] if value["kind"] == "time")
-        changes.choose(self.protocol_id, [{"item_id": item, "value": "20분"}], target=options["target"],
-                       actor_principal_id="person-a")
+        chosen = changes.choose(self.protocol_id, [{"item_id": item, "value": "20분"}], target=options["target"],
+                                actor_principal_id="person-a")
         configured = replace(self.fixture, revision_id="fixture-0123456789abcdef0123")
         with patch.object(server, "_open_protocol_catalog", side_effect=self.open_catalog), \
                 patch.object(server, "_start_check_principal_id", return_value="person-a"), \
                 patch.dict("os.environ", {"VOINEY_LAB_PROTOCOL_ENABLED": "true",
                                           "VOINEY_LAB_PROTOCOL_DATA_DIR": str(self.settings.data_dir)}):
-            (set_id, found), stale = server._start_run_changes(
-                self.protocol_id, configured.revision_id, configured)
-        self.assertFalse(stale)
+            (set_id, found), refused = server._start_run_changes(
+                self.protocol_id, configured.revision_id, configured, chosen["change_set_id"])
+        self.assertIsNone(refused)
         self.assertIsNotNone(set_id)
         self.assertEqual([change.shown for change in found], ["20분"])
 

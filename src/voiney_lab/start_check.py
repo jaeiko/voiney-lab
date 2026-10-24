@@ -560,7 +560,9 @@ class StartCheck:
 # Human decision of 2026-10-24 (after the first PR): a new value below half or
 # above twice the source's is asked about once before it applies, whatever
 # confirm_mode says (``run_change_is_large``) -- by voice, and in the wizard,
-# where the choice is refused until the screen confirms it.
+# where the choice is refused until the screen confirms it. Every start passes
+# the step: the start names the choice it uses (``for_start``), and nothing
+# chosen earlier applies on its own.
 
 RUN_CHANGES_EVENT = "protocol_run_changes_chosen"
 RUN_CHANGES_APPLIED_EVENT = "protocol_run_changes_applied"
@@ -569,9 +571,6 @@ RUN_CHANGE_KIND_KO = {"time": "시간", "temperature": "온도", "speed": "속�
                       "concentration": "농도"}
 TODAY_MARK_KO = "오늘 바꾼 값"
 RUN_CHANGE_LIMIT = 12
-#: A choice older than this is not today's: a start never applies it (a sheet
-#: closed yesterday without a start leaves nothing for today's run).
-RUN_CHANGE_MAX_AGE_SECONDS = 12 * 3600
 #: A new value below 1/LARGE or above LARGE times the source's is asked first.
 RUN_CHANGE_LARGE_FACTOR = 2.0
 _KIND_OBJECT_KO = {"time": "시간을", "temperature": "온도를", "speed": "속도를", "volume": "부피를",
@@ -1040,35 +1039,34 @@ class RunChanges:
         return {"change_set_id": change_set_id, "changes": payload["changes"], "source": source}
 
     def for_start(
-        self, protocol_id: str, *, actor_principal_id: str | None, revision_id: str | None,
-        now: datetime | None = None,
-    ) -> tuple[str | None, tuple[RunChange, ...]]:
-        """The person's latest choice on the run's revision that no start used
-        yet, made within ``RUN_CHANGE_MAX_AGE_SECONDS``."""
+        self, protocol_id: str, change_set_id: str, *, actor_principal_id: str | None,
+        revision_ids: Sequence[str | None],
+    ) -> tuple[RunChange, ...]:
+        """The values of the choice a start names, or ``run_changes_stale``.
 
-        if actor_principal_id is None or revision_id is None:
-            return None, ()
+        The choice must be this person's, made on one of ``revision_ids`` (the
+        revision about to run, or the catalog entry's the wizard read), and not
+        used by an earlier start. Nothing is looked up by time: a start that
+        names no choice gets none (decision of 2026-10-24).
+        """
+
+        stale = RunChangeError("run_changes_stale", "오늘 바꾼 값이 지금 분석과 맞지 않아요. 시작 화면에서 다시 골라 주세요.")
+        if actor_principal_id is None:
+            raise stale
         events = self.catalog.store.list_events(protocol_id)
-        used = {str((event.payload or {}).get("change_set_id")) for event in events
-                if event.event_type == RUN_CHANGES_APPLIED_EVENT}
-        latest = next((event.payload for event in reversed(events)
+        if any(event.event_type == RUN_CHANGES_APPLIED_EVENT
+               and str((event.payload or {}).get("change_set_id")) == change_set_id for event in events):
+            raise stale
+        chosen = next((event.payload for event in events
                        if event.event_type == RUN_CHANGES_EVENT
-                       and (event.payload or {}).get("actor_principal_id") == actor_principal_id
-                       and (event.payload or {}).get("revision_id") == revision_id), None)
-        if latest is None or str(latest.get("change_set_id")) in used:
-            return None, ()
+                       and str((event.payload or {}).get("change_set_id")) == change_set_id), None)
+        if (chosen is None or chosen.get("actor_principal_id") != actor_principal_id
+                or chosen.get("revision_id") not in {item for item in revision_ids if item}):
+            raise stale
         try:
-            age = ((now or datetime.now(timezone.utc))
-                   - datetime.fromisoformat(str(latest.get("recorded_at")))).total_seconds()
-        except (TypeError, ValueError):
-            return None, ()
-        if not 0 <= age <= RUN_CHANGE_MAX_AGE_SECONDS:
-            return None, ()
-        try:
-            changes = tuple(RunChange.from_mapping(item) for item in latest.get("changes") or ())
-        except RunChangeError:
-            return None, ()
-        return str(latest["change_set_id"]), changes
+            return tuple(RunChange.from_mapping(item) for item in chosen.get("changes") or ())
+        except RunChangeError as exc:
+            raise stale from exc
 
     def mark_applied(
         self, protocol_id: str, change_set_id: str, *, experiment_session_id: str | None,

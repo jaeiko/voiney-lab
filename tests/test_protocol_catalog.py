@@ -642,6 +642,13 @@ class ProtocolCatalogTests(unittest.TestCase):
             check.answer(approved.protocol_id, question["question_id"], action="accept", actor_principal_id=actor)
         check.acknowledge_safety(approved.protocol_id, target=check.questions(approved.protocol_id)["target"],
                                  actor_principal_id=actor)
+        # Lane EASY (decision of 2026-10-24): the start names its "오늘 원문과
+        # 다르게 할 값" choice ("바꿀 값 없이 다음" here).
+        from voiney_lab.start_check import RunChanges
+        run_changes = RunChanges(self.catalog)
+        change_set_id = run_changes.choose(
+            approved.protocol_id, [], target=run_changes.options(approved.protocol_id)["target"],
+            actor_principal_id=actor)["change_set_id"]
 
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
@@ -668,6 +675,7 @@ class ProtocolCatalogTests(unittest.TestCase):
                                     "language": "ko",
                                     "protocol_id": approved.protocol_id,
                                     "configuration_id": 33,
+                                    "run_change_set_id": change_set_id,
                                 }
                             )
                         },
@@ -718,10 +726,11 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertEqual(projected["state"]["source_filename"], "alpha.pdf")
         self.assertEqual(projected["state"]["source_sha256"], approved.source_sha256)
         analysis_model.assert_not_called()
-        # Lane EASY, decision 2 (2026-10-24): the start also reads the person's
-        # values for today from the catalog (_start_run_changes) -- one more
-        # worker-opened store, closed like the selection's and the check's.
-        self.assertEqual(store_handle.close.call_count, 3)
+        # Lane EASY (decisions of 2026-10-24): the start also reads the choice
+        # it names (_start_run_changes) and marks it used
+        # (_mark_run_changes_applied) -- two more worker-opened stores, closed
+        # like the selection's and the check's.
+        self.assertEqual(store_handle.close.call_count, 4)
 
 
 class CandidateDevelopmentBootstrapTests(unittest.TestCase):

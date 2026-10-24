@@ -3629,7 +3629,9 @@ async function startSession(){
  stopVoicePreview();forgetSafetyRead();
  sessionActive=false;
  acceptedSessionConfiguration=null;
- const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),pending={configuration_id,mode:"cascade",language:"ko",protocol_id:$("protocol-id")?.value||null,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{})};
+ const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),startProtocol=$("protocol-id")?.value||null,changeSetId=!resumeExisting&&changesPassedFor(startProtocol)?wizard.chosenChanges.changeSetId:null,pending={configuration_id,mode:"cascade",language:"ko",protocol_id:startProtocol,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{}),...(changeSetId?{run_change_set_id:changeSetId}:{})};
+ // Lane EASY (human decision 2026-10-24): the choice is the start's own -- the next start passes the step again.
+ if(changeSetId)wizard.chosenChanges=null;
  pendingSessionConfiguration=pending;
  $("session-configuration-status").textContent="서버가 설정을 확인하고 있어요";
  renderState("CONNECTING");
@@ -5232,8 +5234,9 @@ function experimentStartPlan(){
  }
  const entry=wizardSelectedProtocol();
  if(entry?.available_for_execution===true){
-  const checked=safetyReadFor(entry.protocol_id);
-  return {kind:"protocol",protocolId:entry.protocol_id,checked,label:"이 프로토콜로 시작",sub:`${entry.title} · ${checked?"안전 주의를 읽었어요 · 누르면 바로 시작해요":"핵심 값과 안전 주의를 확인하고 시작해요"}`};
+  // Human decision 2026-10-24: at once only when the safety check was read and "오늘 원문과 다르게 할 값" passed.
+  const checked=safetyReadFor(entry.protocol_id)&&changesPassedFor(entry.protocol_id);
+  return {kind:"protocol",protocolId:entry.protocol_id,checked,label:"이 프로토콜로 시작",sub:`${entry.title} · ${checked?"안전 주의와 오늘 바꿀 값을 확인했어요 · 누르면 바로 시작해요":safetyReadFor(entry.protocol_id)?"오늘 원문과 다르게 할 값을 고르고 시작해요":"핵심 값과 안전 주의를 확인하고 시작해요"}`};
  }
  return {kind:"new",label:"새 실험 시작",sub:"마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요"};
 }
@@ -5258,6 +5261,8 @@ async function pressExperimentStart(){
    if(typeof refused==="string"){restPrimedAudio();openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
    navigateTab("experiment",null,{replace:true});return true;
   }
+  // The safety check read, the step not passed: the sheet opens at the step.
+  if(safetyReadFor(plan.protocolId)&&!sessionActive)return openWizardSheet("changes");
   if(openStartForProtocol(plan.protocolId))return true;
   return openWizardSheet("protocol");
  }
@@ -5631,7 +5636,7 @@ async function acknowledgeStartSafety(){
  finally{wizardSetBusy(false);}
 }
 // A start the server refused for the check: its sentence, and the sheet again at the step it names.
-const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null,run_changes_stale:"changes"});
+const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null,run_changes_stale:"changes",run_changes_required:"changes"});
 function returnToStartStep(reason,words){
  forgetSafetyRead();
  const step=START_REFUSAL_STEPS[reason];
@@ -5817,11 +5822,14 @@ async function wizardSubmitChanges(confirmLarge=[]){
   wizard.busy=false;
   if(!response.ok&&payload?.detail?.code==="run_change_large_unconfirmed"&&Array.isArray(payload.detail.large)){wizard.largeConfirm={items:payload.detail.large};wizardNote("");renderWizard();return null;}
   if(!response.ok||!payload){wizardNote(nonemptyText(payload?.detail?.message_ko)?payload.detail.message_ko:"값을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
+  // Human decision 2026-10-24: the start names this choice (session.start run_change_set_id); it is used once.
   wizard.largeConfirm=null;
-  wizard.chosenChanges={protocolId:entry.protocol_id,changes:Array.isArray(payload.changes)?payload.changes:[]};
+  wizard.chosenChanges={protocolId:entry.protocol_id,changeSetId:typeof payload.change_set_id==="string"?payload.change_set_id:null,changes:Array.isArray(payload.changes)?payload.changes:[]};
   wizardNext();return payload;
  }catch(_){wizard.busy=false;wizardNote("서버에 연결할 수 없어요.","error");renderWizard();return null;}
 }
+// Whether "오늘 원문과 다르게 할 값" was passed for this protocol in this sheet and its choice is not yet used.
+function changesPassedFor(protocolId){return Boolean(protocolId)&&wizard?.chosenChanges?.protocolId===protocolId&&nonemptyText(wizard.chosenChanges.changeSetId);}
 function renderRunChanges(changes){
  const list=$("procedure-run-changes");if(!list)return false;
  list.replaceChildren();

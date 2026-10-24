@@ -47,7 +47,7 @@ async function mock(page: Page, { catalog = true } = {}) {
   // safety acknowledgement at start-check/safety; this spec's protocol is a stand-in, so that answer is one too.
   await page.route('**/api/protocols/*/start-check/safety', (route: Route) => route.fulfill({ json: { ready: true, reason: null, target: CHECK.target, missing_question_ids: [], safety_acknowledged: true } }));
   // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" comes after the safety check; this stand-in offers none and keeps the skip.
-  await page.route('**/api/protocols/*/start-check/changes', (route: Route) => route.fulfill({ json: route.request().method() === 'POST' ? { change_set_id: 'run-changes-e2e', source: 'wizard', changes: [] } : { target: CHECK.target, revision_id: 'pdf-1', limit: 12, values: [] } }));
+  await page.route('**/api/protocols/*/start-check/changes', (route: Route) => route.fulfill({ json: route.request().method() === 'POST' ? { change_set_id: 'run-changes-0123456789abcdef01234567', source: 'wizard', changes: [] } : { target: CHECK.target, revision_id: 'pdf-1', limit: 12, values: [] } }));
   await page.route('**/api/protocols/*/review', (route: Route) => route.fulfill({ json: REVIEW }));
   await page.route('**/api/protocols/*/reagent-tables', (route: Route) => route.fulfill({ json: { tables: [] } }));
   await page.route('**/api/protocols/*/analysis/status', (route: Route) => route.fulfill({ json: { state: 'passed', worker_running: false } }));

@@ -5402,41 +5402,52 @@ def _local_day_words(moment:object)->str:
     return f"{when.month}월 {when.day}일"
 
 
+RUN_CHANGES_REFUSAL_KO={
+    "run_changes_required":"오늘 원문과 다르게 할 값 단계를 지나야 시작할 수 있어요. 바꿀 값이 없으면 '바꿀 값 없이 다음'을 눌러 주세요.",
+    "run_changes_stale":"오늘 바꾼 값이 지금 분석과 맞지 않아요. 시작 화면에서 다시 골라 주세요.",
+}
+
+
 def _start_run_changes(
     protocol_id:str,revision_id:str|None,fixture:CuratedProtocolFixture,
-)->tuple[tuple[str|None,tuple[RunChange,...]],bool]:
-    """((change set id, today's values), stale) for a new run's start.
+    change_set_id:str|None=None,
+)->tuple[tuple[str|None,tuple[RunChange,...]],str|None]:
+    """((change set id, today's values), refusal) for a new run's start.
 
-    Lane EASY, decision 2: the person's latest choice on the revision about
-    to run that no start used yet -- or on the catalog entry's revision, which
-    the wizard read: the development fixture runs from its configured file,
-    named "fixture-…", while its catalog copy is "pdf-1-analysis-1". Stale
-    when a value is no longer the fixture's as the source prints it (refused,
-    never applied in part); that check, value by value, is the guard."""
+    Lane EASY (human decisions 2026-10-24): the start names the choice it
+    uses -- the "오늘 원문과 다르게 할 값" step it passed, "바꿀 값 없이 다음"
+    included -- and nothing chosen earlier applies on its own. With the start
+    check on (``VOINEY_LAB_START_CHECK_ENABLED``, the gate family the step
+    joins) a start that names none is refused ``run_changes_required``. The
+    named choice must be this person's, on the revision about to run or on the
+    catalog entry's the wizard read (the development fixture runs from its
+    file, "fixture-…", its catalog copy is "pdf-1-analysis-1"), unused, and
+    every value must still be the fixture's as the source prints it;
+    otherwise ``run_changes_stale``, never applied in part."""
 
     if not _protocol_store_settings().enabled:
-        return (None,()),False
+        return (None,()),None
+    if change_set_id is None:
+        return (None,()),("run_changes_required" if start_check_enabled() else None)
     catalog,store=_open_protocol_catalog()
     try:
-        actor=_start_check_principal_id()
-        changes_store=RunChanges(catalog)
-        change_set_id,changes=changes_store.for_start(
-            protocol_id,actor_principal_id=actor,revision_id=revision_id)
-        if change_set_id is None:
-            try:
-                listed=catalog.get_entry(protocol_id).revision_id
-            except ProtocolCatalogError:
-                listed=None
-            if listed and listed!=revision_id:
-                change_set_id,changes=changes_store.for_start(
-                    protocol_id,actor_principal_id=actor,revision_id=listed)
+        try:
+            listed=catalog.get_entry(protocol_id).revision_id
+        except ProtocolCatalogError:
+            listed=None
+        try:
+            changes=RunChanges(catalog).for_start(
+                protocol_id,change_set_id,actor_principal_id=_start_check_principal_id(),
+                revision_ids=(revision_id,listed))
+        except RunChangeError:
+            return (None,()),"run_changes_stale"
     finally:
         store.close()
     values={value.item_id:value for value in changeable_values(fixture.steps)}
     if any((value:=values.get(change.item_id)) is None or value.number!=change.source_number
            or value.unit!=change.source_unit or value.step_id!=change.step_id for change in changes):
-        return (None,()),True
-    return (change_set_id,changes),False
+        return (None,()),"run_changes_stale"
+    return (change_set_id,changes),None
 
 
 def _mark_run_changes_applied(protocol_id:str,change_set_id:str,experiment_session_id:str|None)->None:
@@ -13888,15 +13899,15 @@ async def voice_socket(websocket:WebSocket):
                     run_change_set:tuple[str|None,tuple[RunChange,...]]=(None,())
                     if selected_curated_fixture is not None and control.get("experiment_session_id") is None:
                         configuration_stage="run_changes"
-                        run_change_set,stale_changes=await asyncio.to_thread(
+                        run_change_set,run_changes_refused=await asyncio.to_thread(
                             _start_run_changes,requested_protocol_id,selected_revision_id,
-                            selected_curated_fixture)
-                        if stale_changes:
+                            selected_curated_fixture,control.get("run_change_set_id"))
+                        if run_changes_refused is not None:
                             await websocket.send_text(event(
                                 "session.configuration_required",configuration_id=configuration_id,
                                 mode=requested_mode,language=context.language,
-                                protocol_id=requested_protocol_id,reason="run_changes_stale",
-                                message_ko="오늘 바꾼 값이 지금 분석과 맞지 않아요. 시작 화면에서 다시 골라 주세요."))
+                                protocol_id=requested_protocol_id,reason=run_changes_refused,
+                                message_ko=RUN_CHANGES_REFUSAL_KO[run_changes_refused]))
                             continue
                     configuration_stage="session_state"
                     session.set_tool_context(context)
