@@ -235,6 +235,8 @@ from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
 from voiney_lab.start_check import StartCheck, StartCheckError, start_check_enabled
 from voiney_lab.accounts import (
+    DEVICE_COOKIE_LIFETIME,
+    DEVICE_COOKIE_NAME,
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
     ACCOUNTS_DATABASE_FILENAME,
@@ -254,6 +256,8 @@ from voiney_lab.accounts import (
     LoginRefusedError,
     PasswordInvalidError,
     bearer_token,
+    device_marker,
+    new_device_marker,
     normalize_origin,
     socket_auth_token,
 )
@@ -765,6 +769,7 @@ def _signed_in_response(request:Request,content:dict[str,Any],token:str,*,status
         })
     response=JSONResponse(status_code=status_code,content=content)
     _set_session_cookie(response,token,request)
+    _ensure_device_cookie(response,request)
     return response
 
 
@@ -793,11 +798,27 @@ def _account_is_admin()->bool:
     return account is not None and account.admin
 
 
-def _request_client(request:Request)->str:
-    """The transport peer; a caller-supplied forwarding header has no authority."""
+# Lane PRE, decision 3 (2026-10-24): the login lock counts by (name, device).
+# Behind the tunnel the peer address is the proxy's, so the device is a random
+# marker the browser keeps in an HttpOnly cookie (accounts.py, "The device a
+# login comes from"); the app's screen, which has no cookie, sends its own in
+# the request body. Without one the request is the one unknown device.
+def _request_device(request:Request,body:dict[str,Any]|None=None)->str|None:
+    """The device marker of this request: the body's from a listed app origin, else the cookie."""
 
-    client=getattr(request,"client",None)
-    return str(getattr(client,"host","") or "")[:200]
+    if _from_app(request.headers):
+        return device_marker((body or {}).get("device"))
+    return device_marker(request.cookies.get(DEVICE_COOKIE_NAME))
+
+
+def _ensure_device_cookie(response:Response,request:Request)->None:
+    """Give a browser without a (well-formed) device marker a new one, for a year."""
+
+    if _from_app(request.headers) or device_marker(request.cookies.get(DEVICE_COOKIE_NAME)):
+        return
+    response.set_cookie(
+        DEVICE_COOKIE_NAME,new_device_marker(),max_age=int(DEVICE_COOKIE_LIFETIME.total_seconds()),
+        httponly=True,samesite="lax",secure=_request_is_secure(request),path="/")
 
 
 def _request_is_secure(request:Request)->bool:
@@ -3454,11 +3475,13 @@ async def get_workspace_session()->dict[str,object]:
 
 
 @app.get("/api/auth/session")
-async def get_auth_session(request:Request)->dict[str,object]:
+async def get_auth_session(request:Request,response:Response)->dict[str,object]:
     """Which door is in use and who is signed in (lane ON, decision ①).
 
     Answered without a session, so the screen can show the login step.
     In dev mode the one development identity is "signed in"; no cookie.
+    In accounts mode a browser without a device marker gets one here, before
+    its first login (lane PRE, decision 3).
     """
 
     auth=_auth_settings()
@@ -3486,6 +3509,7 @@ async def get_auth_session(request:Request)->dict[str,object]:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+    _ensure_device_cookie(response,request)
     return {
         "mode":"accounts","signed_in":account is not None,
         "account":None if account is None else account.public_dict(),
@@ -3534,14 +3558,14 @@ async def post_auth_signup(request:Request,body:dict[str,Any]=Body(...))->Respon
 
 @app.post("/api/auth/login")
 async def post_auth_login(request:Request,body:dict[str,Any]=Body(...))->Response:
-    """Log in by name and password; failures are limited by name and by client."""
+    """Log in by name and password; failures are limited by name on this device, and by name."""
 
     _accounts_only()
     try:
         store=_account_store()
         try:
             account=store.log_in(
-                body.get("name"),body.get("password"),client=_request_client(request))
+                body.get("name"),body.get("password"),device=_request_device(request,body))
             token=store.open_session(account)
         finally:
             store.close()
@@ -3594,7 +3618,7 @@ async def post_auth_password(request:Request,body:dict[str,Any]=Body(...))->dict
         try:
             store.change_password(
                 account.account_id,body.get("current"),body.get("new"),
-                keep_session_token=_session_token(request))
+                keep_session_token=_session_token(request),device=_request_device(request,body))
         finally:
             store.close()
     except Exception as exc:
@@ -3716,7 +3740,7 @@ async def post_auth_delete_account(request:Request,body:dict[str,Any]=Body(...))
         store=_account_store()
         try:
             store.switch_off_for_deletion(
-                account.account_id,body.get("password"),client=_request_client(request))
+                account.account_id,body.get("password"),device=_request_device(request,body))
         finally:
             store.close()
     except LastAdminError:

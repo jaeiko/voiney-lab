@@ -22,9 +22,12 @@ What is kept, and how:
 * an invite as the SHA-256 of its token, with its expiry, the lab it joins
   (``organization_id``), whether the account is an administrator, and its
   entitlement -- one field, ``pilot`` (human decision: no payment is built);
-* failed logins by name and by client, so that ``LOGIN_FAILURE_LIMIT``
-  failures within ``LOGIN_FAILURE_WINDOW`` lock that name (and that client)
-  until the window passes.
+* failed logins by name and by device (lane PRE, decision 3): the browser
+  keeps a random device marker (``DEVICE_COOKIE_NAME``), and
+  ``LOGIN_FAILURE_LIMIT`` failures for a name from one device within
+  ``LOGIN_FAILURE_WINDOW`` lock that name on that device only, while
+  ``LOGIN_NAME_FAILURE_LIMIT`` failures for a name from any devices lock the
+  whole name -- each until the window passes. Both are kept as digests.
 
 An account is the experimenter principal of its lab (``Account.principal``):
 ``identity.Principal`` with ``authentication_method="accounts"``, so the
@@ -64,7 +67,10 @@ ACCOUNTS_SCHEMA_VERSION = 1
 SESSION_COOKIE_NAME = "voiney_session"
 SESSION_LIFETIME = timedelta(days=30)
 LOGIN_FAILURE_LIMIT = 5
+LOGIN_NAME_FAILURE_LIMIT = 30
 LOGIN_FAILURE_WINDOW = timedelta(minutes=15)
+DEVICE_COOKIE_NAME = "voiney_device"
+DEVICE_COOKIE_LIFETIME = timedelta(days=365)
 INVITE_DEFAULT_HOURS = 72
 INVITE_MAX_HOURS = 24 * 365
 ENTITLEMENTS = ("pilot",)
@@ -80,6 +86,9 @@ _SCRYPT_R = 8
 _SCRYPT_P = 1
 _SCRYPT_LENGTH = 32
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
+_DEVICE_MARKER = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
+#: What a failed login without a device marker is kept under: one shared device.
+UNKNOWN_DEVICE = "unknown-device"
 _HEX = re.compile(r"^[0-9a-f]+$")
 
 
@@ -345,6 +354,37 @@ def _attempt_key(key: str) -> str:
     return hashlib.sha256(("login-attempt\0" + key).encode("utf-8")).hexdigest()[:32]
 
 
+# --- The device a login comes from (lane PRE, decision 3, 2026-10-24) -------------
+#
+# The server sits behind a tunnel or a proxy, so the peer address does not tell
+# one device from another, and a lock by name alone let anybody who knew a
+# labmate's name lock them out. A browser therefore keeps a random marker in an
+# HttpOnly cookie (``server.py`` sets it with the first session question, at
+# signup and at login); the app's screen, which has no cookie, sends its own in
+# the login body. The marker is no secret and proves nothing -- it only says
+# which failures belong together; a request without one counts as the one
+# ``UNKNOWN_DEVICE``. The lock keeps a digest of it, never the marker.
+
+
+def new_device_marker() -> str:
+    """A fresh device marker: 32 URL-safe characters."""
+
+    return secrets.token_urlsafe(24)
+
+
+def device_marker(value: object) -> str | None:
+    """The marker when it has a marker's shape, else None (counted as the unknown device)."""
+
+    return value if isinstance(value, str) and _DEVICE_MARKER.fullmatch(value) else None
+
+
+def _device_key(device: object) -> str:
+    marker = device_marker(device)
+    if marker is None:
+        return UNKNOWN_DEVICE
+    return hashlib.sha256(("login-device\0" + marker).encode("utf-8")).hexdigest()[:32]
+
+
 # --- Records --------------------------------------------------------------------
 
 
@@ -408,6 +448,8 @@ class Invite:
         }
 
 
+# ``login_attempts.client`` holds the device's digest (``_device_key``) since lane
+# PRE; it held the peer address before, which the lock never read.
 SCHEMA = """
 CREATE TABLE schema_metadata(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=1)
@@ -671,11 +713,11 @@ class AccountStore:
             raise
         return self.account(account.account_id)
 
-    def switch_off_for_deletion(self, account_id: object, password: object, *, client: str = "") -> Account:
+    def switch_off_for_deletion(self, account_id: object, password: object, *, device: object = None) -> Account:
         """The first step of an account deleting itself (lane FX5, decision 2).
 
         The password is asked again and checked as a login is (a wrong one
-        counts toward the lock). Then, in one transaction, the lab's last
+        counts toward this device's lock). Then, in one transaction, the lab's last
         active administrator is refused and every other account is switched
         off with its sessions -- so two administrators leaving at once cannot
         both be the one who was not last.
@@ -684,7 +726,7 @@ class AccountStore:
         account = self.account(account_id)
         if not isinstance(password, str) or not password:
             raise PasswordInvalidError("The password is needed again to delete the account.")
-        self.log_in(account.name, password, client=client)
+        self.log_in(account.name, password, device=device)
         now = self._stamp(self._now())
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -727,65 +769,81 @@ class AccountStore:
 
     # --- logging in ----------------------------------------------------------------
 
-    def _failures(self, key_column: str, value: str, since: datetime) -> int:
-        return int(self._connection.execute(
-            f"SELECT COUNT(*) FROM login_attempts WHERE {key_column}=? AND failed_at>?",
-            (value, self._stamp(since))).fetchone()[0])
+    def _failure_times(self, name_value: str, device_value: str | None, since: datetime) -> list[datetime]:
+        if device_value is None:
+            rows = self._connection.execute(
+                "SELECT failed_at FROM login_attempts WHERE name_key=? AND failed_at>? ORDER BY failed_at",
+                (name_value, self._stamp(since))).fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT failed_at FROM login_attempts WHERE name_key=? AND client=? AND failed_at>? ORDER BY failed_at",
+                (name_value, device_value, self._stamp(since))).fetchall()
+        return [self._parse(row[0]) for row in rows]
 
-    def _oldest_failure(self, key_column: str, value: str, since: datetime) -> datetime | None:
-        row = self._connection.execute(
-            f"SELECT MIN(failed_at) FROM login_attempts WHERE {key_column}=? AND failed_at>?",
-            (value, self._stamp(since))).fetchone()
-        return None if row is None or row[0] is None else self._parse(row[0])
+    def _check_lock(self, key: str, device: str) -> None:
+        """Refuse while this name is locked on this device, or everywhere."""
 
-    def _check_lock(self, key: str, client: str) -> None:
         now = self._now()
         since = now - LOGIN_FAILURE_WINDOW
         # Failures past the window count for nothing; they are not kept either.
         self._connection.execute("DELETE FROM login_attempts WHERE failed_at<=?", (self._stamp(since),))
         self._connection.commit()
-        for column, value in (("name_key", _attempt_key(key)),):
-            if value and self._failures(column, value, since) >= LOGIN_FAILURE_LIMIT:
-                oldest = self._oldest_failure(column, value, since) or now
-                remaining = (oldest + LOGIN_FAILURE_WINDOW) - now
-                raise LoginLockedError(
-                    "Too many failed logins; wait.",
-                    retry_after_seconds=max(1, math.ceil(remaining.total_seconds())))
+        name_value = _attempt_key(key)
+        waits = []
+        for limit, device_value in ((LOGIN_FAILURE_LIMIT, device), (LOGIN_NAME_FAILURE_LIMIT, None)):
+            times = self._failure_times(name_value, device_value, since)
+            if len(times) >= limit:
+                # Locked until the failure that keeps the count at the limit leaves the window.
+                waits.append(times[len(times) - limit] + LOGIN_FAILURE_WINDOW - now)
+        if waits:
+            raise LoginLockedError(
+                "Too many failed logins; wait.",
+                retry_after_seconds=max(1, math.ceil(max(waits).total_seconds())))
 
-    def _record_failure(self, key: str, client: str) -> None:
+    def _record_failure(self, key: str, device: str) -> None:
         now = self._now()
         self._connection.execute(
             "INSERT INTO login_attempts(name_key,client,failed_at) VALUES(?,?,?)",
-            (_attempt_key(key), client, self._stamp(now)))
+            (_attempt_key(key), device, self._stamp(now)))
         self._connection.execute(
             "DELETE FROM login_attempts WHERE failed_at<=?", (self._stamp(now - LOGIN_FAILURE_WINDOW),))
         self._connection.commit()
 
-    def log_in(self, name: object, password: object, *, client: str = "") -> Account:
-        """The account of a name and password, or one of three refusals."""
+    def log_in(self, name: object, password: object, *, device: object = None) -> Account:
+        """The account of a name and password, or one of three refusals.
+
+        ``device`` is the device marker the request carried (None or a
+        malformed one: the unknown device); the lock counts by it.
+        """
 
         key = name_key(name)
-        client = " ".join(str(client or "").split())[:200]
-        self._check_lock(key, client)
+        device_value = _device_key(device)
+        self._check_lock(key, device_value)
         row = self._connection.execute("SELECT * FROM accounts WHERE name_key=?", (key,)).fetchone()
         stored = row["password_hash"] if row is not None else _DUMMY_HASH
         if not verify_password(str(password if password is not None else ""), stored) or row is None:
-            self._record_failure(key, client)
+            self._record_failure(key, device_value)
             raise LoginRefusedError("The name or the password is wrong.")
         account = self._account(row)
         if account.disabled:
             raise AccountDisabledError("The account is switched off.")
-        self._connection.execute("DELETE FROM login_attempts WHERE name_key=?", (_attempt_key(key),))
+        # Only this device's failures are forgiven: another device's guesses still count.
+        self._connection.execute(
+            "DELETE FROM login_attempts WHERE name_key=? AND client=?", (_attempt_key(key), device_value))
         self._connection.commit()
         return account
 
     def change_password(
         self, account_id: object, current: object, new: object, *, keep_session_token: str | None = None,
+        device: object = None,
     ) -> None:
-        """Set a new password after the current one; every other session ends."""
+        """Set a new password after the current one; every other session ends.
+
+        The current password is checked as a login from ``device`` is.
+        """
 
         account = self.account(account_id)
-        self.log_in(account.name, current)
+        self.log_in(account.name, current, device=device)
         secret = _checked_password(new)
         now = self._stamp(self._now())
         self._connection.execute("BEGIN IMMEDIATE")

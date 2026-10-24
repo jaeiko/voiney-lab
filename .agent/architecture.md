@@ -380,8 +380,12 @@ record, without granting execution. Other-lab/unauthorized reports appear
 absent. The full permission matrix is in `.agent/security_rules.md`.
 Previous-run comparisons, start-check answers and daily run numbers are scoped
 to the same owner, lab and protocol; unknown owners receive no guessed number.
-Login and current-password failures lock the normalized name after five
-failures in fifteen minutes, without locking other names on the same network.
+Login and current-password failures are counted by (normalized name, device):
+five failures in fifteen minutes lock that name on that device, thirty from
+any devices lock the whole name, each for fifteen minutes. The device is a
+random HttpOnly cookie (`voiney_device`, one year) the browser receives with
+`/api/auth/session`; a listed app origin sends it in the request body; a
+request without one is the one unknown device. Only digests are stored.
 Logout, password change, disable and deletion close all that account's open
 voice sockets; the HTTP session scope still follows the account operation.
 Account erasure drains in-flight voice report writes before inventory/deletion

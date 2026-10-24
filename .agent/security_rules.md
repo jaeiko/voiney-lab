@@ -63,8 +63,8 @@ they are not production identity and access management.
 2. Passwords are scrypt hashes; session and invite tokens are stored as
    SHA-256 hashes (`accounts.py`). Invite tokens are removed from the access
    log line, `/api/auth/*` validation errors do not echo the input, and a
-   failed login's name is kept only as a short hash for the 15-minute lock
-   window.
+   failed login's name and device marker are kept only as short hashes for
+   the 15-minute lock window.
 3. The admin token is compared with constant-time digests
    (`hmac.compare_digest`). The admin metrics page keeps a typed token in the
    page's memory only and sends it as a header; an admin account needs none
@@ -100,10 +100,16 @@ they are not production identity and access management.
    cookies, auth or proxy settings carried, the same size limits as upload,
    format judged from the bytes (`protocol_link_import.py`).
 3. **Accounts**: invite-only sign-up; HttpOnly, SameSite=Lax cookie, Secure
-   over HTTPS; login lock after 5 failures in 15 minutes per normalized name,
-   including current-password verification. Shared client addresses do not lock
-   other accounts, and changing `X-Forwarded-For` cannot bypass a name lock. App origins in
-   `VOINEY_LAB_APP_ORIGINS` may use a bearer token.
+   over HTTPS; login lock per (normalized name, device): 5 failures in 15
+   minutes lock that name on that device, 30 failures in 15 minutes from any
+   devices lock the whole name, each for 15 minutes, including
+   current-password verification. The device is a random marker in an
+   HttpOnly, SameSite=Lax cookie (`voiney_device`, Secure over HTTPS, one
+   year); it is not a credential and proves nothing, so a missing or
+   malformed one counts as the one unknown device and the per-name limit
+   bounds guessing from many devices. Client addresses and `X-Forwarded-For`
+   play no part. App origins in `VOINEY_LAB_APP_ORIGINS` may use a bearer
+   token and send their marker as `device` in the request body.
 4. Cookie-authenticated browser writes with an Origin require the server's
    origin (scheme, host
    and effective port). Cross-origin cookie writes are rejected, including
