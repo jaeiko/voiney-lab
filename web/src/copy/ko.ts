@@ -70,6 +70,7 @@ export const states = {
   loading: "불러오는 중…",
   reload: "다시 불러오기",
   protocolsFailed: "프로토콜 목록을 불러오지 못했어요.",
+  appFailed: "화면을 불러오지 못했어요. 잠시 뒤 다시 해 주세요.",
   handoff: "지금 화면으로 넘어가요…",
 } as const;
 

@@ -3,7 +3,7 @@ import { useAuthSession } from "./api/queries";
 import { AppFrame } from "./components/AppFrame";
 import { ErrorBox, LoadingBox } from "./components/Pieces";
 import { Logo } from "./components/Logo";
-import { auth, frame } from "./copy/ko";
+import { auth, frame, states } from "./copy/ko";
 import { useHashRoute } from "./lib/useHashRoute";
 import { HandoffScreen } from "./screens/HandoffScreen";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -40,7 +40,8 @@ export function App() {
     );
   }
   if (session.isError) {
-    const message = session.error instanceof ApiError && session.error.code !== "network" ? auth.errors.unknown : auth.errors.network;
+    // The session route failed: no network at all, or the app itself is not ready (a 503 by a setting's name).
+    const message = session.error instanceof ApiError && session.error.code !== "network" ? states.appFailed : auth.errors.network;
     return (
       <Centered>
         <ErrorBox message={message} onRetry={() => void session.refetch()} />

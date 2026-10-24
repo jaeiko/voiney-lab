@@ -99,6 +99,12 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "로그인하기" })).toBeInTheDocument();
   });
 
+  it("an app that is not ready (a 503 on the session route) says so, not 'login failed'", async () => {
+    fakeFetch({ "/api/auth/session": { status: 503, json: { detail: "configuration_invalid" } } });
+    renderWithClient(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("화면을 불러오지 못했어요. 잠시 뒤 다시 해 주세요.");
+  });
+
   it("a server that cannot be reached says so and offers a retry", async () => {
     fakeFetch({ "/api/auth/session": new TypeError("Failed to fetch") });
     renderWithClient(<App />);
