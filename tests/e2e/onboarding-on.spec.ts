@@ -69,6 +69,8 @@ async function mock(page: Page) {
   // Lane IA (2026-10-22): since lane SAFE (#115) the server keeps the start and the sheet's [읽었어요] leaves the
   // safety acknowledgement at start-check/safety; this spec's protocol is a stand-in, so that answer is one too.
   await page.route('**/api/protocols/p-on-1/start-check/safety', (route: Route) => route.fulfill({ json: { ready: true, reason: null, target: CHECK.target, missing_question_ids: [], safety_acknowledged: true } }));
+  // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" comes after the safety check; this stand-in offers none and keeps the skip.
+  await page.route('**/api/protocols/p-on-1/start-check/changes', (route: Route) => route.fulfill({ json: route.request().method() === 'POST' ? { change_set_id: 'run-changes-0123456789abcdef01234567', source: 'wizard', changes: [] } : { protocol_id: 'p-on-1', target: CHECK.target, revision_id: 'pdf-1', limit: 12, values: [] } }));
   await page.route('**/api/protocols/p-on-1/review', (route: Route) => route.fulfill({ json: REVIEW }));
   await page.route('**/api/protocols/p-on-1/reagent-tables', (route: Route) => route.fulfill({ json: { tables: [] } }));
   await page.route('**/api/protocols/p-on-1/analysis/status', (route: Route) => route.fulfill({ json: { state: 'passed', worker_running: false } }));
@@ -95,7 +97,8 @@ test.describe('Start wizard (lane ON)', () => {
     await expect(page.locator('body')).toHaveAttribute('data-wizard', 'on');
     await expect(page.locator('#start')).toBeHidden();
     await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
-    await expect(page.locator('#wizard-dots li')).toHaveCount(6);
+    // Lane EASY decision 2: one more step ("오늘 원문과 다르게 할 값").
+    await expect(page.locator('#wizard-dots li')).toHaveCount(7);
     await expect(page.locator('#wizard-back')).toBeHidden();
     const primary = page.locator('#wizard-primary');
     const box = await primary.boundingBox();
@@ -123,6 +126,9 @@ test.describe('Start wizard (lane ON)', () => {
     await expect(page.locator('#wizard-title')).toHaveText('안전 주의');
     await expect(page.locator('#wizard-body')).toContainText('장갑을 끼세요.');
     await expect(page.locator('#wizard-body')).toContainText('기관 안전 문서 없음 · 원문 안전 주의만');
+    await primary.click();
+    // Lane EASY decision 2: nothing to change today, so the step is passed with its one button.
+    await expect(page.locator('#wizard-title')).toHaveText('오늘 원문과 다르게 할 값');
     await primary.click();
     await expect(page.locator('#wizard-title')).toHaveText('Gamma (예시)');
     await expect(primary).toHaveText('이 프로토콜로 시작');

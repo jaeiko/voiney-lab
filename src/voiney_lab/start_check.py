@@ -539,3 +539,559 @@ class StartCheck:
             ]
             result["card"] = value_card(question, item)
         return result
+
+
+# --- Today's values (lane EASY, decision 2, human decision 2026-10-24) -------
+#
+# A lab that runs from a paper's Methods changes conditions run to run and
+# will not rewrite its protocol for that. After the key values, the start
+# wizard offers "오늘 원문과 다르게 할 값" (it may be skipped): a value the
+# analysis read -- a time, a temperature, a speed, a volume or a
+# concentration in a step's own sentence -- and the new value a person types.
+# Only the same kind of unit is taken (a time for a time), a value in a
+# safety sentence of the step is never offered, and nothing here writes a
+# completion criterion. The choice is one event in the protocol's ledger,
+# bound to the person and the exact analysis or review version it was made
+# on; the start applies it once (a second event names the experiment), and
+# the run says and shows the value as "20분(오늘 바꾼 값 · 원문 15분)", runs
+# the step's timer for it and writes "원문 → 실제" in the notebook. No model
+# chooses or proposes such a value.
+#
+# Human decision of 2026-10-24 (after the first PR): a new value below half or
+# above twice the source's is asked about once before it applies, whatever
+# confirm_mode says (``run_change_is_large``) -- by voice, and in the wizard,
+# where the choice is refused until the screen confirms it. Every start passes
+# the step: the start names the choice it uses (``for_start``), and nothing
+# chosen earlier applies on its own.
+
+RUN_CHANGES_EVENT = "protocol_run_changes_chosen"
+RUN_CHANGES_APPLIED_EVENT = "protocol_run_changes_applied"
+RUN_CHANGE_KINDS = ("time", "temperature", "speed", "volume", "concentration")
+RUN_CHANGE_KIND_KO = {"time": "시간", "temperature": "온도", "speed": "속도", "volume": "부피",
+                      "concentration": "농도"}
+TODAY_MARK_KO = "오늘 바꾼 값"
+RUN_CHANGE_LIMIT = 12
+#: A new value below 1/LARGE or above LARGE times the source's is asked first.
+RUN_CHANGE_LARGE_FACTOR = 2.0
+_KIND_OBJECT_KO = {"time": "시간을", "temperature": "온도를", "speed": "속도를", "volume": "부피를",
+                   "concentration": "농도를"}
+RUN_CHANGE_SOURCES = ("wizard", "last_time")
+
+
+@dataclass(frozen=True)
+class RunUnit:
+    """A unit a changed value may be written in: its kind, the family it is
+    compared within (rpm is never ×g) and its scale to the family's base."""
+
+    canonical: str
+    kind: str
+    family: str
+    scale: float
+
+
+_RUN_UNITS: dict[str, RunUnit] = {unit.canonical: unit for unit in (
+    RunUnit("s", "time", "time", 1.0), RunUnit("min", "time", "time", 60.0),
+    RunUnit("h", "time", "time", 3600.0), RunUnit("day", "time", "time", 86400.0),
+    RunUnit("°C", "temperature", "celsius", 1.0), RunUnit("°F", "temperature", "fahrenheit", 1.0),
+    RunUnit("rpm", "speed", "rpm", 1.0), RunUnit("×g", "speed", "rcf", 1.0),
+    RunUnit("nL", "volume", "volume", 0.001), RunUnit("µL", "volume", "volume", 1.0),
+    RunUnit("mL", "volume", "volume", 1000.0), RunUnit("L", "volume", "volume", 1_000_000.0),
+    RunUnit("nM", "concentration", "molar", 0.001), RunUnit("µM", "concentration", "molar", 1.0),
+    RunUnit("mM", "concentration", "molar", 1000.0), RunUnit("M", "concentration", "molar", 1_000_000.0),
+    RunUnit("%", "concentration", "percent", 1.0),
+    RunUnit("ng/µL", "concentration", "mass_per_volume", 1.0),
+    RunUnit("µg/mL", "concentration", "mass_per_volume", 1.0),
+    RunUnit("mg/mL", "concentration", "mass_per_volume", 1000.0),
+    RunUnit("µg/µL", "concentration", "mass_per_volume", 1000.0),
+    RunUnit("g/L", "concentration", "mass_per_volume", 1000.0),
+    RunUnit("mg/L", "concentration", "mass_per_volume", 1.0),
+)}
+#: The units a family is written in, for the refusal that names them.
+_FAMILY_UNITS_KO = {
+    "time": "초·분·시간", "celsius": "°C", "fahrenheit": "°F", "rpm": "rpm", "rcf": "×g",
+    "volume": "µL·mL·L", "molar": "nM·µM·mM·M", "percent": "%",
+    "mass_per_volume": "mg/mL·µg/mL·ng/µL",
+}
+#: Spellings of a unit, folded (casefold, µ for μ and u, no spaces) -> its
+#: canonical unit. Molar units are read case-sensitively (nm is a length).
+_UNIT_SPELLINGS: dict[str, str] = {
+    **{word: "s" for word in ("s", "sec", "secs", "second", "seconds", "초")},
+    **{word: "min" for word in ("min", "mins", "minute", "minutes", "분")},
+    **{word: "h" for word in ("h", "hr", "hrs", "hour", "hours", "시간")},
+    **{word: "day" for word in ("day", "days", "일")},
+    **{word: "°C" for word in ("°c", "℃", "c", "도", "°")},
+    "°f": "°F", "rpm": "rpm", "알피엠": "rpm",
+    **{word: "×g" for word in ("×g", "xg", "rcf")},
+    "nl": "nL", "µl": "µL", "마이크로리터": "µL", "ml": "mL", "밀리리터": "mL", "l": "L", "리터": "L",
+    "%": "%", "퍼센트": "%",
+    "나노몰": "nM", "마이크로몰": "µM", "밀리몰": "mM", "몰": "M",
+    "ng/µl": "ng/µL", "µg/ml": "µg/mL", "mg/ml": "mg/mL", "µg/µl": "µg/µL", "g/l": "g/L",
+    "mg/l": "mg/L",
+}
+_MOLAR = {"nM": "nM", "µM": "µM", "uM": "µM", "μM": "µM", "mM": "mM", "M": "M"}
+_RUN_NUMBER = r"-?\d+(?:\.\d+)?"
+_RUN_SOURCE_VALUE = re.compile(
+    r"(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s?(?P<unit>"
+    r"(?:[nµμu]?g|mg)\s?/\s?(?:[µμu]?L|ml|mL|l)"
+    r"|°\s?[CF]|℃|[CF](?![A-Za-z])"
+    r"|rpm|RPM|[x×]\s?g(?![A-Za-z])|RCF"
+    r"|[nµμu]?[Ll](?![A-Za-z])|m[Ll](?![A-Za-z])"
+    r"|[nµμum]?M(?![A-Za-z])"
+    r"|%"
+    r"|(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)(?![A-Za-z])"
+    r"|(?:s|min|h)(?![A-Za-z])"
+    r"|초|분|시간"
+    r")"
+)
+#: A sentence that sets a limit or warns: its values are a safety statement's,
+#: never offered for change.
+_SAFETY_SENTENCE = re.compile(
+    r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|exceed|caution|warning|hazard|danger"
+    r"|toxic|flammable|corrosive)\b|주의|경고|금지|넘지|초과|위험",
+    re.IGNORECASE,
+)
+
+
+def run_unit(unit: str) -> RunUnit | None:
+    """The canonical unit of a spelling ("mins", "분", "x g", "uL"), or None."""
+
+    text = unicodedata.normalize("NFKC", str(unit or "")).strip()
+    if text.replace(" ", "") in _MOLAR:
+        return _RUN_UNITS[_MOLAR[text.replace(" ", "")]]
+    folded = text.casefold().replace("μ", "µ").replace(" ", "")
+    if folded.startswith("u") and folded[1:2] in {"l", "g"} and len(folded) <= 5:
+        folded = "µ" + folded[1:]
+    folded = folded.replace("/ul", "/µl")
+    canonical = _UNIT_SPELLINGS.get(folded)
+    return _RUN_UNITS.get(canonical) if canonical else None
+
+
+def value_words(number: str, unit: str) -> str:
+    """A value as the run says and shows it: "20분", "1.5시간", "40°C", "1.5 mL"."""
+
+    if unit in {"s", "min", "h", "day"}:
+        return f"{number}{ {'s': '초', 'min': '분', 'h': '시간', 'day': '일'}[unit] }"
+    if unit in {"°C", "°F", "%"}:
+        return f"{number}{unit}"
+    return f"{number} {unit}"
+
+
+def _base(number: str, unit: str) -> float | None:
+    info = _RUN_UNITS.get(unit)
+    try:
+        return float(number) * info.scale if info is not None else None
+    except ValueError:
+        return None
+
+
+def _same_value(number: str, unit: str, other_number: str, other_unit: str) -> bool:
+    mine, theirs = _RUN_UNITS.get(unit), _RUN_UNITS.get(other_unit)
+    if mine is None or theirs is None or mine.family != theirs.family:
+        return False
+    left, right = _base(number, unit), _base(other_number, other_unit)
+    return left is not None and right is not None and abs(left - right) <= 1e-9 * max(1.0, abs(right))
+
+
+class RunChangeError(StartCheckError):
+    """A changed value the server does not take, with the sentence that says why.
+
+    ``large`` holds the values to confirm once more when the code is
+    ``run_change_large_unconfirmed``."""
+
+    def __init__(self, code: str, message_ko: str, *, large: Sequence[Mapping[str, Any]] = ()) -> None:
+        super().__init__(message_ko)
+        self.code = code
+        self.message_ko = message_ko
+        self.large = [dict(item) for item in large]
+
+
+@dataclass(frozen=True)
+class ChangeableValue:
+    """One value of a step's own sentence that a run may use another value for."""
+
+    item_id: str
+    step_id: str
+    step_label: str
+    kind: str
+    number: str
+    unit: str
+    written: str
+
+    @property
+    def shown(self) -> str:
+        return value_words(self.number, self.unit)
+
+    @property
+    def seconds(self) -> int | None:
+        base = _base(self.number, self.unit) if self.kind == "time" else None
+        return int(round(base)) if base is not None else None
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "item_id": self.item_id, "step_id": self.step_id, "step_label": self.step_label,
+            "kind": self.kind, "kind_ko": RUN_CHANGE_KIND_KO[self.kind], "number": self.number,
+            "unit": self.unit, "written": self.written, "shown_ko": self.shown,
+            "units_ko": _FAMILY_UNITS_KO[_RUN_UNITS[self.unit].family],
+        }
+
+
+def _sentences(text: str) -> list[tuple[int, int]]:
+    spans, start = [], 0
+    for match in re.finditer(r"[.!?。;](?=\s|$)|\n", text):
+        spans.append((start, match.end()))
+        start = match.end()
+    if start < len(text):
+        spans.append((start, len(text)))
+    return spans
+
+
+def step_changeable_values(
+    step_id: str, step_label: str, text: str, warnings: Sequence[str] = (),
+) -> list[ChangeableValue]:
+    """The values of one step's sentence a run may change, in order.
+
+    A step's own number opening its sentence is not a value; a value inside
+    a sentence that warns or sets a limit, or that one of the step's safety
+    statements prints too, is never offered (decision 2: "안전 주의 글과 완료
+    기준은 바꿀 수 없다").
+    """
+
+    words = str(text or "")
+    begin = 0
+    opening = _LEADING_LABEL.match(words)
+    if opening is not None:
+        begin = opening.end()
+    guarded = [span for span in _sentences(words) if _SAFETY_SENTENCE.search(words[span[0]:span[1]])]
+    warned = " ".join(" ".join(str(item or "").split()) for item in warnings)
+    found: list[ChangeableValue] = []
+    for match in _RUN_SOURCE_VALUE.finditer(words, begin):
+        unit = run_unit(match["unit"])
+        if unit is None or unit.kind not in RUN_CHANGE_KINDS:
+            continue
+        if any(first <= match.start() < last for first, last in guarded):
+            continue
+        written = " ".join(match[0].split())
+        if warned and re.search(rf"(?<![\d.]){re.escape(match['number'])}\s?{re.escape(match['unit'].strip())}", warned):
+            continue
+        if any(item.unit == unit.canonical and item.number == match["number"] for item in found):
+            continue
+        found.append(ChangeableValue(
+            item_id=f"{step_id}#{len(found) + 1}", step_id=step_id, step_label=step_label,
+            kind=unit.kind, number=match["number"], unit=unit.canonical, written=written))
+    return found
+
+
+def changeable_values(steps: Sequence[Any]) -> list[ChangeableValue]:
+    """Every changeable value of a run's steps (``ProtocolSourceStep``s), in step order."""
+
+    found: list[ChangeableValue] = []
+    for step in steps:
+        warnings = [getattr(item, "source_text", "") for item in getattr(step, "warnings", ()) or ()]
+        found += step_changeable_values(
+            step.step_id, step.source_label, step.instruction_source_text, warnings)
+    return found
+
+
+def parse_run_value(text: object) -> tuple[str, str] | None:
+    """A typed value as (number, canonical unit): "20 min", "20분", "40 °C", "1.5mL"."""
+
+    words = unicodedata.normalize("NFKC", str(text or "")).strip()
+    match = re.fullmatch(rf"({_RUN_NUMBER})\s*([^\d\s].*)", words)
+    if match is None:
+        return None
+    unit = run_unit(match[2])
+    return (match[1], unit.canonical) if unit is not None else None
+
+
+@dataclass(frozen=True)
+class RunChange:
+    """A value a person chose for this run in place of the source's."""
+
+    item_id: str
+    step_id: str
+    step_label: str
+    kind: str
+    source_number: str
+    source_unit: str
+    source_written: str
+    number: str
+    unit: str
+
+    @property
+    def shown(self) -> str:
+        return value_words(self.number, self.unit)
+
+    @property
+    def source_shown(self) -> str:
+        return value_words(self.source_number, self.source_unit)
+
+    @property
+    def words(self) -> str:
+        """"20분(오늘 바꾼 값 · 원문 15분)"."""
+
+        return f"{self.shown}({TODAY_MARK_KO} · 원문 {self.source_shown})"
+
+    @property
+    def seconds(self) -> int | None:
+        base = _base(self.number, self.unit) if self.kind == "time" else None
+        return int(round(base)) if base is not None else None
+
+    @property
+    def source_seconds(self) -> int | None:
+        base = _base(self.source_number, self.source_unit) if self.kind == "time" else None
+        return int(round(base)) if base is not None else None
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "item_id": self.item_id, "step_id": self.step_id, "step_label": self.step_label,
+            "kind": self.kind, "kind_ko": RUN_CHANGE_KIND_KO.get(self.kind, ""),
+            "source_number": self.source_number, "source_unit": self.source_unit,
+            "source_written": self.source_written, "source_shown_ko": self.source_shown,
+            "number": self.number, "unit": self.unit, "shown_ko": self.shown, "words_ko": self.words,
+            "large": run_change_is_large(self),
+        }
+
+    @property
+    def large_question(self) -> str:
+        """The question of a large value: "5단계 온도를 37°C에서 14°C로 바꿀까요? …"."""
+
+        return (f"{self.step_label}단계 {_KIND_OBJECT_KO.get(self.kind, '값을')} {self.source_shown}에서 "
+                f"{_with_ro(self.shown)} 바꿀까요? 원문 값과 많이 달라요.")
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> RunChange:
+        fields = {key: value.get(key) for key in (
+            "item_id", "step_id", "step_label", "kind", "source_number", "source_unit",
+            "source_written", "number", "unit")}
+        if any(not isinstance(item, str) or not item for item in fields.values()):
+            raise RunChangeError("run_change_invalid", "바꾼 값 기록을 읽을 수 없어요.")
+        if fields["kind"] not in RUN_CHANGE_KINDS or fields["unit"] not in _RUN_UNITS:
+            raise RunChangeError("run_change_invalid", "바꾼 값 기록을 읽을 수 없어요.")
+        return cls(**fields)
+
+
+def run_change_is_large(change: RunChange) -> bool:
+    """Whether the new value is below half or above twice the source's.
+
+    Compared in the family's base unit (15 min against 1 h is four times). A
+    temperature at or below zero has no meaningful ratio: any change to or
+    from it is large (decision of 2026-10-24: asked once rather than guessed).
+    """
+
+    new, source = _base(change.number, change.unit), _base(change.source_number, change.source_unit)
+    if new is None or source is None:
+        return True
+    if new <= 0 or source <= 0:
+        return True
+    return new < source / RUN_CHANGE_LARGE_FACTOR or new > source * RUN_CHANGE_LARGE_FACTOR
+
+
+def _with_ro(shown: str) -> str:
+    """``shown`` + 으로/로 as it is read: "30분으로", "14°C로", "800 rpm으로"."""
+
+    last = shown.rstrip()[-1:] if shown.strip() else ""
+    if "가" <= last <= "힣":
+        final = (ord(last) - ord("가")) % 28
+        return shown + ("으로" if final and final != 8 else "로")
+    return shown + ("으로" if shown.rstrip().endswith("rpm") else "로")
+
+
+def check_run_change(value: ChangeableValue, number: str, unit: str) -> RunChange:
+    """The change of ``value`` to ``number unit``, or the reason it is refused."""
+
+    info = _RUN_UNITS.get(unit)
+    if info is None:
+        raise RunChangeError(
+            "run_change_unit_unknown",
+            f"단위를 알 수 없어요. 원문 값({value.shown})과 같은 종류인 "
+            f"{_FAMILY_UNITS_KO[_RUN_UNITS[value.unit].family]} 단위로 넣어 주세요.")
+    source = _RUN_UNITS[value.unit]
+    if info.kind != source.kind or info.family != source.family:
+        raise RunChangeError(
+            "run_change_unit_kind",
+            f"단위 종류가 달라요. 원문 값({value.shown})과 같은 종류인 "
+            f"{_FAMILY_UNITS_KO[source.family]} 단위로 넣어 주세요.")
+    try:
+        amount = float(number)
+    except ValueError as exc:
+        raise RunChangeError("run_change_number_invalid", "숫자를 알아듣지 못했어요. 다시 넣어 주세요.") from exc
+    if amount != amount or amount in {float("inf"), float("-inf")} or (
+            info.kind != "temperature" and amount <= 0) or len(number) > 12:
+        raise RunChangeError("run_change_number_invalid", "0보다 큰 값으로 넣어 주세요.")
+    if _same_value(number, unit, value.number, value.unit):
+        raise RunChangeError("run_change_same_as_source", f"원문과 같은 값이에요({value.shown}).")
+    return RunChange(
+        item_id=value.item_id, step_id=value.step_id, step_label=value.step_label, kind=value.kind,
+        source_number=value.number, source_unit=value.unit, source_written=value.written,
+        number=number, unit=unit)
+
+
+def _target_key(target: Mapping[str, Any] | None) -> dict[str, Any]:
+    target = target or {}
+    return {key: target.get(key) for key in ("kind", "version", "event_id", "analysis_id", "revision_id",
+                                             "analysis_revision_number")}
+
+
+class RunChanges:
+    """Today's values of a protocol about to run: what may change, a person's
+    choice, and the choice the start applies (lane EASY, decision 2)."""
+
+    def __init__(self, catalog: Any) -> None:
+        self.catalog = catalog
+
+    def _current(self, protocol_id: str) -> tuple[dict[str, Any], Any, list[ChangeableValue]]:
+        """(the target the run would follow, its fixture, its changeable values)."""
+
+        draft, _, _ = StartCheck(self.catalog, enabled=True)._built(protocol_id)  # noqa: SLF001
+        target = draft.get("target") if isinstance(draft.get("target"), Mapping) else None
+        if target is None or not draft.get("available_for_execution"):
+            raise RunChangeError("run_change_unavailable", "실행할 수 있는 분석이 없어요.")
+        fixture = self.catalog.load_executable_fixture(protocol_id)
+        return dict(target), fixture, changeable_values(fixture.steps)
+
+    def options(self, protocol_id: str) -> dict[str, Any]:
+        target, fixture, values = self._current(protocol_id)
+        return {"protocol_id": protocol_id, "target": target, "revision_id": fixture.revision_id,
+                "values": [value.public_dict() for value in values], "limit": RUN_CHANGE_LIMIT}
+
+    @staticmethod
+    def last_time(values: Sequence[Mapping[str, Any]], last: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """The last run's values (lane EASY, decision 3: "지난번처럼") on today's list.
+
+        A value of the last run comes back only where today's analysis states
+        the same value at a step of the same label and kind; its new value is
+        offered as it was, for a person to keep or change before the start
+        checks it again.
+        """
+
+        found: list[dict[str, Any]] = []
+        for item in last:
+            match = next((value for value in values
+                          if str(value.get("step_label")) == str(item.get("step_label"))
+                          and value.get("kind") == item.get("kind")
+                          and _same_value(str(value.get("number")), str(value.get("unit")),
+                                          str(item.get("source_number")), str(item.get("source_unit")))), None)
+            if match is None or any(entry["item_id"] == match["item_id"] for entry in found):
+                continue
+            try:
+                change = RunChange.from_mapping({**item, "item_id": match["item_id"], "step_id": match["step_id"]})
+            except RunChangeError:
+                continue
+            found.append({**change.public_dict(), "item_id": match["item_id"]})
+        return found
+
+    def choose(
+        self, protocol_id: str, changes: object, *, target: object, actor_principal_id: str | None,
+        source: object = "wizard", confirm_large: object = (),
+    ) -> dict[str, Any]:
+        """Check each (item, new value) and append the choice; an empty list is
+        the step skipped, which is a choice too (nothing changes today). A
+        large value (``run_change_is_large``) is refused until its item is in
+        ``confirm_large`` -- the screen's second look."""
+
+        if actor_principal_id is None:
+            raise RunChangeError("run_change_identity_required", "로그인한 뒤에 고를 수 있어요.")
+        current, fixture, values = self._current(protocol_id)
+        if not isinstance(target, Mapping) or _target_key(target) != _target_key(current):
+            raise RunChangeError("run_change_target_stale", "분석이 바뀌었어요. 시작 화면을 다시 열어 주세요.")
+        if source not in RUN_CHANGE_SOURCES:
+            raise RunChangeError("run_change_invalid", "바꾼 값을 읽을 수 없어요.")
+        if not isinstance(changes, Sequence) or isinstance(changes, (str, bytes)) or len(changes) > RUN_CHANGE_LIMIT:
+            raise RunChangeError("run_change_invalid", f"바꿀 값은 {RUN_CHANGE_LIMIT}개까지 고를 수 있어요.")
+        by_id = {value.item_id: value for value in values}
+        chosen: list[RunChange] = []
+        for item in changes:
+            if not isinstance(item, Mapping) or str(item.get("item_id")) not in by_id:
+                raise RunChangeError("run_change_item_unknown", "고른 값이 이 분석의 값 목록에 없어요.")
+            value = by_id[str(item.get("item_id"))]
+            if any(change.item_id == value.item_id for change in chosen):
+                raise RunChangeError("run_change_invalid", "같은 값을 두 번 골랐어요.")
+            parsed = parse_run_value(item.get("value"))
+            if parsed is None:
+                raise RunChangeError(
+                    "run_change_number_invalid",
+                    f"{value.step_label}단계 {value.shown}: 새 값을 숫자와 단위로 넣어 주세요(예: "
+                    f"{value_words('20' if value.kind != 'temperature' else '40', value.unit)}).")
+            try:
+                chosen.append(check_run_change(value, *parsed))
+            except RunChangeError as exc:
+                raise RunChangeError(exc.code, f"{value.step_label}단계 {value.shown}: {exc.message_ko}") from exc
+        confirmed = ({str(item) for item in confirm_large}
+                     if isinstance(confirm_large, (list, tuple)) else set())
+        large = [change for change in chosen if run_change_is_large(change)]
+        unconfirmed = [change for change in large if change.item_id not in confirmed]
+        if unconfirmed:
+            raise RunChangeError(
+                "run_change_large_unconfirmed",
+                " ".join(change.large_question for change in unconfirmed),
+                large=[{**change.public_dict(), "question_ko": change.large_question} for change in unconfirmed])
+        change_set_id = "run-changes-" + secrets.token_hex(12)
+        revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
+        payload = {
+            "change_set_id": change_set_id, "actor_principal_id": actor_principal_id,
+            "target": _target_key(current), "revision_id": fixture.revision_id, "source": source,
+            "changes": [change.public_dict() for change in chosen],
+            "confirmed_large": [change.item_id for change in large],
+            "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        self.catalog.store.append_event(change_set_id, protocol_id, revision.revision_number,
+                                        RUN_CHANGES_EVENT, payload)
+        return {"change_set_id": change_set_id, "changes": payload["changes"], "source": source}
+
+    def for_start(
+        self, protocol_id: str, change_set_id: str, *, actor_principal_id: str | None,
+        revision_ids: Sequence[str | None],
+    ) -> tuple[RunChange, ...]:
+        """The values of the choice a start names, or ``run_changes_stale``.
+
+        The choice must be this person's, made on one of ``revision_ids`` (the
+        revision about to run, or the catalog entry's the wizard read), and not
+        used by an earlier start. Nothing is looked up by time: a start that
+        names no choice gets none (decision of 2026-10-24).
+        """
+
+        stale = RunChangeError("run_changes_stale", "오늘 바꾼 값이 지금 분석과 맞지 않아요. 시작 화면에서 다시 골라 주세요.")
+        if actor_principal_id is None:
+            raise stale
+        events = self.catalog.store.list_events(protocol_id)
+        if any(event.event_type == RUN_CHANGES_APPLIED_EVENT
+               and str((event.payload or {}).get("change_set_id")) == change_set_id for event in events):
+            raise stale
+        chosen = next((event.payload for event in events
+                       if event.event_type == RUN_CHANGES_EVENT
+                       and str((event.payload or {}).get("change_set_id")) == change_set_id), None)
+        if (chosen is None or chosen.get("actor_principal_id") != actor_principal_id
+                or chosen.get("revision_id") not in {item for item in revision_ids if item}):
+            raise stale
+        try:
+            return tuple(RunChange.from_mapping(item) for item in chosen.get("changes") or ())
+        except RunChangeError as exc:
+            raise stale from exc
+
+    def mark_applied(
+        self, protocol_id: str, change_set_id: str, *, experiment_session_id: str | None,
+        actor_principal_id: str | None,
+    ) -> None:
+        revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
+        self.catalog.store.append_event(
+            "run-changes-applied-" + secrets.token_hex(12), protocol_id, revision.revision_number,
+            RUN_CHANGES_APPLIED_EVENT,
+            {"change_set_id": change_set_id, "experiment_session_id": experiment_session_id,
+             "actor_principal_id": actor_principal_id,
+             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+
+    def applied_to(self, protocol_id: str, experiment_session_id: str) -> tuple[RunChange, ...]:
+        """The choice a start applied to that experiment (for its recovery)."""
+
+        events = self.catalog.store.list_events(protocol_id)
+        applied = next((event.payload for event in reversed(events)
+                        if event.event_type == RUN_CHANGES_APPLIED_EVENT
+                        and (event.payload or {}).get("experiment_session_id") == experiment_session_id), None)
+        if applied is None:
+            return ()
+        chosen = next((event.payload for event in events if event.event_type == RUN_CHANGES_EVENT
+                       and (event.payload or {}).get("change_set_id") == applied.get("change_set_id")), None)
+        try:
+            return tuple(RunChange.from_mapping(item) for item in (chosen or {}).get("changes") or ())
+        except RunChangeError:
+            return ()

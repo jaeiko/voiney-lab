@@ -65,6 +65,16 @@ from voiney_lab.llm_router import (
     validate_tool_proposals,
 )
 from voiney_lab.intent_fences import has_completion_evidence, is_question_or_speculation
+from voiney_lab.start_check import (
+    RUN_CHANGE_KIND_KO,
+    ChangeableValue,
+    RunChange,
+    RunChangeError,
+    changeable_values,
+    check_run_change,
+    run_change_is_large,
+    run_unit,
+)
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -134,6 +144,8 @@ class CuratedProtocolAction(str, Enum):
     REPORT_HANDOFF = "report_handoff"
     RECORD_CORRECTION = "record_correction"
     REPORT_REVIEW = "report_review"
+    #: Lane EASY, decision 2: a value of today's run changed or put back.
+    CHANGE_VALUE = "change_value"
 
 
 class CuratedProtocolSpeechMode(str, Enum):
@@ -4098,6 +4110,12 @@ FRONT_RULES: dict[str, str] = {
                      "step: asked once, '1~(N-1)단계는 건너뛰고 N단계부터 "
                      "시작할까요?'; a yes starts at N and the skipped steps are "
                      "recorded (lane R7, decision 3)",
+    "run_value_change": "'이번엔 3단계 15분 대신 20분', '3단계 온도 40도로 바꿔 줘', "
+                        "'3단계 원문대로': a value of a step's own sentence changed for "
+                        "today's run, or put back, by the person's words only -- the "
+                        "same kind of unit, a current or later step, no timer running "
+                        "at it; read back (asked first in 바로 확인 or 시끄러운 곳 mode) "
+                        "and appended to the record (lane EASY, decision 2)",
     "note_record": "'실험노트에 적어 줘 / 기록해 줘 / 메모해 줘 / 메모 추가해' with "
                    "words: the words are recorded at the current step as the STT "
                    "gave them, as a measurement, a deviation, an observation or "
@@ -4262,6 +4280,8 @@ class _OpenQuestions:
     #: Lane SP1, decision 3: "N단계 완료하고 N+1단계로 갈까요?" (one turn) and
     #: "시끄러운 곳 모드로 바꿀까요?" (until the next turn).
     ambient: bool = False
+    #: Lane EASY, decision 2: "3단계 시간을 20분으로 바꿀까요?" (one turn).
+    run_change: bool = False
 
     @property
     def first_open(self) -> str | None:
@@ -4270,7 +4290,7 @@ class _OpenQuestions:
         for name in (
             "ambient",
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
-            "step_move", "record_fix", "note_confirm", "report_review", "branch",
+            "step_move", "record_fix", "note_confirm", "run_change", "report_review", "branch",
             "repeat_count", "prestart",
         ):
             if getattr(self, name):
@@ -5583,6 +5603,96 @@ def step_revert_request(transcript: str) -> StepRevertRequest | None:
 
 # Decision 5: which file the run follows. "현재 프로토콜 버전 알려줘" keeps its
 # own answer (the protocol audit); these ask for the file and its upload.
+# --- Lane EASY, decision 2: a value of today's run said aloud ----------------
+#
+# "이번엔 3단계 15분 대신 20분", "3단계 온도 40도로 바꿔 줘", "원심 속도 1000 rpm
+# 으로 할게", and "3단계 원문대로" to put one back. Only words like these,
+# with the value and a word that changes it; a question, a note to write, a
+# timer command and a past "…했어" (what was done is a deviation, recorded as
+# one) are left to their own rules.
+
+_RUN_CHANGE_CUE = re.compile(
+    r"대신(?:에)?|말고|바꿔|바꿀|바꾸|변경|"
+    r"(?:으로|로)\s*(?:할게|할래|하자|해\s*줘|해\s*주세요|갈게|가자|합시다|할\s*거야)"
+)
+_RUN_CHANGE_LEFT_TO_OTHERS = re.compile(
+    r"기록|노트|메모|적어|남겨|타이머|timer|"
+    r"(?:했|됐|였|었|갔|넣었|돌렸)(?:어|어요|습니다|다|네|는데)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+_RUN_CHANGE_REVERT = re.compile(
+    r"(?:원문대로|원래대로|원래\s*값|원문\s*값)\s*(?:으로|로)?\s*"
+    r"(?:되돌려|돌려|해|바꿔|할게|갈게|하자|돌아가)|"
+    r"(?:원문대로|원래대로)\s*[.!]?\s*$|"
+    r"바꾼\s*값\s*(?:을|를)?\s*(?:되돌려|돌려|취소|원래대로|원문대로)"
+)
+_RUN_CHANGE_STEP = re.compile(r"(?<![\d.])(\d+(?:\.\d+)*)\s*단계")
+_RUN_CHANGE_KIND = re.compile(
+    r"(?P<kind>시간|온도|원심\s*속도|회전\s*속도|속도|부피|(?<![가-힣])양|농도)"
+    r"(?:을|를|은|는|이|가)?(?=\s|$)"
+)
+_RUN_CHANGE_KIND_WORDS = {"시간": "time", "온도": "temperature", "속도": "speed", "부피": "volume",
+                          "양": "volume", "농도": "concentration"}
+
+
+@dataclass(frozen=True)
+class RunChangeRequest:
+    """Words that change a value of today's run, or put one back (decision 2)."""
+
+    revert: bool
+    step_label: str | None
+    old: tuple[str, str] | None
+    new: tuple[str, str] | None
+    kind: str | None
+
+
+def run_change_request(transcript: str) -> RunChangeRequest | None:
+    """The change the words ask for, or None when they ask for none."""
+
+    words = " ".join(str(transcript or "").split())
+    if not words or is_question_or_speculation(words) or _RUN_CHANGE_LEFT_TO_OTHERS.search(words):
+        return None
+    step = _RUN_CHANGE_STEP.search(words)
+    kind_match = _RUN_CHANGE_KIND.search(words)
+    kind = None
+    if kind_match is not None:
+        word = re.sub(r"^(?:원심|회전)\s*", "", kind_match["kind"])
+        kind = _RUN_CHANGE_KIND_WORDS.get(word)
+    values = []
+    for value in measured_values(words):
+        unit = run_unit(value.unit) if value.unit else None
+        if unit is not None and not value.name:
+            values.append((value.number, unit.canonical))
+    revert = _RUN_CHANGE_REVERT.search(words) is not None
+    if revert:
+        return RunChangeRequest(True, step[1] if step else None, values[0] if values else None, None, kind)
+    if not values or _RUN_CHANGE_CUE.search(words) is None:
+        return None
+    if len(values) >= 2:
+        return RunChangeRequest(False, step[1] if step else None, values[0], values[1], kind)
+    return RunChangeRequest(False, step[1] if step else None, None, values[0], kind)
+
+
+def _same_measure(number: str, unit: str, other_number: str, other_unit: str) -> bool:
+    """Two values of one family that are equal ("15분" and "900 s")."""
+
+    mine, theirs = run_unit(unit), run_unit(other_unit)
+    if mine is None or theirs is None or mine.family != theirs.family:
+        return False
+    try:
+        left, right = float(number) * mine.scale, float(other_number) * theirs.scale
+    except ValueError:
+        return False
+    return abs(left - right) <= 1e-9 * max(1.0, abs(right))
+
+
+def _value_said(value: tuple[str, str]) -> str:
+    from voiney_lab.start_check import value_words
+
+    unit = run_unit(value[1])
+    return value_words(value[0], unit.canonical if unit is not None else value[1])
+
+
 _BASIS_QUESTION = re.compile(
     r"^(?:지금|현재)?\s*(?:어느|어떤|무슨)\s*(?:프로토콜|파일|버전|문서|pdf|PDF)\s*"
     r"(?:기준|기준으로\s*(?:하고\s*있어|하는\s*거야|해))(?:이야|이에요|인가요|야|이지|이냐)?$"
@@ -9617,6 +9727,14 @@ class CuratedProtocolSession:
         #: Lane VX, decision 1: "잘못 넘어갔으면 '방금 완료 취소'라고 해
         #: 주세요." is said the first time words move on, once a session.
         self._forward_hint_said = False
+        #: Lane EASY, decision 2: today's values -- item id -> the change a
+        #: person chose (the start wizard's, or words during the run) -- the
+        #: change set the start applied, and the one-turn "…바꿀까요?" of the
+        #: 바로 확인 way. A model never writes any of them.
+        self._run_changes: dict[str, RunChange] = {}
+        self._run_change_set_id: str | None = None
+        self._pending_run_change: dict[str, Any] | None = None
+        self._changeable_cache: tuple[Any, tuple[ChangeableValue, ...]] | None = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
         self.safety_pack = safety_pack
@@ -9653,6 +9771,252 @@ class CuratedProtocolSession:
             "web_lookup": self.web_lookup, "proactive_mode": self.proactive_mode,
             "ambient_mode": self.ambient_mode, "speaker_sensitivity": self.speaker_sensitivity,
         }
+
+    # --- lane EASY, decision 2: today's values --------------------------------
+
+    def changeable_values(self) -> tuple[ChangeableValue, ...]:
+        """The values of the steps' own sentences a run may change (start_check)."""
+
+        cached = self._changeable_cache
+        if cached is None or cached[0] is not self.fixture:
+            cached = (self.fixture, tuple(changeable_values(self.fixture.steps)))
+            self._changeable_cache = cached
+        return cached[1]
+
+    def set_run_changes(
+        self, changes: Sequence[RunChange], *, change_set_id: str | None = None,
+    ) -> tuple[RunChange, ...]:
+        """Take today's values a start applies or a recovery restores.
+
+        Each must be a value of this fixture's steps as the source prints it;
+        one that is not (an analysis changed since) is refused whole.
+        """
+
+        values = {value.item_id: value for value in self.changeable_values()}
+        kept: dict[str, RunChange] = {}
+        for change in changes:
+            value = values.get(change.item_id)
+            if (value is None or value.step_id != change.step_id or value.number != change.source_number
+                    or value.unit != change.source_unit):
+                raise CuratedProtocolFixtureError("A changed value is not one of this run's values.")
+            kept[change.item_id] = change
+        self._run_changes = kept
+        self._run_change_set_id = change_set_id
+        return self.run_changes()
+
+    def run_changes(self) -> tuple[RunChange, ...]:
+        order = {value.item_id: index for index, value in enumerate(self.changeable_values())}
+        return tuple(sorted(self._run_changes.values(), key=lambda change: order.get(change.item_id, 0)))
+
+    @property
+    def run_change_set_id(self) -> str | None:
+        return self._run_change_set_id
+
+    def run_changes_for_step(self, index: int) -> tuple[RunChange, ...]:
+        if not 0 <= index < len(self.fixture.steps):
+            return ()
+        step_id = self.fixture.steps[index].step_id
+        return tuple(change for change in self.run_changes() if change.step_id == step_id)
+
+    def _timer_run_change(self, index: int, seconds: int) -> RunChange | None:
+        """The time change that replaces a step timer of ``seconds``, if any."""
+
+        if not seconds:
+            return None
+        return next((change for change in self.run_changes_for_step(index)
+                     if change.kind == "time" and change.source_seconds == seconds
+                     and change.seconds), None)
+
+    def _run_change_notice(self) -> str:
+        """Said on coming to a step whose value today's run changed."""
+
+        changes = self.run_changes_for_step(self.current_index)
+        if not changes:
+            return ""
+        return "이 단계는 바꾼 값으로 해요: " + " · ".join(
+            f"{RUN_CHANGE_KIND_KO.get(change.kind, '')} {change.words}" for change in changes) + "."
+
+    def _run_change_time_suffix(self) -> str:
+        changes = [change for change in self.run_changes_for_step(self.current_index) if change.kind == "time"]
+        return (" 오늘 바꾼 값: " + " · ".join(change.words for change in changes) + ".") if changes else ""
+
+    def _run_change_target(self) -> dict[str, Any]:
+        """Which analysis or review version a change was made on."""
+
+        version = getattr(self.fixture.draft, "review_version", None)
+        return {"protocol_id": self.fixture.protocol_id, "revision_id": self.fixture.revision_id,
+                **({"review_version": version.version} if version is not None else {})}
+
+    def _run_change_item(
+        self, request: RunChangeRequest, index: int,
+    ) -> tuple[ChangeableValue | None, str | None]:
+        """The value of step ``index`` the words name, or why none is."""
+
+        label = self.fixture.steps[index].source_label
+        step_id = self.fixture.steps[index].step_id
+        values = [value for value in self.changeable_values() if value.step_id == step_id]
+        if not values:
+            return None, f"{label}단계 원문에는 바꿀 수 있는 값(시간·온도·속도·부피·농도)이 없어요."
+        if request.old is not None:
+            matched = [value for value in values if _same_measure(value.number, value.unit, *request.old)]
+            if len(matched) == 1:
+                return matched[0], None
+            old = _value_said(request.old)
+            return None, (
+                f"{label}단계 원문에서 {josa(old, '을', '를')} 찾지 못했어요. "
+                f"바꿀 수 있는 값: {' · '.join(value.shown for value in values)}.")
+        kind = request.kind
+        if kind is None and request.new is not None:
+            unit = run_unit(request.new[1])
+            kind = unit.kind if unit is not None else None
+        same_kind = [value for value in values if value.kind == kind]
+        if request.new is not None and len(same_kind) > 1:
+            unit = run_unit(request.new[1])
+            same_family = [value for value in same_kind if unit is not None
+                           and run_unit(value.unit) is not None and run_unit(value.unit).family == unit.family]
+            if len(same_family) == 1:
+                same_kind = same_family
+        if len(same_kind) == 1:
+            return same_kind[0], None
+        if not same_kind:
+            return None, (
+                f"{label}단계에서 바꿀 그 값을 찾지 못했어요. 바꿀 수 있는 값: "
+                f"{' · '.join(value.shown for value in values)}. 안전 주의와 완료 기준의 값은 바꿀 수 없어요.")
+        shown = ", ".join(value.shown for value in same_kind)
+        example = f"{same_kind[0].shown} 대신 …"
+        return None, f"{label}단계에는 {RUN_CHANGE_KIND_KO.get(kind or '', '그 종류의')} 값이 여럿이에요({shown}). '{example}'처럼 말씀해 주세요."
+
+    def _plan_run_change(
+        self, transcript: str, *, turn_id: int, configuration_id: int | None, generation: int | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """A value of today's run changed or put back in words (decision 2)."""
+
+        request = run_change_request(transcript)
+        if request is None or self._pause_state == "paused":
+            return None
+        self._last_front_rule = "run_value_change"
+
+        def said(words: str, kind: str) -> CuratedProtocolTurnPlan:
+            plan = self._words_plan(words, intent_kind=kind)
+            self._replay[turn_id] = plan
+            return plan
+
+        if not self.active:
+            return said(
+                "실험을 시작한 뒤에 말로 바꿀 수 있어요. 시작 전에는 시작 화면의 "
+                "'오늘 원문과 다르게 할 값'에서 고를 수 있어요.", "run_value_change_inactive")
+        index = (self._step_index_for_label(request.step_label) if request.step_label is not None
+                 else self.current_index)
+        if index is None:
+            return said(f"{request.step_label}단계를 찾지 못했어요.", "run_value_change_refused")
+        label = self.fixture.steps[index].source_label
+        if index < self.current_index:
+            return said(
+                f"{label}단계는 이미 지나간 단계예요. 실제로 한 값을 남기려면 '노트에 적어 줘'라고 말씀해 주세요.",
+                "run_value_change_refused")
+        if request.revert:
+            changes = [change for change in self.run_changes_for_step(index)
+                       if (request.kind is None or change.kind == request.kind)
+                       and (request.old is None or _same_measure(change.number, change.unit, *request.old)
+                            or _same_measure(change.source_number, change.source_unit, *request.old))]
+            if not changes:
+                return said(f"{label}단계에는 오늘 바꾼 값이 없어요.", "run_value_change_refused")
+            pending: dict[str, Any] = {"revert": [change.public_dict() for change in changes]}
+        else:
+            value, refusal = self._run_change_item(request, index)
+            if value is None:
+                return said(refusal or "바꿀 값을 찾지 못했어요.", "run_value_change_refused")
+            assert request.new is not None
+            try:
+                change = check_run_change(value, *request.new)
+            except RunChangeError as exc:
+                return said(f"{label}단계: {exc.message_ko}", "run_value_change_refused")
+            pending = {"change": change.public_dict()}
+        timer = self.timer_status()
+        touches_time = any(item.get("kind") == "time" for item in (
+            pending.get("revert") or [pending.get("change") or {}]))
+        if touches_time and timer.get("state") == "running" and timer.get("step_index") == index:
+            return said(
+                f"{label}단계 타이머가 돌고 있어 시간을 바꾸지 않았어요. 타이머가 끝난 뒤에 말씀해 주세요.",
+                "run_value_change_refused")
+        # Human decision 2026-10-24: confirm_mode as before, but a new value
+        # below half or above twice the source's is asked first in every mode.
+        large = bool(pending.get("change")) and run_change_is_large(RunChange.from_mapping(pending["change"]))
+        if self.confirm_mode == "confirm" or self.ambient_mode == "noisy" or large:
+            question = self._run_change_question(pending, label)
+            self._pending_run_change = {
+                **pending, "step_index": index, "workflow_revision": self._revision,
+                "requested_turn_id": turn_id, "configuration_id": configuration_id,
+                "requested_generation": generation, "question": question,
+            }
+            plan = self._words_plan(question, intent_kind="run_value_change_confirmation_required",
+                                    action=CuratedProtocolAction.CLARIFY_COMPLETION)
+            if large:
+                # Said the way the decision words it: "37도에서 14도로".
+                plan = replace(plan, speech_text=spoken_korean(question))
+            self._replay[turn_id] = plan
+            return plan
+        plan = self._apply_run_change(pending, index)
+        self._replay[turn_id] = plan
+        return plan
+
+    def _run_change_question(self, pending: Mapping[str, Any], label: str) -> str:
+        if pending.get("revert"):
+            listed = " · ".join(f"{item['kind_ko']} {item['shown_ko']}" for item in pending["revert"])
+            return f"{label}단계의 오늘 바꾼 값({listed})을 원문대로 되돌릴까요? 맞으면 '네'라고 해 주세요."
+        change = pending["change"]
+        if change.get("large"):
+            return f"{RunChange.from_mapping(change).large_question} 맞으면 '네'라고 해 주세요."
+        return (f"{label}단계 {change['kind_ko']} {josa(change['source_shown_ko'], '을', '를')} "
+                f"{josa_ro(change['shown_ko'])} 바꿀까요? "
+                "맞으면 '네'라고 해 주세요.")
+
+    def _apply_run_change(self, pending: Mapping[str, Any], index: int) -> CuratedProtocolTurnPlan:
+        """Change or put back today's values: the state machine's own change."""
+
+        step = self.fixture.steps[index]
+        label = step.source_label
+        if pending.get("revert"):
+            reverted = [RunChange.from_mapping(item) for item in pending["revert"]]
+            for change in reverted:
+                self._run_changes.pop(change.item_id, None)
+            listed = " · ".join(
+                f"{RUN_CHANGE_KIND_KO.get(change.kind, '')} {change.source_shown}" for change in reverted)
+            words = f"{label}단계를 원문 값으로 되돌렸어요: {listed}."
+            record = {"kind": "run_value_reverted", "step_id": step.step_id, "step_label": label,
+                      "reverted": [change.public_dict() for change in reverted],
+                      "target": self._run_change_target()}
+            intent_kind = "run_value_reverted"
+        else:
+            change = RunChange.from_mapping(pending["change"])
+            before = self._run_changes.get(change.item_id)
+            self._run_changes[change.item_id] = change
+            words = (f"{label}단계 {josa(RUN_CHANGE_KIND_KO.get(change.kind, '값'), '을', '를')} "
+                     f"바꿨어요: {change.words}. "
+                     f"되돌리려면 '{label}단계 원문대로'라고 말씀해 주세요.")
+            record = {"kind": "run_value_changed", "step_id": step.step_id, "step_label": label,
+                      "change": change.public_dict(),
+                      "replaced": before.public_dict() if before is not None else None,
+                      "target": self._run_change_target()}
+            intent_kind = "run_value_changed"
+        self._revision += 1
+        plan = self._words_plan(words, intent_kind=intent_kind, action=CuratedProtocolAction.CHANGE_VALUE,
+                                step_record=record)
+        return replace(plan, state_changed=True, step_label=label, target_step=label)
+
+    def _run_change_confirmation_valid(
+        self, *, turn_id: int, configuration_id: int | None, generation: int | None,
+    ) -> bool:
+        asked = self._pending_run_change
+        return bool(
+            asked is not None
+            and self._pause_state != "paused"
+            and self._revision == asked.get("workflow_revision")
+            and turn_id == asked.get("requested_turn_id", -2) + 1
+            and (asked.get("configuration_id") is None or configuration_id == asked.get("configuration_id"))
+            and (asked.get("requested_generation") is None or generation is None
+                 or generation >= asked.get("requested_generation"))
+        )
 
     # --- lane SP1, decision 3: 시끄러운 곳 mode asks before it acts ---------
 
@@ -9963,7 +10327,10 @@ class CuratedProtocolSession:
         if not 0 <= index < len(self.fixture.steps):
             return 0
         step_id = self.fixture.steps[index].step_id
-        return int((self.fixture.timer_manifest or {}).get(step_id, 0))
+        seconds = int((self.fixture.timer_manifest or {}).get(step_id, 0))
+        # Lane EASY, decision 2: a time today's run changed runs as changed.
+        change = self._timer_run_change(index, seconds)
+        return int(change.seconds) if change is not None and change.seconds else seconds
 
     def timer_choices_for_step(self, index: int) -> tuple[domain.TimerChoice, ...]:
         """The source values a step's timer is chosen from, or none (lane PT).
@@ -9976,7 +10343,13 @@ class CuratedProtocolSession:
         if not 0 <= index < len(self.fixture.steps):
             return ()
         step_id = self.fixture.steps[index].step_id
-        return tuple((self.fixture.timer_choices or {}).get(step_id, ()))
+        choices = tuple((self.fixture.timer_choices or {}).get(step_id, ()))
+        # Lane EASY, decision 2: a printed value today's run changed is offered as changed.
+        return tuple(
+            replace(choice, seconds=int(change.seconds), literal=change.shown, bound="exact")
+            if (change := self._timer_run_change(index, choice.seconds)) is not None else choice
+            for choice in choices
+        )
 
     @property
     def analysis_timers(self) -> bool:
@@ -11465,6 +11838,9 @@ class CuratedProtocolSession:
             return {"kind": "step_move", "text": words(self._pending_step_move, "question")}
         if self._pending_record_fix is not None:
             return {"kind": "record_fix", "text": words(self._pending_record_fix, "question")}
+        if self._pending_run_change is not None:
+            # Lane EASY, decision 2.
+            return {"kind": "run_change", "text": words(self._pending_run_change, "question")}
         return self.open_server_question()
 
     def next_step_sentence(self, language: str = "ko") -> str | None:
@@ -11833,6 +12209,10 @@ class CuratedProtocolSession:
         reviewer = self._reviewer_value_notice()
         if reviewer:
             parts.append(reviewer)
+        # Lane EASY, decision 2: a value today's run changed, said at every arrival.
+        changed = self._run_change_notice()
+        if changed:
+            parts.append(changed)
         branch = self._open_branch()
         if branch is not None:
             parts.append(self._branch_question_words(branch))
@@ -15688,6 +16068,10 @@ class CuratedProtocolSession:
         self._prestart = None
         # Lane VT: "A요, B요?" asked of a "그거".
         self._pending_value_choice = None
+        # Lane EASY, decision 2: today's values belong to the run reset.
+        self._run_changes = {}
+        self._run_change_set_id = None
+        self._pending_run_change = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -15865,6 +16249,8 @@ class CuratedProtocolSession:
         tuple[dict[str, Any] | None, dict[str, int], frozenset[str]],
         tuple[dict[str, Any] | None, dict[str, Any] | None, str | None],
         tuple[dict[str, Any] | None, str | None],
+        tuple[str | None, dict[str, bool]],
+        tuple[tuple[str, ...], str | None],
     ]:
         return (
             self.active,
@@ -15944,6 +16330,13 @@ class CuratedProtocolSession:
             (
                 json.dumps(self._notebook_question) if self._notebook_question is not None else None,
                 dict(self._notebook_said),
+            ),
+            # Lane EASY, decision 2: today's values and their question roll
+            # back with the turn that changed them.
+            (
+                tuple(json.dumps(change.public_dict(), sort_keys=True) for change in self.run_changes()),
+                json.dumps(self._pending_run_change, sort_keys=True)
+                if self._pending_run_change is not None else None,
             ),
         )
 
@@ -16034,6 +16427,11 @@ class CuratedProtocolSession:
             notebook = checkpoint[27] if len(checkpoint) >= 28 else (None, None)
             self._notebook_question = json.loads(notebook[0]) if notebook[0] is not None else None
             self._notebook_said = dict(notebook[1]) if notebook[1] else {"purpose": False, "result": False}
+            if len(checkpoint) >= 29:
+                changes, asked_change = checkpoint[28]
+                restored = [RunChange.from_mapping(json.loads(item)) for item in changes]
+                self._run_changes = {change.item_id: change for change in restored}
+                self._pending_run_change = json.loads(asked_change) if asked_change is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -16446,6 +16844,12 @@ class CuratedProtocolSession:
                 "step": self.timer_status(),
                 "pause": self.pause_timer_status(),
             },
+            # Lane EASY, decision 2: today's values, and the current step's.
+            "run_changes": [change.public_dict() for change in self.run_changes()],
+            "current_step_run_changes": (
+                [change.public_dict() for change in self.run_changes_for_step(self.current_index)]
+                if current_step is not None else []
+            ),
         }
 
     #: Why a forward move was refused, as a short code. The turn layer turns
@@ -17303,6 +17707,10 @@ class CuratedProtocolSession:
                 turn_id=turn_id, configuration_id=configuration_id, generation=generation,
             ),
             prestart=self._prestart_open(),
+            # Lane EASY, decision 2: "3단계 시간을 20분으로 바꿀까요?" (one turn).
+            run_change=self._run_change_confirmation_valid(
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ),
         )
 
     def _note_confirmation_valid(
@@ -17674,6 +18082,9 @@ class CuratedProtocolSession:
             # RA's fragment) are not an answer either -- the question stays.
             or _NOTEBOOK_REQUEST.search(probe)
             or incomplete_fragment(probe)
+            # Lane EASY, decision 2: "1단계 15분 대신 20분으로 할게" changes
+            # a value of today's run; it is no purpose or result.
+            or run_change_request(probe) is not None
         ):
             return None
         kind = str(held["kind"])
@@ -18122,6 +18533,9 @@ class CuratedProtocolSession:
         record_fix_valid = open_questions.record_fix
         if self._pending_record_fix is not None and not record_fix_valid:
             self._pending_record_fix = None
+        run_change_valid = open_questions.run_change
+        if self._pending_run_change is not None and not run_change_valid:
+            self._pending_run_change = None
         note_confirm_valid = open_questions.note_confirm
         if self._pending_note_confirmation is not None and not note_confirm_valid:
             self._pending_note_confirmation = None
@@ -18386,6 +18800,33 @@ class CuratedProtocolSession:
             or binary_reply == "negative"
             else None
         ) if note_confirm_valid and transcript_quality is None else None
+        change_reply = (
+            "affirmative"
+            if (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "affirmative"
+            else "negative"
+            if (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "negative"
+            else None
+        ) if run_change_valid and transcript_quality is None else None
+        if change_reply is not None and self._pending_run_change is not None:
+            # Lane EASY, decision 2: a yes or no to "…바꿀까요?". Only a yes
+            # changes today's value, as it was asked.
+            asked = dict(self._pending_run_change)
+            self._pending_run_change = None
+            self._last_front_rule = "yes_no_open_question"
+            if change_reply == "negative" or not self.active:
+                plan = self._words_plan("바꾸지 않았어요.", intent_kind="run_value_change_declined")
+            else:
+                plan = self._apply_run_change(asked, int(asked.get("step_index") or 0))
+            self._replay[turn_id] = plan
+            return plan
         if note_reply is not None and self._pending_note_confirmation is not None:
             # Lane CF, decision 1: a yes or no to "0.5 mL로 기록할까요?". Only
             # a yes stores the note, as the words were said when it was asked.
@@ -18900,6 +19341,9 @@ class CuratedProtocolSession:
             if note_confirm_valid:
                 # And "0.5 mL로 기록할까요?" (lane CF).
                 self._pending_note_confirmation = None
+            if run_change_valid:
+                # And "…바꿀까요?" (lane EASY, decision 2).
+                self._pending_run_change = None
             if language == "ko" and transcript_quality is None:
                 # Lane VT, decision 3: the words after "A요, B요?" pick one;
                 # anything else goes on as a turn of its own.
@@ -18946,6 +19390,15 @@ class CuratedProtocolSession:
             )
             if observation_pending is not None:
                 self._pending_observation_confirmation = None
+            changed_value = (
+                self._plan_run_change(
+                    transcript, turn_id=turn_id, configuration_id=configuration_id,
+                    generation=generation)
+                if language == "ko" and transcript_quality is None else None
+            )
+            if changed_value is not None:
+                # Lane EASY, decision 2: a value of today's run changed in words.
+                return changed_value
             recorded = (
                 self._plan_record_request(
                     transcript,
@@ -23044,6 +23497,11 @@ class CuratedProtocolSession:
             if language == "ko" else
             f"The source timer for this step is {spoken}. Start {spoken}?"
         )
+        changed = next((change for change in self.run_changes_for_step(self.current_index)
+                        if change.kind == "time" and change.seconds == facts.step_timer_seconds), None)
+        if changed is not None and language == "ko":
+            # Lane EASY, decision 2: the step's time is today's, not the source's.
+            question = f"이 단계 시간은 {changed.words}예요. {_with_ro(spoken)} 시작할까요?"
         self._pending_timer_confirmation = {
             "configuration_id": configuration_id,
             "requested_turn_id": turn_id,
@@ -23155,6 +23613,14 @@ class CuratedProtocolSession:
         return plan
 
     def _source_time_answer(self, language: str) -> str:
+        """The step's source time (below), and a time today's run changed
+        there (lane EASY, decision 2): "오늘 바꾼 값: 20분(오늘 바꾼 값 · 원문 15분)."
+        """
+
+        answer = self._source_time_answer_as_printed(language)
+        return answer + (self._run_change_time_suffix() if language == "ko" else "")
+
+    def _source_time_answer_as_printed(self, language: str) -> str:
         """The current step's source time, as verified, or its words read back.
 
         Lane PT, decision 3: "몇 분 반응시켜?", "이 단계 몇 분이야?". Only the

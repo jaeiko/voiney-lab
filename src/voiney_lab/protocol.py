@@ -59,6 +59,14 @@ def parse_control(raw: str) -> dict[str, Any]:
             or experiment_session_version<=0
         ):
             raise ProtocolError("experiment recovery metadata is invalid")
+        # Lane EASY (human decision 2026-10-24): the "오늘 원문과 다르게 할 값"
+        # choice this start uses, as the server named it; never a value.
+        run_change_set_id=message.get("run_change_set_id")
+        if run_change_set_id is not None and (
+            not isinstance(run_change_set_id,str)
+            or re.fullmatch(r"run-changes-[0-9a-f]{24}",run_change_set_id) is None
+        ):
+            raise ProtocolError("session.start run_change_set_id is invalid")
         return {
             "type":"session.start",
             "mode":mode,
@@ -73,6 +81,7 @@ def parse_control(raw: str) -> dict[str, Any]:
                 }
                 if experiment_session_id is not None else {}
             ),
+            **({"run_change_set_id":run_change_set_id} if run_change_set_id is not None else {}),
         }
     if message["type"]=="session.set_language":
         language=message.get("language")

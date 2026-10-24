@@ -132,6 +132,17 @@
 | 2026-10-23 | PDF 글자 추출 중 그림 바이트를 만들지 않고 기하만 읽는다. 기본 30초 제한은 유지하고 실행기가 실제 설정을 보여 준다 | 불필요 추출 비용 축소, 사람 설정 우선(QA2 #119) | `pdf_text_engine.py`, 실행기 |
 | 2026-10-23 | 홈은 자기 실험만 이어하고, 남의 실험은 읽기 전용으로 표시한다. 계정 지우기를 연결하고 지난 기록에 Word·Markdown·JSON·CSV 링크를 둔다 | 파일럿 전 필수 화면(UI4 #118). PDF·랩미팅·xlsx·PI는 서버만 | `static/index.html`, `docs/USER_GUIDE.md` |
 
+## 12. 프로토콜을 따로 쓰지 않고 쓰기 (줄 EASY)
+
+| 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
+|---|---|---|---|---|---|
+| 2026-10-24 | 올리기·다시 분석에서 분석할 쪽을 고르면 그 쪽만 분석하고, 원문 근거 검사·분석에 없는 원문 검사도 그 쪽만 본다. 고른 쪽은 분석 요청 장부에 남는다. 고르지 않으면 전체 | 논문의 Methods 로 실험하는 연구실이 프로토콜을 따로 쓰지 않게(10/23 답장) | EASY | `protocol_catalog.py` `request_analysis`·`analyze`, `experiment_protocol_analysis.py` `checked_page_range` | 쪽 범위 밖의 OCR 필요 쪽도 지금처럼 분석 전에 OCR 을 기다린다 |
+| 2026-10-24 | 시작 마법사의 안전 주의 뒤에 "오늘 원문과 다르게 할 값"을 둔다(처음에는 건너뛸 수 있었고, 같은 날 아래 후속 결정으로 반드시 지나는 단계가 됨). 실험 중에도 말로 바꾸고 수치 확인 방식대로 되읽는다. 같은 단위 종류만, 안전 주의·완료 기준은 안 되고, 사람이 말하거나 고른 값만 상태 기계가 적용한다. 장부에 덧붙이고 되돌리기는 새 사건이다 | 조건을 수시로 바꾸는 실험(설문 1순위 실험노트) | EASY | `start_check.py` `RunChanges`, `curated_protocol.py` `run_value_change`·`set_run_changes`, `server.py` `start-check/changes`, `experiment_reports.py` | (아래 두 줄로 정함) |
+| 2026-10-24 | 말로 바꿀 때 확인은 confirm_mode 그대로(되읽기는 바로 적용 후 되읽기 — 되물음이 실험 타이밍을 늦춘다는 인터뷰 의견). 새 값이 원문 값의 절반 미만이거나 2배를 넘으면 방식과 관계없이 적용 전에 한 번 묻는다. 다섯 종류 모두 같은 기준, 마법사에서 고른 값도 화면에서 한 번 더 확인 | 큰 값 실수(STT 오인식 포함)를 막되 평소 흐름은 늦추지 않기 | EASY | `start_check.run_change_is_large`, `RunChanges.choose(confirm_large=)`, `curated_protocol.py` `_plan_run_change` | 0 °C 이하 온도는 비율이 없어 언제나 묻는다 |
+| 2026-10-24 | 시작은 반드시 "오늘 원문과 다르게 할 값" 단계를 지나야 열린다("바꿀 값 없이 다음" 포함). "바로 시작" 카드를 포함해 건너뛰는 길과 12시간 안 지난 선택이 조용히 적용되는 길을 없앤다. 단계 위치는 안전 주의 뒤 그대로 | 오늘 조건을 매번 사람이 확인하게 | EASY | `session.start` `run_change_set_id`(`protocol.py`), `server.py` `_start_run_changes`, `static/index.html` `changesPassedFor` | 시작 확인 설정을 끄면 이 요구도 함께 꺼진다 |
+| 2026-10-24 | 같은 계정·같은 프로토콜의 지난 실험이 바꾼 값을 "지난번처럼"으로 다시 고른다. 본인 기록만, 지금 분석의 같은 단계·종류·원문 값일 때만 | 같은 조건 반복 실험 | EASY | `ExperimentReportStore.last_run_values`, `RunChanges.last_time` | |
+| 2026-10-24 | 프로토콜 없이 타이머·기록만 하는 모드는 만들지 않고, 장단점·범위·위험을 줄 보고서의 "선택지"에만 적는다 | 파일럿 뒤에 사람이 정한다 | EASY | (코드 없음) | 파일럿 뒤 결정 |
+
 ## 해결한 빈틈
 
 | 예전 빈틈 | 해결 · 남은 범위 |

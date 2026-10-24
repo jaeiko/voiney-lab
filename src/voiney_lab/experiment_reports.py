@@ -752,6 +752,34 @@ class ExperimentReportStore:
             ).fetchone()
         return row[0] if row and row[0] else None
 
+    def last_run_values(
+        self, *, protocol_id: str, organization_id: str | None, owner_principal_id: str | None,
+    ) -> dict[str, Any] | None:
+        """The values the owner's latest run of this protocol used in place of
+        the source's (lane EASY, decision 3: "지난번처럼"), or None.
+
+        The record's own owner only (the ownership rule of the records): an
+        unknown owner gets nothing; any revision, finished or not.
+        """
+
+        if owner_principal_id is None:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT report_id FROM experiment_reports
+                 WHERE protocol_id=? AND organization_id IS ? AND owner_principal_id=?
+                 ORDER BY started_at DESC, report_id DESC LIMIT 1
+                """,
+                (protocol_id, organization_id, owner_principal_id),
+            ).fetchone()
+        if row is None:
+            return None
+        report = self.get_report(row[0])
+        return {"report_id": report["report_id"], "started_at": report.get("started_at"),
+                "protocol_revision": report.get("protocol_revision"),
+                "changes": run_values(report.get("events") or ())}
+
     def previous_finished_report(self, report: Mapping[str, Any]) -> dict[str, Any] | None:
         """The finished run of the same protocol that started last before this
         one, with its events, or None (lane RP3, decision ① (6): "지난번").
@@ -3092,6 +3120,11 @@ NO_VALUED_STEPS_WORDS = "원문에 값(양·시간·온도·속도·농도)이 �
 NO_OBSERVATION_WORDS = "기록된 관찰이 없다."
 NO_PI_WORDS = "PI 확인: 아직 없음."
 NOTEBOOK_SUBTITLE = "실험 노트"
+#: Lane EASY, decision 2: the events that hold today's values -- the start's
+#: (on "session_started"), a change and a put-back said during the run.
+RUN_VALUE_CHANGED = "run_value_changed"
+RUN_VALUE_REVERTED = "run_value_reverted"
+TODAY_MARK_WORDS = "오늘 바꾼 값"
 #: The kinds the appendix's record table gives decision ②'s sayings.
 SAYING_KINDS = {PURPOSE_RECORDED: "목적·시료", RESULT_RECORDED: "결과·다음 할 일"}
 
@@ -3122,6 +3155,10 @@ class NotebookValue:
     words: str = ""
     key: str = ""
     early: bool = False
+    #: Lane EASY, decision 2: the value today's run chose in place of the
+    #: source's ("20분"), "" when none was; ``actual`` is then that value, or
+    #: what the record says happened instead (a timer ended early).
+    planned: str = ""
 
 
 @dataclass(frozen=True)
@@ -3398,6 +3435,52 @@ class _Measure:
         return False
 
 
+def run_values(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Today's values of a record as they stood at its end (lane EASY, 2-3):
+    the start's ("session_started"), then each change and put-back in order."""
+
+    kept: dict[str, dict[str, Any]] = {}
+    for event in events:
+        kind = str(event.get("event_type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        record = payload.get("step_record") if isinstance(payload.get("step_record"), Mapping) else {}
+        if kind == "session_started":
+            for item in payload.get("run_changes") or ():
+                if isinstance(item, Mapping) and item.get("item_id"):
+                    kept[str(item["item_id"])] = {**item, "event_key": str(event.get("event_key") or "")}
+        elif kind == RUN_VALUE_CHANGED and isinstance(record.get("change"), Mapping):
+            kept[str(record["change"].get("item_id"))] = {
+                **record["change"], "event_key": str(event.get("event_key") or "")}
+        elif kind == RUN_VALUE_REVERTED:
+            for item in record.get("reverted") or ():
+                if isinstance(item, Mapping):
+                    kept.pop(str(item.get("item_id")), None)
+    return list(kept.values())
+
+
+def _actual_words(value: NotebookValue) -> str:
+    """What was used, with today's value marked: "20분 (오늘 바꾼 값)", or
+    "20분(오늘 바꾼 값) · 12분에 끝냄" when its timer ended early."""
+
+    if not value.planned:
+        return value.actual
+    if value.actual != value.planned:
+        return f"{value.planned}({TODAY_MARK_WORDS}) · {value.actual}"
+    return f"{value.actual} ({TODAY_MARK_WORDS})"
+
+
+def _planned_seconds(shown: str) -> tuple[str, str, str]:
+    """A Korean time as today's value shows it ("20분") as a measure's parts."""
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(초|분|시간|일)", shown.strip())
+    if match is None:
+        return ("", "", shown)
+    unit = {"초": "s", "분": "min", "시간": "h"}.get(match[2])
+    if unit is None:
+        return (str(float(match[1]) * 24), "h", shown)
+    return (match[1], unit, shown)
+
+
 def _condition_measures(text: str) -> list[_Measure]:
     """The values of the notebook's kinds a text states, in order, once each."""
 
@@ -3607,6 +3690,10 @@ def build_lab_notebook(
             except (TypeError, ValueError):
                 continue
 
+    # Lane EASY, decision 2: today's values -- the start's, then each change
+    # and put-back said during the run, in the record's order.
+    planned = {str(item["item_id"]): (item, str(item.get("event_key") or "")) for item in run_values(events)}
+
     # The conditions actually used (decision ① 3): each performed step's
     # source values, and for each what the record says was used instead.
     live = [record for record in facts.records if record.status != "취소됨"]
@@ -3673,13 +3760,41 @@ def build_lab_notebook(
                 if not family or any(measures[id(found[i])].same_as(measure) for i in family):
                     continue
                 set_actual(family[0], measure.written, record.text, record.key)
+        # Lane EASY, decision 2: a value today's run chose, where the record
+        # does not say something else was done.
+        for item, key in planned.values():
+            if str(item.get("step_label") or "") != step.label:
+                continue
+            source = _Measure(str(item.get("source_number") or ""), str(item.get("source_unit") or ""),
+                              str(item.get("source_written") or ""))
+            shown = " ".join(str(item.get("shown_ko") or "").split())
+            position = next((i for i, value in enumerate(found) if measures.get(id(value)) is not None
+                             and (measures[id(value)].same_as(source) or (
+                                 measures[id(value)].unit == source.unit
+                                 and measures[id(value)].number == source.number))), None)
+            if position is None:
+                found.append(NotebookValue(
+                    step.label, str(item.get("kind_ko") or "값"), source.family,
+                    source.written or str(item.get("source_shown_ko") or ""),
+                    actual=shown, key=key, planned=shown))
+                continue
+            if not found[position].actual:
+                found[position] = _replace_dataclass(found[position], actual=shown, key=key, planned=shown)
         if step.label in early:
             elapsed, duration, key = early[step.label]
             ended = f"{_duration_words(elapsed)}에 끝냄"
             position = next((i for i, value in enumerate(found) if measures.get(id(value)) is not None
                              and measures[id(value)].family == "time" and measures[id(value)].same_as(
                                  _Measure(str(duration), "s", f"{duration} s"))), None)
-            if position is not None:
+            if position is None:
+                # A timer today's run changed ran for the changed time.
+                position = next((i for i, value in enumerate(found) if value.planned and value.actual == value.planned
+                                 and _Measure(*_planned_seconds(value.planned)).same_as(
+                                     _Measure(str(duration), "s", f"{duration} s"))), None)
+                if position is not None:
+                    found[position] = _replace_dataclass(found[position], actual=ended, key=key, early=True)
+                    position = -1
+            if position is not None and position >= 0:
                 set_actual(position, ended, "", key, True)
             elif duration:
                 found.append(NotebookValue(step.label, "시간", "time", _duration_words(duration),
@@ -3689,13 +3804,13 @@ def build_lab_notebook(
             continue
         differing = [value for value in found if value.actual]
         condition_by_label[step.label] = (
-            " · ".join(f"{value.kind} {value.written} → {value.actual}" for value in differing)
+            " · ".join(f"{value.kind} {value.written} → {_actual_words(value)}" for value in differing)
             if differing else f"{AS_SOURCE_WORDS} — " + " · ".join(dict.fromkeys(value.written for value in found)))
         if differing:
             flush_group()
             parts = []
             for value in differing:
-                part = f"{value.kind} {value.written} → {value.actual}"
+                part = f"{value.kind} {value.written} → {_actual_words(value)}"
                 if value.early:
                     part += " (타이머 일찍 끝냄)"
                 if value.words:
@@ -3808,12 +3923,15 @@ def build_lab_notebook(
         if value.actual and not value.early:
             position = index_by_key.get(value.key, len(kinds))
             differences.append(NotebookDifference(
-                position, f"{value.label}단계 {value.kind}: 원문 {value.written} → {value.actual}"
+                position, f"{value.label}단계 {value.kind}: 원문 {value.written} → {_actual_words(value)}"
                           + (f" — “{value.words}”" if value.words else "") + mark(value.key)))
     for label, (elapsed, duration, key) in early.items():
+        # Lane EASY, decision 2: a timer today's run changed is today's, not the source's.
+        today = any(value.label == label and value.planned and value.early for value in values)
         differences.append(NotebookDifference(
             index_by_key.get(key, len(kinds)),
-            f"{label}단계 타이머: 원문 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 끝냄" + mark(key)))
+            f"{label}단계 타이머: {TODAY_MARK_WORDS if today else '원문'} {_duration_words(duration)} 중 "
+            f"{_duration_words(elapsed)}에 끝냄" + mark(key)))
     for record in live:
         if record.kind == "이상":
             differences.append(NotebookDifference(
