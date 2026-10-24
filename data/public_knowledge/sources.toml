@@ -16,6 +16,11 @@
 # grade (additional decision 3): "A" = public institution, standard or
 # peer-reviewed article; "B" = open textbook; "C" = wiki. The answer uses a
 # higher grade first and says so when a wiki is the only ground.
+#
+# Of the same material only the latest is kept (human decision 2026-10-24):
+# a document is fetched again only when its source changed (revision id,
+# ETag, refresh interval) and the new copy replaces the old; the same words
+# from two sources keep the copy whose version or fetched date is later.
 
 version = 1
 # Wikimedia's User-Agent policy wants a descriptive agent with a way to reach

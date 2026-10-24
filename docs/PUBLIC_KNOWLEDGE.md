@@ -49,8 +49,11 @@ python scripts/public_knowledge_pipeline.py evaluate --backend moss --index voin
 
 `collect` 는 출처마다 조건부 요청(ETag·Last-Modified, 위키백과 개정 id,
 PubChem·위키데이터는 30일 간격)으로 바뀐 것만 받고, 원본 캐시에서 묶음
-전체를 다시 만든다(파서를 고치면 모두에 적용, 조각 id 는 그대로). 실패한
-출처·항목은 `bundle/failures.jsonl` 에 적고 건너뛴다. 묶음은
+전체를 다시 만든다(파서를 고치면 모두에 적용, 조각 id 는 그대로). 같은
+자료는 최신 것만 남는다: 바뀐 문서는 새 사본이 옛 사본을 대신하고, 같은
+글이 두 출처에 있으면 출처 버전(날짜)이나 받은 날짜가 늦은 쪽을 둔다(사람
+결정 2026-10-24). 실패한 출처·항목은 `bundle/failures.jsonl` 에 적고
+건너뛴다. 묶음은
 `bundle/chunks.jsonl`, `bundle/manifest.json`(출처별 조각 수·글자 수·요청
 수), `bundle/glossary.json`.
 
