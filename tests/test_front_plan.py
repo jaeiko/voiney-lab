@@ -284,6 +284,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "visual_request",
             # lane VX, decision 1
             "forward_step",
+            # lane HELP, decision 1 (2026-10-24)
+            "problem_help",
         })
 
 

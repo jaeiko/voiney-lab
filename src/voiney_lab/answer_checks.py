@@ -712,3 +712,137 @@ def server_value_violations(text: str, values: ServerValues) -> tuple[str, ...]:
             violations.append("title_not_server_value")
             break
     return tuple(violations)
+
+
+# --- Help with a problem (lane HELP, 2026-10-24) -----------------------------------
+#
+# The help after a problem ("젤이 아직 파래") quotes the sources and adds only
+# fixed sentences; a model may add possible causes ("AI 일반 지식", ③). Neither
+# may give a number the quoted sources do not state, tell a condition to be
+# changed, give permission to go on, judge safety, say that something was done
+# or ask what only the server asks. The quoted lines themselves are the
+# source's or the record's words and are not judged here.
+
+#: Permission to go on, or a judgment that all is well.
+_HELP_PERMISSION = re.compile(
+    r"(?:계속|진행|넘어가|해|써|사용해|넣어|그대로\s*해)\s*도\s*(?:돼|되|됩|괜찮|무방)"
+    r"|괜찮(?:아요|습니다|을\s*거|아)|문제\s*(?:없|안\s*(?:돼|되))|정상(?:이에요|입니다|이야|적이)"
+    r"|걱정\s*(?:안\s*해도|하지\s*않아도|없|마)"
+    r"|\b(?:you\s+can\s+(?:continue|proceed|go\s+on|move\s+on|keep\s+going)|it(?:'|’)?s\s+(?:fine|ok(?:ay)?|normal)"
+    r"|(?:is|are)\s+(?:fine|normal)|no\s+problem|nothing\s+to\s+worry)\b",
+    re.I,
+)
+#: A change of a condition told as something to do: "늘리세요", "더 넣어 보세요".
+_HELP_CONDITION_CHANGE = re.compile(
+    r"(?:늘리|늘려|줄이|줄여|바꾸|바꿔|올리|올려|낮추|낮춰|높이|높여|더\s*넣|추가로\s*넣|추가하|교체하|교체해"
+    r"|대신\s*(?:쓰|써|사용)|연장하|연장해|단축하|다시\s*만들|다시\s*준비)"
+    r"\S*\s*(?:세요|십시오|면\s*(?:돼|됩)|보세요|는\s*게\s*좋|야\s*(?:해|합|돼))"
+    r"|\b(?:increase|decrease|raise|lower|extend|shorten|replace|substitute|switch\s+to|add\s+more|use\s+more"
+    r"|use\s+less|try\s+(?:adding|using|increasing|changing))\b",
+    re.I,
+)
+#: A judgment about safety (the source's warnings are quoted, never judged).
+_HELP_SAFETY_JUDGMENT = re.compile(
+    r"안전(?:해|합|하|한|함)|위험(?:해|합|하|한|함)|유해|무해|독성|해롭|해로울|인체에"
+    r"|\b(?:safe|unsafe|dangerous|hazardous|harmless|toxic)\b",
+    re.I,
+)
+#: A possible cause said as one: "~일 수 있어요", "may", "might".
+_HEDGED = re.compile(r"수\s*있(?:어요|습니다|어|다)|수도\s*있|지도\s*몰라|\b(?:may|might|could|possibly)\b", re.I)
+#: The server's own numbers in the help's frame: a page, a step, a run's date.
+_HELP_FRAME_NUMBER = re.compile(
+    r"\d+\s*쪽|p\.\s*\d+|page\s+\d+|\d+(?:\s*~\s*\d+)?\s*단계|steps?\s+\d+|\d+\s*월\s*\d+\s*일", re.I)
+#: At most this many characters of possible causes.
+POSSIBLE_CAUSES_MAX_CHARS = 200
+
+
+def _help_words_violations(text: str, *, labels: bool = True) -> list[str]:
+    violations: list[str] = []
+    if _HELP_PERMISSION.search(text):
+        violations.append("permission")
+    if _HELP_CONDITION_CHANGE.search(text):
+        violations.append("condition_change")
+    if _HELP_SAFETY_JUDGMENT.search(text) or any(
+            permissive_hazard_topics(sentence) for sentence in _SENTENCE_END.split(text)):
+        violations.append("safety_judgment")
+    if claims_state_change(text):
+        violations.append("state_claim")
+    if asks_server_question(text):
+        violations.append("server_question")
+    if labels and display_label_violations(text):
+        violations.append("display_label")
+    if "http://" in text.casefold() or "https://" in text.casefold():
+        violations.append("url")
+    return violations
+
+
+def problem_help_violations(text: str, *, quoted: Iterable[str]) -> tuple[str, ...]:
+    """Why the help's own words may not be said; empty when they may.
+
+    ``quoted`` are the lines the help quotes (the source's sentences and
+    their checked readings, a past record's words, a public line): they are
+    taken out first, and so are the page, step and date the frame names.
+    What is left -- the help's fixed sentences -- may state no number at all.
+    """
+
+    rest = text
+    for line in sorted({item.strip() for item in quoted if item and item.strip()}, key=len, reverse=True):
+        rest = rest.replace(line, " ")
+    rest = _HELP_FRAME_NUMBER.sub(" ", rest)
+    # The frame's own labels ("원문 · p.5 · 7단계") are the server's, not a
+    # model imitating the screen.
+    violations = _help_words_violations(rest, labels=False)
+    if _ANY_DIGIT.search(rest):
+        violations.append("number_not_in_sources")
+    return tuple(dict.fromkeys(violations))
+
+
+def possible_cause_violations(
+    text: str, *, sources_text: str, protocol_text: str,
+) -> tuple[str, ...]:
+    """Why a model's possible causes (③) may not be said; empty when they may.
+
+    Each sentence says a possible cause ("~일 수 있어요"); a number must be one
+    the quoted sources state; a word in Latin letters and a laboratory word in
+    Korean must be one of the protocol's own (no new reagent or material); no
+    instruction about safety, no change of a condition, no permission, no
+    safety judgment, nothing said to be done and no server question.
+    """
+
+    body = " ".join(text.split()).strip()
+    if not body:
+        return ("empty",)
+    violations = _help_words_violations(body)
+    if len(body) > POSSIBLE_CAUSES_MAX_CHARS:
+        violations.append("too_long")
+    if NUMERIC.search(body) and introduces_numbers(body, sources_text):
+        violations.append("number_not_in_sources")
+    if introduces_bare_numbers(body, sources_text):
+        violations.append("number_not_in_sources")
+    if ungrounded_safety_instructions(body, protocol_text):
+        violations.append("safety_instruction")
+    folded = protocol_text.casefold()
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", body):
+        if word.casefold() not in folded and word.casefold() not in _GENERAL_ENGLISH:
+            violations.append("term_not_in_protocol")
+            break
+    else:
+        # A laboratory word said in Korean ("메탄올") whose English the
+        # protocol does not write: the state machine's lab lexicon, read here.
+        from voiney_lab.curated_protocol import _LAB_LEXICON
+
+        for _key, english, korean, _stem in _LAB_LEXICON:
+            if any(form in body for form in korean) and not any(
+                    surface in folded for surface in english) and not any(form in protocol_text for form in korean):
+                violations.append("term_not_in_protocol")
+                break
+    if any(not _HEDGED.search(sentence) for sentence in _SENTENCE_END.split(body) if sentence.strip()):
+        violations.append("not_hedged")
+    return tuple(dict.fromkeys(violations))
+
+
+#: English words a cause may use that name no reagent or material.
+_GENERAL_ENGLISH = frozenset({
+    "may", "might", "could", "possibly", "the", "and", "or", "not", "too", "enough", "gel", "band",
+    "sample", "solution", "buffer", "cells", "cell", "time", "temperature", "volume", "ai",
+})

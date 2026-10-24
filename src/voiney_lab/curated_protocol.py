@@ -46,6 +46,7 @@ from voiney_lab.intent_arbitration import (
     RequestArbitration,
     RequestIntent,
     arbitrate_request,
+    problem_reading,
 )
 from voiney_lab.answer_checks import (
     ServerValues,
@@ -134,6 +135,9 @@ class CuratedProtocolAction(str, Enum):
     REPORT_HANDOFF = "report_handoff"
     RECORD_CORRECTION = "record_correction"
     REPORT_REVIEW = "report_review"
+    #: A problem asked about at the bench (lane HELP): help from the sources,
+    #: nothing recorded, nothing changed.
+    PROBLEM_HELP = "problem_help"
 
 
 class CuratedProtocolSpeechMode(str, Enum):
@@ -563,6 +567,11 @@ class CuratedProtocolTurnPlan:
     #: and the change for next time, or a correction of one of these. The
     #: server stores it; nothing here moves the run.
     notebook_record: dict[str, Any] | None = None
+    #: Lane HELP (decision 1): a problem said or asked about at this step --
+    #: its words, its kind ("statement" recorded as an anomaly, "question"
+    #: only asked), the step and whether it is a safety event. The server
+    #: adds the sources' help after the reply (``knowledge``); nothing moves.
+    problem_help: dict[str, Any] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -3389,6 +3398,7 @@ _OBSERVATION_PROMPT_PASS_THROUGH = frozenset({
 })
 _OBSERVATION_PROMPT_READ_ONLY = frozenset({
     CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.PROBLEM_HELP,
     CuratedProtocolAction.RELATED_QUESTION,
     CuratedProtocolAction.FULL_DETAIL,
     CuratedProtocolAction.CURRENT,
@@ -4144,6 +4154,14 @@ FRONT_RULES: dict[str, str] = {
                    "취소하고 N단계로 돌아갈까요?'; a yes goes back and the revert "
                    "is recorded beside the completions, which stay (lane CF, "
                    "decision 3)",
+    "problem_help": "a problem at the bench said or asked about -- '젤이 아직 "
+                    "파래', '침전이 생겼어', '왜 안 되지?' (intent_arbitration."
+                    "problem_reading) -- that no earlier rule owns: said as having "
+                    "happened it is recorded as an anomaly as the anomaly reader "
+                    "records one, asked it is not; either way the server adds help "
+                    "from the protocol and the account's earlier runs of it, with "
+                    "where each line comes from, and nothing moves (lane HELP, "
+                    "decision 1)",
     "visual_request": "a picture asked for -- the step's own figure ('그림 보여줘', "
                       "'이 단계 그림 있어?', '사진 보여줘'), a web lookup of a thing "
                       "named ('X가 어떻게 생겼어?', '실제 사진', '웹에서 찾아봐'), or a "
@@ -5148,6 +5166,7 @@ _RETURN_SUMMARY_ACTIONS = frozenset({
     CuratedProtocolAction.UNSUPPORTED, CuratedProtocolAction.AGENT_META,
     CuratedProtocolAction.TIMER_STATUS, CuratedProtocolAction.PREVIEW_STEP,
     CuratedProtocolAction.STEP_RANGE, CuratedProtocolAction.LAB_DOMAIN_QA,
+    CuratedProtocolAction.PROBLEM_HELP,
 })
 #: The notices each choice says aloud; the screen shows a timer's every
 #: notice whatever is chosen (decision 6).
@@ -5674,6 +5693,22 @@ def _spill_reading(key: str, transcript: str) -> str | None:
             or (is_question_or_speculation(transcript) and not _asserted_spill_clause(transcript))):
         return "not_reported"
     return "reported" if _SPILL_REPORT.search(key) else None
+
+
+#: Lane HELP: each session's index of its protocol's sentences, built once
+#: and kept outside the session's own state (which is copied and compared
+#: whole); it goes with the session.
+_PROBLEM_KNOWLEDGE: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
+_PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
+#: Lane HELP: the record's category of a problem no anomaly pattern names.
+PROBLEM_CATEGORY = "unexpected_result"
+#: The intents the problem reader makes (front rule "problem_help").
+_PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet"})
+#: The anomalies whose help leaves out what a model may say (③): a spill,
+#: an exposure or a contamination is the source's and the lab's to speak to.
+_SAFETY_ANOMALY_CATEGORIES = frozenset({
+    "spill_exposure_safety_event", "contamination_concern",
+})
 
 
 def _anomaly_category(key: str) -> str:
@@ -7425,8 +7460,15 @@ def classify_curated_control_intent(
     max_steps: int = 25,
     protocol_vocabulary: ProtocolVocabulary | None = None,
     endpoint_step_for: Callable[[str], str | None] | None = None,
+    read_problem_statements: bool = True,
 ) -> CuratedControlIntent:
-    """Classify reviewed workflow shapes before any knowledge or model route."""
+    """Classify reviewed workflow shapes before any knowledge or model route.
+
+    ``read_problem_statements``: whether a problem said as having happened is
+    read (lane HELP); the session turns it off where the words name the
+    step's own endpoint ("탈색이 안 됐어"), which the endpoint readers and
+    gates own. A problem asked about is helped either way.
+    """
 
     if front := _front_control_intent(transcript, language):
         return front
@@ -7949,6 +7991,23 @@ def classify_curated_control_intent(
             protocol_scope="UNSUPPORTED_OPERATIONAL",
         )
     spill = _spill_reading(key, transcript)
+    problem = problem_reading(transcript) if spill != "reported" else None
+    if problem is not None and (
+        problem.kind == "question" or is_question_or_speculation(transcript)
+    ):
+        # Lane HELP, decision 1: a problem asked about ("왜 아직 파래?",
+        # "침전이 생겼는데 어떡해") is helped and not recorded, as the anomaly
+        # reader records nothing asked ("어떻게 해"). A spill said as having
+        # happened is recorded below with a question after it (lane R7).
+        return CuratedControlIntent(
+            intent_kind="problem_question",
+            action=CuratedProtocolAction.PROBLEM_HELP,
+            target_step="authoritative_current_step",
+            question_kind="troubleshooting",
+            language=language,
+            normalized_transcript=key,
+            question_dimensions=("troubleshooting",),
+        )
     for pattern, category in _ANOMALY_PATTERNS:
         match = pattern.search(key)
         if match is None:
@@ -7970,6 +8029,19 @@ def classify_curated_control_intent(
             reported_anomaly=True,
             anomaly_category=category,
             spill_reported=spill == "reported",
+        )
+    if problem is not None and read_problem_statements and not _ANOMALY_NON_ASSERTION.search(key):
+        # Lane HELP, decision 1: a problem said as having happened that no
+        # anomaly pattern names ("젤이 아직 파래", "침전이 생겼어") is recorded
+        # as one, read back as one is, and helped.
+        return CuratedControlIntent(
+            intent_kind="problem_report",
+            action=CuratedProtocolAction.REPORT_ANOMALY,
+            question_kind="anomaly",
+            language=language,
+            reported_anomaly=True,
+            anomaly_category=PROBLEM_CATEGORY,
+            normalized_transcript=key,
         )
     if any(pattern.search(key) for pattern in _SOURCE_REQUEST_PATTERNS):
         return CuratedControlIntent(
@@ -12481,6 +12553,96 @@ class CuratedProtocolSession:
             return f"{lead}{subject}{_josa(subject, '은', '는')} 웹 찾아보기가 꺼져 있어 찾아보지 않았어요. 원문이 기준이에요."
         return f"{lead}그림 그리기가 꺼져 있어 그리지 않았어요. 원문이 기준이에요."
 
+    # --- Help with a problem (lane HELP, 2026-10-24) --------------------------------
+
+    def problem_knowledge(self) -> Any:
+        """The protocol's own sentences, indexed once for this fixture."""
+
+        from voiney_lab.knowledge import ProtocolKnowledge
+
+        with _PROBLEM_KNOWLEDGE_LOCK:
+            held = _PROBLEM_KNOWLEDGE.get(self)
+        if held is not None and held.fixture is self.fixture:
+            return held
+        built = ProtocolKnowledge(self.fixture)
+        with _PROBLEM_KNOWLEDGE_LOCK:
+            held = _PROBLEM_KNOWLEDGE.get(self)
+            if held is None or held.fixture is not self.fixture:
+                _PROBLEM_KNOWLEDGE[self] = held = built
+            return held
+
+    def _problem_help_marker(
+        self, transcript: str, *, kind: str, category: str | None = None, safety: bool = False,
+    ) -> dict[str, Any]:
+        step = self.fixture.steps[self.current_index] if self.active else None
+        return {
+            "words": " ".join(transcript.split())[:400],
+            "kind": kind,
+            "category": category,
+            # A spill (lane R7), an exposure or a contamination: no model's
+            # possible causes are said about it (③).
+            "safety": bool(safety or category in _SAFETY_ANOMALY_CATEGORIES),
+            "step_index": self.current_index if step is not None else None,
+            "step_id": step.step_id if step is not None else None,
+            "step_label": step.source_label if step is not None else None,
+            "workflow_revision": self._revision,
+        }
+
+    def problem_help_context(self, marker: Mapping[str, Any], *, language: str,
+                             organization_id: str | None = None,
+                             account_id: str | None = None) -> Any:
+        """The search scope of a problem's help: this run's protocol and step."""
+
+        from voiney_lab.knowledge import KnowledgeContext
+
+        return KnowledgeContext(
+            organization_id=organization_id, account_id=account_id,
+            protocol_id=self.fixture.protocol_id, revision_id=self.fixture.revision_id,
+            step_id=marker.get("step_id"), language=language,
+        )
+
+    def _problem_help_plan(
+        self, transcript: str, *, language: str, intent: CuratedControlIntent,
+    ) -> CuratedProtocolTurnPlan:
+        """A problem asked about (decision 1): the protocol's help, read-only.
+
+        What the source says about it here (①) and the closing (④); the
+        server puts the account's earlier runs (②) and, when it may, the
+        public or general lines (③) in before it is said. Nothing is
+        recorded by this plan and nothing moves.
+        """
+
+        from voiney_lab.knowledge import compose_problem_help
+
+        marker = self._problem_help_marker(
+            transcript, kind="not_yet" if intent.intent_kind == "problem_not_yet" else "question")
+        hits = self.problem_knowledge().search_sync(
+            marker["words"], limit=4, context=self.problem_help_context(marker, language=language))
+        help_ = compose_problem_help(hits, language=language)
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.PROBLEM_HELP,
+            display_text=help_.shown,
+            speech_text=help_.spoken,
+            speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+            facts=self.fixture.facts_for_step(self.current_index),
+            step_label=step.source_label if self.active else None,
+            final_step=self.active and self.current_index == len(steps) - 1,
+            state_changed=False,
+            primary_text=help_.shown,
+            source_texts=tuple(hit.text for hit in hits),
+            source_pages=tuple(int(hit.detail("page") or 0) for hit in hits),
+            translation_status="deterministic_protocol_structure",
+            intent_kind=intent.intent_kind,
+            target_step="authoritative_current_step",
+            question_kind="troubleshooting",
+            normalized_transcript=intent.normalized_transcript,
+            question_dimensions=("troubleshooting",),
+            answer_origin="current_protocol",
+            problem_help=marker,
+        )
+
     def _words_plan(
         self,
         words: str,
@@ -15767,7 +15929,7 @@ class CuratedProtocolSession:
                 normalized_transcript=_utterance_key(transcript),
             )
         shared_decision = arbitration or arbitrate_request(transcript)
-        return _front_control_intent(transcript, language) or curated_intent_from_arbitration(
+        intent = _front_control_intent(transcript, language) or curated_intent_from_arbitration(
             shared_decision,
             language=language,
         ) or classify_curated_control_intent(
@@ -15782,7 +15944,52 @@ class CuratedProtocolSession:
             max_steps=len(self.fixture.steps),
             protocol_vocabulary=self._protocol_vocabulary(),
             endpoint_step_for=self._step_naming_state,
+            read_problem_statements=not self._names_own_endpoint(transcript),
         )
+        if intent.intent_kind == "problem_report" and self._problem_not_yet(transcript):
+            # Lane HELP: "아직 파래" at a step repeated until the band is
+            # destained is the repeat's own course, not a problem to record:
+            # it is helped (the repeat condition) and nothing is recorded.
+            intent = replace(
+                intent, intent_kind="problem_not_yet", action=CuratedProtocolAction.PROBLEM_HELP,
+                reported_anomaly=False, anomaly_category=None, question_kind="troubleshooting",
+                question_dimensions=("troubleshooting",), target_step="authoritative_current_step",
+            )
+        return intent
+
+    def _names_own_endpoint(self, transcript: str) -> bool:
+        """Whether the words name the current step's endpoint ("탈색이 안 됐어"
+        at a step repeated until destained): the endpoint readers' words, and
+        the gates', never a problem for the help (lane HELP)."""
+
+        if not self.active or not 0 <= self.current_index < len(self.fixture.steps):
+            return False
+        words = self._endpoint_words(self.current_index)
+        if words.empty:
+            return False
+        said = " ".join(transcript.split()).casefold()
+        return any(stem in said for stem in (*words.positive_ko, *words.paraphrases_ko)) or any(
+            re.search(rf"(?<![a-z]){re.escape(stem)}", said) for stem in words.positive_en)
+
+    def _problem_not_yet(self, transcript: str) -> bool:
+        """Whether a problem said here is the step's endpoint not reached yet:
+        the step anchors a repeat-until and the words name a state its
+        condition or expected result names ("파래" for "destained")."""
+
+        from voiney_lab.knowledge import problem_concepts
+
+        if not self.active or not 0 <= self.current_index < len(self.fixture.steps):
+            return False
+        step = self.fixture.steps[self.current_index]
+        interval = self.repetition_anchored_at(step.step_id)
+        if interval is None:
+            return False
+        texts = [
+            str(interval.get("source_text") or ""), str(interval.get("condition_source_text") or ""),
+            *(fact.text for fact in self.fixture.facts_for_step(self.current_index)
+              if fact.kind == "expected_result"),
+        ]
+        return bool(problem_concepts(" ".join(texts)) & problem_concepts(transcript))
 
     @property
     def last_front_rule(self) -> str | None:
@@ -17347,6 +17554,10 @@ class CuratedProtocolSession:
             return "anomaly_report"
         if intent.intent_kind in {"step_duration_question", "step_timer_elapsed"}:
             return "step_time"
+        if intent.intent_kind in _PROBLEM_HELP_KINDS:
+            # Lane HELP, decision 1: the help is the server's, from its own
+            # sources (the protocol and the account's records), router or not.
+            return "problem_help"
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
@@ -17946,7 +18157,7 @@ class CuratedProtocolSession:
                 RequestIntent.LEARNING, RequestIntent.PROTOCOL_AUDIT,
                 RequestIntent.HISTORY_RESUME, RequestIntent.UNCERTAINTY,
                 RequestIntent.VISUAL, RequestIntent.CURRENT_STEP, RequestIntent.GENERAL_QA,
-                RequestIntent.COMBINED_LEARNING_NEXT,
+                RequestIntent.COMBINED_LEARNING_NEXT, RequestIntent.TROUBLESHOOTING,
             }
             and not _asserted_spill_clause(transcript)
             and not (
@@ -20557,7 +20768,20 @@ class CuratedProtocolSession:
                 reported_anomaly=True,
                 anomaly_category=category,
                 anomaly_text=transcript.strip()[:800],
+                # Lane HELP, decision 1: a new problem recorded -- by the
+                # rules, the router's confirmed proposal or the spill rule --
+                # is helped after it is read back; more words for a pending
+                # one, or a problem said with an endpoint, are not.
+                problem_help=(
+                    self._problem_help_marker(
+                        transcript, kind="statement", category=category,
+                        safety=intent.spill_reported)
+                    if intent.intent_kind not in {"enrich_pending_anomaly", "observation_with_anomaly"}
+                    else None
+                ),
             )
+        elif command is CuratedProtocolAction.PROBLEM_HELP:
+            plan = self._problem_help_plan(transcript, language=language, intent=intent)
         elif command is CuratedProtocolAction.SHOW_REPORT:
             step = steps[self.current_index]
             response = {
