@@ -433,6 +433,14 @@ responses are discarded. Sheets reagent-table attachment remains API-only.
 
 `#/protocols` is the list, `#/protocols/<id>` its own detail screen, and
 `#/upload` follows pick → progress (elapsed time/current work) → result.
+While the page is visible and signed in, the catalog re-reads
+`/api/protocols` quietly (`scheduleCatalogRefresh`): every 5 s while an entry's
+analysis runs, every 30 s otherwise, and at once on a tab change, on
+`visibilitychange` back to visible and when the start sheet opens; it stops
+while hidden. A quiet refresh keeps status lines, skips an unchanged list,
+keeps the list on failure and drops answers older than the one drawn. The
+start sheet and the start ask the server once more
+(`recheckProtocolRunnable`) before refusing a protocol as not runnable.
 Detail groups analysis, source comparison, reagent tables, review history
 and reanalysis in expandable sections. `#/records` lists server-provided
 experiments; `#/records/<id>` opens one timeline and reads

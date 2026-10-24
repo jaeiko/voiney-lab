@@ -1656,6 +1656,9 @@ let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfig
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
 let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="",workspacePrincipalId="";
 const protocolCatalog=new Map();
+// Lane PRE decision 1 (2026-10-24): the catalog's own refresh -- its timer, the loads in flight, the newest answer drawn.
+const CATALOG_REFRESH_RUNNING_MS=5000,CATALOG_REFRESH_IDLE_MS=30000;
+let catalogRefreshHandle=null,catalogLoadsInFlight=0,catalogRequestSeq=0,catalogAppliedSeq=0,catalogSignature=null,catalogRouteTab=null;
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null,reportReadOnly=false;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
 const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
@@ -3622,18 +3625,52 @@ async function startSession(){
   sendControl("session.start",pending);
  }catch(e){if(generation===sessionGeneration)fail(e);}
 }
-async function loadProtocolCatalog(preferredProtocolId=null){
+// Lane PRE decision 1 (2026-10-24, lane PERSONA F1): a page left open kept the list it loaded, so a
+// protocol whose analysis ended meanwhile -- a labmate's upload, or one's own in another tab -- stayed
+// "분석 중" and the start sheet refused it until a reload. While the page is shown the list asks the
+// server again: every 5 s while an analysis in it runs, every 30 s otherwise, and at once when a tab
+// opens, the page comes back into view or the start sheet opens; nothing while hidden or before a login.
+// Such a refresh is quiet: the status lines stay, an unchanged list is not drawn again, a refresh that
+// fails keeps the list on screen, and an answer older than one already drawn is dropped.
+function pageShown(){return globalThis.document?.visibilityState!=="hidden";}
+function catalogEntryAnalysing(entry){return PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||PROTOCOL_RUNNING_STATES.has(protocolAnalysisRun(entry)?.state);}
+function stopCatalogRefresh(){if(catalogRefreshHandle!==null)clearTimeout(catalogRefreshHandle);catalogRefreshHandle=null;}
+function scheduleCatalogRefresh(){
+ stopCatalogRefresh();
+ if(!pageShown()||authRequired())return null;
+ const delay=[...protocolCatalog.values()].some(catalogEntryAnalysing)?CATALOG_REFRESH_RUNNING_MS:CATALOG_REFRESH_IDLE_MS;
+ catalogRefreshHandle=setTimeout(()=>{catalogRefreshHandle=null;void refreshProtocolCatalog();},delay);catalogRefreshHandle?.unref?.();
+ return delay;
+}
+// A load already in flight answers for this one (and schedules the next).
+async function refreshProtocolCatalog(){if(!pageShown()||authRequired()){stopCatalogRefresh();return false;}if(catalogLoadsInFlight>0)return false;return loadProtocolCatalog(null,{quiet:true});}
+function onCatalogVisibilityChange(){if(pageShown())return refreshProtocolCatalog();stopCatalogRefresh();return Promise.resolve(false);}
+// Before the page says a protocol cannot run, it asks the server once more (the start sheet, the start).
+async function recheckProtocolRunnable(protocolId){
+ if(!protocolId)return false;
+ if(protocolCatalog.get(protocolId)?.available_for_execution!==true)await loadProtocolCatalog(null,{quiet:true});
+ return protocolCatalog.get(protocolId)?.available_for_execution===true;
+}
+async function loadProtocolCatalog(preferredProtocolId=null,{quiet=false}={}){
  const selector=$("protocol-id");
  if(!selector||typeof fetch!=="function")return;
- const manual=selector.value,selected=preferredProtocolId||manual,status=$("protocol-upload-status");
- catalogState="loading";
- selector.setAttribute?.("aria-busy","true");
- $("protocol-readiness").textContent="카탈로그 불러오는 중";
- if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
+ const manual=selector.value,selected=preferredProtocolId||manual,status=$("protocol-upload-status"),seq=++catalogRequestSeq;
+ if(!quiet){
+  catalogState="loading";
+  selector.setAttribute?.("aria-busy","true");
+  $("protocol-readiness").textContent="카탈로그 불러오는 중";
+  if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
+ }
+ catalogLoadsInFlight++;
  try{
   const response=await serverFetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
   if(!response.ok)throw new Error("catalog unavailable");
   const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
+  if(seq<catalogAppliedSeq)return false;
+  const signature=JSON.stringify(entries),recovering=catalogState!=="ready";
+  catalogAppliedSeq=seq;
+  if(quiet&&!recovering&&signature===catalogSignature)return true;
+  catalogSignature=signature;
   protocolCatalog.clear();selector.replaceChildren();
   const empty=document.createElement("option");empty.value="";empty.textContent="프로토콜을 선택하지 않음";selector.appendChild(empty);
   for(const item of entries){
@@ -3648,11 +3685,15 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   const runnable=option=>Boolean(option.value)&&option.dataset.runnable==="true";
   if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
   else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
-  if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
+  if(status&&(!quiet||recovering))status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
   catalogState="ready";renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();applyRouteSelections();
+  return true;
  }catch(_){
+  if(quiet||seq<catalogAppliedSeq)return false;
+  catalogAppliedSeq=seq;catalogSignature=null;
   protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";catalogState="failed";renderState(visibleState);renderProtocolList();
- }finally{selector.setAttribute?.("aria-busy","false");}
+  return false;
+ }finally{catalogLoadsInFlight--;if(!quiet)selector.setAttribute?.("aria-busy","false");scheduleCatalogRefresh();}
 }
 
 const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
@@ -4862,7 +4903,9 @@ async function startReviewedProtocol(){
  if(isRegisteringProtocol)return START_NOT_SENT_WORDS.uploading;
  if(sessionActive)return START_NOT_SENT_WORDS.running;
  if(lastProtocolReview?.protocol_id!==protocolId){if(button)button.hidden=true;return START_NOT_SENT_WORDS.no_review;}
- if(lastProtocolReview?.available_for_execution!==true){if(button)button.hidden=true;return START_NOT_SENT_WORDS.not_runnable;}
+ // Lane PRE decision 1: the server is asked once more before the start says the protocol cannot run.
+ if((lastProtocolReview?.available_for_execution!==true||protocolCatalog.get(protocolId)?.available_for_execution!==true)&&await recheckProtocolRunnable(protocolId)&&lastProtocolReview?.available_for_execution!==true)await loadProtocolReview(protocolId);
+ if(lastProtocolReview?.protocol_id!==protocolId||lastProtocolReview?.available_for_execution!==true){if(button)button.hidden=true;return START_NOT_SENT_WORDS.not_runnable;}
  const select=$("protocol-id");if(!select||protocolCatalog.get(protocolId)?.available_for_execution!==true){if(status)status.textContent=START_NOT_SENT_WORDS.not_runnable;return START_NOT_SENT_WORDS.not_runnable;}
  if(button)button.disabled=true;if(status)status.textContent="안전 주의를 확인했습니다 · 실험을 시작합니다.";
  try{select.value=protocolId;renderSelectedProtocolContext();await startSession();}finally{if(button)button.disabled=false;}
@@ -5254,6 +5297,7 @@ $("wizard-close")?.addEventListener("click",()=>{closeWizardSheet();});
 $("wizard-sheet-backdrop")?.addEventListener("click",()=>{closeWizardSheet();});
 globalThis.addEventListener?.("popstate",()=>{if(wizard.open)closeWizardSheet({fromHistory:true});else wizardSheetPushed=false;renderRoute();});
 globalThis.document?.addEventListener?.("visibilitychange",()=>{void onScreenVisibilityChange();});
+globalThis.document?.addEventListener?.("visibilitychange",()=>{void onCatalogVisibilityChange();});
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 // Lane UI3 decision 3: the file buttons are labels; Enter or Space on one opens its chooser.
@@ -5336,6 +5380,8 @@ function openWizardSheet(step=null,{mode="start"}={}){
  wizard.step=step&&steps.includes(step)?step:steps[0];
  if(!wizard.open){wizard.open=true;wizardOpener=globalThis.document?.activeElement||null;pushWizardSheetHistory();}
  renderWizard();
+ // Lane PRE decision 1: the sheet offers the protocols as the server has them now.
+ if(mode==="start")void refreshProtocolCatalog();
  $("wizard-sheet-panel")?.focus?.();
  if(wizard.step==="check")void wizardLoadCheck();
  return true;
@@ -5710,12 +5756,14 @@ function renderWizardStart(host,primary){
  if(resuming){const fresh=compareEl("button","wizard-back","이어하지 않고 새로 시작");fresh.type="button";fresh.addEventListener("click",()=>{clearExperimentResumeSelection();renderWizard();});host.appendChild(fresh);}
  if(primary){primary.textContent=resuming?"실험 이어하기":"이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
 }
+// Lane PRE decision 1: the sheet asks the server once more before it refuses a protocol that its list says cannot run.
+async function wizardRecheck(protocolId){wizardSetBusy(true);try{return await recheckProtocolRunnable(protocolId);}finally{wizardSetBusy(false);renderWizard();}}
 async function wizardPrimary(){
  if(wizard.busy)return null;
  switch(wizard.step){
   case "login":return wizardSubmitLogin();
   case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety"){if(!await acknowledgeStartSafety())return null;rememberSafetyRead();}wizardNext();return true;}
-  case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
+  case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true&&!(entry&&await wizardRecheck(entry.protocol_id))){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
   case "start":{
    const entry=wizardSelectedProtocol();if(!entry)return null;
    // Lane TAB decision 3: in the touch itself, before anything is awaited.
@@ -5775,6 +5823,9 @@ function navigateTab(tab,id=null,{replace=false}={}){
 function renderRoute(){
  readRoute();
  const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",page=authRequired(),key=`${tab}|${screenRoute.path}|${page}`;
+ // Lane PRE decision 1: a tab that opens shows the list as the server has it now.
+ if(catalogRouteTab!==null&&catalogRouteTab!==tab&&!page)void refreshProtocolCatalog();
+ catalogRouteTab=tab;
  if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(page?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
  // Before a login no panel shows: the login is a page of its own (the sheet in page mode).
  for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during)||(name==="settings"&&runSettingsSheetOpen()));}
