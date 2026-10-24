@@ -202,8 +202,9 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   → execution rule at read time: analysis (or review version) present and no
     execution blocker → available_for_execution
   → start wizard: start check (two key values) → safety statements →
-    today's values (optional; `protocol_run_changes_chosen`) → start
-    (applies the choice once: `protocol_run_changes_applied`)
+    today's values (always passed, "바꿀 값 없이 다음" included;
+    `protocol_run_changes_chosen`) → start naming that choice
+    (`run_change_set_id`; applied once: `protocol_run_changes_applied`)
   → CuratedProtocolFixture for the session
 ```
 
@@ -249,11 +250,16 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
 - Today's values (lane EASY): `start_check.changeable_values` lists the time,
   temperature, speed, volume and concentration values of each step's own
   sentence, never one in a warning or limit sentence; `check_run_change`
-  takes only the same unit family. The start applies the person's latest
-  choice on the exact revision made within 12 hours that no start used, or
-  refuses with `run_changes_stale` when it no longer matches the fixture.
+  takes only the same unit family; a value below half or above twice the
+  source's (`run_change_is_large`) is refused until the screen confirms it
+  (`confirm_large`). Every start passes the step: `session.start` names the
+  choice (`run_change_set_id`); with the start check on, a new run that names
+  none is refused `run_changes_required`, and a choice that is another
+  person's, used, or no longer the fixture's is refused `run_changes_stale`.
+  Nothing chosen earlier applies on its own.
   During the run `CuratedProtocolSession` changes or puts back a value
-  (confirm_mode readback; asked first in 바로 확인 or noisy mode), runs the
+  (confirm_mode readback; asked first in 바로 확인 or noisy mode, and in
+  every mode for a large value), runs the
   step's timer for a changed time, says the value at the step and puts it in
   `state()["current_step_run_changes"]`. The record (`run_value_changed`,
   `run_value_reverted`, `session_started.run_changes`) feeds the notebook's

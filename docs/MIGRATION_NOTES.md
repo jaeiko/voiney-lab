@@ -22,6 +22,13 @@ nothing existing is rewritten.
   `run_value_changed` and `run_value_reverted`. The append-only triggers are
   unchanged.
 
+Follow-up of the same day: `protocol_run_changes_chosen` may also carry
+`confirmed_large` (the item ids confirmed once more), and `session.start`
+may carry `run_change_set_id` (`run-changes-<24 hex>`). With the start check
+on, a client that sends no such id cannot start a new run -- an older page
+must be reloaded after the upgrade. Rolling back: older servers (before
+this lane) drop the unknown control field and apply no changed value.
+
 Reading old records: an analysis without `page_range` read the whole
 document, and a record or experiment without these events used no changed
 value -- the notebook, the recovery and "지난번처럼" read them that way.
