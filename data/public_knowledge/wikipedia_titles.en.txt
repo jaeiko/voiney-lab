@@ -10,7 +10,6 @@ Centrifuge tube
 Vortex mixer
 Pipette
 Air displacement pipette
-Mouth pipetting
 Autoclave
 Laminar flow cabinet
 Biosafety cabinet
@@ -54,7 +53,7 @@ X-ray photoelectron spectroscopy
 Fourier-transform infrared spectroscopy
 Raman spectroscopy
 Nuclear magnetic resonance spectroscopy
-UV–visible spectroscopy
+Ultraviolet–visible spectroscopy
 Atomic absorption spectroscopy
 Inductively coupled plasma mass spectrometry
 Mass spectrometry
@@ -119,7 +118,6 @@ Gas cylinder
 Pressure regulator
 Pressure vessel
 Calibration
-Serological pipette
 Dropper
 Wash bottle
 Bunsen burner
@@ -167,10 +165,10 @@ Ammonium bicarbonate
 Urea
 Guanidinium chloride
 Ethylenediaminetetraacetic acid
-Tris (buffer)
+Tris
 Glycine
 HEPES
-MOPS (buffer)
+MOPS
 Phosphate-buffered saline
 Tris-buffered saline
 Buffer solution
@@ -358,7 +356,6 @@ Cell disruption
 Centrifugation
 Differential centrifugation
 Ultracentrifuge
-Pellet (biology)
 Supernatant
 Denaturation (biochemistry)
 Protein folding
@@ -371,7 +368,6 @@ Luciferase
 Green fluorescent protein
 Antibody
 Primary and secondary antibodies
-Blocking (protein)
 Nitrocellulose
 Polyvinylidene fluoride
 Chemiluminescence
@@ -392,7 +388,6 @@ Ethylene carbonate
 Dimethyl carbonate
 Diethyl carbonate
 Propylene carbonate
-Fluoroethylene carbonate
 Vinylene carbonate
 Lithium bis(trifluoromethanesulfonyl)imide
 Lithium
@@ -407,7 +402,6 @@ Separator (electricity)
 Anode
 Cathode
 Current collector
-Solid electrolyte interphase
 Electrochemical cell
 Galvanic cell
 Electrolytic cell
@@ -502,7 +496,7 @@ Face shield
 White coat
 Respirator
 Dust mask
-Eyewash station
+Eyewash
 Emergency eyewash and safety shower station
 Fire extinguisher
 Fire class
@@ -579,12 +573,8 @@ Occupational safety and health
 Occupational Safety and Health Administration
 National Institute for Occupational Safety and Health
 Chemical storage
-Flammable liquid storage cabinet
 Fume hood
 Ventilation (architecture)
 Thermal runaway
-Peroxide-forming compound
-Chemical incompatibility
-Mixing of chemicals
 Ergonomics
 Hearing protection

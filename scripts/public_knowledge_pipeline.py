@@ -697,7 +697,14 @@ def sections_of(text: str) -> list[tuple[str, str]]:
 _SKIPPED_SECTIONS = {
     "references", "external links", "see also", "further reading", "notes", "bibliography",
     "gallery", "sources", "citations", "footnotes", "explanatory notes",
+    # Not bench knowledge: how a thing came to be, who makes money from it,
+    # where it appears in culture or law (lane KNOW v1).
+    "history", "etymology", "culture", "society and culture", "in popular culture", "popular culture",
+    "in fiction", "economy", "economics", "economic aspects", "politics", "legal status", "legislation",
+    "regulation", "awards", "notable people", "timeline", "demographics", "trivia", "in the media",
+    "national legislation and public organizations", "etymology and history", "discovery",
     "각주", "외부 링크", "같이 보기", "참고 문헌", "더 보기", "주석", "출처", "참고 자료", "관련 항목",
+    "역사", "어원", "문화", "대중문화", "대중 문화", "경제", "법적 지위",
 }
 
 
@@ -1375,13 +1382,39 @@ def _epmc_license_ok(license_text: str) -> bool:
     return bool(_EPMC_ALLOWED.match((license_text or "").strip()))
 
 
+def europepmc_query(phrase: str) -> str:
+    """The search for one phrase: in the title or abstract, open access, full text, CC BY.
+
+    A phrase (``"in-gel digestion"``) must appear in the title or the abstract
+    so that a long review merely mentioning it is not chosen; several phrases
+    joined by `` OR `` are each tried that way.
+    """
+
+    parts = [part.strip().strip('"') for part in phrase.split(" OR ") if part.strip()]
+    fields = " OR ".join(f'TITLE:"{part}" OR ABSTRACT:"{part}"' for part in parts)
+    return f'({fields}) AND LICENSE:"cc by" AND OPEN_ACCESS:y AND HAS_FT:y'
+
+
+#: Sections a bench question is answered from, read first; the rest follow.
+_PREFERRED_JATS = ("abstract", "method", "material", "protocol", "procedure", "troubleshoot", "result",
+                   "limitation", "safety", "note", "tip")
+
+
+def _section_order(name: str) -> int:
+    lowered = name.casefold()
+    for rank, word in enumerate(_PREFERRED_JATS):
+        if word in lowered:
+            return rank
+    return len(_PREFERRED_JATS)
+
+
 def jats_sections(xml_text: str) -> tuple[dict[str, str], list[tuple[str, str]]]:
     """(article facts, [(section title, text)]) of a JATS article; the licence href is a fact."""
 
     root = ElementTree.fromstring(xml_text)
     facts: dict[str, str] = {}
     title = root.find(".//article-meta/title-group/article-title")
-    facts["title"] = "".join(title.itertext()).strip() if title is not None else ""
+    facts["title"] = " ".join("".join(title.itertext()).split()) if title is not None else ""
     journal = root.find(".//journal-meta/journal-title-group/journal-title")
     facts["journal"] = "".join(journal.itertext()).strip() if journal is not None else ""
     year = root.find(".//article-meta/pub-date/year")
@@ -1439,7 +1472,7 @@ def handle_europepmc(source: Source, ctx: RunContext) -> Iterator[Piece]:
     for query in source.option("queries", []) or []:
         kept = [pmcid for pmcid in selected.get(query, [])]
         if len(kept) < per_query or ctx.full:
-            url = f"{base}search?{urlencode({'query': f'({query}) AND LICENSE:\"cc by\" AND OPEN_ACCESS:y AND HAS_FT:y', 'format': 'json', 'resultType': 'core', 'pageSize': per_query * 4})}"
+            url = f"{base}search?{urlencode({'query': europepmc_query(query), 'format': 'json', 'resultType': 'core', 'pageSize': per_query * 4})}"
             try:
                 reply = ctx.http.get(url, pace_key=source.id, per_second=source.requests_per_second)
                 results = reply.json().get("resultList", {}).get("result", [])
@@ -1476,7 +1509,7 @@ def handle_europepmc(source: Source, ctx: RunContext) -> Iterator[Piece]:
         fetched_at = ((raw.item(key) or {}).get("fetched_at") or today())[:10]
         url = f"https://europepmc.org/article/PMC/{pmcid}"
         where = " ".join(part for part in (facts.get("journal", ""), facts.get("year", "")) if part)
-        for name, text in sections:
+        for name, text in sorted(sections, key=lambda item: _section_order(item[0])):
             if len(text) < 120:
                 continue
             yield Piece(
@@ -1550,6 +1583,7 @@ def collect(
     records: list[dict[str, Any]] = []
     seen_text: dict[str, str] = {}
     dropped: Counter[str] = Counter()
+    capped: Counter[str] = Counter()
     for source in ordered_sources(sources.sources, only):
         started = time.perf_counter()
         count_pieces = 0
@@ -1558,15 +1592,21 @@ def collect(
         requests_before = http.requests_made
         log(f"[{source.id}] start")
         try:
+            cap = source.option("max_chunks_per_document")
+            per_document: Counter[str] = Counter()
             for piece in HANDLERS[source.kind](source, ctx):
                 count_pieces += 1
                 for record in records_for(piece, source):
+                    if cap and per_document[piece.title] >= int(cap):
+                        capped[source.id] += 1
+                        continue
                     key = _dedupe_key(record["text"])
                     if key in seen_text:
                         dropped[source.id] += 1
                         continue
                     seen_text[key] = record["id"]
                     records.append(record)
+                    per_document[piece.title] += 1
                     count_chunks += 1
                     chars += len(record["text"])
         except Exception as exc:  # noqa: BLE001 - one source's failure never stops the others
@@ -1574,7 +1614,8 @@ def collect(
         report.per_source.setdefault(source.id, {}).update({
             "name": source.name, "kind": source.kind, "grade": source.grade, "license": source.license,
             "pieces": count_pieces, "chunks": count_chunks, "chars": chars,
-            "duplicates_dropped": dropped[source.id], "requests": http.requests_made - requests_before,
+            "duplicates_dropped": dropped[source.id], "capped": capped[source.id],
+            "requests": http.requests_made - requests_before,
             "seconds": round(time.perf_counter() - started, 1),
         })
         report.per_source[source.id].setdefault("failures", 0)
@@ -1644,16 +1685,18 @@ def load_bundle_glossary(runtime_dir: Path) -> Glossary:
 
 
 def documents_for(records: Sequence[Mapping[str, Any]], glossary: Glossary) -> list[dict[str, Any]]:
-    """Index documents: id, searched text, string metadata and the piece's words as payload."""
+    """Index documents: id, searched text (head line, then the words) and string metadata."""
 
     documents: list[dict[str, Any]] = []
     for record in records:
         aliases = glossary.aliases.get(str(record.get("title", "")), ())
+        # The piece's own words are the searched text after its head line
+        # (``public_knowledge._body_of``); sending them again as a payload
+        # would double what the plan's monthly ingest counts.
         documents.append({
             "id": record["id"],
             "text": index_text_for(record, aliases),
             "metadata": {name: str(record.get(name, "")) for name in METADATA_FIELDS},
-            "payload": str(record["text"]),
         })
     return documents
 
@@ -1701,7 +1744,7 @@ async def upload(
         def client_factory(pid: str, key: str) -> Any:  # noqa: E306
             return moss.MossClient(pid, key)
         make_document = lambda doc: moss.DocumentInfo(  # noqa: E731
-            id=doc["id"], text=doc["text"], metadata=doc["metadata"], payload=doc["payload"])
+            id=doc["id"], text=doc["text"], metadata=doc["metadata"])
         upsert_options = moss.MutationOptions(upsert=True)
     else:
         make_document = lambda doc: doc  # noqa: E731
@@ -2044,7 +2087,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             documents = documents_for(records, glossary)
             text_bytes = sum(len(doc["text"].encode("utf-8")) for doc in documents)
             print(json.dumps({"documents": len(documents), "text_bytes": text_bytes,
-                              "payload_bytes": sum(len(doc["payload"].encode("utf-8")) for doc in documents),
+                              "metadata_bytes": sum(len(json.dumps(doc["metadata"], ensure_ascii=False).encode("utf-8"))
+                                                    for doc in documents),
                               "estimated_memory": estimate_memory_mib(records)}, ensure_ascii=False))
             return 0
         _load_env_file(args.env_file)

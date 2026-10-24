@@ -255,29 +255,32 @@ terms = "https://www.ebi.ac.uk/robots.txt sets no rule for /europepmc/webservice
 base_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/"
 requests_per_second = 1.0
 max_per_query = 3
-# A query is run again on each collect; new CC BY hits are added, bounded by
-# max_per_query per query.
+# At most this many pieces of one article (long reviews would drown the rest).
+max_chunks_per_document = 40
+# Each phrase must be in the article's title or abstract (`europepmc_query`);
+# a query is run again on each collect and new CC BY hits are added, bounded
+# by max_per_query per query.
 queries = [
-  "in-gel digestion protocol mass spectrometry",
-  "SDS-PAGE troubleshooting",
-  "western blot troubleshooting",
-  "PCR troubleshooting guide",
-  "MIQE guidelines quantitative PCR",
-  "agarose gel electrophoresis DNA method",
-  "protein quantification Bradford BCA assay comparison",
-  "cell culture contamination mycoplasma detection",
-  "bacterial transformation competent cells protocol",
-  "plasmid DNA extraction alkaline lysis",
-  "coin cell assembly lithium-ion best practices",
-  "electrode slurry casting lithium-ion battery",
-  "cyclic voltammetry practical guide",
-  "electrochemical impedance spectroscopy tutorial",
-  "powder X-ray diffraction sample preparation",
-  "scanning electron microscopy sample preparation biological",
-  "mass spectrometry sample preparation keratin contamination",
-  "laboratory chemical safety training",
-  "buffer preparation pH laboratory",
-  "pipetting accuracy calibration",
+  "in-gel digestion",
+  "SDS-PAGE troubleshooting OR SDS-PAGE artifacts",
+  "western blot troubleshooting OR western blotting pitfalls",
+  "PCR troubleshooting OR PCR optimization",
+  "MIQE guidelines",
+  "agarose gel electrophoresis",
+  "Bradford assay OR BCA assay",
+  "mycoplasma contamination",
+  "bacterial transformation OR competent cells",
+  "plasmid DNA extraction OR alkaline lysis",
+  "coin cell assembly OR coin cell fabrication",
+  "electrode slurry OR slurry casting",
+  "cyclic voltammetry tutorial OR cyclic voltammetry practical",
+  "electrochemical impedance spectroscopy tutorial OR impedance spectroscopy beginners",
+  "powder X-ray diffraction sample preparation OR XRD sample preparation",
+  "SEM sample preparation OR scanning electron microscopy sample preparation",
+  "keratin contamination OR mass spectrometry contaminants",
+  "laboratory safety training OR chemical safety laboratory",
+  "buffer preparation OR pH buffer laboratory",
+  "pipetting accuracy OR pipette calibration",
 ]
 pmcids = []
 
@@ -299,6 +302,9 @@ license_note = "Text may be reused under CC BY-SA 4.0 with a link to the article
 terms = "https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy (descriptive User-Agent with contact) and https://www.mediawiki.org/wiki/API:Etiquette (requests in series, maxlag=5); robots.txt leaves api.php to such clients. One request per second, one article per request."
 api_url = "https://en.wikipedia.org/w/api.php"
 titles_file = "wikipedia_titles.en.txt"
+# At most this many pieces of one article; sections about history, culture,
+# economy and law are left out (`_SKIPPED_SECTIONS`).
+max_chunks_per_document = 16
 requests_per_second = 1.0
 
 [[source]]
@@ -318,6 +324,7 @@ titles_file = "wikipedia_titles.ko.txt"
 # Korean titles of the English list's articles come from Wikidata's sitelinks
 # (CC0) and are fetched as well.
 sitelinks_from = "wikipedia-en"
+max_chunks_per_document = 16
 requests_per_second = 1.0
 
 # Wikidata labels (CC0): the Korean and English names of every article item

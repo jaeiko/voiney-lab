@@ -382,6 +382,12 @@ class EuropePmcTests(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("licence", failures[0]["reason"])
 
+    def test_the_search_asks_for_the_phrase_in_the_title_or_abstract(self):
+        query = pk.europepmc_query("coin cell assembly OR coin cell fabrication")
+        self.assertEqual(query, '(TITLE:"coin cell assembly" OR ABSTRACT:"coin cell assembly" OR '
+                                'TITLE:"coin cell fabrication" OR ABSTRACT:"coin cell fabrication") '
+                                'AND LICENSE:"cc by" AND OPEN_ACCESS:y AND HAS_FT:y')
+
     def test_a_search_hit_that_is_not_cc_by_is_never_fetched(self):
         pieces, failures = self._run("http://creativecommons.org/licenses/by/4.0/", search_license="cc by-nc")
         self.assertEqual(pieces, [])
@@ -646,6 +652,21 @@ class CollectTests(unittest.TestCase):
             self.assertEqual(manifest["totals"]["chunks"], 5)
             self.assertEqual(sorted(manifest["sources"]), ["page"])
 
+    def test_a_source_s_cap_keeps_at_most_that_many_pieces_of_one_document(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources, transport = _collect_fixture(root, missing=True)  # one English article
+            long_article = "\n\n== Part ==\n".join("Sentence about the method number %d. " % n * 12 for n in range(8))
+            transport.replies["https://en.wikipedia.org/w/api.php?action=query&prop=extracts*"] = (
+                200, {}, json.dumps({"query": {"pages": [{"extract": long_article}]}}).encode())
+            capped = pk.SourceList(sources.user_agent, tuple(
+                pk.Source(**{**src.__dict__, "options": {**src.options, "max_chunks_per_document": 3}})
+                if src.id == "en" else src for src in sources.sources), sources.excluded, sources.directory)
+            http = pk.Http(sources.user_agent, transport=transport, sleep=lambda s: None)
+            manifest = pk.collect(capped, runtime_dir=root / "runtime", http=http, log=lambda line: None)
+            self.assertEqual(manifest["sources"]["en"]["chunks"], 3)
+            self.assertGreater(manifest["sources"]["en"]["capped"], 0)
+
     def test_a_source_whose_handler_breaks_is_recorded_and_the_others_still_run(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -679,7 +700,7 @@ class UploadTests(unittest.TestCase):
         glossary = pk.Glossary(terms={}, aliases={"Acetonitrile": ("아세토나이트릴",)})
         documents = pk.documents_for(self._records(), glossary)
         self.assertEqual(documents[0]["text"], "Acetonitrile (아세토나이트릴) · Safety\nFlash point 2 °C.")
-        self.assertEqual(documents[0]["payload"], "Flash point 2 °C.")
+        self.assertNotIn("payload", documents[0])  # the words are the text after the head line
         self.assertEqual(set(documents[0]["metadata"]), set(pk.METADATA_FIELDS))
         self.assertTrue(all(isinstance(v, str) for v in documents[0]["metadata"].values()))
         estimate = pk.estimate_memory_mib(self._records())
