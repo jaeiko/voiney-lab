@@ -658,6 +658,26 @@ def _dedupe_key(text: str) -> str:
     return hashlib.sha1(" ".join(text.casefold().split()).encode("utf-8")).hexdigest()
 
 
+_DATE_IN = re.compile(r"(\d{4})-(\d{2})-(\d{2})|(\d{4})\b")
+
+
+def _record_date(record: Mapping[str, Any]) -> str:
+    """When a record's material is from: the source version's date, else the fetched date.
+
+    A version such as "revision 1380139469" or "6th edition (CDC/NIH; file
+    dated 2025-08)" gives its year or date; without one the fetched date
+    stands in, so of two copies of the same words the later one wins.
+    """
+
+    version = str(record.get("version", ""))
+    match = _DATE_IN.search(version)
+    if match:
+        if match.group(1):
+            return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+        return f"{match.group(4)}-00-00"
+    return str(record.get("fetched_at", ""))[:10]
+
+
 # --- HTML to text ---------------------------------------------------------------------------
 
 _BLOCK_TAGS = r"p|div|tr|li|h[1-6]|dt|dd|section|article|table|ul|ol|blockquote|pre|br"
@@ -1591,7 +1611,7 @@ def collect(
         except ValueError:
             pass
     records: list[dict[str, Any]] = []
-    seen_text: dict[str, str] = {}
+    seen_text: dict[str, dict[str, Any]] = {}
     dropped: Counter[str] = Counter()
     capped: Counter[str] = Counter()
     for source in ordered_sources(sources.sources, only):
@@ -1612,9 +1632,19 @@ def collect(
                         continue
                     key = _dedupe_key(record["text"])
                     if key in seen_text:
-                        dropped[source.id] += 1
+                        # The same words twice: the newer copy stays (human
+                        # decision 2026-10-24: of the same material, the
+                        # latest is enough), the older is dropped.
+                        held = seen_text[key]
+                        if _record_date(record) > _record_date(held):
+                            records.remove(held)
+                            seen_text[key] = record
+                            records.append(record)
+                            dropped[held["source_id"]] += 1
+                        else:
+                            dropped[source.id] += 1
                         continue
-                    seen_text[key] = record["id"]
+                    seen_text[key] = record
                     records.append(record)
                     per_document[piece.title] += 1
                     count_chunks += 1
@@ -1631,6 +1661,12 @@ def collect(
         report.per_source[source.id].setdefault("failures", 0)
         log(f"[{source.id}] pieces={count_pieces} chunks={count_chunks} chars={chars} "
             f"failures={report.per_source[source.id]['failures']} requests={http.requests_made - requests_before}")
+    # A later source's newer copy of the same words takes an earlier source's
+    # piece out again, so the counts are read from what is left at the end.
+    for source_id, row in report.per_source.items():
+        own = [record for record in records if record.get("source_id") == source_id]
+        row.update({"chunks": len(own), "chars": sum(len(r["text"]) for r in own),
+                    "duplicates_dropped": dropped[source_id]})
     if only:
         # Sources not run this time keep their earlier records, and their
         # rows of the manifest (counts from the records, the rest from the
@@ -1660,6 +1696,8 @@ def collect(
                         "chunks": len(own), "chars": sum(len(r["text"]) for r in own), "carried": True})
             row.setdefault("failures", 0)
             report.per_source[source.id] = row
+        for record in kept:
+            seen_text.setdefault(_dedupe_key(record["text"]), record)
         records = kept + records
     glossary = {
         "generated_at": now_iso(),

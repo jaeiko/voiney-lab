@@ -663,6 +663,33 @@ class CollectTests(unittest.TestCase):
             self.assertEqual(manifest["sources"]["en"]["chunks"], 2)
             self.assertNotIn("carried", manifest["sources"]["page"])
 
+    def test_of_the_same_words_twice_the_newer_copy_stays(self):
+        # Human decision 2026-10-24: of the same material, the latest is enough.
+        old_piece = pk.Piece(title="Guide 2019", locator="p. 1", text="Keep the sash low when working. " * 4,
+                             url="u1", language="en", domain="safety", version="2019 edition", fetched_at="2026-10-24")
+        new_piece = pk.Piece(title="Guide 2024", locator="p. 1", text="Keep the sash low when working. " * 4,
+                             url="u2", language="en", domain="safety", version="2024 edition", fetched_at="2026-10-24")
+        older = _source(id="older", kind="html")
+        newer = _source(id="newer", kind="html")
+        handlers = {**pk.HANDLERS, "html": lambda source, ctx: iter([old_piece] if source.id == "older" else [new_piece])}
+        original = pk.HANDLERS
+        pk.HANDLERS = handlers
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                sources = pk.SourceList("Test/0.1 (x)", (older, newer), (), Path(temporary))
+                manifest = pk.collect(sources, runtime_dir=Path(temporary) / "runtime",
+                                      http=pk.Http("Test/0.1 (x)", transport=FakeTransport({}), sleep=lambda s: None),
+                                      log=lambda line: None)
+                records = [json.loads(line) for line in
+                           (Path(temporary) / "runtime" / "bundle" / "chunks.jsonl").read_text(encoding="utf-8").splitlines()]
+        finally:
+            pk.HANDLERS = original
+        self.assertEqual([r["source_id"] for r in records], ["newer"])
+        self.assertEqual(manifest["sources"]["older"]["duplicates_dropped"], 1)
+        self.assertEqual(pk._record_date({"version": "6th edition (file dated 2025-08-01)"}), "2025-08-01")
+        self.assertEqual(pk._record_date({"version": "revision 1380139469", "fetched_at": "2026-10-24"}), "2026-10-24")
+        self.assertEqual(pk._record_date({"version": "published 2015-03-11 (retired edition)"}), "2015-03-11")
+
     def test_a_source_s_cap_keeps_at_most_that_many_pieces_of_one_document(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
