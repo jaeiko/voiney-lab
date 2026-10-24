@@ -26,9 +26,11 @@ a { color: inherit; }
   min-height: 64px; padding: 0 var(--space-4);
   background: var(--paper); border-bottom: 1px solid var(--line);
 }
-.frame-head .logo { display: inline-flex; align-items: center; gap: var(--space-2); text-decoration: none; min-height: var(--target); }
+.frame-head .logo { display: inline-flex; align-items: center; gap: var(--space-2); text-decoration: none; min-height: var(--target); white-space: nowrap; flex: none; }
 .frame-account { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .frame-account-name { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A phone's head has room for the name and one button, not the account line (the settings screen names the account). */
+@media (max-width: 599px) { .frame-account-name { display: none; } }
 .frame-body { display: grid; grid-template-columns: 1fr; }
 .frame-main { padding: var(--space-6) var(--space-4) calc(var(--tab-height) + var(--space-6)); max-width: 960px; width: 100%; margin: 0 auto; }
 
@@ -57,7 +59,7 @@ a { color: inherit; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
   min-height: var(--target); padding: 0 var(--space-4); border-radius: var(--radius-md);
-  border: 2px solid var(--ink); background: var(--paper); color: var(--ink); font-weight: 700; text-decoration: none; cursor: pointer;
+  border: 2px solid var(--ink); background: var(--paper); color: var(--ink); font-weight: 700; text-decoration: none; cursor: pointer; white-space: nowrap;
 }
 .btn:disabled { opacity: 0.55; cursor: default; }
 .btn-primary { background: var(--ink); color: var(--on-ink); }
@@ -85,8 +87,8 @@ a { color: inherit; }
 .big-card[data-static="true"] { cursor: default; border-color: var(--line-strong); }
 .big-card-title { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-display); line-height: var(--line-display); font-weight: 800; }
 .big-card-title svg { width: 36px; height: 36px; flex: none; }
-.big-card-sub { margin-top: var(--space-2); font-size: var(--text-lead); line-height: var(--line-lead); color: var(--ink-muted); font-weight: 600; }
-.big-card-why { margin-top: var(--space-2); color: var(--ink-muted); }
+.big-card-sub { display: block; margin-top: var(--space-2); font-size: var(--text-lead); line-height: var(--line-lead); color: var(--ink-muted); font-weight: 600; }
+.big-card-why { display: block; margin-top: var(--space-2); color: var(--ink-muted); }
 .secondary-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
 
 .state-box { padding: var(--space-6); border-radius: var(--radius-lg); border: 1px dashed var(--line-strong); background: var(--paper); }
