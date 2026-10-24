@@ -353,6 +353,18 @@ class Http:
             return False
         return parsed.can_fetch(self.user_agent, url)  # type: ignore[union-attr]
 
+    def crawl_delay(self, url: str) -> float | None:
+        """The robots.txt Crawl-delay for this agent on ``url``'s host, once robots.txt was read."""
+
+        parsed = self._robots.get(urlparse(url).netloc)
+        if parsed is None or isinstance(parsed, str):
+            return None
+        try:
+            delay = parsed.crawl_delay(self.user_agent)
+        except (AttributeError, ValueError):
+            return None
+        return float(delay) if delay else None
+
     def get(
         self,
         url: str,
@@ -363,8 +375,13 @@ class Http:
         robots: str = "check",
         retries: int = 3,
     ) -> Response:
-        if robots == "check" and not self._robots_allow(url):
-            raise FetchError(f"robots.txt disallows {urlparse(url).netloc}{urlparse(url).path}")
+        if robots == "check":
+            if not self._robots_allow(url):
+                raise FetchError(f"robots.txt disallows {urlparse(url).netloc}{urlparse(url).path}")
+            delay = self.crawl_delay(url)
+            if delay:
+                # The site's Crawl-delay wins over the source list's pace.
+                per_second = min(per_second, 1.0 / delay)
         sent = {"User-Agent": self.user_agent, "Accept-Encoding": "gzip"}
         sent.update(headers or {})
         attempt = 0
@@ -1044,31 +1061,89 @@ def pubchem_pieces(
         )
 
 
+def read_compounds(path: Path) -> list[tuple[str, int | None, str]]:
+    """(name, explicit CID or None, English Wikipedia title) per line of the compounds file.
+
+    A line is ``name``, ``name<TAB>CID`` or ``name<TAB>enwiki:Title``; the
+    title defaults to the name itself (MediaWiki capitalises its first letter).
+    """
+
+    compounds: list[tuple[str, int | None, str]] = []
+    for line, _domain in read_titles(path):
+        parts = [part.strip() for part in line.split("\t") if part.strip()]
+        name = parts[0]
+        cid: int | None = None
+        title = name
+        for extra in parts[1:]:
+            if extra.isdigit():
+                cid = int(extra)
+            elif extra.lower().startswith("enwiki:"):
+                title = extra.split(":", 1)[1].strip()
+        compounds.append((name, cid, title))
+    return compounds
+
+
+WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+PUBCHEM_CID_PROPERTY = "P662"
+
+
+def resolve_cids_from_wikidata(
+    source: Source, ctx: RunContext, titles: Sequence[str],
+) -> dict[str, int]:
+    """English Wikipedia title → PubChem CID, from Wikidata's PubChem CID claim (P662, CC0).
+
+    PubChem's robots.txt disallows the PUG REST name lookup (``/rest/pug/``)
+    for every agent, so names are never sent to PubChem; the CID comes from
+    Wikidata and only PUG View (``/rest/pug_view/``, allowed) is read.
+    """
+
+    found: dict[str, int] = {}
+    for batch in _batches(list(dict.fromkeys(titles)), 50):
+        url = _api(WIKIDATA_API, {
+            "action": "wbgetentities", "sites": "enwiki", "titles": "|".join(batch), "props": "claims|sitelinks",
+            "sitefilter": "enwiki", "format": "json", "maxlag": 5,
+        })
+        try:
+            reply = ctx.http.get(url, pace_key="wikidata", per_second=1.0, robots="api")
+            entities = reply.json().get("entities", {})
+        except (FetchError, ValueError) as exc:
+            for title in batch:
+                ctx.report.fail(source.id, title, f"wikidata: {exc}")
+            continue
+        for qid, entity in entities.items():
+            if qid.startswith("-") or "missing" in entity:
+                continue
+            title = entity.get("sitelinks", {}).get("enwiki", {}).get("title", "")
+            claims = entity.get("claims", {}).get(PUBCHEM_CID_PROPERTY, [])
+            ranked = sorted(claims, key=lambda c: 0 if c.get("rank") == "preferred" else 1)
+            for claim in ranked:
+                value = claim.get("mainsnak", {}).get("datavalue", {}).get("value")
+                if isinstance(value, str) and value.isdigit():
+                    found[title] = int(value)
+                    break
+    return found
+
+
 def handle_pubchem(source: Source, ctx: RunContext) -> Iterator[Piece]:
     raw = ctx.raw(source)
     base = source.option("base_url")
-    names = [name for name, _domain in read_titles(ctx.data_file(source.option("compounds_file")))]
-    cids = raw.state.setdefault("cids", {})
-    for name in names:
-        if name in cids and cids[name]:
-            continue
-        lookup = f"{base}pug/compound/name/{quote(name)}/cids/JSON"
-        try:
-            reply = ctx.http.get(lookup, pace_key=source.id, per_second=source.requests_per_second)
-        except FetchError as exc:
-            ctx.report.fail(source.id, name, str(exc))
-            continue
-        if reply.status != 200:
-            ctx.report.fail(source.id, name, f"name lookup HTTP {reply.status}")
-            cids[name] = None
-            continue
-        try:
-            found = reply.json()["IdentifierList"]["CID"]
-        except (ValueError, KeyError, TypeError):
-            ctx.report.fail(source.id, name, "name lookup returned no CID")
-            cids[name] = None
-            continue
-        cids[name] = int(found[0])
+    compounds = read_compounds(ctx.data_file(source.option("compounds_file")))
+    names = [name for name, _cid, _title in compounds]
+    cids: dict[str, int | None] = raw.state.setdefault("cids", {})
+    for name, explicit, _title in compounds:
+        if explicit:
+            cids[name] = explicit
+    unresolved = [(name, title) for name, explicit, title in compounds if not explicit and not cids.get(name)]
+    if unresolved:
+        by_title = resolve_cids_from_wikidata(source, ctx, [title for _name, title in unresolved])
+        lowered = {key.casefold(): value for key, value in by_title.items()}
+        for name, title in unresolved:
+            cid = by_title.get(title) or by_title.get(title[:1].upper() + title[1:]) or lowered.get(title.casefold())
+            if cid:
+                cids[name] = cid
+            else:
+                cids[name] = None
+                ctx.report.fail(source.id, name, "no PubChem CID on Wikidata (P662); add the CID to the list")
     raw.save()
     seen: set[int] = set()
     for name in names:

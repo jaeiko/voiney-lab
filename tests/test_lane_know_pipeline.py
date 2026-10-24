@@ -285,6 +285,38 @@ class PubChemTests(unittest.TestCase):
         self.assertEqual(pieces[0].url, "https://pubchem.ncbi.nlm.nih.gov/compound/42")
 
 
+class PubChemCidTests(unittest.TestCase):
+    def test_names_become_cids_from_the_list_or_wikidata_and_pubchem_gets_only_pug_view(self):
+        wikidata = json.dumps({"entities": {"Q1": {"sitelinks": {"enwiki": {"title": "Dimethylformamide"}}, "claims": {
+            "P662": [{"rank": "normal", "mainsnak": {"datavalue": {"value": "6228"}}}]}}}}).encode()
+        record = json.dumps({"Record": _pubchem_record()}).encode()
+        transport = FakeTransport({
+            "https://pubchem.ncbi.nlm.nih.gov/robots.txt": (200, {}, b"User-agent: *\nCrawl-delay: 5\nDisallow: /rest/pug/\n"),
+            "https://www.wikidata.org/w/api.php?*": (200, {}, wikidata),
+            "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/6228/JSON": (200, {}, record),
+            "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/14013/JSON": (200, {}, record),
+        })
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary) / "data"
+            data.mkdir()
+            (data / "compounds.txt").write_text(
+                "ammonium bicarbonate\t14013\nN,N-dimethylformamide\tenwiki:Dimethylformamide\nunknownium\n", encoding="utf-8")
+            source = _source(id="pubchem", kind="pubchem", options={
+                "base_url": "https://pubchem.ncbi.nlm.nih.gov/rest/", "compounds_file": "compounds.txt",
+                "headings": ["Flash Point"], "allowed_references": ["Hazardous Substances Data Bank (HSDB)"]})
+            ctx = pk.RunContext(sources=pk.SourceList("Test/0.1 (x)", (source,), (), data),
+                                http=pk.Http("Test/0.1 (x)", transport=transport, sleep=lambda s: None),
+                                runtime_dir=Path(temporary), report=pk.RunReport())
+            pieces = list(pk.handle_pubchem(source, ctx))
+            state = pk.RawStore(Path(temporary) / "raw" / "pubchem").state
+        self.assertEqual(sorted(p.locator for p in pieces),
+                         ["CID 14013 · Physical properties", "CID 6228 · Physical properties"])
+        self.assertEqual(state["cids"], {"ammonium bicarbonate": 14013, "N,N-dimethylformamide": 6228, "unknownium": None})
+        self.assertEqual([f["item"] for f in ctx.report.failures], ["unknownium"])
+        pubchem_urls = [url for url, _h in transport.calls if "pubchem" in url and "robots" not in url]
+        self.assertTrue(all("/rest/pug_view/" in url for url in pubchem_urls), pubchem_urls)
+
+
 class SectionTests(unittest.TestCase):
     def test_headings_become_paths_and_reference_sections_are_skipped(self):
         extract = "Intro text here.\n\n== Uses ==\nUsed widely.\n=== Solvent ===\nAs a solvent.\n\n== References ==\n1. x"
@@ -425,6 +457,21 @@ class HttpTests(unittest.TestCase):
                          robots="api")
         self.assertEqual(reply.body, b'{"entities": {}}')
         self.assertEqual(sleeps[0], 5.0)  # the server's wait; then the ordinary pace
+
+    def test_a_robots_crawl_delay_slows_the_pace_below_the_source_s(self):
+        clock = {"now": 0.0}
+        sleeps: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock["now"] += seconds
+
+        transport = FakeTransport({"https://slow.example/robots.txt": (200, {}, b"User-agent: *\nCrawl-delay: 5\n"),
+                                   "https://slow.example/a": (200, {}, b"a"), "https://slow.example/b": (200, {}, b"b")})
+        http = pk.Http("Test/0.1 (x)", transport=transport, sleep=sleep, clock=lambda: clock["now"])
+        http.get("https://slow.example/a", pace_key="s", per_second=2.0)
+        http.get("https://slow.example/b", pace_key="s", per_second=2.0)
+        self.assertEqual(sleeps, [5.0])
 
     def test_the_user_agent_names_the_client_and_a_contact(self):
         transport = FakeTransport({"https://example.org/robots.txt": (404, {}, b""), "https://example.org/a": (200, {}, b"a")})

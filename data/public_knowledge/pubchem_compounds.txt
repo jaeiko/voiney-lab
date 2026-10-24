@@ -1,8 +1,11 @@
 # PubChem compounds taken into the public bundle (lane KNOW): the reagents the
 # pilot's protocols (in-gel digestion, the starter pack) and common bench work
 # name. One name per line, as PubChem's name lookup understands it; the
-# pipeline resolves each to a CID once and keeps the CID in its state. A name
-# PubChem does not know is recorded as a failure, not guessed.
+# pipeline turns a name into a CID once -- an explicit "name<TAB>CID" column,
+# or "name<TAB>enwiki:Title" / the name itself looked up as an English
+# Wikipedia title on Wikidata (PubChem CID claim P662, CC0; PubChem's own
+# name lookup is disallowed by its robots.txt) -- and keeps it in its state.
+# A name with no CID is recorded as a failure, not guessed.
 
 # in-gel digestion and proteomics
 ammonium bicarbonate
