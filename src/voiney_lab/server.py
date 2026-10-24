@@ -48,6 +48,7 @@ from voiney_lab.curated_protocol import (
     ClaimAdmissionStatus,
     CuratedProtocolAction,
     CuratedProtocolFixture,
+    CuratedProtocolFixtureError,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
     TimerNotice,
@@ -234,7 +235,15 @@ from voiney_lab.vad import (
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
-from voiney_lab.start_check import StartCheck, StartCheckError, start_check_enabled
+from voiney_lab.start_check import (
+    RunChange,
+    RunChangeError,
+    RunChanges,
+    StartCheck,
+    StartCheckError,
+    changeable_values,
+    start_check_enabled,
+)
 from voiney_lab.accounts import (
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
@@ -1446,6 +1455,36 @@ def _workspace_reverted_step_ids(state:Any)->tuple[str,...]:
     return tuple(found)
 
 
+def _workspace_run_changes(state:Any)->tuple[RunChange,...]|None:
+    """Today's values as the durable record holds them (lane EASY, decision 2).
+
+    The start's values (the "protocol_started" event), then each change and
+    put-back in order; None when the run never started (its values are then
+    the start's choice in the protocol's ledger)."""
+
+    events=(state or {}).get("events") or ()
+    if not any(isinstance(event,dict) and event.get("event_type")=="protocol_started" for event in events):
+        return None
+    kept:dict[str,RunChange]={}
+    for event in events:
+        payload=event.get("payload") if isinstance(event.get("payload"),dict) else {}
+        try:
+            if event.get("event_type")=="protocol_started":
+                for item in payload.get("run_changes") or ():
+                    change=RunChange.from_mapping(item)
+                    kept[change.item_id]=change
+            record=payload.get("step_record") if isinstance(payload.get("step_record"),dict) else {}
+            if record.get("kind")=="run_value_changed" and isinstance(record.get("change"),dict):
+                change=RunChange.from_mapping(record["change"])
+                kept[change.item_id]=change
+            elif record.get("kind")=="run_value_reverted":
+                for item in record.get("reverted") or ():
+                    kept.pop(str((item or {}).get("item_id")),None)
+        except RunChangeError:
+            continue
+    return tuple(kept.values())
+
+
 def _workspace_started_at(state:Any)->float|None:
     """When the experiment first started, as the durable record holds it, or None.
 
@@ -1512,6 +1551,9 @@ def _record_workspace_experiment_progress(
         CuratedProtocolAction.PAUSE,
         CuratedProtocolAction.RESUME,
         CuratedProtocolAction.START_TIMER,
+        # Lane EASY, decision 2: today's values, for a run continued after a
+        # lost connection.
+        CuratedProtocolAction.CHANGE_VALUE,
     }:
         return None
     key=f"voice-{generation}-{turn_id}-{plan.action.value}"
@@ -1570,6 +1612,9 @@ def _record_workspace_experiment_progress(
     move_kind=record.get("kind")
     if record:
         event_payload["step_record"]=record
+    if plan.action is CuratedProtocolAction.START and curated.run_changes():
+        # Lane EASY, decision 2: the values the start applied for today.
+        event_payload["run_changes"]=[change.public_dict() for change in curated.run_changes()]
     principal,store=_commercial_workspace()
     try:
         state=store.record_experiment_progress(
@@ -1578,6 +1623,8 @@ def _record_workspace_experiment_progress(
             expected_voice_connection_id=session.voice_connection_id,
             event_key=key,
             event_type=(
+                move_kind
+                if plan.action is CuratedProtocolAction.CHANGE_VALUE else
                 "repeat_returned"
                 if move_kind in {"repeat_return","repeat_round"} else
                 # Lane CF, decision 3: a confirmed revert, beside the
@@ -5272,6 +5319,94 @@ def post_protocol_start_safety(
         raise _catalog_http_error(exc) from exc
 
 
+@app.get("/api/protocols/{protocol_id}/start-check/changes")
+def get_protocol_run_changes(protocol_id:str)->dict[str,object]:
+    """"오늘 원문과 다르게 할 값" (lane EASY, decision 2): the values the
+    analysis (or review version) about to run states that today's run may
+    change -- time, temperature, speed, volume, concentration -- each with
+    its step and source words."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return RunChanges(catalog).options(protocol_id)
+        finally:
+            store.close()
+    except RunChangeError as exc:
+        raise HTTPException(status_code=422,detail={"code":exc.code,"message_ko":exc.message_ko}) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/start-check/changes")
+def post_protocol_run_changes(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """The person's values for today (an empty list: the step skipped), checked
+    item by item -- the same kind of unit, a value the list holds -- and kept
+    in the protocol's ledger for the next start; the server's sentence when
+    one is refused."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return RunChanges(catalog).choose(
+                protocol_id,body.get("changes"),target=body.get("target"),
+                actor_principal_id=_start_check_principal_id(),source=body.get("source","wizard"))
+        finally:
+            store.close()
+    except RunChangeError as exc:
+        raise HTTPException(status_code=422,detail={"code":exc.code,"message_ko":exc.message_ko}) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+def _start_run_changes(
+    protocol_id:str,revision_id:str|None,fixture:CuratedProtocolFixture,
+)->tuple[tuple[str|None,tuple[RunChange,...]],bool]:
+    """((change set id, today's values), stale) for a new run's start.
+
+    Lane EASY, decision 2: the person's latest choice on the revision about
+    to run that no start used yet. Stale when a value is no longer the
+    fixture's as the source prints it (refused, never applied in part)."""
+
+    if not _protocol_store_settings().enabled:
+        return (None,()),False
+    catalog,store=_open_protocol_catalog()
+    try:
+        change_set_id,changes=RunChanges(catalog).for_start(
+            protocol_id,actor_principal_id=_start_check_principal_id(),revision_id=revision_id)
+    finally:
+        store.close()
+    values={value.item_id:value for value in changeable_values(fixture.steps)}
+    if any((value:=values.get(change.item_id)) is None or value.number!=change.source_number
+           or value.unit!=change.source_unit or value.step_id!=change.step_id for change in changes):
+        return (None,()),True
+    return (change_set_id,changes),False
+
+
+def _mark_run_changes_applied(protocol_id:str,change_set_id:str,experiment_session_id:str|None)->None:
+    catalog,store=_open_protocol_catalog()
+    try:
+        RunChanges(catalog).mark_applied(
+            protocol_id,change_set_id,experiment_session_id=experiment_session_id,
+            actor_principal_id=_start_check_principal_id())
+    finally:
+        store.close()
+
+
+def _applied_run_changes(protocol_id:str,experiment_session_id:str)->tuple[RunChange,...]:
+    if not _protocol_store_settings().enabled:
+        return ()
+    catalog,store=_open_protocol_catalog()
+    try:
+        return RunChanges(catalog).applied_to(protocol_id,experiment_session_id)
+    finally:
+        store.close()
+
+
 def _start_check_principal_id()->str|None:
     principal=_REQUEST_PRINCIPAL.get()
     if (principal is None and not _auth_settings().accounts
@@ -8789,6 +8924,17 @@ def _record_experiment_report_plan(
         step_label=str(record.get("step_label") or step_label or "")
     elif move_kind=="repeat_registered":
         event_type="repeat_registered"
+    elif plan.state_changed and move_kind in {"run_value_changed","run_value_reverted"}:
+        # Lane EASY, decision 2: at the step whose value changed, with the
+        # analysis or review version it was changed on; a put-back is its own
+        # event beside the change, which stays in the record.
+        event_type=move_kind
+        step_id=str(record.get("step_id") or step_id or "")
+        step_label=str(record.get("step_label") or step_label or "")
+    if event_type=="session_started" and curated.run_changes():
+        # Lane EASY, decision 2: the values the start applied for today.
+        payload["run_changes"]=[change.public_dict() for change in curated.run_changes()]
+        payload["run_change_set_id"]=curated.run_change_set_id
     followed_by=(
         "repeat_rounds_declined" if move_kind=="repeat_declined" else
         "repeat_closed" if move_kind=="repeat_closed" else
@@ -9106,7 +9252,9 @@ _REPORTED_WHEN_CHANGED=frozenset({
 
 #: Lane CB: the records that reach the report although their turn moved
 #: nothing -- a condition answered yes, a count given by voice.
-_RECORDED_STEP_RECORD_KINDS=frozenset({"branch_answer","repeat_registered"})
+_RECORDED_STEP_RECORD_KINDS=frozenset({"branch_answer","repeat_registered",
+    # Lane EASY, decision 2: a value of today's run changed or put back.
+    "run_value_changed","run_value_reverted"})
 
 
 def _reportable(plan:Any)->bool:
@@ -12184,6 +12332,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.REPORT_HANDOFF:"report_handoff_requested",
             CuratedProtocolAction.RECORD_CORRECTION:"experiment_record_corrected",
             CuratedProtocolAction.REPORT_REVIEW:"report_value_review",
+            # Lane EASY, decision 2: a value of today's run changed or put back.
+            CuratedProtocolAction.CHANGE_VALUE:"run_value_changed",
         }
         operation=(
             "completion_and_next_transition"
@@ -13681,6 +13831,21 @@ async def voice_socket(websocket:WebSocket):
                                             if readiness["reason"]=="safety_acknowledgement_required"
                                             else "시작 화면에서 현재 프로토콜의 확인을 마쳐 주세요.")))
                             continue
+                    # Lane EASY, decision 2: today's values the person chose
+                    # for this start (a recovery keeps the run's own).
+                    run_change_set:tuple[str|None,tuple[RunChange,...]]=(None,())
+                    if selected_curated_fixture is not None and control.get("experiment_session_id") is None:
+                        configuration_stage="run_changes"
+                        run_change_set,stale_changes=await asyncio.to_thread(
+                            _start_run_changes,requested_protocol_id,selected_revision_id,
+                            selected_curated_fixture)
+                        if stale_changes:
+                            await websocket.send_text(event(
+                                "session.configuration_required",configuration_id=configuration_id,
+                                mode=requested_mode,language=context.language,
+                                protocol_id=requested_protocol_id,reason="run_changes_stale",
+                                message_ko="오늘 바꾼 값이 지금 분석과 맞지 않아요. 시작 화면에서 다시 골라 주세요."))
+                            continue
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     if selected_curated_fixture is not None:
@@ -13759,6 +13924,10 @@ async def voice_socket(websocket:WebSocket):
                             _load_experimenter_settings)
                         session.curated_protocol_session.apply_experimenter_settings(
                             experimenter_settings)
+                        if run_change_set[1]:
+                            # Lane EASY, decision 2: the state machine takes them.
+                            session.curated_protocol_session.set_run_changes(
+                                run_change_set[1],change_set_id=run_change_set[0])
                         # Lane SP1, decision 1: the "민감도" margin of the
                         # wearer's measurement is the experimenter's setting.
                         session.set_speaker_sensitivity(
@@ -13801,6 +13970,11 @@ async def voice_socket(websocket:WebSocket):
                         ),
                         reattach=reconnect is not None,
                     )
+                    if recovery_session_id is None and run_change_set[0] is not None:
+                        # The choice is used once: by this experiment.
+                        await asyncio.to_thread(
+                            _mark_run_changes_applied,str(requested_protocol_id),run_change_set[0],
+                            session.session_id)
                     previous_connection=(
                         _HEARD_CONNECTIONS.get(session.session_id)
                         if reconnect is not None else None)
@@ -13844,6 +14018,17 @@ async def voice_socket(websocket:WebSocket):
                             reconnect_notices=list(reconnection.notices)
                         elif experiment_state["status"] in {"paused","blocked"}:
                             session.curated_protocol_session.pause_workflow()
+                    if (recovery_session_id is not None and experiment_state is not None
+                            and session.curated_protocol_session is not None):
+                        # Lane EASY, decision 2: today's values as the run kept them.
+                        kept_changes=_workspace_run_changes(experiment_state)
+                        if kept_changes is None:
+                            kept_changes=await asyncio.to_thread(
+                                _applied_run_changes,str(requested_protocol_id),str(recovery_session_id))
+                        try:
+                            session.curated_protocol_session.set_run_changes(kept_changes)
+                        except CuratedProtocolFixtureError:
+                            log.warning("run_changes.restore_refused protocol_id=%s",requested_protocol_id)
                     if reconnect is not None and experiment_state is not None:
                         restored_connection=True
                         if (

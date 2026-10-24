@@ -54,6 +54,8 @@ class StandIn {
       this.acknowledged.push({ body: route.request().postDataJSON(), at: Date.now() });
       return route.fulfill({ json: { ready: true, reason: null, target: TARGET, missing_question_ids: [], safety_acknowledged: true } });
     });
+    // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" comes after the safety check; this stand-in offers none and keeps the skip.
+    await page.route(`**/api/protocols/${PID}/start-check/changes`, (route: Route) => route.fulfill({ json: route.request().method() === 'POST' ? { change_set_id: 'run-changes-e2e', source: 'wizard', changes: [] } : { protocol_id: PID, target: TARGET, revision_id: 'pdf-1', limit: 12, values: [] } }));
     await page.routeWebSocket(/\/ws$/, ws => this.connect(ws));
   }
 
@@ -91,6 +93,9 @@ test.describe('The start through the server-kept check (lane IA with lane SAFE)'
     await expect(page.locator('#wizard-title')).toHaveText('안전 주의');
     await expect(page.locator('#wizard-body')).toContainText('장갑을 끼세요.');
     expect(server.acknowledged.length).toBe(0);
+    await page.locator('#wizard-primary').click();
+    // Lane EASY decision 2: "오늘 원문과 다르게 할 값", nothing to change.
+    await expect(page.locator('#wizard-title')).toHaveText('오늘 원문과 다르게 할 값');
     await page.locator('#wizard-primary').click();
     await expect(page.locator('#wizard-primary')).toHaveText('이 프로토콜로 시작');
     expect(server.answers.length).toBe(1);

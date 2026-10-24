@@ -100,6 +100,8 @@ class StandIn {
       if (path === `/api/protocols/${PID}/start-check`) return json(CHECK);
       if (path === `/api/protocols/${PID}/start-check/answers`) return json({ question_id: CHECK.questions[0].question_id, correct: true, proceed: true, chosen_label: '10 min', next_question_id: null, message_ko: '', followups: [] });
       if (path === `/api/protocols/${PID}/start-check/safety`) return json({ ready: true, reason: null, target: TARGET, missing_question_ids: [], safety_acknowledged: true });
+      // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값"; this stand-in offers none and keeps the skip.
+      if (path === `/api/protocols/${PID}/start-check/changes`) return json(route.request().method() === 'POST' ? { change_set_id: 'run-changes-e2e', source: 'wizard', changes: [] } : { protocol_id: PID, target: TARGET, revision_id: 'pdf-1', limit: 12, values: [] });
       if (path === '/api/workspace/session') return json({ display_name: '김재준', principal_id: 'p-a-tab' });
       if (path === '/api/workspace/experiments') return json({ experiments: this.started ? [this.experiment()] : [] });
       if (path === `/api/workspace/experiments/${SESSION}/timeline`) return json({ session: this.experiment(), timeline: [{ event_type: 'session_started', step_label: '1', created_at: iso(Date.now() - 600_000) }], observation_count: 0, evidence_count: 0 });
@@ -279,6 +281,9 @@ test.describe('One experiment on a tablet (lane TAB)', () => {
     await expect(page.locator('#wizard-title')).toHaveText('안전 주의');
     await expect(page.locator('#wizard-body')).toContainText('장갑을 끼고 흄후드에서 작업하세요.');
     await expectTabletScreen(page, 'start sheet · safety');
+    await page.locator('#wizard-primary').tap();
+    // Lane EASY decision 2: "오늘 원문과 다르게 할 값", nothing to change.
+    await expect(page.locator('#wizard-title')).toHaveText('오늘 원문과 다르게 할 값');
     await page.locator('#wizard-primary').tap();
     await expect(page.locator('#wizard-primary')).toHaveText('이 프로토콜로 시작');
     await expectTabletScreen(page, 'start sheet · start');

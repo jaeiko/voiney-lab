@@ -1298,6 +1298,8 @@
           <div id="procedure-progress"></div>
           <p id="procedure-step-title"></p>
           <p id="procedure-primary" class="step-body"></p>
+          <!-- Lane EASY decision 2 (2026-10-24): the current step's values today's run changed, as the server words them ("20분(오늘 바꾼 값 · 원문 15분)"); nothing when there are none. -->
+          <ul id="procedure-run-changes" class="run-changes" aria-label="오늘 바꾼 값" hidden></ul>
           <!-- Lane UI3 decision 1 (2026-10-14): the draft M2's "다음 단계: …" -- the next step's sentence as the server sends it (screen.next_step_sentence); nothing when it sends none. -->
           <p id="run-next-step" class="run-next-step" hidden></p>
           <div id="procedure-open-question" class="open-question" role="status" hidden></div>
@@ -2852,6 +2854,7 @@ function renderCuratedProtocolState(message){
  // English reader, the source is the body and nothing is folded.
  const stepShown=value.active||previewValid,koreanStep=koreanIsBody()&&nonempty(value.primary_summary);
  setText("procedure-primary",stepShown?normalizePresentationText(koreanStep?value.primary_summary:(value.display_summary||"")):"");
+ renderRunChanges(stepShown?value.current_step_run_changes:null);
  $("procedure-instruction").textContent=stepShown&&koreanStep&&nonempty(value.display_summary)?normalizePresentationText(value.display_summary):"";
  const sourceToggleNode=$("procedure-source-toggle");if(sourceToggleNode){sourceToggleNode.hidden=!(stepShown&&koreanStep&&nonempty(value.display_summary));sourceToggleNode.open=false;}
  updateStepSafetyGuidance();renderTranslationNote();
@@ -5353,9 +5356,9 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 // step shows what the server sent and sends the person's press back as one
 // request.
 const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
-const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
+const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},changes:{kicker:"오늘 바꿀 값",title:"오늘 원문과 다르게 할 값"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
-var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null};
+var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null,changes:null,changeInputs:{},chosenChanges:null};
 var wizardSheetPushed=false,wizardOpener=null;
 const FIRST_SETUP_KEY="voiney-lab.first-setup";
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
@@ -5370,7 +5373,7 @@ function wizardSteps(){
  if((wizard.voices?.voices?.length||0)>=2)steps.push("agent");
  // Lane IA addendum: the first setup after a login is the voice steps alone.
  if(wizard.mode==="setup")return steps.filter(step=>step!=="login");
- steps.push("protocol","check","safety","start");
+ steps.push("protocol","check","safety","changes","start");
  return steps;
 }
 // Lane IA addendum (2026-10-19): the sheet -- opened by the page's own buttons (never on its own, except the login), closed by ×, a press outside, Esc or the back button (one history entry is pushed while it is open), and by the start of the experiment.
@@ -5383,6 +5386,7 @@ function openWizardSheet(step=null,{mode="start"}={}){
  renderWizard();
  $("wizard-sheet-panel")?.focus?.();
  if(wizard.step==="check")void wizardLoadCheck();
+ if(wizard.step==="changes")void wizardLoadChanges();
  return true;
 }
 function closeWizardSheet({fromHistory=false,silent=false}={}){
@@ -5432,7 +5436,7 @@ async function wizardAfterSignIn(){
  const settings=serverFetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
  await Promise.all([settings,loadAgentVoices()]);
 }
-function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
+function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();if(step==="changes")void wizardLoadChanges();}
 function wizardNext(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<0||index>=steps.length-1)return;wizardGo(steps[index+1]);}
 function wizardBack(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<=0)return;wizardGo(steps[index-1]);}
 function wizardField(label,id,type,autocomplete){const field=compareEl("label","wizard-field",label);let input=document.getElementById(id);if(!input){input=document.createElement("input");input.id=id;}input.type=type;if(autocomplete)input.setAttribute?.("autocomplete",autocomplete);field.appendChild(input);return field;}
@@ -5464,7 +5468,7 @@ function renderWizard(){
  if(primary){primary.hidden=false;primary.disabled=wizard.busy;primary.textContent="다음";}
  if(back)back.hidden=steps.indexOf(wizard.step)<=0;
  const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=wizard.noteKind;}
- const renderers={login:renderWizardLogin,voice:renderWizardVoice,agent:renderWizardAgent,protocol:renderWizardProtocol,check:renderWizardCheck,safety:renderWizardSafety,start:renderWizardStart};
+ const renderers={login:renderWizardLogin,voice:renderWizardVoice,agent:renderWizardAgent,protocol:renderWizardProtocol,check:renderWizardCheck,safety:renderWizardSafety,changes:renderWizardChanges,start:renderWizardStart};
  renderers[wizard.step]?.(host,primary);
  if(wizard.mode==="setup"){host.appendChild(compareEl("p","wizard-done","설정 탭에서 언제든 다시 할 수 있어요."));if(primary&&steps.indexOf(wizard.step)===steps.length-1)primary.textContent="다 됐어요";}
  const quick=$("wizard-quick"),last=wizardLastProtocol();
@@ -5627,7 +5631,7 @@ async function acknowledgeStartSafety(){
  finally{wizardSetBusy(false);}
 }
 // A start the server refused for the check: its sentence, and the sheet again at the step it names.
-const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null});
+const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null,run_changes_stale:"changes"});
 function returnToStartStep(reason,words){
  forgetSafetyRead();
  const step=START_REFUSAL_STEPS[reason];
@@ -5742,12 +5746,75 @@ function renderWizardSafety(host,primary){
  else if(skipped==="disabled")host.appendChild(compareEl("p","wizard-done","핵심 값 확인은 꺼져 있어요(서버 설정)."));
  if(primary)primary.textContent="읽었어요";
 }
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" -- after the safety check, may be skipped. The
+// server lists the values the analysis read (time, temperature, speed, volume, concentration) beside their step;
+// a person types a new value beside the ones to change. The server checks each (the same kind of unit, a value of
+// the list) and keeps the choice for the next start -- an empty choice too, which is the step skipped. The page
+// decides nothing: what it shows and what the run uses are the server's.
+async function wizardLoadChanges(){
+ const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
+ wizard.changes=null;wizard.busy=true;renderWizard();
+ try{
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/changes`,{cache:"no-store",redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  wizard.changes=response.ok&&payload&&Array.isArray(payload.values)?{...payload,protocolId:entry.protocol_id}:{failed:true,values:[],failure_ko:nonemptyText(payload?.detail?.message_ko)?String(payload.detail.message_ko):"서버가 값 목록을 보내지 않았어요."};
+ }catch(_){wizard.changes={failed:true,values:[],failure_ko:"서버에 연결할 수 없어요. 네트워크를 확인해 주세요."};}
+ finally{wizard.busy=false;}
+ if(wizard.changes.protocolId!==wizard.chosenChanges?.protocolId)wizard.changeInputs={};
+ renderWizard();return wizard.changes;
+}
+function wizardTypedChanges(){
+ return Object.entries(wizard.changeInputs||{}).map(([item_id,value])=>({item_id,value:String(value||"").trim()})).filter(item=>item.value);
+}
+function renderWizardChanges(host,primary){
+ const changes=wizard.changes;
+ if(!changes){setText("wizard-lead",wizard.busy?"분석한 값을 불러오는 중…":"");if(primary)primary.hidden=true;return;}
+ if(changes.failed){setText("wizard-lead",`${changes.failure_ko||"값 목록을 불러오지 못했어요."}\n[다시 불러오기]를 눌러 주세요.`);if(primary)primary.textContent="다시 불러오기";return;}
+ if(!changes.values.length){setText("wizard-lead","이 분석에는 바꿀 수 있는 값(시간·온도·속도·부피·농도)이 없어요.");if(primary)primary.textContent="다음";return;}
+ setText("wizard-lead","원문과 다르게 할 값만 새 값을 적어 주세요. 같은 종류의 단위만 쓸 수 있어요. 없으면 비운 채로 다음을 눌러요.");
+ const list=compareEl("ul","wizard-changes");list.id="wizard-changes-list";
+ for(const value of changes.values){
+  const row=compareEl("li","wizard-change");
+  const label=compareEl("label","wizard-field",`${value.step_label}단계 · ${value.kind_ko} · 원문 ${value.shown_ko}`);
+  const input=document.createElement("input");input.type="text";input.id=`wizard-change-${value.item_id}`;input.setAttribute?.("inputmode","decimal");input.setAttribute?.("aria-label",`${value.step_label}단계 ${value.kind_ko} 새 값 (${value.units_ko})`);
+  input.placeholder=`새 값 · ${value.units_ko}`;input.value=wizard.changeInputs?.[value.item_id]||"";
+  input.addEventListener("input",()=>{wizard.changeInputs={...wizard.changeInputs,[value.item_id]:input.value};wizard.changeSource="wizard";renderWizardChangesPrimary();});
+  label.appendChild(input);row.appendChild(label);list.appendChild(row);
+ }
+ host.appendChild(list);
+ renderWizardChangesPrimary();
+}
+function renderWizardChangesPrimary(){const primary=$("wizard-primary");if(primary&&wizard.step==="changes"&&wizard.changes&&!wizard.changes.failed)primary.textContent=wizardTypedChanges().length?`이 값으로 할게요 (${wizardTypedChanges().length}개)`:"바꿀 값 없이 다음";}
+async function wizardSubmitChanges(){
+ const entry=wizardSelectedProtocol();if(!entry||wizard.busy)return null;
+ const typed=wizard.changes?.values?.length?wizardTypedChanges():[];
+ wizard.busy=true;renderWizard();
+ try{
+  const body={target:wizard.changes?.target||null,changes:typed,source:"wizard"};
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/changes`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  wizard.busy=false;
+  if(!response.ok||!payload){wizardNote(nonemptyText(payload?.detail?.message_ko)?payload.detail.message_ko:"값을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
+  wizard.chosenChanges={protocolId:entry.protocol_id,changes:Array.isArray(payload.changes)?payload.changes:[]};
+  wizardNext();return payload;
+ }catch(_){wizard.busy=false;wizardNote("서버에 연결할 수 없어요.","error");renderWizard();return null;}
+}
+function renderRunChanges(changes){
+ const list=$("procedure-run-changes");if(!list)return false;
+ list.replaceChildren();
+ const items=Array.isArray(changes)?changes.filter(item=>item&&nonemptyText(item.words_ko)):[];
+ for(const item of items)list.appendChild(compareEl("li","run-change",`${item.kind_ko||""} ${item.words_ko}`.trim()));
+ list.hidden=!items.length;return items.length>0;
+}
 function renderWizardStart(host,primary){
  const entry=wizardSelectedProtocol();
  setText("wizard-title",entry?.title||"시작할 준비가 됐어요");
  setText("wizard-lead","시작하면 마이크가 켜지고 음성 안내가 시작돼요. 안전 주의를 확인한 것으로 기록돼요.");
  const voice=wizard.voices?.voices?.find(item=>item.voice_id===(wizardSettings().agent_voice==="default"?wizard.voices?.default_voice_id:wizardSettings().agent_voice));
  if(voice)host.appendChild(compareEl("p","wizard-done",`안내 목소리 · ${voice.label_ko}`));
+ // Lane EASY decision 2: the values chosen for today, as the server words them.
+ const chosen=Array.isArray(wizard.chosenChanges?.changes)&&wizard.chosenChanges.protocolId===entry?.protocol_id?wizard.chosenChanges.changes:[];
+ if(chosen.length)host.appendChild(compareEl("p","wizard-done",`오늘 바꾼 값 · ${chosen.map(item=>`${item.step_label}단계 ${item.kind_ko} ${item.words_ko}`).join(" · ")}`));
  // Lane IA decision ⑦: a saved experiment picked in the records (or from the home's card) continues from here -- the start sends the session the server named, as the voice console's '실험 이어하기' did.
  const resuming=experimentIsResumable();
  if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 아래 [이어하지 않고 새로 시작]을 눌러 주세요.`));
@@ -5774,6 +5841,7 @@ async function wizardPrimary(){
   }
   // Lane UI4 QA-15: [다시 불러오기] when the check failed to load.
   case "check":return wizard.check?.skipped_reason==="unavailable"?wizardLoadCheck():null;
+  case "changes":return wizard.changes?.failed?wizardLoadChanges():wizardSubmitChanges();
   default:return null;
  }
 }
