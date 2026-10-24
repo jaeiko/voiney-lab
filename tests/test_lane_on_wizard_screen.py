@@ -62,10 +62,11 @@ await open(base());
 assert(wizardOn(),"the wizard is not on");
 assert(!node("start-wizard").hidden,"the wizard section is hidden");
 assert(wizard.step==="voice",`first step: ${wizard.step}`);
-assert(node("wizard-dots").children.length===6,`dots: ${node("wizard-dots").children.length}`);
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" after the safety step is one more dot.
+assert(node("wizard-dots").children.length===7,`dots: ${node("wizard-dots").children.length}`);
 assert(node("wizard-dots").children[0].dataset.state==="current","the first dot is not current");
 assert(title().includes("마이크 확인"),`title: ${title()}`);
-assert(node("wizard-kicker").textContent.startsWith("1 / 6"),`kicker: ${node("wizard-kicker").textContent}`);
+assert(node("wizard-kicker").textContent.startsWith("1 / 7"),`kicker: ${node("wizard-kicker").textContent}`);
 assert(labels(body()).some(words=>words.startsWith("마이크 켜서 확인")),`no mic button: ${labels(body())}`);
 assert(primary().textContent==="다음",`primary: ${primary().textContent}`);
 assert(node("wizard-back").hidden,"← 이전 shows on the first step");
@@ -76,9 +77,10 @@ assert(!wizardSteps().includes("login"),"dev mode asks for a login");
     def test_a_measured_voice_skips_its_step_and_one_voice_skips_the_agent_step(self):
         result = run(r"""
 await open(base(DEV_SESSION,SETTINGS({voice_calibration:"measured"}),{...VOICES,voices:VOICES.voices.slice(0,1)}));
-assert(wizardSteps().join(",")==="protocol,check,safety,start",`steps: ${wizardSteps()}`);
+// Lane EASY decision 2: the step "changes" after the safety check.
+assert(wizardSteps().join(",")==="protocol,check,safety,changes,start",`steps: ${wizardSteps()}`);
 assert(wizard.step==="protocol",`step: ${wizard.step}`);
-assert(node("wizard-dots").children.length===4,"dots");
+assert(node("wizard-dots").children.length===5,"dots");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -102,7 +104,8 @@ assert(wizard.step==="login",`step: ${wizard.step}`);
 assert(title()==="로그인",`title: ${title()}`);
 assert(primary().textContent==="로그인");
 // Before the login the voices cannot be read (401), so the agent step is not yet counted.
-assert(node("wizard-dots").children.length===6,`dots: ${node("wizard-dots").children.length}`);
+// Lane EASY decision 2: one more step after the safety check.
+assert(node("wizard-dots").children.length===7,`dots: ${node("wizard-dots").children.length}`);
 node("wizard-name").value="김재준";node("wizard-password").value="wrong wrong";
 primary().dispatch("click");await settle();
 assert(node("wizard-note").textContent.includes("맞지 않아요"),`note: ${node("wizard-note").textContent}`);
@@ -290,7 +293,7 @@ class SafetyAndStartTests(unittest.TestCase):
     def test_the_safety_step_shows_the_servers_notices_and_the_start_presses_the_one_button(self):
         result = run(r"""
 let started=0;startReviewedProtocol=async()=>{started+=1;};
-await open([["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
+await open([["/start-check/changes",call=>call.method==="POST"?{change_set_id:"run-changes-1",changes:[],source:"wizard"}:{values:[],target:{kind:"analysis"}}],["/start-check",{enabled:true,questions:[],skipped_reason:"no_numeric_values"}],...base()]);
 wizardGo("protocol");await settle();
 walk(body()).filter(el=>el.className==="wizard-option-pick")[0].dispatch("click");await settle(8);
 primary().dispatch("click");await settle(8);
@@ -301,6 +304,9 @@ assert(text.includes("장갑을 끼세요.")&&text.includes("Wear gloves.")&&tex
 assert(text.includes("기관 안전 문서 없음 · 원문 안전 주의만"),"the scope line is missing");
 assert(text.includes("동시 작업은 아직 안내 기능이 없습니다."),"the notice is missing");
 assert(primary().textContent==="읽었어요");
+primary().dispatch("click");await settle();
+// Lane EASY decision 2: "오늘 원문과 다르게 할 값" comes between, skipped here with nothing typed.
+assert(wizard.step==="changes",`step: ${wizard.step}`);
 primary().dispatch("click");await settle();
 assert(wizard.step==="start",`step: ${wizard.step}`);
 assert(title()==="Gamma",title());

@@ -28,6 +28,9 @@
 | 시작을 막는 사유 | 실행을 막는 사유 | `execution_blockers` — `experiment_protocol.EXECUTION_BLOCKING_REASON_CODES` | 이것이 있으면 시작할 수 없다 |
 | 시작 전 알림 | 시작 전 알림 | `execution_notices` — `execution_notice_reasons` | 알리기만 하고 시작은 막지 않는다 |
 | 새로 분석하면 더 정확해요 | 분석기 개선 전 분석 · 다시 분석 권장 | `ANALYSIS_OUTDATED_KO`, `_analysis_outdated_codes` | |
+| 분석할 쪽 | 분석할 쪽 (선택) · 분석한 쪽 | page range — `page_range` (요청 장부), `checked_page_range`, `review()` 의 `analysis_page_range` | 문서 일부만 분석할 때 고른 처음·끝 쪽 |
+| 오늘 바꾼 값 | 오늘 원문과 다르게 할 값 · 20분(오늘 바꾼 값 · 원문 15분) | run change — `RunChange`, `RunChanges`, `protocol_run_changes_chosen`, `run_value_changed` | 이번 실험에만 원문 대신 쓰는 값. 사람이 고르거나 말한 값만 |
+| 지난번처럼 | 지난번처럼 (n개) | `ExperimentReportStore.last_run_values`, `RunChanges.last_time` | 같은 계정의 지난 실험이 바꾼 값을 다시 고르기 |
 | 개발용 예시 | 개발용 큐레이션 분석 | curated fixture — `VOINEY_LAB_CURATED_PROTOCOL_FIXTURE` | 개발 실행기가 넣는 in-gel 프로토콜 |
 
 ## 2. 확인 카드와 시작

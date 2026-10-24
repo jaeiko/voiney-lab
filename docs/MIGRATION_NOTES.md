@@ -1,5 +1,45 @@
 # Migration Notes
 
+## Page range and today's values (lane EASY, 2026-10-24)
+
+No schema number changes. Three stores gain event types and payload keys;
+nothing existing is rewritten.
+
+- **Protocol catalog** (`protocol_workspace.sqlite`, events): an analysis
+  request, its start and its result may carry `page_range`
+  (`first_page`, `last_page`, `page_count`, `pages_ko`). New event types
+  `protocol_run_changes_chosen` (the person's values for the next start:
+  `change_set_id`, `actor_principal_id`, `target`, `revision_id`, `source`,
+  `changes`, `recorded_at`) and `protocol_run_changes_applied`
+  (`change_set_id`, `experiment_session_id`).
+- **Experiment record** (`experiment_reports.sqlite`): `session_started` may
+  carry `run_changes` and `run_change_set_id`; new event types
+  `run_value_changed` and `run_value_reverted` (their `step_record` holds the
+  change, what it replaced or what was put back, and the analysis or review
+  version).
+- **Workspace** (`commercial_workspace.sqlite`, `experiment_session_events`):
+  `protocol_started` may carry `run_changes`; new event types
+  `run_value_changed` and `run_value_reverted`. The append-only triggers are
+  unchanged.
+
+Follow-up of the same day: `protocol_run_changes_chosen` may also carry
+`confirmed_large` (the item ids confirmed once more), and `session.start`
+may carry `run_change_set_id` (`run-changes-<24 hex>`). With the start check
+on, a client that sends no such id cannot start a new run -- an older page
+must be reloaded after the upgrade. Rolling back: older servers (before
+this lane) drop the unknown control field and apply no changed value.
+
+Reading old records: an analysis without `page_range` read the whole
+document, and a record or experiment without these events used no changed
+value -- the notebook, the recovery and "지난번처럼" read them that way.
+
+Rolling back to older code: older code ignores the new catalog event types
+and `page_range` (an analysis made on a range still runs; its review shows no
+range, and the possibly-missed notice it stored is the range's). Older code
+ignores the new report and workspace events: a run continued on older code
+uses the source's values, and its notebook no longer shows "오늘 바꾼 값".
+No backup or migration step is needed; the events stay in the ledgers.
+
 ## Experiment record schema 1 → 2
 
 The report store adds `organization_id`, `owner_principal_id` and
