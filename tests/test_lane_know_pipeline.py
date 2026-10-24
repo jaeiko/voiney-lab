@@ -464,6 +464,14 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(reply.body, b'{"entities": {}}')
         self.assertEqual(sleeps[0], 5.0)  # the server's wait; then the ordinary pace
 
+    def test_a_site_that_stays_lagged_is_a_fetch_error_not_a_cached_body(self):
+        lagged = b'{"error":{"code":"maxlag","info":"Waiting for a replica: 9 seconds lagged."}}'
+        http = pk.Http("Test/0.1 (x)", transport=lambda url, h, t: pk.Response(200, {"Retry-After": "1"}, lagged, url),
+                       sleep=lambda s: None, clock=lambda: 0.0)
+        with self.assertRaises(pk.FetchError) as caught:
+            http.get("https://www.wikidata.org/w/api.php?action=wbgetentities", pace_key="s", per_second=5, robots="api")
+        self.assertIn("maxlag", str(caught.exception))
+
     def test_a_robots_crawl_delay_slows_the_pace_below_the_source_s(self):
         clock = {"now": 0.0}
         sleeps: list[float] = []

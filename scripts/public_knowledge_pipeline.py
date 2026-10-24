@@ -409,6 +409,9 @@ class Http:
                     seconds = 5.0 * 3 ** (attempt - 1)
                 self._sleep(min(120.0, seconds))
                 continue
+            if _mediawiki_lagged(reply):
+                # Still lagged after the waits: a failure to record, never a body to cache.
+                raise FetchError("MediaWiki maxlag: the site asked us to wait and stayed lagged")
             return reply
 
 
@@ -1092,6 +1095,10 @@ def read_compounds(path: Path) -> list[tuple[str, int | None, str]]:
 
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 PUBCHEM_CID_PROPERTY = "P662"
+#: Wikidata counts its query service's lag in ``maxlag``, and that sat above
+#: 5 s for hours on 2026-10-24; a few dozen reads a run are no load, so the
+#: courtesy bound is 8 s here (Wikipedia's reads keep 5).
+WIKIDATA_MAXLAG = 8
 
 
 def resolve_cids_from_wikidata(
@@ -1108,7 +1115,7 @@ def resolve_cids_from_wikidata(
     for batch in _batches(list(dict.fromkeys(titles)), 50):
         url = _api(WIKIDATA_API, {
             "action": "wbgetentities", "sites": "enwiki", "titles": "|".join(batch), "props": "claims|sitelinks",
-            "sitefilter": "enwiki", "format": "json", "maxlag": 5,
+            "sitefilter": "enwiki", "format": "json", "maxlag": WIKIDATA_MAXLAG,
         })
         try:
             reply = ctx.http.get(url, pace_key="wikidata", per_second=1.0, robots="api")
@@ -1327,7 +1334,7 @@ def handle_wikidata_glossary(source: Source, ctx: RunContext) -> Iterator[Piece]
         key = "batch-" + hashlib.sha1("|".join(batch).encode("utf-8")).hexdigest()[:12]
         url = _api(api_url, {
             "action": "wbgetentities", "sites": "enwiki", "titles": "|".join(batch), "props": "labels|aliases|sitelinks",
-            "languages": "ko|en", "sitefilter": "enwiki|kowiki", "format": "json", "maxlag": 5, "normalize": 1,
+            "languages": "ko|en", "sitefilter": "enwiki|kowiki", "format": "json", "maxlag": WIKIDATA_MAXLAG,
         })
         try:
             body, _changed = raw.fetch(ctx.http, key, url, suffix=".json", source=source, full=ctx.full,
