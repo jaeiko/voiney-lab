@@ -38,13 +38,22 @@ test.describe('The new screen (lane RX0)', () => {
     expect(overflow).toBeLessThanOrEqual(1);
   });
 
-  test('with runnable protocols the home offers 실험 시작 and the list shows chips and next actions', async ({ page }) => {
-    await mockCatalog(page, [ENTRY_FAILED, ENTRY_REVIEW, ENTRY_ANALYSING, ENTRY_READY]);
+  test('with runnable protocols and nothing to review the home offers 실험 시작 with three small actions', async ({ page }) => {
+    await mockCatalog(page, [ENTRY_FAILED, ENTRY_ANALYSING, ENTRY_READY]);
     await page.goto(APP);
     await expect(page.locator('.big-card')).toContainText('실험 시작');
     await expect(page.locator('.big-card')).toContainText('바로 쓸 수 있는 프로토콜 1개');
+    await expect(page.locator('.big-card')).toHaveAttribute('href', '/index.html#/experiment');
+    await expect(page.locator('.secondary-actions a')).toHaveText(['프로토콜 보기', '올리기', '지난 기록']);
     await page.getByRole('navigation').getByText('프로토콜', { exact: true }).click();
     await expect(page).toHaveURL(/#\/protocols$/);
+    await expect(page.locator('.row')).toHaveCount(3);
+  });
+
+  test('the list shows a chip and the next action per row, runnable first', async ({ page }) => {
+    // A review-pending protocol is in this catalog too, so the home would lead with 확인하기; the list is opened directly.
+    await mockCatalog(page, [ENTRY_FAILED, ENTRY_REVIEW, ENTRY_ANALYSING, ENTRY_READY]);
+    await page.goto(`${APP}#/protocols`);
     const rows = page.locator('.row');
     await expect(rows).toHaveCount(4);
     await expect(rows.nth(0)).toContainText('바로 쓸 수 있어요');
