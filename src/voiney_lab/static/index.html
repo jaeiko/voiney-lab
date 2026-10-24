@@ -4199,12 +4199,13 @@ function renderProtocolReview(review,options={}){
  }
  appendProtocolReviewGroup("원문 파일",[
   `파일 · ${source.filename||review?.source_filename||"—"}`,
-  `페이지 · ${Number.isInteger(source.page_count)?`${source.page_count}쪽`:"—"} · ${review?.analysis_payload_sha256?"분석 끝남":"분석 전"}`,
+  `페이지 · ${Number.isInteger(source.page_count)?`${source.page_count}쪽`:"—"} · ${review?.analysis_payload_sha256||review?.available_for_execution===true?"분석 끝남":"분석 전"}`,
  ],[["revision_id",review?.revision_id||null],["source_sha256",source.sha256||review?.source_sha256||null],["analysis_payload_sha256",review?.analysis_payload_sha256||null]]);
  const lifecycleCode=review?.lifecycle_state||"uploaded",readinessCode=readiness.status||review?.readiness_status||"analysis_required";
  appendProtocolReviewGroup("실행 준비 판정",[
   `처리 단계 · ${serverCodeText("lifecycle_state",lifecycleCode)}`,
-  `상태 · ${serverCodeText("readiness_status",readinessCode)}`,
+  // Lane PRE decision 2: whether it can run comes first; the readiness code only says what to read before the start.
+  `상태 · ${review?.available_for_execution===true?"실행 가능 · ":""}${serverCodeText("readiness_status",readinessCode)}`,
   ...reasons.map(reason=>`${serverCodeText(["readiness_reason","analysis_status"],reason.code)} · ${reason.message_ko||reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
   review?.available_for_execution===true?"실험 시작 가능 · '이 프로토콜로 실험 시작'을 누르면 확인 뒤 시작":"분석 통과 전 실행 불가",
  ],[["lifecycle_state",lifecycleCode],["readiness_status",readinessCode],["readiness_label",typeof readiness.label==="string"?readiness.label:null],...reasons.map(reason=>["reason",reason?.code]),...reasons.map(reason=>["reason_message",typeof reason?.message==="string"?reason.message:null])]);
@@ -5950,6 +5951,8 @@ function uploadFlowStep(){
  if(isRegisteringProtocol)return "uploading";
  if(!id)return "pick";
  const entry=protocolCatalog.get(id),run=protocolAnalysisRun(entry);
+ // Lane PRE decision 2: a protocol that can run is shown as ready, whatever analysis runs over it.
+ if(entry?.available_for_execution===true)return "result";
  const polling=(protocolAnalysisPollHandle!==null||protocolOcrPollHandle!==null)&&currentProtocolReviewId===id;
  const running=polling||PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||PROTOCOL_RUNNING_STATES.has(run?.state);
  if(running||!entry)return "progress";
