@@ -658,7 +658,8 @@ def _dedupe_key(text: str) -> str:
     return hashlib.sha1(" ".join(text.casefold().split()).encode("utf-8")).hexdigest()
 
 
-_DATE_IN = re.compile(r"(\d{4})-(\d{2})-(\d{2})|(\d{4})\b")
+#: A date, or a year on its own (1900–2099, not part of a longer number).
+_DATE_IN = re.compile(r"(?<!\d)((?:19|20)\d{2})-(\d{2})-(\d{2})(?!\d)|(?<!\d)((?:19|20)\d{2})(?!\d)")
 
 
 def _record_date(record: Mapping[str, Any]) -> str:
