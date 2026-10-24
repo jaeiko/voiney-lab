@@ -324,6 +324,24 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   (`web_explanations`). Each is labelled, checked by the server (numbers,
   safety, state claims removed) and read-only; none can supply a value or a
   safety statement. Web images are proxied same-origin, never hotlinked.
+- Public material (lane KNOW, human decision 2026-10-24):
+  `public_knowledge.PublicKnowledgeSource` is the `public` tier of the
+  knowledge contract — one Moss index of licence-checked public pieces
+  (public domain, CC0, CC BY, CC BY-SA; `data/public_knowledge/sources.toml`,
+  built by `scripts/public_knowledge_pipeline.py`), loaded once at start by
+  `server._start_public_knowledge` and queried in process. A Korean
+  question is joined by the English names of its words
+  (`data/public_knowledge/glossary.json`, Wikidata labels, CC0) before the
+  query. Hits come best source grade first (A public institution /
+  peer-reviewed, B open textbook, C wiki) with source, licence and address;
+  what may be said from them is `answer_checks.public_reference_violations`
+  (only the piece's numbers, a fact not an instruction, no "continue", no
+  value against the source's, the "공개 자료 · 일반 참고 — <출처>" mark added
+  by the server). It is a general reference beside the source and never a
+  value or a safety statement; off, or without `MOSS_PROJECT_ID` /
+  `MOSS_PROJECT_KEY`, or after a failed load, this tier alone is off by
+  setting name. Its wiring into the problem help (lane HELP's ③) follows
+  that lane's merge.
 - Model roles (`model_providers.ROLES`): `router`, `answer`, `translation`,
   `analysis`, `report`, `supplemental`, each with a provider (`xai`,
   `anthropic`, `openai`, `google`), model and reasoning level and no default.
@@ -361,7 +379,9 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   adaptations, connectors, dry-lab, ELN write-back); see
   `docs/MIGRATION_NOTES.md`.
 - In-memory only: runtime metrics, web photos, drawn SVGs, report-prose job
-  state, the speaker's level reference.
+  state, the speaker's level reference, and the public knowledge index Moss
+  holds after the start (its disk cache sits beside the protocol catalog in
+  `public-knowledge-cache/`; the cloud copy is the source of truth).
 
 ## 7. Identity and accounts
 
@@ -479,6 +499,7 @@ Everything fails closed and visibly, and none of it mutates workflow state:
 | Old setting name present | Server, launchers and tests refuse to start, naming it |
 | Safety scope needs a catalog that is missing or unusable | `server_config` refuses; `/readyz` returns 503 `safety_configuration_invalid` with setting names only |
 | Usage scope missing/blank, or malformed start-check/workspace boolean | Configuration error naming the setting; no silent scope/boolean fallback |
+| `VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED` without `MOSS_PROJECT_ID`/`MOSS_PROJECT_KEY`, a malformed switch, or an index that fails to load | That tier alone is off; `ready.research_capabilities.public_knowledge` and `/readyz` say `unavailable` with the setting name; the server starts and no other provider is tried |
 
 ## 12. Audio constants
 

@@ -101,7 +101,8 @@ Understanding a turn and workflow state
 - `multi_brain.py`: optional read-only Answer, Source and Visual roles.
 - `tools.py`: trusted turn context and record-value checks for `record_log`.
 - `model_providers.py`: model roles, provider clients, retries, Gemini safety settings.
-- `external_references.py`: the outside-PDF "AI 일반 지식" explanation and research-query planning.
+- `external_references.py`: the outside-PDF "AI 일반 지식" explanation, research-query planning, and the checked short form of a public-material ground.
+- `public_knowledge.py`: the `public` knowledge tier — settings that fail closed by name, the ko/en glossary, the Moss client seam, `PublicKnowledgeSource` (one index loaded at start, searched in process).
 - `web_explanations.py`: web explanation and free-licence photo (off by default).
 - `drawn_diagrams.py`: on-request SVG diagram, sanitised and labelled (off by default).
 - `source_figures.py`: step figures cut from the uploaded PDF by geometry.

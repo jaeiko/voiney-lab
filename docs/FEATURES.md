@@ -152,6 +152,7 @@
 - **무엇**: 원문이 답하는 질문(양·시간·온도·지금 단계·다른 단계)은 원문 값으로 답한다. 원문에 없는 것은 "PDF에서 확인할 수 없어요."라고 한다.
   - **"그거"**: 가리킬 값이 하나면 그것으로, 둘·셋이면 "A요, B요?"로 되묻고, 더 많으면 화면 목록을 띄운다. 다음 말이나 화면 누르기로 고른다.
   - **AI 일반 지식**: 원문이 설명하지 않는 용어 뜻("HPLC water 가 뭐야?")에는 규칙의 답 뒤에 "PDF에는 따로 설명이 없어요. 일반적으로는 …"을 붙이고 화면에 "AI 일반 지식"으로 표시한다. 120자 이내, 숫자·방법·양·안전·완료 기준이 든 설명은 서버가 뺀다. 켰을 때만 나온다(개발 실행기는 켜고 파일럿 실행기는 끈다).
+  - **공개 자료**: 라이선스를 확인한 공개 자료에서 찾은 조각은 "공개 자료 · 일반 참고 — <출처 이름>"으로 밝히고 출처·라이선스를 보인다(F20; 줄 HELP 의 문제 도움 ③ 단계에 연결 예정). 수치는 인용한 조각에 있는 것만, 지시가 아니라 참고 사실로 말하며 원문 값을 바꾸거나 "계속해도 돼요"를 말하지 않는다(`answer_checks.public_reference_violations`).
   - **그림**: "그림 보여 줘"는 그 단계의 원문 그림을 먼저 보여 준다(원문에서 모양만으로 잘라 냄). "그림으로 그려 줘"는 켰을 때 간단한 그림을 그리고 "AI 가 그린 그림 — 실제와 다를 수 있음"을 붙인다(원문에 없는 숫자는 뺀다). "○○ 사진"·"웹에서 찾아봐"는 켰을 때 웹 설명과 자유 라이선스 사진(Wikimedia Commons)을 출처와 함께 보여 준다. 웹 설명에서 숫자·안전·상태 문장은 뺀다.
 - **어디**: `curated_protocol.py` (`resolve_bounded_coreference`, 앞단 규칙 `coreference_clarify`, `reference_value`, `quantity_target`, `visual_request`); `external_references.py` `explain_outside_pdf`, `supplemental_knowledge_allowed`; `answer_checks.OUTSIDE_PDF_MAX_CHARS`; `source_figures.py` `figures_for_step`; `drawn_diagrams.py` `sanitize_svg`; `web_explanations.py` `check_sentences`; `multi_brain.py`(읽기 전용 Answer·Source·Visual 역할).
 - **설정**: `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`(false), `VOINEY_LAB_SUPPLEMENTAL_PROVIDER`·`_MODEL`, `VOINEY_LAB_DRAWN_DIAGRAMS_ENABLED`(false), `VOINEY_LAB_WEB_EXPLANATIONS_ENABLED`(false), `VOINEY_LAB_WEB_PHOTOS_ENABLED`(true) — 그림·웹은 `OPENAI_API_KEY` 가 필요하고 모델 기본값은 `gpt-6-luna`; `VOINEY_LAB_MULTI_BRAIN_ENABLED`(false). 실험자 설정 `web_lookup`.
@@ -230,6 +231,7 @@
   | 보조 설명 `SUPPLEMENTAL` | "AI 일반 지식"(켰을 때) | `openai` · `gpt-6-luna` · 추론 `low` |
   | 보고서 `REPORT` | 보고서의 AI 정리 | `google` · `gemini-3.8-flash` |
   | 웹 설명·AI 그림 | 켰을 때 | `gpt-6-luna` (`OPENAI_API_KEY`) |
+  | 공개 자료 검색 | 켰을 때(F20) | Moss `moss-minilm` 색인 `voiney-public-knowledge` (`MOSS_PROJECT_ID`·`MOSS_PROJECT_KEY`) |
   | STT | 말 → 글 | `elevenlabs` · `scribe_v2` |
   | TTS | 글 → 말 | `google_cloud` (목소리 기본 `ko-KR-Chirp3-HD-Charon`) |
   | OCR | 사진 글자 읽기 | `VOINEY_LAB_OCR_PROVIDERS` 에 `clova`,`google` |
@@ -245,7 +247,7 @@
   - **밖으로 나가는 것**(F17 의 값 기준): 말소리 → STT 공급자, 말할 문장 → TTS 공급자, 글자 층 없는 쪽의 이미지 → OCR 엔진, 원문 글자 → 분석·번역 공급자, 말한 글과 지금 단계 문맥 → 라우터·답변·보조 설명 공급자(켰을 때), 웹 설명·그림 요청 → OpenAI(켰을 때), 실험 기록 → 보고서 공급자, Google 링크 가져오기 → Google. 공급자가 받은 데이터를 어떻게 두는지는 각 약관을 따른다 — 파일럿 전에 사람이 확인한다.
   - **파일럿 데이터 삭제**: `python scripts/pilot_data_delete.py` — 미리보기 → 확인 단어 → 삭제 → 기록 순서만 허용, 되돌릴 수 없음. `data/runtime/pilot` 과 파일럿 표시가 있는 폴더만 받는다. `--account NAME` 은 그 계정의 실험·기록·지표 행을 지운다(연구실이 함께 쓰는 프로토콜은 남긴다). 계정이 스스로 지울 때도 범위가 같다.
   - **백업**: `python scripts/pilot_state_backup.py create|verify|restore`(SQLite 온라인 백업, 원문·첨부만, 환경 파일·원음 제외).
-  - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부). 준비 점검은 사용 범위와 그 범위의 활성 안전 문서를 로컬에서 확인한다. 설정을 읽지 못하면 503과 이유 코드·설정 이름만 준다. `source_protocol_only`는 카탈로그를 읽지 않는다.
+  - **점검**: `GET /healthz`(살아 있음), `GET /readyz`(신원 방식·작업공간·카탈로그·보고서·Word 변환·HEIC 가능 여부·공개 자료 검색 상태). 준비 점검은 사용 범위와 그 범위의 활성 안전 문서를 로컬에서 확인한다. 설정을 읽지 못하면 503과 이유 코드·설정 이름만 준다. `source_protocol_only`는 카탈로그를 읽지 않는다.
   - **기록(log)**: 말 내용은 남기지 않는다. 키는 `.env` 에만 둔다.
 - **어디**: `scripts/pilot_data_delete.py`, `accounts.py`(지우는 범위), `scripts/pilot_state_backup.py`, `server.py` `healthz`, `readyz`, `persist_stt_diagnostic`.
 - **설정**: `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED`, `VOINEY_LAB_STT_DIAGNOSTIC_MAX_FILES`(20), `VOINEY_LAB_ANALYTICS_RETENTION_DAYS`(90).
@@ -262,3 +264,16 @@
 - **어디**: `static/index.html`의 `renderProtocolViews`, `renderUploadFlow`, `renderRecordsViews`, `showExperimentEnded`, `signOutOnScreen`, `renderRecordReports`, `recheckAccountAfterClose`, `deleteAccount`; 주소는 `serverOrigin`·`serverUrl`·`serverSocketUrl`·`serverFetch`를 거친다. 화면은 서버 상태를 그리며 문장에서 상태를 추측하지 않는다.
 - **시험**: `tests/test_lane_ia_tabs.py`, `tests/e2e/upload-ia.spec.ts`, `tests/e2e/tabs-ia.spec.ts`, `tests/test_lane_ui4_record_reports.py`, `tests/test_lane_ui4_account.py`, `tests/e2e/pilot-ui4.spec.ts`(브라우저는 CI). 사용 순서는 `docs/USER_GUIDE.md`.
 - **한계**: PI 확인·추가 보고서 형식·계정 삭제 등 서버 기능의 화면 연결 범위는 각 기능 절에 적는다. 실제 기기·공급자 시험과 가짜 서버 화면 시험을 구분한다.
+
+
+## F20. 공개 자료 검색 (Moss)
+
+- **무엇**: 실험 중 질문·문제에 라이선스를 확인한 **공개** 실험·안전·과학 자료(퍼블릭 도메인·CC0·CC BY·CC BY-SA 만)를 서버 안에서 찾는다. 연구실 자료는 넣지 않는다. 자료는 `scripts/public_knowledge_pipeline.py` 가 출처 목록 `data/public_knowledge/sources.toml` 대로 모아(다시 돌릴 때마다 바뀐 것만 받아 늘어나는 수집 파이프라인) 조각으로 만들고 Moss 색인에 올린다 — 조각마다 tier `public`, 제목, 본문, 위치(섹션·쪽·CID), URL, 라이선스, 언어, 분야, 출처 등급, 출처 버전, 받은 날짜. 서버는 시작할 때 색인 하나를 불러오고(`lifespan`), 질의는 프로세스 안에서 돈다. 한국어 질문은 위키데이터 용어집(CC0, `data/public_knowledge/glossary.json`)으로 낱말의 영어 이름을 붙여 영어 자료와 만난다. v1 출처: NIOSH Pocket Guide, CDC BMBL 6판, NIOSH 2007-107, CDC MMWR 실험실 안전 지침, PubChem(참고 출처가 공공기관·ILO ICSC 인 항목만), OpenStax Chemistry·Biology 1판(CC BY 4.0; 2판은 CC BY-NC-SA 라 제외), Europe PMC CC BY 논문, 위키백과(영·한). 뺀 후보와 이유는 출처 목록의 `[[excluded]]`.
+  - **등급**: 공공기관·표준·심사 논문(A) > 공개 교재(B) > 위키백과(C). 답은 높은 등급을 먼저 쓰고, 위키백과만 근거면 그렇게 밝힌다(`wiki_only`).
+  - **답의 규칙**(결정 6): 말과 화면에 "공개 자료 · 일반 참고 — <출처 이름>"으로 밝히고 화면에 출처·라이선스를 보인다. 이 실험의 값·조건·안전 판단은 원문과 연구실 규정이 먼저다: 수치는 인용한 조각에 있는 것만, 지시가 아니라 참고 사실로("…로 알려져 있어요"), 160자 이내, 원문을 60자 넘게 그대로 읽지 않고, "계속해도 돼요"·원문 값 바꾸기·위험 허가·상태 변경 주장·URL·표시 글자는 서버가 거른다(`answer_checks.public_reference_violations`). 보조 설명 역할이 꺼져 있거나 바꿔 말한 문장이 검사에 걸리면 모델 없이 첫 문장(90자)만 표시와 함께 말한다(`public_reference_fallback`).
+  - **켜고 끄기**: 설정이 없거나 키가 없거나 불러오기에 실패하면 이 등급만 꺼지고(이유는 설정 이름), 다른 기능은 그대로이며 다른 공급자로 넘어가지 않는다. `ready.research_capabilities.public_knowledge` 와 `/readyz` 의 `public_knowledge` 가 `disabled`·`enabled`·`unavailable` 을 알린다.
+  - **연결**: 실험 중 문제 도움(줄 HELP)의 ③ 단계가 이 등급을 먼저 쓴다 — 줄 HELP 가 `dev` 에 병합된 뒤 연결한다. 그 전까지 서버는 색인을 불러오고 상태만 알린다.
+- **어디**: `public_knowledge.py` (`PublicKnowledgeSettings`, `Glossary`, `PublicKnowledgeSource`, `start_public_knowledge`, `MossSdkClient`, `wiki_only`); `server.py` `_start_public_knowledge`, `_public_knowledge_capability`; `answer_checks.py` `public_reference_violations`, `PUBLIC_REFERENCE_MAX_CHARS`; `external_references.py` `paraphrase_public_reference`, `public_reference_fallback`; `scripts/public_knowledge_pipeline.py` (`collect`·`status`·`glossary`·`upload`·`evaluate`); `data/public_knowledge/`(출처 목록, 문서·시약·용어 목록, 용어집). 받은 원본과 묶음은 `data/runtime/public-knowledge/`(커밋하지 않음). 운영 순서는 `docs/PUBLIC_KNOWLEDGE.md`.
+- **설정**: `VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED`(false), `VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX`(`voiney-public-knowledge`), `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`. 패키지 `moss==1.15.1`(PolyForm Shield 1.0.0).
+- **시험**: `tests/test_lane_know_public_knowledge.py`, `tests/test_lane_know_pipeline.py`, `tests/test_lane_know_answer_rules.py`, `tests/test_lane_know_server_start.py` — 모두 가짜 전송(contract-tested). 실제 Moss 질의와 측정치는 줄 KNOW 보고서.
+- **한계**: 내장 임베딩 `moss-minilm` 은 영어 모델이라 한국어 ↔ 영어는 용어집과 키워드 쪽이 맡는다(측정치는 줄 보고서); 들어 있는 자료는 v1 출처 목록뿐이고 완전성을 보증하지 않는다; 공개 자료는 참고일 뿐 원문·연구실 규정을 바꾸지 못한다; Moss 무료 단계 한도(저장 500 MB, 올리기 50 MB/월, 색인 3개) 안에서만 늘린다.
