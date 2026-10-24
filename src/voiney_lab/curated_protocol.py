@@ -20281,16 +20281,24 @@ class CuratedProtocolSession:
             instruction = localized if language == "ko" and localized else target_step.instruction_source_text
             current_label = steps[self.current_index].source_label if self.active else "시작 전"
             current_label_en = steps[self.current_index].source_label if self.active else "not started"
-            response = (
-                f"{target_step.source_label}단계 미리보기: {instruction} (현재 상태: {current_label}, 상태는 변경하지 않았습니다)"
-                if language == "ko" else
-                f"Step {target_step.source_label} preview: {instruction} (Current status: {current_label_en}, state not changed)"
+
+            def preview(text: str) -> str:
+                return (
+                    f"{target_step.source_label}단계 미리보기: {text} (현재 상태: {current_label}, 상태는 변경하지 않았습니다)"
+                    if language == "ko" else
+                    f"Step {target_step.source_label} preview: {text} (Current status: {current_label_en}, state not changed)"
+                )
+            response = preview(instruction)
+            # Lane FIXV decision 2: the Korean's own "N단계: " is not said again.
+            speech = preview(
+                _without_step_prefix(target_step.source_label, localized)
+                if language == "ko" and localized else instruction
             )
             facts = self.fixture.facts_for_step(target_idx)
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PREVIEW_STEP,
                 display_text=response,
-                speech_text=response,
+                speech_text=speech,
                 speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
                 facts=facts,
                 step_label=(steps[self.current_index].source_label if self.active else None),
@@ -20750,6 +20758,7 @@ class CuratedProtocolSession:
                     if language == "en" else
                     "현재 단계가 프로토콜의 마지막 단계라 미리 볼 다음 단계가 없습니다. 상태는 변경하지 않았습니다."
                 )
+                speech = response
                 facts: tuple[CuratedProtocolFact, ...] = ()
                 next_label = current.source_label
             else:
@@ -20757,6 +20766,13 @@ class CuratedProtocolSession:
                 next_step = steps[next_index]
                 localized = self._localized_fact(next_step.step_id, "current_step")
                 instruction = localized if language == "ko" and localized else next_step.instruction_source_text
+                # Lane FIXV decision 2: the Korean begins with its own
+                # "N단계: ", which the preview already says -- said once,
+                # shown as stored. A quoted source line is said as written.
+                said = (
+                    _without_step_prefix(next_step.source_label, localized)
+                    if language == "ko" and localized else instruction
+                )
                 # An open endpoint gate counts as an open execution gate
                 # here. It used to be visible only through
                 # unsupported_repeat_until, so declaring the capability would
@@ -20772,19 +20788,22 @@ class CuratedProtocolSession:
                     " 현재 단계의 실행 제어가 미해결이므로 이 미리보기로 다음 단계에 들어가지 않습니다."
                     if held else ""
                 )
-                response = (
-                    f"Preview only — Step {next_step.source_label}: {instruction} "
-                    f"The workflow remains at step {current.source_label}.{blocker_text}"
-                    if language == "en" else
-                    f"다음 단계 미리보기 · {next_step.source_label}단계: {instruction} "
-                    f"워크플로는 현재 {current.source_label}단계에 그대로 있습니다.{blocker_text}"
-                )
+                def preview(text: str) -> str:
+                    return (
+                        f"Preview only — Step {next_step.source_label}: {text} "
+                        f"The workflow remains at step {current.source_label}.{blocker_text}"
+                        if language == "en" else
+                        f"다음 단계 미리보기 · {next_step.source_label}단계: {text} "
+                        f"워크플로는 현재 {current.source_label}단계에 그대로 있습니다.{blocker_text}"
+                    )
+                response = preview(instruction)
+                speech = preview(said)
                 facts = self.fixture.facts_for_step(next_index)
                 next_label = next_step.source_label
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.NEXT_INFORMATION,
                 display_text=response,
-                speech_text=response,
+                speech_text=speech,
                 speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
                 facts=facts,
                 step_label=current.source_label,
@@ -22073,7 +22092,9 @@ class CuratedProtocolSession:
                 # translation failed here with an AttributeError.
                 desc = localized if localized else s.instruction_source_text.strip()
                 bullet_lines.append(f"• {s.source_label}단계: {desc}")
-                speech_bits.append(f"{s.source_label}단계: {desc}")
+                # Lane FIXV decision 2: the Korean's own "N단계: " is not said again.
+                said = _without_step_prefix(s.source_label, localized) if localized else desc
+                speech_bits.append(f"{s.source_label}단계: {said}")
             header_text = (
                 f"{start_step}단계부터 {end_step}단계까지의 절차 요약입니다."
                 if language == "ko"
@@ -22097,10 +22118,8 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.LAB_DOMAIN_QA:
             current_step = steps[self.current_index]
-            localized_step = (
-                self._localized_fact(current_step.step_id, "current_step")
-                or current_step.instruction_source_text
-            )
+            localized = self._localized_fact(current_step.step_id, "current_step")
+            localized_step = localized or current_step.instruction_source_text
             speech_text = None
             if re.search(r"(?:튜브|tube|용기|vial|container)", transcript.casefold()):
                 # What this protocol's own statements say about its tubes.
@@ -22114,10 +22133,16 @@ class CuratedProtocolSession:
                 speech_text = f"{tube.spoken(alone=True)} {keep}"
             else:
                 if language == "ko":
-                    response = (
-                        f"현재 진행 중인 {current_step.source_label}단계 작업은 다음과 같습니다: {localized_step} "
-                        f"현재 프로토콜은 {current_step.source_label}단계를 유지합니다."
-                    )
+                    def active_step(text: str) -> str:
+                        return (
+                            f"현재 진행 중인 {current_step.source_label}단계 작업은 다음과 같습니다: {text} "
+                            f"현재 프로토콜은 {current_step.source_label}단계를 유지합니다."
+                        )
+                    response = active_step(localized_step)
+                    if localized:
+                        # Lane FIXV decision 2: the Korean's own "N단계: " is not said again.
+                        speech_text = active_step(
+                            _without_step_prefix(current_step.source_label, localized))
                 else:
                     response = (
                         f"The active Step {current_step.source_label} is: {localized_step}. "
