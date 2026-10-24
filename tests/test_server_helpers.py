@@ -1546,6 +1546,8 @@ class ServerTests(unittest.TestCase):
             "experiment_reports_enabled": False,
             "docx_conversion_available": True,
             "heic_photos_available": False,
+            # Lane KNOW (2026-10-24): the public knowledge tier's state, off here.
+            "public_knowledge": "disabled",
         })
         self.assertNotIn("key", json.dumps(body).lower())
         self.assertNotIn("secret", json.dumps(body).lower())
