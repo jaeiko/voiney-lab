@@ -152,7 +152,9 @@ class TheRouteOffersItTests(_CatalogCase):
         item = mine["last_time"]["changes"][0]
         chosen = RunChanges(self.catalog).choose(
             self.protocol_id, [{"item_id": item["item_id"], "value": item["shown_ko"]}],
-            target=mine["target"], actor_principal_id="person-a", source="last_time")
+            target=mine["target"], actor_principal_id="person-a", source="last_time",
+            # 10 → 25 min is above twice the source: confirmed once more (decision of 2026-10-24).
+            confirm_large=[item["item_id"]])
         self.assertEqual(chosen["source"], "last_time")
         self.assertEqual(chosen["changes"][0]["words_ko"], "25분(오늘 바꾼 값 · 원문 10분)")
 

@@ -5358,7 +5358,7 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
 const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},changes:{kicker:"오늘 바꿀 값",title:"오늘 원문과 다르게 할 값"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
-var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null,changes:null,changeInputs:{},chosenChanges:null};
+var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null,changes:null,changeInputs:{},chosenChanges:null,largeConfirm:null};
 var wizardSheetPushed=false,wizardOpener=null;
 const FIRST_SETUP_KEY="voiney-lab.first-setup";
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
@@ -5770,8 +5770,22 @@ function renderWizardChanges(host,primary){
  const changes=wizard.changes;
  if(!changes){setText("wizard-lead",wizard.busy?"분석한 값을 불러오는 중…":"");if(primary)primary.hidden=true;return;}
  if(changes.failed){setText("wizard-lead",`${changes.failure_ko||"값 목록을 불러오지 못했어요."}\n[다시 불러오기]를 눌러 주세요.`);if(primary)primary.textContent="다시 불러오기";return;}
- if(!changes.values.length){setText("wizard-lead","이 분석에는 바꿀 수 있는 값(시간·온도·속도·부피·농도)이 없어요.");if(primary)primary.textContent="다음";return;}
- setText("wizard-lead","원문과 다르게 할 값만 새 값을 적어 주세요. 같은 종류의 단위만 쓸 수 있어요. 없으면 비운 채로 다음을 눌러요.");
+ if(!changes.values.length){setText("wizard-lead","이 분석에는 바꿀 수 있는 값(시간·온도·속도·부피·농도)이 없어요.");if(primary)primary.textContent="바꿀 값 없이 다음";return;}
+ // Human decision 2026-10-24: a value below half or above twice the source's is confirmed once more here.
+ if(wizard.largeConfirm){
+  setText("wizard-lead","원문 값과 많이 다른 값이 있어요. 한 번 더 확인해 주세요.");
+  if(primary)primary.hidden=true;
+  const asked=compareEl("ul","wizard-changes-large");asked.id="wizard-changes-large";
+  for(const item of wizard.largeConfirm.items)asked.appendChild(compareEl("li","wizard-change-large",String(item.question_ko||"")));
+  host.appendChild(asked);
+  const yes=compareEl("button","wizard-option-pick","네, 이 값으로 할게요");yes.type="button";yes.id="wizard-changes-large-yes";
+  yes.addEventListener("click",()=>{const ids=wizard.largeConfirm.items.map(item=>item.item_id);void wizardSubmitChanges(ids);});
+  const fix=compareEl("button","wizard-back","고칠게요");fix.type="button";fix.id="wizard-changes-large-fix";
+  fix.addEventListener("click",()=>{wizard.largeConfirm=null;wizardNote("");renderWizard();});
+  host.appendChild(yes);host.appendChild(fix);
+  return;
+ }
+ setText("wizard-lead","원문과 다르게 할 값만 새 값을 적어 주세요. 같은 종류의 단위만 쓸 수 있어요. 바꿀 값이 없으면 '바꿀 값 없이 다음'을 눌러요.");
  const last=Array.isArray(changes.last_time?.changes)?changes.last_time.changes:[];
  if(last.length){
   const again=compareEl("button","wizard-back",`지난번처럼 (${last.length}개)`);again.type="button";again.id="wizard-changes-last-time";
@@ -5785,23 +5799,25 @@ function renderWizardChanges(host,primary){
   const label=compareEl("label","wizard-field",`${value.step_label}단계 · ${value.kind_ko} · 원문 ${value.shown_ko}`);
   const input=document.createElement("input");input.type="text";input.id=`wizard-change-${value.item_id}`;input.setAttribute?.("autocomplete","off");input.setAttribute?.("aria-label",`${value.step_label}단계 ${value.kind_ko} 새 값 (${value.units_ko})`);
   input.placeholder=`새 값 · ${value.units_ko}`;input.value=wizard.changeInputs?.[value.item_id]||"";
-  input.addEventListener("input",()=>{wizard.changeInputs={...wizard.changeInputs,[value.item_id]:input.value};wizard.changeSource="wizard";renderWizardChangesPrimary();});
+  input.addEventListener("input",()=>{wizard.changeInputs={...wizard.changeInputs,[value.item_id]:input.value};wizard.changeSource="wizard";wizard.largeConfirm=null;renderWizardChangesPrimary();});
   label.appendChild(input);row.appendChild(label);list.appendChild(row);
  }
  host.appendChild(list);
  renderWizardChangesPrimary();
 }
 function renderWizardChangesPrimary(){const primary=$("wizard-primary");if(primary&&wizard.step==="changes"&&wizard.changes&&!wizard.changes.failed)primary.textContent=wizardTypedChanges().length?`이 값으로 할게요 (${wizardTypedChanges().length}개)`:"바꿀 값 없이 다음";}
-async function wizardSubmitChanges(){
+async function wizardSubmitChanges(confirmLarge=[]){
  const entry=wizardSelectedProtocol();if(!entry||wizard.busy)return null;
  const typed=wizard.changes?.values?.length?wizardTypedChanges():[];
  wizard.busy=true;renderWizard();
  try{
-  const body={target:wizard.changes?.target||null,changes:typed,source:typed.length&&wizard.changeSource==="last_time"?"last_time":"wizard"};
+  const body={target:wizard.changes?.target||null,changes:typed,source:typed.length&&wizard.changeSource==="last_time"?"last_time":"wizard",...(confirmLarge.length?{confirm_large:confirmLarge}:{})};
   const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/changes`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
   wizard.busy=false;
+  if(!response.ok&&payload?.detail?.code==="run_change_large_unconfirmed"&&Array.isArray(payload.detail.large)){wizard.largeConfirm={items:payload.detail.large};wizardNote("");renderWizard();return null;}
   if(!response.ok||!payload){wizardNote(nonemptyText(payload?.detail?.message_ko)?payload.detail.message_ko:"값을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
+  wizard.largeConfirm=null;
   wizard.chosenChanges={protocolId:entry.protocol_id,changes:Array.isArray(payload.changes)?payload.changes:[]};
   wizardNext();return payload;
  }catch(_){wizard.busy=false;wizardNote("서버에 연결할 수 없어요.","error");renderWizard();return null;}

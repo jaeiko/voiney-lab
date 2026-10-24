@@ -5363,11 +5363,15 @@ def post_protocol_run_changes(
         try:
             return RunChanges(catalog).choose(
                 protocol_id,body.get("changes"),target=body.get("target"),
-                actor_principal_id=_start_check_principal_id(),source=body.get("source","wizard"))
+                actor_principal_id=_start_check_principal_id(),source=body.get("source","wizard"),
+                confirm_large=body.get("confirm_large") or ())
         finally:
             store.close()
     except RunChangeError as exc:
-        raise HTTPException(status_code=422,detail={"code":exc.code,"message_ko":exc.message_ko}) from exc
+        # A large value comes back with its question for the screen's second look.
+        raise HTTPException(status_code=422,detail={
+            "code":exc.code,"message_ko":exc.message_ko,
+            **({"large":exc.large} if exc.large else {})}) from exc
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 

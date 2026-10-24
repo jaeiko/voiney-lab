@@ -556,6 +556,11 @@ class StartCheck:
 # the run says and shows the value as "20분(오늘 바꾼 값 · 원문 15분)", runs
 # the step's timer for it and writes "원문 → 실제" in the notebook. No model
 # chooses or proposes such a value.
+#
+# Human decision of 2026-10-24 (after the first PR): a new value below half or
+# above twice the source's is asked about once before it applies, whatever
+# confirm_mode says (``run_change_is_large``) -- by voice, and in the wizard,
+# where the choice is refused until the screen confirms it.
 
 RUN_CHANGES_EVENT = "protocol_run_changes_chosen"
 RUN_CHANGES_APPLIED_EVENT = "protocol_run_changes_applied"
@@ -567,6 +572,10 @@ RUN_CHANGE_LIMIT = 12
 #: A choice older than this is not today's: a start never applies it (a sheet
 #: closed yesterday without a start leaves nothing for today's run).
 RUN_CHANGE_MAX_AGE_SECONDS = 12 * 3600
+#: A new value below 1/LARGE or above LARGE times the source's is asked first.
+RUN_CHANGE_LARGE_FACTOR = 2.0
+_KIND_OBJECT_KO = {"time": "시간을", "temperature": "온도를", "speed": "속도를", "volume": "부피를",
+                   "concentration": "농도를"}
 RUN_CHANGE_SOURCES = ("wizard", "last_time")
 
 
@@ -685,12 +694,16 @@ def _same_value(number: str, unit: str, other_number: str, other_unit: str) -> b
 
 
 class RunChangeError(StartCheckError):
-    """A changed value the server does not take, with the sentence that says why."""
+    """A changed value the server does not take, with the sentence that says why.
 
-    def __init__(self, code: str, message_ko: str) -> None:
+    ``large`` holds the values to confirm once more when the code is
+    ``run_change_large_unconfirmed``."""
+
+    def __init__(self, code: str, message_ko: str, *, large: Sequence[Mapping[str, Any]] = ()) -> None:
         super().__init__(message_ko)
         self.code = code
         self.message_ko = message_ko
+        self.large = [dict(item) for item in large]
 
 
 @dataclass(frozen=True)
@@ -836,7 +849,15 @@ class RunChange:
             "source_number": self.source_number, "source_unit": self.source_unit,
             "source_written": self.source_written, "source_shown_ko": self.source_shown,
             "number": self.number, "unit": self.unit, "shown_ko": self.shown, "words_ko": self.words,
+            "large": run_change_is_large(self),
         }
+
+    @property
+    def large_question(self) -> str:
+        """The question of a large value: "5단계 온도를 37°C에서 14°C로 바꿀까요? …"."""
+
+        return (f"{self.step_label}단계 {_KIND_OBJECT_KO.get(self.kind, '값을')} {self.source_shown}에서 "
+                f"{_with_ro(self.shown)} 바꿀까요? 원문 값과 많이 달라요.")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> RunChange:
@@ -848,6 +869,32 @@ class RunChange:
         if fields["kind"] not in RUN_CHANGE_KINDS or fields["unit"] not in _RUN_UNITS:
             raise RunChangeError("run_change_invalid", "바꾼 값 기록을 읽을 수 없어요.")
         return cls(**fields)
+
+
+def run_change_is_large(change: RunChange) -> bool:
+    """Whether the new value is below half or above twice the source's.
+
+    Compared in the family's base unit (15 min against 1 h is four times). A
+    temperature at or below zero has no meaningful ratio: any change to or
+    from it is large (decision of 2026-10-24: asked once rather than guessed).
+    """
+
+    new, source = _base(change.number, change.unit), _base(change.source_number, change.source_unit)
+    if new is None or source is None:
+        return True
+    if new <= 0 or source <= 0:
+        return True
+    return new < source / RUN_CHANGE_LARGE_FACTOR or new > source * RUN_CHANGE_LARGE_FACTOR
+
+
+def _with_ro(shown: str) -> str:
+    """``shown`` + 으로/로 as it is read: "30분으로", "14°C로", "800 rpm으로"."""
+
+    last = shown.rstrip()[-1:] if shown.strip() else ""
+    if "가" <= last <= "힣":
+        final = (ord(last) - ord("가")) % 28
+        return shown + ("으로" if final and final != 8 else "로")
+    return shown + ("으로" if shown.rstrip().endswith("rpm") else "로")
 
 
 def check_run_change(value: ChangeableValue, number: str, unit: str) -> RunChange:
@@ -936,10 +983,12 @@ class RunChanges:
 
     def choose(
         self, protocol_id: str, changes: object, *, target: object, actor_principal_id: str | None,
-        source: object = "wizard",
+        source: object = "wizard", confirm_large: object = (),
     ) -> dict[str, Any]:
         """Check each (item, new value) and append the choice; an empty list is
-        the step skipped, which is a choice too (nothing changes today)."""
+        the step skipped, which is a choice too (nothing changes today). A
+        large value (``run_change_is_large``) is refused until its item is in
+        ``confirm_large`` -- the screen's second look."""
 
         if actor_principal_id is None:
             raise RunChangeError("run_change_identity_required", "로그인한 뒤에 고를 수 있어요.")
@@ -968,12 +1017,22 @@ class RunChanges:
                 chosen.append(check_run_change(value, *parsed))
             except RunChangeError as exc:
                 raise RunChangeError(exc.code, f"{value.step_label}단계 {value.shown}: {exc.message_ko}") from exc
+        confirmed = ({str(item) for item in confirm_large}
+                     if isinstance(confirm_large, (list, tuple)) else set())
+        large = [change for change in chosen if run_change_is_large(change)]
+        unconfirmed = [change for change in large if change.item_id not in confirmed]
+        if unconfirmed:
+            raise RunChangeError(
+                "run_change_large_unconfirmed",
+                " ".join(change.large_question for change in unconfirmed),
+                large=[{**change.public_dict(), "question_ko": change.large_question} for change in unconfirmed])
         change_set_id = "run-changes-" + secrets.token_hex(12)
         revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
         payload = {
             "change_set_id": change_set_id, "actor_principal_id": actor_principal_id,
             "target": _target_key(current), "revision_id": fixture.revision_id, "source": source,
             "changes": [change.public_dict() for change in chosen],
+            "confirmed_large": [change.item_id for change in large],
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         self.catalog.store.append_event(change_set_id, protocol_id, revision.revision_number,

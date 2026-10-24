@@ -72,6 +72,7 @@ from voiney_lab.start_check import (
     RunChangeError,
     changeable_values,
     check_run_change,
+    run_change_is_large,
     run_unit,
 )
 
@@ -9938,7 +9939,10 @@ class CuratedProtocolSession:
             return said(
                 f"{label}단계 타이머가 돌고 있어 시간을 바꾸지 않았어요. 타이머가 끝난 뒤에 말씀해 주세요.",
                 "run_value_change_refused")
-        if self.confirm_mode == "confirm" or self.ambient_mode == "noisy":
+        # Human decision 2026-10-24: confirm_mode as before, but a new value
+        # below half or above twice the source's is asked first in every mode.
+        large = bool(pending.get("change")) and run_change_is_large(RunChange.from_mapping(pending["change"]))
+        if self.confirm_mode == "confirm" or self.ambient_mode == "noisy" or large:
             question = self._run_change_question(pending, label)
             self._pending_run_change = {
                 **pending, "step_index": index, "workflow_revision": self._revision,
@@ -9947,6 +9951,9 @@ class CuratedProtocolSession:
             }
             plan = self._words_plan(question, intent_kind="run_value_change_confirmation_required",
                                     action=CuratedProtocolAction.CLARIFY_COMPLETION)
+            if large:
+                # Said the way the decision words it: "37도에서 14도로".
+                plan = replace(plan, speech_text=spoken_korean(question))
             self._replay[turn_id] = plan
             return plan
         plan = self._apply_run_change(pending, index)
@@ -9958,6 +9965,8 @@ class CuratedProtocolSession:
             listed = " · ".join(f"{item['kind_ko']} {item['shown_ko']}" for item in pending["revert"])
             return f"{label}단계의 오늘 바꾼 값({listed})을 원문대로 되돌릴까요? 맞으면 '네'라고 해 주세요."
         change = pending["change"]
+        if change.get("large"):
+            return f"{RunChange.from_mapping(change).large_question} 맞으면 '네'라고 해 주세요."
         return (f"{label}단계 {change['kind_ko']} {josa(change['source_shown_ko'], '을', '를')} "
                 f"{josa_ro(change['shown_ko'])} 바꿀까요? "
                 "맞으면 '네'라고 해 주세요.")
