@@ -92,6 +92,12 @@ class SettingsTests(unittest.TestCase):
             PublicKnowledgeSettings.from_environment({ENABLED_SETTING: "true", INDEX_SETTING: "a/b"})
         self.assertIn(INDEX_SETTING, str(caught.exception))
 
+    def test_the_settings_repr_never_shows_a_credential(self):
+        settings = PublicKnowledgeSettings.from_environment(
+            {ENABLED_SETTING: "true", MOSS_PROJECT_ID_SETTING: "proj-id-7f3a", MOSS_PROJECT_KEY_SETTING: "key-value-7f3a"})
+        self.assertNotIn("7f3a", repr(settings))
+        self.assertEqual(settings.project_key, "key-value-7f3a")
+
     def test_the_missing_credential_is_named(self):
         settings = PublicKnowledgeSettings.from_environment({ENABLED_SETTING: "true"})
         self.assertEqual(settings.missing_setting(), MOSS_PROJECT_ID_SETTING)

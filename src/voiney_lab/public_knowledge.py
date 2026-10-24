@@ -162,8 +162,9 @@ class PublicKnowledgeConfigurationError(ValueError):
 class PublicKnowledgeSettings:
     enabled: bool
     index_name: str = DEFAULT_INDEX_NAME
-    project_id: str = ""
-    project_key: str = ""
+    # The credentials never appear in a repr, a log line or an event.
+    project_id: str = field(default="", repr=False)
+    project_key: str = field(default="", repr=False)
     cache_dir: str | None = None
     alpha: float = DEFAULT_ALPHA
 
