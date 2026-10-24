@@ -2954,7 +2954,7 @@ SENTENCE_AUDIO_MAX_BYTES=16*1024*1024
 
 
 class SentenceAudioCache:
-    """Sentence audio by (provider, model, voice, language, sentence), bounded.
+    """Sentence audio by (lab, provider, model, voice, language, sentence), bounded.
 
     ``synthesize`` runs in worker threads, so every read and write holds the
     lock. Audio larger than the whole memory is never kept.
@@ -3021,6 +3021,18 @@ def sentence_audio_kept(keep:bool=True)->Iterator[None]:
         _KEEP_SENTENCE_AUDIO.reset(token)
 
 
+def _speaking_organization()->str:
+    """The lab (organisation) whose request or voice connection speaks now.
+
+    Empty with no identity: a server without the workspace serves one
+    development tenant. ``asyncio.to_thread`` copies the context, so a
+    worker thread's synthesis knows it too.
+    """
+
+    principal=_REQUEST_PRINCIPAL.get()
+    return principal.organization_id if principal is not None else ""
+
+
 def synthesize(text:str,language:str|None=None)->bytes:
     clean_text = clean_speech_text(text)
     if not clean_text:
@@ -3032,9 +3044,12 @@ def synthesize(text:str,language:str|None=None)->bytes:
         settings=replace(settings,voice=chosen)
     # Lane VOX, decision 3: the same provider, model, voice, language and
     # sentence give the same audio. An unset provider keeps nothing and
-    # fails below by its setting's name, as before.
+    # fails below by its setting's name, as before. Lane FIXV, decision 3:
+    # and the same lab -- another lab's kept sentence is made anew, so how
+    # fast a sentence comes back tells no lab what another one said.
     key=(
-        (settings.provider,settings.model,settings.voice,language or "ko",clean_text)
+        (_speaking_organization(),settings.provider,settings.model,settings.voice,
+         language or "ko",clean_text)
         if _KEEP_SENTENCE_AUDIO.get() and settings.provider else None
     )
     if key is not None:
