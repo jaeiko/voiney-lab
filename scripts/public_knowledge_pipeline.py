@@ -2100,7 +2100,7 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--questions", required=True, help="질문 세트 JSON")
     ev.add_argument("--backend", choices=("fts5", "moss"), required=True)
     ev.add_argument("--index", help="Moss 색인 이름 (moss 일 때)")
-    ev.add_argument("--alpha", type=float, default=0.7, help="Moss 하이브리드 비율 (기본 0.7)")
+    ev.add_argument("--alpha", type=float, default=0.5, help="Moss 하이브리드 비율 (기본 0.5, 서버와 같음)")
     ev.add_argument("--top-k", type=int, default=10)
     ev.add_argument("--no-expand", action="store_true", help="용어집 확장 없이 질문 그대로")
     ev.add_argument("--repeats", type=int, default=1, help="질의 반복 횟수 (지연 측정용)")

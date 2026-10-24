@@ -125,8 +125,10 @@ MOSS_PROJECT_KEY_SETTING = "MOSS_PROJECT_KEY"
 DEFAULT_INDEX_NAME = "voiney-public-knowledge"
 #: The hybrid blend (1.0 semantic, 0.0 keyword; Moss's default is 0.8). A
 #: Korean question carries English glossary words, so the keyword side has
-#: something to hold on to.
-DEFAULT_ALPHA = 0.7
+#: something to hold on to: on the 130-question set (2026-10-24) 0.5 gave
+#: recall@5 0.638 / MRR 0.579 against 0.546 / 0.519 at 0.7 and 0.500 / 0.447
+#: at 1.0 (lane KNOW report, section 5).
+DEFAULT_ALPHA = 0.5
 #: How many results are read from the index for ``limit`` hits: the grade
 #: ordering needs a few more than are kept.
 CANDIDATES_PER_HIT = 3
