@@ -104,9 +104,27 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
 
       - name: Install npm dependencies
         run: npm ci
+
+      # Lane RX0 (2026-10-24): the new screen (web/) -- its own packages, its
+      # component and copy tests (Vitest), a type check and a build. The CI
+      # server launcher builds it again before the browser tests, so the
+      # /app/ walks below run against the same build.
+      - name: Install the new screen's packages
+        run: npm ci
+        working-directory: web
+
+      - name: New screen unit tests (Vitest) and type check
+        run: npm test && npm run typecheck
+        working-directory: web
+
+      - name: Build the new screen
+        run: bash web/build.sh
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
