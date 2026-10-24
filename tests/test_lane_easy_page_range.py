@@ -122,6 +122,23 @@ class OnlyTheChosenPagesAreAnalysedTests(_RangeCase):
                          "2–3쪽")
 
 
+class TheReAskStaysOnTheRangeTests(unittest.TestCase):
+    """The re-ask of refused quotes (lane AN4) offers only the chosen pages,
+    as it offers only a piece's: a quote is never moved off what was analysed."""
+
+    def test_the_re_ask_page_sets_are_the_range(self) -> None:
+        from types import SimpleNamespace
+
+        from voiney_lab.experiment_protocol_analysis import AnalysisPiece
+        from voiney_lab.protocol_catalog import _requote_groups
+
+        self.assertEqual(_requote_groups(SimpleNamespace(page_range=(2, 4)), ()), [(2, 3, 4)])
+        self.assertIsNone(_requote_groups(SimpleNamespace(page_range=None), ()))
+        pieces = (AnalysisPiece(1, 2, 3, 17), AnalysisPiece(2, 2, 17, 30))
+        self.assertEqual(_requote_groups(SimpleNamespace(page_range=(3, 30)), pieces),
+                         [tuple(range(3, 18)), tuple(range(17, 31))])
+
+
 class ARangeThatIsNotTheDocumentsTests(_RangeCase):
     def test_pages_past_the_end_are_refused_before_any_request_is_kept(self) -> None:
         with self.assertRaises(ProtocolAnalysisPageRangeInvalidError):

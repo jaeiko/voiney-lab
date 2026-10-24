@@ -5783,7 +5783,7 @@ function renderWizardChanges(host,primary){
  for(const value of changes.values){
   const row=compareEl("li","wizard-change");
   const label=compareEl("label","wizard-field",`${value.step_label}단계 · ${value.kind_ko} · 원문 ${value.shown_ko}`);
-  const input=document.createElement("input");input.type="text";input.id=`wizard-change-${value.item_id}`;input.setAttribute?.("inputmode","decimal");input.setAttribute?.("aria-label",`${value.step_label}단계 ${value.kind_ko} 새 값 (${value.units_ko})`);
+  const input=document.createElement("input");input.type="text";input.id=`wizard-change-${value.item_id}`;input.setAttribute?.("autocomplete","off");input.setAttribute?.("aria-label",`${value.step_label}단계 ${value.kind_ko} 새 값 (${value.units_ko})`);
   input.placeholder=`새 값 · ${value.units_ko}`;input.value=wizard.changeInputs?.[value.item_id]||"";
   input.addEventListener("input",()=>{wizard.changeInputs={...wizard.changeInputs,[value.item_id]:input.value};wizard.changeSource="wizard";renderWizardChangesPrimary();});
   label.appendChild(input);row.appendChild(label);list.appendChild(row);

@@ -334,6 +334,19 @@ def _shown_page_range(events: Sequence[Any]) -> dict[str, object] | None:
     return dict(shown) if _page_range_from(shown) is not None else None
 
 
+def _requote_groups(
+    draft: ProtocolAnalysisDraft, pieces: Sequence[AnalysisPiece],
+) -> list[tuple[int, ...]] | None:
+    """The page sets a re-ask may offer: each piece's, or the chosen pages
+    (lane EASY, decision 1) -- a quote is never moved off what was analysed."""
+
+    if pieces:
+        return [tuple(piece.page_numbers) for piece in pieces]
+    if draft.page_range is not None:
+        return [tuple(range(draft.page_range[0], draft.page_range[1] + 1))]
+    return None
+
+
 def _within_page_range(places: Sequence[Any], page_range: tuple[int, int] | None) -> tuple[Any, ...]:
     """The possibly-missed places on the chosen pages (lane EASY, 1): the
     check of the lines no quote covers reads only the pages analysed."""
@@ -3941,7 +3954,7 @@ class ProtocolCatalog:
         comes first as before (``_requoted``), since what it keeps decides
         whether the document is read again or ends with the guidance."""
 
-        groups = [tuple(piece.page_numbers) for piece in pieces] or None
+        groups = _requote_groups(draft, pieces)
         asks = (
             model is not None and bool(draft.review_flags) and analysis_requote_enabled()
             and bool(requote_questions(draft, groups=groups)))
@@ -4006,7 +4019,7 @@ class ProtocolCatalog:
             return draft
         result = requote_unverified_items(
             draft, model,
-            groups=[tuple(piece.page_numbers) for piece in pieces] or None,
+            groups=_requote_groups(draft, pieces),
             concurrency=analysis_piece_concurrency(), time_limit=REQUOTE_TIME_LIMIT_SECONDS)
         if not result.questions:
             return draft
@@ -4072,7 +4085,7 @@ class ProtocolCatalog:
         try:
             result = requote_unverified_items(
                 draft, model,
-                groups=[tuple(piece.page_numbers) for piece in pieces] or None,
+                groups=_requote_groups(draft, pieces),
                 concurrency=analysis_piece_concurrency(), time_limit=REQUOTE_TIME_LIMIT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - the cards stay as they are
             self.store.append_event(
