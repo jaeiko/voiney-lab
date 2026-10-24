@@ -49,6 +49,7 @@ from voiney_lab.experiment_protocol_analysis import (
     PieceConcurrencyGate,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
+    ProtocolAnalysisPageRangeError,
     ProtocolAnalysisIncompleteError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolAnalysisModel,
@@ -77,6 +78,7 @@ from voiney_lab.experiment_protocol_analysis import (
     blocked_pages_ko,
     check_analysis_page_count,
     check_pieced_page_count,
+    checked_page_range,
     join_piece_analyses,
     possibly_missed_flags,
     possibly_missed_places,
@@ -291,6 +293,55 @@ class ProtocolAnalysisTooManyItemsError(ProtocolCatalogError):
 
 class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
     code = "chunked_analysis_required"
+
+
+class ProtocolAnalysisPageRangeInvalidError(ProtocolCatalogError):
+    """The pages chosen to analyse are not pages of the document (lane EASY, 1)."""
+
+    code = "analysis_page_range_invalid"
+
+
+def _page_range_public(page_range: tuple[int, int], page_count: int) -> dict[str, object]:
+    """The chosen pages as the ledger and the screen hold them (lane EASY, 1)."""
+
+    first, last = page_range
+    return {
+        "first_page": first, "last_page": last, "page_count": page_count,
+        "pages_ko": f"{first}쪽" if first == last else f"{first}–{last}쪽",
+    }
+
+
+def _page_range_from(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    first, last = value.get("first_page"), value.get("last_page")
+    if (isinstance(first, int) and isinstance(last, int)
+            and not isinstance(first, bool) and not isinstance(last, bool) and 1 <= first <= last):
+        return first, last
+    return None
+
+
+def _shown_page_range(events: Sequence[Any]) -> dict[str, object] | None:
+    """The chosen pages of the latest analysis that passed or waits for a
+    person, as its ledger event holds them; None for one that read every page."""
+
+    latest = None
+    for event in events:
+        if event.event_type in {_ANALYSIS_READY_EVENT, _REVIEW_PENDING_EVENT}:
+            latest = event
+    payload = latest.payload if latest is not None and isinstance(latest.payload, dict) else {}
+    shown = payload.get("page_range")
+    return dict(shown) if _page_range_from(shown) is not None else None
+
+
+def _within_page_range(places: Sequence[Any], page_range: tuple[int, int] | None) -> tuple[Any, ...]:
+    """The possibly-missed places on the chosen pages (lane EASY, 1): the
+    check of the lines no quote covers reads only the pages analysed."""
+
+    if page_range is None:
+        return tuple(places)
+    first, last = page_range
+    return tuple(place for place in places if first <= place.page_number <= last)
 
 
 class _RepairedAnswerWithItems(ProtocolAnalysisEvidenceError):
@@ -3020,6 +3071,9 @@ class ProtocolCatalog:
                 else None
             ),
             "reanalysis": reanalysis,
+            # Lane EASY, decision 1: the pages the analysis shown here read
+            # (None: the whole document).
+            "analysis_page_range": _shown_page_range(revision_events),
             # Lane RV, decision a: the latest analysis waiting for a person.
             "review_pending": entry.review_pending,
             "source": {
@@ -3749,15 +3803,17 @@ class ProtocolCatalog:
         )
         extraction = extract_protocol_pdf(source)
         extraction = self._extraction_for_analysis(revision, extraction)
-        pieces = analysis_pieces(extraction)
+        # Lane EASY, decision 1: the pages the request chose, or the whole.
+        page_range = self._requested_page_range(revision, analysis_id)
+        pieces = analysis_pieces(extraction, page_range=page_range)
         try:
             # Lane EV2, decision 4, changed by lane AN, decision 2: a document
             # longer than one analysis reads is read in pieces; one longer
             # than the pieces read is refused here, before any model call.
             if pieces:
-                check_pieced_page_count(extraction)
+                check_pieced_page_count(extraction, page_range=page_range)
             else:
-                check_analysis_page_count(extraction)
+                check_analysis_page_count(extraction, page_range=page_range)
         except ProtocolAnalysisTooManyPagesError as exc:
             self._record_analysis_failure(revision, analysis_id, exc)
             raise
@@ -3771,7 +3827,9 @@ class ProtocolCatalog:
             protocol_id,
             revision.revision_number,
             _ANALYSIS_STARTED_EVENT,
-            {"status": "analyzing", "analysis_id": analysis_id},
+            {"status": "analyzing", "analysis_id": analysis_id,
+             **({"page_range": _page_range_public(page_range, extraction.page_count)}
+                if page_range is not None else {})},
         )
         if pieces:
             try:
@@ -3780,9 +3838,11 @@ class ProtocolCatalog:
             except Exception as exc:
                 self._record_analysis_failure(revision, analysis_id, exc)
                 raise
+            if page_range is not None:
+                draft = replace(draft, page_range=page_range)
             return self._store_analysis_result(
                 revision, draft, analysis_id, pieces=pieces, model=model)
-        if status == "chunked_analysis_required":
+        if status == "chunked_analysis_required" and page_range is None:
             raise ProtocolChunkedAnalysisRequiredError(
                 "Protocol text is larger than one analysis reads."
             )
@@ -3792,7 +3852,7 @@ class ProtocolCatalog:
         kept: ProtocolAnalysisDraft | None = None
         try:
             draft = analyze_protocol_extraction(
-                extraction, observed.model, review_unverified=True)
+                extraction, observed.model, review_unverified=True, page_range=page_range)
             if draft.review_flags and draft.response_repair is not None:
                 raise _RepairedAnswerWithItems(draft)
         except Exception as exc:
@@ -3842,7 +3902,7 @@ class ProtocolCatalog:
             )
             try:
                 draft = analyze_protocol_extraction(
-                    extraction, retry_model, review_unverified=True)
+                    extraction, retry_model, review_unverified=True, page_range=page_range)
             except Exception as retry_exc:
                 self._record_analysis_failure(
                     revision, analysis_id, retry_exc, truncated=observed.truncated)
@@ -4180,7 +4240,8 @@ class ProtocolCatalog:
             )
             try:
                 again = analyze_protocol_extraction(
-                    first.extraction, escalated, review_unverified=True)
+                    first.extraction, escalated, review_unverified=True,
+                    page_range=first.page_range)
                 again = self._with_ocr_value_flags(revision, again)
                 after = _items_by_reason(again)
             except Exception as exc:  # noqa: BLE001 - the first result's guidance stands
@@ -4221,8 +4282,9 @@ class ProtocolCatalog:
         of a run of pages, on one card (``possibly_missed_flags``).
         """
 
-        places = possibly_missed_places(
-            draft.protocol, draft.extraction, asked_lines=_lines_asked_about(draft))
+        places = _within_page_range(possibly_missed_places(
+            draft.protocol, draft.extraction, asked_lines=_lines_asked_about(draft)),
+            draft.page_range)
         flags = possibly_missed_flags(places, limit=review_max_items())
         if not flags:
             return draft
@@ -4300,12 +4362,45 @@ class ProtocolCatalog:
             record["cleared_fields"] = list(protocol.cleared_fields)
         if pieces:
             record["pieces"] = [piece.public_dict() for piece in pieces]
+        if draft.page_range is not None:
+            # Lane EASY, decision 1: the pages this analysis read.
+            record["page_range"] = _page_range_public(draft.page_range, pdf.page_count)
         if draft.response_repair is not None:
             record["response_repaired"] = draft.response_repair.public_dict()
         if draft.auto_resolved:
             # Lane RV2, decision b: what the server settled itself, and why.
             record["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
         return record
+
+    def _requested_page_range(
+        self, revision: ProtocolRevisionRecord, analysis_id: str,
+    ) -> tuple[int, int] | None:
+        """The pages the request of ``analysis_id`` chose (lane EASY, 1), or None."""
+
+        return self._analysis_page_range(revision, analysis_id)
+
+    def _analysis_page_range(
+        self, revision: ProtocolRevisionRecord, analysis_id: str | None,
+    ) -> tuple[int, int] | None:
+        """The pages an analysis read, from its request in the ledger.
+
+        Lane EASY, decision 1. ``analysis_id`` may be a run's later attempt
+        ("…-retry-1", "…-more-1"): the request it answers is the one whose id
+        it begins with. None for a request that chose no pages.
+        """
+
+        if not analysis_id:
+            return None
+        found: tuple[int, int] | None = None
+        for event in self.store.list_events(revision.experiment_id):
+            if (event.event_type != _ANALYSIS_REQUESTED_EVENT
+                    or event.protocol_revision_number != revision.revision_number):
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            requested = str(payload.get("analysis_id") or "")
+            if requested and (analysis_id == requested or analysis_id.startswith(requested + "-")):
+                found = _page_range_from(payload.get("page_range"))
+        return found
 
     def _analyze_in_pieces(
         self,
@@ -4522,7 +4617,12 @@ class ProtocolCatalog:
         if draft.auto_resolved:
             # Lane RV2, decision b: what the server settled itself, and why.
             ready_payload["auto_resolved"] = [dict(entry) for entry in draft.auto_resolved]
-        places = possibly_missed_places(draft.protocol, draft.extraction)
+        places = _within_page_range(
+            possibly_missed_places(draft.protocol, draft.extraction), draft.page_range)
+        if draft.page_range is not None:
+            # Lane EASY, decision 1: the pages this analysis read.
+            ready_payload["page_range"] = _page_range_public(
+                draft.page_range, draft.extraction.page_count)
         if places:
             # Lane MISS, decision 4: lines no quote covers that read like an
             # instruction; told before the start, never a card or a blocker.
@@ -4691,6 +4791,7 @@ class ProtocolCatalog:
 
     def request_analysis(
         self, protocol_id: str, analysis_id: str, *, reanalysis: bool = False,
+        page_range: tuple[int, int] | None = None,
     ) -> ProtocolCatalogEntry:
         """Persist an explicit analysis request without contacting a provider.
 
@@ -4701,6 +4802,11 @@ class ProtocolCatalog:
         pass then becomes one more analysis revision beside the old one, and
         a failure leaves the old one as it is. The curated development
         fixture is never analysed again.
+
+        ``page_range`` (lane EASY, decision 1, human decision 2026-10-24) is
+        the pages a person chose to analyse -- a paper's Methods pages -- kept
+        in the request event; the analysis then reads those pages alone. None
+        is the whole document, as before.
         """
 
         revision = self._latest_protocol_revision(protocol_id)
@@ -4732,6 +4838,10 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         )
         extraction = extract_protocol_pdf(source)
+        try:
+            page_range = checked_page_range(extraction, page_range)
+        except ProtocolAnalysisPageRangeError as exc:
+            raise ProtocolAnalysisPageRangeInvalidError(str(exc)) from exc
         if (
             _analysis_state(extraction) == "ocr_required"
             and self._ocr_projection(
@@ -4745,6 +4855,8 @@ class ProtocolCatalog:
         request_payload: dict[str, object] = {
             "status": "analysis_pending", "analysis_id": analysis_id,
         }
+        if page_range is not None:
+            request_payload["page_range"] = _page_range_public(page_range, extraction.page_count)
         if previous is not None:
             request_payload["reanalysis"] = True
             request_payload["previous_analysis_revision_number"] = (
@@ -4758,6 +4870,19 @@ class ProtocolCatalog:
             request_payload,
         )
         return self.get_entry(protocol_id)
+
+    def check_page_range(
+        self, protocol_id: str, page_range: tuple[int, int] | None,
+    ) -> tuple[int, int] | None:
+        """``page_range`` when it names pages of the protocol's source (lane EASY, 1)."""
+
+        if page_range is None:
+            return None
+        revision = self._latest_protocol_revision(protocol_id)
+        try:
+            return checked_page_range(self._source_extraction(revision), page_range)
+        except ProtocolAnalysisPageRangeError as exc:
+            raise ProtocolAnalysisPageRangeInvalidError(str(exc)) from exc
 
     def fail_analysis_request(
         self,
@@ -6131,8 +6256,9 @@ class ProtocolCatalog:
         answered on a card -- reviewed from a passed analysis, all of them;
         from an earlier version, those it still told."""
 
-        places = _possibly_missed_answered(
-            possibly_missed_places(protocol, protocol.metadata.pdf), items, decisions)
+        places = _possibly_missed_answered(_within_page_range(
+            possibly_missed_places(protocol, protocol.metadata.pdf),
+            self._analysis_page_range(revision, target.analysis_id)), items, decisions)
         if target.kind == "review_version":
             versions = self._review_versions(revision)
             told = (versions[-1][0].payload or {}).get("possibly_missed") if versions else None

@@ -1148,6 +1148,14 @@
             <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
             <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
             <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
+            <!-- Lane EASY decision 1: the pages the analysis read, and the pages "다시 분석" may read instead. -->
+            <p id="protocol-analysis-range" class="protocol-review-status" hidden></p>
+            <fieldset id="reanalysis-page-range" class="protocol-page-range">
+              <legend>다시 분석할 쪽 (선택)</legend>
+              <label for="reanalysis-first-page">처음</label><input id="reanalysis-first-page" type="number" inputmode="numeric" min="1" step="1">
+              <label for="reanalysis-last-page">끝</label><input id="reanalysis-last-page" type="number" inputmode="numeric" min="1" step="1">
+              <small>비우면 문서 전체를 다시 분석해요.</small>
+            </fieldset>
             <div class="protocol-review-actions">
               <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
               <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
@@ -1175,6 +1183,13 @@
               <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
               <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
             </div>
+            <!-- Lane EASY decision 1 (2026-10-24): the pages to analyse -- a paper's Methods pages, say; empty is the whole document. The server checks them against the document and keeps them in the ledger. -->
+            <fieldset id="protocol-page-range" class="protocol-page-range">
+              <legend>분석할 쪽 (선택)</legend>
+              <label for="protocol-first-page">처음</label><input id="protocol-first-page" type="number" inputmode="numeric" min="1" step="1" placeholder="예: 3">
+              <label for="protocol-last-page">끝</label><input id="protocol-last-page" type="number" inputmode="numeric" min="1" step="1" placeholder="예: 5">
+              <small id="protocol-page-range-help">논문처럼 실험 방법이 일부 쪽에만 있으면 그 쪽만 적어 주세요. 비우면 문서 전체를 분석해요.</small>
+            </fieldset>
             <small id="protocol-upload-status" role="status"></small>
             <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
             <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
@@ -3684,8 +3699,27 @@ const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  protocol_image_too_large:"사진의 화소 수가 서버가 읽는 한도를 넘었습니다. 해상도를 낮춰 다시 올려 주세요.",
  source_conversion_failed:"Word 문서를 PDF로 바꾸지 못했습니다. Word에서 PDF로 저장해 올려 주세요.",
  network_error:"서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+ // Lane EASY decision 1: pages to analyse that the document does not have.
+ analysis_page_range_invalid:"고른 쪽이 이 문서에 없어요. 처음과 끝 쪽 번호를 확인해 주세요.",
  unexpected_server_error:"PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 });
+// Lane EASY decision 1 (2026-10-24): the pages to analyse, as two number inputs say them -- null for the whole
+// document, "invalid" for one end alone or a range that runs backwards (the server checks the pages against the
+// document). The upload's range is kept by the protocol it registered, for that protocol's first analysis request.
+var uploadPageRanges=new Map();
+function pageRangeFrom(firstId,lastId){
+ const first=String($(firstId)?.value||"").trim(),last=String($(lastId)?.value||"").trim();
+ if(!first&&!last)return null;
+ const a=Number(first),b=Number(last);
+ if(!Number.isInteger(a)||!Number.isInteger(b)||a<1||b<a)return "invalid";
+ return {first_page:a,last_page:b};
+}
+function pageRangeQuery(range){return range&&typeof range==="object"?`first_page=${range.first_page}&last_page=${range.last_page}`:"";}
+function pageRangeWords(range){
+ if(!range||typeof range!=="object")return "분석한 쪽 · 문서 전체";
+ const pages=nonemptyText(range.pages_ko)?range.pages_ko:`${range.first_page}–${range.last_page}쪽`;
+ return `분석한 쪽 · ${pages}${Number.isInteger(range.page_count)?` (전체 ${range.page_count}쪽)`:""}`;
+}
 function protocolUploadErrorMessage(code){return PROTOCOL_UPLOAD_ERROR_MESSAGES[code]||PROTOCOL_UPLOAD_ERROR_MESSAGES.unexpected_server_error;}
 // Lane UI3 decision 3 (2026-10-14): what the server takes as a protocol's
 // source (lane AN): each file goes with the type the browser gives it, or
@@ -4142,6 +4176,8 @@ function renderProtocolReview(review,options={}){
  const compare=$("protocol-compare");if(compare){compare.hidden=false;compare.open=options.open!==false;}
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderExecutionReasons(review);renderStartSummary(review);
+ // Lane EASY decision 1: the pages the analysis read (the server's range; nothing when none has run).
+ const rangeLine=$("protocol-analysis-range");if(rangeLine){const shown=review?.analysis_available===true||review?.review_pending;rangeLine.hidden=!shown;rangeLine.textContent=shown?pageRangeWords(review.analysis_page_range):"";}
  // Lane UI3 decision 4: the picked protocol's reagent tables, read once per protocol.
  if(typeof review?.protocol_id==="string"&&review.protocol_id&&review.protocol_id!==reagentTablesProtocolId){const said=$("reagent-table-status");if(said)said.textContent="";void loadReagentTables(review.protocol_id);}
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
@@ -4828,10 +4864,13 @@ async function runProtocolOcr(){
  try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
 }
 async function analyzeRegisteredProtocol(protocolId,{reanalysis=false}={}){
+ // Lane EASY decision 1: "다시 분석" reads the detail's two page inputs; a first analysis, the upload's range.
+ const pageRange=reanalysis?pageRangeFrom("reanalysis-first-page","reanalysis-last-page"):(uploadPageRanges.get(protocolId)||null);
+ if(pageRange==="invalid"){showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("analysis_page_range_invalid"),"");return null;}
  const watchedSince=protocolAnalysisStartedAt,runWord=reanalysis?"다시 분석":"분석";
  currentProtocolReviewId=protocolId;protocolAnalysisStartedAt=Date.now();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,true);showProtocolAnalysisNotice(protocolId,reanalysis?PROTOCOL_REANALYSIS_RUNNING_NOTICE:PROTOCOL_ANALYSIS_RUNNING_NOTICE,`${runWord} 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음`);startProtocolAnalysisPolling(protocolId);
  try{
-  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}${pageRange?`?${pageRangeQuery(pageRange)}`:""}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
   if(!response.ok){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(code),"");await loadProtocolReview(protocolId);return null;}
   if(!payload){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("unexpected_server_error"),"");return null;}
   const run=payload.analysis_run||{},running=["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(run.state||payload.analysis_status),pending=payload.analysis_request_accepted===true||running;
@@ -4912,7 +4951,9 @@ async function registerProtocolLink(){
  renderUploadFlow();
  try{
   let response;
-  try{response=await serverFetch("/api/protocols/import-link",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({url}),redirect:"error"});}
+  const pageRange=pageRangeFrom("protocol-first-page","protocol-last-page");
+  if(pageRange==="invalid"){if(status)status.textContent=protocolUploadErrorMessage("analysis_page_range_invalid");return null;}
+  try{response=await serverFetch("/api/protocols/import-link",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({url,...(pageRange||{})}),redirect:"error"});}
   catch(_){if(generation===sessionGeneration&&status)status.textContent=protocolUploadErrorMessage("network_error");return null;}
   const payload=await safeProtocolUploadPayload(response);
   if(generation!==sessionGeneration)return null;
@@ -4922,6 +4963,7 @@ async function registerProtocolLink(){
    return null;
   }
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return null;}
+  if(pageRange&&typeof payload.protocol?.protocol_id==="string")uploadPageRanges.set(payload.protocol.protocol_id,pageRange);
   const protocolId=await acceptRegisteredProtocol(payload);
   if(protocolId&&input)input.value="";
   return protocolId||null;
@@ -4933,6 +4975,8 @@ async function registerProtocolLink(){
 async function registerSelectedProtocol(){
  const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
  if(!file){if(status)status.textContent="등록할 원문 파일(PDF, Word, 사진)을 선택해 주세요.";return;}
+ const pageRange=pageRangeFrom("protocol-first-page","protocol-last-page");
+ if(pageRange==="invalid"){if(status)status.textContent=protocolUploadErrorMessage("analysis_page_range_invalid");return;}
  const mediaType=protocolSourceMediaType(file);
  if(!PROTOCOL_SOURCE_MEDIA_TYPES.has(mediaType)){if(status)status.textContent=protocolUploadErrorMessage("unsupported_pdf_media_type");if(input)input.value="";return;}
  if(isRegisteringProtocol)return;
@@ -4942,11 +4986,12 @@ async function registerSelectedProtocol(){
  if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
  try{
   let response;
-  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}${pageRange?`&${pageRangeQuery(pageRange)}`:""}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
+  if(pageRange&&typeof payload.protocol?.protocol_id==="string")uploadPageRanges.set(payload.protocol.protocol_id,pageRange);
   await acceptRegisteredProtocol(payload);
  }finally{isRegisteringProtocol=false;renderProtocolLinkControls();if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;renderUploadFlow();}
 }

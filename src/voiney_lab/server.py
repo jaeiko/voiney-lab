@@ -126,6 +126,7 @@ from voiney_lab.safety_pack import (
     unavailable_safety_pack,
 )
 from voiney_lab.protocol_catalog import (
+    ProtocolAnalysisPageRangeInvalidError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogEntry,
@@ -3414,6 +3415,9 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=409,detail=exc.code)
     if isinstance(exc,ProtocolReviewError):
         return HTTPException(status_code=422,detail=exc.code)
+    # Lane EASY, decision 1: pages to analyse that the document does not have.
+    if isinstance(exc,ProtocolAnalysisPageRangeInvalidError):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ReagentTableError):
         return HTTPException(status_code=422,detail=exc.code)
     return HTTPException(
@@ -4350,15 +4354,23 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 
 @app.post("/api/protocols",status_code=201)
-async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
+async def register_protocol_pdf(
+    request:Request,filename:str,first_page:int|None=None,last_page:int|None=None,
+)->dict[str,object]:
     """Register one protocol source: a PDF, a Word document or a photo.
 
     Lane AN, FM (human decision 2026-10-13): a .docx (through LibreOffice)
     and a JPG, PNG or HEIC photo are turned into the PDF that extraction, OCR
     and the analysis read -- one evidence path -- and registered as it; the
     upload's own checksum is kept with the registration.
+
+    Lane EASY, decision 1: ``first_page``/``last_page`` are the pages to
+    analyse, checked against the document; the analysis the upload-time OCR
+    starts reads those pages alone (the screen sends them to the analysis
+    request of a text PDF itself).
     """
 
+    page_range=_requested_page_range(first_page,last_page)
     media_type=source_media_type(request.headers.get("content-type",""))
     if media_type not in SOURCE_MEDIA_TYPES:
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
@@ -4412,6 +4424,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                         **registration_scope,
                     )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
+                catalog.check_page_range(result.entry.protocol_id,page_range)
                 _record_workspace_metric(
                     category="protocol",metric_name="upload",
                     dimensions={
@@ -4424,7 +4437,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                 )
                 return result,_upload_ocr_status(catalog,result.entry)
             result,status=await _catalog_in_worker(register)
-            ocr=_automatic_ocr_on_upload(None,result.entry,status=status)
+            ocr=_automatic_ocr_on_upload(None,result.entry,status=status,page_range=page_range)
             return _registration_response(result,ocr)
         except HTTPException:
             raise
@@ -4531,8 +4544,10 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
                 target=protocol_id
                 table_id=str(response["reagent_table"]["table_id"])
             else:
+                # Lane EASY, decision 1: the pages to analyse, as for an upload.
                 response=await register_protocol_pdf(
-                    upload_request(fetched,"/api/protocols"),filename=fetched.filename)
+                    upload_request(fetched,"/api/protocols"),filename=fetched.filename,
+                    first_page=body.get("first_page"),last_page=body.get("last_page"))
                 target=str(response["protocol"]["protocol_id"])
                 table_id=None
         try:
@@ -4575,7 +4590,7 @@ def _upload_ocr_status(catalog:ProtocolCatalog,entry:ProtocolCatalogEntry)->dict
 
 def _automatic_ocr_on_upload(
     catalog:ProtocolCatalog|None,entry:ProtocolCatalogEntry,
-    *,status:dict[str,object]|None=None,
+    *,status:dict[str,object]|None=None,page_range:tuple[int,int]|None=None,
 )->dict[str,object]:
     """Start OCR for the pages without a usable text layer, if any (lane PX 3).
 
@@ -4616,7 +4631,8 @@ def _automatic_ocr_on_upload(
         return {"state":state,"automatic":False,"blocked":"analysis_already_ran"}
     ocr_id=f"ocr-{secrets.token_hex(16)}"
     _schedule_ocr_then_analysis(
-        entry.protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get())
+        entry.protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get(),
+        page_range=page_range)
     return {"state":"queued","automatic":True,"ocr_id":ocr_id}
 
 
@@ -4631,7 +4647,7 @@ def _ocr_page_numbers(status:dict[str,object])->list[int]:
 
 def _schedule_ocr_then_analysis(
     protocol_id:str,provider:ProtocolOcrProvider,*,ocr_id:str,
-    principal:Principal|None,
+    principal:Principal|None,page_range:tuple[int,int]|None=None,
 )->asyncio.Task[None]:
     """OCR in a worker, accepted automatically, then the analysis (lane PX 3)."""
 
@@ -4655,7 +4671,9 @@ def _schedule_ocr_then_analysis(
         if status.get("accepted_for_analysis") is not True:
             return
         try:
-            await _begin_background_analysis(protocol_id,principal=principal)
+            await _begin_background_analysis(
+                protocol_id,principal=principal,
+                **({"page_range":page_range} if page_range is not None else {}))
         except Exception as exc:  # noqa: BLE001 - recorded by the catalog
             log.warning(
                 "protocol.analysis.after_ocr_failed protocol_id=%s error=%s",
@@ -4790,10 +4808,15 @@ def get_protocol_ocr_status(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols/{protocol_id}/analysis",status_code=202)
 async def trigger_protocol_analysis(
-    protocol_id:str,background:bool=True
+    protocol_id:str,background:bool=True,
+    first_page:int|None=None,last_page:int|None=None,
 )->dict[str,object]:
-    """Persist a request, then run provider analysis outside the request path."""
+    """Persist a request, then run provider analysis outside the request path.
 
+    ``first_page``/``last_page`` (lane EASY, decision 1): only those pages
+    are analysed, and the request event keeps them."""
+
+    page_range=_requested_page_range(first_page,last_page)
     _scope_catalog_resource(protocol_id)
     analysis_id=f"analysis-{secrets.token_hex(16)}"
     metric_principal=_REQUEST_PRINCIPAL.get()
@@ -4804,7 +4827,7 @@ async def trigger_protocol_analysis(
         catalog,store=_open_protocol_catalog()
         try:
             if request_first:
-                catalog.request_analysis(protocol_id,analysis_id)
+                catalog.request_analysis(protocol_id,analysis_id,page_range=page_range)
             try:
                 model=_protocol_analysis_model()
             except (RuntimeError,ValueError) as exc:
@@ -4854,13 +4877,16 @@ async def trigger_protocol_analysis(
         if deferred is not None:
             return deferred
         return await _begin_background_analysis(
-            protocol_id,principal=metric_principal,analysis_id=analysis_id)
+            protocol_id,principal=metric_principal,analysis_id=analysis_id,
+            page_range=page_range)
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
 
 @app.post("/api/protocols/{protocol_id}/reanalysis",status_code=202)
-async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
+async def trigger_protocol_reanalysis(
+    protocol_id:str,first_page:int|None=None,last_page:int|None=None,
+)->dict[str,object]:
     """Analyse a protocol again over the analysis it has (lane RN, decision 2).
 
     The person's one confirmation is on the screen. Here the request is one
@@ -4868,17 +4894,36 @@ async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
     the request path; a pass is one more analysis revision, a failure leaves
     the old one as it is. The analysis route above keeps lane PA's rule and
     never calls a passed analysis again, so an upload cannot reach this.
+    ``first_page``/``last_page`` (lane EASY, decision 1): the new analysis
+    reads those pages alone; none is the whole document.
     """
 
+    page_range=_requested_page_range(first_page,last_page)
     _scope_catalog_resource(protocol_id)
     try:
         deferred=await _analysis_deferred_for_ocr(protocol_id)
         if deferred is not None:
             return deferred
         return await _begin_background_analysis(
-            protocol_id,principal=_REQUEST_PRINCIPAL.get(),reanalysis=True)
+            protocol_id,principal=_REQUEST_PRINCIPAL.get(),reanalysis=True,
+            page_range=page_range)
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+def _requested_page_range(first_page:object,last_page:object)->tuple[int,int]|None:
+    """The pages to analyse as a request names them (lane EASY, decision 1).
+
+    Both ends or neither; whether they are pages of the document is the
+    catalog's to check against the source."""
+
+    if first_page is None and last_page is None:
+        return None
+    if (not isinstance(first_page,int) or not isinstance(last_page,int)
+            or isinstance(first_page,bool) or isinstance(last_page,bool)
+            or not 1<=first_page<=last_page):
+        raise HTTPException(status_code=422,detail="analysis_page_range_invalid")
+    return first_page,last_page
 
 
 async def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
@@ -4901,7 +4946,7 @@ async def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
 
 async def _begin_background_analysis(
     protocol_id:str,*,principal:Principal|None,analysis_id:str|None=None,
-    reanalysis:bool=False,
+    reanalysis:bool=False,page_range:tuple[int,int]|None=None,
 )->dict[str,object]:
     """Record the request, then run the analysis off the request path.
 
@@ -4917,7 +4962,7 @@ async def _begin_background_analysis(
         catalog,store=_open_protocol_catalog()
         try:
             entry=catalog.request_analysis(
-                protocol_id,analysis_id,reanalysis=reanalysis)
+                protocol_id,analysis_id,reanalysis=reanalysis,page_range=page_range)
             public=entry.public_dict()
             public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
             return public
