@@ -506,6 +506,38 @@ class TheStartAppliesTheChoiceTests(_CatalogCase):
         self.assertTrue(result["message_ko"])
 
 
+class TheConfiguredFixturesStartTests(_CatalogCase):
+    """The development fixture runs from its configured file, whose revision id
+    ("fixture-…") is not the catalog's ("pdf-1-analysis-1") the wizard chose on;
+    the start still finds the choice, and checks each value against the fixture."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.analyze(self.answer(pages=(1, 2, 3)))
+        self.fixture = self.catalog.load_executable_fixture(self.protocol_id)
+
+    def open_catalog(self):
+        opened = initialize_protocol_store(self.settings)
+        return ProtocolCatalog(opened), opened
+
+    def test_a_choice_on_the_catalogs_revision_reaches_the_configured_fixtures_start(self) -> None:
+        changes = RunChanges(self.catalog)
+        options = changes.options(self.protocol_id)
+        item = next(value["item_id"] for value in options["values"] if value["kind"] == "time")
+        changes.choose(self.protocol_id, [{"item_id": item, "value": "20분"}], target=options["target"],
+                       actor_principal_id="person-a")
+        configured = replace(self.fixture, revision_id="fixture-0123456789abcdef0123")
+        with patch.object(server, "_open_protocol_catalog", side_effect=self.open_catalog), \
+                patch.object(server, "_start_check_principal_id", return_value="person-a"), \
+                patch.dict("os.environ", {"VOINEY_LAB_PROTOCOL_ENABLED": "true",
+                                          "VOINEY_LAB_PROTOCOL_DATA_DIR": str(self.settings.data_dir)}):
+            (set_id, found), stale = server._start_run_changes(
+                self.protocol_id, configured.revision_id, configured)
+        self.assertFalse(stale)
+        self.assertIsNotNone(set_id)
+        self.assertEqual([change.shown for change in found], ["20분"])
+
+
 class TheRoutesTests(_CatalogCase):
     def setUp(self) -> None:
         super().setUp()

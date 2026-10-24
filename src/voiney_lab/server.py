@@ -5404,15 +5404,28 @@ def _start_run_changes(
     """((change set id, today's values), stale) for a new run's start.
 
     Lane EASY, decision 2: the person's latest choice on the revision about
-    to run that no start used yet. Stale when a value is no longer the
-    fixture's as the source prints it (refused, never applied in part)."""
+    to run that no start used yet -- or on the catalog entry's revision, which
+    the wizard read: the development fixture runs from its configured file,
+    named "fixture-…", while its catalog copy is "pdf-1-analysis-1". Stale
+    when a value is no longer the fixture's as the source prints it (refused,
+    never applied in part); that check, value by value, is the guard."""
 
     if not _protocol_store_settings().enabled:
         return (None,()),False
     catalog,store=_open_protocol_catalog()
     try:
-        change_set_id,changes=RunChanges(catalog).for_start(
-            protocol_id,actor_principal_id=_start_check_principal_id(),revision_id=revision_id)
+        actor=_start_check_principal_id()
+        changes_store=RunChanges(catalog)
+        change_set_id,changes=changes_store.for_start(
+            protocol_id,actor_principal_id=actor,revision_id=revision_id)
+        if change_set_id is None:
+            try:
+                listed=catalog.get_entry(protocol_id).revision_id
+            except ProtocolCatalogError:
+                listed=None
+            if listed and listed!=revision_id:
+                change_set_id,changes=changes_store.for_start(
+                    protocol_id,actor_principal_id=actor,revision_id=listed)
     finally:
         store.close()
     values={value.item_id:value for value in changeable_values(fixture.steps)}
