@@ -1632,7 +1632,9 @@ def collect(
         log(f"[{source.id}] pieces={count_pieces} chunks={count_chunks} chars={chars} "
             f"failures={report.per_source[source.id]['failures']} requests={http.requests_made - requests_before}")
     if only:
-        # Sources not run this time keep their earlier records.
+        # Sources not run this time keep their earlier records, and their
+        # rows of the manifest (counts from the records, the rest from the
+        # earlier manifest where it has them).
         earlier = bundle_dir / "chunks.jsonl"
         kept: list[dict[str, Any]] = []
         if earlier.is_file():
@@ -1642,6 +1644,22 @@ def collect(
                 record = json.loads(line)
                 if record.get("source_id") not in only:
                     kept.append(record)
+        previous_rows: dict[str, Any] = {}
+        earlier_manifest = bundle_dir / "manifest.json"
+        if earlier_manifest.is_file():
+            try:
+                previous_rows = dict(json.loads(earlier_manifest.read_text(encoding="utf-8")).get("sources", {}))
+            except ValueError:
+                previous_rows = {}
+        for source in sources.sources:
+            if source.id in only:
+                continue
+            own = [record for record in kept if record.get("source_id") == source.id]
+            row = dict(previous_rows.get(source.id, {}))
+            row.update({"name": source.name, "kind": source.kind, "grade": source.grade, "license": source.license,
+                        "chunks": len(own), "chars": sum(len(r["text"]) for r in own), "carried": True})
+            row.setdefault("failures", 0)
+            report.per_source[source.id] = row
         records = kept + records
     glossary = {
         "generated_at": now_iso(),

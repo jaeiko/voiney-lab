@@ -658,7 +658,10 @@ class CollectTests(unittest.TestCase):
             manifest = pk.collect(sources, runtime_dir=root / "runtime", http=http2, only={"page"}, log=lambda line: None)
             self.assertEqual({url.split("/")[2] for url, _h in transport.calls}, {"docs.example"})
             self.assertEqual(manifest["totals"]["chunks"], 5)
-            self.assertEqual(sorted(manifest["sources"]), ["page"])
+            self.assertEqual(sorted(manifest["sources"]), ["en", "glossary", "ko", "page"])
+            self.assertTrue(manifest["sources"]["en"]["carried"])
+            self.assertEqual(manifest["sources"]["en"]["chunks"], 2)
+            self.assertNotIn("carried", manifest["sources"]["page"])
 
     def test_a_source_s_cap_keeps_at_most_that_many_pieces_of_one_document(self):
         with tempfile.TemporaryDirectory() as temporary:

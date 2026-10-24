@@ -53,7 +53,7 @@ HEPES
 MOPS
 imidazole
 sucrose
-D-glucose	enwiki:Glucose
+D-glucose	5793
 Triton X-100
 polysorbate 20
 sodium azide
@@ -72,7 +72,7 @@ isoamyl alcohol
 dimethyl sulfoxide
 trypan blue
 # acids and bases
-hydrochloric acid
+hydrochloric acid	313
 sodium hydroxide
 potassium hydroxide
 sulfuric acid
@@ -137,10 +137,10 @@ titanium dioxide
 silicon dioxide
 aluminium oxide
 # gases
-nitrogen
+nitrogen	947
 argon
-oxygen
-hydrogen
+oxygen	977
+hydrogen	783
 carbon dioxide
 carbon monoxide
 helium
