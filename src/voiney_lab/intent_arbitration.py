@@ -25,6 +25,7 @@ class RequestIntent(str, Enum):
     UNCERTAINTY = "uncertainty"
     COMBINED_LEARNING_NEXT = "combined_learning_next"
     VISUAL = "visual"
+    TROUBLESHOOTING = "troubleshooting"
     CURRENT_STEP = "current_step"
     GENERAL_QA = "general_qa"
     UNKNOWN = "unknown"
@@ -128,6 +129,139 @@ _WORKFLOW_CONTROL_PATTERNS = (
 )
 
 
+# --- A problem at the bench (lane HELP, decision 1, 2026-10-24) ------------------
+#
+# "젤이 아직 파래", "침전이 생겼어", "왜 안 되지?": something did not go as it
+# should. A read-only request kind: the state machine records a problem said
+# as having happened (as the anomaly readers do) and answers both with help
+# from the sources; nothing here decides anything.
+
+#: Something does not do what it should: "안 빠져", "안 녹아", "안 떨어져".
+_PROBLEM_NOT_DOING = (
+    r"(?:안|못)\s*(?:빠져|빠지|빠졌|빠진|녹아|녹지|녹았|녹|섞여|섞이|풀려|풀리|줄어|떨어져|떨어지|떨어졌"
+    r"|붙어|붙|나와|나오|나왔|보여|보이|올라가|올라|내려가|내려|굳어|굳|말라|마르|말랐|부풀|가라앉"
+    r"|생겨|생기|생겼|퍼져|퍼지|들어가|들어갔|돌아가|돌아|맞아|맞|덮여|덮어|덮이|덮|변해|변하|변했|바뀌"
+    r"|움직|돼|되|됐|된)"
+)
+#: Words between a thing and its "안": "다 안", "잘 안", "전혀 안".
+_PROBLEM_ADVERBS = r"(?:(?:다|잘|전혀|아예|계속|아직|거의|좀|조금|도무지|영)\s*)*"
+#: The things of an experiment a problem is said about.
+_PROBLEM_SUBJECTS = (
+    r"(?:색|색깔|젤|겔|밴드|용액|시료|샘플|세포|펠릿|펠렛|상층액|단백질|결정|가루|분말|시약|막|멤브레인|배지|미디어"
+    r"|신호|형광|피크|콜로니|조각|플러그|온도|장비|기계|기포|거품|증폭|커브|곡선|검량선|표준\s*곡선|흡광도|측정값|값|수치"
+    r"|항체|버퍼|웰|용량|부피|양|시간)"
+)
+_PROBLEM_SHAPES = (
+    # Still in a state it should have left: "아직 파래", "여전히 투명해".
+    ("still", r"(?:아직|아직도|여전히|계속)\s*(?:\S+\s*){0,2}?(?:파래|파랗|파란|푸르|투명|탁해|탁하|뿌옇|남아\s*있"
+              r"|그대로|하얗지|희지|뜨거|따뜻|차가|미지근|안\s*\S+|덜\s*\S+)"),
+    # Something formed: "침전이 생겼어", "거품이 많아", "덩어리가 보여".
+    ("formed", r"(?:침전|침전물|거품|기포|덩어리|응집|결정|얼룩|이물질|부유물|알갱이|연기|곰팡이|균열)"
+               r"(?:이|가|은|는|도|물이)?\s*(?:\S+\s*){0,2}?(?:생겼|생기|생긴|보여|보이|있어|있네|있는|나와|났|많아"
+               r"|많이|떠\s*있|껴|올라와|맺혀)"),
+    # It failed or came out wrong: "실패한 것 같아", "결과가 안 좋아", "제대로 안 돼".
+    ("failed", r"실패했|실패한\s*것\s*같|실패인\s*것\s*같|망했|망한\s*것\s*같|잘못\s*(?:된|됐|되었)"
+               r"|이상하게\s*(?:나왔|됐|돼)|(?:결과|밴드|신호|색|형광|배경|백그라운드|흡광도|값|수치|피크)"
+               r"(?:가|이|는|은)?\s*(?:안\s*좋|나쁘|약해|약하|너무\s*(?:약|진|연|흐|높|낮|세|강|희미))"
+               r"|예상(?:과|이랑|하고)\s*(?:달라|다르|다른)|원하는\s*대로\s*안"
+               r"|제대로\s*안|잘\s*안\s*(?:돼|되|나와|빠|녹|섞|떨어|덮|붙)"),
+    # Not enough of something: "버퍼가 모자란 것 같아", "양이 부족해".
+    ("short", r"모자라|모자란|모자랄|부족해|부족한|부족하"),
+    # Something left that should be gone: "웰에 아크릴아마이드가 남아 있는 것 같아".
+    ("left_over", r"\S+(?:이|가)\s*(?:아직\s*)?(?:조금\s*)?남아\s*있|찌꺼기|잔여물"),
+    # Something it should be kept from: "빛에 노출됐어".
+    ("exposed", r"(?:빛|햇빛|조명|공기)(?:에|이|가)?\s*(?:\S+\s*){0,1}?노출"),
+    # A thing of the experiment does not do it: "색이 안 빠져", "세포가 안 떨어져".
+    ("not_doing", _PROBLEM_SUBJECTS + r"(?:이|가|은|는|도|을|를)?\s*(?:\S+\s*){0,2}?" + _PROBLEM_NOT_DOING),
+    # Any named thing that does not do it: "master mix가 안 녹아", "흙이 다 안 풀려".
+    ("thing_not_doing", r"(?:[가-힣A-Za-z0-9]+)(?:이|가)\s+" + _PROBLEM_ADVERBS + _PROBLEM_NOT_DOING),
+    # Too much of a state: "너무 뜨거워", "여과가 너무 느려", "세포가 너무 빽빽해".
+    ("too", r"너무\s*(?:많|적|진해|진하|연해|연하|뜨거|차가|느려|느리|빨라|빠르|오래|짧|길어|빽빽|묽|걸쭉|되직|약해|약하"
+            r"|높|낮|커|작아|두꺼|얇|탁|흐려|흐릿|끈적|뻑뻑|세게|강해|빨리|늦|더디)"),
+    # Not fully: "분해가 덜 된 것 같아", "덜 말랐어".
+    ("not_fully", r"덜\s*(?:된|됐|돼|되|녹|말랐|마른|말라|섞|풀|빠|식|끓|굳|덮|퍼|빠졌)"),
+    # Loose or leaking: "뚜껑이 헐거워", "새고 있어".
+    ("loose", r"헐거|헐겁|느슨해|헐렁|새고\s*있|새는\s*(?:것|거)\s*같|샜"),
+    # Uneven or stuck: "한쪽에 몰려 있어", "벽에 붙어 있어", "흐트러졌어".
+    ("uneven", r"(?:몰려|쏠려|뭉쳐|흩어져)\s*있|흐트러|흩어졌"
+               r"|(?:벽|바닥|뚜껑|입구|팁|관|튜브|윗부분)\S*\s*(?:\S+\s*){0,1}?(?:붙어|달라붙어|묻어)\s*(?:있|버렸|남)"),
+    # Left too long or forgotten: "빛에 오래 뒀어", "깜빡했어".
+    ("too_long", r"오래\s*(?:뒀|둬|놔뒀|놓|방치)|깜빡\s*(?:했|잊)|잊어\s*버렸|잊었"),
+    # Something got in: "먼지가 들어갔어", "물이 섞였어".
+    ("got_in", r"(?:먼지|이물질|머리카락|물방울|공기|기포|다른\s*시약)(?:이|가)?\s*(?:\S+\s*){0,2}?"
+               r"(?:들어갔|들어간|섞였|섞인|묻었|묻은|떨어졌)"),
+    # A thing turned wrong: "용액이 탁해졌어", "젤이 녹았어", "펠릿이 안 보여".
+    ("turned", r"(?:젤|겔|밴드|용액|시료|샘플|세포|펠릿|펠렛|상층액|막|멤브레인|배지|미디어)(?:이|가|은|는)?\s*"
+               r"(?:\S+\s*){0,2}?(?:탁해|뿌옇|변색|갈색으로|노랗게|노래졌|녹았|녹아\s*버|말라\s*버|굳었|퍼졌|번졌"
+               r"|떨어져\s*(?:나갔|버렸))"),
+    ("english", r"\b(?:still\s+(?:blue|stained|transparent|cloudy|there|attached|visible|not)"
+                r"|(?:is|are|it'?s)\s+not\s+(?:working|dissolving|destaining|attaching|detaching|clearing|mixing)"
+                r"|(?:isn'?t|aren'?t|doesn'?t|don'?t|didn'?t|won'?t)\s+(?:work|working|dissolve|dissolving|destain"
+                r"|attach|detach|clear|mix|form)"
+                r"|(?:a|some)\s+precipitate|precipitate\s+(?:formed|appeared)|turned\s+cloudy|(?:it|this)\s+failed"
+                r"|has\s+failed|went\s+wrong|no\s+(?:band|bands|signal|pellet|colonies|peaks?)"
+                r"|(?:got|is|it'?s)\s+(?:foamy|cloudy|bubbly)|(?:signal|bands?|background)\s+(?:is|are)\s+(?:too\s+)?"
+                r"(?:weak|faint|high|strong)|(?:cells?|pellet)\s+(?:won'?t|didn'?t|don'?t|doesn'?t)\s+\w+)\b"),
+)
+#: Asking about a problem rather than only saying it: "왜", "어떡해", "뭐가 문제야".
+_PROBLEM_QUESTION = (
+    r"(?:^|\s)왜(?:\s|$)|^왜|어떡해|어떡하|어떻게\s*(?:해|하지|하면|하나|해야)|어쩌지|어쩌면|어떻게\s*된"
+    r"|뭐가\s*(?:문제|잘못|이상)|무슨\s*문제|원인이\s*(?:뭐|뭘)|\bwhy\b|what\s+(?:went\s+wrong|should\s+i\s+do"
+    r"|do\s+i\s+do)|how\s+(?:do|can)\s+i\s+fix"
+)
+#: A problem asked about with no thing named: "왜 안 되지?", "뭐가 문제야?".
+_PROBLEM_GENERIC_QUESTION = (
+    r"^(?:이거|이게|근데|아|어|음)?\s*왜\s*(?:이렇게\s*)?(?:안\s*(?:돼|되|됐|된|나와|나오)|이러|이래|이렇지|그러지|그래)"
+    r"|^(?:이거|근데)?\s*뭐가\s*(?:문제|잘못|이상)|^what\s+went\s+wrong|^why\s+(?:is(?:n'?t)?|does(?:n'?t)?)\s+it"
+    r"\s+(?:not\s+)?work"
+)
+#: Never a problem at the bench: a step done or not done yet, the sound or the
+#: screen, a rule or a permission ("면 안 돼", "써도 돼?"), a time left, a
+#: hypothetical ("생기면 어떡해?") or a request for something else.
+_NOT_A_PROBLEM = (
+    r"끝났|끝내|끝나|완료|마쳤|마치|다\s*했|\bdone\b|\bfinish"
+    r"|들려|들리|소리|목소리|화면|그림|사진|이미지|영상|글자|타이머|앱|마이크|이어폰|연결"
+    r"|(?:으|하)?면\s*안\s*(?:돼|되)|지\s*마|말아|안\s*해도|도\s*(?:돼|되|괜찮)"
+    r"|(?:분|초|시간)\s*(?:이|가)?\s*남|(?:으|하)?면\s*(?:어떡|어떻게|어쩌|뭐|왜)|\bif\b|\bwould\b|\bcould\b"
+    r"|아니야|아니에요|아닌|않았|라고\s*(?:말|하면)"
+    # A move or a step command with it ("덜 됐는데 그냥 다음 단계 가자") is
+    # the command's: the completion gates rule on it (D7).
+    r"|다음\s*(?:단계|으로)|넘어가|건너뛰|가자|진행하자|진행해|\bnext\s+step\b|\bmove\s+on\b|\bskip\b"
+)
+_PROBLEM_REQUEST_ENDING = r"(?:줘|주세요|줄래|주라|줄\s*수)$"
+
+
+@dataclass(frozen=True)
+class ProblemReading:
+    """A problem said or asked about, and which shape read it."""
+
+    kind: str  # "statement" (said as having happened) | "question" (asked about)
+    shape: str
+
+
+def problem_reading(text: str) -> ProblemReading | None:
+    """Whether the words tell or ask about a problem at the bench (lane HELP).
+
+    "statement": "젤이 아직 파래", "침전이 생겼어", "the gel is still blue".
+    "question": "왜 아직 파래?", "침전이 생겼는데 어떡해", "왜 안 되지?". None
+    for anything else, including a step not done yet, the sound or screen, a
+    rule, a permission asked, a time left and a hypothetical.
+    """
+
+    normalized = normalize_request_text(text)
+    if not normalized or _matches(normalized, (_NOT_A_PROBLEM,)):
+        return None
+    asked = _matches(normalized, (_PROBLEM_QUESTION,))
+    shape = next((name for name, pattern in _PROBLEM_SHAPES if _matches(normalized, (pattern,))), None)
+    if shape is None and asked and _matches(normalized, (_PROBLEM_GENERIC_QUESTION,)):
+        shape = "generic"
+    if shape is None:
+        return None
+    if not asked and re.search(_PROBLEM_REQUEST_ENDING, normalized):
+        return None
+    return ProblemReading("question" if asked else "statement", shape)
+
+
 def arbitrate_request(text: str) -> RequestArbitration:
     """Classify one latest user request with deterministic, fail-closed priority."""
 
@@ -166,6 +300,16 @@ def arbitrate_request(text: str) -> RequestArbitration:
             1.0,
             "outcome_prediction_unsupported",
             ("bounded_uncertainty",),
+        )
+
+    problem = problem_reading(text)
+    if problem is not None:
+        return RequestArbitration(
+            normalized,
+            RequestIntent.TROUBLESHOOTING,
+            1.0,
+            f"problem_{problem.kind}",
+            ("troubleshooting",),
         )
 
     protocol_information = _matches(normalized, _PROTOCOL_INFORMATION_PATTERNS)

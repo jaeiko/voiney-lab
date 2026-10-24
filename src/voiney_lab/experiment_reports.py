@@ -102,6 +102,8 @@ EVENT_NAMES_KO: dict[str, str] = {
     "timer_end_notice": "타이머 끝 알림", "timer_last_minute_notice": "타이머 1분 전 알림",
     "connection_restored": "연결 끊김 뒤 다시 연결", "photo_attached": "사진 첨부",
     "web_reference": "웹 참고 링크", "experimenter_recorded": "실험자 기록",
+    # Lane HELP: the sources' help after a problem said or asked about.
+    "problem_help": "문제 도움",
     "protocol_basis_recorded": "따른 원문 파일 기록", "steps_skipped": "단계 건너뜀",
     "step_reverted": "이전 단계로 되돌림", "repeat_returned": "반복 구간으로 돌아감",
     "repeat_registered": "반복 횟수 등록", "repeat_rounds_declined": "반복 더 하지 않음",
@@ -3119,6 +3121,30 @@ NO_VALUED_STEPS_WORDS = "원문에 값(양·시간·온도·속도·농도)이 �
 NO_OBSERVATION_WORDS = "기록된 관찰이 없다."
 NO_PI_WORDS = "PI 확인: 아직 없음."
 NOTEBOOK_SUBTITLE = "실험 노트"
+#: Lane HELP: the event of the help given after a problem.
+PROBLEM_HELP_EVENT = "problem_help"
+
+
+def problem_help_line(step_label: str | None, payload: Mapping[str, Any], words: str | None, at: str) -> str:
+    """The notebook's one line for a problem's help: where its lines came from."""
+
+    found = payload.get("found") if isinstance(payload.get("found"), Mapping) else {}
+    pages = sorted({
+        str(item.get("page")) for item in payload.get("sources") or ()
+        if isinstance(item, Mapping) and item.get("tier") == "protocol" and str(item.get("page") or "").isdigit()
+    }, key=int)
+    told = []
+    if pages:
+        told.append("원문 " + "·".join(f"p.{page}" for page in pages))
+    if found.get("history"):
+        told.append(f"지난 기록 {found['history']}건")
+    if found.get("public"):
+        told.append(f"공개 자료 {found['public']}건")
+    asked = f" — 물음 “{' '.join(str(words).split())}”" if words else ""
+    where = f"{step_label}단계 " if step_label else ""
+    return f"도움 · {where}({at or '시각 없음'}){asked}: " + (" · ".join(told) or "원문과 지난 기록에 관련 내용 없음")
+
+
 #: The kinds the appendix's record table gives decision ②'s sayings.
 SAYING_KINDS = {PURPOSE_RECORDED: "목적·시료", RESULT_RECORDED: "결과·다음 할 일"}
 
@@ -3846,6 +3872,11 @@ def build_lab_notebook(
             differences.append(NotebookDifference(
                 index_by_key.get(record.key, len(kinds)),
                 f"이상 · {record.step_label}단계 ({record.at or '시각 없음'}): “{record.text}”" + mark(record.key)))
+    for index, kind in enumerate(kinds):
+        # Lane HELP: what the sources said back after a problem, one line.
+        if kind == PROBLEM_HELP_EVENT:
+            differences.append(NotebookDifference(
+                index, problem_help_line(labels[index], payloads[index], wordings[index], _clock(moments[index]))))
     if facts.outcome == "stopped" and source_steps:
         last_done = max((order.get(label, -1) for label in facts.completed_labels), default=-1)
         after = [str(step["label"]) for step in source_steps
@@ -3948,6 +3979,8 @@ def build_lab_notebook(
             said_kind = SAYING_KINDS[kind]
         elif kind == "step_completed" and text:
             said_kind = "관찰"
+        elif kind == PROBLEM_HELP_EVENT and text:
+            said_kind = "문제 질문"
         else:
             continue
         for clock, change, after in history.get(keys[index], ()):
