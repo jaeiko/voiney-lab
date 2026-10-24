@@ -334,6 +334,13 @@ mkdir -p "$PILOT_DATA_DIR"
 # refuses every folder that is neither this one nor carries the mark.
 : > "$PILOT_DATA_DIR/.voiney-pilot-data"
 
+# Lane RX0 (human decision 2026-10-24): the new screen is built here when node
+# is present; without node or on a failed build, web/build.sh prints [WARN],
+# the new screen stays off (/app/ says so) and the server starts as before.
+echo
+bash "$ROOT/web/build.sh" || true
+echo "NEW_UI = ${VOINEY_LAB_NEW_UI:-false}   (VOINEY_LAB_NEW_UI=true sends / to /app/; /app/ opens either way)"
+
 echo
 echo "=== Starting Voiney Lab ==="
 

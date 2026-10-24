@@ -228,6 +228,9 @@ SETTINGS: tuple[Setting, ...] = (
             "서버가 정답과 선택지를 정함; 줄 ON 결정 ③)"),
     Setting("VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION", SWITCHES, "true",
             "종점이 있는 단계를 끝낼 때 '관찰한 것 있으면 말씀해 주세요'를 한 번 묻기 (줄 RP3 결정 ② c)"),
+    Setting("VOINEY_LAB_NEW_UI", SWITCHES, "false",
+            "새 화면(web/, /app/)을 기본으로: true 면 / 가 /app/ 으로 감 (빌드가 없으면 지금 화면 그대로); "
+            "false 면 지금 화면 그대로이고 /app/ 은 언제나 열림 (줄 RX0)"),
     # --- 경로·저장소 --------------------------------------------------------------
     Setting("VOINEY_LAB_SAFETY_CATALOG", PATHS, "(없음, 필수)",
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),
