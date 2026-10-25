@@ -4433,6 +4433,31 @@ _RESUME_PATTERNS = (
     # "계속", "프로토콜 계속" said alone (lane RT, decision 4).
     re.compile(r"^(?:(?:프로토콜|실험)\s*)?계속$"),
 )
+#: Lane HEAR, decision 7 (2026-10-25): "이어서 하자" resumes a paused run too.
+#: Only while paused -- elsewhere "이어서" may continue an earlier run
+#: ("지난번처럼 이어서", lane EASY) -- so it is not one of _RESUME_PATTERNS.
+_PAUSED_RESUME_PATTERNS = (
+    re.compile(
+        r"^(?:(?:실험|프로토콜)\s*)?이어서(?:\s*(?:하자|할게요?|해|해줘|해요|합시다|가자|"
+        r"진행(?:해|해줘|해요|하자|할게요?)?))?$"
+    ),
+)
+
+
+def is_paused_resume_utterance(transcript: str) -> bool:
+    """Whether the words resume a paused run (lane HEAR, decision 7).
+
+    While a run is paused the server answers only these: the resume words
+    the front rules read (_RESUME_PATTERNS) and "이어서 하자" with its
+    endings. A question about them ("다시 시작할까요?") is not one.
+    """
+
+    if not isinstance(transcript, str) or not transcript.strip() or _asked(transcript):
+        return False
+    key = _utterance_key(transcript)
+    return any(pattern.search(key) for pattern in (*_RESUME_PATTERNS, *_PAUSED_RESUME_PATTERNS))
+
+
 # --- "재개" misheard while paused (lane XO, decision 8a) -----------------------
 #: The resume words of _RESUME_PATTERNS, each with the endings it is said
 #: with, as one string without spaces.
@@ -18642,7 +18667,10 @@ class CuratedProtocolSession:
             fix = _NOTEBOOK_FIX.fullmatch(" ".join(transcript.split()))
             if fix is not None:
                 return self._plan_notebook_fix(fix, turn_id=turn_id)
-        if self._notebook_question is not None:
+        if self._notebook_question is not None and not (
+            # Lane HEAR, decision 7: a paused run's resume word resumes it.
+            self._pause_state == "paused" and is_paused_resume_utterance(transcript)
+        ):
             # Lane RP3, decision ② a, c, d: the words after a notebook question.
             # A server question open for this turn (a completion, an endpoint,
             # a value, the end, ...) is answered first; the notebook's waits.
@@ -19998,12 +20026,19 @@ class CuratedProtocolSession:
                 confidence_source="provider_metadata",
                 language=language,
             )
-        if (
-            self._pause_state == "paused"
-            and intent.action is CuratedProtocolAction.START
-            and any(
-                pattern.search(intent.normalized_transcript or "")
-                for pattern in _RESUME_PATTERNS
+        if self._pause_state == "paused" and (
+            (
+                intent.action is CuratedProtocolAction.START
+                and any(
+                    pattern.search(intent.normalized_transcript or "")
+                    for pattern in _RESUME_PATTERNS
+                )
+            )
+            or (
+                # Lane HEAR, decision 7: "이어서 하자" resumes a paused run.
+                intent.action is not CuratedProtocolAction.RESUME
+                and any(pattern.search(_utterance_key(transcript)) for pattern in _PAUSED_RESUME_PATTERNS)
+                and not _asked(transcript)
             )
         ):
             # "재개", "프로토콜 재개" and "resume" are in the workflow-command

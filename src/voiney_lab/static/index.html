@@ -1301,8 +1301,9 @@
             </div>
             <div id="procedure-status">대기</div>
           </div>
+          <!-- Lane HEAR decision 7 (2026-10-25): 일시정지 중 — ‘다시 시작’이라고 말하거나 [다시 시작]을 누르세요. While paused only the resume words are heard; nothing else is answered aloud. -->
           <div id="workflow-paused-banner" class="workflow-paused-banner" role="status" aria-live="polite" hidden>
-            <div><strong>일시정지 중</strong><span id="workflow-paused-text">준비되면 ‘다시 시작’을 누르거나 “재개”라고 말하세요.</span></div>
+            <div><strong>일시정지 중</strong><span id="workflow-paused-text"> — ‘다시 시작’이라고 말하거나 [다시 시작]을 누르세요</span></div>
             <button id="workflow-resume-button" type="button">▶ 다시 시작</button>
           </div>
           <div id="procedure-progress"></div>
@@ -5336,6 +5337,8 @@ async function onMessage(e,generation,current){
  if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
  // Lane SP1 decisions 1 and 4: a voice taken for another person's -- no transcript, no turn; the provisional card comes down and one small line with the time goes into the folded list.
  if(m.type==="speech.dropped"){renderDroppedSpeech(m);return;}
+ // Lane HEAR decision 7: the guidance playing stops with the pause.
+ if(m.type==="playback.stop"){const accepted=acceptedSessionConfiguration;if(accepted&&m.configuration_id===accepted.configuration_id)clearPlayback();return;}
  if(m.type==="speech.ignored"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);renderIgnoredSpeech(m);if(sessionActive&&m.during_playback!==true)renderState("LISTENING");}
  if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation));if(filler)showFillerStatus(node,filler);updateVoiceProcessing("recognized");}
  if(m.type==="turn.state")applyTurnState(m,generation);

@@ -53,6 +53,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
     TimerNotice,
+    is_paused_resume_utterance,
     josa_ro,
     load_curated_protocol_fixture,
     ProtocolVocabulary,
@@ -7830,6 +7831,24 @@ class ListenerSession:
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
+    def stop_turn_for_pause(self)->tuple[int,int]|None:
+        """[일시정지] pressed while a turn was answering: it ends here (lane HEAR, decision 7).
+
+        Its playback is stopped by the page (``playback.stop``); the session
+        listens again after the cooldown. None when nothing was answering.
+        """
+
+        turn_id=self.active_turn_id
+        if turn_id is None or self.state not in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING):
+            return None
+        generation=self.turn_generations.get(turn_id,self.generation)
+        self._interrupted_generations.add((turn_id,generation))
+        self._deferred_playback_end=None
+        self.active_turn_id=None; self.framer=FrameBuffer()
+        self._restore_primary_detector(TurnState.COOLDOWN)
+        self._reset_interrupt_input()
+        self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000
+        return turn_id,generation
     def complete_without_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.active_turn_id=None; self.framer=FrameBuffer()
@@ -11814,6 +11833,25 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     # admission or calibration can consume it. Empty input and self-echo
     # are already refused above; this never authorizes a state change.
     emergency=recognize_emergency(transcript)
+    if emergency is None and _run_paused(session) and not is_paused_resume_utterance(transcript):
+        # Lane HEAR, decision 7: while paused only a resume word is heard;
+        # anything else gets no sound -- no language question, no asking
+        # back, no drop notice. The pause band on the screen says why.
+        log.info("speech.paused_not_resume turn_id=%s duration_ms=%s",turn_id,input_frames*20)
+        if session.reject_empty_transcript(turn_id):
+            # The page puts its "듣는 중" card away on speech.rejected.
+            await sender.text(
+                "speech.rejected",turn_id=turn_id,generation=generation,reason="paused",
+                voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20,
+            )
+            await sender.text(
+                "state.changed",state=session.state.value,turn_id=turn_id,
+                cooldown_ms=session.detector.config.cooldown_ms,
+            )
+            await _report_speech_drop(
+                session,sender,reason="paused",turn_id=turn_id,generation=generation,
+                duration_ms=input_frames*20,level_db=voiced_level_db)
+        return
     if session.llm_router_settings.router_first:
         # Lane RA, decision (d): words cut by the endpoint. A fragment held
         # by the turn before this one is joined with these words when they
@@ -15266,6 +15304,13 @@ async def voice_socket(websocket:WebSocket):
                     if task and not task.done():
                         await _finish_all_research_operations(sender,session,"cancelled")
                         task.cancel()
+                    if changed:
+                        # Lane HEAR, decision 7: the guidance playing stops with the pause.
+                        stopped=session.stop_turn_for_pause()
+                        if stopped is not None:
+                            await websocket.send_text(event(
+                                "playback.stop",configuration_id=session.accepted_configuration_id,
+                                turn_id=stopped[0],generation=stopped[1],reason="paused"))
                     _record_screen_history(
                         session,screen_before,control="pause",changed=changed)
                     if changed:
