@@ -14,6 +14,7 @@
 // applyServerEvent for what the new screen draws. It decides no workflow
 // state; the server does.
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { run as runCopy } from "../copy/ko";
 import type { VoiceState } from "./runModel";
 import { runStore } from "./runStore";
 
@@ -32,6 +33,7 @@ const TURN_SETS = ["greetingEvents", "interruptedTurns"] as const;
 export const STOP_ANSWER_MS = 3000;
 
 const g = globalThis as any;
+const TURN_FAILED_WORDS = runCopy.turnFailed;
 let stopRequest: { socket: WebSocket | null | undefined; resolve: (() => void) | null } | null = null;
 
 function turnBrowserKey(turnId: unknown, browserGeneration: number = sessionGeneration): string {
@@ -310,7 +312,11 @@ async function onMessage(e: MessageEvent, generation: number, current: WebSocket
       }
       return;
     }
-    if (turnError && sessionActive) return;
+    if (turnError && sessionActive) {
+      // A turn's own failure: the session goes on; the screen says the words were not taken (index.html writes it on the turn's card).
+      runStore.event({ type: "workflow.control.refused", configuration_id: acceptedSessionConfiguration?.configuration_id, message_ko: words || TURN_FAILED_WORDS }, eventContext());
+      return;
+    }
     fail(words || "연결에 문제가 생겼어요.");
     return;
   }

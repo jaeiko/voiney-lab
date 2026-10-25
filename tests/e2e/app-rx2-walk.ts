@@ -104,7 +104,11 @@ export async function walk(page: Page, info: TestInfo) {
   await expect(page.getByTestId('start-go')).toHaveText('이 프로토콜로 시작');
   await shot(page, info, '10-start-5-go');
   await page.getByText('시끄러워요', { exact: true }).click();
+  // The shared voice code is already on the page, so the press itself primes the sound (voice-core's primeRunStart).
+  await page.waitForFunction(() => typeof (window as any).primeRunStart === 'function');
+  await page.evaluate(() => { const w = window as any; const original = w.primeRunStart; w.__primed = 0; w.primeRunStart = function (...args: unknown[]) { w.__primed += 1; return original.apply(this, args); }; });
   await page.getByTestId('start-go').click();
+  expect(await page.evaluate(() => (window as any).__primed)).toBe(1);
   await expect.poll(() => server.settingPuts).toContainEqual({ ambient_mode: 'noisy' });
 
   // The experiment screen.

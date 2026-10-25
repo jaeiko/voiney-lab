@@ -321,6 +321,7 @@ export const run = {
   micProblemButton: "마이크 다시 연결하기",
   failed: "연결에 문제가 생겼어요.",
   failedAction: "실험 시작하기",
+  turnFailed: "방금 말을 처리하지 못했어요. 다시 말해 주세요.",
 } as const;
 
 export const settings = {

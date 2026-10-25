@@ -275,7 +275,8 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
       return withLog(model, { key: `said:${String(m.generation)}:${String(m.turn_id)}`, who: "said", text: oneLine(m.text) });
     case "transcript":
       if (turnId === null || !context.live(m) || !text(m.text)) return model;
-      return withLog(model, { key: `heard:${String(m.generation)}:${turnId}`, who: "heard", text: oneLine(m.text) });
+      // A new utterance taken: a refusal said for the last one goes.
+      return withLog({ ...model, notice: null }, { key: `heard:${String(m.generation)}:${turnId}`, who: "heard", text: oneLine(m.text) });
     case "reply.delta":
     case "reply.complete": {
       if (turnId === null || !context.live(m)) return model;

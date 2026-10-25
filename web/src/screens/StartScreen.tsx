@@ -10,7 +10,7 @@ import { StepProgress } from "../components/StepProgress";
 import { start as copy } from "../copy/ko";
 import { go, oldRoutes, routes } from "../lib/navigation";
 import { protocolStatus, sortEntries } from "../lib/protocolStatus";
-import { primeStart, startRun } from "../voice/engine";
+import { loadVoiceScripts, primeStart, startRun } from "../voice/engine";
 import { RunChangesStep } from "../components/RunChangesStep";
 import type { RunChangesChosen } from "../api/types";
 
@@ -406,6 +406,10 @@ export function StartScreen({ protocolId, resumeId, step }: StartScreenProps) {
   useEffect(() => {
     window.scrollTo?.(0, 0);
   }, [index]);
+  useEffect(() => {
+    // The shared voice code is on the page before the start press, so the press itself can make and resume the sound (lane TAB's primeRunStart).
+    void loadVoiceScripts().catch(() => undefined);
+  }, []);
 
   const back = () => (index === 0 ? go(routes.home) : setIndex(index - 1));
   const next = () => setIndex(Math.min(STEP_COUNT - 1, index + 1));
