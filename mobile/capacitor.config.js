@@ -1,4 +1,4 @@
-// VoineyLab store app shell (lane APP0). See docs/APP_PLAN.md.
+// Voiney Lab store app shell (lane APP0). See docs/APP_PLAN.md.
 //
 // Two ways to load the screen, chosen when the app is built:
 //
@@ -31,7 +31,7 @@ module.exports = {
   // Placeholder until a person fixes it; a store listing cannot change it
   // after the first upload (docs/APP_PLAN.md, 사람이 할 일).
   appId: "com.voiney.lab",
-  appName: "VoineyLab",
+  appName: "Voiney Lab",
   webDir: "www",
   server,
   // Lane APP1: Capacitor's default ("debug") logs every plugin call's

@@ -7,7 +7,7 @@ decided is in `docs/DECISIONS.md`.
 
 ## What it is
 
-**VoineyLab** (the company is Voiney) is a voice guide for running a lab's own
+**Voiney Lab** (the company is Voiney) is a voice guide for running a lab's own
 protocol. Chemistry and biology wet-lab researchers wearing gloves follow
 their protocol without touching a screen:
 

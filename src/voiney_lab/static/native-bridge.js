@@ -1,5 +1,5 @@
 /*
- * VoineyLab native bridge (lane APP0).
+ * Voiney Lab native bridge (lane APP0).
  *
  * The store app (mobile/, Capacitor) wraps this same web screen and adds
  * device features only. This file is the screen's side of that: it turns the
@@ -448,7 +448,7 @@
    * Android lets a background app use the microphone only from a
    * "microphone" foreground service started while the app is visible. The
    * app's VoineyMicrophone plugin (mobile/android/.../mic/) runs one, with
-   * the notification line "VoineyLab 이 듣는 중 · 끄기", records 16 kHz mono
+   * the notification line "Voiney Lab 이 듣는 중 · 끄기", records 16 kHz mono
    * PCM16 and hands it to the page in batches (base64, 100 ms each). Here the
    * batches become the 20 ms frames the web screen's worklet sends on /ws
    * today (voiney_lab.audio: SAMPLE_RATE, FRAME_MS, FRAME_BYTES), and the
@@ -460,10 +460,10 @@
   const MIC_FORMAT = Object.freeze({ sampleRate: 16000, frameMs: 20, frameBytes: 640 });
 
   const MIC_WORDS = {
-    listening: "VoineyLab 이 듣는 중 — 화면을 꺼도 계속 들어요. 알림 줄의 '끄기'로 멈출 수 있어요.",
+    listening: "Voiney Lab 이 듣는 중 — 화면을 꺼도 계속 들어요. 알림 줄의 '끄기'로 멈출 수 있어요.",
     user_stopped: "알림 줄의 '끄기'로 듣기를 껐어요. 다시 들으려면 화면에서 듣기를 켜 주세요.",
     stopped: "듣기를 멈췄어요.",
-    permission_denied: "마이크 권한이 거절됐어요. 설정 → 앱 → VoineyLab → 권한에서 마이크를 허용해 주세요.",
+    permission_denied: "마이크 권한이 거절됐어요. 설정 → 앱 → Voiney Lab → 권한에서 마이크를 허용해 주세요.",
     not_visible: "앱 화면이 보일 때만 듣기를 시작할 수 있어요. 화면을 켜고 다시 시작해 주세요.",
     mic_unavailable: "마이크를 열지 못했어요. 다른 앱이 마이크를 쓰고 있는지 확인해 주세요.",
     unavailable: "이 앱에는 화면이 꺼져도 듣는 기능이 없어요. 화면을 켜 둔 채로 들어요.",

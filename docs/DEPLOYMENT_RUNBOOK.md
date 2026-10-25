@@ -44,7 +44,7 @@
 
 ```ini
 [Unit]
-Description=VoineyLab pilot
+Description=Voiney Lab pilot
 After=network.target
 
 [Service]

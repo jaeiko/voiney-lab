@@ -162,6 +162,6 @@ test("every reason has words for the screen", () => {
     assert.equal(typeof words, "string");
     assert.ok(words.length > 5, reason);
   }
-  assert.match(bridge.micStateWords("listening"), /VoineyLab 이 듣는 중/);
+  assert.match(bridge.micStateWords("listening"), /Voiney Lab 이 듣는 중/);
   assert.equal(bridge.micStateWords("nonsense"), bridge.micStateWords("stopped"));
 });

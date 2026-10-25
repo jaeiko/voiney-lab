@@ -79,7 +79,7 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 
 # --- The agent's voice, chosen by the person (lane ON, decision ②, 2026-10-18) ---
 #: What the preview says in each voice ([들어 보기]).
-PREVIEW_SENTENCE_KO = "안녕하세요, 보이니랩이에요. 이 목소리로 실험을 안내할게요."
+PREVIEW_SENTENCE_KO = "안녕하세요, 보이니 랩이에요. 이 목소리로 실험을 안내할게요."
 
 
 @dataclass(frozen=True)

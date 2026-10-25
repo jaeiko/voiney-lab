@@ -242,7 +242,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 | 경로 | 무엇 |
 |---|---|
 | `mobile/package.json` | Capacitor 8.5.3, `@capacitor/local-notifications` 8.3.1, `@capacitor/network` 8.0.1, `@capacitor/app` 8.1.2, `@capacitor-community/keep-awake` 8.0.1 (정확한 버전으로 고정). 줄 APP1 은 npm 패키지를 더하지 않았다 — 플러그인 셋은 앱 안 코드다 |
-| `mobile/capacitor.config.js` | 앱 id `com.voiney.lab`(자리표시 — 11절), 이름 VoineyLab. 기본은 화면 묶기, `VOINEY_APP_SERVER_URL=https://…` 이면 서버 주소, `VOINEY_APP_START_PATH` 로 첫 쪽. **`loggingBehavior: "none"`**(줄 APP1): Capacitor 의 기본값 "debug" 는 디버그 빌드에서 모든 플러그인 호출의 인자와 답을 기기 로그(logcat)에 적는다 — 로그인 토큰과 마이크 소리가 거기 남는다 |
+| `mobile/capacitor.config.js` | 앱 id `com.voiney.lab`(자리표시 — 11절), 이름 Voiney Lab. 기본은 화면 묶기, `VOINEY_APP_SERVER_URL=https://…` 이면 서버 주소, `VOINEY_APP_START_PATH` 로 첫 쪽. **`loggingBehavior: "none"`**(줄 APP1): Capacitor 의 기본값 "debug" 는 디버그 빌드에서 모든 플러그인 호출의 인자와 답을 기기 로그(logcat)에 적는다 — 로그인 토큰과 마이크 소리가 거기 남는다 |
 | `mobile/scripts/prepare-web.mjs` | `mobile/www/`(추적 안 함)를 서버 정적 화면 + `mobile/www-src/` 로 만들고, 줄 APP1 부터 `www/app-config.js`(`window.VOINEY_APP_CONFIG = {serverUrl}`)를 쓴다. 주소는 빌드할 때 `VOINEY_APP_API_URL=https://…`(`mobile/scripts/app-config.mjs`, 시험 `tests/native_bridge/app_config.test.js`). 공개 주소만 — 토큰·키는 넣지 않는다 |
 | `mobile/www-src/offline.html` | 서버 주소 모드에서 서버를 못 열 때의 화면 |
 | `mobile/www-src/device-check.html` | 디버그 빌드의 기기 시험 화면(11.3절): 알림(어느 방식이 쓰이는지 표시), 정확한 알람 설정, 화면 켜 두기, 네트워크, 화면 꺼도 듣기(받은 프레임 수·소리 크기), 마이크 권한 설정, 앱 로그인·웹소켓 첫 메시지·로그아웃 |
@@ -320,7 +320,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 - **시작**: 앱 화면이 보일 때만(`Lifecycle.STARTED` 이상, 아니면 `not_visible`). 마이크 권한이 없으면 묻고, 거절이면 `permission_denied`
   (설정 열기는 `openAppSettings`). Android 가 화면 밖에서 마이크 서비스를 시작하지 못하게 하므로("you cannot create a microphone foreground service
   while your app is in the background", [문서](https://developer.android.com/develop/background-work/services/fgs/service-types)) 실험 시작 단추를 누른 순간에 시작한다.
-- **알림 줄**: 채널 `voiney-listening`(조용함), "VoineyLab 이 듣는 중 · 화면을 꺼도 실험 안내를 계속 들어요." + **[끄기]**. 끄기를 누르면 서비스가 멈추고
+- **알림 줄**: 채널 `voiney-listening`(조용함), "Voiney Lab 이 듣는 중 · 화면을 꺼도 실험 안내를 계속 들어요." + **[끄기]**. 끄기를 누르면 서비스가 멈추고
   페이지는 `user_stopped` 를 받는다. 마이크를 잃으면 `mic_unavailable`.
 - **아무도 받지 않으면 녹음하지 않는다**: 화면의 액티비티가 사라지면(앱 종료) 서비스도 멈춘다. 휴대폰에 소리를 저장하지 않는다. 페이지가 바빠 묶음이
   빠지면 다리가 `missedBatches` 로 센다(숨기지 않음).
@@ -450,7 +450,7 @@ EC2 에는 Xcode 가 없어서 iOS 는 이 줄에서 만들지 않았다. 맥에
 
 **C. 화면 꺼도 듣기 (결정 ②)**
 
-12. "9. 화면 꺼도 듣기 시작" → 마이크 권한 허용 → 알림 줄에 **"VoineyLab 이 듣는 중"** 과 **[끄기]**. 10초마다 "받은 프레임 … 가장 큰 소리 …%" 가 찍힌다
+12. "9. 화면 꺼도 듣기 시작" → 마이크 권한 허용 → 알림 줄에 **"Voiney Lab 이 듣는 중"** 과 **[끄기]**. 10초마다 "받은 프레임 … 가장 큰 소리 …%" 가 찍힌다
     (10초에 약 500프레임). 말하면 % 가 오르는지.
 13. **화면 끔**: 1분 동안 화면을 끄고 말한다 → 켜서 로그를 본다: 그 사이에도 10초마다 줄이 찍혔는지, 프레임 수가 줄지 않았는지, "빠진 묶음" 이 0 인지.
     (이것이 8절 11 — 웹뷰가 화면 꺼진 채 프레임을 받는지의 첫 증거다.) 다른 앱을 연 채로도 한 번.

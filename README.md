@@ -1,14 +1,14 @@
-# VoineyLab
+# Voiney Lab
 
 [![CI](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml)
 
-> **VoineyLab** (by Voiney) is a hands-free voice guide that lets wet-lab researchers run their own uploaded protocol step by step.
+> **Voiney Lab** (by Voiney) is a hands-free voice guide that lets wet-lab researchers run their own uploaded protocol step by step.
 > It analyses the protocol, checks every value against the source, asks only what it must, then guides, times and records the run and writes a lab notebook.
 > The server owns all workflow state and models only propose. Coding agents: read [`AGENTS.md`](AGENTS.md) first.
 
 ## 1. 무엇인가 · 누구를 위한가
 
-VoineyLab 은 화학·바이오 웻랩 연구자가 **장갑을 낀 채 손을 쓰지 않고** 자기 연구실의 프로토콜을 따라 실험하도록 돕는 음성 실험 가이드다. 만든 곳은 Voiney, 저장소는 [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab), 파이썬 패키지는 `voiney_lab` 이다.
+Voiney Lab 은 화학·바이오 웻랩 연구자가 **장갑을 낀 채 손을 쓰지 않고** 자기 연구실의 프로토콜을 따라 실험하도록 돕는 음성 실험 가이드다. 만든 곳은 Voiney, 저장소는 [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab), 파이썬 패키지는 `voiney_lab` 이다.
 
 - 쓰는 사람: 벤치에서 실험하는 연구자(첫 파일럿은 석사생 두 명, 2026년 10월 말부터). 연구실 담당은 계정과 데이터를, PI 는 노트에 "확인함"을 남긴다.
 - 근거: 생명 분야 연구자 3명 현장 인터뷰(2026-10-07·08), 13명 설문(2026-10-19) — `.agent/product_context.md`.
@@ -132,9 +132,9 @@ git diff --check
 
 | 조건 | 결과 | 언제·어디서 |
 |---|---|---|
-| A — 외부 라이선스 원문이 있는 원래 폴더 | **4762 passed · 7 skipped · 실패 0** | 2026-10-24, dev `0d45705` 실측 기준(작업 폴더와 구분) |
-| B — 라이선스 PDF 없음(CI) | 4263 passed · 508 skipped · 실패 0 | 2026-10-23, dev `0d45705`, PR #120 병합 CI |
-| 화면 시험(Playwright, CI) | 144 passed | 2026-10-23, 같은 병합 CI(두 태블릿 프로젝트 포함) |
+| A — 외부 라이선스 원문이 있는 원래 폴더 | **5037 passed · 7 skipped · 실패 0** | 2026-10-25, dev `0d18d2b` 실측 기준(작업 폴더와 구분) |
+| B — 라이선스 PDF 없음(CI) | 4535 passed · 510 skipped · 실패 1 | 2026-10-25, dev `0d18d2b`, PR #127 병합 CI. 실패 1 은 `tests/test_native_bridge.py` 의 `test_native_bridge_timer_alerts_under_node` 다: 그 실행의 러너 이미지(ubuntu-26.04)에 깔린 Node 가 결과를 TAP 대신 spec 모양으로 찍어 시험이 찾는 `# fail 0` 줄이 없었다. node 시험 43개는 모두 통과했다 |
+| 화면 시험(Playwright, CI) | 146 passed | 2026-10-25, 같은 병합 CI(두 태블릿 프로젝트 포함) |
 
 동시 작업의 전체 pytest 는 `AGENTS.md`의 공유 `flock` 명령으로 실행한다. 조건 B만 확인한 음성·서버 변경은 병합 뒤 태그 전에 원래 폴더에서 조건 A로 확인하고, 사람이 음성 시험을 한 뒤 태그·main 반영을 한다.
 

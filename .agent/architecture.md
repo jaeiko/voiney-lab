@@ -1,6 +1,6 @@
 # Current architecture
 
-VoineyLab (the company is Voiney): this is the one deep description of how
+Voiney Lab (the company is Voiney): this is the one deep description of how
 the code is built. Every name below refers to the executable code. The
 per-module one-liners are in `AGENTS.md`, the feature-by-feature
 behaviour in `docs/FEATURES.md`, and the reasons and dates in

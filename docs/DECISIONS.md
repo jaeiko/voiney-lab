@@ -1,4 +1,4 @@
-# 결정 기록 — VoineyLab
+# 결정 기록 — Voiney Lab
 
 사람이 정한 것을 주제별로 모은다. 한 줄에 날짜 · 결정 · 이유 · 관련 줄(lane) · 지금 코드에서 어디 · 남은 질문.
 
@@ -104,7 +104,8 @@
 | 2026-10-19 | 쉬운 말 규칙: 해요체 하나, 한 문장 한 뜻, 내부 말 금지(용어 사전), 단추는 동사, 오류 = 무엇이 일어났나 + 무엇을 하나. 숫자·단위·인용·안전 글은 그대로 | 사용자는 해요체와 합니다체를 섞어 듣는다(말하는 511줄 중 277 : 234) | WORD (PR #99) | 1단계는 문서만(`docs/VOICE_AND_TONE.md`). 코드 문구는 아직 바꾸지 않았다 | 2단계 진행 |
 | 2026-10-19 | 화면을 다섯 탭(홈·프로토콜·실험·기록·설정)과 떠오르는 시트로 나눈다 | 한 화면에 모든 것이 있었다 | IA (PR #100) | `static/index.html` `TAB_PANELS`, `TAB_ROUTE_PATTERN` | 단계 ②③도 #104·#113으로 병합. 후속은 파일럿 전 필수 범위만(UI4) |
 | 2026-10-04 | 모든 환경 설정 이름에 `VOINEY_LAB_` 머리를 붙인다. 옛 `.env` 는 `scripts/migrate_env.py` 로 바꾼다. 옛 이름이 있으면 시작을 거부한다 | 이름 하나로 | V | `setting_renames.py`; `setting_names.py` `refuse_old_setting_names` | — |
-| 2026-10-20 | 사람이 읽는 글의 제품 이름은 VoineyLab(회사 Voiney). 옛 이름 "Voice Workflow Agent" 는 코드 식별자·설정 이름·보관 문서·옛 기록 인용에만 남긴다 | 문서와 제품 이름을 맞춘다 | DOC4 | 이 결정은 문서만 바꾼다 | — |
+| 2026-10-20 | 사람이 읽는 글의 제품 이름은 ~~`VoineyLab`~~(2026-10-25 "Voiney Lab"으로 바뀜, 아래 줄), 회사는 Voiney. 옛 이름 "Voice Workflow Agent" 는 코드 식별자·설정 이름·보관 문서·옛 기록 인용에만 남긴다 | 문서와 제품 이름을 맞춘다 | DOC4 | 이 결정은 문서만 바꾼다 | — |
+| 2026-10-25 | 회사는 **Voiney**, 제품은 **Voiney Lab** — 띄어 쓰고, 한국어로는 "보이니 랩"(소리로도 "보이니 랩"). 붙여 쓴 `VoineyLab` 은 사람이 읽는 글에 쓰지 않는다. 띄어쓰기를 쓸 수 없는 곳(주소·계정·패키지·파일 이름·앱 id·저장소 이름)에서만 소문자 `voineylab`·`voiney-lab`(코드 이름 `voiney_lab`, 앱 id `com.voiney.lab` 은 그대로). 로고: 제품은 둥근 플라스크 아이콘(안에 물결, 입구에서 소리 호) + "Voiney"(Pretendard 700) "Lab"(400), 회사는 말풍선 안 소리 막대 + "Voiney". 먹색 `#1C1C1A` 한 색(어두운 바탕은 흰색), 장식 색·그림자·그라데이션 없음. 원본은 `assets/brand/`(규칙은 그 `README.txt`), 화면은 쓰는 것만 `static/icons/` 에 복사한다 | 사람 결정. 위 2026-10-20 줄의 붙여 쓰기를 바꾸고, 로고가 확정됐다 | NAME | `static/icons/voiney-lab_*`(탭·홈 화면 아이콘, `index.html` 위 막대·로그인 화면의 로고), 화면 글·`static/manifest.webmanifest` 의 `name`·`short_name`, `mobile/capacitor.config.js` `appName`, `strings.xml` `app_name`, `voice_providers.py` `PREVIEW_SENTENCE_KO`; `tests/test_lane_name_product_name.py` 가 화면 글·manifest·문서(보관 제외)에 붙여 쓴 이름이 없는지, 아이콘이 원본과 같은 파일인지 본다 | 앱 런처 아이콘, 둥근 마스크용 아이콘, 회사 로고를 쓸 곳. `.env.example` 첫 줄, `pyproject.toml`·`package.json` 설명, `mobile/` 의 다른 글(README·`www-src`)은 그대로 |
 | 2026-10-20 | 에이전트 규칙은 모두 `AGENTS.md` 한 곳에 쓴다(사전 점검, 줄과 작업 폴더, 무거운 실행 잠금, 다른 줄 프로세스, 병합 조건, AI 도구 표시 금지, 파괴적 git 금지, live/contract 구분 포함). `CLAUDE.md` 는 `@AGENTS.md` 한 줄 | 같은 규칙이 모든 에이전트에 필요하다. Claude Code 는 `AGENTS.md` 가 아니라 `CLAUDE.md` 를 읽고, `@경로` 줄로 다른 파일을 불러온다 | DOC4 | `CLAUDE.md`; `tests/test_docs_consistency.py` `AgentContractTests`(그 줄과 파일이 있는지) | — |
 | 2026-10-20 | README 와 문서에 상태 문구("MVP 시제품 — 현장 미검증")를 쓰지 않는다. 검증된 것처럼 쓰지도 않는다: 성능·정확도 숫자는 측정 날짜·조건과 함께, 상용·인증·규제 준수 주장은 없다. 현장 검증 전이라는 사실은 `.agent/product_context.md` 한 줄에만 | 과장도, 상태 딱지도 없이 사실만 | DOC4 | 문서만 바꾼다 | PILOT_GUIDE는 DOC4 2단계에서 반영. APP_PLAN의 스토어 문구 계획은 사람이 결정 |
 

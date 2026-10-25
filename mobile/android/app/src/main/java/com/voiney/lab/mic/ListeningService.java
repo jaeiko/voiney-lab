@@ -28,7 +28,7 @@ import com.voiney.lab.R;
  * cancellation and noise suppression where it has them, and hands each
  * 100 ms batch to MicEvents (the page sends it on its own socket).
  *
- * The notification line says "VoineyLab 이 듣는 중" with a "끄기" action that
+ * The notification line says "Voiney Lab 이 듣는 중" with a "끄기" action that
  * stops this service; the page is told why it stopped. Nothing is written to
  * the phone's storage.
  */
@@ -192,7 +192,7 @@ public class ListeningService extends Service {
             this, 2, launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_voiney_mic)
-            .setContentTitle("VoineyLab 이 듣는 중")
+            .setContentTitle("Voiney Lab 이 듣는 중")
             .setContentText("화면을 꺼도 실험 안내를 계속 들어요.")
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

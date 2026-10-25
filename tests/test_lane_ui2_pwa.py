@@ -1,6 +1,6 @@
-"""Lane UI2, decision 5 (2026-10-13): VoineyLab as a home-screen web app.
+"""Lane UI2, decision 5 (2026-10-13): Voiney Lab as a home-screen web app.
 
-The page links a web app manifest -- the name VoineyLab, its icons, the
+The page links a web app manifest -- the name Voiney Lab, its icons, the
 start address, either orientation -- and the icons, and the app serves the
 manifest under its registered type whatever the host's own type table says.
 There is no service worker, so nothing is cached and nothing works offline.
@@ -34,27 +34,28 @@ class ManifestTests(unittest.TestCase):
 
     def test_the_manifest_names_voineylab_its_icons_start_and_orientation(self) -> None:
         manifest = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["name"], "VoineyLab")
-        self.assertEqual(manifest["short_name"], "VoineyLab")
+        self.assertEqual(manifest["name"], "Voiney Lab")
+        self.assertEqual(manifest["short_name"], "Voiney Lab")
         self.assertEqual(manifest["start_url"], "/")
         self.assertEqual(manifest["scope"], "/")
         self.assertEqual(manifest["display"], "standalone")
         self.assertEqual(manifest["orientation"], "any")
         self.assertEqual(manifest["lang"], "ko")
         icons = {(icon["src"], icon.get("purpose", "any")): icon for icon in manifest["icons"]}
-        for (src, purpose), size in {("/icons/icon-192.png", "any"): 192, ("/icons/icon-512.png", "any"): 512, ("/icons/icon-maskable-512.png", "maskable"): 512}.items():
+        # Lane NAME (2026-10-25): the brand's app icons replace lane UI2's drawn ones.
+        for (src, purpose), size in {("/icons/voiney-lab_app-icon_180.png", "any"): 180, ("/icons/voiney-lab_app-icon_512.png", "any"): 512}.items():
             self.assertIn((src, purpose), icons)
             self.assertEqual(icons[(src, purpose)]["sizes"], f"{size}x{size}")
             self.assertEqual(_png_size(STATIC / src.lstrip("/")), (size, size))
-        self.assertEqual(_png_size(STATIC / "icons" / "apple-touch-icon.png"), (180, 180))
-        self.assertTrue((STATIC / "icons" / "icon.svg").read_text(encoding="utf-8").startswith("<svg"))
+        self.assertEqual(_png_size(STATIC / "icons" / "voiney-lab_favicon_32.png"), (32, 32))
+        self.assertTrue((STATIC / "icons" / "voiney-lab_logo_ink.svg").read_text(encoding="utf-8").startswith("<svg"))
 
     def test_the_page_links_the_manifest_and_the_icons_and_has_no_service_worker(self) -> None:
         html = INDEX.read_text(encoding="utf-8")
         head = html.split("</head>", 1)[0]
-        for tag in ('<link rel="manifest" href="/manifest.webmanifest">', '<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">',
-                    '<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">', '<meta name="apple-mobile-web-app-title" content="VoineyLab">',
-                    '<meta name="application-name" content="VoineyLab">', "<title>VoineyLab"):
+        for tag in ('<link rel="manifest" href="/manifest.webmanifest">', '<link rel="apple-touch-icon" href="/icons/voiney-lab_app-icon_180.png">',
+                    '<link rel="icon" href="/icons/voiney-lab_favicon_32.png" type="image/png" sizes="32x32">', '<meta name="apple-mobile-web-app-title" content="Voiney Lab">',
+                    '<meta name="application-name" content="Voiney Lab">', "<title>Voiney Lab"):
             self.assertIn(tag, head)
         self.assertNotIn("serviceWorker", html)
         self.assertEqual([path.name for path in STATIC.rglob("*") if path.name in {"sw.js", "service-worker.js"}], [])
@@ -67,8 +68,8 @@ class ServedTests(unittest.TestCase):
         manifest = client.get("/manifest.webmanifest")
         self.assertEqual(manifest.status_code, 200)
         self.assertEqual(manifest.headers["content-type"].split(";")[0], "application/manifest+json")
-        self.assertEqual(manifest.json()["name"], "VoineyLab")
-        for path, kind in (("/icons/icon-192.png", "image/png"), ("/icons/icon-512.png", "image/png"), ("/icons/icon-maskable-512.png", "image/png"), ("/icons/apple-touch-icon.png", "image/png"), ("/icons/icon.svg", "image/svg+xml")):
+        self.assertEqual(manifest.json()["name"], "Voiney Lab")
+        for path, kind in (("/icons/voiney-lab_app-icon_180.png", "image/png"), ("/icons/voiney-lab_app-icon_512.png", "image/png"), ("/icons/voiney-lab_favicon_32.png", "image/png"), ("/icons/voiney-lab_logo_ink.svg", "image/svg+xml")):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, path)
             self.assertEqual(response.headers["content-type"].split(";")[0], kind, path)
