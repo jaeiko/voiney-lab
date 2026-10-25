@@ -302,6 +302,7 @@ from voiney_lab.identity import (
     Principal,
 )
 from voiney_lab.protocol_translation import (
+    STYLE_GUIDE as PROTOCOL_TRANSLATION_STYLE,
     generate_revision_translations,
     glossary_entries,
     is_korean,
@@ -7763,13 +7764,11 @@ class LockedSender:
 
 READER_TRANSLATION_PROMPT=(
     "You translate one laboratory protocol step for a researcher who is new to the lab "
-    "and reads Korean. Write plain, concrete Korean that says exactly what the step "
-    "says, so it can be followed at the bench. Keep every number, unit, time, "
-    "temperature, concentration and ratio exactly as written, and keep reagent, "
-    "material and equipment names in their original spelling. Begin with the step "
-    "label followed by '단계: '. Do not add any step, reason, warning, quantity, "
-    "condition or advice the text does not state, and do not leave out any "
-    "instruction. Return only the JSON object."
+    "and reads Korean, so it can be followed at the bench. Say exactly what the step "
+    "says. "+PROTOCOL_TRANSLATION_STYLE+" Begin with the step label followed by "
+    "'단계: '. Do not add any step, reason, warning, quantity, condition or advice the "
+    "text does not state, and do not leave out any instruction. Return only the JSON "
+    "object."
 )
 # No label on the reading itself: the page says once, at the head of the
 # protocol card, that Korean it shows is an automatic translation, and the
@@ -8632,10 +8631,9 @@ SPOT_READINGS_MAX_REVISIONS=32
 SPOT_TRANSLATIONS_PER_TURN=3
 SPOT_TRANSLATION_PHRASE_PROMPT=(
     "You translate one sentence or phrase of a laboratory protocol into Korean for a "
-    "researcher at the bench. Say exactly what it says. Keep every number, unit, time, "
-    "temperature, concentration and ratio exactly as written, keep reagent, material "
-    "and equipment names in their original spelling, keep every negation and add none. "
-    "Do not begin with a step label. Return only the JSON object."
+    "researcher at the bench. Say exactly what it says. "+PROTOCOL_TRANSLATION_STYLE+
+    " This is a phrase, not a step: do not begin with a step label or '예상 결과: '. "
+    "Return only the JSON object."
 )
 
 

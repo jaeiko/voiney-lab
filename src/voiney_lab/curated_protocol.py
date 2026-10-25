@@ -8951,13 +8951,18 @@ def _protocol_query_presentation(
         step_id, _, fact_id = PURPOSE_FACT_KEY.partition("/")
         korean = fixture.localized_fact(step_id, fact_id)
         if language=="ko" and korean:
-            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
+            # Lane SAY, decision 4: said in 해요체, its first sentence read.
+            first = re.split(r"(?<=[.!?])\s+", " ".join(korean.split()), maxsplit=1)[0]
+            speech=(
+                f"원문에 적힌 실험 목적이에요. {first}" if len(first) <= 120
+                else "원문에 적힌 실험 목적을 화면에 띄웠어요."
+            )
             display=(
                 f"실험 목적\n{korean}\n\n원문 · English · PDF p.{page}\n"
                 f"{knowledge.purpose.text}"
             )
         elif language=="ko":
-            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
+            speech="원문에 적힌 실험 목적을 화면에 띄웠어요."
             display=(
                 f"실험 목적\n원문에 적힌 실험 목적입니다.\n\n원문 · English · PDF p.{page}\n"
                 f"{knowledge.purpose.text}"
@@ -15999,7 +16004,7 @@ class CuratedProtocolSession:
 
         if intent.protocol_scope == "purpose":
             answer = (
-                f"활성 프로토콜 원문에 표시된 목적 또는 제목은 다음과 같습니다: {knowledge.purpose.text}"
+                f"이 프로토콜 원문에 적힌 목적이에요: {knowledge.purpose.text}"
                 if language == "ko" else
                 f"The active protocol source states this purpose or title: {knowledge.purpose.text}"
             )
@@ -16009,7 +16014,7 @@ class CuratedProtocolSession:
             )
         elif intent.question_kind == "protocol_benefit":
             answer = (
-                f"활성 원문에서 확인되는 범위는 ‘{knowledge.purpose.text}’입니다. 별도의 과학적 이점은 원문 근거 없이 추정하지 않습니다."
+                f"원문에서 확인되는 건 ‘{knowledge.purpose.text}’까지예요. 원문에 없는 이점은 추측해서 말하지 않아요."
                 if language == "ko" else
                 f"The active source supports only ‘{knowledge.purpose.text}’. I will not infer a separate scientific benefit without source evidence."
             )
@@ -16406,10 +16411,11 @@ class CuratedProtocolSession:
         if language == "ko":
             # The step's purpose is the section the source puts it in, named
             # as the source names it -- never a sentence written for one PDF.
+            # Lane SAY, decision 4: 해요체, short.
             if section_title:
-                purpose = f"원문의 ‘{concise(section_title, 90)}’ 구간을 수행하는 것"
+                purpose = f"원문의 ‘{concise(section_title, 90)}’ 부분"
             else:
-                purpose = "현재 PDF에 정의된 순서에 따라 후속 단계를 준비하는 것"
+                purpose = "원문 순서대로 다음 단계를 준비하는 단계"
 
             if warning_only:
                 speech = (
@@ -16419,15 +16425,17 @@ class CuratedProtocolSession:
                     else "현재 PDF에는 이 단계의 별도 주의사항이 명시되어 있지 않습니다. 추가 안전 판단은 담당자에게 확인해 주세요."
                 )
             else:
-                speech = f"이 단계의 수행 목적은 {purpose}입니다."
+                speech = f"이 단계는 {purpose}이에요." if purpose.endswith("분") else f"이 단계는 {purpose}예요."
                 if expected_facts:
                     localized_expected = (
                         self._localized_fact(step.step_id, expected_facts[0].fact_id)
                         or expected_facts[0].text
                     )
-                    speech += f" 원문이 제시한 확인 결과는 {concise(localized_expected)}"
+                    localized_expected = re.sub(
+                        r"^\s*예상\s*결과\s*[:：]\s*", "", localized_expected)
+                    speech += f" 원문에 적힌 확인 결과는 이래요. {concise(localized_expected)}"
                 else:
-                    speech += " 원문에는 별도의 과학적 작용 기전은 명시되어 있지 않습니다."
+                    speech += " 왜 하는지는 원문에 따로 적혀 있지 않아요."
                 if warning_facts:
                     speech += (
                         f" 주의할 점은 {spoken_warning(0)}"
