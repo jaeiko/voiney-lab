@@ -203,8 +203,9 @@ svg { flex: none; }
 .page-image { margin: 0; }
 .page-image-frame { position: relative; border: var(--border) solid var(--line-strong); background: var(--paper); overflow: hidden; }
 .page-image-frame img { display: block; width: 100%; height: auto; }
-.page-band { position: absolute; display: block; border: var(--border-state) solid var(--warning); background: var(--warning-soft); opacity: 0.6; pointer-events: none; }
-.page-band[data-kind="picked"] { border-color: var(--pending); background: var(--pending-soft); opacity: 0.7; }
+/* A highlighter stroke: multiplied over the page so the words under it stay readable. */
+.page-band { position: absolute; display: block; border: var(--border) solid var(--warning); background: var(--warning-soft); mix-blend-mode: multiply; pointer-events: none; }
+.page-band[data-kind="picked"] { border-color: var(--pending); background: var(--pending-soft); }
 .page-image figcaption { margin-top: var(--space-1); }
 .review-lines ol { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow: auto; border: var(--border) solid var(--line); background: var(--paper); }
 .review-line { display: flex; gap: var(--space-2); width: 100%; min-height: var(--target); padding: var(--space-1) var(--space-2); border: 0; border-left: var(--border-state) solid transparent; background: var(--paper); color: var(--ink); text-align: left; cursor: pointer; font-size: var(--text-body); line-height: var(--line-body); }
