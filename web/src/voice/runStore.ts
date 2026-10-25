@@ -22,6 +22,8 @@ export interface RunSnapshot {
   micProblem: string | null;
   /** The saved experiment the server bound this run to. */
   experimentId: string | null;
+  /** The protocol the last start named (a refused start goes back to its start flow). */
+  startedProtocolId: string | null;
   /** The server refused the start: its reason code and its own words. */
   startRefusal: { reason: string; words: string } | null;
   model: RunModel;
@@ -36,6 +38,7 @@ const INITIAL: RunSnapshot = {
   micOn: false,
   micProblem: null,
   experimentId: null,
+  startedProtocolId: null,
   startRefusal: null,
   model: EMPTY_RUN,
 };

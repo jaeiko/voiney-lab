@@ -349,7 +349,7 @@ export async function startRun(request: StartRequest): Promise<void> {
     ...(!request.resume && request.changeSetId ? { run_change_set_id: request.changeSetId } : {}),
   };
   pendingSessionConfiguration = pending;
-  runStore.reset({ phase: "starting" });
+  runStore.reset({ phase: "starting", startedProtocolId: request.protocolId });
   renderState("CONNECTING");
   try {
     if (!socket || socket.readyState !== WebSocket.OPEN) await init(generation);

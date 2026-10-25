@@ -240,7 +240,7 @@ export function RunScreen() {
         <EmptyBox
           message={snapshot.startRefusal.words || copy.failed}
           action={
-            <a className="btn btn-primary" href={routes.start(protocol?.protocol_id ?? lastProtocolId(), { step })}>
+            <a className="btn btn-primary" href={routes.start(snapshot.startedProtocolId, { step })}>
               {copy.emptyAction}
             </a>
           }
@@ -357,8 +357,4 @@ export function RunScreen() {
 function recordsKey(model: ReturnType<typeof useRun>["model"]): string {
   const card = model.card;
   return `${model.protocol?.current_step_id ?? ""}:${card && card.kind === "record" ? card.turnId : ""}`;
-}
-
-function lastProtocolId(): string | null {
-  return null;
 }

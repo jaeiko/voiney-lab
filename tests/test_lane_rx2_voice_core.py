@@ -157,3 +157,112 @@ class SharedModuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- The new screen's side (web/src/voice/engine.ts) ---------------------------
+
+CONNECTION = ROOT / "src" / "voiney_lab" / "static" / "connection.js"
+# What connection.js reaches for on its page beyond voice-core.js (its forgetTurns, its restore and give-up).
+CONNECTION_HOST_NAMES = (
+    "turns", "provisionalTurns", "pendingFillers", "toolEvents", "visualEvents", "researchEvents", "brainEvents",
+    "greetingEvents", "webEvents", "drawingEvents", "turnProgress", "turnServerGenerations", "turnHoldEvidence",
+    "interruptedTurns", "runTurns", "runCardKey", "curatedProtocolState", "curatedStateRevision",
+    "currentExperimentSessionId", "currentExperimentSessionVersion", "currentExperimentSessionStatus",
+    "RESUMABLE_EXPERIMENT_STATUSES", "renderState", "renderRunView", "removeProvisionalTurns",
+    "invalidateCuratedProtocolState", "stopWorkflowTimer", "stopReportPolling", "workspaceFetch",
+)
+
+
+def _engine_defines(name: str) -> bool:
+    text = ENGINE.read_text(encoding="utf-8")
+    host = text.split("export function installVoiceHost", 1)[1].split("\nlet loading", 1)[0]
+    escaped = re.escape(name)
+    if name in {"turns", "provisionalTurns", "pendingFillers", "toolEvents", "visualEvents", "researchEvents", "brainEvents", "webEvents", "drawingEvents", "turnProgress", "turnServerGenerations", "turnHoldEvidence", "runTurns"}:
+        return f'"{name}"' in text.split("const TURN_MAPS", 1)[1].split("\n", 1)[0]
+    if name in {"greetingEvents", "interruptedTurns"}:
+        return f'"{name}"' in text.split("const TURN_SETS", 1)[1].split("\n", 1)[0]
+    return re.search(rf"(?:^|[\s,{{])(?:{escaped}\s*:|{escaped},|{escaped}\n)", host, re.M) is not None or (name == "$" and "$: (id: string)" in host)
+
+
+def _minified(text: str) -> str:
+    """A line of code without spaces, the host's ``g.`` and TypeScript's ``: any`` -- to compare the same conditions."""
+    return re.sub(r"(?<![\w$])g\.", "", re.sub(r"\s+", "", text)).replace(":any", "")
+
+
+class NewScreenHostTests(unittest.TestCase):
+    def test_the_new_screen_defines_every_name_the_shared_files_reach_for(self) -> None:
+        for name in (*_host_names(), *CONNECTION_HOST_NAMES):
+            self.assertTrue(_engine_defines(name), name)
+
+    def test_the_connection_names_are_the_ones_connection_js_uses(self) -> None:
+        text = _code(CONNECTION.read_text(encoding="utf-8"))
+        for name in CONNECTION_HOST_NAMES:
+            self.assertRegex(text, rf"(?<![\w$.]){re.escape(name)}\b", name)
+
+    def test_no_voice_calibration_during_a_run_on_the_new_screen(self) -> None:
+        text = ENGINE.read_text(encoding="utf-8")
+        self.assertIn("voiceCalibrationAtStart: () => false,", text)
+        self.assertIn("requestVoiceCalibration: () => false,", text)
+
+    def test_the_audio_and_fence_lines_read_as_the_old_screens(self) -> None:
+        page = _minified(inline_script(INDEX.read_text(encoding="utf-8")))
+        engine = _minified(ENGINE.read_text(encoding="utf-8"))
+        old_lines = [
+            'if(m.type==="filler.audio.start"){constaccepted=acceptedSessionConfiguration,valid=accepted&&accepted.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&currentCascadeMessage(m)&&!cascadeTurnInterrupted(m)&&Number.isInteger(m.frame_count)&&m.frame_count>0;if(valid&&!playing&&!activeSource){receivingFiller=m;fillerFrames=[];}}',
+            'if(m.type==="filler.audio.end"&&receivingFiller&&m.turn_id===receivingFiller.turn_id&&m.generation===receivingFiller.generation){constmeta=receivingFiller,data=join(fillerFrames);receivingFiller=null;fillerFrames=[];awaitplayFiller(data,meta,generation);}',
+            'if(m.type==="filler.audio.clear")clearFillerPlayback(m.turn_id,m.generation);',
+            'if(m.type==="state.changed"&&sessionActive&&!cascadeTurnInterrupted(m)&&(!Number.isInteger(m.turn_id)||currentCascadeMessage(m))&&m.state!=="AGENT_SPEAKING")renderState(m.state==="PROCESSING"?"THINKING":"LISTENING");',
+            'if(m.type==="turn.processing"&&sessionActive&&!cascadeTurnInterrupted(m)&&(activeTurn===null||currentCascadeMessage(m)))renderState("THINKING");',
+            'if(m.type==="audio.segment.end"&&!cascadeTurnInterrupted(m)&&receiving&&currentCascadeMessage(m)&&m.segment_index===receiving.segment_index&&(!Number.isInteger(m.generation)||m.generation===receiving.generation)){queued.set(m.segment_index,join(receivedFrames));receiving=null;receivedFrames=[];pump(generation);}',
+            'if(m.type==="audio.complete"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){audioComplete=true;pump(generation);}',
+            'valid=accepted&&accepted.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&Number.isInteger(m.generation)&&Number.isInteger(m.superseding_turn_id)&&Number.isInteger(m.superseding_generation)&&m.reason==="confirmed_speech"&&m.state==="cancelled";',
+            'valid=pending&&Number.isInteger(m.configuration_id)&&m.configuration_id===pending.configuration_id&&m.mode===pending.mode&&m.language===pending.language&&serverInputLanguage===pendingInputLanguage&&m.protocol_id===pending.protocol_id&&revisionValid;',
+        ]
+        for line in old_lines:
+            line = _minified(line)
+            self.assertTrue(line in page, f"index.html no longer has: {line[:80]}")
+            self.assertTrue(line in engine, f"engine.ts differs from index.html in: {line[:80]}")
+
+
+WEB_STYLES = ROOT / "web" / "src" / "styles"
+PALETTE = {
+    "#1c1c1a", "#55554f", "#ffffff", "#efefec", "#d4d4cf", "#76766f",
+    "#bf2229", "#fbeaea", "#f2a900", "#7a4f00", "#fff4d6", "#5b3cc4", "#efebfb",
+}
+
+
+class NewStylesFollowTheDesignSystemTests(unittest.TestCase):
+    """The design system (docs/UI_SPEC.md section 6) on lane RX2's stylesheets, as lane RX0's test reads its own."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.screens = (WEB_STYLES / "screens.css").read_text(encoding="utf-8")
+        cls.run_css = (WEB_STYLES / "run.css").read_text(encoding="utf-8")
+        cls.css = cls.screens + "\n" + cls.run_css
+        cls.tokens = (WEB_STYLES / "tokens.css").read_text(encoding="utf-8")
+
+    def test_colours_from_the_palette_only(self) -> None:
+        colours = {match.lower() for match in re.findall(r"#[0-9a-fA-F]{3,8}\b", self.css)}
+        self.assertEqual(colours - PALETTE, set())
+
+    def test_no_shadow_but_the_one_taken_off_connection_js_band(self) -> None:
+        shadows = re.findall(r"(box-shadow|text-shadow|drop-shadow)\s*:?\s*([^;]*)", self.css)
+        self.assertEqual([shadow for shadow in shadows if shadow != ("box-shadow", "none")], [])
+
+    def test_corners_and_weights(self) -> None:
+        for value in re.findall(r"border-radius:\s*([^;]+);", self.css):
+            self.assertRegex(value.strip(), r"^var\(--radius(-small)?\)$|^0$")
+        self.assertEqual({int(w) for w in re.findall(r"font-weight:\s*(\d+)", self.css)} - {400, 600, 700}, set())
+
+    def test_danger_is_for_stop_alone(self) -> None:
+        self.assertNotIn("--danger", self.screens)
+        for rule in re.findall(r"([^{}]+)\{[^}]*--danger[^}]*\}", self.run_css):
+            self.assertRegex(rule.strip(), r"run-stop|connection-band|run-timer-offline", rule)
+
+    def test_the_run_scale_is_decision_3(self) -> None:
+        phone = self.tokens.split("@media (pointer: coarse)", 1)[0]
+        tablet = self.tokens.split("@media (pointer: coarse) and (min-width: 721px) and (min-height: 600px)", 1)[1]
+        for name, value in (("--run-step", "2.5rem"), ("--run-step-line", "3rem"), ("--run-timer", "6rem"), ("--run-next", "1.25rem"), ("--run-caption", "1.375rem"), ("--run-status", "1rem"), ("--run-target", "64px")):
+            self.assertRegex(phone, rf"{name}:\s*{re.escape(value)};", name)
+        for name, value in (("--run-step", "3.25rem"), ("--run-step-min", "2.5rem"), ("--run-timer", "8rem"), ("--run-target", "80px")):
+            self.assertRegex(tablet, rf"{name}:\s*{re.escape(value)};", name)

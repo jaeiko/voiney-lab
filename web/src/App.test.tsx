@@ -36,6 +36,14 @@ describe("routes", () => {
 });
 
 describe("App", () => {
+  it("lane RX2: the first guide comes once after a login, not in the development mode", async () => {
+    localStorage.clear();
+    fakeFetch({ "/api/auth/session": { json: SESSION_ACCOUNTS }, "/api/protocols": { json: { protocols: [] } }, "/api/workspace/experiments": { json: { experiments: [] } }, "/api/workspace/session": { json: { principal_id: "a1" } } });
+    renderWithClient(<App />);
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("#/welcome"));
+    localStorage.setItem("voiney-lab.app-welcome:a1", "done");
+  });
+
   it("shows the login when accounts are on and nobody is signed in", async () => {
     fakeFetch({ "/api/auth/session": { json: SESSION_OUT } });
     renderWithClient(<App />);
