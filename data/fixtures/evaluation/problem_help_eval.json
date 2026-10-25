@@ -1,0 +1,1403 @@
+{
+ "schema_version": 1,
+ "description": "Lane HELP (2026-10-24): problems said or asked at the bench, and what the help must and must not say. Written from each protocol's own text by reading it (not copied from any code's output). Shared with lane KNOW, which adds the public tier and its number rules.",
+ "fields": {
+  "id": "row id",
+  "protocol": "in_gel (the development fixture, condition A) or a starter-pack id (scripts/pilot_starter_pack.csv)",
+  "step": "the step label the problem is said at (no question open); '#<index>' for a protocol whose labels repeat",
+  "utterance": "the words, as the STT would give them",
+  "expect_help": "true when the help must follow; false for words other rules own (a step not done, a command, a hypothetical, a picture, the step's own endpoint said)",
+  "expect_record": "true when the words are a problem said as having happened (recorded as an anomaly first)",
+  "expected_protocol": "substrings of source lines (whitespace collapsed); one of them must be shown. Empty: no line of this protocol is about it",
+  "history": "earlier runs to seed: owner 'same' (this account) or 'other' (another account of the same lab), the step, the event and its words, then what followed at that step",
+  "expected_history": "substrings of a same-account past record one of which must be shown",
+  "forbidden": "substrings that must never be shown or said (another account's words, a permission, an instruction to change a condition)",
+  "set": "development: the rows the reader and the search vocabulary were developed on; heldout_1: written after that and measured once (2026-10-24), then the reader was widened from its misses; heldout_2: written before that widening and measured once after it"
+ },
+ "forbidden_everywhere": [
+  "계속해도 돼",
+  "괜찮아요",
+  "안전해요",
+  "늘리세요",
+  "바꾸세요",
+  "줄이세요",
+  "더 넣으세요",
+  "넘어가도 돼"
+ ],
+ "cases": [
+  {
+   "id": "H01",
+   "protocol": "in_gel",
+   "step": "7",
+   "utterance": "젤이 아직 파래",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "Repeat steps 2-7 until the gel band is fully destained",
+    "fully destained before progressing"
+   ],
+   "history": [
+    {
+     "owner": "same",
+     "step": "7",
+     "event_type": "anomaly",
+     "words": "세 번째 세척 뒤에도 아직 파래",
+     "after": [
+      {
+       "event_type": "observation",
+       "words": "Solution A로 한 번 더 세척함"
+      }
+     ]
+    }
+   ],
+   "expected_history": [
+    "세 번째 세척 뒤에도"
+   ],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H02",
+   "protocol": "in_gel",
+   "step": "7",
+   "utterance": "젤이 아직도 파래요",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "Repeat steps 2-7 until the gel band is fully destained",
+    "fully destained before progressing"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H03",
+   "protocol": "in_gel",
+   "step": "7",
+   "utterance": "왜 아직 탈색이 안 되지?",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "Repeat steps 2-7 until the gel band is fully destained",
+    "fully destained before progressing",
+    "extremely stained"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H04",
+   "protocol": "in_gel",
+   "step": "7",
+   "utterance": "why is it still blue",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a protocol session's turn language is Korean (architecture §3): a whole-English sentence is asked again by the language admission, so no help follows; the reader still reads it on the rules path",
+   "set": "development"
+  },
+  {
+   "id": "H05",
+   "protocol": "in_gel",
+   "step": "3",
+   "utterance": "the gel is still blue",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a protocol session's turn language is Korean (architecture §3): a whole-English sentence is asked again by the language admission, so no help follows; the reader still reads it on the rules path",
+   "set": "development"
+  },
+  {
+   "id": "H06",
+   "protocol": "in_gel",
+   "step": "9",
+   "utterance": "왜 아직 투명하지?",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "If the band is still transparent then repeat steps 8-9",
+    "still transparent then repeat steps 8-9"
+   ],
+   "history": [
+    {
+     "owner": "same",
+     "step": "9",
+     "event_type": "anomaly",
+     "words": "젤이 투명해서 8~9단계 한 번 더 함",
+     "after": []
+    }
+   ],
+   "expected_history": [
+    "투명해서"
+   ],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H07",
+   "protocol": "in_gel",
+   "step": "1",
+   "utterance": "먼지가 들어갔어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Dust will be your worse enemy",
+    "clean surface and use clean tools"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H08",
+   "protocol": "in_gel",
+   "step": "1",
+   "utterance": "젤 자를 때 먼지가 묻은 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "Dust will be your worse enemy",
+    "clean surface and use clean tools"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H09",
+   "protocol": "in_gel",
+   "step": "11",
+   "utterance": "젤이 다 안 덮여",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "around 50uL of volume to fully cover the gel band",
+    "enough volume of the DTT solution to fully cover"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H10",
+   "protocol": "in_gel",
+   "step": "11",
+   "utterance": "DTT 용액이 모자란 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "around 50uL of volume to fully cover the gel band",
+    "enough volume of the DTT solution to fully cover"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H11",
+   "protocol": "in_gel",
+   "step": "12",
+   "utterance": "온도가 안 올라가",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Incubate for 60min at 60C"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H12",
+   "protocol": "in_gel",
+   "step": "16",
+   "utterance": "빛에 노출된 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "IN THE DARK"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H13",
+   "protocol": "in_gel",
+   "step": "22",
+   "utterance": "젤이 안 부풀어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "fully rehydrates in the trypsin solution"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H14",
+   "protocol": "in_gel",
+   "step": "5",
+   "utterance": "용액이 탁해졌어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H15",
+   "protocol": "in_gel",
+   "step": "8",
+   "utterance": "아세토니트릴 넣었더니 거품이 생겼어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H16",
+   "protocol": "in_gel",
+   "step": "25",
+   "utterance": "speedvac이 멈췄어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Dry the extracted peptides to completion using a speedvac"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H17",
+   "protocol": "in_gel",
+   "step": "3",
+   "utterance": "시료를 흘렸어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H18",
+   "protocol": "in_gel",
+   "step": "3",
+   "utterance": "침전이 생겼어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [
+    {
+     "owner": "other",
+     "step": "3",
+     "event_type": "anomaly",
+     "words": "다른 계정 기록 침전이 생겼음",
+     "after": []
+    }
+   ],
+   "expected_history": [],
+   "forbidden": [
+    "다른 계정 기록"
+   ],
+   "set": "development"
+  },
+  {
+   "id": "H19",
+   "protocol": "in_gel",
+   "step": "23",
+   "utterance": "왜 안 되지",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H20",
+   "protocol": "in_gel",
+   "step": "20",
+   "utterance": "뭐가 문제야",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "still transparent then repeat steps 17-18",
+    "whitish appearance"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H21",
+   "protocol": "pio_54201_sds_page",
+   "step": "9",
+   "utterance": "샘플이 끝까지 안 내려가",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "until the samples have reached the end",
+    "Run precast gels at 200 V"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "the step runs until the samples reach the end: not yet there is that repeat's own course, helped and not recorded",
+   "set": "development"
+  },
+  {
+   "id": "H22",
+   "protocol": "pio_54201_sds_page",
+   "step": "9",
+   "utterance": "why is the dye front not moving",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a protocol session's turn language is Korean (architecture §3): a whole-English sentence is asked again by the language admission, so no help follows; the reader still reads it on the rules path",
+   "set": "development"
+  },
+  {
+   "id": "H23",
+   "protocol": "pio_54201_sds_page",
+   "step": "5",
+   "utterance": "단백질이 안 녹아",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "resolubilization of SDS",
+    "Heating previously frozen protein"
+   ],
+   "history": [
+    {
+     "owner": "other",
+     "step": "5",
+     "event_type": "anomaly",
+     "words": "남의 실험 단백질 안 녹음",
+     "after": []
+    }
+   ],
+   "expected_history": [],
+   "forbidden": [
+    "남의 실험"
+   ],
+   "set": "development"
+  },
+  {
+   "id": "H24",
+   "protocol": "pio_54201_sds_page",
+   "step": "3",
+   "utterance": "버퍼가 모자란 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "The volume varies depending on whether running 2 or 4 gels",
+    "up to the recommended mark"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H25",
+   "protocol": "pio_54201_sds_page",
+   "step": "11",
+   "utterance": "stacking gel이 잘 안 떨어져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Remove stacking gel with a blade"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H26",
+   "protocol": "pio_54201_sds_page",
+   "step": "4",
+   "utterance": "웰에 아크릴아마이드가 남아 있는 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "remove residual acrylamide"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H27",
+   "protocol": "pio_4719_western_detection",
+   "step": "1",
+   "utterance": "멤브레인이 말라 버렸어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "pre-wet briefly in 100%",
+    "allowed to dry"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H28",
+   "protocol": "pio_4719_western_detection",
+   "step": "4",
+   "utterance": "항체가 막을 다 안 덮어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "completely cover the membrane"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H29",
+   "protocol": "pio_4719_western_detection",
+   "step": "15",
+   "utterance": "signal is too weak",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a protocol session's turn language is Korean (architecture §3): a whole-English sentence is asked again by the language admission, so no help follows; the reader still reads it on the rules path",
+   "set": "development"
+  },
+  {
+   "id": "H30",
+   "protocol": "pio_4719_western_detection",
+   "step": "11",
+   "utterance": "배경이 너무 높게 나와",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H31",
+   "protocol": "pio_37443_passaging",
+   "step": "4",
+   "utterance": "세포가 안 떨어져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "check if the cells have detached",
+    "tap the side of the flask"
+   ],
+   "history": [
+    {
+     "owner": "same",
+     "step": "4",
+     "event_type": "anomaly",
+     "words": "세포가 잘 안 떨어져서 5분 더 둠",
+     "after": [
+      {
+       "event_type": "observation",
+       "words": "두드리니 떨어짐"
+      }
+     ]
+    },
+    {
+     "owner": "other",
+     "step": "4",
+     "event_type": "anomaly",
+     "words": "다른 사람 기록 세포 안 떨어짐",
+     "after": []
+    }
+   ],
+   "expected_history": [
+    "5분 더 둠"
+   ],
+   "forbidden": [
+    "다른 사람 기록"
+   ],
+   "set": "development"
+  },
+  {
+   "id": "H32",
+   "protocol": "pio_37443_passaging",
+   "step": "4",
+   "utterance": "왜 세포가 안 떨어지지?",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "check if the cells have detached",
+    "tap the side of the flask"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H33",
+   "protocol": "pio_37443_passaging",
+   "step": "11",
+   "utterance": "배지가 노랗게 변했어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "media looks yellow",
+    "complete media change"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H34",
+   "protocol": "pio_37443_passaging",
+   "step": "7",
+   "utterance": "펠릿이 안 보여",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "avoid disturbing the cell pellet"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H35",
+   "protocol": "pio_37443_passaging",
+   "step": "2",
+   "utterance": "세포가 떨어져 나갔어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "avoid dislodging any cells"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H36",
+   "protocol": "pio_27069_bca",
+   "step": "11",
+   "utterance": "검량선이 직선이 안 나와",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "R2 value as close to 1 as possible",
+    "create standard curve"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H37",
+   "protocol": "pio_27069_bca",
+   "step": "6",
+   "utterance": "색이 안 변해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "37° C incubator for 30 minutes to react"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H38",
+   "protocol": "pio_27069_bca",
+   "step": "10",
+   "utterance": "흡광도가 너무 낮게 나와",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "create standard curve",
+    "GloMax plate reader"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H39",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "4",
+   "utterance": "거품이 생겼어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "avoid foaming"
+   ],
+   "history": [
+    {
+     "owner": "same",
+     "step": "4",
+     "event_type": "observation",
+     "words": "거품 생겨서 잠깐 기다림",
+     "after": []
+    }
+   ],
+   "expected_history": [
+    "잠깐 기다림"
+   ],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H40",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "6",
+   "utterance": "it got foamy",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a protocol session's turn language is Korean (architecture §3): a whole-English sentence is asked again by the language admission, so no help follows; the reader still reads it on the rules path",
+   "set": "development"
+  },
+  {
+   "id": "H41",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "8",
+   "utterance": "기포가 안 빠져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "eliminate air bubbles"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H42",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "10",
+   "utterance": "증폭이 안 돼",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H43",
+   "protocol": "pio_67395_hek293t_transfection",
+   "step": "8",
+   "utterance": "세포가 덩어리져 있어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Pipet 10 times to dissociate the cells"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H44",
+   "protocol": "pio_67395_hek293t_transfection",
+   "step": "6",
+   "utterance": "trypsin 넣었는데 세포가 안 떨어져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Trypsin covers the entire dish",
+    "Incubate at 37 °C for 00:01:00"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H45",
+   "protocol": "pio_67395_hek293t_transfection",
+   "step": "20",
+   "utterance": "형광이 약해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "C01",
+   "protocol": "in_gel",
+   "step": "7",
+   "utterance": "탈색이 안 됐어",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "the step's own endpoint: the endpoint readers' and the router's (tests/test_front_plan.py)",
+   "set": "development"
+  },
+  {
+   "id": "C02",
+   "protocol": "in_gel",
+   "step": "4",
+   "utterance": "아니 아직 안 끝났어",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "C03",
+   "protocol": "in_gel",
+   "step": "3",
+   "utterance": "침전이 생기면 어떡해?",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a hypothetical",
+   "set": "development"
+  },
+  {
+   "id": "C04",
+   "protocol": "pio_37443_passaging",
+   "step": "4",
+   "utterance": "세포 사진 보여 줘",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "C05",
+   "protocol": "in_gel",
+   "step": "7",
+   "utterance": "탈색 아직 덜 됐는데 그냥 다음 단계 가자",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "a move command: the completion gates' (D7)",
+   "set": "development"
+  },
+  {
+   "id": "C06",
+   "protocol": "in_gel",
+   "step": "9",
+   "utterance": "아직 투명해",
+   "expect_help": false,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "the endpoint not reached, read by the endpoint readers (D9)",
+   "set": "development"
+  },
+  {
+   "id": "H46",
+   "protocol": "pio_4719_western_detection",
+   "step": "2",
+   "utterance": "blocking buffer가 부족한 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "sufficient blocking buffer to cover the membrane"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H47",
+   "protocol": "pio_37443_passaging",
+   "step": "4",
+   "utterance": "TrypLE 넣었는데 세포가 안 떨어져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "check if the cells have detached",
+    "tap the side of the flask"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H48",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "3",
+   "utterance": "master mix가 안 녹아",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Thaw the GoTaq"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "H49",
+   "protocol": "pio_54201_sds_page",
+   "step": "9",
+   "utterance": "dye front가 안 움직여",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "until the samples have reached the end",
+    "Run precast gels at 200 V"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "note": "not yet at the end of the run: that repeat's own course, helped and not recorded",
+   "set": "development"
+  },
+  {
+   "id": "H50",
+   "protocol": "in_gel",
+   "step": "20",
+   "utterance": "젤이 왜 아직 투명하지",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "still transparent then repeat steps 17-18"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": [],
+   "set": "development"
+  },
+  {
+   "id": "X01",
+   "set": "heldout_1",
+   "protocol": "fda_eam_2_3_solution_prep",
+   "step": "3",
+   "utterance": "질산 넣었더니 거품이 막 올라와",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "strong exothermic reactions",
+    "cap and seal"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X02",
+   "set": "heldout_1",
+   "protocol": "fda_eam_2_3_solution_prep",
+   "step": "9",
+   "utterance": "분해가 덜 된 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "If digestion is complete, then continue"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X03",
+   "set": "heldout_1",
+   "protocol": "fda_eam_2_3_solution_prep",
+   "step": "11",
+   "utterance": "뚜껑이 헐거워",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "loose cap"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X04",
+   "set": "heldout_1",
+   "protocol": "fda_eam_2_3_solution_prep",
+   "step": "8",
+   "utterance": "아직 너무 뜨거워",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Cool to ≤50° C then slowly vent"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X05",
+   "set": "heldout_1",
+   "protocol": "fda_eam_2_3_solution_prep",
+   "step": "6",
+   "utterance": "시료가 벽에 붙어 있어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "wet/disperse sample material",
+    "wash down any material on vessel wall"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X06",
+   "set": "heldout_1",
+   "protocol": "zenodo_13275242_soil_nutrient",
+   "step": "#2",
+   "utterance": "흔들었는데 흙이 안 풀려",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Shake the sample for at least 1 hour"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X07",
+   "set": "heldout_1",
+   "protocol": "zenodo_13275242_soil_nutrient",
+   "step": "#3",
+   "utterance": "여과가 너무 느려",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Filter the samples using filter papers"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X08",
+   "set": "heldout_1",
+   "protocol": "zenodo_13275242_soil_nutrient",
+   "step": "#9",
+   "utterance": "pH가 안 맞아",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Adjust pH if necessary, to 2.5",
+    "check pH"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X09",
+   "set": "heldout_1",
+   "protocol": "zenodo_13275242_soil_nutrient",
+   "step": "#14",
+   "utterance": "여과액이 탁해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X10",
+   "set": "heldout_1",
+   "protocol": "pio_37443_passaging",
+   "step": "10",
+   "utterance": "세포가 한쪽에 몰려 있어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "even distribution of cells"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X11",
+   "set": "heldout_1",
+   "protocol": "pio_27069_bca",
+   "step": "9",
+   "utterance": "웰에 기포가 생겼어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X12",
+   "set": "heldout_1",
+   "protocol": "pio_4719_western_detection",
+   "step": "5",
+   "utterance": "세척 버퍼에 거품이 너무 많아",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X13",
+   "set": "heldout_1",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "7",
+   "utterance": "반응액 양이 안 맞는 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "40μl of reaction mix for a 50μl reaction"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X14",
+   "set": "heldout_1",
+   "protocol": "in_gel",
+   "step": "21",
+   "utterance": "트립신 양이 부족해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "enough to fully cover the dehydrated gel piece"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X15",
+   "set": "heldout_1",
+   "protocol": "in_gel",
+   "step": "14",
+   "utterance": "액체가 다 안 빠져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Aspirate the liquid around the gel plug"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "X16",
+   "set": "heldout_1",
+   "protocol": "pio_54201_sds_page",
+   "step": "7",
+   "utterance": "ladder가 안 보여",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Pre-stained Protein Ladder"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y01",
+   "set": "heldout_2",
+   "protocol": "in_gel",
+   "step": "3",
+   "utterance": "밴드 색이 너무 진해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "extremely stained"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y02",
+   "set": "heldout_2",
+   "protocol": "in_gel",
+   "step": "13",
+   "utterance": "튜브 바닥에 액체가 안 모여",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "spin down to return liquid to bottom of tube"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y03",
+   "set": "heldout_2",
+   "protocol": "in_gel",
+   "step": "18",
+   "utterance": "상층액이 잘 안 빠져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Remove and discard the supernatant"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y04",
+   "set": "heldout_2",
+   "protocol": "in_gel",
+   "step": "24",
+   "utterance": "펩타이드가 거의 안 나온 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y05",
+   "set": "heldout_2",
+   "protocol": "pio_54201_sds_page",
+   "step": "2",
+   "utterance": "comb이 잘 안 빠져",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Carefully remove the comb"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y06",
+   "set": "heldout_2",
+   "protocol": "pio_54201_sds_page",
+   "step": "1",
+   "utterance": "버퍼를 너무 많이 만들었어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "is required per gel"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y07",
+   "set": "heldout_2",
+   "protocol": "pio_4719_western_detection",
+   "step": "9",
+   "utterance": "항체 바이알을 빛에 오래 뒀어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Avoid prolonged exposure of the antibody vial to light"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y08",
+   "set": "heldout_2",
+   "protocol": "pio_37443_passaging",
+   "step": "3",
+   "utterance": "TrypLE가 바닥을 다 못 덮어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "cover the bottom of the flask"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y09",
+   "set": "heldout_2",
+   "protocol": "pio_37443_passaging",
+   "step": "6",
+   "utterance": "원심분리 했는데 펠릿이 흐트러졌어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "avoid disturbing the cell pellet"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y10",
+   "set": "heldout_2",
+   "protocol": "pio_27069_bca",
+   "step": "8",
+   "utterance": "샘플이 아직 따뜻해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Cool samples to room temp"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y11",
+   "set": "heldout_2",
+   "protocol": "pio_16372_qpcr_setup",
+   "step": "1",
+   "utterance": "표준 희석이 잘못된 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "expected_protocol": [
+    "standard DNA dilution series"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y12",
+   "set": "heldout_2",
+   "protocol": "pio_67395_hek293t_transfection",
+   "step": "2",
+   "utterance": "세포가 너무 빽빽해",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "80% confluency"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y13",
+   "set": "heldout_2",
+   "protocol": "fda_eam_2_3_solution_prep",
+   "step": "4",
+   "utterance": "반응이 아직 안 가라앉았어",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "After any initial reactions subside"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y14",
+   "set": "heldout_2",
+   "protocol": "zenodo_13275242_soil_nutrient",
+   "step": "#13",
+   "utterance": "shaker가 안 돌아가",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Place flasks on the shaker table for 5 minutes"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  },
+  {
+   "id": "Y15",
+   "set": "heldout_2",
+   "protocol": "in_gel",
+   "step": "19",
+   "utterance": "아세토니트릴이 모자라",
+   "expect_help": true,
+   "expect_record": true,
+   "expected_protocol": [
+    "Wash the gel piece with 500 µL acetonitrile"
+   ],
+   "history": [],
+   "expected_history": [],
+   "forbidden": []
+  }
+ ]
+}

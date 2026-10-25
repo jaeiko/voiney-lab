@@ -16,6 +16,7 @@
 | 2026-10-08 | **승인 단계가 없다.** 분석이 통과(원문 근거 검사 포함)하고 실험자가 시작을 누르면 실행된다. 검토자·관리자 승인, 회수, 연구실 변형은 없다 | MVP 줄이기. 사람 확인은 시작 하나이고 장부에 남는다 | DI (PR #52) | `experiment_protocol.py` `EXECUTION_BLOCKING_REASON_CODES`, `execution_blocking_reasons`; `protocol_catalog.py` `available_for_execution` | — |
 | 2026-10-08 | 옛 `procedures.py`·`procedure_store.py` 작업 흐름을 지운다. 두 번째 작업 흐름은 다시 만들지 않는다 | 상태 기계는 하나 | DI | 두 파일 없음 | — |
 | 2026-10-14 | 라우터 먼저 스위치 `VOINEY_LAB_ROUTER_FIRST` 는 **꺼진 채** 둔다. 사람이 음성 시험을 한 뒤 사람이 켠다 | 평가 세트에서 알아들음 77.1 % → 81.8 %, 잘못 바뀐 상태 0, 하지만 지연은 사람 시험이 필요 | RA (PR #74) | `setting_names.py` 기본 `false`; `llm_router.py` `ROUTER_FIRST_ENV`(라우터가 켜져 있어야 함) | ① 켤지 ② 조각 잇기를 스위치 밖으로 뺄지 |
+| 2026-10-24 | 실험 중 문제("젤이 아직 파래", "침전이 생겼어", "왜 안 되지?")에는 상태를 바꾸지 않고 출처가 붙은 도움을 준다. 한 줄 안의 읽기 전용 요청 한 종류(앞단 규칙 `problem_help`)로 넣고 따로 분류기를 두지 않는다. 일어난 일로 말한 문제는 지금처럼 이상 사항으로 기록·되읽기한 뒤 붙인다. 순서는 ① 원문(쪽·원문 그대로) ② 같은 계정·프로토콜의 지난 기록 ③ 공개 자료(없으면 보조 설명이 켜졌을 때만 "AI 일반 지식", 가능한 원인만) ④ "조건을 바꾸려면 담당자와 확인하세요…". 찾기는 서버 안 SQLite FTS5 | 현장 의견(10/23)과 설문(문서에 답이 없을 때 물을 사람이 없음, AI 오류·보안 걱정) | HELP | `knowledge.py`; `curated_protocol.py` `problem_help`·`PROBLEM_HELP`; `intent_arbitration.py` `problem_reading`; `server.py` `_with_problem_help`; `answer_checks.py` `problem_help_violations`, `possible_cause_violations` | 줄이 정하고 사람이 승인함(10/24): 되풀이 단계의 "아직"은 기록하지 않음, 끝점 낱말로 한 말·명령은 기존 규칙에 둠, 끝점과 함께 말한 문제에는 도움 없음, 일반 이상 사항은 되읽기 끝 질문 뒤에 도움을 붙임. 남은 한계: 문제를 알아보는 말 모양의 재현율(새 말 12/15) |
 | 2026-10-17 | 라우터 모델이 요청 한도(HTTP 429)에 걸리면 규칙 길로 넘기지 않고 그 말을 멈추고 "지금 답하지 못했어요. 다시 말씀해 주세요." 라고 한다 | 한도에 걸린 순간 규칙이 대신 상태를 바꾸면 사람이 모르는 결과가 생긴다 | FX3 | `llm_router.py` `ROUTER_MODEL_UNAVAILABLE_KINDS`; `server.py` `ROUTER_UNAVAILABLE_WORDS` | — |
 
 ## 2. 분석 · 모델 · 공급자
@@ -132,6 +133,24 @@
 | 2026-10-23 | 쓰기 HTTP·브라우저 소켓의 Origin을 scheme·host·유효 포트로 검사하고 계정 관리자 지표를 연구실로 한정한다 | 쿠키 쓰기·타 연구실 숫자 노출 차단(QA2 #119) | `.agent/security_rules.md` |
 | 2026-10-23 | PDF 글자 추출 중 그림 바이트를 만들지 않고 기하만 읽는다. 기본 30초 제한은 유지하고 실행기가 실제 설정을 보여 준다 | 불필요 추출 비용 축소, 사람 설정 우선(QA2 #119) | `pdf_text_engine.py`, 실행기 |
 | 2026-10-23 | 홈은 자기 실험만 이어하고, 남의 실험은 읽기 전용으로 표시한다. 계정 지우기를 연결하고 지난 기록에 Word·Markdown·JSON·CSV 링크를 둔다 | 파일럿 전 필수 화면(UI4 #118). PDF·랩미팅·xlsx·PI는 서버만 | `static/index.html`, `docs/USER_GUIDE.md` |
+| 2026-10-23 | 분석이 뽑지 않은, 실행 지시처럼 보이는 원문 줄을 일반 규칙으로 찾는다. 검토 대기 분석에는 카드([단계가 아니에요]·[다시 분석할게요], 카드 12개 한도 판단 뒤)로, 통과한 분석에는 막지 않는 시작 전 알림으로 보인다. 숫자+단위만 있는 줄·번호 뒤가 문장이 아닌 줄은 기록만 한다 | 모델이 지시를 아예 뽑지 않으면 카드도 차단도 없던 빈틈. 기준 문서 없이 특정 문서에 맞춘 분기 없이(MISS #122) | `experiment_protocol_analysis.possibly_missed_places`, `protocol_catalog.py` |
+| 2026-10-23 | 프로토콜 안내를 문장마다 합성해 첫 문장부터 재생하고 나머지는 재생 중에 만든다. 같은 공급자·모델·목소리·언어·문장의 안내 소리를 서버 메모리에 둔다(512문장·16 MiB). 실험자 말 되읽기·기록·질문 답·응급 문장은 매번 합성한다. 말 끝 1초와 단계 읽기 문구는 그대로 | 긴 안내의 첫 소리가 전체 합성 뒤였다(가짜 지연 측정, VOX #121) | `server.speech_sentences`, `_say_answer`, `SENTENCE_AUDIO` |
+| 2026-10-23 | 태블릿(터치·폭 721px·높이 600px 이상)에서만 누를 것 44px, 가로 두 칸 실험 화면, 1.5 m 읽기·장갑 토큰을 쓴다. 시작 터치에서 화면 켜 두기와 소리를 열고, 마이크 거절은 기기별로 말한다. Playwright 에 두 태블릿 프로젝트를 더하고 서버는 바꾸지 않는다 | 태블릿 파일럿 준비(TAB #120). 실기기 확인은 `docs/PILOT_COMPARISON.md` 6절 점검표 | `static/index.html`, `playwright.config.ts`, `tests/e2e/tablet-tab.spec.ts` |
+| 2026-10-24 | "다시 들려줘"는 직전 턴의 소리 조각을 모두 순서대로 다시 낸다. 새 턴의 첫 소리에서 바뀌고, 다시 들려 달라는 턴의 대답은 남기지 않으며, 120초까지 남긴다 | 여러 문장 답의 마지막 문장만 다시 나왔다(FIXV) | `static/index.html` `keepReplayableAudio` |
+| 2026-10-24 | 단계 한국어의 "N단계: " 머리는 다음 단계·번호 단계 미리보기, 범위 요약, 장비 질문의 현재 단계 읽기에서 말에서만 뺀다. 화면 글과 원문 인용은 그대로 둔다 | 단계 이름을 두 번 말했다("2단계: 2단계: …", FIXV) | `curated_protocol.py` `_without_step_prefix` |
+| 2026-10-24 | 문장 소리 기억의 키에 말하는 연구실의 조직 id 를 넣어 연구실 사이에 소리를 나누지 않는다 | 응답 시간으로 다른 연구실이 같은 문장을 썼는지 짐작하는 길을 막는다(FIXV) | `server._speaking_organization`, `SENTENCE_AUDIO` |
+| 2026-10-24 | 가능한 누락 줄의 헛경보 꼴(설명 번호 문단·설명 글머리)은 파일럿 자료를 본 뒤 정한다. 단계 읽기의 짧은 판은 만들지 않는다 | 사람 결정. 지금 동작 그대로 | — |
+
+## 12. 프로토콜을 따로 쓰지 않고 쓰기 (줄 EASY)
+
+| 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
+|---|---|---|---|---|---|
+| 2026-10-24 | 올리기·다시 분석에서 분석할 쪽을 고르면 그 쪽만 분석하고, 원문 근거 검사·분석에 없는 원문 검사도 그 쪽만 본다. 고른 쪽은 분석 요청 장부에 남는다. 고르지 않으면 전체 | 논문의 Methods 로 실험하는 연구실이 프로토콜을 따로 쓰지 않게(10/23 답장) | EASY | `protocol_catalog.py` `request_analysis`·`analyze`, `experiment_protocol_analysis.py` `checked_page_range` | 쪽 범위 밖의 OCR 필요 쪽도 지금처럼 분석 전에 OCR 을 기다린다 |
+| 2026-10-24 | 시작 마법사의 안전 주의 뒤에 "오늘 원문과 다르게 할 값"을 둔다(처음에는 건너뛸 수 있었고, 같은 날 아래 후속 결정으로 반드시 지나는 단계가 됨). 실험 중에도 말로 바꾸고 수치 확인 방식대로 되읽는다. 같은 단위 종류만, 안전 주의·완료 기준은 안 되고, 사람이 말하거나 고른 값만 상태 기계가 적용한다. 장부에 덧붙이고 되돌리기는 새 사건이다 | 조건을 수시로 바꾸는 실험(설문 1순위 실험노트) | EASY | `start_check.py` `RunChanges`, `curated_protocol.py` `run_value_change`·`set_run_changes`, `server.py` `start-check/changes`, `experiment_reports.py` | (아래 두 줄로 정함) |
+| 2026-10-24 | 말로 바꿀 때 확인은 confirm_mode 그대로(되읽기는 바로 적용 후 되읽기 — 되물음이 실험 타이밍을 늦춘다는 인터뷰 의견). 새 값이 원문 값의 절반 미만이거나 2배를 넘으면 방식과 관계없이 적용 전에 한 번 묻는다. 다섯 종류 모두 같은 기준, 마법사에서 고른 값도 화면에서 한 번 더 확인 | 큰 값 실수(STT 오인식 포함)를 막되 평소 흐름은 늦추지 않기 | EASY | `start_check.run_change_is_large`, `RunChanges.choose(confirm_large=)`, `curated_protocol.py` `_plan_run_change` | 0 °C 이하 온도는 비율이 없어 언제나 묻는다 |
+| 2026-10-24 | 시작은 반드시 "오늘 원문과 다르게 할 값" 단계를 지나야 열린다("바꿀 값 없이 다음" 포함). "바로 시작" 카드를 포함해 건너뛰는 길과 12시간 안 지난 선택이 조용히 적용되는 길을 없앤다. 단계 위치는 안전 주의 뒤 그대로 | 오늘 조건을 매번 사람이 확인하게 | EASY | `session.start` `run_change_set_id`(`protocol.py`), `server.py` `_start_run_changes`, `static/index.html` `changesPassedFor` | 시작 확인 설정을 끄면 이 요구도 함께 꺼진다 |
+| 2026-10-24 | 같은 계정·같은 프로토콜의 지난 실험이 바꾼 값을 "지난번처럼"으로 다시 고른다. 본인 기록만, 지금 분석의 같은 단계·종류·원문 값일 때만 | 같은 조건 반복 실험 | EASY | `ExperimentReportStore.last_run_values`, `RunChanges.last_time` | |
+| 2026-10-24 | 프로토콜 없이 타이머·기록만 하는 모드는 만들지 않고, 장단점·범위·위험을 줄 보고서의 "선택지"에만 적는다 | 파일럿 뒤에 사람이 정한다 | EASY | (코드 없음) | 파일럿 뒤 결정 |
 
 ## 해결한 빈틈
 

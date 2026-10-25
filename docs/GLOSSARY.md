@@ -28,6 +28,9 @@
 | 시작을 막는 사유 | 실행을 막는 사유 | `execution_blockers` — `experiment_protocol.EXECUTION_BLOCKING_REASON_CODES` | 이것이 있으면 시작할 수 없다 |
 | 시작 전 알림 | 시작 전 알림 | `execution_notices` — `execution_notice_reasons` | 알리기만 하고 시작은 막지 않는다 |
 | 새로 분석하면 더 정확해요 | 분석기 개선 전 분석 · 다시 분석 권장 | `ANALYSIS_OUTDATED_KO`, `_analysis_outdated_codes` | |
+| 분석할 쪽 | 분석할 쪽 (선택) · 분석한 쪽 | page range — `page_range` (요청 장부), `checked_page_range`, `review()` 의 `analysis_page_range` | 문서 일부만 분석할 때 고른 처음·끝 쪽 |
+| 오늘 바꾼 값 | 오늘 원문과 다르게 할 값 · 20분(오늘 바꾼 값 · 원문 15분) | run change — `RunChange`, `RunChanges`, `protocol_run_changes_chosen`, `run_value_changed` | 이번 실험에만 원문 대신 쓰는 값. 사람이 고르거나 말한 값만 |
+| 지난번처럼 | 지난번처럼 (n개) | `ExperimentReportStore.last_run_values`, `RunChanges.last_time` | 같은 계정의 지난 실험이 바꾼 값을 다시 고르기 |
 | 개발용 예시 | 개발용 큐레이션 분석 | curated fixture — `VOINEY_LAB_CURATED_PROTOCOL_FIXTURE` | 개발 실행기가 넣는 in-gel 프로토콜 |
 
 ## 2. 확인 카드와 시작
@@ -63,6 +66,8 @@
 | 다시 물어봐요 | 되묻기 | clarify — `clarify_candidates`, 라우터 먼저의 `clarify` 도구 | "그거"처럼 가리키는 말이 애매할 때 |
 | 원문과 다른 점 | 편차 | `deviation` | 기록 종류 |
 | 이상 사항 | 이상 사항, 이상 | `anomaly` | 기록 종류 |
+| 문제 도움 | 문제 도움 · 도움 | `problem_help` (앞단 규칙·계획 표시·기록 사건), `CuratedProtocolAction.PROBLEM_HELP`, `knowledge.py` | 실험 중 문제에 원문·지난 기록·(켰을 때) AI 일반 지식으로 답하기. 아무것도 바꾸지 않는다 |
+| 지난 기록 | 지난 기록 | `HistoryKnowledge`, `ExperimentReportStore.earlier_reports` | 같은 계정·연구실·프로토콜의 앞선 실험 기록 |
 | 목소리 맞추기 | 목소리 맞추기 | voice calibration — `SpeakerLevelReference` | 내 목소리 크기를 기준으로 삼기 |
 | 다른 사람 말로 보여 듣지 않은 말 | 같음 | `speech.ignored` (`other_speaker_level`) | 기준보다 많이 작은 말 |
 | 시끄러운 곳 모드 | 주변 소리: 시끄러움 | 실험자 설정 `ambient_mode` = `noisy` | 상태를 바꾸는 말과 기록을 한 번 되묻는다 |

@@ -99,6 +99,7 @@ Understanding a turn and workflow state
 - `completion_intent.py`: deterministic completion-statement classifier.
 - `brain.py`: router turn history (`ConversationHistory`), protocol answer models, sentence chunking.
 - `multi_brain.py`: optional read-only Answer, Source and Visual roles.
+- `knowledge.py`: knowledge search for a problem's help — the source contract (`KnowledgeHit`, `KnowledgeContext`, `KnowledgeSource`, `KnowledgeUnavailable`), in-process SQLite FTS5 over the protocol and the account's earlier runs, the help composer.
 - `tools.py`: trusted turn context and record-value checks for `record_log`.
 - `model_providers.py`: model roles, provider clients, retries, Gemini safety settings.
 - `external_references.py`: the outside-PDF "AI 일반 지식" explanation, research-query planning, and the checked short form of a public-material ground.
