@@ -8,13 +8,16 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly retryAfterSeconds: number | null;
+  /** The refusal's body as the server sent it (lane RX2: the start flow reads its message_ko and detail fields). */
+  readonly payload: unknown;
 
-  constructor(status: number, code: string, retryAfterSeconds: number | null = null) {
+  constructor(status: number, code: string, retryAfterSeconds: number | null = null, payload: unknown = null) {
     super(`${status} ${code}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.payload = payload;
   }
 }
 
@@ -61,7 +64,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     }
   }
   if (!response.ok) {
-    throw new ApiError(response.status, detailOf(payload), retryAfterOf(response));
+    throw new ApiError(response.status, detailOf(payload), retryAfterOf(response), payload);
   }
   return payload as T;
 }

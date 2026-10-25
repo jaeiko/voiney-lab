@@ -45,8 +45,9 @@ describe("App", () => {
     expect(await screen.findByTestId("account-line")).toHaveTextContent("재준 · 연구실 lab-a");
     const nav = screen.getByRole("navigation", { name: "화면 고르기" });
     expect(nav.querySelector('[data-nav="home"]')).toHaveAttribute("aria-current", "page");
-    expect(nav.querySelector('[data-nav="experiment"]')).toHaveAttribute("href", "/index.html#/experiment");
-    expect(nav.querySelector('[data-nav="settings"]')).toHaveAttribute("href", "/index.html#/settings");
+    // Lane RX2 (person's decisions 1-5, 2026-10-25): the experiment and the settings are the new screen's own now.
+    expect(nav.querySelector('[data-nav="experiment"]')).toHaveAttribute("href", "#/experiment");
+    expect(nav.querySelector('[data-nav="settings"]')).toHaveAttribute("href", "#/settings");
     for (const word of ["일시정지", "종료", "00:00", "안전 자료 확인 중", "프로토콜을 고르세요", "확인 필요"]) expect(screen.queryByText(word)).toBeNull();
   });
 

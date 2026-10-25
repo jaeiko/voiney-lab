@@ -1,0 +1,105 @@
+/* The start flow, the settings and the first guide (lane RX2). The Desk
+   scale and the design system of tokens.css: ink on paper, colour only for a
+   state beside its word, corners of 4 px at most, no shadow. */
+
+/* --- A flow's steps (① to ⑤) --------------------------------------------- */
+.step-progress { list-style: none; margin: 0 0 var(--space-6); padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.step-progress li { display: flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; }
+.step-progress-number {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none;
+  border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper);
+}
+.step-progress-number svg { width: 16px; height: 16px; }
+.step-progress li[data-state="current"] { color: var(--ink); }
+.step-progress li[data-state="current"] .step-progress-number { border-width: var(--border-state); border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+.step-progress li[data-state="done"] .step-progress-number { border-color: var(--ink); color: var(--ink); }
+/* A phone shows the numbers, and only the current step's name. */
+@media (max-width: 599px) {
+  .step-progress li:not([data-state="current"]) .step-progress-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+
+/* --- The start flow ------------------------------------------------------ */
+.start { max-width: 760px; }
+.start-step { display: flex; flex-direction: column; gap: var(--space-4); }
+.start-why { padding: var(--space-3) var(--space-4); border-left: var(--border-state) solid var(--ink); background: var(--paper); font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; }
+.start-lead { color: var(--ink); }
+.start-count { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.start-count svg { width: 24px; height: 24px; }
+.start-protocol, .start-summary { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding: var(--space-6); border: var(--border) solid var(--ink); border-radius: var(--radius); background: var(--paper); }
+.start-protocol-title { font-size: var(--text-title); line-height: var(--line-title); font-weight: 700; }
+.start-options, .start-list, .start-changes, .start-safety, .choice-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.start-list { list-style: disc; padding-left: var(--space-6); }
+.start-option {
+  display: flex; width: 100%; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 64px; padding: var(--space-3) var(--space-4);
+  border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); text-align: left; cursor: pointer;
+}
+.start-option[aria-pressed="true"] { border-width: var(--border-state); border-color: var(--ink); }
+.start-option:disabled { cursor: default; color: var(--ink-muted); }
+.start-option-title { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; }
+.start-question { font-size: var(--text-title); line-height: var(--line-title); font-weight: 700; }
+.start-excerpt { margin: 0; padding: var(--space-4); border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); display: flex; flex-direction: column; gap: var(--space-2); }
+.start-excerpt-where { color: var(--ink-muted); font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; }
+.start-choices { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.start-last-time { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.start-notices { display: flex; flex-direction: column; gap: var(--space-2); }
+.start-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); padding-top: var(--space-4); border-top: var(--border) solid var(--line); }
+.start-footer-primary { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-left: auto; }
+.btn-big { min-height: 56px; padding: 0 var(--space-6); font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
+
+/* A safety notice: the warning family -- its fill as a side band, its ink for the word, beside the icon. */
+.safety-card { padding: var(--space-4); border: var(--border) solid var(--line-strong); border-left: 6px solid var(--warning); border-radius: var(--radius); background: var(--paper); display: flex; flex-direction: column; gap: var(--space-2); }
+.safety-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-weight: 600; color: var(--warning-ink); }
+.safety-card-head svg { width: 24px; height: 24px; }
+.safety-card-text { font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
+.source-fold summary { cursor: pointer; min-height: var(--target); display: inline-flex; align-items: center; font-weight: 600; }
+.source-fold p { color: var(--ink-muted); }
+
+/* --- A choice of two or three (주변 소리, 숫자를 말했을 때) --------------------- */
+.ambient { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ambient legend { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; margin-bottom: var(--space-2); }
+.segmented { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.segmented-option {
+  position: relative; display: inline-flex; align-items: center; min-height: 56px; padding: 0 var(--space-4);
+  border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); font-weight: 600; cursor: pointer;
+}
+.segmented-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.segmented-option[data-checked="true"] { border-width: var(--border-state); border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+.segmented-option:focus-within { outline: var(--border-focus) solid var(--focus-ring); outline-offset: 2px; }
+
+/* --- The settings -------------------------------------------------------- */
+.settings { display: flex; flex-direction: column; gap: var(--space-6); max-width: 760px; }
+.settings-section { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-6); border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--paper); }
+.settings-section h2 { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; }
+.settings-account { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-start; }
+.settings-account-part { display: flex; flex-direction: column; gap: var(--space-3); }
+.settings-account-name { font-weight: 600; }
+.settings-form { display: flex; flex-direction: column; gap: var(--space-3); max-width: 360px; }
+.settings-form-actions { display: flex; gap: var(--space-3); }
+.saved { display: inline-flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.saved svg { width: 24px; height: 24px; }
+.switch { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--target); color: var(--ink-muted); font-weight: 600; }
+.switch input { width: 24px; height: 24px; }
+.field textarea { padding: var(--space-3); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); background: var(--paper); font-size: var(--text-body); line-height: var(--line-body); font-weight: 400; resize: vertical; }
+
+.choice-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.choice {
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 56px; padding: 0 var(--space-4); flex: 1 1 220px;
+  border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); text-align: left; cursor: pointer;
+}
+.choice[aria-pressed="true"] { border-width: var(--border-state); border-color: var(--ink); }
+.choice svg { width: 24px; height: 24px; }
+.choice-dot { width: 24px; height: 24px; flex: none; }
+.choice-label { font-weight: 600; }
+
+.voice-check { display: flex; flex-direction: column; gap: var(--space-3); }
+.voice-check-sentence { margin: 0; padding: var(--space-4); border-left: var(--border-state) solid var(--ink); background: var(--bench); font-size: var(--text-title); line-height: var(--line-title); font-weight: 700; }
+.voice-check-meter { height: 16px; border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); background: var(--paper); overflow: hidden; }
+.voice-check-meter span { display: block; height: 100%; background: var(--ink); }
+.voice-check-result { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; }
+.voice-check-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+
+/* --- The first guide ----------------------------------------------------- */
+.welcome { min-height: 100dvh; display: grid; place-items: center; padding: var(--space-6) var(--space-4); }
+.welcome-card { width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-8) var(--space-6); border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--paper); }
+.welcome-step { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; }
+.welcome .step-progress { margin-bottom: 0; }

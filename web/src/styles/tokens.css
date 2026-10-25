@@ -3,9 +3,9 @@
    colour only for a state, never for decoration or brand; no green (done is
    an ink check and dimming); no shadow; corners at most 4 px; Pretendard at
    400 / 600 / 700 on the Desk scale; 4 px spacing steps; a Desk target of
-   40 px or more (44 here). The Run (experiment) scale is not here: no Run
-   screen is built in web/ yet, and UI_SPEC 6 lists its values beside lane
-   TAB's measured ones for a person to settle. */
+   40 px or more (44 here). The Run (experiment) scale below is the
+   person's decision 3 of 2026-10-25 (lane RX2): a tablet reads lane TAB's
+   1.5 m measurements, a phone and a desktop the design system's Run scale. */
 :root {
   /* Ink and paper */
   --ink: #1c1c1a;
@@ -55,4 +55,33 @@
 
   --nav-width: 220px;
   --tab-height: 64px;
+
+  /* Run (the experiment screen), phone and desktop: the design system's Run
+     scale -- step 40/48, timer 96, next step 20/28, caption 22/30 (weight 400:
+     only 400/600/700 are in the system), status 16/24 (the screen's smallest
+     words); targets 64 px. */
+  --run-step: 2.5rem;        --run-step-line: 3rem;
+  --run-step-min: 2rem;      --run-step-min-line: 2.5rem;
+  --run-timer: 6rem;
+  --run-next: 1.25rem;       --run-next-line: 1.75rem;
+  --run-caption: 1.375rem;   --run-caption-line: 1.875rem;
+  --run-status: 1rem;        --run-status-line: 1.5rem;
+  --run-listening: 1.75rem;  --run-listening-line: 2.25rem;
+  --run-target: 64px;
+}
+
+/* Run on a tablet (lane TAB's scope: touch, at least 721 x 600): read from
+   1.5 m -- step 52 px, a long step never under 40 px, timer 128 px, the
+   glove's 80 px targets. */
+@media (pointer: coarse) and (min-width: 721px) and (min-height: 600px) {
+  :root {
+    --run-step: 3.25rem;     --run-step-line: 3.875rem;
+    --run-step-min: 2.5rem;  --run-step-min-line: 3.125rem;
+    --run-timer: 8rem;
+    --run-next: 1.5rem;      --run-next-line: 2rem;
+    --run-caption: 1.75rem;  --run-caption-line: 2.25rem;
+    --run-status: 1.25rem;   --run-status-line: 1.75rem;
+    --run-listening: 2.5rem; --run-listening-line: 3rem;
+    --run-target: 80px;
+  }
 }

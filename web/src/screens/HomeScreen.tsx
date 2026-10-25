@@ -1,4 +1,4 @@
-import { ClipboardCheck, Hourglass, Play, RotateCcw, Upload } from "lucide-react";
+import { ClipboardCheck, FlaskConical, Hourglass, Play, RotateCcw, Upload } from "lucide-react";
 
 import { useExperiments, useProtocolDetail, useProtocols, useSignOutOnExpiry, useWorkspaceSession } from "../api/queries";
 import type { AuthSession, CatalogEntry, Experiment } from "../api/types";
@@ -6,6 +6,7 @@ import { BigCard, ErrorBox, LoadingBox } from "../components/Pieces";
 import { home, states } from "../copy/ko";
 import { oldRoutes, routes } from "../lib/navigation";
 import { elapsedWords, entryAnalysing, reviewCount } from "../lib/protocolStatus";
+import { useRun } from "../voice/runStore";
 
 export const RESUMABLE = new Set(["ready", "in_progress", "paused", "blocked"]);
 
@@ -79,6 +80,7 @@ export function HomeScreen({ session }: { session: AuthSession }) {
   const protocolsQuery = useProtocols();
   const experimentsQuery = useExperiments();
   const workspace = useWorkspaceSession();
+  const run = useRun();
   useSignOutOnExpiry(protocolsQuery.error);
 
   const name = session.account?.name?.trim();
@@ -103,7 +105,7 @@ export function HomeScreen({ session }: { session: AuthSession }) {
               kind="resume"
               title={home.resume}
               sub={home.resumeSub(situation.title, typeof step === "string" && step.trim() ? step.trim() : null)}
-              href={oldRoutes.experiment}
+              href={routes.start(situation.experiment.protocol_id ?? null, { resume: situation.experiment.session_id })}
               icon={<RotateCcw aria-hidden="true" />}
             />
             <SecondaryActions keysShown={["protocols", "records"]} />
@@ -148,12 +150,19 @@ export function HomeScreen({ session }: { session: AuthSession }) {
       case "start":
         body = (
           <>
-            <BigCard kind="start" title={home.start} sub={home.startSub(situation.ready)} href={oldRoutes.experiment} icon={<Play aria-hidden="true" />} />
+            <BigCard kind="start" title={home.start} sub={home.startSub(situation.ready)} href={routes.start()} icon={<Play aria-hidden="true" />} />
             <SecondaryActions keysShown={["protocols", "upload", "records"]} />
           </>
         );
         break;
     }
+  }
+
+  // Lane RX2: a run going on in this tab comes first -- back to it.
+  if (run.active) {
+    body = (
+      <BigCard kind="running" title={home.running} sub={run.model.protocol?.display_name ?? null} href={routes.run} icon={<FlaskConical aria-hidden="true" />} />
+    );
   }
 
   return (

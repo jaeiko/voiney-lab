@@ -13,19 +13,20 @@ import { Note } from "./Pieces";
 
 interface Props {
   session: AuthSession;
-  current: "home" | "protocols" | "handoff";
+  current: string;
   children: ReactNode;
 }
 
 const NAV = [
   { key: "home", label: nav.home, href: routes.home, Icon: Home },
   { key: "protocols", label: nav.protocols, href: routes.protocols, Icon: ClipboardList },
-  { key: "experiment", label: nav.experiment, href: oldRoutes.experiment, Icon: FlaskConical },
+  // Lane RX2: the experiment (the start flow and the run) and the settings are the new screen's own.
+  { key: "experiment", label: nav.experiment, href: routes.run, Icon: FlaskConical },
   { key: "records", label: nav.records, href: oldRoutes.records, Icon: NotebookPen },
-  { key: "settings", label: nav.settings, href: oldRoutes.settings, Icon: Settings },
+  { key: "settings", label: nav.settings, href: routes.settings, Icon: Settings },
 ] as const;
 
-function LogoutDialog() {
+export function LogoutDialog() {
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -106,7 +107,7 @@ export function AppFrame({ session, current, children }: Props) {
       <div className="frame-body">
         <nav className="nav" aria-label={nav.menuLabel}>
           {NAV.map(({ key, label, href, Icon }) => (
-            <a key={key} href={href} aria-current={current === key ? "page" : undefined} data-nav={key}>
+            <a key={key} href={href} aria-current={current === key || (key === "experiment" && (current === "start" || current === "run")) ? "page" : undefined} data-nav={key}>
               <Icon aria-hidden="true" />
               <span>{label}</span>
             </a>
