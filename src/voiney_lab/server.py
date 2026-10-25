@@ -11931,7 +11931,40 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     )
     transcript=transcription.text
 
+    def persist_dropped(reason:str)->None:
+        """Lane HEAR: with the opt-in recording on, a dropped turn's sound is kept too."""
+
+        try:
+            if not SttDiagnosticSettings.from_environment().enabled:
+                return
+            try:
+                endpoint_label=stt_endpoint_label()
+            except (KeyError,ConfigurationError):
+                endpoint_label="unknown"
+            persist_stt_diagnostic(
+                clean_path(source_pcm),
+                {
+                    "configuration_id":session.accepted_configuration_id,
+                    "session_id":session.session_id,"turn_id":turn_id,"generation":generation,
+                    "input_sample_rate":16000,"frame_count":input_frames,
+                    "voiced_frame_count":voiced_frames,"duration_ms":input_frames*20,
+                    "endpoint_reason":f"dropped_{reason}","stt_endpoint":endpoint_label,
+                    "language":stt_language,"keyterms":list(stt_keyterms),
+                    "audio_origin":transcription_context.audio_origin,
+                    "response_status":transcription.response_status,
+                    "response_duration_seconds":transcription.duration_seconds,
+                    "word_count":len(transcription.words),
+                    "detected_language":transcription.detected_language,
+                    "raw_transcript":transcription.text,
+                    "browser_audio_constraints":dict(session.client_audio_constraints),
+                },
+                identity=f"session-{session.session_id}-turn-{turn_id}-g-{generation}",
+            )
+        except (OSError,ValueError):
+            log.warning("opt-in STT diagnostic persistence failed")
+
     if not transcript.strip():
+        persist_dropped("empty_transcript")
         if session.reject_empty_transcript(turn_id):
             _record_workspace_metric(
                 category="voice",metric_name="command_failure",
@@ -12141,6 +12174,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     if admission.mismatch_status=="unclear":
         # Lane HEAR, decision 8: Latin letters for Korean speech -- a turn
         # misheard, not another language: dropped and shown, not asked about.
+        persist_dropped("language_unclear")
         if session.reject_empty_transcript(turn_id):
             await sender.text(
                 "speech.rejected",turn_id=turn_id,generation=generation,reason="language_unclear",
