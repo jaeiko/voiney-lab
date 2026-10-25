@@ -69,6 +69,7 @@ __all__ = [
     "grade_rank",
     "index_text_for",
     "public_reference_label",
+    "shared_term",
     "start_public_knowledge",
     "wiki_only",
 ]
@@ -194,6 +195,18 @@ _HANGUL = re.compile(r"[가-힣]")
 _TOKEN_SPLIT = re.compile(r"[\s,.;:!?()\[\]{}\"'“”‘’·…/]+")
 #: The most English names appended to a query; more would drown the question.
 _MAX_EXPANSION_TERMS = 6
+#: A question's own Latin-letter words (``DTT``, ``stacking gel``, ``blue``)
+#: are terms a piece may share with it; these name nothing to look for.
+_LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z0-9\-]+")
+_QUESTION_WORDS = frozenset({
+    "a", "after", "again", "an", "and", "any", "are", "at", "be", "been", "before", "but", "can",
+    "could", "did", "do", "does", "doing", "done", "down", "enough", "for", "from", "get", "got",
+    "had", "has", "have", "help", "here", "how", "i", "in", "is", "isn", "it", "its", "just", "like",
+    "look", "looks", "maybe", "more", "much", "my", "no", "not", "now", "of", "off", "on", "or",
+    "out", "over", "problem", "seem", "seems", "should", "so", "some", "still", "the", "then",
+    "there", "this", "that", "to", "too", "up", "very", "was", "we", "were", "what", "when", "where",
+    "which", "why", "will", "with", "won", "work", "working", "would", "wrong", "yet", "you",
+})
 
 
 def _normalise_term(value: str) -> str:
@@ -289,6 +302,35 @@ class Glossary:
             if english:
                 found[token] = english
         return found
+
+    def query_terms(self, query: str) -> tuple[str, ...]:
+        """The words a public piece must share with ``query`` to be about it.
+
+        The Korean words the glossary knows (with their particles taken off),
+        their English names and the other Korean names of those, and the
+        query's own Latin-letter words other than question words. A question
+        with none of these ("왜 안 되지?") names nothing a piece could be
+        about.
+        """
+
+        terms: list[str] = []
+        for words, english in self.matches(query).items():
+            for word in words.split():
+                stem = _korean_stems(word)[-1]  # the particle taken off, when one was
+                if len(stem) >= 2:
+                    terms.append(stem)
+            for name in english:
+                terms.append(name)
+                terms += list(self.aliases.get(name, ()))
+        terms += [word for word in _LATIN_WORD.findall(query) if word.casefold() not in _QUESTION_WORDS]
+        seen: set[str] = set()
+        unique: list[str] = []
+        for term in terms:
+            key = term.casefold().strip()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(term.strip())
+        return tuple(unique)
 
     def expand(self, query: str) -> str:
         """``query`` followed by the English names of its Korean words, when any."""
@@ -496,16 +538,18 @@ class PublicKnowledgeSource:
             self.settings.index_name, expanded,
             top_k=max(limit * CANDIDATES_PER_HIT, limit), alpha=self.settings.alpha,
         )
-        hits = [self._hit_from(doc) for doc in found]
+        terms = self.glossary.query_terms(text)
+        hits = [self._hit_from(doc, terms) for doc in found]
         ordered = sorted(hits, key=lambda hit: grade_rank(hit.detail("grade")))  # stable
         return ordered[:limit]
 
     @staticmethod
-    def _hit_from(doc: FoundDocument) -> KnowledgeHit:
+    def _hit_from(doc: FoundDocument, terms: Sequence[str] = ()) -> KnowledgeHit:
         meta = doc.metadata
         body = doc.payload if doc.payload else _body_of(doc.text)
         source_name = meta.get("source_name", "")
         grade = meta.get("grade", "")
+        title = meta.get("title", "") or doc.id
         details = (
             ("source_id", meta.get("source_id", "")),
             ("source_name", source_name),
@@ -516,10 +560,14 @@ class PublicKnowledgeSource:
             ("fetched_at", meta.get("fetched_at", "")),
             ("label", public_reference_label(source_name)),
             ("doc_id", doc.id),
+            # The question's word this piece also has ("" when none): Moss
+            # always returns its nearest pieces, and one that shares no word
+            # with the question is not shown as being about it.
+            ("shares", shared_term(f"{title}\n{meta.get('locator', '')}\n{body}", terms)),
         )
         return KnowledgeHit(
             tier=PUBLIC_TIER,
-            title=meta.get("title", "") or doc.id,
+            title=title,
             text=body,
             locator=meta.get("locator", ""),
             source_url=meta.get("url") or None,
@@ -535,6 +583,27 @@ def _body_of(index_text: str) -> str:
 
     head, _sep, rest = index_text.partition("\n")
     return rest.strip() or head.strip()
+
+
+def shared_term(text: str, terms: Sequence[str]) -> str:
+    """The first of ``terms`` that ``text`` contains, or "".
+
+    A Latin-letter term must stand as a word ("Ab" is not in "about"); a
+    Korean term of two or more letters may sit inside a longer word, as
+    Korean particles and endings attach to it.
+    """
+
+    haystack = unicodedata.normalize("NFKC", text).casefold()
+    for term in terms:
+        needle = unicodedata.normalize("NFKC", term).casefold().strip()
+        if not needle:
+            continue
+        if _HANGUL.search(needle):
+            if len(needle) >= 2 and needle in haystack:
+                return term
+        elif re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack):
+            return term
+    return ""
 
 
 def wiki_only(hits: Iterable[KnowledgeHit]) -> bool:

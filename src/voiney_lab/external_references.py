@@ -514,10 +514,16 @@ class PublicReferencePart:
 
 
 def public_reference_part(hits: Any, *, language: str, limit: int = PUBLIC_REFERENCE_SHOWN) -> PublicReferencePart | None:
-    """The help's public block from ``public`` tier hits, or None when there are none."""
+    """The help's public block from ``public`` tier hits, or None when there are none.
+
+    Only pieces that share a word with the question (the tier's ``shares``
+    detail, ``public_knowledge.shared_term``) are shown: the index always
+    returns its nearest pieces, and a problem said in words the material does
+    not use ("왜 안 되지?") has no public ground.
+    """
 
     language = language if language in {"ko", "en"} else "ko"
-    pieces = [hit for hit in hits if getattr(hit, "tier", "") == "public"][:limit]
+    pieces = [hit for hit in hits if getattr(hit, "tier", "") == "public" and hit.detail("shares")][:limit]
     if not pieces:
         return None
     shown: list[str] = []

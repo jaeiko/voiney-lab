@@ -39,7 +39,7 @@ from voiney_lab.external_references import (
 )
 from voiney_lab.knowledge import CLOSING, NOTHING_FOUND, KnowledgeUnavailable
 from voiney_lab.language import Transcription
-from voiney_lab.public_knowledge import PublicKnowledgeSettings, PublicKnowledgeSource
+from voiney_lab.public_knowledge import Glossary, PublicKnowledgeSettings, PublicKnowledgeSource, shared_term
 from voiney_lab.server import ListenerSession, run_turn
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import TurnState
@@ -49,10 +49,19 @@ NIOSH = "NIOSH Pocket Guide to Chemical Hazards"
 NIOSH_TEXT = "Acetonitrile has a flash point of 42 °F and an exposure limit of 20 ppm TWA."
 NIOSH_LABEL = f"공개 자료 · 일반 참고 — {NIOSH}"
 NIOSH_POINTER = f"{NIOSH_LABEL}에 관련 내용이 있어요. 화면에서 확인해 주세요."
+#: A problem asked at step 2 that names the step's buffer and what the NIOSH piece is about.
+ASKED = "wash buffer에 acetonitrile 거품이 왜 생기지?"
+GLOSSARY = Glossary(terms={"아세토나이트릴": ("Acetonitrile",), "젤": ("Gel",)})
 
 
 def _niosh(doc_id: str = "niosh-0017") -> pk.FoundDocument:
     return _doc(doc_id, "A", title="Acetonitrile (CAS 75-05-8)", text=NIOSH_TEXT, source_name=NIOSH)
+
+
+def _wiki_gel() -> pk.FoundDocument:
+    return _doc("enwiki-coomassie", "C", title="Coomassie brilliant blue",
+                text="Coomassie brilliant blue stains protein bands in a polyacrylamide gel.",
+                source_name="Wikipedia (English)")
 
 
 def _wiki_ko(doc_id: str = "kowiki-1", text: str = "아세토나이트릴은 무색의 액체이다. 끓는점은 82 °C이다.") -> pk.FoundDocument:
@@ -61,7 +70,8 @@ def _wiki_ko(doc_id: str = "kowiki-1", text: str = "아세토나이트릴은 무
 
 async def _loaded(docs) -> tuple[PublicKnowledgeSource, FakeClient]:
     client = FakeClient(docs)
-    source = PublicKnowledgeSource(PublicKnowledgeSettings(True, project_id="p", project_key="k"), client)
+    source = PublicKnowledgeSource(PublicKnowledgeSettings(True, project_id="p", project_key="k"), client,
+                                   glossary=GLOSSARY)
     await source.load()
     return source, client
 
@@ -133,7 +143,8 @@ class SpokenFormTests(unittest.TestCase):
     def test_the_screen_block_names_the_source_place_licence_and_address(self) -> None:
         source, _client = _source([_niosh()])
         context = knowledge.KnowledgeContext("lab", "acc", "p1", "r1", "s1", "ko")
-        hits = asyncio.run(source.search("아세토니트릴", limit=2, context=context))
+        hits = asyncio.run(source.search("acetonitrile 인화점", limit=2, context=context))
+        self.assertEqual(hits[0].detail("shares"), "acetonitrile")
         part = public_reference_part(hits, language="ko")
         self.assertIsNotNone(part)
         lines = part.shown.splitlines()
@@ -152,13 +163,39 @@ class SpokenFormTests(unittest.TestCase):
     def test_a_wiki_only_ground_says_so_and_none_found_is_none(self) -> None:
         source, _client = _source([_wiki_ko()])
         context = knowledge.KnowledgeContext("lab", "acc", "p1", "r1", "s1", "ko")
-        part = public_reference_part(asyncio.run(source.search("아세토나이트릴", limit=2, context=context)),
+        part = public_reference_part(asyncio.run(source.search("아세토나이트릴이 뭐야", limit=2, context=context)),
                                      language="ko")
         self.assertTrue(part.wiki_only)
         self.assertTrue(part.shown.endswith(PUBLIC_WIKI_ONLY["ko"]))
         self.assertEqual(part.spoken, "공개 자료 · 일반 참고 — 위키백과 (한국어): 아세토나이트릴은 무색의 액체이다. "
                                       + PUBLIC_WIKI_ONLY["ko"])
         self.assertIsNone(public_reference_part((), language="ko"))
+
+
+class SharedWordTests(unittest.TestCase):
+    """The index always returns its nearest pieces: only a piece that shares a
+    word with the question is shown as being about it (live check 2026-10-25:
+    without this every problem got public pieces, most of them unrelated)."""
+
+    def test_the_question_s_terms(self) -> None:
+        self.assertEqual(GLOSSARY.query_terms("왜 안 되지?"), ())
+        self.assertEqual(GLOSSARY.query_terms("why is it still blue"), ("blue",))
+        self.assertEqual(GLOSSARY.query_terms("아세토나이트릴이 탁해"), ("아세토나이트릴", "Acetonitrile"))
+        self.assertEqual(GLOSSARY.query_terms("DTT 용액이 모자라"), ("DTT",))
+
+    def test_a_term_is_a_word_in_latin_letters_and_a_stem_in_hangul(self) -> None:
+        self.assertEqual(shared_term("Antibody (Ab) binds", ("Ab",)), "Ab")
+        self.assertEqual(shared_term("about the gel", ("Ab",)), "")
+        self.assertEqual(shared_term("아세토나이트릴은 무색의 액체이다", ("아세토나이트릴",)), "아세토나이트릴")
+        self.assertEqual(shared_term("젤라틴", ("젤",)), "")  # one Hangul letter is too little
+
+    def test_pieces_sharing_no_word_are_not_shown(self) -> None:
+        source, client = _source([_niosh()])
+        context = knowledge.KnowledgeContext("lab", "acc", "p1", "r1", "s1", "ko")
+        hits = asyncio.run(source.search("왜 안 되지?", limit=2, context=context))
+        self.assertEqual(len(hits), 1)  # the tier still returns what the index found
+        self.assertEqual(hits[0].detail("shares"), "")
+        self.assertIsNone(public_reference_part(hits, language="ko"))
 
 
 class _TurnHarness:
@@ -231,7 +268,7 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
     def test_with_the_role_off_the_public_piece_is_shown_and_its_mark_said(self) -> None:
         source, client = _source([_niosh()])
         session = self._session(supplemental=False, public=source)
-        reply, spoken, paraphrased, _sent = self._turn(session, "왜 안 되지?")
+        reply, spoken, paraphrased, _sent = self._turn(session, ASKED)
         self.assertTrue(client.queries, "the public tier was searched")
         self.assertIn("원문 · ", reply)  # the protocol's lines stay first
         self.assertIn(NIOSH_LABEL, reply)
@@ -252,7 +289,7 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
         source, _client = _source([_niosh()])
         session = self._session(supplemental=True, public=source)
         reply, spoken, paraphrased, _sent = self._turn(
-            session, "왜 안 되지?",
+            session, ASKED,
             paraphrase={"status": "success", "answer": "아세토니트릴은 인화점이 42 °F로 알려져 있어요.",
                         "label": NIOSH_LABEL})
         self.assertEqual(paraphrased[0]["source_name"], NIOSH)
@@ -274,14 +311,14 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
                 source, _client = _source([_niosh()])
                 session = self._session(supplemental=True, public=source)
                 _reply, spoken, _paraphrased, _sent = self._turn(
-                    session, "왜 안 되지?", paraphrase={"status": "success", "answer": answer, "label": "x"})
+                    session, ASKED, paraphrase={"status": "success", "answer": answer, "label": "x"})
                 self.assertTrue(spoken[-1].startswith(NIOSH_POINTER))
                 self.assertNotIn(answer, " ".join(spoken))
 
     def test_a_paraphrase_that_fails_a_check_leaves_the_fixed_form(self) -> None:
         source, _client = _source([_niosh()])
         session = self._session(supplemental=True, public=source)
-        _reply, spoken, paraphrased, _sent = self._turn(session, "왜 안 되지?")
+        _reply, spoken, paraphrased, _sent = self._turn(session, ASKED)
         self.assertEqual(len(paraphrased), 1)
         self.assertEqual(
             spoken[-1], f"{NIOSH_POINTER} AI 일반 지식으로는, 세척 횟수가 부족했을 수 있어요. {CLOSING_KO}")
@@ -289,11 +326,21 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
     def test_only_public_material_says_the_sources_had_none_then_the_piece(self) -> None:
         source, _client = _source([_wiki_ko()])
         session = self._session(supplemental=False, public=source)
-        reply, spoken, _paraphrased, _sent = self._turn(session, "침전이 생겼는데 어떡해")
+        reply, spoken, _paraphrased, _sent = self._turn(session, "아세토나이트릴 침전이 생겼는데 어떡해")
         self.assertIn(NOTHING_FOUND["ko"], reply)
         self.assertLess(reply.index(NOTHING_FOUND["ko"]), reply.index("공개 자료 · 일반 참고 — 위키백과"))
         self.assertIn(PUBLIC_WIKI_ONLY["ko"], reply)
         self.assertIn(PUBLIC_WIKI_ONLY["ko"], " ".join(spoken))
+
+    def test_a_problem_naming_nothing_gets_no_public_piece(self) -> None:
+        source, client = _source([_niosh()])
+        session = self._session(supplemental=True, public=source)
+        reply, spoken, paraphrased, _sent = self._turn(session, "왜 안 되지?")
+        self.assertTrue(client.queries)
+        self.assertIn("원문 · ", reply)
+        self.assertNotIn("공개 자료", reply)
+        self.assertNotIn("공개 자료", " ".join(spoken))
+        self.assertEqual(paraphrased, [])
 
     def test_a_public_source_that_cannot_be_used_is_skipped(self) -> None:
         for public in (_Unavailable(), _Slow()):
@@ -309,7 +356,7 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
     def test_a_spill_says_the_fixed_form_at_once_and_asks_no_model(self) -> None:
         source, _client = _source([_niosh()])
         session = self._session(supplemental=True, public=source)
-        _reply, spoken, paraphrased, _sent = self._turn(session, "아세토니트릴을 흘렸어")
+        _reply, spoken, paraphrased, _sent = self._turn(session, "acetonitrile을 흘렸어")
         self.assertEqual(paraphrased, [])
         said = " ".join(spoken)
         self.assertIn(NIOSH_POINTER, said)
@@ -334,7 +381,7 @@ class VoiceSocketWiringTests(VoiceSessionHarness, unittest.TestCase):
 
         async def scenario(socket, listener, say):
             held.append(listener)
-            for turn, words in enumerate(("시작", "넘어가", "다음", "다음", "젤이 아직 파래"), 1):
+            for turn, words in enumerate(("시작", "넘어가", "다음", "다음", "젤 조각이 아직 파래"), 1):
                 await say(turn, words)
 
         with patch.object(server_module.app.state, "public_knowledge", public, create=True):
@@ -343,15 +390,17 @@ class VoiceSocketWiringTests(VoiceSessionHarness, unittest.TestCase):
         return socket, held[0], spoken
 
     def test_the_session_gets_the_tier_loaded_at_start_and_the_help_records_it(self) -> None:
-        source, client = _source([_niosh()])
+        source, client = _source([_wiki_gel()])
         socket, listener, spoken = self._run(source)
         self.assertIs(listener.public_knowledge, source)
         self.assertTrue(client.queries)
         reply = socket.reply(5)
+        label = "공개 자료 · 일반 참고 — Wikipedia (English)"
         self.assertIn(f"“{STEP_3}”", reply)
-        self.assertIn(NIOSH_LABEL, reply)
-        self.assertIn("https://example.org/niosh-0017 · Public domain", reply)
-        self.assertIn(NIOSH_POINTER, " ".join(spoken))
+        self.assertLess(reply.index(f"“{STEP_3}”"), reply.index(label))
+        self.assertIn("https://example.org/enwiki-coomassie · Public domain", reply)
+        self.assertIn(PUBLIC_WIKI_ONLY["ko"], reply)
+        self.assertIn(f"{label}에 관련 내용이 있어요. 화면에서 확인해 주세요.", " ".join(spoken))
         store = ExperimentReportStore(self.report_db)
         (report,) = store.list_reports()
         (helped,) = [event for event in store.get_report(report["report_id"])["events"]
@@ -359,7 +408,7 @@ class VoiceSocketWiringTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(helped["payload"]["found"]["public"], 1)
         (public,) = [item for item in helped["payload"]["sources"] if item["tier"] == "public"]
         self.assertEqual((public["license"], public["grade"], public["source_name"]),
-                         ("Public domain", "A", NIOSH))
+                         ("Public domain", "C", "Wikipedia (English)"))
         self.assertFalse(helped["payload"]["state_mutation"])
 
     def test_with_the_tier_off_the_session_has_none_and_the_help_is_lane_help_s(self) -> None:

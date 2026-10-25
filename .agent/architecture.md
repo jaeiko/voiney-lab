@@ -403,7 +403,9 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `app.state.public_knowledge`; `_with_problem_help` composes the protocol
   and history hits with `compose_problem_help` and appends the public ones
   through `_with_public_reference` / `external_references.public_reference_part`
-  (the mark, title and place, the piece's words, address and licence on the
+  -- only pieces sharing a word with the problem (the tier marks each hit
+  with `shared_term` of the glossary's terms and the problem's own Latin
+  words; the index always returns its nearest pieces) -- (the mark, title and place, the piece's words, address and licence on the
   screen; said, the mark and a short same-language fact or where to see it;
   every line naming the source is quoted, so `problem_help_violations` judges
   only the fixed sentences). With the supplemental role on, the spoken form
