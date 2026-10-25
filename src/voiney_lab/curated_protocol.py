@@ -3595,12 +3595,28 @@ _REPEAT_PATTERNS = (
         r"(?:줘|줘요|줄래|줄래요|주세요|줄\s*수\s*있어(?:요)?)?$"
     ),
     re.compile(r"^뭐라고(?:요|\s*(?:했어|했어요|하셨어요|하셨죠|그랬어|그랬어요))?$"),
+    # Lane SAY, decision 5: "다시", "한 번 더", "다시 한 번" said alone ask
+    # for the last guidance again; with a notebook question open they were
+    # written down as its answer.
+    re.compile(r"^(?:다시|한\s*번\s*더|다시\s*한\s*번)(?:\s*만)?(?:요)?$"),
     re.compile(
         r"^(?:방금|아까)\s*(?:거|것|말|답|답변|안내)?\s*다시"
         r"(?:\s*(?:말해|들려|해)\s*(?:줘|줘요|줄래|줄래요|주세요)?)?$"
     ),
 )
+#: Lane SAY, decision 5 (2026-10-25): "자세히" and its kin said alone --
+#: "더 자세히", "자세하게", "좀 더 설명해 줘", "더 알려줘" -- ask for the
+#: current step in detail. "차세이", "자세이" and "차세히" are how the STT
+#: heard "자세히" in the person's voice test (the purpose it stored).
+_DETAIL_WORD = r"(?:자세히|자세하게|상세히|상세하게|자세이|차세히|차세이)"
+_DETAIL_REQUEST = re.compile(
+    r"^(?:(?:좀|조금)\s*)?(?:더\s*)?(?:(?:좀|조금)\s*)?" + _DETAIL_WORD
+    + r"(?:\s*좀)?(?:요)?"
+    r"(?:\s*(?:알려|설명해|말해|얘기해)\s*(?:줘|줘요|줄래|줄래요|주세요))?$"
+    r"|^(?:(?:좀|조금)\s*)?(?:더\s*)?(?:쉽게\s*)?(?:설명해|알려)\s*(?:줘|줘요|줄래|줄래요|주세요)$"
+)
 _STEP_ELABORATION_PATTERNS = (
+    _DETAIL_REQUEST,
     re.compile(
         r"(?:(?P<label>[0-9]{1,2})\s*단계|현재\s*단계|이\s*단계)"
         r".*(?:조금\s*더|더\s*)?(?:자세|상세|설명)"
@@ -4260,6 +4276,26 @@ _NOTEBOOK_SKIP = re.compile(
 #: are completions, read as commands before this.
 _NOTEBOOK_BARE_YES_NO = re.compile(
     r"^(?:네|예|응|어|그래|맞아|아니|아니요|아뇨|아니야|아닙니다|yes|no)(?:\s*요)?[.!]*$"
+)
+#: Lane SAY, decision 5 (2026-10-25): an acknowledgement or "I don't know"
+#: to a notebook question skips it, as "넘어가" does -- it was written down
+#: as the purpose ("알겠어", "고마워", "확인").
+_NOTEBOOK_ACKNOWLEDGEMENT = re.compile(
+    r"^(?:(?:네|응|어)\s*)?(?:알겠어|알겠어요|알겠습니다|알았어|알았어요|고마워|고마워요|고맙습니다|"
+    r"감사해요|감사합니다|좋아|좋아요|좋습니다|오케이|오케|ok|okay|확인|확인했어|확인했어요|"
+    r"몰라|몰라요|모르겠어|모르겠어요|글쎄|글쎄요)[.!]*$"
+)
+#: Lane SAY, decision 5: short command words said alone are never the
+#: answer to a notebook question, whatever the rules make of them -- the
+#: sweep of 2026-10-25 found each written down as the purpose or an
+#: observation. "자세히" and its kin, "다시" and "한 번 더" are read by the
+#: rules themselves (``_DETAIL_REQUEST``, ``_REPEAT_PATTERNS``).
+_NOTEBOOK_SHORT_COMMAND = re.compile(
+    r"^(?:(?:좀|조금|더|다시)\s*)*"
+    r"(?:천천히|빨리|크게|작게|짧게|길게|이전|이전\s*단계|앞\s*단계|처음|처음으로|취소|그만|"
+    r"요약|요약해|원문|원문\s*그대로|그림|사진|도식|타이머|남은\s*시간|뭐|뭐야|응|어|한국어로|영어로|"
+    r"번역|번역해|다시\s*말해|다시\s*읽어|읽어)"
+    r"(?:\s*(?:말해|읽어|보여|띄워|해)?\s*(?:줘|줘요|줄래|줄래요|주세요))?(?:요)?[.!?]*$"
 )
 #: A request or an order anywhere in the words ("원문 그림 띄워 줘", "관찰
 #: 메모해 줘 멤브레인이 살짝 말랐어", "해라"): a command, whatever the rules
@@ -8014,6 +8050,9 @@ def classify_curated_control_intent(
                 target_step=label or "authoritative_current_step",
                 detail_level="detailed",
                 language=language,
+                # Lane SAY, decision 5: the bare detail words carry what was
+                # said, so the front rules can hand them on (see _front_rule_for).
+                normalized_transcript=key if pattern is _DETAIL_REQUEST else None,
             )
     if any(pattern.search(key) for pattern in _EXPECTED_RESULT_PATTERNS):
         return CuratedControlIntent(
@@ -17966,6 +18005,15 @@ class CuratedProtocolSession:
             # Lane HELP, decision 1: the help is the server's, from its own
             # sources (the protocol and the account's records), router or not.
             return "problem_help"
+        if (
+            intent.intent_kind == "step_elaboration"
+            and intent.normalized_transcript
+            and _DETAIL_REQUEST.fullmatch(intent.normalized_transcript)
+        ):
+            # Lane SAY, decision 5: "자세히" said alone may mean the last
+            # answer, which the router reads from its history; the rules'
+            # own route reads the current step in detail.
+            return None
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
@@ -18256,7 +18304,10 @@ class CuratedProtocolSession:
         key = _semantic_utterance_key(transcript)
         if language != "ko" or transcript_quality is not None:
             return None
-        if not key or _NOTEBOOK_SKIP.fullmatch(key) or _NOTEBOOK_BARE_YES_NO.fullmatch(key):
+        if (
+            not key or _NOTEBOOK_SKIP.fullmatch(key) or _NOTEBOOK_BARE_YES_NO.fullmatch(key)
+            or _NOTEBOOK_ACKNOWLEDGEMENT.fullmatch(key)
+        ):
             self._notebook_question = None
             plan = self._words_plan(NOTEBOOK_SKIPPED_KO, intent_kind="notebook_question_skipped")
             self._last_front_rule = "notebook_question"
@@ -18292,6 +18343,9 @@ class CuratedProtocolSession:
             # rules make of it; words cut short ("… 이 단계에서 쓰는", lane
             # RA's fragment) are not an answer either -- the question stays.
             or _NOTEBOOK_REQUEST.search(probe)
+            # Lane SAY, decision 5: a short command word is not an answer.
+            or _DETAIL_REQUEST.fullmatch(_semantic_utterance_key(probe))
+            or _NOTEBOOK_SHORT_COMMAND.fullmatch(_semantic_utterance_key(probe))
             or incomplete_fragment(probe)
             # Lane EASY, decision 2: "1단계 15분 대신 20분으로 할게" changes
             # a value of today's run; it is no purpose or result.
