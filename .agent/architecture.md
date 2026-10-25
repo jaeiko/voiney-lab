@@ -27,12 +27,13 @@ Browser / store-app WebView (static/index.html, connection.js, feedback.js)
                                                     │
                                      ListenerSession (one per connection)
                                        FrameBuffer → vad.EndpointDetector
-                                       level gate (calibrated speaker)
+                                       level gate (only when the person's filter is on)
                                                     │ utterance
                                        STT (voice_providers, provider setting)
                                                     │ transcript
                           empty / self-echo → emergency gate (emergency.py)
-                          → fragment / filler / calibration / language admission
+                          → paused: resume words only → fragment / filler /
+                            calibration / language admission (every drop: speech.dropped)
                                                     │
                      CuratedProtocolSession.front_plan  (front rules)
                           │ handled                    │ handed on
@@ -86,8 +87,19 @@ generation is cancelled and its audio cleared (barge-in).
    `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`), at 15 s, or — in a
    calibrated session in a room that keeps the VAD on — when the level stays
    under the wearer's line (`EndpointResult.endpoint` = `silence`/`level`/
-   `forced`). After calibration, speech far quieter than the wearer's
-   reference is dropped before STT (`ignores_level`, event `speech.ignored`).
+   `forced`). With the filter on (lane HEAR, decision 2: the experimenter's
+   `speaker_filter`, a `voice_reference` measured through
+   `POST /api/voice/calibration` under `VOICE_REFERENCE_MAX_AGE_DAYS` old, on
+   the microphone the page names in `client.audio_ready` — `stored_voice_filter`),
+   speech far quieter than the wearer's reference is dropped before STT
+   (`ignores_level`, event `speech.ignored`). No voice is measured during a
+   run (decision 1). Speech that starts within `CONTINUATION_JOIN_SECONDS`
+   of the last end (`FRAGMENT_JOIN_SECONDS` for held or still-transcribing
+   words), while that turn is unanswered and has changed nothing, is joined
+   to it (`_join_continuation`: the turn is cancelled, its audio goes in front
+   via `EndpointDetector.prepend_utterance`). Every dropped sound, here or in
+   step 3, goes through `_report_speech_drop` (reason code, dB, ms; event
+   `speech.dropped`; one spoken notice for two drops in 30 s).
 2. The waiting cue (`cascade_filler.CascadeFiller`) starts; STT returns one
    transcript per utterance.
 3. Admission, in this order (`server.run_turn`): empty and self-echo
@@ -96,9 +108,13 @@ generation is cancelled and its audio cleared (barge-in).
    `deterministic_emergency`). Recognized emergencies do not become calibration
    samples or wait for language confirmation. Router-first recognizes the new
    utterance before joining any held fragment; only a non-emergency is joined
-   and checked again, through this same fixed-response gate. Other turns continue through
-   fragment join (router-first only), non-speech/filler admission, a pending
-   calibration sentence and language confirmation. With a protocol the ordinary
+   and checked again, through this same fixed-response gate. A paused run
+   takes only a resume word past this point (`is_paused_resume_utterance`;
+   lane HEAR, decision 7) and answers nothing else. Other turns continue through
+   fragment join (both paths since lane HEAR), non-speech/filler admission, a pending
+   calibration sentence and language confirmation (asked only for clearly
+   English or Vietnamese words; a short Latin transcript is dropped as
+   `language_unclear` — decision 8). With a protocol the ordinary
    turn language is Korean. Audio rejected before STT still cannot reach this
    text gate; no change to acoustic recognition is implied.
 4. Routing, one line (AGENTS rule 3):
