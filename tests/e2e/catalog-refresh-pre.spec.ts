@@ -30,6 +30,7 @@ const review = (protocol_id: string, title: string) => ({
   pipeline: { stage: 'ready', stage_ko: '실행 가능', blocked: false, message: '분석 통과' },
 });
 const TARGET = { kind: 'analysis', version: null, event_id: null, analysis_id: 'an-1', revision_id: REVISION, analysis_revision_number: 1 };
+const CHOICE = 'run-changes-0123456789abcdef01234567';
 const account = (account_id: string, name: string) => ({
   mode: 'accounts', signed_in: true,
   account: { account_id, name, organization_id: 'lab-pilot', admin: false, entitlement: 'pilot', disabled: false, created_at: '2026-10-20T00:00:00+00:00' },
@@ -39,7 +40,7 @@ class Lab {
   protocols = [entry(GAMMA, 'Gamma (예시)', 'ready')];
   analysed = false;
   catalogAsks = new Map<string, number>();
-  starts: Array<{ protocol_id: string }> = [];
+  starts: Array<{ protocol_id: string; choice: string | undefined }> = [];
 
   theta() { return this.protocols.find(item => item.protocol_id === THETA); }
 
@@ -71,6 +72,10 @@ class Lab {
       await page.route(`**/api/protocols/${id}/reagent-tables`, (route: Route) => route.fulfill({ json: { tables: [] } }));
       await page.route(`**/api/protocols/${id}/start-check`, (route: Route) => route.fulfill({ json: { enabled: true, protocol_id: id, target: TARGET, questions: [], skipped_reason: 'no_numeric_values' } }));
       await page.route(`**/api/protocols/${id}/start-check/safety`, (route: Route) => route.fulfill({ json: { ready: true, reason: null, target: TARGET, missing_question_ids: [], safety_acknowledged: true } }));
+      // Lane EASY: "오늘 원문과 다르게 할 값" between the safety check and the start; nothing to change here.
+      await page.route(`**/api/protocols/${id}/start-check/changes`, (route: Route) => route.fulfill({ json: route.request().method() === 'POST'
+        ? { change_set_id: CHOICE, source: 'wizard', changes: [] }
+        : { protocol_id: id, target: TARGET, revision_id: REVISION, limit: 12, values: [] } }));
     }
     await page.routeWebSocket(/\/ws$/, ws => this.connect(ws));
   }
@@ -81,7 +86,7 @@ class Lab {
       if (typeof raw !== 'string') return;
       const message = JSON.parse(raw);
       if (message.type !== 'session.start') return;
-      this.starts.push({ protocol_id: message.protocol_id });
+      this.starts.push({ protocol_id: message.protocol_id, choice: message.run_change_set_id });
       ws.send(JSON.stringify({ type: 'session.ready', configuration_id: message.configuration_id, generation: 1, mode: 'cascade', language: 'ko', input_language: 'ko', protocol_id: message.protocol_id, revision_id: REVISION, research_capabilities: {} }));
     });
   }
@@ -125,10 +130,13 @@ test.describe('A labmate\'s upload, started without a reload (lane PRE)', () => 
     await page.locator('#protocol-start').click();
     await expect(page.locator('#wizard-title')).toHaveText('안전 주의');
     await page.locator('#wizard-primary').click();
+    await expect(page.locator('#wizard-title')).toHaveText('오늘 원문과 다르게 할 값');
+    await page.locator('#wizard-primary').click();
     await expect(page.locator('#wizard-primary')).toHaveText('이 프로토콜로 시작');
     await expect(page.locator('#wizard-note')).not.toHaveText('분석을 통과한 프로토콜을 골라 주세요.');
     await page.locator('#wizard-primary').click();
     await expect.poll(() => lab.starts.map(item => item.protocol_id)).toEqual([THETA]);
+    expect(lab.starts[0].choice).toBe(CHOICE);
     expect(labmateLoads).toBe(1);
     await uploaderContext.close();
   });
