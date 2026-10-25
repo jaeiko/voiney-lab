@@ -281,6 +281,31 @@ class ServerTurnTests(unittest.TestCase):
         self.assertIn("Solution A 500 µL로", spoken[0])
 
 
+class GreetingTests(unittest.TestCase):
+    """The greeting asks the source's count or condition before the start (lane CF)."""
+
+    def test_the_spoken_greeting_does_not_read_the_quoted_source(self) -> None:
+        from tests.lane_cf_support import RANGE_21, Session
+
+        class _Open(Session, unittest.TestCase):
+            def runTest(self) -> None:  # pragma: no cover - a holder
+                pass
+
+        holder_case = _Open()
+        session = holder_case.open_with(None, question_timing="before_start")
+        session.open_prestart_questions()
+        holder = type("Listener", (), {"curated_protocol_session": session})()
+        shown = server_module._session_greeting_text(holder, "ko")
+        self.assertIn(RANGE_21, shown)  # the screen keeps the source
+        said = server_module._korean_first_words(holder, shown, "ko")
+        self.assertNotIn(RANGE_21, said)
+        self.assertIn(UNTRANSLATED_SPOKEN, said)
+        self.assertTrue(said.startswith("Voiney Lab입니다."))
+        self.assertIn("몇 번(몇 개) 하시나요?", said)
+        # English sessions are left alone.
+        self.assertEqual(server_module._korean_first_words(holder, shown, "en"), shown)
+
+
 class MiniprepTests(unittest.TestCase):
     def test_every_step_preview_and_reading_says_no_english_source(self) -> None:
         fixture = miniprep_fixture()

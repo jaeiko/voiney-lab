@@ -9537,6 +9537,12 @@ def _cached_korean_first_index(key: _FixtureContentKey) -> _KoreanFirstIndex:
         for term in ProtocolVocabulary.from_fixture(fixture).terms
     }
     names.update(_normalized_words(source) for source, _ in (fixture.translation_glossary or ()))
+    # The protocol's and its sections' titles are names, said as written
+    # ("Voiney Lab입니다. 선택한 In-gel digestion protocol … 프로토콜이").
+    names.add(_normalized_words(str(getattr(fixture, "title", "") or "")))
+    names.update(
+        _normalized_words(str(getattr(section, "title_source_text", "") or ""))
+        for section in getattr(protocol, "sections", ()) or ())
     return _KoreanFirstIndex(
         corpus=tuple(dict.fromkeys(_normalized_words(text) for text in texts if text.strip())),
         units=tuple(units),

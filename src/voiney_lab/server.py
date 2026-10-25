@@ -10335,6 +10335,29 @@ def _session_greeting_text(session:Any,language:str)->str:
     }.get(language,"Voiney Lab is ready.")
 
 
+def _korean_first_words(session:Any,text:str,language:str)->str:
+    """Server words that quote the source, as they are said (lane SAY, decision 1).
+
+    The greeting asks a question the source's conditions or counts raise
+    before the start, quoting the source; said aloud, a quote with no Korean
+    reading (reviewed, stored or made in an earlier turn) is "이 문장은 아직
+    번역되지 않았어요. 원문을 화면에 띄울게요." -- no call is made here -- and the
+    screen keeps the words as written.
+    """
+
+    curated=getattr(session,"curated_protocol_session",None)
+    if language!="ko" or curated is None or not text:
+        return text
+    try:
+        plan=curated._words_plan(text,intent_kind="server_words")
+        reading=curated.korean_first(
+            plan,language="ko",readings=_spot_readings(translation_revision_key(curated.fixture)))
+    except Exception as exc:  # noqa: BLE001 - the words are said as written
+        log.warning("korean_first server_words failed error=%s",type(exc).__name__)
+        return text
+    return reading.plan.speech_text or text
+
+
 async def _send_session_greeting(
     sender:LockedSender,session:ListenerSession,*,language:str,
 ) -> None:
@@ -10345,6 +10368,7 @@ async def _send_session_greeting(
     session.greeting_emitted=True
     greeting_turn_id=2_000_000_000  # Reserved display/audio identity; user turns start at 1.
     greeting=_session_greeting_text(session,language)
+    spoken_greeting=_korean_first_words(session,greeting,language)
     generation=session.generation
     configuration_id=session.accepted_configuration_id
     greeting_id=hashlib.sha256(
@@ -10363,7 +10387,7 @@ async def _send_session_greeting(
         log.info("session.greeting.tts_started greeting_id=%s",greeting_id)
         # Lane VOX, decision 3: the same greeting next session, from memory.
         with sentence_audio_kept():
-            pcm=await asyncio.to_thread(synthesize,said(greeting),language)
+            pcm=await asyncio.to_thread(synthesize,said(spoken_greeting),language)
         frames=frame_complete_audio(pcm)
         log.info(
             "session.greeting.tts_completed greeting_id=%s frame_count=%d",
@@ -10398,7 +10422,7 @@ async def _send_session_greeting(
     await sender.text(
         "reply.delta",configuration_id=configuration_id,
         turn_id=greeting_turn_id,generation=generation,segment_index=0,text=greeting,
-        primary_text=greeting,speech_text=greeting,
+        primary_text=greeting,speech_text=spoken_greeting,
         answer_origin="server_greeting",source_texts=[],source_pages=[],
         evidence_ids=[],translation_status="not_applicable",
     )
