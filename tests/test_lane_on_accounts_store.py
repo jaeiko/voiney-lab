@@ -211,10 +211,10 @@ class LoginAndLockTests(_StoreCase):
         self.join("최수진", "another pass phrase")
         for _ in range(acc.LOGIN_FAILURE_LIMIT):
             with self.assertRaises(acc.LoginRefusedError):
-                self.store.log_in("없는 사람", "x" * 12, client="10.0.0.9")
-        self.assertEqual(self.store.log_in("최수진", "another pass phrase", client="10.0.0.9").name, "최수진")
+                self.store.log_in("없는 사람", "x" * 12, device="10.0.0.9")
+        self.assertEqual(self.store.log_in("최수진", "another pass phrase", device="10.0.0.9").name, "최수진")
         # Another client is not locked.
-        self.assertEqual(self.store.log_in("최수진", "another pass phrase", client="10.0.0.10").name, "최수진")
+        self.assertEqual(self.store.log_in("최수진", "another pass phrase", device="10.0.0.10").name, "최수진")
 
     def test_a_success_clears_the_names_failures(self):
         self.join("김재준", "correct horse battery")

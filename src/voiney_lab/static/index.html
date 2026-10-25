@@ -1148,6 +1148,14 @@
             <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
             <!-- Lane RN decision 4: the analysis notice (start, progress with the time taken, pass or failure) stands beside the button that asked for it. -->
             <p id="protocol-review-analysis-notice" class="protocol-review-status" role="status" aria-live="polite" hidden></p>
+            <!-- Lane EASY decision 1: the pages the analysis read, and the pages "다시 분석" may read instead. -->
+            <p id="protocol-analysis-range" class="protocol-review-status" hidden></p>
+            <fieldset id="reanalysis-page-range" class="protocol-page-range">
+              <legend>다시 분석할 쪽 (선택)</legend>
+              <label for="reanalysis-first-page">처음</label><input id="reanalysis-first-page" type="number" inputmode="numeric" min="1" step="1">
+              <label for="reanalysis-last-page">끝</label><input id="reanalysis-last-page" type="number" inputmode="numeric" min="1" step="1">
+              <small>비우면 문서 전체를 다시 분석해요.</small>
+            </fieldset>
             <div class="protocol-review-actions">
               <button id="protocol-review-refresh" type="button">분석 결과 새로고침</button>
               <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
@@ -1175,6 +1183,13 @@
               <label id="protocol-pdf-pick" for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">원문 파일 선택</label>
               <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
             </div>
+            <!-- Lane EASY decision 1 (2026-10-24): the pages to analyse -- a paper's Methods pages, say; empty is the whole document. The server checks them against the document and keeps them in the ledger. -->
+            <fieldset id="protocol-page-range" class="protocol-page-range">
+              <legend>분석할 쪽 (선택)</legend>
+              <label for="protocol-first-page">처음</label><input id="protocol-first-page" type="number" inputmode="numeric" min="1" step="1" placeholder="예: 3">
+              <label for="protocol-last-page">끝</label><input id="protocol-last-page" type="number" inputmode="numeric" min="1" step="1" placeholder="예: 5">
+              <small id="protocol-page-range-help">논문처럼 실험 방법이 일부 쪽에만 있으면 그 쪽만 적어 주세요. 비우면 문서 전체를 분석해요.</small>
+            </fieldset>
             <small id="protocol-upload-status" role="status"></small>
             <small id="protocol-heic-hint" class="protocol-heic-hint" role="note" hidden></small>
             <small id="protocol-duplicate-notice" class="protocol-duplicate-notice" role="status" hidden></small>
@@ -1283,6 +1298,8 @@
           <div id="procedure-progress"></div>
           <p id="procedure-step-title"></p>
           <p id="procedure-primary" class="step-body"></p>
+          <!-- Lane EASY decision 2 (2026-10-24): the current step's values today's run changed, as the server words them ("20분(오늘 바꾼 값 · 원문 15분)"); nothing when there are none. -->
+          <ul id="procedure-run-changes" class="run-changes" aria-label="오늘 바꾼 값" hidden></ul>
           <!-- Lane UI3 decision 1 (2026-10-14): the draft M2's "다음 단계: …" -- the next step's sentence as the server sends it (screen.next_step_sentence); nothing when it sends none. -->
           <p id="run-next-step" class="run-next-step" hidden></p>
           <div id="procedure-open-question" class="open-question" role="status" hidden></div>
@@ -1656,6 +1673,9 @@ let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfig
 let curatedProtocolState={attached:false},curatedStateRevision=-1;
 let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false,workspaceDisplayName="",workspacePrincipalId="";
 const protocolCatalog=new Map();
+// Lane PRE decision 1 (2026-10-24): the catalog's own refresh -- its timer, the loads in flight, the newest answer drawn.
+const CATALOG_REFRESH_RUNNING_MS=5000,CATALOG_REFRESH_IDLE_MS=30000;
+let catalogRefreshHandle=null,catalogLoadsInFlight=0,catalogRequestSeq=0,catalogAppliedSeq=0,catalogSignature=null,catalogRouteTab=null,catalogHoldsWizard=false;
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null,reportReadOnly=false;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
 const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
@@ -2837,6 +2857,7 @@ function renderCuratedProtocolState(message){
  // English reader, the source is the body and nothing is folded.
  const stepShown=value.active||previewValid,koreanStep=koreanIsBody()&&nonempty(value.primary_summary);
  setText("procedure-primary",stepShown?normalizePresentationText(koreanStep?value.primary_summary:(value.display_summary||"")):"");
+ renderRunChanges(stepShown?value.current_step_run_changes:null);
  $("procedure-instruction").textContent=stepShown&&koreanStep&&nonempty(value.display_summary)?normalizePresentationText(value.display_summary):"";
  const sourceToggleNode=$("procedure-source-toggle");if(sourceToggleNode){sourceToggleNode.hidden=!(stepShown&&koreanStep&&nonempty(value.display_summary));sourceToggleNode.open=false;}
  updateStepSafetyGuidance();renderTranslationNote();
@@ -3611,7 +3632,9 @@ async function startSession(){
  stopVoicePreview();forgetSafetyRead();
  sessionActive=false;
  acceptedSessionConfiguration=null;
- const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),pending={configuration_id,mode:"cascade",language:"ko",protocol_id:$("protocol-id")?.value||null,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{})};
+ const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),startProtocol=$("protocol-id")?.value||null,changeSetId=!resumeExisting&&changesPassedFor(startProtocol)?wizard.chosenChanges.changeSetId:null,pending={configuration_id,mode:"cascade",language:"ko",protocol_id:startProtocol,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{}),...(changeSetId?{run_change_set_id:changeSetId}:{})};
+ // Lane EASY (human decision 2026-10-24): the choice is the start's own -- the next start passes the step again.
+ if(changeSetId)wizard.chosenChanges=null;
  pendingSessionConfiguration=pending;
  $("session-configuration-status").textContent="서버가 설정을 확인하고 있어요";
  renderState("CONNECTING");
@@ -3622,18 +3645,55 @@ async function startSession(){
   sendControl("session.start",pending);
  }catch(e){if(generation===sessionGeneration)fail(e);}
 }
-async function loadProtocolCatalog(preferredProtocolId=null){
+// Lane PRE decision 1 (2026-10-24, lane PERSONA F1): a page left open kept the list it loaded, so a
+// protocol whose analysis ended meanwhile -- a labmate's upload, or one's own in another tab -- stayed
+// "분석 중" and the start sheet refused it until a reload. While the page is shown the list asks the
+// server again: every 5 s while an analysis in it runs, every 30 s otherwise, and at once when a tab
+// opens, the page comes back into view or the start sheet opens; nothing while hidden or before a login.
+// Such a refresh is quiet: the status lines stay, an unchanged list is not drawn again, a refresh that
+// fails keeps the list on screen, and an answer older than one already drawn is dropped.
+function pageShown(){return globalThis.document?.visibilityState!=="hidden";}
+function catalogEntryAnalysing(entry){return PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||PROTOCOL_RUNNING_STATES.has(protocolAnalysisRun(entry)?.state);}
+function stopCatalogRefresh(){if(catalogRefreshHandle!==null)clearTimeout(catalogRefreshHandle);catalogRefreshHandle=null;}
+function scheduleCatalogRefresh(){
+ stopCatalogRefresh();
+ if(!pageShown()||authRequired())return null;
+ const delay=[...protocolCatalog.values()].some(catalogEntryAnalysing)?CATALOG_REFRESH_RUNNING_MS:CATALOG_REFRESH_IDLE_MS;
+ catalogRefreshHandle=setTimeout(()=>{catalogRefreshHandle=null;void refreshProtocolCatalog();},delay);catalogRefreshHandle?.unref?.();
+ return delay;
+}
+// A load already in flight answers for this one (and schedules the next).
+async function refreshProtocolCatalog(){if(!pageShown()||authRequired()){stopCatalogRefresh();return false;}if(catalogLoadsInFlight>0)return false;return loadProtocolCatalog(null,{quiet:true});}
+// A box in the start sheet being typed in (lane EASY's "오늘 원문과 다르게 할 값") is not rebuilt by a refresh:
+// the sheet is drawn again at the next press, with what was typed.
+function wizardTyping(){const active=globalThis.document?.activeElement;return Boolean(wizard?.open)&&String(active?.tagName||"").toLowerCase()==="input"&&$("wizard-sheet")?.contains?.(active)===true;}
+function onCatalogVisibilityChange(){if(pageShown())return refreshProtocolCatalog();stopCatalogRefresh();return Promise.resolve(false);}
+// Before the page says a protocol cannot run, it asks the server once more (the start sheet, the start).
+async function recheckProtocolRunnable(protocolId){
+ if(!protocolId)return false;
+ if(protocolCatalog.get(protocolId)?.available_for_execution!==true)await loadProtocolCatalog(null,{quiet:true});
+ return protocolCatalog.get(protocolId)?.available_for_execution===true;
+}
+async function loadProtocolCatalog(preferredProtocolId=null,{quiet=false}={}){
  const selector=$("protocol-id");
  if(!selector||typeof fetch!=="function")return;
- const manual=selector.value,selected=preferredProtocolId||manual,status=$("protocol-upload-status");
- catalogState="loading";
- selector.setAttribute?.("aria-busy","true");
- $("protocol-readiness").textContent="카탈로그 불러오는 중";
- if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
+ const manual=selector.value,selected=preferredProtocolId||manual,status=$("protocol-upload-status"),seq=++catalogRequestSeq;
+ if(!quiet){
+  catalogState="loading";
+  selector.setAttribute?.("aria-busy","true");
+  $("protocol-readiness").textContent="카탈로그 불러오는 중";
+  if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
+ }
+ catalogLoadsInFlight++;
  try{
   const response=await serverFetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
   if(!response.ok)throw new Error("catalog unavailable");
   const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
+  if(seq<catalogAppliedSeq)return false;
+  const signature=JSON.stringify(entries),recovering=catalogState!=="ready";
+  catalogAppliedSeq=seq;
+  if(quiet&&!recovering&&signature===catalogSignature)return true;
+  catalogSignature=signature;
   protocolCatalog.clear();selector.replaceChildren();
   const empty=document.createElement("option");empty.value="";empty.textContent="프로토콜을 선택하지 않음";selector.appendChild(empty);
   for(const item of entries){
@@ -3648,11 +3708,16 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   const runnable=option=>Boolean(option.value)&&option.dataset.runnable==="true";
   if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
   else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
-  if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
-  catalogState="ready";renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();applyRouteSelections();
+  if(status&&(!quiet||recovering))status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
+  catalogState="ready";catalogHoldsWizard=quiet&&wizardTyping();
+  try{renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();applyRouteSelections();}finally{catalogHoldsWizard=false;}
+  return true;
  }catch(_){
+  if(quiet||seq<catalogAppliedSeq)return false;
+  catalogAppliedSeq=seq;catalogSignature=null;
   protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";catalogState="failed";renderState(visibleState);renderProtocolList();
- }finally{selector.setAttribute?.("aria-busy","false");}
+  return false;
+ }finally{catalogLoadsInFlight--;if(!quiet)selector.setAttribute?.("aria-busy","false");scheduleCatalogRefresh();}
 }
 
 const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
@@ -3684,8 +3749,27 @@ const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  protocol_image_too_large:"사진의 화소 수가 서버가 읽는 한도를 넘었습니다. 해상도를 낮춰 다시 올려 주세요.",
  source_conversion_failed:"Word 문서를 PDF로 바꾸지 못했습니다. Word에서 PDF로 저장해 올려 주세요.",
  network_error:"서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+ // Lane EASY decision 1: pages to analyse that the document does not have.
+ analysis_page_range_invalid:"고른 쪽이 이 문서에 없어요. 처음과 끝 쪽 번호를 확인해 주세요.",
  unexpected_server_error:"PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 });
+// Lane EASY decision 1 (2026-10-24): the pages to analyse, as two number inputs say them -- null for the whole
+// document, "invalid" for one end alone or a range that runs backwards (the server checks the pages against the
+// document). The upload's range is kept by the protocol it registered, for that protocol's first analysis request.
+var uploadPageRanges=new Map();
+function pageRangeFrom(firstId,lastId){
+ const first=String($(firstId)?.value||"").trim(),last=String($(lastId)?.value||"").trim();
+ if(!first&&!last)return null;
+ const a=Number(first),b=Number(last);
+ if(!Number.isInteger(a)||!Number.isInteger(b)||a<1||b<a)return "invalid";
+ return {first_page:a,last_page:b};
+}
+function pageRangeQuery(range){return range&&typeof range==="object"?`first_page=${range.first_page}&last_page=${range.last_page}`:"";}
+function pageRangeWords(range){
+ if(!range||typeof range!=="object")return "분석한 쪽 · 문서 전체";
+ const pages=nonemptyText(range.pages_ko)?range.pages_ko:`${range.first_page}–${range.last_page}쪽`;
+ return `분석한 쪽 · ${pages}${Number.isInteger(range.page_count)?` (전체 ${range.page_count}쪽)`:""}`;
+}
 function protocolUploadErrorMessage(code){return PROTOCOL_UPLOAD_ERROR_MESSAGES[code]||PROTOCOL_UPLOAD_ERROR_MESSAGES.unexpected_server_error;}
 // Lane UI3 decision 3 (2026-10-14): what the server takes as a protocol's
 // source (lane AN): each file goes with the type the browser gives it, or
@@ -4142,6 +4226,8 @@ function renderProtocolReview(review,options={}){
  const compare=$("protocol-compare");if(compare){compare.hidden=false;compare.open=options.open!==false;}
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderExecutionReasons(review);renderStartSummary(review);
+ // Lane EASY decision 1: the pages the analysis read (the server's range; nothing when none has run).
+ const rangeLine=$("protocol-analysis-range");if(rangeLine){const shown=review?.analysis_available===true||review?.review_pending;rangeLine.hidden=!shown;rangeLine.textContent=shown?pageRangeWords(review.analysis_page_range):"";}
  // Lane UI3 decision 4: the picked protocol's reagent tables, read once per protocol.
  if(typeof review?.protocol_id==="string"&&review.protocol_id&&review.protocol_id!==reagentTablesProtocolId){const said=$("reagent-table-status");if(said)said.textContent="";void loadReagentTables(review.protocol_id);}
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
@@ -4158,12 +4244,13 @@ function renderProtocolReview(review,options={}){
  }
  appendProtocolReviewGroup("원문 파일",[
   `파일 · ${source.filename||review?.source_filename||"—"}`,
-  `페이지 · ${Number.isInteger(source.page_count)?`${source.page_count}쪽`:"—"} · ${review?.analysis_payload_sha256?"분석 끝남":"분석 전"}`,
+  `페이지 · ${Number.isInteger(source.page_count)?`${source.page_count}쪽`:"—"} · ${review?.analysis_payload_sha256||review?.available_for_execution===true?"분석 끝남":"분석 전"}`,
  ],[["revision_id",review?.revision_id||null],["source_sha256",source.sha256||review?.source_sha256||null],["analysis_payload_sha256",review?.analysis_payload_sha256||null]]);
  const lifecycleCode=review?.lifecycle_state||"uploaded",readinessCode=readiness.status||review?.readiness_status||"analysis_required";
  appendProtocolReviewGroup("실행 준비 판정",[
   `처리 단계 · ${serverCodeText("lifecycle_state",lifecycleCode)}`,
-  `상태 · ${serverCodeText("readiness_status",readinessCode)}`,
+  // Lane PRE decision 2: whether it can run comes first; the readiness code only says what to read before the start.
+  `상태 · ${review?.available_for_execution===true?"실행 가능 · ":""}${serverCodeText("readiness_status",readinessCode)}`,
   ...reasons.map(reason=>`${serverCodeText(["readiness_reason","analysis_status"],reason.code)} · ${reason.message_ko||reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
   review?.available_for_execution===true?"실험 시작 가능 · '이 프로토콜로 실험 시작'을 누르면 확인 뒤 시작":"분석 통과 전 실행 불가",
  ],[["lifecycle_state",lifecycleCode],["readiness_status",readinessCode],["readiness_label",typeof readiness.label==="string"?readiness.label:null],...reasons.map(reason=>["reason",reason?.code]),...reasons.map(reason=>["reason_message",typeof reason?.message==="string"?reason.message:null])]);
@@ -4828,10 +4915,13 @@ async function runProtocolOcr(){
  try{const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
 }
 async function analyzeRegisteredProtocol(protocolId,{reanalysis=false}={}){
+ // Lane EASY decision 1: "다시 분석" reads the detail's two page inputs; a first analysis, the upload's range.
+ const pageRange=reanalysis?pageRangeFrom("reanalysis-first-page","reanalysis-last-page"):(uploadPageRanges.get(protocolId)||null);
+ if(pageRange==="invalid"){showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("analysis_page_range_invalid"),"");return null;}
  const watchedSince=protocolAnalysisStartedAt,runWord=reanalysis?"다시 분석":"분석";
  currentProtocolReviewId=protocolId;protocolAnalysisStartedAt=Date.now();protocolAnalysisDuplicatePressFor=null;setProtocolAnalysisBusy(protocolId,true);showProtocolAnalysisNotice(protocolId,reanalysis?PROTOCOL_REANALYSIS_RUNNING_NOTICE:PROTOCOL_ANALYSIS_RUNNING_NOTICE,`${runWord} 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음`);startProtocolAnalysisPolling(protocolId);
  try{
-  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(protocolId)}/${reanalysis?"reanalysis":"analysis"}${pageRange?`?${pageRangeQuery(pageRange)}`:""}`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
   if(!response.ok){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(code),"");await loadProtocolReview(protocolId);return null;}
   if(!payload){stopProtocolAnalysisPolling();protocolAnalysisStartedAt=null;setProtocolAnalysisBusy(protocolId,false);showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("unexpected_server_error"),"");return null;}
   const run=payload.analysis_run||{},running=["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(run.state||payload.analysis_status),pending=payload.analysis_request_accepted===true||running;
@@ -4862,7 +4952,9 @@ async function startReviewedProtocol(){
  if(isRegisteringProtocol)return START_NOT_SENT_WORDS.uploading;
  if(sessionActive)return START_NOT_SENT_WORDS.running;
  if(lastProtocolReview?.protocol_id!==protocolId){if(button)button.hidden=true;return START_NOT_SENT_WORDS.no_review;}
- if(lastProtocolReview?.available_for_execution!==true){if(button)button.hidden=true;return START_NOT_SENT_WORDS.not_runnable;}
+ // Lane PRE decision 1: the server is asked once more before the start says the protocol cannot run.
+ if((lastProtocolReview?.available_for_execution!==true||protocolCatalog.get(protocolId)?.available_for_execution!==true)&&await recheckProtocolRunnable(protocolId)&&lastProtocolReview?.available_for_execution!==true)await loadProtocolReview(protocolId);
+ if(lastProtocolReview?.protocol_id!==protocolId||lastProtocolReview?.available_for_execution!==true){if(button)button.hidden=true;return START_NOT_SENT_WORDS.not_runnable;}
  const select=$("protocol-id");if(!select||protocolCatalog.get(protocolId)?.available_for_execution!==true){if(status)status.textContent=START_NOT_SENT_WORDS.not_runnable;return START_NOT_SENT_WORDS.not_runnable;}
  if(button)button.disabled=true;if(status)status.textContent="안전 주의를 확인했습니다 · 실험을 시작합니다.";
  try{select.value=protocolId;renderSelectedProtocolContext();await startSession();}finally{if(button)button.disabled=false;}
@@ -4912,7 +5004,9 @@ async function registerProtocolLink(){
  renderUploadFlow();
  try{
   let response;
-  try{response=await serverFetch("/api/protocols/import-link",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({url}),redirect:"error"});}
+  const pageRange=pageRangeFrom("protocol-first-page","protocol-last-page");
+  if(pageRange==="invalid"){if(status)status.textContent=protocolUploadErrorMessage("analysis_page_range_invalid");return null;}
+  try{response=await serverFetch("/api/protocols/import-link",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({url,...(pageRange||{})}),redirect:"error"});}
   catch(_){if(generation===sessionGeneration&&status)status.textContent=protocolUploadErrorMessage("network_error");return null;}
   const payload=await safeProtocolUploadPayload(response);
   if(generation!==sessionGeneration)return null;
@@ -4922,6 +5016,7 @@ async function registerProtocolLink(){
    return null;
   }
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return null;}
+  if(pageRange&&typeof payload.protocol?.protocol_id==="string")uploadPageRanges.set(payload.protocol.protocol_id,pageRange);
   const protocolId=await acceptRegisteredProtocol(payload);
   if(protocolId&&input)input.value="";
   return protocolId||null;
@@ -4933,6 +5028,8 @@ async function registerProtocolLink(){
 async function registerSelectedProtocol(){
  const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
  if(!file){if(status)status.textContent="등록할 원문 파일(PDF, Word, 사진)을 선택해 주세요.";return;}
+ const pageRange=pageRangeFrom("protocol-first-page","protocol-last-page");
+ if(pageRange==="invalid"){if(status)status.textContent=protocolUploadErrorMessage("analysis_page_range_invalid");return;}
  const mediaType=protocolSourceMediaType(file);
  if(!PROTOCOL_SOURCE_MEDIA_TYPES.has(mediaType)){if(status)status.textContent=protocolUploadErrorMessage("unsupported_pdf_media_type");if(input)input.value="";return;}
  if(isRegisteringProtocol)return;
@@ -4942,11 +5039,12 @@ async function registerSelectedProtocol(){
  if(status)status.textContent=protocolSourceRegisteringLine(mediaType);
  try{
   let response;
-  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
+  try{response=await serverFetch(`/api/protocols?filename=${encodeURIComponent(file.name)}${pageRange?`&${pageRangeQuery(pageRange)}`:""}`,{method:"POST",headers:{"Content-Type":mediaType},body:file,redirect:"error"});}
   catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=code==="heic_support_unavailable"&&$("protocol-heic-hint")?.hidden===false?HEIC_REFUSED_BESIDE_HINT:protocolUploadErrorMessage(code);if(input)input.value="";return;}
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
+  if(pageRange&&typeof payload.protocol?.protocol_id==="string")uploadPageRanges.set(payload.protocol.protocol_id,pageRange);
   await acceptRegisteredProtocol(payload);
  }finally{isRegisteringProtocol=false;renderProtocolLinkControls();if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;renderUploadFlow();}
 }
@@ -5195,8 +5293,9 @@ function experimentStartPlan(){
  }
  const entry=wizardSelectedProtocol();
  if(entry?.available_for_execution===true){
-  const checked=safetyReadFor(entry.protocol_id);
-  return {kind:"protocol",protocolId:entry.protocol_id,checked,label:"이 프로토콜로 시작",sub:`${entry.title} · ${checked?"안전 주의를 읽었어요 · 누르면 바로 시작해요":"핵심 값과 안전 주의를 확인하고 시작해요"}`};
+  // Human decision 2026-10-24: at once only when the safety check was read and "오늘 원문과 다르게 할 값" passed.
+  const checked=safetyReadFor(entry.protocol_id)&&changesPassedFor(entry.protocol_id);
+  return {kind:"protocol",protocolId:entry.protocol_id,checked,label:"이 프로토콜로 시작",sub:`${entry.title} · ${checked?"안전 주의와 오늘 바꿀 값을 확인했어요 · 누르면 바로 시작해요":safetyReadFor(entry.protocol_id)?"오늘 원문과 다르게 할 값을 고르고 시작해요":"핵심 값과 안전 주의를 확인하고 시작해요"}`};
  }
  return {kind:"new",label:"새 실험 시작",sub:"마이크와 목소리, 프로토콜, 안전 주의를 한 화면씩 확인하고 시작해요"};
 }
@@ -5221,6 +5320,8 @@ async function pressExperimentStart(){
    if(typeof refused==="string"){restPrimedAudio();openWizardSheet("start");wizardNote(refused,"error");renderWizard();return false;}
    navigateTab("experiment",null,{replace:true});return true;
   }
+  // The safety check read, the step not passed: the sheet opens at the step.
+  if(safetyReadFor(plan.protocolId)&&!sessionActive)return openWizardSheet("changes");
   if(openStartForProtocol(plan.protocolId))return true;
   return openWizardSheet("protocol");
  }
@@ -5265,6 +5366,7 @@ $("wizard-close")?.addEventListener("click",()=>{closeWizardSheet();});
 $("wizard-sheet-backdrop")?.addEventListener("click",()=>{closeWizardSheet();});
 globalThis.addEventListener?.("popstate",()=>{if(wizard.open)closeWizardSheet({fromHistory:true});else wizardSheetPushed=false;renderRoute();});
 globalThis.document?.addEventListener?.("visibilitychange",()=>{void onScreenVisibilityChange();});
+globalThis.document?.addEventListener?.("visibilitychange",()=>{void onCatalogVisibilityChange();});
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 // Lane UI3 decision 3: the file buttons are labels; Enter or Space on one opens its chooser.
@@ -5319,9 +5421,9 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 // step shows what the server sent and sends the person's press back as one
 // request.
 const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
-const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
+const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},changes:{kicker:"오늘 바꿀 값",title:"오늘 원문과 다르게 할 값"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
-var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null};
+var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null,changes:null,changeInputs:{},chosenChanges:null,largeConfirm:null};
 var wizardSheetPushed=false,wizardOpener=null;
 const FIRST_SETUP_KEY="voiney-lab.first-setup";
 function wizardInviteToken(){try{return new URLSearchParams(String(globalThis.location?.search||"")).get("invite")||"";}catch(_){return "";}}
@@ -5336,7 +5438,7 @@ function wizardSteps(){
  if((wizard.voices?.voices?.length||0)>=2)steps.push("agent");
  // Lane IA addendum: the first setup after a login is the voice steps alone.
  if(wizard.mode==="setup")return steps.filter(step=>step!=="login");
- steps.push("protocol","check","safety","start");
+ steps.push("protocol","check","safety","changes","start");
  return steps;
 }
 // Lane IA addendum (2026-10-19): the sheet -- opened by the page's own buttons (never on its own, except the login), closed by ×, a press outside, Esc or the back button (one history entry is pushed while it is open), and by the start of the experiment.
@@ -5347,8 +5449,11 @@ function openWizardSheet(step=null,{mode="start"}={}){
  wizard.step=step&&steps.includes(step)?step:steps[0];
  if(!wizard.open){wizard.open=true;wizardOpener=globalThis.document?.activeElement||null;pushWizardSheetHistory();}
  renderWizard();
+ // Lane PRE decision 1: the sheet offers the protocols as the server has them now.
+ if(mode==="start")void refreshProtocolCatalog();
  $("wizard-sheet-panel")?.focus?.();
  if(wizard.step==="check")void wizardLoadCheck();
+ if(wizard.step==="changes")void wizardLoadChanges();
  return true;
 }
 function closeWizardSheet({fromHistory=false,silent=false}={}){
@@ -5398,7 +5503,7 @@ async function wizardAfterSignIn(){
  const settings=serverFetch("/api/experimenter/settings",{cache:"no-store"}).then(async response=>{if(response.ok){const payload=await response.json();if(payload?.settings)wizard.settings={...payload.settings};}}).catch(()=>{});
  await Promise.all([settings,loadAgentVoices()]);
 }
-function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();}
+function wizardGo(step){stopVoicePreview();wizard.step=step;wizard.wrong=null;wizard.card=null;wizard.cardText=null;wizardNote("");renderWizard();if(step==="check")void wizardLoadCheck();if(step==="changes")void wizardLoadChanges();}
 function wizardNext(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<0||index>=steps.length-1)return;wizardGo(steps[index+1]);}
 function wizardBack(){const steps=wizardSteps(),index=steps.indexOf(wizard.step);if(index<=0)return;wizardGo(steps[index-1]);}
 function wizardField(label,id,type,autocomplete){const field=compareEl("label","wizard-field",label);let input=document.getElementById(id);if(!input){input=document.createElement("input");input.id=id;}input.type=type;if(autocomplete)input.setAttribute?.("autocomplete",autocomplete);field.appendChild(input);return field;}
@@ -5410,6 +5515,7 @@ function wizardOption(label,sub,pressed,onPick,aside){
 }
 function renderWizard(){
  if(!wizard)return false;
+ if(catalogHoldsWizard)return Boolean(wizard.open);
  const body=globalThis.document?.body,section=$("start-wizard"),sheet=$("wizard-sheet");
  // Lane IA addendum: a sheet over the page while it is open and no run is on; the login's page of its own whatever the hash.
  const page=authRequired(),on=page||(wizard.open===true&&screenView()!=="during");
@@ -5430,7 +5536,7 @@ function renderWizard(){
  if(primary){primary.hidden=false;primary.disabled=wizard.busy;primary.textContent="다음";}
  if(back)back.hidden=steps.indexOf(wizard.step)<=0;
  const note=$("wizard-note");if(note){note.textContent=wizard.note;if(note.dataset)note.dataset.kind=wizard.noteKind;}
- const renderers={login:renderWizardLogin,voice:renderWizardVoice,agent:renderWizardAgent,protocol:renderWizardProtocol,check:renderWizardCheck,safety:renderWizardSafety,start:renderWizardStart};
+ const renderers={login:renderWizardLogin,voice:renderWizardVoice,agent:renderWizardAgent,protocol:renderWizardProtocol,check:renderWizardCheck,safety:renderWizardSafety,changes:renderWizardChanges,start:renderWizardStart};
  renderers[wizard.step]?.(host,primary);
  if(wizard.mode==="setup"){host.appendChild(compareEl("p","wizard-done","설정 탭에서 언제든 다시 할 수 있어요."));if(primary&&steps.indexOf(wizard.step)===steps.length-1)primary.textContent="다 됐어요";}
  const quick=$("wizard-quick"),last=wizardLastProtocol();
@@ -5593,7 +5699,7 @@ async function acknowledgeStartSafety(){
  finally{wizardSetBusy(false);}
 }
 // A start the server refused for the check: its sentence, and the sheet again at the step it names.
-const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null});
+const START_REFUSAL_STEPS=Object.freeze({start_check_required:"check",safety_acknowledgement_required:"safety",start_check_unavailable:"protocol",start_check_identity_required:null,run_changes_stale:"changes",run_changes_required:"changes"});
 function returnToStartStep(reason,words){
  forgetSafetyRead();
  const step=START_REFUSAL_STEPS[reason];
@@ -5708,12 +5814,101 @@ function renderWizardSafety(host,primary){
  else if(skipped==="disabled")host.appendChild(compareEl("p","wizard-done","핵심 값 확인은 꺼져 있어요(서버 설정)."));
  if(primary)primary.textContent="읽었어요";
 }
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" -- after the safety check, may be skipped. The
+// server lists the values the analysis read (time, temperature, speed, volume, concentration) beside their step;
+// a person types a new value beside the ones to change. The server checks each (the same kind of unit, a value of
+// the list) and keeps the choice for the next start -- an empty choice too, which is the step skipped. The page
+// decides nothing: what it shows and what the run uses are the server's.
+async function wizardLoadChanges(){
+ const entry=wizardSelectedProtocol();if(!entry){wizardGo("protocol");return null;}
+ wizard.changes=null;wizard.busy=true;renderWizard();
+ try{
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/changes`,{cache:"no-store",redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  wizard.changes=response.ok&&payload&&Array.isArray(payload.values)?{...payload,protocolId:entry.protocol_id}:{failed:true,values:[],failure_ko:nonemptyText(payload?.detail?.message_ko)?String(payload.detail.message_ko):"서버가 값 목록을 보내지 않았어요."};
+ }catch(_){wizard.changes={failed:true,values:[],failure_ko:"서버에 연결할 수 없어요. 네트워크를 확인해 주세요."};}
+ finally{wizard.busy=false;}
+ if(wizard.changes.protocolId!==wizard.chosenChanges?.protocolId)wizard.changeInputs={};
+ renderWizard();return wizard.changes;
+}
+function wizardTypedChanges(){
+ return Object.entries(wizard.changeInputs||{}).map(([item_id,value])=>({item_id,value:String(value||"").trim()})).filter(item=>item.value);
+}
+function renderWizardChanges(host,primary){
+ const changes=wizard.changes;
+ if(!changes){setText("wizard-lead",wizard.busy?"분석한 값을 불러오는 중…":"");if(primary)primary.hidden=true;return;}
+ if(changes.failed){setText("wizard-lead",`${changes.failure_ko||"값 목록을 불러오지 못했어요."}\n[다시 불러오기]를 눌러 주세요.`);if(primary)primary.textContent="다시 불러오기";return;}
+ if(!changes.values.length){setText("wizard-lead","이 분석에는 바꿀 수 있는 값(시간·온도·속도·부피·농도)이 없어요.");if(primary)primary.textContent="바꿀 값 없이 다음";return;}
+ // Human decision 2026-10-24: a value below half or above twice the source's is confirmed once more here.
+ if(wizard.largeConfirm){
+  setText("wizard-lead","원문 값과 많이 다른 값이 있어요. 한 번 더 확인해 주세요.");
+  if(primary)primary.hidden=true;
+  const asked=compareEl("ul","wizard-changes-large");asked.id="wizard-changes-large";
+  for(const item of wizard.largeConfirm.items)asked.appendChild(compareEl("li","wizard-change-large",String(item.question_ko||"")));
+  host.appendChild(asked);
+  const yes=compareEl("button","wizard-option-pick","네, 이 값으로 할게요");yes.type="button";yes.id="wizard-changes-large-yes";
+  yes.addEventListener("click",()=>{const ids=wizard.largeConfirm.items.map(item=>item.item_id);void wizardSubmitChanges(ids);});
+  const fix=compareEl("button","wizard-back","고칠게요");fix.type="button";fix.id="wizard-changes-large-fix";
+  fix.addEventListener("click",()=>{wizard.largeConfirm=null;wizardNote("");renderWizard();});
+  host.appendChild(yes);host.appendChild(fix);
+  return;
+ }
+ setText("wizard-lead","원문과 다르게 할 값만 새 값을 적어 주세요. 같은 종류의 단위만 쓸 수 있어요. 바꿀 값이 없으면 '바꿀 값 없이 다음'을 눌러요.");
+ const last=Array.isArray(changes.last_time?.changes)?changes.last_time.changes:[];
+ if(last.length){
+  const again=compareEl("button","wizard-back",`지난번처럼 (${last.length}개)`);again.type="button";again.id="wizard-changes-last-time";
+  again.addEventListener("click",()=>{const inputs={};for(const item of last)inputs[item.item_id]=item.shown_ko;wizard.changeInputs=inputs;wizard.changeSource="last_time";renderWizard();});
+  host.appendChild(again);
+  host.appendChild(compareEl("p","wizard-option-sub",`지난번(${changes.last_time.when_ko||"지난 실험"}): ${last.map(item=>`${item.step_label}단계 ${item.kind_ko} ${item.shown_ko}`).join(" · ")}`));
+ }
+ const list=compareEl("ul","wizard-changes");list.id="wizard-changes-list";
+ for(const value of changes.values){
+  const row=compareEl("li","wizard-change");
+  const label=compareEl("label","wizard-field",`${value.step_label}단계 · ${value.kind_ko} · 원문 ${value.shown_ko}`);
+  const input=document.createElement("input");input.type="text";input.id=`wizard-change-${value.item_id}`;input.setAttribute?.("autocomplete","off");input.setAttribute?.("aria-label",`${value.step_label}단계 ${value.kind_ko} 새 값 (${value.units_ko})`);
+  input.placeholder=`새 값 · ${value.units_ko}`;input.value=wizard.changeInputs?.[value.item_id]||"";
+  input.addEventListener("input",()=>{wizard.changeInputs={...wizard.changeInputs,[value.item_id]:input.value};wizard.changeSource="wizard";wizard.largeConfirm=null;renderWizardChangesPrimary();});
+  label.appendChild(input);row.appendChild(label);list.appendChild(row);
+ }
+ host.appendChild(list);
+ renderWizardChangesPrimary();
+}
+function renderWizardChangesPrimary(){const primary=$("wizard-primary");if(primary&&wizard.step==="changes"&&wizard.changes&&!wizard.changes.failed)primary.textContent=wizardTypedChanges().length?`이 값으로 할게요 (${wizardTypedChanges().length}개)`:"바꿀 값 없이 다음";}
+async function wizardSubmitChanges(confirmLarge=[]){
+ const entry=wizardSelectedProtocol();if(!entry||wizard.busy)return null;
+ const typed=wizard.changes?.values?.length?wizardTypedChanges():[];
+ wizard.busy=true;renderWizard();
+ try{
+  const body={target:wizard.changes?.target||null,changes:typed,source:typed.length&&wizard.changeSource==="last_time"?"last_time":"wizard",...(confirmLarge.length?{confirm_large:confirmLarge}:{})};
+  const response=await serverFetch(`/api/protocols/${encodeURIComponent(entry.protocol_id)}/start-check/changes`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  wizard.busy=false;
+  if(!response.ok&&payload?.detail?.code==="run_change_large_unconfirmed"&&Array.isArray(payload.detail.large)){wizard.largeConfirm={items:payload.detail.large};wizardNote("");renderWizard();return null;}
+  if(!response.ok||!payload){wizardNote(nonemptyText(payload?.detail?.message_ko)?payload.detail.message_ko:"값을 보내지 못했어요. 다시 눌러 주세요.","error");renderWizard();return null;}
+  // Human decision 2026-10-24: the start names this choice (session.start run_change_set_id); it is used once.
+  wizard.largeConfirm=null;
+  wizard.chosenChanges={protocolId:entry.protocol_id,changeSetId:typeof payload.change_set_id==="string"?payload.change_set_id:null,changes:Array.isArray(payload.changes)?payload.changes:[]};
+  wizardNext();return payload;
+ }catch(_){wizard.busy=false;wizardNote("서버에 연결할 수 없어요.","error");renderWizard();return null;}
+}
+// Whether "오늘 원문과 다르게 할 값" was passed for this protocol in this sheet and its choice is not yet used.
+function changesPassedFor(protocolId){return Boolean(protocolId)&&wizard?.chosenChanges?.protocolId===protocolId&&nonemptyText(wizard.chosenChanges.changeSetId);}
+function renderRunChanges(changes){
+ const list=$("procedure-run-changes");if(!list)return false;
+ list.replaceChildren();
+ const items=Array.isArray(changes)?changes.filter(item=>item&&nonemptyText(item.words_ko)):[];
+ for(const item of items)list.appendChild(compareEl("li","run-change",`${item.kind_ko||""} ${item.words_ko}`.trim()));
+ list.hidden=!items.length;return items.length>0;
+}
 function renderWizardStart(host,primary){
  const entry=wizardSelectedProtocol();
  setText("wizard-title",entry?.title||"시작할 준비가 됐어요");
  setText("wizard-lead","시작하면 마이크가 켜지고 음성 안내가 시작돼요. 안전 주의를 확인한 것으로 기록돼요.");
  const voice=wizard.voices?.voices?.find(item=>item.voice_id===(wizardSettings().agent_voice==="default"?wizard.voices?.default_voice_id:wizardSettings().agent_voice));
  if(voice)host.appendChild(compareEl("p","wizard-done",`안내 목소리 · ${voice.label_ko}`));
+ // Lane EASY decision 2: the values chosen for today, as the server words them.
+ const chosen=Array.isArray(wizard.chosenChanges?.changes)&&wizard.chosenChanges.protocolId===entry?.protocol_id?wizard.chosenChanges.changes:[];
+ if(chosen.length)host.appendChild(compareEl("p","wizard-done",`오늘 바꾼 값 · ${chosen.map(item=>`${item.step_label}단계 ${item.kind_ko} ${item.words_ko}`).join(" · ")}`));
  // Lane IA decision ⑦: a saved experiment picked in the records (or from the home's card) continues from here -- the start sends the session the server named, as the voice console's '실험 이어하기' did.
  const resuming=experimentIsResumable();
  if(resuming)host.appendChild(compareEl("p","wizard-done",`진행 중이던 실험을 ${nonemptyText(currentExperimentStepLabel)?`${currentExperimentStepLabel}단계`:"저장된 단계"}부터 이어서 해요. 새로 시작하려면 아래 [이어하지 않고 새로 시작]을 눌러 주세요.`));
@@ -5721,12 +5916,14 @@ function renderWizardStart(host,primary){
  if(resuming){const fresh=compareEl("button","wizard-back","이어하지 않고 새로 시작");fresh.type="button";fresh.addEventListener("click",()=>{clearExperimentResumeSelection();renderWizard();});host.appendChild(fresh);}
  if(primary){primary.textContent=resuming?"실험 이어하기":"이 프로토콜로 시작";primary.disabled=wizard.busy||entry?.available_for_execution!==true;}
 }
+// Lane PRE decision 1: the sheet asks the server once more before it refuses a protocol that its list says cannot run.
+async function wizardRecheck(protocolId){wizardSetBusy(true);try{return await recheckProtocolRunnable(protocolId);}finally{wizardSetBusy(false);renderWizard();}}
 async function wizardPrimary(){
  if(wizard.busy)return null;
  switch(wizard.step){
   case "login":return wizardSubmitLogin();
   case "voice":case "agent":case "safety":{if(wizard.mode==="setup"&&wizardStepIndex()===wizardSteps().length-1){closeWizardSheet();return true;}if(wizard.step==="safety"){if(!await acknowledgeStartSafety())return null;rememberSafetyRead();}wizardNext();return true;}
-  case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
+  case "protocol":{const entry=wizardSelectedProtocol();if(entry?.available_for_execution!==true&&!(entry&&await wizardRecheck(entry.protocol_id))){wizardNote("분석을 통과한 프로토콜을 골라 주세요.","error");return null;}if(lastProtocolReview?.protocol_id!==entry.protocol_id){wizard.busy=true;renderWizard();try{await loadProtocolReview(entry.protocol_id);}finally{wizard.busy=false;}}wizardRememberProtocol(entry.protocol_id);wizardNext();return true;}
   case "start":{
    const entry=wizardSelectedProtocol();if(!entry)return null;
    // Lane TAB decision 3: in the touch itself, before anything is awaited.
@@ -5740,6 +5937,7 @@ async function wizardPrimary(){
   }
   // Lane UI4 QA-15: [다시 불러오기] when the check failed to load.
   case "check":return wizard.check?.skipped_reason==="unavailable"?wizardLoadCheck():null;
+  case "changes":return wizard.changes?.failed?wizardLoadChanges():wizardSubmitChanges();
   default:return null;
  }
 }
@@ -5786,6 +5984,9 @@ function navigateTab(tab,id=null,{replace=false}={}){
 function renderRoute(){
  readRoute();
  const tab=shownTab(),body=globalThis.document?.body,auth=wizard?.auth,during=screenView()==="during",page=authRequired(),key=`${tab}|${screenRoute.path}|${page}`;
+ // Lane PRE decision 1: a tab that opens shows the list as the server has it now.
+ if(catalogRouteTab!==null&&catalogRouteTab!==tab&&!page)void refreshProtocolCatalog();
+ catalogRouteTab=tab;
  if(body?.dataset){body.dataset.tab=tab;body.dataset.route=screenRoute.path;body.dataset.auth=auth?(page?"required":"ok"):"unknown";body.dataset.dev=auth?(auth.mode==="dev"?"on":"off"):"";}
  // Before a login no panel shows: the login is a page of its own (the sheet in page mode).
  for(const name of TAB_PANELS){const panel=$(`tab-${name}`);if(panel)panel.hidden=page||!(name===tab||(name==="records"&&tab==="experiment"&&during)||(name==="settings"&&runSettingsSheetOpen()));}
@@ -5910,6 +6111,8 @@ function uploadFlowStep(){
  if(isRegisteringProtocol)return "uploading";
  if(!id)return "pick";
  const entry=protocolCatalog.get(id),run=protocolAnalysisRun(entry);
+ // Lane PRE decision 2: a protocol that can run is shown as ready, whatever analysis runs over it.
+ if(entry?.available_for_execution===true)return "result";
  const polling=(protocolAnalysisPollHandle!==null||protocolOcrPollHandle!==null)&&currentProtocolReviewId===id;
  const running=polling||PROTOCOL_RUNNING_STATES.has(entry?.lifecycle_state)||PROTOCOL_RUNNING_STATES.has(entry?.analysis_status)||entry?.analysis_status==="ocr_in_progress"||PROTOCOL_RUNNING_STATES.has(run?.state);
  if(running||!entry)return "progress";

@@ -84,6 +84,14 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("ELEVENLABS_API_KEY", KEYS, _NONE,
             "ElevenLabs API 키 (음성 공급자 elevenlabs)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
+    # Lane KNOW (2026-10-24, decision 4): the Moss project credentials keep the
+    # names Moss's own SDK reads, unprefixed like the other provider keys.
+    Setting("MOSS_PROJECT_ID", KEYS, _NONE,
+            "Moss 프로젝트 id (공개 지식 검색; VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED 이 true 면 필수)",
+            kept_because="공급자 SDK 표준 이름 (사람 결정 2; 줄 KNOW 결정 4)"),
+    Setting("MOSS_PROJECT_KEY", KEYS, _NONE,
+            "Moss 프로젝트 키 (공개 지식 검색)",
+            kept_because="공급자 SDK 표준 이름 (사람 결정 2; 줄 KNOW 결정 4)"),
     # --- OCR ------------------------------------------------------------------
     Setting("VOINEY_LAB_OCR_PROVIDERS", OCR, _NONE,
             "쓸 OCR 엔진: clova, google (쉼표로)"),
@@ -228,6 +236,9 @@ SETTINGS: tuple[Setting, ...] = (
             "서버가 정답과 선택지를 정함; 줄 ON 결정 ③)"),
     Setting("VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION", SWITCHES, "true",
             "종점이 있는 단계를 끝낼 때 '관찰한 것 있으면 말씀해 주세요'를 한 번 묻기 (줄 RP3 결정 ② c)"),
+    Setting("VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED", SWITCHES, "false",
+            "공개 실험·안전·과학 지식(라이선스 확인한 공개 자료) Moss 검색 — 시작 때 색인을 불러오고 질의는 프로세스 안에서; "
+            "켜면 MOSS_PROJECT_ID·MOSS_PROJECT_KEY 필수, 없거나 불러오기 실패면 이 등급만 꺼짐 (줄 KNOW 결정 4)"),
     Setting("VOINEY_LAB_NEW_UI", SWITCHES, "false",
             "새 화면(web/, /app/)을 기본으로: true 면 / 가 /app/ 으로 감 (빌드가 없으면 지금 화면 그대로); "
             "false 면 지금 화면 그대로이고 /app/ 은 언제나 열림 (줄 RX0)"),
@@ -236,6 +247,8 @@ SETTINGS: tuple[Setting, ...] = (
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),
     Setting("VOINEY_LAB_PROTOCOL_DATA_DIR", PATHS, "(없음, 켜면 필수)",
             "프로토콜 카탈로그 데이터 폴더 (절대 경로)"),
+    Setting("VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX", PATHS, "voiney-public-knowledge",
+            "공개 지식 Moss 색인 이름 (scripts/public_knowledge_pipeline.py upload --index 로 올린 것)"),
     Setting("VOINEY_LAB_WORKSPACE_DATA_DIR", PATHS, "(없음, 켜면 필수)",
             "작업공간 데이터 폴더 (절대 경로)"),
     Setting("VOINEY_LAB_EXPERIMENT_REPORT_DB", PATHS, "(없음, 켜면 필수)",

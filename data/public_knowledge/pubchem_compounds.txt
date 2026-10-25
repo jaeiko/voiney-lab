@@ -1,0 +1,146 @@
+# PubChem compounds taken into the public bundle (lane KNOW): the reagents the
+# pilot's protocols (in-gel digestion, the starter pack) and common bench work
+# name. One name per line, as PubChem's name lookup understands it; the
+# pipeline turns a name into a CID once -- an explicit "name<TAB>CID" column,
+# or "name<TAB>enwiki:Title" / the name itself looked up as an English
+# Wikipedia title on Wikidata (PubChem CID claim P662, CC0; PubChem's own
+# name lookup is disallowed by its robots.txt) -- and keeps it in its state.
+# A name with no CID is recorded as a failure, not guessed.
+
+# in-gel digestion and proteomics
+ammonium bicarbonate
+acetonitrile
+dithiothreitol
+iodoacetamide
+formic acid
+trifluoroacetic acid
+methanol
+ethanol
+acetic acid
+urea
+guanidine hydrochloride	enwiki:Guanidinium chloride
+2-mercaptoethanol	enwiki:2-Mercaptoethanol
+iodoacetic acid
+tris(2-carboxyethyl)phosphine	enwiki:TCEP
+sodium deoxycholate
+# electrophoresis and blotting
+sodium dodecyl sulfate
+tromethamine	enwiki:Tris
+glycine
+acrylamide
+N,N'-methylenebisacrylamide	enwiki:N,N'-Methylenebisacrylamide
+ammonium persulfate
+N,N,N',N'-tetramethylethylenediamine	enwiki:Tetramethylethylenediamine
+bromophenol blue
+Coomassie brilliant blue R-250	enwiki:Coomassie brilliant blue
+Ponceau S
+ethidium bromide
+agarose
+boric acid
+edetic acid	enwiki:Ethylenediaminetetraacetic acid
+glycerol
+# buffers, salts, detergents
+sodium chloride
+potassium chloride
+magnesium chloride
+calcium chloride
+ammonium sulfate
+sodium bicarbonate
+sodium carbonate
+sodium phosphate dibasic	enwiki:Disodium phosphate
+potassium phosphate monobasic	enwiki:Monopotassium phosphate
+HEPES
+MOPS
+imidazole
+sucrose
+D-glucose	5793
+Triton X-100
+polysorbate 20
+sodium azide
+# molecular biology and cell culture
+isopropyl beta-D-1-thiogalactopyranoside	enwiki:Isopropyl β-D-1-thiogalactopyranoside
+ampicillin
+kanamycin
+chloramphenicol
+paraformaldehyde
+formaldehyde
+glutaraldehyde
+diethyl pyrocarbonate
+phenol
+chloroform
+isoamyl alcohol
+dimethyl sulfoxide
+trypan blue
+# acids and bases
+hydrochloric acid	313
+sodium hydroxide
+potassium hydroxide
+sulfuric acid
+nitric acid
+phosphoric acid
+perchloric acid
+hydrofluoric acid
+ammonium hydroxide	enwiki:Ammonia solution
+citric acid
+oxalic acid
+picric acid
+# solvents
+2-propanol	enwiki:Isopropyl alcohol
+acetone
+toluene
+xylene
+benzene
+hexane
+cyclohexane
+tetrahydrofuran
+dichloromethane
+ethyl acetate
+diethyl ether
+1,4-dioxane	enwiki:1,4-Dioxane
+pyridine
+N,N-dimethylformamide	enwiki:Dimethylformamide
+N-methyl-2-pyrrolidone	enwiki:N-Methyl-2-pyrrolidone
+acetaldehyde
+# oxidisers, reducers, reactive reagents
+hydrogen peroxide
+sodium hypochlorite
+potassium permanganate
+silver nitrate
+osmium tetroxide
+sodium borohydride
+lithium aluminium hydride
+hydrazine
+sodium dithionite
+# battery and materials
+lithium
+lithium hexafluorophosphate
+lithium bis(trifluoromethanesulfonyl)imide
+lithium hydroxide
+lithium carbonate
+lithium cobalt oxide
+lithium iron phosphate
+ethylene carbonate
+dimethyl carbonate
+diethyl carbonate
+propylene carbonate
+fluoroethylene carbonate
+vinylene carbonate
+sodium hexafluorophosphate
+graphite
+cobalt(II) chloride
+nickel(II) chloride
+copper(II) sulfate
+zinc chloride
+iron(III) chloride
+manganese dioxide
+titanium dioxide
+silicon dioxide
+aluminium oxide
+# gases
+nitrogen	947
+argon
+oxygen	977
+hydrogen	783
+carbon dioxide
+carbon monoxide
+helium

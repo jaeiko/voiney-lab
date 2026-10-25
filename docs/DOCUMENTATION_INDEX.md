@@ -47,6 +47,7 @@
 | [`PILOT_GUIDE.md`](PILOT_GUIDE.md) | 파일럿을 여는 순서, 데이터 처리·고지·지표·삭제, 계정·스타터 팩, HTTPS, 기준판·복구 점검, 참가자 안내 |
 | [`PILOT_COMPARISON.md`](PILOT_COMPARISON.md) | 기존 방식·범용 음성 서비스와 같은 과업으로 비교하는 절차, 태블릿 확인, 빈 기록 양식, 저장된 분석 비교 |
 | [`SOURCE_FORMATS.md`](SOURCE_FORMATS.md) | 올릴 수 있는 원문 형식, 서버에 필요한 것, 링크 가져오기, 오류 코드 |
+| [`PUBLIC_KNOWLEDGE.md`](PUBLIC_KNOWLEDGE.md) | 공개 지식 묶음: 출처 목록과 라이선스 규칙, 모으기·올리기·재기 명령, 서버 설정, Moss 한도와 확대 |
 
 ## 5. 옮긴 문서
 
