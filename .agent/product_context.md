@@ -49,9 +49,10 @@ Researchers at the bench (the pilot: two master's students, from late October
 - "Use the protocol I uploaded, not different conditions."
 - "Record only what I actually said, and not other people's voices."
 - After the run: a notebook that helps a researcher, not a voice-test log.
-- "I adapt a paper's method — conditions and the steps themselves — run by
-  run; writing a separate protocol beside my experiment record is extra
-  work." (a chemistry pilot candidate, 2026-10-24/25; see Evidence)
+- Adapt a paper's method — conditions and the steps themselves — run by run,
+  without writing a separate protocol beside the experiment record
+  (paraphrased from a chemistry pilot candidate's reason for withdrawing,
+  2026-10-24/25; see Evidence).
 - During the run: expert answers to the problems and questions that come up,
   not explanations of terms already known before it; on a tablet, because
   people move around the lab.
@@ -90,8 +91,9 @@ record ("the paper's method → what was actually done today"), not a protocol.
 
 **Not built.** What exists today is page-range analysis and "today's values"
 (time, temperature, speed, volume and concentration changed by a person);
-removing, adding, reordering or rewording steps, substituting reagents and
-changing the procedure during a run do not exist. The design — a personal
+beyond starting at a later step, removing, adding, reordering or rewording
+steps, substituting reagents and changing the procedure during a run do not
+exist. The design — a personal
 "today's plan" over the analysed source, researcher-written steps marked as
 such with author and time, model proposals applied only after a person
 confirms them, source safety statements never removed — is
