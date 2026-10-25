@@ -136,7 +136,16 @@ generation is cancelled and its audio cleared (barge-in).
      candidates must be source term names, and commands/completion/assent
      candidates are rejected even when a source term has that spelling.
 5. Read-only roles (`multi_brain`), outside-PDF explanation, pictures and web
-   lookups run after the answer and never change state.
+   lookups run after the answer and never change state. Before a Korean
+   curated reply is spoken, `server._korean_first` (lane SAY) runs
+   `CuratedProtocolSession.korean_first`: every source sentence the speech
+   quotes in English is replaced by its reviewed or stored Korean, or by a
+   reading the translation role makes in the turn (at most three, each once,
+   checked by `statement_issue`, kept in the process and put on the session's
+   fixture as a machine translation); with none it is said as "이 문장은 아직
+   번역되지 않았어요. 원문을 화면에 띄울게요." and shown in the source. Only
+   "원문 그대로 읽어 줘" (`SOURCE_READ_ALOUD_INTENT`) reads the English. No
+   workflow state is involved.
 6. Sentence TTS streams through generation-aware audio segments;
    `turn.route_decision` carries a compact projection (with a `router`
    block when the router ran); `turn.done` and `playback.completed` close it.
