@@ -5085,12 +5085,14 @@ _END = r"(?![\w-])"
 _INSTRUCTION_WORDS_EN = r"instructions?|prompts?|directions|rules|guidelines|commands|messages"
 _INSTRUCTION_WORDS_KO = r"지시|명령|지침|프롬프트"
 PROGRAM_ADDRESS_SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # "Note to the AI", "AI assistant:", "if you are an AI", "as an AI language
-    # model", "instructions for the LLM"; "AI에게", "인공지능에게", "당신은 AI".
+    # "Note to the AI", "AI assistant:", "if you are an AI", "instructions for
+    # the LLM"; "AI에게", "인공지능에게", "당신은 AI". Not "note to the
+    # assistant" (a lab's), "note for the model" (an animal model) or "used
+    # as an AI tool" (a methods section's).
     (PROGRAM_ADDRESSED, re.compile(
-        rf"\bnote\s+(?:to|for)\s+(?:the\s+|any\s+)?(?:ai|a\.i\.|assistant|model|{_PROGRAM_NAMES_EN}){_END}"
+        rf"\bnote\s+(?:to|for)\s+(?:the\s+|any\s+)?(?:ai|a\.i\.|{_PROGRAM_NAMES_EN}){_END}"
         rf"|\b(?:dear|attention,?|hey)\s+(?:the\s+)?(?:ai|a\.i\.|{_PROGRAM_NAMES_EN}){_END}"
-        rf"|\b(?:you\s+are|as)\s+(?:an?\s+)?(?:ai|a\.i\.|{_PROGRAM_NAMES_EN}){_END}"
+        rf"|\byou\s+are\s+(?:an?\s+)?(?:ai|a\.i\.|{_PROGRAM_NAMES_EN}){_END}"
         rf"|\b(?:{_INSTRUCTION_WORDS_EN})\s+(?:for|to)\s+(?:the\s+|any\s+)?(?:ai|a\.i\.|{_PROGRAM_NAMES_EN}){_END}"
         rf"|\b(?:{_PROGRAM_CALLED_EN})\s*:"
         rf"|(?:{_PROGRAM_NAMES_KO})\s*(?:에게|한테|께)"

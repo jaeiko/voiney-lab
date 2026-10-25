@@ -15,6 +15,7 @@ under the logo is the new screen's one-line intro (``docs/COPY_DECK.md``
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -58,13 +59,11 @@ def test_the_files_lane_name_left_and_the_server_write_voiney_lab_apart() -> Non
 
 
 def test_the_settings_example_opens_with_the_tools_header() -> None:
-    header = re.search(r'HEADER = \(\n((?:    "[^\n]*\n)+)\)',
-                       (ROOT / "scripts/migrate_env.py").read_text(encoding="utf-8"))
-    assert header is not None
-    lines = [line.strip()[1:-1].encode().decode("unicode_escape").encode("latin-1").decode("utf-8")
-             for line in header[1].splitlines()]
+    tool = ast.parse((ROOT / "scripts/migrate_env.py").read_text(encoding="utf-8"))
+    (header,) = [ast.literal_eval(node.value) for node in tool.body if isinstance(node, ast.Assign)
+                 and [getattr(target, "id", None) for target in node.targets] == ["HEADER"]]
     example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert example.startswith("".join(lines))
+    assert example.startswith(header)
     assert example.startswith("## Voiney Lab 설정. ")
 
 
