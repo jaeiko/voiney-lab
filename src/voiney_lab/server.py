@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
+import asyncio, base64, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
@@ -251,7 +251,8 @@ from voiney_lab.runtime_routing import (
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import (
     DEFAULT_SENSITIVITY, SENSITIVITY_MARGINS_DB, EndpointDetector, EndpointResult,
-    NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
+    NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, WebRtcVadClassifier,
+    level_reference_from, voiced_median_level_db,
 )
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
@@ -1931,12 +1932,87 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # configured voice) and what the last 목소리 맞추기 came to.
     "agent_voice":"default",
     "voice_calibration":"none",
+    # Lane HEAR, decision 2: every voice is heard until the person turns the
+    # filter on after measuring; the measurement (level, time, microphone)
+    # is written by POST /api/voice/calibration only.
+    "speaker_filter":"off",
+    "voice_reference":"none",
 }
+#: Settings the server writes itself (lane HEAR, decision 2): the screen's
+#: PUT may not set them.
+SERVER_ONLY_EXPERIMENTER_SETTINGS=frozenset({"voice_reference"})
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
 #: Lane WV's "web_lookup" used to be kept here even with a workspace; since
 #: workspace schema 9 (lane VT, decision 7) it is kept with the others.
 _EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
+
+
+# --- Lane HEAR, decision 2: the measured voice, kept as a setting -----------
+#: A measurement older than this, or made on another microphone, is not used.
+VOICE_REFERENCE_MAX_AGE_DAYS=14
+#: The sentence posted to POST /api/voice/calibration: 0.5-12 s of 16 kHz PCM16.
+CALIBRATION_MIN_BYTES=16000
+CALIBRATION_MAX_BYTES=12*32000
+CALIBRATION_MAX_BASE64_CHARS=(CALIBRATION_MAX_BYTES*4)//3+8
+#: At least 0.8 s of the sentence must be voiced to measure it.
+CALIBRATION_MIN_VOICED_FRAMES=40
+_MIC_ID=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+_VOICE_REFERENCE=re.compile(r"^v1:(-?\d{1,3}(?:\.\d)?):(\d{9,11}):([A-Za-z0-9][A-Za-z0-9_-]{0,39})$")
+
+
+@dataclass(frozen=True)
+class VoiceReference:
+    """The wearer's measured level, when it was measured, and on which microphone."""
+
+    level_db:float
+    measured_at:float
+    mic_id:str
+
+
+def normalize_mic_id(value:object)->str|None:
+    """The page's short microphone id, or None when it sent none or a bad one."""
+
+    return value if isinstance(value,str) and _MIC_ID.fullmatch(value) else None
+
+
+def voice_reference_value(level_db:float,measured_at:float,mic_id:str)->str:
+    """The setting's value: "v1:<dBFS>:<unix seconds>:<microphone id>"."""
+
+    return f"v1:{level_db:.1f}:{int(measured_at)}:{normalize_mic_id(mic_id) or 'unknown'}"
+
+
+def parse_voice_reference(value:object)->VoiceReference|None:
+    match=_VOICE_REFERENCE.fullmatch(value) if isinstance(value,str) else None
+    if match is None:
+        return None
+    level=float(match.group(1))
+    if not -100.0<=level<=0.0:
+        return None
+    return VoiceReference(level,float(match.group(2)),match.group(3))
+
+
+def stored_voice_filter(
+    settings:Mapping[str,str],mic_id:str|None,now:float,
+)->tuple[str,str,VoiceReference|None]:
+    """Whether a run filters by level, and why not (lane HEAR, decision 2).
+
+    ("active", "on", reference) only when the person turned the filter on,
+    a measurement exists, it is younger than VOICE_REFERENCE_MAX_AGE_DAYS
+    and the run's microphone is the one measured. Otherwise ("inactive",
+    reason, None): "off", "not_measured", "stale_age" or "stale_device".
+    """
+
+    if str(settings.get("speaker_filter","off"))!="on":
+        return "inactive","off",None
+    reference=parse_voice_reference(settings.get("voice_reference"))
+    if reference is None:
+        return "inactive","not_measured",None
+    if now-reference.measured_at>VOICE_REFERENCE_MAX_AGE_DAYS*86400 or reference.measured_at>now+300:
+        return "inactive","stale_age",None
+    if mic_id is None or reference.mic_id=="unknown" or mic_id!=reference.mic_id:
+        return "inactive","stale_device",None
+    return "active","on",reference
 
 
 def _experimenter_settings_key()->str:
@@ -1998,10 +2074,67 @@ def get_experimenter_settings()->dict[str,object]:
 
 @app.put("/api/experimenter/settings")
 def put_experimenter_settings(body:dict[str,Any]=Body(...))->dict[str,object]:
+    if isinstance(body,Mapping) and SERVER_ONLY_EXPERIMENTER_SETTINGS.intersection(map(str,body)):
+        raise HTTPException(status_code=403,detail="setting_server_only")
     try:
         return {"settings":_save_experimenter_settings(body,"screen")}
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/voice/calibration")
+def post_voice_calibration(body:dict[str,Any]=Body(...))->dict[str,object]:
+    """목소리 맞추기 outside a run (lane HEAR, decisions 1 and 2).
+
+    The page records the sentence on the microphone it uses for runs and
+    posts it here as 16 kHz mono PCM16 (base64) with the microphone's short
+    id. The median level of the frames the VAD calls voiced is kept as the
+    experimenter's ``voice_reference`` -- the level, when, and the
+    microphone id -- and the sound is dropped at once: nothing is
+    transcribed, logged or stored. Measuring does not turn the filter on.
+    """
+
+    raw=body.get("pcm_base64") if isinstance(body,Mapping) else None
+    if not isinstance(raw,str) or not raw or len(raw)>CALIBRATION_MAX_BASE64_CHARS:
+        raise HTTPException(status_code=422,detail={"code":"audio_invalid"})
+    try:
+        pcm=base64.b64decode(raw,validate=True)
+    except (ValueError,TypeError) as exc:
+        raise HTTPException(status_code=422,detail={"code":"audio_invalid"}) from exc
+    if len(pcm)%2 or not CALIBRATION_MIN_BYTES<=len(pcm)<=CALIBRATION_MAX_BYTES:
+        raise HTTPException(status_code=422,detail={"code":"audio_length"})
+    mic_id=normalize_mic_id(body.get("mic_id")) or "unknown"
+    try:
+        mode=VoiceVadSettings.from_environment().cascade.mode
+    except Exception:  # noqa: BLE001 - the listener's own default mode then
+        mode=VadConfig().mode
+    classifier=WebRtcVadClassifier(mode)
+    frames=[pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES)]
+    flags=[(frame,bool(classifier(frame))) for frame in frames]
+    voiced=sum(1 for _,flag in flags if flag)
+    if voiced<CALIBRATION_MIN_VOICED_FRAMES:
+        log.info("voice calibration refused reason=too_little_voice voiced_frames=%d frames=%d",voiced,len(frames))
+        raise HTTPException(status_code=422,detail={"code":"too_little_voice"})
+    level=voiced_median_level_db(flags)
+    if level is None or not math.isfinite(level):
+        raise HTTPException(status_code=422,detail={"code":"too_little_voice"})
+    measured_at=time.time()
+    try:
+        settings=_save_experimenter_settings({
+            "voice_reference":voice_reference_value(level,measured_at,mic_id),
+            "voice_calibration":"measured",
+        },"screen")
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    log.info(
+        "voice calibration measured on screen level_db=%.1f voiced_frames=%d frames=%d",
+        level,voiced,len(frames))
+    return {
+        "state":"measured","level_db":round(level,1),
+        "measured_at":datetime.fromtimestamp(measured_at,tz=timezone.utc).isoformat(),
+        "mic_id":mic_id,"speaker_filter":settings.get("speaker_filter","off"),
+        "max_age_days":VOICE_REFERENCE_MAX_AGE_DAYS,
+    }
 
 
 @app.get("/api/voice/voices")
@@ -10691,6 +10824,8 @@ def _end_notice_playback_later(
 _SERVER_WORDS_TURN_BASE=2_000_000_300
 #: The short sentence the wearer reads so their level can be measured.
 VOICE_CALIBRATION_SENTENCE="목소리를 맞출게요. 지금 이 문장을 평소처럼 읽어 주세요."
+#: Lane HEAR, decision 1: the answer to a calibration asked for during a run.
+VOICE_CALIBRATION_IN_RUN_WORDS="실험 중에는 목소리를 맞추지 않아요. 실험이 끝난 뒤 설정에서 맞춰 주세요."
 VOICE_CALIBRATION_PROMPT=(
     "목소리를 맞출게요. 화면의 문장을 평소 목소리로 읽어 주세요. "
     "건너뛰려면 '건너뛰기'라고 하세요."
@@ -10940,6 +11075,47 @@ SPEAKER_FILTER_WORDS={
     "lowered":"내 말이 작게 들려서 옆 사람 말 거르기를 낮췄어요.",
     "off":"내 말이 계속 걸러져서 옆 사람 말 거르기를 껐어요. 이제 모든 말을 들어요.",
 }
+
+
+def _audio_ready_mic_id(raw:str)->str|None:
+    """The page's short microphone id beside client.audio_ready (lane HEAR, decision 2).
+
+    The control parser keeps only the fields every audio_ready has, so the
+    id is read from the message itself; None when absent or malformed.
+    """
+
+    try:
+        message=json.loads(raw)
+    except ValueError:
+        return None
+    return normalize_mic_id(message.get("mic_id")) if isinstance(message,dict) else None
+
+
+async def _apply_stored_voice_filter(
+    sender:LockedSender,session:ListenerSession,mic_id:str|None,
+)->None:
+    """Filter this run by level only as the person chose and measured (decision 2)."""
+
+    try:
+        settings=await asyncio.to_thread(_load_experimenter_settings)
+    except Exception:  # noqa: BLE001 - the defaults: every voice is heard
+        settings=dict(EXPERIMENTER_SETTING_DEFAULTS)
+    session.set_speaker_sensitivity(str(settings.get("speaker_sensitivity",DEFAULT_SENSITIVITY)))
+    state,reason,reference=stored_voice_filter(settings,mic_id,time.time())
+    if reference is not None:
+        session.level_reference=level_reference_from(reference.level_db,session.speaker_sensitivity)
+    else:
+        session.level_reference=None
+        session.level_endpoint_on=False
+    log.info("speaker.filter %s reason=%s microphone_known=%s",state,reason,mic_id is not None)
+    margin=session.level_reference.margin_db if session.level_reference is not None else None
+    await sender.text(
+        "speaker.filter",configuration_id=session.accepted_configuration_id,
+        state=state,reason=reason,margin_db=margin,
+        measured_at=(
+            datetime.fromtimestamp(reference.measured_at,tz=timezone.utc).isoformat()
+            if reference is not None else None),
+    )
 
 
 def _run_paused(session:ListenerSession)->bool:
@@ -11934,6 +12110,15 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         session.last_confirmed_language=turn_language
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
+    if voice_calibration_asked(transcript) and session.curated_protocol_session is not None:
+        # Lane HEAR, decision 1: not during a run; it is done in the settings.
+        await current_text(
+            "speaker.calibration",turn_id=turn_id,state="refused",reason="settings_only",
+            words=VOICE_CALIBRATION_IN_RUN_WORDS,sensitivity=session.speaker_sensitivity)
+        log.info("voice calibration refused by voice reason=settings_only turn_id=%s",turn_id)
+        await finish_blocked_voice(
+            VOICE_CALIBRATION_IN_RUN_WORDS,"voice_calibration",outcome="complete")
+        return
     if voice_calibration_asked(transcript):
         # Lane SP1, decision 1: "목소리 다시 맞춰 줘" -- the next sentence
         # measures the wearer again. A front rule of the server's: read-only.
@@ -15176,6 +15361,15 @@ async def voice_socket(websocket:WebSocket):
                         "client.voice_calibration rejected action=%s configuration_id=%s generation=%s",
                         control["action"],control["configuration_id"],control["generation"])
                     continue
+                if control["action"]=="start" and session.curated_protocol_session is not None:
+                    # Lane HEAR, decision 1: not during a run -- in the settings.
+                    log.info("voice calibration refused on screen reason=settings_only")
+                    await websocket.send_text(event(
+                        "speaker.calibration",configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,state="refused",reason="settings_only",
+                        words=VOICE_CALIBRATION_IN_RUN_WORDS,
+                        sensitivity=session.speaker_sensitivity))
+                    continue
                 if control["action"]=="skip":
                     skipped=session.calibration_pending
                     session.calibration_pending=False
@@ -15270,6 +15464,10 @@ async def voice_socket(websocket:WebSocket):
                     control["configuration_id"],control["generation"],
                     control["sample_rate"],
                 )
+                # Lane HEAR, decision 2: the run's microphone is known now, and
+                # with it whether this run filters by level.
+                await _apply_stored_voice_filter(
+                    sender,session,_audio_ready_mic_id(message["text"]))
                 if restored_connection:
                     # Lane NET, decision 4: a reconnection continues the run;
                     # it is not greeted as a new session.

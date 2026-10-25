@@ -201,8 +201,11 @@ class ReconnectTests(ReconnectHarness, unittest.TestCase):
 
         socket = self.reconnect(session_id, durable, scenario=audio_ready)
         self.assertEqual(_events(socket, "session.greeting"), [])
-        self.assertIsNotNone(seen["level"])
-        self.assertEqual(seen["level"].reference_db, -31.5)
+        # Lane HEAR, decision 2 (2026-10-25): whether a run filters by level is
+        # the person's stored choice, read again at each audio-ready; with the
+        # default (off) a reconnection hears every voice, as the run did.
+        self.assertIsNone(seen["level"])
+        self.assertEqual([m["reason"] for m in _events(socket, "speaker.filter")], ["off"])
 
     def test_after_a_server_restart_the_pages_moment_is_used(self) -> None:
         session_id, durable = self.run_to_timer()
