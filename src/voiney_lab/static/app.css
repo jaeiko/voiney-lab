@@ -129,18 +129,6 @@
       gap:1rem;
     }
     .brand{display:flex;align-items:center;gap:.85rem;font-weight:800;letter-spacing:-.02em;font-size:1.15rem}
-    .brand-mark{
-      width:2.5rem;
-      height:2.5rem;
-      border-radius:var(--radius-sm);
-      display:grid;
-      place-items:center;
-      background:linear-gradient(135deg,var(--blurple),var(--magenta));
-      color:white;
-      font-size:.95rem;
-      font-weight:900;
-      box-shadow:0 6px 18px rgba(88,101,242,.35);
-    }
     .brand small{display:block;color:var(--muted);font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
     .session-badge{
       display:flex;

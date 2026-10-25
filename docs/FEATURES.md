@@ -224,11 +224,11 @@
 
 ## F16. 모바일 웹과 스토어 앱
 
-- **무엇**: 화면은 휴대폰 폭에서도 쓰고, 브라우저의 "홈 화면에 추가"로 둘 수 있다(`manifest.webmanifest`, 오프라인 없음). 마이크·설치·화면 꺼짐 방지는 **HTTPS(또는 localhost)** 에서만 된다.
+- **무엇**: 화면은 휴대폰 폭에서도 쓰고, 브라우저의 "홈 화면에 추가"로 둘 수 있다(`manifest.webmanifest`, 오프라인 없음). 마이크·설치·화면 꺼짐 방지는 **HTTPS(또는 localhost)** 에서만 된다. 탭·홈 화면 아이콘과 위 막대·로그인 화면의 로고는 확정 로고 파일 그대로다(이름 "Voiney Lab").
   `mobile/` 은 같은 웹 화면을 감싸는 Capacitor(안드로이드 먼저) 앱 뼈대다: 정확한 시각 알람, 화면을 꺼도 듣는 마이크 서비스, 기기에 봉한 로그인 토큰, 화면 켜 두기. 앱은 상태·타이머 권한을 갖지 않는다(서버의 타이머 시각을 복사해 알릴 뿐).
-- **어디**: `static/manifest.webmanifest`, `static/native-bridge.js`; `mobile/capacitor.config.js`, `mobile/scripts/prepare-web.mjs`, `mobile/README.md`(빌드), `docs/APP_PLAN.md`(계획); 서버 `VOINEY_LAB_APP_ORIGINS`(앱 출처의 토큰 로그인·CORS·`/ws` 출처).
-- **시험**: `tests/test_native_bridge.py`, `tests/test_lane_app1_app_login.py`, `tests/test_lane_app1_app_origins.py`.
-- **한계**: `native-bridge.js` 는 아직 `index.html` 이 불러오지 않는다 — 일반 화면에서는 기기 알림·화면 꺼도 듣기가 없다. 화면 주소는 `serverOrigin` 한 곳에서 정해 HTTP·이미지·내보내기·웹소켓에 적용한다. 현재는 빈 값으로 같은 서버를 쓰며 앱 묶음의 서버 주소 주입은 아직 연결되지 않았다. 실제 기기 연결도 확인 안 됨. 실제 휴대폰·HTTPS 에서 확인한 기록은 없다. iOS 빌드 없음.
+- **어디**: `static/manifest.webmanifest`, `static/icons/`(원본 `assets/brand/` 에서 쓰는 것만 복사), `static/index.html` 의 `.brand-logo`·`.wizard-logo`, `static/native-bridge.js`; `mobile/capacitor.config.js`, `mobile/scripts/prepare-web.mjs`, `mobile/README.md`(빌드), `docs/APP_PLAN.md`(계획); 서버 `VOINEY_LAB_APP_ORIGINS`(앱 출처의 토큰 로그인·CORS·`/ws` 출처).
+- **시험**: `tests/test_native_bridge.py`, `tests/test_lane_app1_app_login.py`, `tests/test_lane_app1_app_origins.py`, `tests/test_lane_ui2_pwa.py`, `tests/test_lane_name_product_name.py`(이름 표기, 아이콘·로고 파일).
+- **한계**: `native-bridge.js` 는 아직 `index.html` 이 불러오지 않는다 — 일반 화면에서는 기기 알림·화면 꺼도 듣기가 없다. 화면 주소는 `serverOrigin` 한 곳에서 정해 HTTP·이미지·내보내기·웹소켓에 적용한다. 현재는 빈 값으로 같은 서버를 쓰며 앱 묶음의 서버 주소 주입은 아직 연결되지 않았다. 실제 기기 연결도 확인 안 됨. 실제 휴대폰·HTTPS 에서 확인한 기록은 없다. iOS 빌드 없음. 앱의 런처 아이콘·시작 그림은 아직 Capacitor 기본 그림이다. manifest 에는 둥근 마스크용(`maskable`) 아이콘이 없다(확정 앱 아이콘은 모서리가 둥근 그림이라 그 용도로 쓰지 않았다).
 
 ## F17. 공급자와 설정
 

@@ -42,18 +42,19 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest["orientation"], "any")
         self.assertEqual(manifest["lang"], "ko")
         icons = {(icon["src"], icon.get("purpose", "any")): icon for icon in manifest["icons"]}
-        for (src, purpose), size in {("/icons/icon-192.png", "any"): 192, ("/icons/icon-512.png", "any"): 512, ("/icons/icon-maskable-512.png", "maskable"): 512}.items():
+        # Lane NAME (2026-10-25): the brand's app icons replace lane UI2's drawn ones.
+        for (src, purpose), size in {("/icons/voiney-lab_app-icon_180.png", "any"): 180, ("/icons/voiney-lab_app-icon_512.png", "any"): 512}.items():
             self.assertIn((src, purpose), icons)
             self.assertEqual(icons[(src, purpose)]["sizes"], f"{size}x{size}")
             self.assertEqual(_png_size(STATIC / src.lstrip("/")), (size, size))
-        self.assertEqual(_png_size(STATIC / "icons" / "apple-touch-icon.png"), (180, 180))
-        self.assertTrue((STATIC / "icons" / "icon.svg").read_text(encoding="utf-8").startswith("<svg"))
+        self.assertEqual(_png_size(STATIC / "icons" / "voiney-lab_favicon_32.png"), (32, 32))
+        self.assertTrue((STATIC / "icons" / "voiney-lab_logo_ink.svg").read_text(encoding="utf-8").startswith("<svg"))
 
     def test_the_page_links_the_manifest_and_the_icons_and_has_no_service_worker(self) -> None:
         html = INDEX.read_text(encoding="utf-8")
         head = html.split("</head>", 1)[0]
-        for tag in ('<link rel="manifest" href="/manifest.webmanifest">', '<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">',
-                    '<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">', '<meta name="apple-mobile-web-app-title" content="Voiney Lab">',
+        for tag in ('<link rel="manifest" href="/manifest.webmanifest">', '<link rel="apple-touch-icon" href="/icons/voiney-lab_app-icon_180.png">',
+                    '<link rel="icon" href="/icons/voiney-lab_favicon_32.png" type="image/png" sizes="32x32">', '<meta name="apple-mobile-web-app-title" content="Voiney Lab">',
                     '<meta name="application-name" content="Voiney Lab">', "<title>Voiney Lab"):
             self.assertIn(tag, head)
         self.assertNotIn("serviceWorker", html)
@@ -68,7 +69,7 @@ class ServedTests(unittest.TestCase):
         self.assertEqual(manifest.status_code, 200)
         self.assertEqual(manifest.headers["content-type"].split(";")[0], "application/manifest+json")
         self.assertEqual(manifest.json()["name"], "Voiney Lab")
-        for path, kind in (("/icons/icon-192.png", "image/png"), ("/icons/icon-512.png", "image/png"), ("/icons/icon-maskable-512.png", "image/png"), ("/icons/apple-touch-icon.png", "image/png"), ("/icons/icon.svg", "image/svg+xml")):
+        for path, kind in (("/icons/voiney-lab_app-icon_180.png", "image/png"), ("/icons/voiney-lab_app-icon_512.png", "image/png"), ("/icons/voiney-lab_favicon_32.png", "image/png"), ("/icons/voiney-lab_logo_ink.svg", "image/svg+xml")):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, path)
             self.assertEqual(response.headers["content-type"].split(";")[0], kind, path)

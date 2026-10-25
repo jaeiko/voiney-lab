@@ -7,9 +7,9 @@
   <title>Voiney Lab · Lab Copilot</title>
   <!-- Lane UI2 decision 5 (2026-10-13): Voiney Lab as a home-screen web app -- the manifest (name, icons, start address, either orientation) and the icons; no service worker, so nothing works offline. -->
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-  <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <!-- Lane NAME (2026-10-25): the confirmed Voiney Lab icons from assets/brand/ -- the tab's icon, the home screen's icon. -->
+  <link rel="icon" href="/icons/voiney-lab_favicon_32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/icons/voiney-lab_app-icon_180.png">
   <meta name="application-name" content="Voiney Lab">
   <meta name="apple-mobile-web-app-title" content="Voiney Lab">
   <meta name="mobile-web-app-capable" content="yes">
@@ -332,7 +332,10 @@
     .rail-safety{border-color:var(--warning-ink);background:var(--warning-soft);color:var(--warning-ink)}
     .btn-rail-danger{border-color:var(--danger);background:var(--danger-soft);color:var(--danger)}
     .btn-rail-danger:hover:not(:disabled){background:var(--danger);color:var(--on-ink)}
-    .brand-mark{background:var(--ink);box-shadow:none}
+    /* Lane NAME (2026-10-25): the logo 40px high -- its flask icon about 33px, over
+       the brand's 16px floor; the SVG carries part of its clear space and the
+       neighbours keep the rest (assets/brand/README.txt). One ink colour, as drawn. */
+    .brand-logo{display:block;flex:none;height:40px;width:auto}
     .session-badge{background:var(--paper)}
     .pulse{background:var(--bench);color:var(--ink-muted)}
     .pulse.listening,.pulse.speaking{background:var(--bench);color:var(--ink)}
@@ -843,6 +846,8 @@
     .wizard-sheet[data-mode="page"] .wizard-sheet-backdrop{display:none}
     .wizard-sheet[data-mode="page"] .wizard-sheet-panel{max-height:none;margin:0 auto;overflow:visible;border:0;border-radius:0;background:none}
     .wizard-sheet[data-mode="page"] .wizard{min-height:100dvh}
+    .wizard-logo{display:none}
+    .wizard-sheet[data-mode="page"] .wizard-logo{display:block;align-self:center;height:40px;width:auto}
     body[data-auth="required"] .topbar,body[data-auth="required"] .sticky-rail,body[data-auth="required"] .shell{display:none}
     body[data-wizard="on"]:not([data-auth="required"]){overflow:hidden}
     .experiment-start{display:grid}
@@ -982,9 +987,10 @@
   </header>
 
   <header class="topbar">
+    <!-- Lane NAME (2026-10-25): the Voiney Lab logo in place of the "VL" mark and the name in letters. -->
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">VL</div>
-      <div>Voiney Lab<small>Lab Copilot · 지능형 실험 보조</small></div>
+      <img class="brand-logo" src="/icons/voiney-lab_logo_ink.svg" alt="Voiney Lab" width="384" height="88">
+      <small>Lab Copilot · 지능형 실험 보조</small>
     </div>
     <div class="topbar-side">
       <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
@@ -1595,6 +1601,8 @@
       <button id="wizard-close" type="button" class="wizard-close" aria-label="닫기">×</button>
       <!-- Lane ON decision 2 (2026-10-18): the start, one thing per screen -- login (when accounts are on), the microphone and the voice, the agent's voice, the protocol, two key values, the safety check, the start. The server decides every step's content; the page draws what it sends. Lane IA decision ⑦ (2026-10-19): the wizard is the experiment tab's start; the detail view behind it is gone, every part has its own tab. -->
       <section id="start-wizard" class="wizard" aria-label="시작 준비" hidden>
+        <!-- Lane NAME (2026-10-25): the logo heads the login and signup page (data-mode="page") only, where the top bar is hidden; the sheet over the page does not show it. -->
+        <img class="wizard-logo" src="/icons/voiney-lab_logo_ink.svg" alt="Voiney Lab" width="384" height="88">
         <ol id="wizard-dots" class="wizard-dots" aria-label="진행"></ol>
         <div class="wizard-card">
           <p id="wizard-kicker" class="wizard-kicker"></p>
