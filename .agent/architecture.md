@@ -63,7 +63,7 @@ without a protocol: a voice session refuses to start without one.
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Workflow state (step, completion, timers, pause, observations) | `curated_protocol.CuratedProtocolSession` | The only state machine. Every change — read by a front rule or proposed by the router — runs through its branches (`plan`, `apply_tool_proposal` → `_execute_turn_intent`). |
+| Workflow state (step, completion, timers, pause, observations, today's values) | `curated_protocol.CuratedProtocolSession` | The only state machine. Every change — read by a front rule or proposed by the router — runs through its branches (`plan`, `apply_tool_proposal` → `_execute_turn_intent`). Today's values (`set_run_changes`, front rule `run_value_change`) come only from a person's choice or words; no router tool changes them. |
 | Turn classification label | `intent_arbitration.arbitrate_request` | A read-only label for planning and telemetry; it decides nothing on its own. |
 | Rules-only routing boundary | `runtime_routing.route_curated_runtime_turn` | The path when the router is off, the router's fallback, and `scripts/replay_turns.py`. |
 | Model proposals and answers | `llm_router` + `answer_checks` | Validate, then hand to the state machine. No state of their own. |
@@ -156,11 +156,18 @@ generation is cancelled and its audio cleared (barge-in).
    The screen text is not cut. The greeting, timer notices, clarifications
    and the emergency reply are still synthesized whole.
    `server.synthesize` keeps a sentence's audio (`SENTENCE_AUDIO`, bounded
-   by entries and bytes, keyed by provider, model, voice, language and the
-   cleaned sentence) only inside `sentence_audio_kept`: the curated plans
+   by entries and bytes, keyed by the speaking lab's organisation id
+   (`_speaking_organization`, from the request or voice connection's
+   principal; empty with no workspace), provider, model, voice, language and
+   the cleaned sentence) only inside `sentence_audio_kept`: the curated plans
    `_speech_kept` allows (protocol readings and fixed server sentences, not
    records, repeats, answers to questions, model-written speech or the
    experimenter's words) and the greeting. The emergency reply never is.
+   The page keeps every segment one turn played, in order, for "다시
+   들려줘" (`keepReplayableAudio`, at most 120 s; the replay turn's own
+   reply is not kept). A step's Korean begins with its own "N단계: "; the
+   previews, range summary and lab-equipment reading leave that prefix out of
+   `speech_text` only.
 
 The front rules and proposal checks share
 `intent_fences.is_question_or_speculation`: Korean question/speculation
@@ -190,6 +197,8 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   → page text by PyMuPDF in a bounded child process (pdf_text_engine)
   → pages without a usable text layer: OCR started by the upload itself,
     two engines compared place by place, accepted automatically
+  → optional page range (the request's `page_range`): only those pages are
+    sent, checked, counted for the hollow bound and searched for missed lines
   → one structured analysis (or pieces of ≤15 pages, ≤400 pages), background job
   → server-owned evidence check, requote of refused items, domain validation
   → lines no quote covers that read like an instruction (possibly_missed_places)
@@ -199,7 +208,10 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
                    → decisions → registered review version vN (latest runs)
   → execution rule at read time: analysis (or review version) present and no
     execution blocker → available_for_execution
-  → start wizard: start check (two key values) → safety statements → start
+  → start wizard: start check (two key values) → safety statements →
+    today's values (always passed, "바꿀 값 없이 다음" included;
+    `protocol_run_changes_chosen`) → start naming that choice
+    (`run_change_set_id`; applied once: `protocol_run_changes_applied`)
   → CuratedProtocolFixture for the session
 ```
 
@@ -242,6 +254,24 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   experiment and the current configuration id and generation.
 - Review cards never rewrite a safety statement (`_FIXABLE_KINDS` has no
   `warning`).
+- Today's values (lane EASY): `start_check.changeable_values` lists the time,
+  temperature, speed, volume and concentration values of each step's own
+  sentence, never one in a warning or limit sentence; `check_run_change`
+  takes only the same unit family; a value below half or above twice the
+  source's (`run_change_is_large`) is refused until the screen confirms it
+  (`confirm_large`). Every start passes the step: `session.start` names the
+  choice (`run_change_set_id`); with the start check on, a new run that names
+  none is refused `run_changes_required`, and a choice that is another
+  person's, used, or no longer the fixture's is refused `run_changes_stale`.
+  Nothing chosen earlier applies on its own.
+  During the run `CuratedProtocolSession` changes or puts back a value
+  (confirm_mode readback; asked first in 바로 확인 or noisy mode, and in
+  every mode for a large value), runs the
+  step's timer for a changed time, says the value at the step and puts it in
+  `state()["current_step_run_changes"]`. The record (`run_value_changed`,
+  `run_value_reverted`, `session_started.run_changes`) feeds the notebook's
+  "원문 → 실제"; the workspace events feed a recovery; "지난번처럼" reads the
+  owner's last record (`ExperimentReportStore.last_run_values`).
 
 ### Page evidence segments and known analysis limits
 
@@ -482,6 +512,16 @@ only. Start failures keep the sheet open with a reason, and a failed
 key-value load stays on its step with retry. Source-check/registration
 blockers remain visible. Settings opens as a sheet over the run; account
 erasure asks for the password again and returns to login on success.
+
+Tablet rules apply only under `(pointer:coarse) and (min-width:721px) and
+(min-height:600px)`: 44 px targets, a two-column landscape run (step |
+timer, figures in a sheet), far-reading and glove tokens (`--read-far-*`,
+`--target-glove`, `--gap-glove`). The start press itself asks for the screen
+wake lock (held while the start is pending, `keepScreenOnForStart`) and
+resumes the playback context (`primeRunStart`); a context the browser still
+holds back shows `#audio-unlock`, and `client.audio_ready` is sent once,
+after that touch. A refused microphone names the device's own setting
+(`micBlockedWords`). Phone and desktop layouts are unchanged.
 
 ## 10. Store-app shell
 

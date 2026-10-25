@@ -682,6 +682,9 @@ class ProtocolAnalysisDraft:
     #: (lane RV2, decision b): an OCR value both engines read alike, a step
     #: two pieces read in the same words kept once. Recorded with the result.
     auto_resolved: tuple[dict[str, object], ...] = ()
+    #: The pages a person chose to analyse (lane EASY, decision 1), both ends
+    #: included; None when the whole document was read.
+    page_range: tuple[int, int] | None = None
 
     @property
     def capability_policy_id(self) -> str:
@@ -802,8 +805,13 @@ def prepare_protocol_analysis_request(
     *,
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     max_input_bytes: int = MAX_SINGLE_PASS_INPUT_BYTES,
+    page_range: tuple[int, int] | None = None,
 ) -> ProtocolAnalysisRequest:
-    """Build the complete single-pass input without truncating page text."""
+    """Build the complete single-pass input without truncating page text.
+
+    With ``page_range`` (lane EASY, decision 1) only those pages go in, each
+    with its own number in the whole document.
+    """
 
     if (
         not isinstance(max_input_bytes, int)
@@ -821,11 +829,12 @@ def prepare_protocol_analysis_request(
         raise ProtocolAnalysisInputError(
             "Protocol PDF extraction is incomplete."
         )
-    if extraction.non_empty_page_count == 0:
+    pages = range_pages(extraction, page_range)
+    if not any(not page.text_empty for page in pages):
         raise ProtocolAnalysisInputError(
             "Protocol PDF has no extractable text; reviewed OCR is required."
         )
-    request = _analysis_request(extraction, extraction.pages, capability_policy)
+    request = _analysis_request(extraction, pages, capability_policy)
     if len(request.as_json().encode("utf-8")) > max_input_bytes:
         raise ProtocolAnalysisInputTooLargeError(
             "Protocol exceeds the single-pass analysis limit and requires "
@@ -5035,16 +5044,73 @@ def possibly_missed_flags(
         for run in runs if run)
 
 
-def check_analysis_page_count(extraction: ProtocolPdfExtraction) -> None:
+class ProtocolAnalysisPageRangeError(ProtocolAnalysisInputError):
+    """The pages chosen to analyse are not pages of this document."""
+
+
+def checked_page_range(
+    extraction: ProtocolPdfExtraction, page_range: object,
+) -> tuple[int, int] | None:
+    """``page_range`` as (first, last) when it names pages of this document.
+
+    Lane EASY, decision 1 (human decision 2026-10-24): a person may analyse
+    only part of a document -- a paper's Methods pages, say. None is the
+    whole document. Both ends are included; a range that is not two page
+    numbers of the document in order is refused.
+    """
+
+    if page_range is None:
+        return None
+    if (
+        not isinstance(page_range, (tuple, list)) or len(page_range) != 2
+        or any(not isinstance(page, int) or isinstance(page, bool) for page in page_range)
+    ):
+        raise ProtocolAnalysisPageRangeError("The pages to analyse are not two page numbers.")
+    first, last = int(page_range[0]), int(page_range[1])
+    if not 1 <= first <= last <= extraction.page_count:
+        raise ProtocolAnalysisPageRangeError(
+            f"The pages to analyse ({first}-{last}) are not pages of this "
+            f"{extraction.page_count}-page document."
+        )
+    return first, last
+
+
+def range_pages(
+    extraction: ProtocolPdfExtraction, page_range: tuple[int, int] | None,
+) -> tuple[ProtocolPdfPage, ...]:
+    """The pages an analysis reads: the chosen ones, or every page."""
+
+    checked = checked_page_range(extraction, page_range)
+    if checked is None:
+        return extraction.pages
+    return extraction.pages[checked[0] - 1:checked[1]]
+
+
+def _range_view(
+    extraction: ProtocolPdfExtraction, page_range: tuple[int, int] | None,
+) -> ProtocolPdfExtraction:
+    """The document as its chosen pages alone, for counting what they number."""
+
+    if page_range is None:
+        return extraction
+    pages = range_pages(extraction, page_range)
+    return replace(extraction, page_count=len(pages), pages=pages)
+
+
+def check_analysis_page_count(
+    extraction: ProtocolPdfExtraction, *, page_range: tuple[int, int] | None = None,
+) -> None:
     """Refuse a document longer than one analysis reads, before any model call.
 
     The single analysis's own bound; the catalog sends a longer document to
-    the pieces (``analysis_pieces``) before it gets here.
+    the pieces (``analysis_pieces``) before it gets here. With ``page_range``
+    only the chosen pages count.
     """
 
-    if extraction.page_count > MAX_ANALYSIS_PAGES:
+    count = len(range_pages(extraction, page_range))
+    if count > MAX_ANALYSIS_PAGES:
         raise ProtocolAnalysisTooManyPagesError(
-            f"Protocol has {extraction.page_count} pages; one analysis reads at "
+            f"Protocol has {count} pages; one analysis reads at "
             f"most {MAX_ANALYSIS_PAGES}."
         )
 
@@ -5056,12 +5122,24 @@ def analyze_protocol_extraction(
     capability_policy: domain.CapabilityPolicy = domain.P1_CAPABILITY_POLICY,
     max_input_bytes: int = MAX_SINGLE_PASS_INPUT_BYTES,
     review_unverified: bool = False,
+    page_range: tuple[int, int] | None = None,
 ) -> ProtocolAnalysisDraft:
-    check_analysis_page_count(extraction)
+    """One analysis of the document, or of its chosen pages (``page_range``).
+
+    Lane EASY, decision 1: the chosen pages are read the way a long
+    document's piece is -- only they go to the model, each with its own
+    page number, a quote must stand on one of them (with
+    ``review_unverified``, one that does not is an item for a person), and
+    the hollow-pass bound counts their numbered steps alone.
+    """
+
+    page_range = checked_page_range(extraction, page_range)
+    check_analysis_page_count(extraction, page_range=page_range)
     request = prepare_protocol_analysis_request(
         extraction,
         capability_policy=capability_policy,
         max_input_bytes=max_input_bytes,
+        page_range=page_range,
     )
     input_json = request.as_json()
     try:
@@ -5076,13 +5154,17 @@ def analyze_protocol_extraction(
         raise ProtocolAnalysisModelError(
             "Protocol analysis model request failed."
         ) from exc
+    allowed = range(page_range[0], page_range[1] + 1) if page_range is not None else None
     draft = parse_protocol_analysis_response(
         raw_response,
         extraction,
         capability_policy=capability_policy,
         review_unverified=review_unverified,
+        allowed_pages=allowed if review_unverified else None,
     )
-    hollow = hollow_analysis_check(draft.protocol, extraction)
+    if allowed is not None and not review_unverified:
+        _refuse_pages_outside(draft, extraction, allowed)
+    hollow = hollow_analysis_check(draft.protocol, _range_view(extraction, page_range))
     if hollow["hollow"]:
         incomplete = ProtocolAnalysisIncompleteError(
             "Protocol analysis holds far fewer steps than the source numbers.",
@@ -5091,7 +5173,30 @@ def analyze_protocol_extraction(
         )
         incomplete.response_repair = draft.response_repair
         raise incomplete
-    return draft
+    return draft if page_range is None else replace(draft, page_range=page_range)
+
+
+def _refuse_pages_outside(
+    draft: ProtocolAnalysisDraft, extraction: ProtocolPdfExtraction, allowed: range,
+) -> None:
+    """Refuse a quote on a page outside ``allowed`` (a piece's or the chosen pages)."""
+
+    for page, continued in _evidence_pages(draft.protocol):
+        if page not in allowed or (
+            continued is not None and continued not in range(allowed.start, allowed.stop + 1)
+        ):
+            error = ProtocolAnalysisEvidenceError(
+                "Protocol piece evidence cites a page outside the piece.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="piece_page_validation",
+                    reason_code="page_outside_piece",
+                    mismatch_class="page_identity_mismatch",
+                    source_hash=extraction.sha256,
+                    page_number=page,
+                ),
+            )
+            error.response_repair = draft.response_repair
+            raise error
 
 
 def analyze_protocol_pdf(
@@ -5287,25 +5392,31 @@ def _piece_bounds(page_count: int, most_pages: int) -> list[tuple[int, int]]:
     return [(edges[index], edges[index + 1]) for index in range(count)]
 
 
-def analysis_pieces(extraction: ProtocolPdfExtraction) -> tuple[AnalysisPiece, ...]:
+def analysis_pieces(
+    extraction: ProtocolPdfExtraction, *, page_range: tuple[int, int] | None = None,
+) -> tuple[AnalysisPiece, ...]:
     """The pieces this document is analysed in; empty when one analysis reads it.
 
     A document is read in pieces when it has more than ``MAX_ANALYSIS_PAGES``
     pages, or when its text is planned to need more output than one call
     gives (``estimated_output_tokens``). Pieces hold at most
     ``ANALYSIS_PIECE_MAX_PAGES`` pages; where a piece that long is planned
-    past the output budget, fewer pages, down to two.
+    past the output budget, fewer pages, down to two. With ``page_range``
+    (lane EASY, decision 1) the same is decided for the chosen pages alone,
+    and the pieces lie within them.
     """
 
+    pages = range_pages(extraction, page_range)
+    offset = (page_range[0] - 1) if page_range is not None else 0
     if (
-        extraction.page_count <= MAX_ANALYSIS_PAGES
-        and estimated_output_tokens(extraction.pages) <= ANALYSIS_OUTPUT_BUDGET_TOKENS
+        len(pages) <= MAX_ANALYSIS_PAGES
+        and estimated_output_tokens(pages) <= ANALYSIS_OUTPUT_BUDGET_TOKENS
     ):
         return ()
     for most_pages in range(ANALYSIS_PIECE_MAX_PAGES, ANALYSIS_PIECE_OVERLAP_PAGES, -1):
-        bounds = _piece_bounds(extraction.page_count, most_pages)
+        bounds = _piece_bounds(len(pages), most_pages)
         if len(bounds) > 1 and all(
-            estimated_output_tokens(extraction.pages[first - 1:last])
+            estimated_output_tokens(pages[first - 1:last])
             <= ANALYSIS_OUTPUT_BUDGET_TOKENS
             for first, last in bounds
         ):
@@ -5313,7 +5424,7 @@ def analysis_pieces(extraction: ProtocolPdfExtraction) -> tuple[AnalysisPiece, .
     if len(bounds) < 2:
         return ()
     return tuple(
-        AnalysisPiece(index, len(bounds), first, last)
+        AnalysisPiece(index, len(bounds), first + offset, last + offset)
         for index, (first, last) in enumerate(bounds, start=1)
     )
 
@@ -5434,12 +5545,16 @@ def analyze_protocol_piece(
     return draft
 
 
-def check_pieced_page_count(extraction: ProtocolPdfExtraction) -> None:
-    """Refuse a document longer than the pieces read, before any model call."""
+def check_pieced_page_count(
+    extraction: ProtocolPdfExtraction, *, page_range: tuple[int, int] | None = None,
+) -> None:
+    """Refuse a document longer than the pieces read, before any model call
+    (with ``page_range``, the chosen pages alone count)."""
 
-    if extraction.page_count > MAX_PIECED_ANALYSIS_PAGES:
+    count = len(range_pages(extraction, page_range))
+    if count > MAX_PIECED_ANALYSIS_PAGES:
         raise ProtocolAnalysisTooManyPagesError(
-            f"Protocol has {extraction.page_count} pages; an analysis in pieces "
+            f"Protocol has {count} pages; an analysis in pieces "
             f"reads at most {MAX_PIECED_ANALYSIS_PAGES}."
         )
 

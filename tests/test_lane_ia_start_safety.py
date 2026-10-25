@@ -39,7 +39,8 @@ primary().dispatch("click");await settle(8);
 const posted=safetyPosts();
 assert(posted.length===1&&posted[0].method==="POST"&&JSON.stringify(posted[0].body)===JSON.stringify({target:TARGET}),`posted: ${JSON.stringify(posted.map(call=>call.body))}`);
 assert(posted[0].url==="/api/protocols/p-1/start-check/safety",posted[0].url);
-assert(wizard.step==="start"&&wizard.checkedProtocolId==="p-1",`after: ${wizard.step} ${wizard.checkedProtocolId}`);
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" now follows the safety check.
+assert(wizard.step==="changes"&&wizard.checkedProtocolId==="p-1",`after: ${wizard.step} ${wizard.checkedProtocolId}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -67,7 +68,8 @@ assert(note.includes("핵심 값")&&!note.includes("start_check_invalid"),`note:
         result = run_safety(r"""
 await toSafety([["/start-check/safety",READY],["/start-check",{enabled:false,protocol_id:"p-1",target:null,questions:[],skipped_reason:"disabled"}],...base()]);
 primary().dispatch("click");await settle(8);
-assert(safetyPosts().length===0&&wizard.step==="start",`check off: posts ${safetyPosts().length} step ${wizard.step}`);
+// Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" now follows the safety check.
+assert(safetyPosts().length===0&&wizard.step==="changes",`check off: posts ${safetyPosts().length} step ${wizard.step}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 

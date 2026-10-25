@@ -32,7 +32,17 @@ class StartGateTests(_CatalogCase):
             self.protocol_id, target=target or self.target,
             actor_principal_id=actor or self.principal.principal_id)
 
-    def start_socket(self, *, enabled=True):
+    def skip_changes(self, actor=None):
+        """Lane EASY (decision of 2026-10-24): the start passes "오늘 원문과 다르게
+        할 값" -- here "바꿀 값 없이 다음" -- and names that choice."""
+
+        from voiney_lab.start_check import RunChanges
+
+        changes = RunChanges(self.catalog)
+        return changes.choose(self.protocol_id, [], target=changes.options(self.protocol_id)["target"],
+                              actor_principal_id=actor or self.principal.principal_id)["change_set_id"]
+
+    def start_socket(self, *, enabled=True, run_change_set_id=None):
         placeholder = Path("/tmp/offline-start-gate")
         config = server.ServerConfig(placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
                                      placeholder, placeholder, placeholder)
@@ -45,7 +55,8 @@ class StartGateTests(_CatalogCase):
             try:
                 task = asyncio.create_task(server.voice_socket(socket))
                 socket.control({"type": "session.start", "configuration_id": 1, "mode": "cascade",
-                                "language": "ko", "protocol_id": self.protocol_id})
+                                "language": "ko", "protocol_id": self.protocol_id,
+                                **({"run_change_set_id": run_change_set_id} if run_change_set_id else {})})
                 result = await socket.wait_for(lambda e: e["type"] in {
                     "session.ready", "session.configuration_required", "error"})
                 socket.disconnect()
@@ -90,7 +101,8 @@ class StartGateTests(_CatalogCase):
     def test_matching_answers_and_safety_record_allow_start(self):
         self.confirm_values()
         self.confirm_safety()
-        result, _ = self.start_socket()
+        # Lane EASY (decision of 2026-10-24): the start also names its "오늘 원문과 다르게 할 값" choice.
+        result, _ = self.start_socket(run_change_set_id=self.skip_changes())
         assert result["type"] == "session.ready"
 
     def test_reanalysis_invalidates_previous_confirmation_records(self):
@@ -168,7 +180,8 @@ class StartGateTests(_CatalogCase):
             server._REQUEST_PRINCIPAL.reset(token)
         assert result.status_code == 200, result.text
         assert result.json()["ready"]
-        result, _ = self.start_socket()
+        # Lane EASY (decision of 2026-10-24): the start also names its "오늘 원문과 다르게 할 값" choice.
+        result, _ = self.start_socket(run_change_set_id=self.skip_changes())
         assert result["type"] == "session.ready"
 
     def test_materialized_development_fixture_uses_the_same_start_gate(self):
@@ -185,7 +198,8 @@ class StartGateTests(_CatalogCase):
         assert refused["reason"] == "start_check_required"
         self.confirm_values()
         self.confirm_safety()
-        accepted, _ = self.start_socket()
+        # Lane EASY (decision of 2026-10-24): the start also names its "오늘 원문과 다르게 할 값" choice.
+        accepted, _ = self.start_socket(run_change_set_id=self.skip_changes())
         assert accepted["type"] == "session.ready"
 
     def test_safety_target_types_are_validated_at_ingress(self):

@@ -48,6 +48,7 @@ from voiney_lab.curated_protocol import (
     ClaimAdmissionStatus,
     CuratedProtocolAction,
     CuratedProtocolFixture,
+    CuratedProtocolFixtureError,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
     TimerNotice,
@@ -107,6 +108,7 @@ from voiney_lab.experiment_reports import (
     pi_confirmations,
     record_amendments,
     report_review_items,
+    report_timezone,
     sample_in_text,
     ReportNarrative,
     ReportPdfError,
@@ -130,6 +132,7 @@ from voiney_lab.safety_pack import (
     unavailable_safety_pack,
 )
 from voiney_lab.protocol_catalog import (
+    ProtocolAnalysisPageRangeInvalidError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogEntry,
@@ -242,7 +245,15 @@ from voiney_lab.vad import (
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
 from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
-from voiney_lab.start_check import StartCheck, StartCheckError, start_check_enabled
+from voiney_lab.start_check import (
+    RunChange,
+    RunChangeError,
+    RunChanges,
+    StartCheck,
+    StartCheckError,
+    changeable_values,
+    start_check_enabled,
+)
 from voiney_lab.accounts import (
     SESSION_COOKIE_NAME,
     SESSION_LIFETIME,
@@ -1454,6 +1465,36 @@ def _workspace_reverted_step_ids(state:Any)->tuple[str,...]:
     return tuple(found)
 
 
+def _workspace_run_changes(state:Any)->tuple[RunChange,...]|None:
+    """Today's values as the durable record holds them (lane EASY, decision 2).
+
+    The start's values (the "protocol_started" event), then each change and
+    put-back in order; None when the run never started (its values are then
+    the start's choice in the protocol's ledger)."""
+
+    events=(state or {}).get("events") or ()
+    if not any(isinstance(event,dict) and event.get("event_type")=="protocol_started" for event in events):
+        return None
+    kept:dict[str,RunChange]={}
+    for event in events:
+        payload=event.get("payload") if isinstance(event.get("payload"),dict) else {}
+        try:
+            if event.get("event_type")=="protocol_started":
+                for item in payload.get("run_changes") or ():
+                    change=RunChange.from_mapping(item)
+                    kept[change.item_id]=change
+            record=payload.get("step_record") if isinstance(payload.get("step_record"),dict) else {}
+            if record.get("kind")=="run_value_changed" and isinstance(record.get("change"),dict):
+                change=RunChange.from_mapping(record["change"])
+                kept[change.item_id]=change
+            elif record.get("kind")=="run_value_reverted":
+                for item in record.get("reverted") or ():
+                    kept.pop(str((item or {}).get("item_id")),None)
+        except RunChangeError:
+            continue
+    return tuple(kept.values())
+
+
 def _workspace_started_at(state:Any)->float|None:
     """When the experiment first started, as the durable record holds it, or None.
 
@@ -1520,6 +1561,9 @@ def _record_workspace_experiment_progress(
         CuratedProtocolAction.PAUSE,
         CuratedProtocolAction.RESUME,
         CuratedProtocolAction.START_TIMER,
+        # Lane EASY, decision 2: today's values, for a run continued after a
+        # lost connection.
+        CuratedProtocolAction.CHANGE_VALUE,
     }:
         return None
     key=f"voice-{generation}-{turn_id}-{plan.action.value}"
@@ -1578,6 +1622,9 @@ def _record_workspace_experiment_progress(
     move_kind=record.get("kind")
     if record:
         event_payload["step_record"]=record
+    if plan.action is CuratedProtocolAction.START and curated.run_changes():
+        # Lane EASY, decision 2: the values the start applied for today.
+        event_payload["run_changes"]=[change.public_dict() for change in curated.run_changes()]
     principal,store=_commercial_workspace()
     try:
         state=store.record_experiment_progress(
@@ -1586,6 +1633,8 @@ def _record_workspace_experiment_progress(
             expected_voice_connection_id=session.voice_connection_id,
             event_key=key,
             event_type=(
+                move_kind
+                if plan.action is CuratedProtocolAction.CHANGE_VALUE else
                 "repeat_returned"
                 if move_kind in {"repeat_return","repeat_round"} else
                 # Lane CF, decision 3: a confirmed revert, beside the
@@ -2914,7 +2963,7 @@ SENTENCE_AUDIO_MAX_BYTES=16*1024*1024
 
 
 class SentenceAudioCache:
-    """Sentence audio by (provider, model, voice, language, sentence), bounded.
+    """Sentence audio by (lab, provider, model, voice, language, sentence), bounded.
 
     ``synthesize`` runs in worker threads, so every read and write holds the
     lock. Audio larger than the whole memory is never kept.
@@ -2981,6 +3030,18 @@ def sentence_audio_kept(keep:bool=True)->Iterator[None]:
         _KEEP_SENTENCE_AUDIO.reset(token)
 
 
+def _speaking_organization()->str:
+    """The lab (organisation) whose request or voice connection speaks now.
+
+    Empty with no identity: a server without the workspace serves one
+    development tenant. ``asyncio.to_thread`` copies the context, so a
+    worker thread's synthesis knows it too.
+    """
+
+    principal=_REQUEST_PRINCIPAL.get()
+    return principal.organization_id if principal is not None else ""
+
+
 def synthesize(text:str,language:str|None=None)->bytes:
     clean_text = clean_speech_text(text)
     if not clean_text:
@@ -2992,9 +3053,12 @@ def synthesize(text:str,language:str|None=None)->bytes:
         settings=replace(settings,voice=chosen)
     # Lane VOX, decision 3: the same provider, model, voice, language and
     # sentence give the same audio. An unset provider keeps nothing and
-    # fails below by its setting's name, as before.
+    # fails below by its setting's name, as before. Lane FIXV, decision 3:
+    # and the same lab -- another lab's kept sentence is made anew, so how
+    # fast a sentence comes back tells no lab what another one said.
     key=(
-        (settings.provider,settings.model,settings.voice,language or "ko",clean_text)
+        (_speaking_organization(),settings.provider,settings.model,settings.voice,
+         language or "ko",clean_text)
         if _KEEP_SENTENCE_AUDIO.get() and settings.provider else None
     )
     if key is not None:
@@ -3422,6 +3486,9 @@ def _catalog_http_error(exc:Exception)->HTTPException:
     if isinstance(exc,ProtocolReviewTargetChangedError):
         return HTTPException(status_code=409,detail=exc.code)
     if isinstance(exc,ProtocolReviewError):
+        return HTTPException(status_code=422,detail=exc.code)
+    # Lane EASY, decision 1: pages to analyse that the document does not have.
+    if isinstance(exc,ProtocolAnalysisPageRangeInvalidError):
         return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ReagentTableError):
         return HTTPException(status_code=422,detail=exc.code)
@@ -4359,15 +4426,23 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 
 @app.post("/api/protocols",status_code=201)
-async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
+async def register_protocol_pdf(
+    request:Request,filename:str,first_page:int|None=None,last_page:int|None=None,
+)->dict[str,object]:
     """Register one protocol source: a PDF, a Word document or a photo.
 
     Lane AN, FM (human decision 2026-10-13): a .docx (through LibreOffice)
     and a JPG, PNG or HEIC photo are turned into the PDF that extraction, OCR
     and the analysis read -- one evidence path -- and registered as it; the
     upload's own checksum is kept with the registration.
+
+    Lane EASY, decision 1: ``first_page``/``last_page`` are the pages to
+    analyse, checked against the document; the analysis the upload-time OCR
+    starts reads those pages alone (the screen sends them to the analysis
+    request of a text PDF itself).
     """
 
+    page_range=_requested_page_range(first_page,last_page)
     media_type=source_media_type(request.headers.get("content-type",""))
     if media_type not in SOURCE_MEDIA_TYPES:
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
@@ -4421,6 +4496,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                         **registration_scope,
                     )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
+                catalog.check_page_range(result.entry.protocol_id,page_range)
                 _record_workspace_metric(
                     category="protocol",metric_name="upload",
                     dimensions={
@@ -4433,7 +4509,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                 )
                 return result,_upload_ocr_status(catalog,result.entry)
             result,status=await _catalog_in_worker(register)
-            ocr=_automatic_ocr_on_upload(None,result.entry,status=status)
+            ocr=_automatic_ocr_on_upload(None,result.entry,status=status,page_range=page_range)
             return _registration_response(result,ocr)
         except HTTPException:
             raise
@@ -4540,8 +4616,10 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
                 target=protocol_id
                 table_id=str(response["reagent_table"]["table_id"])
             else:
+                # Lane EASY, decision 1: the pages to analyse, as for an upload.
                 response=await register_protocol_pdf(
-                    upload_request(fetched,"/api/protocols"),filename=fetched.filename)
+                    upload_request(fetched,"/api/protocols"),filename=fetched.filename,
+                    first_page=body.get("first_page"),last_page=body.get("last_page"))
                 target=str(response["protocol"]["protocol_id"])
                 table_id=None
         try:
@@ -4584,7 +4662,7 @@ def _upload_ocr_status(catalog:ProtocolCatalog,entry:ProtocolCatalogEntry)->dict
 
 def _automatic_ocr_on_upload(
     catalog:ProtocolCatalog|None,entry:ProtocolCatalogEntry,
-    *,status:dict[str,object]|None=None,
+    *,status:dict[str,object]|None=None,page_range:tuple[int,int]|None=None,
 )->dict[str,object]:
     """Start OCR for the pages without a usable text layer, if any (lane PX 3).
 
@@ -4625,7 +4703,8 @@ def _automatic_ocr_on_upload(
         return {"state":state,"automatic":False,"blocked":"analysis_already_ran"}
     ocr_id=f"ocr-{secrets.token_hex(16)}"
     _schedule_ocr_then_analysis(
-        entry.protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get())
+        entry.protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get(),
+        page_range=page_range)
     return {"state":"queued","automatic":True,"ocr_id":ocr_id}
 
 
@@ -4640,7 +4719,7 @@ def _ocr_page_numbers(status:dict[str,object])->list[int]:
 
 def _schedule_ocr_then_analysis(
     protocol_id:str,provider:ProtocolOcrProvider,*,ocr_id:str,
-    principal:Principal|None,
+    principal:Principal|None,page_range:tuple[int,int]|None=None,
 )->asyncio.Task[None]:
     """OCR in a worker, accepted automatically, then the analysis (lane PX 3)."""
 
@@ -4664,7 +4743,9 @@ def _schedule_ocr_then_analysis(
         if status.get("accepted_for_analysis") is not True:
             return
         try:
-            await _begin_background_analysis(protocol_id,principal=principal)
+            await _begin_background_analysis(
+                protocol_id,principal=principal,
+                **({"page_range":page_range} if page_range is not None else {}))
         except Exception as exc:  # noqa: BLE001 - recorded by the catalog
             log.warning(
                 "protocol.analysis.after_ocr_failed protocol_id=%s error=%s",
@@ -4799,10 +4880,15 @@ def get_protocol_ocr_status(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols/{protocol_id}/analysis",status_code=202)
 async def trigger_protocol_analysis(
-    protocol_id:str,background:bool=True
+    protocol_id:str,background:bool=True,
+    first_page:int|None=None,last_page:int|None=None,
 )->dict[str,object]:
-    """Persist a request, then run provider analysis outside the request path."""
+    """Persist a request, then run provider analysis outside the request path.
 
+    ``first_page``/``last_page`` (lane EASY, decision 1): only those pages
+    are analysed, and the request event keeps them."""
+
+    page_range=_requested_page_range(first_page,last_page)
     _scope_catalog_resource(protocol_id)
     analysis_id=f"analysis-{secrets.token_hex(16)}"
     metric_principal=_REQUEST_PRINCIPAL.get()
@@ -4813,7 +4899,7 @@ async def trigger_protocol_analysis(
         catalog,store=_open_protocol_catalog()
         try:
             if request_first:
-                catalog.request_analysis(protocol_id,analysis_id)
+                catalog.request_analysis(protocol_id,analysis_id,page_range=page_range)
             try:
                 model=_protocol_analysis_model()
             except (RuntimeError,ValueError) as exc:
@@ -4863,13 +4949,16 @@ async def trigger_protocol_analysis(
         if deferred is not None:
             return deferred
         return await _begin_background_analysis(
-            protocol_id,principal=metric_principal,analysis_id=analysis_id)
+            protocol_id,principal=metric_principal,analysis_id=analysis_id,
+            page_range=page_range)
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
 
 @app.post("/api/protocols/{protocol_id}/reanalysis",status_code=202)
-async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
+async def trigger_protocol_reanalysis(
+    protocol_id:str,first_page:int|None=None,last_page:int|None=None,
+)->dict[str,object]:
     """Analyse a protocol again over the analysis it has (lane RN, decision 2).
 
     The person's one confirmation is on the screen. Here the request is one
@@ -4877,17 +4966,36 @@ async def trigger_protocol_reanalysis(protocol_id:str)->dict[str,object]:
     the request path; a pass is one more analysis revision, a failure leaves
     the old one as it is. The analysis route above keeps lane PA's rule and
     never calls a passed analysis again, so an upload cannot reach this.
+    ``first_page``/``last_page`` (lane EASY, decision 1): the new analysis
+    reads those pages alone; none is the whole document.
     """
 
+    page_range=_requested_page_range(first_page,last_page)
     _scope_catalog_resource(protocol_id)
     try:
         deferred=await _analysis_deferred_for_ocr(protocol_id)
         if deferred is not None:
             return deferred
         return await _begin_background_analysis(
-            protocol_id,principal=_REQUEST_PRINCIPAL.get(),reanalysis=True)
+            protocol_id,principal=_REQUEST_PRINCIPAL.get(),reanalysis=True,
+            page_range=page_range)
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+def _requested_page_range(first_page:object,last_page:object)->tuple[int,int]|None:
+    """The pages to analyse as a request names them (lane EASY, decision 1).
+
+    Both ends or neither; whether they are pages of the document is the
+    catalog's to check against the source."""
+
+    if first_page is None and last_page is None:
+        return None
+    if (not isinstance(first_page,int) or not isinstance(last_page,int)
+            or isinstance(first_page,bool) or isinstance(last_page,bool)
+            or not 1<=first_page<=last_page):
+        raise HTTPException(status_code=422,detail="analysis_page_range_invalid")
+    return first_page,last_page
 
 
 async def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
@@ -4910,7 +5018,7 @@ async def _analysis_deferred_for_ocr(protocol_id:str)->dict[str,object]|None:
 
 async def _begin_background_analysis(
     protocol_id:str,*,principal:Principal|None,analysis_id:str|None=None,
-    reanalysis:bool=False,
+    reanalysis:bool=False,page_range:tuple[int,int]|None=None,
 )->dict[str,object]:
     """Record the request, then run the analysis off the request path.
 
@@ -4926,7 +5034,7 @@ async def _begin_background_analysis(
         catalog,store=_open_protocol_catalog()
         try:
             entry=catalog.request_analysis(
-                protocol_id,analysis_id,reanalysis=reanalysis)
+                protocol_id,analysis_id,reanalysis=reanalysis,page_range=page_range)
             public=entry.public_dict()
             public["analysis_run"]=_analysis_run_public(catalog,protocol_id)
             return public
@@ -5234,6 +5342,156 @@ def post_protocol_start_safety(
         raise HTTPException(status_code=422,detail=exc.code) from exc
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/start-check/changes")
+def get_protocol_run_changes(protocol_id:str)->dict[str,object]:
+    """"오늘 원문과 다르게 할 값" (lane EASY, decision 2): the values the
+    analysis (or review version) about to run states that today's run may
+    change -- time, temperature, speed, volume, concentration -- each with
+    its step and source words."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            options=RunChanges(catalog).options(protocol_id)
+        finally:
+            store.close()
+        # Lane EASY, decision 3: "지난번처럼" -- the same account's last run of
+        # this protocol, its changed values on today's list.
+        last=_last_run_values(protocol_id)
+        matched=RunChanges.last_time(options["values"],(last or {}).get("changes") or ())
+        options["last_time"]=({"changes":matched,"report_id":last.get("report_id"),
+                               "when_ko":_local_day_words(last.get("started_at"))}
+                              if matched else None)
+        return options
+    except RunChangeError as exc:
+        raise HTTPException(status_code=422,detail={"code":exc.code,"message_ko":exc.message_ko}) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/start-check/changes")
+def post_protocol_run_changes(
+    protocol_id:str,body:dict[str,Any]=Body(...),
+)->dict[str,object]:
+    """The person's values for today (an empty list: the step skipped), checked
+    item by item -- the same kind of unit, a value the list holds -- and kept
+    in the protocol's ledger for the next start; the server's sentence when
+    one is refused."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return RunChanges(catalog).choose(
+                protocol_id,body.get("changes"),target=body.get("target"),
+                actor_principal_id=_start_check_principal_id(),source=body.get("source","wizard"),
+                confirm_large=body.get("confirm_large") or ())
+        finally:
+            store.close()
+    except RunChangeError as exc:
+        # A large value comes back with its question for the screen's second look.
+        raise HTTPException(status_code=422,detail={
+            "code":exc.code,"message_ko":exc.message_ko,
+            **({"large":exc.large} if exc.large else {})}) from exc
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+def _last_run_values(protocol_id:str)->dict[str,Any]|None:
+    """The signed-in person's last run of the protocol, as the records'
+    ownership rule lets them read it (lane EASY, decision 3); None without a
+    known owner or the records."""
+
+    settings=ExperimentReportSettings.from_environment()
+    principal=_REQUEST_PRINCIPAL.get() if _workspace_settings().enabled else None
+    if principal is None or not settings.enabled or settings.database_path is None:
+        return None
+    try:
+        return ExperimentReportStore(settings.database_path).last_run_values(
+            protocol_id=protocol_id,organization_id=getattr(principal,"organization_id",None),
+            owner_principal_id=getattr(principal,"principal_id",None))
+    except Exception as exc:  # noqa: BLE001 - no last time is no button, never a refusal
+        log.warning("run_changes.last_time_unavailable error=%s",type(exc).__name__)
+        return None
+
+
+def _local_day_words(moment:object)->str:
+    try:
+        when=datetime.fromisoformat(str(moment)).astimezone(report_timezone())
+    except (TypeError,ValueError):
+        return ""
+    return f"{when.month}월 {when.day}일"
+
+
+RUN_CHANGES_REFUSAL_KO={
+    "run_changes_required":"오늘 원문과 다르게 할 값 단계를 지나야 시작할 수 있어요. 바꿀 값이 없으면 '바꿀 값 없이 다음'을 눌러 주세요.",
+    "run_changes_stale":"오늘 바꾼 값이 지금 분석과 맞지 않아요. 시작 화면에서 다시 골라 주세요.",
+}
+
+
+def _start_run_changes(
+    protocol_id:str,revision_id:str|None,fixture:CuratedProtocolFixture,
+    change_set_id:str|None=None,
+)->tuple[tuple[str|None,tuple[RunChange,...]],str|None]:
+    """((change set id, today's values), refusal) for a new run's start.
+
+    Lane EASY (human decisions 2026-10-24): the start names the choice it
+    uses -- the "오늘 원문과 다르게 할 값" step it passed, "바꿀 값 없이 다음"
+    included -- and nothing chosen earlier applies on its own. With the start
+    check on (``VOINEY_LAB_START_CHECK_ENABLED``, the gate family the step
+    joins) a start that names none is refused ``run_changes_required``. The
+    named choice must be this person's, on the revision about to run or on the
+    catalog entry's the wizard read (the development fixture runs from its
+    file, "fixture-…", its catalog copy is "pdf-1-analysis-1"), unused, and
+    every value must still be the fixture's as the source prints it;
+    otherwise ``run_changes_stale``, never applied in part."""
+
+    if not _protocol_store_settings().enabled:
+        return (None,()),None
+    if change_set_id is None:
+        return (None,()),("run_changes_required" if start_check_enabled() else None)
+    catalog,store=_open_protocol_catalog()
+    try:
+        try:
+            listed=catalog.get_entry(protocol_id).revision_id
+        except ProtocolCatalogError:
+            listed=None
+        try:
+            changes=RunChanges(catalog).for_start(
+                protocol_id,change_set_id,actor_principal_id=_start_check_principal_id(),
+                revision_ids=(revision_id,listed))
+        except RunChangeError:
+            return (None,()),"run_changes_stale"
+    finally:
+        store.close()
+    values={value.item_id:value for value in changeable_values(fixture.steps)}
+    if any((value:=values.get(change.item_id)) is None or value.number!=change.source_number
+           or value.unit!=change.source_unit or value.step_id!=change.step_id for change in changes):
+        return (None,()),"run_changes_stale"
+    return (change_set_id,changes),None
+
+
+def _mark_run_changes_applied(protocol_id:str,change_set_id:str,experiment_session_id:str|None)->None:
+    catalog,store=_open_protocol_catalog()
+    try:
+        RunChanges(catalog).mark_applied(
+            protocol_id,change_set_id,experiment_session_id=experiment_session_id,
+            actor_principal_id=_start_check_principal_id())
+    finally:
+        store.close()
+
+
+def _applied_run_changes(protocol_id:str,experiment_session_id:str)->tuple[RunChange,...]:
+    if not _protocol_store_settings().enabled:
+        return ()
+    catalog,store=_open_protocol_catalog()
+    try:
+        return RunChanges(catalog).applied_to(protocol_id,experiment_session_id)
+    finally:
+        store.close()
 
 
 def _start_check_principal_id()->str|None:
@@ -8765,6 +9023,17 @@ def _record_experiment_report_plan(
         step_label=str(record.get("step_label") or step_label or "")
     elif move_kind=="repeat_registered":
         event_type="repeat_registered"
+    elif plan.state_changed and move_kind in {"run_value_changed","run_value_reverted"}:
+        # Lane EASY, decision 2: at the step whose value changed, with the
+        # analysis or review version it was changed on; a put-back is its own
+        # event beside the change, which stays in the record.
+        event_type=move_kind
+        step_id=str(record.get("step_id") or step_id or "")
+        step_label=str(record.get("step_label") or step_label or "")
+    if event_type=="session_started" and curated.run_changes():
+        # Lane EASY, decision 2: the values the start applied for today.
+        payload["run_changes"]=[change.public_dict() for change in curated.run_changes()]
+        payload["run_change_set_id"]=curated.run_change_set_id
     followed_by=(
         "repeat_rounds_declined" if move_kind=="repeat_declined" else
         "repeat_closed" if move_kind=="repeat_closed" else
@@ -9082,7 +9351,9 @@ _REPORTED_WHEN_CHANGED=frozenset({
 
 #: Lane CB: the records that reach the report although their turn moved
 #: nothing -- a condition answered yes, a count given by voice.
-_RECORDED_STEP_RECORD_KINDS=frozenset({"branch_answer","repeat_registered"})
+_RECORDED_STEP_RECORD_KINDS=frozenset({"branch_answer","repeat_registered",
+    # Lane EASY, decision 2: a value of today's run changed or put back.
+    "run_value_changed","run_value_reverted"})
 
 
 def _reportable(plan:Any)->bool:
@@ -12405,6 +12676,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.RECORD_CORRECTION:"experiment_record_corrected",
             CuratedProtocolAction.REPORT_REVIEW:"report_value_review",
             CuratedProtocolAction.PROBLEM_HELP:"problem_help_read",
+            # Lane EASY, decision 2: a value of today's run changed or put back.
+            CuratedProtocolAction.CHANGE_VALUE:"run_value_changed",
         }
         operation=(
             "completion_and_next_transition"
@@ -13928,6 +14201,21 @@ async def voice_socket(websocket:WebSocket):
                                             if readiness["reason"]=="safety_acknowledgement_required"
                                             else "시작 화면에서 현재 프로토콜의 확인을 마쳐 주세요.")))
                             continue
+                    # Lane EASY, decision 2: today's values the person chose
+                    # for this start (a recovery keeps the run's own).
+                    run_change_set:tuple[str|None,tuple[RunChange,...]]=(None,())
+                    if selected_curated_fixture is not None and control.get("experiment_session_id") is None:
+                        configuration_stage="run_changes"
+                        run_change_set,run_changes_refused=await asyncio.to_thread(
+                            _start_run_changes,requested_protocol_id,selected_revision_id,
+                            selected_curated_fixture,control.get("run_change_set_id"))
+                        if run_changes_refused is not None:
+                            await websocket.send_text(event(
+                                "session.configuration_required",configuration_id=configuration_id,
+                                mode=requested_mode,language=context.language,
+                                protocol_id=requested_protocol_id,reason=run_changes_refused,
+                                message_ko=RUN_CHANGES_REFUSAL_KO[run_changes_refused]))
+                            continue
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     if selected_curated_fixture is not None:
@@ -14006,6 +14294,10 @@ async def voice_socket(websocket:WebSocket):
                             _load_experimenter_settings)
                         session.curated_protocol_session.apply_experimenter_settings(
                             experimenter_settings)
+                        if run_change_set[1]:
+                            # Lane EASY, decision 2: the state machine takes them.
+                            session.curated_protocol_session.set_run_changes(
+                                run_change_set[1],change_set_id=run_change_set[0])
                         # Lane SP1, decision 1: the "민감도" margin of the
                         # wearer's measurement is the experimenter's setting.
                         session.set_speaker_sensitivity(
@@ -14048,6 +14340,11 @@ async def voice_socket(websocket:WebSocket):
                         ),
                         reattach=reconnect is not None,
                     )
+                    if recovery_session_id is None and run_change_set[0] is not None:
+                        # The choice is used once: by this experiment.
+                        await asyncio.to_thread(
+                            _mark_run_changes_applied,str(requested_protocol_id),run_change_set[0],
+                            session.session_id)
                     previous_connection=(
                         _HEARD_CONNECTIONS.get(session.session_id)
                         if reconnect is not None else None)
@@ -14091,6 +14388,17 @@ async def voice_socket(websocket:WebSocket):
                             reconnect_notices=list(reconnection.notices)
                         elif experiment_state["status"] in {"paused","blocked"}:
                             session.curated_protocol_session.pause_workflow()
+                    if (recovery_session_id is not None and experiment_state is not None
+                            and session.curated_protocol_session is not None):
+                        # Lane EASY, decision 2: today's values as the run kept them.
+                        kept_changes=_workspace_run_changes(experiment_state)
+                        if kept_changes is None:
+                            kept_changes=await asyncio.to_thread(
+                                _applied_run_changes,str(requested_protocol_id),str(recovery_session_id))
+                        try:
+                            session.curated_protocol_session.set_run_changes(kept_changes)
+                        except CuratedProtocolFixtureError:
+                            log.warning("run_changes.restore_refused protocol_id=%s",requested_protocol_id)
                     if reconnect is not None and experiment_state is not None:
                         restored_connection=True
                         if (
