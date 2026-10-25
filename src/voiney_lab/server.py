@@ -14428,15 +14428,35 @@ async def new_screen()->Response:
     return FileResponse(index,media_type="text/html",headers={"Cache-Control":"no-cache"})
 
 
-@app.get("/app/assets/{name}",include_in_schema=False)
-async def new_screen_asset(name:str)->Response:
-    """One built file (hashed name, one path segment) from the build folder, cacheable for good."""
+def _new_ui_file(folder:str,name:str)->Path:
+    """One file (one path segment) inside a folder of the build; anything that resolves outside it is 404."""
 
-    root=(NEW_UI_DIR/"assets").resolve()
+    root=(NEW_UI_DIR/folder).resolve()
     path=(root/name).resolve()
     if not path.is_relative_to(root) or path==root or not path.is_file():
         raise HTTPException(status_code=404,detail="not_found")
-    return FileResponse(path,headers={"Cache-Control":"public, max-age=31536000, immutable"})
+    return path
+
+
+@app.get("/app/assets/{name}",include_in_schema=False)
+async def new_screen_asset(name:str)->Response:
+    """One built file (hashed name) from the build folder, cacheable for good."""
+
+    return FileResponse(_new_ui_file("assets",name),headers={"Cache-Control":"public, max-age=31536000, immutable"})
+
+
+@app.get("/app/brand/{name}",include_in_schema=False)
+async def new_screen_brand(name:str)->Response:
+    """A logo or icon from the brand bundle (web/public/brand/, unhashed names): cached for a day, not for good."""
+
+    return FileResponse(_new_ui_file("brand",name),headers={"Cache-Control":"public, max-age=86400"})
+
+
+@app.get("/app/manifest.webmanifest",include_in_schema=False)
+async def new_screen_manifest()->Response:
+    """The new screen's web app manifest under its registered type (lane UI2 decision 5), re-read on each visit."""
+
+    return FileResponse(_new_ui_file("","manifest.webmanifest"),media_type="application/manifest+json",headers={"Cache-Control":"no-cache"})
 
 
 # Lane UI2 decision 5 (2026-10-13): the web app manifest is served under its

@@ -15,6 +15,7 @@ is pointed at a temporary one so the tests do not depend on node.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -42,6 +43,13 @@ class _Build:
             encoding="utf-8",
         )
         (root / "assets" / "index-abc.js").write_text("console.log('rx0')\n", encoding="utf-8")
+        # The brand files and the manifest as Vite copies them from web/public/.
+        (root / "brand").mkdir()
+        (root / "brand" / "voiney-lab_favicon_32.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
+        (root / "manifest.webmanifest").write_text(
+            '{"name": "Voiney Lab", "start_url": "/app/", "icons": [{"src": "brand/voiney-lab_app-icon_512.png"}]}',
+            encoding="utf-8",
+        )
         return root
 
     def __exit__(self, *exc) -> None:
@@ -79,6 +87,57 @@ class NewScreenServedTests(unittest.TestCase):
             self.assertIn("아직 준비되지 않았어요", answer.text)
             self.assertIn('href="/index.html"', answer.text)
             self.assertEqual(client.get("/healthz").status_code, 200)
+
+    def test_the_brand_files_and_the_manifest_are_served_from_the_build(self) -> None:
+        with _Build() as build, patch.object(server, "NEW_UI_DIR", build):
+            client = _client()
+            icon = client.get("/app/brand/voiney-lab_favicon_32.png")
+            self.assertEqual(icon.status_code, 200)
+            self.assertEqual(icon.headers["content-type"], "image/png")
+            self.assertIn("max-age=86400", icon.headers.get("cache-control", ""))
+            self.assertNotIn("immutable", icon.headers.get("cache-control", ""))
+            manifest = client.get("/app/manifest.webmanifest")
+            self.assertEqual(manifest.status_code, 200)
+            self.assertTrue(manifest.headers["content-type"].startswith("application/manifest+json"))
+            self.assertEqual(manifest.json()["name"], "Voiney Lab")
+            self.assertIn("no-cache", manifest.headers.get("cache-control", ""))
+
+    def test_a_name_that_leaves_its_folder_or_is_missing_is_not_served(self) -> None:
+        with _Build() as build, patch.object(server, "NEW_UI_DIR", build):
+            client = _client()
+            # ".." (encoded, so the client sends it as the one segment) resolves to the build folder itself.
+            self.assertEqual(client.get("/app/brand/%2e%2e").status_code, 404)
+            self.assertEqual(client.get("/app/assets/%2e%2e").status_code, 404)
+            self.assertEqual(client.get("/app/brand/missing.png").status_code, 404)
+            self.assertEqual(client.get("/app/brand/").status_code, 404)
+            # The guard itself, for a name a client could not even send as one segment.
+            for folder, name in (("brand", "../index.html"), ("assets", "../brand/voiney-lab_favicon_32.png"), ("", "../"), ("brand", "")):
+                with self.assertRaises(server.HTTPException) as caught:
+                    server._new_ui_file(folder, name)
+                self.assertEqual(caught.exception.status_code, 404)
+
+    def test_the_repository_holds_the_brand_files_the_screen_names(self) -> None:
+        public = Path(server.__file__).resolve().parents[2] / "web" / "public"
+        for name in (
+            "voiney-lab_logo_ink.svg",
+            "voiney-lab_logo_white.svg",
+            "voiney-lab_symbol_ink.svg",
+            "voiney-lab_symbol_white.svg",
+            "voiney-lab_favicon_32.png",
+            "voiney-lab_app-icon_180.png",
+            "voiney-lab_app-icon_512.png",
+        ):
+            self.assertTrue((public / "brand" / name).is_file(), name)
+        # No company logo (voiney_*) on the new screen: the product logo only.
+        self.assertEqual([p.name for p in (public / "brand").iterdir() if not p.name.startswith("voiney-lab_")], [])
+        manifest = json.loads((public / "manifest.webmanifest").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["name"], "Voiney Lab")
+        self.assertEqual(manifest["start_url"], "/app/")
+        for icon in manifest["icons"]:
+            self.assertTrue((public / icon["src"]).is_file(), icon["src"])
+        shell = (public.parent / "index.html").read_text(encoding="utf-8")
+        self.assertIn('href="/brand/voiney-lab_favicon_32.png"', shell)
+        self.assertIn('href="/manifest.webmanifest"', shell)
 
     def test_the_build_folder_is_the_static_app_folder_and_git_ignores_it(self) -> None:
         self.assertEqual(server.NEW_UI_DIR, STATIC / "app")

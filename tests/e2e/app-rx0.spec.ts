@@ -20,6 +20,17 @@ test.describe('The new screen (lane RX0)', () => {
     // The CI server's dev identity: a quiet chip, no logout.
     await expect(page.getByTestId('dev-chip')).toHaveText('개발 모드');
     await expect(page.getByTestId('logout-open')).toHaveCount(0);
+    // The final logo (an image from this server's brand folder), the tab icon and the manifest beside it.
+    const logo = page.getByRole('img', { name: 'Voiney Lab' }).first();
+    await expect(logo).toBeVisible();
+    expect(await logo.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    expect((await logo.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(16);
+    expect(await page.locator('link[rel="icon"]').getAttribute('href')).toBe('/app/brand/voiney-lab_favicon_32.png');
+    expect(await page.locator('link[rel="manifest"]').getAttribute('href')).toBe('/app/manifest.webmanifest');
+    const manifest = await page.request.get('/app/manifest.webmanifest');
+    expect(manifest.status()).toBe(200);
+    expect((await manifest.json()).name).toBe('Voiney Lab');
+    expect((await page.request.get('/app/brand/voiney-lab_app-icon_180.png')).status()).toBe(200);
     // Fonts come from this server, never a CDN.
     const fontRequests: string[] = [];
     page.on('request', (request) => { if (request.resourceType() === 'font') fontRequests.push(request.url()); });

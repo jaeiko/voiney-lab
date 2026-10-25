@@ -13,7 +13,7 @@ describe("LoginScreen", () => {
   it("shows the name, the tagline and one button; no step number", () => {
     fakeFetch({});
     renderWithClient(<LoginScreen invite={null} />);
-    expect(screen.getByText("Voiney Lab")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Voiney Lab" })).toHaveAttribute("src", expect.stringContaining("brand/voiney-lab_logo_ink.svg"));
     expect(screen.getByText("장갑을 낀 채 말로 진행하는 실험 안내")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그인하기" })).toBeInTheDocument();
     expect(screen.queryByText(/1 \/ 6/)).not.toBeInTheDocument();

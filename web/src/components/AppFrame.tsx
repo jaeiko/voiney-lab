@@ -88,7 +88,7 @@ export function AppFrame({ session, current, children }: Props) {
     <div className="frame">
       <header className="frame-head">
         <a className="logo" href={routes.home} aria-label={nav.home}>
-          <Logo />
+          <Logo height={32} />
         </a>
         <div className="frame-account">
           {accounts ? (

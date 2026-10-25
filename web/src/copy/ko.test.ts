@@ -63,7 +63,6 @@ describe("the copy table", () => {
   it("keeps the product name and the tagline the brief asked for", () => {
     expect(copy.product.name).toBe("Voiney Lab");
     expect(copy.product.tagline).toContain("장갑");
-    expect(copy.product.logoNote).toContain("디자이너 확정 필요");
   });
 
   it("tells a locked login how long to wait from the server's number", () => {

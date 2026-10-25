@@ -78,7 +78,7 @@ export function LoginScreen({ invite, notice = null, onSignedIn }: Props) {
     <div className="auth">
       <section className="auth-card" aria-labelledby="auth-title">
         <div className="auth-brand">
-          <Logo size={40} />
+          <Logo height={48} />
           <p className="lead">{product.tagline}</p>
           <p className="muted">{product.principle}</p>
         </div>

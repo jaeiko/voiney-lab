@@ -20,7 +20,7 @@ function Centered({ children }: { children: React.ReactNode }) {
     <div className="auth">
       <div className="auth-card">
         <div className="auth-brand">
-          <Logo size={40} />
+          <Logo height={48} />
         </div>
         {children}
       </div>
