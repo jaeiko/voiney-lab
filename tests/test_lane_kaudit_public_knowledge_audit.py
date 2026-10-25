@@ -13,7 +13,9 @@ the brief's cells and the shape of its questions.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -480,6 +482,77 @@ class CommandLineTests(TinyBundleCase):
         self.assertEqual(result["totals"]["cells"], 4)
         self.assertEqual(result["load"]["moss_loads"], 0)
         self.assertIn("| 장비 |", markdown.read_text(encoding="utf-8"))
+
+    SECRETS = ("project-secret-1", "key-secret-1", "other-secret-1")
+    HOOD = FoundDocument(id="niosh:hood", text="Fume hood · Section\nKeep the sash low.", score=0.9,
+                         metadata={"title": "Fume hood", "grade": "A", "source_id": "niosh-2007-107"})
+
+    def _moss_run(self, env_text: str, client: FakeClient) -> tuple[int, str, Path, list]:
+        coverage, cases, env_file = self.root / "coverage.json", self.root / "cases.json", self.root / "keys.env"
+        coverage.write_text(json.dumps(TINY_TABLE, ensure_ascii=False), encoding="utf-8")
+        cases.write_text(json.dumps({"cases": [{"id": "X1", "protocol": "not-in-catalog", "step": "1",
+                                                "utterance": "왜 안 되지?", "expect_help": True}]}), encoding="utf-8")
+        env_file.write_text(env_text, encoding="utf-8")
+        catalog, out_dir = self.root / "catalog", self.root / "moss_run"
+        catalog.mkdir()
+        built: list[PublicKnowledgeSettings] = []
+
+        def factory(settings: PublicKnowledgeSettings) -> FakeClient:
+            built.append(settings)
+            return client
+
+        printed = io.StringIO()
+        with patch.dict(os.environ, {}, clear=False), patch.object(audit, "MOSS_CLIENT_FACTORY", factory), \
+                contextlib.redirect_stdout(printed):
+            for name in ("MOSS_PROJECT_ID", "MOSS_PROJECT_KEY", "VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX", "XAI_API_KEY"):
+                os.environ.pop(name, None)
+            code = audit.main(["moss-run", "--runtime-dir", str(self.root), "--env-file", str(env_file),
+                               "--protocol-data-dir", str(catalog), "--coverage", str(coverage), "--cases", str(cases),
+                               "--out-dir", str(out_dir)])
+            # Only the three public-knowledge names were taken from the file, and none was put in the environment.
+            self.assertFalse({"XAI_API_KEY", "MOSS_PROJECT_ID", "MOSS_PROJECT_KEY"} & set(os.environ))
+        for path in out_dir.iterdir():
+            for secret in self.SECRETS:
+                self.assertNotIn(secret, path.read_text(encoding="utf-8"), path.name)
+        for secret in self.SECRETS:
+            self.assertNotIn(secret, printed.getvalue())
+        return code, printed.getvalue(), out_dir, built
+
+    def test_moss_run_loads_once_writes_json_only_and_prints_one_line(self) -> None:
+        client = FakeClient([self.HOOD])
+        code, printed, out_dir, built = self._moss_run(
+            "MOSS_PROJECT_ID=project-secret-1\nMOSS_PROJECT_KEY=key-secret-1\n"
+            "VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX=lab-index\nXAI_API_KEY=other-secret-1\n", client)
+        questions = sum(len(cell["questions"]) for cell in TINY_TABLE["cells"])
+        self.assertEqual(code, 0)
+        self.assertEqual(printed, f"끝: 질문 {questions}개, 파일 3개\n")
+        self.assertEqual(sorted(path.name for path in out_dir.iterdir()), ["help.json", "map.json", "run.json"])
+        run = json.loads((out_dir / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(run["status"], "done")
+        self.assertEqual(run["calls"], {"moss_index_loads": 1, "index_queries": questions, "map_queries": questions,
+                                        "help_queries": 0, "uploads": 0})
+        self.assertEqual((run["index"], client.loaded), ("lab-index", ["lab-index"]))
+        self.assertEqual((built[0].project_id, built[0].project_key), ("project-secret-1", "key-secret-1"))
+        self.assertEqual(built[0].cache_dir, str(self.root / "catalog" / "public-knowledge-cache"))  # the server's place
+        row = json.loads((out_dir / "map.json").read_text(encoding="utf-8"))["cells"][0]["rows"][0]
+        self.assertIsInstance(row["ms"], float)
+        self.assertEqual((row["top"][0]["rank"], row["top"][0]["id"], row["top"][0]["score"]), (1, "niosh:hood", 0.9))
+        helped = json.loads((out_dir / "help.json").read_text(encoding="utf-8"))
+        self.assertEqual(helped["skipped"], {"not-in-catalog_not_in_catalog": 1})
+
+    def test_moss_run_stops_by_class_and_setting_without_the_failure_s_words(self) -> None:
+        client = FakeClient(fail_load=RuntimeError("refused token key-secret-1"))
+        code, printed, out_dir, _built = self._moss_run(
+            "MOSS_PROJECT_ID=project-secret-1\nMOSS_PROJECT_KEY=key-secret-1\n", client)
+        self.assertEqual(code, 1)
+        self.assertTrue(printed.startswith("멈춤: KnowledgeUnavailable (VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX)"), printed)
+        self.assertEqual(printed.count("\n"), 1)
+        self.assertEqual([path.name for path in out_dir.iterdir()], ["run.json"])
+        run = json.loads((out_dir / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(run["status"], "stopped")
+        self.assertEqual(run["error"]["chain"], ["KnowledgeUnavailable", "RuntimeError"])
+        self.assertEqual(run["calls"]["moss_index_loads"], 1)
+        self.assertEqual(run["calls"]["index_queries"], 0)
 
     def test_inventory_writes_counts_and_the_sample(self) -> None:
         out = self.root / "inventory.json"

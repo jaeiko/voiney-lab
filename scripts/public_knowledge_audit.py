@@ -5,6 +5,7 @@
     python scripts/public_knowledge_audit.py map --backend fts5|moss [--out FILE] [--out-md FILE]
     python scripts/public_knowledge_audit.py help --backend fts5|moss --protocol-data-dir DIR [--out FILE]
     python scripts/public_knowledge_audit.py all --backend moss --protocol-data-dir DIR --out-dir DIR
+    python scripts/public_knowledge_audit.py moss-run --env-file FILE --protocol-data-dir DIR --out-dir DIR
     python scripts/public_knowledge_audit.py find TERM [TERM ...] [--source ID] [--limit N]
     python scripts/public_knowledge_audit.py search "질문" --backend fts5|moss
 
@@ -40,6 +41,18 @@ calls no model.
   The starter-pack protocols come from a protocol catalog folder
   (``--protocol-data-dir``, use a copy: opening a catalog may write to it);
   the in-gel rows need the licensed in-gel PDF (condition A).
+- ``moss-run`` is ``map`` and ``help`` on the Moss index for a person to run
+  in a terminal (2026-10-25: reading ``.env`` is refused to agents). The
+  index name and credentials are taken in the server's order -- the process
+  environment first, then the dotenv file (``--env-file``, default this
+  checkout's ``.env``, the file ``server.py`` reads) -- but only those three
+  names are taken from the file. It loads the index once, queries it in
+  process, uploads nothing and writes JSON only (``map.json``, ``help.json``,
+  ``run.json``: per question the pieces found with rank, score and time;
+  each cell's verdict data; the help rows; the calls and memory). Library
+  output is silenced and the one line printed is "끝: 질문 N개, 파일 M개"
+  (N = queries sent to the index); a failure prints the exception's class
+  and setting name only, never a value.
 - ``find`` and ``search`` help write the coverage table: pieces carrying a
   term, and what the server's search returns for a question.
 
@@ -56,24 +69,28 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
 import os
 import random
 import re
+import resource
 import statistics
 import sys
 import tempfile
 import time
+import traceback
 import unicodedata
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from voiney_lab.knowledge import KnowledgeContext, KnowledgeHit
+from voiney_lab.knowledge import KnowledgeContext, KnowledgeHit, KnowledgeUnavailable
 from voiney_lab.public_knowledge import (
     DEFAULT_INDEX_NAME,
     ENABLED_SETTING,
@@ -82,6 +99,7 @@ from voiney_lab.public_knowledge import (
     MOSS_PROJECT_KEY_SETTING,
     FoundDocument,
     Glossary,
+    MossSdkClient,
     PublicKnowledgeSettings,
     PublicKnowledgeSource,
     default_glossary_path,
@@ -243,20 +261,57 @@ class BundleSearchClient:
         self._index = None
 
 
-def _moss_credentials(env_file: str | None) -> dict[str, str]:
-    """``MOSS_PROJECT_ID``/``MOSS_PROJECT_KEY`` from the shell, else from the dotenv file.
+def _server_values(env_file: str | None, names: Sequence[str]) -> dict[str, str]:
+    """``names`` in the server's order: the process environment, else the dotenv file.
 
-    Only those two names are taken from the file; nothing is printed.
+    ``server.py`` loads its ``.env`` with ``override=False``, so a value
+    already in the environment wins; here only ``names`` are taken from the
+    file, so no other key in it enters this process. Nothing is printed.
     """
 
-    values = {name: os.environ.get(name, "").strip() for name in (MOSS_PROJECT_ID_SETTING, MOSS_PROJECT_KEY_SETTING)}
-    if env_file and not all(values.values()):
+    values = {name: os.environ.get(name, "").strip() for name in names}
+    if env_file and not all(values.values()) and Path(env_file).is_file():
         from dotenv import dotenv_values  # noqa: PLC0415
 
         read = dotenv_values(env_file)
         for name in values:
             values[name] = values[name] or str(read.get(name) or "").strip()
     return values
+
+
+def _moss_credentials(env_file: str | None) -> dict[str, str]:
+    """``MOSS_PROJECT_ID``/``MOSS_PROJECT_KEY`` from the shell, else from the dotenv file."""
+
+    return _server_values(env_file, (MOSS_PROJECT_ID_SETTING, MOSS_PROJECT_KEY_SETTING))
+
+
+class CountingClient:
+    """The Moss client with its loads and queries counted (``SearchClient``).
+
+    It has no way to upload: only ``load``, ``query`` and ``close`` pass through.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self.loads = 0
+        self.queries = 0
+
+    async def load(self, index_name: str) -> None:
+        self.loads += 1
+        await self._client.load(index_name)
+
+    async def query(self, index_name: str, text: str, *, top_k: int, alpha: float) -> list[FoundDocument]:
+        self.queries += 1
+        return await self._client.query(index_name, text, top_k=top_k, alpha=alpha)
+
+    async def close(self) -> None:
+        await self._client.close()
+
+
+def _moss_sdk_client(settings: PublicKnowledgeSettings) -> MossSdkClient:
+    """The client ``start_public_knowledge`` builds by default."""
+
+    return MossSdkClient(settings.project_id, settings.project_key, cache_dir=settings.cache_dir)
 
 
 @dataclass
@@ -280,7 +335,7 @@ async def open_source(
     if backend == "moss":
         environment = {
             ENABLED_SETTING: "true",
-            INDEX_SETTING: index_name or os.environ.get(INDEX_SETTING, "") or DEFAULT_INDEX_NAME,
+            INDEX_SETTING: index_name or _server_values(env_file, (INDEX_SETTING,))[INDEX_SETTING] or DEFAULT_INDEX_NAME,
             **_moss_credentials(env_file),
         }
         settings = PublicKnowledgeSettings.from_environment(environment, cache_dir=cache_dir)
@@ -716,7 +771,8 @@ async def coverage_map(
                 unresolved.append(question.id)
             started = time.perf_counter()
             hits = await search(source, question.text, language=question.language, limit=top_k)
-            latencies.append((time.perf_counter() - started) * 1000)
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            latencies.append(elapsed_ms)
             ids = [hit.detail("doc_id") for hit in hits]
             rank = next((index for index, doc_id in enumerate(ids, 1) if doc_id in gold), None)
             gold_hit = hits[rank - 1] if rank else None
@@ -728,9 +784,11 @@ async def coverage_map(
                 "id": question.id, "text": question.text, "language": question.language,
                 "gold_pieces": len(gold), "gold_grades": dict(Counter(grade_of[i] for i in gold).most_common()),
                 "no_answer": question.no_answer, "rank": rank, "found": rank is not None,
-                "shown": bool(gold_hit and gold_hit.detail("shares")),
-                "top": [{"id": hit.detail("doc_id"), "source_id": hit.detail("source_id"), "grade": hit.detail("grade"),
-                         "title": hit.title, "locator": hit.locator, "shares": hit.detail("shares")} for hit in hits],
+                "shown": bool(gold_hit and gold_hit.detail("shares")), "ms": round(elapsed_ms, 1),
+                "top": [{"rank": index, "id": hit.detail("doc_id"), "score": _score(hit),
+                         "source_id": hit.detail("source_id"), "grade": hit.detail("grade"), "title": hit.title,
+                         "locator": hit.locator, "shares": hit.detail("shares"), "gold": hit.detail("doc_id") in gold}
+                        for index, hit in enumerate(hits, 1)],
                 "glossary_gaps": gaps,
             })
         total = len(rows)
@@ -789,6 +847,10 @@ async def coverage_map(
         "by_area": by_area,
         "glossary_gaps": {"all": dict(gaps_all.most_common()), "in_missed_questions": dict(gaps_missed.most_common())},
     }
+
+
+def _score(hit: KnowledgeHit) -> float | None:
+    return round(float(hit.score), 4) if hit.score is not None else None
 
 
 def _share(rows: Sequence[Mapping[str, Any]]) -> float | None:
@@ -1007,6 +1069,9 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
             "public_in_reply": PUBLIC_LABEL in reply, "public_said": PUBLIC_LABEL in said,
             "pieces": [{"source_id": hit.detail("source_id"), "grade": hit.detail("grade"), "title": hit.title,
                         "locator": hit.locator, "shares": hit.detail("shares"), "text": hit.text[:240]} for hit in shown],
+            "hits": [{"rank": index, "id": hit.detail("doc_id"), "score": _score(hit), "source_id": hit.detail("source_id"),
+                      "grade": hit.detail("grade"), "title": hit.title, "shares": hit.detail("shares")}
+                     for index, hit in enumerate(hits, 1)],
             "spoken_public": part.spoken if part else "",
             "spoken_kind": ("fact" if sentence else "pointer") if part else "",
             "public_rule_violations": violations,
@@ -1124,6 +1189,143 @@ def find(bundle: Bundle, terms: Sequence[str], *, source_id: str | None = None, 
     return lines
 
 
+# --- moss-run: the Moss measurement a person runs ------------------------------------------
+
+#: What ``moss-run`` wraps in ``CountingClient``; None is the server's Moss client (tests put a fake here).
+MOSS_CLIENT_FACTORY: Any = None
+HIDDEN = "<가림>"
+
+
+@contextlib.contextmanager
+def _quiet() -> Iterator[None]:
+    """File descriptors 1 and 2 to /dev/null: the Moss core, the server's log and warnings print nothing."""
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = (os.dup(1), os.dup(2))
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        for descriptor in (*saved, devnull):
+            os.close(descriptor)
+
+
+def _hide(text: str, secrets: Iterable[str]) -> str:
+    """``text`` with every credential value replaced: a last guard before anything is written or printed."""
+
+    for secret in secrets:
+        if len(secret) >= 4:
+            text = text.replace(secret, HIDDEN)
+    return text
+
+
+def _failure(exc: BaseException) -> dict[str, Any]:
+    """An exception as class names, the setting it names and code places -- not its message, which may hold a value.
+
+    ``KnowledgeUnavailable`` alone keeps its message: the public tier writes
+    it from a setting name and a Moss error code.
+    """
+
+    chain: list[str] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < 5:
+        chain.append(type(current).__name__)
+        current = current.__cause__ or current.__context__
+    setting = getattr(exc, "setting", None)
+    return {
+        "class": type(exc).__name__, "setting": setting if isinstance(setting, str) else None,
+        "detail": str(exc) if isinstance(exc, KnowledgeUnavailable) else None, "chain": chain,
+        "frames": [f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
+                   for frame in traceback.extract_tb(exc.__traceback__)][-8:],
+    }
+
+
+def _utc() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def moss_run(args: argparse.Namespace) -> int:
+    """``map`` and ``help`` on the Moss index with one load: JSON files only, one line printed."""
+
+    out_dir = Path(args.out_dir).expanduser()
+    coverage_path, cases_path = Path(args.coverage).expanduser(), Path(args.cases).expanduser()
+    protocol_data_dir = Path(args.protocol_data_dir).expanduser()
+    env_file = str(Path(args.env_file).expanduser()) if args.env_file else str(ROOT / ".env")
+    # Where the server keeps the downloaded index: beside the protocol catalog.
+    cache_dir = str(Path(args.cache_dir).expanduser()) if args.cache_dir else str(protocol_data_dir / "public-knowledge-cache")
+    run: dict[str, Any] = {
+        "command": "moss-run", "status": "stopped", "started_at": _utc(), "top_k": TOP_K,
+        "inputs": {name: hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+                   for name, path in (("coverage_sha256", coverage_path), ("cases_sha256", cases_path))},
+        "calls": {"moss_index_loads": 0, "index_queries": 0, "map_queries": 0, "help_queries": 0, "uploads": 0},
+        "rss_mib": {},
+    }
+    secrets = [value for value in _moss_credentials(env_file).values() if value]
+    clients: list[CountingClient] = []
+    written: list[str] = []
+    started = time.perf_counter()
+
+    def factory(settings: PublicKnowledgeSettings) -> CountingClient:
+        clients.append(CountingClient((MOSS_CLIENT_FACTORY or _moss_sdk_client)(settings)))
+        return clients[-1]
+
+    async def job() -> tuple[dict[str, Any], dict[str, Any]]:
+        bundle = Bundle.read(Path(args.runtime_dir).expanduser())
+        table = load_coverage(coverage_path)
+        run["inputs"]["bundle_pieces"] = len(bundle.records)
+        opened = await open_source("moss", bundle, env_file=env_file, cache_dir=cache_dir, index_name=args.index,
+                                   client_factory=factory)
+        source = opened.source
+        run.update(index=source.settings.index_name, alpha=source.settings.alpha, load_s=opened.load_seconds,
+                   glossary_terms=len(source.glossary))
+        run["rss_mib"].update(before_load=opened.rss_before_mib, after_load=opened.rss_after_load_mib)
+        try:
+            mapped = await coverage_map(bundle, table, source)
+            run["calls"]["map_queries"] = clients[-1].queries
+            run["rss_mib"]["after_map"] = pipeline.rss_mib()
+            helped = await help_run(source, protocol_data_dir=protocol_data_dir, cases_file=cases_path)
+            run["calls"]["help_queries"] = clients[-1].queries - run["calls"]["map_queries"]
+            run["rss_mib"]["after_help"] = pipeline.rss_mib()
+        finally:
+            await source.close()
+        mapped["load"] = helped["load"] = _load_line(opened)
+        return mapped, helped
+
+    with _quiet():
+        try:
+            mapped, helped = asyncio.run(job())
+            for name, value in (("map.json", mapped), ("help.json", helped)):
+                _write(str(out_dir / name), _hide(_json(value), secrets))
+                written.append(name)
+            run["status"] = "done"
+            run["unresolved_gold"] = mapped["unresolved_gold"]
+        except Exception as exc:  # noqa: BLE001 - reported by class and setting name, never by value
+            run["error"] = _failure(exc)
+        finally:
+            run["calls"]["moss_index_loads"] = sum(client.loads for client in clients)
+            run["calls"]["index_queries"] = sum(client.queries for client in clients)
+            run["seconds"] = round(time.perf_counter() - started, 1)
+            run["rss_mib"]["peak"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+            run["finished_at"] = _utc()
+            written.append("run.json")
+            run["files"] = list(written)
+            _write(str(out_dir / "run.json"), _hide(_json(run), secrets))
+    if run["status"] == "done":
+        print(f"끝: 질문 {run['calls']['index_queries']}개, 파일 {len(written)}개")
+        return 1 if run["unresolved_gold"] else 0
+    error = run["error"]
+    setting = f" ({error['setting']})" if error["setting"] else ""
+    print(_hide(f"멈춤: {error['class']}{setting} — {out_dir / 'run.json'} 참고 (값은 적지 않음)", secrets))
+    return 1
+
+
 # --- The command line -----------------------------------------------------------------------
 
 
@@ -1181,6 +1383,16 @@ def build_parser() -> argparse.ArgumentParser:
     finding.add_argument("terms", nargs="+")
     finding.add_argument("--source", help="이 출처 id 만")
     finding.add_argument("--limit", type=int, default=40)
+    running = commands.add_parser("moss-run", parents=[shared],
+                                  help="사람이 돌리는 Moss 측정: map·help 를 색인 한 번 불러와서, 결과는 JSON 만, 출력은 한 줄")
+    running.add_argument("--env-file", help="MOSS_PROJECT_ID·MOSS_PROJECT_KEY·VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX 만 읽을 "
+                                            "dotenv 파일 (기본: 이 checkout 의 .env; 셸 값이 먼저; 값은 어디에도 적지 않음)")
+    running.add_argument("--index", help="Moss 색인 이름 (기본: 서버 설정, 없으면 voiney-public-knowledge)")
+    running.add_argument("--cache-dir", help="Moss 색인 디스크 캐시 폴더 (기본: 서버처럼 <protocol-data-dir>/public-knowledge-cache)")
+    running.add_argument("--protocol-data-dir", required=True, help="스타터 팩 프로토콜 카탈로그 폴더 (사본)")
+    running.add_argument("--coverage", default=str(COVERAGE_FILE))
+    running.add_argument("--cases", default=str(HELP_SET_FILE))
+    running.add_argument("--out-dir", required=True, help="결과 JSON 폴더 (map.json, help.json, run.json)")
     searching = commands.add_parser("search", parents=[shared], help="서버처럼 찾은 상위 조각 (표 쓰기용)")
     backend_options(searching)
     searching.add_argument("queries", nargs="+", help="질문 (여럿이면 색인 한 번에 차례로)")
@@ -1204,6 +1416,8 @@ def _load_line(opened: OpenedSource) -> dict[str, Any]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "moss-run":
+        return moss_run(args)
     bundle = Bundle.read(Path(args.runtime_dir))
     if args.command == "inventory":
         result = inventory(bundle, pipeline.load_sources(Path(args.sources)), sample_size=args.sample_size, seed=args.seed)
