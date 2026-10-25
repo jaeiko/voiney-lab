@@ -2,7 +2,7 @@
   "name": "voiney-lab-web",
   "private": true,
   "version": "0.1.0",
-  "description": "VoineyLab new screen (React), built into src/voiney_lab/static/app/ and served at /app/.",
+  "description": "Voiney Lab new screen (React), built into src/voiney_lab/static/app/ and served at /app/.",
   "type": "module",
   "scripts": {
     "dev": "vite",

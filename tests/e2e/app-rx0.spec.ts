@@ -8,7 +8,7 @@ import { APP, ENTRY_ANALYSING, ENTRY_FAILED, ENTRY_READY, ENTRY_REVIEW, mockAcco
 test.describe('The new screen (lane RX0)', () => {
   test('/app/ serves the built page with the name, the menu and no experiment bar', async ({ page }) => {
     await page.goto(APP);
-    await expect(page).toHaveTitle('VoineyLab');
+    await expect(page).toHaveTitle('Voiney Lab');
     await expect(page.getByRole('navigation', { name: '화면 고르기' })).toBeVisible();
     for (const label of ['홈', '프로토콜', '실험', '기록', '설정']) {
       await expect(page.getByRole('navigation').getByText(label, { exact: true })).toBeVisible();

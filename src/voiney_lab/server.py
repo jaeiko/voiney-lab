@@ -14382,7 +14382,7 @@ NEW_UI_ENV="VOINEY_LAB_NEW_UI"
 NEW_UI_NOT_BUILT_HTML=(
     '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
     '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    "<title>VoineyLab</title></head><body style=\"font-family:sans-serif;padding:2rem\">"
+    "<title>Voiney Lab</title></head><body style=\"font-family:sans-serif;padding:2rem\">"
     "<p>새 화면이 아직 준비되지 않았어요. 관리자에게 알려 주세요.</p>"
     '<p><a href="/index.html">지금 화면으로 가기</a></p></body></html>'
 )

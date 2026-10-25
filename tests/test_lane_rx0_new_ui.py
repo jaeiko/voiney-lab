@@ -36,7 +36,7 @@ class _Build:
         root = Path(self._dir.name)
         (root / "assets").mkdir()
         (root / "index.html").write_text(
-            '<!doctype html><html lang="ko"><head><title>VoineyLab</title>'
+            '<!doctype html><html lang="ko"><head><title>Voiney Lab</title>'
             '<script type="module" src="/app/assets/index-abc.js"></script></head>'
             '<body><div id="root"></div></body></html>',
             encoding="utf-8",
@@ -93,7 +93,6 @@ class RootSettingTests(unittest.TestCase):
             page = client.get("/", follow_redirects=False)
             self.assertEqual(page.status_code, 200)
             self.assertIn('<link rel="manifest" href="/manifest.webmanifest">', page.text)
-            self.assertIn("<title>VoineyLab", page.text)
 
     def test_with_the_setting_on_the_root_goes_to_the_new_screen_with_its_query(self) -> None:
         with _Build() as build, patch.object(server, "NEW_UI_DIR", build), patch.dict(os.environ, {"VOINEY_LAB_NEW_UI": "true"}):

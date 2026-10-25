@@ -7,7 +7,7 @@
 // "이 프로토콜로 시작" is the one button name AGENTS.md (rule 5) fixes.
 
 export const product = {
-  name: "VoineyLab",
+  name: "Voiney Lab",
   tagline: "장갑을 낀 채 말로 진행하는 실험 안내",
   principle: "값과 안전 주의는 올린 원문에서만 와요.",
   logoNote: "임시 로고 — 디자이너 확정 필요",
