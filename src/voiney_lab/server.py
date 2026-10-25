@@ -3061,6 +3061,15 @@ def _agent_voice_id(settings:Mapping[str,str])->str|None:
     return None if chosen=="default" or not _agent_voice_known(chosen) else chosen
 
 
+def _session_voice_fallback()->str|None:
+    """The provider's configured voice, or None when no provider is set."""
+
+    try:
+        return _tts_voice() or None
+    except ConfigurationError:
+        return None
+
+
 def _session_tts_voice()->str|None:
     """The chosen voice of the session speaking now, when it chose one."""
 
@@ -14665,6 +14674,15 @@ async def voice_socket(websocket:WebSocket):
                         ),
                     ))
                     continue
+                # Lane HEAR, decision 5: the voice saved before this start --
+                # the page keeps one connection open across starts, so the
+                # choice read when it opened may be an older one.
+                try:
+                    start_voice_settings=await asyncio.to_thread(_load_experimenter_settings)
+                except Exception:  # noqa: BLE001 - the voice already chosen then
+                    start_voice_settings=None
+                if start_voice_settings is not None:
+                    session.tts_voice=_agent_voice_id(start_voice_settings)
                 ready_fields={
                     "configuration_id":session.accepted_configuration_id,
                     "generation":session.generation,
@@ -14673,6 +14691,8 @@ async def voice_socket(websocket:WebSocket):
                     "input_language":session.accepted_input_language.value,
                     "protocol_id":session.accepted_protocol_id,
                     "research_capabilities":research_capabilities,
+                    "agent_voice":session.tts_voice or "default",
+                    "voice_id":session.tts_voice or _session_voice_fallback(),
                 }
                 if session.accepted_protocol_id is not None:
                     ready_fields["revision_id"]=session.accepted_revision_id
