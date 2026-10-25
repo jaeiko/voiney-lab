@@ -11188,37 +11188,57 @@ async def _report_level_drop(
             session,sender,SPEAKER_FILTER_WORDS[action],kind="speaker_filter")))
 
 
-#: Lane SP1, decision 3: the suggestion after this many ignored voices in
-#: this many seconds, at most once in the gap.
+#: Lane SP1, decision 3: the room's condition after this many ignored voices
+#: in this many seconds, at most once in the gap. Since lane HEAR, decision 9
+#: (2026-10-25), it is recorded only -- no question during a run.
 AMBIENT_SUGGESTION_IGNORED_COUNT=3
 AMBIENT_SUGGESTION_WINDOW_SECONDS=60.0
 AMBIENT_SUGGESTION_GAP_SECONDS=600.0
-AMBIENT_SUGGESTION_WORDS="주변이 시끄러워 보여요. 시끄러운 곳 모드로 바꿀까요?"
+#: Lane HEAR, decision 9: the room's noise floor is logged as a number this often while listening.
+NOISE_FLOOR_RECORD_SECONDS=60.0
 
 
-async def _suggest_noisy_mode(
-    sender:LockedSender,session:ListenerSession,*,
-    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
-)->bool:
-    """Say "시끄러운 곳 모드로 바꿀까요?" once the session is quiet; the next turn answers it.
+def _record_noise_condition(session:ListenerSession,kind:str)->None:
+    """Record, never say, that the room is loud (lane HEAR, decision 9).
 
-    A suggestion only (decision 3): the mode changes on the experimenter's
-    yes, through the rules' own yes/no reading, never here.
+    "other_voices": three voices taken for other people's within a minute
+    (lane SP1, decision 3); "floor_near_line": the noise floor near the
+    wearer's line (lane SP2, decision 2). Each used to make the server ask
+    "시끄러운 곳 모드로 바꿀까요?" in the middle of a run. The room is now
+    chosen once before the start; this keeps codes and numbers only, at
+    most once in AMBIENT_SUGGESTION_GAP_SECONDS.
     """
 
-    curated=session.curated_protocol_session
-    if curated is None or not session.noisy_mode_suggestion_due():
-        return False
     session.ambient_suggested_at=session.clock()
-    turn_id=await _say_server_words(
-        session,sender,AMBIENT_SUGGESTION_WORDS,kind="ambient_suggestion",sleep=sleep)
-    if turn_id is None:
-        return False
-    curated.open_ambient_suggestion()
+    floor=session.noise_floor.level_db()
+    reference=session.level_reference
     log.info(
-        "ambient suggestion said turn_id=%s ignored_in_window=%d",
-        turn_id,session.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS))
-    return True
+        "noise.condition kind=%s floor_db=%s reference_db=%s ignored_in_window=%d",
+        kind,round(floor,1) if floor is not None else None,
+        round(reference.reference_db,1) if reference is not None else None,
+        session.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS))
+    _record_workspace_metric(
+        category="voice",metric_name="noise_condition",
+        dimensions={"status":"recorded","reason_code":kind},
+    )
+
+
+def _record_noise_floor(session:ListenerSession)->None:
+    """The room's noise floor as a number, once a minute while listening (decision 9)."""
+
+    floor=session.noise_floor.level_db()
+    if floor is None:
+        return
+    now=session.clock()
+    last=getattr(session,"noise_floor_recorded_at",None)
+    if last is not None and now-last<NOISE_FLOOR_RECORD_SECONDS:
+        return
+    session.noise_floor_recorded_at=now
+    log.info("noise.floor floor_db=%.1f",floor)
+    _record_workspace_metric(
+        category="voice",metric_name="noise_floor_db",metric_value=float(floor),
+        dimensions={"status":"recorded"},
+    )
 
 
 #: Lane SP2, decision 1: the level ends utterances only while the room's
@@ -11236,37 +11256,6 @@ LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
 #: 0.47-0.70, while a fan, a centrifuge or a quiet room gave 0.02-0.09 (lane
 #: SP2 report): the line sits in the empty gap between them, a quarter.
 ROOM_VOICED_SHARE=0.25
-#: Lane SP2, decision 2: said once the floor is that near (room_near_the_line).
-NOISE_FLOOR_SUGGESTION_WORDS="주변이 시끄러워요. 붐 마이크나 시끄러운 곳 모드를 권해요."
-
-
-async def _suggest_noise_floor(
-    sender:LockedSender,session:ListenerSession,*,
-    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
-)->bool:
-    """Say "주변이 시끄러워요 — 붐 마이크나 시끄러운 곳 모드를 권해요" once the session is quiet.
-
-    A suggestion only (lane SP2, decision 2): no question is opened and no
-    setting changes; the experimenter changes the mode by voice or on the
-    settings screen. Shares lane SP1's gap of ten minutes.
-    """
-
-    if not session.noise_floor_suggestion_due():
-        return False
-    session.ambient_suggested_at=session.clock()
-    floor=session.noise_floor.level_db()
-    reference=session.level_reference
-    turn_id=await _say_server_words(
-        session,sender,NOISE_FLOOR_SUGGESTION_WORDS,kind="ambient_suggestion",sleep=sleep)
-    if turn_id is None:
-        return False
-    log.info(
-        "noise floor suggestion said turn_id=%s floor_db=%s reference_db=%s",
-        turn_id,round(floor,1) if floor is not None else None,
-        round(reference.reference_db,1) if reference is not None else None)
-    return True
-
-
 async def _timer_notice_tick(
     session:ListenerSession,sender:LockedSender,*,now:float|None=None,
     sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
@@ -14534,9 +14523,8 @@ async def voice_socket(websocket:WebSocket):
                             during_playback=bool(fields.get("during_playback")))
                         await _report_level_drop(session,sender,fields.get("level_db"))
                         if session.noisy_mode_suggestion_due():
-                            # Lane SP1, decision 3: three in a minute -- suggest the mode.
-                            session.track_visual_task(asyncio.create_task(
-                                _suggest_noisy_mode(sender,session)))
+                            # Lane HEAR, decision 9: three in a minute -- recorded, not asked.
+                            _record_noise_condition(session,"other_voices")
                     if item.kind=="speech.rejected":
                         # Lane HEAR, decision 3: the detector's own drop (too short).
                         await _report_speech_drop(
@@ -14612,9 +14600,9 @@ async def voice_socket(websocket:WebSocket):
                                     accepted["context"] if accepted else None),
                                 voiced_level_db=item.result.voiced_level_db))
                 if session.noise_floor_suggestion_due():
-                    # Lane SP2, decision 2: the room is near the wearer's level.
-                    session.track_visual_task(asyncio.create_task(
-                        _suggest_noise_floor(sender,session)))
+                    # Lane HEAR, decision 9: the room is near the wearer's level -- recorded, not said.
+                    _record_noise_condition(session,"floor_near_line")
+                _record_noise_floor(session)
                 continue
             if message.get("text") is None:continue
             if (ping:=_client_ping(message["text"])) is not None:
