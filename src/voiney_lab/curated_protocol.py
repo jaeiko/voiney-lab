@@ -9459,7 +9459,7 @@ _ENGLISH_FUNCTION_WORDS = frozenset({
     "if", "until", "from", "into", "onto", "using", "use", "is", "are", "be", "was",
     "were", "it", "this", "that", "these", "those", "each", "all", "not", "no", "do",
     "then", "after", "before", "when", "while", "as", "per", "than", "about", "should",
-    "must", "will", "can", "may", "approximately", "until", "repeat", "add", "remove",
+    "must", "will", "can", "may", "approximately", "repeat", "add", "remove",
 })
 _RUN_EDGE = "“”‘’\"'「」『』"
 _HANGUL_LETTER = re.compile(r"[가-힣]")

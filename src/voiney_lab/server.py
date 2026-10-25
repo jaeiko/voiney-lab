@@ -8725,7 +8725,10 @@ async def _korean_first(
 
     fixture=curated.fixture
     key=translation_revision_key(fixture)
-    reading=curated.korean_first(plan,language="ko",readings=_spot_readings(key))
+    # Read-only; off the loop, as the first reading of a long document builds
+    # its index over every page's text.
+    reading=await asyncio.to_thread(
+        curated.korean_first,plan,language="ko",readings=_spot_readings(key))
     if not reading.untranslated:
         return _with_spot_readings(session,curated,reading)
     started=clock()
@@ -8766,7 +8769,8 @@ async def _korean_first(
     if not session.is_current(turn_id,generation):
         return reading.plan  # superseded: the turn's fences drop it anyway
     if readings:
-        reading=curated.korean_first(plan,language="ko",readings=readings)
+        reading=await asyncio.to_thread(
+            curated.korean_first,plan,language="ko",readings=readings)
     # Counts and codes only: no sentence or reading reaches the log.
     log.info(
         "korean_first turn_id=%s quotes=%d untranslated=%d asked=%d statuses=%s elapsed_ms=%d",
@@ -8795,7 +8799,11 @@ def _with_spot_readings(
     }
     if added:
         machine.update(added)
+        vocabulary=curated._vocabulary_cache
         curated.fixture=replace(fixture,machine_localizations=machine)
+        if vocabulary is not None and vocabulary[0] is fixture:
+            # Presentation only: the protocol's vocabulary is the same.
+            curated._vocabulary_cache=(curated.fixture,vocabulary[1])
     if any(quote_key.startswith("span:") for quote_key in reading.readings_used) and not (
             session.auto_translation_announced):
         # A phrase's reading is not a stored sentence the labelling below
