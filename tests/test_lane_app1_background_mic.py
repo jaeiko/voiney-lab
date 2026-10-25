@@ -3,7 +3,7 @@
 Android does not let a background app use the microphone; a ``microphone``
 foreground service started while the app is visible may keep recording.
 The app's ``VoineyMicrophone`` plugin runs one (``ListeningService``) with
-the notification line "VoineyLab 이 듣는 중 · 끄기", records 16 kHz mono
+the notification line "Voiney Lab 이 듣는 중 · 끄기", records 16 kHz mono
 PCM16 -- the format the web screen sends on ``/ws`` (``voiney_lab.audio``)
 -- and hands it to the page, which sends it on its one socket. The bridge
 side is pinned by ``tests/native_bridge/background_mic.test.js``.
@@ -65,7 +65,7 @@ def test_the_service_is_a_microphone_foreground_service_with_its_words() -> None
         assert f'android:name="android.permission.{permission}"' in manifest, permission
     source = _read(MIC / "ListeningService.java")
     assert "ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE" in source
-    assert '"VoineyLab 이 듣는 중"' in source
+    assert '"Voiney Lab 이 듣는 중"' in source
     assert '"끄기"' in source
 
 

@@ -1,6 +1,6 @@
-"""Lane UI2, decision 5 (2026-10-13): VoineyLab as a home-screen web app.
+"""Lane UI2, decision 5 (2026-10-13): Voiney Lab as a home-screen web app.
 
-The page links a web app manifest -- the name VoineyLab, its icons, the
+The page links a web app manifest -- the name Voiney Lab, its icons, the
 start address, either orientation -- and the icons, and the app serves the
 manifest under its registered type whatever the host's own type table says.
 There is no service worker, so nothing is cached and nothing works offline.
@@ -34,8 +34,8 @@ class ManifestTests(unittest.TestCase):
 
     def test_the_manifest_names_voineylab_its_icons_start_and_orientation(self) -> None:
         manifest = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["name"], "VoineyLab")
-        self.assertEqual(manifest["short_name"], "VoineyLab")
+        self.assertEqual(manifest["name"], "Voiney Lab")
+        self.assertEqual(manifest["short_name"], "Voiney Lab")
         self.assertEqual(manifest["start_url"], "/")
         self.assertEqual(manifest["scope"], "/")
         self.assertEqual(manifest["display"], "standalone")
@@ -53,8 +53,8 @@ class ManifestTests(unittest.TestCase):
         html = INDEX.read_text(encoding="utf-8")
         head = html.split("</head>", 1)[0]
         for tag in ('<link rel="manifest" href="/manifest.webmanifest">', '<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">',
-                    '<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">', '<meta name="apple-mobile-web-app-title" content="VoineyLab">',
-                    '<meta name="application-name" content="VoineyLab">', "<title>VoineyLab"):
+                    '<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">', '<meta name="apple-mobile-web-app-title" content="Voiney Lab">',
+                    '<meta name="application-name" content="Voiney Lab">', "<title>Voiney Lab"):
             self.assertIn(tag, head)
         self.assertNotIn("serviceWorker", html)
         self.assertEqual([path.name for path in STATIC.rglob("*") if path.name in {"sw.js", "service-worker.js"}], [])
@@ -67,7 +67,7 @@ class ServedTests(unittest.TestCase):
         manifest = client.get("/manifest.webmanifest")
         self.assertEqual(manifest.status_code, 200)
         self.assertEqual(manifest.headers["content-type"].split(";")[0], "application/manifest+json")
-        self.assertEqual(manifest.json()["name"], "VoineyLab")
+        self.assertEqual(manifest.json()["name"], "Voiney Lab")
         for path, kind in (("/icons/icon-192.png", "image/png"), ("/icons/icon-512.png", "image/png"), ("/icons/icon-maskable-512.png", "image/png"), ("/icons/apple-touch-icon.png", "image/png"), ("/icons/icon.svg", "image/svg+xml")):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, path)

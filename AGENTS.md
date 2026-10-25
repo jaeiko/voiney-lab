@@ -1,6 +1,6 @@
-# AGENTS.md — VoineyLab engineering contract
+# AGENTS.md — Voiney Lab engineering contract
 
-VoineyLab (the company is Voiney) is a voice guide that lets wet-lab
+Voiney Lab (the company is Voiney) is a voice guide that lets wet-lab
 researchers run their own uploaded protocol hands-free: upload → analysis and
 source-evidence check → only the necessary confirmation cards → start → step
 by step voice guidance (timers, questions, records, re-asks) → lab notebook

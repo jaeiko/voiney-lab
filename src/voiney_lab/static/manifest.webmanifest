@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "VoineyLab",
-  "short_name": "VoineyLab",
+  "name": "Voiney Lab",
+  "short_name": "Voiney Lab",
   "description": "분석한 프로토콜을 음성으로 진행하는 실험 보조",
   "lang": "ko",
   "dir": "ltr",

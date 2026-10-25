@@ -1,4 +1,4 @@
-# 문서 지도 — VoineyLab
+# 문서 지도 — Voiney Lab
 
 무엇을 · 누가 · 언제 읽나.
 

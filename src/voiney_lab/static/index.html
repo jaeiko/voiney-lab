@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#ffffff">
-  <title>VoineyLab · Lab Copilot</title>
-  <!-- Lane UI2 decision 5 (2026-10-13): VoineyLab as a home-screen web app -- the manifest (name, icons, start address, either orientation) and the icons; no service worker, so nothing works offline. -->
+  <title>Voiney Lab · Lab Copilot</title>
+  <!-- Lane UI2 decision 5 (2026-10-13): Voiney Lab as a home-screen web app -- the manifest (name, icons, start address, either orientation) and the icons; no service worker, so nothing works offline. -->
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <meta name="application-name" content="VoineyLab">
-  <meta name="apple-mobile-web-app-title" content="VoineyLab">
+  <meta name="application-name" content="Voiney Lab">
+  <meta name="apple-mobile-web-app-title" content="Voiney Lab">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -714,7 +714,7 @@
      body[data-view="after"] .procedure-card{padding:var(--space-4)}
      .report-pending .report-review-actions button,body[data-view="after"] .report-actions a.report-make{flex:1 1 auto;justify-content:center}
     }
-    /* Lane UI2 decision 5 (2026-10-13): the guide to putting VoineyLab on the home screen, folded in the top bar. */
+    /* Lane UI2 decision 5 (2026-10-13): the guide to putting Voiney Lab on the home screen, folded in the top bar. */
     .topbar-side{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-3);min-width:0}
     .install-guide{position:relative;color:var(--ink);font-size:.875rem}
     .install-guide[hidden]{display:none}
@@ -984,7 +984,7 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">VL</div>
-      <div>VoineyLab<small>Lab Copilot · 지능형 실험 보조</small></div>
+      <div>Voiney Lab<small>Lab Copilot · 지능형 실험 보조</small></div>
     </div>
     <div class="topbar-side">
       <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
@@ -1561,7 +1561,7 @@
       <details id="install-guide" class="install-guide">
         <summary>홈 화면에 추가</summary>
         <div class="install-guide-body">
-          <button id="install-app" type="button" hidden>VoineyLab 설치</button>
+          <button id="install-app" type="button" hidden>Voiney Lab 설치</button>
           <p id="install-secure" class="install-secure" role="status" hidden></p>
           <ul>
             <li><b>아이폰·아이패드 (Safari)</b> 공유 버튼 → “홈 화면에 추가”</li>
@@ -5389,7 +5389,7 @@ $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCal
 try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
 $("agc-mode")?.addEventListener("change",event=>{storeAgcMode(event.target.value);const on=event.target.value==="on"||(event.target.value==="calibrated"&&!voiceReferenceMeasured);void applyAutoGainControl(on);});
 try{const agc=$("agc-mode"),stored=localStorage.getItem(AGC_MODE_STORAGE_KEY);if(agc&&["calibrated","on","off"].includes(stored))agc.value=stored;}catch(_){}
-// Lane UI2 decision 5 (2026-10-13): VoineyLab on the home screen. Where the
+// Lane UI2 decision 5 (2026-10-13): Voiney Lab on the home screen. Where the
 // browser offers to install the page (it keeps the offer until asked), the
 // guide shows one button for it; otherwise the steps for each kind of device.
 // The guide goes away once the page runs from the home screen, and says when

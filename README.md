@@ -1,14 +1,14 @@
-# VoineyLab
+# Voiney Lab
 
 [![CI](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml)
 
-> **VoineyLab** (by Voiney) is a hands-free voice guide that lets wet-lab researchers run their own uploaded protocol step by step.
+> **Voiney Lab** (by Voiney) is a hands-free voice guide that lets wet-lab researchers run their own uploaded protocol step by step.
 > It analyses the protocol, checks every value against the source, asks only what it must, then guides, times and records the run and writes a lab notebook.
 > The server owns all workflow state and models only propose. Coding agents: read [`AGENTS.md`](AGENTS.md) first.
 
 ## 1. 무엇인가 · 누구를 위한가
 
-VoineyLab 은 화학·바이오 웻랩 연구자가 **장갑을 낀 채 손을 쓰지 않고** 자기 연구실의 프로토콜을 따라 실험하도록 돕는 음성 실험 가이드다. 만든 곳은 Voiney, 저장소는 [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab), 파이썬 패키지는 `voiney_lab` 이다.
+Voiney Lab 은 화학·바이오 웻랩 연구자가 **장갑을 낀 채 손을 쓰지 않고** 자기 연구실의 프로토콜을 따라 실험하도록 돕는 음성 실험 가이드다. 만든 곳은 Voiney, 저장소는 [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab), 파이썬 패키지는 `voiney_lab` 이다.
 
 - 쓰는 사람: 벤치에서 실험하는 연구자(첫 파일럿은 석사생 두 명, 2026년 10월 말부터). 연구실 담당은 계정과 데이터를, PI 는 노트에 "확인함"을 남긴다.
 - 근거: 생명 분야 연구자 3명 현장 인터뷰(2026-10-07·08), 13명 설문(2026-10-19) — `.agent/product_context.md`.
