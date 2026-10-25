@@ -1,13 +1,37 @@
+import { Check, CircleAlert, ClipboardCheck, Hourglass, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { states } from "../copy/ko";
 import type { Chip as ChipData } from "../lib/protocolStatus";
 
+// A state always has its word; a state that is not plain also has an icon
+// (the design system: colour only for a state, never alone; no green --
+// ready is an ink check).
+const CHIP_ICONS: Record<ChipData["kind"], LucideIcon | null> = {
+  ready: Check,
+  review: ClipboardCheck,
+  analysing: Hourglass,
+  failed: CircleAlert,
+  quiet: null,
+};
+
 export function Chip({ chip }: { chip: ChipData }) {
+  const Icon = CHIP_ICONS[chip.kind];
   return (
     <span className="chip" data-kind={chip.kind}>
-      {chip.text}
+      {Icon ? <Icon aria-hidden="true" /> : null}
+      <span>{chip.text}</span>
     </span>
+  );
+}
+
+/** A short sentence about something that went wrong: ink, a 2 px border and an icon (the danger colour is for stop and hazard only). */
+export function Note({ children, testId }: { children: ReactNode; testId?: string }) {
+  return (
+    <p className="form-note" role="alert" data-testid={testId}>
+      <CircleAlert aria-hidden="true" />
+      <span>{children}</span>
+    </p>
   );
 }
 
@@ -22,7 +46,10 @@ export function LoadingBox({ label = states.loading }: { label?: string }) {
 export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="state-box" data-state="error" role="alert">
-      <p>{message}</p>
+      <p>
+        <CircleAlert aria-hidden="true" />
+        <span>{message}</span>
+      </p>
       {onRetry ? (
         <button type="button" className="btn" onClick={onRetry}>
           {states.reload}

@@ -9,6 +9,7 @@ import type { AuthSession } from "../api/types";
 import { frame, nav } from "../copy/ko";
 import { oldRoutes, routes } from "../lib/navigation";
 import { Logo } from "./Logo";
+import { Note } from "./Pieces";
 
 interface Props {
   session: AuthSession;
@@ -61,11 +62,7 @@ function LogoutDialog() {
           <Dialog.Title asChild>
             <h2>{frame.logoutAsk}</h2>
           </Dialog.Title>
-          {failed ? (
-            <p className="form-note" role="alert">
-              {frame.logoutFailed}
-            </p>
-          ) : null}
+          {failed ? <Note>{frame.logoutFailed}</Note> : null}
           <div className="dialog-actions">
             <Dialog.Close asChild>
               <button type="button" className="btn btn-quiet" disabled={busy}>

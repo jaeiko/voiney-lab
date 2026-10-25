@@ -6,6 +6,7 @@ import { keys, useInvite } from "../api/queries";
 import type { Account } from "../api/types";
 import { auth, product } from "../copy/ko";
 import { Logo } from "../components/Logo";
+import { Note } from "../components/Pieces";
 
 export function authErrorWords(error: unknown): string {
   if (!(error instanceof ApiError)) return auth.errors.unknown;
@@ -90,11 +91,7 @@ export function LoginScreen({ invite, notice = null, onSignedIn }: Props) {
             {lead}
           </p>
           {signup && inviteValid && !inviteQuery.isPending ? <p className="muted">{auth.signupLead}</p> : null}
-          {notice ? (
-            <p className="form-note" role="alert">
-              {notice}
-            </p>
-          ) : null}
+          {notice ? <Note>{notice}</Note> : null}
           <label className="field">
             {auth.name}
             <input name="name" type="text" autoComplete="username" value={name} onChange={(e) => setName(e.target.value)} />
@@ -109,11 +106,7 @@ export function LoginScreen({ invite, notice = null, onSignedIn }: Props) {
               onChange={(e) => setPassword(e.target.value)}
             />
           </label>
-          {error ? (
-            <p className="form-note" role="alert" data-testid="auth-error">
-              {error}
-            </p>
-          ) : null}
+          {error ? <Note testId="auth-error">{error}</Note> : null}
           <button type="submit" className="btn btn-primary btn-wide" disabled={busy || Boolean(inviteFailed) || (signup && inviteQuery.isPending)}>
             {busy ? (signup ? auth.signingUp : auth.loggingIn) : signup ? auth.signupButton : auth.loginButton}
           </button>

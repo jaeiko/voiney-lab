@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -184,6 +185,58 @@ class RootSettingTests(unittest.TestCase):
             self.assertEqual(client.get("/index.html").status_code, 200)
             self.assertEqual(client.get("/app.css").status_code, 200)
             self.assertEqual(client.get("/connection.js").status_code, 200)
+
+
+WEB = Path(server.__file__).resolve().parents[2] / "web"
+PALETTE = {
+    "#1c1c1a", "#55554f", "#ffffff", "#efefec", "#d4d4cf", "#76766f",
+    "#bf2229", "#fbeaea", "#f2a900", "#7a4f00", "#fff4d6", "#5b3cc4", "#efebfb",
+}
+
+
+class DesignSystemRulesTests(unittest.TestCase):
+    """The person's design system (2026-10-25; docs/UI_SPEC.md section 6), read off the stylesheets themselves."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tokens = (WEB / "src" / "styles" / "tokens.css").read_text(encoding="utf-8")
+        cls.base = (WEB / "src" / "styles" / "base.css").read_text(encoding="utf-8")
+        cls.css = cls.tokens + "\n" + cls.base
+
+    def test_colour_is_ink_paper_and_the_three_state_families_only(self) -> None:
+        colours = {match.lower() for match in re.findall(r"#[0-9a-fA-F]{3,8}\b", self.css)}
+        self.assertEqual(colours - PALETTE, set())
+        self.assertIsNone(re.search(r"--ok\b|--source\b|--ai\b|--public\b|:\s*(green|red|blue|purple)\b", self.css))
+
+    def test_the_danger_colour_is_kept_for_stop_and_hazard(self) -> None:
+        self.assertIn("--danger: #bf2229", self.tokens)
+        self.assertNotIn("--danger", self.base)
+
+    def test_corners_are_at_most_4px_and_never_a_pill(self) -> None:
+        for value in re.findall(r"--radius[a-z-]*:\s*(\d+)px", self.tokens):
+            self.assertLessEqual(int(value), 4)
+        for value in re.findall(r"border-radius:\s*([^;]+);", self.base):
+            self.assertRegex(value.strip(), r"^var\(--radius(-small)?\)$")
+
+    def test_no_shadow(self) -> None:
+        self.assertIsNone(re.search(r"box-shadow|text-shadow|drop-shadow", self.css))
+
+    def test_pretendard_at_400_600_700_on_the_desk_scale(self) -> None:
+        self.assertIn('"Pretendard Variable"', self.tokens)
+        self.assertEqual({int(w) for w in re.findall(r"font-weight:\s*(\d+)", self.css)} - {400, 600, 700}, set())
+        for pair in (
+            r"--text-title: 1\.5rem;\s+--line-title: 2rem;",
+            r"--text-subtitle: 1\.125rem;\s+--line-subtitle: 1\.625rem;",
+            r"--text-body: 0\.9375rem;\s+--line-body: 1\.5rem;",
+            r"--text-label: 0\.8125rem;\s+--line-label: 1\.125rem;",
+        ):
+            self.assertRegex(self.tokens, pair)
+
+    def test_spacing_in_steps_of_4_borders_and_a_desk_target_of_40px_or_more(self) -> None:
+        for value in re.findall(r"--space-\d+: (\d+)px", self.tokens):
+            self.assertEqual(int(value) % 4, 0)
+        self.assertGreaterEqual(int(re.search(r"--target: (\d+)px", self.tokens).group(1)), 40)
+        self.assertRegex(self.tokens, r"--border: 1px;\s+--border-state: 2px;\s+--border-focus: 3px;")
 
 
 if __name__ == "__main__":
