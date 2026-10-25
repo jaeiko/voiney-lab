@@ -1886,3 +1886,33 @@ tier is on. The public bundle and its raw downloads live under
 `scripts/public_knowledge_pipeline.py glossary` and committed. Nothing of the
 Moss connection deleted on 2026-10-10 (approved-manual retrieval, reranking,
 index sync) returns.
+
+## Lane PRE (2026-10-24): the login lock by name and device
+
+No account schema change (`accounts.sqlite` stays at version 1). The
+`login_attempts.client` column, which held the peer address and was never
+read by the lock, now holds `sha256("login-device\0" + marker)[:32]` of the
+browser's device marker, or `unknown-device` for a request without one. The
+lock counts failures per (name digest, device digest) -- five in fifteen
+minutes lock that name on that device -- and per name digest -- thirty lock
+the name everywhere. A success clears only that device's failures.
+
+The browser receives the marker as the `voiney_device` cookie (random, 32
+URL-safe characters, HttpOnly, SameSite=Lax, Secure over HTTPS, one year)
+from `GET /api/auth/session`, signup and login in accounts mode; a missing or
+malformed one is replaced. A listed app origin sends its marker as `device`
+in the body of `/api/auth/login`, `/api/auth/password` and
+`/api/auth/delete-account`; it gets no cookie. `AccountStore.log_in`,
+`change_password` and `switch_off_for_deletion` take `device=` (the old
+`client=` keyword is gone).
+
+### Reading older data
+
+Rows written before this version carry a peer address in `client`; they
+count toward the name's thirty and toward no device's five, and leave the
+store within fifteen minutes.
+
+### Going back
+
+The older code locks by name only and ignores `client`; the device cookie is
+then unused and expires by itself.

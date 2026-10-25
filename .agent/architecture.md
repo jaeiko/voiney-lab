@@ -470,8 +470,12 @@ record, without granting execution. Other-lab/unauthorized reports appear
 absent. The full permission matrix is in `.agent/security_rules.md`.
 Previous-run comparisons, start-check answers and daily run numbers are scoped
 to the same owner, lab and protocol; unknown owners receive no guessed number.
-Login and current-password failures lock the normalized name after five
-failures in fifteen minutes, without locking other names on the same network.
+Login and current-password failures are counted by (normalized name, device):
+five failures in fifteen minutes lock that name on that device, thirty from
+any devices lock the whole name, each for fifteen minutes. The device is a
+random HttpOnly cookie (`voiney_device`, one year) the browser receives with
+`/api/auth/session`; a listed app origin sends it in the request body; a
+request without one is the one unknown device. Only digests are stored.
 Logout, password change, disable and deletion close all that account's open
 voice sockets; the HTTP session scope still follows the account operation.
 Account erasure drains in-flight voice report writes before inventory/deletion
@@ -519,6 +523,15 @@ responses are discarded. Sheets reagent-table attachment remains API-only.
 
 `#/protocols` is the list, `#/protocols/<id>` its own detail screen, and
 `#/upload` follows pick → progress (elapsed time/current work) → result.
+While the page is visible and signed in, the catalog re-reads
+`/api/protocols` quietly (`scheduleCatalogRefresh`): every 5 s while an entry's
+analysis runs, every 30 s otherwise, and at once on a tab change, on
+`visibilitychange` back to visible and when the start sheet opens; it stops
+while hidden. A quiet refresh keeps status lines, skips an unchanged list,
+keeps the list on failure, drops answers older than the one drawn, and does
+not redraw the start sheet while one of its inputs has focus. The
+start sheet and the start ask the server once more
+(`recheckProtocolRunnable`) before refusing a protocol as not runnable.
 Detail groups analysis, source comparison, reagent tables, review history
 and reanalysis in expandable sections. `#/records` lists server-provided
 experiments; `#/records/<id>` opens one timeline and reads
