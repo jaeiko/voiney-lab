@@ -184,6 +184,11 @@ _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 #: a, human decision 2026-10-12): kept in this event, never as an analysis
 #: revision, so nothing that runs can read it.
 _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
+#: Lane RX1, decision 4: a person's own name for a protocol -- one more
+#: append-only event; the latest one is the title everywhere it is read. The
+#: analysis's title, the file's metadata and the file name stay as they are.
+PROTOCOL_TITLE_RENAMED_EVENT = "protocol_title_renamed"
+PROTOCOL_TITLE_MAX_CHARS = 120
 #: A person's review registered as a version that runs (lane RV, decision c):
 #: the version's protocol is one more analysis revision, named
 #: ``review-v<N>-...``, and this event beside it holds who registered it,
@@ -244,6 +249,13 @@ class ProtocolCatalogError(RuntimeError):
 
 class ProtocolRegistrationError(ProtocolCatalogError):
     code = "protocol_registration_invalid"
+
+
+class ProtocolTitleInvalidError(ProtocolRegistrationError):
+    """A person's name for a protocol that is empty, too long or holds a
+    control character (lane RX1, decision 4)."""
+
+    code = "protocol_title_invalid"
 
 
 class ProtocolCatalogNotFoundError(ProtocolCatalogError):
@@ -2612,6 +2624,10 @@ class ProtocolCatalog:
                 analysis_status = "review_registered"
             if shown.protocol.metadata.title:
                 title = shown.protocol.metadata.title
+        renamed = self._renamed_title(revision)
+        if renamed is not None:
+            # Lane RX1, decision 4: a person's own name wins over every read one.
+            title = renamed
         return ProtocolCatalogEntry(
             protocol_id=revision.experiment_id,
             title=title,
@@ -5852,13 +5868,68 @@ class ProtocolCatalog:
     def _line_views(page: ProtocolPdfPage, ocr: dict[str, object]) -> list[dict[str, object]]:
         unclear_page = _ocr_page_unclear(page, ocr)
         views = []
+        boxes = _line_boxes(page)
         for number, (_, _, text) in enumerate(_page_lines(page.text), start=1):
             has_value = bool(re.search(r"[0-9]", text))
             views.append({
                 "number": number, "text": text, "has_value": has_value,
                 "unclear": unclear_page and has_value,
+                # Lane RX1, decision 2: where the line stands on the page, in
+                # points ([x0, y0, x1, y1], y down), or None when the engine
+                # kept no block for it.
+                "box": boxes[number - 1] if number - 1 < len(boxes) else None,
             })
         return views
+
+    def _renamed_title(self, revision: ProtocolRevisionRecord) -> str | None:
+        """The latest name a person gave this protocol, or None (lane RX1, 4)."""
+
+        title = None
+        for event in self.store.list_events(revision.experiment_id):
+            if event.event_type == PROTOCOL_TITLE_RENAMED_EVENT and isinstance(event.payload, dict):
+                candidate = event.payload.get("title")
+                if isinstance(candidate, str) and candidate.strip():
+                    title = candidate.strip()
+        return title
+
+    def rename(
+        self, protocol_id: str, title: object, *, actor_principal_id: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """A person's own name for a protocol (lane RX1, decision 4).
+
+        Human decision 2026-10-25: when the analysis's title is a cover line
+        ("표지 최종 하리"), the screen shows the file name instead and lets a
+        person name the protocol. The name is one more append-only ledger
+        event with who gave it and the title it replaces; the source, its
+        metadata and every analysis stay as they are, and the latest name
+        is the title wherever it is read. One line of printable text, at
+        most ``PROTOCOL_TITLE_MAX_CHARS`` characters.
+        """
+
+        if not isinstance(title, str):
+            raise ProtocolTitleInvalidError("A protocol's name is one line of text.")
+        name = " ".join(title.strip().split(" "))
+        if (not name or len(name) > PROTOCOL_TITLE_MAX_CHARS
+                or any(not char.isprintable() for char in name)):
+            raise ProtocolTitleInvalidError(
+                f"A protocol's name is 1 to {PROTOCOL_TITLE_MAX_CHARS} printable characters.")
+        revision = self._latest_protocol_revision(protocol_id)
+        before = self._entry_for_revision(revision)
+        self.store.append_event(
+            f"title-renamed-{secrets.token_hex(12)}", protocol_id, revision.revision_number,
+            PROTOCOL_TITLE_RENAMED_EVENT,
+            {"title": name, "title_before": before.title,
+             "actor_principal_id": actor_principal_id,
+             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+        )
+        return self.get_entry(protocol_id)
+
+    def source_page_count(self, protocol_id: str) -> int:
+        """How many pages the latest revision's source has, before or after an
+        analysis (lane RX1, decision 1: the page picker)."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        return self._source_extraction(revision).page_count
 
     def source_pdf(self, protocol_id: str) -> tuple[Path, str]:
         """The stored source PDF of the latest protocol revision and its checksum."""
@@ -6595,6 +6666,56 @@ def _review_records(protocol: domain.ExperimentProtocol) -> list[_ReviewRecord]:
               section=None, evidence=None, evidence_item=None)
     del item_ids
     return found
+
+
+def _squeezed(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _line_boxes(page: ProtocolPdfPage) -> list[list[float] | None]:
+    """Each line's box on the page, in points, from the engine's text blocks
+    (lane RX1, decision 2: the confirmation screen's highlight band).
+
+    A block carries one box for all its lines; a line inside it takes an
+    equal share of the block's height, top to bottom. Lines are matched to
+    the blocks' lines by their words, in page order, so a line the blocks do
+    not hold (an empty one, a merged one) is None. Geometry only; nothing
+    here reads a word for its meaning.
+    """
+
+    block_lines: list[tuple[str, list[float]]] = []
+    for block in page.blocks:
+        # The engine's PdfTextBlock, or the plain tuple a stored analysis
+        # keeps it as: (x0, y0, x1, y1, font size, bold, text).
+        if not isinstance(block, (tuple, list)) or len(block) < 7:
+            continue
+        x0, y0, x1, y1, _, _, words = block[:7]
+        try:
+            x0, y0, x1, y1 = float(x0), float(y0), float(x1), float(y1)
+        except (TypeError, ValueError):
+            continue
+        parts = [part for part in str(words or "").split("\n") if part.strip()]
+        if not parts or y1 <= y0:
+            continue
+        height = (y1 - y0) / len(parts)
+        for index, part in enumerate(parts):
+            top = y0 + index * height
+            block_lines.append((_squeezed(part), [
+                round(x0, 2), round(top, 2), round(x1, 2), round(top + height, 2)]))
+    boxes: list[list[float] | None] = []
+    cursor = 0
+    for _, _, text in _page_lines(page.text):
+        wanted = _squeezed(text)
+        found = None
+        if wanted:
+            for offset in range(cursor, len(block_lines)):
+                words, box = block_lines[offset]
+                if words == wanted or (len(wanted) >= 8 and (wanted in words or words in wanted)):
+                    found = box
+                    cursor = offset + 1
+                    break
+        boxes.append(found)
+    return boxes
 
 
 def _page_lines(text: str) -> list[tuple[int, int, str]]:
