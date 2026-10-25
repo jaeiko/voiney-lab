@@ -132,9 +132,9 @@ git diff --check
 
 | 조건 | 결과 | 언제·어디서 |
 |---|---|---|
-| A — 외부 라이선스 원문이 있는 원래 폴더 | **5037 passed · 7 skipped · 실패 0** | 2026-10-25, dev `0d18d2b` 실측 기준(작업 폴더와 구분) |
-| B — 라이선스 PDF 없음(CI) | 4535 passed · 510 skipped · 실패 1 | 2026-10-25, dev `0d18d2b`, PR #127 병합 CI. 실패 1 은 `tests/test_native_bridge.py` 의 `test_native_bridge_timer_alerts_under_node` 다: 그 실행의 러너 이미지(ubuntu-26.04)에 깔린 Node 가 결과를 TAP 대신 spec 모양으로 찍어 시험이 찾는 `# fail 0` 줄이 없었다. node 시험 43개는 모두 통과했다 |
-| 화면 시험(Playwright, CI) | 146 passed | 2026-10-25, 같은 병합 CI(두 태블릿 프로젝트 포함) |
+| A — 외부 라이선스 원문이 있는 원래 폴더 | **5059 passed · 7 skipped · 실패 0** | 2026-10-25, dev `cf5ede7`(PR #129·#130·#128 병합 뒤) 원래 폴더 실측(작업 폴더와 구분) |
+| B — 라이선스 PDF 없음(CI) | 4557 passed · 510 skipped · 실패 1 | 2026-10-25, dev `cf5ede7`, PR #128 병합 CI(run 40187499664). 실패 1 은 `tests/test_native_bridge.py` 의 `test_native_bridge_timer_alerts_under_node` 다: 그 실행의 러너 이미지(ubuntu-26.04)에 깔린 Node 가 결과를 TAP 대신 spec 모양으로 찍어 시험이 찾는 `# fail 0` 줄이 없었다. node 시험 43개는 모두 통과했다 |
+| 화면 시험(Playwright, CI) | 168 passed | 2026-10-25, 같은 병합 CI(두 태블릿 프로젝트 포함). 같은 작업에서 새 화면 단위 시험(Vitest) 7개 파일 48 passed |
 
 동시 작업의 전체 pytest 는 `AGENTS.md`의 공유 `flock` 명령으로 실행한다. 조건 B만 확인한 음성·서버 변경은 병합 뒤 태그 전에 원래 폴더에서 조건 A로 확인하고, 사람이 음성 시험을 한 뒤 태그·main 반영을 한다.
 
