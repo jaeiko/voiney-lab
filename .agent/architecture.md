@@ -216,7 +216,9 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
 ```
 
 - The catalog is append-only: uploads, OCR results, analysis requests and
-  results, review decisions, review versions, start-check answers and
+  results, review decisions, review versions, start-check answers, a
+  person's own name for a protocol (`protocol_title_renamed`, lane RX1: the
+  latest one is the title everywhere it is read) and
   "확인함" are events in `protocol_workspace.sqlite`. A reanalysis adds a
   revision; a run continues on the revision it started with
   (`load_fixture_for_revision`).
@@ -566,9 +568,11 @@ into `static/app/` (git-ignored) and served at `/app/` by three routes in
 `root_screen` sends `/` there only with `VOINEY_LAB_NEW_UI=true` and a
 build present, else serves `index.html` as before. The launchers call
 `web/build.sh` and go on without the new screen when node is missing or the
-build fails. It keeps the old hash routes (`#/home`, `#/protocols`); a route
-it has not taken over (`#/upload`, `#/protocols/<id>`, `#/experiment`,
-`#/records…`, `#/settings`) is opened on the old screen at `/index.html`.
+build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its own
+(`#/upload`, `#/protocols/<id>/analysis`, `#/protocols/<id>/review`,
+`#/protocols/<id>/changes` — lane RX1); a route it has not taken over
+(`#/protocols/<id>`, `#/experiment`, `#/records…`, `#/settings`) is opened
+on the old screen at `/index.html`.
 It holds no workflow state: the home's one card and the list's chips are
 read from `/api/auth/session`, `/api/protocols`, `/api/protocols/{id}`
 (`analysis_run` for a row being analysed), `/api/workspace/experiments` and
@@ -576,6 +580,21 @@ read from `/api/auth/session`, `/api/protocols`, `/api/protocols/{id}`
 every 30 s otherwise, at once on focus, never while hidden. A 401 on a
 signed-in read clears the lists and shows the login. Every sentence it
 shows is in `web/src/copy/ko.ts`; server sentences are shown as sent.
+The upload registers the file (`POST /api/protocols`), then asks which
+pages to analyse (`GET …/review-draft/source-pages` for the count,
+`…/source-pages/{n}/image?size=thumb` for the pictures) and starts the
+analysis itself (`POST …/analysis?first_page&last_page`); a source whose OCR
+the upload started, or one already analysed, skips the question. The
+confirmation screen reads `…/review-draft` and `…/source-pages/{n}` (each
+line's `box` in points and `image_dpi`, so the band on the page image is
+placed by dpi/72), posts each decision (`…/review-decisions`) and, when
+every card is decided, registers the version (`…/review-versions`).
+Today's values read `…/start-check/changes` (`steps` with `text_ko`, values
+with `start`/`end`) and post the choice; the server's 422 for a large value
+is asked once more with `confirm_large`. A person's own name for a protocol
+is `POST …/title` (`protocol_title_renamed`, append-only). An odd read
+title (a cover line, a page mark) is shown as the file's name on the screen
+only (`web/src/lib/protocolTitle.ts`); the server's title stays.
 
 Tablet rules apply only under `(pointer:coarse) and (min-width:721px) and
 (min-height:600px)`: 44 px targets, a two-column landscape run (step |
