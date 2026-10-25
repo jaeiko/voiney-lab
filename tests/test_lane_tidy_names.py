@@ -77,3 +77,16 @@ def test_the_device_check_page_quotes_the_notification_line_as_the_app_shows_it(
     for name in ("offline.html", "device-check.html"):
         head = (ROOT / "mobile/www-src" / name).read_text(encoding="utf-8").split("</title>", 1)[0]
         assert head.endswith(" · Voiney Lab"), name
+
+
+def test_the_window_title_is_the_name_and_the_logo_line_is_the_copy_decks_intro() -> None:
+    html = INDEX.read_text(encoding="utf-8")
+    assert "<title>Voiney Lab</title>" in html
+    assert "Lab Copilot" not in html and "지능형 실험 보조" not in html
+    topbar = html.split('<header class="topbar">', 1)[1].split("</header>", 1)[0]
+    assert f"<small>{TAGLINE}</small>" in topbar
+    # The same words as the new screen's and the copy deck's.
+    assert f'tagline: "{TAGLINE}"' in (ROOT / "web/src/copy/ko.ts").read_text(encoding="utf-8")
+    deck = (ROOT / "docs/COPY_DECK.md").read_text(encoding="utf-8")
+    row = next(line for line in deck.splitlines() if "지능형 실험 보조" in line)
+    assert f"`{TAGLINE}`" in row
