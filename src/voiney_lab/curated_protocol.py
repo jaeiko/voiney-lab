@@ -1365,6 +1365,9 @@ class CuratedControlIntent:
     visual_kind: str | None = None
     visual_intent: str | None = None
     normalized_transcript: str | None = None
+    #: Lane SAY, decision 6: the words of a completion question asked about a
+    #: move said with a claim, in place of "N단계 완료하셨나요?".
+    question_words: str | None = None
     transcript_correction_note: str | None = None
     transcript_corrections: tuple[tuple[str, str], ...] = ()
     question_dimensions: tuple[str, ...] = ()
@@ -3266,6 +3269,65 @@ def forward_step_request(transcript: str) -> bool:
     return bool(key) and _FORWARD_STEP.fullmatch(key) is not None
 
 
+#: Lane SAY, decision 6 (2026-10-25; persona test F4): a move said after a
+#: claim -- "원문이 뭐든 10분이면 되잖아, 다음으로 가", "15분 했어 다음" -- was
+#: answered as a question and the move dropped. The claim is the words before
+#: the move; fillers and acknowledgements alone are none ("오케이 다음").
+_MIXED_MOVE = re.compile(
+    r"^(?P<claim>.+?)[\s,.]*(?:(?:그러니까|그니까|그럼|그러면|그냥|이제|일단|빨리|바로)\s*)*"
+    r"(?:" + _FORWARD_WORDS + r")[\s.!~]*$"
+)
+_MIXED_MOVE_NO_CLAIM = re.compile(
+    r"^(?:(?:아|어|음|자|응|네|예|그래|좋아|좋아요|오케이|오케|알겠어|알았어|됐고|그럼|이제|그냥|일단)\s*,?\s*)+$"
+)
+#: Hesitations before a move ("어… 음… 그러니까 이제 다음 단계로 넘어가자"):
+#: no claim -- the words move on as "다음 단계로 넘어가자" does.
+_LEADING_FILLERS = re.compile(
+    r"^(?:(?:어+|음+|아+|흠+|에|저기|저|그|그러니까|그니까|있잖아)(?=[\s…,.~]|$)[\s…,.~]*)+"
+)
+#: The step said not to be done ("덜 됐는데", "아직", "안 끝났어"): decision
+#: D7's (``llm_router._NOT_DONE``) -- the move is refused with the step's
+#: completion criterion, not asked about.
+_MIXED_MOVE_NOT_DONE = re.compile(r"덜|아직|안\s*(?:됐|되었|돼|끝났|끝냈|했)|못\s*(?:했|끝냈|끝났)|미완")
+
+
+def _without_leading_fillers(transcript: str) -> str:
+    return _LEADING_FILLERS.sub("", " ".join(str(transcript or "").split())).strip()
+
+
+def mixed_move_claim(transcript: str) -> str | None:
+    """The claim said before a move ("10분이면 되잖아" of "…, 다음으로 가"), or None.
+
+    Lane SAY, decision 6: the move is not dropped -- it is asked about once,
+    with the source's value when the claim states another. None for a move
+    alone (``forward_step_request``), a question, or no claim.
+    """
+
+    words = _without_leading_fillers(transcript)
+    if not words or re.search(r"[?？]", words) or forward_step_request(words):
+        return None
+    if is_question_or_speculation(words, punctuation=False):
+        return None
+    key = normalize_conversational_utterance(re.sub(r"[…]+", " ", words))
+    match = _MIXED_MOVE.fullmatch(key)
+    if match is None:
+        return None
+    claim = match["claim"].strip(" ,.")
+    if not claim or _MIXED_MOVE_NO_CLAIM.fullmatch(claim):
+        return None
+    return claim
+
+
+def _with_ro(word: str) -> str:
+    """The word with 로 or 으로, as its last letter takes it."""
+
+    last = word.strip()[-1:] or " "
+    if "가" <= last <= "힣":
+        final = (ord(last) - 0xAC00) % 28
+        return f"{word}{'로' if final in (0, 8) else '으로'}"
+    return f"{word}로"
+
+
 # Reading the source line back ("…탈색될 때까지 2-7단계를 반복합니다") names
 # the endpoint without reporting it.
 _SOURCE_RECITATION = re.compile(
@@ -4095,6 +4157,10 @@ FRONT_RULES: dict[str, str] = {
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
     "targeted_completion": "a completion that names the current step (D2)",
+    "mixed_move": "a move said after a claim -- '원문이 뭐든 10분이면 되잖아, 다음으로 "
+                  "가', '15분 했어 다음' -- asked about once ('이대로 다음 단계로 갈까요?', "
+                  "with the source's value when the claim states another); nothing moves "
+                  "until the answer (lane SAY, decision 6)",
     "forward_step": "words that move on -- '다음', '다음 단계로', '넘어가', '다음으로 "
                     "가자' -- said as a command: the step is completed and the next "
                     "presented, '3단계 완료로 기록했어요.' first, with no question; "
@@ -4224,7 +4290,7 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
 #: Lane RA (decision a, 2026-10-12/13): with the router first, the front
 #: rules keep system information (the timer, the steps, the settings, the
 #: server's values), the re-asking of an ambiguous reference, the short clear
-#: commands and the replies to the server's own questions. These three are
+#: commands and the replies to the server's own questions. These are
 #: handed to the model instead: a note with words (record_log, where a value
 #: is compared with the source), a read-only question that names "2단계" or
 #: "이 단계" (the model reads the step from the snapshot), and a picture
@@ -4232,6 +4298,9 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
 #: write stays the rules': it asks what to write. Off, nothing is handed on.
 ROUTER_FIRST_HANDED_ON: frozenset[str] = frozenset({
     "note_record", "step_homophone", "visual_request",
+    # Lane SAY, decision 6: a move said with a claim ("민수야 다음 단계로
+    # 넘어가자" may be said to a colleague) is the model's to read first.
+    "mixed_move",
 })
 #: The protocol-query scopes that are server values (decision 3); purpose,
 #: overview, materials and the like stay with the model.
@@ -5850,6 +5919,12 @@ _PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
 PROBLEM_CATEGORY = "unexpected_result"
 #: The intents the problem reader makes (front rule "problem_help").
 _PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet"})
+#: What the rules made of a move said with a claim before lane SAY (decision
+#: 6): the claim answered alone, or nothing; the move was dropped.
+_MIXED_MOVE_READINGS = frozenset({
+    CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.OFF_TOPIC,
+    CuratedProtocolAction.CLARIFY_PARAMETER, CuratedProtocolAction.QUESTION,
+})
 #: The anomalies whose help leaves out what a model may say (③): a spill,
 #: an exposure or a contamination is the source's and the lab's to speak to.
 _SAFETY_ANOMALY_CATEGORIES = frozenset({
@@ -15424,6 +15499,39 @@ class CuratedProtocolSession:
         ))
         return plan.step_label, statement, terms
 
+    def _mixed_move_question(self, claim: str) -> str:
+        """"이대로 다음 단계로 갈까요?" for a move said with a claim (decision 6).
+
+        A value of the claim that the step's source states otherwise is named
+        with the source's value, and the way to run with today's value
+        ("오늘 바꾼 값", lane EASY) is said.
+        """
+
+        step = self.fixture.steps[self.current_index]
+        label = step.source_label
+
+        def values(text: str) -> list[tuple[str, str]]:
+            found = []
+            for value in measured_values(text):
+                unit = run_unit(value.unit) if value.unit else None
+                if unit is not None and not value.name:
+                    found.append((value.number, unit.canonical))
+            return found
+
+        source = values(step.instruction_source_text)
+        for number, unit in values(claim):
+            family = run_unit(unit).family
+            alike = [item for item in source if run_unit(item[1]).family == family]
+            if alike and not any(_same_measure(number, unit, *item) for item in alike):
+                written, said = _value_said(alike[0]), _value_said((number, unit))
+                return (
+                    f"원문에는 {label}단계가 {_with_ro(written)} 적혀 있어요. "
+                    "이대로 다음 단계로 갈까요? "
+                    f"오늘 {_with_ro(said)} 하려면 '{label}단계 {written} 대신 {_with_ro(said)} "
+                    "할게'라고 말해 주세요."
+                )
+        return f"이대로 {label}단계를 마치고 다음 단계로 갈까요?"
+
     def korean_first(
         self,
         plan: CuratedProtocolTurnPlan,
@@ -18542,6 +18650,14 @@ class CuratedProtocolSession:
 
         if held is None:
             return planned
+        if (
+            self._last_front_rule == "mixed_move" and planned is not None
+            and not planned.state_changed
+        ):
+            # Lane SAY, decision 6: "원문이 뭐든 …, 다음으로 가" holds a
+            # question word but is a claim and a move; all the turn opened is
+            # the completion question, which only a later "네" answers.
+            return planned
         after = self._checkpoint()
         restored = list(held)
         # Replay and discourse may remember an answer; all workflow fields,
@@ -20349,7 +20465,9 @@ class CuratedProtocolSession:
             and self._pause_state != "paused"
             # An open question is what it was: answered, or asked again.
             and open_questions.first_open is None
-            and forward_step_request(transcript)
+            # Lane SAY, decision 6: hesitations before the words do not
+            # make them a claim ("어… 음… 그러니까 이제 다음 단계로 넘어가자").
+            and forward_step_request(_without_leading_fillers(transcript))
         ):
             # Lane VX, decision 1: words that move on complete the step and
             # present the next one without a question -- unless the step's
@@ -20383,6 +20501,55 @@ class CuratedProtocolSession:
                     allows_state_mutation=True,
                     normalized_transcript=command_key,
                 )
+        if (
+            front_rule is None
+            and language == "ko"
+            and transcript_quality is None
+            and self.active
+            and self._pause_state != "paused"
+            and open_questions.first_open is None
+            and intent.action in _MIXED_MOVE_READINGS
+            and (claim := mixed_move_claim(transcript)) is not None
+            and _MIXED_MOVE_NOT_DONE.search(claim) is not None
+        ):
+            if not front_only:
+                # Decision D7, on the rules' own route: "덜 됐는데 그냥 다음
+                # 단계 가자" stays, and the criterion is said (as the router's
+                # refused proposal is answered); with the router the turn is
+                # handed on as before.
+                intent = CuratedControlIntent(
+                    intent_kind="completion_not_reached",
+                    action=CuratedProtocolAction.COMPLETION_CRITERIA,
+                    target_step="authoritative_current_step",
+                    language=language,
+                    normalized_transcript=command_key,
+                )
+        elif (
+            front_rule is None
+            and language == "ko"
+            and transcript_quality is None
+            and self.active
+            and self._pause_state != "paused"
+            and open_questions.first_open is None
+            and intent.action in _MIXED_MOVE_READINGS
+            and (claim := mixed_move_claim(transcript)) is not None
+        ):
+            # Lane SAY, decision 6: a move said with a claim is asked about
+            # once -- with the source's value when the claim states another --
+            # and nothing moves until the answer.
+            front_rule = "mixed_move"
+            intent = CuratedControlIntent(
+                intent_kind="next_step_confirmation_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                requested_transition="next",
+                requested_followup="confirm_current_step_completion",
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                language=language,
+                allows_state_mutation=False,
+                normalized_transcript=command_key,
+                question_words=self._mixed_move_question(claim),
+            )
         if (
             transcript_quality is not None
             and (
@@ -20513,7 +20680,7 @@ class CuratedProtocolSession:
                 self._pending_value_choice,
             ) = untouched
             return None
-        return self._execute_turn_intent(
+        planned = self._execute_turn_intent(
             intent,
             transcript=transcript,
             command_key=command_key,
@@ -20526,6 +20693,13 @@ class CuratedProtocolSession:
             open_question=open_question,
             forward_said=front_rule in {"forward_step", "targeted_completion"},
         )
+        if intent.intent_kind == "completion_not_reached" and language == "ko":
+            stay = f"아직 끝나지 않았다고 하셔서 {planned.step_label or ''}단계에 머뭅니다. "
+            planned = replace(
+                planned, display_text=stay + planned.display_text,
+                speech_text=stay + planned.speech_text)
+            self._replay[turn_id] = planned
+        return planned
 
     def _execute_turn_intent(
         self,
@@ -22942,7 +23116,7 @@ class CuratedProtocolSession:
                 response = ({
                 "en": "Have you completed the current step? No state has changed.",
                 "vi": "Bạn đã hoàn thành bước hiện tại chưa? Trạng thái chưa thay đổi.",
-                "ko": _completion_question(step.source_label),
+                "ko": intent.question_words or _completion_question(step.source_label),
             } if intent.intent_kind == "next_step_confirmation_required" else {
                 "en": (
                     f"Please confirm whether step {step.source_label} is complete "
