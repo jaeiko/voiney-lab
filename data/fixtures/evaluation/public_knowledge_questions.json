@@ -1,0 +1,2456 @@
+{
+ "version": 1,
+ "about": "lane KNOW evaluation set (2026-10-24): questions a researcher asks during a run (in-gel digestion, the starter pack, bench safety, battery/materials), each with the public pieces that answer it. gold specs match bundle records by source id, title and text; '' means any.",
+ "questions": [
+  {
+   "id": "k001",
+   "text": "아세토니트릴 인화점이 몇 도야?",
+   "language": "ko",
+   "kind": "property",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Flash Point"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Flash Point"
+    }
+   ]
+  },
+  {
+   "id": "k002",
+   "text": "아세토니트릴은 왜 위험해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Symptoms"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Hazards"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Toxicity"
+    }
+   ]
+  },
+  {
+   "id": "k003",
+   "text": "아세토니트릴 냄새 맡으면 어떻게 돼?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Exposure Routes"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Inhalation"
+    }
+   ]
+  },
+  {
+   "id": "k004",
+   "text": "아세토니트릴 피부에 묻었을 때 응급 처치",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acetonitrile",
+     "text_contains": "First Aid"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acetonitrile",
+     "text_contains": "First Aid"
+    }
+   ]
+  },
+  {
+   "id": "k005",
+   "text": "acetonitrile boiling point",
+   "language": "en",
+   "kind": "property",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Boiling Point"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acetonitrile",
+     "text_contains": "Boiling Point"
+    }
+   ]
+  },
+  {
+   "id": "k006",
+   "text": "암모늄 바이카보네이트가 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ammonium bicarbonate",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Ammonium bicarbonate",
+     "text_contains": "Identity"
+    }
+   ]
+  },
+  {
+   "id": "k007",
+   "text": "AMBIC 버퍼는 왜 쓰는 거야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ammonium bicarbonate",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "In-gel digestion",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k008",
+   "text": "DTT는 어떤 역할을 해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dithiothreitol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Dithiothreitol",
+     "text_contains": "Identity"
+    }
+   ]
+  },
+  {
+   "id": "k009",
+   "text": "요오도아세트아마이드 빛에 민감해?",
+   "language": "ko",
+   "kind": "property",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Iodoacetamide",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Iodoacetamide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k010",
+   "text": "iodoacetamide hazard",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "pubchem",
+     "title_contains": "Iodoacetamide",
+     "text_contains": "Hazards"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Iodoacetamide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k011",
+   "text": "트립신 소화는 보통 몇 도에서 해?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "In-gel digestion",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Trypsin",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k012",
+   "text": "in-gel digestion 에서 keratin 오염은 왜 생겨?",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "In-gel digestion",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "keratin"
+    }
+   ]
+  },
+  {
+   "id": "k013",
+   "text": "포름산은 부식성이 있어?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Formic acid",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Formic acid",
+     "text_contains": "Hazards"
+    }
+   ]
+  },
+  {
+   "id": "k014",
+   "text": "TFA 는 피부에 닿으면 어떻게 돼?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "pubchem",
+     "title_contains": "Trifluoroacetic acid",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Trifluoroacetic acid",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k015",
+   "text": "메탄올 마시면 왜 위험해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Methyl alcohol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Methanol",
+     "text_contains": "Toxicity"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Methanol",
+     "text_contains": "Hazards"
+    }
+   ]
+  },
+  {
+   "id": "k016",
+   "text": "methanol flash point",
+   "language": "en",
+   "kind": "property",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Methyl alcohol",
+     "text_contains": "Flash Point"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Methanol",
+     "text_contains": "Flash Point"
+    }
+   ]
+  },
+  {
+   "id": "k017",
+   "text": "Coomassie 염색 원리가 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Coomassie brilliant blue",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Bradford protein assay",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k018",
+   "text": "젤 탈색이 잘 안 돼",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Coomassie brilliant blue",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "SDS-PAGE",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "destain"
+    }
+   ]
+  },
+  {
+   "id": "k019",
+   "text": "SDS-PAGE 밴드가 번져 보여",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "SDS-PAGE",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "SDS-PAGE"
+    }
+   ]
+  },
+  {
+   "id": "k020",
+   "text": "SDS-PAGE 에서 SDS 는 무슨 역할이야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "SDS-PAGE",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sodium dodecyl sulfate",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k021",
+   "text": "아크릴아마이드는 왜 조심해야 해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acrylamide",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acrylamide",
+     "text_contains": "Hazards"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Acrylamide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k022",
+   "text": "acrylamide neurotoxin",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acrylamide",
+     "text_contains": "Target Organs"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Acrylamide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k023",
+   "text": "TEMED 냄새가 심한데 괜찮아?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "pubchem",
+     "title_contains": "Tetramethylethylenediamine",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Tetramethylethylenediamine",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k024",
+   "text": "APS 는 왜 새로 만들어 써야 해?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ammonium persulfate",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Ammonium persulfate",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k025",
+   "text": "웨스턴 블롯에서 밴드가 안 나와",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Western blot",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "western blot"
+    }
+   ]
+  },
+  {
+   "id": "k026",
+   "text": "western blot blocking 은 왜 해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Western blot",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Blocking (protein)",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k027",
+   "text": "PVDF 막은 왜 메탄올로 적셔?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Western blot",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Polyvinylidene fluoride",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k028",
+   "text": "Bradford 와 BCA 차이가 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Bradford protein assay",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Bicinchoninic acid assay",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "Bradford"
+    }
+   ]
+  },
+  {
+   "id": "k029",
+   "text": "BCA assay 에서 DTT 가 방해해?",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Bicinchoninic acid assay",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "BCA"
+    }
+   ]
+  },
+  {
+   "id": "k030",
+   "text": "에티듐 브로마이드는 왜 위험해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ethidium bromide",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Ethidium",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k031",
+   "text": "아가로스 젤에서 DNA 밴드가 안 보여",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Agarose gel electrophoresis",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "agarose gel"
+    }
+   ]
+  },
+  {
+   "id": "k032",
+   "text": "PCR 이 안 돼, 뭘 확인해야 해?",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Polymerase chain reaction",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "PCR"
+    }
+   ]
+  },
+  {
+   "id": "k033",
+   "text": "qPCR 에서 Ct 값이 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Real-time polymerase chain reaction",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "MIQE"
+    }
+   ]
+  },
+  {
+   "id": "k034",
+   "text": "primer dimer 는 왜 생겨?",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Primer (molecular biology)",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Polymerase chain reaction",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k035",
+   "text": "플라스미드 미니프렙 수율이 낮아",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Plasmid preparation",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "plasmid"
+    }
+   ]
+  },
+  {
+   "id": "k036",
+   "text": "형질전환 콜로니가 하나도 안 나와",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Genetic transformation",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "competent"
+    }
+   ]
+  },
+  {
+   "id": "k037",
+   "text": "열 충격 형질전환은 몇 도에서 해?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Genetic transformation",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Natural competence",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k038",
+   "text": "페놀 클로로폼 추출에서 층이 안 나뉘어",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Phenol–chloroform extraction",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Chloroform",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k039",
+   "text": "페놀이 피부에 묻으면?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Phenol",
+     "text_contains": "First Aid"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Phenol",
+     "text_contains": "First Aid"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Phenol",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k040",
+   "text": "클로로폼 흡입하면 어떻게 돼?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Chloroform",
+     "text_contains": "Symptoms"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Chloroform",
+     "text_contains": "Hazards"
+    }
+   ]
+  },
+  {
+   "id": "k041",
+   "text": "chloroform exposure limit",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Chloroform",
+     "text_contains": "Exposure Limits"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Chloroform",
+     "text_contains": "Exposure limits"
+    }
+   ]
+  },
+  {
+   "id": "k042",
+   "text": "TRIzol 은 뭐가 들어 있어?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "TRIzol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "RNA extraction",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k043",
+   "text": "RNA 가 자꾸 분해돼",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "RNA extraction",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "TRIzol",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k044",
+   "text": "세포 배양에 마이코플라스마 오염이 의심돼",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Mycoplasma",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "mycoplasma"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Cell culture",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k045",
+   "text": "무균 조작 기본 원칙이 뭐야?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Aseptic technique",
+     "text_contains": ""
+    },
+    {
+     "source_id": "cdc-mmwr-su6101",
+     "title_contains": "",
+     "text_contains": "aseptic"
+    }
+   ]
+  },
+  {
+   "id": "k046",
+   "text": "생물안전작업대와 클린벤치 차이가 뭐야?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Biosafety cabinet",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Laminar flow cabinet",
+     "text_contains": ""
+    },
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "biological safety cabinet"
+    }
+   ]
+  },
+  {
+   "id": "k047",
+   "text": "biosafety level 2 requirements",
+   "language": "en",
+   "kind": "biosafety",
+   "gold": [
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "Biosafety Level 2"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Biosafety level",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k048",
+   "text": "BSL-2 실험실에서 지켜야 할 것",
+   "language": "ko",
+   "kind": "biosafety",
+   "gold": [
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "Biosafety Level 2"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Biosafety level",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k049",
+   "text": "원심분리기 돌리다 튜브가 깨졌어",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "centrifuge"
+    },
+    {
+     "source_id": "cdc-mmwr-su6101",
+     "title_contains": "",
+     "text_contains": "centrifuge"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Centrifuge",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k050",
+   "text": "원심분리기 균형은 왜 맞춰야 해?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Centrifuge",
+     "text_contains": ""
+    },
+    {
+     "source_id": "cdc-mmwr-su6101",
+     "title_contains": "",
+     "text_contains": "centrifuge"
+    }
+   ]
+  },
+  {
+   "id": "k051",
+   "text": "오토클레이브 온도와 압력은 보통 얼마야?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Autoclave",
+     "text_contains": ""
+    },
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "autoclave"
+    }
+   ]
+  },
+  {
+   "id": "k052",
+   "text": "autoclave validation biological indicator",
+   "language": "en",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "autoclave"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Autoclave",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k053",
+   "text": "바늘에 찔렸어, 어떻게 해야 해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "cdc-mmwr-su6101",
+     "title_contains": "",
+     "text_contains": "needlestick"
+    },
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "needlestick"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Needlestick injury",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k054",
+   "text": "실험실에서 쓰는 소독제 종류",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "disinfectant"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Disinfectant",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k055",
+   "text": "락스로 소독할 때 농도는?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "hypochlorite"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sodium hypochlorite",
+     "text_contains": ""
+    },
+    {
+     "source_id": "cdc-mmwr-su6101",
+     "title_contains": "",
+     "text_contains": "bleach"
+    }
+   ]
+  },
+  {
+   "id": "k056",
+   "text": "흄후드는 언제 써야 해?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Fume hood",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "fume hood"
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "fume hood"
+    }
+   ]
+  },
+  {
+   "id": "k057",
+   "text": "fume hood sash height",
+   "language": "en",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Fume hood",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "fume hood"
+    }
+   ]
+  },
+  {
+   "id": "k058",
+   "text": "화학물질 쏟았을 때 먼저 뭘 해야 해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "spill"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Spill containment",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Laboratory safety",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k059",
+   "text": "눈에 시약이 튀었어",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "eyewash"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Eyewash station",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Emergency eyewash and safety shower station",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k060",
+   "text": "니트릴 장갑은 어떤 용매에 약해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Nitrile rubber",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Medical glove",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "gloves"
+    }
+   ]
+  },
+  {
+   "id": "k061",
+   "text": "GHS 그림문자 해골 표시는 무슨 뜻이야?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "GHS hazard pictograms",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "",
+     "text_contains": "GHS"
+    }
+   ]
+  },
+  {
+   "id": "k062",
+   "text": "H225 는 무슨 뜻이야?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "GHS hazard statements",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k063",
+   "text": "MSDS 에서 뭘 봐야 해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Safety data sheet",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "물질안전보건자료",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k064",
+   "text": "인화점과 발화점 차이가 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Flash point",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Autoignition temperature",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "인화점",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k065",
+   "text": "IDLH 가 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Immediately dangerous to life or health",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "",
+     "text_contains": "IDLH"
+    }
+   ]
+  },
+  {
+   "id": "k066",
+   "text": "NIOSH REL 과 OSHA PEL 차이",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Recommended exposure limit",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Permissible exposure limit",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k067",
+   "text": "과산화물 생기는 용매는 뭐가 있어?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Organic peroxide",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Diethyl ether",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "peroxide"
+    }
+   ]
+  },
+  {
+   "id": "k068",
+   "text": "에테르 보관 기한이 왜 중요해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Diethyl ether",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Ethyl ether",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "peroxide"
+    }
+   ]
+  },
+  {
+   "id": "k069",
+   "text": "피라냐 용액은 왜 위험해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Piranha solution",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k070",
+   "text": "HF 에 노출되면 칼슘 글루코네이트를 왜 써?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Hydrofluoric acid",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Calcium gluconate",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Hydrofluoric acid burn",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k071",
+   "text": "hydrofluoric acid first aid",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Hydrogen fluoride",
+     "text_contains": "First Aid"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Hydrofluoric acid",
+     "text_contains": "First Aid"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Hydrofluoric acid burn",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k072",
+   "text": "황산 희석할 때 왜 물에 산을 넣어?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sulfuric acid",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "sulfuric acid"
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "acid to water"
+    }
+   ]
+  },
+  {
+   "id": "k073",
+   "text": "수산화나트륨 피부에 닿으면?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Sodium hydroxide",
+     "text_contains": "First Aid"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Sodium hydroxide",
+     "text_contains": "First Aid"
+    }
+   ]
+  },
+  {
+   "id": "k074",
+   "text": "sodium azide incompatibilities",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Sodium azide",
+     "text_contains": "Incompatibilities"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Sodium azide",
+     "text_contains": "Hazards"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sodium azide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k075",
+   "text": "아지드화나트륨을 배수구에 버리면 안 되는 이유",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sodium azide",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Sodium azide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k076",
+   "text": "DMSO 는 피부로 흡수돼?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dimethyl sulfoxide",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Dimethyl sulfoxide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k077",
+   "text": "베타메르캅토에탄올 냄새가 나는데 환기 필요해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "pubchem",
+     "title_contains": "2-Mercaptoethanol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "2-Mercaptoethanol",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k078",
+   "text": "포름알데히드 발암성이야?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Formaldehyde",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Formaldehyde",
+     "text_contains": "Hazards"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Formaldehyde",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k079",
+   "text": "액체 질소 다룰 때 주의할 점",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Liquid nitrogen",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Cryogenics",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Asphyxiant gas",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k080",
+   "text": "드라이아이스를 밀폐 용기에 넣으면 안 되는 이유",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dry ice",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Carbon dioxide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k081",
+   "text": "가스통은 어떻게 고정해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Gas cylinder",
+     "text_contains": ""
+    },
+    {
+     "source_id": "niosh-2007-107",
+     "title_contains": "",
+     "text_contains": "cylinder"
+    }
+   ]
+  },
+  {
+   "id": "k082",
+   "text": "소화기 종류와 화재 등급",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Fire extinguisher",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Fire class",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "소화기",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k083",
+   "text": "pH 미터 보정은 어떻게 해?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "pH meter",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "pH meter"
+    }
+   ]
+  },
+  {
+   "id": "k084",
+   "text": "마이크로피펫 정확도가 떨어진 것 같아",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Air displacement pipette",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Pipette",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "pipett"
+    }
+   ]
+  },
+  {
+   "id": "k085",
+   "text": "분광광도계 큐벳은 왜 깨끗해야 해?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Cuvette",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Spectrophotometer",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k086",
+   "text": "흡광도가 1 넘으면 왜 안 좋아?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Beer–Lambert law",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Absorbance",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "absorbance"
+    }
+   ]
+  },
+  {
+   "id": "k087",
+   "text": "Beer-Lambert law",
+   "language": "en",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Beer–Lambert law",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "Beer"
+    }
+   ]
+  },
+  {
+   "id": "k088",
+   "text": "몰 농도 계산은 어떻게 해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Molar concentration",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "molarity"
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "몰 농도",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k089",
+   "text": "완충 용액은 어떻게 pH 를 유지해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Buffer solution",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "buffer"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Henderson–Hasselbalch equation",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k090",
+   "text": "Tris 버퍼 pH 는 온도에 따라 변해?",
+   "language": "ko",
+   "kind": "property",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Tris",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k091",
+   "text": "PBS 조성이 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Phosphate-buffered saline",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k092",
+   "text": "재결정으로 정제하는 원리",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Recrystallization (chemistry)",
+     "text_contains": ""
+    },
+    {
+     "source_id": "openstax-chemistry-1e",
+     "title_contains": "",
+     "text_contains": "recrystalliz"
+    }
+   ]
+  },
+  {
+   "id": "k093",
+   "text": "회전증발기 쓸 때 범핑이 생겨",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Rotary evaporator",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k094",
+   "text": "글러브박스 수분 산소 농도는 왜 낮게 유지해?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Glovebox",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Air-free technique",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k095",
+   "text": "코인셀 조립 순서",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Button cell",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "coin cell"
+    }
+   ]
+  },
+  {
+   "id": "k096",
+   "text": "coin cell assembly glove box",
+   "language": "en",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "coin cell"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Glovebox",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k097",
+   "text": "LiPF6 전해질은 물에 닿으면 어떻게 돼?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Lithium hexafluorophosphate",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Lithium hexafluorophosphate",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k098",
+   "text": "NMP 는 왜 조심해야 해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "N-Methyl-2-pyrrolidone",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "1-Methyl-2-pyrrolidinone",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "N-Methyl-2-pyrrolidone",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k099",
+   "text": "전극 슬러리 코팅이 고르지 않아",
+   "language": "ko",
+   "kind": "problem",
+   "gold": [
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "slurry"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Tape casting",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k100",
+   "text": "쿨롱 효율이 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Coulombic efficiency",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "",
+     "text_contains": "쿨롱"
+    }
+   ]
+  },
+  {
+   "id": "k101",
+   "text": "SEI 층이 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Lithium-ion battery",
+     "text_contains": "solid electrolyte interphase"
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "",
+     "text_contains": "solid electrolyte interphase"
+    }
+   ]
+  },
+  {
+   "id": "k102",
+   "text": "리튬 금속 덴드라이트는 왜 위험해?",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dendrite (metal)",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Thermal runaway",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Lithium metal battery",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k103",
+   "text": "thermal runaway lithium-ion",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Thermal runaway",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Lithium-ion battery",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k104",
+   "text": "순환 전압전류법에서 스캔 속도를 바꾸면 뭐가 달라져?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Cyclic voltammetry",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "cyclic voltammetry"
+    }
+   ]
+  },
+  {
+   "id": "k105",
+   "text": "기준 전극은 왜 필요해?",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Reference electrode",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "기준 전극",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k106",
+   "text": "EIS 나이퀴스트 플롯의 반원은 뭘 뜻해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Electrochemical impedance spectroscopy",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "impedance"
+    }
+   ]
+  },
+  {
+   "id": "k107",
+   "text": "XRD 시료는 어떻게 준비해?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Powder diffraction",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "X-ray diffraction"
+    }
+   ]
+  },
+  {
+   "id": "k108",
+   "text": "Scherrer 식으로 뭘 구해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Scherrer equation",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k109",
+   "text": "SEM 시료에 왜 금을 코팅해?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Scanning electron microscope",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sputter deposition",
+     "text_contains": ""
+    },
+    {
+     "source_id": "europepmc-ccby",
+     "title_contains": "",
+     "text_contains": "sputter"
+    }
+   ]
+  },
+  {
+   "id": "k110",
+   "text": "BET 비표면적 측정 원리",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Brunauer–Emmett–Teller theory",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Specific surface area",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k111",
+   "text": "열중량 분석(TGA)로 뭘 알 수 있어?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Thermogravimetric analysis",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k112",
+   "text": "DLS 로 입자 크기 잴 때 주의할 점",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dynamic light scattering",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k113",
+   "text": "졸-겔 공정이 뭐야?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sol–gel process",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-ko",
+     "title_contains": "졸-겔 공정",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k114",
+   "text": "소결과 하소 차이",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Sintering",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Calcination",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k115",
+   "text": "머플로 쓸 때 주의할 점",
+   "language": "ko",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Muffle furnace",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Tube furnace",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k116",
+   "text": "What is the flash point of acetone?",
+   "language": "en",
+   "kind": "property",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Acetone",
+     "text_contains": "Flash Point"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Acetone",
+     "text_contains": "Flash Point"
+    }
+   ]
+  },
+  {
+   "id": "k117",
+   "text": "Is isopropanol flammable?",
+   "language": "en",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Isopropyl alcohol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Isopropyl alcohol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "2-Propanol",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k118",
+   "text": "에탄올 70% 가 소독에 더 좋은 이유",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ethanol",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Disinfectant",
+     "text_contains": ""
+    },
+    {
+     "source_id": "cdc-bmbl6",
+     "title_contains": "",
+     "text_contains": "ethanol"
+    }
+   ]
+  },
+  {
+   "id": "k119",
+   "text": "톨루엔 장기 노출 영향",
+   "language": "ko",
+   "kind": "safety",
+   "gold": [
+    {
+     "source_id": "niosh-npg",
+     "title_contains": "Toluene",
+     "text_contains": "Symptoms"
+    },
+    {
+     "source_id": "pubchem",
+     "title_contains": "Toluene",
+     "text_contains": "Hazards"
+    }
+   ]
+  },
+  {
+   "id": "k120",
+   "text": "핵산 추출할 때 이소프로판올은 왜 넣어?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ethanol precipitation",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "DNA extraction",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k121",
+   "text": "What does an incubator shaker rpm mean for bacterial growth?",
+   "language": "en",
+   "kind": "equipment",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Shaker (laboratory)",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Bacterial growth",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k122",
+   "text": "LB 배지 조성",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Lysogeny broth",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k123",
+   "text": "암피실린 농도는 보통 얼마나 써?",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Ampicillin",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k124",
+   "text": "IPTG 는 왜 넣어?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Isopropyl β-D-1-thiogalactopyranoside",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k125",
+   "text": "His-tag 단백질 정제에서 이미다졸은 왜 써?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Immobilized metal affinity chromatography",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Polyhistidine-tag",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Imidazole",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k126",
+   "text": "투석으로 염을 제거하는 원리",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dialysis (chemistry)",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k127",
+   "text": "혈구계산판으로 세포 수 세는 법",
+   "language": "ko",
+   "kind": "technique",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Hemocytometer",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Cell counting",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k128",
+   "text": "트리판 블루는 왜 죽은 세포만 염색해?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Trypan blue",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k129",
+   "text": "세포 동결 보존할 때 DMSO 는 왜 넣어?",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Cryopreservation",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Dimethyl sulfoxide",
+     "text_contains": ""
+    }
+   ]
+  },
+  {
+   "id": "k130",
+   "text": "라만 분광법과 적외선 분광법 차이",
+   "language": "ko",
+   "kind": "concept",
+   "gold": [
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Raman spectroscopy",
+     "text_contains": ""
+    },
+    {
+     "source_id": "wikipedia-en",
+     "title_contains": "Fourier-transform infrared spectroscopy",
+     "text_contains": ""
+    }
+   ]
+  }
+ ]
+}

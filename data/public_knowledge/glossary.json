@@ -1,0 +1,9844 @@
+{
+"aliases": {
+"1,4-Dioxane": [
+"1,4-다이옥세인"
+],
+"2-Mercaptoethanol": [
+"2-머캅토에탄올",
+"2-메르캅토에탄올"
+],
+"Absorbance": [
+"광학 밀도",
+"흡광도"
+],
+"Accuracy and precision": [
+"정밀도와 정확도",
+"정확도",
+"정확도와 정밀도"
+],
+"Acetic acid": [
+"빙초산",
+"아세트산",
+"에탄산"
+],
+"Acetone": [
+"아세톤",
+"프로판-2-온"
+],
+"Acetonitrile": [
+"아세토나이트릴"
+],
+"Acid dissociation constant": [
+"산 해리 상수"
+],
+"Acrylamide": [
+"아크릴아마이드"
+],
+"Acute toxicity": [
+"급성 독성"
+],
+"Affinity chromatography": [
+"친화 크로마토그래피"
+],
+"Agar plate": [
+"우무배지",
+"한천배지",
+"한천평판"
+],
+"Agarose": [
+"아가로스",
+"아가로오스"
+],
+"Alkaline phosphatase": [
+"알칼리 가수분해효소",
+"알칼리성 인산가수분해효소"
+],
+"Allergy": [
+"알레르기",
+"알레르기 반응",
+"앨러지"
+],
+"Aluminium oxide": [
+"산화 알루미늄",
+"산화알루미늄",
+"알루미나"
+],
+"Ammonium bicarbonate": [
+"탄산 수소 암모늄",
+"탄화수소암모늄"
+],
+"Ammonium sulfate": [
+"황산 암모늄",
+"황산암모늄"
+],
+"Ampicillin": [
+"암피실린"
+],
+"Annealing (materials science)": [
+"어닐링",
+"열풀림",
+"풀림"
+],
+"Anode": [
+"애노드",
+"양극",
+"양전극"
+],
+"Antibody": [
+"항체"
+],
+"Antigen": [
+"항원"
+],
+"Antiseptic": [
+"방부제",
+"살균제"
+],
+"Aqua regia": [
+"왕수"
+],
+"Argon": [
+"아르곤"
+],
+"Atomic layer deposition": [
+"원자층 증착"
+],
+"Autoclave": [
+"고압멸균"
+],
+"Autoignition temperature": [
+"발화점",
+"자연발화온도"
+],
+"Automated external defibrillator": [
+"심장 충격기",
+"자동 제세동기",
+"자동심장충격기"
+],
+"Bacteria": [
+"박테리아",
+"세균",
+"세균계"
+],
+"Bacterial growth": [
+"박테리아 성장"
+],
+"Band gap": [
+"띠틈"
+],
+"Beaker (laboratory equipment)": [
+"비커"
+],
+"Beer–Lambert law": [
+"비어-람베르트 법칙"
+],
+"Benzene": [
+"벤젠",
+"벤졸"
+],
+"Biological hazard": [
+"바이오해저드",
+"생물재해",
+"생물학적 위험"
+],
+"Biomedical waste": [
+"의료폐기물"
+],
+"Biosafety": [
+"바이오안전성"
+],
+"Biosafety cabinet": [
+"생물안전작업대"
+],
+"Biosafety level": [
+"생물 안전도",
+"생물 위해성",
+"생물위해성"
+],
+"Boiling": [
+"끓음"
+],
+"Boiling point": [
+"끓는점",
+"비등점"
+],
+"Bovine serum albumin": [
+"소 혈청 알부민"
+],
+"Bradford protein assay": [
+"브래드퍼드 단백질 정량법"
+],
+"Bragg's law": [
+"브래그 법칙",
+"브래그의 식"
+],
+"Bubble (physics)": [
+"거품",
+"기포"
+],
+"Buffer solution": [
+"완충 용액",
+"완충용액"
+],
+"Bunsen burner": [
+"분젠 버너"
+],
+"Burette": [
+"뷰렛"
+],
+"Burn": [
+"1도 화상",
+"화상"
+],
+"Button cell": [
+"단추형 전지",
+"버튼전지",
+"버튼형전지"
+],
+"Büchner funnel": [
+"부흐너 깔때기"
+],
+"Calcination": [
+"하소"
+],
+"Calcium chloride": [
+"염화 칼슘",
+"염화칼슘",
+"염화칼시움"
+],
+"Calcium gluconate": [
+"글루콘산 칼슘",
+"글루콘산칼슘"
+],
+"Calibration": [
+"교정",
+"교정 (공학)"
+],
+"Calibration curve": [
+"검량선"
+],
+"Capillary electrophoresis": [
+"모세관 전기영동"
+],
+"Carbon black": [
+"카본 블랙"
+],
+"Carbon dioxide": [
+"이산화 탄소"
+],
+"Carbon monoxide": [
+"일산화 탄소"
+],
+"Carbon nanotube": [
+"탄소 나노튜브",
+"탄소나노튜브"
+],
+"Carcinogen": [
+"발암물질"
+],
+"Cardiopulmonary resuscitation": [
+"심폐 소생술",
+"심폐소생",
+"심폐소생술"
+],
+"Catalysis": [
+"촉매 반응"
+],
+"Catalyst": [
+"촉매"
+],
+"Cathode": [
+"어노드",
+"캐소드"
+],
+"Cell (biology)": [
+"세포"
+],
+"Cell culture": [
+"세포 배양"
+],
+"Cell line": [
+"세포계",
+"세포주"
+],
+"Centrifugation": [
+"원심분리"
+],
+"Centrifuge": [
+"원심분리기"
+],
+"Charge (physics)": [
+"전하",
+"전하 (물리학)",
+"하량"
+],
+"Chemical burn": [
+"화학화상"
+],
+"Chemical hazard": [
+"화학적 위험"
+],
+"Chemical vapor deposition": [
+"화학기상증착"
+],
+"Chemiluminescence": [
+"화학발광"
+],
+"Chloramphenicol": [
+"클로람페니콜"
+],
+"Chloroform": [
+"클로로포름",
+"클로로폼"
+],
+"Chronic toxicity": [
+"만성 독성"
+],
+"Cleanroom": [
+"청정실",
+"클린 룸",
+"클린룸"
+],
+"Colony-forming unit": [
+"집락형성단위"
+],
+"Color": [
+"빛깔",
+"색",
+"색깔"
+],
+"Column chromatography": [
+"컬럼 크로마토그래피"
+],
+"Combustibility and flammability": [
+"가연성"
+],
+"Compressed air": [
+"압축공기"
+],
+"Concentration": [
+"농도"
+],
+"Condensation": [
+"액화",
+"응축",
+"응축과정"
+],
+"Confocal microscopy": [
+"공초점 레이저 주사 현미경",
+"공초점 현미경",
+"공초점레이저주사현미경"
+],
+"Contact angle": [
+"접촉각"
+],
+"Coomassie brilliant blue": [
+"쿠마시 브릴리언트 블루"
+],
+"Corrosion": [
+"내식성",
+"부식"
+],
+"Corrosive substance": [
+"부식성 물질"
+],
+"Cryogenics": [
+"저온물리학",
+"저온학"
+],
+"Crystal structure": [
+"결정 구조",
+"결정격자",
+"결정구조"
+],
+"Crystallization": [
+"결정화"
+],
+"Cuvette": [
+"큐벳"
+],
+"Cyclic voltammetry": [
+"순환 전압전류법"
+],
+"Cyclohexane": [
+"사이클로헥세인"
+],
+"DNA": [
+"데옥시리보 핵산",
+"데옥시리보핵산"
+],
+"DNA extraction": [
+"DNA 분리",
+"DNA 추출"
+],
+"DNA sequencing": [
+"DNA 시퀀싱"
+],
+"Decomposition": [
+"부패",
+"분해"
+],
+"Decontamination": [
+"제염"
+],
+"Denaturation (biochemistry)": [
+"변성",
+"변성 (생화학)"
+],
+"Density": [
+"밀도"
+],
+"Depth of discharge": [
+"방전 깊이",
+"방전깊이"
+],
+"Desiccant": [
+"건조제"
+],
+"Desiccator": [
+"데시케이터"
+],
+"Dichloromethane": [
+"다이클로로메테인",
+"디클로로메탄",
+"이염화 탄소"
+],
+"Diethyl ether": [
+"다이에틸 에터",
+"디에틸 에테르",
+"디에틸에테르"
+],
+"Differential scanning calorimetry": [
+"시차 주사 열량계",
+"시차 주사 열량측정법"
+],
+"Dimethyl carbonate": [
+"디메틸 카보네이트",
+"디메틸 카본에이트",
+"탄산디메틸"
+],
+"Dimethyl sulfoxide": [
+"다이메틸 설폭사이드"
+],
+"Dimethylformamide": [
+"다이메틸폼아마이드"
+],
+"Disinfectant": [
+"소독약",
+"소독제"
+],
+"Distillation": [
+"증류"
+],
+"Doping (semiconductor)": [
+"도핑",
+"도핑 (반도체)"
+],
+"Dry ice": [
+"드라이아이스",
+"마른 얼음",
+"마른얼음"
+],
+"Dust explosion": [
+"분진폭발"
+],
+"Dust mask": [
+"방진 마스크"
+],
+"ELISA": [
+"효소 결합 면역 침강 분석법",
+"효소결합면역흡착검사"
+],
+"Electrical injury": [
+"감전"
+],
+"Electrical resistivity and conductivity": [
+"전기 저항률과 전도도"
+],
+"Electrochemical cell": [
+"화학 전지"
+],
+"Electrode": [
+"전극"
+],
+"Electrolysis of water": [
+"물의 전기분해"
+],
+"Electrolyte": [
+"전해질"
+],
+"Electrolytic cell": [
+"전해전지"
+],
+"Electron microscope": [
+"전자현미경"
+],
+"Electronegativity": [
+"전기 음성도",
+"전기음성도"
+],
+"Electroplating": [
+"전기도금"
+],
+"Ellipsometry": [
+"타원계측법",
+"타원법"
+],
+"Emergency evacuation": [
+"긴급소개",
+"피난"
+],
+"Emergency exit": [
+"비상구"
+],
+"Endothermic reaction": [
+"흡열 반응"
+],
+"Enzyme": [
+"효소"
+],
+"Enzyme kinetics": [
+"효소 반응속도론"
+],
+"Ergonomics": [
+"인간공학"
+],
+"Erlenmeyer flask": [
+"삼각 플라스크"
+],
+"Error": [
+"에러",
+"오류"
+],
+"Escherichia coli": [
+"대장균",
+"이콜라이",
+"이콜리"
+],
+"Ethanol": [
+"에탄올",
+"에틸 알코올"
+],
+"Ethidium bromide": [
+"브로민화 에티듐",
+"브로민화에티듐",
+"브롬화 에티듐"
+],
+"Ethyl acetate": [
+"아세트산 에틸",
+"에탄산 에틸"
+],
+"Ethylene carbonate": [
+"에틸렌 카보네이트"
+],
+"Ethylenediaminetetraacetic acid": [
+"에틸렌다이아민테트라아세트산",
+"이디티에이"
+],
+"Evaporation": [
+"증발"
+],
+"Exothermic reaction": [
+"발열 반응"
+],
+"Explosion": [
+"폭발",
+"폭팔"
+],
+"Explosive": [
+"폭발물"
+],
+"Extraction (chemistry)": [
+"추출"
+],
+"Eye protection": [
+"보호 안경"
+],
+"Face shield": [
+"안면 보호대"
+],
+"Faraday's laws of electrolysis": [
+"패러데이의 전기분해 법칙",
+"패러데이의 전기분해법칙",
+"페러데이의 전기 분해 법칙"
+],
+"Fetal bovine serum": [
+"소태아혈청"
+],
+"Filter paper": [
+"거르기종이",
+"거름종이"
+],
+"Filtration": [
+"여과",
+"여과액"
+],
+"Fire": [
+"불"
+],
+"Fire blanket": [
+"방화용 모포"
+],
+"Fire extinguisher": [
+"소화기"
+],
+"First aid": [
+"응급 치료",
+"응급처치",
+"응급치료"
+],
+"Flammability limit": [
+"가연 한계",
+"폭발 한계"
+],
+"Flash point": [
+"인화 온도",
+"인화온도",
+"인화점"
+],
+"Flow cytometry": [
+"유세포 분석"
+],
+"Fluorescence": [
+"형광"
+],
+"Fluorescence microscope": [
+"형광현미경"
+],
+"Foam": [
+"거품"
+],
+"Formaldehyde": [
+"포름알데히드",
+"폼알데하이드",
+"폼알데히드"
+],
+"Formic acid": [
+"메탄산",
+"포름산",
+"폼산"
+],
+"Fourier-transform infrared spectroscopy": [
+"푸리에 변환 적외선 분광법",
+"푸리에 변환 적외선 분광학"
+],
+"Freezing": [
+"결빙",
+"얼음얼이",
+"응고"
+],
+"Frostbite": [
+"동상"
+],
+"Fuel cell": [
+"연료 전지",
+"연료전지"
+],
+"Fume hood": [
+"퓸 후드"
+],
+"GHS hazard pictograms": [
+"GHS 경고표지",
+"GHS 그림문자"
+],
+"Galvanic cell": [
+"갈바니 전지"
+],
+"Gas chromatography": [
+"기체 크로마토그래피"
+],
+"Gas cylinder": [
+"가스용기"
+],
+"Gel": [
+"겔",
+"젤"
+],
+"Gel electrophoresis": [
+"겔 전기 영동법",
+"겔 전기영동"
+],
+"Glass transition": [
+"유리 전이",
+"카우즈먼 온도",
+"카우즈먼의 패러독스"
+],
+"Globally Harmonized System of Classification and Labelling of Chemicals": [
+"화학물질 분류표시 국제조화시스템"
+],
+"Glove": [
+"장갑"
+],
+"Glovebox": [
+"글러브박스"
+],
+"Glycerol": [
+"글리세롤"
+],
+"Glycine": [
+"글라이신",
+"글리신"
+],
+"Goggles": [
+"고글"
+],
+"Graduated cylinder": [
+"눈금실린더",
+"메스실린더",
+"액량계"
+],
+"Gram stain": [
+"그람 염색",
+"그람염색"
+],
+"Graphene": [
+"그라펜",
+"그래펜",
+"그래핀"
+],
+"Graphite": [
+"흑연"
+],
+"Green fluorescent protein": [
+"녹색 형광 단백질",
+"녹색형광단백질"
+],
+"Hardness": [
+"굳기"
+],
+"Hazard": [
+"위험",
+"위험 요소",
+"해저드"
+],
+"Hazardous waste": [
+"유해 폐기물"
+],
+"HeLa": [
+"헬라 세포"
+],
+"Hemocytometer": [
+"혈구계"
+],
+"Henderson–Hasselbalch equation": [
+"헨더슨-하셀바흐 방정식"
+],
+"Hexane": [
+"헥세인"
+],
+"Hierarchy of hazard controls": [
+"위험 통제 계층"
+],
+"High-performance liquid chromatography": [
+"고성능 액체 크로마토그래피"
+],
+"Horseradish peroxidase": [
+"겨자무 과산화효소"
+],
+"Hot plate": [
+"열판"
+],
+"Humidity": [
+"습기",
+"습도"
+],
+"Hydrochloric acid": [
+"염산"
+],
+"Hydrofluoric acid": [
+"불화수소산",
+"플루오르화 수소산",
+"플루오린화 수소산"
+],
+"Hydrofluoric acid burn": [
+"플루오린화 수소산 화상"
+],
+"Hydrogen": [
+"수소"
+],
+"Hydrogen bond": [
+"수소 결합",
+"수소결합"
+],
+"Hydrogen peroxide": [
+"과산화 수소",
+"과산화수소",
+"이산화 이수소"
+],
+"Hydrothermal synthesis": [
+"수열합성법"
+],
+"Hygroscopy": [
+"흡습성"
+],
+"Imidazole": [
+"1H-이미다졸",
+"이미다졸"
+],
+"Immunofluorescence": [
+"면역 형광법"
+],
+"Immunohistochemistry": [
+"면역조직화학"
+],
+"Immunoprecipitation": [
+"면역침강"
+],
+"Implosion": [
+"임플로전"
+],
+"Incubator (culture)": [
+"인큐베이터",
+"인큐베이터 (생물학)"
+],
+"Inductively coupled plasma mass spectrometry": [
+"유도 결합 플라즈마 질량 분석기"
+],
+"Inert gas": [
+"불활성 가스",
+"비반응성 기체"
+],
+"Ingestion": [
+"섭식",
+"섭취"
+],
+"Inhalation": [
+"들숨",
+"흡입"
+],
+"Inoculation loop": [
+"백금이",
+"접종루프"
+],
+"Ionizing radiation": [
+"이온화 방사선"
+],
+"Irritation": [
+"자극성"
+],
+"Isoelectric point": [
+"등전점"
+],
+"Isopropyl alcohol": [
+"아이소프로필 알코올",
+"이소프로필 알코올",
+"프로판-2-올"
+],
+"Isopropyl β-D-1-thiogalactopyranoside": [
+"아이소프로필 베타-D-1-싸이오갈락토피라노사이드"
+],
+"Laboratory glassware": [
+"유리기구"
+],
+"Leak": [
+"누출"
+],
+"Limiting reagent": [
+"한계 시약"
+],
+"Linear sweep voltammetry": [
+"선형 주사 전위법"
+],
+"Liquid nitrogen": [
+"액체 질소"
+],
+"Lithium": [
+"리튬"
+],
+"Lithium aluminium hydride": [
+"수소화 알루미늄 리튬"
+],
+"Lithium cobalt oxide": [
+"리튬 코발트 산화물"
+],
+"Lithium iron phosphate battery": [
+"리튬 인산철 배터리"
+],
+"Lithium nickel manganese cobalt oxides": [
+"리튬 니켈 망간 코발트 산화물"
+],
+"Lithium-ion battery": [
+"리튬 이온 전지"
+],
+"Lowry protein assay": [
+"로우리 단백질 정량법"
+],
+"Luciferase": [
+"루시퍼레이스",
+"루시페라아제",
+"루시페레이스"
+],
+"Lysis": [
+"용해",
+"용해 (생물학)"
+],
+"Lysis buffer": [
+"라이시스 버퍼",
+"용해 완충액"
+],
+"Lysogeny broth": [
+"LB배지",
+"Lb배지"
+],
+"Magnesium chloride": [
+"염화 마그네슘"
+],
+"Magnetic stirrer": [
+"교반기"
+],
+"Mass": [
+"질량"
+],
+"Mass spectrometry": [
+"질량 분석",
+"질량 분석법",
+"질량분석기"
+],
+"Matrix-assisted laser desorption/ionization": [
+"매트릭스 보조 레이저 탈착 이온화"
+],
+"Measurement uncertainty": [
+"측정 불확도"
+],
+"Median lethal dose": [
+"반수 치사량"
+],
+"Medical glove": [
+"수술 장갑",
+"의료용 장갑"
+],
+"Melting point": [
+"녹는점"
+],
+"Metal–organic framework": [
+"금속 유기 골격체"
+],
+"Methanol": [
+"메탄올",
+"메틸 알코올"
+],
+"Michaelis–Menten kinetics": [
+"미카엘리스-멘텐 반응속도론",
+"미하엘리스-멘텐 식"
+],
+"Molality": [
+"몰랄 농도",
+"몰랄농도"
+],
+"Molar concentration": [
+"몰 농도",
+"몰 매 세제곱미터",
+"몰농도"
+],
+"Mutagen": [
+"돌연변이원"
+],
+"Mycoplasma": [
+"마이코플라스마",
+"미코플라스마"
+],
+"Nanomaterials": [
+"나노물질",
+"나노재료"
+],
+"Nanoparticle": [
+"나노입자"
+],
+"National Institute for Occupational Safety and Health": [
+"미국 국립 직업안전위생연구소"
+],
+"Nernst equation": [
+"네른스트 식",
+"네른스트식",
+"네른스트의 식"
+],
+"Nitric acid": [
+"질산"
+],
+"Nitrile rubber": [
+"니트릴 고무"
+],
+"Nitrocellulose": [
+"나이트로셀룰로스"
+],
+"Nitrogen": [
+"질소"
+],
+"Northern blot": [
+"노던 블랏",
+"노던 블롯"
+],
+"Nuclear magnetic resonance spectroscopy": [
+"핵자기 공명 분광법"
+],
+"Nucleic acid": [
+"핵산"
+],
+"Occupational Safety and Health Administration": [
+"미국 산업안전보건청"
+],
+"Occupational safety and health": [
+"직업안전보건"
+],
+"Odor": [
+"냄새"
+],
+"Optical microscope": [
+"광학 현미경"
+],
+"Osmium tetroxide": [
+"사산화 오스뮴",
+"사산화오스뮴",
+"오스뮴산"
+],
+"Oxidation state": [
+"산화 상태",
+"산화수"
+],
+"Oxidizing agent": [
+"산화제"
+],
+"Oxygen": [
+"산소"
+],
+"Paraformaldehyde": [
+"파라포름알데히드"
+],
+"Particle size analysis": [
+"입자 크기 분석"
+],
+"Passivation (chemistry)": [
+"부동태화"
+],
+"Penicillin": [
+"페니실린"
+],
+"Peptide": [
+"펩타이드",
+"펩티드",
+"폴리펩티드"
+],
+"Permissible exposure limit": [
+"허용 노출 한계"
+],
+"Peroxide": [
+"과산화물"
+],
+"Personal protective equipment": [
+"개인 보호 장비"
+],
+"Petri dish": [
+"샬레",
+"페트리 샬레"
+],
+"Phenol": [
+"페놀"
+],
+"Phosphate-buffered saline": [
+"인산완충생리식염수"
+],
+"Phosphoric acid": [
+"인산"
+],
+"Photolithography": [
+"포토리소그래피"
+],
+"Pipette": [
+"피펫"
+],
+"Piranha solution": [
+"피라냐 용액"
+],
+"Plasmid": [
+"플라스미드"
+],
+"Plasmid preparation": [
+"플라스미드 제조"
+],
+"Polarimeter": [
+"편광계"
+],
+"Polymer": [
+"중합분자",
+"중합체",
+"폴리머"
+],
+"Polymerase chain reaction": [
+"중합 효소 연쇄 반응",
+"중합효소 연쇄 반응",
+"폴리메라아제 연쇄 반응"
+],
+"Porosity": [
+"공극률"
+],
+"Potassium chloride": [
+"염화 칼륨",
+"염화칼륨",
+"염화칼리움"
+],
+"Potassium hydroxide": [
+"수산화 칼륨"
+],
+"Potassium permanganate": [
+"과망가니즈산 칼륨",
+"과망가니즈산 포타슘",
+"과망간산칼륨"
+],
+"Precipitation (chemistry)": [
+"침전"
+],
+"Pressure": [
+"압력"
+],
+"Pressure vessel": [
+"압력 탱크"
+],
+"Primary and secondary antibodies": [
+"1차 항체와 2차 항체"
+],
+"Primer (molecular biology)": [
+"프라이머"
+],
+"Protein": [
+"단백질"
+],
+"Protein folding": [
+"단백질 접힘",
+"단백질 폴딩",
+"단백질접힘"
+],
+"Protein purification": [
+"단백질 정제"
+],
+"Proteomics": [
+"단백질체학",
+"단백체학",
+"프로티오믹스"
+],
+"Pyridine": [
+"피리딘"
+],
+"Pyrophoricity": [
+"자연발화성"
+],
+"Quenching": [
+"담금질"
+],
+"RNA extraction": [
+"RNA 추출"
+],
+"Raman spectroscopy": [
+"라만 분광법"
+],
+"Reagent": [
+"시약"
+],
+"Real-time polymerase chain reaction": [
+"실시간 중합효소 연쇄 반응"
+],
+"Recommended exposure limit": [
+"권장 노출 한계"
+],
+"Recrystallization (chemistry)": [
+"재결정"
+],
+"Redox": [
+"산화 환원 반응",
+"산화·환원 반응",
+"산화환원반응"
+],
+"Reducing agent": [
+"환원제"
+],
+"Reference electrode": [
+"기준 전극"
+],
+"Reflux": [
+"환류",
+"환류 (화학)"
+],
+"Refractometer": [
+"굴절계"
+],
+"Respirator": [
+"방진 마스크",
+"호흡용 보호구"
+],
+"Restriction enzyme": [
+"제한 효소",
+"제한효소"
+],
+"Reverse transcription polymerase chain reaction": [
+"역전사 중합연쇄반응",
+"역전사 중합효소 연쇄 반응",
+"역전사-PCR"
+],
+"Risk assessment": [
+"리스크 평가제도",
+"위험도 평가",
+"위험도평가"
+],
+"Rotary evaporator": [
+"회전증발농축기"
+],
+"SDS-PAGE": [
+"SDS-폴리아크릴아마이드 젤 전기영동",
+"폴리아크릴아마이드 겔 전기 영동법"
+],
+"SYBR Green I": [
+"SYBR 그린 I"
+],
+"Safety data sheet": [
+"물질 안전 보건 자료"
+],
+"Sanger sequencing": [
+"생어 염기서열 분석"
+],
+"Saturated calomel electrode": [
+"포화 칼로멜 전극"
+],
+"Scanning electron microscope": [
+"주사전자현미경"
+],
+"Semiconductor": [
+"반도체"
+],
+"Separatory funnel": [
+"분별 깔때기"
+],
+"Shaker (laboratory)": [
+"셰이커 (실험 기구)"
+],
+"Short circuit": [
+"합선"
+],
+"Sieve analysis": [
+"체 분석"
+],
+"Significant figures": [
+"유효 수자",
+"유효 숫자",
+"유효숫자"
+],
+"Silicon": [
+"규소",
+"실리콘"
+],
+"Silicon dioxide": [
+"이산화 규소"
+],
+"Silver nitrate": [
+"질산 은"
+],
+"Sintering": [
+"소결",
+"소성"
+],
+"Smoke": [
+"매연",
+"연기",
+"연기 (화학)"
+],
+"Sodium azide": [
+"아자이드화 나트륨"
+],
+"Sodium bicarbonate": [
+"베이킹 소다",
+"탄산수소 나트륨",
+"탄산수소나트륨"
+],
+"Sodium borohydride": [
+"수소화 붕소 나트륨"
+],
+"Sodium chloride": [
+"염화 나트륨"
+],
+"Sodium dodecyl sulfate": [
+"도데실 황산 나트륨",
+"도데실황산나트륨",
+"로릴 황산 나트륨"
+],
+"Sodium hydroxide": [
+"수산화 나트륨",
+"수산화소듐",
+"양잿물"
+],
+"Sodium hypochlorite": [
+"차아염소산나트륨",
+"하이포아염소산 나트륨"
+],
+"Sodium-ion battery": [
+"나트륨 이온 전지",
+"소듐 이온 전지"
+],
+"Solid-state battery": [
+"전고체 전지"
+],
+"Solubility": [
+"용해도"
+],
+"Solvent": [
+"용매"
+],
+"Sol–gel process": [
+"졸-겔 공정"
+],
+"Southern blot": [
+"서던 블랏",
+"서던 블롯"
+],
+"Spectrophotometry": [
+"분광 측광법",
+"분광광도법"
+],
+"Spin coating": [
+"스핀 코팅"
+],
+"Stain": [
+"얼룩"
+],
+"Standard deviation": [
+"표준 편차"
+],
+"Standard hydrogen electrode": [
+"표준 수소 전극"
+],
+"State of charge": [
+"잔존 용량",
+"잔존용량"
+],
+"Static electricity": [
+"정전기"
+],
+"Sterilization (microbiology)": [
+"멸균",
+"살균"
+],
+"Stoichiometry": [
+"화학량론",
+"화학양론"
+],
+"Storage": [
+"스토리지"
+],
+"Streaking (microbiology)": [
+"선조접종"
+],
+"Streptomycin": [
+"스트렙토마이신"
+],
+"Substrate (chemistry)": [
+"반응물"
+],
+"Sulfuric acid": [
+"황산"
+],
+"Supercapacitor": [
+"슈퍼커패시터"
+],
+"Supersaturation": [
+"과포화"
+],
+"Surface tension": [
+"겉면켕김힘",
+"표면 장력",
+"표면장력"
+],
+"Temperature": [
+"온도"
+],
+"Test tube": [
+"시험관"
+],
+"Tetrahydrofuran": [
+"옥솔레인",
+"테트라하이드로퓨란",
+"테트라히드로푸란"
+],
+"Tetramethylethylenediamine": [
+"테트라메틸에틸렌다이아민",
+"테트메틸에틸렌다이아민"
+],
+"Thermal runaway": [
+"열적 폭주",
+"열폭주"
+],
+"Thermogravimetric analysis": [
+"열 중량 분석"
+],
+"Thin film": [
+"박막"
+],
+"Thin-layer chromatography": [
+"박층 크로마토그래피",
+"얇은층 크로마토그래피"
+],
+"Tissue (biology)": [
+"조직",
+"조직 (생물학)"
+],
+"Titanium dioxide": [
+"이산화 타이타늄",
+"이산화 티타늄"
+],
+"Titration": [
+"적정",
+"적정 (과학)"
+],
+"Toluene": [
+"메틸벤젠",
+"톨루엔"
+],
+"Toxicity": [
+"독성"
+],
+"Transfection": [
+"형질주입"
+],
+"Transmission electron microscopy": [
+"투과전자현미경법"
+],
+"Trichloroacetic acid": [
+"트라이클로로아세트산"
+],
+"Tris": [
+"트리스(히드록시메틸)아미노메탄",
+"트리스(히드록시메틸)아미노메테인",
+"트리스히드록시메틸아미노메탄"
+],
+"Triton X-100": [
+"트라이톤 X-100"
+],
+"Trypan blue": [
+"트리판 블루"
+],
+"Trypsin": [
+"트립신"
+],
+"Turbidity": [
+"탁도",
+"혼탁도"
+],
+"Two-dimensional gel electrophoresis": [
+"겔 전기 영동법"
+],
+"Ultrasonic cleaning": [
+"초음파 세척"
+],
+"Ultraviolet": [
+"넘보라살",
+"자외선"
+],
+"Ultraviolet–visible spectroscopy": [
+"UV/Vis 분광법",
+"UV/Vis 측정",
+"자외선 가시광선 분광법"
+],
+"Urea": [
+"요소 (화학)"
+],
+"Vacuum distillation": [
+"감압 증류"
+],
+"Vacuum pump": [
+"진공펌프"
+],
+"Vapor pressure": [
+"증기 압력",
+"증기압"
+],
+"Ventilation (architecture)": [
+"환기"
+],
+"Virus": [
+"바이러스",
+"비루스"
+],
+"Viscometer": [
+"점도계",
+"점성계"
+],
+"Viscosity": [
+"점성",
+"점성도"
+],
+"Voltage": [
+"전압",
+"전위차"
+],
+"Volume": [
+"부피",
+"용적",
+"체적"
+],
+"Volumetric flask": [
+"메스 플라스크",
+"메스플라스크",
+"부피 플라스크"
+],
+"Vortex mixer": [
+"볼텍스 믹서"
+],
+"Wafer (electronics)": [
+"실리콘 웨이퍼",
+"웨이퍼"
+],
+"Wash bottle": [
+"세척병"
+],
+"Waste": [
+"바다 쓰레기",
+"쓰레기",
+"폐기물"
+],
+"Waste management": [
+"쓰레기 관리",
+"폐기물 관리",
+"폐기물관리"
+],
+"Western blot": [
+"웨스턴 블랏",
+"웨스턴 블롯"
+],
+"White coat": [
+"실험복",
+"실험실 가운",
+"의사 가운"
+],
+"Working electrode": [
+"작업 전극"
+],
+"X-ray crystallography": [
+"X선 회절",
+"엑스선 회절실험",
+"엑스선결정학"
+],
+"X-ray photoelectron spectroscopy": [
+"X선 광전자 분광학"
+],
+"Xylene": [
+"다이메틸벤젠",
+"자일렌",
+"크실렌"
+],
+"Yield (chemistry)": [
+"수율"
+],
+"Young's modulus": [
+"영률"
+],
+"Zeolite": [
+"제올라이트"
+],
+"Zinc oxide": [
+"산화 아연"
+]
+},
+"generated_at": "2026-10-24T05:09:43Z",
+"license": "CC0 1.0 (Wikidata labels) · titles only",
+"terms": {
+"(메테인설피닐)메테인": [
+"DMSO",
+"Dimethyl sulfoxide",
+"Syntexan",
+"dimethyl sulfoxide"
+],
+"1,2,3-트라이하이드록시프로페인": [
+"Glycerol",
+"glycerine",
+"glycerol",
+"glycyl alcohol"
+],
+"1,4-다이옥산": [
+"1,4-Dioxane",
+"Diethylene dioxide",
+"Diethylene ether",
+"dioxane"
+],
+"1,4-다이옥세인": [
+"1,4-Dioxane",
+"Diethylene dioxide",
+"Diethylene ether",
+"dioxane"
+],
+"1,4-디옥산": [
+"1,4-Dioxane",
+"Diethylene dioxide",
+"Diethylene ether",
+"dioxane"
+],
+"14번 원소": [
+"14Si",
+"Silicon",
+"element 14",
+"silicon"
+],
+"18번 원소": [
+"18Ar",
+"Argon",
+"argon",
+"element 18"
+],
+"1H-이미다졸": [
+"Him",
+"IMD",
+"Imidazole",
+"imidazole"
+],
+"1도 화상": [
+"Burn",
+"burn",
+"burns"
+],
+"1번 원소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"1차 항체와 2차 항체": [
+"Primary and secondary antibodies",
+"primary and secondary antibodies"
+],
+"2-머캅토에탄올": [
+"2-Mercaptoethanol",
+"2-Sulfhydryl-Ethanol",
+"2-mercaptoethanol",
+"thioglycol"
+],
+"2-메르캅토에탄올": [
+"2-Mercaptoethanol",
+"2-Sulfhydryl-Ethanol",
+"2-mercaptoethanol",
+"thioglycol"
+],
+"2-프로판올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"3번 원소": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"7번 원소": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"8번 원소": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"ATC 코드 V03AN01": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"ATC 코드 V03AN04": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"ATCvet 코드 QV03AN01": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"ATCvet 코드 QV03AN04": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"BL3 실험실": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"BL4 실험실": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"BSL-4 랩": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"BSL-4 실험실": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"DNA 분리": [
+"DNA extraction",
+"deoxyribonucleic acid extraction"
+],
+"DNA 서열": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 시퀀스": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 시퀀싱": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열 결정": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열 결정법": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열 분석": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열 분석법": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열결정": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열결정법": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열분석": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 염기서열분석법": [
+"DNA sequence analysis",
+"DNA sequencing",
+"sequence analysis, DNA"
+],
+"DNA 추출": [
+"DNA extraction",
+"deoxyribonucleic acid extraction"
+],
+"EDTA산": [
+"EDTA",
+"Ethylenediaminetetraacetic acid",
+"edetic acid",
+"{[-(bis-carboxymethyl-amino)-ethyl]-carboxymethyl-amino}-acetic acid"
+],
+"ELISA (분석법)": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"GHS 경고표지": [
+"GHS hazard pictogram",
+"GHS hazard pictograms",
+"GHS pictogram"
+],
+"GHS 그림문자": [
+"GHS hazard pictogram",
+"GHS hazard pictograms",
+"GHS pictogram"
+],
+"GHS 제도": [
+"GHS",
+"Globally Harmonized System of Classification and Labelling of Chemicals"
+],
+"GHS 픽토그램": [
+"GHS hazard pictogram",
+"GHS hazard pictograms",
+"GHS pictogram"
+],
+"LA배지": [
+"LB medium",
+"Lennox broth",
+"Lysogeny broth"
+],
+"LB배지": [
+"LB medium",
+"Lennox broth",
+"Lysogeny broth"
+],
+"LFP 배터리": [
+"LFP battery",
+"LiFePO₄ battery",
+"Lithium iron phosphate battery",
+"lithium iron phosphate battery"
+],
+"LFP 전지": [
+"LFP battery",
+"LiFePO₄ battery",
+"Lithium iron phosphate battery",
+"lithium iron phosphate battery"
+],
+"Lb배지": [
+"LB medium",
+"Lennox broth",
+"Lysogeny broth"
+],
+"N,N-다이메틸폼아마이드": [
+"DMF",
+"Dimethyl formamide",
+"N,N-Dimethylformamide",
+"N,N-dimethylformamide"
+],
+"PCR 검사": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"PCR 법": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"PCR법": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"RNA 블롯": [
+"Northern blot",
+"Northern blotting",
+"northern blot"
+],
+"RNA 추출": [
+"RNA extraction"
+],
+"SDS-폴리아크릴아마이드 젤 전기영동": [
+"SDS-PAGE",
+"SDS-polyacrylamide gel electrophoresis",
+"sodium dodecyl sulfate polyacrylamide gel electrophoresis"
+],
+"SYBR 그린 I": [
+"SYBR Green I"
+],
+"SYBR그린I": [
+"SYBR Green I"
+],
+"UV 램프": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"UV 측정기": [
+"Ultraviolet–visible spectroscopy",
+"ultraviolet spectroscopy",
+"ultraviolet visible spectroscopy",
+"ultraviolet–visible spectroscopy"
+],
+"UV/Vis 분광법": [
+"Ultraviolet–visible spectroscopy",
+"ultraviolet spectroscopy",
+"ultraviolet visible spectroscopy",
+"ultraviolet–visible spectroscopy"
+],
+"UV/Vis 측정": [
+"Ultraviolet–visible spectroscopy",
+"ultraviolet spectroscopy",
+"ultraviolet visible spectroscopy",
+"ultraviolet–visible spectroscopy"
+],
+"Uv측정기": [
+"Ultraviolet–visible spectroscopy",
+"ultraviolet spectroscopy",
+"ultraviolet visible spectroscopy",
+"ultraviolet–visible spectroscopy"
+],
+"X선 결정학": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"X선 광전자 분광학": [
+"ESCA",
+"X-ray photoelectron spectroscopy",
+"XPS",
+"electron spectroscopy for chemical analysis"
+],
+"X선 회절": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"X선결정학": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"X선회절": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"가성 소다": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"가성소다": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"가스 용기": [
+"Gas cylinder",
+"compressed gas tank",
+"gas cylinder",
+"pressurized gas cylinder"
+],
+"가스 크로마토그래피": [
+"Chromatography, Gas",
+"GC chromatography",
+"Gas chromatography",
+"gas chromatography"
+],
+"가스봄베": [
+"Gas cylinder",
+"compressed gas tank",
+"gas cylinder",
+"pressurized gas cylinder"
+],
+"가스용기": [
+"Gas cylinder",
+"compressed gas tank",
+"gas cylinder",
+"pressurized gas cylinder"
+],
+"가스크로마토그래피": [
+"Chromatography, Gas",
+"GC chromatography",
+"Gas chromatography",
+"gas chromatography"
+],
+"가스통": [
+"Gas cylinder",
+"compressed gas tank",
+"gas cylinder",
+"pressurized gas cylinder"
+],
+"가연 한계": [
+"Flammability limit",
+"explosive limit",
+"flammability limit"
+],
+"가연성": [
+"Combustibility and flammability",
+"flammability",
+"flammable",
+"inflammable"
+],
+"가연성 공기": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"가연성 기체": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"가연성공기": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"가연성기체": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"간극률": [
+"Porosity",
+"porosity",
+"void fraction",
+"void ratio"
+],
+"간접면역형광항체법": [
+"IF microscopy",
+"Immunofluorescence",
+"Immunofluorescent microscopy",
+"immunofluorescence microscopy"
+],
+"갈바니 전지": [
+"Galvanic cell",
+"cell",
+"chemical cell",
+"galvanic cell"
+],
+"갈바니전지": [
+"Galvanic cell",
+"cell",
+"chemical cell",
+"galvanic cell"
+],
+"갈변 현상": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"감압 증류": [
+"Vacuum distillation",
+"vacuum distillation"
+],
+"감압 플라스크": [
+"Buchner funnel",
+"Buechner funnel",
+"Büchner funnel"
+],
+"감압증류": [
+"Vacuum distillation",
+"vacuum distillation"
+],
+"감전": [
+"Electrical injury",
+"electric shock",
+"electrical injury",
+"electrical trauma"
+],
+"개미 산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"개미산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"개인 보호 장비": [
+"PPE",
+"Personal protective equipment",
+"personal protective equipment",
+"protective clothing"
+],
+"개인보호장비": [
+"PPE",
+"Personal protective equipment",
+"personal protective equipment",
+"protective clothing"
+],
+"거르기종이": [
+"Filter paper",
+"filter paper"
+],
+"거름종이": [
+"Filter paper",
+"filter paper"
+],
+"거품": [
+"Bubble (physics)",
+"Foam",
+"bubble",
+"foam",
+"foam material",
+"foams",
+"liquid bubble"
+],
+"건조얼음": [
+"Dry ice",
+"cardice",
+"dry ice"
+],
+"건조제": [
+"Desiccant",
+"desiccant",
+"drying agent"
+],
+"건축 폐기물": [
+"Waste",
+"rubbish",
+"trash",
+"waste"
+],
+"건축폐기물": [
+"Waste",
+"rubbish",
+"trash",
+"waste"
+],
+"검량선": [
+"Calibration curve",
+"calibration curve"
+],
+"겉면켕길힘": [
+"Surface tension",
+"surface tension"
+],
+"겉면켕김힘": [
+"Surface tension",
+"surface tension"
+],
+"게이소": [
+"14Si",
+"Silicon",
+"element 14",
+"silicon"
+],
+"겔": [
+"Gel",
+"gel"
+],
+"겔 전기 영동법": [
+"Gel electrophoresis",
+"Two-dimensional gel electrophoresis",
+"gel electrophoresis",
+"two-dimensional gel electrophoresis"
+],
+"겔 전기영동": [
+"Gel electrophoresis",
+"gel electrophoresis"
+],
+"겔전기영동": [
+"Gel electrophoresis",
+"gel electrophoresis"
+],
+"겔전기영동법": [
+"Gel electrophoresis",
+"gel electrophoresis"
+],
+"겨자무 과산화효소": [
+"Horseradish peroxidase"
+],
+"겨자무과산화효소": [
+"Horseradish peroxidase"
+],
+"결빙": [
+"Freezing",
+"chilling",
+"freezing",
+"solidification"
+],
+"결정 격자": [
+"Crystal structure",
+"crystal lattice",
+"crystal structure",
+"crystalline order"
+],
+"결정 구조": [
+"Crystal structure",
+"crystal lattice",
+"crystal structure",
+"crystalline order"
+],
+"결정격자": [
+"Crystal structure",
+"crystal lattice",
+"crystal structure",
+"crystalline order"
+],
+"결정구조": [
+"Crystal structure",
+"crystal lattice",
+"crystal structure",
+"crystalline order"
+],
+"결정의 구조": [
+"Crystal structure",
+"crystal lattice",
+"crystal structure",
+"crystalline order"
+],
+"결정화": [
+"Crystallization",
+"crystallisation",
+"crystallization"
+],
+"경도 (물리학)": [
+"Hardness",
+"hard",
+"hardness",
+"pressure-resistant"
+],
+"경사슬": [
+"Ab",
+"Antibody",
+"antibodies",
+"antibody"
+],
+"계란소": [
+"Protein",
+"proteid",
+"protein",
+"proteins"
+],
+"계면장력": [
+"Surface tension",
+"surface tension"
+],
+"고글": [
+"Goggles",
+"protective eyewear",
+"safety glasses",
+"safety goggles"
+],
+"고성능 액체 크로마토그래피": [
+"Chromatography, High Pressure Liquid",
+"High-performance liquid chromatography",
+"high-performance liquid chromatography",
+"high-pressure liquid chromatography"
+],
+"고압멸균": [
+"Autoclave",
+"autoclave",
+"autoclave sterilizer",
+"lab sterilizer"
+],
+"고압멸균기": [
+"Autoclave",
+"autoclave",
+"autoclave sterilizer",
+"lab sterilizer"
+],
+"고압멸균법": [
+"Autoclave",
+"autoclave",
+"autoclave sterilizer",
+"lab sterilizer"
+],
+"고정 공기": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"고체 배터리": [
+"Solid-state battery",
+"solid-state battery"
+],
+"고체 산화물 연료 전지": [
+"FC",
+"Fuel cell",
+"fuel cell"
+],
+"고체 전지": [
+"Solid-state battery",
+"solid-state battery"
+],
+"고체배터리": [
+"Solid-state battery",
+"solid-state battery"
+],
+"고체전지": [
+"Solid-state battery",
+"solid-state battery"
+],
+"공간격자": [
+"Crystal structure",
+"crystal lattice",
+"crystal structure",
+"crystalline order"
+],
+"공극률": [
+"Porosity",
+"porosity",
+"void fraction",
+"void ratio"
+],
+"공정 어닐링": [
+"Annealing (materials science)",
+"anneal",
+"annealing"
+],
+"공초점 레이저 주사 현미경": [
+"Confocal microscopy",
+"Microscopy, Confocal",
+"confocal microscopy"
+],
+"공초점 현미경": [
+"Confocal microscopy",
+"Microscopy, Confocal",
+"confocal microscopy"
+],
+"공초점레이저주사현미경": [
+"Confocal microscopy",
+"Microscopy, Confocal",
+"confocal microscopy"
+],
+"공초점레이저현미경": [
+"Confocal microscopy",
+"Microscopy, Confocal",
+"confocal microscopy"
+],
+"공초점현미경": [
+"Confocal microscopy",
+"Microscopy, Confocal",
+"confocal microscopy"
+],
+"공촉매": [
+"Catalyst",
+"catalyst"
+],
+"과망가니즈산 칼륨": [
+"KMnO4",
+"Potassium permanganate",
+"potassium permanganate"
+],
+"과망가니즈산 포타슘": [
+"KMnO4",
+"Potassium permanganate",
+"potassium permanganate"
+],
+"과망가니즈산칼륨": [
+"KMnO4",
+"Potassium permanganate",
+"potassium permanganate"
+],
+"과망간산 칼륨": [
+"KMnO4",
+"Potassium permanganate",
+"potassium permanganate"
+],
+"과망간산칼륨": [
+"KMnO4",
+"Potassium permanganate",
+"potassium permanganate"
+],
+"과산화 생성물": [
+"Peroxide",
+"peroxide",
+"peroxide compound",
+"peroxides"
+],
+"과산화 수소": [
+"H2O2",
+"Hydrogen peroxide",
+"dioxidane",
+"hydrogen peroxide"
+],
+"과산화물": [
+"Peroxide",
+"peroxide",
+"peroxide compound",
+"peroxides"
+],
+"과산화수소": [
+"H2O2",
+"Hydrogen peroxide",
+"dioxidane",
+"hydrogen peroxide"
+],
+"과산화수소수": [
+"H2O2",
+"Hydrogen peroxide",
+"dioxidane",
+"hydrogen peroxide"
+],
+"과포화": [
+"Supersaturation",
+"supersaturation"
+],
+"과포화용액": [
+"Supersaturation",
+"supersaturation"
+],
+"관련도": [
+"Accuracy and precision",
+"Inaccuracy and imprecision",
+"accuracy",
+"accuracy and precision"
+],
+"관련도와 정밀도": [
+"Accuracy and precision",
+"Inaccuracy and imprecision",
+"accuracy",
+"accuracy and precision"
+],
+"광학 밀도": [
+"Absorbance",
+"decadic absorbance",
+"optical density",
+"transmittance optical density"
+],
+"광학 현미경": [
+"Optical microscope",
+"light microscope",
+"microscope",
+"optical microscope"
+],
+"광학밀도": [
+"Absorbance",
+"decadic absorbance",
+"optical density",
+"transmittance optical density"
+],
+"광학현미경": [
+"Optical microscope",
+"light microscope",
+"microscope",
+"optical microscope"
+],
+"교반기": [
+"Magnetic stirrer",
+"laboratory stirrer",
+"magnetic mixer",
+"magnetic stirrer"
+],
+"교정": [
+"Calibration",
+"calibration"
+],
+"교정 (공학)": [
+"Calibration",
+"calibration"
+],
+"교정 곡선": [
+"Calibration curve",
+"calibration curve"
+],
+"구워엉금법": [
+"Sintering",
+"frittage",
+"fritting",
+"sintering"
+],
+"굳기": [
+"Hardness",
+"hard",
+"hardness",
+"pressure-resistant"
+],
+"굴절계": [
+"Refractometer",
+"refractometer",
+"refractometry"
+],
+"권장 노출 기준": [
+"Recommended exposure limit"
+],
+"권장 노출 한계": [
+"Recommended exposure limit"
+],
+"권장 노출 한도": [
+"Recommended exposure limit"
+],
+"권장노출한계": [
+"Recommended exposure limit"
+],
+"규소": [
+"14Si",
+"Silicon",
+"element 14",
+"silicon"
+],
+"그라파이트": [
+"Graphite",
+"graphite",
+"graphite-2H",
+"graphite-3R"
+],
+"그라펜": [
+"Graphene",
+"graphene",
+"monolayer graphite"
+],
+"그람 염색": [
+"Gram stain",
+"Gram's method",
+"Gram-positive",
+"gram stain"
+],
+"그람 염색법": [
+"Gram stain",
+"Gram's method",
+"Gram-positive",
+"gram stain"
+],
+"그람염색": [
+"Gram stain",
+"Gram's method",
+"Gram-positive",
+"gram stain"
+],
+"그람염색법": [
+"Gram stain",
+"Gram's method",
+"Gram-positive",
+"gram stain"
+],
+"그래펜": [
+"Graphene",
+"graphene",
+"monolayer graphite"
+],
+"그래핀": [
+"Graphene",
+"graphene",
+"monolayer graphite"
+],
+"극저온학": [
+"Cryogenics",
+"cryogenics"
+],
+"근 자외선": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"근자외선": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"글라이신": [
+"Glycine",
+"glycin",
+"glycine",
+"glycolixir"
+],
+"글러브 박스": [
+"Glovebox",
+"glove box",
+"glovebox"
+],
+"글러브박스": [
+"Glovebox",
+"glove box",
+"glovebox"
+],
+"글루콘산 칼슘": [
+"Calcarea gluconica",
+"Calcii gluconas",
+"Calcium gluconate anhydrous",
+"calcium gluconate"
+],
+"글루콘산칼슘": [
+"Calcarea gluconica",
+"Calcii gluconas",
+"Calcium gluconate anhydrous",
+"calcium gluconate"
+],
+"글리세롤": [
+"Glycerol",
+"glycerine",
+"glycerol",
+"glycyl alcohol"
+],
+"글리세린": [
+"Glycerol",
+"glycerine",
+"glycerol",
+"glycyl alcohol"
+],
+"글리신": [
+"Glycine",
+"glycin",
+"glycine",
+"glycolixir"
+],
+"금속 유기 골격체": [
+"Metal–organic framework",
+"metal organic framework",
+"metal-organic framework",
+"metal–organic frameworks"
+],
+"금속유기골격체": [
+"Metal–organic framework",
+"metal organic framework",
+"metal-organic framework",
+"metal–organic frameworks"
+],
+"급성 독성": [
+"Acute toxicity",
+"acute toxicity",
+"high toxicity"
+],
+"급성독성": [
+"Acute toxicity",
+"acute toxicity",
+"high toxicity"
+],
+"기준 전극": [
+"Reference electrode",
+"reference electrode"
+],
+"기준전극": [
+"Reference electrode",
+"reference electrode"
+],
+"기질 (화학)": [
+"Substrate (chemistry)",
+"enzyme substrate",
+"substrate"
+],
+"기질 보조 레이저 탈착 이온화": [
+"MALDI",
+"Matrix-assisted laser desorption/ionization",
+"Spectrometry, Mass, Matrix-Assisted Laser Desorption-Ionization",
+"matrix-assisted laser desorption/ionization"
+],
+"기질보조레이저탈착이온화": [
+"MALDI",
+"Matrix-assisted laser desorption/ionization",
+"Spectrometry, Mass, Matrix-Assisted Laser Desorption-Ionization",
+"matrix-assisted laser desorption/ionization"
+],
+"기체 크로마토그래피": [
+"Chromatography, Gas",
+"GC chromatography",
+"Gas chromatography",
+"gas chromatography"
+],
+"기체의 용해": [
+"Solubility",
+"solubility"
+],
+"기체의 용해도": [
+"Solubility",
+"solubility"
+],
+"기체크로마토그래피": [
+"Chromatography, Gas",
+"GC chromatography",
+"Gas chromatography",
+"gas chromatography"
+],
+"기포": [
+"Bubble (physics)",
+"bubble",
+"liquid bubble"
+],
+"기폭약": [
+"Explosive",
+"Explosive Agents",
+"explosive chemicals",
+"explosive compound"
+],
+"긴급소개": [
+"Emergency evacuation",
+"emergency evacuation",
+"evacuation"
+],
+"끓는 점": [
+"Boiling point",
+"b.p.",
+"boiling point",
+"boiling temperature"
+],
+"끓는점": [
+"Boiling point",
+"b.p.",
+"boiling point",
+"boiling temperature"
+],
+"끓음": [
+"Boiling",
+"boiling"
+],
+"끓이기": [
+"Boiling",
+"boiling"
+],
+"나노 입자": [
+"Nanoparticle",
+"nanoparticle",
+"nanoparticles"
+],
+"나노물질": [
+"Nanomaterials",
+"nanomaterial",
+"nanomaterials"
+],
+"나노입자": [
+"Nanoparticle",
+"nanoparticle",
+"nanoparticles"
+],
+"나노재료": [
+"Nanomaterials",
+"nanomaterial",
+"nanomaterials"
+],
+"나이트러전": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"나이트러젼": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"나이트로겐": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"나이트로셀룰로스": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"나이트로셀룰로오스": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"나이트로젠": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"나이트릴 고무": [
+"Nitrile rubber",
+"nitrile",
+"nitrile butadiene rubber",
+"nitrile rubber"
+],
+"나트륨 이온 전지": [
+"Na-ion battery",
+"Sodium-ion battery",
+"sodium-ion battery",
+"sodium-ion rechargeable battery"
+],
+"내식성": [
+"Corrosion",
+"corroding",
+"corrosion",
+"rusting"
+],
+"내음": [
+"Odor",
+"odor",
+"scent",
+"smell"
+],
+"냄새": [
+"Odor",
+"odor",
+"scent",
+"smell"
+],
+"넘보라살": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"네른스트 방정식": [
+"Nernst equation"
+],
+"네른스트 식": [
+"Nernst equation"
+],
+"네른스트식": [
+"Nernst equation"
+],
+"네른스트의 식": [
+"Nernst equation"
+],
+"노던 블랏": [
+"Northern blot",
+"Northern blotting",
+"northern blot"
+],
+"노던 블롯": [
+"Northern blot",
+"Northern blotting",
+"northern blot"
+],
+"노던블랏": [
+"Northern blot",
+"Northern blotting",
+"northern blot"
+],
+"노동 과학": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"노동과학": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"녹는점": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"녹색 형광 단백질": [
+"Green fluorescent protein",
+"green fluorescent protein",
+"green fluorescent proteins"
+],
+"녹색 형광단백질": [
+"Green fluorescent protein",
+"green fluorescent protein",
+"green fluorescent proteins"
+],
+"녹색형광단백질": [
+"Green fluorescent protein",
+"green fluorescent protein",
+"green fluorescent proteins"
+],
+"농도": [
+"Concentration",
+"chemical concentration",
+"concentration",
+"concentration (chemical properties)"
+],
+"뇨소": [
+"Urea",
+"carbamide",
+"carbonic acid diamide",
+"urea"
+],
+"누출": [
+"Leak",
+"leak",
+"leakage",
+"leaking"
+],
+"눈금 실린더": [
+"Graduated cylinder",
+"graduated cylinder",
+"measuring cylinder",
+"mixing cylinder"
+],
+"눈금실린더": [
+"Graduated cylinder",
+"graduated cylinder",
+"measuring cylinder",
+"mixing cylinder"
+],
+"뉴클레인": [
+"Nucleic acid",
+"Nucleic acids",
+"nucleic acid",
+"nucleic acids"
+],
+"니트로게늄": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"니트로게니움": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"니트로겐": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"니트로셀룰로스": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"니트로셀룰로오스": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"니트로젠": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"니트릴 고무": [
+"Nitrile rubber",
+"nitrile",
+"nitrile butadiene rubber",
+"nitrile rubber"
+],
+"다이메틸 설폭사이드": [
+"DMSO",
+"Dimethyl sulfoxide",
+"Syntexan",
+"dimethyl sulfoxide"
+],
+"다이메틸 케톤": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"다이메틸벤젠": [
+"Xylene",
+"xylen",
+"xylene",
+"xylol"
+],
+"다이메틸설폭사이드": [
+"DMSO",
+"Dimethyl sulfoxide",
+"Syntexan",
+"dimethyl sulfoxide"
+],
+"다이메틸케톤": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"다이메틸폼아마이드": [
+"DMF",
+"Dimethyl formamide",
+"N,N-Dimethylformamide",
+"N,N-dimethylformamide"
+],
+"다이에틸 에터": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"다이에틸 에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"다이에틸 이써": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"다이에틸에터": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"다이에틸에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"다이클로로메탄": [
+"Dichloromethane",
+"Methylene chloride",
+"Methylene dichloride",
+"dichloromethane"
+],
+"다이클로로메테인": [
+"Dichloromethane",
+"Methylene chloride",
+"Methylene dichloride",
+"dichloromethane"
+],
+"다중벽 탄소 나노튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"다중벽탄소나노튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"단백질": [
+"Protein",
+"proteid",
+"protein",
+"proteins"
+],
+"단백질 면역 블롯": [
+"Immunoblot",
+"Western blot",
+"protein immunoblot",
+"western blot"
+],
+"단백질 변성": [
+"Denaturation (biochemistry)",
+"biomolecule denaturation",
+"biopolymer denaturation",
+"denaturation"
+],
+"단백질 접힘": [
+"GO:0006457",
+"Protein folding",
+"protein folding"
+],
+"단백질 정제": [
+"Protein purification",
+"protein isolation",
+"protein purification"
+],
+"단백질 폴딩": [
+"GO:0006457",
+"Protein folding",
+"protein folding"
+],
+"단백질의 변성": [
+"Denaturation (biochemistry)",
+"biomolecule denaturation",
+"biopolymer denaturation",
+"denaturation"
+],
+"단백질접힘": [
+"GO:0006457",
+"Protein folding",
+"protein folding"
+],
+"단백질정제": [
+"Protein purification",
+"protein isolation",
+"protein purification"
+],
+"단백질체학": [
+"Proteomics",
+"proteomics"
+],
+"단백체학": [
+"Proteomics",
+"proteomics"
+],
+"단순증류": [
+"Distillation",
+"distillation",
+"distilling"
+],
+"단일벽 탄소 나노튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"단일벽탄소나노튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"단추형 전지": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"단추형전지": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"담금질": [
+"Quenching",
+"quench",
+"quenching"
+],
+"대장균": [
+"Bacterium coli communis",
+"E coli",
+"E. coli",
+"Escherichia coli"
+],
+"더스트 마스크": [
+"Dust mask",
+"ND respirator",
+"Nuisance dust respirator",
+"Respirator",
+"dust mask",
+"mask",
+"respirator"
+],
+"더스트마스크": [
+"Dust mask",
+"ND respirator",
+"Nuisance dust respirator",
+"Respirator",
+"dust mask",
+"mask",
+"respirator"
+],
+"데시케이터": [
+"Desiccator",
+"desiccator"
+],
+"데옥시리보 핵산": [
+"DNA",
+"DNA spiral",
+"deoxyribonucleic acid",
+"deoxyribose nucleic acid"
+],
+"데옥시리보핵산": [
+"DNA",
+"DNA spiral",
+"deoxyribonucleic acid",
+"deoxyribose nucleic acid"
+],
+"도데실 황산 나트륨": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"도데실황산나트륨": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"도핑": [
+"Doping (semiconductor)",
+"doping",
+"semiconductor doping"
+],
+"도핑 (반도체)": [
+"Doping (semiconductor)",
+"doping",
+"semiconductor doping"
+],
+"독성": [
+"Toxicity",
+"toxicity"
+],
+"독성도": [
+"Toxicity",
+"toxicity"
+],
+"돌연변이원": [
+"Genotoxins",
+"Mutagen",
+"mutagen",
+"mutagens"
+],
+"동결": [
+"Freezing",
+"chilling",
+"freezing",
+"solidification"
+],
+"동상": [
+"Frostbite",
+"frostbite"
+],
+"동점성 계수": [
+"Viscosity",
+"viscosity"
+],
+"동점성계수": [
+"Viscosity",
+"viscosity"
+],
+"드라이 아이스": [
+"Dry ice",
+"cardice",
+"dry ice"
+],
+"드라이아이스": [
+"Dry ice",
+"cardice",
+"dry ice"
+],
+"들숨": [
+"Inhalation",
+"air intake",
+"breathing in",
+"inhalation"
+],
+"등전점": [
+"Isoelectric point",
+"isoelectric point"
+],
+"디메틸 카보네이트": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"디메틸 카본에이트": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"디메틸 케톤": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"디메틸 탄산염": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"디메틸벤젠": [
+"Xylene",
+"xylen",
+"xylene",
+"xylol"
+],
+"디메틸카보네이트": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"디메틸카본에이트": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"디메틸케톤": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"디메틸포름아미드": [
+"DMF",
+"Dimethyl formamide",
+"N,N-Dimethylformamide",
+"N,N-dimethylformamide"
+],
+"디에텔 에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"디에틸 에터": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"디에틸 에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"디에틸에터": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"디에틸에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"디클로로메탄": [
+"Dichloromethane",
+"Methylene chloride",
+"Methylene dichloride",
+"dichloromethane"
+],
+"디클로로메테인": [
+"Dichloromethane",
+"Methylene chloride",
+"Methylene dichloride",
+"dichloromethane"
+],
+"똥내": [
+"Odor",
+"odor",
+"scent",
+"smell"
+],
+"띠 간격": [
+"Band gap",
+"band gap",
+"bandgap",
+"forbidden band"
+],
+"띠간격": [
+"Band gap",
+"band gap",
+"bandgap",
+"forbidden band"
+],
+"띠틈": [
+"Band gap",
+"band gap",
+"bandgap",
+"forbidden band"
+],
+"라만 분광법": [
+"Raman spectroscopy",
+"Raman spectrum analysis"
+],
+"라만분광법": [
+"Raman spectroscopy",
+"Raman spectrum analysis"
+],
+"라우릴 황산 나트륨": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"라우릴황산나트륨": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"라이시스 버퍼": [
+"Lysis buffer",
+"lysis buffer"
+],
+"라텍스 장갑": [
+"Medical glove",
+"medical glove",
+"medical gloves",
+"surgical gloves"
+],
+"람베르트-베르의 법칙": [
+"Beer's law",
+"Beer–Lambert law",
+"Lambert-Beer law",
+"Lambert–Beer law"
+],
+"려과": [
+"Filtration",
+"filtration"
+],
+"로릴 황산 나트륨": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"로릴황산나트륨": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"로우리 단백질 정량법": [
+"Lowry protein assay"
+],
+"루시퍼레이스": [
+"Luciferase",
+"luciferase",
+"luciferin monooxygenase"
+],
+"루시페라아제": [
+"Luciferase",
+"luciferase",
+"luciferin monooxygenase"
+],
+"루시페레이스": [
+"Luciferase",
+"luciferase",
+"luciferin monooxygenase"
+],
+"류산": [
+"Sulfuric acid",
+"battery acid",
+"sulfuric acid",
+"sulphuric acid"
+],
+"리스크 평가제도": [
+"Risk assessment",
+"risk assessment",
+"risk estimation",
+"risk evaluation"
+],
+"리스크평가제도": [
+"Risk assessment",
+"risk assessment",
+"risk estimation",
+"risk evaluation"
+],
+"리토스": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"리튬": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"리튬 금속": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"리튬 니켈 망간 코발트 산화물": [
+"LNMC",
+"Li-NMC",
+"Lithium nickel manganese cobalt oxides",
+"lithium nickel manganese cobalt oxides"
+],
+"리튬 세라믹 전지": [
+"Solid-state battery",
+"solid-state battery"
+],
+"리튬 원소": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"리튬 이산화코발트": [
+"Lithium cobalt oxide",
+"lithium cobalt oxide",
+"lithium cobalt(III) oxide",
+"lithium cobaltite"
+],
+"리튬 이온": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬 이온 2차 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬 이온 배터리": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬 이온 이차 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬 이온 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬 이온배터리": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬 인산철 배터리": [
+"LFP battery",
+"LiFePO₄ battery",
+"Lithium iron phosphate battery",
+"lithium iron phosphate battery"
+],
+"리튬 인산철 전지": [
+"LFP battery",
+"LiFePO₄ battery",
+"Lithium iron phosphate battery",
+"lithium iron phosphate battery"
+],
+"리튬 코발트 산화물": [
+"Lithium cobalt oxide",
+"lithium cobalt oxide",
+"lithium cobalt(III) oxide",
+"lithium cobaltite"
+],
+"리튬 화합물": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"리튬-이온 2차 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬-이온 이차 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬-이온 이차전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬-이온 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬-이온전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬금속": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"리튬이온": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온 2차전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온 배터리": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온 이차전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온 전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온 충전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온2차전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온배터리": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온이차전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬이온전지": [
+"LIB",
+"Lithium-ion battery",
+"lithium-ion battery",
+"lithium-ion rechargeable battery"
+],
+"리튬코발트산화물": [
+"Lithium cobalt oxide",
+"lithium cobalt oxide",
+"lithium cobalt(III) oxide",
+"lithium cobaltite"
+],
+"리티움": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"마른 얼음": [
+"Dry ice",
+"cardice",
+"dry ice"
+],
+"마른얼음": [
+"Dry ice",
+"cardice",
+"dry ice"
+],
+"마이코플라스마": [
+"Mycoplasma",
+"mycoplasma"
+],
+"마이코플라즈마": [
+"Mycoplasma",
+"mycoplasma"
+],
+"마이크로 FNA": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"마이크로몰라": [
+"Molar concentration",
+"amount concentration",
+"amount-of-substance concentration",
+"substance concentration"
+],
+"마이클리스-멘텐 식": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"마이클스-멘텐 식": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"만성 독성": [
+"Chronic toxicity",
+"chronic toxicity"
+],
+"만성독성": [
+"Chronic toxicity",
+"chronic toxicity"
+],
+"매연": [
+"Smoke",
+"smoke"
+],
+"매트릭스 보조 레이저 탈착 이온화": [
+"MALDI",
+"Matrix-assisted laser desorption/ionization",
+"Spectrometry, Mass, Matrix-Assisted Laser Desorption-Ionization",
+"matrix-assisted laser desorption/ionization"
+],
+"매트릭스 보조 레이저 탈착 이온화법": [
+"MALDI",
+"Matrix-assisted laser desorption/ionization",
+"Spectrometry, Mass, Matrix-Assisted Laser Desorption-Ionization",
+"matrix-assisted laser desorption/ionization"
+],
+"매트릭스보조레이저탈착이온화": [
+"MALDI",
+"Matrix-assisted laser desorption/ionization",
+"Spectrometry, Mass, Matrix-Assisted Laser Desorption-Ionization",
+"matrix-assisted laser desorption/ionization"
+],
+"메스 실린더": [
+"Graduated cylinder",
+"graduated cylinder",
+"measuring cylinder",
+"mixing cylinder"
+],
+"메스 플라스크": [
+"Volumetric flask",
+"graduated flask",
+"measuring flask",
+"volumetric flask"
+],
+"메스실린더": [
+"Graduated cylinder",
+"graduated cylinder",
+"measuring cylinder",
+"mixing cylinder"
+],
+"메스플라스크": [
+"Volumetric flask",
+"graduated flask",
+"measuring flask",
+"volumetric flask"
+],
+"메타놀": [
+"Methanol",
+"methanol",
+"methyl alcohol",
+"wood alcohol"
+],
+"메탄산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"메탄알": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"메탄올": [
+"Methanol",
+"methanol",
+"methyl alcohol",
+"wood alcohol"
+],
+"메테인산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"메틸 벤젠": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"메틸 알코올": [
+"Methanol",
+"methanol",
+"methyl alcohol",
+"wood alcohol"
+],
+"메틸 알콜": [
+"Methanol",
+"methanol",
+"methyl alcohol",
+"wood alcohol"
+],
+"메틸벤젠": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"메틸알코올": [
+"Methanol",
+"methanol",
+"methyl alcohol",
+"wood alcohol"
+],
+"멜팅 포인트": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"멜팅포인트": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"면역 글로불린": [
+"Ab",
+"Antibody",
+"antibodies",
+"antibody"
+],
+"면역 침전": [
+"Immunoprecipitation",
+"immunoprecipitation"
+],
+"면역 형광": [
+"IF microscopy",
+"Immunofluorescence",
+"Immunofluorescent microscopy",
+"immunofluorescence microscopy"
+],
+"면역 형광법": [
+"IF microscopy",
+"Immunofluorescence",
+"Immunofluorescent microscopy",
+"immunofluorescence microscopy"
+],
+"면역글로불린": [
+"Ab",
+"Antibody",
+"antibodies",
+"antibody"
+],
+"면역조직화학": [
+"IHC",
+"Immunohistochemistry",
+"immunohistochemistry"
+],
+"면역침강": [
+"Immunoprecipitation",
+"immunoprecipitation"
+],
+"면역침강법": [
+"Immunoprecipitation",
+"immunoprecipitation"
+],
+"면역침전": [
+"Immunoprecipitation",
+"immunoprecipitation"
+],
+"면역침전법": [
+"Immunoprecipitation",
+"immunoprecipitation"
+],
+"면역형광": [
+"IF microscopy",
+"Immunofluorescence",
+"Immunofluorescent microscopy",
+"immunofluorescence microscopy"
+],
+"면역형광법": [
+"IF microscopy",
+"Immunofluorescence",
+"Immunofluorescent microscopy",
+"immunofluorescence microscopy"
+],
+"면역형광염색법": [
+"IF microscopy",
+"Immunofluorescence",
+"Immunofluorescent microscopy",
+"immunofluorescence microscopy"
+],
+"면화약": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"멸균": [
+"Sterilization (microbiology)",
+"sterilisation",
+"sterilization"
+],
+"모 표준 편차": [
+"Standard deviation",
+"root-mean-square deviation, root mean square deviation, RMSD",
+"standard deviation"
+],
+"모세관 전기 영동": [
+"Capillary electrophoresis",
+"capillary electrophoresis",
+"label-free HPCE"
+],
+"모세관 전기 이동": [
+"Capillary electrophoresis",
+"capillary electrophoresis",
+"label-free HPCE"
+],
+"모세관 전기영동": [
+"Capillary electrophoresis",
+"capillary electrophoresis",
+"label-free HPCE"
+],
+"모세관 전기이동": [
+"Capillary electrophoresis",
+"capillary electrophoresis",
+"label-free HPCE"
+],
+"모표준편차": [
+"Standard deviation",
+"root-mean-square deviation, root mean square deviation, RMSD",
+"standard deviation"
+],
+"몰 농도": [
+"Molar concentration",
+"amount concentration",
+"amount-of-substance concentration",
+"substance concentration"
+],
+"몰 매 세제곱미터": [
+"Molar concentration",
+"amount concentration",
+"amount-of-substance concentration",
+"substance concentration"
+],
+"몰농도": [
+"Molar concentration",
+"amount concentration",
+"amount-of-substance concentration",
+"substance concentration"
+],
+"몰랄 농도": [
+"Molality",
+"molal concentration",
+"molality"
+],
+"몰랄농도": [
+"Molality",
+"molal concentration",
+"molality"
+],
+"무기형광체": [
+"Fluorescence",
+"fluorescence"
+],
+"무독성": [
+"Toxicity",
+"toxicity"
+],
+"무수 아세트산": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"무수아세트산": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"무수탄산": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"물거품": [
+"Bubble (physics)",
+"bubble",
+"liquid bubble"
+],
+"물안경": [
+"Goggles",
+"protective eyewear",
+"safety glasses",
+"safety goggles"
+],
+"물의 전기분해": [
+"Electrolysis of water",
+"electrolysis of water"
+],
+"물질 안전 보건 자료": [
+"Safety data sheet",
+"material safety data sheet",
+"product safety data sheet",
+"safety data sheet"
+],
+"물질안전보건자료": [
+"Safety data sheet",
+"material safety data sheet",
+"product safety data sheet",
+"safety data sheet"
+],
+"묽은 황산": [
+"Sulfuric acid",
+"battery acid",
+"sulfuric acid",
+"sulphuric acid"
+],
+"미국 국립 직업안전위생연구소": [
+"N.I.O.S.H.",
+"NIOSH",
+"National Institute for Occupational Safety and Health",
+"National Institute of Occupational Safety and Health"
+],
+"미국 산업 안전 보건 연구소": [
+"N.I.O.S.H.",
+"NIOSH",
+"National Institute for Occupational Safety and Health",
+"National Institute of Occupational Safety and Health"
+],
+"미국 산업안전보건청": [
+"OSHA",
+"Occupational Safety and Health Administration",
+"United States Occupational Safety and Health Administration"
+],
+"미카엘리스-멘텐 반응속도론": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"미카엘리스-멘텐 식": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"미코플라스마": [
+"Mycoplasma",
+"mycoplasma"
+],
+"미코플라스마속": [
+"Mycoplasma",
+"mycoplasma"
+],
+"미코플라즈마": [
+"Mycoplasma",
+"mycoplasma"
+],
+"미하엘리스-멘텐 반응속도론": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"미하엘리스-멘텐 속도론": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"미하엘리스-멘텐 식": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"미하엘리스-멘텐의 식": [
+"Michaelis-Menten equation",
+"Michaelis-Menten kinetics",
+"Michaelis–Menten equation",
+"Michaelis–Menten kinetics"
+],
+"밀도": [
+"Density",
+"mass density",
+"volumetric mass density",
+"volumic mass"
+],
+"바다 쓰레기": [
+"Waste",
+"rubbish",
+"trash",
+"waste"
+],
+"바이러스": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"바이오 하자드": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"바이오 해저드": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"바이오바이러스": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"바이오세이프티 레벨": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"바이오안전성": [
+"Biosafety",
+"biosafety"
+],
+"바이오하자드": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"바이오해저드": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"박막": [
+"Thin film",
+"film",
+"films",
+"thin film"
+],
+"박막 크로마토그래피": [
+"Thin-layer chromatography",
+"thin layer chromatography"
+],
+"박층 크로마토그래피": [
+"Thin-layer chromatography",
+"thin layer chromatography"
+],
+"박층크로마토그래피": [
+"Thin-layer chromatography",
+"thin layer chromatography"
+],
+"박테리아": [
+"Bacteria",
+"eubacteria"
+],
+"박테리아 성장": [
+"Bacterial growth",
+"bacterial growth",
+"growth curve"
+],
+"반도체": [
+"Semiconductor",
+"semiconductor",
+"semiconductor material",
+"semiconductors"
+],
+"반수 치사량": [
+"LD50",
+"LD₅₀",
+"Median lethal dose",
+"median lethal dose"
+],
+"반수치사량": [
+"LD50",
+"LD₅₀",
+"Median lethal dose",
+"median lethal dose"
+],
+"반응 물질": [
+"Reagent",
+"analytical reagent",
+"chemical reagent",
+"reagent"
+],
+"반응 수율": [
+"Yield (chemistry)",
+"reaction yield",
+"yield"
+],
+"반응물": [
+"Substrate (chemistry)",
+"enzyme substrate",
+"substrate"
+],
+"반응물질": [
+"Reagent",
+"analytical reagent",
+"chemical reagent",
+"reagent"
+],
+"반응수율": [
+"Yield (chemistry)",
+"reaction yield",
+"yield"
+],
+"발암 물질": [
+"Carcinogen",
+"carcinogen",
+"oncogen",
+"oncogens"
+],
+"발암물질": [
+"Carcinogen",
+"carcinogen",
+"oncogen",
+"oncogens"
+],
+"발암성": [
+"Carcinogen",
+"carcinogen",
+"oncogen",
+"oncogens"
+],
+"발암성 물질": [
+"Carcinogen",
+"carcinogen",
+"oncogen",
+"oncogens"
+],
+"발열 반응": [
+"Exothermic reaction",
+"exothermic reaction"
+],
+"발열반응": [
+"Exothermic reaction",
+"exothermic reaction"
+],
+"발화점": [
+"Autoignition temperature",
+"autoignition temperature",
+"ignition point",
+"kindling point"
+],
+"방부제": [
+"Antiseptic",
+"antibacterials",
+"antiseptic",
+"antiseptics"
+],
+"방부제 (의약품)": [
+"Antiseptic",
+"antibacterials",
+"antiseptic",
+"antiseptics"
+],
+"방사선량": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"방전 깊이": [
+"DOD",
+"Depth of discharge",
+"DoD",
+"depth of discharge"
+],
+"방전깊이": [
+"DOD",
+"Depth of discharge",
+"DoD",
+"depth of discharge"
+],
+"방진 마스크": [
+"Dust mask",
+"ND respirator",
+"Nuisance dust respirator",
+"Respirator",
+"dust mask",
+"mask",
+"respirator"
+],
+"방진마스크": [
+"Dust mask",
+"ND respirator",
+"Nuisance dust respirator",
+"Respirator",
+"dust mask",
+"mask",
+"respirator"
+],
+"방호복": [
+"PPE",
+"Personal protective equipment",
+"personal protective equipment",
+"protective clothing"
+],
+"방화 담요": [
+"Fire blanket",
+"fire blanket"
+],
+"방화용 모포": [
+"Fire blanket",
+"fire blanket"
+],
+"배양": [
+"Cell culture",
+"cell culture",
+"cell culture techniques"
+],
+"백금이": [
+"Inoculation loop"
+],
+"밴드 갭": [
+"Band gap",
+"band gap",
+"bandgap",
+"forbidden band"
+],
+"밴드갭": [
+"Band gap",
+"band gap",
+"bandgap",
+"forbidden band"
+],
+"버튼 셀": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"버튼전지": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"버튼형 전지": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"버튼형전지": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"베르의 법칙": [
+"Beer's law",
+"Beer–Lambert law",
+"Lambert-Beer law",
+"Lambert–Beer law"
+],
+"베이킹 소다": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"베이킹소다": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"벤젠": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"벤젠 고리": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"벤젠 유도체": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"벤젠고리": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"벤졸": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"변성": [
+"Denaturation (biochemistry)",
+"biomolecule denaturation",
+"biopolymer denaturation",
+"denaturation"
+],
+"변성 (생화학)": [
+"Denaturation (biochemistry)",
+"biomolecule denaturation",
+"biopolymer denaturation",
+"denaturation"
+],
+"병독": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"보안면 (보호구)": [
+"Face shield",
+"face shield",
+"facemask",
+"protective visor"
+],
+"보호 안경": [
+"Eye protection",
+"eye protection"
+],
+"보호복": [
+"PPE",
+"Personal protective equipment",
+"personal protective equipment",
+"protective clothing"
+],
+"보호안경": [
+"Eye protection",
+"eye protection"
+],
+"볼류메트릭": [
+"Volume",
+"volume"
+],
+"볼텍스 믹서": [
+"Vortex mixer",
+"vortex mixer",
+"vortexer"
+],
+"볼텍스믹서": [
+"Vortex mixer",
+"vortex mixer",
+"vortexer"
+],
+"부동태화": [
+"Passivation (chemistry)",
+"passivate",
+"passivated",
+"passivation"
+],
+"부식": [
+"Corrosion",
+"corroding",
+"corrosion",
+"rusting"
+],
+"부식성": [
+"Corrosion",
+"corroding",
+"corrosion",
+"rusting"
+],
+"부식성 물질": [
+"Corrosive substance",
+"corrosive chemical",
+"corrosive substance",
+"corrosive substances"
+],
+"부식성물질": [
+"Corrosive substance",
+"corrosive chemical",
+"corrosive substance",
+"corrosive substances"
+],
+"부패": [
+"Decomposition",
+"decomposition",
+"putrefaction",
+"rotting"
+],
+"부피": [
+"Volume",
+"volume"
+],
+"부피 플라스크": [
+"Volumetric flask",
+"graduated flask",
+"measuring flask",
+"volumetric flask"
+],
+"부흐너 깔때기": [
+"Buchner funnel",
+"Buechner funnel",
+"Büchner funnel"
+],
+"부흐너깔때기": [
+"Buchner funnel",
+"Buechner funnel",
+"Büchner funnel"
+],
+"분광 광도법": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분광 측광법": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분광광도계": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분광광도법": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분광측광계": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분광측광기": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분광측광법": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"분리된 단백질": [
+"Protein purification",
+"protein isolation",
+"protein purification"
+],
+"분별 깔때기": [
+"Separatory funnel",
+"separating funnel",
+"separation funnel",
+"separatory funnel"
+],
+"분별깔때기": [
+"Separatory funnel",
+"separating funnel",
+"separation funnel",
+"separatory funnel"
+],
+"분자 수소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"분젠 버너": [
+"Bunsen burner"
+],
+"분젠버너": [
+"Bunsen burner"
+],
+"분진 폭발": [
+"Dust explosion",
+"dust explosion"
+],
+"분진폭발": [
+"Dust explosion",
+"dust explosion"
+],
+"분해": [
+"Decomposition",
+"decomposition",
+"putrefaction",
+"rotting"
+],
+"분해 (생물학)": [
+"Lysis",
+"cell lysis",
+"lysis"
+],
+"불": [
+"Fire",
+"fire",
+"fires"
+],
+"불산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"불산 화상": [
+"Burning caused by hydrofluoric acid",
+"Hydrofluoric acid burn"
+],
+"불용성": [
+"Solubility",
+"solubility"
+],
+"불탈성": [
+"Combustibility and flammability",
+"flammability",
+"flammable",
+"inflammable"
+],
+"불화 수소산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"불화 수소산 화상": [
+"Burning caused by hydrofluoric acid",
+"Hydrofluoric acid burn"
+],
+"불화수소산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"불활성 가스": [
+"Inert gas",
+"inert atmosphere",
+"inert gas",
+"purge gas"
+],
+"붕소수소화 소듐": [
+"NaBH4",
+"Sodium borohydride",
+"sodium borohydride",
+"sodium tetrahydridoborate(1-)"
+],
+"뷰렛": [
+"Burette",
+"buret",
+"burette"
+],
+"뷰흐너 깔때기": [
+"Buchner funnel",
+"Buechner funnel",
+"Büchner funnel"
+],
+"브래그 법칙": [
+"Bragg Diffraction",
+"Bragg equation",
+"Bragg reflection",
+"Bragg's law"
+],
+"브래그법칙": [
+"Bragg Diffraction",
+"Bragg equation",
+"Bragg reflection",
+"Bragg's law"
+],
+"브래그의 법칙": [
+"Bragg Diffraction",
+"Bragg equation",
+"Bragg reflection",
+"Bragg's law"
+],
+"브래그의 식": [
+"Bragg Diffraction",
+"Bragg equation",
+"Bragg reflection",
+"Bragg's law"
+],
+"브래그의법칙": [
+"Bragg Diffraction",
+"Bragg equation",
+"Bragg reflection",
+"Bragg's law"
+],
+"브래드퍼드 단백질 정량법": [
+"Bradford protein assay"
+],
+"브래드퍼드단백질정량법": [
+"Bradford protein assay"
+],
+"브로민화 에티듐": [
+"2,7-diamino-10-ethyl-9-phenylphenanthridinium bromide",
+"2,7-diamino-9-phenyl-10-ethylphenanthridinium bromide",
+"Ethidium bromide",
+"ethidium bromide"
+],
+"브로민화에티듐": [
+"2,7-diamino-10-ethyl-9-phenylphenanthridinium bromide",
+"2,7-diamino-9-phenyl-10-ethylphenanthridinium bromide",
+"Ethidium bromide",
+"ethidium bromide"
+],
+"브롬화 에티듐": [
+"2,7-diamino-10-ethyl-9-phenylphenanthridinium bromide",
+"2,7-diamino-9-phenyl-10-ethylphenanthridinium bromide",
+"Ethidium bromide",
+"ethidium bromide"
+],
+"비등": [
+"Boiling",
+"boiling"
+],
+"비등점": [
+"Boiling point",
+"b.p.",
+"boiling point",
+"boiling temperature"
+],
+"비루스": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"비반응성 기체": [
+"Inert gas",
+"inert atmosphere",
+"inert gas",
+"purge gas"
+],
+"비반응성기체": [
+"Inert gas",
+"inert atmosphere",
+"inert gas",
+"purge gas"
+],
+"비상구": [
+"Emergency exit",
+"emergency exit"
+],
+"비상문": [
+"Emergency exit",
+"emergency exit"
+],
+"비습": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"비습도": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"비어-람베르트 법칙": [
+"Beer's law",
+"Beer–Lambert law",
+"Lambert-Beer law",
+"Lambert–Beer law"
+],
+"비이커": [
+"Beaker (laboratory equipment)",
+"beaker",
+"lab beaker",
+"laboratory beaker"
+],
+"비점": [
+"Boiling point",
+"b.p.",
+"boiling point",
+"boiling temperature"
+],
+"비즈니스 리엔지니어링": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"비커": [
+"Beaker (laboratory equipment)",
+"beaker",
+"lab beaker",
+"laboratory beaker"
+],
+"빙점": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"빙초산": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"빛갈": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"빛깔": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"사산화 오스뮴": [
+"Osmium tetroxide",
+"osmic acid anhydride",
+"osmium oxide",
+"osmium tetroxide"
+],
+"사산화오스뮴": [
+"Osmium tetroxide",
+"osmic acid anhydride",
+"osmium oxide",
+"osmium tetroxide"
+],
+"사이클로 헥세인": [
+"Benzene hexahydride",
+"Cyclohexane",
+"Hexahydrobenzene",
+"cyclohexane"
+],
+"사이클로헥사트라이엔": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"사이클로헥세인": [
+"Benzene hexahydride",
+"Cyclohexane",
+"Hexahydrobenzene",
+"cyclohexane"
+],
+"산 이온화 상수": [
+"Acid dissociation constant",
+"Ka",
+"acid dissociation constant",
+"acidity constant"
+],
+"산 해리 상수": [
+"Acid dissociation constant",
+"Ka",
+"acid dissociation constant",
+"acidity constant"
+],
+"산 해리상수": [
+"Acid dissociation constant",
+"Ka",
+"acid dissociation constant",
+"acidity constant"
+],
+"산도 상수": [
+"Acid dissociation constant",
+"Ka",
+"acid dissociation constant",
+"acidity constant"
+],
+"산소": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"산소 가스": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"산소 분자": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"산소 원소": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"산소분자": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"산업의학과": [
+"OHS",
+"OSH",
+"Occupational safety and health",
+"occupational health and safety"
+],
+"산해리 상수": [
+"Acid dissociation constant",
+"Ka",
+"acid dissociation constant",
+"acidity constant"
+],
+"산해리상수": [
+"Acid dissociation constant",
+"Ka",
+"acid dissociation constant",
+"acidity constant"
+],
+"산화": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화 과정": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화 반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화 상태": [
+"Oxidation state",
+"oxidation number",
+"oxidation state"
+],
+"산화 수": [
+"Oxidation state",
+"oxidation number",
+"oxidation state"
+],
+"산화 아연": [
+"C.I. pigment white 4",
+"Zinc oxide",
+"zinc oxide",
+"zinc(II) oxide"
+],
+"산화 알루미늄": [
+"Abramant",
+"Abramax",
+"Abrarex",
+"aluminium oxide"
+],
+"산화 알루미늄(III)": [
+"Abramant",
+"Abramax",
+"Abrarex",
+"aluminium oxide"
+],
+"산화 타이타늄(IV)": [
+"Titanium dioxide",
+"rutile",
+"titanium dioxide",
+"titanium oxide"
+],
+"산화 환원 반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화-환원 반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화·환원": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화·환원 반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화극": [
+"Anode",
+"anode"
+],
+"산화반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화수": [
+"Oxidation state",
+"oxidation number",
+"oxidation state"
+],
+"산화아연": [
+"C.I. pigment white 4",
+"Zinc oxide",
+"zinc oxide",
+"zinc(II) oxide"
+],
+"산화알루미늄": [
+"Abramant",
+"Abramax",
+"Abrarex",
+"aluminium oxide"
+],
+"산화제": [
+"Oxidizing agent",
+"oxidant",
+"oxidizer",
+"oxidizing agent"
+],
+"산화환원": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화환원 반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"산화환원반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"살균": [
+"Sterilization (microbiology)",
+"sterilisation",
+"sterilization"
+],
+"살균소독제": [
+"Antiseptic",
+"antibacterials",
+"antiseptic",
+"antiseptics"
+],
+"살균제": [
+"Antiseptic",
+"antibacterials",
+"antiseptic",
+"antiseptics"
+],
+"삼각 플라스크": [
+"Erlenmeyer",
+"Erlenmeyer flask",
+"conical flask",
+"titration flask"
+],
+"삼각플라스크": [
+"Erlenmeyer",
+"Erlenmeyer flask",
+"conical flask",
+"titration flask"
+],
+"상대론적 질량": [
+"Mass",
+"mass",
+"weight"
+],
+"상대습도": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"색": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"색갈": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"색깔": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"색채": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"색채 현상": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"색채현상": [
+"Color",
+"color",
+"coloration",
+"colorful"
+],
+"생물 안전 작업대": [
+"Biosafety cabinet",
+"biological safety cabinet",
+"biosafety cabinet",
+"microbiological safety cabinet"
+],
+"생물 안전도": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"생물 위해성": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"생물 재해": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"생물안전도": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"생물안전등급": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"생물안전작업대": [
+"Biosafety cabinet",
+"biological safety cabinet",
+"biosafety cabinet",
+"microbiological safety cabinet"
+],
+"생물위해성": [
+"BSL",
+"Biosafety level",
+"biosafety level",
+"pathogen level"
+],
+"생물재해": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"생물학적 바이러스": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"생물학적 위험": [
+"Biological hazard",
+"biohazard",
+"biological hazard"
+],
+"생물학적 조직": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"생선 알레르기": [
+"Allergy",
+"allergies",
+"allergy",
+"hypersensitivity"
+],
+"생어 염기서열 분석": [
+"Sanger sequencing",
+"dideoxy chain-termination method"
+],
+"생어법": [
+"Sanger sequencing",
+"dideoxy chain-termination method"
+],
+"생어염기서열분석": [
+"Sanger sequencing",
+"dideoxy chain-termination method"
+],
+"생체 조직": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"생체 촉매": [
+"Enzyme",
+"enzyme"
+],
+"생체조직": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"생체촉매": [
+"Enzyme",
+"enzyme"
+],
+"샬레": [
+"Petri dish",
+"dish",
+"petri dishes"
+],
+"서던 블랏": [
+"Southern blot",
+"Southern blotting"
+],
+"서던 블로팅": [
+"Southern blot",
+"Southern blotting"
+],
+"서던 블롯": [
+"Southern blot",
+"Southern blotting"
+],
+"서던블랏": [
+"Southern blot",
+"Southern blotting"
+],
+"석묵": [
+"Graphite",
+"graphite",
+"graphite-2H",
+"graphite-3R"
+],
+"선조접종": [
+"Streaking (microbiology)",
+"streaking"
+],
+"선형 주사 전위법": [
+"LSV",
+"Linear sweep voltammetry",
+"linear scan voltammetry",
+"linear sweep voltammetry"
+],
+"섭식": [
+"Ingestion",
+"ingestion"
+],
+"섭취": [
+"Ingestion",
+"ingestion"
+],
+"세균": [
+"Bacteria",
+"eubacteria"
+],
+"세균계": [
+"Bacteria",
+"eubacteria"
+],
+"세균류": [
+"Bacteria",
+"eubacteria"
+],
+"세균역": [
+"Bacteria",
+"eubacteria"
+],
+"세로 탄성 계수": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"세로탄성률": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"세미컨덕터": [
+"Semiconductor",
+"semiconductor",
+"semiconductor material",
+"semiconductors"
+],
+"세척병": [
+"Wash bottle",
+"lab wash bottle",
+"laboratory wash bottle",
+"wash bottle"
+],
+"세포": [
+"Cell (biology)",
+"cell",
+"cellular entity",
+"individual cell"
+],
+"세포 (생물학)": [
+"Cell (biology)",
+"cell",
+"cellular entity",
+"individual cell"
+],
+"세포 과정": [
+"Cell (biology)",
+"cell",
+"cellular entity",
+"individual cell"
+],
+"세포 배양": [
+"Cell culture",
+"cell culture",
+"cell culture techniques"
+],
+"세포계": [
+"Cell line",
+"cell line"
+],
+"세포내 유전자도입": [
+"Transfection",
+"transfection"
+],
+"세포배양": [
+"Cell culture",
+"cell culture",
+"cell culture techniques"
+],
+"세포주": [
+"Cell line",
+"cell line"
+],
+"셰이커 (실험 기구)": [
+"Laboratory shakers",
+"Shaker",
+"Shaker (laboratory)"
+],
+"소 혈청 알부민": [
+"BSA",
+"Bovine serum albumin",
+"bovine serum albumin"
+],
+"소결": [
+"Sintering",
+"frittage",
+"fritting",
+"sintering"
+],
+"소다 가스": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"소독약": [
+"Disinfectant",
+"disinfectant"
+],
+"소독제": [
+"Disinfectant",
+"disinfectant"
+],
+"소듐 이온 전지": [
+"Na-ion battery",
+"Sodium-ion battery",
+"sodium-ion battery",
+"sodium-ion rechargeable battery"
+],
+"소듐라우릴설페이트": [
+"SLS",
+"Sodium dodecyl sulfate",
+"sodium laurilsulfate",
+"sodium lauryl sulfate"
+],
+"소디엄 이온 전지": [
+"Na-ion battery",
+"Sodium-ion battery",
+"sodium-ion battery",
+"sodium-ion rechargeable battery"
+],
+"소성": [
+"Sintering",
+"frittage",
+"fritting",
+"sintering"
+],
+"소성 (환경)": [
+"Sintering",
+"frittage",
+"fritting",
+"sintering"
+],
+"소태아혈청": [
+"Fetal bovine serum",
+"fetal bovine serum"
+],
+"소화 담요": [
+"Fire blanket",
+"fire blanket"
+],
+"소화기": [
+"Fire extinguisher",
+"extinguisher",
+"fire extinguisher",
+"flame extinguisher"
+],
+"손장갑": [
+"Glove",
+"glove",
+"gloves"
+],
+"솔벤트": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"수산화 나트륨": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"수산화 소듐": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"수산화 칼륨": [
+"KOH",
+"caustic potash",
+"lye",
+"potassium hydroxide"
+],
+"수산화 포타슘": [
+"KOH",
+"caustic potash",
+"lye",
+"potassium hydroxide"
+],
+"수산화나트륨": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"수산화소듐": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"수산화칼륨": [
+"KOH",
+"caustic potash",
+"lye",
+"potassium hydroxide"
+],
+"수소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"수소 가스": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"수소 결합": [
+"Hydrogen bond",
+"hydrogen bond"
+],
+"수소 분자": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"수소 원소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"수소 원자": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"수소결합": [
+"Hydrogen bond",
+"hydrogen bond"
+],
+"수소원자": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"수소화 붕소 나트륨": [
+"NaBH4",
+"Sodium borohydride",
+"sodium borohydride",
+"sodium tetrahydridoborate(1-)"
+],
+"수소화 붕소나트륨": [
+"NaBH4",
+"Sodium borohydride",
+"sodium borohydride",
+"sodium tetrahydridoborate(1-)"
+],
+"수소화 알루미늄 리튬": [
+"Li[AlH4]",
+"Lithium aluminium hydride",
+"lithium aluminohydride",
+"lithium aluminum hydride"
+],
+"수소화 알루미늄리튬": [
+"Li[AlH4]",
+"Lithium aluminium hydride",
+"lithium aluminohydride",
+"lithium aluminum hydride"
+],
+"수소화붕소 나트륨": [
+"NaBH4",
+"Sodium borohydride",
+"sodium borohydride",
+"sodium tetrahydridoborate(1-)"
+],
+"수소화붕소나트륨": [
+"NaBH4",
+"Sodium borohydride",
+"sodium borohydride",
+"sodium tetrahydridoborate(1-)"
+],
+"수소화알루미늄리튬": [
+"Li[AlH4]",
+"Lithium aluminium hydride",
+"lithium aluminohydride",
+"lithium aluminum hydride"
+],
+"수술 장갑": [
+"Medical glove",
+"medical glove",
+"medical gloves",
+"surgical gloves"
+],
+"수술장갑": [
+"Medical glove",
+"medical glove",
+"medical gloves",
+"surgical gloves"
+],
+"수열합성법": [
+"Hydrothermal synthesis",
+"hydrothermal method",
+"hydrothermal synthesis"
+],
+"수율": [
+"Yield (chemistry)",
+"reaction yield",
+"yield"
+],
+"수중안경": [
+"Goggles",
+"protective eyewear",
+"safety glasses",
+"safety goggles"
+],
+"순환 전압전류법": [
+"Cyclic voltammetry",
+"cyclic voltammetry"
+],
+"슈퍼커패시터": [
+"Supercapacitor",
+"supercap",
+"supercapacitor",
+"ultracapacitor"
+],
+"스토리지": [
+"Storage"
+],
+"스트렙토마이신": [
+"SM",
+"STREPTOMYCIN",
+"[2-Deoxy-2-(dimethylamino)-alpha-L-glucopyranosyl]-(1->2)-[5-deoxy-3-C-formyl-alpha-L-lyxofuranosyl]-(1->4)-{n',n'''-[(1,3,5/2,4,6)-2,4,5,6-tetrahydroxycyclohexane-1,3-diyl]diguanidine}",
+"streptomycin"
+],
+"스펙트로포토미터": [
+"Spectrophotometry",
+"spectrophotometry"
+],
+"스포이드": [
+"Pipette",
+"pipet",
+"pipette"
+],
+"스포이트": [
+"Pipette",
+"pipet",
+"pipette"
+],
+"스핀 코팅": [
+"Spin coating"
+],
+"습기": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"습도": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"습윤": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"습윤도": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"승압": [
+"Voltage",
+"electric tension",
+"tension",
+"voltage"
+],
+"시계 전지": [
+"Button cell",
+"button battery",
+"button cell",
+"coin cell"
+],
+"시관": [
+"Test tube",
+"culture tube",
+"sample tube",
+"test tube"
+],
+"시약": [
+"Reagent",
+"analytical reagent",
+"chemical reagent",
+"reagent"
+],
+"시차 주사 열량계": [
+"DSC",
+"Differential scanning calorimetry",
+"differential scanning calorimetry"
+],
+"시차 주사 열량측정법": [
+"DSC",
+"Differential scanning calorimetry",
+"differential scanning calorimetry"
+],
+"시클로 헥산": [
+"Benzene hexahydride",
+"Cyclohexane",
+"Hexahydrobenzene",
+"cyclohexane"
+],
+"시클로헥사트리엔": [
+"Benzene",
+"C6H6",
+"[6]annulene",
+"benzene"
+],
+"시클로헥산": [
+"Benzene hexahydride",
+"Cyclohexane",
+"Hexahydrobenzene",
+"cyclohexane"
+],
+"시험관": [
+"Test tube",
+"culture tube",
+"sample tube",
+"test tube"
+],
+"식소다": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"실리카": [
+"Silicon dioxide",
+"silica",
+"silicic anhydride",
+"silicon dioxide"
+],
+"실리콘": [
+"14Si",
+"Silicon",
+"element 14",
+"silicon"
+],
+"실리콘 웨이퍼": [
+"Wafer (electronics)",
+"semiconductor wafer",
+"wafer"
+],
+"실리콘웨이퍼": [
+"Wafer (electronics)",
+"semiconductor wafer",
+"wafer"
+],
+"실리키움": [
+"14Si",
+"Silicon",
+"element 14",
+"silicon"
+],
+"실시간 중합효소 연쇄 반응": [
+"Real-time polymerase chain reaction",
+"kinetic polymerase chain reaction",
+"qPCR",
+"real-time polymerase chain reaction"
+],
+"실시간 중합효소연쇄반응": [
+"Real-time polymerase chain reaction",
+"kinetic polymerase chain reaction",
+"qPCR",
+"real-time polymerase chain reaction"
+],
+"실시간중합효소연쇄반응": [
+"Real-time polymerase chain reaction",
+"kinetic polymerase chain reaction",
+"qPCR",
+"real-time polymerase chain reaction"
+],
+"실험복": [
+"White coat",
+"lab coat",
+"laboratory coat",
+"white coat"
+],
+"실험실 가운": [
+"White coat",
+"lab coat",
+"laboratory coat",
+"white coat"
+],
+"심장 충격기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"심장마사지": [
+"CPR",
+"Cardiopulmonary Resuscitation (CPR)",
+"Cardiopulmonary resuscitation",
+"cardiopulmonary resuscitation"
+],
+"심장충격기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"심폐 소생술": [
+"CPR",
+"Cardiopulmonary Resuscitation (CPR)",
+"Cardiopulmonary resuscitation",
+"cardiopulmonary resuscitation"
+],
+"심폐소생": [
+"CPR",
+"Cardiopulmonary Resuscitation (CPR)",
+"Cardiopulmonary resuscitation",
+"cardiopulmonary resuscitation"
+],
+"심폐소생술": [
+"CPR",
+"Cardiopulmonary Resuscitation (CPR)",
+"Cardiopulmonary resuscitation",
+"cardiopulmonary resuscitation"
+],
+"쓰레기": [
+"Waste",
+"rubbish",
+"trash",
+"waste"
+],
+"쓰레기 관리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"쓰레기 처리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"쓰레기 처분": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"쓰레기관리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"쓰레기처리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"아가로스": [
+"Agarose",
+"agarose"
+],
+"아가로오스": [
+"Agarose",
+"agarose"
+],
+"아르곤": [
+"18Ar",
+"Argon",
+"argon",
+"element 18"
+],
+"아세토나이트릴": [
+"Acetonitrile",
+"acetonitrile",
+"cyanomethane",
+"ethyl nitrile"
+],
+"아세톤": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"아세트 산": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"아세트산": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"아세트산 에스터": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"아세트산 에틸": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"아세트산에스터": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"아세트산에틸": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"아이소프로판올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"아이소프로필 베타-D-1-싸이오갈락토피라노사이드": [
+"IPTG",
+"Isopropyl β-D-1-thiogalactopyranoside",
+"isopropyl thiogalactoside",
+"isopropyl β-D-thiogalactopyranoside"
+],
+"아이소프로필 알코올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"아이소프로필알코올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"아자이드화 나트륨": [
+"Sodium azide",
+"azium",
+"potaxio",
+"sodium azide"
+],
+"아지드화 나트륨": [
+"Sodium azide",
+"azium",
+"potaxio",
+"sodium azide"
+],
+"아지드화나트륨": [
+"Sodium azide",
+"azium",
+"potaxio",
+"sodium azide"
+],
+"아쿠아 레기아": [
+"Aqua regia",
+"aqua regia"
+],
+"아크릴아마이드": [
+"Acrylamide",
+"acrylamide",
+"ethylenecarboxamide",
+"prop-2-enamide"
+],
+"아크릴아미드": [
+"Acrylamide",
+"acrylamide",
+"ethylenecarboxamide",
+"prop-2-enamide"
+],
+"아포단백질": [
+"Enzyme",
+"enzyme"
+],
+"악취": [
+"Odor",
+"odor",
+"scent",
+"smell"
+],
+"안간 공학": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"안면 보호대": [
+"Face shield",
+"face shield",
+"facemask",
+"protective visor"
+],
+"안면보호대": [
+"Face shield",
+"face shield",
+"facemask",
+"protective visor"
+],
+"알곤": [
+"18Ar",
+"Argon",
+"argon",
+"element 18"
+],
+"알러지": [
+"Allergy",
+"allergies",
+"allergy",
+"hypersensitivity"
+],
+"알레르기": [
+"Allergy",
+"allergies",
+"allergy",
+"hypersensitivity"
+],
+"알레르기 반응": [
+"Allergy",
+"allergies",
+"allergy",
+"hypersensitivity"
+],
+"알록사이트": [
+"Abramant",
+"Abramax",
+"Abrarex",
+"aluminium oxide"
+],
+"알루미나": [
+"Abramant",
+"Abramax",
+"Abrarex",
+"aluminium oxide"
+],
+"알칼리 가수분해효소": [
+"Alkaline phosphatase",
+"IPR001952",
+"alkaline phosphatase",
+"alkaline phosphohydrolase"
+],
+"알칼리성 인산가수분해효소": [
+"Alkaline phosphatase",
+"IPR001952",
+"alkaline phosphatase",
+"alkaline phosphohydrolase"
+],
+"암피실린": [
+"ABPC",
+"Ampicillin",
+"D-(−)-ampicillin",
+"ampicillin"
+],
+"압력": [
+"Pressure",
+"pressure"
+],
+"압력 탱크": [
+"Pressure vessel",
+"pressure vessel",
+"pressurized container",
+"pressurized vessel"
+],
+"압력탱크": [
+"Pressure vessel",
+"pressure vessel",
+"pressurized container",
+"pressurized vessel"
+],
+"압축 공기": [
+"Compressed air",
+"compressed air"
+],
+"압축공기": [
+"Compressed air",
+"compressed air"
+],
+"애노드": [
+"Anode",
+"anode"
+],
+"액량계": [
+"Graduated cylinder",
+"graduated cylinder",
+"measuring cylinder",
+"mixing cylinder"
+],
+"액체 질소": [
+"LN2",
+"LN₂",
+"Liquid nitrogen",
+"liquid nitrogen"
+],
+"액체질소": [
+"LN2",
+"LN₂",
+"Liquid nitrogen",
+"liquid nitrogen"
+],
+"액화": [
+"Condensation",
+"condensation"
+],
+"액화 질소": [
+"LN2",
+"LN₂",
+"Liquid nitrogen",
+"liquid nitrogen"
+],
+"액화질소": [
+"LN2",
+"LN₂",
+"Liquid nitrogen",
+"liquid nitrogen"
+],
+"앨러지": [
+"Allergy",
+"allergies",
+"allergy",
+"hypersensitivity"
+],
+"앰피실린": [
+"ABPC",
+"Ampicillin",
+"D-(−)-ampicillin",
+"ampicillin"
+],
+"얇은막 크로마토그래피": [
+"Thin-layer chromatography",
+"thin layer chromatography"
+],
+"얇은층 크로마토그래피": [
+"Thin-layer chromatography",
+"thin layer chromatography"
+],
+"얇은층크로마토그래피": [
+"Thin-layer chromatography",
+"thin layer chromatography"
+],
+"양극": [
+"Anode",
+"Electrode",
+"anode",
+"electrode",
+"electrodes",
+"terminal"
+],
+"양성자 교환 막 연료 전지": [
+"FC",
+"Fuel cell",
+"fuel cell"
+],
+"양잿물": [
+"Sodium hydroxide",
+"caustic soda",
+"lye",
+"sodium hydroxide"
+],
+"양전극": [
+"Anode",
+"Electrode",
+"anode",
+"electrode",
+"electrodes",
+"terminal"
+],
+"어고노믹스": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"어노드": [
+"Anode",
+"Cathode",
+"anode",
+"cathode"
+],
+"어는점": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"어닐링": [
+"Annealing (materials science)",
+"anneal",
+"annealing"
+],
+"어닐링 공정": [
+"Annealing (materials science)",
+"anneal",
+"annealing"
+],
+"얼룩": [
+"Stain",
+"stain"
+],
+"얼음얼이": [
+"Freezing",
+"chilling",
+"freezing",
+"solidification"
+],
+"에러": [
+"Error",
+"error",
+"incorrect",
+"mistake"
+],
+"에타놀": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"에탄산": [
+"Acetic acid",
+"acetic acid",
+"ethanoic acid",
+"methanecarboxylic acid"
+],
+"에탄산 에틸": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"에탄올": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"에탄올의 역사": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"에톡시에테인": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"에틸 아세테이트": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"에틸 알코올": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"에틸 알콜": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"에틸 에터": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"에틸 에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"에틸렌 카보네이트": [
+"Ethylene carbonate",
+"ethylene carbonate"
+],
+"에틸렌다이아민테트라아세테이토": [
+"EDTA",
+"Ethylenediaminetetraacetic acid",
+"edetic acid",
+"{[-(bis-carboxymethyl-amino)-ethyl]-carboxymethyl-amino}-acetic acid"
+],
+"에틸렌다이아민테트라아세트산": [
+"EDTA",
+"Ethylenediaminetetraacetic acid",
+"edetic acid",
+"{[-(bis-carboxymethyl-amino)-ethyl]-carboxymethyl-amino}-acetic acid"
+],
+"에틸아세테이트": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"에틸알코올": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"에틸에테르": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"에틸에테르 범죄": [
+"Diethyl ether",
+"R-610",
+"diethyl ether",
+"ethoxyethane"
+],
+"엑스선 회절": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"엑스선 회절실험": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"엑스선결정학": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"엑스선회절": [
+"X-ray crystallography",
+"X-ray scattering techniques",
+"x-ray crystallography"
+],
+"엔자임": [
+"Enzyme",
+"enzyme"
+],
+"엘디50": [
+"LD50",
+"LD₅₀",
+"Median lethal dose",
+"median lethal dose"
+],
+"엘시50": [
+"LD50",
+"LD₅₀",
+"Median lethal dose",
+"median lethal dose"
+],
+"여과": [
+"Filtration",
+"filtration"
+],
+"여과기": [
+"Filtration",
+"filtration"
+],
+"여과성미생물": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"여과액": [
+"Filtration",
+"filtration"
+],
+"역전사 중합연쇄반응": [
+"RT-PCR",
+"RTPCR",
+"Reverse transcription polymerase chain reaction",
+"reverse transcription polymerase chain reaction"
+],
+"역전사 중합효소 연쇄 반응": [
+"RT-PCR",
+"RTPCR",
+"Reverse transcription polymerase chain reaction",
+"reverse transcription polymerase chain reaction"
+],
+"역전사 중합효소 연쇄반응": [
+"RT-PCR",
+"RTPCR",
+"Reverse transcription polymerase chain reaction",
+"reverse transcription polymerase chain reaction"
+],
+"역전사-PCR": [
+"RT-PCR",
+"RTPCR",
+"Reverse transcription polymerase chain reaction",
+"reverse transcription polymerase chain reaction"
+],
+"역전사중합효소연쇄반응": [
+"RT-PCR",
+"RTPCR",
+"Reverse transcription polymerase chain reaction",
+"reverse transcription polymerase chain reaction"
+],
+"연기": [
+"Smoke",
+"smoke"
+],
+"연기 (화학)": [
+"Smoke",
+"smoke"
+],
+"연료 전지": [
+"FC",
+"Fuel cell",
+"fuel cell"
+],
+"연료전지": [
+"FC",
+"Fuel cell",
+"fuel cell"
+],
+"연소성": [
+"Combustibility and flammability",
+"flammability",
+"flammable",
+"inflammable"
+],
+"연탄 가스": [
+"Carbon monoxide",
+"Carboneum oxygenisatum",
+"carbon monoxide",
+"carbon(II) oxide"
+],
+"열 중량 분석": [
+"TGA",
+"Thermogravimetric analysis",
+"thermal gravimetric analysis",
+"thermogravimetric analysis"
+],
+"열무게 분석": [
+"TGA",
+"Thermogravimetric analysis",
+"thermal gravimetric analysis",
+"thermogravimetric analysis"
+],
+"열적 폭주": [
+"Thermal runaway",
+"runaway exothermic reaction",
+"thermal runaway"
+],
+"열중량 분석": [
+"TGA",
+"Thermogravimetric analysis",
+"thermal gravimetric analysis",
+"thermogravimetric analysis"
+],
+"열판": [
+"Hot plate",
+"Laboratory Hot Plate",
+"hot plate",
+"hotplate"
+],
+"열폭주": [
+"Thermal runaway",
+"runaway exothermic reaction",
+"thermal runaway"
+],
+"열풀림": [
+"Annealing (materials science)",
+"anneal",
+"annealing"
+],
+"염강수": [
+"Hydrochloric acid",
+"hydrochloric acid",
+"muriatic acid",
+"spirits of salt"
+],
+"염기성 인산가수분해효소": [
+"Alkaline phosphatase",
+"IPR001952",
+"alkaline phosphatase",
+"alkaline phosphohydrolase"
+],
+"염산": [
+"Hydrochloric acid",
+"hydrochloric acid",
+"muriatic acid",
+"spirits of salt"
+],
+"염화 나트륨": [
+"Sodium chloride",
+"salt",
+"sodium chloride",
+"table salt"
+],
+"염화 마그네슘": [
+"Magnesium chloride",
+"magnesium chloride",
+"magnesium chloride anhydrous",
+"magnesium dichloride"
+],
+"염화 소듐": [
+"Sodium chloride",
+"salt",
+"sodium chloride",
+"table salt"
+],
+"염화 수소산": [
+"Hydrochloric acid",
+"hydrochloric acid",
+"muriatic acid",
+"spirits of salt"
+],
+"염화 칼륨": [
+"Potassium chloride",
+"chloride of potash",
+"muriate of potash",
+"potassium chloride"
+],
+"염화 칼슘": [
+"Calcium chloride",
+"calcium chloride",
+"calcium chloride anhydrous",
+"calcium(2+) chloride"
+],
+"염화 포타슘": [
+"Potassium chloride",
+"chloride of potash",
+"muriate of potash",
+"potassium chloride"
+],
+"염화나트륨": [
+"Sodium chloride",
+"salt",
+"sodium chloride",
+"table salt"
+],
+"염화마그네슘": [
+"Magnesium chloride",
+"magnesium chloride",
+"magnesium chloride anhydrous",
+"magnesium dichloride"
+],
+"염화소듐": [
+"Sodium chloride",
+"salt",
+"sodium chloride",
+"table salt"
+],
+"염화수소산": [
+"Hydrochloric acid",
+"hydrochloric acid",
+"muriatic acid",
+"spirits of salt"
+],
+"염화칼륨": [
+"Potassium chloride",
+"chloride of potash",
+"muriate of potash",
+"potassium chloride"
+],
+"염화칼리움": [
+"Potassium chloride",
+"chloride of potash",
+"muriate of potash",
+"potassium chloride"
+],
+"염화칼슘": [
+"Calcium chloride",
+"calcium chloride",
+"calcium chloride anhydrous",
+"calcium(2+) chloride"
+],
+"염화칼시움": [
+"Calcium chloride",
+"calcium chloride",
+"calcium chloride anhydrous",
+"calcium(2+) chloride"
+],
+"염화포타슘": [
+"Potassium chloride",
+"chloride of potash",
+"muriate of potash",
+"potassium chloride"
+],
+"영 계수": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"영구 조직": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"영구조직": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"영률": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"영의 계수": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"오류": [
+"Error",
+"error",
+"incorrect",
+"mistake"
+],
+"오르토 수소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"오르토수소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"오르토인산": [
+"Phosphoric acid",
+"orthophosphoric acid",
+"phosphoric acid",
+"phosphoric(V) acid"
+],
+"오스뮴산": [
+"Osmium tetroxide",
+"osmic acid anhydride",
+"osmium oxide",
+"osmium tetroxide"
+],
+"오토 클레이브": [
+"Autoclave",
+"autoclave",
+"autoclave sterilizer",
+"lab sterilizer"
+],
+"오토클레이브": [
+"Autoclave",
+"autoclave",
+"autoclave sterilizer",
+"lab sterilizer"
+],
+"옥솔레인": [
+"1,4-epoxybutane",
+"Tetrahydrofuran",
+"diethylene oxide",
+"tetrahydrofuran"
+],
+"온도": [
+"Temperature",
+"temp",
+"temperature"
+],
+"와류 믹서": [
+"Vortex mixer",
+"vortex mixer",
+"vortexer"
+],
+"완충 용액": [
+"Buffer solution",
+"buffer",
+"buffer solution",
+"pH buffer"
+],
+"완충액": [
+"Buffer solution",
+"buffer",
+"buffer solution",
+"pH buffer"
+],
+"완충용량": [
+"Buffer solution",
+"buffer",
+"buffer solution",
+"pH buffer"
+],
+"완충용액": [
+"Buffer solution",
+"buffer",
+"buffer solution",
+"pH buffer"
+],
+"완충제": [
+"Buffer solution",
+"buffer",
+"buffer solution",
+"pH buffer"
+],
+"왕수": [
+"Aqua regia",
+"aqua regia"
+],
+"요소 (화학)": [
+"Urea",
+"carbamide",
+"carbonic acid diamide",
+"urea"
+],
+"요소비료": [
+"Urea",
+"carbamide",
+"carbonic acid diamide",
+"urea"
+],
+"용균": [
+"Lysis",
+"cell lysis",
+"lysis"
+],
+"용량 플라스크": [
+"Volumetric flask",
+"graduated flask",
+"measuring flask",
+"volumetric flask"
+],
+"용매": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"용액의 농도": [
+"Concentration",
+"chemical concentration",
+"concentration",
+"concentration (chemical properties)"
+],
+"용적": [
+"Volume",
+"volume"
+],
+"용제": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"용해": [
+"Lysis",
+"cell lysis",
+"lysis"
+],
+"용해 (생물학)": [
+"Lysis",
+"cell lysis",
+"lysis"
+],
+"용해 완충액": [
+"Lysis buffer",
+"lysis buffer"
+],
+"용해도": [
+"Solubility",
+"solubility"
+],
+"용해도 곱 상수": [
+"Solubility",
+"solubility"
+],
+"용해도 곱상수": [
+"Solubility",
+"solubility"
+],
+"용해도곱 상수": [
+"Solubility",
+"solubility"
+],
+"용해도곱상수": [
+"Solubility",
+"solubility"
+],
+"용해물": [
+"Lysis",
+"cell lysis",
+"lysis"
+],
+"용해성": [
+"Solubility",
+"solubility"
+],
+"우무배지": [
+"Agar plate",
+"agar",
+"agar plate"
+],
+"우무평판": [
+"Agar plate",
+"agar",
+"agar plate"
+],
+"우이루스": [
+"Virus",
+"infectious agent",
+"virus"
+],
+"우주 쓰레기": [
+"Waste",
+"rubbish",
+"trash",
+"waste"
+],
+"울트라커패시터": [
+"Supercapacitor",
+"supercap",
+"supercapacitor",
+"ultracapacitor"
+],
+"워시 보틀": [
+"Wash bottle",
+"lab wash bottle",
+"laboratory wash bottle",
+"wash bottle"
+],
+"원 자외선": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"원심 분리": [
+"Centrifugation",
+"centrifugation",
+"centrifuging"
+],
+"원심 분리기": [
+"Centrifuge",
+"centrifugal device",
+"centrifuge",
+"centrifuges"
+],
+"원심 분리법": [
+"Centrifugation",
+"centrifugation",
+"centrifuging"
+],
+"원심기": [
+"Centrifuge",
+"centrifugal device",
+"centrifuge",
+"centrifuges"
+],
+"원심기계": [
+"Centrifuge",
+"centrifugal device",
+"centrifuge",
+"centrifuges"
+],
+"원심분리": [
+"Centrifugation",
+"centrifugation",
+"centrifuging"
+],
+"원심분리기": [
+"Centrifuge",
+"centrifugal device",
+"centrifuge",
+"centrifuges"
+],
+"원심분리법": [
+"Centrifugation",
+"centrifugation",
+"centrifuging"
+],
+"원자 번호 3": [
+"Lithium",
+"element 3",
+"lithium"
+],
+"원자 번호 7": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"원자외선": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"원자층 증착": [
+"ALD",
+"Atomic layer deposition",
+"atomic layer deposition"
+],
+"원자층 증착법": [
+"ALD",
+"Atomic layer deposition",
+"atomic layer deposition"
+],
+"웨스턴 블랏": [
+"Immunoblot",
+"Western blot",
+"protein immunoblot",
+"western blot"
+],
+"웨스턴 블로팅": [
+"Immunoblot",
+"Western blot",
+"protein immunoblot",
+"western blot"
+],
+"웨스턴 블롯": [
+"Immunoblot",
+"Western blot",
+"protein immunoblot",
+"western blot"
+],
+"웨스턴블랏": [
+"Immunoblot",
+"Western blot",
+"protein immunoblot",
+"western blot"
+],
+"웨이퍼": [
+"Wafer (electronics)",
+"semiconductor wafer",
+"wafer"
+],
+"웨이퍼 (전자공학)": [
+"Wafer (electronics)",
+"semiconductor wafer",
+"wafer"
+],
+"웨이퍼 (전자제품)": [
+"Wafer (electronics)",
+"semiconductor wafer",
+"wafer"
+],
+"위해 요소": [
+"Hazard",
+"hazard",
+"safety issue",
+"safety problem"
+],
+"위험": [
+"Hazard",
+"hazard",
+"safety issue",
+"safety problem"
+],
+"위험 대책의 계층": [
+"Hierarchy of hazard controls",
+"hierarchy of hazard controls"
+],
+"위험 요소": [
+"Hazard",
+"hazard",
+"safety issue",
+"safety problem"
+],
+"위험 통제 계층": [
+"Hierarchy of hazard controls",
+"hierarchy of hazard controls"
+],
+"위험도 평가": [
+"Risk assessment",
+"risk assessment",
+"risk estimation",
+"risk evaluation"
+],
+"위험도평가": [
+"Risk assessment",
+"risk assessment",
+"risk estimation",
+"risk evaluation"
+],
+"위험요인 통제계층": [
+"Hierarchy of hazard controls",
+"hierarchy of hazard controls"
+],
+"유기 용매": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"유기 용제": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"유기용매": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"유기용제": [
+"Solvent",
+"solvent",
+"solvents"
+],
+"유기형광체": [
+"Fluorescence",
+"fluorescence"
+],
+"유도 결합 플라즈마 질량 분석기": [
+"ICP-MS",
+"ICPMS",
+"Inductively coupled plasma mass spectrometry"
+],
+"유도결합플라즈마질량분석기": [
+"ICP-MS",
+"ICPMS",
+"Inductively coupled plasma mass spectrometry"
+],
+"유레아": [
+"Urea",
+"carbamide",
+"carbonic acid diamide",
+"urea"
+],
+"유리 기구": [
+"Laboratory glassware",
+"chemical glassware",
+"lab glassware",
+"laboratory glassware"
+],
+"유리 산소": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"유리 전이": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"유리 전이 온도": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"유리 전이점": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"유리기구": [
+"Laboratory glassware",
+"chemical glassware",
+"lab glassware",
+"laboratory glassware"
+],
+"유리전이": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"유리전이온도": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"유리전이점": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"유세포 분석": [
+"Flow cytometry",
+"flow cytometry"
+],
+"유세포 분석기": [
+"Flow cytometry",
+"flow cytometry"
+],
+"유세포분석": [
+"Flow cytometry",
+"flow cytometry"
+],
+"유세포분석기": [
+"Flow cytometry",
+"flow cytometry"
+],
+"유전 물질": [
+"Nucleic acid",
+"Nucleic acids",
+"nucleic acid",
+"nucleic acids"
+],
+"유해 폐기물": [
+"Hazardous waste",
+"dangerous waste",
+"hazardous waste",
+"toxic waste"
+],
+"유해폐기물": [
+"Hazardous waste",
+"dangerous waste",
+"hazardous waste",
+"toxic waste"
+],
+"유효 수자": [
+"Significant figures",
+"significance",
+"significant figure",
+"significant figures"
+],
+"유효 숫자": [
+"Significant figures",
+"significance",
+"significant figure",
+"significant figures"
+],
+"유효수자": [
+"Significant figures",
+"significance",
+"significant figure",
+"significant figures"
+],
+"유효숫자": [
+"Significant figures",
+"significance",
+"significant figure",
+"significant figures"
+],
+"융점": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"융해점": [
+"Melting point",
+"m.p.",
+"melting point",
+"melting temperature"
+],
+"음극": [
+"Electrode",
+"electrode",
+"electrodes",
+"terminal"
+],
+"음식물 섭취": [
+"Ingestion",
+"ingestion"
+],
+"음전극": [
+"Electrode",
+"electrode",
+"electrodes",
+"terminal"
+],
+"응결": [
+"Condensation",
+"condensation"
+],
+"응고": [
+"Freezing",
+"chilling",
+"freezing",
+"solidification"
+],
+"응급 처치": [
+"First aid",
+"first aid"
+],
+"응급 치료": [
+"First aid",
+"first aid"
+],
+"응급처치": [
+"First aid",
+"first aid"
+],
+"응급치료": [
+"First aid",
+"first aid"
+],
+"응축": [
+"Condensation",
+"condensation"
+],
+"응축과정": [
+"Condensation",
+"condensation"
+],
+"의료 폐기물": [
+"Biomedical waste",
+"Medical waste",
+"biomedical waste"
+],
+"의료용 장갑": [
+"Medical glove",
+"medical glove",
+"medical gloves",
+"surgical gloves"
+],
+"의료폐기물": [
+"Biomedical waste",
+"Medical waste",
+"biomedical waste"
+],
+"의사 가운": [
+"White coat",
+"lab coat",
+"laboratory coat",
+"white coat"
+],
+"이디티에이": [
+"EDTA",
+"Ethylenediaminetetraacetic acid",
+"edetic acid",
+"{[-(bis-carboxymethyl-amino)-ethyl]-carboxymethyl-amino}-acetic acid"
+],
+"이미다졸": [
+"Him",
+"IMD",
+"Imidazole",
+"imidazole"
+],
+"이산화 규소": [
+"Silicon dioxide",
+"silica",
+"silicic anhydride",
+"silicon dioxide"
+],
+"이산화 수소": [
+"H2O2",
+"Hydrogen peroxide",
+"dioxidane",
+"hydrogen peroxide"
+],
+"이산화 이수소": [
+"H2O2",
+"Hydrogen peroxide",
+"dioxidane",
+"hydrogen peroxide"
+],
+"이산화 타이타늄": [
+"Titanium dioxide",
+"rutile",
+"titanium dioxide",
+"titanium oxide"
+],
+"이산화 탄소": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"이산화 티타늄": [
+"Titanium dioxide",
+"rutile",
+"titanium dioxide",
+"titanium oxide"
+],
+"이산화규소": [
+"Silicon dioxide",
+"silica",
+"silicic anhydride",
+"silicon dioxide"
+],
+"이산화수소": [
+"H2O2",
+"Hydrogen peroxide",
+"dioxidane",
+"hydrogen peroxide"
+],
+"이산화타이타늄": [
+"Titanium dioxide",
+"rutile",
+"titanium dioxide",
+"titanium oxide"
+],
+"이산화탄소": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"이산화티타늄": [
+"Titanium dioxide",
+"rutile",
+"titanium dioxide",
+"titanium oxide"
+],
+"이소프로필 알코올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"이소프로필알코올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"이소프로필알콜": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"이염화 탄소": [
+"Dichloromethane",
+"Methylene chloride",
+"Methylene dichloride",
+"dichloromethane"
+],
+"이온 방사선": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"이온방사선": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"이온화 방사선": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"이온화방사선": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"이질소": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"이콜라이": [
+"Bacterium coli communis",
+"E coli",
+"E. coli",
+"Escherichia coli"
+],
+"이콜리": [
+"Bacterium coli communis",
+"E coli",
+"E. coli",
+"Escherichia coli"
+],
+"인간 공학": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"인간공학": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"인산": [
+"Phosphoric acid",
+"orthophosphoric acid",
+"phosphoric acid",
+"phosphoric(V) acid"
+],
+"인산 비료": [
+"Phosphoric acid",
+"orthophosphoric acid",
+"phosphoric acid",
+"phosphoric(V) acid"
+],
+"인산(V)": [
+"Phosphoric acid",
+"orthophosphoric acid",
+"phosphoric acid",
+"phosphoric(V) acid"
+],
+"인산비료": [
+"Phosphoric acid",
+"orthophosphoric acid",
+"phosphoric acid",
+"phosphoric(V) acid"
+],
+"인산염 완충 생리 식염수 (PBS)": [
+"PBS",
+"Phosphate-buffered saline",
+"phosphate buffer saline",
+"phosphate buffered saline"
+],
+"인산염완충생리식염수": [
+"PBS",
+"Phosphate-buffered saline",
+"phosphate buffer saline",
+"phosphate buffered saline"
+],
+"인산완충생리식염수": [
+"PBS",
+"Phosphate-buffered saline",
+"phosphate buffer saline",
+"phosphate buffered saline"
+],
+"인산완충식염수": [
+"PBS",
+"Phosphate-buffered saline",
+"phosphate buffer saline",
+"phosphate buffered saline"
+],
+"인산형 연료전지": [
+"FC",
+"Fuel cell",
+"fuel cell"
+],
+"인체공학": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"인큐베이터": [
+"Incubator (culture)",
+"incubator",
+"incubator (culture)",
+"laboratory incubator"
+],
+"인큐베이터 (생물학)": [
+"Incubator (culture)",
+"incubator",
+"incubator (culture)",
+"laboratory incubator"
+],
+"인화 온도": [
+"Flash point",
+"flash point",
+"flash temperature"
+],
+"인화성": [
+"Combustibility and flammability",
+"flammability",
+"flammable",
+"inflammable"
+],
+"인화온도": [
+"Flash point",
+"flash point",
+"flash temperature"
+],
+"인화점": [
+"Flash point",
+"flash point",
+"flash temperature"
+],
+"일반 세균": [
+"Bacteria",
+"eubacteria"
+],
+"일반세균": [
+"Bacteria",
+"eubacteria"
+],
+"일산화 탄소": [
+"Carbon monoxide",
+"Carboneum oxygenisatum",
+"carbon monoxide",
+"carbon(II) oxide"
+],
+"일산화탄소": [
+"Carbon monoxide",
+"Carboneum oxygenisatum",
+"carbon monoxide",
+"carbon(II) oxide"
+],
+"임플로전": [
+"Implosion"
+],
+"입자 크기 분석": [
+"Particle size analysis",
+"granulometry"
+],
+"자극 작용": [
+"Irritation",
+"irritant",
+"irritation"
+],
+"자극물": [
+"Irritation",
+"irritant",
+"irritation"
+],
+"자극성": [
+"Irritation",
+"irritant",
+"irritation"
+],
+"자동 심장 충격기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"자동 심장충격기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"자동 제세동기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"자동 체외식 제세동기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"자동심장충격기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"자동제세동기": [
+"AED",
+"Automated External Defibrillators",
+"Automated external defibrillator",
+"automated external defibrillator"
+],
+"자물쇠-열쇠 모델": [
+"Enzyme",
+"enzyme"
+],
+"자연 발화 온도": [
+"Autoignition temperature",
+"autoignition temperature",
+"ignition point",
+"kindling point"
+],
+"자연발화성": [
+"Pyrophoricity",
+"pyrophoric",
+"pyrophoricity"
+],
+"자연발화온도": [
+"Autoignition temperature",
+"autoignition temperature",
+"ignition point",
+"kindling point"
+],
+"자외복사": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"자외선": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"자외선 A": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"자외선 B": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"자외선 C": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"자외선 가시광선 분광법": [
+"Ultraviolet–visible spectroscopy",
+"ultraviolet spectroscopy",
+"ultraviolet visible spectroscopy",
+"ultraviolet–visible spectroscopy"
+],
+"자외선 복사": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"자외선가시광선분광법": [
+"Ultraviolet–visible spectroscopy",
+"ultraviolet spectroscopy",
+"ultraviolet visible spectroscopy",
+"ultraviolet–visible spectroscopy"
+],
+"자유 산소": [
+"E948",
+"Oxygen",
+"element 8",
+"oxygen"
+],
+"자일렌": [
+"Xylene",
+"xylen",
+"xylene",
+"xylol"
+],
+"작업 전극": [
+"Working electrode",
+"working electrode"
+],
+"잔존 용량": [
+"SOC",
+"SoC",
+"State of charge",
+"state of charge"
+],
+"잔존용량": [
+"SOC",
+"SoC",
+"State of charge",
+"state of charge"
+],
+"장갑": [
+"Glove",
+"glove",
+"gloves"
+],
+"장갑 (의류)": [
+"Glove",
+"glove",
+"gloves"
+],
+"재결정": [
+"Recrystallization (chemistry)",
+"recrystallization"
+],
+"재결정화": [
+"Recrystallization (chemistry)",
+"recrystallization"
+],
+"저온물리학": [
+"Cryogenics",
+"cryogenics"
+],
+"저온학": [
+"Cryogenics",
+"cryogenics"
+],
+"적정": [
+"Titration",
+"titrate",
+"titration",
+"titrimetry"
+],
+"적정 (과학)": [
+"Titration",
+"titrate",
+"titration",
+"titrimetry"
+],
+"전격상": [
+"Electrical injury",
+"electric shock",
+"electrical injury",
+"electrical trauma"
+],
+"전고체 배터리": [
+"Solid-state battery",
+"solid-state battery"
+],
+"전고체 전지": [
+"Solid-state battery",
+"solid-state battery"
+],
+"전고체배터리": [
+"Solid-state battery",
+"solid-state battery"
+],
+"전고체전지": [
+"Solid-state battery",
+"solid-state battery"
+],
+"전극": [
+"Electrode",
+"electrode",
+"electrodes",
+"terminal"
+],
+"전기 도금": [
+"Electroplating",
+"electroplate",
+"electroplating"
+],
+"전기 음성도": [
+"Electronegativity",
+"electron negativity",
+"electronegativity"
+],
+"전기 저항률과 전도도": [
+"Electrical resistivity and conductivity",
+"electrical resistivity and conductivity"
+],
+"전기도금": [
+"Electroplating",
+"electroplate",
+"electroplating"
+],
+"전기음성도": [
+"Electronegativity",
+"electron negativity",
+"electronegativity"
+],
+"전리 방사선": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"전리방사선": [
+"Ionizing radiation",
+"ionising radiation",
+"ionizing radiation",
+"radioactive radiation"
+],
+"전압": [
+"Voltage",
+"electric tension",
+"tension",
+"voltage"
+],
+"전위차": [
+"Voltage",
+"electric tension",
+"tension",
+"voltage"
+],
+"전자 현미경": [
+"Electron microscope",
+"electron microscope",
+"electronmicroscope"
+],
+"전자현미경": [
+"Electron microscope",
+"electron microscope",
+"electronmicroscope"
+],
+"전자현미경 관찰": [
+"Electron microscope",
+"electron microscope",
+"electronmicroscope"
+],
+"전하": [
+"Charge (physics)",
+"charge",
+"charge (theoretical physics)",
+"physical charge (general)"
+],
+"전하 (물리학)": [
+"Charge (physics)",
+"charge",
+"charge (theoretical physics)",
+"physical charge (general)"
+],
+"전해 전지": [
+"Electrolytic cell",
+"electrolyser",
+"electrolytic cell",
+"electrolyzer"
+],
+"전해액": [
+"Electrolyte",
+"electrolyte",
+"electrolyte solution",
+"electrolytes"
+],
+"전해전지": [
+"Electrolytic cell",
+"electrolyser",
+"electrolytic cell",
+"electrolyzer"
+],
+"전해질": [
+"Electrolyte",
+"electrolyte",
+"electrolyte solution",
+"electrolytes"
+],
+"전해질 용액": [
+"Electrolyte",
+"electrolyte",
+"electrolyte solution",
+"electrolytes"
+],
+"전해질용액": [
+"Electrolyte",
+"electrolyte",
+"electrolyte solution",
+"electrolytes"
+],
+"전효소": [
+"Enzyme",
+"enzyme"
+],
+"절대습도": [
+"Humidity",
+"atmospheric humidity",
+"humidity"
+],
+"점도": [
+"Viscosity",
+"viscosity"
+],
+"점도계": [
+"Viscometer",
+"viscometer",
+"viscosimeter"
+],
+"점성": [
+"Viscosity",
+"viscosity"
+],
+"점성 계수": [
+"Viscosity",
+"viscosity"
+],
+"점성계": [
+"Viscometer",
+"viscometer",
+"viscosimeter"
+],
+"점성계수": [
+"Viscosity",
+"viscosity"
+],
+"점성도": [
+"Viscosity",
+"viscosity"
+],
+"접종 루프": [
+"Inoculation loop"
+],
+"접종루프": [
+"Inoculation loop"
+],
+"접촉각": [
+"Contact angle",
+"contact angle"
+],
+"정밀도 (산술)": [
+"Significant figures",
+"significance",
+"significant figure",
+"significant figures"
+],
+"정밀도와 정확도": [
+"Accuracy and precision",
+"Inaccuracy and imprecision",
+"accuracy",
+"accuracy and precision"
+],
+"정전기": [
+"Static electricity",
+"static electricity"
+],
+"정확도": [
+"Accuracy and precision",
+"Inaccuracy and imprecision",
+"accuracy",
+"accuracy and precision"
+],
+"정확도와 정밀도": [
+"Accuracy and precision",
+"Inaccuracy and imprecision",
+"accuracy",
+"accuracy and precision"
+],
+"정확도와정밀도": [
+"Accuracy and precision",
+"Inaccuracy and imprecision",
+"accuracy",
+"accuracy and precision"
+],
+"제염": [
+"Decontamination",
+"dcon",
+"decon",
+"decontamination"
+],
+"제올라이트": [
+"Zeolite",
+"zeolite",
+"zeolite mineral group",
+"zeolites"
+],
+"제한 물질": [
+"Limiting reagent",
+"limiting reagent"
+],
+"제한 엔도뉴클레이스": [
+"DNA restriction enzymes",
+"Restriction enzyme",
+"restriction endonuclease",
+"restriction enzyme"
+],
+"제한 효소": [
+"DNA restriction enzymes",
+"Restriction enzyme",
+"restriction endonuclease",
+"restriction enzyme"
+],
+"제한물질": [
+"Limiting reagent",
+"limiting reagent"
+],
+"제한효소": [
+"DNA restriction enzymes",
+"Restriction enzyme",
+"restriction endonuclease",
+"restriction enzyme"
+],
+"젤": [
+"Gel",
+"gel"
+],
+"젤 전기영동": [
+"Gel electrophoresis",
+"gel electrophoresis"
+],
+"조직": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"조직 (생물학)": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"조직계": [
+"Tissue (biology)",
+"biological tissue",
+"tissue",
+"tissues"
+],
+"조직화학": [
+"IHC",
+"Immunohistochemistry",
+"immunohistochemistry"
+],
+"조해성": [
+"Hygroscopy",
+"hygroscopic",
+"hygroscopicity",
+"hygroscopy"
+],
+"졸-겔": [
+"Sol–gel process",
+"sol-gel",
+"sol-gel process"
+],
+"졸-겔 공정": [
+"Sol–gel process",
+"sol-gel",
+"sol-gel process"
+],
+"졸겔법": [
+"Sol–gel process",
+"sol-gel",
+"sol-gel process"
+],
+"종탄성계수": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"종탄성률": [
+"Young modulus",
+"Young's modulus",
+"elastic modulus",
+"modulus of elasticity"
+],
+"주사 전자 현미경": [
+"SEM",
+"Scanning electron microscope",
+"raster electron microscope",
+"scanning electron microscope"
+],
+"주사 전자현미경": [
+"SEM",
+"Scanning electron microscope",
+"raster electron microscope",
+"scanning electron microscope"
+],
+"주사전자현미경": [
+"SEM",
+"Scanning electron microscope",
+"raster electron microscope",
+"scanning electron microscope"
+],
+"주효소": [
+"Enzyme",
+"enzyme"
+],
+"중사슬": [
+"Ab",
+"Antibody",
+"antibodies",
+"antibody"
+],
+"중자외선": [
+"UV light",
+"Ultraviolet",
+"ultraviolet radiation",
+"ultraviolet ray"
+],
+"중탄산 나트륨": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"중탄산나트륨": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"중탄산암모늄": [
+"Ammonium bicarbonate",
+"ammonium acid carbonate",
+"ammonium bicarbonate",
+"ammonium hydrogen carbonate"
+],
+"중합 효소 연쇄 반응": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"중합분자": [
+"Polymer",
+"polymer",
+"polymers"
+],
+"중합체": [
+"Polymer",
+"polymer",
+"polymers"
+],
+"중합효소 연쇄 반응": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"중합효소 연쇄반응": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"중합효소연쇄반응": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"증기 압력": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"증기압": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"증기압력": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"증류": [
+"Distillation",
+"distillation",
+"distilling"
+],
+"증류법": [
+"Distillation",
+"distillation",
+"distilling"
+],
+"증발": [
+"Evaporation",
+"evaporation"
+],
+"지연형광": [
+"Fluorescence",
+"fluorescence"
+],
+"직업안전건강": [
+"OHS",
+"OSH",
+"Occupational safety and health",
+"occupational health and safety"
+],
+"직업안전보건": [
+"OHS",
+"OSH",
+"Occupational safety and health",
+"occupational health and safety"
+],
+"직업환경의학": [
+"OHS",
+"OSH",
+"Occupational safety and health",
+"occupational health and safety"
+],
+"직업환경의학과": [
+"OHS",
+"OSH",
+"Occupational safety and health",
+"occupational health and safety"
+],
+"진공 펌프": [
+"Vacuum pump",
+"vacuum pump"
+],
+"진공뽐프": [
+"Vacuum pump",
+"vacuum pump"
+],
+"진공펌프": [
+"Vacuum pump",
+"vacuum pump"
+],
+"진정세균": [
+"Bacteria",
+"eubacteria"
+],
+"진정세균류": [
+"Bacteria",
+"eubacteria"
+],
+"질량": [
+"Mass",
+"mass",
+"weight"
+],
+"질량 분석": [
+"Mass spectrometry",
+"mass spec",
+"mass spectrometry",
+"mass spectroscopy"
+],
+"질량 분석기": [
+"Mass spectrometry",
+"mass spec",
+"mass spectrometry",
+"mass spectroscopy"
+],
+"질량 분석법": [
+"Mass spectrometry",
+"mass spec",
+"mass spectrometry",
+"mass spectroscopy"
+],
+"질량분석": [
+"Mass spectrometry",
+"mass spec",
+"mass spectrometry",
+"mass spectroscopy"
+],
+"질량분석기": [
+"Mass spectrometry",
+"mass spec",
+"mass spectrometry",
+"mass spectroscopy"
+],
+"질량분석법": [
+"Mass spectrometry",
+"mass spec",
+"mass spectrometry",
+"mass spectroscopy"
+],
+"질량의 단위": [
+"Mass",
+"mass",
+"weight"
+],
+"질산": [
+"Nitric acid",
+"fuming nitric acid",
+"nitric acid",
+"spirit of niter"
+],
+"질산 은": [
+"AgNO3",
+"Silver nitrate",
+"nitric acid silver(I) salt",
+"silver nitrate"
+],
+"질산은": [
+"AgNO3",
+"Silver nitrate",
+"nitric acid silver(I) salt",
+"silver nitrate"
+],
+"질소": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"질소 가스": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"질소 분자": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"질소 원소": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"질소 화합물": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"질소화합물": [
+"Nitrogen",
+"element 7",
+"nitrogen",
+"₇N"
+],
+"집락형성단위": [
+"CFU",
+"Colony-forming unit",
+"cfu",
+"colony-forming unit"
+],
+"차아 염소산 나트륨": [
+"Sodium hypochlorite",
+"antiformin",
+"bleach",
+"sodium hypochlorite"
+],
+"차아염소산 나트륨": [
+"Sodium hypochlorite",
+"antiformin",
+"bleach",
+"sodium hypochlorite"
+],
+"차아염소산나트륨": [
+"Sodium hypochlorite",
+"antiformin",
+"bleach",
+"sodium hypochlorite"
+],
+"청록색 형광 단백질": [
+"Green fluorescent protein",
+"green fluorescent protein",
+"green fluorescent proteins"
+],
+"청정실": [
+"Cleanroom",
+"clean room",
+"cleanroom",
+"cleanroom technology"
+],
+"청춘이 아파": [
+"Error",
+"error",
+"incorrect",
+"mistake"
+],
+"체 분석": [
+"Sieve analysis"
+],
+"체 실험": [
+"Sieve analysis"
+],
+"체분석": [
+"Sieve analysis"
+],
+"체실험": [
+"Sieve analysis"
+],
+"체적": [
+"Volume",
+"volume"
+],
+"초산에틸": [
+"Ethyl acetate",
+"acetic ester",
+"ethyl acetate",
+"ethyl ethanoate"
+],
+"초음파 세척": [
+"Ultrasonic cleaning",
+"ultrasonic cleaning"
+],
+"초음파 세척기": [
+"Ultrasonic cleaning",
+"ultrasonic cleaning"
+],
+"초음파 청소": [
+"Ultrasonic cleaning",
+"ultrasonic cleaning"
+],
+"초음파세척": [
+"Ultrasonic cleaning",
+"ultrasonic cleaning"
+],
+"초자기구": [
+"Laboratory glassware",
+"chemical glassware",
+"lab glassware",
+"laboratory glassware"
+],
+"촉매": [
+"Catalyst",
+"catalyst"
+],
+"촉매 반응": [
+"Catalysis",
+"Catalyst",
+"catalysis",
+"catalyst"
+],
+"촉매 작용": [
+"Catalyst",
+"catalyst"
+],
+"촉매반응": [
+"Catalyst",
+"catalyst"
+],
+"촉매작용": [
+"Catalyst",
+"catalyst"
+],
+"최대 입경": [
+"Sieve analysis"
+],
+"최대입경": [
+"Sieve analysis"
+],
+"추출": [
+"Extraction (chemistry)",
+"chemical extraction",
+"extraction"
+],
+"축합": [
+"Condensation",
+"condensation"
+],
+"출력 전압": [
+"Voltage",
+"electric tension",
+"tension",
+"voltage"
+],
+"출력전압": [
+"Voltage",
+"electric tension",
+"tension",
+"voltage"
+],
+"측정 불확도": [
+"Measurement uncertainty",
+"measurement uncertainty",
+"uncertainty",
+"uncertainty of measurement"
+],
+"측정불확도": [
+"Measurement uncertainty",
+"measurement uncertainty",
+"uncertainty",
+"uncertainty of measurement"
+],
+"친화 크로마토그래피": [
+"Affinity chromatography",
+"Chromatography, Affinity",
+"affinity chromatography"
+],
+"침전": [
+"Precipitation (chemistry)",
+"chemical precipitation",
+"precipitating out",
+"precipitation"
+],
+"카본 다이옥사이드": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"카본 모노사이드": [
+"Carbon monoxide",
+"Carboneum oxygenisatum",
+"carbon monoxide",
+"carbon(II) oxide"
+],
+"카본 블랙": [
+"Carbon black",
+"acetylene black",
+"carbon black",
+"channel black"
+],
+"카본블랙": [
+"Carbon black",
+"acetylene black",
+"carbon black",
+"channel black"
+],
+"카우즈먼 역설": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"카우즈먼 온도": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"카우즈먼 패러독스": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"카우즈먼의 역설": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"카우즈먼의 패러독스": [
+"Glass transition",
+"glass transition",
+"glass–liquid transition"
+],
+"칼럼크로마토그래피": [
+"Column chromatography",
+"column chromatography"
+],
+"칼슘에틸렌디아민사아세트산": [
+"EDTA",
+"Ethylenediaminetetraacetic acid",
+"edetic acid",
+"{[-(bis-carboxymethyl-amino)-ethyl]-carboxymethyl-amino}-acetic acid"
+],
+"캐소드": [
+"Cathode",
+"cathode"
+],
+"캘리브레이션": [
+"Calibration",
+"calibration"
+],
+"컬럼 크로마토그래피": [
+"Column chromatography",
+"column chromatography"
+],
+"켈리브레이션": [
+"Calibration",
+"calibration"
+],
+"쿠마시 브릴리언트 블루": [
+"Coomassie Brilliant Blue",
+"Coomassie Brilliant Blue R-250",
+"Coomassie brilliant blue"
+],
+"큐베트": [
+"Cuvette",
+"cuvette"
+],
+"큐벳": [
+"Cuvette",
+"cuvette"
+],
+"크벳": [
+"Cuvette",
+"cuvette"
+],
+"크실렌": [
+"Xylene",
+"xylen",
+"xylene",
+"xylol"
+],
+"클로람페니콜": [
+"Amphicol",
+"Mychel",
+"Tevcocin",
+"chloramphenicol"
+],
+"클로로마이세틴": [
+"Amphicol",
+"Mychel",
+"Tevcocin",
+"chloramphenicol"
+],
+"클로로포름": [
+"Chloroform",
+"Terchloride of formyle",
+"chloroform",
+"trichloromethane"
+],
+"클로로폼": [
+"Chloroform",
+"Terchloride of formyle",
+"chloroform",
+"trichloromethane"
+],
+"클린 룸": [
+"Cleanroom",
+"clean room",
+"cleanroom",
+"cleanroom technology"
+],
+"클린룸": [
+"Cleanroom",
+"clean room",
+"cleanroom",
+"cleanroom technology"
+],
+"타원계측법": [
+"Ellipsometry",
+"ellipsometry"
+],
+"타원법": [
+"Ellipsometry",
+"ellipsometry"
+],
+"탁도": [
+"Turbidity",
+"turbidity"
+],
+"탄산 가스": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"탄산 다이메틸": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"탄산 디메틸": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"탄산 수소 나트륨": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"탄산 수소 암모늄": [
+"Ammonium bicarbonate",
+"ammonium acid carbonate",
+"ammonium bicarbonate",
+"ammonium hydrogen carbonate"
+],
+"탄산가스": [
+"Carbon dioxide",
+"R-744",
+"[CO2]",
+"carbon dioxide"
+],
+"탄산다이메틸": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"탄산디메틸": [
+"DMC",
+"Dimethyl carbonate",
+"carbonic acid, dimethyl ester",
+"dimethyl carbonate"
+],
+"탄산수소 나트륨": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"탄산수소나트륨": [
+"Sodium bicarbonate",
+"baking soda",
+"sodium bicarbonate",
+"sodium hydrogencarbonate"
+],
+"탄산수소암모늄": [
+"Ammonium bicarbonate",
+"ammonium acid carbonate",
+"ammonium bicarbonate",
+"ammonium hydrogen carbonate"
+],
+"탄소 나노 튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"탄소 나노튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"탄소나노튜브": [
+"CNT",
+"Carbon nanotube",
+"carbon nanotube",
+"carbon nanotubes"
+],
+"탄화수소암모늄": [
+"Ammonium bicarbonate",
+"ammonium acid carbonate",
+"ammonium bicarbonate",
+"ammonium hydrogen carbonate"
+],
+"테트라메틸에틸렌다이아민": [
+"N,N,N',N'-tetramethylethylenediamine",
+"TEMED",
+"TMEDA",
+"Tetramethylethylenediamine"
+],
+"테트라하이드로푸란": [
+"1,4-epoxybutane",
+"Tetrahydrofuran",
+"diethylene oxide",
+"tetrahydrofuran"
+],
+"테트라하이드로퓨란": [
+"1,4-epoxybutane",
+"Tetrahydrofuran",
+"diethylene oxide",
+"tetrahydrofuran"
+],
+"테트라히드로푸란": [
+"1,4-epoxybutane",
+"Tetrahydrofuran",
+"diethylene oxide",
+"tetrahydrofuran"
+],
+"테트라히드로퓨란": [
+"1,4-epoxybutane",
+"Tetrahydrofuran",
+"diethylene oxide",
+"tetrahydrofuran"
+],
+"테트메틸에틸렌다이아민": [
+"N,N,N',N'-tetramethylethylenediamine",
+"TEMED",
+"TMEDA",
+"Tetramethylethylenediamine"
+],
+"톨루엔": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"톨루올": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"투과전자현미경법": [
+"TEM",
+"Transmission electron microscopy",
+"transmission electron microscopy"
+],
+"트라이클로로아세트산": [
+"TCA",
+"Trichloroacetic acid",
+"trichloroacetic acid",
+"trichloroethanoic acid"
+],
+"트라이톤 X-100": [
+"Poly(oxy-1,2-ethanediyl), .alpha.-[4-(1,1,3,3-tetramethylbutyl)phenyl]-.omega.-hydroxy-",
+"Triton X-100",
+"octoxinol"
+],
+"트라이하이드록시프로페인": [
+"Glycerol",
+"glycerine",
+"glycerol",
+"glycyl alcohol"
+],
+"트랜스펙션": [
+"Transfection",
+"transfection"
+],
+"트리스(하이드록시메틸)아미노메테인": [
+"2-Amino-2-(hydroxymethyl)-1,3-propanediol",
+"tris",
+"trometamol",
+"tromethamine"
+],
+"트리스(히드록시메틸)아미노메탄": [
+"2-Amino-2-(hydroxymethyl)-1,3-propanediol",
+"tris",
+"trometamol",
+"tromethamine"
+],
+"트리스(히드록시메틸)아미노메테인": [
+"2-Amino-2-(hydroxymethyl)-1,3-propanediol",
+"tris",
+"trometamol",
+"tromethamine"
+],
+"트리스히드록시메틸아미노메탄": [
+"2-Amino-2-(hydroxymethyl)-1,3-propanediol",
+"tris",
+"trometamol",
+"tromethamine"
+],
+"트리스히드록시메틸아미노메테인": [
+"2-Amino-2-(hydroxymethyl)-1,3-propanediol",
+"tris",
+"trometamol",
+"tromethamine"
+],
+"트리톤 X-100": [
+"Poly(oxy-1,2-ethanediyl), .alpha.-[4-(1,1,3,3-tetramethylbutyl)phenyl]-.omega.-hydroxy-",
+"Triton X-100",
+"octoxinol"
+],
+"트리판 블루": [
+"Trypan blue",
+"trypan blue sodium"
+],
+"트립신": [
+"Trypsin",
+"trypsin"
+],
+"파라 수소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"파라수소": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"파라포름알데히드": [
+"Paraformaldehyde",
+"paraformaldehyde"
+],
+"파이펫": [
+"Pipette",
+"pipet",
+"pipette"
+],
+"패러데이의 전기 분해법칙": [
+"Faraday's laws of electrolysis"
+],
+"패러데이의 전기분해 법칙": [
+"Faraday's laws of electrolysis"
+],
+"패러데이의 전기분해법칙": [
+"Faraday's laws of electrolysis"
+],
+"패러데이의전기분해법칙": [
+"Faraday's laws of electrolysis"
+],
+"패시베이션": [
+"Passivation (chemistry)",
+"passivate",
+"passivated",
+"passivation"
+],
+"퍼스트 에이드": [
+"First aid",
+"first aid"
+],
+"페놀": [
+"PHOH",
+"Phenol",
+"carbolic acid",
+"phenol"
+],
+"페니실린": [
+"PCN",
+"Penicillin",
+"pen",
+"penicillin"
+],
+"페니실린계 항생물질": [
+"PCN",
+"Penicillin",
+"pen",
+"penicillin"
+],
+"페닐 메탄": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"페닐 메테인": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"페닐메탄": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"페닐메테인": [
+"1-methylbenzene",
+"Toluene",
+"methylbenzol",
+"toluene"
+],
+"페닐산": [
+"PHOH",
+"Phenol",
+"carbolic acid",
+"phenol"
+],
+"페러데이의 전기 분해": [
+"Faraday's laws of electrolysis"
+],
+"페러데이의 전기 분해 법칙": [
+"Faraday's laws of electrolysis"
+],
+"페러데이의 전기분해 법칙": [
+"Faraday's laws of electrolysis"
+],
+"페러데이의 전기분해법칙": [
+"Faraday's laws of electrolysis"
+],
+"페이스 실드": [
+"Face shield",
+"face shield",
+"facemask",
+"protective visor"
+],
+"페트리 디쉬": [
+"Petri dish",
+"dish",
+"petri dishes"
+],
+"페트리 디시": [
+"Petri dish",
+"dish",
+"petri dishes"
+],
+"페트리 샬레": [
+"Petri dish",
+"dish",
+"petri dishes"
+],
+"페트리 접시": [
+"Petri dish",
+"dish",
+"petri dishes"
+],
+"펩타이드": [
+"Peptide",
+"peptide"
+],
+"펩톤": [
+"Peptide",
+"peptide"
+],
+"펩티드": [
+"Peptide",
+"peptide"
+],
+"편광계": [
+"Polarimeter",
+"polarimeter"
+],
+"폐기물": [
+"Waste",
+"rubbish",
+"trash",
+"waste"
+],
+"폐기물 관리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"폐기물 처리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"폐기물 처분": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"폐기물관리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"폐기물처리": [
+"Waste management",
+"waste disposal",
+"waste management"
+],
+"포르말린": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"포름 산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"포름산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"포름알데하이드": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"포름알데히드": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"포말린": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"포멀린": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"포토리소그라피": [
+"Photolithography",
+"UV lithography",
+"optical lithography",
+"photolithography"
+],
+"포토리소그래피": [
+"Photolithography",
+"UV lithography",
+"optical lithography",
+"photolithography"
+],
+"포화 수증기량": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"포화 용액": [
+"Solubility",
+"solubility"
+],
+"포화 증기": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"포화 칼로멜 전극": [
+"Saturated calomel electrode",
+"saturated calomel electrode"
+],
+"포화수증기량": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"포화용액": [
+"Solubility",
+"solubility"
+],
+"포화증기": [
+"Vapor pressure",
+"equilibrium vapor pressure",
+"vapor pressure",
+"vapour pressure"
+],
+"포화칼로멜전극": [
+"Saturated calomel electrode",
+"saturated calomel electrode"
+],
+"폭발": [
+"Explosion",
+"bang",
+"blast",
+"explosion"
+],
+"폭발 사고": [
+"Explosion",
+"bang",
+"blast",
+"explosion"
+],
+"폭발 한계": [
+"Flammability limit",
+"explosive limit",
+"flammability limit"
+],
+"폭발물": [
+"Explosive",
+"Explosive Agents",
+"explosive chemicals",
+"explosive compound"
+],
+"폭발성 물질": [
+"Explosive",
+"Explosive Agents",
+"explosive chemicals",
+"explosive compound"
+],
+"폭발성물질": [
+"Explosive",
+"Explosive Agents",
+"explosive chemicals",
+"explosive compound"
+],
+"폭탄물": [
+"Explosive",
+"Explosive Agents",
+"explosive chemicals",
+"explosive compound"
+],
+"폭팔": [
+"Explosion",
+"bang",
+"blast",
+"explosion"
+],
+"폴리머": [
+"Polymer",
+"polymer",
+"polymers"
+],
+"폴리메라아제 연쇄 반응": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"폴리아크릴아마이드 겔 전기 영동법": [
+"SDS-PAGE",
+"SDS-polyacrylamide gel electrophoresis",
+"sodium dodecyl sulfate polyacrylamide gel electrophoresis"
+],
+"폴리아크릴아마이드겔전기영동법": [
+"SDS-PAGE",
+"SDS-polyacrylamide gel electrophoresis",
+"sodium dodecyl sulfate polyacrylamide gel electrophoresis"
+],
+"폴리펩타이드": [
+"Peptide",
+"peptide"
+],
+"폴리펩타이드 사슬": [
+"Peptide",
+"peptide"
+],
+"폴리펩티드": [
+"Peptide",
+"peptide"
+],
+"폶산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"폼 산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"폼산": [
+"Formic acid",
+"aminic acid",
+"formic acid",
+"hydrogen carboxylic acid"
+],
+"폼알데하이드": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"폼알데히드": [
+"Fannoform",
+"Formaline",
+"Formic aldehyde",
+"formaldehyde"
+],
+"표면 장력": [
+"Surface tension",
+"surface tension"
+],
+"표면장력": [
+"Surface tension",
+"surface tension"
+],
+"표본 표준 편차": [
+"Standard deviation",
+"root-mean-square deviation, root mean square deviation, RMSD",
+"standard deviation"
+],
+"표본표준편차": [
+"Standard deviation",
+"root-mean-square deviation, root mean square deviation, RMSD",
+"standard deviation"
+],
+"표준 수소 전극": [
+"SHE",
+"Standard hydrogen electrode",
+"standard hydrogen electrode"
+],
+"표준 편차": [
+"Standard deviation",
+"root-mean-square deviation, root mean square deviation, RMSD",
+"standard deviation"
+],
+"표준수소전극": [
+"SHE",
+"Standard hydrogen electrode",
+"standard hydrogen electrode"
+],
+"표준편차": [
+"Standard deviation",
+"root-mean-square deviation, root mean square deviation, RMSD",
+"standard deviation"
+],
+"푸리에 변환 적외선 분광법": [
+"FTIR",
+"Fourier-transform infrared spectroscopy",
+"fourier transform infrared imaging",
+"fourier-transform infrared spectroscopy"
+],
+"푸리에 변환 적외선 분광학": [
+"FTIR",
+"Fourier-transform infrared spectroscopy",
+"fourier transform infrared imaging",
+"fourier-transform infrared spectroscopy"
+],
+"푸리에변환적외선분광학": [
+"FTIR",
+"Fourier-transform infrared spectroscopy",
+"fourier transform infrared imaging",
+"fourier-transform infrared spectroscopy"
+],
+"풀림": [
+"Annealing (materials science)",
+"anneal",
+"annealing"
+],
+"품 후드": [
+"Fume hood",
+"fume closet",
+"fume cupboard",
+"fume hood"
+],
+"퓸 후드": [
+"Fume hood",
+"fume closet",
+"fume cupboard",
+"fume hood"
+],
+"퓸후드": [
+"Fume hood",
+"fume closet",
+"fume cupboard",
+"fume hood"
+],
+"프라이머": [
+"PCR primer",
+"Primer (molecular biology)",
+"primer"
+],
+"프로테오믹스": [
+"Proteomics",
+"proteomics"
+],
+"프로테움": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"프로티오믹스": [
+"Proteomics",
+"proteomics"
+],
+"프로틴": [
+"Protein",
+"proteid",
+"protein",
+"proteins"
+],
+"프로판-2-온": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"프로판-2-올": [
+"2-propanol",
+"Isopropyl alcohol",
+"Rubbing Alcohol",
+"isopropyl alcohol"
+],
+"프로판온": [
+"Acetone",
+"acetone",
+"dimethylketone",
+"propanone"
+],
+"플라스미드": [
+"Plasmid",
+"plasmid",
+"plasmids"
+],
+"플라스미드 DNA": [
+"Plasmid",
+"plasmid",
+"plasmids"
+],
+"플라스미드 제조": [
+"Plasmid preparation"
+],
+"플래쉬 페이퍼": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"플래시 페이퍼": [
+"Nitrocellulose",
+"cellulose nitrate",
+"flash paper",
+"nitrocellulose"
+],
+"플루오르산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"플루오르화 수소산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"플루오르화수소산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"플루오린화 수소산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"플루오린화 수소산 화상": [
+"Burning caused by hydrofluoric acid",
+"Hydrofluoric acid burn"
+],
+"플루오린화수소산": [
+"Hydrofluoric acid",
+"hydrofluoric acid"
+],
+"피난": [
+"Emergency evacuation",
+"emergency evacuation",
+"evacuation"
+],
+"피라냐 용액": [
+"Piranha solution",
+"piranha etch",
+"piranha solution"
+],
+"피리딘": [
+"Pyridine",
+"azabenzene",
+"py",
+"pyridine"
+],
+"피씨알 검사": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"피씨알검사": [
+"PCR",
+"Polymerase chain reaction",
+"polymerase chain reaction"
+],
+"피펫": [
+"Pipette",
+"pipet",
+"pipette"
+],
+"필터 페이퍼": [
+"Filter paper",
+"filter paper"
+],
+"하량": [
+"Charge (physics)",
+"charge",
+"charge (theoretical physics)",
+"physical charge (general)"
+],
+"하소": [
+"Calcination",
+"calcination",
+"calcined"
+],
+"하이드러전": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"하이드러젼": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"하이드로겐": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"하이드로젠": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"하이드록시벤젠": [
+"PHOH",
+"Phenol",
+"carbolic acid",
+"phenol"
+],
+"하이드록시에틸기": [
+"C2H5OH",
+"Ethanol",
+"ethanol",
+"hydroxyethane"
+],
+"하이포아염소산 나트륨": [
+"Sodium hypochlorite",
+"antiformin",
+"bleach",
+"sodium hypochlorite"
+],
+"하이포아염소산나트륨": [
+"Sodium hypochlorite",
+"antiformin",
+"bleach",
+"sodium hypochlorite"
+],
+"한계 반응물": [
+"Limiting reagent",
+"limiting reagent"
+],
+"한계 시약": [
+"Limiting reagent",
+"limiting reagent"
+],
+"한계반응물": [
+"Limiting reagent",
+"limiting reagent"
+],
+"한계시약": [
+"Limiting reagent",
+"limiting reagent"
+],
+"한천배지": [
+"Agar plate",
+"agar",
+"agar plate"
+],
+"한천평판": [
+"Agar plate",
+"agar",
+"agar plate"
+],
+"합선": [
+"Short circuit",
+"electrical short",
+"short",
+"short circuit"
+],
+"핫 플레이트": [
+"Hot plate",
+"Laboratory Hot Plate",
+"hot plate",
+"hotplate"
+],
+"핫플레이트": [
+"Hot plate",
+"Laboratory Hot Plate",
+"hot plate",
+"hotplate"
+],
+"항원": [
+"Antigen",
+"antibody generator",
+"antigen",
+"antigens"
+],
+"항체": [
+"Ab",
+"Antibody",
+"antibodies",
+"antibody"
+],
+"해저드": [
+"Hazard",
+"hazard",
+"safety issue",
+"safety problem"
+],
+"핵산": [
+"Nucleic acid",
+"Nucleic acids",
+"nucleic acid",
+"nucleic acids"
+],
+"핵자기 공명 분광법": [
+"MR spectroscopy",
+"NMR spectroscopy",
+"Nuclear magnetic resonance spectroscopy",
+"magnetic resonance spectroscopy"
+],
+"핵자기공명 분광법": [
+"MR spectroscopy",
+"NMR spectroscopy",
+"Nuclear magnetic resonance spectroscopy",
+"magnetic resonance spectroscopy"
+],
+"핵자기공명분광법": [
+"MR spectroscopy",
+"NMR spectroscopy",
+"Nuclear magnetic resonance spectroscopy",
+"magnetic resonance spectroscopy"
+],
+"핸더슨-하셀바흐 방정식": [
+"Henderson-Hasselbalch equation",
+"Henderson–Hasselbalch equation"
+],
+"향기": [
+"Odor",
+"odor",
+"scent",
+"smell"
+],
+"향취": [
+"Odor",
+"odor",
+"scent",
+"smell"
+],
+"허용 노출 기준": [
+"PEL",
+"Permissible exposure limit"
+],
+"허용 노출 한계": [
+"PEL",
+"Permissible exposure limit"
+],
+"허용 노출 한도": [
+"PEL",
+"Permissible exposure limit"
+],
+"헤모사이토미터": [
+"Burker chamber",
+"Bürker chamber",
+"Hemocytometer",
+"hemocytometer"
+],
+"헥산": [
+"CH3-[CH2]4-CH3",
+"Hexane",
+"hexane",
+"hexyl hydride"
+],
+"헥세인": [
+"CH3-[CH2]4-CH3",
+"Hexane",
+"hexane",
+"hexyl hydride"
+],
+"헨더슨-하셀바흐 방정식": [
+"Henderson-Hasselbalch equation",
+"Henderson–Hasselbalch equation"
+],
+"헬라 세포": [
+"HELA",
+"He La",
+"He-La",
+"HeLa"
+],
+"헬라세포": [
+"HELA",
+"He La",
+"He-La",
+"HeLa"
+],
+"혈구계": [
+"Burker chamber",
+"Bürker chamber",
+"Hemocytometer",
+"hemocytometer"
+],
+"혈구계산기": [
+"Burker chamber",
+"Bürker chamber",
+"Hemocytometer",
+"hemocytometer"
+],
+"혈구계산반": [
+"Burker chamber",
+"Bürker chamber",
+"Hemocytometer",
+"hemocytometer"
+],
+"혈구계측기": [
+"Burker chamber",
+"Bürker chamber",
+"Hemocytometer",
+"hemocytometer"
+],
+"형광": [
+"Fluorescence",
+"fluorescence"
+],
+"형광 단": [
+"Fluorescence",
+"fluorescence"
+],
+"형광 물질": [
+"Fluorescence",
+"fluorescence"
+],
+"형광 현미경": [
+"Fluorescence microscope",
+"fluorescence microscope"
+],
+"형광단": [
+"Fluorescence",
+"fluorescence"
+],
+"형광물질": [
+"Fluorescence",
+"fluorescence"
+],
+"형광색": [
+"Fluorescence",
+"fluorescence"
+],
+"형광체": [
+"Fluorescence",
+"fluorescence"
+],
+"형광현미경": [
+"Fluorescence microscope",
+"fluorescence microscope"
+],
+"형질 감염": [
+"Transfection",
+"transfection"
+],
+"형질 주입": [
+"Transfection",
+"transfection"
+],
+"형질감염": [
+"Transfection",
+"transfection"
+],
+"형질주입": [
+"Transfection",
+"transfection"
+],
+"호흡용 보호구": [
+"Respirator",
+"mask",
+"respirator"
+],
+"호흡용보호구": [
+"Respirator",
+"mask",
+"respirator"
+],
+"혼탁도": [
+"Turbidity",
+"turbidity"
+],
+"화상": [
+"Burn",
+"burn",
+"burns"
+],
+"화상 (상해)": [
+"Burn",
+"burn",
+"burns"
+],
+"화상 (손상)": [
+"Burn",
+"burn",
+"burns"
+],
+"화학 발광": [
+"Chemiluminescence",
+"chemiluminescence"
+],
+"화학 전지": [
+"Electrochemical cell",
+"battery cell",
+"electrical cell",
+"electrochemical cell"
+],
+"화학 증기 침적법": [
+"CVD",
+"Chemical vapor deposition",
+"chemical vapour deposition"
+],
+"화학 화상": [
+"Chemical burn",
+"caustic burn",
+"chemical burn",
+"chemical burns"
+],
+"화학기상증착": [
+"CVD",
+"Chemical vapor deposition",
+"chemical vapour deposition"
+],
+"화학량론": [
+"Stoichiometry",
+"stoichiometry"
+],
+"화학물질 분류 및 표지에 관한 세계조화 시스템": [
+"GHS",
+"Globally Harmonized System of Classification and Labelling of Chemicals"
+],
+"화학물질 분류표시 국제조화시스템": [
+"GHS",
+"Globally Harmonized System of Classification and Labelling of Chemicals"
+],
+"화학물질의 분류 및 표지에 관한 세계조화시스템": [
+"GHS",
+"Globally Harmonized System of Classification and Labelling of Chemicals"
+],
+"화학발광": [
+"Chemiluminescence",
+"chemiluminescence"
+],
+"화학양론": [
+"Stoichiometry",
+"stoichiometry"
+],
+"화학적 완충제": [
+"Buffer solution",
+"buffer",
+"buffer solution",
+"pH buffer"
+],
+"화학적 위험": [
+"Chemical hazard",
+"chemical hazard",
+"hazardous chemical agent"
+],
+"화학적 환원": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"화학전지": [
+"Electrochemical cell",
+"battery cell",
+"electrical cell",
+"electrochemical cell"
+],
+"화학화상": [
+"Chemical burn",
+"caustic burn",
+"chemical burn",
+"chemical burns"
+],
+"환기": [
+"Ventilation (architecture)",
+"ventilation",
+"ventilation system",
+"ventilator"
+],
+"환류": [
+"Reflux",
+"reflux"
+],
+"환류 (화학)": [
+"Reflux",
+"reflux"
+],
+"환원": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"환원 반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"환원극": [
+"Cathode",
+"cathode"
+],
+"환원반응": [
+"Redox",
+"redox",
+"redox reaction"
+],
+"환원제": [
+"Reducing agent",
+"reducer",
+"reducing agent",
+"reductant"
+],
+"황산": [
+"Sulfuric acid",
+"battery acid",
+"sulfuric acid",
+"sulphuric acid"
+],
+"황산 암모늄": [
+"(NH4)2SO4",
+"Ammonium sulfate",
+"ammonium sulfate",
+"ammonium sulphate"
+],
+"황산암모늄": [
+"(NH4)2SO4",
+"Ammonium sulfate",
+"ammonium sulfate",
+"ammonium sulphate"
+],
+"회전증발농축기": [
+"Rotary evaporator",
+"rotary evaporator"
+],
+"획선도말": [
+"Streaking (microbiology)",
+"streaking"
+],
+"효소": [
+"Enzyme",
+"enzyme"
+],
+"효소 결합 면역 침강 분석법": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소 면역 검사법": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소 면역 검정법": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소 면역 분석법": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소 면역 측정법": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소 반응 속도론": [
+"Enzyme kinetics",
+"enzyme kinetics"
+],
+"효소 반응속도론": [
+"Enzyme kinetics",
+"enzyme kinetics"
+],
+"효소-기질 복합체": [
+"Enzyme",
+"enzyme"
+],
+"효소결합면역침강분석법": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소결합면역흡착검사": [
+"EIA",
+"ELISA",
+"enzyme-linked immunosorbant assay",
+"enzyme-linked immunosorbent assay"
+],
+"효소반응 속도론": [
+"Enzyme kinetics",
+"enzyme kinetics"
+],
+"효소반응속도론": [
+"Enzyme kinetics",
+"enzyme kinetics"
+],
+"효소학": [
+"Enzyme",
+"enzyme"
+],
+"휴먼 팩터": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"휴먼팩터": [
+"Ergonomics",
+"ergonomics",
+"human factors",
+"human factors and ergonomics"
+],
+"흑연": [
+"Graphite",
+"graphite",
+"graphite-2H",
+"graphite-3R"
+],
+"흡광도": [
+"Absorbance",
+"decadic absorbance",
+"optical density",
+"transmittance optical density"
+],
+"흡기": [
+"Inhalation",
+"air intake",
+"breathing in",
+"inhalation"
+],
+"흡습": [
+"Hygroscopy",
+"hygroscopic",
+"hygroscopicity",
+"hygroscopy"
+],
+"흡습성": [
+"Hygroscopy",
+"hygroscopic",
+"hygroscopicity",
+"hygroscopy"
+],
+"흡열 반응": [
+"Endothermic reaction",
+"endothermic reaction",
+"endothermicity"
+],
+"흡열반응": [
+"Endothermic reaction",
+"endothermic reaction",
+"endothermicity"
+],
+"흡입": [
+"Inhalation",
+"air intake",
+"breathing in",
+"inhalation"
+],
+"흡입뽐프": [
+"Vacuum pump",
+"vacuum pump"
+],
+"흡입펌프": [
+"Vacuum pump",
+"vacuum pump"
+],
+"히드로게니움": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"히드로겐": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"히드로젠": [
+"Hydrogen",
+"element 1",
+"hydrogen"
+],
+"힐리엄": [
+"Lithium",
+"element 3",
+"lithium"
+]
+}
+}

@@ -1,0 +1,97 @@
+# Extra Wikidata items for the ko/en glossary (lane KNOW): the words of a
+# question that are not article titles of the Wikipedia lists -- properties,
+# actions and problems a researcher names. One English Wikipedia title per
+# line; the pipeline reads the item's Korean and English labels and aliases
+# from Wikidata (CC0). Lines starting with "#" are comments.
+Flash point
+Boiling point
+Melting point
+Density
+Vapor pressure
+Solubility
+Viscosity
+Autoignition temperature
+Flammability limit
+Toxicity
+Corrosive substance
+Oxidizing agent
+Reducing agent
+Explosive
+Carcinogen
+Mutagen
+Irritation
+Allergy
+Concentration
+Molar concentration
+Dilution (equation)
+Temperature
+Pressure
+Humidity
+Volume
+Mass
+pH
+Buffer solution
+Precipitation (chemistry)
+Crystallization
+Evaporation
+Condensation
+Sublimation (phase transition)
+Freezing
+Boiling
+Decomposition
+Contamination
+Bubble (physics)
+Foam
+Turbidity
+Color
+Odor
+Smoke
+Leak
+Spill (liquid)
+Fire
+Explosion
+Burn
+Inhalation
+Ventilation (architecture)
+Glove
+Goggles
+Waste
+Storage
+Expiration date
+Calibration
+Error
+Accuracy and precision
+Repeatability
+Standard deviation
+Blank (chemistry)
+Control (science)
+Negative control
+Positive control
+Sample (material)
+Reagent
+Catalyst
+Enzyme
+Substrate (chemistry)
+Protein
+Peptide
+Nucleic acid
+DNA
+RNA
+Plasmid
+Bacteria
+Virus
+Cell (biology)
+Tissue (biology)
+Gel
+Band (gel electrophoresis)
+Stain
+Antibody
+Antigen
+Electrode
+Current (electricity)
+Voltage
+Capacity (battery)
+Charge (physics)
+Short circuit
+Overcharging
+Cycle (battery)

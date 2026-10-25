@@ -79,6 +79,7 @@
 | 원문 그림 | 원문 PDF 그림 | `source_figures.figures_for_step` | 원문에서 잘라 낸 그림 |
 | AI 가 그린 그림 | AI 가 그린 그림 — 실제와 다를 수 있음 | `drawn_diagrams.DRAWN_LABEL` | 요청했을 때만 |
 | 웹 설명·사진 | 웹 참고 자료 | `web_explanations.py` | 설명과 사진만. 값·안전 지시는 원문만 |
+| 공개 자료 | 공개 자료 · 일반 참고 — <출처 이름> | public knowledge — `public_knowledge.PublicKnowledgeSource`, tier `public`, 등급 A/B/C | 라이선스 확인한 공개 자료(NIOSH·CDC·PubChem·OpenStax 1판·Europe PMC CC BY·위키백과)에서 찾은 조각. 참고일 뿐 원문 값·안전 판단을 바꾸지 않는다 |
 | 연결이 끊겼어요 | 연결이 끊겼어요 — 다시 연결 중 | `static/connection.js`; 사건 `connection_restored` | 화면이 읽기 전용이 된다 |
 
 ## 4. 기록과 보고서
