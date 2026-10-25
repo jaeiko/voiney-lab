@@ -144,7 +144,9 @@ Records, accounts and operations
 - `voice_evaluation.py`: offline voice evaluation harness (`voiney-evaluate`).
 
 `src/voiney_lab/static/`: `index.html` (five tabs and sheets; renders server
-events, never derives state from prose), `connection.js` (lost connection),
+events, never derives state from prose), `voice-core.js` (the socket, microphone,
+answer audio, server clock and screen lock both screens share; loaded first),
+`connection.js` (lost connection),
 `feedback.js` (rating), `mic-capture-worklet.js` (capture), `admin-metrics.html`
 (pilot metrics), `native-bridge.js` (app device bridge, not loaded yet),
 `manifest.webmanifest`, `app.css`, `icons/`.
