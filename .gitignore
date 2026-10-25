@@ -23,6 +23,12 @@ data/development_cache/
 .env.*
 !.env.example
 
+# Lane RX0: the new screen's build (web/ -> static/app/, made by the launchers
+# and CI; served at /app/). Never committed.
+/src/voiney_lab/static/app/
+/web/node_modules/
+/web/dist/
+
 # Lane APP0: the store app's generated web copy, build outputs and signing
 # keys (keys never enter the repository; docs/APP_PLAN.md).
 /mobile/www/

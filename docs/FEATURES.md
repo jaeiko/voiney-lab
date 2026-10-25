@@ -14,7 +14,7 @@
 [F9 말 한 번의 길](#f9-말-한-번의-길) · [F10 단계·타이머](#f10-단계-완료-타이머) · [F11 질문과 설명](#f11-질문과-설명) ·
 [F12 기록](#f12-실험-중-기록) · [F13 보고서](#f13-실험-노트와-보고서) · [F14 연결 끊김](#f14-연결-끊김) ·
 [F15 파일럿 지표](#f15-파일럿-지표와-평점) · [F16 모바일](#f16-모바일-웹과-스토어-앱) · [F17 공급자·설정](#f17-공급자와-설정) ·
-[F18 데이터·운영](#f18-데이터-삭제-백업-점검) · [F19 화면](#f19-화면과-시작-및-종료)
+[F18 데이터·운영](#f18-데이터-삭제-백업-점검) · [F19 화면](#f19-화면과-시작-및-종료) · [F20 공개 자료](#f20-공개-자료-검색-moss) · [F21 새 화면](#f21-새-화면-app)
 
 ---
 
@@ -285,7 +285,6 @@
 - **시험**: `tests/test_lane_ia_tabs.py`, `tests/test_lane_pre_catalog_refresh.py`, `tests/test_lane_pre_runnable_words.py`, `tests/e2e/catalog-refresh-pre.spec.ts`(두 계정), `tests/e2e/upload-ia.spec.ts`, `tests/e2e/tabs-ia.spec.ts`, `tests/test_lane_ui4_record_reports.py`, `tests/test_lane_ui4_account.py`, `tests/e2e/pilot-ui4.spec.ts`; 태블릿 `tests/test_lane_tab_tablet.py`, `tests/test_lane_tab_device.py`, `tests/e2e/tablet-tab.spec.ts`(Playwright `Tablet portrait` 820×1180·`Tablet landscape` 1180×820, 브라우저는 CI). 사용 순서는 `docs/USER_GUIDE.md`, 태블릿 실기기 점검표는 `docs/PILOT_COMPARISON.md` 6절.
 - **한계**: PI 확인·추가 보고서 형식·계정 삭제 등 서버 기능의 화면 연결 범위는 각 기능 절에 적는다. 실제 기기·공급자 시험과 가짜 서버 화면 시험을 구분한다. 태블릿은 Chromium 의 태블릿 크기·터치 흉내로만 시험했고 실제 아이패드·안드로이드 태블릿에서는 확인하지 않았다(contract-tested). 시작이 20초보다 오래 걸리면 화면 켜 두기를 놓고 실험 화면이 될 때 터치 밖에서 다시 요청한다(Safari 가 터치를 요구하면 실험 중 첫 터치까지 잠금 없음). 폭 721px 미만 태블릿 세로는 휴대폰 배치다.
 
-
 ## F20. 공개 자료 검색 (Moss)
 
 - **무엇**: 실험 중 질문·문제에 라이선스를 확인한 **공개** 실험·안전·과학 자료(퍼블릭 도메인·CC0·CC BY·CC BY-SA 만)를 서버 안에서 찾는다. 연구실 자료는 넣지 않는다. 자료는 `scripts/public_knowledge_pipeline.py` 가 출처 목록 `data/public_knowledge/sources.toml` 대로 모아(다시 돌릴 때마다 바뀐 것만 받아 늘어나는 수집 파이프라인) 조각으로 만들고 Moss 색인에 올린다 — 조각마다 tier `public`, 제목, 본문, 위치(섹션·쪽·CID), URL, 라이선스, 언어, 분야, 출처 등급, 출처 버전, 받은 날짜. 서버는 시작할 때 색인 하나를 불러오고(`lifespan`), 질의는 프로세스 안에서 돈다. 한국어 질문은 위키데이터 용어집(CC0, `data/public_knowledge/glossary.json`)으로 낱말의 영어 이름을 붙여 영어 자료와 만난다. v1 출처: NIOSH Pocket Guide, CDC BMBL 6판, NIOSH 2007-107, CDC MMWR 실험실 안전 지침, PubChem(참고 출처가 공공기관·ILO ICSC 인 항목만), OpenStax Chemistry·Biology 1판(CC BY 4.0; 2판은 CC BY-NC-SA 라 제외), Europe PMC CC BY 논문, 위키백과(영·한). 뺀 후보와 이유는 출처 목록의 `[[excluded]]`.
@@ -297,3 +296,15 @@
 - **설정**: `VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED`(false), `VOINEY_LAB_PUBLIC_KNOWLEDGE_INDEX`(`voiney-public-knowledge`), `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`. 패키지 `moss==1.15.1`(PolyForm Shield 1.0.0).
 - **시험**: `tests/test_lane_know_public_knowledge.py`, `tests/test_lane_know_pipeline.py`, `tests/test_lane_know_answer_rules.py`, `tests/test_lane_know_server_start.py`, `tests/test_lane_know_help_wiring.py`(문제 도움 ③ 연결, 음성 연결 경계) — 모두 가짜 전송(contract-tested). 실제 Moss 질의와 측정치는 줄 KNOW 보고서.
 - **한계**: 내장 임베딩 `moss-minilm` 은 영어 모델이라 한국어 ↔ 영어는 용어집과 키워드 쪽이 맡는다(혼합 비율 `DEFAULT_ALPHA` 0.5; 130문 세트에서 용어집 없이는 한국어 recall@5 0.14, 있으면 0.605 — 2026-10-24, 줄 보고서); 들어 있는 자료는 v1 출처 목록뿐이고 완전성을 보증하지 않는다; 공개 자료는 참고일 뿐 원문·연구실 규정을 바꾸지 못한다; Moss 무료 단계 한도(저장 500 MB, 올리기 50 MB/월, 색인 3개) 안에서만 늘린다.
+
+## F21. 새 화면 (/app/)
+
+- **무엇**: 사용자 입장에서 다시 설계한 화면(`docs/UI_SPEC.md`)을 React 로 `web/` 에 짓고, 서버가 `/app/` 에서 제공한다. 지금 화면(`static/index.html`, `/`)은 그대로다.
+  이 단계에서 옮긴 화면은 **앱 틀**(로고 머리, 왼쪽 메뉴·휴대폰 아래 탭, 실험이 없을 때 실험용 막대 없음), **로그인·초대 가입**(로고와 한 줄 소개, 단계 번호 없음, 틀린 비밀번호·잠금(429, 서버의 `Retry-After` 분)·연결 끊김 문장), **홈**(상황에 따라 큰 카드 하나 — 이어서 하기 · N단계부터 / 확인하기 / 첫 프로토콜 올리기 / 분석 중 / 실험 시작 — 와 보조 행동 2–3개), **프로토콜 목록**(쉬운 상태 칩: 바로 쓸 수 있어요 · 확인 N개 남음 · 분석 중 · N분 지남 · 분석 실패 — 다시 시도 · 사진 글자 읽는 중 · 아직 시작할 수 없어요, 줄마다 다음 행동 단추, 바로 쓸 수 있는 것 먼저).
+  아직 옮기지 않은 화면(올리기·확인 카드·시작·실험 중·기록 상세·설정)은 같은 주소의 지금 화면(`/index.html#/…`)으로 넘어간다.
+  목록은 분석 중이면 5초, 평소 30초마다, 화면으로 돌아오면 즉시 다시 읽고 숨기면 멈춘다([F19](#f19-화면과-시작-및-종료)의 줄 PRE 간격과 같다). 분석 중인 줄의 지난 시간·나눠 읽는 진행은 `GET /api/protocols/{id}` 의 `analysis_run` 에서 읽는다. 예상 시간은 서버가 주지 않으므로 보이지 않는다.
+  사용자 문구는 모두 `web/src/copy/ko.ts` 한 파일이고 기준은 `docs/COPY_DECK.md`(지금 글 → 새 글 → 이유). 서버가 보내는 문구(오류 코드의 뜻, 카드 질문, 음성 문장)는 그대로 보이고, 바꿀 목록만 그 문서 4절에 있다. 글꼴 Pretendard(OFL)는 빌드에 넣어 서버가 직접 제공한다(바깥 CDN 없음). 로고는 확정 로고 묶음의 제품 로고(`web/public/brand/`, `/app/brand/` 에서 제공; 탭 아이콘과 `/app/manifest.webmanifest` 의 앱 아이콘도 같은 묶음, 회사 로고는 쓰지 않음)다. 화면의 토큰은 사람의 디자인 체계(색은 상태에만 — 정지·위험, 주의, 지금 사람 확인이 필요한 것 — 초록·그림자 없음, 모서리 최대 4 px, Pretendard 400·600·700 의 Desk 글자 단계; `docs/UI_SPEC.md` 6절)를 따르고, `tests/test_lane_rx0_new_ui.py` 가 그 규칙을 검사한다.
+- **어디**: `web/`(`web/src/App.tsx`, `web/src/screens/`, `web/src/api/queries.ts`, `web/src/lib/protocolStatus.ts`, `web/src/copy/ko.ts`, `web/build.sh`); `server.py` `root_screen`, `new_screen`, `new_screen_asset`, `new_screen_brand`, `new_screen_manifest`, `NEW_UI_DIR`; 실행기 `scripts/run_dev.sh`·`scripts/run_pilot.sh`·`scripts/run_ci_server.sh`(빌드 단계); CI `.github/workflows/ci.yml`(Vitest·타입 검사·빌드·Playwright).
+- **설정**: `VOINEY_LAB_NEW_UI`(기본 `false`): `true` 면 `/` 가 `/app/` 으로 간다(질의 문자열 유지 — 초대 링크). 빌드가 없으면 `/app/` 은 "아직 준비되지 않았어요"(503)이고 `/` 는 지금 화면 그대로다. node 가 없거나 빌드가 실패하면 실행기는 `[WARN]` 을 찍고 서버만 시작한다. 서버 계약(API·`/ws`)은 바뀌지 않았다.
+- **시험**: `tests/test_lane_rx0_new_ui.py`(제공·설정·빌드 없음·오타 설정), `web/src/**/*.test.tsx`(Vitest: 문구 규칙, 상태 칩, 로그인·홈·목록의 네 상태, 로그아웃, 넘김), `tests/e2e/app-rx0.spec.ts`(데스크톱·휴대폰), `tests/e2e/tablet-app-rx0.spec.ts`(태블릿 가로·세로). 모두 가짜 서버 응답(contract-tested).
+- **한계**: 새 홈은 저장된 실험 목록으로 "이어서 하기"를 고르고, 음성 연결 중인지는 모른다(실험 중 화면은 아직 지금 화면). 제목은 서버의 `title` 그대로다. 실제 기기·사람 확인은 하지 않았다.

@@ -251,10 +251,17 @@ fi
 load_curated_fixture false || echo \
   "[WARN] 개발 픽스처를 적재하지 못함 — 이 픽스처는 실행할 수 없음: 적재 과정 종료 코드 $?"
 
+# Lane RX0 (human decision 2026-10-24): the new screen is built here when node
+# is present; without node or on a failed build, web/build.sh prints [WARN],
+# the new screen stays off (/app/ says so) and the server starts as before.
+echo
+bash "$ROOT/web/build.sh" || true
+
 echo
 echo "=== Starting Voiney Lab ==="
 echo "HOST = $HOST"
 echo "PORT = $PORT"
+echo "NEW_UI = ${VOINEY_LAB_NEW_UI:-false}   (VOINEY_LAB_NEW_UI=true sends / to /app/; /app/ opens either way)"
 
 exec python -B -m uvicorn \
   voiney_lab.server:app \

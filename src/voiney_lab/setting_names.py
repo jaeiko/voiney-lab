@@ -239,6 +239,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED", SWITCHES, "false",
             "공개 실험·안전·과학 지식(라이선스 확인한 공개 자료) Moss 검색 — 시작 때 색인을 불러오고 질의는 프로세스 안에서; "
             "켜면 MOSS_PROJECT_ID·MOSS_PROJECT_KEY 필수, 없거나 불러오기 실패면 이 등급만 꺼짐 (줄 KNOW 결정 4)"),
+    Setting("VOINEY_LAB_NEW_UI", SWITCHES, "false",
+            "새 화면(web/, /app/)을 기본으로: true 면 / 가 /app/ 으로 감 (빌드가 없으면 지금 화면 그대로); "
+            "false 면 지금 화면 그대로이고 /app/ 은 언제나 열림 (줄 RX0)"),
     # --- 경로·저장소 --------------------------------------------------------------
     Setting("VOINEY_LAB_SAFETY_CATALOG", PATHS, "(없음, 필수)",
             "승인 안전 문서 카탈로그 SQLite (절대 경로)"),

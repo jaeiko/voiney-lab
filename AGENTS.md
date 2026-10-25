@@ -149,6 +149,12 @@ events, never derives state from prose), `connection.js` (lost connection),
 (pilot metrics), `native-bridge.js` (app device bridge, not loaded yet),
 `manifest.webmanifest`, `app.css`, `icons/`.
 
+`web/`: the new screen (React 18 + TypeScript + Vite; `web/build.sh` builds it
+into `src/voiney_lab/static/app/`, git-ignored, served at `/app/`;
+`VOINEY_LAB_NEW_UI` sends `/` there). Every user sentence is in
+`web/src/copy/ko.ts` (`docs/COPY_DECK.md`); the design is `docs/UI_SPEC.md`.
+It reads the same HTTP API and never holds workflow state.
+
 Elsewhere: `mobile/` (Capacitor store-app shell, device features only),
 `scripts/` (launchers `run_dev.sh`, `run_pilot.sh`, `run_ci_server.sh`; pilot
 tools; retired diagnostic tools are recorded in `docs/DECISIONS.md`), `tests/` (pytest; `tests/e2e/` Playwright),

@@ -559,6 +559,24 @@ key-value load stays on its step with retry. Source-check/registration
 blockers remain visible. Settings opens as a sheet over the run; account
 erasure asks for the password again and returns to login on success.
 
+**The new screen** (`web/`, React 18 + TypeScript + Vite + TanStack Query,
+Radix dialog, lucide icons, Pretendard bundled) is built by `web/build.sh`
+into `static/app/` (git-ignored) and served at `/app/` by three routes in
+`server.py` (`new_screen`, `new_screen_asset`, `new_screen_without_slash`);
+`root_screen` sends `/` there only with `VOINEY_LAB_NEW_UI=true` and a
+build present, else serves `index.html` as before. The launchers call
+`web/build.sh` and go on without the new screen when node is missing or the
+build fails. It keeps the old hash routes (`#/home`, `#/protocols`); a route
+it has not taken over (`#/upload`, `#/protocols/<id>`, `#/experiment`,
+`#/records…`, `#/settings`) is opened on the old screen at `/index.html`.
+It holds no workflow state: the home's one card and the list's chips are
+read from `/api/auth/session`, `/api/protocols`, `/api/protocols/{id}`
+(`analysis_run` for a row being analysed), `/api/workspace/experiments` and
+`/api/workspace/session`, re-read every 5 s while a protocol is analysed and
+every 30 s otherwise, at once on focus, never while hidden. A 401 on a
+signed-in read clears the lists and shows the login. Every sentence it
+shows is in `web/src/copy/ko.ts`; server sentences are shown as sent.
+
 Tablet rules apply only under `(pointer:coarse) and (min-width:721px) and
 (min-height:600px)`: 44 px targets, a two-column landscape run (step |
 timer, figures in a sheet), far-reading and glove tokens (`--read-far-*`,

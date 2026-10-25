@@ -37,6 +37,11 @@ export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
 export VOINEY_LAB_MULTI_BRAIN_ENABLED="false"
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
 
+# Lane RX0 (human decision 2026-10-24): the new screen is built here when node
+# is present (CI installs it); without node or on a failed build, web/build.sh
+# prints [WARN] and the server starts without the new screen.
+bash "$ROOT/web/build.sh" || true
+
 echo "=== Starting Voiney Lab (CI, empty protocol catalog) ==="
 exec python -B -m uvicorn \
   voiney_lab.server:app \

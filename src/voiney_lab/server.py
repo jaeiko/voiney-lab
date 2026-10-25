@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, WebSoc
 from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, FrameBuffer, clean_path, pcm_to_wav
@@ -29,6 +29,7 @@ from voiney_lab.configuration import (
     CascadeSttSettings,
     ConfigurationError,
     VoiceVadSettings,
+    boolean_setting,
     cascade_filler_delay_ms,
     refuse_xai_only_features_without_key,
 )
@@ -15162,6 +15163,96 @@ async def voice_socket(websocket:WebSocket):
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
         if account_context_token is not None:
             _REQUEST_ACCOUNT.reset(account_context_token)
+
+# --- The new screen (lane RX0, human decision 2026-10-24) --------------------
+# The React screen (web/) is built into static/app/ (git-ignored) and served
+# at /app/ whether or not the setting is on; VOINEY_LAB_NEW_UI=true sends /
+# there (the query string kept, so an invite link still opens the signup).
+# The current screen stays at /index.html and, with the setting off, at /.
+# A missing build never stops the server: /app/ says so and / stays the
+# current screen even when the setting is on. The server reads the setting
+# and serves files; the screen's contract (the HTTP API, /ws) is unchanged.
+NEW_UI_DIR=STATIC_DIR/"app"
+NEW_UI_ENV="VOINEY_LAB_NEW_UI"
+NEW_UI_NOT_BUILT_HTML=(
+    '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    "<title>Voiney Lab</title></head><body style=\"font-family:sans-serif;padding:2rem\">"
+    "<p>새 화면이 아직 준비되지 않았어요. 관리자에게 알려 주세요.</p>"
+    '<p><a href="/index.html">지금 화면으로 가기</a></p></body></html>'
+)
+
+
+def _new_ui_enabled()->bool:
+    return boolean_setting(os.environ,NEW_UI_ENV,default=False)
+
+
+def _new_ui_index()->Path|None:
+    index=NEW_UI_DIR/"index.html"
+    return index if index.is_file() else None
+
+
+def _with_query(path:str,request:Request)->str:
+    query=request.url.query
+    return f"{path}?{query}" if query else path
+
+
+@app.get("/",include_in_schema=False)
+async def root_screen(request:Request)->Response:
+    try:
+        new_ui=_new_ui_enabled()
+    except ConfigurationError:
+        return JSONResponse(status_code=503,content={
+            "status":"not_ready","reason":"configuration_invalid","fields":[NEW_UI_ENV]})
+    if new_ui and _new_ui_index() is not None:
+        return RedirectResponse(url=_with_query("/app/",request),status_code=302)
+    return FileResponse(STATIC_DIR/"index.html",media_type="text/html")
+
+
+@app.get("/app",include_in_schema=False)
+async def new_screen_without_slash(request:Request)->Response:
+    return RedirectResponse(url=_with_query("/app/",request),status_code=307)
+
+
+@app.get("/app/",include_in_schema=False)
+async def new_screen()->Response:
+    index=_new_ui_index()
+    if index is None:
+        return HTMLResponse(NEW_UI_NOT_BUILT_HTML,status_code=503)
+    # The page names its hashed assets; a new build must be seen at once.
+    return FileResponse(index,media_type="text/html",headers={"Cache-Control":"no-cache"})
+
+
+def _new_ui_file(folder:str,name:str)->Path:
+    """One file (one path segment) inside a folder of the build; anything that resolves outside it is 404."""
+
+    root=(NEW_UI_DIR/folder).resolve()
+    path=(root/name).resolve()
+    if not path.is_relative_to(root) or path==root or not path.is_file():
+        raise HTTPException(status_code=404,detail="not_found")
+    return path
+
+
+@app.get("/app/assets/{name}",include_in_schema=False)
+async def new_screen_asset(name:str)->Response:
+    """One built file (hashed name) from the build folder, cacheable for good."""
+
+    return FileResponse(_new_ui_file("assets",name),headers={"Cache-Control":"public, max-age=31536000, immutable"})
+
+
+@app.get("/app/brand/{name}",include_in_schema=False)
+async def new_screen_brand(name:str)->Response:
+    """A logo or icon from the brand bundle (web/public/brand/, unhashed names): cached for a day, not for good."""
+
+    return FileResponse(_new_ui_file("brand",name),headers={"Cache-Control":"public, max-age=86400"})
+
+
+@app.get("/app/manifest.webmanifest",include_in_schema=False)
+async def new_screen_manifest()->Response:
+    """The new screen's web app manifest under its registered type (lane UI2 decision 5), re-read on each visit."""
+
+    return FileResponse(_new_ui_file("","manifest.webmanifest"),media_type="application/manifest+json",headers={"Cache-Control":"no-cache"})
+
 
 # Lane UI2 decision 5 (2026-10-13): the web app manifest is served under its
 # registered type whatever the host's own type table says, so a browser

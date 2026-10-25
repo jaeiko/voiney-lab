@@ -1,0 +1,95 @@
+import { Upload } from "lucide-react";
+
+import { useProtocolDetail, useProtocols, useSignOutOnExpiry } from "../api/queries";
+import type { CatalogEntry } from "../api/types";
+import { Chip, EmptyBox, ErrorBox, LoadingBox } from "../components/Pieces";
+import { protocols as words, states } from "../copy/ko";
+import { oldRoutes } from "../lib/navigation";
+import { entryAnalysing, protocolStatus, sortEntries, uploadedDay } from "../lib/protocolStatus";
+
+function ProtocolRow({ entry }: { entry: CatalogEntry }) {
+  // Only a row still being analysed asks the server for its run (elapsed time, pieces).
+  const detail = useProtocolDetail(entry.protocol_id, entryAnalysing(entry));
+  const status = protocolStatus(entry, detail.data?.analysis_run ?? null);
+  const meta = [
+    entry.source_filename?.trim() || null,
+    Number.isInteger(entry.step_count) && (entry.step_count as number) > 0 ? words.steps(entry.step_count as number) : null,
+    uploadedDay(entry.created_at) ? words.uploaded(uploadedDay(entry.created_at) as string) : null,
+  ].filter(Boolean);
+  const href = oldRoutes.protocol(entry.protocol_id);
+  const actionLabel = status.action ? words.actions[status.action] : null;
+  return (
+    <li className="row" data-protocol-id={entry.protocol_id} data-status={status.kind}>
+      <div className="row-head">
+        <span className="row-title">{entry.title}</span>
+        {status.chips.map((chip, index) => (
+          <Chip key={`${chip.kind}-${index}`} chip={chip} />
+        ))}
+      </div>
+      {meta.length ? <p className="row-meta">{meta.join(" · ")}</p> : null}
+      {actionLabel ? (
+        <div className="row-action">
+          <a className={`btn ${status.action === "start" ? "btn-primary" : ""}`} href={href} data-action={status.action}>
+            {actionLabel}
+          </a>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+export function ProtocolsScreen() {
+  const query = useProtocols();
+  useSignOutOnExpiry(query.error);
+
+  let body;
+  if (query.isPending) {
+    body = <LoadingBox />;
+  } else if (query.isError) {
+    body = <ErrorBox message={states.protocolsFailed} onRetry={() => void query.refetch()} />;
+  } else if (!query.data.length) {
+    body = (
+      <EmptyBox
+        message={words.empty}
+        action={
+          <a className="btn btn-primary" href={oldRoutes.upload} style={{ marginTop: "var(--space-4)" }}>
+            {words.emptyAction}
+          </a>
+        }
+      />
+    );
+  } else {
+    body = (
+      <ul className="row-list" aria-label={words.title}>
+        {sortEntries(query.data).map((entry) => (
+          <ProtocolRow key={entry.protocol_id} entry={entry} />
+        ))}
+      </ul>
+    );
+  }
+
+  const total = query.data?.length ?? 0;
+  const ready = query.data?.filter((entry) => entry.available_for_execution === true).length ?? 0;
+
+  return (
+    <section aria-labelledby="protocols-title">
+      <div className="screen-head">
+        <div>
+          <h1 id="protocols-title" className="screen-title">
+            {words.title}
+          </h1>
+          {total ? (
+            <p className="muted" data-testid="protocols-count">
+              {words.count(total, ready)}
+            </p>
+          ) : null}
+        </div>
+        <a className="btn" href={oldRoutes.upload} data-testid="protocols-upload">
+          <Upload aria-hidden="true" />
+          {words.upload}
+        </a>
+      </div>
+      {body}
+    </section>
+  );
+}

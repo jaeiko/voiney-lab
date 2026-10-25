@@ -1,0 +1,58 @@
+/* Design tokens of the new screen (docs/UI_SPEC.md section 6). They follow
+   the person's "Voiney Lab 디자인 체계" (decision 2026-10-25): ink on paper;
+   colour only for a state, never for decoration or brand; no green (done is
+   an ink check and dimming); no shadow; corners at most 4 px; Pretendard at
+   400 / 600 / 700 on the Desk scale; 4 px spacing steps; a Desk target of
+   40 px or more (44 here). The Run (experiment) scale is not here: no Run
+   screen is built in web/ yet, and UI_SPEC 6 lists its values beside lane
+   TAB's measured ones for a person to settle. */
+:root {
+  /* Ink and paper */
+  --ink: #1c1c1a;
+  --ink-muted: #55554f;
+  --on-ink: #ffffff;
+  --paper: #ffffff;
+  --bench: #efefec;
+  --line: #d4d4cf;
+  --line-strong: #76766f;
+
+  /* State colours: each only beside a word and a same-family border or icon;
+     a soft surface never stands alone. */
+  --danger: #bf2229;        /* stop and hazard only; never a plain error or refusal */
+  --danger-soft: #fbeaea;
+  --warning: #f2a900;       /* a fill only, never text */
+  --warning-ink: #7a4f00;
+  --warning-soft: #fff4d6;
+  --pending: #5b3cc4;       /* what needs a person's confirmation now */
+  --pending-soft: #efebfb;
+
+  --focus-ring: var(--ink);
+
+  /* Type: Pretendard, weights 400 / 600 / 700 only; the Desk scale
+     (screens before and after an experiment). */
+  --font-sans: "Pretendard Variable", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic",
+    "Noto Sans KR", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --text-title: 1.5rem;      --line-title: 2rem;        /* 24 / 32, 700 */
+  --text-subtitle: 1.125rem; --line-subtitle: 1.625rem; /* 18 / 26, 600 */
+  --text-body: 0.9375rem;    --line-body: 1.5rem;       /* 15 / 24, 400; a value is 600 */
+  --text-label: 0.8125rem;   --line-label: 1.125rem;    /* 13 / 18, 600 */
+
+  /* Space: steps of 4 */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-6: 24px; --space-8: 32px; --space-12: 48px;
+
+  /* Corners: at most 4 px, never a pill */
+  --radius: 4px;        /* cards, buttons */
+  --radius-small: 2px;  /* badges, inputs */
+
+  /* Borders */
+  --border: 1px;
+  --border-state: 2px;
+  --border-focus: 3px;
+
+  /* Targets: Desk 40 px or more */
+  --target: 44px;
+
+  --nav-width: 220px;
+  --tab-height: 64px;
+}
