@@ -92,6 +92,8 @@ export async function mockProtocolScreens(page: Page) {
   const analysisRequests: string[] = [];
   let registered = false;
   let runChanges: object | null = null;
+  // The protocol's title as the ledger holds it: the read one until a person renames it.
+  let title = UPLOADED.title;
 
   await page.route('**/api/protocols', (route) =>
     route.fulfill({ json: { protocols: Object.values(protocols) } }),
@@ -128,6 +130,7 @@ export async function mockProtocolScreens(page: Page) {
             : { state: 'uploaded', reanalysis: false, failure_code: null };
     const entry = {
       ...UPLOADED,
+      title,
       analysis_status: runState === 'running' ? 'chunk_analysis_in_progress' : runState === 'review' ? 'review_pending' : runState === 'ready' ? 'structured_analysis_ready' : 'structured_analysis_ready',
       lifecycle_state: runState === 'running' ? 'analyzing' : runState === 'review' ? 'review_pending' : runState === 'ready' ? 'ready' : 'uploaded',
       available_for_execution: runState === 'ready',
@@ -152,8 +155,9 @@ export async function mockProtocolScreens(page: Page) {
   });
   await page.route('**/api/protocols/p-rx1-new/title', (route) => {
     const body = route.request().postDataJSON();
-    protocols[UPLOADED.protocol_id] = { ...(protocols[UPLOADED.protocol_id] ?? UPLOADED), title: body.title };
-    return route.fulfill({ json: { title: body.title, protocol: protocols[UPLOADED.protocol_id] } });
+    title = body.title;
+    protocols[UPLOADED.protocol_id] = { ...(protocols[UPLOADED.protocol_id] ?? UPLOADED), title };
+    return route.fulfill({ json: { title, protocol: protocols[UPLOADED.protocol_id] } });
   });
   await page.route('**/api/protocols/p-rx1-ready', (route) => route.fulfill({ json: { ...UPLOADED, protocol_id: 'p-rx1-ready', title: 'Protocol Gamma', source_filename: 'gamma.pdf', available_for_execution: true, lifecycle_state: 'ready', analysis_run: { state: 'complete' } } }));
   await page.route('**/api/protocols/p-rx1-ready/start-check/changes', (route) => {

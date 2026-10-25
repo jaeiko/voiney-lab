@@ -76,6 +76,9 @@ export interface ChosenValue {
   text: string;
   /** The words shown ("20분"). */
   shown: string;
+  /** The number and unit as typed, so reopening the value shows them again (none for words written freely). */
+  number?: string;
+  unit?: string;
 }
 
 export function chosenFromLastTime(values: ChangeableValue[], last: RunChange[]): ChosenValue[] {
@@ -85,7 +88,7 @@ export function chosenFromLastTime(values: ChangeableValue[], last: RunChange[])
     const value = byId.get(change.item_id);
     if (!value || out.some((item) => item.item_id === change.item_id)) continue;
     const text = valueText(change.number, change.unit);
-    out.push({ item_id: change.item_id, value, text, shown: change.shown_ko ?? text });
+    out.push({ item_id: change.item_id, value, text, shown: change.shown_ko ?? text, number: change.number, unit: change.unit });
   }
   return out;
 }

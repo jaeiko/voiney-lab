@@ -104,10 +104,11 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
   function openValue(next: ChangeableValue) {
     const already = chosen.find((item) => item.item_id === next.item_id);
     setValueId(next.item_id);
-    setNumber(already ? already.text.replace(/[^\d.]/g, "") : "");
-    setUnit(next.unit);
-    setAsText(false);
-    setFreeText("");
+    // A value chosen before opens as it was typed (its own number and unit); words written freely open as words.
+    setNumber(already?.number ?? "");
+    setUnit(already?.unit ?? next.unit);
+    setAsText(Boolean(already && already.number === undefined));
+    setFreeText(already && already.number === undefined ? already.text : "");
     setNote(null);
     setView("value");
   }
@@ -133,7 +134,9 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
       setNote(words.limit(options.limit));
       return;
     }
-    const next: ChosenValue = { item_id: value.item_id, value, text, shown: text };
+    const next: ChosenValue = asText
+      ? { item_id: value.item_id, value, text, shown: text }
+      : { item_id: value.item_id, value, text, shown: text, number: number.trim(), unit };
     setChosen((current) => [...current.filter((item) => item.item_id !== value.item_id), next]);
     setSource("wizard");
     setNote(null);

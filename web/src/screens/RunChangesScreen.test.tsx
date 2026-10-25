@@ -52,6 +52,12 @@ describe("RunChangesScreen", () => {
     expect(screen.getByTestId("value-compare")).toHaveTextContent("원문: 10분 → 오늘: 20분");
     await user.click(screen.getByRole("button", { name: "시간" }));
     expect(screen.getByTestId("value-compare")).toHaveTextContent("원문: 10분 → 오늘: 20시간");
+    await user.click(screen.getByTestId("value-use"));
+    expect(screen.getByText("고른 값 1개")).toBeInTheDocument();
+    // Opened again, the value shows the number and unit as typed (20시간), not the source unit.
+    await user.click(within(screen.getByTestId("step-values")).getByRole("button", { name: "시간 10분" }));
+    expect(screen.getByTestId("value-number")).toHaveValue("20");
+    expect(screen.getByRole("button", { name: "시간" })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "분" }));
     await user.click(screen.getByTestId("value-use"));
     expect(screen.getByText("고른 값 1개")).toBeInTheDocument();
