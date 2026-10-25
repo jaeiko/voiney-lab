@@ -7,14 +7,19 @@ import { apiFetch } from "../api/client";
 import { signedOut } from "../api/queries";
 import type { AuthSession } from "../api/types";
 import { frame, nav } from "../copy/ko";
-import { oldRoutes, routes } from "../lib/navigation";
+import { oldRoutes, routes, type RouteName } from "../lib/navigation";
 import { Logo } from "./Logo";
 import { Note } from "./Pieces";
 
 interface Props {
   session: AuthSession;
-  current: "home" | "protocols" | "handoff";
+  current: RouteName;
   children: ReactNode;
+}
+
+/** The menu item a route belongs to: the upload, the analysis, the cards and today's values are the protocols'. */
+export function menuKeyOf(current: RouteName): string {
+  return current === "upload" || current === "analysis" || current === "review" || current === "changes" ? "protocols" : current;
 }
 
 const NAV = [
@@ -106,7 +111,7 @@ export function AppFrame({ session, current, children }: Props) {
       <div className="frame-body">
         <nav className="nav" aria-label={nav.menuLabel}>
           {NAV.map(({ key, label, href, Icon }) => (
-            <a key={key} href={href} aria-current={current === key ? "page" : undefined} data-nav={key}>
+            <a key={key} href={href} aria-current={menuKeyOf(current) === key ? "page" : undefined} data-nav={key}>
               <Icon aria-hidden="true" />
               <span>{label}</span>
             </a>

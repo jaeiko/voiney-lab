@@ -2,33 +2,51 @@
 // cookie travels by itself (credentials: same-origin), redirects are
 // refused, and an answer that is not JSON or not 2xx becomes an ApiError
 // that carries the server's detail code -- never its prose -- so the copy
-// table (copy/ko.ts) chooses the sentence.
+// table (copy/ko.ts) chooses the sentence. Lane RX1: a detail that is an
+// object with a Korean sentence ({code, message_ko}, the link import and
+// today's values) keeps that sentence beside the code, and the 422 that asks
+// to confirm a large value keeps its payload (`large`).
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly retryAfterSeconds: number | null;
+  /** The server's own sentence when its detail carried one (shown as sent). */
+  readonly messageKo: string | null;
+  /** The detail object itself when it was one (a 422's extra fields). */
+  readonly detail: Record<string, unknown> | null;
 
-  constructor(status: number, code: string, retryAfterSeconds: number | null = null) {
+  constructor(
+    status: number,
+    code: string,
+    retryAfterSeconds: number | null = null,
+    messageKo: string | null = null,
+    detail: Record<string, unknown> | null = null,
+  ) {
     super(`${status} ${code}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.messageKo = messageKo;
+    this.detail = detail;
   }
 }
 
 export const NETWORK_ERROR = "network";
 
-function detailOf(payload: unknown): string {
+function detailOf(payload: unknown): { code: string; messageKo: string | null; detail: Record<string, unknown> | null } {
   if (payload && typeof payload === "object" && "detail" in payload) {
     const detail = (payload as { detail?: unknown }).detail;
-    if (typeof detail === "string" && detail) return detail;
-    if (detail && typeof detail === "object" && typeof (detail as { code?: unknown }).code === "string") {
-      return (detail as { code: string }).code;
+    if (typeof detail === "string" && detail) return { code: detail, messageKo: null, detail: null };
+    if (detail && typeof detail === "object") {
+      const object = detail as Record<string, unknown>;
+      const code = typeof object.code === "string" && object.code ? object.code : "unexpected_server_error";
+      const messageKo = typeof object.message_ko === "string" && object.message_ko.trim() ? object.message_ko : null;
+      return { code, messageKo, detail: object };
     }
   }
-  return "unexpected_server_error";
+  return { code: "unexpected_server_error", messageKo: null, detail: null };
 }
 
 function retryAfterOf(response: Response): number | null {
@@ -61,7 +79,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     }
   }
   if (!response.ok) {
-    throw new ApiError(response.status, detailOf(payload), retryAfterOf(response));
+    const { code, messageKo, detail } = detailOf(payload);
+    throw new ApiError(response.status, code, retryAfterOf(response), messageKo, detail);
   }
   return payload as T;
 }
@@ -71,5 +90,14 @@ export function postJson<T>(path: string, body: unknown): Promise<T> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+}
+
+/** A file's bytes as the body, typed by its media type (the upload route reads the type, not the name). */
+export function postFile<T>(path: string, file: Blob, mediaType: string): Promise<T> {
+  return apiFetch<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": mediaType },
+    body: file,
   });
 }
