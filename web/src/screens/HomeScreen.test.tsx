@@ -33,11 +33,11 @@ describe("HomeScreen", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("안녕하세요, 재준 님.");
   });
 
-  it("empty state: one card, 첫 프로토콜 올리기, going to the old upload screen", async () => {
+  it("empty state: one card, 첫 프로토콜 올리기, going to the upload screen", async () => {
     fakeFetch({ "/api/protocols": { json: { protocols: [] } }, "/api/workspace/experiments": { json: { experiments: [] } }, "/api/workspace/session": { json: { principal_id: "me" } } });
     renderWithClient(<HomeScreen session={session} />);
     const card = await screen.findByText("첫 프로토콜 올리기");
-    expect(card.closest("a")).toHaveAttribute("href", "/index.html#/upload");
+    expect(card.closest("a")).toHaveAttribute("href", "#/upload");
     expect(screen.getAllByRole("link").filter((link) => link.classList.contains("big-card"))).toHaveLength(1);
   });
 
@@ -67,7 +67,7 @@ describe("HomeScreen", () => {
     expect(await screen.findByText("확인하기")).toBeInTheDocument();
     expect(screen.getByText("Western blot · 확인할 것 2개")).toBeInTheDocument();
     expect(screen.getByText("2가지만 확인하면 실험에 쓸 수 있어요.")).toBeInTheDocument();
-    expect(screen.getByText("확인하기").closest("a")).toHaveAttribute("href", "/index.html#/protocols/p-review");
+    expect(screen.getByText("확인하기").closest("a")).toHaveAttribute("href", "#/protocols/p-review/review");
   });
 
   it("normal state: runnable protocols become 실험 시작 with the count and three small actions", async () => {
@@ -76,11 +76,11 @@ describe("HomeScreen", () => {
     expect(await screen.findByText("실험 시작")).toBeInTheDocument();
     expect(screen.getByText("바로 쓸 수 있는 프로토콜 1개")).toBeInTheDocument();
     expect(screen.getByText("프로토콜 보기")).toHaveAttribute("href", "#/protocols");
-    expect(screen.getByText("올리기")).toHaveAttribute("href", "/index.html#/upload");
+    expect(screen.getByText("올리기")).toHaveAttribute("href", "#/upload");
     expect(screen.getByText("지난 기록")).toHaveAttribute("href", "/index.html#/records");
   });
 
-  it("normal state: only an analysis under way shows 분석 중 with the elapsed time, no button", async () => {
+  it("normal state: only an analysis under way shows 분석 중 with the elapsed time, leading to its progress screen", async () => {
     vi.useFakeTimers({ now: Date.parse("2026-10-24T01:05:30Z"), toFake: ["Date"] });
     fakeFetch({
       "/api/protocols": { json: { protocols: [ENTRY_ANALYSING] } },
@@ -91,7 +91,7 @@ describe("HomeScreen", () => {
     renderWithClient(<HomeScreen session={session} />);
     expect(await screen.findByText("분석 중")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("RNA extraction · 5분 지남")).toBeInTheDocument());
-    expect(screen.getByText("분석 중").closest(".big-card")).toHaveAttribute("data-static", "true");
+    expect(screen.getByText("분석 중").closest(".big-card")).toHaveAttribute("href", "#/protocols/p-analysing/analysis");
     vi.useRealTimers();
   });
 

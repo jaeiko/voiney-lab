@@ -25,5 +25,8 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     css: false,
+    // A walk through a screen (upload → pages, cards, values) is several
+    // user events on jsdom; the shared CI and lane machines are slow.
+    testTimeout: 20000,
   },
 });

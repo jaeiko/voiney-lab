@@ -7,6 +7,7 @@ import { home, states } from "../copy/ko";
 import { oldRoutes, routes } from "../lib/navigation";
 import { elapsedWords, entryAnalysing, reviewCount } from "../lib/protocolStatus";
 import { useRun } from "../voice/runStore";
+import { displayTitle } from "../lib/protocolTitle";
 
 export const RESUMABLE = new Set(["ready", "in_progress", "paused", "blocked"]);
 
@@ -36,9 +37,10 @@ export type Situation =
 export function situationOf(entries: CatalogEntry[], experiments: Experiment[], principalId: string | null): Situation {
   const resume = latestResumable(experiments, principalId);
   if (resume) {
+    const listed = entries.find((entry) => entry.protocol_id === resume.protocol_id);
     const title =
       (typeof resume.protocol_title === "string" && resume.protocol_title.trim()) ||
-      entries.find((entry) => entry.protocol_id === resume.protocol_id)?.title ||
+      (listed ? displayTitle(listed) : "") ||
       "";
     return { kind: "resume", experiment: resume, title };
   }
@@ -54,7 +56,7 @@ export function situationOf(entries: CatalogEntry[], experiments: Experiment[], 
 function SecondaryActions({ keysShown }: { keysShown: Array<keyof typeof home.secondary> }) {
   const hrefs: Record<keyof typeof home.secondary, string> = {
     protocols: routes.protocols,
-    upload: oldRoutes.upload,
+    upload: routes.upload,
     records: oldRoutes.records,
   };
   return (
@@ -72,7 +74,14 @@ function AnalysingCard({ entry }: { entry: CatalogEntry }) {
   const detail = useProtocolDetail(entry.protocol_id);
   const elapsed = elapsedWords(detail.data?.analysis_run?.requested_at);
   return (
-    <BigCard kind="analysing" title={home.analysing} sub={home.analysingSub(entry.title, elapsed)} why={home.analysingWhy} icon={<Hourglass aria-hidden="true" />} />
+    <BigCard
+      kind="analysing"
+      title={home.analysing}
+      sub={home.analysingSub(displayTitle(entry), elapsed)}
+      why={home.analysingWhy}
+      href={routes.analysis(entry.protocol_id)}
+      icon={<Hourglass aria-hidden="true" />}
+    />
   );
 }
 
@@ -121,9 +130,9 @@ export function HomeScreen({ session }: { session: AuthSession }) {
             <BigCard
               kind="review"
               title={home.review}
-              sub={one ? home.reviewOneSub(one.title, reviewCount(one) ?? 0) : home.reviewManySub(situation.entries.length)}
+              sub={one ? home.reviewOneSub(displayTitle(one), reviewCount(one) ?? 0) : home.reviewManySub(situation.entries.length)}
               why={home.reviewWhy(total)}
-              href={one ? oldRoutes.protocol(one.protocol_id) : routes.protocols}
+              href={one ? routes.review(one.protocol_id) : routes.protocols}
               icon={<ClipboardCheck aria-hidden="true" />}
             />
             <SecondaryActions keysShown={["protocols", "upload"]} />
@@ -134,7 +143,7 @@ export function HomeScreen({ session }: { session: AuthSession }) {
       case "first":
         body = (
           <>
-            <BigCard kind="first" title={home.first} sub={home.firstSub} href={oldRoutes.upload} icon={<Upload aria-hidden="true" />} />
+            <BigCard kind="first" title={home.first} sub={home.firstSub} href={routes.upload} icon={<Upload aria-hidden="true" />} />
             <SecondaryActions keysShown={["records"]} />
           </>
         );

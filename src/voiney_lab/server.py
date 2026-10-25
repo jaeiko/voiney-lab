@@ -231,7 +231,7 @@ from voiney_lab.llm_router import (
     screen_history_turn,
 )
 from voiney_lab.model_providers import RoleModel, chat_client
-from voiney_lab import source_figures
+from voiney_lab import pdf_text_engine, source_figures
 from voiney_lab.web_explanations import (
     WEB_PHOTOS,
     WebExplanationSettings,
@@ -5327,6 +5327,25 @@ def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
+@app.post("/api/protocols/{protocol_id}/title")
+def post_protocol_title(protocol_id:str,body:dict[str,Any]=Body(...))->dict[str,object]:
+    """A person's own name for a protocol (lane RX1, decision 4): one more
+    ledger event, the latest name read as the title everywhere. The source,
+    its metadata and the analyses are untouched."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.rename(
+                protocol_id,body.get("title"),actor_principal_id=_start_check_principal_id())
+        finally:
+            store.close()
+        return {"protocol":entry.public_dict(),"title":entry.title}
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get("/api/protocols/{protocol_id}/review")
 def get_protocol_review(protocol_id: str) -> dict[str, object]:
     """Expose the source-linked analysis, its notices and its safety statements."""
@@ -5483,7 +5502,12 @@ def get_protocol_run_changes(protocol_id:str)->dict[str,object]:
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            options=RunChanges(catalog).options(protocol_id)
+            # Lane RX1, decision 3: each step's sentence with its stored
+            # Korean, read only (nothing starts a translation here).
+            options=RunChanges(
+                catalog,
+                localize=lambda fixture:_with_revision_translations(fixture,start_missing=False),
+            ).options(protocol_id)
         finally:
             store.close()
         # Lane EASY, decision 3: "지난번처럼" -- the same account's last run of
@@ -5658,19 +5682,53 @@ def get_protocol_review_version(protocol_id:str,version:int)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
-@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}")
-def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,object]:
-    """One source page as the review read it: every line with its number,
-    the lines holding a value and those an unclear OCR reading holds, and
-    the OCR's value boxes (lane RV, decision b)."""
+#: Lane RX1, decision 1: the page picker's small pictures. A 612 x 792 pt
+#: page becomes 306 x 396 px; enough to tell a methods page from a figure page.
+SOURCE_THUMBNAIL_DPI=36
+#: The thumbnails rendered so far, by (source SHA-256, page); a few hundred
+#: small PNGs at most, in memory only.
+_SOURCE_THUMBNAILS:collections.OrderedDict[tuple[str,int],bytes]=collections.OrderedDict()
+_SOURCE_THUMBNAILS_MAX=256
+_SOURCE_THUMBNAILS_LOCK=threading.Lock()
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages")
+def get_protocol_source_pages(protocol_id:str)->dict[str,object]:
+    """How many pages the source has, before or after an analysis, and the
+    resolutions the page images come in (lane RX1, decision 1: the upload
+    asks which pages to analyse with small pictures of them)."""
 
     try:
         _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.review_source_page(protocol_id,source_page)
+            page_count=catalog.source_page_count(protocol_id)
         finally:
             store.close()
+        return {"protocol_id":protocol_id,"page_count":page_count,
+                "thumbnail_dpi":SOURCE_THUMBNAIL_DPI,
+                "image_dpi":source_figures.PAGE_IMAGE_DPI}
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}")
+def get_protocol_review_source_page(protocol_id:str,source_page:int)->dict[str,object]:
+    """One source page as the review read it: every line with its number,
+    the lines holding a value and those an unclear OCR reading holds, and
+    the OCR's value boxes (lane RV, decision b). Lane RX1, decision 2: each
+    line's box in points and the page image's dpi, so the screen puts a band
+    on the image where the card's lines stand."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            page=catalog.review_source_page(protocol_id,source_page)
+        finally:
+            store.close()
+        page["image_dpi"]=source_figures.PAGE_IMAGE_DPI
+        return page
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
@@ -5705,12 +5763,34 @@ def get_protocol_review_value_box_image(protocol_id:str,source_page:int,box_inde
         raise _catalog_http_error(exc) from exc
 
 
+def _source_thumbnail(path:Path,sha256:str,page_count:int,source_page:int)->bytes:
+    """One page as a small PNG (lane RX1, decision 1), rendered by the one PDF
+    engine in its child process and kept in memory for the next look."""
+
+    if not isinstance(source_page,int) or not 1<=source_page<=page_count:
+        raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+    key=(sha256,source_page)
+    with _SOURCE_THUMBNAILS_LOCK:
+        cached=_SOURCE_THUMBNAILS.get(key)
+        if cached is not None:
+            _SOURCE_THUMBNAILS.move_to_end(key)
+            return cached
+    png=pdf_text_engine.render_page_png(path,source_page,dpi=SOURCE_THUMBNAIL_DPI)
+    with _SOURCE_THUMBNAILS_LOCK:
+        _SOURCE_THUMBNAILS[key]=png
+        _SOURCE_THUMBNAILS.move_to_end(key)
+        while len(_SOURCE_THUMBNAILS)>_SOURCE_THUMBNAILS_MAX:
+            _SOURCE_THUMBNAILS.popitem(last=False)
+    return png
+
+
 @app.get("/api/protocols/{protocol_id}/review-draft/source-pages/{source_page}/image")
-def get_protocol_review_source_page_image(protocol_id:str,source_page:int):
+def get_protocol_review_source_page_image(protocol_id:str,source_page:int,size:str|None=None):
     """The source page itself for the review screen (lane RV, decision b).
 
     The same rendering as "원본 쪽 보기", for any protocol the caller may see
-    -- the review is of an analysis that may not run yet.
+    -- the review is of an analysis that may not run yet. ``?size=thumb``
+    (lane RX1, decision 1) is the page picker's small picture of the page.
     """
 
     try:
@@ -5718,9 +5798,13 @@ def get_protocol_review_source_page_image(protocol_id:str,source_page:int):
         catalog,store=_open_protocol_catalog()
         try:
             path,sha256=catalog.source_pdf(protocol_id)
+            page_count=catalog.source_page_count(protocol_id) if size=="thumb" else None
         finally:
             store.close()
-        png=source_figures.page_image(path,sha256,source_page)
+        if size=="thumb":
+            png=_source_thumbnail(path,sha256,page_count or 0,source_page)
+        else:
+            png=source_figures.page_image(path,sha256,source_page)
         if png is None:
             raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
         return Response(

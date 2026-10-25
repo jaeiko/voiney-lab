@@ -3,7 +3,7 @@ import { ArrowLeft, CircleAlert, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useProtocols } from "../api/queries";
-import { runApi, serverWords, type ChangesChosen, type StartAnswer, type StartCheck } from "../api/runApi";
+import { runApi, serverWords, type StartAnswer, type StartCheck } from "../api/runApi";
 import type { CatalogEntry } from "../api/types";
 import { Chip, EmptyBox, ErrorBox, LoadingBox, Note } from "../components/Pieces";
 import { StepProgress } from "../components/StepProgress";
@@ -11,7 +11,8 @@ import { start as copy } from "../copy/ko";
 import { go, oldRoutes, routes } from "../lib/navigation";
 import { protocolStatus, sortEntries } from "../lib/protocolStatus";
 import { primeStart, startRun } from "../voice/engine";
-import { ChangesStep } from "./start/ChangesStep";
+import { RunChangesStep } from "../components/RunChangesStep";
+import type { RunChangesChosen } from "../api/types";
 
 // The start flow (lane RX2, person's decision 1 of 2026-10-25): one thing per
 // screen, each saying first why it is there, a progress line ① to ⑤ and a
@@ -323,7 +324,7 @@ function GoStep({
   onBack,
 }: {
   entry: CatalogEntry | null;
-  chosen: ChangesChosen | null;
+  chosen: RunChangesChosen | null;
   resume: { sessionId: string; version: number; step: string | null } | null;
   onBack: () => void;
 }) {
@@ -391,7 +392,7 @@ export function StartScreen({ protocolId, resumeId, step }: StartScreenProps) {
   const [chosenId, setChosenId] = useState<string | null>(protocolId);
   const [index, setIndex] = useState(() => (protocolId && step ? Math.max(0, Math.min(STEP_COUNT - 1, step - 1)) : 0));
   const [check, setCheck] = useState<StartCheck | null>(null);
-  const [chosen, setChosen] = useState<ChangesChosen | null>(null);
+  const [chosen, setChosen] = useState<RunChangesChosen | null>(null);
   const protocols = useProtocols();
   const resume = useQuery({
     queryKey: ["workspace", "experiments", resumeId ?? "", "start"],
@@ -452,14 +453,15 @@ export function StartScreen({ protocolId, resumeId, step }: StartScreenProps) {
   } else if (index === 3) {
     body = (
       <StepFrame index={3} title={copy.stepNames[3]}>
-        <ChangesStep
+        {/* Lane RX1's piece for today's values (its decision 3), the same contract the old start sheet used. */}
+        <RunChangesStep
           protocolId={chosenId}
-          onDone={(value) => {
+          onChosen={(value) => {
             setChosen(value);
             next();
           }}
-          footer={(primary) => <Footer onBack={back}>{primary}</Footer>}
         />
+        <Footer onBack={back} />
       </StepFrame>
     );
   } else {

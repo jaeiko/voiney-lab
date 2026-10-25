@@ -39,10 +39,10 @@ const REVIEW = {
 };
 const CHANGES = {
   protocol_id: PID, target: TARGET, values: [
-    { item_id: 'step:s4:time', step_label: '4', kind_ko: '시간', shown_ko: '10 min', units_ko: 'min · s · h' },
-    { item_id: 'step:s4:temp', step_label: '4', kind_ko: '온도', shown_ko: '37 °C', units_ko: '°C' },
+    { item_id: 'step:s4:time', step_id: 'step-4', step_label: '4', kind: 'time', kind_ko: '시간', shown_ko: '10 min', units_ko: 'min · s · h' },
+    { item_id: 'step:s4:temp', step_id: 'step-4', step_label: '4', kind: 'temperature', kind_ko: '온도', shown_ko: '37 °C', units_ko: '°C' },
   ],
-  last_time: null,
+  last_time: null, limit: 12,
 };
 const VOICES = {
   provider: 'google_cloud', default_voice_id: 'ko-KR-Chirp3-HD-Charon', selected: 'default', preview_text_ko: '안녕하세요. 오늘 실험을 안내할게요.',

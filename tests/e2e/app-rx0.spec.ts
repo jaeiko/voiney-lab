@@ -44,7 +44,8 @@ test.describe('The new screen (lane RX0)', () => {
     const card = page.locator('.big-card');
     await expect(card).toHaveCount(1);
     await expect(card).toContainText('첫 프로토콜 올리기');
-    await expect(card).toHaveAttribute('href', '/index.html#/upload');
+    // Lane RX1: the upload is the new screen's own.
+    await expect(card).toHaveAttribute('href', '#/upload');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
   });
@@ -69,12 +70,14 @@ test.describe('The new screen (lane RX0)', () => {
     const rows = page.locator('.row');
     await expect(rows).toHaveCount(4);
     await expect(rows.nth(0)).toContainText('바로 쓸 수 있어요');
-    await expect(rows.nth(0).getByRole('link', { name: '시작하기' })).toHaveAttribute('href', '/index.html#/protocols/p-rx0-ready');
+    // Lane RX2: the start goes to the new screen's start flow (startHref).
+    await expect(rows.nth(0).getByRole('link', { name: '시작하기' })).toHaveAttribute('href', '#/start/p-rx0-ready');
     await expect(rows.nth(1)).toContainText('분석 중 · 3분 지남');
-    await expect(rows.nth(1).getByRole('link')).toHaveCount(0);
+    // Lane RX1: a row being analysed opens its progress screen; it has no start or review button.
+    await expect(rows.nth(1).getByRole('link', { name: '진행 보기' })).toHaveAttribute('href', '#/protocols/p-rx0-analysing/analysis');
     await expect(rows.nth(2)).toContainText('분석 실패 — 다시 시도');
     await expect(rows.nth(3)).toContainText('확인 8개 남음');
-    await expect(rows.nth(3).getByRole('link', { name: '확인하기' })).toHaveAttribute('href', '/index.html#/protocols/p-rx0-review');
+    await expect(rows.nth(3).getByRole('link', { name: '확인하기' })).toHaveAttribute('href', '#/protocols/p-rx0-review/review');
     for (const word of ['검토 대기', '실행 가능', '실행 불가', '카탈로그']) await expect(page.getByText(word)).toHaveCount(0);
     // Every target is at least 44 px tall.
     for (const link of await page.locator('.row .btn, .nav a, .screen-head .btn').all()) {
@@ -89,7 +92,7 @@ test.describe('The new screen (lane RX0)', () => {
     await expect(card).toContainText('확인하기');
     await expect(card).toContainText('Western blot · 확인할 것 8개');
     await expect(card).toContainText('8가지만 확인하면 실험에 쓸 수 있어요.');
-    await expect(card).toHaveAttribute('href', '/index.html#/protocols/p-rx0-review');
+    await expect(card).toHaveAttribute('href', '#/protocols/p-rx0-review/review');
   });
 
   test('my saved experiment becomes 이어서 하기 · N단계부터', async ({ page }) => {

@@ -55,9 +55,35 @@ describe("the copy table", () => {
       copy.protocols.emptyAction,
       ...Object.values(copy.protocols.actions),
       ...Object.values(copy.home.secondary),
+      copy.upload.pick,
+      copy.upload.linkButton,
+      copy.upload.pagesPick,
+      copy.upload.pagesStart,
+      copy.upload.pagesReset,
+      copy.upload.pickAgain,
+      copy.analysis.review,
+      copy.analysis.retry,
+      copy.analysis.startAnalysis,
+      copy.analysis.uploadOther,
+      copy.review.later,
+      copy.review.openSource,
+      copy.review.send,
+      copy.review.cancel,
+      copy.review.memo,
+      copy.changes.remove,
+      copy.changes.asText,
+      copy.changes.asNumber,
+      copy.title.rename,
+      copy.title.save,
     ];
-    const offenders = buttons.filter((label) => !/기$/.test(label) && !["프로토콜 보기", "지난 기록", "실험 시작"].includes(label));
+    // The person's own button words (brief 2026-10-25) and the short way-finders stand as they are.
+    const asWritten = ["프로토콜 보기", "지난 기록", "실험 시작", "전체 분석", "목록으로", "이전", "다음"];
+    const offenders = buttons.filter((label) => !/기$/.test(label) && !asWritten.includes(label));
     expect(offenders).toEqual([]);
+    expect(copy.changes.none).toBe("바꿀 값 없음 — 원문대로 할게요");
+    expect(copy.changes.some).toBe("바꿀 값이 있어요");
+    expect(copy.changes.done).toBe("다 골랐어요");
+    expect(copy.upload.pagesAsk).toBe("어느 쪽을 분석할까요?");
   });
 
   it("keeps the product name and the tagline the brief asked for", () => {

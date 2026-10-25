@@ -92,10 +92,11 @@ export async function walk(page: Page, info: TestInfo) {
   await page.getByTestId('start-next').click();
   expect(server.safetyReads).toBe(1);
 
-  // ④ Today's values: none changed.
-  await expect(page.getByTestId('changes-list')).toBeVisible();
+  // ④ Today's values (lane RX1's piece): none changed.
+  await expect(page.getByTestId('start-why')).toContainText('오늘 원문과 다르게 할 값');
+  await expect(page.getByTestId('changes-none')).toBeVisible();
   await shot(page, info, '09-start-4-changes');
-  await page.getByTestId('start-next').click();
+  await page.getByTestId('changes-none').click();
   expect(server.changeChoices).toEqual([{ target: expect.any(Object), changes: [], source: 'wizard' }]);
 
   // ⑤ The start: the noise choice, its one line, the fixed start button.

@@ -1,6 +1,9 @@
 // Where the new screen sends the person for what it has not taken over yet
 // (lane RX0): the old screen at /index.html keeps its hash routes, so a
-// hash the new screen does not know is opened there unchanged.
+// hash the new screen does not know is opened there unchanged. Lane RX1
+// took over the upload, the analysis progress, the confirmation screen and
+// today's values; lane RX2 the start flow, the experiment, the settings and
+// the first guide. The records are still the old screen's.
 
 export const OLD_SCREEN = "/index.html";
 
@@ -22,11 +25,16 @@ export function goToOldScreen(hash: string): void {
   window.location.replace(oldScreenUrl(hash));
 }
 
+export type RouteName =
+  | "home" | "protocols" | "upload" | "analysis" | "review" | "changes"
+  | "start" | "run" | "settings" | "welcome" | "handoff";
+
 export interface Route {
-  name: "home" | "protocols" | "start" | "run" | "settings" | "welcome" | "handoff";
+  name: RouteName;
   hash: string;
-  /** The protocol a start names (#/start/<id>), or the saved experiment it continues (#/start/<id>?resume=<session>). */
+  /** The protocol a screen is about (#/protocols/<id>/…, #/start/<id>). */
   protocolId?: string | null;
+  /** The saved experiment a start continues (#/start/<id>?resume=<session>). */
   resumeId?: string | null;
   /** The start flow's step to open at (1-5), after the server refused a start for that step. */
   step?: number | null;
@@ -41,11 +49,24 @@ function decoded(value: string): string | null {
   }
 }
 
+const PROTOCOL_SCREEN = /^\/protocols\/([^/]+)\/(analysis|review|changes)$/;
+
 /** The new screen's own routes; everything else is the old screen's. */
 export function parseRoute(hash: string): Route {
   const clean = (hash || "").replace(/^#/, "");
   if (clean === "" || clean === "/" || clean === "/home") return { name: "home", hash: "#/home" };
   if (clean === "/protocols") return { name: "protocols", hash: "#/protocols" };
+  if (clean === "/upload") return { name: "upload", hash: "#/upload" };
+  const screen = PROTOCOL_SCREEN.exec(clean);
+  if (screen) {
+    let protocolId = screen[1];
+    try {
+      protocolId = decodeURIComponent(screen[1]);
+    } catch {
+      // A hash someone typed by hand: kept as written.
+    }
+    return { name: screen[2] as "analysis" | "review" | "changes", hash: `#${clean}`, protocolId };
+  }
   // Lane RX2: the start flow, the experiment screen, the settings and the first guide.
   const start = /^\/start(?:\/([^/?#]+))?\/?(?:\?(.*))?$/.exec(clean);
   if (start) {
@@ -69,6 +90,10 @@ export function parseRoute(hash: string): Route {
 export const routes = {
   home: "#/home",
   protocols: "#/protocols",
+  upload: "#/upload",
+  analysis: (id: string) => `#/protocols/${encodeURIComponent(id)}/analysis`,
+  review: (id: string) => `#/protocols/${encodeURIComponent(id)}/review`,
+  changes: (id: string) => `#/protocols/${encodeURIComponent(id)}/changes`,
   start: (protocolId?: string | null, options: { resume?: string | null; step?: number | null } = {}) => {
     const query = new URLSearchParams();
     if (options.resume) query.set("resume", options.resume);
@@ -80,6 +105,15 @@ export const routes = {
   settings: "#/settings",
   welcome: "#/welcome",
 } as const;
+
+/** Where "실험 시작" goes for a protocol: lane RX2's start flow for it. */
+export function startHref(protocolId: string): string {
+  return routes.start(protocolId);
+}
+
+export function goTo(hash: string): void {
+  window.location.hash = hash;
+}
 
 export function go(hash: string, replace = false): void {
   if (replace) window.location.replace(hash);
