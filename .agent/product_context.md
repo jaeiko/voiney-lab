@@ -49,6 +49,12 @@ Researchers at the bench (the pilot: two master's students, from late October
 - "Use the protocol I uploaded, not different conditions."
 - "Record only what I actually said, and not other people's voices."
 - After the run: a notebook that helps a researcher, not a voice-test log.
+- "I adapt a paper's method — conditions and the steps themselves — run by
+  run; writing a separate protocol beside my experiment record is extra
+  work." (a chemistry pilot candidate, 2026-10-24/25; see Evidence)
+- During the run: expert answers to the problems and questions that come up,
+  not explanations of terms already known before it; on a tablet, because
+  people move around the lab.
 
 A lab also needs: bringing its own protocol in without code changes, seeing
 why a protocol cannot start, a traceable export (Word, Markdown, JSON, CSV)
@@ -69,16 +75,37 @@ records belong to the owner named in `docs/GIT_WORKFLOW.md`).
 | Voice tests | Development server, in-gel protocol, last 2026-10-10. A café test the same day with borrowed earphones picked up bystanders and could not be completed | Voice calibration and loudness filter |
 | Report evaluation, 2026-10-19 | The report read as a voice-test log and did not help a researcher | The lab-notebook report |
 | Synthetic benches | Voice level, noise endpoint and speaker-verification measurements on synthetic voices and noise only | Thresholds marked "to re-measure" |
+| Pilot candidate withdrawal, 2026-10-24/25 (e-mail) | A chemistry lab that was to join the pilot (one master's researcher) withdrew. Reason: the lab follows published methods but changes conditions and the **procedure itself** as its research needs, so writing a separate protocol to use the product, beside its existing experiment record, is extra work. Three comments: (1) people move around the lab a lot — use it on a tablet; (2) terms such as "HPLC water" are known before the run; what is needed is expert answers to problems and questions that arise during it; (3) the burden of writing a separate protocol | The target-lab decision below; the exploratory-run design `docs/ADAPTED_RUN_PLAN.md` (not built) |
 
 The initial-customer profile below is a hypothesis, not evidence.
+
+## Target labs and exploratory runs (human decision 2026-10-25)
+
+The target stays chemistry and biology wet labs as a whole, after the
+withdrawal above. Two kinds of work must both be possible: repeating a fixed
+procedure, and exploratory experiments that take a paper's method and change
+the procedure itself from run to run. For the second, the researcher should
+not have to write a protocol first: the product's output is the experiment
+record ("the paper's method → what was actually done today"), not a protocol.
+
+**Not built.** What exists today is page-range analysis and "today's values"
+(time, temperature, speed, volume and concentration changed by a person);
+removing, adding, reordering or rewording steps, substituting reagents and
+changing the procedure during a run do not exist. The design — a personal
+"today's plan" over the analysed source, researcher-written steps marked as
+such with author and time, model proposals applied only after a person
+confirms them, source safety statements never removed — is
+`docs/ADAPTED_RUN_PLAN.md`, waiting for a person's decisions. The lab
+adaptations and approval step removed on 2026-10-08 do not return.
 
 ## Initial customer (hypothesis)
 
 A university lab, core facility, small biotech or CRO team with 5–20 bench
 users and one repetitive, low-hazard, multi-step protocol run from PDF or
-paper with delayed data entry. The first pilot avoids clinical decisions,
-controlled substances, equipment control, and high-hazard or regulated
-release work.
+paper with delayed data entry — or, after the decision above, exploratory
+runs adapted from published methods. The first pilot avoids clinical
+decisions, controlled substances, equipment control, and high-hazard or
+regulated release work.
 
 ## Principles
 
