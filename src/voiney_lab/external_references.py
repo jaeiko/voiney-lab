@@ -21,7 +21,11 @@ from typing import Any
 
 import httpx
 
-from voiney_lab.answer_checks import PUBLIC_REFERENCE_MAX_CHARS, public_reference_violations
+from voiney_lab.answer_checks import (
+    PUBLIC_REFERENCE_MAX_CHARS,
+    PUBLIC_REFERENCE_QUOTE_CHARS,
+    public_reference_violations,
+)
 from voiney_lab.public_knowledge import public_reference_label
 
 from voiney_lab.model_providers import ROLE_SETTINGS
@@ -446,31 +450,112 @@ class XaiSupplementalKnowledge:
 
 # --- Public material, said short (lane KNOW, decision 6) ----------------------------
 
-#: The most characters of a public piece the fixed (model-free) form reads
-#: aloud: the first sentence, cut here, with the mark in front.
-PUBLIC_REFERENCE_SPOKEN_CHARS = 90
+#: How many public pieces the help shows (the first is the one said).
+PUBLIC_REFERENCE_SHOWN = 2
+#: Said when every public piece found is a wiki's (additional decision 3).
+PUBLIC_WIKI_ONLY = {
+    "ko": "위키백과 자료만 찾았어요.",
+    "en": "Only a wiki has it.",
+}
+
+
+def _first_sentence(text: str) -> str:
+    text = " ".join(text.split())
+    return re.split(r"(?<=[.!?。！？])\s+", text, maxsplit=1)[0] if text else ""
 
 
 def public_reference_fallback(
-    source_text: str, *, source_name: str, language: str,
+    source_text: str, *, source_name: str, language: str, source_language: str | None = None,
 ) -> str:
-    """The model-free form of a public ground: the mark, then the piece's first sentence.
+    """The model-free spoken form of a public ground (decision 6): the mark, then
+    the piece's first sentence when it may be read, else where to see it.
 
-    Used when the supplemental role is off or its paraphrase failed a check:
-    the source's own words, one sentence, cut at ``PUBLIC_REFERENCE_SPOKEN_CHARS``
-    so the rest stays on the screen. Nothing is written by a model.
+    The sentence is read only when it is in the turn's language, shorter than
+    ``PUBLIC_REFERENCE_QUOTE_CHARS`` (a longer stretch of the source would be a
+    reading, not a reference) and passes ``public_reference_violations`` -- a
+    fact, not an instruction, no permission to go on, no value against the
+    source's. Otherwise the mark says where the material is and the screen
+    shows it with its source and licence. Nothing is written by a model.
     """
 
-    text = " ".join(source_text.split())
-    first = re.split(r"(?<=[.!?。！？])\s+", text, maxsplit=1)[0] if text else ""
-    if len(first) > PUBLIC_REFERENCE_SPOKEN_CHARS:
-        cut = first.rfind(" ", 0, PUBLIC_REFERENCE_SPOKEN_CHARS)
-        first = first[: cut if cut > PUBLIC_REFERENCE_SPOKEN_CHARS // 2 else PUBLIC_REFERENCE_SPOKEN_CHARS].rstrip(" ,;:") + "…"
     label = public_reference_label(source_name)
-    if not first:
-        return label
-    tail = " (일반 참고예요.)" if language == "ko" else " (general reference only.)"
-    return f"{label}: {first}{tail}"
+    first = _first_sentence(source_text)
+    same_language = source_language is None or source_language == language
+    if (
+        first and same_language and len(first) < PUBLIC_REFERENCE_QUOTE_CHARS
+        and not public_reference_violations(first, evidence=source_text)
+    ):
+        return f"{label}: {first}"
+    if language == "ko":
+        return f"{label}에 관련 내용이 있어요. 화면에서 확인해 주세요."
+    return f"{label} has something on it; see the screen."
+
+
+@dataclass(frozen=True)
+class PublicReferencePart:
+    """The public pieces of a problem's help, in the form decision 6 sets.
+
+    ``shown`` is the screen's block for each piece -- the mark with the source's
+    name, the title and place, the piece's own words, its address and licence;
+    ``spoken`` is the model-free spoken form of the first piece (and the wiki
+    note when only a wiki has it); ``quoted`` holds every line that is the
+    source's or names it, which the help's own-words check takes out first.
+    """
+
+    shown: str
+    spoken: str
+    sources: tuple[dict[str, str], ...]
+    quoted: tuple[str, ...]
+    count: int
+    wiki_only: bool
+    first_text: str
+    first_source_name: str
+    first_language: str
+
+
+def public_reference_part(hits: Any, *, language: str, limit: int = PUBLIC_REFERENCE_SHOWN) -> PublicReferencePart | None:
+    """The help's public block from ``public`` tier hits, or None when there are none."""
+
+    language = language if language in {"ko", "en"} else "ko"
+    pieces = [hit for hit in hits if getattr(hit, "tier", "") == "public"][:limit]
+    if not pieces:
+        return None
+    shown: list[str] = []
+    sources: list[dict[str, str]] = []
+    quoted: list[str] = []
+    for hit in pieces:
+        source_name = hit.detail("source_name") or hit.title
+        label = public_reference_label(source_name)
+        place = " · ".join(part for part in (hit.title, hit.locator) if part)
+        address = " · ".join(part for part in (hit.source_url or "", hit.license or "") if part)
+        shown.append("\n".join(part for part in (label, place, f"“{hit.text}”", address) if part))
+        sources.append({
+            "tier": "public", "locator": hit.locator, "kind": "public",
+            "source_name": source_name, "grade": hit.detail("grade"),
+            "url": hit.source_url or "", "license": hit.license or "",
+        })
+        quoted += [label, source_name, place, hit.text, address]
+    first = pieces[0]
+    quoted.append(_first_sentence(first.text))
+    first_source_name = first.detail("source_name") or first.title
+    spoken = public_reference_fallback(
+        first.text, source_name=first_source_name, language=language, source_language=first.language)
+    grades = [hit.detail("grade") for hit in pieces]
+    wiki_only = all(grade == "C" for grade in grades)
+    if wiki_only:
+        shown.append(PUBLIC_WIKI_ONLY[language])
+        spoken = f"{spoken} {PUBLIC_WIKI_ONLY[language]}"
+    return PublicReferencePart(
+        shown="\n\n".join(shown),
+        spoken=spoken,
+        sources=tuple(sources),
+        quoted=tuple(item for item in quoted if item),
+        count=len(pieces),
+        wiki_only=wiki_only,
+        first_text=first.text,
+        first_source_name=first_source_name,
+        first_language=first.language,
+    )
 
 
 async def paraphrase_public_reference(

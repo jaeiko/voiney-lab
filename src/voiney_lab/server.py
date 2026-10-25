@@ -65,6 +65,7 @@ from voiney_lab.answer_checks import (
     SAFETY_INSTRUCTION_TOPICS,
     possible_cause_violations,
     problem_help_violations,
+    public_reference_violations,
 )
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
@@ -119,7 +120,9 @@ from voiney_lab.experiment_reports import (
 from voiney_lab.external_references import (
     SupplementalKnowledgeSettings,
     XaiSupplementalKnowledge,
+    paraphrase_public_reference,
     plan_research_query,
+    public_reference_part,
     supplemental_explanation_query,
     supplemental_knowledge_allowed,
 )
@@ -153,6 +156,7 @@ from voiney_lab.public_knowledge import (
     KnowledgeUnavailable as PublicKnowledgeUnavailable,
     PublicKnowledgeConfigurationError,
     PublicKnowledgeSettings,
+    public_reference_label,
     start_public_knowledge,
 )
 from voiney_lab.protocol_link_import import (
@@ -6767,7 +6771,9 @@ class ListenerSession:
         self.experiment_report_id:str|None=None
         #: Lane HELP: the account's earlier runs of this protocol, read once
         #: per experiment record for a problem's help; and the public source
-        #: (lane KNOW connects one; None here, and its tier is skipped).
+        #: (lane KNOW: ``voice_socket`` hands it the tier loaded at start,
+        #: ``app.state.public_knowledge``; None when that tier is off, and
+        #: the help then skips it).
         self.problem_history:HistoryKnowledge|None=None
         self.public_knowledge:Any=None
         #: Lane ON, decision 2: the voice the person chose (None: the
@@ -9808,11 +9814,17 @@ async def _with_problem_help(
         timeout_seconds=PROBLEM_HELP_SEARCH_SECONDS)
     timings["knowledge_search_ms"]=max(found.elapsed_ms.values(),default=0.0)
     causes_follow=_problem_causes_allowed(session,plan,language)
-    help_=compose_problem_help(found,language=language,causes_follow=causes_follow)
+    public=public_reference_part(found.tier("public"),language=language)
+    help_=_with_public_reference(
+        compose_problem_help(
+            replace(found,hits=tuple(hit for hit in found.hits if hit.tier!="public")),
+            language=language,causes_follow=causes_follow),
+        public,causes_follow=causes_follow)
     violations=problem_help_violations(
         f"{help_.shown}\n{help_.spoken}",quoted=help_.quoted_text.splitlines())
     if violations:
         log.warning("problem help dropped checks=%s","+".join(violations))
+        public=None
         help_=compose_problem_help((),language=language,causes_follow=causes_follow)
     if plan.action is CuratedProtocolAction.PROBLEM_HELP:
         display,speech=help_.shown,help_.spoken
@@ -9836,7 +9848,40 @@ async def _with_problem_help(
         "sources_text":"\n".join((help_.quoted_text,step.instruction_source_text)),
         "protocol_text":curated._protocol_vocabulary().corpus,
         "closing":help_.closing,
+        # Lane KNOW, decision 6: the first public piece, said in ③ -- a checked
+        # paraphrase, or its model-free form when that fails or is late.
+        "public":None if public is None else {
+            "text":public.first_text,"source_name":public.first_source_name,
+            "language":public.first_language,"fixed":public.spoken,
+        },
     }
+
+
+def _with_public_reference(help_:Any,public:Any,*,causes_follow:bool)->Any:
+    """The help with its public pieces in decision 6's form (lane KNOW).
+
+    The composer (``knowledge.compose_problem_help``) gets the protocol and
+    history hits only; the public pieces follow as
+    ``external_references.public_reference_part`` writes them -- on the screen
+    the mark "공개 자료 · 일반 참고 — <출처 이름>", the title and place, the
+    piece's own words, its address and licence; said, the mark and the
+    piece's first sentence or where to see it. With ③ to follow, the spoken
+    form waits for ③, where a checked paraphrase may take its place. Every
+    line that is the source's or names it is quoted, so the help's own-words
+    check judges only the fixed sentences.
+    """
+
+    if public is None:
+        return help_
+    found=dict(help_.found); found["public"]=public.count
+    return replace(
+        help_,
+        display=f"{help_.display}\n\n{public.shown}",
+        speech=help_.speech if causes_follow else f"{help_.speech} {public.spoken}",
+        sources=(*help_.sources,*public.sources),
+        found=found,
+        quoted_text="\n".join(item for item in (help_.quoted_text,*public.quoted) if item),
+    )
 
 
 def _record_problem_help(
@@ -9882,19 +9927,53 @@ async def _queue_problem_causes(
     speak_by=float(causes.get("speak_by") or clock())
     explanation=""
     status="disabled"
+    public=causes.get("public") or None
+    public_words=str(public["fixed"]) if public else ""
+    public_status="none" if not public else "disabled"
     try:
         role=RoleModel.from_environment("supplemental")
-        result=await asyncio.wait_for(
-            XaiSupplementalKnowledge(
-                _role_client(role),
-                replace(session.supplemental_knowledge_settings,
-                        model=role.model or session.supplemental_knowledge_settings.model),
-            ).explain_possible_causes(
+        explainer=XaiSupplementalKnowledge(
+            _role_client(role),
+            replace(session.supplemental_knowledge_settings,
+                    model=role.model or session.supplemental_knowledge_settings.model),
+        )
+        timeout=max(0.05,min(session.supplemental_knowledge_settings.timeout_seconds,speak_by-clock()))
+        jobs=[asyncio.wait_for(
+            explainer.explain_possible_causes(
                 causes["problem"],step_text=causes["step_text"],
                 source_lines=tuple(causes.get("source_lines") or ()),
                 public_lines=tuple(causes.get("public_lines") or ()),language=language),
-            timeout=max(0.05,min(session.supplemental_knowledge_settings.timeout_seconds,speak_by-clock())),
-        )
+            timeout=timeout,
+        )]
+        if public:
+            # Lane KNOW, decision 6: the first public piece said short, checked
+            # by ``public_reference_violations``; the mark is the server's.
+            jobs.append(asyncio.wait_for(
+                paraphrase_public_reference(
+                    explainer,causes["problem"],source_text=str(public["text"]),
+                    source_name=str(public["source_name"]),language=language),
+                timeout=timeout,
+            ))
+        results=await asyncio.gather(*jobs,return_exceptions=True)
+        result=results[0]
+        if public:
+            paraphrase=results[1]
+            if isinstance(paraphrase,asyncio.CancelledError):
+                raise paraphrase
+            if isinstance(paraphrase,asyncio.TimeoutError):
+                public_status="late"
+            elif isinstance(paraphrase,BaseException):
+                public_status="provider_error"
+            else:
+                public_status=str(paraphrase.get("status") or "provider_error")
+                answer=str(paraphrase.get("answer") or "") if public_status=="success" else ""
+                if answer and public_reference_violations(answer,evidence=str(public["text"])):
+                    # The server's own gate on the model's sentence (rule 2).
+                    answer,public_status="","rejected"
+                if answer:
+                    public_words=f"{public_reference_label(str(public['source_name']))}: {answer}"
+        if isinstance(result,BaseException):
+            raise result
         status=str(result.get("status") or "provider_error")
         if status=="success":
             explanation=str(result.get("answer") or "")
@@ -9916,6 +9995,9 @@ async def _queue_problem_causes(
         return
     lead=("AI 일반 지식으로는, " if language=="ko" else "From general AI knowledge, ")
     words=f"{lead}{explanation} {causes['closing']}" if explanation else str(causes["closing"])
+    if public_words:
+        words=f"{public_words} {words}"
+        log.info("public reference turn_id=%s status=%s",turn_id,public_status)
     if explanation:
         await sender.text(
             "research.state",turn_id=turn_id,status="running",phase="supplemental_model",
@@ -13876,6 +13958,9 @@ async def voice_socket(websocket:WebSocket):
         web_explanation_settings=web_explanation_settings,
         drawn_diagram_settings=drawn_diagram_settings,
     ); task=None; trusted_config=None
+    # Lane KNOW: the public tier loaded at start (None when it is off), the
+    # source a problem's help searches after the protocol and the history.
+    session.public_knowledge=getattr(app.state,"public_knowledge",None)
     # Every sentence this connection synthesizes is remembered for the echo
     # check; tasks started from here inherit the binding.
     _SPEAKING_SESSION.set(session)

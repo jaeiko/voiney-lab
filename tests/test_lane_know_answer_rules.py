@@ -18,11 +18,11 @@ from types import SimpleNamespace
 from voiney_lab.answer_checks import (
     DISPLAY_LABELS,
     PUBLIC_REFERENCE_MAX_CHARS,
+    PUBLIC_REFERENCE_QUOTE_CHARS,
     display_label_violations,
     public_reference_violations,
 )
 from voiney_lab.external_references import (
-    PUBLIC_REFERENCE_SPOKEN_CHARS,
     SupplementalKnowledgeSettings,
     XaiSupplementalKnowledge,
     paraphrase_public_reference,
@@ -102,18 +102,21 @@ class PublicReferenceViolationTests(unittest.TestCase):
 
 
 class FallbackTests(unittest.TestCase):
-    def test_the_fixed_form_is_the_mark_then_the_first_sentence_cut_short(self):
+    def test_the_fixed_form_is_the_mark_then_a_short_fact_or_where_to_see_it(self):
+        # Decision 6 (applied at the lane HELP wiring, 2026-10-25): the
+        # model-free form reads no more than a short sentence of the source,
+        # and only in the turn's language; otherwise it says where to look.
         text = "Acetonitrile is a colorless liquid with an aromatic odor that is highly flammable and is used as a polar aprotic solvent in many laboratories. It boils at 82 °C."
         spoken = public_reference_fallback(text, source_name="NIOSH Pocket Guide", language="ko")
-        self.assertTrue(spoken.startswith("공개 자료 · 일반 참고 — NIOSH Pocket Guide: Acetonitrile is a colorless"))
+        self.assertEqual(spoken, "공개 자료 · 일반 참고 — NIOSH Pocket Guide에 관련 내용이 있어요. 화면에서 확인해 주세요.")
         self.assertNotIn("boils", spoken)
-        self.assertIn("…", spoken)
-        self.assertTrue(spoken.endswith("(일반 참고예요.)"))
-        body = spoken.split(": ", 1)[1].split(" (일반")[0]
-        self.assertLessEqual(len(body), PUBLIC_REFERENCE_SPOKEN_CHARS + 1)
         short = public_reference_fallback("Short fact.", source_name="S", language="en")
-        self.assertEqual(short, "공개 자료 · 일반 참고 — S: Short fact. (general reference only.)")
-        self.assertEqual(public_reference_fallback("   ", source_name="S", language="ko"), "공개 자료 · 일반 참고 — S")
+        self.assertEqual(short, "공개 자료 · 일반 참고 — S: Short fact.")
+        other_language = public_reference_fallback("Short fact.", source_name="S", language="ko", source_language="en")
+        self.assertEqual(other_language, "공개 자료 · 일반 참고 — S에 관련 내용이 있어요. 화면에서 확인해 주세요.")
+        self.assertEqual(public_reference_fallback("   ", source_name="S", language="en"),
+                         "공개 자료 · 일반 참고 — S has something on it; see the screen.")
+        self.assertLess(len("Short fact."), PUBLIC_REFERENCE_QUOTE_CHARS)
 
 
 class _Responses:

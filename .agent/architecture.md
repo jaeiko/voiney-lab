@@ -369,7 +369,8 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   Korean reading; ② `HistoryKnowledge` -- `ExperimentReportStore.earlier_reports`
   (same protocol, organisation and owner; a lab-only record has none), the
   same step's anomalies and observations and what followed them; ③ a public
-  source (`session.public_knowledge`, none in this code) or, with the
+  source (`session.public_knowledge`, the tier lane KNOW loads at start, in
+  decision 6's form -- see the next item) and, with the
   supplemental role on and no safety category, possible causes
   (`explain_possible_causes`) said after the answer by `_queue_problem_causes`,
   which holds ④ the closing sentence (`knowledge.CLOSING`) until then and says
@@ -397,8 +398,18 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   by the server). It is a general reference beside the source and never a
   value or a safety statement; off, or without `MOSS_PROJECT_ID` /
   `MOSS_PROJECT_KEY`, or after a failed load, this tier alone is off by
-  setting name. Its wiring into the problem help (lane HELP's ③) follows
-  that lane's merge.
+  setting name. Wired into the problem help (2026-10-25, after lane HELP's
+  merge): `voice_socket` sets `session.public_knowledge` from
+  `app.state.public_knowledge`; `_with_problem_help` composes the protocol
+  and history hits with `compose_problem_help` and appends the public ones
+  through `_with_public_reference` / `external_references.public_reference_part`
+  (the mark, title and place, the piece's words, address and licence on the
+  screen; said, the mark and a short same-language fact or where to see it;
+  every line naming the source is quoted, so `problem_help_violations` judges
+  only the fixed sentences). With the supplemental role on, the spoken form
+  waits for ③, where `_queue_problem_causes` runs `paraphrase_public_reference`
+  beside the possible causes and says the checked paraphrase, or the fixed
+  form when it is late or refused, before them and ④.
 - Model roles (`model_providers.ROLES`): `router`, `answer`, `translation`,
   `analysis`, `report`, `supplemental`, each with a provider (`xai`,
   `anthropic`, `openai`, `google`), model and reasoning level and no default.
