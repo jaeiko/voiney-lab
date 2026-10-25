@@ -1675,7 +1675,7 @@ let curatedScreenFields=null,curatedScreenTurnId=null,autoTranslationShown=false
 const protocolCatalog=new Map();
 // Lane PRE decision 1 (2026-10-24): the catalog's own refresh -- its timer, the loads in flight, the newest answer drawn.
 const CATALOG_REFRESH_RUNNING_MS=5000,CATALOG_REFRESH_IDLE_MS=30000;
-let catalogRefreshHandle=null,catalogLoadsInFlight=0,catalogRequestSeq=0,catalogAppliedSeq=0,catalogSignature=null,catalogRouteTab=null;
+let catalogRefreshHandle=null,catalogLoadsInFlight=0,catalogRequestSeq=0,catalogAppliedSeq=0,catalogSignature=null,catalogRouteTab=null,catalogHoldsWizard=false;
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null,reportReadOnly=false;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
 const RESUMABLE_EXPERIMENT_STATUSES=new Set(["ready","in_progress","paused","blocked"]),ENDED_EXPERIMENT_STATUSES=new Set(["completed","stopped"]);
@@ -3664,6 +3664,9 @@ function scheduleCatalogRefresh(){
 }
 // A load already in flight answers for this one (and schedules the next).
 async function refreshProtocolCatalog(){if(!pageShown()||authRequired()){stopCatalogRefresh();return false;}if(catalogLoadsInFlight>0)return false;return loadProtocolCatalog(null,{quiet:true});}
+// A box in the start sheet being typed in (lane EASY's "오늘 원문과 다르게 할 값") is not rebuilt by a refresh:
+// the sheet is drawn again at the next press, with what was typed.
+function wizardTyping(){const active=globalThis.document?.activeElement;return Boolean(wizard?.open)&&String(active?.tagName||"").toLowerCase()==="input"&&$("wizard-sheet")?.contains?.(active)===true;}
 function onCatalogVisibilityChange(){if(pageShown())return refreshProtocolCatalog();stopCatalogRefresh();return Promise.resolve(false);}
 // Before the page says a protocol cannot run, it asks the server once more (the start sheet, the start).
 async function recheckProtocolRunnable(protocolId){
@@ -3706,7 +3709,8 @@ async function loadProtocolCatalog(preferredProtocolId=null,{quiet=false}={}){
   if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
   else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
   if(status&&(!quiet||recovering))status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
-  catalogState="ready";renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();applyRouteSelections();
+  catalogState="ready";catalogHoldsWizard=quiet&&wizardTyping();
+  try{renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();renderProtocolList();applyRouteSelections();}finally{catalogHoldsWizard=false;}
   return true;
  }catch(_){
   if(quiet||seq<catalogAppliedSeq)return false;
@@ -5511,6 +5515,7 @@ function wizardOption(label,sub,pressed,onPick,aside){
 }
 function renderWizard(){
  if(!wizard)return false;
+ if(catalogHoldsWizard)return Boolean(wizard.open);
  const body=globalThis.document?.body,section=$("start-wizard"),sheet=$("wizard-sheet");
  // Lane IA addendum: a sheet over the page while it is open and no run is on; the login's page of its own whatever the hash.
  const page=authRequired(),on=page||(wizard.open===true&&screenView()!=="during");

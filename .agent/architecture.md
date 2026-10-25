@@ -528,7 +528,8 @@ While the page is visible and signed in, the catalog re-reads
 analysis runs, every 30 s otherwise, and at once on a tab change, on
 `visibilitychange` back to visible and when the start sheet opens; it stops
 while hidden. A quiet refresh keeps status lines, skips an unchanged list,
-keeps the list on failure and drops answers older than the one drawn. The
+keeps the list on failure, drops answers older than the one drawn, and does
+not redraw the start sheet while one of its inputs has focus. The
 start sheet and the start ask the server once more
 (`recheckProtocolRunnable`) before refusing a protocol as not runnable.
 Detail groups analysis, source comparison, reagent tables, review history
