@@ -54,7 +54,8 @@ test.describe('The new screen (lane RX0)', () => {
     await page.goto(APP);
     await expect(page.locator('.big-card')).toContainText('실험 시작');
     await expect(page.locator('.big-card')).toContainText('바로 쓸 수 있는 프로토콜 1개');
-    await expect(page.locator('.big-card')).toHaveAttribute('href', '/index.html#/experiment');
+    // Lane RX2: the start card opens the new screen's start flow.
+    await expect(page.locator('.big-card')).toHaveAttribute('href', '#/start');
     await expect(page.locator('.secondary-actions a')).toHaveText(['프로토콜 보기', '올리기', '지난 기록']);
     await page.getByRole('navigation').getByText('프로토콜', { exact: true }).click();
     await expect(page).toHaveURL(/#\/protocols$/);
@@ -96,7 +97,8 @@ test.describe('The new screen (lane RX0)', () => {
     await page.goto(APP);
     await expect(page.locator('.big-card')).toContainText('이어서 하기');
     await expect(page.locator('.big-card')).toContainText('In-gel digestion · 4단계부터');
-    await expect(page.locator('.big-card')).toHaveAttribute('href', '/index.html#/experiment');
+    // Lane RX2: 이어서 하기 opens the new start flow's continuing start for that experiment.
+    await expect(page.locator('.big-card')).toHaveAttribute('href', '#/start/p-rx0-ready?resume=exp-rx0');
   });
 
   test('accounts mode: the login with the name, one button and the server words for a wrong password and a lock', async ({ page }) => {
@@ -128,6 +130,8 @@ test.describe('The new screen (lane RX0)', () => {
     );
     await page.route('**/api/auth/logout', (route) => { signedIn = false; return route.fulfill({ json: { signed_out: true } }); });
     await mockCatalog(page, [ENTRY_READY]);
+    // Lane RX2 (decision 6): the first guide comes once after a login; this account has seen it.
+    await page.addInitScript(() => localStorage.setItem('voiney-lab.app-welcome:acc-rx0', 'done'));
     await page.goto(APP);
     await expect(page.getByTestId('account-line')).toHaveText('재준 · 연구실 lab-a');
     await expect(page.getByText('관리자', { exact: true })).toBeVisible();
@@ -138,9 +142,10 @@ test.describe('The new screen (lane RX0)', () => {
   });
 
   test('a route the new screen has not taken over opens on the old screen unchanged', async ({ page }) => {
-    await page.goto(`${APP}#/settings`);
-    await page.waitForURL(/\/index\.html#\/settings$/);
-    await expect(page.locator('#tab-settings')).toBeVisible();
+    // Lane RX2 took over the settings and the experiment; the records are still the old screen's.
+    await page.goto(`${APP}#/records`);
+    await page.waitForURL(/\/index\.html#\/records$/);
+    await expect(page.locator('#tab-records')).toBeVisible();
   });
 
   test('the default root is the current screen; /app opens the new one', async ({ page }) => {
