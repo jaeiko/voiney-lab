@@ -41,41 +41,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-try:  # The contract module arrives with lane HELP; until it is merged the
-    # same shapes are defined here (lane rules 10/24, 7: lane KNOW follows it).
-    from voiney_lab.knowledge import KnowledgeContext, KnowledgeHit, KnowledgeUnavailable
-except ImportError:  # pragma: no cover - exercised only before lane HELP merges
-
-    class KnowledgeUnavailable(RuntimeError):  # type: ignore[no-redef]
-        """A source cannot be searched; ``setting`` names what is missing or off."""
-
-        def __init__(self, setting: str, message: str = "") -> None:
-            super().__init__(message or f"{setting} is not set (설정 필요)")
-            self.setting = setting
-
-    @dataclass(frozen=True)
-    class KnowledgeContext:  # type: ignore[no-redef]
-        organization_id: str | None
-        account_id: str | None
-        protocol_id: str
-        revision_id: str | None
-        step_id: str | None
-        language: str = "ko"
-
-    @dataclass(frozen=True)
-    class KnowledgeHit:  # type: ignore[no-redef]
-        tier: str
-        title: str
-        text: str
-        locator: str
-        source_url: str | None = None
-        license: str | None = None
-        language: str = "en"
-        score: float = 0.0
-        details: tuple[tuple[str, str], ...] = ()
-
-        def detail(self, name: str, default: str = "") -> str:
-            return next((value for key, value in self.details if key == name), default)
+# The knowledge contract (lane rules 10/24, 7) is lane HELP's: this tier's
+# hits, context and unavailability are those types, not copies of them.
+from voiney_lab.knowledge import KnowledgeContext, KnowledgeHit, KnowledgeUnavailable
 
 
 __all__ = [
