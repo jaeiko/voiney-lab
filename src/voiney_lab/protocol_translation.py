@@ -729,7 +729,11 @@ def _label_only_in_the_korean(unit: TranslationUnit, korean: str) -> str | None:
         return None
     if not re.match(rf"\s*{re.escape(label)}\s*단계", korean):
         return None
-    if re.match(rf"\s*{re.escape(label)}(?![0-9.])", unit.source_text):
+    # The source's own number opening the step -- "2 Prepare …" or "1. Harvest
+    # …" (lane SAY: a numbered line's point, measured 2026-10-25 on
+    # PMC8250384, 63 of 84 refused) -- balances the Korean label. "1.5 mL"
+    # opening a step is a quantity, not the label.
+    if re.match(rf"\s*{re.escape(label)}(?![0-9]|\.[0-9])", unit.source_text):
         return None
     return label
 

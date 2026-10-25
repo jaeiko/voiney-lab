@@ -9629,7 +9629,9 @@ def reader_translation_issue(
     if step_label:
         reading = re.sub(
             rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
-        source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
+        # The step's own number, "2 " or "1. " (lane SAY); not "1.5 mL".
+        source = re.sub(
+            rf"^\s*{re.escape(step_label)}(?![0-9]|\.[0-9])\.?\s*", "", source)
     if _quantities_changed(source, reading):
         return "quantities_changed"
     if bool(_SOURCE_NEGATION.search(source)) != bool(
