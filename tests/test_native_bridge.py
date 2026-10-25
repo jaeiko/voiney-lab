@@ -32,13 +32,15 @@ NODE_TESTS = sorted((ROOT / "tests" / "native_bridge").glob("*.test.js"))
 #: A summary line of ``node --test``, TAP (``# pass 43``) or spec (``ℹ pass 43``),
 #: at the start of a line (nested TAP subtests are indented).
 SUMMARY_LINE = re.compile(r"^(?:#|\u2139)[ \t]+(tests|pass|fail|cancelled)[ \t]+(\d+)[ \t]*$", re.MULTILINE)
+#: Terminal colour codes, which Node adds to the spec lines when colour is forced.
+COLOUR_CODE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def node_test_summary(output: str) -> dict[str, int]:
     """The counts in the closing summary of ``node --test``, in either shape."""
 
     counts: dict[str, int] = {}
-    for name, value in SUMMARY_LINE.findall(output):
+    for name, value in SUMMARY_LINE.findall(COLOUR_CODE.sub("", output)):
         counts[name] = int(value)  # the closing summary is the last one
     return counts
 
@@ -77,6 +79,12 @@ def test_native_bridge_timer_alerts_under_node() -> None:
 
 TAP_PASSED = "ok 43 - the notifier\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n"
 SPEC_PASSED = "\u2714 the notifier (6.1ms)\n\u2139 tests 43\n\u2139 suites 0\n\u2139 pass 43\n\u2139 fail 0\n\u2139 cancelled 0\n"
+#: The spec summary when colour is forced (``FORCE_COLOR=1``): each line is wrapped
+#: in escape codes.
+SPEC_PASSED_IN_COLOUR = "".join(
+    f"\x1b[34m\u2139 {name} {value}\x1b[39m\n"
+    for name, value in (("tests", 43), ("suites", 0), ("pass", 43), ("fail", 0), ("cancelled", 0))
+)
 TAP_FAILED = (
     "not ok 1 - one alert\n  ---\n  # fail 0\n  ...\n1..43\n"
     "# tests 43\n# pass 42\n# fail 1\n# cancelled 0\n"
@@ -84,7 +92,9 @@ TAP_FAILED = (
 SPEC_FAILED = "\u2716 one alert (2ms)\n\u2139 tests 43\n\u2139 pass 42\n\u2139 fail 1\n\u2139 cancelled 0\n"
 
 
-@pytest.mark.parametrize("output", [TAP_PASSED, SPEC_PASSED], ids=["tap", "spec"])
+@pytest.mark.parametrize(
+    "output", [TAP_PASSED, SPEC_PASSED, SPEC_PASSED_IN_COLOUR], ids=["tap", "spec", "spec-in-colour"]
+)
 def test_node_summary_passes_in_either_shape(output: str) -> None:
     """The CI runner's Node prints spec, a local Node 22 prints TAP: both pass."""
 
