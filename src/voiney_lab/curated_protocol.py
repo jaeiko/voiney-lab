@@ -47,6 +47,7 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
     problem_reading,
+    vague_check_reading,
 )
 from voiney_lab.answer_checks import (
     ServerValues,
@@ -5918,7 +5919,7 @@ _PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
 #: Lane HELP: the record's category of a problem no anomaly pattern names.
 PROBLEM_CATEGORY = "unexpected_result"
 #: The intents the problem reader makes (front rule "problem_help").
-_PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet"})
+_PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet", "vague_check"})
 #: What the rules made of a move said with a claim before lane SAY (decision
 #: 6): the claim answered alone, or nothing; the move was dropped.
 _MIXED_MOVE_READINGS = frozenset({
@@ -7693,6 +7694,20 @@ def classify_curated_control_intent(
 
     if front := _front_control_intent(transcript, language):
         return front
+    if language == "ko" and vague_check_reading(transcript):
+        # Lane SAY, decision 7: a doubt with nothing named ("이거 맞아요?",
+        # "망한 것 같아요") is answered with what the step should look like,
+        # then the problem help -- before "이게" is read as a reference.
+        return CuratedControlIntent(
+            intent_kind="vague_check",
+            action=CuratedProtocolAction.COMPLETION_CRITERIA,
+            requested_followup="explain_completion_criteria",
+            target_step="authoritative_current_step",
+            question_kind="troubleshooting",
+            language=language,
+            normalized_transcript=_utterance_key(transcript),
+            question_dimensions=("troubleshooting",),
+        )
     if meta_intent := classify_agent_meta_intent(transcript, language=language):
         return meta_intent
 
@@ -13315,6 +13330,62 @@ class CuratedProtocolSession:
             organization_id=organization_id, account_id=account_id,
             protocol_id=self.fixture.protocol_id, revision_id=self.fixture.revision_id,
             step_id=marker.get("step_id"), language=language,
+        )
+
+    def _vague_check_plan(
+        self, transcript: str, *, language: str, intent: CuratedControlIntent,
+    ) -> CuratedProtocolTurnPlan:
+        """"이거 맞아요?", "망한 것 같아요" (lane SAY, decision 7): what the step
+        should look like, said short, then the problem help.
+
+        The step's expected result as the source states it (its Korean
+        reading, or the source for the Korean-first step to read), or the
+        endpoint of a step repeated until it is reached, or that the source
+        states none. The server puts the protocol's and the earlier runs'
+        help after it (``problem_help``, lane HELP). Read-only: nothing is
+        recorded by this plan and nothing moves.
+        """
+
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        label = step.source_label
+        expected = next(
+            (fact for fact in self.fixture.facts_for_step(self.current_index)
+             if fact.kind == "expected_result"), None)
+        interval = self.repetition_anchored_at(step.step_id)
+        if expected is not None:
+            text = self._localized_fact(step.step_id, expected.fact_id) or expected.text
+            text = re.sub(r"^\s*예상\s*결과\s*[:：]\s*", "", " ".join(text.split()))
+            said = f"{label}단계는 이렇게 되면 돼요. {text}"
+            facts: tuple[CuratedProtocolFact, ...] = (expected,)
+        elif interval is not None and str(interval.get("source_text") or "").strip():
+            stated = " ".join(str(interval["source_text"]).split())
+            said = f"{label}단계는 원문의 이 상태가 되면 끝나요. “{stated}”"
+            facts = ()
+        else:
+            said = f"{label}단계 원문에는 확인할 결과가 따로 적혀 있지 않아요."
+            facts = ()
+        said = f"{said} 다르게 보이는 게 있으면 무엇이 다른지 말해 주세요."
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.COMPLETION_CRITERIA,
+            display_text=said,
+            speech_text=said,
+            speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+            facts=facts,
+            step_label=label,
+            final_step=self.current_index == len(steps) - 1,
+            state_changed=False,
+            primary_text=said,
+            source_texts=tuple(fact.text for fact in facts),
+            source_pages=tuple(fact.source_page for fact in facts),
+            evidence_ids=tuple(fact.fact_id for fact in facts),
+            translation_status="deterministic_protocol_structure",
+            intent_kind="vague_check",
+            target_step=label,
+            question_kind="troubleshooting",
+            normalized_transcript=intent.normalized_transcript,
+            question_dimensions=("troubleshooting",),
+            problem_help=self._problem_help_marker(transcript, kind="question"),
         )
 
     def _problem_help_plan(
@@ -22076,6 +22147,11 @@ class CuratedProtocolSession:
                 target_step=next_label,
                 question_kind=intent.question_kind,
             )
+        elif (
+            command is CuratedProtocolAction.COMPLETION_CRITERIA
+            and intent.intent_kind == "vague_check"
+        ):
+            plan = self._vague_check_plan(transcript, language=language, intent=intent)
         elif command is CuratedProtocolAction.COMPLETION_CRITERIA:
             step = steps[self.current_index]
             step_facts = self.fixture.facts_for_step(self.current_index)
