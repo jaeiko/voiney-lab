@@ -196,6 +196,18 @@ export async function walk(page: Page, info: TestInfo) {
   await shot(page, info, '17-run-drawer');
   await page.keyboard.press('Escape');
 
+  // A lost connection: connection.js (shared, unchanged) sees it and says it, the step stays, and the same experiment goes on.
+  await server.drop();
+  await expect(page.locator('#connection-band')).toContainText('연결이 끊겼어요');
+  await expect(page.getByTestId('run-listening')).toHaveAttribute('data-word', 'reconnecting');
+  await expect(page.getByTestId('run-step-text')).toHaveText(STEPS[1].korean);
+  await shot(page, info, '19-run-connection-lost');
+  await expect(page.locator('#connection-band')).toContainText('다시 연결됐어요', { timeout: 20_000 });
+  expect(server.starts.length).toBe(2);
+  expect(server.starts[1]).toMatchObject({ experiment_session_id: 's-rx2-1', reconnect: expect.any(Object) });
+  await expect(page.getByTestId('run-listening')).not.toHaveAttribute('data-word', 'reconnecting');
+  await expect(page.locator('#connection-band')).toBeHidden({ timeout: 10_000 });
+
   // [종료]: asked once, then the end.
   await page.getByTestId('run-stop').click();
   await page.getByTestId('run-stop-confirm').click();
@@ -220,3 +232,4 @@ export async function settingsWalk(page: Page, info: TestInfo) {
   await noOverflow(page, 'the settings');
   await shot(page, info, '20-settings');
 }
+

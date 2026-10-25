@@ -11,10 +11,11 @@ test.use({
 });
 test.describe.configure({ timeout: 120_000 });
 
-test('login, the first guide, the start flow and an experiment to its end', async ({ page }, info) => {
+test('login, the first guide, the start flow and an experiment to its end, through a lost connection', async ({ page }, info) => {
   await walk(page, info);
 });
 
 test('the settings save each choice and keep the filter off until the voice is checked', async ({ page }, info) => {
   await settingsWalk(page, info);
 });
+

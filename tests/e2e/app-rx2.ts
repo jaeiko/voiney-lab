@@ -167,9 +167,16 @@ export class StandIn {
     this.send({ type: 'speech.ignored', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'level_gate', during_playback: false });
   }
 
+  /** The server's side of the socket goes away (a lost connection; connection.js tries again). */
+  async drop() {
+    await this.socket?.close();
+  }
+
   async attach(page: Page) {
     await page.routeWebSocket(/\/ws$/, (ws) => this.connect(ws));
-    await page.route((url) => url.pathname.startsWith('/api/'), (route: Route) => {
+    // A glob, not a predicate: only /api/ requests are intercepted, so the AudioWorklet module loads from the server (Playwright
+    // fails a worklet module it intercepts -- lane NET's note).
+    await page.route('**/api/**', (route: Route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
       const json = (body: object, status = 200) => route.fulfill({ status, json: body });
