@@ -5391,7 +5391,14 @@ $("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSett
 $("ambient-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("ambient_mode",event.target.value);});
 $("speaker-sensitivity")?.addEventListener("change",event=>{void saveExperimenterSetting("speaker_sensitivity",event.target.value);});
 $("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");renderMicCheck();});
-$("mic-check-settings")?.addEventListener("click",()=>{const select=$("mic-device");select?.scrollIntoView?.({block:"center"});select?.focus?.();});
+// Lane HEAR decision 6 (2026-10-25): the microphone list lives in the settings tab, a hidden panel from
+// here, so scrolling to it showed nothing. Open the settings -- the sheet over a run, the tab before one -- then focus the list.
+function openMicSettings(){
+ if(screenView()==="during")openRunSheet("settings");else navigateTab("settings");
+ const select=$("mic-device");select?.scrollIntoView?.({block:"center"});select?.focus?.();
+ return true;
+}
+$("mic-check-settings")?.addEventListener("click",()=>{openMicSettings();});
 $("voice-calibration-skip")?.addEventListener("click",()=>{requestVoiceCalibration("skip");});
 $("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCalibrationAtStart(event.target.checked);});
 try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
