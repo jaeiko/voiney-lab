@@ -202,6 +202,7 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   → one structured analysis (or pieces of ≤15 pages, ≤400 pages), background job
   → server-owned evidence check, requote of refused items, domain validation
   → lines no quote covers that read like an instruction (possibly_missed_places)
+  → records whose words read as written to the program (program_address_flags)
   → all confirmed: analysis revision; those lines one start notice
     otherwise:     "review pending" ledger event + cards, those lines cards too
                    (never an analysis revision)
@@ -325,6 +326,20 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   (`source_text_possibly_missed`). It is no completeness guarantee: an
   instruction in none of the shapes, or one another record's quote covers,
   is not found.
+- Words written to the program (lane TIDY, 2026-10-25): a step, an action or
+  a statement beside them (safety statement, note, tip, completion
+  criterion, condition, observation, before-start item) whose words have a
+  shape of `PROGRAM_ADDRESS_SHAPES` in `experiment_protocol_analysis.py`
+  (they address the program, order the instructions before ignored or every
+  step marked done, or use a program's own words such as "system prompt")
+  gets a card (`program_address_flags`, reason `addressed_to_program`),
+  added after the card bound like the possibly-missed lines, so an analysis
+  that otherwise passed waits for review. [빼 주세요] is the `clear`
+  decision -- a step or an action leaves the version that runs -- and
+  [실험 지시예요] keeps the words as the source's. A safety statement is
+  never cleared on this ground (rule 5): its card offers confirm or a
+  re-analysis. The words were never obeyed before either; the card keeps
+  them from being read aloud as a step. Word lists only, no model.
 - The in-gel development fixture's timers come from
   `data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json`;
   no manifest, no timers.

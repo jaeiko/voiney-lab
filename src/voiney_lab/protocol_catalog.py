@@ -60,6 +60,7 @@ from voiney_lab.experiment_protocol_analysis import (
     REQUOTE_OCR_VALUES,
     REQUOTE_TIME_LIMIT_SECONDS,
     REVIEW_ITEM_KINDS,
+    REVIEW_REASON_ADDRESSED_TO_PROGRAM,
     REVIEW_REASON_BLOCKED,
     REVIEW_REASON_NUMBERING_SEAM,
     REVIEW_REASON_OCR_VALUE,
@@ -84,6 +85,7 @@ from voiney_lab.experiment_protocol_analysis import (
     possibly_missed_places,
     possibly_missed_summary,
     prepare_protocol_analysis_request,
+    program_address_flags,
     replace_at_paths,
     requote_questions,
     requote_unverified_items,
@@ -3980,6 +3982,7 @@ class ProtocolCatalog:
                 raise too_many
         elif model is not None and _items_by_reason(draft)[0] > review_max_items():
             draft, analysis_id = self._fewer_items(revision, draft, analysis_id, model=model)
+        draft = self._with_program_address_flags(revision, draft)
         if draft.review_flags:
             draft = self._with_possibly_missed_flags(revision, draft)
             entry = self._store_review_pending(revision, draft, analysis_id, pieces=pieces)
@@ -4276,6 +4279,31 @@ class ProtocolCatalog:
         # attempt's id, whose failure the ledger already holds.
         self._record_analysis_failure(revision, f"{analysis_id}-too-many-items", too_many)
         raise too_many
+
+    def _with_program_address_flags(
+        self, revision: ProtocolRevisionRecord, draft: ProtocolAnalysisDraft,
+    ) -> ProtocolAnalysisDraft:
+        """The draft with an item for each record whose words read as written
+        to the program (lane TIDY, item 3; fake-user test F6).
+
+        A step, an action or a statement beside them in one of the shapes of
+        ``program_address_flags`` is a card, "이 문장은 실험 지시가 아니라
+        프로그램에 하는 말처럼 보여요. 단계에서 뺄까요?", so an analysis that
+        would have passed waits for a person. Like the possibly-missed lines,
+        these items are made after the bound on cards was applied: they never
+        send a document to be read again or refuse it.
+        """
+
+        asked = {flag.item_id for flag in draft.review_flags
+                 if flag.reason == REVIEW_REASON_ADDRESSED_TO_PROGRAM}
+        flags = tuple(flag for flag in program_address_flags(draft.protocol)
+                      if flag.item_id not in asked)
+        if not flags:
+            return draft
+        logging.getLogger(__name__).info(
+            "protocol.analysis.addressed_to_program protocol_id=%s items=%d",
+            revision.experiment_id, len(flags))
+        return replace(draft, review_flags=(*draft.review_flags, *flags))
 
     def _with_possibly_missed_flags(
         self, revision: ProtocolRevisionRecord, draft: ProtocolAnalysisDraft,
@@ -5345,8 +5373,12 @@ class ProtocolCatalog:
             covered_by = (
                 evidence_item if quote_refused and not needs_review and evidence_item != item_id
                 else None)
+            # Lane TIDY, item 3: words asked about only because they read as
+            # written to the program are still the source's.
+            doubted = any(flag.reason != REVIEW_REASON_ADDRESSED_TO_PROGRAM for flag in own)
             origin = origins.get(item_id) or (
-                REVIEW_ORIGIN_AI if needs_review or covered_by else REVIEW_ORIGIN_SOURCE)
+                REVIEW_ORIGIN_AI if doubted or covered_by or (needs_review and quote_refused)
+                else REVIEW_ORIGIN_SOURCE)
             source: dict[str, object] | None = None
             if evidence is not None:
                 lines = None if quote_refused else _quote_lines(evidence, extraction)
@@ -5393,7 +5425,14 @@ class ProtocolCatalog:
             if any(flag.reason == REVIEW_REASON_READ_TWO_WAYS for flag in own):
                 # Lane RV2, decision e: this reading or the other piece's.
                 allowed = ["choose", *(action for action in allowed if action != "confirm")]
-            if needs_review and kind in _CLEARABLE_KINDS:
+            addressed = [flag for flag in own if flag.reason == REVIEW_REASON_ADDRESSED_TO_PROGRAM]
+            if needs_review and kind in _CLEARABLE_KINDS and not (
+                    kind == "warning" and len(addressed) == len(own)):
+                allowed.insert(allowed.index("memo"), "clear")
+            elif addressed and kind in {"step", "sub_action"}:
+                # Lane TIDY, item 3: words written to the program are taken out
+                # of the steps when a person says so ([빼 주세요]). A safety
+                # statement the source prints is not (AGENTS.md rule 5).
                 allowed.insert(allowed.index("memo"), "clear")
             decision = decisions.get(item_id)
             current: object = text
@@ -7222,6 +7261,27 @@ def _card_choices(
             _choice("fix", "직접 입력", request("fix"), needs="text"),
         ], {"proposal": value}
     quote_refused = source is not None and source.get("verified") is False
+    if any(reason.get("reason") == REVIEW_REASON_ADDRESSED_TO_PROGRAM for reason in reasons):
+        # Lane TIDY, item 3 (fake-user test F6): words that read as written to
+        # the program, not as an experiment's. [빼 주세요] takes them out of
+        # the steps; [실험 지시예요] keeps them (pointing at the source lines
+        # when the quote was not found). A safety statement is never taken out
+        # (AGENTS.md rule 5): it is the source's, or the document is read again.
+        keep_needs = "source_lines" if quote_refused else None
+        if kind == "warning":
+            choices = [_choice("confirm", "맞아요", request("confirm"), needs=keep_needs,
+                               primary=True)]
+            if "clear" in allowed:
+                choices.append(_choice("clear", "원문에 없어요", request("clear")))
+            choices.append(_choice("reanalysis", "다시 분석할게요", None, route="reanalysis"))
+            return "addressed_to_program", (
+                "이 안전 주의는 프로그램에 하는 말처럼 보여요. 원문의 안전 주의가 맞나요?"), choices, {}
+        choices = []
+        if "clear" in allowed:
+            choices.append(_choice("clear", "빼 주세요", request("clear"), primary=True))
+        choices.append(_choice("confirm", "실험 지시예요", request("confirm"), needs=keep_needs))
+        return "addressed_to_program", (
+            "이 문장은 실험 지시가 아니라 프로그램에 하는 말처럼 보여요. 단계에서 뺄까요?"), choices, {}
     suggested = source.get("suggested_lines") if source is not None else None
     if quote_refused and isinstance(suggested, dict) and suggested.get("unique"):
         # Decision b: the lines narrow to one place; the server proposes it
@@ -7917,9 +7977,14 @@ def _apply_review(
             reviewed = value.get("text")
         if action == "confirm" and not item["needs_review"]:
             continue
+        only_addressed = all(
+            isinstance(reason, dict) and reason.get("reason") == REVIEW_REASON_ADDRESSED_TO_PROGRAM
+            for reason in item.get("reasons") or ())
         origin = (
             REVIEW_ORIGIN_REVIEWER if action in {"fix", "enter"}
             else REVIEW_ORIGIN_SOURCE if kind in _SOURCE_WORDS_ONLY and action == "confirm"
+            # Lane TIDY, item 3: kept as the source's own words.
+            else str(item["origin"]) if item["needs_review"] and only_addressed
             else REVIEW_ORIGIN_AI if item["needs_review"] else str(item["origin"])
         )
         if action in {"fix", "enter", "choose"} or (
