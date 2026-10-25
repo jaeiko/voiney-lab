@@ -103,6 +103,8 @@
     body[data-view="during"] .run-analysis-state::before{content:" · "}
     body[data-view="during"] #rail-pdf-title{order:2;flex:0 1 auto;min-width:3rem;max-width:none;color:var(--ink);font-size:1rem;font-weight:600}
     body[data-view="during"] #rail-step-badge{order:4;flex:none;margin-left:auto;padding:0;border:0;background:none;color:var(--ink);font-size:1rem;font-weight:600;font-variant-numeric:tabular-nums}
+    body[data-view="during"] .run-stat.run-heard{color:var(--warning-ink)}
+    body[data-view="during"] .run-stat.run-heard[hidden],.run-heard[hidden]{display:none}
     body[data-view="during"] .run-stat{order:5;display:inline-flex;align-items:center;gap:.4rem;flex:none;color:var(--ink);font-size:1rem;font-weight:600;white-space:nowrap}
     /* The buttons along the bottom: pause or resume and stop, 64px. */
     body[data-view="during"] .rail-right{position:fixed;right:0;bottom:0;z-index:95;height:var(--target-run);gap:0;background:var(--ink)}
@@ -974,6 +976,8 @@
       <!-- Lane UI0 decision 2: this browser's own connection and microphone, in words. -->
       <span class="run-stat"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5a11 11 0 0 1 15 0"/><path d="M8 14a6 6 0 0 1 8 0"/><path d="M12 18h.01"/></svg><span id="run-connection">연결 안 됨</span></span>
       <span class="run-stat"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg><span id="run-mic">마이크 꺼짐</span></span>
+      <!-- Lane HEAR decision 3 (2026-10-25): a sound the server dropped is never dropped in silence; this shows for a few seconds after each. -->
+      <span id="run-heard" class="run-stat run-heard" role="status" hidden>잘 안 들렸어요</span>
     </div>
     <div class="rail-right">
       <!-- Lane UI0 decision 3: on the run screen, the three sheets -- the conversation, the pictures, the settings. -->
@@ -3938,7 +3942,29 @@ function renderIgnoredSpeech(m){
  setText("ignored-speech-summary",`다른 사람 말로 보여 듣지 않은 말 ${ignoredSpeechCount}개`);
  box.hidden=false;
 }
-function resetIgnoredSpeech(){ignoredSpeechCount=0;const box=$("ignored-speech"),list=$("ignored-speech-list");if(list)list.replaceChildren();if(box)box.hidden=true;setText("ignored-speech-summary","다른 사람 말로 보여 듣지 않은 말 0개");}
+// Lane HEAR decision 3 (2026-10-25): every sound the server dropped -- too short, the agent's own voice
+// coming back, nothing written down, a language it could not tell -- is one small line with its reason in
+// plain words, and "잘 안 들렸어요" shows beside the microphone for a few seconds. A voice the filter took for
+// someone else's keeps its own line (renderIgnoredSpeech); nothing is shown for a drop while paused (the band says why).
+const DROP_REASON_WORDS=Object.freeze({empty_transcript:"받아 적은 말이 없어요",self_echo:"안내 소리가 다시 들어왔어요",minimum_voiced_frames:"너무 짧은 소리예요",language_unclear:"어느 나라 말인지 알 수 없었어요",filler_only:"‘음’ 같은 소리만 들렸어요",non_lexical_event:"말이 아닌 소리였어요",non_speech:"말소리가 아니었어요",keyterm_echo:"용어만 나열돼 말로 보지 않았어요",transcription_failed:"받아 적지 못했어요",provider_no_speech_probability:"말소리가 아니었어요",provider_low_confidence:"받아 적은 말이 불확실했어요"});
+const DROP_NOTICE_MS=6000;
+let droppedSpeechCount=0,dropNoticeTimer=null;
+function renderDroppedSpeech(m){
+ const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return false;
+ if(m.paused===true||m.reason==="other_speaker_level")return false;
+ const heard=$("run-heard");
+ if(heard){heard.textContent=nonemptyText(m.notice)?normalizePresentationText(m.notice):"잘 안 들렸어요";heard.hidden=false;clearTimeout(dropNoticeTimer);dropNoticeTimer=setTimeout(()=>{heard.hidden=true;},DROP_NOTICE_MS);}
+ const box=$("ignored-speech"),list=$("ignored-speech-list");if(!box||!list)return true;
+ droppedSpeechCount+=1;
+ const why=DROP_REASON_WORDS[m.reason]||"들리지 않았어요",item=document.createElement("li");
+ item.textContent=`잘 안 들렸어요 · ${why} · ${clockWords()}${m.during_playback===true?" · 답하는 중":""}`;
+ if(typeof list.prepend==="function")list.prepend(item);else list.appendChild(item);
+ while(list.children.length>IGNORED_SPEECH_LINES_MAX){const last=list.children[list.children.length-1];if(last?.remove)last.remove();else break;}
+ setText("ignored-speech-summary",`잘 안 들린 말 ${droppedSpeechCount}개${ignoredSpeechCount?` · 다른 사람 말로 보여 듣지 않은 말 ${ignoredSpeechCount}개`:""}`);
+ box.hidden=false;
+ return true;
+}
+function resetIgnoredSpeech(){droppedSpeechCount=0;const heard=$("run-heard");if(heard)heard.hidden=true;ignoredSpeechCount=0;const box=$("ignored-speech"),list=$("ignored-speech-list");if(list)list.replaceChildren();if(box)box.hidden=true;setText("ignored-speech-summary","다른 사람 말로 보여 듣지 않은 말 0개");}
 function renderVoiceCalibration(m){
  const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return;
  if(m.state==="measured")voiceReferenceMeasured=true;
@@ -5242,6 +5268,7 @@ async function onMessage(e,generation,current){
  if(m.type==="speech.start"){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;if(Number.isInteger(m.generation)){const key=turnBrowserKey(m.turn_id,generation),known=turnServerGenerations.get(key);if(known===undefined)turnServerGenerations.set(key,m.generation);provisionalTurns.set(key,m.generation);}resetVoiceProcessing();}
  if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
  // Lane SP1 decisions 1 and 4: a voice taken for another person's -- no transcript, no turn; the provisional card comes down and one small line with the time goes into the folded list.
+ if(m.type==="speech.dropped"){renderDroppedSpeech(m);return;}
  if(m.type==="speech.ignored"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);renderIgnoredSpeech(m);if(sessionActive&&m.during_playback!==true)renderState("LISTENING");}
  if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation));if(filler)showFillerStatus(node,filler);updateVoiceProcessing("recognized");}
  if(m.type==="turn.state")applyTurnState(m,generation);

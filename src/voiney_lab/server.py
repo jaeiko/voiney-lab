@@ -6895,6 +6895,13 @@ class ListenerSession:
         #: Turns of the server's own words (a calibration prompt, a
         #: suggestion), numbered from _SERVER_WORDS_TURN_BASE.
         self.server_words_turns:int=0
+        #: Lane HEAR, decision 3: when sounds that may have been the wearer's
+        #: words were dropped (session clock), whether "잘 안 들렸어요. 다시
+        #: 말씀해 주세요." was said since words were last heard, and how many
+        #: voices in a row the filter dropped just under its line.
+        self.drop_times:collections.deque[float]=collections.deque(maxlen=16)
+        self.drop_notice_said:bool=False
+        self.near_line_drops:int=0
     @property
     def state(self): return self.detector.state
     def remember_spoken(self,text:str)->None:
@@ -7139,6 +7146,61 @@ class ListenerSession:
                 "during_playback":during_playback,
                 "ignored_count":self.ignored_speech_count,
             })
+    # --- lane HEAR, decision 3: no sound dropped in silence ------------------
+    def note_drop(self,reason:str,*,during_playback:bool=False)->bool:
+        """Count a drop; True when "잘 안 들렸어요. 다시 말씀해 주세요." is due now.
+
+        Only drops of what may have been the wearer's words count
+        (SPOKEN_DROP_REASONS), never one while an answer plays on. Two
+        within DROP_NOTICE_WINDOW_SECONDS make it due -- once, until words
+        are heard again (``note_heard``).
+        """
+
+        if during_playback or reason not in SPOKEN_DROP_REASONS:
+            return False
+        now=self.clock()
+        self.drop_times.append(now)
+        recent=sum(1 for at in self.drop_times if now-at<=DROP_NOTICE_WINDOW_SECONDS)
+        if recent>=DROP_NOTICE_COUNT and not self.drop_notice_said:
+            self.drop_notice_said=True
+            return True
+        return False
+    def note_heard(self)->None:
+        """Words reached routing: the drops before them no longer count."""
+
+        self.drop_times.clear()
+        self.drop_notice_said=False
+        self.near_line_drops=0
+    def note_level_drop(self,level_db:float|None)->str|None:
+        """A voice the filter dropped: "lowered", "off" or None (lane HEAR, decision 3).
+
+        A voice within NEAR_LINE_DB under the line is where the wearer's own
+        quieter words fall; NEAR_LINE_DROPS of them in a row move the line to
+        the "낮음" margin, or, already there, turn the filter off for this
+        session. A voice further under it is someone else's and resets the count.
+        """
+
+        reference=self.level_reference
+        if reference is None or level_db is None:
+            return None
+        if level_db<reference.threshold_db-NEAR_LINE_DB:
+            self.near_line_drops=0
+            return None
+        self.near_line_drops+=1
+        if self.near_line_drops<NEAR_LINE_DROPS:
+            return None
+        self.near_line_drops=0
+        if reference.margin_db<SENSITIVITY_MARGINS_DB["low"]:
+            self.level_reference=reference.with_sensitivity("low")
+            self.speaker_sensitivity="low"
+            return "lowered"
+        self.level_reference=None
+        self.level_endpoint_on=False
+        return "off"
+    def forget_drops(self)->None:
+        self.drop_times.clear()
+        self.drop_notice_said=False
+        self.near_line_drops=0
     def ignored_speech_in_last(self,seconds:float)->int:
         """How many utterances were taken for another person's in the last ``seconds``."""
 
@@ -7203,6 +7265,7 @@ class ListenerSession:
         self.experiment_report_id=None
         self.forget_timer_notices()
         self.forget_level_reference()
+        self.forget_drops()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
     def stop(self):
@@ -10852,6 +10915,103 @@ CLARIFY_CHOICE_REFUSED_WORDS={
 }
 
 
+# --- Lane HEAR, decision 3 (2026-10-25): no sound is dropped in silence -------
+#: Shown on the screen beside each dropped sound, and said once two drops
+#: of what may have been the wearer's words come within the window.
+DROP_SCREEN_WORDS="잘 안 들렸어요"
+DROP_NOTICE_WORDS="잘 안 들렸어요. 다시 말씀해 주세요."
+DROP_NOTICE_WINDOW_SECONDS=30.0
+DROP_NOTICE_COUNT=2
+#: The drops that may have been the wearer's words. Not counted: the agent's
+#: own voice coming back (self_echo), a sound too short to be a word
+#: (minimum_voiced_frames), a filler or a sound label the STT wrote
+#: (filler_only, non_lexical_event) -- each is still recorded and shown.
+SPOKEN_DROP_REASONS=frozenset({
+    "empty_transcript","other_speaker_level","language_unclear","non_speech",
+    "provider_no_speech_probability","provider_low_confidence","keyterm_echo",
+    "transcription_failed",
+})
+#: A voice the filter dropped within this many dB under its line is where
+#: the wearer's own quieter words fall (a head turned, a step back: the SP1
+#: bench varied the wearer by +/-6 dB); this many in a row move the line.
+NEAR_LINE_DB=6.0
+NEAR_LINE_DROPS=2
+SPEAKER_FILTER_WORDS={
+    "lowered":"내 말이 작게 들려서 옆 사람 말 거르기를 낮췄어요.",
+    "off":"내 말이 계속 걸러져서 옆 사람 말 거르기를 껐어요. 이제 모든 말을 들어요.",
+}
+
+
+def _run_paused(session:ListenerSession)->bool:
+    curated=session.curated_protocol_session
+    return curated is not None and getattr(curated,"workflow_status",None)=="paused"
+
+
+async def _report_speech_drop(
+    session:ListenerSession,sender:LockedSender,*,reason:str,turn_id:int|None,
+    generation:int|None,duration_ms:int|None,level_db:float|None,
+    during_playback:bool=False,
+)->None:
+    """Record, show and -- the second time -- say that a sound was dropped (decision 3).
+
+    The log and the metrics keep the reason code, the level (dB) and the
+    length (ms) only, never the sound or any words (AGENTS.md rule 8). While
+    the run is paused nothing is said or shown beyond the pause band
+    (decision 7).
+    """
+
+    reason=str(reason or "unknown")[:100]
+    paused=_run_paused(session)
+    level=round(float(level_db),1) if isinstance(level_db,(int,float)) and math.isfinite(level_db) else None
+    log.info(
+        "speech.dropped reason=%s duration_ms=%s level_db=%s paused=%s during_playback=%s turn_id=%s",
+        reason,duration_ms,level,paused,during_playback,turn_id)
+    _record_workspace_metric(
+        category="voice",metric_name="speech_dropped",
+        dimensions={"status":"rejected","reason_code":reason},
+    )
+    await sender.text(
+        "speech.dropped",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,reason=reason,
+        duration_ms=duration_ms,level_db=level,paused=paused,
+        during_playback=during_playback,
+        notice=None if paused else DROP_SCREEN_WORDS,
+    )
+    if paused:
+        return
+    if session.note_drop(reason,during_playback=during_playback):
+        session.track_visual_task(asyncio.create_task(_say_server_words(
+            session,sender,DROP_NOTICE_WORDS,kind="drop_notice")))
+
+
+async def _report_level_drop(
+    session:ListenerSession,sender:LockedSender,level_db:float|None,
+)->None:
+    """A voice the filter dropped may move its line (decision 3); said and shown when it does."""
+
+    action=session.note_level_drop(level_db)
+    if action is None:
+        return
+    reference=session.level_reference
+    log.info(
+        "speaker.filter %s margin_db=%s level_db=%s",action,
+        round(reference.margin_db,1) if reference is not None else None,
+        round(level_db,1) if level_db is not None else None)
+    _record_workspace_metric(
+        category="voice",metric_name="speaker_filter",
+        dimensions={"status":action,"reason_code":"wearer_dropped"},
+    )
+    await sender.text(
+        "speaker.filter",configuration_id=session.accepted_configuration_id,
+        state=action,reason="wearer_dropped",
+        margin_db=round(reference.margin_db,1) if reference is not None else None,
+        words=SPEAKER_FILTER_WORDS[action],
+    )
+    if not _run_paused(session):
+        session.track_visual_task(asyncio.create_task(_say_server_words(
+            session,sender,SPEAKER_FILTER_WORDS[action],kind="speaker_filter")))
+
+
 #: Lane SP1, decision 3: the suggestion after this many ignored voices in
 #: this many seconds, at most once in the gap.
 AMBIENT_SUGGESTION_IGNORED_COUNT=3
@@ -11451,6 +11611,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             )
             await sender.text("speech.rejected",turn_id=turn_id,reason="empty_transcript",voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20)
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
+            await _report_speech_drop(
+                session,sender,reason="empty_transcript",turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
         return
     committed_at=session.turn_committed_at.get(turn_id)
     echo=(
@@ -11478,6 +11641,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "state.changed",state=session.state.value,turn_id=turn_id,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
+            await _report_speech_drop(
+                session,sender,reason="self_echo",turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
         return
     # A recognized emergency uses the one fixed-response gate before soft
     # admission or calibration can consume it. Empty input and self-echo
@@ -11593,6 +11759,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "state.changed",state=session.state.value,turn_id=turn_id,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
+            await _report_speech_drop(
+                session,sender,reason=str(reason),turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
         return
     if session.calibration_pending:
         # Lane SP1, decision 1: the sentence read to measure the wearer's
@@ -11706,6 +11875,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "language_clarification",
         )
         return
+    # Lane HEAR, decision 3: words were heard; the drops before them no longer count.
+    session.note_heard()
     if not await current_text("transcript",turn_id=turn_id,text=transcript):
         return
     if session.curated_protocol_session is not None:
@@ -14164,14 +14335,37 @@ async def voice_socket(websocket:WebSocket):
                             fields.get("reference_db"),fields.get("margin_db"),
                             item.result.voiced_frames,item.result.total_frames,
                             fields.get("during_playback"),item.turn_id)
+                        # Lane HEAR, decision 3: "reason" is no dimension the
+                        # analytics store takes, so this was never recorded.
                         _record_workspace_metric(
                             category="voice",metric_name="speech_ignored",
-                            dimensions={"reason":str(fields["reason"])[:100]},
+                            dimensions={"reason_code":str(fields["reason"])[:100]},
                         )
+                        await _report_speech_drop(
+                            session,sender,reason=str(fields["reason"] or "other_speaker_level"),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,
+                            level_db=fields.get("level_db"),
+                            during_playback=bool(fields.get("during_playback")))
+                        await _report_level_drop(session,sender,fields.get("level_db"))
                         if session.noisy_mode_suggestion_due():
                             # Lane SP1, decision 3: three in a minute -- suggest the mode.
                             session.track_visual_task(asyncio.create_task(
                                 _suggest_noisy_mode(sender,session)))
+                    if item.kind=="speech.rejected":
+                        # Lane HEAR, decision 3: the detector's own drop (too short).
+                        await _report_speech_drop(
+                            session,sender,
+                            reason=str(fields["reason"] or "minimum_voiced_frames"),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,level_db=None)
+                    elif item.kind=="barge_in_rejected" and fields["reason"]!="other_speaker_level":
+                        # Heard while an answer was coming: it goes on, nothing is said.
+                        await _report_speech_drop(
+                            session,sender,reason=str(fields["reason"] or "barge_in_rejected"),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,
+                            level_db=item.result.voiced_level_db,during_playback=True)
                     if (
                         item.kind=="barge_in_rejected"
                         and session.resume_deferred_playback_end(
