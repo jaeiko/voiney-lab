@@ -63,7 +63,7 @@ without a protocol: a voice session refuses to start without one.
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Workflow state (step, completion, timers, pause, observations) | `curated_protocol.CuratedProtocolSession` | The only state machine. Every change — read by a front rule or proposed by the router — runs through its branches (`plan`, `apply_tool_proposal` → `_execute_turn_intent`). |
+| Workflow state (step, completion, timers, pause, observations, today's values) | `curated_protocol.CuratedProtocolSession` | The only state machine. Every change — read by a front rule or proposed by the router — runs through its branches (`plan`, `apply_tool_proposal` → `_execute_turn_intent`). Today's values (`set_run_changes`, front rule `run_value_change`) come only from a person's choice or words; no router tool changes them. |
 | Turn classification label | `intent_arbitration.arbitrate_request` | A read-only label for planning and telemetry; it decides nothing on its own. |
 | Rules-only routing boundary | `runtime_routing.route_curated_runtime_turn` | The path when the router is off, the router's fallback, and `scripts/replay_turns.py`. |
 | Model proposals and answers | `llm_router` + `answer_checks` | Validate, then hand to the state machine. No state of their own. |
@@ -105,8 +105,8 @@ generation is cancelled and its audio cleared (barge-in).
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",
      yes/no to an open question, replies to an endpoint question, time left,
-     "그거", repeat, cancel, completion naming the current step, start, and
-     the rest of the table).
+     "그거", repeat, cancel, completion naming the current step, start, a
+     problem at the bench (`problem_help`), and the rest of the table).
    - Router off (`VOINEY_LAB_LLM_ROUTER_ENABLED`, default false): the rules'
      own route (`route_curated_runtime_turn` → `plan`).
    - Router on: `llm_router.route_turn_with_llm_router` makes one streamed
@@ -156,11 +156,18 @@ generation is cancelled and its audio cleared (barge-in).
    The screen text is not cut. The greeting, timer notices, clarifications
    and the emergency reply are still synthesized whole.
    `server.synthesize` keeps a sentence's audio (`SENTENCE_AUDIO`, bounded
-   by entries and bytes, keyed by provider, model, voice, language and the
-   cleaned sentence) only inside `sentence_audio_kept`: the curated plans
+   by entries and bytes, keyed by the speaking lab's organisation id
+   (`_speaking_organization`, from the request or voice connection's
+   principal; empty with no workspace), provider, model, voice, language and
+   the cleaned sentence) only inside `sentence_audio_kept`: the curated plans
    `_speech_kept` allows (protocol readings and fixed server sentences, not
    records, repeats, answers to questions, model-written speech or the
    experimenter's words) and the greeting. The emergency reply never is.
+   The page keeps every segment one turn played, in order, for "다시
+   들려줘" (`keepReplayableAudio`, at most 120 s; the replay turn's own
+   reply is not kept). A step's Korean begins with its own "N단계: "; the
+   previews, range summary and lab-equipment reading leave that prefix out of
+   `speech_text` only.
 
 The front rules and proposal checks share
 `intent_fences.is_question_or_speculation`: Korean question/speculation
@@ -190,6 +197,8 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   → page text by PyMuPDF in a bounded child process (pdf_text_engine)
   → pages without a usable text layer: OCR started by the upload itself,
     two engines compared place by place, accepted automatically
+  → optional page range (the request's `page_range`): only those pages are
+    sent, checked, counted for the hollow bound and searched for missed lines
   → one structured analysis (or pieces of ≤15 pages, ≤400 pages), background job
   → server-owned evidence check, requote of refused items, domain validation
   → lines no quote covers that read like an instruction (possibly_missed_places)
@@ -199,7 +208,10 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
                    → decisions → registered review version vN (latest runs)
   → execution rule at read time: analysis (or review version) present and no
     execution blocker → available_for_execution
-  → start wizard: start check (two key values) → safety statements → start
+  → start wizard: start check (two key values) → safety statements →
+    today's values (always passed, "바꿀 값 없이 다음" included;
+    `protocol_run_changes_chosen`) → start naming that choice
+    (`run_change_set_id`; applied once: `protocol_run_changes_applied`)
   → CuratedProtocolFixture for the session
 ```
 
@@ -242,6 +254,24 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   experiment and the current configuration id and generation.
 - Review cards never rewrite a safety statement (`_FIXABLE_KINDS` has no
   `warning`).
+- Today's values (lane EASY): `start_check.changeable_values` lists the time,
+  temperature, speed, volume and concentration values of each step's own
+  sentence, never one in a warning or limit sentence; `check_run_change`
+  takes only the same unit family; a value below half or above twice the
+  source's (`run_change_is_large`) is refused until the screen confirms it
+  (`confirm_large`). Every start passes the step: `session.start` names the
+  choice (`run_change_set_id`); with the start check on, a new run that names
+  none is refused `run_changes_required`, and a choice that is another
+  person's, used, or no longer the fixture's is refused `run_changes_stale`.
+  Nothing chosen earlier applies on its own.
+  During the run `CuratedProtocolSession` changes or puts back a value
+  (confirm_mode readback; asked first in 바로 확인 or noisy mode, and in
+  every mode for a large value), runs the
+  step's timer for a changed time, says the value at the step and puts it in
+  `state()["current_step_run_changes"]`. The record (`run_value_changed`,
+  `run_value_reverted`, `session_started.run_changes`) feeds the notebook's
+  "원문 → 실제"; the workspace events feed a recovery; "지난번처럼" reads the
+  owner's last record (`ExperimentReportStore.last_run_values`).
 
 ### Page evidence segments and known analysis limits
 
@@ -324,6 +354,64 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   (`web_explanations`). Each is labelled, checked by the server (numbers,
   safety, state claims removed) and read-only; none can supply a value or a
   safety statement. Web images are proxied same-origin, never hotlinked.
+- Help with a problem (`knowledge.py`, front rule `problem_help`): a problem
+  said or asked at the bench (`intent_arbitration.problem_reading`; label
+  `RequestIntent.TROUBLESHOOTING`) is answered read-only. A problem said as
+  having happened is first recorded as an anomaly (the existing read-back);
+  one asked, or the step's repeat-until state "not yet", is not recorded; the
+  step's own endpoint words and move commands stay with the endpoint readers
+  and the completion gates. The plan carries a `problem_help` marker; the
+  server (`_with_problem_help`) searches the tiers at once
+  (`search_tiers`, 1.5 s each) and puts the help after the reply:
+  ① `ProtocolKnowledge` -- the step ± 1 and its section's notes, expected
+  results, warnings, repeat/branch conditions and unclaimed troubleshooting
+  page lines, the source's words with page and step, said by their checked
+  Korean reading; ② `HistoryKnowledge` -- `ExperimentReportStore.earlier_reports`
+  (same protocol, organisation and owner; a lab-only record has none), the
+  same step's anomalies and observations and what followed them; ③ a public
+  source (`session.public_knowledge`, the tier lane KNOW loads at start, in
+  decision 6's form -- see the next item) and, with the
+  supplemental role on and no safety category, possible causes
+  (`explain_possible_causes`) said after the answer by `_queue_problem_causes`,
+  which holds ④ the closing sentence (`knowledge.CLOSING`) until then and says
+  ④ alone when ③ is late, fails or fails `possible_cause_violations`. Both
+  searches are in-process SQLite FTS5 over prepared terms (values with units,
+  English stems, Korean words without particles, concept terms joining the
+  two languages); nothing leaves the process. The help is composed from the
+  sources' words and fixed sentences only (`compose_problem_help`, checked by
+  `problem_help_violations`) and recorded as a `problem_help` event with its
+  places, not its text. A source that cannot be used raises
+  `KnowledgeUnavailable` (its setting) and is skipped; none replaces it.
+- Public material (lane KNOW, human decision 2026-10-24):
+  `public_knowledge.PublicKnowledgeSource` is the `public` tier of the
+  knowledge contract — one Moss index of licence-checked public pieces
+  (public domain, CC0, CC BY, CC BY-SA; `data/public_knowledge/sources.toml`,
+  built by `scripts/public_knowledge_pipeline.py`), loaded once at start by
+  `server._start_public_knowledge` and queried in process. A Korean
+  question is joined by the English names of its words
+  (`data/public_knowledge/glossary.json`, Wikidata labels, CC0) before the
+  query. Hits come best source grade first (A public institution /
+  peer-reviewed, B open textbook, C wiki) with source, licence and address;
+  what may be said from them is `answer_checks.public_reference_violations`
+  (only the piece's numbers, a fact not an instruction, no "continue", no
+  value against the source's, the "공개 자료 · 일반 참고 — <출처>" mark added
+  by the server). It is a general reference beside the source and never a
+  value or a safety statement; off, or without `MOSS_PROJECT_ID` /
+  `MOSS_PROJECT_KEY`, or after a failed load, this tier alone is off by
+  setting name. Wired into the problem help (2026-10-25, after lane HELP's
+  merge): `voice_socket` sets `session.public_knowledge` from
+  `app.state.public_knowledge`; `_with_problem_help` composes the protocol
+  and history hits with `compose_problem_help` and appends the public ones
+  through `_with_public_reference` / `external_references.public_reference_part`
+  -- only pieces sharing a word with the problem (the tier marks each hit
+  with `shared_term` of the glossary's terms and the problem's own Latin
+  words; the index always returns its nearest pieces) -- (the mark, title and place, the piece's words, address and licence on the
+  screen; said, the mark and a short same-language fact or where to see it;
+  every line naming the source is quoted, so `problem_help_violations` judges
+  only the fixed sentences). With the supplemental role on, the spoken form
+  waits for ③, where `_queue_problem_causes` runs `paraphrase_public_reference`
+  beside the possible causes and says the checked paraphrase, or the fixed
+  form when it is late or refused, before them and ④.
 - Model roles (`model_providers.ROLES`): `router`, `answer`, `translation`,
   `analysis`, `report`, `supplemental`, each with a provider (`xai`,
   `anthropic`, `openai`, `google`), model and reasoning level and no default.
@@ -361,7 +449,9 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   adaptations, connectors, dry-lab, ELN write-back); see
   `docs/MIGRATION_NOTES.md`.
 - In-memory only: runtime metrics, web photos, drawn SVGs, report-prose job
-  state, the speaker's level reference.
+  state, the speaker's level reference, and the public knowledge index Moss
+  holds after the start (its disk cache sits beside the protocol catalog in
+  `public-knowledge-cache/`; the cloud copy is the source of truth).
 
 ## 7. Identity and accounts
 
@@ -468,6 +558,16 @@ key-value load stays on its step with retry. Source-check/registration
 blockers remain visible. Settings opens as a sheet over the run; account
 erasure asks for the password again and returns to login on success.
 
+Tablet rules apply only under `(pointer:coarse) and (min-width:721px) and
+(min-height:600px)`: 44 px targets, a two-column landscape run (step |
+timer, figures in a sheet), far-reading and glove tokens (`--read-far-*`,
+`--target-glove`, `--gap-glove`). The start press itself asks for the screen
+wake lock (held while the start is pending, `keepScreenOnForStart`) and
+resumes the playback context (`primeRunStart`); a context the browser still
+holds back shows `#audio-unlock`, and `client.audio_ready` is sent once,
+after that touch. A refused microphone names the device's own setting
+(`micBlockedWords`). Phone and desktop layouts are unchanged.
+
 ## 10. Store-app shell
 
 `mobile/` wraps the same screen in Capacitor (Android first) and adds device
@@ -491,6 +591,7 @@ Everything fails closed and visibly, and none of it mutates workflow state:
 | Old setting name present | Server, launchers and tests refuse to start, naming it |
 | Safety scope needs a catalog that is missing or unusable | `server_config` refuses; `/readyz` returns 503 `safety_configuration_invalid` with setting names only |
 | Usage scope missing/blank, or malformed start-check/workspace boolean | Configuration error naming the setting; no silent scope/boolean fallback |
+| `VOINEY_LAB_PUBLIC_KNOWLEDGE_ENABLED` without `MOSS_PROJECT_ID`/`MOSS_PROJECT_KEY`, a malformed switch, or an index that fails to load | That tier alone is off; `ready.research_capabilities.public_knowledge` and `/readyz` say `unavailable` with the setting name; the server starts and no other provider is tried |
 
 ## 12. Audio constants
 

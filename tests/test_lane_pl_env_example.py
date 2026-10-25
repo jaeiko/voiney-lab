@@ -163,7 +163,10 @@ class NoStaleWordsTests(unittest.TestCase):
     def test_it_describes_no_fallback_the_code_no_longer_has_and_no_setting_nothing_reads(self):
         text = EXAMPLE.read_text(encoding="utf-8")
         for stale in (
-            "old xai default", "old fallback", "code's old", "MOSS", "Moss", "moss_retrieval",
+            # Lane KNOW (2026-10-24) added MOSS_PROJECT_ID/KEY for the public
+            # knowledge search, so "Moss" itself is a current word again; the
+            # deleted setting and module stay forbidden.
+            "old xai default", "old fallback", "code's old", "MOSS_ENABLED", "moss_retrieval",
             "코드가 읽지 않음",
             # The web reference search was deleted in lane DOC3.
             "외부 근거", "EXTERNAL_REFERENCE", "web reference",

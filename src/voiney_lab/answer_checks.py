@@ -16,6 +16,7 @@ server-value checks are new for the lane R answer structure
 
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 from collections.abc import Callable, Iterable
@@ -180,6 +181,9 @@ DISPLAY_LABELS: tuple[str, ...] = (
     "주의 ·",
     "PDF 밖",
     "PDF에는 따로 설명이 없어요",
+    # Lane KNOW (decision 6): the public-material mark is the server's.
+    "공개 자료 ·",
+    "일반 참고 —",
 )
 #: A line that is nothing but a label ("출처", "원문", "Sources") is a label too.
 _LABEL_LINE = re.compile(
@@ -712,3 +716,230 @@ def server_value_violations(text: str, values: ServerValues) -> tuple[str, ...]:
             violations.append("title_not_server_value")
             break
     return tuple(violations)
+
+
+# --- Public material in an answer (lane KNOW, decision 6) ----------------------------
+
+#: The longest spoken sentence grounded in public material: a short
+#: paraphrase, never a reading of the source (human decision 2026-10-24, 6).
+PUBLIC_REFERENCE_MAX_CHARS = 160
+#: A run of the source's own words this long is a reading, not a paraphrase.
+PUBLIC_REFERENCE_QUOTE_CHARS = 60
+#: "계속해도 돼요", "진행하셔도 됩니다", "you can continue": only the source
+#: and the lab's rules say whether a run goes on; public material never does.
+_CONTINUE_PERMISSION = re.compile(
+    r"(?:(?:계속|진행|그대로|그냥)\s*(?:해도|하셔도|하여도|해두어도|써도|쓰셔도)"
+    r"|(?:다음\s*단계로\s*)?(?:넘어가|넘어가셔|지나가|지나가셔|가|가셔)도"
+    r"|(?:계속|진행)(?:해|하셔)도)\s*"
+    r"(?:돼|되|됩|괜찮|좋|무방|문제\s*없)"
+    r"|\b(?:you\s+)?(?:can|may|could)\s+(?:safely\s+|just\s+)?(?:continue|proceed|go\s+on|move\s+on|carry\s+on|keep\s+going)\b"
+    r"|\b(?:it(?:'|’)s|it\s+is)\s+(?:safe|fine|ok(?:ay)?)\s+to\s+(?:continue|proceed|go\s+on|keep\s+going)\b"
+    r"|\bsafe\s+to\s+(?:continue|proceed)\b",
+    re.I,
+)
+#: A value said against the source's: "대신 50 mL", "30분으로 바꾸세요",
+#: "instead of 15 min", "should be 37 °C".
+_VALUE_OVERRIDE = re.compile(
+    r"(?:대신|말고|보다는)\s*[0-9０-９]"
+    r"|[0-9０-９][^.!?\n]{0,12}(?:으로|로)\s*(?:바꾸|바꿔|변경|줄이|줄여|늘리|늘려|조정|고치|고쳐|맞추|맞춰)"
+    r"|(?:원문|프로토콜)\s*(?:의\s*)?(?:값|수치|조건)\s*(?:은|는|이|가)?\s*(?:틀|잘못|맞지\s*않)"
+    r"|\binstead\s+of\s+(?:the\s+)?[0-9]"
+    r"|\brather\s+than\s+(?:the\s+)?[0-9]"
+    r"|\b(?:change|set|adjust|reduce|increase|raise|lower)\s+(?:it|this|that|the\s+\w+)\s+to\s+[0-9]"
+    r"|\bshould\s+(?:really\s+)?be\s+[0-9]"
+    r"|\bthe\s+protocol(?:'|’)s\s+\w+\s+is\s+(?:wrong|incorrect|too)",
+    re.I,
+)
+_URL = re.compile(r"https?://", re.I)
+
+
+def _longest_shared_run(answer: str, evidence: str) -> int:
+    """Characters of the longest stretch ``answer`` repeats from ``evidence``, spacing and case aside."""
+
+    a = " ".join(answer.casefold().split())
+    b = " ".join(evidence.casefold().split())
+    if not a or not b:
+        return 0
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    match = matcher.find_longest_match(0, len(a), 0, len(b))
+    return match.size
+
+
+def public_reference_violations(
+    answer: str,
+    *,
+    evidence: str,
+    max_chars: int = PUBLIC_REFERENCE_MAX_CHARS,
+    step_labels: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Why a sentence grounded in public material may not be used; empty when it may.
+
+    Human decision 2026-10-24 (lane KNOW, 6): public material is a general
+    reference beside the source. The sentence is a short paraphrase; its
+    numbers are only those the cited piece (``evidence``) states; it states a
+    fact ("아세토니트릴은 인화점이 낮은 물질로 알려져 있어요"), not an
+    instruction; it never says a run may go on, never sets a value against the
+    source's, never permits anything about a hazard; and the server, not the
+    model, adds the "공개 자료 · 일반 참고 — <출처>" mark.
+    """
+
+    violations: list[str] = []
+    body = " ".join(answer.split()).strip()
+    if not body:
+        return ("empty_answer",)
+    if len(body) > max_chars:
+        violations.append("answer_too_long")
+    if introduces_bare_numbers(body, evidence, step_labels=step_labels):
+        violations.append("answer_has_number_not_in_evidence")
+    if claims_state_change(body) or asks_server_question(body):
+        violations.append("answer_claims_state_change")
+    if _CONTINUE_PERMISSION.search(body):
+        violations.append("answer_permits_continuing")
+    if _VALUE_OVERRIDE.search(body):
+        violations.append("answer_overrides_source_value")
+    if _URL.search(body):
+        violations.append("answer_has_url")
+    sentences = [part for part in _SENTENCE_END.split(body) if part.strip()]
+    if any(_DIRECTIVE.search(sentence) for sentence in sentences):
+        violations.append("answer_gives_instruction")
+    if any(permissive_hazard_topics(sentence) for sentence in sentences):
+        violations.append("answer_permits_hazard")
+    if _longest_shared_run(body, evidence) >= PUBLIC_REFERENCE_QUOTE_CHARS:
+        violations.append("answer_reads_source_at_length")
+    if display_label_violations(body):
+        violations.append("answer_has_display_label")
+    return tuple(violations)
+
+
+# --- Help with a problem (lane HELP, 2026-10-24) -----------------------------------
+#
+# The help after a problem ("젤이 아직 파래") quotes the sources and adds only
+# fixed sentences; a model may add possible causes ("AI 일반 지식", ③). Neither
+# may give a number the quoted sources do not state, tell a condition to be
+# changed, give permission to go on, judge safety, say that something was done
+# or ask what only the server asks. The quoted lines themselves are the
+# source's or the record's words and are not judged here.
+
+#: Permission to go on, or a judgment that all is well.
+_HELP_PERMISSION = re.compile(
+    r"(?:계속|진행|넘어가|해|써|사용해|넣어|그대로\s*해)\s*도\s*(?:돼|되|됩|괜찮|무방)"
+    r"|괜찮(?:아요|습니다|을\s*거|아)|문제\s*(?:없|안\s*(?:돼|되))|정상(?:이에요|입니다|이야|적이)"
+    r"|걱정\s*(?:안\s*해도|하지\s*않아도|없|마)"
+    r"|\b(?:you\s+can\s+(?:continue|proceed|go\s+on|move\s+on|keep\s+going)|it(?:'|’)?s\s+(?:fine|ok(?:ay)?|normal)"
+    r"|(?:is|are)\s+(?:fine|normal)|no\s+problem|nothing\s+to\s+worry)\b",
+    re.I,
+)
+#: A change of a condition told as something to do: "늘리세요", "더 넣어 보세요".
+_HELP_CONDITION_CHANGE = re.compile(
+    r"(?:늘리|늘려|줄이|줄여|바꾸|바꿔|올리|올려|낮추|낮춰|높이|높여|더\s*넣|추가로\s*넣|추가하|교체하|교체해"
+    r"|대신\s*(?:쓰|써|사용)|연장하|연장해|단축하|다시\s*만들|다시\s*준비)"
+    r"\S*\s*(?:세요|십시오|면\s*(?:돼|됩)|보세요|는\s*게\s*좋|야\s*(?:해|합|돼))"
+    r"|\b(?:increase|decrease|raise|lower|extend|shorten|replace|substitute|switch\s+to|add\s+more|use\s+more"
+    r"|use\s+less|try\s+(?:adding|using|increasing|changing))\b",
+    re.I,
+)
+#: A judgment about safety (the source's warnings are quoted, never judged).
+_HELP_SAFETY_JUDGMENT = re.compile(
+    r"안전(?:해|합|하|한|함)|위험(?:해|합|하|한|함)|유해|무해|독성|해롭|해로울|인체에"
+    r"|\b(?:safe|unsafe|dangerous|hazardous|harmless|toxic)\b",
+    re.I,
+)
+#: A possible cause said as one: "~일 수 있어요", "may", "might".
+_HEDGED = re.compile(r"수\s*있(?:어요|습니다|어|다)|수도\s*있|지도\s*몰라|\b(?:may|might|could|possibly)\b", re.I)
+#: The server's own numbers in the help's frame: a page, a step, a run's date.
+_HELP_FRAME_NUMBER = re.compile(
+    r"\d+\s*쪽|p\.\s*\d+|page\s+\d+|\d+(?:\s*~\s*\d+)?\s*단계|steps?\s+\d+|\d+\s*월\s*\d+\s*일", re.I)
+#: At most this many characters of possible causes.
+POSSIBLE_CAUSES_MAX_CHARS = 200
+
+
+def _help_words_violations(text: str, *, labels: bool = True) -> list[str]:
+    violations: list[str] = []
+    if _HELP_PERMISSION.search(text):
+        violations.append("permission")
+    if _HELP_CONDITION_CHANGE.search(text):
+        violations.append("condition_change")
+    if _HELP_SAFETY_JUDGMENT.search(text) or any(
+            permissive_hazard_topics(sentence) for sentence in _SENTENCE_END.split(text)):
+        violations.append("safety_judgment")
+    if claims_state_change(text):
+        violations.append("state_claim")
+    if asks_server_question(text):
+        violations.append("server_question")
+    if labels and display_label_violations(text):
+        violations.append("display_label")
+    if "http://" in text.casefold() or "https://" in text.casefold():
+        violations.append("url")
+    return violations
+
+
+def problem_help_violations(text: str, *, quoted: Iterable[str]) -> tuple[str, ...]:
+    """Why the help's own words may not be said; empty when they may.
+
+    ``quoted`` are the lines the help quotes (the source's sentences and
+    their checked readings, a past record's words, a public line): they are
+    taken out first, and so are the page, step and date the frame names.
+    What is left -- the help's fixed sentences -- may state no number at all.
+    """
+
+    rest = text
+    for line in sorted({item.strip() for item in quoted if item and item.strip()}, key=len, reverse=True):
+        rest = rest.replace(line, " ")
+    rest = _HELP_FRAME_NUMBER.sub(" ", rest)
+    # The frame's own labels ("원문 · p.5 · 7단계") are the server's, not a
+    # model imitating the screen.
+    violations = _help_words_violations(rest, labels=False)
+    if _ANY_DIGIT.search(rest):
+        violations.append("number_not_in_sources")
+    return tuple(dict.fromkeys(violations))
+
+
+def possible_cause_violations(
+    text: str, *, sources_text: str, protocol_text: str,
+) -> tuple[str, ...]:
+    """Why a model's possible causes (③) may not be said; empty when they may.
+
+    Each sentence says a possible cause ("~일 수 있어요"); a number must be one
+    the quoted sources state; a word in Latin letters and a laboratory word in
+    Korean must be one of the protocol's own (no new reagent or material); no
+    instruction about safety, no change of a condition, no permission, no
+    safety judgment, nothing said to be done and no server question.
+    """
+
+    body = " ".join(text.split()).strip()
+    if not body:
+        return ("empty",)
+    violations = _help_words_violations(body)
+    if len(body) > POSSIBLE_CAUSES_MAX_CHARS:
+        violations.append("too_long")
+    if NUMERIC.search(body) and introduces_numbers(body, sources_text):
+        violations.append("number_not_in_sources")
+    if introduces_bare_numbers(body, sources_text):
+        violations.append("number_not_in_sources")
+    if ungrounded_safety_instructions(body, protocol_text):
+        violations.append("safety_instruction")
+    folded = protocol_text.casefold()
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", body):
+        if word.casefold() not in folded and word.casefold() not in _GENERAL_ENGLISH:
+            violations.append("term_not_in_protocol")
+            break
+    else:
+        # A laboratory word said in Korean ("메탄올") whose English the
+        # protocol does not write: the state machine's lab lexicon, read here.
+        from voiney_lab.curated_protocol import _LAB_LEXICON
+
+        for _key, english, korean, _stem in _LAB_LEXICON:
+            if any(form in body for form in korean) and not any(
+                    surface in folded for surface in english) and not any(form in protocol_text for form in korean):
+                violations.append("term_not_in_protocol")
+                break
+    if any(not _HEDGED.search(sentence) for sentence in _SENTENCE_END.split(body) if sentence.strip()):
+        violations.append("not_hedged")
+    return tuple(dict.fromkeys(violations))
+
+
+#: English words a cause may use that name no reagent or material.
+_GENERAL_ENGLISH = frozenset({
+    "may", "might", "could", "possibly", "the", "and", "or", "not", "too", "enough", "gel", "band",
+    "sample", "solution", "buffer", "cells", "cell", "time", "temperature", "volume", "ai",
+})

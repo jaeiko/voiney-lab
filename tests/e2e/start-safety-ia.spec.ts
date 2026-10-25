@@ -39,7 +39,7 @@ const REFUSED = '안전 주의를 읽고 확인해 주세요.';
 class StandIn {
   acknowledged: object[] = [];
   answers: object[] = [];
-  received: Array<{ type: string; at: number }> = [];
+  received: Array<{ type: string; at: number; choice?: string }> = [];
 
   async attach(page: Page) {
     await page.route('**/api/protocols', (route: Route) => route.fulfill({ json: { protocols: [ENTRY] } }));
@@ -54,6 +54,8 @@ class StandIn {
       this.acknowledged.push({ body: route.request().postDataJSON(), at: Date.now() });
       return route.fulfill({ json: { ready: true, reason: null, target: TARGET, missing_question_ids: [], safety_acknowledged: true } });
     });
+    // Lane EASY decision 2 (2026-10-24): "오늘 원문과 다르게 할 값" comes after the safety check; this stand-in offers none and keeps the skip.
+    await page.route(`**/api/protocols/${PID}/start-check/changes`, (route: Route) => route.fulfill({ json: route.request().method() === 'POST' ? { change_set_id: 'run-changes-0123456789abcdef01234567', source: 'wizard', changes: [] } : { protocol_id: PID, target: TARGET, revision_id: 'pdf-1', limit: 12, values: [] } }));
     await page.routeWebSocket(/\/ws$/, ws => this.connect(ws));
   }
 
@@ -62,7 +64,7 @@ class StandIn {
     ws.onMessage(raw => {
       if (typeof raw !== 'string') return;
       const message = JSON.parse(raw);
-      this.received.push({ type: message.type, at: Date.now() });
+      this.received.push({ type: message.type, at: Date.now(), choice: message.run_change_set_id });
       if (message.type !== 'session.start') return;
       const configuration_id = message.configuration_id;
       if (!this.acknowledged.length) {
@@ -92,12 +94,17 @@ test.describe('The start through the server-kept check (lane IA with lane SAFE)'
     await expect(page.locator('#wizard-body')).toContainText('장갑을 끼세요.');
     expect(server.acknowledged.length).toBe(0);
     await page.locator('#wizard-primary').click();
+    // Lane EASY decision 2: "오늘 원문과 다르게 할 값", nothing to change.
+    await expect(page.locator('#wizard-title')).toHaveText('오늘 원문과 다르게 할 값');
+    await page.locator('#wizard-primary').click();
     await expect(page.locator('#wizard-primary')).toHaveText('이 프로토콜로 시작');
     expect(server.answers.length).toBe(1);
     expect(server.acknowledged.map(item => (item as { body: object }).body)).toEqual([{ target: TARGET }]);
     await page.locator('#wizard-primary').click();
     await expect.poll(() => server.received.filter(item => item.type === 'session.start').length).toBe(1);
     const startAt = server.received.find(item => item.type === 'session.start')!.at;
+    // Lane EASY (human decision 2026-10-24): the start names the "오늘 원문과 다르게 할 값" choice it passed.
+    expect(server.received.find(item => item.type === 'session.start')!.choice).toBe('run-changes-0123456789abcdef01234567');
     expect((server.acknowledged[0] as { at: number }).at).toBeLessThanOrEqual(startAt);
     await expect(page.locator('#start-wizard')).toBeHidden();
     await expect(page.locator('#session-configuration-status')).not.toHaveText(REFUSED);

@@ -21,7 +21,9 @@ In a wet-lab copilot a software error is an experiment error. The suite
    with `fastapi.testclient`, barge-in, reconnection, recovery.
 5. **Screen**: JavaScript run against the real `static/` files from Python
    tests, and browser acceptance tests in `tests/e2e/` (Playwright, desktop
-   and mobile Chrome; CI runs them).
+   and mobile Chrome, and two tablet projects — portrait 820×1180 and
+   landscape 1180×820, Galaxy Tab S4 touch emulation — that run only
+   `tests/e2e/tablet-*.spec.ts`; CI runs them).
 
 Rules:
 
