@@ -6859,6 +6859,13 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
 #: -- the join window, plus the time the endpoint and speech recognition
 #: take to deliver them.
 FRAGMENT_HOLD_SECONDS=FRAGMENT_JOIN_SECONDS+1.0
+#: Lane HEAR, decision 4 (2026-10-25): speech that starts within this long
+#: of the last end, before that turn's answer plays and while it has changed
+#: nothing, is the same sentence: the two are joined into one utterance. The
+#: brief's example value; the log of the person's test had 54 of 66 ends
+#: followed by speech within it (39 within 0.5 s).
+CONTINUATION_JOIN_SECONDS=1.5
+FRAGMENT_HOLD_POLL_SECONDS=0.05
 TURN_PROGRESS_TRANSITIONS={
     "listening":frozenset({"transcribing","cancelled","error"}),
     "transcribing":frozenset({"routing","cancelled","error"}),
@@ -7034,6 +7041,10 @@ class ListenerSession:
         #: 말씀해 주세요." was said since words were last heard, and how many
         #: voices in a row the filter dropped just under its line.
         self.drop_times:collections.deque[float]=collections.deque(maxlen=16)
+        #: Lane HEAR, decision 4: the last committed turn's audio (for a
+        #: continuation to join) and events of a turn opened between chunks.
+        self._joinable_turn:dict[str,Any]|None=None
+        self._pending_listener_events:list[ListenerEvent]=[]
         self.drop_notice_said:bool=False
         self.near_line_drops:int=0
     @property
@@ -7100,6 +7111,8 @@ class ListenerSession:
         self._interrupt_candidate_endpoint_at=None
         self._interrupt_candidate_diagnostics={}
     def _reset_turn_identity(self)->None:
+        self._joinable_turn=None
+        self._pending_listener_events=[]
         for task in tuple(self.visual_tasks):
             task.cancel()
         self.visual_tasks.clear()
@@ -7552,13 +7565,19 @@ class ListenerSession:
     def accept_chunk(self,chunk:bytes)->list[ListenerEvent]:
         if not self.active:return []
         self._microphone_chunk_sequence+=1
+        # Lane HEAR, decision 4: a turn opened outside this method (speech
+        # kept when the turn before it was dropped) is announced here.
+        output=self._pending_listener_events; self._pending_listener_events=[]
         self.refresh_cooldown()
         if self.state in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING):
-            return self._accept_interrupt_chunk(chunk)
-        if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):return []
-        output=[]
+            return output+self._accept_interrupt_chunk(chunk)
+        if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):return output
         self._apply_endpoint_threshold(self.detector)
-        for frame in self.framer.push(chunk):
+        output.extend(self._accept_primary_frames(self.framer.push(chunk)))
+        return output
+    def _accept_primary_frames(self,frames:list[bytes])->list[ListenerEvent]:
+        output=[]
+        for frame in frames:
             result=self.detector.process(frame)
             if self.detector.last_frame_level_db is not None:
                 self.noise_floor.add(self.detector.last_frame_level_db,self.detector.last_frame_voiced)
@@ -7589,18 +7608,125 @@ class ListenerSession:
                 if self.active_turn_id is None: raise RuntimeError("committed utterance has no turn_id")
                 self.endpoint_at=self.clock()
                 self.turn_committed_at[self.active_turn_id]=self.endpoint_at
+                self._keep_turn_audio(
+                    self.active_turn_id,self.turn_generations[self.active_turn_id],result.utterance)
                 output.append(ListenerEvent(
                     "speech.end",self.active_turn_id,result,
                     self.turn_generations[self.active_turn_id]))
                 self.framer=FrameBuffer(); self._reset_interrupt_input()
             if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING): break
         return output
+    # --- lane HEAR, decision 4: a sentence with a pause in it ------------------
+    def _workflow_revision(self)->tuple[Any,Any]:
+        """What changes when a turn changes something: the run's revision and its record's version."""
+
+        curated=self.curated_protocol_session
+        return (getattr(curated,"_revision",None) if curated is not None else None,
+                self.experiment_state_version)
+    def _keep_turn_audio(self,turn_id:int,generation:int,pcm:bytes)->None:
+        """The last committed turn's audio and the run's revision then, for a continuation to join."""
+
+        self._joinable_turn={"identity":(turn_id,generation),"pcm":bytes(pcm),
+                             "revision":self._workflow_revision()}
+    def _join_continuation(
+        self,identity:tuple[int,int],detector:EndpointDetector,framer:FrameBuffer,
+        result:EndpointResult,
+    )->list[ListenerEvent]|None:
+        """Join speech that began soon after the last end to it (decision 4); None to interrupt as before.
+
+        Only while the turn is still being answered (not playing), within
+        CONTINUATION_JOIN_SECONDS of its end (FRAGMENT_JOIN_SECONDS when its
+        words were held as unfinished or are still being written down), and
+        when it has changed nothing --
+        the run's revision and its record's version are as they were. The
+        turn is cancelled; its audio goes in front of the words now under
+        way, which carry on as the listener's own utterance of a new turn.
+        """
+
+        kept=self._joinable_turn
+        if self.state is not TurnState.PROCESSING or kept is None or kept["identity"]!=identity:
+            return None
+        committed=self.turn_committed_at.get(identity[0])
+        if committed is None:
+            return None
+        held=self._held_fragment
+        progress=self.turn_progress.get(identity)
+        window=(
+            FRAGMENT_JOIN_SECONDS
+            if (held is not None and (held["turn_id"],held["generation"])==identity)
+            # Still being written down: whether its words end unfinished is
+            # not known yet, and nothing has been done with them.
+            or (progress is not None and progress.state in {"listening","transcribing"})
+            else CONTINUATION_JOIN_SECONDS)
+        gap=self.clock()-committed
+        if gap>window or kept["revision"]!=self._workflow_revision():
+            return None
+        self._interrupted_generations.add(identity)
+        self._held_fragment=None
+        self._joinable_turn=None
+        self.generation+=1
+        joined_turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=joined_turn_id
+        self.turn_generations[joined_turn_id]=self.generation
+        pcm=kept["pcm"]
+        detector.prepend_utterance(
+            pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES))
+        self.detector=detector
+        self.framer=framer
+        self._interrupt_detector=self._new_interrupt_detector()
+        self._interrupt_framer=FrameBuffer()
+        self._interrupt_candidate_identity=None
+        self._interrupt_candidate_started_at=None
+        self._interrupt_candidate_endpoint_at=None
+        self._interrupt_candidate_diagnostics={}
+        log.info(
+            "speech.continued turn_id=%s joined_turn_id=%s gap_ms=%d joined_ms=%d",
+            identity[0],joined_turn_id,round(gap*1000),len(pcm)//32)
+        return [
+            ListenerEvent(
+                "assistant.interrupted",identity[0],result,identity[1],
+                joined_turn_id,self.generation,reason="continued_speech"),
+            ListenerEvent("speech.start",joined_turn_id,result,self.generation),
+        ]
+    def interrupt_candidate_open(self,turn_id:int,generation:int)->bool:
+        """Whether words that began during this turn are still being heard or checked."""
+
+        return self._interrupt_candidate_identity==(turn_id,generation)
+    def _promote_open_candidate(self)->bool:
+        """Speech under way when its turn is dropped becomes a turn of its own (decision 4).
+
+        The turn before it wrote nothing (or was otherwise dropped); the words
+        that began while it was being answered are kept, not thrown away with it.
+        """
+
+        detector=self._interrupt_detector
+        if self._interrupt_candidate_identity is None or detector.state is not TurnState.USER_SPEAKING:
+            return False
+        turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=turn_id
+        self.turn_generations[turn_id]=self.generation
+        self.detector=detector
+        self.framer=self._interrupt_framer
+        self._interrupt_detector=self._new_interrupt_detector()
+        self._interrupt_framer=FrameBuffer()
+        self._interrupt_candidate_identity=None
+        self._interrupt_candidate_started_at=None
+        self._interrupt_candidate_endpoint_at=None
+        self._interrupt_candidate_diagnostics={}
+        self._pending_listener_events.append(ListenerEvent(
+            "speech.start",turn_id,EndpointResult(speech_started=True,
+                                                  voiced_frames=detector.voiced_frames,
+                                                  total_frames=detector.buffered_frames),
+            self.generation))
+        log.info("speech.kept_after_drop turn_id=%s",turn_id)
+        return True
     def _accept_interrupt_chunk(self,chunk:bytes)->list[ListenerEvent]:
         output=[]
         detector=self._interrupt_detector
         framer=self._interrupt_framer
         self._apply_endpoint_threshold(detector)
-        for frame in framer.push(chunk):
+        frames=framer.push(chunk)
+        for index,frame in enumerate(frames):
             result=detector.process(frame)
             if result.speech_started:
                 interrupted_turn_id=self.active_turn_id
@@ -7612,6 +7738,12 @@ class ListenerSession:
                 identity=(interrupted_turn_id,interrupted_generation)
                 if identity in self._interrupted_generations:
                     continue
+                joined=self._join_continuation(identity,detector,framer,result)
+                if joined is not None:
+                    # The rest of this chunk is the joined utterance's.
+                    output.extend(joined)
+                    output.extend(self._accept_primary_frames(frames[index+1:]))
+                    return output
                 self._interrupt_candidate_identity=identity
                 self._interrupt_candidate_started_at=self.clock()
                 self._interrupt_candidate_diagnostics={
@@ -7729,6 +7861,8 @@ class ListenerSession:
         self.framer=FrameBuffer()
         self.endpoint_at=candidate_endpoint_at or self.clock()
         self.turn_committed_at[superseding_turn_id]=self.endpoint_at
+        if event.result.utterance:
+            self._keep_turn_audio(superseding_turn_id,self.generation,event.result.utterance)
         latency=event.latency_ms
         diagnostics=dict(event.diagnostics or {})
         if stt_ms is not None:
@@ -7756,6 +7890,11 @@ class ListenerSession:
     def start_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.detector.state=TurnState.AGENT_SPEAKING
+        if self._interrupt_candidate_identity is not None:
+            # Lane HEAR, decision 4: words begun while the answer was being
+            # prepared -- still heard, or being checked -- are not cut or
+            # lost when it starts playing; they end as the interruption they are.
+            return True
         self._reset_interrupt_input(playback=True)
         return True
     def playback_ended(self,turn_id:int)->bool:
@@ -7827,6 +7966,8 @@ class ListenerSession:
         return str(held["text"])
     def reject_empty_transcript(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
+        if self._promote_open_candidate():
+            return True
         self.active_turn_id=None; self.framer=FrameBuffer()
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
@@ -7851,6 +7992,8 @@ class ListenerSession:
         return turn_id,generation
     def complete_without_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
+        if self._promote_open_candidate():
+            return True
         self.active_turn_id=None; self.framer=FrameBuffer()
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
@@ -11787,6 +11930,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         },
     )
     transcript=transcription.text
+
     if not transcript.strip():
         if session.reject_empty_transcript(turn_id):
             _record_workspace_metric(
@@ -11852,40 +11996,51 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 session,sender,reason="paused",turn_id=turn_id,generation=generation,
                 duration_ms=input_frames*20,level_db=voiced_level_db)
         return
-    if session.llm_router_settings.router_first:
-        # Lane RA, decision (d): words cut by the endpoint. A fragment held
-        # by the turn before this one is joined with these words when they
-        # started within the join window; a turn whose words end in an
-        # unfinished Korean ending waits for the words that follow and, when
-        # they come and supersede it, is not routed at all.
-        held=session.take_held_fragment(
-            turn_id,generation,
-            speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
-        )
-        if held is not None and emergency is None:
-            transcript=f"{held} {transcript}".strip()
-            emergency=recognize_emergency(transcript)
-            await current_text(
-                "turn.fragment_joined",turn_id=turn_id,text=transcript,
-                fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
-        if (
-            committed_at is not None
-            and emergency is None
-            and incomplete_fragment(transcript)
-        ):
-            session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
-            deadline=committed_at+FRAGMENT_HOLD_SECONDS
-            try:
-                while session.clock()<deadline:
-                    if not session.is_current(turn_id,generation):
-                        # The words that follow took the turn; they join this fragment.
-                        return
-                    await asyncio.sleep(0.05)
-            except asyncio.CancelledError:
-                # Superseded: the fragment stays held for the turn that follows.
-                raise
-            if not session.release_fragment(turn_id,generation):
-                return
+    # Lane HEAR, decision 4: on the rules path as well as the router's.
+    # Lane RA, decision (d): words cut by the endpoint. A fragment held
+    # by the turn before this one is joined with these words when they
+    # started within the join window; a turn whose words end in an
+    # unfinished Korean ending waits for the words that follow and, when
+    # they come and supersede it, is not routed at all.
+    held=session.take_held_fragment(
+        turn_id,generation,
+        speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
+    )
+    if held is not None and emergency is None:
+        transcript=f"{held} {transcript}".strip()
+        emergency=recognize_emergency(transcript)
+        await current_text(
+            "turn.fragment_joined",turn_id=turn_id,text=transcript,
+            fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
+    if (
+        committed_at is not None
+        and emergency is None
+        and incomplete_fragment(transcript)
+    ):
+        session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
+        deadline=committed_at+FRAGMENT_HOLD_SECONDS
+        # Lane HEAR, decision 4: words already under way when the hold
+        # would end are waited for, up to one utterance's length; the
+        # wait is bounded on the wall clock as well as the session's.
+        longest=session.detector.config.maximum_utterance_frames*FRAME_MS/1000
+        polls=int((FRAGMENT_HOLD_SECONDS+longest)/FRAGMENT_HOLD_POLL_SECONDS)+1
+        plain_polls=int(FRAGMENT_HOLD_SECONDS/FRAGMENT_HOLD_POLL_SECONDS)+1
+        try:
+            for poll in range(polls):
+                if not session.is_current(turn_id,generation):
+                    # The words that follow took the turn; they join this fragment.
+                    return
+                following=session.interrupt_candidate_open(turn_id,generation)
+                if (session.clock()>=deadline or poll>=plain_polls) and not following:
+                    break
+                if session.clock()>=deadline+longest:
+                    break
+                await asyncio.sleep(FRAGMENT_HOLD_POLL_SECONDS)
+        except asyncio.CancelledError:
+            # Superseded: the fragment stays held for the turn that follows.
+            raise
+        if not session.release_fragment(turn_id,generation):
+            return
     if emergency is not None:
         if not await current_text("transcript",turn_id=turn_id,text=transcript):
             return
@@ -14515,6 +14670,14 @@ async def voice_socket(websocket:WebSocket):
                             item,"stale_candidate")
                         if rejected is not None:
                             listener_events.append(rejected)
+                        else:
+                            # Lane HEAR, decision 3: words the turn could no
+                            # longer take are a drop like any other, not lost in silence.
+                            await _report_speech_drop(
+                                session,sender,reason="stale_candidate",
+                                turn_id=item.turn_id,generation=item.generation,
+                                duration_ms=item.result.total_frames*20,
+                                level_db=item.result.voiced_level_db,during_playback=True)
                         continue
                     end=next(
                         event_item for event_item in committed
