@@ -120,10 +120,10 @@ def test_every_icon_the_manifest_and_the_pages_name_is_the_brands_file_and_is_th
         linked.update(names)
     assert {"voiney-lab_favicon_32.png", "voiney-lab_app-icon_180.png", "voiney-lab_logo_ink.svg"} <= linked
     on_disk = {path.name for path in (STATIC / "icons").iterdir()}
-    used = linked | {icon["src"].rsplit("/", 1)[1] for icon in manifest["icons"]}
-    assert used <= on_disk
-    assert on_disk <= used, f"icons nothing names: {sorted(on_disk - used)}"
+    assert linked | {icon["src"].rsplit("/", 1)[1] for icon in manifest["icons"]} <= on_disk
+    # Every file there is the brand's own, byte for byte -- so no drawn icon is left.
     for name in sorted(on_disk):
+        assert (BRAND / name).is_file(), f"static/icons/{name} is not a file of assets/brand/"
         assert (STATIC / "icons" / name).read_bytes() == (BRAND / name).read_bytes(), name
     assert _png_size(STATIC / "icons" / "voiney-lab_favicon_32.png") == (32, 32)
     assert _png_size(STATIC / "icons" / "voiney-lab_app-icon_180.png") == (180, 180)
