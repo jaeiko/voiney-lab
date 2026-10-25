@@ -61,7 +61,11 @@ from voiney_lab.curated_protocol import (
     spoken_korean,
     web_lookup_subject,
 )
-from voiney_lab.answer_checks import SAFETY_INSTRUCTION_TOPICS
+from voiney_lab.answer_checks import (
+    SAFETY_INSTRUCTION_TOPICS,
+    possible_cause_violations,
+    problem_help_violations,
+)
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
 )
@@ -169,6 +173,11 @@ from voiney_lab.language import (
     resolve_turn_language, transcription_quality_issue,
 )
 from voiney_lab.intent_arbitration import arbitrate_request
+from voiney_lab.knowledge import (
+    HistoryKnowledge,
+    compose_problem_help,
+    search_tiers,
+)
 from voiney_lab.runtime_metrics import RUNTIME_METRICS
 from voiney_lab.pilot_metrics import (
     ACCOUNT_ID_PATTERN as PILOT_ACCOUNT_PATTERN,
@@ -6657,6 +6666,11 @@ class ListenerSession:
         #: goes to the model, and to the rules when the model cannot be used.
         self.llm_router_settings=llm_router_settings or LlmRouterSettings()
         self.experiment_report_id:str|None=None
+        #: Lane HELP: the account's earlier runs of this protocol, read once
+        #: per experiment record for a problem's help; and the public source
+        #: (lane KNOW connects one; None here, and its tier is skipped).
+        self.problem_history:HistoryKnowledge|None=None
+        self.public_knowledge:Any=None
         #: Lane ON, decision 2: the voice the person chose (None: the
         #: provider's configured voice); ``synthesize`` reads it.
         self.tts_voice:str|None=None
@@ -7094,6 +7108,13 @@ class ListenerSession:
     )->None:
         self.curated_protocol_session=(
             CuratedProtocolSession(fixture) if fixture is not None else None)
+        if self.curated_protocol_session is not None:
+            # Lane HELP: the protocol's sentences are indexed now, off the
+            # turn path, so a problem's first help does not wait for it.
+            threading.Thread(
+                target=_warm_problem_knowledge,args=(self.curated_protocol_session,),
+                name="problem-knowledge-index",daemon=True,
+            ).start()
         self.reset_sensitive_state()
     def set_tool_context(self,context:ToolContext)->None:
         """Change trusted language and clear all language-sensitive session state."""
@@ -9605,6 +9626,226 @@ async def _finish_research_operation(
     return True
 
 
+# --- Help with a problem (lane HELP, 2026-10-24) -----------------------------------
+
+#: How long a problem's sources may take; a later one is left out of the help
+#: (the protocol and the history are searched in this process).
+PROBLEM_HELP_SEARCH_SECONDS=1.5
+#: After the answer has played, how long the possible causes (③) and the
+#: closing (④) they hold may take before the held audio.complete goes anyway.
+PROBLEM_CAUSES_GRACE_SECONDS=10.0
+
+
+def _warm_problem_knowledge(curated:CuratedProtocolSession)->None:
+    """Index the protocol's sentences ahead of the first problem; a failure
+    is left for the turn that needs the index, which builds it itself."""
+
+    try:
+        curated.problem_knowledge()
+    except Exception as exc:
+        log.info("problem knowledge index not built ahead category=%s",type(exc).__name__)
+
+
+def _problem_help_sources(session:ListenerSession,curated:CuratedProtocolSession)->list[Any]:
+    """The protocol, the account's earlier runs (with a record) and the
+    public source when one is connected (lane KNOW); nothing else."""
+
+    sources:list[Any]=[curated.problem_knowledge()]
+    store=session.experiment_report_store
+    if store is not None and session.experiment_report_id:
+        held=session.problem_history
+        if held is None or held.report_id!=session.experiment_report_id or held.store is not store:
+            held=HistoryKnowledge(
+                store,session.experiment_report_id,
+                step_labels={step.step_id:step.source_label for step in curated.fixture.steps})
+            session.problem_history=held
+        sources.append(held)
+    if session.public_knowledge is not None:
+        sources.append(session.public_knowledge)
+    return sources
+
+
+def _problem_causes_allowed(session:ListenerSession,plan:Any,language:str)->bool:
+    """③ from a model: only with the supplemental role on, for a spoken Korean
+    or English help, and never for a spill, an exposure or a contamination."""
+
+    marker=getattr(plan,"problem_help",None) or {}
+    return bool(
+        session.supplemental_knowledge_settings.enabled
+        and language in {"ko","en"}
+        and getattr(plan,"speech_policy","speak")=="speak"
+        and not marker.get("safety")
+        and marker.get("step_index") is not None
+    )
+
+
+async def _with_problem_help(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,*,
+    language:str,timings:dict[str,Any],
+)->tuple[Any,dict[str,Any]|None]:
+    """The help put after a problem's reply (decision 2), and ③'s job if any.
+
+    The sources are searched at once (``knowledge.search_tiers``); the help
+    is their own words and fixed sentences (``compose_problem_help``),
+    checked (``problem_help_violations``) and put after the reply as it is
+    -- an anomaly's read-back first -- or as the whole reply of a problem
+    asked about. With ③ to follow, ④ is held for after it. Nothing moves.
+    """
+
+    marker=dict(plan.problem_help)
+    sources=_problem_help_sources(session,curated)
+    history=next((item for item in sources if getattr(item,"tier","")=="history"),None)
+    organization_id=account_id=None
+    if history is not None:
+        try:
+            organization_id,account_id=await asyncio.to_thread(history.scope)
+        except Exception as exc:
+            log.info("problem help history scope unavailable category=%s",type(exc).__name__)
+            sources=[item for item in sources if item is not history]
+    context=curated.problem_help_context(
+        marker,language=language,organization_id=organization_id,account_id=account_id)
+    found=await search_tiers(
+        sources,str(marker.get("words") or ""),context=context,limit=4,
+        timeout_seconds=PROBLEM_HELP_SEARCH_SECONDS)
+    timings["knowledge_search_ms"]=max(found.elapsed_ms.values(),default=0.0)
+    causes_follow=_problem_causes_allowed(session,plan,language)
+    help_=compose_problem_help(found,language=language,causes_follow=causes_follow)
+    violations=problem_help_violations(
+        f"{help_.shown}\n{help_.spoken}",quoted=help_.quoted_text.splitlines())
+    if violations:
+        log.warning("problem help dropped checks=%s","+".join(violations))
+        help_=compose_problem_help((),language=language,causes_follow=causes_follow)
+    if plan.action is CuratedProtocolAction.PROBLEM_HELP:
+        display,speech=help_.shown,help_.spoken
+    else:
+        display=f"{plan.display_text}\n\n{help_.shown}"
+        speech=f"{plan.speech_text} {help_.spoken}"
+    marker.update({
+        "found":dict(help_.found),"sources":[dict(item) for item in help_.sources],
+        "search_ms":dict(found.elapsed_ms),"unavailable":list(found.unavailable),
+        "failed":list(found.failed),"causes_follow":causes_follow,
+    })
+    plan=replace(plan,display_text=display,speech_text=speech,primary_text=display,problem_help=marker)
+    if not causes_follow:
+        return plan,None
+    step=curated.fixture.steps[int(marker["step_index"])]
+    return plan,{
+        "problem":str(marker.get("words") or ""),
+        "step_text":step.instruction_source_text,
+        "source_lines":tuple(hit.text for hit in found.tier("protocol"))[:3],
+        "public_lines":tuple(hit.text for hit in found.tier("public"))[:2],
+        "sources_text":"\n".join((help_.quoted_text,step.instruction_source_text)),
+        "protocol_text":curated._protocol_vocabulary().corpus,
+        "closing":help_.closing,
+    }
+
+
+def _record_problem_help(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,*,
+    turn_id:int,generation:int,
+)->dict:
+    """The help given, as its own event beside the problem (decision 2 and the
+    notebook's line): where each line came from, never the help's words."""
+
+    report=_open_experiment_report(session,curated)
+    store=session.experiment_report_store
+    assert store is not None and session.experiment_report_id is not None
+    marker=plan.problem_help or {}
+    assert report is not None
+    return store.append_event(
+        session.experiment_report_id,
+        event_key=f"turn-{turn_id}-generation-{generation}-problem-help",
+        event_type="problem_help",
+        step_id=marker.get("step_id"),
+        step_label=marker.get("step_label"),
+        user_wording=(str(marker.get("words") or "") or None) if marker.get("kind")!="statement" else None,
+        category=str(marker.get("kind") or "question"),
+        confirmation_state="server_observed",
+        payload={
+            "kind":marker.get("kind"),"found":marker.get("found") or {},
+            "sources":list(marker.get("sources") or ())[:8],
+            "search_ms":marker.get("search_ms") or {},
+            "causes_follow":bool(marker.get("causes_follow")),
+            "state_mutation":False,
+        },
+    )
+
+
+async def _queue_problem_causes(
+    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    clock:Callable[[],float],causes:dict[str,Any],language:str,answer_segments:int,
+)->None:
+    """③ then ④, said after the answer (decision 2): possible causes from the
+    supplemental role, marked "AI 일반 지식" and checked; ④ alone when they are
+    not ready while the answer plays, fail or fail a check."""
+
+    configuration_id=session.accepted_configuration_id
+    speak_by=float(causes.get("speak_by") or clock())
+    explanation=""
+    status="disabled"
+    try:
+        role=RoleModel.from_environment("supplemental")
+        result=await asyncio.wait_for(
+            XaiSupplementalKnowledge(
+                _role_client(role),
+                replace(session.supplemental_knowledge_settings,
+                        model=role.model or session.supplemental_knowledge_settings.model),
+            ).explain_possible_causes(
+                causes["problem"],step_text=causes["step_text"],
+                source_lines=tuple(causes.get("source_lines") or ()),
+                public_lines=tuple(causes.get("public_lines") or ()),language=language),
+            timeout=max(0.05,min(session.supplemental_knowledge_settings.timeout_seconds,speak_by-clock())),
+        )
+        status=str(result.get("status") or "provider_error")
+        if status=="success":
+            explanation=str(result.get("answer") or "")
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        status="late"
+    except Exception as exc:
+        log.info("possible causes failed turn_id=%s category=%s",turn_id,type(exc).__name__)
+        status="provider_error"
+    if explanation:
+        violations=possible_cause_violations(
+            explanation,sources_text=str(causes.get("sources_text") or ""),
+            protocol_text=str(causes.get("protocol_text") or ""))
+        if violations:
+            log.info("possible causes dropped turn_id=%s checks=%s",turn_id,"+".join(violations))
+            explanation,status="","rejected"
+    if not session.owns_research_result(turn_id,generation,configuration_id):
+        return
+    lead=("AI 일반 지식으로는, " if language=="ko" else "From general AI knowledge, ")
+    words=f"{lead}{explanation} {causes['closing']}" if explanation else str(causes["closing"])
+    if explanation:
+        await sender.text(
+            "research.state",turn_id=turn_id,status="running",phase="supplemental_model",
+            correlation_id=f"research-{generation}-{turn_id}")
+        await _finish_research_operation(
+            sender,session,turn_id,generation,"success",
+            primary_text=f"{explanation}",answer_origin="supplemental_model_knowledge",
+            citations=[],retrieval_backend="supplemental_possible_causes",
+            limitations=["possible_causes"],source_label="AI 일반 지식",outside_pdf=True,spoken=True)
+    else:
+        session.finish_research(turn_id,generation)
+    log.info("possible causes turn_id=%s status=%s",turn_id,status)
+    try:
+        pcm=await asyncio.to_thread(synthesize,said(words),language)
+    except Exception:
+        log.exception("possible causes TTS failed")
+        await _release_held_audio(sender,session,turn_id,generation,answer_segments)
+        return
+    frames=frame_complete_audio(pcm)
+    if (
+        frames and session.is_current(turn_id,generation)
+        and (turn_id,generation) in session.held_audio_complete
+    ):
+        await sender.segment(turn_id,answer_segments,frames,generation)
+        await _release_held_audio(sender,session,turn_id,generation,answer_segments+1)
+    else:
+        await _release_held_audio(sender,session,turn_id,generation,answer_segments)
+
+
 def _outside_pdf_gap(
     session:ListenerSession,curated:CuratedProtocolSession,plan:Any,
     transcript:str,language:str,
@@ -11604,6 +11845,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 translation_status="answer_brain_grounded",
                             )
             research_context=None
+            problem_causes:dict[str,Any]|None=None
+            problem_record_failed=False
             explanatory_visual_request=bool(
                 plan.action is CuratedProtocolAction.VISUAL_REQUEST
                 and plan.requested_entities
@@ -11719,6 +11962,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             pre_transition_index=pre_transition_index,
                         )
                     except Exception:
+                        problem_record_failed=True
                         failed=(
                             "실험 기록을 저장하지 못해 이상 사항이 기록되었다고 확인할 수 없습니다. "
                             "프로토콜 상태는 변경하지 않았습니다."
@@ -11765,6 +12009,27 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 speech_text=acknowledged,
                                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                             )
+                        await report_state(report)
+            if getattr(plan,"problem_help",None) is not None:
+                # Lane HELP, decision 1-2: the sources' help after the reply
+                # (an anomaly's read-back first), and the record of it.
+                plan,problem_causes=await _with_problem_help(
+                    session,curated,plan,language=turn_language,timings=timings)
+                if problem_causes is not None:
+                    session.begin_research(turn_id,generation)
+                if session.experiment_report_store is not None and not problem_record_failed:
+                    # A problem whose own record failed gets the help, read-
+                    # only, and no record of it beside a record that is not there.
+                    try:
+                        report=await _voice_report_write(
+                            _record_problem_help,session,curated,plan,
+                            turn_id=turn_id,generation=generation)
+                    except Exception as exc:
+                        log.warning(
+                            "problem help not recorded turn_id=%s error=%s",
+                            turn_id,type(exc).__name__)
+                    else:
+                        report_prepared=True
                         await report_state(report)
             # A Korean reader asked to hear a step that has no reviewed
             # translation: a checked automatic reading, or the source as before.
@@ -12410,6 +12675,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.REPORT_HANDOFF:"report_handoff_requested",
             CuratedProtocolAction.RECORD_CORRECTION:"experiment_record_corrected",
             CuratedProtocolAction.REPORT_REVIEW:"report_value_review",
+            CuratedProtocolAction.PROBLEM_HELP:"problem_help_read",
             # Lane EASY, decision 2: a value of today's run changed or put back.
             CuratedProtocolAction.CHANGE_VALUE:"run_value_changed",
         }
@@ -12512,7 +12778,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # need not keep the delta's copy.
             display_document=getattr(plan, "display_document", None))
         web_speak_by:float|None=None
-        if speech_policy=="speak" and (
+        if speech_policy=="speak" and problem_causes is not None:
+            # Lane HELP, decision 2: ③ and the closing it holds are said after
+            # the answer; ④ alone when ③ is not ready while the answer plays.
+            session.held_audio_complete.add((turn_id,generation))
+            answer_ends=max(clock(),spoken.ends_at)+0.3
+            problem_causes["speak_by"]=answer_ends
+            async def release_after_causes(deadline:float)->None:
+                await asyncio.sleep(max(0.0,deadline-clock()))
+                await _release_held_audio(
+                    sender,session,turn_id,generation,spoken.segments)
+            session.track_visual_task(asyncio.create_task(
+                release_after_causes(answer_ends+PROBLEM_CAUSES_GRACE_SECONDS)))
+        elif speech_policy=="speak" and (
             (research_context is not None and research_context.get("outside_pdf") is not None)
             or web_lookup_now
         ):
@@ -12693,6 +12971,20 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     ).hexdigest(),status="visual_failed",
                     visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
                     fallback="planner_no_visual" if visual_kind=="no_visual" else "feature_disabled")
+        if problem_causes is not None and speech_policy=="speak":
+            # As the research follow-up is: its own task, which a barge-in
+            # or a new turn's cancellation of this one does not cut short.
+            causes_task=asyncio.create_task(_queue_problem_causes(
+                session=session,sender=sender,turn_id=turn_id,generation=generation,
+                clock=clock,causes=problem_causes,language=turn_language,
+                answer_segments=spoken.segments))
+            session.track_visual_task(causes_task)
+            try:
+                await asyncio.shield(causes_task)
+            except asyncio.CancelledError:
+                pass
+        elif problem_causes is not None:
+            session.finish_research(turn_id,generation)
         if research_context is not None:
             await _queue_curated_research(
                 session=session,
