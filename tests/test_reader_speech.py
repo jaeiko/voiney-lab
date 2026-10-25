@@ -23,6 +23,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from voiney_lab.curated_protocol import (
+    UNTRANSLATED_SHOWN,
+    UNTRANSLATED_SPOKEN,
     CuratedProtocolAction,
     CuratedProtocolSession,
     classify_curated_control_intent,
@@ -222,10 +224,13 @@ class UntranslatedStepTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = miniprep_fixture()
 
-    def test_without_model_roles_the_source_is_read_as_before(self) -> None:
+    def test_without_model_roles_the_source_is_shown_not_read(self) -> None:
+        # Lane SAY, decision 1 (2026-10-25): the English is not read aloud;
+        # "이 문장은 아직 번역되지 않았어요. …" is said and the source is shown.
         session = _listener(self.fixture, 0, model_roles=False)
         spoken, reply, state = _turn(session, "이 단계 읽어줘", 1)
-        self.assertEqual(spoken, [MINIPREP_STEPS[0]])
+        self.assertEqual(spoken, [UNTRANSLATED_SPOKEN])
+        self.assertIn(MINIPREP_STEPS[0], reply["text"])
         self.assertEqual(reply["translation_status"], "source_language")
         self.assertEqual(state["spoken_summary"], spoken[0])
 
@@ -268,27 +273,30 @@ class UntranslatedStepTests(unittest.TestCase):
         self.assertNotIn("자동 번역", spoken[0])
 
     def test_a_reading_that_changes_a_number_is_refused_aloud(self) -> None:
+        # Lane SAY, decision 1: refused, the reading is not said and neither is
+        # the English; the screen keeps the source and says why.
+        model = _FakeModel(BAD_READING)
         session = _listener(self.fixture, 0, model_roles=True)
-        spoken, reply, state = _turn(session, "이 단계 읽어줘", 1, _FakeModel(BAD_READING))
-        self.assertEqual(
-            spoken,
-            ["한국어 자동 번역을 확인하지 못해 원문을 그대로 읽었습니다. " + MINIPREP_STEPS[0]],
-        )
+        spoken, reply, state = _turn(session, "이 단계 읽어줘", 1, model)
+        self.assertEqual(spoken, [UNTRANSLATED_SPOKEN])
         self.assertNotIn("25 µL에", reply["text"])
+        self.assertIn(MINIPREP_STEPS[0], reply["text"])
         self.assertEqual(reply["translation_status"], "source_language")
         self.assertEqual(
-            reply["display_document"]["sections"][0]["text"],
-            "한국어 자동 번역을 확인하지 못해 원문을 그대로 읽었습니다.",
-        )
+            reply["display_document"]["sections"][0]["text"], UNTRANSLATED_SHOWN)
         self.assertEqual(session.reader_translations, {})
+        # Asked once: the same sentence is not sent again in the session.
+        self.assertEqual(len(model.calls), 1)
+        _turn(session, "이 단계 읽어줘", 2, model)
+        self.assertEqual(len(model.calls), 1)
 
     def test_a_provider_failure_is_bounded_and_said(self) -> None:
         session = _listener(self.fixture, 0, model_roles=True)
         before = session.curated_protocol_session.state()
         spoken, reply, _ = _turn(
             session, "이 단계 읽어줘", 1, _FakeModel(error=TimeoutError("slow")))
-        self.assertTrue(spoken[0].startswith("한국어 자동 번역을 확인하지 못해"))
-        self.assertTrue(spoken[0].endswith(MINIPREP_STEPS[0]))
+        # Lane SAY, decision 1: said as not translated yet, never in English.
+        self.assertEqual(spoken, [UNTRANSLATED_SPOKEN])
         self.assertEqual(session.curated_protocol_session.state()["revision"], before["revision"])
 
     def test_logs_carry_no_statement_or_reading(self) -> None:

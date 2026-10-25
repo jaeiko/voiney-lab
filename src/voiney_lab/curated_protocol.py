@@ -8034,6 +8034,13 @@ def classify_curated_control_intent(
             language=language,
             allows_state_mutation=True,
         )
+    if _SOURCE_READ_ALOUD_REQUEST.fullmatch(key):
+        # Lane SAY, decision 1: the one request that reads the English.
+        return CuratedControlIntent(
+            intent_kind=SOURCE_READ_ALOUD_INTENT,
+            action=CuratedProtocolAction.FULL_DETAIL,
+            language=language,
+        )
     if key in _FULL_DETAIL_COMMANDS or _READ_ALOUD_REQUEST.fullmatch(key):
         return CuratedControlIntent(
             intent_kind="full_detail",
@@ -9331,6 +9338,216 @@ def _without_step_prefix(label: str, text: str) -> str:
     return re.sub(rf"^\s*{re.escape(label)}\s*단계\s*:\s*", "", text).strip()
 
 
+# --- Korean first (lane SAY, decision 1, 2026-10-25) ---------------------------
+#
+# Human decision 1: the words said and shown are Korean first wherever a
+# source sentence is carried -- a step read, the next step, a preview, a range,
+# a completion condition, a warning, the purpose. A source sentence without a
+# Korean reading is translated in the turn by the translation role (server.py,
+# ``_korean_first``), used only when it passes the check; failing that, this
+# is said in its place and the source stays on the screen. The English is
+# read aloud only when asked for ("원문 그대로 읽어 줘").
+
+UNTRANSLATED_SPOKEN = "이 문장은 아직 번역되지 않았어요. 원문을 화면에 띄울게요."
+UNTRANSLATED_SPOKEN_AGAIN = "이것도 아직 번역되지 않았어요."
+UNTRANSLATED_SHOWN = "아직 번역되지 않은 문장은 원문 그대로 보여요."
+#: The one request that reads the source in English (decision 1).
+SOURCE_READ_ALOUD_INTENT = "source_read_aloud"
+_SOURCE_READ_ALOUD_REQUEST = re.compile(
+    r"^(?:(?:이|현재|지금)\s*(?:단계\s*)?)?(?:원문|영어\s*원문)(?:을|를)?\s*(?:그대로|대로)?\s*"
+    r"(?:영어로\s*)?(?:읽어|말해|들려)\s*(?:줘|줘요|주세요|줄래|줄래요)$"
+    r"|^(?:(?:이|현재|지금)\s*(?:단계\s*)?)?영어로\s*(?:그대로\s*)?(?:읽어|말해)\s*(?:줘|줘요|주세요|줄래|줄래요)$"
+)
+#: Words that make an English run a sentence rather than a name.
+_ENGLISH_FUNCTION_WORDS = frozenset({
+    "the", "a", "an", "of", "with", "to", "for", "in", "on", "at", "by", "and", "or",
+    "if", "until", "from", "into", "onto", "using", "use", "is", "are", "be", "was",
+    "were", "it", "this", "that", "these", "those", "each", "all", "not", "no", "do",
+    "then", "after", "before", "when", "while", "as", "per", "than", "about", "should",
+    "must", "will", "can", "may", "approximately", "until", "repeat", "add", "remove",
+})
+_RUN_EDGE = "“”‘’\"'「」『』"
+_HANGUL_LETTER = re.compile(r"[가-힣]")
+
+
+def _normalized_words(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
+
+
+@dataclass(frozen=True)
+class SourceQuote:
+    """One source sentence (or phrase) a Korean reply carries in English."""
+
+    #: "<step_id>/<fact_id>" of the sentence, or "span:<sha256>" of a phrase.
+    key: str
+    #: What a translation reads: the whole sentence, or the phrase as said.
+    text: str
+    label: str | None
+    #: The sentence's kind ("step", "warning", ...), or "phrase".
+    kind: str
+    #: The protocol terms it uses (the check keeps them in English).
+    terms: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class KoreanFirstReading:
+    plan: "CuratedProtocolTurnPlan"
+    #: Every source quote the speech carried.
+    quotes: tuple[SourceQuote, ...] = ()
+    #: Those said as ``UNTRANSLATED_SPOKEN`` (no Korean reading yet).
+    untranslated: tuple[SourceQuote, ...] = ()
+    #: Keys whose Korean came from the server's in-turn readings.
+    readings_used: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _KoreanFirstIndex:
+    corpus: tuple[str, ...]
+    #: (key, kind, source text, step label, normalized text) per sentence.
+    units: tuple[tuple[str, str, str, str | None, str], ...]
+    names: tuple[str, ...]
+
+
+@functools.lru_cache(maxsize=32)
+def _cached_korean_first_index(key: _FixtureContentKey) -> _KoreanFirstIndex:
+    from voiney_lab.protocol_translation import translation_units  # imports this module
+
+    fixture = key.fixture
+    texts: list[str] = []
+    for index in range(len(fixture.steps)):
+        texts.extend(fact.text for fact in fixture.facts_for_step(index))
+    protocol = fixture.draft.protocol
+    for construct in getattr(protocol, "constructs", ()) or ():
+        for name in ("condition_source_text", "source_text"):
+            value = getattr(construct, name, None)
+            if isinstance(value, str):
+                texts.append(value)
+        evidence = getattr(construct, "evidence", None)
+        if evidence is not None:
+            texts.append(str(getattr(evidence, "source_excerpt", "") or ""))
+    for reason in getattr(fixture.draft.readiness, "reasons", ()) or ():
+        evidence = getattr(reason, "evidence", None)
+        if evidence is not None:
+            texts.append(str(getattr(evidence, "source_excerpt", "") or ""))
+    extraction = getattr(fixture.draft, "extraction", None)
+    for page in getattr(extraction, "pages", ()) or ():
+        texts.append(str(getattr(page, "text", "") or ""))
+    units = []
+    for unit in translation_units(fixture):
+        texts.append(unit.source_text)
+        units.append((unit.fact_key, unit.kind, unit.source_text, unit.step_label,
+                      _normalized_words(unit.source_text)))
+    names = {
+        _normalized_words(term.text)
+        for term in ProtocolVocabulary.from_fixture(fixture).terms
+    }
+    names.update(_normalized_words(source) for source, _ in (fixture.translation_glossary or ()))
+    return _KoreanFirstIndex(
+        corpus=tuple(dict.fromkeys(_normalized_words(text) for text in texts if text.strip())),
+        units=tuple(units),
+        names=tuple(sorted((name for name in names if name), key=len, reverse=True)),
+    )
+
+
+def _english_runs(text: str) -> list[tuple[int, int]]:
+    """(start, end) of each stretch of words with no Hangul in them.
+
+    A word that closes a quote and runs on into Korean ("00:15:00’라고")
+    ends the stretch with its part before the quote mark.
+    """
+
+    runs: list[tuple[int, int]] = []
+    start = end = None
+    for match in re.finditer(r"\S+", text):
+        if _HANGUL_LETTER.search(match.group()):
+            closing = re.match(r"([^가-힣]*?)[”’\"']", match.group())
+            if closing and closing.group(1) and start is not None:
+                end = match.start() + len(closing.group(1))
+            if start is not None:
+                runs.append((start, end))
+            start = end = None
+            continue
+        if start is None:
+            start = match.start()
+        end = match.end()
+    if start is not None:
+        runs.append((start, end))
+    trimmed = []
+    for start, end in runs:
+        while start < end and (text[start] in _RUN_EDGE or text[start] in "([:·-"):
+            start += 1
+        while end > start and (text[end - 1] in _RUN_EDGE or text[end - 1] in ".,;:!?"):
+            end -= 1
+        if end > start:
+            trimmed.append((start, end))
+    return trimmed
+
+
+def _is_source_sentence(run: str, index: _KoreanFirstIndex) -> bool:
+    """A run is a source sentence: it is in the source, and not just names."""
+
+    normalized = _normalized_words(run)
+    if not normalized or not any(normalized in text for text in index.corpus):
+        return False
+    rest = f" {normalized} "
+    for name in index.names:
+        rest = rest.replace(f" {name} ", " ")
+    words = [word for word in rest.split() if re.fullmatch(r"[a-z][a-z]*", word)]
+    return len(words) >= 4 or (
+        len(words) >= 2 and any(word in _ENGLISH_FUNCTION_WORDS for word in words))
+
+
+def _quote_for(run: str, index: _KoreanFirstIndex, label_near: str | None) -> SourceQuote:
+    normalized = _normalized_words(run)
+    containing = [unit for unit in index.units if normalized in unit[4]]
+    if containing:
+        key, kind, source, label, unit_words = min(containing, key=lambda unit: len(unit[4]))
+        body = re.sub(rf"^{re.escape(_normalized_words(label or ''))}\s+", "", unit_words) \
+            if label else unit_words
+        if len(normalized.split()) >= 0.6 * max(1, len(body.split())):
+            return SourceQuote(key, source, label, kind)
+        label_near = label_near or label
+    digest = hashlib.sha256(" ".join(run.split()).encode("utf-8")).hexdigest()
+    return SourceQuote(f"span:{digest}", " ".join(run.split()), label_near, "phrase")
+
+
+def _korean_in_place(korean: str, label: str | None, before: str) -> str:
+    """The reading as it stands in the reply: no second "N단계:" after one said."""
+
+    text = " ".join(korean.split())
+    if label and re.search(r"단계", before[-24:]):
+        text = _without_step_prefix(label, text)
+    return text
+
+
+def _untranslated_in_place(speech: str, start: int, end: int, said_before: bool) -> tuple[str, int, int]:
+    """Where the fallback goes: the run, with a lead-in or a quoting tail
+    ("원문에는 ‘…’라고 적혀 있어요") that only made sense around the English."""
+
+    sentence_start = max(
+        (match.end() for match in re.finditer(r"[.!?。](?=\s)|\n", speech[:start])), default=0)
+    lead = speech[sentence_start:start]
+    if re.search(r"[:：·]\s*[“‘\"']?\s*$", lead):
+        # "2단계: ", "원문 조건에 답해 주세요: “" -- the lead stays, its
+        # opening quote mark does not.
+        start = sentence_start + len(re.sub(r"\s*[“‘\"']\s*$", " ", lead))
+    else:
+        start = sentence_start
+    closing = re.match(r"[.!?,;:]*[”’\"']+", speech[end:])
+    cut = end + (closing.end() if closing else 0)
+    if _HANGUL_LETTER.match(speech[cut:cut + 1]):
+        # A particle or a quotative stuck to the quote ("…’라고 적혀 있어요."):
+        # the rest of that sentence goes with it.
+        stop = re.search(r"[.!?](?=\s|$)", speech[cut:])
+        cut += stop.end() if stop else len(speech) - cut
+    else:
+        stop = re.match(r"\s*(?:\([^()]*\))?\s*[.]", speech[cut:])
+        if stop:
+            cut += stop.end()
+    words = UNTRANSLATED_SPOKEN_AGAIN if said_before else UNTRANSLATED_SPOKEN
+    return words, start, cut
+
+
 def _spoken_summary_sentence(summary: str) -> str:
     """End one summary as a sentence: a finished Korean sentence keeps its own ending."""
 
@@ -9401,8 +9618,11 @@ _SOURCE_NEGATION = re.compile(
 #: Said before a source safety warning read in place of its Korean (lane TS,
 #: human decision 2 of 2026-10-08): the voice reads a warning's Korean only
 #: when it passes every check (``protocol_translation.statement_issue``).
+#: Lane SAY, decision 1 (2026-10-25): the English is no longer read aloud --
+#: the source stays on the screen, and a reading the server makes in the turn
+#: takes the place of the source and of this lead (``korean_first``).
 SAFETY_SOURCE_READ_LEAD = (
-    "이 안전 주의는 번역 확인이 안 돼서 원문을 읽어 드릴게요. 화면의 원문을 꼭 확인해 주세요."
+    "이 안전 주의는 아직 번역되지 않았어요. 화면의 원문을 꼭 확인해 주세요."
 )
 #: Lane FX, human decision 1 of 2026-10-07: the 없이 of "관계없이" and
 #: "상관없이" ("regardless") is not a negation, so a reading that drops the
@@ -12398,7 +12618,7 @@ class CuratedProtocolSession:
             quoted = " ".join(
                 str(reason.evidence.source_excerpt if reason.evidence else "").split()
             )
-            sentence = f"이 단계의 {name}은 아직 안내 기능이 없어요. 원문을 읽어 드릴게요."
+            sentence = f"이 단계의 {name}은 아직 안내 기능이 없어요. 원문을 확인해 주세요."
             if quoted:
                 sentence += f" “{quoted}”"
             sentences.append(sentence)
@@ -15203,6 +15423,136 @@ class CuratedProtocolSession:
             if _term_pattern(term.text).search(statement)
         ))
         return plan.step_label, statement, terms
+
+    def korean_first(
+        self,
+        plan: CuratedProtocolTurnPlan,
+        *,
+        language: str,
+        readings: Mapping[str, str] | None = None,
+    ) -> KoreanFirstReading:
+        """The reply with every source sentence it says put in Korean (lane SAY, decision 1).
+
+        A stretch of the speech that is a sentence of the source -- in the
+        source's text, and more than names kept in English -- is said in
+        Korean: the sentence's reviewed or stored reading, or ``readings``
+        (what the server translated in this turn, by sentence key). With
+        none, ``UNTRANSLATED_SPOKEN`` is said in its place, the source stays
+        on the screen and the quote is listed in ``untranslated``. The
+        screen's answer shows a Korean reading in place of the source where
+        one is used; a source section ("원문 · English") is left as it is.
+        Only "원문 그대로 읽어 줘" reads the English. Nothing in the session
+        changes.
+        """
+
+        speech = plan.speech_text
+        if (
+            language != "ko" or not isinstance(speech, str) or not speech.strip()
+            or plan.intent_kind == SOURCE_READ_ALOUD_INTENT
+            or getattr(plan, "speech_policy", "speak") != "speak"
+        ):
+            return KoreanFirstReading(plan)
+        index = _cached_korean_first_index(_fixture_content_key(self.fixture))
+        # English a Korean reading keeps ("Concentration (start) x Volume
+        # (start) = …", a formula) is part of that reading, not a quote.
+        kept = [
+            _normalized_words(text) for text in (
+                *(getattr(self.fixture, "localizations", None) or {}).values(),
+                *(getattr(self.fixture, "machine_localizations", None) or {}).values(),
+                *(readings or {}).values(),
+            ) if isinstance(text, str) and _HANGUL_LETTER.search(text)
+        ]
+        found = [
+            (start, end) for start, end in _english_runs(speech)
+            if _is_source_sentence(speech[start:end], index)
+            and not any(_normalized_words(speech[start:end]) in text for text in kept)
+        ]
+        if not found:
+            return KoreanFirstReading(plan)
+        from voiney_lab.protocol_translation import statement_issue  # imports this module
+
+        readings = readings or {}
+        vocabulary = self._protocol_vocabulary()
+        quotes: list[SourceQuote] = []
+        untranslated: list[SourceQuote] = []
+        used: list[str] = []
+        shown: list[tuple[str, str]] = []
+        out: list[str] = []
+        cursor = 0
+        said_fallback = False
+        for start, end in found:
+            if start < cursor:
+                continue  # taken with an earlier quote's sentence
+            run = speech[start:end]
+            quote = _quote_for(run, index, None)
+            quote = replace(quote, terms=tuple(dict.fromkeys(
+                term.text for term in vocabulary.terms
+                if _term_pattern(term.text).search(quote.text))))
+            quotes.append(quote)
+            korean = readings.get(quote.key)
+            if korean:
+                used.append(quote.key)
+            elif not quote.key.startswith("span:"):
+                step_id, _, fact_id = quote.key.partition("/")
+                korean = self._localized_fact(step_id, fact_id)
+                if korean and quote.kind == "warning" and statement_issue(quote.text, korean):
+                    korean = None  # lane TS: a warning's Korean passes every check
+            before = speech[cursor:start]
+            if korean:
+                text = _korean_in_place(korean, quote.label, speech[:start])
+                if speech[end:end + 1] in {".", "!", "?"}:
+                    text = text.rstrip(".!?")  # the reply's own sentence end stays
+                if before.rstrip().endswith(SAFETY_SOURCE_READ_LEAD):
+                    before = before.rstrip()[: -len(SAFETY_SOURCE_READ_LEAD)]
+                out.extend((before, text))
+                shown.append((run, text))
+                cursor = end
+                continue
+            untranslated.append(quote)
+            words, begin, cut = _untranslated_in_place(
+                speech, start, end,
+                said_fallback or "원문을 화면에 띄울게요" in speech[:start])
+            if speech[max(cursor, begin - 80):begin].rstrip().endswith(SAFETY_SOURCE_READ_LEAD):
+                words = ""  # the lead already says it is not translated
+            begin = max(begin, cursor)
+            out.append(speech[cursor:begin])
+            if words:
+                out.append(f" {words} ")
+            said_fallback = said_fallback or bool(words)
+            cursor = cut
+        out.append(speech[cursor:])
+        new_speech = re.sub(r"[ \t]{2,}", " ", "".join(out))
+        new_speech = re.sub(r" +([.,])", r"\1", new_speech).strip()
+        display = plan.display_text
+        primary = plan.primary_text
+        document = plan.display_document
+
+        def korean_shown(value: str | None) -> str | None:
+            if not isinstance(value, str):
+                return value
+            boundary = value.find("원문 · ")
+            for run, text in shown:
+                at = value.find(run)
+                if at >= 0 and (boundary < 0 or at < boundary):
+                    value = value[:at] + text + value[at + len(run):]
+                    boundary = value.find("원문 · ")
+            return value
+
+        display, primary = korean_shown(display), korean_shown(primary)
+        if untranslated and isinstance(display, str) and UNTRANSLATED_SHOWN not in display:
+            display = f"{UNTRANSLATED_SHOWN}\n\n{display}"
+            if isinstance(document, dict):
+                document = {**document, "sections": [
+                    {"kind": "section", "heading": "", "text": UNTRANSLATED_SHOWN},
+                    *(document.get("sections") or ())]}
+        changes: dict[str, Any] = {
+            "speech_text": new_speech or UNTRANSLATED_SPOKEN,
+            "display_text": display, "primary_text": primary, "display_document": document,
+        }
+        if used:
+            changes["translation_status"] = "model_assisted_unreviewed"
+        return KoreanFirstReading(
+            replace(plan, **changes), tuple(quotes), tuple(untranslated), tuple(used))
 
     def entity_source_answer(
         self,
@@ -22239,8 +22589,13 @@ class CuratedProtocolSession:
                 self._replay[turn_id] = plan
                 return plan
             step = steps[target_index]
-            if intent.intent_kind == "full_detail":
-                localized = self._localized_fact(step.step_id, "current_step")
+            if intent.intent_kind in {"full_detail", SOURCE_READ_ALOUD_INTENT}:
+                # "원문 그대로 읽어 줘" (lane SAY, decision 1) reads the source
+                # itself, asked for; it is the one reply said in English.
+                as_source = intent.intent_kind == SOURCE_READ_ALOUD_INTENT
+                localized = (
+                    None if as_source
+                    else self._localized_fact(step.step_id, "current_step"))
                 response = _display_contract(
                     language,
                     (
@@ -22251,7 +22606,7 @@ class CuratedProtocolSession:
                     (step.instruction_source_text,),
                     (step.evidence.source_page_number,),
                     ("current_step",),
-                    translated=language != "ko" or localized is not None,
+                    translated=language != "ko" or localized is not None or as_source,
                 )
                 # Asked to hear the step, a Korean reader hears its reviewed
                 # Korean translation; with none, the source as before.

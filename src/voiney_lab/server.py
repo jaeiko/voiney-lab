@@ -6780,6 +6780,9 @@ class ListenerSession:
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
         self.reader_translations:dict[tuple[str,str,str],str]={}
+        # Lane SAY, decision 1: readings asked for and refused (or failed),
+        # so a sentence is translated once a session, never again in a turn.
+        self.reader_translation_refused:set[tuple[str,str,str]]=set()
         # "자동 번역입니다." is said once a session, before the first
         # unreviewed Korean it speaks; the page carries the label after that.
         self.auto_translation_announced=False
@@ -8564,7 +8567,10 @@ async def _apply_reader_translation(
     korean=session.reader_translations.get(key)
     status="cached" if korean else "unavailable"
     started=clock()
-    if korean is None:
+    if korean is None and key in session.reader_translation_refused:
+        # Lane SAY, decision 1: a sentence is asked for once a session.
+        status="refused_before"
+    elif korean is None:
         try:
             candidate=await _request_reader_translation(session,label,statement)
         except Exception as exc:
@@ -8578,6 +8584,8 @@ async def _apply_reader_translation(
                 status="accepted"
             else:
                 status=f"rejected_{issue}"
+        if korean is None:
+            session.reader_translation_refused.add(key)
     # Status and size only: the statement and the reading stay out of logs.
     log.info(
         "reader_translation turn_id=%s status=%s chars=%d elapsed_ms=%d",
@@ -8599,13 +8607,204 @@ async def _apply_reader_translation(
                 plan.display_document,READER_TRANSLATION_HEADING,korean),
             translation_status="model_assisted_unreviewed",
         )
-    return replace(
-        plan,
-        speech_text=f"{READER_TRANSLATION_UNAVAILABLE} {plan.speech_text}",
-        display_text=f"{READER_TRANSLATION_UNAVAILABLE}\n\n{plan.display_text}",
-        display_document=_with_reader_section(
-            plan.display_document,"",READER_TRANSLATION_UNAVAILABLE),
+    # Lane SAY, decision 1: the source is not read aloud any more; the
+    # turn's Korean-first step says the sentence is not translated yet and
+    # leaves the source on the screen (``_korean_first``).
+    return plan
+
+
+#: Lane SAY, decision 1 (2026-10-25): readings the translation role made in a
+#: turn, by translation key (protocol id / revision id) and sentence key
+#: (``SourceQuote.key``), kept for the process so a sentence is translated
+#: once and every session on the revision reads it. Presentation only; a
+#: stored machine row that was refused cannot be replaced in the store
+#: (append-only), so these live here. Bounded by revisions.
+_SPOT_READINGS:"collections.OrderedDict[str,dict[str,str]]"=collections.OrderedDict()
+#: Sentence keys asked for already, by translation key, with when they may be
+#: asked for again: never after a reading came back (accepted or refused),
+#: ``SPOT_RETRY_AFTER_SECONDS`` after a provider failure.
+_SPOT_ATTEMPTED:dict[str,dict[str,float]]={}
+SPOT_RETRY_AFTER_SECONDS=60.0
+_SPOT_LOCK=threading.Lock()
+SPOT_READINGS_MAX_REVISIONS=32
+#: At most this many sentences are translated in one turn; the rest are said
+#: as not translated yet and tried in a later turn.
+SPOT_TRANSLATIONS_PER_TURN=3
+SPOT_TRANSLATION_PHRASE_PROMPT=(
+    "You translate one sentence or phrase of a laboratory protocol into Korean for a "
+    "researcher at the bench. Say exactly what it says. Keep every number, unit, time, "
+    "temperature, concentration and ratio exactly as written, keep reagent, material "
+    "and equipment names in their original spelling, keep every negation and add none. "
+    "Do not begin with a step label. Return only the JSON object."
+)
+
+
+def _spot_readings(key:str)->dict[str,str]:
+    with _SPOT_LOCK:
+        return dict(_SPOT_READINGS.get(key,{}))
+
+
+def _spot_attempt(key:str,sentence:str,now:float)->bool:
+    """Mark one sentence as asked for; False when it may not be asked for now."""
+
+    with _SPOT_LOCK:
+        attempted=_SPOT_ATTEMPTED.setdefault(key,{})
+        if attempted.get(sentence,-math.inf)>now:
+            return False
+        attempted[sentence]=math.inf
+        return True
+
+
+def _spot_failed(key:str,sentence:str,now:float)->None:
+    with _SPOT_LOCK:
+        _SPOT_ATTEMPTED.setdefault(key,{})[sentence]=now+SPOT_RETRY_AFTER_SECONDS
+
+
+def _spot_keep(key:str,sentence:str,korean:str)->None:
+    with _SPOT_LOCK:
+        readings=_SPOT_READINGS.setdefault(key,{})
+        _SPOT_READINGS.move_to_end(key)
+        readings[sentence]=korean
+        while len(_SPOT_READINGS)>SPOT_READINGS_MAX_REVISIONS:
+            dropped,_=_SPOT_READINGS.popitem(last=False)
+            _SPOT_ATTEMPTED.pop(dropped,None)
+
+
+async def _request_spot_translation(session:ListenerSession,quote:Any)->str:
+    """One bounded call for a Korean reading of one source sentence or phrase."""
+
+    if quote.kind=="step" and quote.label:
+        return await _request_reader_translation(session,quote.label,quote.text)
+    settings=session.multi_brain_settings
+    role=RoleModel.from_environment("translation")
+    client=_role_client(role)
+    response=await asyncio.wait_for(
+        client.chat.completions.create(
+            model=role.model,
+            messages=[
+                {"role":"system","content":SPOT_TRANSLATION_PHRASE_PROMPT},
+                {"role":"user","content":json.dumps(
+                    {"source_text":quote.text},ensure_ascii=False)},
+            ],
+            response_format={
+                "type":"json_schema",
+                "json_schema":{
+                    "name":"protocol_phrase_reader_translation_v1",
+                    "strict":True,
+                    "schema":{
+                        "type":"object","additionalProperties":False,
+                        "properties":{"korean":{"type":"string"}},
+                        "required":["korean"],
+                    },
+                },
+            },
+            temperature=0,
+        ),
+        timeout=min(6.0,settings.answer_timeout_seconds),
     )
+    payload=json.loads(response.choices[0].message.content or "{}")
+    korean=payload.get("korean") if isinstance(payload,dict) else None
+    return " ".join(korean.split()) if isinstance(korean,str) else ""
+
+
+async def _korean_first(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,*,
+    turn_id:int,generation:int,clock:Callable[[],float],
+)->Any:
+    """Say every source sentence of a Korean reply in Korean (lane SAY, decision 1).
+
+    ``CuratedProtocolSession.korean_first`` puts a sentence's reviewed or
+    stored Korean in place of the source it quotes. A sentence with none is
+    translated now by the translation role -- at most
+    ``SPOT_TRANSLATIONS_PER_TURN``, each once (in this process), each bounded
+    -- and used only when it passes the check every reading passes
+    (``statement_issue``). One still without Korean is said as "이 문장은
+    아직 번역되지 않았어요. 원문을 화면에 띄울게요." and shown in the source.
+    A checked reading of a step's own sentence is put on the session's
+    fixture for the screen, as a stored machine translation is. Nothing in
+    the workflow changes.
+    """
+
+    fixture=curated.fixture
+    key=translation_revision_key(fixture)
+    reading=curated.korean_first(plan,language="ko",readings=_spot_readings(key))
+    if not reading.untranslated:
+        return _with_spot_readings(session,curated,reading)
+    started=clock()
+    sha=fixture.fixture_sha256
+    readings=_spot_readings(key)
+    for quote in reading.untranslated:
+        held=session.reader_translations.get((sha,quote.label or "",quote.text))
+        if held:
+            readings[quote.key]=held
+    asked:list[Any]=[]
+    if session.multi_brain_settings.translation_enabled:
+        for quote in reading.untranslated:
+            if len(asked)>=SPOT_TRANSLATIONS_PER_TURN or quote.key in readings:
+                continue
+            if (sha,quote.label or "",quote.text) in session.reader_translation_refused:
+                continue
+            if _spot_attempt(key,quote.key,started):
+                asked.append(quote)
+    statuses:list[str]=[]
+    if asked:
+        answers=await asyncio.gather(
+            *(_request_spot_translation(session,quote) for quote in asked),
+            return_exceptions=True)
+        for quote,answer in zip(asked,answers):
+            if isinstance(answer,BaseException):
+                _spot_failed(key,quote.key,started)
+                statuses.append(f"provider_{type(answer).__name__}")
+                continue
+            issue=statement_issue(
+                quote.text,answer,required_terms=quote.terms,
+                step_label=quote.label if quote.kind=="step" else None)
+            if issue is None:
+                _spot_keep(key,quote.key,answer)
+                readings[quote.key]=answer
+                statuses.append("accepted")
+            else:
+                statuses.append(f"rejected_{issue}")
+    if not session.is_current(turn_id,generation):
+        return reading.plan  # superseded: the turn's fences drop it anyway
+    if readings:
+        reading=curated.korean_first(plan,language="ko",readings=readings)
+    # Counts and codes only: no sentence or reading reaches the log.
+    log.info(
+        "korean_first turn_id=%s quotes=%d untranslated=%d asked=%d statuses=%s elapsed_ms=%d",
+        turn_id,len(reading.quotes),len(reading.untranslated),len(asked),
+        ",".join(statuses) or "none",round((clock()-started)*1000))
+    return _with_spot_readings(session,curated,reading,readings)
+
+
+def _with_spot_readings(
+    session:ListenerSession,curated:CuratedProtocolSession,reading:Any,
+    readings:Mapping[str,str]|None=None,
+)->Any:
+    """The reply, with the readings it used put on the session's fixture."""
+
+    plan=reading.plan
+    if not reading.readings_used:
+        return plan
+    readings=readings or _spot_readings(translation_revision_key(curated.fixture))
+    fixture=curated.fixture
+    reviewed=getattr(fixture,"localizations",None) or {}
+    machine=dict(getattr(fixture,"machine_localizations",None) or {})
+    added={
+        quote_key:readings[quote_key] for quote_key in reading.readings_used
+        if quote_key in readings and not quote_key.startswith("span:")
+        and quote_key not in reviewed and machine.get(quote_key)!=readings[quote_key]
+    }
+    if added:
+        machine.update(added)
+        curated.fixture=replace(fixture,machine_localizations=machine)
+    if any(quote_key.startswith("span:") for quote_key in reading.readings_used) and not (
+            session.auto_translation_announced):
+        # A phrase's reading is not a stored sentence the labelling below
+        # knows: it is announced here, once a session.
+        session.auto_translation_announced=True
+        plan=replace(plan,speech_text=f"{READER_TRANSLATION_SPOKEN_LEAD} {plan.speech_text}")
+    return plan
 
 
 async def _queue_curated_research(
@@ -12248,6 +12447,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     session,curated,plan,reader_target,
                     turn_id=turn_id,generation=generation,clock=clock,
                 )
+            if turn_language=="ko":
+                # Lane SAY, decision 1: Korean first -- no source sentence is
+                # read aloud in English unless it was asked for.
+                plan=await _korean_first(
+                    session,curated,plan,turn_id=turn_id,generation=generation,clock=clock)
             plan=_label_machine_translation(session,curated,plan)
             display_text=plan.display_text
             speech_text=plan.speech_text
