@@ -7041,12 +7041,12 @@ class ListenerSession:
         #: 말씀해 주세요." was said since words were last heard, and how many
         #: voices in a row the filter dropped just under its line.
         self.drop_times:collections.deque[float]=collections.deque(maxlen=16)
+        self.drop_notice_said:bool=False
+        self.near_line_drops:int=0
         #: Lane HEAR, decision 4: the last committed turn's audio (for a
         #: continuation to join) and events of a turn opened between chunks.
         self._joinable_turn:dict[str,Any]|None=None
         self._pending_listener_events:list[ListenerEvent]=[]
-        self.drop_notice_said:bool=False
-        self.near_line_drops:int=0
     @property
     def state(self): return self.detector.state
     def remember_spoken(self,text:str)->None:
@@ -11418,6 +11418,8 @@ LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
 #: 0.47-0.70, while a fan, a centrifuge or a quiet room gave 0.02-0.09 (lane
 #: SP2 report): the line sits in the empty gap between them, a quarter.
 ROOM_VOICED_SHARE=0.25
+
+
 async def _timer_notice_tick(
     session:ListenerSession,sender:LockedSender,*,now:float|None=None,
     sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
