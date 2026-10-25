@@ -11983,6 +11983,22 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     )
     if admission.correction_class is not None:
         transcript = admission.admitted_text
+    if admission.mismatch_status=="unclear":
+        # Lane HEAR, decision 8: Latin letters for Korean speech -- a turn
+        # misheard, not another language: dropped and shown, not asked about.
+        if session.reject_empty_transcript(turn_id):
+            await sender.text(
+                "speech.rejected",turn_id=turn_id,generation=generation,reason="language_unclear",
+                voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20,
+            )
+            await sender.text(
+                "state.changed",state=session.state.value,turn_id=turn_id,
+                cooldown_ms=session.detector.config.cooldown_ms,
+            )
+            await _report_speech_drop(
+                session,sender,reason="language_unclear",turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
+        return
     cleaned_source=clean_path(source_pcm)
     diagnostic_wav=pcm_to_wav(cleaned_source)
     stt_diagnostic_metadata={
