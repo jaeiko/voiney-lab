@@ -22,6 +22,7 @@ from unittest.mock import patch
 import voiney_lab.server as server_module
 from tests.lane_n_support import VoiceNotesHarness, error_message
 from tests.lane_net_support import CONNECTION, run_connection_script
+from tests.static_page import page_script
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "src" / "voiney_lab" / "static" / "index.html"
@@ -162,7 +163,9 @@ class PageServedTests(unittest.TestCase):
         self.assertIsNotNone(stat_result)
         html = INDEX.read_text(encoding="utf-8")
         self.assertLess(html.index("<script>"), html.index('<script src="/connection.js"></script>'))
-        self.assertIn("voineyConnection?.watch(current)", html)
+        # Lane RX2 (decision 4): the page's socket code is voice-core.js, loaded just before the page's own script.
+        self.assertLess(html.index('<script src="/voice-core.js"></script>'), html.index("<script>"))
+        self.assertIn("voineyConnection?.watch(current)", page_script(html))
         self.assertTrue(CONNECTION.read_text(encoding="utf-8").startswith("// Lane NET"))
 
 

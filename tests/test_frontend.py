@@ -1,5 +1,6 @@
 import subprocess, unittest
 from pathlib import Path
+from tests.static_page import page_script
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -115,7 +116,7 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
         self.assertIn("calc(100dvh - 5.5rem)", css)
         self.assertIn("overflow-y:auto", css)
         self.assertIn('role="log"', html)
-        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        script = page_script(html)
         harness = r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.hidden=false;this.disabled=false;this.dataset={};this.options=[];this.scrollTop=0;this.scrollHeight=0;this.clientHeight=300;this.offsetTop=0;this.attributes={}}get firstChild(){return this.children[0]||null}insertBefore(n,ref){const i=this.children.indexOf(ref);if(i>=0)this.children.splice(i,0,n);else this.children.unshift(n);this.options=this.children;this.scrollHeight=this.children.length*100;return n}set innerHTML(v){for(const c of ["transcript","reply","turn-status","filler-status","server-operation","tools","replay-status","turn-visual","stats","error"]){const item=new Element();item.textContent=c==="transcript"?"듣는 중…":"";this.fields[c]=item}}querySelector(s){if(s.startsWith("."))return this.fields[s.slice(1)]||this.children.find(item=>String(item.className||"").split(" ").includes(s.slice(1)))||null;return null}replaceChildren(...items){this.children=[...items];this.options=this.children;this.scrollHeight=this.children.length*100}appendChild(n){n.offsetTop=this.children.length*100;this.children.push(n);this.options=this.children;this.scrollHeight=this.children.length*100;return n}prepend(n){this.children.unshift(n)}remove(){this.removed=true}setAttribute(name,value){this.attributes[name]=value}addEventListener(kind,fn){this["on"+kind]=fn}}
@@ -139,7 +140,7 @@ await onMessage({data:JSON.stringify({type:"speech.start",turn_id:5,generation:9
 
     def test_session_restart_and_stale_event_isolation(self):
         html = (ROOT / "src" / "voiney_lab" / "static" / "index.html").read_text(encoding="utf-8")
-        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        script = page_script(html)
         self.assertNotIn("create"+"ScriptProcessor", script)
         self.assertNotIn("Script"+"ProcessorNode", script)
         self.assertNotIn("on"+"audioprocess", script)
@@ -210,7 +211,7 @@ for(let i=0;i<3;i++){socket=new WS();ids["pipeline-mode"].value="cascade";ids["p
         html=(
             ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
-        script=html.split("<script>",1)[1].split("</script>",1)[0]
+        script=page_script(html)
         for forbidden in (
             "127.0.0.1:8000","localhost:8000","file://",
             "/home/student/protocol-test-files",
@@ -284,7 +285,7 @@ globalThis.WebSocket=WS;Object.defineProperty(globalThis,"navigator",{value:{med
         html=(
             ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
-        script=html.split("<script>",1)[1].split("</script>",1)[0]
+        script=page_script(html)
         harness=r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.disabled=false;this.hidden=false;this.removed=false;this.dataset={};this.options=[]}set innerHTML(v){for(const c of ["transcript","reply","turn-status","filler-status","server-operation","tools","turn-visual","stats","error"]){const item=new Element();item.textContent=c==="transcript"?"듣는 중…":"";this.fields[c]=item}}querySelector(s){return this.fields[s.slice(1)]}prepend(n){this.children.unshift(n)}replaceChildren(){this.children=[];this.options=this.children}appendChild(n){this.children.push(n);this.options=this.children}remove(){this.removed=true}addEventListener(){}setAttribute(){}}
@@ -350,7 +351,7 @@ assert(processor.process([ [block] ])===false,"stopped processor remained active
         html=(
             ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
-        script=html.split("<script>",1)[1].split("</script>",1)[0]
+        script=page_script(html)
         harness=r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.disabled=false;this.hidden=false;this.removed=false;this.dataset={};this.options=[];this.attributes={}}set innerHTML(v){for(const c of ["transcript","reply","turn-status","filler-status","server-operation","tools","turn-visual","stats","error"]){const item=new Element();item.textContent=c==="transcript"?"듣는 중…":"";this.fields[c]=item}}querySelector(s){return this.fields[s.slice(1)]}prepend(n){this.children.unshift(n)}replaceChildren(){this.children=[];this.options=this.children}appendChild(n){this.children.push(n);this.options=this.children}remove(){this.removed=true}addEventListener(kind,fn){this["on"+kind]=fn}setAttribute(name,value){this.attributes[name]=value}}

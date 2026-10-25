@@ -51,6 +51,7 @@ from voiney_lab.workspace_store import (
     WorkspaceSettings,
     initialize_workspace_store,
 )
+from tests.static_page import page_script
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
@@ -481,7 +482,7 @@ class SilentTurnPageTests(unittest.TestCase):
 
     def test_the_paused_notice_is_shown_and_the_page_returns_to_listening(self):
         html = (ROOT / "src/voiney_lab/static/index.html").read_text(encoding="utf-8")
-        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        script = page_script(html)
         notice = (
             "현재 실험 안내가 일시정지 상태입니다. "
             "'실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
@@ -529,7 +530,7 @@ globalThis.WebSocket=WS;Object.defineProperty(globalThis,"navigator",{value:{med
         take it, or the card keeps the last checking label (line M, §9-1).
         """
         html = (ROOT / "src/voiney_lab/static/index.html").read_text(encoding="utf-8")
-        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        script = page_script(html)
         harness = r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.className="";this.disabled=false;this.hidden=false;this.removed=false;this.dataset={};this.options=[]}set innerHTML(v){for(const c of ["transcript","reply","turn-status","filler-status","server-operation","tools","turn-visual","stats","error"]){const item=new Element();item.textContent=c==="transcript"?"듣는 중…":"";this.fields[c]=item}}querySelector(s){return this.fields[s.slice(1)]}prepend(n){this.children.unshift(n)}replaceChildren(){this.children=[];this.options=this.children}appendChild(n){this.children.push(n);this.options=this.children}remove(){this.removed=true}addEventListener(){}setAttribute(){}}
