@@ -438,6 +438,13 @@ class PausedVoiceTests(VoiceSessionHarness, unittest.TestCase):
             return 0
         return len(ExperimentReportStore(self.report_db).get_report(report_id)["events"])
 
+    def _silent_in_pause(self, socket, turn_id: int) -> bool:
+        """Lane HEAR, decision 7: a paused run answers no word but a resume word."""
+
+        dropped = socket.for_turn(turn_id, "speech.dropped")
+        return (socket.for_turn(turn_id, "reply.delta") == []
+                and [m["reason"] for m in dropped] == ["paused"])
+
     def _spoken(self, socket, turn_id: int) -> bool:
         done = socket.for_turn(turn_id, "turn.done")
         self.assertEqual(len(done), 1)
@@ -462,12 +469,10 @@ class PausedVoiceTests(VoiceSessionHarness, unittest.TestCase):
         socket, _ = self._session(scenario)
         self.assertEqual(self._errors(socket), [])
         self.assertEqual(socket.reply(2), PAUSED_REPLY)
-        self.assertTrue(self._spoken(socket, 3))
-        self.assertEqual(socket.for_turn(3, "reply.delta")[-1]["speech_text"], PAUSED_SPOKEN)
-        self.assertEqual(socket.reply(3), PAUSED_NOTICE)
-        self.assertFalse(self._spoken(socket, 4))
-        self.assertEqual(socket.for_turn(4, "reply.delta")[-1]["speech_text"], "")
-        self.assertEqual(socket.reply(4), PAUSED_NOTICE)
+        # Lane HEAR, decision 7 (2026-10-25): no word in a pause is answered
+        # any more -- not the first aloud, not the rest on the screen.
+        self.assertTrue(self._silent_in_pause(socket, 3))
+        self.assertTrue(self._silent_in_pause(socket, 4))
         (paused, paused_events), (held, held_events) = seen["paused"], seen["held"]
         self.assertEqual(held["step_index"], 0)
         self.assertEqual(held["pause_state"], "paused")
@@ -476,9 +481,9 @@ class PausedVoiceTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(held["durable"]["version"], paused["durable"]["version"])
         self.assertEqual(len(held["durable"]["events"]), len(paused["durable"]["events"]))
         self.assertEqual(held_events, paused_events)
-        # A new pause counts afresh.
-        self.assertTrue(self._spoken(socket, 7))
-        self.assertFalse(self._spoken(socket, 8))
+        # A new pause is as silent.
+        self.assertTrue(self._silent_in_pause(socket, 7))
+        self.assertTrue(self._silent_in_pause(socket, 8))
 
     def test_a_refused_resume_keeps_the_word_already_spoken(self):
         real_transition = server_module._transition_workspace_experiment
@@ -504,9 +509,10 @@ class PausedVoiceTests(VoiceSessionHarness, unittest.TestCase):
                 side_effect=refuse_resume,
             ),
         )
-        self.assertTrue(self._spoken(socket, 3))
+        # Lane HEAR, decision 7: the words in the pause get no answer.
+        self.assertTrue(self._silent_in_pause(socket, 3))
         self.assertIn("실험 세션을 저장하지 못해", socket.reply(4))
-        self.assertFalse(self._spoken(socket, 5))
+        self.assertTrue(self._silent_in_pause(socket, 5))
 
 
 def _predicate(label: str, said: str):

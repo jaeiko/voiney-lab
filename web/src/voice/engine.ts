@@ -183,9 +183,12 @@ export function installVoiceHost(): void {
     invalidateCuratedProtocolState,
     stopWorkflowTimer: () => undefined,
     stopReportPolling: () => undefined,
-    // Decision 1 (2026-10-25): the voice is never measured during a run; it is the settings' and the first guide's.
-    voiceCalibrationAtStart: () => false,
-    requestVoiceCalibration: () => false,
+    // Lane HEAR decision 2: the microphone's short id (index.html's micIdFor, the same hash), sent with client.audio_ready.
+    micIdFor: (track: MediaStreamTrack | null) => {
+      const id = String(track?.getSettings?.()?.deviceId || ""), label = String(track?.label || ""); if (!id && !label) return null;
+      let hash = 0x811c9dc5; for (const char of `${id}|${label}`) { hash ^= char.codePointAt(0)!; hash = Math.imul(hash, 0x01000193) >>> 0; }
+      return `mic-${hash.toString(16).padStart(8, "0")}`;
+    },
     workspaceFetch: (url: string, options: RequestInit = {}) => fetch(url, { credentials: "same-origin", ...options }),
   });
 }

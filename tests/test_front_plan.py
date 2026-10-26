@@ -288,6 +288,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "problem_help",
             # lane EASY, decision 2 (2026-10-24): today's values said aloud
             "run_value_change",
+            # lane SAY, decision 6 (2026-10-25): a move said with a claim
+            "mixed_move",
         })
 
 

@@ -17,8 +17,9 @@ step, fixing one Korean form for the words the protocol repeats (names of
 reagents, equipment and products stay in English); it is stored with the
 revision. Each sentence call then carries the title, a short purpose, the
 glossary, and the step the sentence belongs to with the steps either side.
-The style is ``STYLE_GUIDE``: general rules for terms, units, numbers and
-the polite imperative form, with no document's example in them (lane GE).
+The style is ``STYLE_GUIDE``: the Korean a lab member says at the bench
+(해요체, short sentences, names as Korean labs say them; lane SAY, decision 3)
+with lane GE's rules for terms, units and numbers.
 
 Sentences are translated purpose and safety first, then step by step from
 step 1, with the steps open sessions are on (current and next) ahead of the
@@ -73,7 +74,8 @@ from voiney_lab.workspace_store import FactTranslationRecord, TranslationGlossar
 log = logging.getLogger(__name__)
 
 TARGET_LANGUAGE = "ko"
-PROMPT_VERSION = "revision_translation_v2"
+#: v3: lane SAY's style guide (해요체, short, names as labs say them).
+PROMPT_VERSION = "revision_translation_v3"
 #: The fact kinds the screen and the answers draw.
 TRANSLATED_KINDS = (
     "step", "sub_action", "warning", "note", "expected_result", "prerequisite",
@@ -92,27 +94,37 @@ GLOSSARY_MAX_CHARACTERS = 60000
 GLOSSARY_MAX_ENTRIES = 80
 PURPOSE_SUMMARY_CHARACTERS = 600
 
-#: The house style every machine translation follows (lane GE, decision 4):
-#: general rules only -- the terms, units and numbers of the source kept as
-#: written, the polite declarative form, and an instruction's imperative
-#: shape -- with no example taken from any one document.
+#: The house style every machine translation follows. Lane SAY, decision 3
+#: (2026-10-25) replaced lane GE's formal style: the Korean a lab member says
+#: at the bench -- 해요체, short sentences, names as Korean labs say them -- and
+#: lane GE's rule kept: the terms, units and numbers of the source exactly as
+#: written. The examples are general lab words and reagents, not one
+#: document's.
 STYLE_GUIDE = (
-    "Write in formal polite Korean declarative style (합니다체: '넣습니다', "
-    "'배양합니다', '준비합니다'), as instructions to the reader, never "
-    "addressing the reader as '당신'. Write an instruction as an instruction "
-    "(an imperative sentence of the protocol becomes a 합니다체 instruction, "
-    "not a description or a suggestion). Begin a step instruction with its "
-    "step label followed by '단계: ' (for example '3단계: '), and an expected "
-    "result with '예상 결과: '. Keep the names of reagents, solutions, buffers, "
-    "kits, products, instruments, brands and labelled items in their original "
-    "English spelling exactly as the source writes them, following the "
-    "glossary; keep chemical formulas and abbreviations as written. Write "
-    "ordinary words in Korean (water as 물 unless it is part of a reagent "
-    "name, tube 튜브, gloves 장갑, chamber 챔버, hours 시간, room temperature "
-    "실온). Keep every number, unit, symbol, time, temperature, concentration, "
-    "volume, ratio and range exactly as written -- the same digits, the same "
-    "unit spelling, the same order -- and never convert, round, add or drop "
-    "one."
+    "Write the Korean a Korean lab member would say at the bench to a new "
+    "colleague: polite informal style (해요체: '넣어요', '섞어요', '배양해요', "
+    "'준비해요'), short sentences, one action per sentence, in the order the "
+    "source gives them. Never use 합니다체 or '~하십시오', and never address the "
+    "reader ('귀하', '당신', '여러분'). Say what the sentence means in this "
+    "protocol, not word by word: no translationese such as '이것은 …이며', "
+    "'~하는 것을 환영합니다', '~에 의해', '~하는 것이 요구됩니다'. Write an "
+    "instruction as an instruction ('… 넣어요'), and a note or a result as a "
+    "plain statement. Begin a step instruction with its step label followed by "
+    "'단계: ' (for example '3단계: '), and an expected result with '예상 결과: '. "
+    "Name reagents, solutions, buffers, kits, products, instruments and brands "
+    "the way Korean labs say them, following the glossary: a name lab members "
+    "say in English (for example acetonitrile, DTT, Tris-HCl, PBS, SpeedVac) "
+    "stays in its original English spelling exactly as the source writes it, "
+    "with no Korean added in brackets; keep chemical formulas and abbreviations "
+    "as written. Write everyday lab words in the Korean labs use (튜브, "
+    "원심분리, 상층액, 실온, 얼음 위, 피펫팅, 볼텍싱, 장갑; water as 물 unless it "
+    "is part of a reagent name). Keep every number, unit, symbol, time, "
+    "temperature, concentration, volume, ratio and range exactly as written -- "
+    "the same digits, the same unit spelling, the same order -- and never "
+    "convert, round, add or drop one; a count of parts or volumes keeps its "
+    "unit word as written ('2 parts' stays '2 parts'). Keep every negation and "
+    "add none: an instruction to keep or retain something is said as keeping "
+    "it ('보관해요'), not as not throwing it away."
 )
 
 GLOSSARY_PROMPT = (
@@ -121,16 +133,17 @@ GLOSSARY_PROMPT = (
     "the words and phrases it repeats or that need one fixed Korean form: "
     "reagents, solutions, materials, equipment, products and techniques, and "
     "the ordinary lab words it uses. For a name of a reagent, solution, kit, "
-    "product, instrument or brand set keep_english to true and korean to the "
-    "English name itself, or to 'Korean(English)' when a Korean reader needs "
-    "the meaning on first use. For an ordinary word (water, chamber, gloves, "
-    "hours, tube, incubation, contamination) set keep_english to false and "
-    "give the plain Korean word. Return only the JSON object."
+    "product, instrument or brand that Korean lab members say in English, set "
+    "keep_english to true and korean to the English name itself, with no Korean "
+    "added in brackets. For an ordinary word (water, chamber, gloves, hours, "
+    "tube, incubation, contamination) set keep_english to false and give the "
+    "Korean word Korean labs use at the bench. Return only the JSON object."
 )
 
 REVISION_TRANSLATION_PROMPT = (
-    "You translate sentences of one laboratory protocol into Korean for a "
-    "researcher who is new to the lab, so each can be followed at the bench. "
+    "You translate sentences of one laboratory protocol into the Korean a lab "
+    "member would say to a researcher who is new to the lab, so each can be "
+    "followed at the bench. "
     "You are given the protocol title, a short purpose, a glossary, and the "
     "steps around the sentences; use them to understand what each sentence "
     "means in this protocol, then translate each item so it says exactly "
@@ -729,7 +742,11 @@ def _label_only_in_the_korean(unit: TranslationUnit, korean: str) -> str | None:
         return None
     if not re.match(rf"\s*{re.escape(label)}\s*단계", korean):
         return None
-    if re.match(rf"\s*{re.escape(label)}(?![0-9.])", unit.source_text):
+    # The source's own number opening the step -- "2 Prepare …" or "1. Harvest
+    # …" (lane SAY: a numbered line's point, measured 2026-10-25 on
+    # PMC8250384, 63 of 84 refused) -- balances the Korean label. "1.5 mL"
+    # opening a step is a quantity, not the label.
+    if re.match(rf"\s*{re.escape(label)}(?![0-9]|\.[0-9])", unit.source_text):
         return None
     return label
 

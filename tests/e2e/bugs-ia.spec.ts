@@ -83,7 +83,7 @@ async function openAgentStep(page: Page) {
   await page.goto(TAB.experiment);
   await pageReady(page);
   await page.locator('#experiment-start-open').click();
-  await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
+  await expect(page.locator('#wizard-title')).toHaveText('마이크 확인');
   await page.locator('#wizard-primary').click();
   await expect(page.locator('#wizard-title')).toHaveText('안내 목소리 고르기');
   const asides = page.locator('#wizard-body .wizard-option-aside');
@@ -138,7 +138,7 @@ test.describe('Bug ①: one agent-voice preview at a time (lane IA)', () => {
     await expect(asides).toHaveText(['들어 보기', '듣는 중…']);
     await expect.poll(() => page.evaluate(() => window.__audio.length)).toBe(2);
     await page.locator('#wizard-back').click();
-    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
+    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인');
     expect(await page.evaluate(() => window.__audio.filter(audio => !audio.paused).length)).toBe(0);
 
     await page.locator('#wizard-primary').click();
@@ -200,6 +200,6 @@ test.describe('Bug ②: the experiment tab always shows one start (lane IA)', ()
     await expect(page.locator('#start')).toBeHidden();
     await card.click();
     await expect(page.locator('#start-wizard')).toBeVisible();
-    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
+    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인');
   });
 });

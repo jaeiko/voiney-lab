@@ -62,8 +62,11 @@ class ProtocolTermsLanguageCheckTests(unittest.TestCase):
         for text in ("AMBIC", "trypsin", "Evotip"):
             with self.subTest(text=text):
                 admission = _check(text, keyterms)
-                self.assertTrue(admission.clarification_required)
-                self.assertEqual(admission.mismatch_status, "contradiction")
+                # Lane HEAR, decision 8 (2026-10-25): not this protocol's term,
+                # still not admitted -- but one word is no clear language, so
+                # it is dropped as unclear instead of asked about.
+                self.assertFalse(admission.clarification_required)
+                self.assertEqual(admission.mismatch_status, "unclear")
 
     def test_english_sentences_are_still_a_contradiction(self) -> None:
         keyterms = CuratedProtocolSession(miniprep_fixture()).stt_keyterms(
@@ -76,7 +79,9 @@ class ProtocolTermsLanguageCheckTests(unittest.TestCase):
         for word in _PREVIOUS_WORDS:
             with self.subTest(word=word):
                 self.assertFalse(_check(word, None).clarification_required)
-        self.assertTrue(_check("lysozyme", None).clarification_required)
+        # Lane HEAR, decision 8: one unknown word is unclear, not asked about.
+        self.assertEqual(_check("lysozyme", None).mismatch_status, "unclear")
+        self.assertFalse(_check("lysozyme", None).clarification_required)
 
     @unittest.skipUnless(
         SOURCE_PDF.is_file(),

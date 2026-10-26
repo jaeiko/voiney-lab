@@ -27,7 +27,11 @@ from voiney_lab.curated_protocol import (
 )
 from voiney_lab.server import curated_safety_items, fixture_safety_notices
 
-LEAD = "이 안전 주의는 번역 확인이 안 돼서 원문을 읽어 드릴게요. 화면의 원문을 꼭 확인해 주세요."
+#: Lane SAY, decision 1 (2026-10-25) changed these words: the English is no
+#: longer read aloud -- the server's Korean-first step takes the source out of
+#: the speech (``tests/test_lane_say_korean_first.py``); the session still
+#: places the source after the lead, as here.
+LEAD = "이 안전 주의는 아직 번역되지 않았어요. 화면의 원문을 꼭 확인해 주세요."
 GOOD = "lysate를 볼텍스하지 마세요."
 #: Two negations where the source has one: "do not leave it un-vortexed".
 FLIPPED = "lysate를 볼텍스하지 않은 채로 두지 마세요."

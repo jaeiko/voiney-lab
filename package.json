@@ -2,7 +2,7 @@
   "name": "voiney-lab-e2e",
   "private": true,
   "version": "0.1.0",
-  "description": "Playwright browser acceptance tests for the VoineyLab web screen.",
+  "description": "Playwright browser acceptance tests for the Voiney Lab web screen.",
   "scripts": {
     "test:e2e": "playwright test"
   },

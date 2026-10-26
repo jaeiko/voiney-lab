@@ -27,12 +27,13 @@ Browser / store-app WebView (static/index.html or web/ at /app/; voice-core.js, 
                                                     │
                                      ListenerSession (one per connection)
                                        FrameBuffer → vad.EndpointDetector
-                                       level gate (calibrated speaker)
+                                       level gate (only when the person's filter is on)
                                                     │ utterance
                                        STT (voice_providers, provider setting)
                                                     │ transcript
                           empty / self-echo → emergency gate (emergency.py)
-                          → fragment / filler / calibration / language admission
+                          → paused: resume words only → fragment / filler /
+                            calibration / language admission (every drop: speech.dropped)
                                                     │
                      CuratedProtocolSession.front_plan  (front rules)
                           │ handled                    │ handed on
@@ -86,8 +87,19 @@ generation is cancelled and its audio cleared (barge-in).
    `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`), at 15 s, or — in a
    calibrated session in a room that keeps the VAD on — when the level stays
    under the wearer's line (`EndpointResult.endpoint` = `silence`/`level`/
-   `forced`). After calibration, speech far quieter than the wearer's
-   reference is dropped before STT (`ignores_level`, event `speech.ignored`).
+   `forced`). With the filter on (lane HEAR, decision 2: the experimenter's
+   `speaker_filter`, a `voice_reference` measured through
+   `POST /api/voice/calibration` under `VOICE_REFERENCE_MAX_AGE_DAYS` old, on
+   the microphone the page names in `client.audio_ready` — `stored_voice_filter`),
+   speech far quieter than the wearer's reference is dropped before STT
+   (`ignores_level`, event `speech.ignored`). No voice is measured during a
+   run (decision 1). Speech that starts within `CONTINUATION_JOIN_SECONDS`
+   of the last end (`FRAGMENT_JOIN_SECONDS` for held or still-transcribing
+   words), while that turn is unanswered and has changed nothing, is joined
+   to it (`_join_continuation`: the turn is cancelled, its audio goes in front
+   via `EndpointDetector.prepend_utterance`). Every dropped sound, here or in
+   step 3, goes through `_report_speech_drop` (reason code, dB, ms; event
+   `speech.dropped`; one spoken notice for two drops in 30 s).
 2. The waiting cue (`cascade_filler.CascadeFiller`) starts; STT returns one
    transcript per utterance.
 3. Admission, in this order (`server.run_turn`): empty and self-echo
@@ -96,9 +108,13 @@ generation is cancelled and its audio cleared (barge-in).
    `deterministic_emergency`). Recognized emergencies do not become calibration
    samples or wait for language confirmation. Router-first recognizes the new
    utterance before joining any held fragment; only a non-emergency is joined
-   and checked again, through this same fixed-response gate. Other turns continue through
-   fragment join (router-first only), non-speech/filler admission, a pending
-   calibration sentence and language confirmation. With a protocol the ordinary
+   and checked again, through this same fixed-response gate. A paused run
+   takes only a resume word past this point (`is_paused_resume_utterance`;
+   lane HEAR, decision 7) and answers nothing else. Other turns continue through
+   fragment join (both paths since lane HEAR), non-speech/filler admission, a pending
+   calibration sentence and language confirmation (asked only for clearly
+   English or Vietnamese words; a short Latin transcript is dropped as
+   `language_unclear` — decision 8). With a protocol the ordinary
    turn language is Korean. Audio rejected before STT still cannot reach this
    text gate; no change to acoustic recognition is implied.
 4. Routing, one line (AGENTS rule 3):
@@ -136,7 +152,16 @@ generation is cancelled and its audio cleared (barge-in).
      candidates must be source term names, and commands/completion/assent
      candidates are rejected even when a source term has that spelling.
 5. Read-only roles (`multi_brain`), outside-PDF explanation, pictures and web
-   lookups run after the answer and never change state.
+   lookups run after the answer and never change state. Before a Korean
+   curated reply is spoken, `server._korean_first` (lane SAY) runs
+   `CuratedProtocolSession.korean_first`: every source sentence the speech
+   quotes in English is replaced by its reviewed or stored Korean, or by a
+   reading the translation role makes in the turn (at most three, each once,
+   checked by `statement_issue`, kept in the process and put on the session's
+   fixture as a machine translation); with none it is said as "이 문장은 아직
+   번역되지 않았어요. 원문을 화면에 띄울게요." and shown in the source. Only
+   "원문 그대로 읽어 줘" (`SOURCE_READ_ALOUD_INTENT`) reads the English. No
+   workflow state is involved.
 6. Sentence TTS streams through generation-aware audio segments;
    `turn.route_decision` carries a compact projection (with a `router`
    block when the router ran); `turn.done` and `playback.completed` close it.
@@ -202,6 +227,7 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   → one structured analysis (or pieces of ≤15 pages, ≤400 pages), background job
   → server-owned evidence check, requote of refused items, domain validation
   → lines no quote covers that read like an instruction (possibly_missed_places)
+  → records whose words read as written to the program (program_address_flags)
   → all confirmed: analysis revision; those lines one start notice
     otherwise:     "review pending" ledger event + cards, those lines cards too
                    (never an analysis revision)
@@ -327,6 +353,20 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   (`source_text_possibly_missed`). It is no completeness guarantee: an
   instruction in none of the shapes, or one another record's quote covers,
   is not found.
+- Words written to the program (lane TIDY, 2026-10-25): a step, an action or
+  a statement beside them (safety statement, note, tip, completion
+  criterion, condition, observation, before-start item) whose words have a
+  shape of `PROGRAM_ADDRESS_SHAPES` in `experiment_protocol_analysis.py`
+  (they address the program, order the instructions before ignored or every
+  step marked done, or use a program's own words such as "system prompt")
+  gets a card (`program_address_flags`, reason `addressed_to_program`),
+  added after the card bound like the possibly-missed lines, so an analysis
+  that otherwise passed waits for review. [빼 주세요] is the `clear`
+  decision -- a step or an action leaves the version that runs -- and
+  [실험 지시예요] keeps the words as the source's. A safety statement is
+  never cleared on this ground (rule 5): its card offers confirm or a
+  re-analysis. The words were never obeyed before either; the card keeps
+  them from being read aloud as a step. Word lists only, no model.
 - The in-gel development fixture's timers come from
   `data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json`;
   no manifest, no timers.

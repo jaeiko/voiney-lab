@@ -3179,8 +3179,14 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         # settle it. Held independently by
         # test_repeat_until_declaration_properties.TheOperatorIsStillToldTests.
         self.assertIn("관찰 결과가 충족될 때까지 반복하는 단계", spoken)
-        self.assertIn(
+        # Lane SAY, decision 1 (2026-10-25): the endpoint is said in the step's
+        # reviewed Korean, not quoted in English.
+        self.assertNotIn(
             "Repeat steps 2-7 until the gel band is fully destained", spoken
+        )
+        self.assertIn(
+            self.fixture.localized_fact(step.step_id, "current_step").split(": ", 1)[1].rstrip("."),
+            spoken,
         )
         self.assertIn("완료 처리하지 마세요", spoken)
         self.assertNotIn("서버", spoken)

@@ -269,8 +269,12 @@ export function ReviewScreen({ protocolId, session }: { protocolId: string; sess
   const needsLines = card.choices.some((choice) => needsOf(choice).lines);
   const bands: Band[] = [];
   const span = cardLines(card);
-  if (span && span.page === page) bands.push(spanToBand(span, "card") as Band);
-  if (picked && picked.cardId === card.card_id && picked.page === page) bands.push({ first: picked.first, last: picked.last, kind: "picked" });
+  const pickedHere = picked && picked.cardId === card.card_id && picked.page === page ? picked : null;
+  // The card's lines, and the lines a person picked; the same lines once, as picked.
+  if (span && span.page === page && !(pickedHere && pickedHere.first === span.first_line && pickedHere.last === span.last_line)) {
+    bands.push(spanToBand(span, "card") as Band);
+  }
+  if (pickedHere) bands.push({ first: pickedHere.first, last: pickedHere.last, kind: "picked" });
   const decidedCount = cards.length - undecidedCount(cards);
   const pageCount = sourcePage.data?.page_count ?? null;
 

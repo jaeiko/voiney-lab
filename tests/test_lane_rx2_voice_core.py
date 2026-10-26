@@ -199,10 +199,12 @@ class NewScreenHostTests(unittest.TestCase):
         for name in CONNECTION_HOST_NAMES:
             self.assertRegex(text, rf"(?<![\w$.]){re.escape(name)}\b", name)
 
-    def test_no_voice_calibration_during_a_run_on_the_new_screen(self) -> None:
-        text = ENGINE.read_text(encoding="utf-8")
-        self.assertIn("voiceCalibrationAtStart: () => false,", text)
-        self.assertIn("requestVoiceCalibration: () => false,", text)
+    def test_no_voice_calibration_during_a_run_on_either_screen(self) -> None:
+        # Lane HEAR decision 1 (2026-10-25): the start of a run no longer asks for the measurement (voice-core's sendAudioReady).
+        core = VOICE_CORE.read_text(encoding="utf-8")
+        ready = core.split("function sendAudioReady(){", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("requestVoiceCalibration", ready)
+        self.assertIn("mic_id:micIdFor(currentMicTrack())", ready)
 
     def test_the_audio_and_fence_lines_read_as_the_old_screens(self) -> None:
         page = _minified(inline_script(INDEX.read_text(encoding="utf-8")))

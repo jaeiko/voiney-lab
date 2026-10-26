@@ -8,28 +8,24 @@ handled as a turn of their own. Commands that already ask (종료, 방금 완료
 취소, a move to another step) keep their one question. Questions are
 answered as before. "조용함" (the default) changes nothing. The setting is
 said aloud ("시끄러운 곳 모드로 바꿔 줘"), and after three voices taken for
-other people's within a minute the server suggests the mode once; only the
-experimenter's yes changes it. Decision 1's "민감도" is a setting the same
+other people's within a minute the server suggested the mode once (since
+lane HEAR, decision 9, that is recorded only, never said during a run). Decision 1's "민감도" is a setting the same
 way.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.test_lane_sp1_level_gate import CONFIG, Socket, utterance, voiced_if_loud
+from tests.test_lane_sp1_level_gate import CONFIG, utterance, voiced_if_loud
 from voiney_lab.curated_protocol import CuratedProtocolSession, load_curated_protocol_fixture
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 from voiney_lab.server import (
-    AMBIENT_SUGGESTION_WORDS,
     EXPERIMENTER_SETTING_DEFAULTS,
     ListenerSession,
-    LockedSender,
-    _suggest_noisy_mode,
+    _record_noise_condition,
 )
 from voiney_lab.vad import SENSITIVITY_MARGINS_DB, EndpointDetector, TurnState
 
@@ -263,21 +259,22 @@ class SuggestionTests(unittest.TestCase):
         session.ignored_speech_at.extend([session.clock() - 61, session.clock() - 61, session.clock() - 61])
         self.assertFalse(session.noisy_mode_suggestion_due(), "older than a minute")
 
-    def test_the_suggestion_is_said_as_the_servers_words_and_opened_to_the_rules(self) -> None:
+    def test_the_condition_is_recorded_and_nothing_is_said_or_opened(self) -> None:
+        # Lane HEAR, decision 9 (2026-10-25): the question interrupted runs; the
+        # condition is recorded as a code only, and no question is opened.
         session = self.listener()
         self.ignore(session, 3)
-        socket = Socket()
-        with patch("voiney_lab.server.synthesize", return_value=b"\0\0" * 320 * 5):
-            said = asyncio.run(_suggest_noisy_mode(LockedSender(socket), session))
-        self.assertTrue(said)
-        words = next(m for m in socket.text if m["type"] == "server.words")
-        self.assertEqual((words["words_kind"], words["text"]), ("ambient_suggestion", AMBIENT_SUGGESTION_WORDS))
-        self.assertTrue(session.curated_protocol_session.ambient_suggestion_open)
+        self.assertTrue(session.noisy_mode_suggestion_due())
+        with patch("voiney_lab.server._record_workspace_metric") as metric, self.assertLogs(
+            "voiney_lab", level="INFO",
+        ) as logs:
+            _record_noise_condition(session, "other_voices")
+        self.assertIn("noise.condition kind=other_voices", "\n".join(logs.output))
+        self.assertEqual(metric.call_args.kwargs["dimensions"]["reason_code"], "other_voices")
+        self.assertFalse(session.curated_protocol_session.ambient_suggestion_open)
         self.assertEqual(session.ambient_suggested_at, session.clock())
-        self.assertEqual(session.curated_protocol_session.ambient_mode, "quiet", "suggested only")
-        with patch("voiney_lab.server.synthesize", return_value=b"\0\0" * 320) as tts:
-            self.assertFalse(asyncio.run(_suggest_noisy_mode(LockedSender(socket), session)))
-        tts.assert_not_called()
+        self.assertFalse(session.noisy_mode_suggestion_due(), "once in the gap")
+        self.assertEqual(session.curated_protocol_session.ambient_mode, "quiet", "nothing changes")
 
 
 class SettingsReachTheListenerTests(unittest.TestCase):

@@ -27,7 +27,7 @@
 var VOICE_CORE_HOST_NAMES=Object.freeze([
  "$","setText","setDisabled","announceMilestone","renderState","renderRunStatus","renderMicCheck","screenView",
  "serverSocketUrl","onMessage","fail","recheckAccountAfterClose","removeProvisionalTurns","invalidateCuratedProtocolState",
- "stopWorkflowTimer","stopReportPolling","voiceCalibrationAtStart","requestVoiceCalibration",
+ "stopWorkflowTimer","stopReportPolling","micIdFor",
 ]);
 
 // --- The session, the socket and the audio's state -----------------------------
@@ -310,9 +310,8 @@ function sendAudioReady(){
  const accepted=acceptedSessionConfiguration;
  if(!accepted||!micWorkletNode||playContext?.state!=="running")return false;
  const key=`${accepted.configuration_id}:${accepted.server_generation}`;if(audioReadySentFor===key)return true;audioReadySentFor=key;
- sendControl("client.audio_ready",{configuration_id:accepted.configuration_id,generation:accepted.server_generation,audio_context_state:"running",sample_rate:playContext.sampleRate});
- // Lane SP1 decision 1: the wearer's voice is measured once at the start, after the greeting, unless turned off here (it can be skipped by voice or button).
- if(voiceCalibrationAtStart()&&!globalThis.voineyConnection?.reconnecting?.())requestVoiceCalibration("start");
+ // Lane HEAR decisions 1 and 2 (2026-10-25): no voice measurement in a run; the microphone's short id tells the server whether the measured voice was this microphone's.
+ sendControl("client.audio_ready",{configuration_id:accepted.configuration_id,generation:accepted.server_generation,audio_context_state:"running",sample_rate:playContext.sampleRate,mic_id:micIdFor(currentMicTrack())});
  return true;
 }
 function audioHeld(){return [micContext,playContext].some(context=>context&&(context.state==="suspended"||context.state==="interrupted"));}

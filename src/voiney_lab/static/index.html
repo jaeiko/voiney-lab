@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#ffffff">
-  <title>Voiney Lab · Lab Copilot</title>
+  <title>Voiney Lab</title>
   <!-- Lane UI2 decision 5 (2026-10-13): Voiney Lab as a home-screen web app -- the manifest (name, icons, start address, either orientation) and the icons; no service worker, so nothing works offline. -->
   <link rel="manifest" href="/manifest.webmanifest">
   <!-- Lane NAME (2026-10-25): the confirmed Voiney Lab icons from assets/brand/ -- the tab's icon, the home screen's icon. -->
@@ -103,6 +103,8 @@
     body[data-view="during"] .run-analysis-state::before{content:" · "}
     body[data-view="during"] #rail-pdf-title{order:2;flex:0 1 auto;min-width:3rem;max-width:none;color:var(--ink);font-size:1rem;font-weight:600}
     body[data-view="during"] #rail-step-badge{order:4;flex:none;margin-left:auto;padding:0;border:0;background:none;color:var(--ink);font-size:1rem;font-weight:600;font-variant-numeric:tabular-nums}
+    body[data-view="during"] .run-stat.run-heard{color:var(--warning-ink)}
+    body[data-view="during"] .run-stat.run-heard[hidden],.run-heard[hidden]{display:none}
     body[data-view="during"] .run-stat{order:5;display:inline-flex;align-items:center;gap:.4rem;flex:none;color:var(--ink);font-size:1rem;font-weight:600;white-space:nowrap}
     /* The buttons along the bottom: pause or resume and stop, 64px. */
     body[data-view="during"] .rail-right{position:fixed;right:0;bottom:0;z-index:95;height:var(--target-run);gap:0;background:var(--ink)}
@@ -974,6 +976,8 @@
       <!-- Lane UI0 decision 2: this browser's own connection and microphone, in words. -->
       <span class="run-stat"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5a11 11 0 0 1 15 0"/><path d="M8 14a6 6 0 0 1 8 0"/><path d="M12 18h.01"/></svg><span id="run-connection">연결 안 됨</span></span>
       <span class="run-stat"><svg class="run-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg><span id="run-mic">마이크 꺼짐</span></span>
+      <!-- Lane HEAR decision 3 (2026-10-25): a sound the server dropped is never dropped in silence; this shows for a few seconds after each. -->
+      <span id="run-heard" class="run-stat run-heard" role="status" hidden>잘 안 들렸어요</span>
     </div>
     <div class="rail-right">
       <!-- Lane UI0 decision 3: on the run screen, the three sheets -- the conversation, the pictures, the settings. -->
@@ -990,7 +994,7 @@
     <!-- Lane NAME (2026-10-25): the Voiney Lab logo in place of the "VL" mark and the name in letters. -->
     <div class="brand">
       <img class="brand-logo" src="/icons/voiney-lab_logo_ink.svg" alt="Voiney Lab" width="384" height="88">
-      <small>Lab Copilot · 지능형 실험 보조</small>
+      <small>장갑을 낀 채 말로 진행하는 실험 안내</small>
     </div>
     <div class="topbar-side">
       <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 원문 PDF 기준</div>
@@ -1297,8 +1301,9 @@
             </div>
             <div id="procedure-status">대기</div>
           </div>
+          <!-- Lane HEAR decision 7 (2026-10-25): 일시정지 중 — ‘다시 시작’이라고 말하거나 [다시 시작]을 누르세요. While paused only the resume words are heard; nothing else is answered aloud. -->
           <div id="workflow-paused-banner" class="workflow-paused-banner" role="status" aria-live="polite" hidden>
-            <div><strong>일시정지 중</strong><span id="workflow-paused-text">준비되면 ‘다시 시작’을 누르거나 “재개”라고 말하세요.</span></div>
+            <div><strong>일시정지 중</strong><span id="workflow-paused-text"> — ‘다시 시작’이라고 말하거나 [다시 시작]을 누르세요</span></div>
             <button id="workflow-resume-button" type="button">▶ 다시 시작</button>
           </div>
           <div id="procedure-progress"></div>
@@ -1496,8 +1501,13 @@
               <option value="on">항상 켬 · 작은 소리도 키움</option>
               <option value="off">항상 끔</option>
             </select><small id="agc-status" class="mic-device-status" role="status"></small></label>
-            <!-- Lane SP1 decision 1: measure the wearer's voice again (the same as saying "목소리 다시 맞춰 줘"); the measurement is kept for this session only. -->
-            <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button><label class="voice-calibration-auto"><input id="voice-calibration-at-start" type="checkbox" checked> 세션 시작 때 한 번</label></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
+            <!-- Lane HEAR decision 1 (2026-10-25): the voice is measured here, never during a run: the page records the sentence and the server keeps its level, when and on which microphone. -->
+            <div class="control-field"><span>목소리 맞추기</span><div class="voice-calibration-controls"><button id="voice-calibration-start" type="button">지금 목소리 맞추기</button></div><small id="voice-calibration-setting-status" class="mic-device-status" role="status">맞추지 않음 · 모든 말을 들어요</small></div>
+            <!-- Lane HEAR decisions 1 and 2 (2026-10-25): the voice is measured here, outside a run, and filtering by it is the person's own switch; by default every voice is heard. -->
+            <label class="control-field"><span>옆 사람 말 거르기</span><select id="speaker-filter" aria-label="옆 사람 말 거르기" aria-describedby="speaker-filter-status">
+              <option value="off" selected>끔 · 모든 말을 들어요 (기본)</option>
+              <option value="on">켬 · 맞춘 내 목소리보다 많이 작은 말은 걸러요</option>
+            </select><small id="speaker-filter-status" class="mic-device-status" role="status">목소리를 맞춘 뒤 켤 수 있어요. 기기나 마이크가 바뀌거나 2주가 지나면 거르지 않아요.</small></label>
             <label class="control-field"><span>목소리 민감도</span><select id="speaker-sensitivity" aria-label="목소리 민감도" aria-describedby="experimenter-settings-status">
               <option value="high">높음 · 조금만 작아도 거름 (9 dB) · 이어버드에 맞음</option>
               <option value="normal" selected>보통 (12 dB)</option>
@@ -3584,14 +3594,72 @@ function renderSourceBasis(basis){const rail=$("rail-basis");if(rail)rail.textCo
 // utterance, and from then on takes a much quieter voice for someone else's.
 // The screen only shows the sentence and the result, and asks the server to
 // measure again or to skip; nothing about the voice is kept by the page.
-const VOICE_CALIBRATION_AT_START_KEY="voiney-lab.voice-calibration-at-start";
-function voiceCalibrationAtStart(){const box=$("voice-calibration-at-start");if(box&&typeof box.checked==="boolean")return box.checked;try{return localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)!=="off";}catch(_){return true;}}
-function storeVoiceCalibrationAtStart(on){try{localStorage.setItem(VOICE_CALIBRATION_AT_START_KEY,on?"on":"off");}catch(_){}}
+// Lane HEAR decision 2 (2026-10-25): a short id for the microphone, so a measurement made on another one is not used.
+function micIdFor(track){
+ const id=String(track?.getSettings?.()?.deviceId||""),label=String(track?.label||"");if(!id&&!label)return null;
+ let hash=0x811c9dc5;for(const char of `${id}|${label}`){hash^=char.codePointAt(0);hash=Math.imul(hash,0x01000193)>>>0;}
+ return `mic-${hash.toString(16).padStart(8,"0")}`;
+}
+const VOICE_MEASURE_SENTENCE="오늘 실험도 차근차근 안전하게 시작해 볼게요.",VOICE_MEASURE_SECONDS=5;
+// In a run the server answers that it is done here; outside one the page measures by itself (measureVoiceInSettings).
 function requestVoiceCalibration(action){
+ if(action==="start"&&sessionActive){setText("voice-calibration-setting-status","실험 중에는 맞출 수 없어요 · 실험이 끝난 뒤 맞춰 주세요.");return false;}
+ if(action==="start"){void measureVoiceInSettings();return true;}
  const accepted=acceptedSessionConfiguration;
- if(!sessionActive||!accepted||socket?.readyState!==WebSocket.OPEN){setText("voice-calibration-setting-status","세션을 시작한 뒤 맞출 수 있어요.");return false;}
+ if(!sessionActive||!accepted||socket?.readyState!==WebSocket.OPEN)return false;
  sendControl("client.voice_calibration",{action,configuration_id:accepted.configuration_id,generation:accepted.server_generation});
- if(action==="start")setText("voice-calibration-setting-status","목소리를 맞출게요 · 안내를 들은 뒤 문장을 읽어 주세요.");
+ return true;
+}
+// Records the sentence on the microphone runs use (same device and processing; automatic gain off in
+// "목소리를 맞추면 끔", as a filtered run has it), as 16 kHz PCM16 -- the browser half of the measurement.
+async function recordCalibrationPcm(seconds){
+ const opened=await openMicStream(),stream=opened.stream,track=stream.getAudioTracks?.()[0]||stream.getTracks?.()[0]||null;
+ if(track&&agcMode()==="calibrated"&&typeof track.applyConstraints==="function"){try{await track.applyConstraints({autoGainControl:false});}catch(_){}}
+ const context=new AudioContext(),chunks=[];
+ try{
+  await context.audioWorklet.addModule("/mic-capture-worklet.js");
+  const source=context.createMediaStreamSource(stream),node=new AudioWorkletNode(context,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"});
+  node.port.onmessage=e=>{if(e.data instanceof ArrayBuffer)chunks.push(resamplePcm16(new Float32Array(e.data),context.sampleRate,16000));};
+  source.connect(node);await context.resume?.();
+  await new Promise(resolve=>setTimeout(resolve,seconds*1000));
+  node.port.postMessage({type:"stop"});source.disconnect?.();
+ }finally{for(const item of stream.getTracks?.()||[])item.stop?.();try{await context.close?.();}catch(_){}}
+ const total=chunks.reduce((sum,chunk)=>sum+chunk.length,0),pcm=new Int16Array(total);let at=0;for(const chunk of chunks){pcm.set(chunk,at);at+=chunk.length;}
+ return {pcm,micId:micIdFor(track)};
+}
+function pcmBase64(pcm){const bytes=new Uint8Array(pcm.buffer,pcm.byteOffset,pcm.byteLength);let text="";for(let i=0;i<bytes.length;i+=0x8000)text+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(text);}
+let voiceMeasuring=false;
+async function measureVoiceInSettings(){
+ if(voiceMeasuring)return false;
+ if(sessionActive){setText("voice-calibration-setting-status","실험 중에는 맞출 수 없어요 · 실험이 끝난 뒤 맞춰 주세요.");return false;}
+ voiceMeasuring=true;setDisabled($("voice-calibration-start"),true);
+ try{
+  setText("voice-calibration-setting-status",`아래 문장을 평소 목소리로 읽어 주세요 · “${VOICE_MEASURE_SENTENCE}” · ${VOICE_MEASURE_SECONDS}초 동안 들어요`);
+  let recorded;
+  try{recorded=await recordCalibrationPcm(VOICE_MEASURE_SECONDS);}catch(error){setText("voice-calibration-setting-status",(["NotAllowedError","SecurityError"].includes(error?.name)&&micBlockedWords(error))||"마이크를 쓸 수 없어 맞추지 못했어요.");return false;}
+  const response=await serverFetch("/api/voice/calibration",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pcm_base64:pcmBase64(recorded.pcm),mic_id:recorded.micId})});
+  if(!response.ok){
+   let code="";try{code=(await response.json())?.detail?.code||"";}catch(_){}
+   setText("voice-calibration-setting-status",code==="too_little_voice"?"목소리가 잘 안 들렸어요 · 다시 맞춰 주세요.":"맞추지 못했어요 · 다시 해 주세요.");return false;
+  }
+  const result=await response.json();voiceReferenceMeasured=true;
+  setText("voice-calibration-setting-status",`맞춤 · 기준 ${Number.isFinite(result.level_db)?`${result.level_db} dBFS`:"측정값 없음"} · 옆 사람 말 거르기를 켜면 이보다 많이 작은 말은 걸러요`);
+  void loadExperimenterSettings();
+  return true;
+ }catch(_){setText("voice-calibration-setting-status","서버에 연결할 수 없어 맞추지 못했어요.");return false;}
+ finally{voiceMeasuring=false;setDisabled($("voice-calibration-start"),false);}
+}
+// Lane HEAR decision 2: what the server decided for this run, said in the setting's line.
+const SPEAKER_FILTER_REASON_WORDS=Object.freeze({off:"꺼짐 · 모든 말을 들어요",not_measured:"목소리를 맞추지 않아 모든 말을 들어요",stale_age:"맞춘 지 2주가 지나 모든 말을 들어요 · 다시 맞춰 주세요",stale_device:"마이크가 바뀌어 모든 말을 들어요 · 이 마이크로 다시 맞춰 주세요"});
+function renderSpeakerFilter(m){
+ const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return false;
+ let line="";
+ if(m.state==="active")line="켜짐 · 맞춘 목소리보다 많이 작은 말은 걸러요";
+ else if(m.state==="inactive")line=SPEAKER_FILTER_REASON_WORDS[m.reason]||"모든 말을 들어요";
+ else if(m.state==="lowered"||m.state==="off")line=nonemptyText(m.words)?normalizePresentationText(m.words):"옆 사람 말 거르기를 바꿨어요";
+ if(line)setText("speaker-filter-status",`이번 실험 · ${line}`);
+ // The automatic gain stays on unless the run filters by level ("목소리를 맞추면 끔").
+ if(agcMode()==="calibrated")void applyAutoGainControl(m.state!=="active");
  return true;
 }
 function hideVoiceCalibration(){const box=$("voice-calibration");if(box)box.hidden=true;setText("voice-calibration-status","");}
@@ -3612,7 +3680,29 @@ function renderIgnoredSpeech(m){
  setText("ignored-speech-summary",`다른 사람 말로 보여 듣지 않은 말 ${ignoredSpeechCount}개`);
  box.hidden=false;
 }
-function resetIgnoredSpeech(){ignoredSpeechCount=0;const box=$("ignored-speech"),list=$("ignored-speech-list");if(list)list.replaceChildren();if(box)box.hidden=true;setText("ignored-speech-summary","다른 사람 말로 보여 듣지 않은 말 0개");}
+// Lane HEAR decision 3 (2026-10-25): every sound the server dropped -- too short, the agent's own voice
+// coming back, nothing written down, a language it could not tell -- is one small line with its reason in
+// plain words, and "잘 안 들렸어요" shows beside the microphone for a few seconds. A voice the filter took for
+// someone else's keeps its own line (renderIgnoredSpeech); nothing is shown for a drop while paused (the band says why).
+const DROP_REASON_WORDS=Object.freeze({empty_transcript:"받아 적은 말이 없어요",self_echo:"안내 소리가 다시 들어왔어요",minimum_voiced_frames:"너무 짧은 소리예요",language_unclear:"어느 나라 말인지 알 수 없었어요",filler_only:"‘음’ 같은 소리만 들렸어요",non_lexical_event:"말이 아닌 소리였어요",non_speech:"말소리가 아니었어요",keyterm_echo:"용어만 나열돼 말로 보지 않았어요",transcription_failed:"받아 적지 못했어요",provider_no_speech_probability:"말소리가 아니었어요",provider_low_confidence:"받아 적은 말이 불확실했어요"});
+const DROP_NOTICE_MS=6000;
+let droppedSpeechCount=0,dropNoticeTimer=null;
+function renderDroppedSpeech(m){
+ const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return false;
+ if(m.paused===true||m.reason==="other_speaker_level")return false;
+ const heard=$("run-heard");
+ if(heard){heard.textContent=nonemptyText(m.notice)?normalizePresentationText(m.notice):"잘 안 들렸어요";heard.hidden=false;clearTimeout(dropNoticeTimer);dropNoticeTimer=setTimeout(()=>{heard.hidden=true;},DROP_NOTICE_MS);}
+ const box=$("ignored-speech"),list=$("ignored-speech-list");if(!box||!list)return true;
+ droppedSpeechCount+=1;
+ const why=DROP_REASON_WORDS[m.reason]||"들리지 않았어요",item=document.createElement("li");
+ item.textContent=`잘 안 들렸어요 · ${why} · ${clockWords()}${m.during_playback===true?" · 답하는 중":""}`;
+ if(typeof list.prepend==="function")list.prepend(item);else list.appendChild(item);
+ while(list.children.length>IGNORED_SPEECH_LINES_MAX){const last=list.children[list.children.length-1];if(last?.remove)last.remove();else break;}
+ setText("ignored-speech-summary",`잘 안 들린 말 ${droppedSpeechCount}개${ignoredSpeechCount?` · 다른 사람 말로 보여 듣지 않은 말 ${ignoredSpeechCount}개`:""}`);
+ box.hidden=false;
+ return true;
+}
+function resetIgnoredSpeech(){droppedSpeechCount=0;const heard=$("run-heard");if(heard)heard.hidden=true;ignoredSpeechCount=0;const box=$("ignored-speech"),list=$("ignored-speech-list");if(list)list.replaceChildren();if(box)box.hidden=true;setText("ignored-speech-summary","다른 사람 말로 보여 듣지 않은 말 0개");}
 function renderVoiceCalibration(m){
  const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return;
  if(m.state==="measured")voiceReferenceMeasured=true;
@@ -3637,6 +3727,7 @@ function renderVoiceCalibration(m){
   return;
  }
  if(m.state==="skipped"){hideVoiceCalibration();setText("voice-calibration-setting-status","건너뜀 · 모든 말을 들어요");}
+ if(m.state==="refused"){hideVoiceCalibration();setText("voice-calibration-setting-status",nonemptyText(m.words)?normalizePresentationText(m.words):"실험 중에는 맞출 수 없어요 · 실험이 끝난 뒤 맞춰 주세요.");}
 }
 // Lane CF decisions 1 and 4: the settings are the server's; the screen shows them and asks it to change them.
 function renderExperimenterSettings(settings){
@@ -3653,6 +3744,9 @@ function renderExperimenterSettings(settings){
  if(ambient&&["quiet","noisy"].includes(settings.ambient_mode))ambient.value=settings.ambient_mode;
  const sensitivity=$("speaker-sensitivity");
  if(sensitivity&&["high","normal","low"].includes(settings.speaker_sensitivity))sensitivity.value=settings.speaker_sensitivity;
+ // Lane HEAR decision 2.
+ const filter=$("speaker-filter");
+ if(filter&&["off","on"].includes(settings.speaker_filter))filter.value=settings.speaker_filter;
 }
 async function loadExperimenterSettings(){
  try{const response=await serverFetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);wizardTakeSettings(payload?.settings);}}catch(_){}
@@ -4819,9 +4913,10 @@ async function onMessage(e,generation,current){
  }
  // Lane SP1 decision 1: the calibration prompt (and later a suggestion) said as a turn of the server's own, like a timer notice.
  if(m.type==="server.words"){
-  const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof m.text!=="string")return;activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=`words-${m.turn_id}`;const labels={voice_calibration:"목소리 맞추기",ambient_suggestion:"제안"};if(node.children?.[0])node.children[0].textContent="서버 안내";node.querySelector(".transcript").textContent=labels[m.words_kind]||"서버 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="서버가 말함 · 음성으로 중단 가능";renderState("THINKING");
+  const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof m.text!=="string")return;activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=`words-${m.turn_id}`;const labels={voice_calibration:"목소리 맞추기",ambient_suggestion:"제안",drop_notice:"잘 안 들렸어요",speaker_filter:"옆 사람 말 거르기"};if(node.children?.[0])node.children[0].textContent="서버 안내";node.querySelector(".transcript").textContent=labels[m.words_kind]||"서버 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="서버가 말함 · 음성으로 중단 가능";renderState("THINKING");
  }
  if(m.type==="speaker.calibration"){renderVoiceCalibration(m);renderMicCheck();}
+ if(m.type==="speaker.filter"){renderSpeakerFilter(m);renderMicCheck();}
  if(m.type==="clarify.choice.refused"){const accepted=acceptedSessionConfiguration;if(accepted&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&nonemptyText(m.text)){clarifyChoiceRefusal={turnId:m.turn_id,text:normalizePresentationText(m.text)};renderRunCard();}}
  // Lane VT decisions 1-2: the server tells the step timer before it is asked -- on the screen (a timer's end with a short sound) and, when the setting has it said, as a turn of its own like the greeting.
  if(m.type==="protocol.timer.notice"){
@@ -4887,6 +4982,9 @@ async function onMessage(e,generation,current){
  if(m.type==="speech.start"){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;if(Number.isInteger(m.generation)){const key=turnBrowserKey(m.turn_id,generation),known=turnServerGenerations.get(key);if(known===undefined)turnServerGenerations.set(key,m.generation);provisionalTurns.set(key,m.generation);}resetVoiceProcessing();}
  if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
  // Lane SP1 decisions 1 and 4: a voice taken for another person's -- no transcript, no turn; the provisional card comes down and one small line with the time goes into the folded list.
+ if(m.type==="speech.dropped"){renderDroppedSpeech(m);return;}
+ // Lane HEAR decision 7: the guidance playing stops with the pause.
+ if(m.type==="playback.stop"){const accepted=acceptedSessionConfiguration;if(accepted&&m.configuration_id===accepted.configuration_id)clearPlayback();return;}
  if(m.type==="speech.ignored"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);renderIgnoredSpeech(m);if(sessionActive&&m.during_playback!==true)renderState("LISTENING");}
  if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation));if(filler)showFillerStatus(node,filler);updateVoiceProcessing("recognized");}
  if(m.type==="turn.state")applyTurnState(m,generation);
@@ -5035,11 +5133,17 @@ $("web-lookup")?.addEventListener("change",event=>{void saveExperimenterSetting(
 $("proactive-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("proactive_mode",event.target.value);});
 $("ambient-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("ambient_mode",event.target.value);});
 $("speaker-sensitivity")?.addEventListener("change",event=>{void saveExperimenterSetting("speaker_sensitivity",event.target.value);});
+$("speaker-filter")?.addEventListener("change",event=>{void saveExperimenterSetting("speaker_filter",event.target.value);});
 $("voice-calibration-start")?.addEventListener("click",()=>{requestVoiceCalibration("start");renderMicCheck();});
-$("mic-check-settings")?.addEventListener("click",()=>{const select=$("mic-device");select?.scrollIntoView?.({block:"center"});select?.focus?.();});
+// Lane HEAR decision 6 (2026-10-25): the microphone list lives in the settings tab, a hidden panel from
+// here, so scrolling to it showed nothing. Open the settings -- the sheet over a run, the tab before one -- then focus the list.
+function openMicSettings(){
+ if(screenView()==="during")openRunSheet("settings");else navigateTab("settings");
+ const select=$("mic-device");select?.scrollIntoView?.({block:"center"});select?.focus?.();
+ return true;
+}
+$("mic-check-settings")?.addEventListener("click",()=>{openMicSettings();});
 $("voice-calibration-skip")?.addEventListener("click",()=>{requestVoiceCalibration("skip");});
-$("voice-calibration-at-start")?.addEventListener("change",event=>{storeVoiceCalibrationAtStart(event.target.checked);});
-try{const atStart=$("voice-calibration-at-start");if(atStart&&localStorage.getItem(VOICE_CALIBRATION_AT_START_KEY)==="off")atStart.checked=false;}catch(_){}
 $("agc-mode")?.addEventListener("change",event=>{storeAgcMode(event.target.value);const on=event.target.value==="on"||(event.target.value==="calibrated"&&!voiceReferenceMeasured);void applyAutoGainControl(on);});
 try{const agc=$("agc-mode"),stored=localStorage.getItem(AGC_MODE_STORAGE_KEY);if(agc&&["calibrated","on","off"].includes(stored))agc.value=stored;}catch(_){}
 // Lane UI2 decision 5 (2026-10-13): Voiney Lab on the home screen. Where the
@@ -5074,7 +5178,7 @@ $("install-app")?.addEventListener("click",()=>{void installFromHomeScreenOffer(
 // step shows what the server sent and sends the person's press back as one
 // request.
 const WIZARD_LAST_PROTOCOL_KEY="voiney-lab.last-protocol";
-const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인 · 목소리 맞추기"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},changes:{kicker:"오늘 바꿀 값",title:"오늘 원문과 다르게 할 값"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
+const WIZARD_STEP_WORDS={login:{kicker:"계정",title:"로그인"},voice:{kicker:"내 목소리",title:"마이크 확인"},agent:{kicker:"안내 목소리",title:"안내 목소리 고르기"},protocol:{kicker:"프로토콜",title:"프로토콜 고르기"},check:{kicker:"핵심 값 확인",title:"원문의 값을 확인해 주세요"},safety:{kicker:"시작 전 확인",title:"안전 주의"},changes:{kicker:"오늘 바꿀 값",title:"오늘 원문과 다르게 할 값"},start:{kicker:"실험",title:"시작할 준비가 됐어요"}};
 const WIZARD_AUTH_WORDS={login_refused:"이름이나 비밀번호가 맞지 않아요.",login_locked:"여러 번 틀려 잠시 막혔어요. 15분 뒤에 다시 해 주세요.",account_disabled:"꺼진 계정이에요. 연구실 담당에게 물어보세요.",invite_invalid:"초대 링크가 만료되었거나 이미 쓰였어요. 새 링크를 받아 주세요.",account_name_taken:"이미 있는 이름이에요. 다른 이름을 적어 주세요.",account_name_invalid:"이름은 2–40자로 적어 주세요.",password_invalid:"비밀번호는 8자 이상으로 적어 주세요.",accounts_disabled:"이 서버는 로그인 없이 씁니다.",authentication_required:"다시 로그인해 주세요."};
 var wizard={active:false,open:false,mode:"start",step:null,auth:null,settings:null,voices:null,check:null,question:0,wrong:null,card:null,cardText:null,busy:false,note:"",noteKind:"",mic:null,invite:null,inviteValid:null,previewing:null,reviewerName:"",checkedProtocolId:null,checkedRevisionId:null,changes:null,changeInputs:{},chosenChanges:null,largeConfirm:null};
 var wizardSheetPushed=false,wizardOpener=null;
@@ -5223,13 +5327,11 @@ async function wizardSubmitLogin(){
 }
 function renderWizardVoice(host,primary){
  const settings=wizardSettings();
- setText("wizard-lead","실험 중에는 말로 안내하고 말로 답해요. 마이크를 켜서 확인하고, 시작할 때 목소리를 한 번 맞출게요.");
+ // Lane HEAR decision 1 (2026-10-25): the voice is not measured at the start of a run any more -- in 설정 when the person wants the filter.
+ setText("wizard-lead","실험 중에는 말로 안내하고 말로 답해요. 마이크를 켜서 확인해 주세요. 모든 말을 들어요. 옆 사람 말을 거르고 싶으면 설정에서 목소리를 맞춘 뒤 켜요.");
  const check=compareEl("button","wizard-option-pick",wizard.mic?`마이크 사용 가능 · ${wizard.mic}`:"마이크 켜서 확인");check.id="wizard-mic-check";check.type="button";check.setAttribute?.("aria-pressed",String(Boolean(wizard.mic)));
  check.addEventListener("click",()=>{void wizardCheckMic();});host.appendChild(check);
- const row=compareEl("label","wizard-check"),box=document.createElement("input");box.type="checkbox";box.id="wizard-calibrate";box.checked=voiceCalibrationAtStart();
- box.addEventListener("change",()=>{storeVoiceCalibrationAtStart(box.checked);const setting=$("voice-calibration-at-start");if(setting)setting.checked=box.checked;});
- row.appendChild(box);row.append(" 실험을 시작할 때 문장 하나를 읽어 목소리를 맞출게요");host.appendChild(row);
- if(settings.voice_calibration==="skipped")host.appendChild(compareEl("p","wizard-done","지난번에는 건너뛰었어요 · 모든 말을 들어요"));
+ if(settings.voice_calibration==="measured")host.appendChild(compareEl("p","wizard-done",settings.speaker_filter==="on"?"목소리를 맞췄어요 · 옆 사람 말 거르기 켜짐":"목소리를 맞췄어요 · 옆 사람 말 거르기는 꺼져 있어요"));
  if(primary)primary.textContent="다음";
 }
 async function wizardCheckMic(){

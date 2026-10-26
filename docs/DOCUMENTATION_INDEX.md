@@ -16,6 +16,7 @@
 | [`GLOSSARY.md`](GLOSSARY.md) | 사용자 말 ↔ 지금 화면 말 ↔ 코드 이름 | 말이 헷갈릴 때 |
 | [`../.agent/product_context.md`](../.agent/product_context.md) | 제품·사용자·인터뷰와 설문 근거·성공 지표 | 제품 방향을 볼 때 |
 | [`../.agent/roadmap.md`](../.agent/roadmap.md) | 지금 · 다음 · 나중 | 계획을 볼 때 |
+| [`ADAPTED_RUN_PLAN.md`](ADAPTED_RUN_PLAN.md) | **설계만, 구현 전.** 논문을 보고 절차를 바꿔 가며 하는 실험을 분석한 원문 위의 "오늘 실험 계획"으로 돕는 설계: 사용자 흐름, 권한과 근거 규칙, 데이터 모델, 사람이 정할 것, 구현 줄 나누기 | 다음 기능의 설계를 볼 때 |
 
 ## 2. 연구자
 

@@ -16,10 +16,17 @@ problem-word tables are read, when an anomaly is ruled on).
 The rules follow the lane R design (``~/reports/lane_r_design.md`` §2) as the
 people running the pilot decided them on 2026-10-02:
 
-* ``next`` never moves on by itself (D2): it opens the completion question,
-  or at a repeat-until step the endpoint question, and only the researcher's
-  answer on the next turn moves on. Said with "not done yet" it is refused
-  and the step's source completion criterion is said instead (D7).
+* Words that move on ("다음", "다음 단계로", "넘어가") are the front rules'
+  (``forward_step``, lane VX decision 1, 2026-10-09) while the run goes on
+  and no question is open, the router first included: they complete the step
+  and present the next one with no question, unless the step's endpoint is
+  still to be observed, a timer running at it has not run out, the
+  researcher chose 바로 확인 or it is the last step -- then "N단계
+  완료하셨나요?" is asked. A ``next`` the model proposes for other words
+  never moves on by itself (D2): it opens the completion question, or at a
+  repeat-until step the endpoint question, and only the researcher's answer
+  on the next turn moves on. Said with "not done yet" it is refused and the
+  step's source completion criterion is said instead (D7).
 * ``stop`` needs "종료" in the words and then asks once more (D5).
 * ``start_timer`` takes its duration from the source; a different duration
   said aloud starts nothing and asks "원문은 15분입니다. 15분으로 시작할까요?"
@@ -175,9 +182,11 @@ CHANGE_STATE_TOOL: dict[str, Any] = {
             "Propose ONE workflow change that the researcher explicitly asked "
             "for in this turn. This is a proposal: the server validates it "
             "against its own state and may refuse it or ask the researcher "
-            "first. 'next' never moves on by itself: the server asks the "
-            "researcher to confirm the step is complete, or to report the "
-            "observed endpoint. 'stop' needs the researcher to have said "
+            "first. Plain words that move on ('다음', '넘어가') are the "
+            "server's own while the run goes on; a 'next' you propose never "
+            "moves on by itself: the server asks the researcher to confirm "
+            "the step is complete, or to report the observed endpoint. "
+            "'stop' needs the researcher to have said "
             "'종료', and the server asks once more before ending. "
             "'start_timer' runs the protocol's own duration; the server asks "
             "when the researcher names a different one. Never call it for a "
