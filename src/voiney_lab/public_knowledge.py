@@ -17,16 +17,20 @@ another provider: with no ``MOSS_PROJECT_ID``/``MOSS_PROJECT_KEY`` or a load
 that fails, this tier alone is off and the server says why by setting name.
 
 A Korean question meets English material through the glossary
-(``data/public_knowledge/glossary.json``, Wikidata labels, CC0): the Korean
-words of the question, their particles taken off, are joined by their English
-names before the query is embedded. That is deterministic; no model sees the
-question here.
+(``data/public_knowledge/glossary.json``, Wikidata labels, CC0, and the
+hand-written list ``glossary_words.txt``): the Korean words of the question,
+their particles taken off, are joined by their English names before the query
+is embedded. A problem's help asks with the problem's own query
+(``problem_query``) and attaches only pieces over the relevance floor
+(``problem_relevance``); with a ``custom`` index the query's vector comes from
+the pinned multilingual model (``EMBEDDING_MODEL``, lane KNOW2). That is
+deterministic; no generative model sees the question here.
 
 Every hit carries where it comes from -- source name, licence, address, the
 source grade of additional decision 3 (A: public institution, standard or
-peer-reviewed article; B: open textbook; C: wiki) -- and the answer rules of
-decision 6 (``answer_checks.public_reference_violations``) hold whoever
-phrases the answer.
+peer-reviewed article; B: open textbook; C: wiki). Of the pieces only the
+fixed sentence "공개 자료에 관련 내용이 있어요" is said; the pieces are on the
+screen with their source (person's decision 2026-10-26, 1).
 """
 
 from __future__ import annotations
