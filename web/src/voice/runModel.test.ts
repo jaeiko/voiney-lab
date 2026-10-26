@@ -48,6 +48,16 @@ describe("applyServerEvent", () => {
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 8 }, context)).toBe(EMPTY_RUN);
   });
 
+  it("keeps the server's notice and reason for a dropped sound (lane HEAR2, decision 4)", () => {
+    const dropped = applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "minimum_voiced_frames", notice: "잘 안 들렸어요", reason_ko: "너무 짧은 소리였어요", paused: false }, context);
+    expect(dropped.misheard).toEqual({ notice: "잘 안 들렸어요", reason: "너무 짧은 소리였어요" });
+    // A provider that failed: its own notice and reason, in the same place.
+    const failed = applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "stt_failed", code: "quota_exceeded", notice: "받아쓰기 서비스가 답하지 않아요", reason_ko: "받아쓰기 서비스의 한도가 다 됐어요", paused: false }, context);
+    expect(failed.misheard).toEqual({ notice: "받아쓰기 서비스가 답하지 않아요", reason: "받아쓰기 서비스의 한도가 다 됐어요" });
+    // An older server without the words: the screen's own.
+    expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 7 }, context).misheard).toEqual({ notice: null, reason: null });
+  });
+
   it("says the side-voice filter's state for this run, nothing when it is simply off", () => {
     const words = { active: "켜짐", notMeasured: "안 맞춤", staleAge: "2주", staleDevice: "마이크 바뀜", changed: "바꿈" };
     const withWords = { ...context, filterWords: words };

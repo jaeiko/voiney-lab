@@ -72,13 +72,16 @@ const LISTENING_ICONS: Record<ListeningWord, typeof Ear> = {
   idle: AudioLines,
 };
 
-function ListeningBadge({ word }: { word: ListeningWord }) {
+function ListeningBadge({ word, misheard }: { word: ListeningWord; misheard?: { notice: string | null; reason: string | null } }) {
   const Icon = LISTENING_ICONS[word];
+  // Lane HEAR2, decision 4: a dropped sound shows the server's notice and its reason; nothing is said.
+  const label = word === "misheard" && misheard?.notice ? misheard.notice : copy.listening[word];
+  const hint = word === "misheard" ? misheard?.reason || copy.misheardHint : null;
   return (
     <div className="run-listening" data-word={word} role="status" aria-live="polite" data-testid="run-listening">
       <Icon aria-hidden="true" />
-      <span>{copy.listening[word]}</span>
-      {word === "misheard" ? <span className="run-listening-hint">{copy.misheardHint}</span> : null}
+      <span>{label}</span>
+      {hint ? <span className="run-listening-hint">{hint}</span> : null}
     </div>
   );
 }
@@ -279,7 +282,7 @@ export function RunScreen() {
     return (
       <div className="run" data-testid="run-screen" data-layout={narrow ? "narrow" : "wide"}>
         <div className="run-bar">
-          <ListeningBadge word={word} />
+          <ListeningBadge word={word} misheard={model.misheard} />
         </div>
         <div className="run-main">
           <LoadingBox label={copy.connecting} />
@@ -293,7 +296,7 @@ export function RunScreen() {
       <p id="run-announcer" className="sr-only" aria-live="assertive" />
       <header className="run-bar">
         <p className="run-protocol">{protocol?.display_name ?? ""}</p>
-        <ListeningBadge word={word} />
+        <ListeningBadge word={word} misheard={model.misheard} />
         {timer.kind !== "none" && timer.kind !== "soon" && timer.kind !== "done" ? <TimerChip timer={timer} /> : null}
         <div className="run-controls">
           <span className="run-mic" data-on={snapshot.micOn}>

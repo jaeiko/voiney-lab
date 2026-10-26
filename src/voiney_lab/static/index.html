@@ -3669,11 +3669,13 @@ function renderDroppedSpeech(m){
  const accepted=acceptedSessionConfiguration;if(!accepted||(m.configuration_id!==undefined&&m.configuration_id!==accepted.configuration_id))return false;
  if(m.paused===true||m.reason==="other_speaker_level")return false;
  const heard=$("run-heard");
- if(heard){heard.textContent=nonemptyText(m.notice)?normalizePresentationText(m.notice):"잘 안 들렸어요";heard.hidden=false;clearTimeout(dropNoticeTimer);dropNoticeTimer=setTimeout(()=>{heard.hidden=true;},DROP_NOTICE_MS);}
+ // Lane HEAR2 decision 4: the server's words first (its notice and reason), the page's table for an older server; never said.
+ const notice=nonemptyText(m.notice)?normalizePresentationText(m.notice):"잘 안 들렸어요",why=nonemptyText(m.reason_ko)?normalizePresentationText(m.reason_ko):(DROP_REASON_WORDS[m.reason]||"들리지 않았어요");
+ if(heard){heard.textContent=`${notice} · ${why}`;heard.hidden=false;clearTimeout(dropNoticeTimer);dropNoticeTimer=setTimeout(()=>{heard.hidden=true;},DROP_NOTICE_MS);}
  const box=$("ignored-speech"),list=$("ignored-speech-list");if(!box||!list)return true;
  droppedSpeechCount+=1;
- const why=DROP_REASON_WORDS[m.reason]||"들리지 않았어요",item=document.createElement("li");
- item.textContent=`잘 안 들렸어요 · ${why} · ${clockWords()}${m.during_playback===true?" · 답하는 중":""}`;
+ const item=document.createElement("li");
+ item.textContent=`${notice} · ${why} · ${clockWords()}${m.during_playback===true?" · 답하는 중":""}`;
  if(typeof list.prepend==="function")list.prepend(item);else list.appendChild(item);
  while(list.children.length>IGNORED_SPEECH_LINES_MAX){const last=list.children[list.children.length-1];if(last?.remove)last.remove();else break;}
  setText("ignored-speech-summary",`잘 안 들린 말 ${droppedSpeechCount}개${ignoredSpeechCount?` · 다른 사람 말로 보여 듣지 않은 말 ${ignoredSpeechCount}개`:""}`);

@@ -91,6 +91,22 @@ describe("RunScreen", () => {
     expect(engine.stopRun).toHaveBeenCalled();
   });
 
+  it("shows the server's reason for a dropped sound, and a provider that failed, in the listening band (lane HEAR2, decision 4)", () => {
+    running({}, { misheardAt: Date.now(), misheard: { notice: null, reason: "너무 짧은 소리였어요" } });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-listening")).toHaveTextContent("잘 안 들렸어요");
+    expect(screen.getByTestId("run-listening")).toHaveTextContent("너무 짧은 소리였어요");
+    expect(screen.getByTestId("run-listening")).not.toHaveTextContent("한 번 더 말해 주세요");
+  });
+
+  it("names a speech-to-text provider that failed where the dropped word goes (lane HEAR2, decisions 1-2)", () => {
+    running({}, { misheardAt: Date.now(), misheard: { notice: "받아쓰기 서비스가 답하지 않아요", reason: "받아쓰기 서비스의 한도가 다 됐어요" } });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-listening")).toHaveTextContent("받아쓰기 서비스가 답하지 않아요");
+    expect(screen.getByTestId("run-listening")).toHaveTextContent("받아쓰기 서비스의 한도가 다 됐어요");
+    expect(screen.getByTestId("run-listening").getAttribute("data-word")).toBe("misheard");
+  });
+
   it("shows what the server said of the side-voice filter for a few seconds", () => {
     running({}, { filterNotice: { text: "마이크가 바뀌어 모든 말을 들어요 · 이 마이크로 다시 맞춰 주세요", at: Date.now() } });
     renderWithClient(<RunScreen />);

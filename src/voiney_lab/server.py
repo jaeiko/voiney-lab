@@ -7132,12 +7132,9 @@ class ListenerSession:
         #: Turns of the server's own words (a calibration prompt, a
         #: suggestion), numbered from _SERVER_WORDS_TURN_BASE.
         self.server_words_turns:int=0
-        #: Lane HEAR, decision 3: when sounds that may have been the wearer's
-        #: words were dropped (session clock), whether "잘 안 들렸어요. 다시
-        #: 말씀해 주세요." was said since words were last heard, and how many
-        #: voices in a row the filter dropped just under its line.
-        self.drop_times:collections.deque[float]=collections.deque(maxlen=16)
-        self.drop_notice_said:bool=False
+        #: Lane HEAR, decision 3: how many voices in a row the filter dropped
+        #: just under its line. (Lane HEAR2, decision 4: a drop is shown,
+        #: never said, so no drop is counted toward a spoken notice.)
         self.near_line_drops:int=0
         #: Lane HEAR2: whether the provider outage under way was said aloud;
         #: a response that comes back ends the outage.
@@ -7393,24 +7390,6 @@ class ListenerSession:
                 "ignored_count":self.ignored_speech_count,
             })
     # --- lane HEAR, decision 3: no sound dropped in silence ------------------
-    def note_drop(self,reason:str,*,during_playback:bool=False)->bool:
-        """Count a drop; True when "잘 안 들렸어요. 다시 말씀해 주세요." is due now.
-
-        Only drops of what may have been the wearer's words count
-        (SPOKEN_DROP_REASONS), never one while an answer plays on. Two
-        within DROP_NOTICE_WINDOW_SECONDS make it due -- once, until words
-        are heard again (``note_heard``).
-        """
-
-        if during_playback or reason not in SPOKEN_DROP_REASONS:
-            return False
-        now=self.clock()
-        self.drop_times.append(now)
-        recent=sum(1 for at in self.drop_times if now-at<=DROP_NOTICE_WINDOW_SECONDS)
-        if recent>=DROP_NOTICE_COUNT and not self.drop_notice_said:
-            self.drop_notice_said=True
-            return True
-        return False
     def note_stt_failure(self)->bool:
         """A provider failure; True the first time in an outage (lane HEAR2)."""
 
@@ -7425,8 +7404,6 @@ class ListenerSession:
     def note_heard(self)->None:
         """Words reached routing: the drops before them no longer count."""
 
-        self.drop_times.clear()
-        self.drop_notice_said=False
         self.near_line_drops=0
     def note_level_drop(self,level_db:float|None)->str|None:
         """A voice the filter dropped: "lowered", "off" or None (lane HEAR, decision 3).
@@ -7455,8 +7432,6 @@ class ListenerSession:
         self.level_endpoint_on=False
         return "off"
     def forget_drops(self)->None:
-        self.drop_times.clear()
-        self.drop_notice_said=False
         self.near_line_drops=0
     def ignored_speech_in_last(self,seconds:float)->int:
         """How many utterances were taken for another person's in the last ``seconds``."""
@@ -11558,21 +11533,37 @@ CLARIFY_CHOICE_REFUSED_WORDS={
 
 
 # --- Lane HEAR, decision 3 (2026-10-25): no sound is dropped in silence -------
-#: Shown on the screen beside each dropped sound, and said once two drops
-#: of what may have been the wearer's words come within the window.
+#: Shown on the screen beside each dropped sound. Lane HEAR2, decision 4
+#: (2026-10-26): shown only, never said -- lane HEAR's "said once after two
+#: drops in 30 s" came with every stretch of room noise the provider wrote
+#: nothing for, and the person could not bear it. The reason goes with it,
+#: in plain words (``drop_reason_words``), so a run of drops says why.
 DROP_SCREEN_WORDS="잘 안 들렸어요"
-DROP_NOTICE_WORDS="잘 안 들렸어요. 다시 말씀해 주세요."
-DROP_NOTICE_WINDOW_SECONDS=30.0
-DROP_NOTICE_COUNT=2
-#: The drops that may have been the wearer's words. Not counted: the agent's
-#: own voice coming back (self_echo), a sound too short to be a word
-#: (minimum_voiced_frames), a filler or a sound label the STT wrote
-#: (filler_only, non_lexical_event) -- each is still recorded and shown.
-SPOKEN_DROP_REASONS=frozenset({
-    "empty_transcript","other_speaker_level","language_unclear","non_speech",
-    "provider_no_speech_probability","provider_low_confidence","keyterm_echo",
-    "transcription_failed",
-})
+DROP_REASON_WORDS_KO={
+    "empty_transcript":"받아 적은 말이 없어요",
+    "self_echo":"안내 소리가 다시 들어왔어요",
+    "minimum_voiced_frames":"너무 짧은 소리였어요",
+    "language_unclear":"어느 나라 말인지 알 수 없었어요",
+    "filler_only":"'음' 같은 소리만 들렸어요",
+    "non_lexical_event":"말이 아닌 소리였어요",
+    "non_speech":"말소리가 아니었어요",
+    "keyterm_echo":"용어만 나열돼 말로 보지 않았어요",
+    "transcription_failed":"받아 적지 못했어요",
+    "provider_no_speech_probability":"말소리가 아니었어요",
+    "provider_low_confidence":"확실하게 알아듣지 못했어요",
+    "other_speaker_level":"내 목소리보다 많이 작은 소리였어요",
+    "paused":"일시정지 중이에요",
+    "stale_candidate":"답이 바뀌는 사이에 들린 소리예요",
+    "barge_in_rejected":"끼어든 말로 보지 않았어요",
+    "stt_failed":"받아쓰기 서비스가 답하지 않았어요",
+    "unknown":"들리지 않았어요",
+}
+
+
+def drop_reason_words(reason:str)->str:
+    """The plain words for a drop's reason code (lane HEAR2, decision 4); never the code."""
+
+    return DROP_REASON_WORDS_KO.get(str(reason or ""),DROP_REASON_WORDS_KO["unknown"])
 #: Lane HEAR2, decisions 1-2 (2026-10-26): a speech-to-text provider that
 #: fails (the person's test: 44 requests answered 401 quota_exceeded) is
 #: one more dropped sound with its code, shown with the reason in plain
@@ -11651,12 +11642,11 @@ async def _report_speech_drop(
     generation:int|None,duration_ms:int|None,level_db:float|None,
     during_playback:bool=False,
 )->None:
-    """Record, show and -- the second time -- say that a sound was dropped (decision 3).
+    """Record and show that a sound was dropped, with its reason (decision 3; lane HEAR2, decision 4: never said).
 
     The log and the metrics keep the reason code, the level (dB) and the
     length (ms) only, never the sound or any words (AGENTS.md rule 8). While
-    the run is paused nothing is said or shown beyond the pause band
-    (decision 7).
+    the run is paused nothing is shown beyond the pause band (decision 7).
     """
 
     reason=str(reason or "unknown")[:100]
@@ -11675,12 +11665,8 @@ async def _report_speech_drop(
         duration_ms=duration_ms,level_db=level,paused=paused,
         during_playback=during_playback,
         notice=None if paused else DROP_SCREEN_WORDS,
+        reason_ko=drop_reason_words(reason),
     )
-    if paused:
-        return
-    if session.note_drop(reason,during_playback=during_playback):
-        session.track_visual_task(asyncio.create_task(_say_server_words(
-            session,sender,DROP_NOTICE_WORDS,kind="drop_notice")))
 
 
 async def _report_stt_failure(
