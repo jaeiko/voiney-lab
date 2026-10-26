@@ -126,7 +126,8 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
         session, (purpose,) = _run(self.fixture, ("이 실험 목적이 뭐야?",), index=0)
         self.assertEqual(purpose.action, CuratedProtocolAction.PROTOCOL_QUERY)
         self.assertIn("A fictional protocol for vocabulary tests.", purpose.display_text)
-        self.assertEqual(purpose.speech_text, "원문에 적힌 실험 목적을 화면에 표시했습니다.")
+        # Lane SAY, decision 4 (2026-10-25): said in 해요체.
+        self.assertEqual(purpose.speech_text, "원문에 적힌 실험 목적을 화면에 띄웠어요.")
 
     def test_a_tube_question_answers_from_the_pdf_instead_of_crashing(self) -> None:
         # The crash: ``current_step.text`` on a step without a reviewed

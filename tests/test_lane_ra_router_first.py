@@ -76,7 +76,9 @@ class FrontRuleTests(unittest.TestCase):
     """Decision (a): what the front rules keep with the router first."""
 
     def test_the_handed_on_rules_are_named_and_the_rest_stay(self) -> None:
-        self.assertEqual(ROUTER_FIRST_HANDED_ON, frozenset({"note_record", "step_homophone", "visual_request"}))
+        # Lane SAY, decision 6 (2026-10-25) added "mixed_move".
+        self.assertEqual(ROUTER_FIRST_HANDED_ON, frozenset({
+            "note_record", "step_homophone", "visual_request", "mixed_move"}))
         self.assertTrue(ROUTER_FIRST_HANDED_ON <= set(FRONT_RULES))
         for kept in ("pause", "end_command", "yes_no_open_question", "observation_reply",
                      "timer_remaining", "step_time", "coreference_clarify", "reference_value",

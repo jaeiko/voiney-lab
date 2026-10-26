@@ -368,7 +368,8 @@ class TheOneTimeNoticeAtTheStepTests(unittest.TestCase):
         plan = turns.say("2단계 완료했어")
         self.assertTrue(plan.state_changed)
         self.assertEqual(turns.label(), "3")
-        self.assertIn("이 단계의 동시 작업은 아직 안내 기능이 없어요. 원문을 읽어 드릴게요.", plan.display_text)
+        # Lane SAY, decision 1: the source is shown, not read aloud in English.
+        self.assertIn("이 단계의 동시 작업은 아직 안내 기능이 없어요. 원문을 확인해 주세요.", plan.display_text)
         self.assertIn("Meanwhile, start the water bath while the gel is washing.", plan.display_text)
         self.assertIn("동시 작업은 아직 안내 기능이 없어요", plan.speech_text)
         # The step itself is presented as at any other step.

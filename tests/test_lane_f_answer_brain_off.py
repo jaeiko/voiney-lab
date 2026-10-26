@@ -169,10 +169,13 @@ class ReaderTranslationTests(unittest.TestCase):
         self.assertEqual(model.schemas(), ["protocol_step_reader_translation_v1"])
         self.assertEqual(spoken, ["자동 번역입니다. " + GOOD_READING])
 
-    def test_without_a_translation_key_the_source_is_read_as_before(self) -> None:
+    def test_without_a_translation_key_the_source_is_shown_not_read(self) -> None:
+        # Lane SAY, decision 1 (2026-10-25): the English is not read aloud.
+        from voiney_lab.curated_protocol import UNTRANSLATED_SPOKEN
+
         model, spoken = _turn(_settings({**DEV_ENV, **NO_TRANSLATION_KEY}), "이 단계 읽어줘")
         self.assertEqual(model.calls, [])
-        self.assertEqual(spoken, [MINIPREP_STEPS[0]])
+        self.assertEqual(spoken, [UNTRANSLATED_SPOKEN])
 
 
 class VoiceTurnTests(unittest.TestCase):
