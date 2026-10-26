@@ -716,6 +716,10 @@ class ChangeableValue:
     number: str
     unit: str
     written: str
+    #: Where ``written`` stands in the step's own sentence (lane RX1, decision
+    #: 3): character offsets into ``instruction_source_text``, -1 when unknown.
+    start: int = -1
+    end: int = -1
 
     @property
     def shown(self) -> str:
@@ -732,6 +736,7 @@ class ChangeableValue:
             "kind": self.kind, "kind_ko": RUN_CHANGE_KIND_KO[self.kind], "number": self.number,
             "unit": self.unit, "written": self.written, "shown_ko": self.shown,
             "units_ko": _FAMILY_UNITS_KO[_RUN_UNITS[self.unit].family],
+            "start": self.start, "end": self.end,
         }
 
 
@@ -777,7 +782,8 @@ def step_changeable_values(
             continue
         found.append(ChangeableValue(
             item_id=f"{step_id}#{len(found) + 1}", step_id=step_id, step_label=step_label,
-            kind=unit.kind, number=match["number"], unit=unit.canonical, written=written))
+            kind=unit.kind, number=match["number"], unit=unit.canonical, written=written,
+            start=match.start(), end=match.end()))
     return found
 
 
@@ -936,8 +942,13 @@ class RunChanges:
     """Today's values of a protocol about to run: what may change, a person's
     choice, and the choice the start applies (lane EASY, decision 2)."""
 
-    def __init__(self, catalog: Any) -> None:
+    def __init__(self, catalog: Any, *, localize: Any = None) -> None:
         self.catalog = catalog
+        #: Lane RX1, decision 3: a callable that returns the fixture with its
+        #: revision's stored Korean attached (the server's
+        #: ``_with_revision_translations``), so the options can show a step's
+        #: sentence in Korean first. None: the source alone.
+        self.localize = localize
 
     def _current(self, protocol_id: str) -> tuple[dict[str, Any], Any, list[ChangeableValue]]:
         """(the target the run would follow, its fixture, its changeable values)."""
@@ -952,7 +963,31 @@ class RunChanges:
     def options(self, protocol_id: str) -> dict[str, Any]:
         target, fixture, values = self._current(protocol_id)
         return {"protocol_id": protocol_id, "target": target, "revision_id": fixture.revision_id,
-                "values": [value.public_dict() for value in values], "limit": RUN_CHANGE_LIMIT}
+                "values": [value.public_dict() for value in values], "limit": RUN_CHANGE_LIMIT,
+                "steps": self._steps(fixture, values)}
+
+    def _steps(self, fixture: Any, values: Sequence[ChangeableValue]) -> list[dict[str, Any]]:
+        """Every step of the run with its sentence, its stored Korean and the
+        ids of its changeable values (lane RX1, decision 3), in step order; a
+        step without a changeable value is listed empty-handed so the screen
+        can say so."""
+
+        localized = self.localize(fixture) if self.localize is not None else fixture
+        korean = getattr(localized, "localized_fact", None)
+        by_step: dict[str, list[str]] = {}
+        for value in values:
+            by_step.setdefault(value.step_id, []).append(value.item_id)
+        steps = []
+        for step in fixture.steps:
+            text = str(step.instruction_source_text or "")
+            text_ko = korean(step.step_id, "current_step") if callable(korean) else None
+            if not isinstance(text_ko, str) or not text_ko.strip() or text_ko.strip() == text.strip():
+                text_ko = None
+            steps.append({
+                "step_id": step.step_id, "step_label": step.source_label, "text": text,
+                "text_ko": text_ko, "value_ids": by_step.get(step.step_id, []),
+            })
+        return steps
 
     @staticmethod
     def last_time(values: Sequence[Mapping[str, Any]], last: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

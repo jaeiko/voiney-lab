@@ -18,12 +18,16 @@ afterEach(() => {
 });
 
 describe("routes", () => {
-  it("knows the home and the list; everything else is the old screen's", () => {
+  it("knows the home, the list, the upload and the protocol screens; everything else is the old screen's", () => {
     expect(parseRoute("")).toEqual({ name: "home", hash: "#/home" });
     expect(parseRoute("#/home")).toEqual({ name: "home", hash: "#/home" });
     expect(parseRoute("#/protocols")).toEqual({ name: "protocols", hash: "#/protocols" });
     expect(parseRoute("#/protocols/p-1")).toEqual({ name: "handoff", hash: "#/protocols/p-1" });
-    expect(parseRoute("#/upload")).toEqual({ name: "handoff", hash: "#/upload" });
+    expect(parseRoute("#/upload")).toEqual({ name: "upload", hash: "#/upload" });
+    expect(parseRoute("#/protocols/p-1/analysis")).toEqual({ name: "analysis", hash: "#/protocols/p-1/analysis", protocolId: "p-1" });
+    expect(parseRoute("#/protocols/p%201/review")).toEqual({ name: "review", hash: "#/protocols/p%201/review", protocolId: "p 1" });
+    expect(parseRoute("#/protocols/p-1/changes")).toEqual({ name: "changes", hash: "#/protocols/p-1/changes", protocolId: "p-1" });
+    expect(parseRoute("#/protocols/p-1/other")).toEqual({ name: "handoff", hash: "#/protocols/p-1/other" });
     expect(parseRoute("#/records/s-1")).toEqual({ name: "handoff", hash: "#/records/s-1" });
     expect(parseRoute("#nonsense")).toEqual({ name: "home", hash: "#/home" });
     expect(inviteTokenOf("?invite=abc")).toBe("abc");

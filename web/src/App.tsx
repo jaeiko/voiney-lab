@@ -5,10 +5,14 @@ import { ErrorBox, LoadingBox } from "./components/Pieces";
 import { Logo } from "./components/Logo";
 import { auth, frame, states } from "./copy/ko";
 import { useHashRoute } from "./lib/useHashRoute";
+import { AnalysisScreen } from "./screens/AnalysisScreen";
 import { HandoffScreen } from "./screens/HandoffScreen";
 import { HomeScreen } from "./screens/HomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { ProtocolsScreen } from "./screens/ProtocolsScreen";
+import { ReviewScreen } from "./screens/ReviewScreen";
+import { RunChangesScreen } from "./screens/RunChangesScreen";
+import { UploadScreen } from "./screens/UploadScreen";
 
 export function inviteTokenOf(search: string): string | null {
   const token = new URLSearchParams(search).get("invite");
@@ -60,6 +64,18 @@ export function App() {
       break;
     case "protocols":
       screen = <ProtocolsScreen />;
+      break;
+    case "upload":
+      screen = <UploadScreen session={data} />;
+      break;
+    case "analysis":
+      screen = <AnalysisScreen key={route.protocolId} protocolId={route.protocolId ?? ""} />;
+      break;
+    case "review":
+      screen = <ReviewScreen key={route.protocolId} protocolId={route.protocolId ?? ""} session={data} />;
+      break;
+    case "changes":
+      screen = <RunChangesScreen key={route.protocolId} protocolId={route.protocolId ?? ""} />;
       break;
     case "handoff":
       screen = <HandoffScreen hash={route.hash} />;
