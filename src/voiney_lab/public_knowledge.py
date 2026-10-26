@@ -248,16 +248,47 @@ def _korean_stems(token: str) -> list[str]:
 
 
 @dataclass(frozen=True)
+class Symptom:
+    """What went wrong, as the hand-written glossary's [현상] entry says it:
+    the Korean a researcher says ("굳지 않") and the English material uses
+    ("polymerization"). ``name`` is its first English word."""
+
+    name: str
+    korean: tuple[str, ...]
+    english: tuple[str, ...]
+
+    def said_in(self, text: str) -> bool:
+        flat = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+        return any(" ".join(form.casefold().split()) in flat for form in self.korean)
+
+    def found_in(self, folded: str) -> bool:
+        """Whether a piece's casefolded words say it: an English word (its
+        ending may differ) or a Korean form of two letters or more."""
+
+        if any(_english_pattern(word).search(folded) for word in self.english):
+            return True
+        return any(len(form.replace(" ", "")) >= 2 and form.casefold() in folded for form in self.korean)
+
+
+@dataclass(frozen=True)
 class Glossary:
-    """Korean names → English names (Wikidata labels and aliases, CC0).
+    """Korean names → English names (Wikidata labels and aliases, CC0, and the
+    hand-written list ``glossary_words.txt``).
 
     ``terms`` maps a normalised Korean term (NFKC, casefold, no spaces) to the
     English names of the same item. ``aliases`` maps an English title to its
-    Korean names, for the pipeline to prefix English pieces with.
+    Korean names, for the pipeline to prefix English pieces with. ``general``
+    holds words that never count as a meaning word (NFKC, casefolded) besides
+    ``GENERAL_WORDS``; ``symptoms`` what went wrong (the list's [현상]);
+    ``things`` the English names of reagents, materials, devices and hazards
+    (the list's [물질], [소재], [장비], [안전]), a step's key words.
     """
 
     terms: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     aliases: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    general: frozenset[str] = frozenset()
+    symptoms: tuple[Symptom, ...] = ()
+    things: frozenset[str] = frozenset()
 
     @classmethod
     def load(cls, path: Path | str) -> "Glossary":
@@ -357,15 +388,14 @@ class Glossary:
         return tuple(unique)
 
     @cached_property
-    def _english_index(self) -> Mapping[str, tuple[str, ...]]:
-        """English names (NFKC, casefolded) by their first word, longest first."""
+    def _things_index(self) -> Mapping[str, tuple[str, ...]]:
+        """The things' English names (NFKC, casefolded) by their first word, longest first."""
 
         index: dict[str, set[str]] = {}
-        for names in self.terms.values():
-            for name in names:
-                key = " ".join(unicodedata.normalize("NFKC", name).casefold().split())
-                if len(key) >= 3:
-                    index.setdefault(key.split()[0], set()).add(key)
+        for name in self.things:
+            key = " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+            if len(key) >= 3:
+                index.setdefault(key.split()[0], set()).add(key)
         return {word: tuple(sorted(found, key=len, reverse=True)) for word, found in index.items()}
 
     @cached_property
@@ -380,12 +410,12 @@ class Glossary:
             found.setdefault(name.casefold(), []).extend(koreans)
         return {name: tuple(dict.fromkeys(items)) for name, items in found.items()}
 
-    def english_names_in(self, folded: str) -> list[tuple[str, int]]:
-        """The glossary's English names a casefolded text holds as words, with where."""
+    def things_in(self, folded: str) -> list[tuple[str, int]]:
+        """The things' English names a casefolded text holds as words, with where."""
 
         found: list[tuple[str, int]] = []
         for match in re.finditer(r"[a-z0-9][a-z0-9\-]*", folded):
-            for name in self._english_index.get(match.group(0), ()):
+            for name in self._things_index.get(match.group(0), ()):
                 end = match.start() + len(name)
                 if folded.startswith(name, match.start()) and not folded[end:end + 1].isalnum():
                     found.append((name, match.start()))
@@ -396,6 +426,21 @@ class Glossary:
         """The Korean names of an English name, or ()."""
 
         return self._korean_by_english.get(english.casefold().strip(), ())
+
+    def general_word(self, term: str) -> bool:
+        """Whether ``term`` names nothing a piece could be about ("세포", "wash buffer")."""
+
+        key = _plain(term)
+        if not key:
+            return True
+        words = key.split()
+        return (key in GENERAL_WORDS or key in self.general or _normalise_term(key) in self.general
+                or all(word in GENERAL_WORDS or word in self.general for word in words))
+
+    def symptoms_in(self, text: str) -> list[Symptom]:
+        """The [현상] entries said in ``text``."""
+
+        return [symptom for symptom in self.symptoms if symptom.said_in(text)]
 
     def expand(self, query: str) -> str:
         """``query`` followed by the English names of its Korean words, when any."""
@@ -422,23 +467,40 @@ class Glossary:
 # one general word with the problem ("cell", "Gel", "Ab") and none of what went
 # wrong. So a problem's public query is the problem's own words and the names
 # it is about -- what the person named and the current step's key words --
-# never the whole sentence, and a piece is attached only when it shares both a
-# word of what went wrong and a name, other words, and the index scored it at
-# least ``SCORE_FLOOR``. Under that floor no public layer is attached at all:
-# nothing is better than a piece off the point. The vocabulary is general lab
-# language (lane HELP's concepts, the state machine's lab lexicon, the
-# glossary), never one protocol's words.
+# never the whole sentence, and a piece is attached only over the relevance
+# floor: it shares a name, says what went wrong in other words, speaks of a
+# cause, an effect or a hazard rather than defining a thing, and the index
+# scored it at least ``SCORE_FLOOR``. Under that floor no public layer is
+# attached at all: nothing is better than a piece off the point. The
+# vocabulary is general lab language (lane HELP's concepts, the state
+# machine's lab lexicon, the glossary), never one protocol's words.
 
 #: Words that name nothing a piece could be about: general laboratory nouns
 #: and verbs a piece about anything carries. A piece sharing only these is not
-#: about the problem.
+#: about the problem. The hand-written glossary's [일반] words join them.
 GENERAL_WORDS = frozenset({
     "add", "added", "addition", "amount", "buffer", "buffers", "cell", "cells", "dish", "gel", "gels",
     "incubate", "incubation", "lab", "laboratory", "liquid", "medium", "media", "min", "minute", "minutes",
     "mix", "mixture", "piece", "pieces", "plate", "plates", "protein", "proteins", "reagent", "reagents",
     "room", "sample", "samples", "solution", "solutions", "step", "temperature", "time", "tube", "tubes",
     "volume", "wash", "washes", "washing", "water", "well", "wells",
+    # Carrier buffers nearly every washing step names.
+    "pbs", "pbs-t", "pbst", "dpbs", "tbs", "tbs-t", "tbst", "tween", "tween-20", "tween 20", "saline",
     "젤", "겔", "세포", "단백질", "샘플", "시료", "용액", "버퍼", "튜브", "물", "온도", "시간", "단계",
+})
+#: What a step handles things with -- containers and hand tools. Said by the
+#: person they are what the problem is about ("피펫에서 새"); in the step's
+#: own words they are incidental ("using a pipette, add …").
+STEP_TOOL_WORDS = frozenset({
+    "tube", "tubes", "microcentrifuge tube", "centrifuge tube", "conical tube", "flask", "erlenmeyer flask",
+    "beaker", "vial", "petri dish", "dish", "bottle", "pipette", "pipet", "micropipette", "tip", "tips",
+    "syringe", "glove", "gloves", "balance", "thermometer", "plate", "microplate", "rack", "ice",
+})
+#: The lab lexicon's entries that name an action or a technique, not a thing a
+#: step handles: they are not a step's key words.
+_LEXICON_ACTIONS = frozenset({
+    "destaining", "dehydration", "incubation", "contamination", "electrophoresis", "sds page", "mass spectrometry",
+    "rpm", "calibration", "dilution", "blank", "hygroscopic", "waste", "vortex",
 })
 #: Lane HELP's concepts that say what a sentence is about, a colour, a
 #: quantity or a time rather than what went wrong: alone they make no piece
@@ -447,6 +509,9 @@ VAGUE_CONCEPTS = frozenset({
     "still", "color", "liquid", "gel", "band", "cell", "protein", "sample", "medium", "time", "temperature",
     "volume", "change", "speed", "remove", "measure", "mix", "wall", "ph",
     "yellow", "brown", "red", "purple", "white", "transparent",
+    # Topic words: a process named ("filtration", "digestion") or a word with
+    # other senses ("light chain"); a piece with them is about the topic.
+    "filter", "digest", "light",
 })
 #: The words a concept is searched by (lane HELP's table holds stems, not words).
 CONCEPT_QUERY_WORDS: Mapping[str, str] = {
@@ -458,12 +523,26 @@ CONCEPT_QUERY_WORDS: Mapping[str, str] = {
     "signal": "weak signal background", "leak": "leak spill", "loose": "seal leak", "filter": "filtration",
     "distribution": "uneven distribution", "digest": "digestion", "migrate": "migration",
 }
+#: The language of a cause, an effect, a failure or a hazard. A piece without
+#: any of it only defines or describes a thing (lane KAUDIT: "Filter paper has
+#: various properties", "T cells ..."), which does not help with a problem.
+_EFFECT_WORDS = re.compile(
+    r"(?<![a-z])(?:caus|due to|because|result(?:s|ed|ing)? in|lead(?:s|ing)? to|led to|prevent|avoid|reduc|"
+    r"increas|decreas|improv|promot|enhanc|inhibit|impair|interfer|affect|fail|poor|insufficient|incomplete|"
+    r"excess|too (?:much|little|long|short|high|low|fast|slow)|problem|troubleshoot|unless|"
+    r"hazard|toxic|irritat|corros|flammab|explos|danger|warning|caution|harmful|fatal)"
+    r"|(?<![a-z])if\b[^.]{0,80}\b(?:not|no|fails?|too)\b"
+    r"|원인|때문|방지|피해야|피하|줄이|줄어|늘리|늘어|높이|낮추|촉진|억제|방해|실패|부족|과다|너무|문제|해결|주의"
+    r"|위험|독성|유해|자극|화상|않으면|않을 때|않도록"
+)
 #: At most this many names go into a problem's query (the person's first, then the step's).
 _MAX_QUERY_NAMES = 6
 #: A word of letters that names a reagent, a cell line or a method by its form:
 #: two capitals or more ("DTT", "TrypLE", "SDS-PAGE"), or letters and digits
 #: together ("HEK293T", "LiPF6").
 _NAME_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*")
+#: Words in Latin letters said together ("dye front", "master mix") name one thing.
+_LATIN_RUN = re.compile(r"[A-Za-z][A-Za-z0-9\-]*(?:[ \t]+[A-Za-z][A-Za-z0-9\-]*)*")
 _UNIT_TOKENS = frozenset({"ml", "µl", "ul", "nl", "mm", "µm", "um", "nm", "mg", "µg", "ug", "ng", "rpm", "rcf",
                           "min", "sec", "hr", "h", "s", "kda", "bp", "kb", "od", "ph"})
 
@@ -476,9 +555,29 @@ def _name_like(token: str) -> bool:
     return capitals >= 2 or (has_digit and capitals >= 1 and len(token) >= 3)
 
 
-def _general(term: str) -> bool:
-    key = unicodedata.normalize("NFKC", term).casefold().strip()
-    return key in GENERAL_WORDS or all(word in GENERAL_WORDS for word in key.split())
+def _plain(term: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", term).casefold().split())
+
+
+@lru_cache(maxsize=1)
+def _ordinary_words() -> frozenset[str]:
+    from voiney_lab.knowledge import _ENGLISH_STOP  # noqa: PLC0415 - lane HELP's stop words
+
+    return frozenset(_ENGLISH_STOP) | _QUESTION_WORDS
+
+
+@lru_cache(maxsize=1)
+def _reagent_names() -> tuple[str, ...]:
+    """The reagents the bundle holds compound records for (``pubchem_compounds.txt``):
+    a step that names one names a thing it handles."""
+
+    path = Path(__file__).resolve().parents[2] / "data" / "public_knowledge" / "pubchem_compounds.txt"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ()
+    names = [line.split("\t")[0].strip().casefold() for line in lines if line.strip() and not line.startswith("#")]
+    return tuple(name for name in dict.fromkeys(names) if len(name) >= 3)
 
 
 @lru_cache(maxsize=1)
@@ -490,25 +589,31 @@ def _lexicon() -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
     return tuple((key.replace("_", " "), english, korean) for key, english, korean, _stem in _LAB_LEXICON)
 
 
-def _english_pattern(term: str) -> re.Pattern[str]:
-    """A name as a word, with its plural or ending ("centrifug" → "centrifuged")."""
+@lru_cache(maxsize=4096)
+def _english_pattern(term: str, *, any_ending: bool = False) -> re.Pattern[str]:
+    """A name as a word, with its plural or ending ("centrifug" → "centrifuged");
+    with ``any_ending`` every word it begins ("trypsin" → "trypsinization")."""
 
     words = term.casefold().split()
     tail = words[-1]
     stem = tail[:-1] if len(tail) > 5 and tail.endswith("e") else tail
-    body = r"\s+".join([*(re.escape(word) for word in words[:-1]), re.escape(stem) + r"[a-z]{0,5}"])
+    ending = r"[a-z]*" if any_ending else r"[a-z]{0,5}"
+    body = r"\s+".join([*(re.escape(word) for word in words[:-1]), re.escape(stem) + ending])
     return re.compile(rf"(?<![a-z0-9]){body}(?![a-z0-9])")
 
 
 def _has_term(haystack: str, term: str) -> bool:
     """Whether ``haystack`` (NFKC, casefolded) holds ``term``: a Korean name of
-    two letters or more anywhere (particles attach to it), a Latin name as a word."""
+    two letters or more anywhere (particles attach to it), a Latin name as a
+    word, an acronym or a formula ("PEB", "LiPF6") only as itself."""
 
-    needle = unicodedata.normalize("NFKC", term).casefold().strip()
+    needle = _plain(term)
     if not needle:
         return False
     if _HANGUL.search(needle):
         return len(needle) >= 2 and needle in haystack
+    if _name_like(term.strip()):
+        return re.search(rf"(?<![a-z0-9]){re.escape(needle)}s?(?![a-z0-9])", haystack) is not None
     return bool(_english_pattern(needle).search(haystack))
 
 
@@ -516,110 +621,234 @@ def _has_term(haystack: str, term: str) -> bool:
 class ProblemQuery:
     """What the public tier is asked about a problem at the bench.
 
-    ``problem`` are lane HELP's concepts of what went wrong (``foam``,
-    ``detach``); ``subjects`` the names it is about, the person's first and
-    then the current step's key words; ``text`` what the index is queried
-    with -- those words, never the whole sentence.
+    ``problem`` names what went wrong -- lane HELP's concepts (``foam``,
+    ``detach``) and the hand-written glossary's [현상] entries
+    (``polymerization``); ``subjects`` the names it is about, the person's
+    first and then the current step's key words; ``text`` what the index is
+    queried with -- those words, never the whole sentence; ``symptoms`` the
+    [현상] entries found, with their words; ``said`` the subjects the person
+    named (a piece must share one of these when there are any).
     """
 
     text: str
     problem: tuple[str, ...]
     subjects: tuple[str, ...]
+    symptoms: tuple["Symptom", ...] = ()
+    said: tuple[str, ...] = ()
 
 
-def _subjects_said(words: str, glossary: "Glossary") -> list[str]:
+def _said_names(words: str, glossary: "Glossary", problem: set[str], korean_part: str) -> list[str]:
     """The names in what the person said: glossary words (and their English),
-    the lab lexicon's Korean forms, and their own words in Latin letters."""
+    the lab lexicon's Korean forms, and their own words in Latin letters.
+
+    A word that is general ("단백질") or is itself the problem -- the only word
+    that says it, as "침전" in "침전이 생겼어" -- brings none of its names;
+    "뚜껑" in "뚜껑이 헐거워" is what is loose, not the looseness.
+    """
+
+    from voiney_lab.knowledge import concepts_in  # noqa: PLC0415
+
+    def the_problem(form: str) -> bool:
+        carried = set(concepts_in(form)) & problem
+        return bool(carried) and not carried <= set(concepts_in(korean_part.replace(form, " ")))
 
     found: list[str] = []
     for korean, english in glossary.matches(words).items():
-        found += [korean if " " in korean else _korean_stems(korean)[-1], *english[:2]]
+        stem = korean if " " in korean else _korean_stems(korean)[-1]
+        if glossary.general_word(stem) or the_problem(stem):
+            continue
+        found += [stem, *(name for name in english[:2] if not glossary.general_word(name))]
     folded = unicodedata.normalize("NFKC", words).casefold()
     for name, _english, korean in _lexicon():
-        if any(form in folded for form in korean if len(form) >= 2):
+        forms = [form for form in korean if len(form) >= 2 and form in folded]
+        if forms and not any(the_problem(form) for form in forms):
             found.append(name)
-    found += [word for word in _LATIN_WORD.findall(words)
-              if word.casefold() not in _QUESTION_WORDS and (len(word) >= 3 or _name_like(word))]
+    for run in _LATIN_RUN.findall(words):
+        kept = [word for word in run.split() if word.casefold() not in _QUESTION_WORDS]
+        phrase = " ".join(kept)
+        if kept and (len(phrase) >= 3 or _name_like(phrase)):
+            found.append(phrase)
     return found
 
 
-def _subjects_of_step(step_text: str, glossary: "Glossary") -> list[str]:
-    """The current step's key words: what it names -- names by their form, the
-    lab lexicon's English, the glossary's English names, a Korean step's
-    glossary words -- in the order the step says them."""
+def _step_names(step_text: str, glossary: "Glossary") -> list[str]:
+    """The current step's key words: the reagents, materials and devices it
+    names -- names by their form ("DTT", "LiPF6"), the bundle's reagents, the
+    lab lexicon's things (English or Korean) and the hand-written glossary's
+    things -- in the order the step says them. Its actions and techniques
+    ("dilution", "fluorescence"), containers and hand tools, and a shouted run
+    of ordinary words ("IN THE DARK") are not."""
 
     folded = unicodedata.normalize("NFKC", step_text).casefold()
     placed: list[tuple[int, str]] = []
-    for match in _NAME_TOKEN.finditer(step_text):
-        if _name_like(match.group(0)):
+    tokens = list(_NAME_TOKEN.finditer(step_text))
+    shouted: set[int] = set()
+    run: list[int] = []
+    for index, match in enumerate([*tokens, None]):
+        upper = match is not None and len(match.group(0)) >= 2 and match.group(0).isupper()
+        joined = upper and run and not step_text[tokens[run[-1]].end():match.start()].strip()
+        if upper and (not run or joined):
+            run.append(index)
+            continue
+        if any(tokens[item].group(0).casefold() in _ordinary_words() for item in run) and len(run) > 1:
+            shouted.update(run)
+        run = [index] if upper else []
+    for index, match in enumerate(tokens):
+        if index not in shouted and _name_like(match.group(0)):
             placed.append((match.start(), match.group(0)))
-    for name, english, _korean in _lexicon():
+    for name in _reagent_names():
+        found = _english_pattern(name).search(folded)
+        if found is not None:
+            placed.append((found.start(), name))
+    for name, english, korean in _lexicon():
+        if name in _LEXICON_ACTIONS or name in STEP_TOOL_WORDS:
+            continue
         at = min((found.start() for found in (_english_pattern(surface).search(folded) for surface in english)
                   if found is not None), default=-1)
+        at = at if at >= 0 else min((folded.find(form) for form in korean if len(form) >= 2 and form in folded),
+                                    default=-1)
         if at >= 0:
             placed.append((at, name))
-    for name, at in glossary.english_names_in(folded):
-        placed.append((at, name))
-    for korean, english in glossary.matches(step_text).items():
-        placed.append((max(0, folded.find(korean.split()[0].casefold())), english[0]))
+    for name, at in glossary.things_in(folded):
+        if name not in STEP_TOOL_WORDS:
+            placed.append((at, name))
     return [name for _at, name in sorted(placed, key=lambda item: item[0])]
 
 
 def problem_query(words: str, step_text: str, glossary: "Glossary") -> ProblemQuery | None:
     """The public query of a problem said at a step, or None when there is
-    nothing to look for: no word of what went wrong, or nothing it is about."""
+    nothing to look for: no word of what went wrong, or nothing it is about.
+
+    What went wrong is read from the Korean of what was said -- its words in
+    Latin letters are names ("dye front", "TrypLE"), not problems.
+    """
 
     from voiney_lab.knowledge import concepts_in  # noqa: PLC0415 - lane HELP's concept table
 
-    problem = tuple(concept for concept in concepts_in(words)
-                    if concept not in VAGUE_CONCEPTS and concept in CONCEPT_QUERY_WORDS)
+    korean_part = _LATIN_RUN.sub(" ", words) if _HANGUL.search(words) else words
+    concepts = [concept for concept in concepts_in(korean_part)
+                if concept not in VAGUE_CONCEPTS and concept in CONCEPT_QUERY_WORDS]
+    symptoms = glossary.symptoms_in(korean_part)
+    problem = tuple(dict.fromkeys([*concepts, *(symptom.name for symptom in symptoms)]))
     if not problem:
         return None
-    # A name the person said that is itself a word of what went wrong ("오염"
-    # → contamination) is the problem, not what it is about.
-    said = [name for name in _subjects_said(words, glossary) if not set(concepts_in(name)) & set(problem)]
     subjects: list[str] = []
+    named_by_person: list[str] = []
     seen: set[str] = set()
-    for name in (*said, *_subjects_of_step(step_text, glossary)):
-        key = unicodedata.normalize("NFKC", name).casefold().strip()
-        if (not key or key in seen or _general(name) or key in _UNIT_TOKENS
+    said = _said_names(words, glossary, set(problem), korean_part)
+    for index, name in enumerate([*said, *_step_names(step_text, glossary)]):
+        key = _plain(name)
+        if (not key or key in seen or glossary.general_word(name) or key in _UNIT_TOKENS
+                or (index >= len(said) and key in STEP_TOOL_WORDS)
                 or (not _HANGUL.search(key) and len(key) < 3 and not _name_like(name))):
             continue
+        found = [name.strip()]
         seen.add(key)
-        subjects.append(name.strip())
         for korean in glossary.korean_names(name):
-            if korean.casefold() not in seen and not _general(korean):
-                seen.add(korean.casefold())
-                subjects.append(korean)
+            if _plain(korean) not in seen and not glossary.general_word(korean):
+                seen.add(_plain(korean))
+                found.append(korean)
+        subjects += found
+        if index < len(said):
+            named_by_person += found
     if not subjects:
         return None
-    named = subjects[:_MAX_QUERY_NAMES]
-    text = " ".join([*named, *(CONCEPT_QUERY_WORDS[concept] for concept in problem)])
-    return ProblemQuery(text=text, problem=problem, subjects=tuple(subjects))
+    named: list[str] = []
+    for name in subjects:
+        # One Korean name of each thing in the query; all of them still count when a piece is read.
+        if len(named) < _MAX_QUERY_NAMES and not (_HANGUL.search(name) and any(_HANGUL.search(n) for n in named[-1:])):
+            named.append(name)
+    words_of = [CONCEPT_QUERY_WORDS[name] for name in concepts]
+    words_of += [" ".join(symptom.english[:2]) for symptom in symptoms]
+    return ProblemQuery(text=" ".join([*named, *words_of]), problem=problem, subjects=tuple(subjects),
+                        symptoms=tuple(symptoms), said=tuple(named_by_person))
 
 
-def problem_relevance(text: str, score: float, query: ProblemQuery) -> tuple[str, str, bool]:
-    """(the problem's concept the piece has, the name it shares, attached?).
+@lru_cache(maxsize=1)
+def _concept_patterns() -> tuple[tuple[str, re.Pattern[str] | None, tuple[str, ...]], ...]:
+    """Lane HELP's concepts as a piece is read for them: a stem of three letters
+    or fewer only as a whole word ("cap", not "capacity"), and a Korean stem of
+    two letters or more (one letter, "녹", is inside "녹색")."""
 
-    The concept must be in words other than the names: "trypsin" is a word of
-    the ``detach`` concept and a reagent, and a piece that only names it says
-    nothing about cells not detaching.
+    from voiney_lab.knowledge import _CONCEPTS  # noqa: PLC0415
+
+    patterns = []
+    for concept, english, korean in _CONCEPTS:
+        parts = [re.escape(stem) + (r"s?(?![a-z0-9])" if len(stem) <= 3 else "")
+                 for stem in english]
+        pattern = re.compile(rf"(?<![a-z0-9])(?:{'|'.join(parts)})") if parts else None
+        patterns.append((concept, pattern, tuple(stem for stem in korean if len(stem.replace(" ", "")) >= 2)))
+    return tuple(patterns)
+
+
+class Relevance(tuple):
+    """(the problem's word the piece has, the name it shares, attached?, its word of an effect)."""
+
+    __slots__ = ()
+
+    def __new__(cls, problem: str, subject: str, attached: bool, effect: str) -> "Relevance":
+        return super().__new__(cls, (problem, subject, attached, effect))
+
+
+def problem_relevance(text: str, score: float, query: ProblemQuery, *, title: str = "") -> Relevance:
+    """How a piece stands against the relevance floor of a problem.
+
+    The piece must share a name of the query (one the person said, when they
+    named any) and say what went wrong in the same sentence, in words other
+    than the names ("trypsin" is a word of the ``detach`` concept and a
+    reagent: a piece that only names it says nothing about cells not
+    detaching) -- or be titled by the name itself, a record about that thing
+    -- speak of a cause, an effect or a hazard, and have been scored at least
+    ``SCORE_FLOOR``.
     """
 
-    from voiney_lab.knowledge import concepts_in  # noqa: PLC0415
-
     haystack = unicodedata.normalize("NFKC", text).casefold()
-    subject = next((name for name in query.subjects if _has_term(haystack, name)), "")
-    masked = haystack
+    # What the person named is what the problem is about; the step's key
+    # words stand in only when they named nothing.
+    names = query.said or query.subjects
+    heading = _plain(title)
+    titled = next((name for name in names if heading and (
+        heading == _plain(name) or heading.startswith(f"{_plain(name)} ("))), "")
+    subject = titled
+    problem = ""
+    for sentence in re.split(r"(?<=[.!?。;])[\s/]+|\n+", haystack):
+        named = titled or next((name for name in names if _has_term(sentence, name)), "")
+        if not named:
+            continue
+        subject = subject or named
+        found = _problem_word(_masked(sentence, query), query)
+        if found:
+            subject, problem = named, found
+            break
+    if not subject:
+        subject = next((name for name in names if _has_term(haystack, name)), "")
+    effect = _EFFECT_WORDS.search(_masked(haystack, query))
+    effect_word = effect.group(0) if effect else ""
+    return Relevance(problem, subject, bool(problem and subject and effect_word and score >= SCORE_FLOOR),
+                     effect_word)
+
+
+def _masked(folded: str, query: ProblemQuery) -> str:
+    """``folded`` with every name of the query and every word it begins taken out."""
+
+    masked = folded
     for name in query.subjects:
-        needle = unicodedata.normalize("NFKC", name).casefold().strip()
+        needle = _plain(name)
         if _HANGUL.search(needle):
             masked = masked.replace(needle, " ")
         elif needle:
-            masked = _english_pattern(needle).sub(" ", masked)
-    concepts = set(concepts_in(masked))
-    problem = next((concept for concept in query.problem if concept in concepts), "")
-    return problem, subject, bool(problem and subject and score >= SCORE_FLOOR)
+            masked = _english_pattern(needle, any_ending=True).sub(" ", masked)
+    return masked
+
+
+def _problem_word(masked: str, query: ProblemQuery) -> str:
+    """The query's concept or [현상] entry ``masked`` says, or ""."""
+
+    for concept, pattern, korean in _concept_patterns():
+        if concept in query.problem and ((pattern is not None and pattern.search(masked))
+                                         or any(stem in masked for stem in korean)):
+            return concept
+    return next((symptom.name for symptom in query.symptoms if symptom.found_in(masked)), "")
 
 
 def default_glossary_path() -> Path:
@@ -820,9 +1049,10 @@ class PublicKnowledgeSource:
     async def search_problem(self, query: ProblemQuery, *, limit: int) -> list[KnowledgeHit]:
         """The pieces for a problem, best first, each marked by the relevance floor.
 
-        ``details`` gain ``problem_shares`` (the concept of what went wrong the
-        piece has), ``subject_shares`` (the name it shares) and ``relevant``
-        ("yes" when both and the score clear the floor; "" else). Only
+        ``details`` gain ``problem_shares`` (the word of what went wrong the
+        piece has), ``subject_shares`` (the name it shares), ``effect_word``
+        (its word of a cause, an effect or a hazard) and ``relevant`` ("yes"
+        when all three are there and the score clears the floor; "" else). Only
         relevant pieces are attached to the help
         (``external_references.public_reference_part``).
         """
@@ -840,11 +1070,11 @@ class PublicKnowledgeSource:
         hits: list[KnowledgeHit] = []
         for doc in found:
             hit = self._hit_from(doc)
-            problem, subject, relevant = problem_relevance(
-                f"{hit.title}\n{hit.locator}\n{hit.text}", hit.score, query)
+            problem, subject, relevant, effect = problem_relevance(
+                f"{hit.title}\n{hit.locator}\n{hit.text}", hit.score, query, title=hit.title)
             hits.append(replace(hit, details=(
                 *hit.details, ("problem_shares", problem), ("subject_shares", subject),
-                ("relevant", "yes" if relevant else ""))))
+                ("effect_word", effect), ("relevant", "yes" if relevant else ""))))
         return ordered_hits(hits)[:limit]
 
     @staticmethod

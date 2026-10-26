@@ -1103,10 +1103,11 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
             "pieces": [{"id": hit.detail("doc_id"), "source_id": hit.detail("source_id"), "grade": hit.detail("grade"),
                         "title": hit.title, "locator": hit.locator, "score": _score(hit),
                         "problem_shares": hit.detail("problem_shares"), "subject_shares": hit.detail("subject_shares"),
-                        "text": hit.text[:240]} for hit in shown],
+                        "effect_word": hit.detail("effect_word"), "text": hit.text[:240]} for hit in shown],
             "hits": [{"rank": index, "id": hit.detail("doc_id"), "score": _score(hit), "source_id": hit.detail("source_id"),
                       "grade": hit.detail("grade"), "title": hit.title, "problem_shares": hit.detail("problem_shares"),
-                      "subject_shares": hit.detail("subject_shares"), "relevant": hit.detail("relevant")}
+                      "subject_shares": hit.detail("subject_shares"), "effect_word": hit.detail("effect_word"),
+                      "relevant": hit.detail("relevant")}
                      for index, hit in enumerate(hits, 1)],
             "spoken_public": part.spoken if part else "",
             "piece_read_aloud": read_aloud,

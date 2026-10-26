@@ -51,7 +51,7 @@ GLOSSARY = Glossary(terms={"아세토나이트릴": ("Acetonitrile",), "젤": ("
 #: Asked at step 2 of lane HELP's wash protocol ("Wash the gel piece with 500 µL
 #: wash buffer for 15 min at 37°C."): names a reagent and what went wrong.
 ASKED = "wash buffer에 acetonitrile 거품이 왜 생기지?"
-FOAM_TEXT = "Acetonitrile solutions foam when shaken; the bubbles settle within minutes."
+FOAM_TEXT = "Shaking acetonitrile solutions causes foam; the bubbles settle within minutes."
 SAFETY_TEXT = "Acetonitrile has a flash point of 42 °F and an exposure limit of 20 ppm TWA."
 
 
@@ -153,10 +153,11 @@ class RelevanceFloorTests(unittest.TestCase):
 
     def test_a_piece_with_the_problem_and_the_name_above_the_floor_is_attached(self) -> None:
         good = _doc("epmc-1", "A", title="Passaging organoids",
-                    text="TrypLE was applied for 10 min until the cells detached from the plate.",
+                    text="Too short a TrypLE incubation leaves cells that do not detach from the plate.",
                     source_name="Europe PMC", score=0.7)
         low = _doc("epmc-2", "A", title="Passaging organoids",
-                   text="TrypLE was applied until the cells detached.", source_name="Europe PMC", score=0.05)
+                   text="Too short a TrypLE incubation leaves cells that do not detach.", source_name="Europe PMC",
+                   score=0.05)
         hits, client = self._hits([good, low], "세포가 안 떨어져", "4 Add 2 mL TrypLE Express and incubate for 5 min.")
         self.assertEqual([hit.detail("relevant") for hit in hits], ["yes", ""])
         self.assertEqual(hits[0].detail("problem_shares"), "detach")
@@ -173,6 +174,117 @@ class RelevanceFloorTests(unittest.TestCase):
                        source_name="Wikipedia (English)", score=0.9)
         hits, _client = self._hits([trypsin], "세포가 안 떨어져", "4 Add 2 mL trypsin-EDTA and incubate for 5 min.")
         self.assertEqual(hits[0].detail("relevant"), "")
+
+
+class TighterFloorTests(unittest.TestCase):
+    """The floor tightened after the first offline run (2026-10-26): the help
+    rows still attached textbook passages, definitions and pieces that shared a
+    shouted step word ("IN THE DARK"), another English name of a general word
+    ("proteid" for 단백질) or "cap" inside "capacity"."""
+
+    GLOSSARY = Glossary(terms={"단백질": ("Protein", "proteid"), "분해": ("Decomposition",), "세포": ("Cell",)})
+
+    def test_a_shouted_run_of_ordinary_words_is_not_a_name(self) -> None:
+        self.assertIsNone(problem_query("침전이 생겼어", "16 Keep the tubes IN THE DARK for 30 min.", self.GLOSSARY))
+        query = problem_query("침전이 생겼어", "16 Keep the DTT tubes IN THE DARK.", self.GLOSSARY)
+        assert query is not None
+        self.assertEqual(query.subjects, ("DTT",))
+
+    def test_a_general_word_said_brings_none_of_its_names(self) -> None:
+        query = problem_query("단백질이 안 녹아", "5 Boil the sample in Laemmli buffer.", self.GLOSSARY)
+        self.assertIsNone(query)
+
+    def test_a_word_of_the_problem_said_is_not_also_what_it_is_about(self) -> None:
+        query = problem_query("분해 때문에 침전이 생겼어", "9 Digest with HNO3 on the hot block.",
+                              Glossary(terms={"분해": ("Decomposition",), "침전": ("Precipitation",)}))
+        assert query is not None
+        self.assertEqual(query.problem, ("precipitate",))
+        self.assertNotIn("Precipitation", query.subjects)
+        self.assertIn("Decomposition", query.subjects)
+        self.assertIn("HNO3", query.subjects)
+
+    def test_latin_words_said_are_names_not_problems(self) -> None:
+        query = problem_query("dye front가 안 움직여", "9 Run the gel at 120 V until the dye front reaches the bottom.",
+                              self.GLOSSARY)
+        assert query is not None
+        self.assertEqual(query.problem, ("migrate",))
+        self.assertIn("dye front", [name.casefold() for name in query.subjects])
+
+    def test_a_step_s_container_or_tool_is_not_its_key_word_but_one_said_is(self) -> None:
+        step = "4 Using a pipette, add 2 mL TrypLE to the flask."
+        query = problem_query("세포가 안 떨어져", step, self.GLOSSARY)
+        assert query is not None
+        self.assertEqual(query.subjects, ("TrypLE",))
+        said = problem_query("피펫에서 새고 있어", step, Glossary(terms={"피펫": ("pipette",)}))
+        assert said is not None
+        self.assertIn("pipette", said.subjects)
+
+    def test_a_short_concept_word_must_stand_as_a_word(self) -> None:
+        query = pk.ProblemQuery(text="membrane seal", problem=("loose",), subjects=("membrane",))
+        self.assertEqual(pk.problem_relevance("The membrane capacity is high; avoid tearing.", 0.9, query)[0], "")
+        self.assertEqual(pk.problem_relevance("A loose cap on the membrane box causes drying.", 0.9, query)[0], "loose")
+
+    def test_a_piece_must_speak_of_a_cause_an_effect_or_a_hazard(self) -> None:
+        query = pk.ProblemQuery(text="filter paper filtration", problem=("filter",), subjects=("filter paper",))
+        definition = "Engine oil is filtered to remove impurities with filter paper."
+        cause = "Slow filtration is caused by fine particles clogging the filter paper."
+        self.assertFalse(pk.problem_relevance(definition, 0.9, query)[2])
+        self.assertTrue(pk.problem_relevance(cause, 0.9, query)[2])
+
+
+class SaidFirstTests(unittest.TestCase):
+    """The second offline run (2026-10-26): an acronym of the step found inside
+    a longer word ("PEB" in "Pebble lime"), a carrier buffer every western
+    step names (PBS), a piece sharing only the step's word when the person
+    named something else, and topic words read as problems ("light chain")."""
+
+    GLOSSARY = Glossary(terms={"뚜껑": ("cap", "lid"), "항체": ("Antibody",)})
+
+    def test_an_acronym_is_found_only_as_itself(self) -> None:
+        query = pk.ProblemQuery(text="PEB dissolve", problem=("dissolve",), subjects=("PEB",))
+        self.assertEqual(pk.problem_relevance("Pebble lime does not dissolve; it is corrosive.", 0.9, query)[1], "")
+        self.assertEqual(pk.problem_relevance("PEB does not dissolve when cold; avoid ice.", 0.9, query)[1], "PEB")
+
+    def test_a_carrier_buffer_is_a_general_word(self) -> None:
+        query = problem_query("거품이 너무 많아", "5 Wash the membrane three times with PBS-T (PBS, 0.1% Tween 20).",
+                              self.GLOSSARY)
+        assert query is not None
+        self.assertEqual(query.subjects, ("membrane",))
+
+    def test_what_the_person_named_must_be_in_the_piece(self) -> None:
+        query = problem_query("뚜껑이 헐거워", "11 Cover the vessel with a membrane.", self.GLOSSARY)
+        assert query is not None
+        self.assertEqual(query.said, ("뚜껑", "cap", "lid"))
+        spill = "Holding areas should be sealed with a membrane liner to prevent leaks."
+        cap = "A loose cap lets the solvent evaporate; tighten it to prevent loss."
+        self.assertFalse(pk.problem_relevance(spill, 0.9, query)[2])
+        self.assertTrue(pk.problem_relevance(cap, 0.9, query)[2])
+
+    def test_topic_words_are_not_what_went_wrong(self) -> None:
+        for words in ("항체를 빛에 오래 뒀어", "여과가 너무 느려", "분해가 덜 된 것 같아"):
+            with self.subTest(words=words):
+                self.assertIsNone(problem_query(words, "9 Add the HNO3 to the IRDye antibody.", self.GLOSSARY))
+
+
+class SameSentenceTests(unittest.TestCase):
+    """The third offline run (2026-10-26): "membrane" and "foam" in other senses
+    in different sentences of one piece (an electrolyser's nickel foam, a spill's
+    membrane liner). The name and the problem's word must meet in one sentence,
+    or the piece's title must be the name itself (a compound record)."""
+
+    QUERY = pk.ProblemQuery(text="membrane foam bubbles", problem=("foam",), subjects=("membrane",))
+
+    def test_the_name_and_the_problem_meet_in_one_sentence(self) -> None:
+        apart = "Anion exchange membrane electrolyzer\nBare Ni foam was employed. Cycling promotes stability."
+        together = "Blocking buffer\nDetergent foam on the membrane causes uneven blocking."
+        self.assertFalse(pk.problem_relevance(apart, 0.9, self.QUERY)[2])
+        self.assertTrue(pk.problem_relevance(together, 0.9, self.QUERY)[2])
+
+    def test_a_record_titled_by_the_name_is_about_it(self) -> None:
+        query = pk.ProblemQuery(text="acetonitrile foam", problem=("foam",), subjects=("acetonitrile",))
+        record = "Acetonitrile\nHazards\nShaking the solution causes foam; it is flammable."
+        self.assertTrue(pk.problem_relevance(record, 0.9, query, title="Acetonitrile")[2])
+        self.assertFalse(pk.problem_relevance(record, 0.9, query, title="Solvents in HPLC")[2])
 
 
 class _TurnHarness:
@@ -261,7 +373,7 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
 
     def test_with_the_role_on_the_piece_is_not_read_or_paraphrased(self) -> None:
         source, _client = _source([_doc("kowiki-1", "C", title="아세토나이트릴",
-                                        text="아세토나이트릴 용액은 흔들면 거품이 생긴다.",
+                                        text="아세토나이트릴 용액은 세게 흔들면 거품이 생기는 원인이 된다.",
                                         source_name="위키백과 (한국어)", score=0.7, language="ko")])
         reply, spoken, asked = self._turn(self._session(source, supplemental=True), ASKED)
         self.assertIn("공개 자료 · 일반 참고 — 위키백과 (한국어)", reply)
@@ -273,7 +385,7 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
         self.assertTrue(said.endswith(CLOSING["ko"]))
 
     def test_a_relevant_piece_with_a_one_letter_line_keeps_the_whole_help(self) -> None:
-        text = "Buffer foam\np\nAcetonitrile solutions foam when shaken."
+        text = "Buffer foam\np\nShaking acetonitrile solutions causes foam."
         source, _client = _source([_doc("wiki-1", "C", title="Acetonitrile", text=text,
                                         source_name="Wikipedia (English)", score=0.7)])
         reply, _spoken, _asked = self._turn(self._session(source), ASKED)

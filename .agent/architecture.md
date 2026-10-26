@@ -448,10 +448,12 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   through `_with_public_reference` / `external_references.public_reference_part`
   -- since lane KNOW2 (person's decision 2026-10-26) the tier is asked with
   the problem's query (`public_knowledge.problem_query`: what went wrong and
-  the names it is about, the person's and the current step's key words, not
-  the sentence; nothing to look for, not asked) and a piece is attached only
-  over the relevance floor (`problem_relevance`: a name and a word of what
-  went wrong, and the index's score at least `SCORE_FLOOR`) -- (the mark,
+  the names it is about -- what the person named, else the reagents and
+  devices the current step names -- not the sentence; nothing to look for,
+  not asked) and a piece is attached only over the relevance floor
+  (`problem_relevance`: a name and a word of what went wrong in one
+  sentence, a word of a cause, an effect or a hazard, and the index's score
+  at least `SCORE_FLOOR`) -- (the mark,
   title and place, the piece's words, address and licence on the screen;
   said, only "공개 자료에 관련 내용이 있어요"; no piece is read or
   paraphrased; every line naming the source is quoted, so

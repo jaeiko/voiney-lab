@@ -440,7 +440,7 @@ class HelpTurnTests(unittest.TestCase):
 
     def test_the_attached_public_piece_and_the_spoken_form_are_recorded(self) -> None:
         doc = FoundDocument(
-            id="niosh-0017", text="Acetonitrile · Safety\nAcetonitrile forms bubbles when warmed.", score=0.9,
+            id="niosh-0017", text="Acetonitrile · Safety\nWarming acetonitrile causes bubbles.", score=0.9,
             metadata={"title": "Acetonitrile", "locator": "Safety", "url": "https://example.org/niosh-0017",
                       "license": "Public domain", "language": "en", "source_id": "niosh-npg",
                       "source_name": "NIOSH Pocket Guide to Chemical Hazards", "grade": "A"})

@@ -52,9 +52,9 @@ from voiney_lab.vad import TurnState
 
 CLOSING_KO = CLOSING["ko"]
 NIOSH = "NIOSH Pocket Guide to Chemical Hazards"
-# Lane KNOW2: a piece is attached only when it says something of what went
-# wrong (here bubbles) as well as naming the reagent.
-NIOSH_TEXT = "Acetonitrile forms bubbles when warmed; flash point 42 °F, exposure limit 20 ppm TWA."
+# Lane KNOW2: a piece is attached only when it names the reagent, says what
+# went wrong (here bubbles) and speaks of a cause, an effect or a hazard.
+NIOSH_TEXT = "Acetonitrile is flammable and forms bubbles when warmed; flash point 42 °F, exposure limit 20 ppm TWA."
 NIOSH_LABEL = f"공개 자료 · 일반 참고 — {NIOSH}"
 SAID = PUBLIC_SPOKEN["ko"]
 #: A problem asked at step 2 that names the step's buffer and what the NIOSH piece is about.
@@ -68,12 +68,12 @@ def _niosh(doc_id: str = "niosh-0017") -> pk.FoundDocument:
 
 def _wiki_gel() -> pk.FoundDocument:
     return _doc("enwiki-coomassie", "C", title="Coomassie brilliant blue",
-                text="Destaining removes Coomassie from the gel; a gel that stays blue is destained longer.",
+                text="Too little destaining leaves the gel blue; destaining removes Coomassie.",
                 source_name="Wikipedia (English)")
 
 
 def _wiki_ko(doc_id: str = "kowiki-1",
-             text: str = "아세토나이트릴은 무색의 액체이다. 찬 곳에서는 침전이 생길 수 있다.") -> pk.FoundDocument:
+             text: str = "아세토나이트릴은 무색의 액체이다. 찬 곳에 두는 것이 침전의 원인이 된다.") -> pk.FoundDocument:
     return _doc(doc_id, "C", title="아세토나이트릴", text=text, source_name="위키백과 (한국어)", language="ko")
 
 
@@ -348,7 +348,8 @@ class VoiceSocketWiringTests(VoiceSessionHarness, unittest.TestCase):
 
         async def scenario(socket, listener, say):
             held.append(listener)
-            for turn, words in enumerate(("시작", "넘어가", "다음", "다음", "젤 조각이 아직 파래"), 1):
+            # Lane KNOW2: the problem names a thing (쿠마시), or no public piece is looked for.
+            for turn, words in enumerate(("시작", "넘어가", "다음", "다음", "젤 조각이 쿠마시로 아직 파래"), 1):
                 await say(turn, words)
 
         with patch.object(server_module.app.state, "public_knowledge", public, create=True):
