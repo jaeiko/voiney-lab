@@ -53,7 +53,7 @@ GENERATED = "## "
 UNREAD_TITLE = "코드가 읽지 않는 설정"
 LOOSE_COMMENTS_TITLE = "옛 파일에서 옮긴 주석 (바로 아래에 설정이 없던 것)"
 HEADER = (
-    "## VoineyLab 설정. scripts/migrate_env.py 가 영역별로 정리했다.\n"
+    "## Voiney Lab 설정. scripts/migrate_env.py 가 영역별로 정리했다.\n"
     "## '## ' 로 시작하는 줄은 도구가 쓰는 주석이라, 다시 정리할 때 새로 쓴다.\n"
     "## 이름 표: src/voiney_lab/setting_names.py\n"
 )
