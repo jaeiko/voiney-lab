@@ -54,7 +54,7 @@ import re
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Iterable, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 from voiney_lab.curated_protocol import (
     _SOURCE_UN_WORD,
@@ -74,8 +74,17 @@ from voiney_lab.workspace_store import FactTranslationRecord, TranslationGlossar
 log = logging.getLogger(__name__)
 
 TARGET_LANGUAGE = "ko"
-#: v3: lane SAY's style guide (해요체, short, names as labs say them).
-PROMPT_VERSION = "revision_translation_v3"
+#: The version of the translation instructions (``STYLE_GUIDE`` and the
+#: prompts built on it). Every stored row and glossary carries the version it
+#: was made with, as part of its identity (lane KO2, decision 1): generation
+#: makes what the current version lacks, and reading takes the newest
+#: version's row that passes. v2 was lane GE's formal style, v3 lane SAY's
+#: 해요체 (neither was stored with its rows: those rows are version 0), v4
+#: lane KO2's (a)-(e). Raise it whenever the instructions change what a
+#: translation says or how; ``scripts/retranslate_protocols.py`` then makes
+#: the stored protocols' Korean again.
+STYLE_VERSION = 4
+PROMPT_VERSION = f"revision_translation_v{STYLE_VERSION}"
 #: The fact kinds the screen and the answers draw.
 TRANSLATED_KINDS = (
     "step", "sub_action", "warning", "note", "expected_result", "prerequisite",
@@ -124,7 +133,23 @@ STYLE_GUIDE = (
     "convert, round, add or drop one; a count of parts or volumes keeps its "
     "unit word as written ('2 parts' stays '2 parts'). Keep every negation and "
     "add none: an instruction to keep or retain something is said as keeping "
-    "it ('보관해요'), not as not throwing it away."
+    "it ('보관해요'), not as not throwing it away. "
+    # Lane KO2, decision 2 (2026-10-26): the person's five refinements, (a)-(e).
+    "Never put a Korean verb ending on an English word ('resuspension해요', "
+    "'pooling해요', 'vortexing하면서'): use the Korean verb labs use "
+    "('재부유해요', '모아요', '볼텍싱하면서'), or write the word in Hangul so it "
+    "reads aloud naturally. Use one Korean word for one action in the whole "
+    "protocol, the same in every sentence: wash is always '세척해요' (never "
+    "'워싱해요'), discard '버려요', resuspend '재부유해요', pool '모아요', aspirate "
+    "'피펫으로 빨아들여요' (never '흡입 제거'). When the source speaks as its "
+    "authors ('we', 'our', 'us'), say it in the third person ('이 논문의 저자들은' "
+    "for a paper, '이 프로토콜을 쓴 사람들은' otherwise), and never '우리' or "
+    "'저희', which would sound as if the assistant were speaking. When a step "
+    "ends with a line of settings that repeats its values (for example '300 "
+    "rpm, 25°C, 00:10:00'), keep that line once, as written, at the end, and do "
+    "not move its values into the sentence: never say a value more often than "
+    "the source does. Use plain, precise words: describe a colour or a look as "
+    "it is ('하얗게', never '희끄무레한')."
 )
 
 GLOSSARY_PROMPT = (
@@ -709,7 +734,24 @@ def statement_issue(
     if issue == "negation_changed" and negation_or_avoidance(
             "en", source_text) and negation_or_avoidance("ko", korean):
         issue = _name_issue(korean, required_terms)
-    return issue or meaning_issue(source_text, korean)
+    return issue or meaning_issue(source_text, korean) or first_person_issue(korean)
+
+
+#: "우리" / "저희" as a pronoun: the word alone, or with a particle.
+_FIRST_PERSON_KO = re.compile(
+    r"(?<![가-힣])(?:우리|저희)(?=(?:는|가|의|를|도|와|랑|만|에게|에서|끼리|들)?(?:[\s,.!?·]|$))")
+
+
+def first_person_issue(korean: str) -> str | None:
+    """``first_person`` when a reading speaks as "we" (lane KO2, decision 2c).
+
+    A source's authors ("we", "our") are said in the third person ("이 논문의
+    저자들은"): "우리"/"저희" in a reading the assistant says would be heard
+    as Voiney Lab speaking. Every reading -- stored, spot or reader -- is held
+    to it, like the other checks; the numbers and units are not involved.
+    """
+
+    return "first_person" if _FIRST_PERSON_KO.search(korean or "") else None
 
 
 def check_translation(
@@ -771,6 +813,14 @@ def batch_context(
     }
 
 
+def glossaries_by_version(
+    records: Iterable[TranslationGlossaryRecord],
+) -> dict[int, tuple[GlossaryEntry, ...]]:
+    """Each stored glossary's entries by its style version (lane KO2)."""
+
+    return {record.style_version: glossary_entries(record) for record in records}
+
+
 def glossary_entries(record: TranslationGlossaryRecord | None) -> tuple[GlossaryEntry, ...]:
     if record is None:
         return ()
@@ -785,6 +835,68 @@ def glossary_entries(record: TranslationGlossaryRecord | None) -> tuple[Glossary
     )
 
 
+def pending_units(
+    fixture: CuratedProtocolFixture,
+    stored: Iterable[FactTranslationRecord] = (),
+    *,
+    style_version: int = STYLE_VERSION,
+) -> tuple[list[TranslationUnit], int, int, int]:
+    """The sentences ``style_version`` still lacks, and the counts skipped.
+
+    (pending, reviewed, already Korean, already stored): a sentence with a
+    reviewed translation -- the fixture's sidecar or a stored ``reviewed`` row
+    of any version -- is never made again (a person confirmed it); one stored
+    for this source text under ``style_version``, passed or refused, is not
+    asked again. Shared by generation and ``scripts/retranslate_protocols.py``.
+    """
+
+    key = translation_revision_key(fixture)
+    mine = [
+        item for item in stored
+        if item.revision_id == key and item.language == TARGET_LANGUAGE
+    ]
+    held = {
+        (item.fact_key, item.source_sha256) for item in mine
+        if item.style_version == style_version
+    }
+    reviewed = set(getattr(fixture, "localizations", None) or ())
+    reviewed.update(
+        item.fact_key for item in mine if item.status == "reviewed")
+    pending: list[TranslationUnit] = []
+    skipped_reviewed = skipped_korean = skipped_stored = 0
+    for unit in translation_units(fixture):
+        if unit.fact_key in reviewed:
+            skipped_reviewed += 1
+        elif is_korean(unit.source_text):
+            skipped_korean += 1
+        elif (unit.fact_key, unit.source_sha256) in held:
+            skipped_stored += 1
+        else:
+            pending.append(unit)
+    return pending, skipped_reviewed, skipped_korean, skipped_stored
+
+
+def planned_calls(
+    pending: Sequence[TranslationUnit], *, glossary_held: bool,
+) -> tuple[int, int]:
+    """(glossary calls, sentence calls) generation would make for ``pending``.
+
+    The same batching as ``generate_revision_translations`` (no open session,
+    so step order); a failed call is not counted again.
+    """
+
+    if not pending:
+        return 0, 0
+    calls = 0
+    left = generation_order(pending)
+    while left:
+        batch = _next_batch(left)
+        sent = {unit.fact_key for unit in batch}
+        left = [unit for unit in left if unit.fact_key not in sent]
+        calls += 1
+    return (0 if glossary_held else 1), calls
+
+
 async def generate_revision_translations(
     fixture: CuratedProtocolFixture,
     translate: BatchTranslator,
@@ -797,41 +909,33 @@ async def generate_revision_translations(
     on_glossary: Callable[[TranslationGlossaryRecord], Any] | None = None,
     on_batch: Callable[[list[FactTranslationRecord]], Any] | None = None,
     clock: Callable[[], datetime] | None = None,
+    style_version: int = STYLE_VERSION,
 ) -> GenerationReport:
     """Translate the sentences of one revision not yet translated or reviewed.
 
-    Sentences with a reviewed translation, sentences already in Korean and
-    sentences already stored for this revision and source text are skipped,
-    so a second call for the same revision makes no model call. The glossary
-    is made once (``make_glossary``) unless ``glossary`` holds it. Before
-    each batch ``priority_steps`` says which steps open sessions are on;
-    after it ``on_batch`` receives its rows. A batch whose call fails stores
-    nothing, so a later run can try again.
+    Sentences with a reviewed translation (the fixture's sidecar or a stored
+    ``reviewed`` row), sentences already in Korean and sentences already
+    stored for this revision, source text and ``style_version`` -- passed or
+    refused -- are skipped, so a second call for the same revision makes no
+    model call. A sentence stored only under an older style version is
+    translated again (lane KO2, decision 1). The glossary is made once for
+    the version (``make_glossary``) unless ``glossary`` is that version's.
+    Before each batch ``priority_steps`` says which steps open sessions are
+    on; after it ``on_batch`` receives its rows. A batch whose call fails
+    stores nothing, so a later run can try again.
     """
 
     now = clock or (lambda: datetime.now(timezone.utc))
     key = translation_revision_key(fixture)
     report = GenerationReport(revision_id=key)
-    held = {
-        (item.fact_key, item.source_sha256) for item in stored
-        if item.revision_id == key
-        and item.language == TARGET_LANGUAGE
-    }
-    reviewed = set(getattr(fixture, "localizations", None) or ())
-    pending: list[TranslationUnit] = []
-    for unit in translation_units(fixture):
-        report.units += 1
-        if unit.fact_key in reviewed:
-            report.skipped_reviewed += 1
-        elif is_korean(unit.source_text):
-            report.skipped_korean += 1
-        elif (unit.fact_key, unit.source_sha256) in held:
-            report.skipped_stored += 1
-        else:
-            pending.append(unit)
+    pending, report.skipped_reviewed, report.skipped_korean, report.skipped_stored = (
+        pending_units(fixture, stored, style_version=style_version))
+    report.units = len(translation_units(fixture))
     if not pending:
         return report
     context = protocol_context(fixture)
+    if glossary is not None and glossary.style_version != style_version:
+        glossary = None  # an older version's glossary: the new instructions make their own
     entries = glossary_entries(glossary)
     if glossary is None and make_glossary is not None:
         report.glossary_calls += 1
@@ -853,6 +957,7 @@ async def generate_revision_translations(
                 model=model,
                 model_version=made.model_version or model,
                 created_at=now().isoformat(),
+                style_version=style_version,
             )
             report.glossary_record = glossary
             if on_glossary is not None:
@@ -892,6 +997,7 @@ async def generate_revision_translations(
                 model=model,
                 model_version=result.model_version or model,
                 created_at=created,
+                style_version=style_version,
             ))
         report.records.extend(rows)
         if on_batch is not None:
@@ -933,13 +1039,15 @@ def stored_checks(
     glossary: Sequence[GlossaryEntry] = (),
     *,
     units: Sequence[TranslationUnit] | None = None,
+    glossaries: Mapping[int, Sequence[GlossaryEntry]] | None = None,
 ) -> list[tuple[FactTranslationRecord, str]]:
     """Each row that belongs here, with today's check of it.
 
     A row belongs when it is of this revision (stored under
     ``translation_revision_key``) and was made from the sentence the revision
-    holds now. It is checked with the revision's glossary, the way it was
-    checked when it was made, by today's ``check_translation``: the verdict
+    holds now. It is checked with the glossary it was made with -- its style
+    version's in ``glossaries`` (lane KO2), else ``glossary`` -- the way it
+    was checked when it was made, by today's ``check_translation``: the verdict
     stored with the row is not read (lane FX, human decision 2 of
     2026-10-07), so a check fixed later reaches a revision already translated
     and a row an older check passed is not shown once today's check refuses
@@ -950,6 +1058,8 @@ def stored_checks(
         translation_units(fixture) if units is None else units)}
     key = translation_revision_key(fixture)
     entries = tuple(glossary)
+    by_version = {
+        version: tuple(items) for version, items in (glossaries or {}).items()}
     checked: list[tuple[FactTranslationRecord, str]] = []
     for record in records:
         unit = by_key.get(record.fact_key)
@@ -960,7 +1070,9 @@ def stored_checks(
             or record.source_sha256 != unit.source_sha256
         ):
             continue
-        checked.append((record, _checked_today(unit, record.translated_text, entries)))
+        checked.append((record, _checked_today(
+            unit, record.translated_text,
+            by_version.get(record.style_version, entries) if by_version else entries)))
     return checked
 
 
@@ -968,37 +1080,77 @@ def stored_localizations(
     fixture: CuratedProtocolFixture,
     records: Iterable[FactTranslationRecord],
     glossary: Sequence[GlossaryEntry] = (),
+    *,
+    glossaries: Mapping[int, Sequence[GlossaryEntry]] | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """(reviewed, machine) Korean by fact key, from the rows today's check passes.
 
     See ``stored_checks``: a row today's check refuses leaves its sentence
-    in the source.
+    in the source. Of several rows that pass for one sentence, the newest
+    style version's is taken (lane KO2, decision 1), whatever the order the
+    rows come in; within a version, the later row.
     """
 
-    reviewed: dict[str, str] = {}
-    machine: dict[str, str] = {}
-    for record, result in stored_checks(fixture, records, glossary):
+    best = _newest_passing(fixture, records, glossary, glossaries)
+    reviewed = {key: rank[2] for (kind, key), rank in best.items() if kind == "reviewed"}
+    machine = {key: rank[2] for (kind, key), rank in best.items() if kind == "machine"}
+    return reviewed, machine
+
+
+def _newest_passing(
+    fixture: CuratedProtocolFixture,
+    records: Iterable[FactTranslationRecord],
+    glossary: Sequence[GlossaryEntry],
+    glossaries: Mapping[int, Sequence[GlossaryEntry]] | None,
+) -> dict[tuple[str, str], tuple[int, int, str]]:
+    """(status kind, fact key) -> (style version, order, text) of the row shown."""
+
+    best: dict[tuple[str, str], tuple[int, int, str]] = {}
+    for order, (record, result) in enumerate(
+            stored_checks(fixture, records, glossary, glossaries=glossaries)):
         if result != "passed":
             continue
-        target = reviewed if record.status == "reviewed" else machine
-        target[record.fact_key] = record.translated_text
-    return reviewed, machine
+        kind = "reviewed" if record.status == "reviewed" else "machine"
+        rank = (record.style_version, order, record.translated_text)
+        held = best.get((kind, record.fact_key))
+        if held is None or rank[:2] > held[:2]:
+            best[(kind, record.fact_key)] = rank
+    return best
+
+
+def newest_glossary(
+    glossaries: Mapping[int, Sequence[GlossaryEntry]] | None,
+) -> tuple[GlossaryEntry, ...]:
+    """The glossary of the newest style version held, or none."""
+
+    if not glossaries:
+        return ()
+    return tuple(glossaries[max(glossaries)])
 
 
 def with_stored_translations(
     fixture: CuratedProtocolFixture,
     records: Iterable[FactTranslationRecord],
     glossary: Sequence[GlossaryEntry] = (),
+    *,
+    glossaries: Mapping[int, Sequence[GlossaryEntry]] | None = None,
 ) -> CuratedProtocolFixture:
     """The fixture carrying the stored translations that may be shown.
 
     Adds to what the fixture already carries, so it also takes one batch
     at a time while a revision is being translated. The glossary's source ↔
     Korean pairs go with them (lane FX2, decision 3): the session's
-    vocabulary hears those Korean names as the protocol's terms.
+    vocabulary hears those Korean names as the protocol's terms -- with
+    ``glossaries`` (by style version, lane KO2), the newest version's.
     """
 
-    reviewed, machine = stored_localizations(fixture, records, glossary)
+    records = tuple(records)
+    best = _newest_passing(fixture, records, glossary, glossaries)
+    reviewed = {key: rank[2] for (kind, key), rank in best.items() if kind == "reviewed"}
+    machine = {key: rank[2] for (kind, key), rank in best.items() if kind == "machine"}
+    versions = {key: rank[0] for (kind, key), rank in best.items() if kind == "machine"}
+    if glossaries:
+        glossary = newest_glossary(glossaries)
     names = tuple(
         (entry.source, entry.korean) for entry in glossary
         if entry.source.strip() and _HANGUL.search(entry.korean)
@@ -1012,6 +1164,9 @@ def with_stored_translations(
         sidecar.setdefault(key, text)
     merged = dict(getattr(fixture, "machine_localizations", None) or {})
     merged.update(machine)
+    # Lane KO2, decision 6: the style version of each machine reading shown.
+    merged_versions = dict(getattr(fixture, "translation_versions", None) or {})
+    merged_versions.update(versions)
     return replace(
         fixture,
         localizations=sidecar or fixture.localizations,
@@ -1019,6 +1174,10 @@ def with_stored_translations(
             key: text for key, text in merged.items() if key not in sidecar
         } or None,
         translation_glossary=names,
+        translation_versions={
+            key: version for key, version in merged_versions.items()
+            if key in merged and key not in sidecar
+        } or None,
     )
 
 

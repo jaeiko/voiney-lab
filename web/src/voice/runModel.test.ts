@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyServerEvent, EMPTY_RUN, isPaused, listeningWord, MISHEARD_SHOWN_MS, replyText, sourceFigures, timerView, type ProtocolState } from "./runModel";
+import { applyServerEvent, EMPTY_RUN, isPaused, listeningWord, MISHEARD_SHOWN_MS, replyText, sourceFigures, spokenText, timerView, type ProtocolState } from "./runModel";
 
 const accepted = { configuration_id: 7, protocol_id: "p1", revision_id: "r1" };
 const live = () => true;
@@ -38,6 +38,27 @@ describe("applyServerEvent", () => {
     expect(model.log.map((line) => line.who)).toEqual(["said", "heard", "said"]);
     // A turn the audio no longer plays (cut off, stale) is not drawn.
     expect(applyServerEvent(model, { type: "transcript", turn_id: 3, generation: 1, text: "x" }, { ...context, live: () => false })).toBe(model);
+  });
+
+  it("captions what was said, not the display's source quote (lane KO2, decision 4)", () => {
+    const display = "실험 목적\n이 논문의 저자들은 젤 조각을 세척해요.\n\n원문 · English · PDF p.2\nYou can do this manually or with the help of a pipetting robot.";
+    const said = "원문에 적힌 실험 목적이에요. 이 논문의 저자들은 젤 조각을 세척해요.";
+    let model = applyServerEvent(EMPTY_RUN, { type: "server.operation", turn_id: 4, generation: 2, route: "curated_protocol", operation: "verified_fact_read" }, context);
+    model = applyServerEvent(model, { type: "reply.delta", turn_id: 4, generation: 2, text: display, primary_text: said, speech_text: said }, context);
+    expect(model.caption?.text).toBe(said);
+    model = applyServerEvent(model, { type: "reply.complete", turn_id: 4, generation: 2, text: display, primary_text: said, speech_text: said }, context);
+    expect(model.caption?.text).toBe(said);
+    expect(model.log.at(-1)?.text).not.toContain("pipetting robot");
+    // The answer card keeps what is shown.
+    expect(model.card?.text).toBe(said);
+    // A reply not said (no speech_text) is captioned with its shown words, as before.
+    model = applyServerEvent(model, { type: "reply.complete", turn_id: 4, generation: 2, text: "화면에만 적었어요.", speech_text: null }, context);
+    expect(model.caption?.text).toBe("화면에만 적었어요.");
+    expect(spokenText({ speech_text: "  말한 글  " })).toBe("말한 글");
+    // The greeting and the server's notices are captioned as said too.
+    model = applyServerEvent(EMPTY_RUN, { type: "session.greeting", configuration_id: 7, turn_id: 9, generation: 1, text: "Voiney Lab입니다. “until the band is clear”인가요?", speech_text: "Voiney Lab입니다. 이 문장은 아직 번역되지 않았어요." }, context);
+    expect(model.caption?.text).toBe("Voiney Lab입니다. 이 문장은 아직 번역되지 않았어요.");
+    expect(spokenText({ speech_text: 3 })).toBe("");
   });
 
   it("marks a word the server dropped (speech.dropped, speech.ignored), not while paused, and nothing for another configuration's", () => {

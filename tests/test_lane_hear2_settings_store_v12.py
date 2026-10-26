@@ -89,7 +89,9 @@ class SchemaTwelveTests(unittest.TestCase):
         self.path = self.folder / ws.WORKSPACE_DATABASE_FILENAME
 
     def test_the_version_is_twelve_and_the_values_table_knows_the_two_names(self) -> None:
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 12)
+        # Lane KO2 (2026-10-26) raised the schema to 13 (translation style
+        # versions); the settings table is schema 12's.
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 13)
         self.assertEqual(EXPERIMENTER_SETTING_VALUES["speaker_filter"], ("off", "on"))
         self.assertIsNone(EXPERIMENTER_SETTING_VALUES["voice_reference"], "the server checks the reference's form")
 
@@ -111,7 +113,7 @@ class SchemaTwelveTests(unittest.TestCase):
         store = initialize_workspace_store(WorkspaceSettings(enabled=True, data_dir=self.folder))
         try:
             connection = store._connection  # noqa: SLF001
-            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
+            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 13)  # lane KO2: 13
             rows = connection.execute(
                 "SELECT sequence_id,organization_id,principal_id,name,value,source,created_at"
                 " FROM experimenter_settings ORDER BY sequence_id").fetchall()
@@ -154,7 +156,7 @@ class SchemaTwelveTests(unittest.TestCase):
         store = initialize_workspace_store(WorkspaceSettings(enabled=True, data_dir=self.folder))
         try:
             connection = store._connection  # noqa: SLF001
-            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
+            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 13)  # lane KO2: 13
             for kind, expected in objects.items():
                 self.assertEqual(_objects(connection, kind), expected)
             self.assertEqual(connection.execute(

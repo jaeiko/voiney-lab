@@ -205,7 +205,8 @@ class ServerTurnTests(unittest.TestCase):
         self.assertEqual(len(spoken), 1)
         self.assertNotIn("Wash the pieces", spoken[0])
         self.assertIn(UNTRANSLATED_SPOKEN, spoken[0])
-        self.assertIn(STEP_TWO, reply["text"])
+        # Lane KO2, decision 5: the source line after "2단계: " without its own "2".
+        self.assertIn(f"2단계: {STEP_TWO[2:]}", reply["text"])
         self.assertIn(UNTRANSLATED_SHOWN, reply["text"])
         self.assertEqual(state["revision"], before["revision"])
         self.assertEqual(state["spoken_summary"], spoken[0])
