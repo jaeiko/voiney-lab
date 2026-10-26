@@ -22,9 +22,19 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 11
+WORKSPACE_SCHEMA_VERSION = 12
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _style_version(value: object) -> int:
+    """A translation's style version as stored: a whole number from 0."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 10_000:
+        raise WorkspaceError("Translation style version is invalid.")
+    return value
+
+
 _SCIENTIFIC_TOKEN = re.compile(
     r"(?<![A-Za-z0-9])\d+(?:\.\d+)?\s*(?:%|°\s*C|°C|mM|µL|uL|mL|L|mg|g|kg|s|min|h|rpm|×|x)",
     re.IGNORECASE,
@@ -148,7 +158,12 @@ class FactTranslationRecord:
     ``source_sha256`` is the hash of the source sentence the translation was
     made from. ``check_result`` is ``passed`` or the reason the mechanical
     check refused it; a refused sentence is kept so it is not requested
-    again, and is never shown.
+    again under the same ``style_version``, and is never shown.
+    ``style_version`` is the version of the translation instructions it was
+    made with (``protocol_translation.STYLE_VERSION``; 0 for a row stored
+    before versions were kept, schema 11 and earlier). It is part of the
+    row's identity, so a newer version adds rows beside the old ones (lane
+    KO2, decision 1).
     """
 
     revision_id: str
@@ -161,6 +176,7 @@ class FactTranslationRecord:
     model: str
     model_version: str
     created_at: str
+    style_version: int = 0
 
 
 @dataclass(frozen=True)
@@ -168,8 +184,9 @@ class TranslationGlossaryRecord:
     """The Korean form one revision's translation fixes for its words.
 
     ``entries_json`` is a list of {"source", "korean", "keep_english"}.
-    One per revision and language: every sentence of the revision is
-    translated with it.
+    One per revision, language and ``style_version`` (as for
+    ``FactTranslationRecord``): every sentence of that version is translated
+    with it.
     """
 
     revision_id: str
@@ -178,6 +195,7 @@ class TranslationGlossaryRecord:
     model: str
     model_version: str
     created_at: str
+    style_version: int = 0
 
 
 @dataclass(frozen=True)
@@ -903,6 +921,79 @@ CREATE TABLE schema_metadata_next(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=11)
 );
 INSERT INTO schema_metadata_next(schema_version) VALUES(11);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+#: Lane KO2 (2026-10-26), decision 1: a stored translation and a glossary
+#: name the version of the translation instructions they were made with
+#: (``style_version``), and the version is part of their identity, so a
+#: newer version's rows are added beside the old ones. SQLite cannot change
+#: a UNIQUE constraint in place, so both tables are built again: every row is
+#: copied in its order with its id and ``style_version`` 0 ("before versions
+#: were kept"), and the index and the append-only triggers are made as
+#: schema 7 made them. DROP TABLE fires no trigger.
+MIGRATION_11_TO_12 = """
+CREATE TABLE protocol_fact_translations_v11 AS
+ SELECT rowid AS old_rowid,* FROM protocol_fact_translations;
+DROP TABLE protocol_fact_translations;
+CREATE TABLE protocol_fact_translations(
+ translation_id TEXT PRIMARY KEY,
+ revision_id TEXT NOT NULL,
+ fact_key TEXT NOT NULL,
+ language TEXT NOT NULL,
+ source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+ translated_text TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('machine','reviewed')),
+ check_result TEXT NOT NULL,
+ model TEXT NOT NULL,
+ model_version TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ style_version INTEGER NOT NULL DEFAULT 0 CHECK(style_version>=0),
+ UNIQUE(revision_id,fact_key,language,source_sha256,status,style_version)
+);
+INSERT INTO protocol_fact_translations(
+ translation_id,revision_id,fact_key,language,source_sha256,translated_text,
+ status,check_result,model,model_version,created_at,style_version
+) SELECT translation_id,revision_id,fact_key,language,source_sha256,translated_text,
+ status,check_result,model,model_version,created_at,0
+ FROM protocol_fact_translations_v11 ORDER BY old_rowid;
+DROP TABLE protocol_fact_translations_v11;
+CREATE INDEX protocol_fact_translations_revision
+ ON protocol_fact_translations(revision_id,language);
+CREATE TRIGGER fact_translations_no_update BEFORE UPDATE ON protocol_fact_translations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER fact_translations_no_delete BEFORE DELETE ON protocol_fact_translations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE protocol_translation_glossaries_v11 AS
+ SELECT rowid AS old_rowid,* FROM protocol_translation_glossaries;
+DROP TABLE protocol_translation_glossaries;
+CREATE TABLE protocol_translation_glossaries(
+ glossary_id TEXT PRIMARY KEY,
+ revision_id TEXT NOT NULL,
+ language TEXT NOT NULL,
+ entries_json TEXT NOT NULL,
+ model TEXT NOT NULL,
+ model_version TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ style_version INTEGER NOT NULL DEFAULT 0 CHECK(style_version>=0),
+ UNIQUE(revision_id,language,style_version)
+);
+INSERT INTO protocol_translation_glossaries(
+ glossary_id,revision_id,language,entries_json,model,model_version,created_at,style_version
+) SELECT glossary_id,revision_id,language,entries_json,model,model_version,created_at,0
+ FROM protocol_translation_glossaries_v11 ORDER BY old_rowid;
+DROP TABLE protocol_translation_glossaries_v11;
+CREATE TRIGGER translation_glossaries_no_update BEFORE UPDATE ON protocol_translation_glossaries
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER translation_glossaries_no_delete BEFORE DELETE ON protocol_translation_glossaries
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=12)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(12);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -2647,9 +2738,12 @@ class WorkspaceStore:
                 record.translated_text
             ) > 20000:
                 raise WorkspaceError("Translation text is invalid.")
+            version = _style_version(record.style_version)
             identity = (
                 f"{record.revision_id}:{record.fact_key}:{record.language}:"
                 f"{record.source_sha256}:{record.status}"
+                # A row of before versions keeps the identity it had.
+                + (f":v{version}" if version else "")
             )
             rows.append((
                 "fact-translation-"
@@ -2657,7 +2751,7 @@ class WorkspaceStore:
                 record.revision_id, record.fact_key, record.language,
                 record.source_sha256, record.translated_text, record.status,
                 record.check_result, record.model, record.model_version,
-                record.created_at,
+                record.created_at, version,
             ))
         before = self._connection.total_changes
         try:
@@ -2665,7 +2759,7 @@ class WorkspaceStore:
                 "INSERT OR IGNORE INTO protocol_fact_translations"
                 "(translation_id,revision_id,fact_key,language,source_sha256,"
                 "translated_text,status,check_result,model,model_version,"
-                "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "created_at,style_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 rows,
             )
             self._connection.commit()
@@ -2677,7 +2771,8 @@ class WorkspaceStore:
     def fact_translations(
         self, revision_id: str, language: str
     ) -> tuple[FactTranslationRecord, ...]:
-        """Every stored sentence translation of one revision, oldest first."""
+        """Every stored sentence translation of one revision, oldest first,
+        of every style version."""
 
         return tuple(
             FactTranslationRecord(
@@ -2691,6 +2786,7 @@ class WorkspaceStore:
                 model=row["model"],
                 model_version=row["model_version"],
                 created_at=row["created_at"],
+                style_version=int(row["style_version"]),
             )
             for row in self._connection.execute(
                 "SELECT * FROM protocol_fact_translations "
@@ -2700,7 +2796,7 @@ class WorkspaceStore:
         )
 
     def record_translation_glossary(self, record: TranslationGlossaryRecord) -> bool:
-        """Keep a revision's glossary; one already held is kept as is."""
+        """Keep a revision's glossary of one style version; one already held is kept as is."""
 
         for value, label in (
             (record.revision_id, "Glossary revision"),
@@ -2717,18 +2813,20 @@ class WorkspaceStore:
             raise WorkspaceError("Glossary entries are invalid.") from exc
         if not isinstance(entries, list) or len(record.entries_json) > 200000:
             raise WorkspaceError("Glossary entries are invalid.")
+        version = _style_version(record.style_version)
         glossary_id = "glossary-" + hashlib.sha256(
-            f"{record.revision_id}:{record.language}".encode("utf-8")
+            (f"{record.revision_id}:{record.language}"
+             + (f":v{version}" if version else "")).encode("utf-8")
         ).hexdigest()[:32]
         before = self._connection.total_changes
         try:
             self._connection.execute(
                 "INSERT OR IGNORE INTO protocol_translation_glossaries"
                 "(glossary_id,revision_id,language,entries_json,model,"
-                "model_version,created_at) VALUES(?,?,?,?,?,?,?)",
+                "model_version,created_at,style_version) VALUES(?,?,?,?,?,?,?,?)",
                 (glossary_id, record.revision_id, record.language,
                  record.entries_json, record.model, record.model_version,
-                 record.created_at),
+                 record.created_at, version),
             )
             self._connection.commit()
         except Exception:
@@ -2737,19 +2835,32 @@ class WorkspaceStore:
         return self._connection.total_changes > before
 
     def translation_glossary(
-        self, revision_id: str, language: str
+        self, revision_id: str, language: str, style_version: int | None = None,
     ) -> TranslationGlossaryRecord | None:
-        row = self._connection.execute(
-            "SELECT * FROM protocol_translation_glossaries "
-            "WHERE revision_id=? AND language=?",
-            (revision_id, language),
-        ).fetchone()
-        if row is None:
-            return None
-        return TranslationGlossaryRecord(
-            revision_id=row["revision_id"], language=row["language"],
-            entries_json=row["entries_json"], model=row["model"],
-            model_version=row["model_version"], created_at=row["created_at"],
+        """The glossary of one style version, or the newest one held (None)."""
+
+        held = self.translation_glossaries(revision_id, language)
+        if style_version is None:
+            return held[-1] if held else None
+        return next((item for item in held if item.style_version == style_version), None)
+
+    def translation_glossaries(
+        self, revision_id: str, language: str,
+    ) -> tuple[TranslationGlossaryRecord, ...]:
+        """Every glossary of one revision and language, oldest style version first."""
+
+        return tuple(
+            TranslationGlossaryRecord(
+                revision_id=row["revision_id"], language=row["language"],
+                entries_json=row["entries_json"], model=row["model"],
+                model_version=row["model_version"], created_at=row["created_at"],
+                style_version=int(row["style_version"]),
+            )
+            for row in self._connection.execute(
+                "SELECT * FROM protocol_translation_glossaries "
+                "WHERE revision_id=? AND language=? ORDER BY style_version",
+                (revision_id, language),
+            )
         )
 
     def add_knowledge(
@@ -3124,6 +3235,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 11
+    if version == 11:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_11_TO_12 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 12
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

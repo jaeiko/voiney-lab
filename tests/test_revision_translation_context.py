@@ -25,6 +25,7 @@ from voiney_lab.curated_protocol import PURPOSE_FACT_KEY, CuratedProtocolSession
 from voiney_lab.protocol_translation import (
     REVISION_TRANSLATION_PROMPT,
     STYLE_GUIDE,
+    STYLE_VERSION,
     GlossaryEntry,
     GlossaryResult,
     generate_revision_translations,
@@ -100,10 +101,13 @@ class GlossaryTests(unittest.TestCase):
     def test_a_stored_glossary_is_used_and_not_made_again(self) -> None:
         maker = FakeGlossary()
         translator = FakeTranslator()
+        # Lane KO2 (2026-10-26): a glossary is held for one style version; this
+        # one is the current version's (an older version's is made again).
         held = TranslationGlossaryRecord(
             "fictional-miniprep/fictional-miniprep-v1", "ko",
             json.dumps([{"source": "PBS", "korean": "PBS", "keep_english": True}]),
-            "grok-test", "grok-test", "2026-10-03T00:00:00+00:00")
+            "grok-test", "grok-test", "2026-10-03T00:00:00+00:00",
+            style_version=STYLE_VERSION)
         run(generate_revision_translations(
             rich_fixture(), translator, model="grok-test",
             make_glossary=maker, glossary=held))

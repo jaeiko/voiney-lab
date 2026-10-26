@@ -333,8 +333,9 @@ class WorkspaceSchemaTests(unittest.TestCase):
         from voiney_lab import workspace_store as ws
 
         # Lane VT (2026-10-09) raised the schema to 9, lane SP1 (2026-10-10)
-        # to 10, lane ON (2026-10-18) to 11; a 7 still opens.
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 11)
+        # to 10, lane ON (2026-10-18) to 11, lane KO2 (2026-10-26) to 12; a 7
+        # still opens.
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 12)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ws.WORKSPACE_DATABASE_FILENAME
             connection = sqlite3.connect(path)
@@ -347,7 +348,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             try:
                 version = store._connection.execute(
                     "SELECT schema_version FROM schema_metadata").fetchone()[0]
-                self.assertEqual(version, 11)
+                self.assertEqual(version, 12)
                 principal = development_principal()
                 store.bootstrap_principal(principal)
                 store.record_experimenter_setting(

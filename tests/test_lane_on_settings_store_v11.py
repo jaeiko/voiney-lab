@@ -77,7 +77,9 @@ class SchemaElevenTests(unittest.TestCase):
         self.path = self.folder / ws.WORKSPACE_DATABASE_FILENAME
 
     def test_the_version_is_eleven_and_the_values_table_knows_the_two_names(self) -> None:
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 11)
+        # Lane KO2 (2026-10-26) raised the schema to 12 (translation style
+        # versions); the settings table is schema 11's.
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 12)
         self.assertEqual(EXPERIMENTER_SETTING_VALUES["voice_calibration"], ("none", "measured", "skipped"))
         self.assertIsNone(EXPERIMENTER_SETTING_VALUES["agent_voice"], "the voice ids are the provider's; the server checks them")
 
@@ -90,7 +92,7 @@ class SchemaElevenTests(unittest.TestCase):
         store = initialize_workspace_store(WorkspaceSettings(enabled=True, data_dir=self.folder))
         try:
             connection = store._connection  # noqa: SLF001
-            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 11)
+            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
             rows = connection.execute(
                 "SELECT sequence_id,organization_id,principal_id,name,value,source,created_at"
                 " FROM experimenter_settings ORDER BY sequence_id").fetchall()
@@ -137,7 +139,7 @@ class SchemaElevenTests(unittest.TestCase):
         store = initialize_workspace_store(WorkspaceSettings(enabled=True, data_dir=self.folder))
         try:
             connection = store._connection  # noqa: SLF001
-            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 11)
+            self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
             self.assertIn("'agent_voice'", _objects(connection, "table")["experimenter_settings"])
         finally:
             store.close()

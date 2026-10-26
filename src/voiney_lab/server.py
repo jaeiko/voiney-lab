@@ -305,7 +305,9 @@ from voiney_lab.identity import (
 )
 from voiney_lab.protocol_translation import (
     STYLE_GUIDE as PROTOCOL_TRANSLATION_STYLE,
+    STYLE_VERSION as TRANSLATION_STYLE_VERSION,
     generate_revision_translations,
+    glossaries_by_version,
     glossary_entries,
     is_korean,
     openai_batch_translator,
@@ -2602,7 +2604,10 @@ async def store_revision_translations(
         return None
     key=translation_revision_key(fixture)
     try:
-        glossary_record=store.translation_glossary(key,"ko")
+        # Lane KO2, decision 1: the current style version's glossary; an
+        # older version's is not used for the new instructions' sentences.
+        glossary_record=store.translation_glossary(
+            key,"ko",style_version=TRANSLATION_STYLE_VERSION)
         current={"glossary":glossary_entries(glossary_record)}
 
         def stored_glossary(record:Any)->None:
@@ -2684,8 +2689,11 @@ def _with_revision_translations(
     key=translation_revision_key(fixture)
     try:
         rows=store.fact_translations(key,"ko")
+        # Lane KO2, decision 1: each row checked with its own version's
+        # glossary; the newest version's passing row is shown.
         attached=with_stored_translations(
-            fixture,rows,glossary_entries(store.translation_glossary(key,"ko")))
+            fixture,rows,glossaries=glossaries_by_version(
+                store.translation_glossaries(key,"ko")))
     except Exception as exc:  # noqa: BLE001 - the source is shown instead
         log.warning("revision_translation read_failed error=%s",type(exc).__name__)
         return fixture
@@ -6030,19 +6038,22 @@ def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,obj
         }
     try:
         rows=store.fact_translations(key,"ko")
-        glossary=glossary_entries(store.translation_glossary(key,"ko"))
+        glossaries=glossaries_by_version(store.translation_glossaries(key,"ko"))
     finally:
         store.close()
-    attached=with_stored_translations(fixture,rows,glossary)
+    attached=with_stored_translations(fixture,rows,glossaries=glossaries)
     machine=getattr(attached,"machine_localizations",None) or {}
     reviewed=getattr(attached,"localizations",None) or {}
     passed={key_ for key_ in (*machine,*reviewed)}
     steps_korean=sum(1 for k in step_keys if k in passed or k in korean_source)
     # Lane FX, decision 2: refused by today's check, not by the verdict
     # stored with the row (each judged once; the rows themselves unchanged).
-    refused=sum(
-        1 for _,result in stored_checks(fixture,rows,glossary,units=units)
-        if result!="passed")
+    # Lane KO2: a sentence is refused when none of its rows, of any style
+    # version, passes.
+    refused=len({
+        record.fact_key
+        for record,result in stored_checks(fixture,rows,glossaries=glossaries,units=units)
+        if result!="passed"}-passed)
     with _REVISION_TRANSLATIONS_LOCK:
         running=key in _REVISION_TRANSLATIONS_RUNNING
     runner=_revision_translation_runner()
