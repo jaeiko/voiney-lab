@@ -1172,9 +1172,13 @@ EMBEDDING_MODELS: Mapping[str, EmbeddingModel] = {
 #: build the index with the same one).
 EMBEDDING_MODEL = EMBEDDING_MODELS["multilingual-e5-small"]
 #: The relevance floor's score by the index's model: Moss's own (None) and the
-#: custom one, whose cosine scale is another (calibrated on the offline hybrid
-#: run of 2026-10-26: see the lane report).
-SCORE_FLOORS: Mapping[str | None, float] = {None: SCORE_FLOOR, EMBEDDING_MODEL.key: 0.80}
+#: custom one. The e5 cosine of a question and a piece lies between about 0.83
+#: and 0.90: on the offline hybrid run of 2026-10-26 (lane KNOW2, 359
+#: questions, top five) a tenth of the gold pieces scored under 0.84, as did a
+#: tenth of the others, so this floor only cuts the low tail and the words do
+#: the rest. Moss's scale for a custom index is not documented: a person's
+#: ``moss-run`` shows it.
+SCORE_FLOORS: Mapping[str | None, float] = {None: SCORE_FLOOR, EMBEDDING_MODEL.key: 0.84}
 #: Where a model's files are kept under a cache folder.
 MODELS_FOLDER = "models"
 

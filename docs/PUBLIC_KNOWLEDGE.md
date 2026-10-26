@@ -110,7 +110,8 @@ REST)는 robots.txt 가 막으므로 위키데이터의 PubChem CID(P662)나 목
   등급만 꺼지고 이유는 설정 이름이다; `/readyz` 의 `public_knowledge` 와
   `ready.research_capabilities.public_knowledge` 가 `disabled`·`enabled`·
   `unavailable` 을 알린다. 다른 공급자로 넘어가지 않는다.
-- 답의 규칙(결정 6)은 `answer_checks.public_reference_violations` 가 지킨다:
+- 답의 규칙(결정 6)은 `answer_checks.public_reference_violations` 가 잰다(줄
+  KNOW2 부터 말로는 고정 문장만이라 감사 도구의 규칙 위반 셈에 쓴다):
   "공개 자료 · 일반 참고 — <출처 이름>" 표시(서버가 붙임), 인용한 조각에 있는
   수치만, 지시가 아니라 참고 사실, 160자 이내, 원문 60자 이상 그대로 읽지
   않음, "계속해도 돼요"·원문 값 바꾸기·위험 허가·상태 변경 주장·URL 금지.
@@ -122,8 +123,11 @@ REST)는 robots.txt 가 막으므로 위키데이터의 PubChem CID(P662)나 목
   - **관련도 하한**: 조각의 한 문장 안에 이름과(제목이 그 이름인 기록은 제목으로
     충분), 그 이름이 아닌 낱말로 된 문제 낱말이 함께 있고, 원인·효과·실패·위험을
     말하며(정의·설명만인 조각은 아님),
-    색인 점수가 `SCORE_FLOOR` 이상이어야 붙는다(`problem_relevance`). 넘는
-    조각이 없으면 공개 자료 층을 붙이지 않는다.
+    색인 점수가 하한 이상이어야 붙는다(`problem_relevance`; Moss 내장 모델 색인은
+    `SCORE_FLOOR` 0.30, e5 custom 색인은 `SCORE_FLOORS` 0.84 — e5 코사인은
+    0.83–0.90 에 몰려 정답·다른 조각이 거의 갈리지 않으니 낮은 꼬리만 자르고,
+    가르는 일은 낱말 조건이 한다; Moss 의 custom 점수 척도는 문서에 없어 사람의
+    `moss-run` 결과로 다시 본다). 넘는 조각이 없으면 공개 자료 층을 붙이지 않는다.
   - **순서**: 색인 점수, 등급은 점수가 비슷할 때(0.03 안)만 앞세운다.
   - **말**: "공개 자료에 관련 내용이 있어요."만. 조각의 문장·정의는 읽지 않고
     바꿔 말하지도 않는다; 내용은 화면에 표시·출처·라이선스와 함께.
