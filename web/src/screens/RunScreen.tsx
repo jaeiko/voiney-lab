@@ -89,8 +89,8 @@ function ListeningBadge({ word, misheard }: { word: ListeningWord; misheard?: { 
 function TimerChip({ timer }: { timer: TimerView }) {
   if (timer.kind === "none") return null;
   const big = timer.kind === "soon" || timer.kind === "done";
-  const words = timer.kind === "done" ? copy.timer.over(clock(timer.seconds)) : timer.kind === "idle" ? copy.timer.idle(clock(timer.seconds)) : copy.timer.left(clock(timer.seconds));
-  const fill = timer.kind === "running" || timer.kind === "soon" ? (timer.duration > 0 ? Math.min(100, (timer.seconds / timer.duration) * 100) : 0) : timer.kind === "idle" ? 100 : 0;
+  const words = timer.kind === "done" ? copy.timer.over(clock(timer.seconds)) : timer.kind === "idle" ? copy.timer.idle(clock(timer.seconds)) : timer.kind === "paused" ? copy.timer.paused(clock(timer.seconds)) : copy.timer.left(clock(timer.seconds));
+  const fill = timer.kind === "running" || timer.kind === "soon" || timer.kind === "paused" ? (timer.duration > 0 ? Math.min(100, (timer.seconds / timer.duration) * 100) : 0) : timer.kind === "idle" ? 100 : 0;
   return (
     <div className="run-timer" data-kind={timer.kind} data-big={big} role="timer" aria-live={big ? "assertive" : "off"} data-testid="run-timer">
       <span className="run-timer-name">

@@ -263,6 +263,8 @@ export const run = {
     left: (clock: string) => `${clock} 남음`,
     over: (clock: string) => `끝남 · ${clock} 지남`,
     idle: (clock: string) => `${clock} · 시작 전`,
+    // Lane HEAR2, decision 3: paused by voice ("타이머 일시정지해 줘").
+    paused: (clock: string) => `일시정지 · ${clock} 남음`,
   },
   figures: {
     title: "그림",

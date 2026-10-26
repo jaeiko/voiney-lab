@@ -91,6 +91,15 @@ describe("RunScreen", () => {
     expect(engine.stopRun).toHaveBeenCalled();
   });
 
+  it("shows a timer paused by voice as paused, with its remaining time (lane HEAR2, decision 3)", () => {
+    running({ timers: { step: { state: "paused", duration_seconds: 600, deadline_at: null, remaining_seconds: 540, name: "10분" } } });
+    renderWithClient(<RunScreen />);
+    const timer = screen.getByTestId("run-timer");
+    expect(timer.getAttribute("data-kind")).toBe("paused");
+    expect(timer).toHaveTextContent("9:00");
+    expect(timer).toHaveTextContent("일시정지");
+  });
+
   it("shows the server's reason for a dropped sound, and a provider that failed, in the listening band (lane HEAR2, decision 4)", () => {
     running({}, { misheardAt: Date.now(), misheard: { notice: null, reason: "너무 짧은 소리였어요" } });
     renderWithClient(<RunScreen />);

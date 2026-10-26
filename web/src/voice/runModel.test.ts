@@ -92,6 +92,11 @@ describe("timerView and listeningWord", () => {
     expect(timerView(state({ timers: { step } }), () => -20)).toMatchObject({ kind: "done", seconds: 20 });
   });
 
+  it("shows a timer paused by voice where it stands (lane HEAR2, decision 3)", () => {
+    const step = { state: "paused", duration_seconds: 600, deadline_at: null, remaining_seconds: 540, name: "10분" };
+    expect(timerView(state({ timers: { step } }), (s) => Number(s.remaining_seconds))).toMatchObject({ kind: "paused", seconds: 540, duration: 600, name: "10분" });
+  });
+
   it("puts the pause first, then a dropped word for a few seconds, then the voice state", () => {
     expect(isPaused(state({ workflow_status: "paused" }))).toBe(true);
     expect(listeningWord("LISTENING", true, null, 0)).toBe("paused");

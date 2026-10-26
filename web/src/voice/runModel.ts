@@ -348,7 +348,7 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
 
 /** The step timer as the screen shows it: none, running, its last minute, or ended (index.html's renderRunTimer). */
 export interface TimerView {
-  kind: "none" | "idle" | "running" | "soon" | "done";
+  kind: "none" | "idle" | "running" | "soon" | "done" | "paused";
   seconds: number;
   duration: number;
   name: string | null;
@@ -363,6 +363,8 @@ export function timerView(protocol: ProtocolState | null, remaining: (step: Step
     if (seconds > 0) return { kind: seconds <= 60 ? "soon" : "running", seconds, duration, name };
     return { kind: "done", seconds: -seconds, duration, name };
   }
+  // Lane HEAR2, decision 3: paused by voice, the timer stands where it was (no deadline; the server's remaining seconds).
+  if (step && step.state === "paused") return { kind: "paused", seconds: Math.max(0, remaining(step)), duration, name };
   if (step && step.state === "not_started" && duration > 0) return { kind: "idle", seconds: duration, duration, name };
   return { kind: "none", seconds: 0, duration, name };
 }
