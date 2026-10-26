@@ -5970,6 +5970,9 @@ def _anomaly_category(key: str) -> str:
 _AUDIO_RECOVERY_PATTERNS = (
     re.compile(r"^(?:소리가\s*안\s*(?:나|나요|나요)|안\s*들려|음성이\s*재생되지\s*않았어)$"),
     re.compile(r"^(?:방금\s*)?(?:답변|음성).*(?:다시\s*)?(?:들려|재생해)"),
+    # Lane HEAR2, decision 5: "다시 들려줘" alone is the replay too ("다시
+    # 말해줘" stays the re-reading of the last reply).
+    re.compile(r"^(?:방금\s*(?:거|것|답)?\s*)?(?:다시|한\s*번\s*더)\s*들려(?:\s*줘|\s*주세요|\s*줄래|\s*주실래요)?$"),
     re.compile(r"^(?:there(?:'|’)s\s+no\s+sound|i\s+can(?:'|’)t\s+hear(?:\s+the\s+answer)?|replay\s+that)$"),
 )
 #: A state the source names as an endpoint, asked what it means (lane GE:
@@ -18201,7 +18204,16 @@ class CuratedProtocolSession:
             )
             return routed
         elif (
-            routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
+            (
+                routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
+                # Lane HEAR2, decision 5: a bare "다시 들려줘" is the replay
+                # elsewhere, but while this question is open it asks for the
+                # question again, as "다시 말해줘" does.
+                and not (
+                    routed.action is CuratedProtocolAction.AUDIO_RECOVERY
+                    and _OBSERVATION_REPEAT_REQUEST.fullmatch(_utterance_key(transcript))
+                )
+            )
             or self._names_another_step(routed)
         ):
             return routed
@@ -21114,15 +21126,20 @@ class CuratedProtocolSession:
                 ),
             )
         elif command is CuratedProtocolAction.AUDIO_RECOVERY:
+            # Lane HEAR2, decision 5 (2026-10-26): the replay comes at once,
+            # with no words of its own first -- the person's test heard
+            # "마지막으로 재생 가능한 답변을 한 번 다시 들려드릴게요…" before every
+            # replay. A short line for the screen only; the server sends the
+            # replay request as before and the page plays the kept answer.
             response = {
-                "en": "I will replay the last available answer once. The protocol state will not change.",
-                "vi": "Tôi sẽ phát lại câu trả lời gần nhất một lần. Trạng thái quy trình không thay đổi.",
-                "ko": "마지막으로 재생 가능한 답변을 한 번 다시 들려드릴게요. 프로토콜 상태는 변경하지 않습니다.",
-            }.get(language, "마지막 답변을 한 번 다시 재생합니다.")
+                "en": "Replaying the last answer.",
+                "vi": "Phát lại câu trả lời gần nhất.",
+                "ko": "직전 답변을 다시 들려드려요.",
+            }.get(language, "직전 답변을 다시 들려드려요.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.AUDIO_RECOVERY,
                 display_text=response,
-                speech_text=response,
+                speech_text="",
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=(),
                 step_label=(steps[self.current_index].source_label if self.active else None),
@@ -21130,6 +21147,7 @@ class CuratedProtocolSession:
                 state_changed=False,
                 intent_kind=intent.intent_kind,
                 requested_followup=intent.requested_followup,
+                speech_policy="silent",
             )
         elif command is CuratedProtocolAction.CLARIFY_PARAMETER:
             step = steps[self.current_index]
