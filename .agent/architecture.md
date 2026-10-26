@@ -490,7 +490,7 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 | Store | File (launcher layout) | Schema | Written by | Append-only |
 |---|---|---|---|---|
 | Protocol catalog | `<protocol dir>/protocol_workspace.sqlite` + `objects/sha256/…` | 1 | `experiment_protocol_store`, `protocol_catalog` | events: yes; sources immutable |
-| Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 12 | `workspace_store` | session events, completed steps, observations, evidence, sentence translations and glossaries (each with its translation `style_version`) — SQL triggers refuse UPDATE/DELETE |
+| Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 13 | `workspace_store` | session events, completed steps, observations, evidence, sentence translations and glossaries (each with its translation `style_version`) — SQL triggers refuse UPDATE/DELETE |
 | Experiment record | `<protocol dir>/experiment_reports.sqlite` | 2 | `experiment_reports` | events by stable key (`INSERT OR IGNORE`); no triggers — enforced by code; prose is replaceable |
 | Accounts | `<workspace>/accounts.sqlite` | 1 | `accounts` | no (sessions end; only hashes stored) |
 | Pilot metrics | `<workspace>/pilot_metrics.sqlite` | — | `pilot_metrics` | rows of numbers, codes and times |

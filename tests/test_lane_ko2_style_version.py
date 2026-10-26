@@ -305,6 +305,108 @@ class StoreTests(unittest.TestCase):
             store.close()
 
 
+SETTING_ROWS = (
+    (1, "tenant-a", "principal-a", "confirm_mode", "quiet", "voice", "2026-10-20T01:00:00+00:00"),
+    (2, "tenant-a", "principal-a", "speaker_filter", "on", "screen", "2026-10-26T02:00:00+00:00"),
+    (5, "tenant-a", "principal-a", "voice_reference", "v1:-24.0:1792990000:mic-1", "voice",
+     "2026-10-26T02:01:00+00:00"),
+)
+
+
+def _hear2_schema_12_store(path: Path, fixture) -> None:
+    """A store as lane HEAR2's schema 12 left it: its settings names, the old translation tables."""
+
+    _schema_11_store(path, fixture)
+    connection = sqlite3.connect(path)
+    connection.executescript("BEGIN IMMEDIATE;\n" + ws.MIGRATION_11_TO_12 + "\nCOMMIT;")
+    connection.execute("INSERT INTO organizations VALUES('tenant-a','Lab A','2026-10-08T00:00:00+00:00')")
+    connection.execute("INSERT INTO principals VALUES(?,?,?,?)",
+                       ("principal-a", "dev:principal-a", "principal-a", "2026-10-08T00:00:00+00:00"))
+    connection.executemany(
+        "INSERT INTO experimenter_settings(sequence_id,organization_id,principal_id,name,value,source,created_at)"
+        " VALUES(?,?,?,?,?,?,?)", SETTING_ROWS)
+    connection.commit()
+    assert connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0] == 12
+    columns = [row[1] for row in connection.execute("PRAGMA table_info(protocol_fact_translations)")]
+    assert "style_version" not in columns
+    connection.close()
+
+
+class SchemaThirteenTests(unittest.TestCase):
+    """Lane HEAR2's 11 -> 12 (settings names) and this lane's 12 -> 13 (style versions).
+
+    Both lanes had raised the schema to 12; HEAR2 merged first (person's
+    signal of 2026-10-26), so this lane's migration is 12 -> 13. A store at 11
+    takes both, a store at HEAR2's 12 takes the second, and each keeps its rows.
+    """
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.folder = Path(self._temp.name)
+        self.path = self.folder / ws.WORKSPACE_DATABASE_FILENAME
+
+    def opened(self):
+        return initialize_workspace_store(WorkspaceSettings(True, self.folder))
+
+    def check_both_migrations(self, store, fixture) -> None:
+        connection = store._connection  # noqa: SLF001
+        self.assertEqual(ws.WORKSPACE_SCHEMA_VERSION, 13)
+        self.assertEqual(connection.execute(
+            "SELECT schema_version FROM schema_metadata").fetchone()[0], 13)
+        settings = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='experimenter_settings'").fetchone()[0]
+        for name in ("'speaker_filter'", "'voice_reference'", "'voice_calibration'"):
+            self.assertIn(name, settings)  # lane HEAR2's 11 -> 12
+        for table in ("protocol_fact_translations", "protocol_translation_glossaries"):
+            columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+            self.assertIn("style_version", columns)  # this lane's 12 -> 13
+            self.assertEqual(
+                _objects(connection, table, "trigger"),
+                {"fact_translations_no_update", "fact_translations_no_delete"}
+                if table == "protocol_fact_translations" else
+                {"translation_glossaries_no_update", "translation_glossaries_no_delete"})
+        key = translation_revision_key(fixture)
+        rows = store.fact_translations(key, "ko")
+        self.assertEqual([row.style_version for row in rows], [0, 0])
+        self.assertEqual([row.translated_text for row in rows],
+                         [row.translated_text for row in old_rows(fixture)])
+        made = generate(fixture, FakeTranslator(), rows)
+        self.assertEqual(store.record_fact_translations(made.records), len(made.records))
+
+    def test_a_schema_11_store_takes_both_migrations(self) -> None:
+        fixture = rich_fixture()
+        _schema_11_store(self.path, fixture)
+        store = self.opened()
+        try:
+            self.check_both_migrations(store, fixture)
+        finally:
+            store.close()
+
+    def test_a_hear2_schema_12_store_takes_the_translation_migration_and_keeps_its_settings(self) -> None:
+        fixture = rich_fixture()
+        _hear2_schema_12_store(self.path, fixture)
+        store = self.opened()
+        try:
+            self.check_both_migrations(store, fixture)
+            connection = store._connection  # noqa: SLF001
+            self.assertEqual(
+                [tuple(row) for row in connection.execute(
+                    "SELECT sequence_id,organization_id,principal_id,name,value,source,created_at"
+                    " FROM experimenter_settings ORDER BY sequence_id")],
+                list(SETTING_ROWS))
+            self.assertEqual(connection.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='experimenter_settings'").fetchone()[0], 5)
+        finally:
+            store.close()
+        again = self.opened()  # opening again changes nothing
+        try:
+            self.assertEqual(len(again.fact_translations(translation_revision_key(fixture), "ko")),
+                             2 + len(generate(fixture, FakeTranslator(), old_rows(fixture)).records))
+        finally:
+            again.close()
+
+
 class ServerPathTests(unittest.TestCase):
     """The server makes and reads the current version through the workspace."""
 

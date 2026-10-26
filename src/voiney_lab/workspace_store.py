@@ -161,7 +161,7 @@ class FactTranslationRecord:
     again under the same ``style_version``, and is never shown.
     ``style_version`` is the version of the translation instructions it was
     made with (``protocol_translation.STYLE_VERSION``; 0 for a row stored
-    before versions were kept, schema 11 and earlier). It is part of the
+    before versions were kept, schema 12 and earlier). It is part of the
     row's identity, so a newer version adds rows beside the old ones (lane
     KO2, decision 1).
     """
