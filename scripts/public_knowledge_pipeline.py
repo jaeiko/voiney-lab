@@ -78,6 +78,7 @@ from voiney_lab.public_knowledge import (  # noqa: E402
     METADATA_FIELDS,
     Glossary,
     default_glossary_path,
+    default_words_path,
     index_text_for,
 )
 
@@ -1743,9 +1744,14 @@ def read_bundle(runtime_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def load_bundle_glossary(runtime_dir: Path) -> Glossary:
+def load_bundle_glossary(runtime_dir: Path, words_path: Path | None = None) -> Glossary:
+    """The bundle's Wikidata glossary joined by the hand-written list (lane KNOW2):
+    its Korean names go beside the English titles of the pieces indexed."""
+
     path = runtime_dir / "bundle" / "glossary.json"
-    return Glossary.load(path) if path.is_file() else Glossary.empty()
+    glossary = Glossary.load(path) if path.is_file() else Glossary.empty()
+    words = words_path or default_words_path()
+    return glossary.with_words(words) if words.is_file() else glossary
 
 
 # --- upload -------------------------------------------------------------------------------------
@@ -1755,8 +1761,14 @@ def documents_for(records: Sequence[Mapping[str, Any]], glossary: Glossary) -> l
     """Index documents: id, searched text (head line, then the words) and string metadata."""
 
     documents: list[dict[str, Any]] = []
+    # A title's Korean names from Wikidata ("Fume hood") and from the hand-written
+    # list ("fume hood"), whichever case each wrote it in.
+    by_title: dict[str, tuple[str, ...]] = {}
+    for name, koreans in glossary.aliases.items():
+        key = name.casefold()
+        by_title[key] = tuple(dict.fromkeys((*by_title.get(key, ()), *koreans)))
     for record in records:
-        aliases = glossary.aliases.get(str(record.get("title", "")), ())
+        aliases = by_title.get(str(record.get("title", "")).casefold(), ())[:4]
         # The piece's own words are the searched text after its head line
         # (``public_knowledge._body_of``); sending them again as a payload
         # would double what the plan's monthly ingest counts.

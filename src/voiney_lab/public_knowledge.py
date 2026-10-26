@@ -52,8 +52,10 @@ __all__ = [
     "ENABLED_SETTING",
     "FoundDocument",
     "GRADES",
+    "GRADE_BONUS",
     "GRADE_WORDS",
     "Glossary",
+    "GlossaryWords",
     "INDEX_SETTING",
     "KnowledgeContext",
     "KnowledgeHit",
@@ -63,13 +65,23 @@ __all__ = [
     "MossSdkClient",
     "PUBLIC_LABEL",
     "PUBLIC_TIER",
+    "ProblemQuery",
+    "ProblemSearch",
     "PublicKnowledgeSettings",
     "PublicKnowledgeSource",
+    "SCORE_FLOOR",
     "SearchClient",
+    "Symptom",
     "default_glossary_path",
+    "default_words_path",
     "grade_rank",
     "index_text_for",
+    "load_glossary",
+    "ordered_hits",
+    "problem_query",
+    "problem_relevance",
     "public_reference_label",
+    "read_glossary_words",
     "shared_term",
     "start_public_knowledge",
     "wiki_only",
@@ -308,6 +320,23 @@ class Glossary:
     def empty(cls) -> "Glossary":
         return cls()
 
+    def with_words(self, path: Path | str) -> "Glossary":
+        """This glossary joined by the hand-written list: its English names
+        first for a Korean word both know, its aliases, general words,
+        symptoms and things added."""
+
+        words = read_glossary_words(path)
+        terms = dict(self.terms)
+        for key, names in words.terms.items():
+            terms[key] = tuple(dict.fromkeys((*names, *terms.get(key, ()))))
+        aliases = dict(self.aliases)
+        for name, koreans in words.aliases.items():
+            aliases[name] = tuple(dict.fromkeys((*aliases.get(name, ()), *koreans)))
+        return Glossary(
+            terms=terms, aliases=aliases, general=self.general | words.general,
+            symptoms=(*self.symptoms, *words.symptoms), things=self.things | words.things,
+        )
+
     def __len__(self) -> int:
         return len(self.terms)
 
@@ -445,12 +474,15 @@ class Glossary:
     def expand(self, query: str) -> str:
         """``query`` followed by the English names of its Korean words, when any."""
 
-        if not self.terms or not _HANGUL.search(query):
+        if not (self.terms or self.symptoms) or not _HANGUL.search(query):
             return query
         added: list[str] = []
         lower_query = query.casefold()
-        for english in self.matches(query).values():
-            for name in english[:2]:
+        names = [english[:2] for english in self.matches(query).values()]
+        # What went wrong, in the list's words ("굳지 않" → polymerization).
+        names += [symptom.english[:2] for symptom in self.symptoms_in(query)]
+        for english in names:
+            for name in english:
                 if name.casefold() in lower_query or name in added:
                     continue
                 added.append(name)
@@ -655,7 +687,7 @@ def _said_names(words: str, glossary: "Glossary", problem: set[str], korean_part
     found: list[str] = []
     for korean, english in glossary.matches(words).items():
         stem = korean if " " in korean else _korean_stems(korean)[-1]
-        if glossary.general_word(stem) or the_problem(stem):
+        if glossary.general_word(stem) or the_problem(stem) or glossary.symptoms_in(stem):
             continue
         found += [stem, *(name for name in english[:2] if not glossary.general_word(name))]
     folded = unicodedata.normalize("NFKC", words).casefold()
@@ -857,14 +889,114 @@ def default_glossary_path() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "public_knowledge" / "glossary.json"
 
 
-def _load_glossary(path: Path | str | None) -> Glossary:
+def default_words_path() -> Path:
+    """The hand-written glossary: ``data/public_knowledge/glossary_words.txt``."""
+
+    return Path(__file__).resolve().parents[2] / "data" / "public_knowledge" / "glossary_words.txt"
+
+
+def load_glossary(path: Path | str | None = None, words_path: Path | str | None = None) -> Glossary:
+    """The glossary the tier searches with: Wikidata's names (``path``, by
+    default ``glossary.json``) and the hand-written list (``words_path``; by
+    default ``glossary_words.txt`` when ``path`` is the default too). A file
+    that is missing or unreadable adds nothing; the tier still searches."""
+
+    if path is None and words_path is None:
+        words_path = default_words_path()
     candidate = Path(path) if path is not None else default_glossary_path()
-    if not candidate.is_file():
-        return Glossary.empty()
-    try:
-        return Glossary.load(candidate)
-    except (OSError, ValueError):
-        return Glossary.empty()
+    glossary = Glossary.empty()
+    if candidate.is_file():
+        try:
+            glossary = Glossary.load(candidate)
+        except (OSError, ValueError):
+            glossary = Glossary.empty()
+    if words_path is not None and Path(words_path).is_file():
+        try:
+            glossary = glossary.with_words(words_path)
+        except OSError:
+            pass
+    return glossary
+
+
+# --- The hand-written glossary (person's decision 2026-10-26, 2) --------------------------
+#
+# Lane KAUDIT: 133 of the 151 Korean questions the public search missed held a
+# word the Wikidata glossary did not know (흄후드, 시료, 튜브, 버퍼, 배지,
+# 전기영동, 폐액, 보안경 ...). ``glossary_words.txt`` is a list a person reads
+# and edits: "Korean forms = English names", by kind.
+
+#: The list's kinds: a thing a step handles or a hazard (a step's key word), a
+#: technique (a name, not a step's key word), what went wrong, a general word.
+WORD_KINDS: Mapping[str, str] = {
+    "장비": "thing", "물질": "thing", "소재": "thing", "안전": "thing",
+    "기법": "name", "현상": "symptom", "일반": "general",
+}
+_KIND_LINE = re.compile(r"^\[(.+)\]$")
+_INLINE_NOTE = re.compile(r"\s+#.*$")
+
+
+@dataclass(frozen=True)
+class GlossaryWords:
+    """What the hand-written list says, and the lines it could not read."""
+
+    terms: Mapping[str, tuple[str, ...]]
+    aliases: Mapping[str, tuple[str, ...]]
+    general: frozenset[str]
+    symptoms: tuple[Symptom, ...]
+    things: frozenset[str]
+    problems: tuple[str, ...]
+
+
+def read_glossary_words(path: Path | str) -> GlossaryWords:
+    """Read ``glossary_words.txt``; a line it cannot read is left out and named in ``problems``."""
+
+    terms: dict[str, list[str]] = {}
+    aliases: dict[str, list[str]] = {}
+    general: set[str] = set()
+    things: set[str] = set()
+    symptoms: list[Symptom] = []
+    problems: list[str] = []
+    kind: str | None = None
+    for number, raw in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+        line = _INLINE_NOTE.sub("", raw).strip()
+        if not line or line.startswith("#"):
+            continue
+        heading = _KIND_LINE.match(line)
+        if heading:
+            kind = WORD_KINDS.get(heading.group(1).strip())
+            if kind is None:
+                problems.append(f"line {number}: unknown kind [{heading.group(1).strip()}]")
+            continue
+        if kind is None:
+            continue
+        if "=" not in line:
+            problems.append(f"line {number}: no '=' (한국어 = English)")
+            continue
+        left, _sep, right = line.partition("=")
+        korean = [form.strip() for form in left.split(";") if form.strip()]
+        english = [name.strip() for name in right.split(";") if name.strip()]
+        if not korean or not english:
+            problems.append(f"line {number}: a side is empty")
+            continue
+        if kind == "symptom":
+            symptoms.append(Symptom(english[0].casefold(), tuple(korean), tuple(english)))
+            continue
+        for form in korean:
+            known = terms.setdefault(_normalise_term(form), [])
+            known += [name for name in english if name not in known]
+        for name in english:
+            known = aliases.setdefault(name, [])
+            known += [form for form in korean if form not in known]
+        if kind == "general":
+            general.update(_plain(item) for item in (*korean, *english))
+        elif kind == "thing":
+            things.update(_plain(name) for name in english)
+    return GlossaryWords(
+        terms={key: tuple(values) for key, values in terms.items()},
+        aliases={key: tuple(values) for key, values in aliases.items()},
+        general=frozenset(general), symptoms=tuple(symptoms), things=frozenset(things - general),
+        problems=tuple(problems),
+    )
 
 
 # --- What one piece looks like in the index ---------------------------------------------
@@ -1169,6 +1301,7 @@ async def start_public_knowledge(
     *,
     client_factory: Callable[[PublicKnowledgeSettings], SearchClient] | None = None,
     glossary_path: Path | str | None = None,
+    words_path: Path | str | None = None,
 ) -> PublicKnowledgeSource | None:
     """Build and load the tier for the server's start, or None when it is off.
 
@@ -1185,7 +1318,7 @@ async def start_public_knowledge(
     factory = client_factory or (lambda s: MossSdkClient(
         s.project_id, s.project_key, cache_dir=s.cache_dir))
     client = factory(settings)
-    source = PublicKnowledgeSource(settings, client, glossary=_load_glossary(glossary_path))
+    source = PublicKnowledgeSource(settings, client, glossary=load_glossary(glossary_path, words_path))
     try:
         await source.load()
     except KnowledgeUnavailable:

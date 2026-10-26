@@ -1,0 +1,329 @@
+# 손으로 쓴 용어집: 한국어 낱말 → 영어 이름 (줄 KNOW2, 사람 결정 2026-10-26 2번)
+#
+# 서버는 공개 지식을 불러올 때 이 파일을 glossary.json(위키데이터 이름, CC0)과
+# 함께 읽는다. 고친 뒤에는 서버를 다시 켜면 질의 쪽에 바로 들어간다; 공개 조각
+# 제목에 붙는 한국어 별칭은 다음 `upload` 때 들어간다.
+#
+# 한 줄 = 한국어 꼴들 = 영어 이름들. 꼴과 이름은 ";" 로 나눈다. 띄어 쓴 꼴(흄 후드)도
+# 쓸 수 있다. "#" 뒤는 설명이다. [종류] 줄 아래가 그 종류다:
+#   [장비] [물질] [기법] [안전] [소재]  이름: 한국어 질문에 영어 이름을 붙여 찾고,
+#                    문제 도움에서는 "무엇에 관한" 낱말로 센다.
+#   [현상]  무엇이 잘못됐는지: 문제 도움의 질의에 영어를 붙이고, 공개 조각이 이 영어
+#           낱말(뒤가 조금 달라도 됨: polymeriz → polymerization)이나 한국어 꼴을
+#           가져야 그 문제에 관한 조각이다. 한국어 꼴은 말 속 어디에 있어도 된다
+#           ("굳지 않" 은 "겔이 굳지 않아" 에서 찾음).
+#   [일반]  어디에나 있는 낱말: 질의에는 영어를 붙이지만, 공개 조각과 겹쳐도 뜻 있는
+#           낱말로 세지 않는다(세포·튜브·버퍼만 겹친 조각은 붙지 않음).
+# 출처: 줄 KAUDIT 의 덮는 범위 점검(2026-10-26)이 찾은 용어집 빈칸 낱말 전부와, 같은
+# 꼴의 실험실 기본 낱말. 어느 한 프로토콜의 낱말이 아니라 젖은 실험실 일반 낱말이다.
+
+[안전]
+흄후드; 흄 후드; 퓸후드; 품후드; 후드 = fume hood; fume cupboard
+새시; 샤시 = sash
+보호구; 개인 보호구; 개인보호구 = personal protective equipment; PPE
+보안경; 안전 안경; 안전안경; 고글 = safety glasses; goggles; eye protection
+안면 보호구; 페이스 쉴드; 안면보호대 = face shield
+마스크; 방진 마스크 = respirator; dust mask
+방독면 = respirator; gas mask
+니트릴; 니트릴 장갑 = nitrile; nitrile gloves
+라텍스 장갑 = latex gloves
+귀마개 = earplugs; hearing protection
+실험복; 랩코트 = lab coat
+폐액; 폐용액; 화학 폐액 = chemical waste; liquid waste; waste
+폐액통; 폐액 통 = waste container
+폐기 = disposal; waste disposal
+의료 폐기물; 생물 폐기물; 감염성 폐기물 = biohazardous waste; biological waste
+락스; 표백제 = bleach; sodium hypochlorite
+주사바늘; 주사 바늘; 바늘 = needle; sharps
+날카로운 도구; 샤프스 = sharps
+샤프스 통; 손상성 폐기물 용기 = sharps container
+깨진 유리; 깨진 유리병; 유리 조각 = broken glass
+라벨; 라벨지; 표지 = label; labeling
+해골; 해골 그림 = skull and crossbones
+그림문자; 그림 표시 = pictogram; GHS pictogram
+물질안전보건자료; 물질 안전 보건 자료; MSDS; 엠에스디에스 = safety data sheet; SDS
+생식독성 = reproductive toxicity
+발암성; 발암 물질 = carcinogen; carcinogenic
+돌연변이원; 변이원성 = mutagen; mutagenic
+독성 = toxicity; toxic
+부식성 = corrosive
+인화성 = flammable; flammability
+인화점 = flash point
+산화제 = oxidizer; oxidizing agent
+과산화물 = peroxide
+할로겐; 할로겐 폐액; 할로겐화 = halogenated; halogen
+수은 = mercury
+아세틸렌 = acetylene
+레귤레이터; 감압 밸브; 압력 조절기 = pressure regulator; regulator
+실린더; 가스 실린더; 가스통; 봄베 = gas cylinder; cylinder
+고압가스; 압축가스 = compressed gas
+탱크; 가스 탱크 = tank
+멀티탭 = power strip; extension cord
+감전 = electric shock
+누전 = ground fault; electrical leakage
+소화기 = fire extinguisher
+세안기; 눈 세척기 = eyewash; eyewash station
+비상 샤워; 안전 샤워 = safety shower; emergency shower
+흡착포; 스필 키트 = spill kit; absorbent
+쏟음; 엎지름; 유출 = spill
+화상 = burn
+동상 = frostbite
+질식 = asphyxiation
+흡입 = inhalation
+피부 노출; 피부에 묻음 = skin contact; skin exposure
+눈에 들어감 = eye contact
+생물안전 = biosafety
+생물안전등급; 생물안전 등급 = biosafety level; BSL
+에어로졸 = aerosol
+자외선 = ultraviolet; UV light
+레이저 = laser
+방사선 = radiation
+나노물질; 나노 물질 = nanomaterial; nanomaterials
+열폭주 = thermal runaway
+
+[장비]
+튜브; 원심관 = tube; centrifuge tube
+코니컬 튜브; 코니컬; 팔콘 튜브 = conical tube; Falcon tube
+에펜도르프; 에펜도르프 튜브; 이펜도르프 = microcentrifuge tube; Eppendorf tube
+피펫팁; 피펫 팁; 팁 = pipette tip
+마이크로피펫; 마이크로 피펫 = micropipette
+컬럼; 칼럼 = column
+히팅블록; 히팅 블록; 히트블록; 드라이 배스 = heating block; dry bath; heat block
+써모믹서; 서모믹서 = thermomixer; heating block
+수조; 항온수조; 워터배스 = water bath
+콜드트랩; 콜드 트랩; 냉각 트랩 = cold trap
+퍼니스; 전기로; 머플로 = furnace; muffle furnace
+튜브로; 튜브 퍼니스 = tube furnace
+스피드백; 스피드 백; 원심 농축기; 진공 농축기 = SpeedVac; centrifugal evaporator; vacuum concentrator
+코인셀; 코인 셀; 버튼 셀 = coin cell; button cell
+크림퍼; 크림핑 = crimper; crimping
+동결건조; 동결 건조; 동결건조기; 동결 건조기 = freeze-drying; lyophilization; freeze dryer; lyophilizer
+볼텍서; 볼텍스; 보텍스 = vortex mixer; vortex
+클린벤치; 클린 벤치 = laminar flow cabinet; clean bench
+생물안전작업대; 바이오 안전 작업대 = biosafety cabinet
+회전증발기; 회전 증발기; 로타뱁; 로타베이퍼; 로터리 증발기; 로터리 = rotary evaporator; rotavap
+슐렝크 라인; 슐렝크; 쉬렝크 라인 = Schlenk line
+안티챔버; 앤티챔버 = antechamber
+글러브박스; 글러브 박스 = glovebox
+저울; 분석저울; 분석 저울; 전자저울 = balance; analytical balance
+현미경 = microscope
+대물렌즈; 대물 렌즈 = objective lens; objective
+접안렌즈 = eyepiece
+소니케이터; 초음파 분쇄기; 초음파분쇄기 = sonicator; sonication
+초음파 세척기 = ultrasonic cleaner
+트랜스일루미네이터; 자외선 투시기 = transilluminator
+나노드랍; 나노드롭 = NanoDrop; spectrophotometer
+분광광도계 = spectrophotometer
+큐벳; 큐벳트 = cuvette
+플레이트; 마이크로플레이트; 96웰 플레이트 = microplate; plate
+플레이트 리더; 플레이트리더 = plate reader
+노즐 = nozzle
+뚜껑; 캡 = cap; lid
+진공 펌프; 진공펌프; 펌프 = vacuum pump; pump
+핫플레이트; 가열판 = hot plate
+교반기; 스터러; 마그네틱 스터러 = magnetic stirrer; stirrer
+스터러 바; 마그네틱 바 = stir bar
+오븐; 건조기 = oven; drying oven
+데시케이터 = desiccator
+인큐베이터; 배양기 = incubator
+CO2 인큐베이터 = CO2 incubator
+오토클레이브; 고압멸균기 = autoclave
+원심분리기; 원심기 = centrifuge
+로터 = rotor
+냉장고 = refrigerator
+냉동고; 초저온 냉동고 = freezer; ultra-low temperature freezer
+액체질소 탱크; 질소 탱크; 듀어 = dewar; cryogenic storage dewar
+pH 미터; 피에이치 미터; pH미터 = pH meter
+전극 = electrode
+기준 전극 = reference electrode
+전위차계; 포텐쇼스탯 = potentiostat
+분액깔때기; 분액 깔때기 = separatory funnel
+깔때기 = funnel
+뷰렛 = burette
+메스실린더; 눈금실린더 = graduated cylinder
+메스플라스크; 부피플라스크 = volumetric flask
+비커 = beaker
+시약병 = reagent bottle
+세척병 = wash bottle
+여과지; 거름종이 = filter paper
+시린지 필터; 주사기 필터 = syringe filter
+유세포 분석기 = flow cytometer; flow cytometry
+혈구계산판; 헤모사이토미터 = hemocytometer
+써멀 사이클러; PCR 기기 = thermal cycler
+전기영동 장치; 전기영동기 = electrophoresis apparatus
+전원 장치; 파워 서플라이 = power supply
+전원 = power
+플러그 = plug
+호일; 알루미늄 호일 = aluminium foil; foil
+램프 = lamp
+홀더 = holder
+캐비닛; 시약장 = cabinet
+볼밀; 볼 밀 = ball mill
+스핀 코터 = spin coater; spin coating
+
+[물질]
+시료; 샘플 = sample  # [일반]에도 둔다: 이름으로 세지 않음
+에테르; 디에틸 에테르; 다이에틸 에테르 = diethyl ether; ether
+에티디움 브로마이드; 에티디움; 이티비; EtBr = ethidium bromide
+트리클로로아세트산 = trichloroacetic acid; TCA
+과염소산 = perchloric acid
+구아니딘 티오시아네이트; 구아니딘 = guanidine thiocyanate; guanidinium thiocyanate
+스킴밀크; 탈지분유 = skim milk; nonfat dry milk
+우유 = milk
+증류수; 탈이온수 = distilled water; deionized water
+수돗물 = tap water
+카본 테이프 = carbon tape
+중수소; 중수소화 용매 = deuterium; deuterated solvent
+이동상 = mobile phase
+고정상 = stationary phase
+슬러리 = slurry
+파우더; 가루; 분말 = powder
+알코올 = alcohol; ethanol
+오일 = oil
+얼음 = ice
+드라이아이스 = dry ice
+액체질소 = liquid nitrogen
+탄산염 = carbonate
+칼슘 = calcium
+배지; 배양액; 미디어 = culture medium; medium
+혈청 = serum
+소혈청; 우태아혈청; FBS = fetal bovine serum
+트립신; 트립신-EDTA = trypsin
+항생제 = antibiotic
+페니실린-스트렙토마이신; 펜스트렙 = penicillin-streptomycin
+블로킹 버퍼; 블로킹 용액 = blocking buffer
+세척 버퍼 = wash buffer
+로딩 버퍼; 시료 버퍼 = loading buffer; sample buffer
+마커; 사이즈 마커; 래더 = molecular-weight size marker; ladder
+기질 = substrate
+효소 = enzyme
+프라이머 = primer
+플라스미드 = plasmid
+마스터믹스; 마스터 믹스 = master mix
+아크릴아마이드; 아크릴아미드 = acrylamide
+과황산암모늄; APS = ammonium persulfate
+테메드; TEMED = tetramethylethylenediamine; TEMED
+에스디에스; SDS = sodium dodecyl sulfate
+쿠마시; 쿠마씨 = Coomassie brilliant blue; Coomassie
+전해질 = electrolyte
+전해액 = electrolyte solution
+분리막 = separator
+바인더 = binder
+도전재 = conductive additive; carbon black
+리튬 금속; 리튬 = lithium metal; lithium
+양극재 = cathode material
+음극재 = anode material
+집전체 = current collector
+NMP; 엔엠피 = N-methyl-2-pyrrolidone; NMP
+PVDF; 피브이디에프 = polyvinylidene fluoride; PVDF
+유기물 = organic matter
+유기 용매; 유기용매 = organic solvent
+용매 = solvent
+산 = acid
+염기 = base
+가스 = gas
+공기 = air
+수분 = moisture; water content
+
+[소재]
+소성 = calcination
+소결 = sintering
+어닐링; 열처리 = annealing; heat treatment
+나노입자; 나노 입자 = nanoparticle
+박막 = thin film
+코팅 = coating
+결정 구조 = crystal structure
+피크 = peak
+분위기; 불활성 분위기 = atmosphere; inert atmosphere
+승온; 승온 속도 = heating rate; ramp rate
+메탈 = metal
+
+[기법]
+전기영동 = electrophoresis; gel electrophoresis
+겔 전기영동; 젤 전기영동 = gel electrophoresis
+아가로스 겔; 아가로스 젤 = agarose gel
+웨스턴; 웨스턴 블롯; 웨스턴 블랏; 웨스턴블롯 = western blot; western blotting
+전이; 트랜스퍼 = transfer; electroblotting
+블로킹 = blocking
+밴드 = band
+배경 = background
+발현 = expression
+인큐베이션; 인큐베이트 = incubation; incubate
+워싱; 세척 = washing; wash
+탈색; 디스테인 = destaining; destain
+염색 = staining; stain
+투석 = dialysis
+당량점 = equivalence point
+종말점 = end point; endpoint
+메니스커스; 메니스커스 = meniscus
+유기층 = organic layer; organic phase
+수층 = aqueous layer; aqueous phase
+분별증류; 분별 증류 = fractional distillation
+증류 = distillation
+감압; 감압 증류 = reduced pressure; vacuum distillation
+환류 = reflux
+재결정 = recrystallization
+추출 = extraction
+여과 = filtration
+적정 = titration
+극성 = polarity; polar
+크로마토그래피 = chromatography
+박층 크로마토그래피; 티엘씨; TLC = thin-layer chromatography
+컬럼 크로마토그래피 = column chromatography
+계대; 계대배양; 계대 배양; 패시징 = passage; passaging; subculture
+트립신 처리 = trypsinization
+세포 수 세기; 세포 계수 = cell counting
+컨플루언시; 컨플루언트 = confluence; confluent
+형질주입; 트랜스펙션 = transfection
+형질전환 = transformation
+클로닝 = cloning
+미니프렙; 플라스미드 추출 = miniprep; plasmid preparation
+정량 = quantification
+검량선; 표준 곡선; 표준곡선 = calibration curve; standard curve
+흡광도 = absorbance
+형광 = fluorescence
+증폭 = amplification
+멜팅 커브; 융해 곡선 = melting curve
+엑스선 회절; XRD = X-ray diffraction; powder diffraction
+주사전자현미경; SEM = scanning electron microscope
+순환전압전류법 = cyclic voltammetry
+조립 = assembly
+보정; 교정; 캘리브레이션 = calibration
+측정 = measurement
+초점 = focus
+렌즈 = lens
+가열 = heating
+냉각 = cooling
+건조 = drying
+진공 = vacuum
+
+[현상]
+굳지 않; 안 굳; 안굳; 굳질 않; 중합이 안 = polymerization; polymerize; solidify
+번져; 번짐; 번진; 번지 = smearing; smear; diffuse
+막혀; 막힘; 막혔 = clogging; clog; blocked
+깨졌; 깨짐; 금이 갔; 갈라 = crack; broken
+과열; 너무 뜨거 = overheating; overheat
+타는 냄새; 탄 냄새 = burning smell
+연기 = smoke
+불꽃; 불이 붙; 불나; 불이 났 = fire; flame; ignition
+점도가; 끈적 = viscosity; viscous
+얼룩 = stain; spot
+결로; 물방울이 맺 = condensation
+변색 = discoloration
+비특이 = nonspecific; nonspecific binding
+압력이 안; 압력이 떨어 = pressure drop; pressure
+진공이 안; 진공이 안 잡 = vacuum leak
+찢어졌; 찢어짐 = tear; torn
+곰팡이; 곰팡 = mold; fungal contamination
+오염; 오염됐; 오염된 = contamination; contaminated
+알람 = alarm
+
+[일반]
+세포 = cell; cells
+튜브 = tube
+버퍼 = buffer
+시료; 샘플 = sample
+용액 = solution
+액체 = liquid
+무게 = weight; mass
+기기; 장치 = instrument; apparatus

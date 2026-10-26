@@ -107,6 +107,8 @@ from voiney_lab.public_knowledge import (
     PublicKnowledgeSettings,
     PublicKnowledgeSource,
     default_glossary_path,
+    default_words_path,
+    load_glossary,
     start_public_knowledge,
 )
 
@@ -348,7 +350,8 @@ async def open_source(
         loads = 1
     elif backend == "fts5":
         settings = PublicKnowledgeSettings(enabled=True, index_name="offline-fts5")
-        glossary = Glossary.load(glossary_path or default_glossary_path())
+        # The server's glossary: Wikidata's names and the hand-written list (lane KNOW2).
+        glossary = load_glossary(glossary_path or default_glossary_path(), default_words_path())
         source = PublicKnowledgeSource(settings, BundleSearchClient(bundle.records, bundle.glossary), glossary=glossary)
         await source.load()
         loads = 0
