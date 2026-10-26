@@ -181,7 +181,9 @@ export class StandIn {
   state() {
     const plan = this.protocol.steps[this.step];
     const step = plan.timerSeconds
-      ? { state: 'running', duration_seconds: plan.timerSeconds, remaining_seconds: plan.timerLeft, elapsed_seconds: plan.timerSeconds - (plan.timerLeft ?? 0), step_id: plan.id, step_label: plan.label, deadline_at: iso(Date.now() + (plan.timerLeft ?? 0) * 1000), name: `${Math.round(plan.timerSeconds / 60)}분`, bound: 'exact' }
+      ? this.pausedTimer
+        ? { state: 'paused', duration_seconds: plan.timerSeconds, remaining_seconds: plan.timerLeft, elapsed_seconds: plan.timerSeconds - (plan.timerLeft ?? 0), step_id: plan.id, step_label: plan.label, deadline_at: null, paused_at: iso(Date.now()), name: `${Math.round(plan.timerSeconds / 60)}분`, bound: 'exact' }
+        : { state: 'running', duration_seconds: plan.timerSeconds, remaining_seconds: plan.timerLeft, elapsed_seconds: plan.timerSeconds - (plan.timerLeft ?? 0), step_id: plan.id, step_label: plan.label, deadline_at: iso(Date.now() + (plan.timerLeft ?? 0) * 1000), name: `${Math.round(plan.timerSeconds / 60)}분`, bound: 'exact' }
       : null;
     return {
       attached: true, protocol_id: this.protocol.id, revision_id: REVISION, source_sha256: SOURCE, display_name: this.protocol.title, development_only: false,
@@ -235,6 +237,13 @@ export class StandIn {
     this.pushState('translation_update');
   }
 
+  /** Lane HEAR2, decision 3: "타이머 일시정지해 줘" -- the step's timer stands where it was (no deadline, its remaining seconds). */
+  pausedTimer = false;
+  pauseTimer() {
+    this.pausedTimer = true;
+    this.pushState('timer_pause');
+  }
+
   /** The server moves to the next step (as a "다음 단계" turn would). */
   nextStep() {
     this.step = Math.min(this.protocol.steps.length - 1, this.step + 1);
@@ -251,7 +260,8 @@ export class StandIn {
 
   /** The server dropped a sound it could not use (lane HEAR's speech.dropped). */
   misheard() {
-    this.send({ type: 'speech.dropped', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'empty_transcript', duration_ms: 640, level_db: -31.2, paused: false, during_playback: false, notice: '잘 안 들렸어요' });
+    // Lane HEAR2, decision 4: the drop's notice and its reason in plain words (shown, not said).
+    this.send({ type: 'speech.dropped', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'empty_transcript', reason_ko: '받아 적은 말이 없어요', duration_ms: 640, level_db: -31.2, paused: false, during_playback: false, notice: '잘 안 들렸어요' });
   }
 
   /** The last control of a type the screen sent, with the generation it carried. */

@@ -89,7 +89,8 @@ export async function walk(page: Page, info: TestInfo) {
   await page.getByTestId('start-next').click();
   await page.getByRole('button', { name: '10 min', exact: true }).click();
   await page.getByRole('button', { name: '56 °C', exact: true }).click();
-  expect(server.answers.length).toBe(3);
+  // The third answer's POST may still be on its way when the tap returns (seen once on the phone, lane RX4): wait for it.
+  await expect.poll(() => server.answers.length).toBe(3);
 
   // ③ The safety notices.
   await expect(page.getByTestId('start-why')).toContainText('안전 주의를 읽어요');
@@ -168,6 +169,17 @@ export async function walk(page: Page, info: TestInfo) {
   await noOverflow(page, 'the experiment screen');
   await shot(page, info, '11-run');
 
+  // Lane HEAR2, decision 3: a timer paused by voice shows its words on this lane's chip -- "일시정지 · 8:30 남음" seen,
+  // not the bare digits of a running timer.
+  server.pauseTimer();
+  await expect(page.getByTestId('run-timer')).toHaveAttribute('data-kind', 'paused');
+  await expect(page.getByTestId('run-timer').locator('.run-timer-words')).toBeVisible();
+  await expect(page.getByTestId('run-timer').locator('.run-timer-words')).toHaveText(/^일시정지 · \d+:\d{2} 남음$/);
+  await shot(page, info, '11c-run-timer-paused');
+  server.pausedTimer = false;
+  server.pushState('timer_resume');
+  await expect(page.getByTestId('run-timer')).toHaveAttribute('data-kind', 'running');
+
   // A memo.
   await page.getByTestId('record-memo').click();
   await page.getByTestId('memo-input').fill('젤 조각 4개 확인');
@@ -192,6 +204,9 @@ export async function walk(page: Page, info: TestInfo) {
   server.misheard();
   await expect(page.getByTestId('run-listening')).toHaveAttribute('data-word', 'misheard');
   await expect(page.getByTestId('run-listening')).toContainText('잘 안 들렸어요');
+  // Lane HEAR2, decision 4: the server's reason beside the word, inside the bar without overflow.
+  await expect(page.getByTestId('run-listening')).toContainText('받아 적은 말이 없어요');
+  await noOverflow(page, 'the misheard word with its reason');
   await shot(page, info, '14-run-misheard');
 
   // The pause: a band across the whole screen, the listening word 일시정지; resumed from the band.
