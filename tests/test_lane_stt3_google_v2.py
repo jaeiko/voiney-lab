@@ -34,6 +34,8 @@ def v2_env(tmp_path, monkeypatch):
         monkeypatch.setenv(name, value)
     monkeypatch.delenv(vp.STT_MODEL_ENV, raising=False)
     monkeypatch.delenv(vp.STT_LANGUAGE_ENV, raising=False)
+    monkeypatch.delenv(LOCATION, raising=False)
+    monkeypatch.delenv(DENOISE, raising=False)
     monkeypatch.setenv('VOINEY_LAB_USAGE_SCOPE', 'source_protocol_only')
     return values
 
