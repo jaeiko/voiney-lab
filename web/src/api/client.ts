@@ -15,6 +15,8 @@ export class ApiError extends Error {
   readonly messageKo: string | null;
   /** The detail object itself when it was one (a 422's extra fields). */
   readonly detail: Record<string, unknown> | null;
+  /** The refusal's whole body as the server sent it (lane RX2: a start refusal's message_ko at the top level). */
+  readonly payload: unknown;
 
   constructor(
     status: number,
@@ -22,6 +24,7 @@ export class ApiError extends Error {
     retryAfterSeconds: number | null = null,
     messageKo: string | null = null,
     detail: Record<string, unknown> | null = null,
+    payload: unknown = null,
   ) {
     super(`${status} ${code}`);
     this.name = "ApiError";
@@ -30,6 +33,7 @@ export class ApiError extends Error {
     this.retryAfterSeconds = retryAfterSeconds;
     this.messageKo = messageKo;
     this.detail = detail;
+    this.payload = payload;
   }
 }
 
@@ -80,7 +84,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (!response.ok) {
     const { code, messageKo, detail } = detailOf(payload);
-    throw new ApiError(response.status, code, retryAfterOf(response), messageKo, detail);
+    throw new ApiError(response.status, code, retryAfterOf(response), messageKo, detail, payload);
   }
   return payload as T;
 }

@@ -58,7 +58,8 @@ describe("AnalysisScreen", () => {
     fakeFetch({ "/api/protocols/p-ready": { json: { ...ENTRY_READY, analysis_run: { state: "complete" } } } });
     renderWithClient(<AnalysisScreen protocolId="p-ready" />);
     expect(await screen.findByTestId("analysis-ready")).toHaveTextContent("분석이 끝났어요");
-    expect(screen.getByTestId("analysis-start")).toHaveAttribute("href", "/index.html#/protocols/p-ready");
+    // Lane RX2: the start goes to the new screen's start flow (startHref).
+    expect(screen.getByTestId("analysis-start")).toHaveAttribute("href", "#/start/p-ready");
   });
 
   it("done with cards: 확인할 것 N개가 있어요 → 확인하기", async () => {

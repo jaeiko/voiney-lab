@@ -27,7 +27,8 @@ describe("RunChangesScreen", () => {
     expect(await screen.findByTestId("changes-chosen")).toHaveTextContent("원문대로 진행해요.");
     const sent = calls.find((call) => call.path === "/api/protocols/p-ready/start-check/changes" && call.init?.method === "POST");
     expect(JSON.parse(String(sent?.init?.body))).toEqual({ target: RUN_OPTIONS.target, source: "wizard", changes: [] });
-    expect(screen.getByTestId("changes-start")).toHaveAttribute("href", "/index.html#/protocols/p-ready");
+    // Lane RX2: the start goes to the new screen's start flow (startHref).
+    expect(screen.getByTestId("changes-start")).toHaveAttribute("href", "#/start/p-ready");
   });
 
   it("바꿀 값이 있어요: the steps, the step's Korean sentence with the source folded, a marked value, number + unit, the comparison, the list and 다 골랐어요", async () => {

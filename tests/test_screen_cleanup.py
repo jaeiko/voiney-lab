@@ -8,6 +8,7 @@ that only exists in a helper cannot pass for one the page actually renders.
 import subprocess
 import unittest
 from pathlib import Path
+from tests.static_page import page_script
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "src" / "voiney_lab" / "static" / "index.html"
@@ -72,7 +73,7 @@ const json=(payload,ok=true)=>({ok,headers:{get:()=>"application/json"},json:asy
 
 def run_page_script(body: str) -> subprocess.CompletedProcess:
     html = INDEX.read_text(encoding="utf-8")
-    script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+    script = page_script(html)
     harness = (
         PRELUDE + script
         + "\n(async()=>{\n" + body

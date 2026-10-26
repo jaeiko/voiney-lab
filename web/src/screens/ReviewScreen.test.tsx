@@ -70,7 +70,8 @@ describe("ReviewScreen", () => {
     expect(await screen.findByTestId("review-done")).toHaveTextContent("확인 끝 — 이제 실험할 수 있어요");
     const registered = calls.find((call) => call.path === "/api/protocols/p-review/review-versions");
     expect(JSON.parse(String(registered?.init?.body))).toEqual({ target: REVIEW_DRAFT.target });
-    expect(screen.getByTestId("review-start")).toHaveAttribute("href", "/index.html#/protocols/p-review");
+    // Lane RX2: the start goes to the new screen's start flow (startHref).
+    expect(screen.getByTestId("review-start")).toHaveAttribute("href", "#/start/p-review");
   });
 
   it("a button that needs words opens the field, and 다시 분석 goes to the progress screen", async () => {

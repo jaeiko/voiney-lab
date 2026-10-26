@@ -57,7 +57,8 @@ describe("HomeScreen", () => {
     renderWithClient(<HomeScreen session={session} />);
     expect(await screen.findByText("이어서 하기")).toBeInTheDocument();
     expect(screen.getByText("In-gel digestion · 4단계부터")).toBeInTheDocument();
-    expect(screen.getByText("이어서 하기").closest("a")).toHaveAttribute("href", "/index.html#/experiment");
+    // Lane RX2: 이어서 하기 opens the new start flow's continuing start for that experiment.
+    expect(screen.getByText("이어서 하기").closest("a")).toHaveAttribute("href", "#/start/p-ready?resume=s1");
   });
 
   it("normal state: a review-pending protocol becomes 확인하기 with the count", async () => {

@@ -19,18 +19,22 @@ interface Props {
 
 /** The menu item a route belongs to: the upload, the analysis, the cards and today's values are the protocols'. */
 export function menuKeyOf(current: RouteName): string {
-  return current === "upload" || current === "analysis" || current === "review" || current === "changes" ? "protocols" : current;
+  if (current === "upload" || current === "analysis" || current === "review" || current === "changes") return "protocols";
+  // Lane RX2: the start flow and the run are the experiment's.
+  if (current === "start" || current === "run") return "experiment";
+  return current;
 }
 
 const NAV = [
   { key: "home", label: nav.home, href: routes.home, Icon: Home },
   { key: "protocols", label: nav.protocols, href: routes.protocols, Icon: ClipboardList },
-  { key: "experiment", label: nav.experiment, href: oldRoutes.experiment, Icon: FlaskConical },
+  // Lane RX2: the experiment (the start flow and the run) and the settings are the new screen's own.
+  { key: "experiment", label: nav.experiment, href: routes.run, Icon: FlaskConical },
   { key: "records", label: nav.records, href: oldRoutes.records, Icon: NotebookPen },
-  { key: "settings", label: nav.settings, href: oldRoutes.settings, Icon: Settings },
+  { key: "settings", label: nav.settings, href: routes.settings, Icon: Settings },
 ] as const;
 
-function LogoutDialog() {
+export function LogoutDialog() {
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);

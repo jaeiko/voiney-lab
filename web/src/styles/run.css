@@ -1,0 +1,184 @@
+/* The experiment screen (lane RX2, person's decisions 2 and 3 of 2026-10-25).
+   The whole screen while a run goes: the listening word and the controls on
+   top, the step large in the middle with its pictures, the records beside it
+   (a column on a wide screen, a folding panel at the bottom on a narrow one,
+   its head and buttons always shown), the caption in two whole lines at the
+   bottom. Sizes are the Run tokens (tokens.css): lane TAB's 1.5 m values on a
+   tablet, the design system's Run scale elsewhere. Colour only for a state:
+   danger for [종료] alone, the warning family for "잘 안 들렸어요" and an ended
+   timer, ink for everything else. */
+
+body[data-run="on"] { background: var(--paper); }
+
+.run {
+  position: relative; height: 100dvh; overflow: hidden; background: var(--paper);
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 32%);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "bar bar" "alerts alerts" "main side" "caption caption";
+}
+.run[data-layout="narrow"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "bar" "alerts" "main" "side" "caption";
+}
+
+/* --- The bar: the listening word, the timer chip, the controls ------------ */
+.run-bar {
+  grid-area: bar; display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4); border-bottom: var(--border) solid var(--line);
+}
+.run-protocol {
+  flex: 1 1 160px; min-width: 0; color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.run-controls { display: flex; align-items: center; gap: var(--space-3); margin-left: auto; }
+.run-mic { display: inline-flex; color: var(--ink-muted); }
+.run-mic svg { width: 28px; height: 28px; }
+.run-mic[data-on="true"] { color: var(--ink); }
+/* A narrow screen: the listening word across the top, then the timer and the controls; the protocol's name is left to the start flow. */
+.run[data-layout="narrow"] .run-bar { gap: var(--space-2) var(--space-3); padding: var(--space-2) var(--space-3); }
+.run[data-layout="narrow"] .run-listening { order: -1; flex: 1 1 100%; }
+.run[data-layout="narrow"] .run-protocol { display: none; }
+.run[data-layout="narrow"] .run-mic { display: none; }
+.run[data-layout="narrow"] .run-btn { padding: 0 var(--space-3); }
+.run[data-layout="narrow"] .run-main { padding: var(--space-4) var(--space-4) var(--space-6); gap: var(--space-4); }
+
+.run-btn { min-height: var(--run-target); padding: 0 var(--space-6); font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-btn svg { width: 28px; height: 28px; }
+/* [종료]: stop, the one place the danger colour is for. */
+.run-stop { border-color: var(--danger); background: var(--danger); color: var(--on-ink); }
+.run-stop:not(:disabled):hover { background: var(--danger); color: var(--on-ink); border-color: var(--ink); }
+
+/* The one listening word, large; a word the server dropped is the warning family. */
+.run-listening {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); min-height: var(--run-target); padding: 0 var(--space-4);
+  border: var(--border-state) solid var(--ink); border-radius: var(--radius);
+  font-size: var(--run-listening); line-height: var(--run-listening-line); font-weight: 700;
+}
+.run-listening svg { width: 1em; height: 1em; }
+.run-listening[data-word="misheard"] { border-color: var(--warning); border-left-width: 8px; background: var(--warning-soft); color: var(--warning-ink); }
+.run-listening[data-word="paused"] { background: var(--ink); color: var(--on-ink); }
+.run-listening[data-word="connecting"], .run-listening[data-word="reconnecting"], .run-listening[data-word="idle"] { border-color: var(--line-strong); color: var(--ink-muted); }
+.run-listening-hint { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+
+/* --- Alerts: sound held back, the microphone lost, a refusal --------------- */
+.run-alerts { grid-area: alerts; display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-4); }
+.run-alerts:not(:empty) { padding-top: var(--space-3); }
+.run-alert { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: var(--border-state) solid var(--ink); border-radius: var(--radius); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+
+/* --- The step, large ------------------------------------------------------ */
+.run-main { grid-area: main; overflow-y: auto; padding: var(--space-6) var(--space-6) var(--space-8); display: flex; flex-direction: column; gap: var(--space-6); }
+.run-step { display: flex; flex-direction: column; gap: var(--space-4); }
+.run-step-label { color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+.run-step-text { font-size: var(--run-step); line-height: var(--run-step-line); font-weight: 700; white-space: pre-wrap; }
+.run-step-text[data-length="long"] { font-size: var(--run-step-min); line-height: var(--run-step-min-line); }
+.run-step-waiting { color: var(--ink-muted); }
+.run-next { color: var(--ink-muted); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+.run-source summary { font-size: var(--run-status); line-height: var(--run-status-line); min-height: var(--run-target); }
+.run-source p { font-size: var(--run-next); line-height: var(--run-next-line); }
+.run-changes { margin: 0; padding-left: var(--space-6); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+
+.run-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: var(--border) solid var(--ink); border-radius: var(--radius); font-size: var(--run-next); line-height: var(--run-next-line); }
+.run-card[data-kind="confirm"], .run-card[data-kind="clarify"] { border-width: var(--border-state); border-color: var(--pending); }
+.run-card-head { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+.run-card[data-kind="confirm"] .run-card-head, .run-card[data-kind="clarify"] .run-card-head { color: var(--pending); }
+.run-card-text { white-space: pre-wrap; }
+.run-card-values { margin: 0; padding-left: var(--space-6); font-weight: 600; }
+.run-card-choices { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.run-timer-notice { display: flex; align-items: center; gap: var(--space-2); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+.run-timer-notice svg { width: 28px; height: 28px; }
+
+/* --- The timer: a chip in the bar, large from its last minute -------------- */
+.run-timer {
+  display: inline-grid; grid-template-columns: auto auto; align-items: center; gap: 0 var(--space-3); padding: var(--space-1) var(--space-3);
+  border: var(--border) solid var(--ink); border-radius: var(--radius); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600;
+}
+.run-timer-name { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--ink-muted); grid-column: 1 / -1; font-size: var(--text-label); line-height: var(--line-label); }
+.run-timer-name svg { width: 16px; height: 16px; }
+.run-timer-digits { font-variant-numeric: tabular-nums; font-weight: 700; }
+.run-timer-words { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.run-timer-bar { grid-column: 1 / -1; display: block; height: 4px; background: var(--bench); }
+.run-timer-bar span { display: block; height: 100%; background: var(--ink); }
+.run-timer[data-big="true"] {
+  display: grid; grid-template-columns: 1fr; justify-items: start; gap: var(--space-2); padding: var(--space-4) var(--space-6); border-width: var(--border-state);
+}
+.run-timer[data-big="true"] .run-timer-name { font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-timer[data-big="true"] .run-timer-digits { font-size: var(--run-timer); line-height: 1; }
+.run-timer[data-big="true"] .run-timer-words { position: static; width: auto; height: auto; overflow: visible; clip: auto; font-size: var(--run-next); line-height: var(--run-next-line); }
+.run-timer[data-big="true"] .run-timer-bar { width: 100%; height: 8px; }
+.run-timer[data-kind="done"] { border-color: var(--warning); border-left-width: 8px; background: var(--warning-soft); color: var(--warning-ink); }
+
+/* --- The pictures, large; a press opens one across the screen -------------- */
+.run-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); }
+.run-figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.run-figure-open { position: relative; display: block; width: 100%; padding: 0; border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); cursor: zoom-in; }
+.run-figure-image { display: block; width: 100%; height: min(44dvh, 520px); object-fit: contain; }
+.run-figure-zoom { position: absolute; right: var(--space-2); bottom: var(--space-2); display: inline-flex; padding: var(--space-2); border: var(--border) solid var(--ink); border-radius: var(--radius); background: var(--paper); }
+.run-figure-zoom svg { width: 24px; height: 24px; }
+.run-figure figcaption { display: flex; flex-wrap: wrap; gap: var(--space-2); font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-figure-origin { display: inline-flex; padding: 0 var(--space-2); border: var(--border) solid var(--ink); border-radius: var(--radius-small); font-weight: 600; }
+.run-figure[data-origin="drawn"] .run-figure-origin, .run-figure[data-origin="web"] .run-figure-origin { border-style: dashed; }
+.figure-backdrop { position: fixed; inset: 0; background: var(--paper); z-index: 60; }
+.figure-full { position: fixed; inset: 0; z-index: 61; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: var(--space-3); padding: var(--space-4); background: var(--paper); }
+.figure-full-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+.run-figure-full { width: 100%; height: 100%; object-fit: contain; }
+.figure-full-caption { font-size: var(--run-next); line-height: var(--run-next-line); }
+
+/* --- The records, beside the step ------------------------------------------ */
+.run-records { grid-area: side; display: flex; flex-direction: column; min-height: 0; border-left: var(--border) solid var(--line); background: var(--paper); }
+.run-records-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: var(--border) solid var(--line); }
+.run-records-head h2 { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 700; }
+.run-records-count { color: var(--ink-muted); font-weight: 600; }
+.run-records-actions { display: flex; gap: var(--space-2); }
+/* Folded (a narrow screen): the latest record in one line under the head. */
+.run-records-latest { display: flex; gap: var(--space-2); align-items: baseline; padding: var(--space-2) var(--space-4); font-size: var(--run-status); line-height: var(--run-status-line); white-space: nowrap; overflow: hidden; }
+.run-records-latest .run-record-text { overflow: hidden; text-overflow: ellipsis; }
+.run-records-note { padding: var(--space-2) var(--space-4); font-weight: 600; }
+.run-records .form-note { margin: var(--space-2) var(--space-4) 0; }
+.run-records-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--space-3) var(--space-4); }
+.run-records-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.run-records-list li { display: flex; flex-direction: column; gap: var(--space-1); padding-bottom: var(--space-3); border-bottom: var(--border) solid var(--line); font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-records-list li[data-state="retracted"] .run-record-text { text-decoration: line-through; color: var(--ink-muted); }
+.run-record-kind { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; }
+.run-record-kind svg { width: 16px; height: 16px; }
+.run[data-layout="narrow"] .run-records { border-left: 0; border-top: var(--border-state) solid var(--ink); }
+.run[data-layout="narrow"] .run-records-body { max-height: 36dvh; }
+.run[data-layout="narrow"] .run-records-head { padding: var(--space-2) var(--space-4); }
+
+/* --- The caption: two whole lines; a press opens the conversation ---------- */
+.run-caption {
+  grid-area: caption; display: flex; align-items: flex-start; gap: var(--space-3); width: 100%; padding: var(--space-3) var(--space-4); border: 0; border-radius: 0;
+  background: var(--ink); color: var(--on-ink); text-align: left; cursor: pointer;
+  font-size: var(--run-caption); line-height: var(--run-caption-line); font-weight: 400;
+}
+.run-caption svg { width: 28px; height: 28px; margin-top: 2px; flex: none; }
+.run-caption-box { position: relative; flex: 1 1 auto; min-width: 0; }
+.run-caption-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; min-height: calc(var(--run-caption-line) * 2); word-break: keep-all; overflow-wrap: anywhere; }
+/* The measure: the same words' box, unseen, to find what fits in two lines (CaptionBar's pages). */
+.run-caption-measure { position: absolute; left: 0; right: 0; top: 0; display: block; visibility: hidden; -webkit-line-clamp: none; line-clamp: none; overflow: visible; min-height: 0; pointer-events: none; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: min(520px, 100%); display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); background: var(--paper); border-left: var(--border) solid var(--line-strong); overflow-y: auto; }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.drawer-head h2 { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; }
+.drawer-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.drawer-log li { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); border: var(--border) solid var(--line); border-radius: var(--radius); font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
+.drawer-log li[data-who="heard"] { border-color: var(--line-strong); background: var(--bench); }
+.drawer-who { font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; color: var(--ink-muted); }
+.run-dialog p { margin-top: var(--space-2); }
+
+/* --- The pause: a band across the whole screen ----------------------------- */
+.run-paused {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-6);
+  padding: var(--space-6); background: rgba(28, 28, 26, 0.88); color: var(--on-ink); text-align: center;
+}
+.run-paused p { max-width: 960px; font-size: var(--run-step-min); line-height: var(--run-step-min-line); font-weight: 700; }
+.run-paused-resume { min-height: var(--run-target); border-color: var(--on-ink); background: var(--paper); color: var(--ink); font-size: var(--run-next); line-height: var(--run-next-line); }
+
+/* --- No run: an ordinary page ---------------------------------------------- */
+.run-empty { display: flex; flex-direction: column; gap: var(--space-4); max-width: 760px; }
+
+/* --- connection.js's band (lane NET), in this screen's colours: danger while
+       the connection is lost (a stop of the run), ink once it is back. ------ */
+body #connection-band { background: var(--danger); box-shadow: none; }
+body #connection-band[data-state="restored"] { background: var(--ink); }
+body #connection-band .connection-band-timer { border-radius: var(--radius); color: var(--danger); }
+body #run-timer #run-timer-offline { border-radius: var(--radius); background: var(--danger); }

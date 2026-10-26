@@ -41,7 +41,8 @@ describe("ProtocolsScreen", () => {
 
     const ready = within(rows[0]);
     expect(ready.getByText("바로 쓸 수 있어요")).toBeInTheDocument();
-    expect(ready.getByRole("link", { name: "시작하기" })).toHaveAttribute("href", "/index.html#/protocols/p-ready");
+    // Lane RX2: the start goes to the new screen's start flow (startHref).
+    expect(ready.getByRole("link", { name: "시작하기" })).toHaveAttribute("href", "#/start/p-ready");
     expect(ready.getByText("in-gel-digestion.pdf · 9단계 · 10월 19일 올림")).toBeInTheDocument();
 
     const analysing = within(rows[1]);

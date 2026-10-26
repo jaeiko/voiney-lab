@@ -4,7 +4,7 @@ import { useProtocolDetail, useProtocols, useSignOutOnExpiry } from "../api/quer
 import type { CatalogEntry } from "../api/types";
 import { Chip, EmptyBox, ErrorBox, LoadingBox } from "../components/Pieces";
 import { protocols as words, states } from "../copy/ko";
-import { oldRoutes, routes } from "../lib/navigation";
+import { oldRoutes, routes, startHref } from "../lib/navigation";
 import { entryAnalysing, protocolStatus, sortEntries, uploadedDay } from "../lib/protocolStatus";
 import { displayTitle } from "../lib/protocolTitle";
 
@@ -17,8 +17,8 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
     Number.isInteger(entry.step_count) && (entry.step_count as number) > 0 ? words.steps(entry.step_count as number) : null,
     uploadedDay(entry.created_at) ? words.uploaded(uploadedDay(entry.created_at) as string) : null,
   ].filter(Boolean);
-  // The start is still the old screen's detail (lane RX2 takes it over); the
-  // cards, a failed analysis and a running one open the new screens.
+  // The start opens lane RX2's start flow; the cards, a failed analysis and a
+  // running one open lane RX1's screens; anything else the old detail.
   const href =
     status.action === "review"
       ? routes.review(entry.protocol_id)
@@ -26,7 +26,9 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
         ? routes.analysis(entry.protocol_id)
         : status.kind === "analysing"
           ? routes.analysis(entry.protocol_id)
-          : oldRoutes.protocol(entry.protocol_id);
+          : status.action === "start"
+            ? startHref(entry.protocol_id)
+            : oldRoutes.protocol(entry.protocol_id);
   const actionLabel = status.action ? words.actions[status.action] : status.kind === "analysing" ? words.actions.progress : null;
   return (
     <li className="row" data-protocol-id={entry.protocol_id} data-status={status.kind}>

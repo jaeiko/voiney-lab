@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 from tests.test_screen_cleanup import INDEX, PRELUDE, ROOT
+from tests.static_page import page_script
 
 CONNECTION = ROOT / "src" / "voiney_lab" / "static" / "connection.js"
 
@@ -86,7 +87,7 @@ async function openRun(extra={}){
 
 def run_connection_script(body: str) -> subprocess.CompletedProcess:
     html = INDEX.read_text(encoding="utf-8")
-    script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+    script = page_script(html)
     harness = (
         PRELUDE + CLOCK + script + "\n" + CONNECTION.read_text(encoding="utf-8")
         + SOCKETS + "\n(async()=>{\n" + body

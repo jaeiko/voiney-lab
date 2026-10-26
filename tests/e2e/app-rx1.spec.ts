@@ -70,7 +70,8 @@ test.describe('The new screen: upload → pages → analysis → confirmation �
     expect(server.decisions).toHaveLength(2);
     expect(server.decisions[0]).toMatchObject({ item_id: 'step:s2', action: 'confirm', source_lines: { page: 1, first_line: 4, last_line: 4 } });
     await expect(page.getByTestId('review-start')).toHaveText('실험 시작');
-    await expect(page.getByTestId('review-start')).toHaveAttribute('href', '/index.html#/protocols/p-rx1-new');
+    // Lane RX2: the start goes to the new screen's start flow (startHref).
+    await expect(page.getByTestId('review-start')).toHaveAttribute('href', '#/start/p-rx1-new');
     // No internal word anywhere on these screens.
     for (const word of ['검토 대기', '검토본', '리비전', '카탈로그', 'OCR', '실행 불가']) await expect(page.getByText(word)).toHaveCount(0);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

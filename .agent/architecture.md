@@ -21,7 +21,7 @@ cleaning its temporary files. These workers share the process and stores,
 so there is no horizontal scaling or failover: one process, one data folder.
 
 ```text
-Browser / store-app WebView (static/index.html, connection.js, feedback.js)
+Browser / store-app WebView (static/index.html or web/ at /app/; voice-core.js, connection.js)
   AudioWorklet → 16 kHz PCM16 frames ─────────────► /ws  (server.voice_socket)
   canonical JSON events + audio segments ◄─ LockedSender
                                                     │
@@ -554,8 +554,11 @@ nothing.
 sheets. The tab bar is hidden during a run and before login. It renders
 canonical server snapshots and events only; workflow state is never inferred
 from assistant prose, and text is inserted with `textContent`.
-`connection.js` (loss and reconnection), `feedback.js` (end-of-run rating)
-and `mic-capture-worklet.js` (capture) load with it; `native-bridge.js` does
+`voice-core.js` (the socket, the microphone, the answer's audio, the
+server's clock, the screen lock — loaded just before the page's own script
+and shared with the new screen, lane RX2), `connection.js` (loss and
+reconnection), `feedback.js` (end-of-run rating) and `mic-capture-worklet.js`
+(capture) load with it; `native-bridge.js` does
 not yet. `admin-metrics.html` is a separate page.
 The upload screen's public Drive/Docs form calls `/api/protocols/import-link`
 and shares the file upload's response handling, analysis/OCR polling and
@@ -610,9 +613,18 @@ build present, else serves `index.html` as before. The launchers call
 `web/build.sh` and go on without the new screen when node is missing or the
 build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its own
 (`#/upload`, `#/protocols/<id>/analysis`, `#/protocols/<id>/review`,
-`#/protocols/<id>/changes` — lane RX1); a route it has not taken over
-(`#/protocols/<id>`, `#/experiment`, `#/records…`, `#/settings`) is opened
-on the old screen at `/index.html`.
+`#/protocols/<id>/changes` — lane RX1; `#/start`, `#/start/<id>`,
+`#/experiment`, `#/settings`, `#/welcome` — lane RX2); a route it has not
+taken over (`#/protocols/<id>`, `#/records…`) is opened on the old screen at
+`/index.html`. Its experiment screen does not reimplement the voice: it
+loads `/voice-core.js` and `/connection.js` as classic scripts and
+`web/src/voice/engine.ts` defines the names they call
+(`VOICE_CORE_HOST_NAMES`, connection.js's per-turn maps and renderers), reads
+the session's events (the audio and fence conditions as index.html's
+`onMessage`; `tests/test_lane_rx2_voice_core.py` compares them) and draws the
+server's protocol state through `runModel.ts`. The start flow, the settings
+and the first guide use the same HTTP routes as the old start sheet and
+settings.
 It holds no workflow state: the home's one card and the list's chips are
 read from `/api/auth/session`, `/api/protocols`, `/api/protocols/{id}`
 (`analysis_run` for a row being analysed), `/api/workspace/experiments` and

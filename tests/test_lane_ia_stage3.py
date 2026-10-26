@@ -22,6 +22,7 @@ import unittest
 
 from tests.test_lane_ia_tabs import run
 from tests.test_screen_cleanup import INDEX
+from tests.static_page import page_script
 
 STAGE3 = r"""
 const ENDED={...RESUMABLE,session_id:"s-8",status:"stopped",current_step_label:"5",started_at:"2026-10-18T01:00:00+00:00"};
@@ -42,7 +43,7 @@ class AddressTests(unittest.TestCase):
 
     def test_every_request_and_the_socket_go_through_one_function(self) -> None:
         html = INDEX.read_text(encoding="utf-8")
-        script = html.split("<script>", 1)[1]
+        script = page_script(html)
         self.assertEqual(re.findall(r"""(?<![\w.])fetch\(\s*["`]/""", script), [], "a request names its address itself")
         self.assertNotIn("location.host", script)
         self.assertEqual(script.count("new WebSocket("), 1)
