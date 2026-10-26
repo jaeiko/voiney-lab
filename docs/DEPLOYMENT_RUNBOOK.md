@@ -90,7 +90,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-- 저장소를 `/opt/voineylab` 에 두고, 그 안에 `.venv` 와 `.env`(커밋하지 않음, 키는 여기만)를 둔다. 실행기가 `exec` 로 uvicorn 을 띄우므로 systemd 가 그 프로세스를 그대로 본다.
+- 저장소를 `/opt/voineylab` 에 두고, 그 안에 `.venv` 와 `.env`(커밋하지 않음)를 둔다. API 키는 `.env`에, Google V2 서비스 계정 JSON은 위 안내대로 저장소 밖에 둔다. 실행기가 `exec` 로 uvicorn 을 띄우므로 systemd 가 그 프로세스를 그대로 본다.
 - 전용 비루트 사용자로 돌린다. 데이터는 저장소 안 `data/runtime/pilot/` 이다.
 
 ## 3. 기관 안전 문서 카탈로그 (선택)
