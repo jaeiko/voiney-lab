@@ -520,13 +520,15 @@ GENERAL_WORDS = frozenset({
     "pbs", "pbs-t", "pbst", "dpbs", "tbs", "tbs-t", "tbst", "tween", "tween-20", "tween 20", "saline",
     "젤", "겔", "세포", "단백질", "샘플", "시료", "용액", "버퍼", "튜브", "물", "온도", "시간", "단계",
 })
-#: What a step handles things with -- containers and hand tools. Said by the
-#: person they are what the problem is about ("피펫에서 새"); in the step's
-#: own words they are incidental ("using a pipette, add …").
+#: What a step handles things with -- containers, hand tools and parts. Said
+#: by the person they are what the problem is about ("피펫에서 새", "뚜껑이
+#: 헐거워"); in the step's own words they are incidental ("using a pipette,
+#: add …", "cap the tube", the "plug" of "gel plug").
 STEP_TOOL_WORDS = frozenset({
     "tube", "tubes", "microcentrifuge tube", "centrifuge tube", "conical tube", "flask", "erlenmeyer flask",
     "beaker", "vial", "petri dish", "dish", "bottle", "pipette", "pipet", "micropipette", "tip", "tips",
     "syringe", "glove", "gloves", "balance", "thermometer", "plate", "microplate", "rack", "ice",
+    "cap", "caps", "lid", "plug", "power", "lamp", "holder", "nozzle", "cabinet", "tank", "pump",
 })
 #: The lab lexicon's entries that name an action or a technique, not a thing a
 #: step handles: they are not a step's key words.

@@ -145,6 +145,22 @@ class GlossaryTests(unittest.TestCase):
         self.assertEqual(hits[0].detail("problem_shares"), "polymerization")
 
 
+class StepPartTests(unittest.TestCase):
+    def test_a_part_named_in_a_step_is_not_its_key_word_but_one_said_is(self) -> None:
+        # The fourth offline run (2026-10-26): the list's "플러그 = plug" found
+        # "plug" inside the step's "gel plug" and a methanol spill record was
+        # attached to "시료를 흘렸어".
+        glossary = load_glossary()
+        query = problem_query("시료를 흘렸어", "3 Cut the gel plug and cap the tube; power the heater.", glossary)
+        assert query is not None
+        self.assertNotIn("plug", query.subjects)
+        self.assertNotIn("cap", query.subjects)
+        self.assertNotIn("power", query.subjects)
+        said = problem_query("뚜껑이 헐거워", "11 Cover the vessel.", glossary)
+        assert said is not None
+        self.assertIn("cap", said.said)
+
+
 class LoadTests(unittest.TestCase):
     def test_the_server_reads_the_list_with_the_wikidata_glossary(self) -> None:
         settings = PublicKnowledgeSettings(enabled=True, project_id="p", project_key="k")
