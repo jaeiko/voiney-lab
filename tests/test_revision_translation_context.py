@@ -190,8 +190,10 @@ class SentenceContextTests(unittest.TestCase):
             [step["step_label"] for step in context.neighbourhood([0])], ["1", "2"])
 
     def test_the_style_is_the_reviewed_in_gel_style(self) -> None:
+        # Lane SAY, decision 3 (2026-10-25): ordinary words are now "the Korean
+        # labs use", and 합니다체 is named only to forbid it.
         for phrase in ("합니다체", "'당신'", "'단계: '", "'예상 결과: '",
-                       "original English spelling", "Write ordinary words in Korean",
+                       "original English spelling", "Write everyday lab words in the Korean labs use",
                        "exactly as written"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, STYLE_GUIDE)

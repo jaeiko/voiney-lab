@@ -2,7 +2,7 @@
   "name": "voineylab-mobile",
   "private": true,
   "version": "0.1.0",
-  "description": "VoineyLab store app shell (Capacitor). Wraps the server's web screen and adds device features only; the server stays the workflow authority. See docs/APP_PLAN.md.",
+  "description": "Voiney Lab store app shell (Capacitor). Wraps the server's web screen and adds device features only; the server stays the workflow authority. See docs/APP_PLAN.md.",
   "scripts": {
     "sync": "node scripts/prepare-web.mjs && cap sync android",
     "build:debug": "node scripts/prepare-web.mjs && cap sync android && cd android && ./gradlew assembleDebug"

@@ -1,4 +1,4 @@
-# mobile/ — VoineyLab 스토어 앱 (줄 APP0 뼈대 · 줄 APP1 플러그인)
+# mobile/ — Voiney Lab 스토어 앱 (줄 APP0 뼈대 · 줄 APP1 플러그인)
 
 왜 이렇게 만들었는지, 권한·심사·결제·오프라인 계획은 [`docs/APP_PLAN.md`](../docs/APP_PLAN.md) 에 있다. 이 파일은 만드는 법만 적는다.
 

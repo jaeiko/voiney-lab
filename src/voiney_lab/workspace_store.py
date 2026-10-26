@@ -921,6 +921,11 @@ EXPERIMENTER_SETTING_VALUES: dict[str, tuple[str, ...] | None] = {
     "speaker_sensitivity": ("high", "normal", "low"),
     "agent_voice": None,
     "voice_calibration": ("none", "measured", "skipped"),
+    # Lane HEAR, decision 2: the level filter is the person's own choice, and
+    # the measured voice ("v1:<dBFS>:<unix seconds>:<microphone id>", or
+    # "none") is written by the server's measurement only.
+    "speaker_filter": ("off", "on"),
+    "voice_reference": None,
 }
 _SETTING_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,79}$")
 

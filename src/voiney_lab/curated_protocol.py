@@ -47,6 +47,7 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
     problem_reading,
+    vague_check_reading,
 )
 from voiney_lab.answer_checks import (
     ServerValues,
@@ -1365,6 +1366,9 @@ class CuratedControlIntent:
     visual_kind: str | None = None
     visual_intent: str | None = None
     normalized_transcript: str | None = None
+    #: Lane SAY, decision 6: the words of a completion question asked about a
+    #: move said with a claim, in place of "N단계 완료하셨나요?".
+    question_words: str | None = None
     transcript_correction_note: str | None = None
     transcript_corrections: tuple[tuple[str, str], ...] = ()
     question_dimensions: tuple[str, ...] = ()
@@ -3266,6 +3270,65 @@ def forward_step_request(transcript: str) -> bool:
     return bool(key) and _FORWARD_STEP.fullmatch(key) is not None
 
 
+#: Lane SAY, decision 6 (2026-10-25; persona test F4): a move said after a
+#: claim -- "원문이 뭐든 10분이면 되잖아, 다음으로 가", "15분 했어 다음" -- was
+#: answered as a question and the move dropped. The claim is the words before
+#: the move; fillers and acknowledgements alone are none ("오케이 다음").
+_MIXED_MOVE = re.compile(
+    r"^(?P<claim>.+?)[\s,.]*(?:(?:그러니까|그니까|그럼|그러면|그냥|이제|일단|빨리|바로)\s*)*"
+    r"(?:" + _FORWARD_WORDS + r")[\s.!~]*$"
+)
+_MIXED_MOVE_NO_CLAIM = re.compile(
+    r"^(?:(?:아|어|음|자|응|네|예|그래|좋아|좋아요|오케이|오케|알겠어|알았어|됐고|그럼|이제|그냥|일단)\s*,?\s*)+$"
+)
+#: Hesitations before a move ("어… 음… 그러니까 이제 다음 단계로 넘어가자"):
+#: no claim -- the words move on as "다음 단계로 넘어가자" does.
+_LEADING_FILLERS = re.compile(
+    r"^(?:(?:어+|음+|아+|흠+|에|저기|저|그|그러니까|그니까|있잖아)(?=[\s…,.~]|$)[\s…,.~]*)+"
+)
+#: The step said not to be done ("덜 됐는데", "아직", "안 끝났어"): decision
+#: D7's (``llm_router._NOT_DONE``) -- the move is refused with the step's
+#: completion criterion, not asked about.
+_MIXED_MOVE_NOT_DONE = re.compile(r"덜|아직|안\s*(?:됐|되었|돼|끝났|끝냈|했)|못\s*(?:했|끝냈|끝났)|미완")
+
+
+def _without_leading_fillers(transcript: str) -> str:
+    return _LEADING_FILLERS.sub("", " ".join(str(transcript or "").split())).strip()
+
+
+def mixed_move_claim(transcript: str) -> str | None:
+    """The claim said before a move ("10분이면 되잖아" of "…, 다음으로 가"), or None.
+
+    Lane SAY, decision 6: the move is not dropped -- it is asked about once,
+    with the source's value when the claim states another. None for a move
+    alone (``forward_step_request``), a question, or no claim.
+    """
+
+    words = _without_leading_fillers(transcript)
+    if not words or re.search(r"[?？]", words) or forward_step_request(words):
+        return None
+    if is_question_or_speculation(words, punctuation=False):
+        return None
+    key = normalize_conversational_utterance(re.sub(r"[…]+", " ", words))
+    match = _MIXED_MOVE.fullmatch(key)
+    if match is None:
+        return None
+    claim = match["claim"].strip(" ,.")
+    if not claim or _MIXED_MOVE_NO_CLAIM.fullmatch(claim):
+        return None
+    return claim
+
+
+def _with_ro(word: str) -> str:
+    """The word with 로 or 으로, as its last letter takes it."""
+
+    last = word.strip()[-1:] or " "
+    if "가" <= last <= "힣":
+        final = (ord(last) - 0xAC00) % 28
+        return f"{word}{'로' if final in (0, 8) else '으로'}"
+    return f"{word}로"
+
+
 # Reading the source line back ("…탈색될 때까지 2-7단계를 반복합니다") names
 # the endpoint without reporting it.
 _SOURCE_RECITATION = re.compile(
@@ -3595,12 +3658,28 @@ _REPEAT_PATTERNS = (
         r"(?:줘|줘요|줄래|줄래요|주세요|줄\s*수\s*있어(?:요)?)?$"
     ),
     re.compile(r"^뭐라고(?:요|\s*(?:했어|했어요|하셨어요|하셨죠|그랬어|그랬어요))?$"),
+    # Lane SAY, decision 5: "다시", "한 번 더", "다시 한 번" said alone ask
+    # for the last guidance again; with a notebook question open they were
+    # written down as its answer.
+    re.compile(r"^(?:다시|한\s*번\s*더|다시\s*한\s*번)(?:\s*만)?(?:요)?$"),
     re.compile(
         r"^(?:방금|아까)\s*(?:거|것|말|답|답변|안내)?\s*다시"
         r"(?:\s*(?:말해|들려|해)\s*(?:줘|줘요|줄래|줄래요|주세요)?)?$"
     ),
 )
+#: Lane SAY, decision 5 (2026-10-25): "자세히" and its kin said alone --
+#: "더 자세히", "자세하게", "좀 더 설명해 줘", "더 알려줘" -- ask for the
+#: current step in detail. "차세이", "자세이" and "차세히" are how the STT
+#: heard "자세히" in the person's voice test (the purpose it stored).
+_DETAIL_WORD = r"(?:자세히|자세하게|상세히|상세하게|자세이|차세히|차세이)"
+_DETAIL_REQUEST = re.compile(
+    r"^(?:(?:좀|조금)\s*)?(?:더\s*)?(?:(?:좀|조금)\s*)?" + _DETAIL_WORD
+    + r"(?:\s*좀)?(?:요)?"
+    r"(?:\s*(?:알려|설명해|말해|얘기해)\s*(?:줘|줘요|줄래|줄래요|주세요))?$"
+    r"|^(?:(?:좀|조금)\s*)?(?:더\s*)?(?:쉽게\s*)?(?:설명해|알려)\s*(?:줘|줘요|줄래|줄래요|주세요)$"
+)
 _STEP_ELABORATION_PATTERNS = (
+    _DETAIL_REQUEST,
     re.compile(
         r"(?:(?P<label>[0-9]{1,2})\s*단계|현재\s*단계|이\s*단계)"
         r".*(?:조금\s*더|더\s*)?(?:자세|상세|설명)"
@@ -4079,6 +4158,10 @@ FRONT_RULES: dict[str, str] = {
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
     "targeted_completion": "a completion that names the current step (D2)",
+    "mixed_move": "a move said after a claim -- '원문이 뭐든 10분이면 되잖아, 다음으로 "
+                  "가', '15분 했어 다음' -- asked about once ('이대로 다음 단계로 갈까요?', "
+                  "with the source's value when the claim states another); nothing moves "
+                  "until the answer (lane SAY, decision 6)",
     "forward_step": "words that move on -- '다음', '다음 단계로', '넘어가', '다음으로 "
                     "가자' -- said as a command: the step is completed and the next "
                     "presented, '3단계 완료로 기록했어요.' first, with no question; "
@@ -4208,7 +4291,7 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
 #: Lane RA (decision a, 2026-10-12/13): with the router first, the front
 #: rules keep system information (the timer, the steps, the settings, the
 #: server's values), the re-asking of an ambiguous reference, the short clear
-#: commands and the replies to the server's own questions. These three are
+#: commands and the replies to the server's own questions. These are
 #: handed to the model instead: a note with words (record_log, where a value
 #: is compared with the source), a read-only question that names "2단계" or
 #: "이 단계" (the model reads the step from the snapshot), and a picture
@@ -4216,6 +4299,9 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
 #: write stays the rules': it asks what to write. Off, nothing is handed on.
 ROUTER_FIRST_HANDED_ON: frozenset[str] = frozenset({
     "note_record", "step_homophone", "visual_request",
+    # Lane SAY, decision 6: a move said with a claim ("민수야 다음 단계로
+    # 넘어가자" may be said to a colleague) is the model's to read first.
+    "mixed_move",
 })
 #: The protocol-query scopes that are server values (decision 3); purpose,
 #: overview, materials and the like stay with the model.
@@ -4260,6 +4346,26 @@ _NOTEBOOK_SKIP = re.compile(
 #: are completions, read as commands before this.
 _NOTEBOOK_BARE_YES_NO = re.compile(
     r"^(?:네|예|응|어|그래|맞아|아니|아니요|아뇨|아니야|아닙니다|yes|no)(?:\s*요)?[.!]*$"
+)
+#: Lane SAY, decision 5 (2026-10-25): an acknowledgement or "I don't know"
+#: to a notebook question skips it, as "넘어가" does -- it was written down
+#: as the purpose ("알겠어", "고마워", "확인").
+_NOTEBOOK_ACKNOWLEDGEMENT = re.compile(
+    r"^(?:(?:네|응|어)\s*)?(?:알겠어|알겠어요|알겠습니다|알았어|알았어요|고마워|고마워요|고맙습니다|"
+    r"감사해요|감사합니다|좋아|좋아요|좋습니다|오케이|오케|ok|okay|확인|확인했어|확인했어요|"
+    r"몰라|몰라요|모르겠어|모르겠어요|글쎄|글쎄요)[.!]*$"
+)
+#: Lane SAY, decision 5: short command words said alone are never the
+#: answer to a notebook question, whatever the rules make of them -- the
+#: sweep of 2026-10-25 found each written down as the purpose or an
+#: observation. "자세히" and its kin, "다시" and "한 번 더" are read by the
+#: rules themselves (``_DETAIL_REQUEST``, ``_REPEAT_PATTERNS``).
+_NOTEBOOK_SHORT_COMMAND = re.compile(
+    r"^(?:(?:좀|조금|더|다시)\s*)*"
+    r"(?:천천히|빨리|크게|작게|짧게|길게|이전|이전\s*단계|앞\s*단계|처음|처음으로|취소|그만|"
+    r"요약|요약해|원문|원문\s*그대로|그림|사진|도식|타이머|남은\s*시간|뭐|뭐야|응|어|한국어로|영어로|"
+    r"번역|번역해|다시\s*말해|다시\s*읽어|읽어)"
+    r"(?:\s*(?:말해|읽어|보여|띄워|해)?\s*(?:줘|줘요|줄래|줄래요|주세요))?(?:요)?[.!?]*$"
 )
 #: A request or an order anywhere in the words ("원문 그림 띄워 줘", "관찰
 #: 메모해 줘 멤브레인이 살짝 말랐어", "해라"): a command, whatever the rules
@@ -4433,6 +4539,31 @@ _RESUME_PATTERNS = (
     # "계속", "프로토콜 계속" said alone (lane RT, decision 4).
     re.compile(r"^(?:(?:프로토콜|실험)\s*)?계속$"),
 )
+#: Lane HEAR, decision 7 (2026-10-25): "이어서 하자" resumes a paused run too.
+#: Only while paused -- elsewhere "이어서" may continue an earlier run
+#: ("지난번처럼 이어서", lane EASY) -- so it is not one of _RESUME_PATTERNS.
+_PAUSED_RESUME_PATTERNS = (
+    re.compile(
+        r"^(?:(?:실험|프로토콜)\s*)?이어서(?:\s*(?:하자|할게요?|해|해줘|해요|합시다|가자|"
+        r"진행(?:해|해줘|해요|하자|할게요?)?))?$"
+    ),
+)
+
+
+def is_paused_resume_utterance(transcript: str) -> bool:
+    """Whether the words resume a paused run (lane HEAR, decision 7).
+
+    While a run is paused the server answers only these: the resume words
+    the front rules read (_RESUME_PATTERNS) and "이어서 하자" with its
+    endings. A question about them ("다시 시작할까요?") is not one.
+    """
+
+    if not isinstance(transcript, str) or not transcript.strip() or _asked(transcript):
+        return False
+    key = _utterance_key(transcript)
+    return any(pattern.search(key) for pattern in (*_RESUME_PATTERNS, *_PAUSED_RESUME_PATTERNS))
+
+
 # --- "재개" misheard while paused (lane XO, decision 8a) -----------------------
 #: The resume words of _RESUME_PATTERNS, each with the endings it is said
 #: with, as one string without spaces.
@@ -5813,7 +5944,13 @@ _PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
 #: Lane HELP: the record's category of a problem no anomaly pattern names.
 PROBLEM_CATEGORY = "unexpected_result"
 #: The intents the problem reader makes (front rule "problem_help").
-_PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet"})
+_PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet", "vague_check"})
+#: What the rules made of a move said with a claim before lane SAY (decision
+#: 6): the claim answered alone, or nothing; the move was dropped.
+_MIXED_MOVE_READINGS = frozenset({
+    CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.OFF_TOPIC,
+    CuratedProtocolAction.CLARIFY_PARAMETER, CuratedProtocolAction.QUESTION,
+})
 #: The anomalies whose help leaves out what a model may say (③): a spill,
 #: an exposure or a contamination is the source's and the lab's to speak to.
 _SAFETY_ANOMALY_CATEGORIES = frozenset({
@@ -7582,6 +7719,20 @@ def classify_curated_control_intent(
 
     if front := _front_control_intent(transcript, language):
         return front
+    if language == "ko" and vague_check_reading(transcript):
+        # Lane SAY, decision 7: a doubt with nothing named ("이거 맞아요?",
+        # "망한 것 같아요") is answered with what the step should look like,
+        # then the problem help -- before "이게" is read as a reference.
+        return CuratedControlIntent(
+            intent_kind="vague_check",
+            action=CuratedProtocolAction.COMPLETION_CRITERIA,
+            requested_followup="explain_completion_criteria",
+            target_step="authoritative_current_step",
+            question_kind="troubleshooting",
+            language=language,
+            normalized_transcript=_utterance_key(transcript),
+            question_dimensions=("troubleshooting",),
+        )
     if meta_intent := classify_agent_meta_intent(transcript, language=language):
         return meta_intent
 
@@ -7998,6 +8149,13 @@ def classify_curated_control_intent(
             language=language,
             allows_state_mutation=True,
         )
+    if _SOURCE_READ_ALOUD_REQUEST.fullmatch(key):
+        # Lane SAY, decision 1: the one request that reads the English.
+        return CuratedControlIntent(
+            intent_kind=SOURCE_READ_ALOUD_INTENT,
+            action=CuratedProtocolAction.FULL_DETAIL,
+            language=language,
+        )
     if key in _FULL_DETAIL_COMMANDS or _READ_ALOUD_REQUEST.fullmatch(key):
         return CuratedControlIntent(
             intent_kind="full_detail",
@@ -8014,6 +8172,9 @@ def classify_curated_control_intent(
                 target_step=label or "authoritative_current_step",
                 detail_level="detailed",
                 language=language,
+                # Lane SAY, decision 5: the bare detail words carry what was
+                # said, so the front rules can hand them on (see _front_rule_for).
+                normalized_transcript=key if pattern is _DETAIL_REQUEST else None,
             )
     if any(pattern.search(key) for pattern in _EXPECTED_RESULT_PATTERNS):
         return CuratedControlIntent(
@@ -8815,13 +8976,18 @@ def _protocol_query_presentation(
         step_id, _, fact_id = PURPOSE_FACT_KEY.partition("/")
         korean = fixture.localized_fact(step_id, fact_id)
         if language=="ko" and korean:
-            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
+            # Lane SAY, decision 4: said in 해요체, its first sentence read.
+            first = re.split(r"(?<=[.!?])\s+", " ".join(korean.split()), maxsplit=1)[0]
+            speech=(
+                f"원문에 적힌 실험 목적이에요. {first}" if len(first) <= 120
+                else "원문에 적힌 실험 목적을 화면에 띄웠어요."
+            )
             display=(
                 f"실험 목적\n{korean}\n\n원문 · English · PDF p.{page}\n"
                 f"{knowledge.purpose.text}"
             )
         elif language=="ko":
-            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
+            speech="원문에 적힌 실험 목적을 화면에 띄웠어요."
             display=(
                 f"실험 목적\n원문에 적힌 실험 목적입니다.\n\n원문 · English · PDF p.{page}\n"
                 f"{knowledge.purpose.text}"
@@ -9292,6 +9458,222 @@ def _without_step_prefix(label: str, text: str) -> str:
     return re.sub(rf"^\s*{re.escape(label)}\s*단계\s*:\s*", "", text).strip()
 
 
+# --- Korean first (lane SAY, decision 1, 2026-10-25) ---------------------------
+#
+# Human decision 1: the words said and shown are Korean first wherever a
+# source sentence is carried -- a step read, the next step, a preview, a range,
+# a completion condition, a warning, the purpose. A source sentence without a
+# Korean reading is translated in the turn by the translation role (server.py,
+# ``_korean_first``), used only when it passes the check; failing that, this
+# is said in its place and the source stays on the screen. The English is
+# read aloud only when asked for ("원문 그대로 읽어 줘").
+
+UNTRANSLATED_SPOKEN = "이 문장은 아직 번역되지 않았어요. 원문을 화면에 띄울게요."
+UNTRANSLATED_SPOKEN_AGAIN = "이것도 아직 번역되지 않았어요."
+UNTRANSLATED_SHOWN = "아직 번역되지 않은 문장은 원문 그대로 보여요."
+#: The one request that reads the source in English (decision 1).
+SOURCE_READ_ALOUD_INTENT = "source_read_aloud"
+_SOURCE_READ_ALOUD_REQUEST = re.compile(
+    r"^(?:(?:이|현재|지금)\s*(?:단계\s*)?)?(?:원문|영어\s*원문)(?:을|를)?\s*(?:그대로|대로)?\s*"
+    r"(?:영어로\s*)?(?:읽어|말해|들려)\s*(?:줘|줘요|주세요|줄래|줄래요)$"
+    r"|^(?:(?:이|현재|지금)\s*(?:단계\s*)?)?영어로\s*(?:그대로\s*)?(?:읽어|말해)\s*(?:줘|줘요|주세요|줄래|줄래요)$"
+)
+#: Words that make an English run a sentence rather than a name.
+_ENGLISH_FUNCTION_WORDS = frozenset({
+    "the", "a", "an", "of", "with", "to", "for", "in", "on", "at", "by", "and", "or",
+    "if", "until", "from", "into", "onto", "using", "use", "is", "are", "be", "was",
+    "were", "it", "this", "that", "these", "those", "each", "all", "not", "no", "do",
+    "then", "after", "before", "when", "while", "as", "per", "than", "about", "should",
+    "must", "will", "can", "may", "approximately", "repeat", "add", "remove",
+})
+_RUN_EDGE = "“”‘’\"'「」『』"
+_HANGUL_LETTER = re.compile(r"[가-힣]")
+
+
+def _normalized_words(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
+
+
+@dataclass(frozen=True)
+class SourceQuote:
+    """One source sentence (or phrase) a Korean reply carries in English."""
+
+    #: "<step_id>/<fact_id>" of the sentence, or "span:<sha256>" of a phrase.
+    key: str
+    #: What a translation reads: the whole sentence, or the phrase as said.
+    text: str
+    label: str | None
+    #: The sentence's kind ("step", "warning", ...), or "phrase".
+    kind: str
+    #: The protocol terms it uses (the check keeps them in English).
+    terms: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class KoreanFirstReading:
+    plan: "CuratedProtocolTurnPlan"
+    #: Every source quote the speech carried.
+    quotes: tuple[SourceQuote, ...] = ()
+    #: Those said as ``UNTRANSLATED_SPOKEN`` (no Korean reading yet).
+    untranslated: tuple[SourceQuote, ...] = ()
+    #: Keys whose Korean came from the server's in-turn readings.
+    readings_used: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _KoreanFirstIndex:
+    corpus: tuple[str, ...]
+    #: (key, kind, source text, step label, normalized text) per sentence.
+    units: tuple[tuple[str, str, str, str | None, str], ...]
+    names: tuple[str, ...]
+
+
+@functools.lru_cache(maxsize=32)
+def _cached_korean_first_index(key: _FixtureContentKey) -> _KoreanFirstIndex:
+    from voiney_lab.protocol_translation import translation_units  # imports this module
+
+    fixture = key.fixture
+    texts: list[str] = []
+    for index in range(len(fixture.steps)):
+        texts.extend(fact.text for fact in fixture.facts_for_step(index))
+    protocol = fixture.draft.protocol
+    for construct in getattr(protocol, "constructs", ()) or ():
+        for name in ("condition_source_text", "source_text"):
+            value = getattr(construct, name, None)
+            if isinstance(value, str):
+                texts.append(value)
+        evidence = getattr(construct, "evidence", None)
+        if evidence is not None:
+            texts.append(str(getattr(evidence, "source_excerpt", "") or ""))
+    for reason in getattr(fixture.draft.readiness, "reasons", ()) or ():
+        evidence = getattr(reason, "evidence", None)
+        if evidence is not None:
+            texts.append(str(getattr(evidence, "source_excerpt", "") or ""))
+    extraction = getattr(fixture.draft, "extraction", None)
+    for page in getattr(extraction, "pages", ()) or ():
+        texts.append(str(getattr(page, "text", "") or ""))
+    units = []
+    for unit in translation_units(fixture):
+        texts.append(unit.source_text)
+        units.append((unit.fact_key, unit.kind, unit.source_text, unit.step_label,
+                      _normalized_words(unit.source_text)))
+    names = {
+        _normalized_words(term.text)
+        for term in ProtocolVocabulary.from_fixture(fixture).terms
+    }
+    names.update(_normalized_words(source) for source, _ in (fixture.translation_glossary or ()))
+    # The protocol's and its sections' titles are names, said as written
+    # ("Voiney Lab입니다. 선택한 In-gel digestion protocol … 프로토콜이").
+    names.add(_normalized_words(str(getattr(fixture, "title", "") or "")))
+    names.update(
+        _normalized_words(str(getattr(section, "title_source_text", "") or ""))
+        for section in getattr(protocol, "sections", ()) or ())
+    return _KoreanFirstIndex(
+        corpus=tuple(dict.fromkeys(_normalized_words(text) for text in texts if text.strip())),
+        units=tuple(units),
+        names=tuple(sorted((name for name in names if name), key=len, reverse=True)),
+    )
+
+
+def _english_runs(text: str) -> list[tuple[int, int]]:
+    """(start, end) of each stretch of words with no Hangul in them.
+
+    A word that closes a quote and runs on into Korean ("00:15:00’라고")
+    ends the stretch with its part before the quote mark.
+    """
+
+    runs: list[tuple[int, int]] = []
+    start = end = None
+    for match in re.finditer(r"\S+", text):
+        if _HANGUL_LETTER.search(match.group()):
+            closing = re.match(r"([^가-힣]*?)[”’\"']", match.group())
+            if closing and closing.group(1) and start is not None:
+                end = match.start() + len(closing.group(1))
+            if start is not None:
+                runs.append((start, end))
+            start = end = None
+            continue
+        if start is None:
+            start = match.start()
+        end = match.end()
+    if start is not None:
+        runs.append((start, end))
+    trimmed = []
+    for start, end in runs:
+        while start < end and (text[start] in _RUN_EDGE or text[start] in "([:·-"):
+            start += 1
+        while end > start and (text[end - 1] in _RUN_EDGE or text[end - 1] in ".,;:!?"):
+            end -= 1
+        if end > start:
+            trimmed.append((start, end))
+    return trimmed
+
+
+def _is_source_sentence(run: str, index: _KoreanFirstIndex) -> bool:
+    """A run is a source sentence: it is in the source, and not just names."""
+
+    normalized = _normalized_words(run)
+    if not normalized or not any(normalized in text for text in index.corpus):
+        return False
+    rest = f" {normalized} "
+    for name in index.names:
+        rest = rest.replace(f" {name} ", " ")
+    words = [word for word in rest.split() if re.fullmatch(r"[a-z][a-z]*", word)]
+    return len(words) >= 4 or (
+        len(words) >= 2 and any(word in _ENGLISH_FUNCTION_WORDS for word in words))
+
+
+def _quote_for(run: str, index: _KoreanFirstIndex, label_near: str | None) -> SourceQuote:
+    normalized = _normalized_words(run)
+    containing = [unit for unit in index.units if normalized in unit[4]]
+    if containing:
+        key, kind, source, label, unit_words = min(containing, key=lambda unit: len(unit[4]))
+        body = re.sub(rf"^{re.escape(_normalized_words(label or ''))}\s+", "", unit_words) \
+            if label else unit_words
+        if len(normalized.split()) >= 0.6 * max(1, len(body.split())):
+            return SourceQuote(key, source, label, kind)
+        label_near = label_near or label
+    digest = hashlib.sha256(" ".join(run.split()).encode("utf-8")).hexdigest()
+    return SourceQuote(f"span:{digest}", " ".join(run.split()), label_near, "phrase")
+
+
+def _korean_in_place(korean: str, label: str | None, before: str) -> str:
+    """The reading as it stands in the reply: no second "N단계:" after one said."""
+
+    text = " ".join(korean.split())
+    if label and re.search(r"단계", before[-24:]):
+        text = _without_step_prefix(label, text)
+    return text
+
+
+def _untranslated_in_place(speech: str, start: int, end: int, said_before: bool) -> tuple[str, int, int]:
+    """Where the fallback goes: the run, with a lead-in or a quoting tail
+    ("원문에는 ‘…’라고 적혀 있어요") that only made sense around the English."""
+
+    sentence_start = max(
+        (match.end() for match in re.finditer(r"[.!?。](?=\s)|\n", speech[:start])), default=0)
+    lead = speech[sentence_start:start]
+    if re.search(r"[:：·]\s*[“‘\"']?\s*$", lead):
+        # "2단계: ", "원문 조건에 답해 주세요: “" -- the lead stays, its
+        # opening quote mark does not.
+        start = sentence_start + len(re.sub(r"\s*[“‘\"']\s*$", " ", lead))
+    else:
+        start = sentence_start
+    closing = re.match(r"[.!?,;:]*[”’\"']+", speech[end:])
+    cut = end + (closing.end() if closing else 0)
+    if _HANGUL_LETTER.match(speech[cut:cut + 1]):
+        # A particle or a quotative stuck to the quote ("…’라고 적혀 있어요."):
+        # the rest of that sentence goes with it.
+        stop = re.search(r"[.!?](?=\s|$)", speech[cut:])
+        cut += stop.end() if stop else len(speech) - cut
+    else:
+        stop = re.match(r"\s*(?:\([^()]*\))?\s*[.]", speech[cut:])
+        if stop:
+            cut += stop.end()
+    words = UNTRANSLATED_SPOKEN_AGAIN if said_before else UNTRANSLATED_SPOKEN
+    return words, start, cut
+
+
 def _spoken_summary_sentence(summary: str) -> str:
     """End one summary as a sentence: a finished Korean sentence keeps its own ending."""
 
@@ -9362,8 +9744,11 @@ _SOURCE_NEGATION = re.compile(
 #: Said before a source safety warning read in place of its Korean (lane TS,
 #: human decision 2 of 2026-10-08): the voice reads a warning's Korean only
 #: when it passes every check (``protocol_translation.statement_issue``).
+#: Lane SAY, decision 1 (2026-10-25): the English is no longer read aloud --
+#: the source stays on the screen, and a reading the server makes in the turn
+#: takes the place of the source and of this lead (``korean_first``).
 SAFETY_SOURCE_READ_LEAD = (
-    "이 안전 주의는 번역 확인이 안 돼서 원문을 읽어 드릴게요. 화면의 원문을 꼭 확인해 주세요."
+    "이 안전 주의는 아직 번역되지 않았어요. 화면의 원문을 꼭 확인해 주세요."
 )
 #: Lane FX, human decision 1 of 2026-10-07: the 없이 of "관계없이" and
 #: "상관없이" ("regardless") is not a negation, so a reading that drops the
@@ -9590,7 +9975,9 @@ def reader_translation_issue(
     if step_label:
         reading = re.sub(
             rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
-        source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
+        # The step's own number, "2 " or "1. " (lane SAY); not "1.5 mL".
+        source = re.sub(
+            rf"^\s*{re.escape(step_label)}(?![0-9]|\.[0-9])\.?\s*", "", source)
     if _quantities_changed(source, reading):
         return "quantities_changed"
     if bool(_SOURCE_NEGATION.search(source)) != bool(
@@ -12357,7 +12744,7 @@ class CuratedProtocolSession:
             quoted = " ".join(
                 str(reason.evidence.source_excerpt if reason.evidence else "").split()
             )
-            sentence = f"이 단계의 {name}은 아직 안내 기능이 없어요. 원문을 읽어 드릴게요."
+            sentence = f"이 단계의 {name}은 아직 안내 기능이 없어요. 원문을 확인해 주세요."
             if quoted:
                 sentence += f" “{quoted}”"
             sentences.append(sentence)
@@ -12979,6 +13366,62 @@ class CuratedProtocolSession:
             organization_id=organization_id, account_id=account_id,
             protocol_id=self.fixture.protocol_id, revision_id=self.fixture.revision_id,
             step_id=marker.get("step_id"), language=language,
+        )
+
+    def _vague_check_plan(
+        self, transcript: str, *, language: str, intent: CuratedControlIntent,
+    ) -> CuratedProtocolTurnPlan:
+        """"이거 맞아요?", "망한 것 같아요" (lane SAY, decision 7): what the step
+        should look like, said short, then the problem help.
+
+        The step's expected result as the source states it (its Korean
+        reading, or the source for the Korean-first step to read), or the
+        endpoint of a step repeated until it is reached, or that the source
+        states none. The server puts the protocol's and the earlier runs'
+        help after it (``problem_help``, lane HELP). Read-only: nothing is
+        recorded by this plan and nothing moves.
+        """
+
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        label = step.source_label
+        expected = next(
+            (fact for fact in self.fixture.facts_for_step(self.current_index)
+             if fact.kind == "expected_result"), None)
+        interval = self.repetition_anchored_at(step.step_id)
+        if expected is not None:
+            text = self._localized_fact(step.step_id, expected.fact_id) or expected.text
+            text = re.sub(r"^\s*예상\s*결과\s*[:：]\s*", "", " ".join(text.split()))
+            said = f"{label}단계는 이렇게 되면 돼요. {text}"
+            facts: tuple[CuratedProtocolFact, ...] = (expected,)
+        elif interval is not None and str(interval.get("source_text") or "").strip():
+            stated = " ".join(str(interval["source_text"]).split())
+            said = f"{label}단계는 원문의 이 상태가 되면 끝나요. “{stated}”"
+            facts = ()
+        else:
+            said = f"{label}단계 원문에는 확인할 결과가 따로 적혀 있지 않아요."
+            facts = ()
+        said = f"{said} 다르게 보이는 게 있으면 무엇이 다른지 말해 주세요."
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.COMPLETION_CRITERIA,
+            display_text=said,
+            speech_text=said,
+            speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+            facts=facts,
+            step_label=label,
+            final_step=self.current_index == len(steps) - 1,
+            state_changed=False,
+            primary_text=said,
+            source_texts=tuple(fact.text for fact in facts),
+            source_pages=tuple(fact.source_page for fact in facts),
+            evidence_ids=tuple(fact.fact_id for fact in facts),
+            translation_status="deterministic_protocol_structure",
+            intent_kind="vague_check",
+            target_step=label,
+            question_kind="troubleshooting",
+            normalized_transcript=intent.normalized_transcript,
+            question_dimensions=("troubleshooting",),
+            problem_help=self._problem_help_marker(transcript, kind="question"),
         )
 
     def _problem_help_plan(
@@ -15163,6 +15606,169 @@ class CuratedProtocolSession:
         ))
         return plan.step_label, statement, terms
 
+    def _mixed_move_question(self, claim: str) -> str:
+        """"이대로 다음 단계로 갈까요?" for a move said with a claim (decision 6).
+
+        A value of the claim that the step's source states otherwise is named
+        with the source's value, and the way to run with today's value
+        ("오늘 바꾼 값", lane EASY) is said.
+        """
+
+        step = self.fixture.steps[self.current_index]
+        label = step.source_label
+
+        def values(text: str) -> list[tuple[str, str]]:
+            found = []
+            for value in measured_values(text):
+                unit = run_unit(value.unit) if value.unit else None
+                if unit is not None and not value.name:
+                    found.append((value.number, unit.canonical))
+            return found
+
+        source = values(step.instruction_source_text)
+        for number, unit in values(claim):
+            family = run_unit(unit).family
+            alike = [item for item in source if run_unit(item[1]).family == family]
+            if alike and not any(_same_measure(number, unit, *item) for item in alike):
+                written, said = _value_said(alike[0]), _value_said((number, unit))
+                return (
+                    f"원문에는 {label}단계가 {_with_ro(written)} 적혀 있어요. "
+                    "이대로 다음 단계로 갈까요? "
+                    f"오늘 {_with_ro(said)} 하려면 '{label}단계 {written} 대신 {_with_ro(said)} "
+                    "할게'라고 말해 주세요."
+                )
+        return f"이대로 {label}단계를 마치고 다음 단계로 갈까요?"
+
+    def korean_first(
+        self,
+        plan: CuratedProtocolTurnPlan,
+        *,
+        language: str,
+        readings: Mapping[str, str] | None = None,
+    ) -> KoreanFirstReading:
+        """The reply with every source sentence it says put in Korean (lane SAY, decision 1).
+
+        A stretch of the speech that is a sentence of the source -- in the
+        source's text, and more than names kept in English -- is said in
+        Korean: the sentence's reviewed or stored reading, or ``readings``
+        (what the server translated in this turn, by sentence key). With
+        none, ``UNTRANSLATED_SPOKEN`` is said in its place, the source stays
+        on the screen and the quote is listed in ``untranslated``. The
+        screen's answer shows a Korean reading in place of the source where
+        one is used; a source section ("원문 · English") is left as it is.
+        Only "원문 그대로 읽어 줘" reads the English. Nothing in the session
+        changes.
+        """
+
+        speech = plan.speech_text
+        if (
+            language != "ko" or not isinstance(speech, str) or not speech.strip()
+            or plan.intent_kind == SOURCE_READ_ALOUD_INTENT
+            or getattr(plan, "speech_policy", "speak") != "speak"
+        ):
+            return KoreanFirstReading(plan)
+        index = _cached_korean_first_index(_fixture_content_key(self.fixture))
+        # English a Korean reading keeps ("Concentration (start) x Volume
+        # (start) = …", a formula) is part of that reading, not a quote.
+        kept = [
+            _normalized_words(text) for text in (
+                *(getattr(self.fixture, "localizations", None) or {}).values(),
+                *(getattr(self.fixture, "machine_localizations", None) or {}).values(),
+                *(readings or {}).values(),
+            ) if isinstance(text, str) and _HANGUL_LETTER.search(text)
+        ]
+        found = [
+            (start, end) for start, end in _english_runs(speech)
+            if _is_source_sentence(speech[start:end], index)
+            and not any(_normalized_words(speech[start:end]) in text for text in kept)
+        ]
+        if not found:
+            return KoreanFirstReading(plan)
+        from voiney_lab.protocol_translation import statement_issue  # imports this module
+
+        readings = readings or {}
+        vocabulary = self._protocol_vocabulary()
+        quotes: list[SourceQuote] = []
+        untranslated: list[SourceQuote] = []
+        used: list[str] = []
+        shown: list[tuple[str, str]] = []
+        out: list[str] = []
+        cursor = 0
+        said_fallback = False
+        for start, end in found:
+            if start < cursor:
+                continue  # taken with an earlier quote's sentence
+            run = speech[start:end]
+            quote = _quote_for(run, index, None)
+            quote = replace(quote, terms=tuple(dict.fromkeys(
+                term.text for term in vocabulary.terms
+                if _term_pattern(term.text).search(quote.text))))
+            quotes.append(quote)
+            korean = readings.get(quote.key)
+            if korean:
+                used.append(quote.key)
+            elif not quote.key.startswith("span:"):
+                step_id, _, fact_id = quote.key.partition("/")
+                korean = self._localized_fact(step_id, fact_id)
+                if korean and quote.kind == "warning" and statement_issue(quote.text, korean):
+                    korean = None  # lane TS: a warning's Korean passes every check
+            before = speech[cursor:start]
+            if korean:
+                text = _korean_in_place(korean, quote.label, speech[:start])
+                if speech[end:end + 1] in {".", "!", "?"}:
+                    text = text.rstrip(".!?")  # the reply's own sentence end stays
+                if before.rstrip().endswith(SAFETY_SOURCE_READ_LEAD):
+                    before = before.rstrip()[: -len(SAFETY_SOURCE_READ_LEAD)]
+                out.extend((before, text))
+                shown.append((run, text))
+                cursor = end
+                continue
+            untranslated.append(quote)
+            words, begin, cut = _untranslated_in_place(
+                speech, start, end,
+                said_fallback or "원문을 화면에 띄울게요" in speech[:start])
+            if speech[max(cursor, begin - 80):begin].rstrip().endswith(SAFETY_SOURCE_READ_LEAD):
+                words = ""  # the lead already says it is not translated
+            begin = max(begin, cursor)
+            out.append(speech[cursor:begin])
+            if words:
+                out.append(f" {words} ")
+            said_fallback = said_fallback or bool(words)
+            cursor = cut
+        out.append(speech[cursor:])
+        new_speech = re.sub(r"[ \t]{2,}", " ", "".join(out))
+        new_speech = re.sub(r" +([.,])", r"\1", new_speech).strip()
+        display = plan.display_text
+        primary = plan.primary_text
+        document = plan.display_document
+
+        def korean_shown(value: str | None) -> str | None:
+            if not isinstance(value, str):
+                return value
+            boundary = value.find("원문 · ")
+            for run, text in shown:
+                at = value.find(run)
+                if at >= 0 and (boundary < 0 or at < boundary):
+                    value = value[:at] + text + value[at + len(run):]
+                    boundary = value.find("원문 · ")
+            return value
+
+        display, primary = korean_shown(display), korean_shown(primary)
+        if untranslated and isinstance(display, str) and UNTRANSLATED_SHOWN not in display:
+            display = f"{UNTRANSLATED_SHOWN}\n\n{display}"
+            if isinstance(document, dict):
+                document = {**document, "sections": [
+                    {"kind": "section", "heading": "", "text": UNTRANSLATED_SHOWN},
+                    *(document.get("sections") or ())]}
+        changes: dict[str, Any] = {
+            "speech_text": new_speech or UNTRANSLATED_SPOKEN,
+            "display_text": display, "primary_text": primary, "display_document": document,
+        }
+        if used:
+            changes["translation_status"] = "model_assisted_unreviewed"
+        return KoreanFirstReading(
+            replace(plan, **changes), tuple(quotes), tuple(untranslated), tuple(used))
+
     def entity_source_answer(
         self,
         entity: str,
@@ -15429,7 +16035,7 @@ class CuratedProtocolSession:
 
         if intent.protocol_scope == "purpose":
             answer = (
-                f"활성 프로토콜 원문에 표시된 목적 또는 제목은 다음과 같습니다: {knowledge.purpose.text}"
+                f"이 프로토콜 원문에 적힌 목적이에요: {knowledge.purpose.text}"
                 if language == "ko" else
                 f"The active protocol source states this purpose or title: {knowledge.purpose.text}"
             )
@@ -15439,7 +16045,7 @@ class CuratedProtocolSession:
             )
         elif intent.question_kind == "protocol_benefit":
             answer = (
-                f"활성 원문에서 확인되는 범위는 ‘{knowledge.purpose.text}’입니다. 별도의 과학적 이점은 원문 근거 없이 추정하지 않습니다."
+                f"원문에서 확인되는 건 ‘{knowledge.purpose.text}’까지예요. 원문에 없는 이점은 추측해서 말하지 않아요."
                 if language == "ko" else
                 f"The active source supports only ‘{knowledge.purpose.text}’. I will not infer a separate scientific benefit without source evidence."
             )
@@ -15836,10 +16442,11 @@ class CuratedProtocolSession:
         if language == "ko":
             # The step's purpose is the section the source puts it in, named
             # as the source names it -- never a sentence written for one PDF.
+            # Lane SAY, decision 4: 해요체, short.
             if section_title:
-                purpose = f"원문의 ‘{concise(section_title, 90)}’ 구간을 수행하는 것"
+                purpose = f"원문의 ‘{concise(section_title, 90)}’ 부분"
             else:
-                purpose = "현재 PDF에 정의된 순서에 따라 후속 단계를 준비하는 것"
+                purpose = "원문 순서대로 다음 단계를 준비하는 단계"
 
             if warning_only:
                 speech = (
@@ -15849,15 +16456,17 @@ class CuratedProtocolSession:
                     else "현재 PDF에는 이 단계의 별도 주의사항이 명시되어 있지 않습니다. 추가 안전 판단은 담당자에게 확인해 주세요."
                 )
             else:
-                speech = f"이 단계의 수행 목적은 {purpose}입니다."
+                speech = f"이 단계는 {purpose}이에요." if purpose.endswith("분") else f"이 단계는 {purpose}예요."
                 if expected_facts:
                     localized_expected = (
                         self._localized_fact(step.step_id, expected_facts[0].fact_id)
                         or expected_facts[0].text
                     )
-                    speech += f" 원문이 제시한 확인 결과는 {concise(localized_expected)}"
+                    localized_expected = re.sub(
+                        r"^\s*예상\s*결과\s*[:：]\s*", "", localized_expected)
+                    speech += f" 원문에 적힌 확인 결과는 이래요. {concise(localized_expected)}"
                 else:
-                    speech += " 원문에는 별도의 과학적 작용 기전은 명시되어 있지 않습니다."
+                    speech += " 왜 하는지는 원문에 따로 적혀 있지 않아요."
                 if warning_facts:
                     speech += (
                         f" 주의할 점은 {spoken_warning(0)}"
@@ -17966,6 +18575,15 @@ class CuratedProtocolSession:
             # Lane HELP, decision 1: the help is the server's, from its own
             # sources (the protocol and the account's records), router or not.
             return "problem_help"
+        if (
+            intent.intent_kind == "step_elaboration"
+            and intent.normalized_transcript
+            and _DETAIL_REQUEST.fullmatch(intent.normalized_transcript)
+        ):
+            # Lane SAY, decision 5: "자세히" said alone may mean the last
+            # answer, which the router reads from its history; the rules'
+            # own route reads the current step in detail.
+            return None
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
@@ -18142,6 +18760,14 @@ class CuratedProtocolSession:
 
         if held is None:
             return planned
+        if (
+            self._last_front_rule == "mixed_move" and planned is not None
+            and not planned.state_changed
+        ):
+            # Lane SAY, decision 6: "원문이 뭐든 …, 다음으로 가" holds a
+            # question word but is a claim and a move; all the turn opened is
+            # the completion question, which only a later "네" answers.
+            return planned
         after = self._checkpoint()
         restored = list(held)
         # Replay and discourse may remember an answer; all workflow fields,
@@ -18256,7 +18882,10 @@ class CuratedProtocolSession:
         key = _semantic_utterance_key(transcript)
         if language != "ko" or transcript_quality is not None:
             return None
-        if not key or _NOTEBOOK_SKIP.fullmatch(key) or _NOTEBOOK_BARE_YES_NO.fullmatch(key):
+        if (
+            not key or _NOTEBOOK_SKIP.fullmatch(key) or _NOTEBOOK_BARE_YES_NO.fullmatch(key)
+            or _NOTEBOOK_ACKNOWLEDGEMENT.fullmatch(key)
+        ):
             self._notebook_question = None
             plan = self._words_plan(NOTEBOOK_SKIPPED_KO, intent_kind="notebook_question_skipped")
             self._last_front_rule = "notebook_question"
@@ -18292,6 +18921,9 @@ class CuratedProtocolSession:
             # rules make of it; words cut short ("… 이 단계에서 쓰는", lane
             # RA's fragment) are not an answer either -- the question stays.
             or _NOTEBOOK_REQUEST.search(probe)
+            # Lane SAY, decision 5: a short command word is not an answer.
+            or _DETAIL_REQUEST.fullmatch(_semantic_utterance_key(probe))
+            or _NOTEBOOK_SHORT_COMMAND.fullmatch(_semantic_utterance_key(probe))
             or incomplete_fragment(probe)
             # Lane EASY, decision 2: "1단계 15분 대신 20분으로 할게" changes
             # a value of today's run; it is no purpose or result.
@@ -18642,7 +19274,10 @@ class CuratedProtocolSession:
             fix = _NOTEBOOK_FIX.fullmatch(" ".join(transcript.split()))
             if fix is not None:
                 return self._plan_notebook_fix(fix, turn_id=turn_id)
-        if self._notebook_question is not None:
+        if self._notebook_question is not None and not (
+            # Lane HEAR, decision 7: a paused run's resume word resumes it.
+            self._pause_state == "paused" and is_paused_resume_utterance(transcript)
+        ):
             # Lane RP3, decision ② a, c, d: the words after a notebook question.
             # A server question open for this turn (a completion, an endpoint,
             # a value, the end, ...) is answered first; the notebook's waits.
@@ -19943,7 +20578,9 @@ class CuratedProtocolSession:
             and self._pause_state != "paused"
             # An open question is what it was: answered, or asked again.
             and open_questions.first_open is None
-            and forward_step_request(transcript)
+            # Lane SAY, decision 6: hesitations before the words do not
+            # make them a claim ("어… 음… 그러니까 이제 다음 단계로 넘어가자").
+            and forward_step_request(_without_leading_fillers(transcript))
         ):
             # Lane VX, decision 1: words that move on complete the step and
             # present the next one without a question -- unless the step's
@@ -19978,6 +20615,55 @@ class CuratedProtocolSession:
                     normalized_transcript=command_key,
                 )
         if (
+            front_rule is None
+            and language == "ko"
+            and transcript_quality is None
+            and self.active
+            and self._pause_state != "paused"
+            and open_questions.first_open is None
+            and intent.action in _MIXED_MOVE_READINGS
+            and (claim := mixed_move_claim(transcript)) is not None
+            and _MIXED_MOVE_NOT_DONE.search(claim) is not None
+        ):
+            if not front_only:
+                # Decision D7, on the rules' own route: "덜 됐는데 그냥 다음
+                # 단계 가자" stays, and the criterion is said (as the router's
+                # refused proposal is answered); with the router the turn is
+                # handed on as before.
+                intent = CuratedControlIntent(
+                    intent_kind="completion_not_reached",
+                    action=CuratedProtocolAction.COMPLETION_CRITERIA,
+                    target_step="authoritative_current_step",
+                    language=language,
+                    normalized_transcript=command_key,
+                )
+        elif (
+            front_rule is None
+            and language == "ko"
+            and transcript_quality is None
+            and self.active
+            and self._pause_state != "paused"
+            and open_questions.first_open is None
+            and intent.action in _MIXED_MOVE_READINGS
+            and (claim := mixed_move_claim(transcript)) is not None
+        ):
+            # Lane SAY, decision 6: a move said with a claim is asked about
+            # once -- with the source's value when the claim states another --
+            # and nothing moves until the answer.
+            front_rule = "mixed_move"
+            intent = CuratedControlIntent(
+                intent_kind="next_step_confirmation_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                requested_transition="next",
+                requested_followup="confirm_current_step_completion",
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                language=language,
+                allows_state_mutation=False,
+                normalized_transcript=command_key,
+                question_words=self._mixed_move_question(claim),
+            )
+        if (
             transcript_quality is not None
             and (
                 intent.action not in {
@@ -19998,12 +20684,19 @@ class CuratedProtocolSession:
                 confidence_source="provider_metadata",
                 language=language,
             )
-        if (
-            self._pause_state == "paused"
-            and intent.action is CuratedProtocolAction.START
-            and any(
-                pattern.search(intent.normalized_transcript or "")
-                for pattern in _RESUME_PATTERNS
+        if self._pause_state == "paused" and (
+            (
+                intent.action is CuratedProtocolAction.START
+                and any(
+                    pattern.search(intent.normalized_transcript or "")
+                    for pattern in _RESUME_PATTERNS
+                )
+            )
+            or (
+                # Lane HEAR, decision 7: "이어서 하자" resumes a paused run.
+                intent.action is not CuratedProtocolAction.RESUME
+                and any(pattern.search(_utterance_key(transcript)) for pattern in _PAUSED_RESUME_PATTERNS)
+                and not _asked(transcript)
             )
         ):
             # "재개", "프로토콜 재개" and "resume" are in the workflow-command
@@ -20107,7 +20800,7 @@ class CuratedProtocolSession:
                 self._pending_value_choice,
             ) = untouched
             return None
-        return self._execute_turn_intent(
+        planned = self._execute_turn_intent(
             intent,
             transcript=transcript,
             command_key=command_key,
@@ -20120,6 +20813,13 @@ class CuratedProtocolSession:
             open_question=open_question,
             forward_said=front_rule in {"forward_step", "targeted_completion"},
         )
+        if intent.intent_kind == "completion_not_reached" and language == "ko":
+            stay = f"아직 끝나지 않았다고 하셔서 {planned.step_label or ''}단계에 머뭅니다. "
+            planned = replace(
+                planned, display_text=stay + planned.display_text,
+                speech_text=stay + planned.speech_text)
+            self._replay[turn_id] = planned
+        return planned
 
     def _execute_turn_intent(
         self,
@@ -21496,6 +22196,11 @@ class CuratedProtocolSession:
                 target_step=next_label,
                 question_kind=intent.question_kind,
             )
+        elif (
+            command is CuratedProtocolAction.COMPLETION_CRITERIA
+            and intent.intent_kind == "vague_check"
+        ):
+            plan = self._vague_check_plan(transcript, language=language, intent=intent)
         elif command is CuratedProtocolAction.COMPLETION_CRITERIA:
             step = steps[self.current_index]
             step_facts = self.fixture.facts_for_step(self.current_index)
@@ -22183,8 +22888,13 @@ class CuratedProtocolSession:
                 self._replay[turn_id] = plan
                 return plan
             step = steps[target_index]
-            if intent.intent_kind == "full_detail":
-                localized = self._localized_fact(step.step_id, "current_step")
+            if intent.intent_kind in {"full_detail", SOURCE_READ_ALOUD_INTENT}:
+                # "원문 그대로 읽어 줘" (lane SAY, decision 1) reads the source
+                # itself, asked for; it is the one reply said in English.
+                as_source = intent.intent_kind == SOURCE_READ_ALOUD_INTENT
+                localized = (
+                    None if as_source
+                    else self._localized_fact(step.step_id, "current_step"))
                 response = _display_contract(
                     language,
                     (
@@ -22195,7 +22905,7 @@ class CuratedProtocolSession:
                     (step.instruction_source_text,),
                     (step.evidence.source_page_number,),
                     ("current_step",),
-                    translated=language != "ko" or localized is not None,
+                    translated=language != "ko" or localized is not None or as_source,
                 )
                 # Asked to hear the step, a Korean reader hears its reviewed
                 # Korean translation; with none, the source as before.
@@ -22531,7 +23241,7 @@ class CuratedProtocolSession:
                 response = ({
                 "en": "Have you completed the current step? No state has changed.",
                 "vi": "Bạn đã hoàn thành bước hiện tại chưa? Trạng thái chưa thay đổi.",
-                "ko": _completion_question(step.source_label),
+                "ko": intent.question_words or _completion_question(step.source_label),
             } if intent.intent_kind == "next_step_confirmation_required" else {
                 "en": (
                     f"Please confirm whether step {step.source_label} is complete "

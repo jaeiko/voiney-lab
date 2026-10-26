@@ -96,7 +96,7 @@ test.describe('Start wizard (lane ON)', () => {
     await expect(page.locator('#start-wizard')).toBeVisible();
     await expect(page.locator('body')).toHaveAttribute('data-wizard', 'on');
     await expect(page.locator('#start')).toBeHidden();
-    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
+    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인');
     // Lane EASY decision 2: one more step ("오늘 원문과 다르게 할 값").
     await expect(page.locator('#wizard-dots li')).toHaveCount(7);
     await expect(page.locator('#wizard-back')).toBeHidden();
@@ -146,6 +146,6 @@ test.describe('Start wizard (lane ON)', () => {
     await page.locator('#wizard-primary').click();
     await expect(page.locator('#wizard-title')).toHaveText('안내 목소리 고르기');
     await page.locator('#wizard-back').click();
-    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
+    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인');
   });
 });

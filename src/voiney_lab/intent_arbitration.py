@@ -235,6 +235,36 @@ _NOT_A_PROBLEM = (
 _PROBLEM_REQUEST_ENDING = r"(?:줘|주세요|줄래|주라|줄\s*수)$"
 
 
+#: Lane SAY, decision 7 (2026-10-25; persona test F3): a doubt about the
+#: bench with nothing named -- "망한 것 같아요", "이거 맞아요?", "잘 된 건가",
+#: "제대로 한 건지 모르겠어". The whole words, so "젤이 망한 것 같아" (a thing
+#: named) stays a problem for ``problem_reading``.
+_VAGUE_LEAD = r"^(?:(?:아|어|음|근데|그런데|혹시|저기|아니|흠)\s*,?\s*)*"
+_VAGUE_CHECK = (
+    _VAGUE_LEAD + r"(?:이거|이게|이건|다|나|저|제가|내가|지금)?\s*(?:완전히\s*|다\s*)?"
+    r"(?:망한|망친|망했|망쳤|망하|망치|잘못한|잘못된|잘못했|잘못\s*한|잘못\s*된|틀린|틀렸)"
+    r"(?:\s*(?:것|거|듯|건가|건지|나|나요|어|어요|네|는데|다))?(?:\s*(?:같아|같아요|같은데|같네|봐|봐요|나\s*봐))?"
+    r"(?:\s*(?:어떡해|어떡하지|어쩌지))?[.!?~]*$",
+    # Something must stand before 맞아: a bare "맞아" is a yes.
+    _VAGUE_LEAD + r"(?:(?:이거|이게|이건|이대로|이렇게|지금|제대로|맞게)\s*"
+    r"(?:(?:하는|한|된|되는|하고\s*있는|해도\s*되는)\s*)?(?:거|게|건)?"
+    r"|(?:하는|한|된|되는|하고\s*있는)\s*(?:거|게|건))\s*"
+    r"맞(?:아|아요|나|나요|는\s*거야|는\s*거예요|는\s*건가|는\s*건지|지|죠|을까|을까요)[.!?~]*$",
+    _VAGUE_LEAD + r"(?:이거|이게|지금|다)?\s*(?:잘|제대로)\s*(?:된|됐|되고\s*있는|한|했|하고\s*있는)\s*"
+    r"(?:건가|건가요|거야|거예요|건지|거\s*맞아|거\s*맞아요|나|나요|어|어요|을까|을까요)?"
+    r"(?:\s*(?:모르겠어|모르겠어요|모르겠네))?[.!?~]*$",
+    _VAGUE_LEAD + r"(?:이\s*정도면|이러면|이렇게\s*하면)\s*(?:돼|되나|되나요|될까|될까요|된\s*거야|괜찮아)[.!?~]*$",
+)
+
+
+def vague_check_reading(text: str) -> bool:
+    """Whether the words doubt the bench with nothing named (lane SAY, decision 7)."""
+
+    normalized = normalize_request_text(text)
+    return bool(normalized) and any(
+        re.fullmatch(pattern, normalized) for pattern in _VAGUE_CHECK)
+
+
 @dataclass(frozen=True)
 class ProblemReading:
     """A problem said or asked about, and which shape read it."""
@@ -295,6 +325,17 @@ def arbitrate_request(text: str) -> RequestArbitration:
             1.0,
             "protocol_version_or_hash",
             ("title", "protocol_version", "document_version", "checksum"),
+        )
+
+    if vague_check_reading(text):
+        # Lane SAY, decision 7: a doubt with nothing named is helped as a
+        # problem is (the step's expected result first).
+        return RequestArbitration(
+            normalized,
+            RequestIntent.TROUBLESHOOTING,
+            1.0,
+            "problem_vague_check",
+            ("troubleshooting",),
         )
 
     if _matches(normalized, _UNCERTAINTY_PATTERNS):

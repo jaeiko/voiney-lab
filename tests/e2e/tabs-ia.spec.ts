@@ -86,7 +86,7 @@ test.describe('Five tabs (lane IA)', () => {
     await page.locator('#home-cards .home-card[data-card="new-experiment"]').click();
     await expect(sheet).toBeVisible();
     await expect(page.locator('#start-wizard')).toBeVisible();
-    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인 · 목소리 맞추기');
+    await expect(page.locator('#wizard-title')).toHaveText('마이크 확인');
     await expect(page.locator('#tab-home')).toBeVisible();
     await expect(page).toHaveURL(/#\/home$/);
     expect((await page.locator('#wizard-primary').boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(64);

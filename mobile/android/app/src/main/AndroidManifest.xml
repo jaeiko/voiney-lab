@@ -43,7 +43,7 @@
 
         <!-- Lane APP1, decision 2: listening with the screen off (VoineyMicrophone
              plugin). Started only while the app is on screen; its notification
-             line says "VoineyLab 이 듣는 중" with a 끄기 action. -->
+             line says "Voiney Lab 이 듣는 중" with a 끄기 action. -->
         <service
             android:name=".mic.ListeningService"
             android:exported="false"

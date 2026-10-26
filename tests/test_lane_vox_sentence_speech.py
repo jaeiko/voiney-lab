@@ -43,7 +43,10 @@ STEP_2_SENTENCES = [
     "Remove Solution A and add 0.5 mL of Solution B.",
     "Keep the tube at -20 °C until the next step.",
 ]
-READ_THE_STEP = "지금 단계 읽어 줘"
+#: Lane SAY, decision 1 (2026-10-25): only "원문 그대로 읽어 줘" reads the
+#: English source aloud (a step with no Korean reading is said as not
+#: translated); it reads the same sentences "지금 단계 읽어 줘" read before.
+READ_THE_STEP = "원문 그대로 읽어 줘"
 #: One second of 16 kHz PCM16: fifty 20 ms frames.
 ONE_SECOND = b"\0\0" * 16000
 T0 = 1000.0

@@ -302,7 +302,8 @@ class XaiSupplementalKnowledge:
                             f"In one short sentence, say {about}, as it is used in the "
                             "protocol given. "
                             + (
-                                "Reply in polite Korean (해요체 or 합니다체), at most 80 "
+                                "Reply in polite informal Korean (해요체; never 합니다체, '귀하' "
+                                "or '당신'; lane SAY, decision 4), at most 80 "
                                 "characters, as the rest of a sentence that begins "
                                 "'일반적으로는' (do not repeat it). "
                                 if language == "ko" else

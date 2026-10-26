@@ -104,6 +104,14 @@ class KoreanTranscriptionAdmission:
 LANGUAGE_MISMATCH_CLARIFICATION_KO = (
     "음성 인식 언어가 불확실합니다. 다시 한 번 말씀해 주세요."
 )
+#: Lane HEAR, decision 8: words are clearly another language with at least
+#: this many Latin words, this many of them request words ("what", "can",
+#: "please", ...; the Vietnamese ones likewise).
+CLEAR_OTHER_LANGUAGE_WORDS = 3
+CLEAR_OTHER_LANGUAGE_REQUEST_WORDS = 2
+#: ... or this many Latin words whatever they are; or the provider's own
+#: label is English or Vietnamese for two words or more.
+CLEAR_OTHER_LANGUAGE_LONG_WORDS = 6
 
 
 _SHORT_KOREAN_DISCOURSE_ALIASES = {
@@ -205,8 +213,34 @@ def classify_korean_admission(
         )
 
     # Check for strong English request / contradiction without Hangul
-    ko_chars, en_words, _ = _signals(cleaned)
+    ko_chars, en_words, vi_words = _signals(cleaned)
     if ko_chars == 0 and (en_words >= 1 or len(tokens) >= 3 or detected_language == "en"):
+        # Lane HEAR, decision 8 (2026-10-25): the provider is sent the
+        # session's language, so its label says little, and Latin letters
+        # for Korean speech ("ok so thank you", a romanisation) are a turn
+        # misheard, not another language. Ask about the language only when
+        # the words are clearly English or Vietnamese; otherwise -- a single
+        # term, a short Latin phrase the provider labelled Korean -- the turn
+        # is dropped as unclear (recorded and shown, never asked about).
+        latin_words = len(_LATIN_WORD.findall(cleaned))
+        clearly_other = (
+            # The provider itself heard English or Vietnamese, in words, not a term.
+            (detected_language in {"en", "vi"} and latin_words >= 2)
+            # Or the words say so: request words in a sentence, or a long one.
+            or (latin_words >= CLEAR_OTHER_LANGUAGE_WORDS and (
+                en_words >= CLEAR_OTHER_LANGUAGE_REQUEST_WORDS
+                or vi_words >= CLEAR_OTHER_LANGUAGE_REQUEST_WORDS))
+            or latin_words >= CLEAR_OTHER_LANGUAGE_LONG_WORDS
+        )
+        if not clearly_other:
+            return KoreanTranscriptionAdmission(
+                raw_text=raw_text,
+                admitted_text=raw_text,
+                detected_language=detected_language,
+                expected_language=expected_language,
+                mismatch_status="unclear",
+                clarification_required=False,
+            )
         return KoreanTranscriptionAdmission(
             raw_text=raw_text,
             admitted_text=raw_text,
