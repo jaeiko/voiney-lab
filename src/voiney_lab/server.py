@@ -9319,7 +9319,9 @@ async def _korean_for_screen(session:ListenerSession,curated:CuratedProtocolSess
         return False
     fixture=curated.fixture
     key=translation_revision_key(fixture)
-    started=time.monotonic()
+    # The turn's clock (``run_turn``): one base for the retry times kept in
+    # ``_SPOT_ATTEMPTED``.
+    started=time.perf_counter()
     with _SPOT_LOCK:
         _SCREEN_TRANSLATING[key]=_SCREEN_TRANSLATING.get(key,0)+1
     try:
@@ -9336,7 +9338,7 @@ async def _korean_for_screen(session:ListenerSession,curated:CuratedProtocolSess
         log.info(
             "screen_korean quotes=%d asked=%d statuses=%s elapsed_ms=%d",
             len(quotes),asked,",".join(statuses) or "none",
-            round((time.monotonic()-started)*1000))
+            round((time.perf_counter()-started)*1000))
     if curated.fixture is not fixture:
         # Another update put readings on meanwhile; they are kept as they are.
         fixture_now=curated.fixture
