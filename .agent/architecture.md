@@ -432,7 +432,10 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `server._start_public_knowledge` and queried in process. A Korean
   question is joined by the English names of its words
   (`data/public_knowledge/glossary.json`, Wikidata labels, CC0) before the
-  query. Hits come by the index's score, a better source grade (A public
+  query; with a `custom` index (lane KNOW2) every query also carries its
+  vector from one pinned multilingual model run in process
+  (`public_knowledge.LocalEmbedder`, the index's pieces made with the same
+  model by the pipeline). Hits come by the index's score, a better source grade (A public
   institution / peer-reviewed, B open textbook, C wiki) first only where
   scores are close (lane KNOW2), with source, licence and address;
   what may be said from them is `answer_checks.public_reference_violations`

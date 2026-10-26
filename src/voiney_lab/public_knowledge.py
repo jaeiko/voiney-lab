@@ -1147,7 +1147,9 @@ class EmbeddingModel:
         return f"https://huggingface.co/{self.repo}/resolve/{self.revision}/{self.files[role][0]}"
 
 
-#: The models measured (lane KNOW2, 2026-10-26). Both 384 dimensions, int8.
+#: The pinned model (lane KNOW2, 2026-10-26): 384 dimensions, int8 weights,
+#: trained for retrieval with "query: "/"passage: " prefixes, XLM-R's
+#: sentencepiece vocabulary (Korean and English in one space).
 EMBEDDING_MODELS: Mapping[str, EmbeddingModel] = {
     "multilingual-e5-small": EmbeddingModel(
         name="multilingual-e5-small", repo="intfloat/multilingual-e5-small",
@@ -1155,22 +1157,10 @@ EMBEDDING_MODELS: Mapping[str, EmbeddingModel] = {
         files={
             "model": ("onnx/model_qint8_avx512_vnni.onnx",
                       "dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88"),
-            "tokenizer": ("onnx/tokenizer.json",
-                          "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"),
+            "pieces": ("sentencepiece.bpe.model",
+                       "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"),
         },
         dims=384, query_prefix="query: ", passage_prefix="passage: ",
-    ),
-    "paraphrase-multilingual-minilm-l12": EmbeddingModel(
-        name="paraphrase-multilingual-minilm-l12",
-        repo="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        revision="e8f8c211226b894fcb81acc59f3b34ba3efd5f42", licence="Apache-2.0",
-        files={
-            "model": ("onnx/model_quint8_avx2.onnx",
-                      "98a01d88b7de996cdea58c32ca71208c09968d143798814b2ea09d3439dc334f"),
-            "tokenizer": ("tokenizer.json",
-                          "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8"),
-        },
-        dims=384, max_tokens=128,
     ),
 }
 #: The model the server embeds queries with when its index is ``custom`` (lane
@@ -1240,35 +1230,65 @@ def ensure_model_files(
     return paths
 
 
-class LocalEmbedder:
-    """``model`` run in process on the CPU (onnxruntime, tokenizers): text in,
-    unit vectors out, mean-pooled over the tokens."""
+class _XlmrPieces:
+    """XLM-R's sentencepiece ids as the Hugging Face tokenizer gives them:
+    ``<s>`` 0, ``</s>`` 2, ``<unk>`` 3 and every other piece one above its
+    sentencepiece id (fairseq's offset). The same ids as the model's
+    ``tokenizer.json`` on 1,503 texts of the bundle (2026-10-26) in a fifth of
+    the memory (+66 MiB against +286 MiB)."""
 
-    def __init__(self, model: EmbeddingModel, paths: Mapping[str, Path], *, threads: int = 1) -> None:
+    def __init__(self, path: Path, max_tokens: int) -> None:
+        from sentencepiece import SentencePieceProcessor  # noqa: PLC0415
+
+        self._processor = SentencePieceProcessor(model_file=str(path))
+        self._max = max_tokens
+
+    def ids(self, text: str) -> list[int]:
+        body = [piece + 1 if piece else 3 for piece in self._processor.encode(text)]
+        return [0, *body[: self._max - 2], 2]
+
+
+class LocalEmbedder:
+    """``model`` run in process on the CPU (onnxruntime, sentencepiece): text
+    in, unit vectors out, mean-pooled over the tokens.
+
+    ``lean`` (the server's) turns onnxruntime's graph optimisation, weight
+    pre-packing and memory arena off: the int8 model then stays int8 in
+    memory -- about +135 MiB against +410 MiB, measured 2026-10-26 -- for
+    about 30 ms a query against 18 ms, with the same vectors (difference
+    under 1e-7). The pipeline's bulk embedding uses the fast session.
+    """
+
+    def __init__(self, model: EmbeddingModel, paths: Mapping[str, Path], *, threads: int = 1,
+                 lean: bool = True) -> None:
         try:
             import numpy  # noqa: PLC0415 - optional native dependencies, loaded on use
             import onnxruntime  # noqa: PLC0415
-            from tokenizers import Tokenizer  # noqa: PLC0415
+            import sentencepiece  # noqa: F401, PLC0415
         except ImportError as exc:
             raise KnowledgeUnavailable(
-                "onnxruntime", "onnxruntime, tokenizers or numpy is not installed (pip install -e .)") from exc
+                "onnxruntime", "onnxruntime, sentencepiece or numpy is not installed (pip install -e .)") from exc
         self.model = model
         self._numpy = numpy
-        self._tokenizer = Tokenizer.from_file(str(paths["tokenizer"]))
-        self._tokenizer.enable_truncation(max_length=model.max_tokens)
-        self._tokenizer.enable_padding()
+        self._pieces = _XlmrPieces(paths["pieces"], model.max_tokens)
         options = onnxruntime.SessionOptions()
         options.intra_op_num_threads = max(1, threads)
         options.inter_op_num_threads = 1
+        if lean:
+            options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL
+            options.enable_cpu_mem_arena = False
+            options.enable_mem_pattern = False
+            options.add_session_config_entry("session.disable_prepacking", "1")
         self._session = onnxruntime.InferenceSession(
             str(paths["model"]), options, providers=["CPUExecutionProvider"])
         self._inputs = {item.name for item in self._session.get_inputs()}
 
     def _run(self, texts: Sequence[str]) -> Any:
         np = self._numpy
-        encodings = self._tokenizer.encode_batch(list(texts))
-        ids = np.array([item.ids for item in encodings], dtype=np.int64)
-        mask = np.array([item.attention_mask for item in encodings], dtype=np.int64)
+        rows = [self._pieces.ids(text) for text in texts]
+        width = max(len(row) for row in rows)
+        ids = np.array([row + [1] * (width - len(row)) for row in rows], dtype=np.int64)  # <pad> is 1
+        mask = np.array([[1] * len(row) + [0] * (width - len(row)) for row in rows], dtype=np.int64)
         feed = {"input_ids": ids, "attention_mask": mask}
         if "token_type_ids" in self._inputs:
             feed["token_type_ids"] = np.zeros_like(ids)

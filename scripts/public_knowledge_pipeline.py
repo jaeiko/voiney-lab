@@ -1062,10 +1062,13 @@ def _book_page(source: Source, page_text: str, state: dict[str, Any]) -> str | N
 
 def pdf_pieces(source: Source, pages: Sequence[str], *, url: str, fetched_at: str) -> Iterator[Piece]:
     skip_before = int(source.option("skip_pages_before", 1) or 1)
+    last = int(source.option("skip_pages_after", 0) or 0)  # the last page taken (0: to the end)
     book: dict[str, Any] = {}
     for number, page_text in enumerate(pages, 1):
         if number < skip_before:
             continue
+        if last and number > last:
+            break
         running = _book_page(source, page_text, book)
         if running is None:
             continue
@@ -2066,7 +2069,7 @@ def embed(
     log(f"embed {model.key}: {len(texts)} documents, {len(todo)} to embed")
     if todo and embedder is None:
         paths = ensure_model_files(model, models_dir or model_directory(runtime_dir, model))
-        embedder = LocalEmbedder(model, paths, threads=threads)
+        embedder = LocalEmbedder(model, paths, threads=threads, lean=False)
     started = time.perf_counter()
     done = 0
     for start in range(0, len(todo), 64):

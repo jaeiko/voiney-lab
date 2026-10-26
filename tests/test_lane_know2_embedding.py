@@ -134,7 +134,7 @@ class StartTests(unittest.TestCase):
 class ModelFileTests(unittest.TestCase):
     def _model(self, content: bytes):
         digest = hashlib.sha256(content).hexdigest()
-        return replace(EMBEDDING_MODEL, files={"model": ("onnx/m.onnx", digest), "tokenizer": ("t.json", digest)})
+        return replace(EMBEDDING_MODEL, files={"model": ("onnx/m.onnx", digest), "pieces": ("s.model", digest)})
 
     def test_files_are_fetched_from_the_pinned_commit_once_and_checked(self) -> None:
         content = b"model bytes"

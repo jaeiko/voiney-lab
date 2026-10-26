@@ -68,6 +68,10 @@ python scripts/public_knowledge_pipeline.py glossary               # 용어집�
 # Moss 에 올린다. 키는 셸의 MOSS_PROJECT_ID·MOSS_PROJECT_KEY 또는 --env-file (값은 출력하지 않음).
 python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge --dry-run
 python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge --env-file .env
+# 다국어 임베딩(줄 KNOW2): 조각 벡터를 만들고(캐시, 이어서 됨) custom 색인으로 올린다.
+python -u scripts/public_knowledge_pipeline.py embed --model multilingual-e5-small
+python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --dry-run
+python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --env-file .env
 # 질문 세트로 FTS5 기준선과 Moss 를 잰다 (recall@k, 지연 p50/p95, 불러오기 시간, RSS 증가).
 python scripts/public_knowledge_pipeline.py evaluate --backend fts5 --questions data/fixtures/evaluation/public_knowledge_questions.json
 python scripts/public_knowledge_pipeline.py evaluate --backend moss --index voiney-public-knowledge --questions data/fixtures/evaluation/public_knowledge_questions.json --env-file .env --out /tmp/moss_eval.json
@@ -121,12 +125,26 @@ REST)는 robots.txt 가 막으므로 위키데이터의 PubChem CID(P662)나 목
   - **말**: "공개 자료에 관련 내용이 있어요."만. 조각의 문장·정의는 읽지 않고
     바꿔 말하지도 않는다; 내용은 화면에 표시·출처·라이선스와 함께.
   동작은 [`FEATURES.md`](FEATURES.md) F11·F20.
+- **다국어 임베딩**(사람 결정 2026-10-26 5번, 줄 KNOW2): Moss 의 내장 모델은
+  영어라, `custom` 색인(조각마다 우리가 만든 벡터)을 쓰면 서버가 질의마다 같은
+  모델로 벡터를 만들어 넘긴다. 모델은 `intfloat/multilingual-e5-small` 의 int8
+  ONNX(MIT, 커밋 `614241f6…` 고정, 파일마다 SHA-256 확인) — 질의 앞에
+  "query: ", 조각 앞에 "passage: ". 서버는 시작할 때 Moss 에 색인의 모델을
+  묻고, `custom` 이면 모델 파일을 캐시 폴더(`public-knowledge-cache/models/`)에서
+  찾거나 고정 커밋에서 한 번 받아 확인한 뒤 쓴다. 조각에 적힌 모델 이름
+  (`embedding`)이 다르면 이 등급을 끈다. 내장 모델 색인은 지금처럼 벡터 없이
+  묻는다. 서버의 임베더는 메모리를 아끼는 설정(그래프 최적화·가중치 묶기·메모리
+  아레나 끔, 어휘는 sentencepiece)으로 +225 MiB, 질의당 약 30 ms(2026-10-26 측정).
 
 ## 4. 한도와 확대
 
 - Moss 무료 단계(docs.moss.dev 가격표, 2026-10-24 읽음): 프로젝트 1, 색인 3,
   저장 500 MB, 올리기 50 MB/월, 내려받기 10 GB/월, 세션 60분/월. 로컬 질의는
-  세지 않는다.
+  세지 않는다. 2026-10-26 가격표: Developer 무료(월 $5 크레딧)·올리기 50 MB/월,
+  Hobbyist 월 $30·500 MB/월, Startup 월 $200·5 GB/월, 넘는 올리기는 MB 당
+  $0.03. 무엇이 올리기로 세어지는지(글·벡터·메타데이터)는 적혀 있지 않다.
+  custom 색인은 조각마다 벡터(384 × 4바이트 어림)를 함께 올린다
+  (`upload --embedding … --dry-run` 이 어림한다).
 - 메모리(Moss 문서의 측정치): 임베딩 모델 149 MiB(프로세스당 한 번), SDK
   37 MiB, 조각당 약 7 KB(한글은 약 2배), 불러오는 동안 색인 크기의 약 2배가
   더 든다. `status` 와 `upload --dry-run` 이 이 식으로 어림한다; 실측은 줄

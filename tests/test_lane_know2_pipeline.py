@@ -99,6 +99,14 @@ class TextbookTests(unittest.TestCase):
             self.assertNotIn("Chapter 1 |", piece.text)
 
 
+class PageRangeTests(unittest.TestCase):
+    def test_only_the_pages_between_the_bounds_are_taken(self) -> None:
+        source = _source(id="doe", kind="pdf", options={"skip_pages_before": 2, "skip_pages_after": 3})
+        pages = [f"Page {n}. " + LAB * 3 for n in range(1, 6)]
+        pieces = list(pk.pdf_pieces(source, pages, url="https://x/h.pdf", fetched_at="2026-10-26"))
+        self.assertEqual([piece.locator for piece in pieces], ["p. 2", "p. 3"])
+
+
 class BrokenPieceTests(unittest.TestCase):
     """A piece that reads as no running text -- a table run together, a book
     index, a reference list, exercises, formula markup -- is left out, with
