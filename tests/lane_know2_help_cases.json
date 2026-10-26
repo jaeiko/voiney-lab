@@ -1,0 +1,113 @@
+{
+ "description": "Lane KNOW2 (2026-10-26): problems said at the steps of the fictional coin cell protocol (tests/lane_know2_support.py), for rule 10's materials/battery check of the public tier's help. Utterances written by the lane before searching; not a person's set.",
+ "cases": [
+  {
+   "id": "M01",
+   "protocol": "coin_cell_fictional",
+   "step": "1",
+   "utterance": "슬러리가 뭉쳐",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M02",
+   "protocol": "coin_cell_fictional",
+   "step": "1",
+   "utterance": "슬러리에 거품이 생겼어",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M03",
+   "protocol": "coin_cell_fictional",
+   "step": "1",
+   "utterance": "PVDF가 NMP에 안 녹아",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M04",
+   "protocol": "coin_cell_fictional",
+   "step": "2",
+   "utterance": "코팅이 말라서 갈라졌어",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M05",
+   "protocol": "coin_cell_fictional",
+   "step": "2",
+   "utterance": "전극이 집전체에서 떨어져",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M06",
+   "protocol": "coin_cell_fictional",
+   "step": "3",
+   "utterance": "안티챔버 진공이 안 잡혀",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M07",
+   "protocol": "coin_cell_fictional",
+   "step": "4",
+   "utterance": "전해질을 흘렸어",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M08",
+   "protocol": "coin_cell_fictional",
+   "step": "4",
+   "utterance": "전해액이 뿌옇게 변했어",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M09",
+   "protocol": "coin_cell_fictional",
+   "step": "5",
+   "utterance": "크림핑했는데 셀에서 전해액이 새",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M10",
+   "protocol": "coin_cell_fictional",
+   "step": "5",
+   "utterance": "리튬 칩에 이물질이 묻어 오염된 것 같아",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M11",
+   "protocol": "coin_cell_fictional",
+   "step": "6",
+   "utterance": "셀이 너무 뜨거워져",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  },
+  {
+   "id": "M12",
+   "protocol": "coin_cell_fictional",
+   "step": "6",
+   "utterance": "왜 안 되지?",
+   "expect_help": true,
+   "expect_record": false,
+   "set": "materials"
+  }
+ ]
+}

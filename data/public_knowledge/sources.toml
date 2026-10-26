@@ -96,6 +96,98 @@ url = "https://www.cdc.gov/mmwr/preview/mmwrhtml/su6101a1.htm"
 version = "MMWR Suppl 2012;61(1)"
 requests_per_second = 1.0
 
+# v2 (lane KNOW2, person's decision 2026-10-26, 6: lane KAUDIT's P3 safety
+# and P4 equipment plan). U.S. Government works, each read for its licence
+# on 2026-10-26.
+
+[[source]]
+id = "nih-waste-2022"
+name = "NIH Waste Disposal Guide 2022"
+kind = "pdf"
+grade = "A"
+domains = ["biology", "chemistry", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.copyright.gov/title17/92chap1.html#105"
+license_checked = "2026-10-26"
+license_note = "Written by the NIH Office of Research Facilities (federal employees): not subject to copyright under 17 U.S.C. 105. NIH's own web-policy page answered 403 to the pipeline (as for lane KAUDIT on 2026-10-25)."
+terms = "https://orf.od.nih.gov/robots.txt disallows only /_layouts/, /_vti_bin/ and /_catalogs/; one file."
+url = "https://orf.od.nih.gov/EnvironmentalProtection/WasteDisposal/Documents/NIH-Waste-Disposal-Guide-2022-508Ready.pdf"
+page_url = "https://orf.od.nih.gov/EnvironmentalProtection/WasteDisposal/Pages/default.aspx"
+version = "2022 edition"
+requests_per_second = 1.0
+
+[[source]]
+id = "niosh-2012-147"
+name = "NIOSH General Safe Practices for Working with Engineered Nanomaterials in Research Laboratories (2012-147)"
+kind = "pdf"
+grade = "A"
+domains = ["materials", "chemistry", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.cdc.gov/other/agencymaterials.html"
+license_checked = "2026-10-26"
+terms = "CDC robots.txt allows /niosh/docs/; one file."
+url = "https://www.cdc.gov/niosh/docs/2012-147/pdfs/2012-147.pdf"
+page_url = "https://www.cdc.gov/niosh/docs/2012-147/default.html"
+version = "DHHS (NIOSH) Publication 2012-147, May 2012"
+requests_per_second = 1.0
+
+[[source]]
+id = "doe-hdbk-1092-2013"
+name = "DOE Handbook: Electrical Safety (DOE-HDBK-1092-2013), research and development chapter"
+kind = "pdf"
+grade = "A"
+domains = ["equipment", "materials", "safety"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.energy.gov/about-us/web-policies"
+license_checked = "2026-10-26"
+license_note = "energy.gov web policies: government information on DOE sites is in the public domain (acknowledgement requested). The handbook says it is approved for public release; distribution unlimited."
+terms = "https://www.energy.gov/robots.txt does not disallow /sites/default/files/; one file."
+url = "https://www.energy.gov/sites/default/files/2026-04/DOE-HDBK-1092-2013.pdf"
+page_url = "https://www.standards.doe.gov/standards-documents/1000/1092-BHdbk-2013"
+version = "DOE-HDBK-1092-2013 (July 2013)"
+requests_per_second = 1.0
+# Only chapter 13, Research & Development (PDF pages 163-189): laboratory and
+# experimental equipment; the rest is utility and construction work.
+skip_pages_before = 163
+skip_pages_after = 189
+
+[[source]]
+id = "fda-ora-lab-iv-1"
+name = "FDA ORA Laboratory Manual Vol. IV Section 1: Laboratory Orientation"
+kind = "pdf"
+grade = "A"
+domains = ["equipment", "chemistry"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.fda.gov/about-fda/about-website/website-policies"
+license_checked = "2026-10-26"
+license_note = "FDA website policies: information on FDA's website is not copyrighted and is in the public domain (lane KAUDIT read it on 2026-10-25)."
+terms = "https://www.fda.gov/robots.txt does not disallow /media/; one file."
+url = "https://www.fda.gov/media/73548/download"
+page_url = "https://www.fda.gov/science-research/field-science-and-laboratories/field-science-laboratory-manual"
+version = "MAN-000054 Revision 03 (2022-12-08)"
+requests_per_second = 1.0
+
+[[source]]
+id = "nistir-6969-2019"
+name = "NISTIR 6969: Selected Laboratory and Measurement Practices and Procedures to Support Basic Mass Calibrations (2019)"
+kind = "pdf"
+grade = "A"
+domains = ["equipment", "chemistry"]
+language = "en"
+license = "Public domain (U.S. Government work)"
+license_url = "https://www.nist.gov/open/copyright-fair-use-and-licensing-statements-srd-data-software-and-technical-series-publications"
+license_checked = "2026-10-26"
+license_note = "NIST: works authored by NIST employees are not subject to copyright protection within the United States; outside it NIST grants a non-exclusive, worldwide licence to reprint them. Material marked as copyrighted is not NIST's."
+terms = "nvlpubs.nist.gov has no robots.txt (404); one file."
+url = "https://nvlpubs.nist.gov/nistpubs/ir/2019/NIST.IR.6969-2019.pdf"
+page_url = "https://doi.org/10.6028/NIST.IR.6969-2019"
+version = "2019 edition (May 2019)"
+requests_per_second = 1.0
+
 # ---------------------------------------------------------------------------
 # Chemicals (grade A): PubChem records, kept only where the record's own
 # reference is a source whose terms were read.
@@ -281,7 +373,9 @@ license_note = "Each article's licence is read from the Europe PMC record (licen
 terms = "https://www.ebi.ac.uk/robots.txt sets no rule for /europepmc/webservices/ (User-agent: * has no Disallow for it); one request per second with the contact User-Agent."
 base_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/"
 requests_per_second = 1.0
-max_per_query = 3
+# 3 until 2026-10-26; 8 since lane KNOW2's v2 (person's decision 6: about
+# 2,400 pieces of methods and troubleshooting, lane KAUDIT's P5).
+max_per_query = 8
 # At most this many pieces of one article (long reviews would drown the rest).
 max_chunks_per_document = 40
 # Only these sections of an article, a nested one by its parents' titles too
@@ -313,6 +407,35 @@ queries = [
   "laboratory safety training OR chemical safety laboratory",
   "buffer preparation OR pH buffer laboratory",
   "pipetting accuracy OR pipette calibration",
+  # v2 (lane KNOW2, person's decision 2026-10-26, 6: lane KAUDIT's P5 --
+  # troubleshooting at the bench and battery and materials methods; only the
+  # methods, troubleshooting and notes sections are kept, see `sections`)
+  "western blot background OR nonspecific bands",
+  "PCR inhibition OR PCR inhibitors",
+  "primer dimer OR nonspecific amplification",
+  "qPCR troubleshooting OR qPCR optimization",
+  "cell culture contamination OR microbial contamination",
+  "mycoplasma detection",
+  "cell detachment OR trypsinization",
+  "ELISA optimization OR ELISA troubleshooting",
+  "flow cytometry troubleshooting OR flow cytometry pitfalls",
+  "transfection efficiency",
+  "plasmid DNA yield OR DNA yield",
+  "RNA degradation OR RNA integrity",
+  "protein aggregation OR inclusion body solubilization",
+  "acrylamide polymerization OR gel polymerization",
+  "glovebox OR inert atmosphere",
+  "lithium hexafluorophosphate electrolyte",
+  "thermal runaway OR battery abuse test",
+  "pouch cell OR coin cell",
+  "electrode coating OR calendering",
+  "lithium metal anode",
+  "perovskite film",
+  "nanoparticle synthesis",
+  "recrystallization",
+  "Schlenk line OR air-sensitive",
+  "column chromatography",
+  "protocol troubleshooting",
 ]
 pmcids = []
 
@@ -466,3 +589,10 @@ name = "ILO-WHO International Chemical Safety Cards (ICSCs), as PubChem cites th
 reason = "Left out by the person's decision of 2026-10-26 (lane KNOW2). PubChem's source table labels the cards CC BY 4.0, but the cards themselves say \"© ILO and WHO 2021 ... All rights reserved\" (the Korean cards \"© 한국어판, 고용노동부ㆍ산업안전보건공단, 2018\"), and ILO's copyright page puts only publications and databases from 2023-05-03 under CC BY 4.0 (lane KAUDIT read both on 2026-10-25). PubChem statements whose reference is the ICSC are no longer kept (about 524 pieces of the v1 bundle held ICSC text)."
 evidence_url = "https://www.ilo.org/global/copyright/lang--en/index.htm"
 checked = "2026-10-25"
+
+[[excluded]]
+id = "kr-lab-safety-act-annex-4"
+name = "연구실 안전환경 조성에 관한 법률 시행규칙 [별표 4] (law.go.kr)"
+reason = "Planned for v2 (lane KAUDIT's P3: Korean grade-A safety text; statutes are not protected works under Article 7 of the Korean Copyright Act) but not collected by lane KNOW2 (2026-10-26): the annex is an attachment served by a file number (flDownload.do?flSeq=…) that changes with each revision, in HWP, and the current text otherwise comes through the open API, which needs a key issued to a registered user. Left for a person to fetch the current annex by hand (PDF) and list it as a pdf source."
+evidence_url = "https://www.law.go.kr/LSW/flDownload.do?flSeq=144813025"
+checked = "2026-10-26"

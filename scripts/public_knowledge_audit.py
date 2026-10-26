@@ -116,6 +116,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIPELINE_SCRIPT = ROOT / "scripts" / "public_knowledge_pipeline.py"
 COVERAGE_FILE = ROOT / "data" / "fixtures" / "evaluation" / "public_knowledge_coverage.json"
 HELP_SET_FILE = ROOT / "data" / "fixtures" / "evaluation" / "problem_help_eval.json"
+#: Lane KNOW2's materials cases on its fictional coin cell protocol (rule 10).
+MATERIALS_CASES_FILE = ROOT / "tests" / "lane_know2_help_cases.json"
 STARTER_PACK_FILE = ROOT / "scripts" / "pilot_starter_pack.csv"
 IN_GEL_FIXTURE_DIR = ROOT / "data" / "fixtures" / "development_protocols"
 IN_GEL_PDF = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
@@ -1050,6 +1052,13 @@ def _help_environment(protocol_data_dir: Path) -> None:
 
 
 def _load_help_fixture(server: Any, name: str, protocol_ids: Mapping[str, str]) -> Any:
+    if name == "coin_cell_fictional":
+        # Lane KNOW2's fictional materials protocol (rule 10's materials/battery check).
+        spec = importlib.util.spec_from_file_location("lane_know2_support", ROOT / "tests" / "lane_know2_support.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module.coin_cell_fixture()
     if name == "in_gel":
         from voiney_lab.curated_protocol import load_curated_protocol_fixture  # noqa: PLC0415
 
@@ -1059,6 +1068,8 @@ def _load_help_fixture(server: Any, name: str, protocol_ids: Mapping[str, str]) 
             IN_GEL_PDF)
     catalog, store = server._open_protocol_catalog()
     try:
+        # What the server does at its start (a copied catalog may not have it yet).
+        catalog.prepare_source_metadata()
         fixture = catalog.load_executable_fixture(protocol_ids[name])
     finally:
         store.close()
@@ -1202,9 +1213,15 @@ def _sentences(text: str) -> list[str]:
 
 async def help_run(
     source: PublicKnowledgeSource, *, protocol_data_dir: Path, cases_file: Path = HELP_SET_FILE,
-    only_protocols: set[str] | None = None,
+    only_protocols: set[str] | None = None, extra_cases: Sequence[Path] = (MATERIALS_CASES_FILE,),
 ) -> dict[str, Any]:
-    """Lane HELP's set through the server's turn with the public tier on (offline fakes elsewhere)."""
+    """Lane HELP's set through the server's turn with the public tier on (offline fakes elsewhere).
+
+    ``extra_cases`` follow lane HELP's own set (lane KNOW2's materials cases
+    on a fictional coin cell protocol, for rule 10); ``by_set`` counts each
+    set apart, and the top-level numbers are lane HELP's set's alone, so they
+    stay comparable with lane KAUDIT's.
+    """
 
     _help_environment(protocol_data_dir)
     from voiney_lab import server  # noqa: PLC0415
@@ -1213,6 +1230,9 @@ async def help_run(
         os.environ.pop(name, None)
     protocol_ids = starter_pack_protocol_ids(protocol_data_dir)
     cases = json.loads(Path(cases_file).read_text(encoding="utf-8"))["cases"]
+    for extra in (extra_cases if Path(cases_file).resolve() == HELP_SET_FILE.resolve() else ()):
+        if Path(extra).is_file():
+            cases += json.loads(Path(extra).read_text(encoding="utf-8"))["cases"]
     public = RecordingSource(source)
     fixtures: dict[str, Any] = {}
     rows: list[dict[str, Any]] = []
@@ -1224,15 +1244,25 @@ async def help_run(
         if name == "in_gel" and not IN_GEL_PDF.is_file():
             skipped["in_gel_pdf_missing"] += 1
             continue
-        if name != "in_gel" and name not in protocol_ids:
+        if name not in ("in_gel", "coin_cell_fictional") and name not in protocol_ids:
             skipped[f"{name}_not_in_catalog"] += 1
             continue
         if name not in fixtures:
             fixtures[name] = _load_help_fixture(server, name, protocol_ids)
         rows.append(await _help_case(server, case, fixtures[name], public))
-    helped = [row for row in rows if row["expect_help"]]
+    extra_rows = [row for row in rows if row["set"] == "materials"]
+    rows_of_help_set = [row for row in rows if row["set"] != "materials"]
+    helped = [row for row in rows_of_help_set if row["expect_help"]]
     latencies = [row["search_ms"] for row in rows if row["search_ms"] is not None]
+    by_set: dict[str, dict[str, int]] = {}
+    for row in rows:
+        counts = by_set.setdefault(row["set"] or "-", {"cases": 0, "searched": 0, "public_attached": 0})
+        counts["cases"] += 1
+        counts["searched"] += bool(row["searched"])
+        counts["public_attached"] += bool(row["public_in_reply"])
     return {
+        "by_set": by_set,
+        "materials_rows": len(extra_rows),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "index": source.settings.index_name, "alpha": source.settings.alpha,
         "cases": len(rows), "skipped": dict(skipped), "help_cases": len(helped),
@@ -1240,7 +1270,7 @@ async def help_run(
         "searched": sum(1 for row in helped if row["searched"]),
         "public_attached": sum(1 for row in helped if row["public_in_reply"]),
         "public_attached_share": round(sum(1 for row in helped if row["public_in_reply"]) / len(helped), 3) if helped else None,
-        "not_help_with_public": sum(1 for row in rows if not row["expect_help"] and row["public_in_reply"]),
+        "not_help_with_public": sum(1 for row in rows_of_help_set if not row["expect_help"] and row["public_in_reply"]),
         "public_said": sum(1 for row in helped if row["public_said"]),
         "piece_read_aloud": sum(1 for row in rows if row["piece_read_aloud"]),
         "public_rule_violations": sum(1 for row in rows if row["public_rule_violations"]),
