@@ -46,6 +46,7 @@ source .venv/bin/activate
 python -u scripts/public_knowledge_pipeline.py collect
 python -u scripts/public_knowledge_pipeline.py collect --only wikipedia-ko,pubchem
 python -u scripts/public_knowledge_pipeline.py collect --full      # 조건 없이 전부 다시
+python -u scripts/public_knowledge_pipeline.py collect --offline   # 요청 없이 받아 둔 원본만으로 다시 (파서를 고친 뒤)
 python scripts/public_knowledge_pipeline.py status                 # 출처별 조각 수·용량·예상 메모리
 python scripts/public_knowledge_pipeline.py glossary               # 용어집을 data/public_knowledge/glossary.json 으로
 # Moss 에 올린다. 키는 셸의 MOSS_PROJECT_ID·MOSS_PROJECT_KEY 또는 --env-file (값은 출력하지 않음).

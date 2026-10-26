@@ -293,6 +293,20 @@ def _mediawiki_lagged(reply: "Response") -> bool:
     return reply.status == 200 and body.lstrip().startswith(b'{"error"') and b'"maxlag"' in body
 
 
+class OfflineHttp:
+    """No request at all (``collect --offline``): the bundle is rebuilt from the
+    raw cache, so a parser change is measured on the same material."""
+
+    user_agent = ""
+
+    def __init__(self) -> None:
+        self.requests_made = 0
+        self.requests_by_host: Counter[str] = Counter()
+
+    def get(self, url: str, **kwargs: Any) -> "Response":
+        raise FetchError("offline: no request is made")
+
+
 class Http:
     """GETs for one run: one agent, a pace per source, retries, a robots gate.
 
@@ -422,9 +436,11 @@ class Http:
 class RawStore:
     """What a source's requests returned, by key, with the headers that make
     the next request conditional. ``meta.json`` beside the files is the state
-    of this source: fetched dates, ETags, revision ids and resolved ids."""
+    of this source: fetched dates, ETags, revision ids and resolved ids.
+    ``offline`` answers from the cache alone (``collect --offline``)."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, offline: bool = False) -> None:
+        self.offline = offline
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
         self._meta_path = directory / "meta.json"
@@ -458,6 +474,10 @@ class RawStore:
         if not item:
             return None
         path = Path(item["path"])
+        if not path.is_file():
+            # A cache that moved (lane KNOW's was written in its worktree):
+            # the file is beside this meta.json under the same name.
+            path = self.directory / path.name
         return path.read_bytes() if path.is_file() else None
 
     def fetch(
@@ -481,6 +501,10 @@ class RawStore:
 
         item = self.item(key)
         cached = self.read(key)
+        if self.offline:
+            if cached is None:
+                raise FetchError(f"offline: {key} is not in the raw cache")
+            return cached, False
         if cached is not None and item and not full:
             if refresh_days is not None:
                 fetched = item.get("fetched_at", "")
@@ -748,13 +772,15 @@ class RunContext:
     runtime_dir: Path
     report: RunReport
     full: bool = False
+    offline: bool = False
+    previous_domains: dict[tuple[str, str], str] = field(default_factory=dict)
     glossary_terms: dict[str, set[str]] = field(default_factory=dict)
     glossary_aliases: dict[str, set[str]] = field(default_factory=dict)
     sitelinks: dict[str, dict[str, str]] = field(default_factory=dict)
     pdf_text: Callable[[bytes], list[str]] | None = None
 
     def raw(self, source: Source) -> RawStore:
-        return RawStore(self.runtime_dir / "raw" / source.id)
+        return RawStore(self.runtime_dir / "raw" / source.id, offline=self.offline)
 
     def data_file(self, name: str) -> Path:
         return self.sources.directory / name
@@ -1173,7 +1199,10 @@ def handle_pubchem(source: Source, ctx: RunContext) -> Iterator[Piece]:
         if explicit:
             cids[name] = explicit
     unresolved = [(name, title) for name, explicit, title in compounds if not explicit and not cids.get(name)]
-    if unresolved:
+    if unresolved and ctx.offline:
+        for name, _title in unresolved:
+            ctx.report.fail(source.id, name, "offline: no CID in the raw cache")
+    elif unresolved:
         by_title = resolve_cids_from_wikidata(source, ctx, [title for _name, title in unresolved])
         lowered = {key.casefold(): value for key, value in by_title.items()}
         for name, title in unresolved:
@@ -1254,6 +1283,24 @@ def wikipedia_info(source: Source, ctx: RunContext, titles: Sequence[str]) -> di
     return found
 
 
+def _cached_wikipedia_info(raw: RawStore, titles: Sequence[str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """``wikipedia_info`` from the raw cache (``--offline``): each cached extract
+    under the title asked for, and the extracts of redirected titles under their
+    own (canonical) title, which the run then reads too."""
+
+    items = raw.meta["items"]
+    revisions = raw.state.get("revisions", {})
+    found: dict[str, dict[str, Any]] = {}
+    for key, item in items.items():
+        if not key.startswith("extract:"):
+            continue
+        title = key.split(":", 1)[1]
+        found[title] = {"title": title, "pageid": None, "lastrevid": revisions.get(title, item.get("revid")),
+                        "fullurl": item.get("url", "")}
+    extra = [title for title in found if title not in set(titles)]
+    return found, extra
+
+
 def wikipedia_pieces(
     extract: str, *, title: str, url: str, revid: Any, language: str, domain: str, fetched_at: str,
 ) -> Iterator[Piece]:
@@ -1279,7 +1326,14 @@ def handle_wikipedia(source: Source, ctx: RunContext) -> Iterator[Piece]:
                 domains[ko_title] = ctx.sitelinks.get(f"{linked_from}:domains", {}).get(en_title, "")
                 wanted.append(ko_title)
     wanted = list(dict.fromkeys(wanted))
-    info = wikipedia_info(source, ctx, wanted)
+    if ctx.offline:
+        info, extra = _cached_wikipedia_info(raw, wanted)
+        wanted += extra
+        # A redirected title's domain is the one its article had in the last bundle.
+        for title in extra:
+            domains.setdefault(title, ctx.previous_domains.get((source.id, title), ""))
+    else:
+        info = wikipedia_info(source, ctx, wanted)
     revisions = raw.state.setdefault("revisions", {})
     for title in wanted:
         page = info.get(title)
@@ -1324,7 +1378,7 @@ def _collect_korean_redirects(source: Source, ctx: RunContext, raw: RawStore, ti
     """The other spellings a Korean article is reached by ("아세토니트릴" → 아세토나이트릴) join the glossary."""
 
     aliases = raw.state.setdefault("redirect_aliases", {})
-    if title not in aliases or ctx.full:
+    if (title not in aliases or ctx.full) and not ctx.offline:
         url = _api(source.option("api_url"), {
             "action": "query", "prop": "redirects", "rdlimit": 50, "format": "json", "formatversion": 2,
             "maxlag": 5, "titles": title,
@@ -1503,7 +1557,7 @@ def handle_europepmc(source: Source, ctx: RunContext) -> Iterator[Piece]:
     chosen: list[str] = [str(pmcid) for pmcid in source.option("pmcids", []) or []]
     for query in source.option("queries", []) or []:
         kept = [pmcid for pmcid in selected.get(query, [])]
-        if len(kept) < per_query or ctx.full:
+        if (len(kept) < per_query or ctx.full) and not ctx.offline:
             url = f"{base}search?{urlencode({'query': europepmc_query(query), 'format': 'json', 'resultType': 'core', 'pageSize': per_query * 4})}"
             try:
                 reply = ctx.http.get(url, pace_key=source.id, per_second=source.requests_per_second)
@@ -1590,16 +1644,28 @@ def collect(
     http: Http,
     only: set[str] | None = None,
     full: bool = False,
+    offline: bool = False,
     pdf_text: Callable[[bytes], list[str]] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    """Fetch what changed, rebuild the bundle, write the manifest; returns the manifest."""
+    """Fetch what changed, rebuild the bundle, write the manifest; returns the manifest.
+
+    ``offline`` sends no request: every source is read from the raw cache
+    (what is not cached is a failure), so a parser change is measured on the
+    same material (lane KNOW2)."""
 
     bundle_dir = runtime_dir / "bundle"
     bundle_dir.mkdir(parents=True, exist_ok=True)
     report = RunReport()
     ctx = RunContext(sources=sources, http=http, runtime_dir=runtime_dir, report=report, full=full,
-                     pdf_text=pdf_text)
+                     offline=offline, pdf_text=pdf_text)
+    previous_chunks = bundle_dir / "chunks.jsonl"
+    if offline and previous_chunks.is_file():
+        for line in previous_chunks.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                record = json.loads(line)
+                ctx.previous_domains.setdefault((str(record.get("source_id")), str(record.get("title"))),
+                                                str(record.get("domain", "")))
     previous_glossary = bundle_dir / "glossary.json"
     if previous_glossary.is_file():
         try:
@@ -2101,6 +2167,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("collect", help="바뀐 것만 받아 묶음을 다시 만든다")
     run.add_argument("--only", help="이 출처 id 만 (쉼표로 여럿)")
     run.add_argument("--full", action="store_true", help="조건 없이 전부 다시 받는다")
+    run.add_argument("--offline", action="store_true", help="요청 없이 받아 둔 원본만으로 묶음을 다시 만든다")
     commands.add_parser("status", help="묶음의 출처별 조각 수·용량을 보인다")
     commands.add_parser("glossary", help="묶음의 용어집을 data/public_knowledge/glossary.json 으로 복사한다")
     up = commands.add_parser("upload", help="묶음을 Moss 색인에 올린다 (MOSS_PROJECT_ID/KEY)")
@@ -2127,9 +2194,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_dir = Path(args.runtime_dir)
     sources = load_sources(Path(args.sources))
     if args.command == "collect":
-        http = Http(sources.user_agent)
+        http = OfflineHttp() if args.offline else Http(sources.user_agent)
         only = {item.strip() for item in args.only.split(",") if item.strip()} if args.only else None
-        manifest = collect(sources, runtime_dir=runtime_dir, http=http, only=only, full=args.full)
+        manifest = collect(sources, runtime_dir=runtime_dir, http=http, only=only, full=args.full,
+                           offline=args.offline)
         totals = manifest["totals"]
         print(f"bundle: {totals['chunks']} chunks, {totals['chars']} chars, {totals['failures']} failures, "
               f"{totals['requests']} requests, glossary {totals['glossary_terms']} terms")
