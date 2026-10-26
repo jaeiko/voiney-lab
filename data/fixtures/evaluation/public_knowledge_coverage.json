@@ -1,0 +1,7158 @@
+{
+ "schema_version": 1,
+ "about": "Lane KAUDIT coverage table (2026-10-25): how far the public knowledge bundle covers the wet lab (chemistry, biology, materials/batteries). One cell per row of the brief's table; each cell has 3-5 questions a researcher would ask during a run (mostly Korean, some English, some without a question mark), written before the bundle was searched, and the bundle pieces that answer each one, read and checked, or why none does. Measured by scripts/public_knowledge_audit.py map.",
+ "fields": {
+  "areas": "the brief's areas, in its order",
+  "cells[].importance": "safety: how much harm a wrong or missing answer can do (3 high); use: how often a wet lab meets it (3 every week). Lane KAUDIT's estimate, used only to order the gaps; a person may change it",
+  "cells[].terms": "words that mark a piece as about the cell, for counting related pieces (Latin-letter terms match whole words, case ignored; Hangul terms as substrings)",
+  "cells[].coverage_note": "what the bundle holds and lacks for the cell, in one line (written while finding the gold pieces)",
+  "questions[].gold": "pieces that answer the question: source_id ('*' for any) and title_contains / locator_contains / text_contains substrings (whitespace collapsed, case ignored); found when any matching piece is in the top five",
+  "questions[].no_answer": "why no piece answers (when gold is empty): the bundle was searched with several words and the search",
+  "questions[].in_pubchem_list": "reagent cells only: whether the reagent asked about is in data/public_knowledge/pubchem_compounds.txt"
+ },
+ "verdict_rule": "✓ when at least two thirds of a cell's questions find a gold piece in the server-style top five; ✗ when no question has any gold piece in the bundle; △ otherwise (some found, or material there but not found)",
+ "areas": [
+  {
+   "id": "safety",
+   "name": "안전"
+  },
+  {
+   "id": "equipment",
+   "name": "장비"
+  },
+  {
+   "id": "bio_technique",
+   "name": "바이오 기법"
+  },
+  {
+   "id": "chem_technique",
+   "name": "화학 기법"
+  },
+  {
+   "id": "materials",
+   "name": "소재·배터리"
+  },
+  {
+   "id": "reagent",
+   "name": "시약 사실"
+  },
+  {
+   "id": "troubleshooting",
+   "name": "문제 해결"
+  }
+ ],
+ "cells": [
+  {
+   "id": "safety.ghs_sds",
+   "area": "safety",
+   "name": "화학물질 위험(GHS·SDS 항목)",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "GHS",
+    "safety data sheet",
+    "safety data sheets",
+    "MSDS",
+    "pictogram",
+    "pictograms",
+    "hazard statement",
+    "hazard statements",
+    "precautionary statements",
+    "signal word",
+    "물질안전보건자료",
+    "그림문자"
+   ],
+   "coverage_note": "GHS 그림문자·SDS 16항목(영·한 위키), NIOSH 2007-107 MSDS 해설, NPG 노출기준 카드 있음; H-코드 번호별 문구(H314 등) 조각 없음",
+   "questions": [
+    {
+     "id": "safety.ghs_sds.1",
+     "text": "GHS 해골 그림 표시 무슨 뜻이야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Chemical hazard",
+       "text_contains": "acute toxicity (skull and crossbones)"
+      }
+     ]
+    },
+    {
+     "id": "safety.ghs_sds.2",
+     "text": "SDS 에서 보호구 나오는 항목 몇 번",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Safety data sheet",
+       "text_contains": "section 8: exposure controls/personal protection"
+      }
+     ]
+    },
+    {
+     "id": "safety.ghs_sds.3",
+     "text": "What does hazard statement H314 mean?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "H314 문구 조각 없음: 'GHS hazard statements' 문서 조각은 EU·호주 지역 문구(EUH/AUH)뿐, 'skin burns and eye damage' 는 TCA 문서 한 줄 (find H314 0건)"
+    },
+    {
+     "id": "safety.ghs_sds.4",
+     "text": "메탄올 노출 기준 얼마야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Methyl alcohol",
+       "text_contains": "rel twa 200 ppm"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.ppe",
+   "area": "safety",
+   "name": "보호구",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "personal protective equipment",
+    "PPE",
+    "goggles",
+    "safety glasses",
+    "face shield",
+    "face shields",
+    "lab coat",
+    "laboratory coat",
+    "nitrile gloves",
+    "eye protection",
+    "보호구",
+    "보안경",
+    "실험복",
+    "보호 장비"
+   ],
+   "coverage_note": "MMWR 보호구 절(안경은 보호구 아님·눈/얼굴 보호), PubChem 시약별 장갑·보호복 재질(DCM·페놀), 위키 Eye protection·Face shield·PPE 있음; 장갑 내화학성 표 없음",
+   "questions": [
+    {
+     "id": "safety.ppe.1",
+     "text": "니트릴 장갑 DCM 쓸 때 괜찮아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Dichloromethane",
+       "text_contains": "permeated through all materials, except polyvinyl alcohol"
+      }
+     ]
+    },
+    {
+     "id": "safety.ppe.2",
+     "text": "보안경 대신 그냥 안경 써도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "neither eyeglasses nor contact lenses are considered ppe"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "eyeglasses and contact lenses are not a substitute for eye protection"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "eye glasses and contact lenses alone are not adequate"
+      }
+     ]
+    },
+    {
+     "id": "safety.ppe.3",
+     "text": "페놀 다룰 때 끼는 장갑 종류",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Phenol",
+       "text_contains": "butyl rubber (good resistance)"
+      }
+     ]
+    },
+    {
+     "id": "safety.ppe.4",
+     "text": "When do I need a face shield instead of goggles?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Eye protection",
+       "text_contains": "face shield may be required in areas where workers are exposed to severe chemical hazards"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Personal protective equipment",
+       "text_contains": "face shields provide additional protection"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "face shields are optimal for full face and neck protection"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.fume_hood",
+   "area": "safety",
+   "name": "흄후드",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "fume hood",
+    "fume hoods",
+    "fume cupboard",
+    "chemical hood",
+    "laboratory chemical hood",
+    "sash",
+    "face velocity",
+    "흄후드",
+    "퓸 후드",
+    "흄 후드"
+   ],
+   "coverage_note": "영·한 위키 Fume hood, NIOSH 2007-107 후드 사용 수칙(새시 최소·6인치 안쪽), Engineering control 면속도 80–100 fpm 있음; 새시 높이 수치·알람 대응 절차 없음",
+   "questions": [
+    {
+     "id": "safety.fume_hood.1",
+     "text": "흄후드 새시 높이 얼마나 내려",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "sash opening should be kept at a minimum"
+      }
+     ]
+    },
+    {
+     "id": "safety.fume_hood.2",
+     "text": "후드 안에 물건 얼마나 안쪽에 둬야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "at least six inches within the hood"
+      }
+     ]
+    },
+    {
+     "id": "safety.fume_hood.3",
+     "text": "흄후드 알람 울리면 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Fume hood",
+       "text_contains": "high sash"
+      }
+     ]
+    },
+    {
+     "id": "safety.fume_hood.4",
+     "text": "What face velocity should a fume hood have?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Engineering control",
+       "text_contains": "average inward velocity of 80"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "ft/minute capture velocity"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.hazard_classes",
+   "area": "safety",
+   "name": "인화성·부식성·독성·반응성 물질",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "flammable liquid",
+    "flammable",
+    "corrosive",
+    "oxidizer",
+    "oxidizers",
+    "oxidizing agent",
+    "flash point",
+    "incompatible chemicals",
+    "water-reactive",
+    "인화성",
+    "부식성",
+    "인화점",
+    "산화제"
+   ],
+   "coverage_note": "NPG 카드(인화점·비호환), PubChem 위험 항목, NIOSH 2007-107 보관 계열·비호환 표·희석 수칙, 위키 Chemical storage 있음; 한국어 조각은 개요 수준",
+   "questions": [
+    {
+     "id": "safety.hazard_classes.1",
+     "text": "산이랑 염기 같은 캐비닛에 둬도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Chemical storage",
+       "text_contains": "acids and bases are incompatible"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Chemical storage",
+       "text_contains": "oxidizers and organics, or acids and bases"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "store acids in a dedicated acid cabinet"
+      }
+     ]
+    },
+    {
+     "id": "safety.hazard_classes.2",
+     "text": "에테르 인화점 몇 도야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Ethyl ether",
+       "text_contains": "flash point: -49°f"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Diethyl Ether",
+       "text_contains": "flash point: -49 °f"
+      }
+     ]
+    },
+    {
+     "id": "safety.hazard_classes.3",
+     "text": "산화제랑 인화성 용매 같이 보관 안 되는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Chemical storage",
+       "text_contains": "oxidizers and organics"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Hydrogen Peroxide",
+       "text_contains": "when spilled on combustible materials it can set fire to them"
+      }
+     ]
+    },
+    {
+     "id": "safety.hazard_classes.4",
+     "text": "Do I add acid to water or water to acid?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "never add water to a concentrated acid"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.peroxide_formers",
+   "area": "safety",
+   "name": "과산화물 생성 물질",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "peroxide former",
+    "peroxide-forming",
+    "form peroxides",
+    "forms peroxides",
+    "explosive peroxides",
+    "peroxide formation",
+    "organic peroxides",
+    "hydroperoxides",
+    "과산화물",
+    "폭발성 유기 과산화물"
+   ],
+   "coverage_note": "PubChem THF·에테르·디옥산 보관 기한·과산화물, NPG 주의 문구, 위키 Organic peroxides 검출법(요오드-녹말), 한국어 '용매' 안전 문단 있음; 과산화물 생성 물질 분류 목록 없음",
+   "questions": [
+    {
+     "id": "safety.peroxide_formers.1",
+     "text": "THF 오래된 거 써도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Tetrahydrofuran",
+       "text_contains": "should not be stored for more than a few months"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Tetrahydrofuran",
+       "text_contains": "accumulate above 1% become thermally explosive"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "용매",
+       "text_contains": "오래 보관한 용매를 증류하면"
+      }
+     ]
+    },
+    {
+     "id": "safety.peroxide_formers.2",
+     "text": "에테르 과산화물 테스트 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Organic peroxides",
+       "text_contains": "iodine-starch reaction"
+      }
+     ]
+    },
+    {
+     "id": "safety.peroxide_formers.3",
+     "text": "과산화물 생기는 용매 종류",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "용매",
+       "text_contains": "에터와 테트라하이드로푸란 같은 일부 용매"
+      }
+     ]
+    },
+    {
+     "id": "safety.peroxide_formers.4",
+     "text": "How long can I keep an opened bottle of diethyl ether?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Diethyl Ether",
+       "text_contains": "remain in storage for more than six months"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.cryogenic",
+   "area": "safety",
+   "name": "액체질소·극저온",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "liquid nitrogen",
+    "cryogen",
+    "cryogens",
+    "cryogenic",
+    "dewar",
+    "dewars",
+    "cryotube",
+    "cryotubes",
+    "LN2",
+    "액체 질소",
+    "액체질소",
+    "극저온"
+   ],
+   "coverage_note": "MMWR 3.9 극저온 절(장갑·질식·크라이오튜브 폭발), 영·한 위키 Liquid nitrogen·Cryogenic storage dewar(엘리베이터), PubChem 질소 보호구 있음",
+   "questions": [
+    {
+     "id": "safety.cryogenic.1",
+     "text": "액체질소 옮길 때 끼는 장갑",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "insulated gloves are designed to provide short-term protection"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Nitrogen",
+       "text_contains": "insulated gloves; long sleeves"
+      }
+     ]
+    },
+    {
+     "id": "safety.cryogenic.2",
+     "text": "액체질소 엘리베이터에 같이 타도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Cryogenic storage dewar",
+       "text_contains": "before transporting dewars in an elevator"
+      }
+     ]
+    },
+    {
+     "id": "safety.cryogenic.3",
+     "text": "LN2 탱크 작은 방에 두면 왜 위험해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "do not store dewars or nitrogen containers in a confined space"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Liquid nitrogen",
+       "text_contains": "act as an asphyxiant, especially in confined spaces"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "액체 질소",
+       "text_contains": "밀폐 공간에서 질식을 유발"
+      }
+     ]
+    },
+    {
+     "id": "safety.cryogenic.4",
+     "text": "Why can cryovials explode when taken out of liquid nitrogen?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "entry of liquid nitrogen into the tube through minute cracks"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.compressed_gas",
+   "area": "safety",
+   "name": "고압가스",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "gas cylinder",
+    "gas cylinders",
+    "compressed gas",
+    "compressed gases",
+    "cylinder valve",
+    "pressure regulator",
+    "고압가스",
+    "가스통",
+    "가스 실린더",
+    "압축 가스"
+   ],
+   "coverage_note": "MMWR 3.8·NIOSH 2007-107 실린더 수칙(체인 고정·전용 레귤레이터·비눗물 누설 검사), 위키 Gas cylinder·Pressure regulator 있음; 가스별(아세틸렌 등) 취급 조각 없음",
+   "questions": [
+    {
+     "id": "safety.compressed_gas.1",
+     "text": "가스 실린더 체인으로 묶어야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "securely anchored to the wall with chains or straps"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "securely attach all gas cylinders"
+      }
+     ]
+    },
+    {
+     "id": "safety.compressed_gas.2",
+     "text": "레귤레이터 연결 전에 확인할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "special regulators and threading are designed for each gas type"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "use the proper regulator for each gas cylinder"
+      }
+     ]
+    },
+    {
+     "id": "safety.compressed_gas.3",
+     "text": "아세틸렌 실린더 눕혀서 써도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "아세틸렌 실린더를 세워 써야 하는 이유(아세톤 유출) 조각 없음; NIOSH 의 일반 '세워 고정' 한 구절과 위키 Acetone 의 아세틸렌 용해 저장 설명뿐 (acetylene+cylinder/upright find 0건)"
+    },
+    {
+     "id": "safety.compressed_gas.4",
+     "text": "How do I check a gas cylinder regulator for leaks?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "check for leaks around the valve and handle using a soap solution"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.chemical_waste",
+   "area": "safety",
+   "name": "폐액·폐기물 처리",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "chemical waste",
+    "hazardous waste",
+    "waste container",
+    "waste containers",
+    "waste disposal",
+    "disposal methods",
+    "down the drain",
+    "폐액",
+    "폐기물",
+    "지정폐기물"
+   ],
+   "coverage_note": "NIOSH 2007-107 폐기 절차·폐액 라벨·보관, MMWR EtBr 폐기, 위키 Ethidium bromide 폐기, PubChem 시약별 처분 방법 있음; 할로겐/비할로겐 폐액 분리·중화 후 배출 기준 없음",
+   "questions": [
+    {
+     "id": "safety.chemical_waste.1",
+     "text": "할로겐 폐액이랑 일반 유기 폐액 섞어도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "할로겐/비할로겐 폐액 분리 조각 없음 (halogenated waste·non-halogenated·할로겐 폐액 find 0건; NIOSH 는 '내용물과 맞는 용기'만)"
+    },
+    {
+     "id": "safety.chemical_waste.2",
+     "text": "폐액통 라벨에 뭐 써야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "accumulation start date"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "clearly and permanently label each container as to its contents"
+      }
+     ]
+    },
+    {
+     "id": "safety.chemical_waste.3",
+     "text": "에티디움 브로마이드 겔 버리는 법",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "place agarose gels containing etbr"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "bag materials coming into contact with etbr"
+      }
+     ]
+    },
+    {
+     "id": "safety.chemical_waste.4",
+     "text": "Can I pour dilute acid down the sink after neutralizing?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "do not pour chemicals down the drain (unless authorized by local sewer authority)"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "never pour chemical waste into the sink drains"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.spill_exposure",
+   "area": "safety",
+   "name": "쏟음·노출 대응",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "spill",
+    "spills",
+    "spillage",
+    "spill kit",
+    "eyewash",
+    "safety shower",
+    "first aid",
+    "flush",
+    "쏟",
+    "응급 처치",
+    "응급처치",
+    "눈 세척"
+   ],
+   "coverage_note": "NIOSH 2007-107 부록 I(눈·산염기·수은 쏟음), MMWR 눈 세척 15분, 위키 Eyewash·HF 화상·Calcium gluconate, PubChem 시약별 응급조치·누출 처리 있음",
+   "questions": [
+    {
+     "id": "safety.spill_exposure.1",
+     "text": "눈에 시약 튀었어 몇 분 씻어",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Emergency eyewash",
+       "text_contains": "wash their eyes for at least 15 minutes"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "flushed for a minimum of 15 minutes"
+      }
+     ]
+    },
+    {
+     "id": "safety.spill_exposure.2",
+     "text": "염산 쏟았어 어떻게 치워?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "neutralize acids with powdered sodium hydrogen carbonate"
+      }
+     ]
+    },
+    {
+     "id": "safety.spill_exposure.3",
+     "text": "수은 온도계 깨졌을 때",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "mercury spill evacuate the affected area"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "close off interior doors and windows"
+      }
+     ]
+    },
+    {
+     "id": "safety.spill_exposure.4",
+     "text": "Hydrofluoric acid on skin, what first aid?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Hydrofluoric acid burn",
+       "text_contains": "calcium gluconate cream is then usually applied"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcium gluconate",
+       "text_contains": "used to treat hydrofluoric acid burns"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.biosafety_levels",
+   "area": "safety",
+   "name": "생물안전 등급(BSL1–3)",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "biosafety level",
+    "BSL-1",
+    "BSL-2",
+    "BSL-3",
+    "BSL-4",
+    "biological safety cabinet",
+    "biosafety cabinet",
+    "BSC",
+    "risk group",
+    "생물안전등급",
+    "생물 안전도",
+    "생물안전작업대"
+   ],
+   "coverage_note": "BMBL 6판(BSL1–4 기준·원심분리·BSC 운용), MMWR, 영·한 위키 Biosafety level 있음; 바이러스 벡터(렌티 등)별 봉쇄 등급 조각 없음",
+   "questions": [
+    {
+     "id": "safety.biosafety_levels.1",
+     "text": "BSL2 에서 원심분리할 때 주의할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "may be centrifuged in the open laboratory using sealed rotors or centrifuge safety cups"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "gasketed centrifuge safety cups and sealed rotors"
+      }
+     ]
+    },
+    {
+     "id": "safety.biosafety_levels.2",
+     "text": "BSL1 이랑 BSL2 차이가 뭐야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "생물 안전도",
+       "text_contains": "허가된 인원만 입실이 가능하며"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Biosafety level",
+       "text_contains": "laboratory personnel have specific training in handling pathogenic agents"
+      }
+     ]
+    },
+    {
+     "id": "safety.biosafety_levels.3",
+     "text": "생물안전작업대 켜고 몇 분 기다려?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "operated at least five minutes before beginning work"
+      }
+     ]
+    },
+    {
+     "id": "safety.biosafety_levels.4",
+     "text": "Does lentivirus work need BSL-2 or BSL-3?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "렌티바이러스 벡터 봉쇄 등급 조각 없음; BMBL 은 '위험이 다양하니 IBC 검토'만, 나머지 lentiviral 조각은 논문 방법 절 (find lentivirus/lentiviral 16건 확인)"
+    }
+   ]
+  },
+  {
+   "id": "safety.biowaste_autoclave",
+   "area": "safety",
+   "name": "생물 폐기물·오토클레이브",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "autoclave",
+    "autoclaves",
+    "autoclaving",
+    "biohazard waste",
+    "biomedical waste",
+    "medical waste",
+    "biological indicator",
+    "decontamination",
+    "고압멸균",
+    "오토클레이브",
+    "의료폐기물",
+    "멸균"
+   ],
+   "coverage_note": "위키 Autoclave·Sterilization·Biomedical waste, 한국어 고압멸균(121°C 15분), MMWR 3.5 폐기물 처리·지시약, BMBL 오염제거 부록 있음; 병뚜껑·액체 적재 요령 없음",
+   "questions": [
+    {
+     "id": "safety.biowaste_autoclave.1",
+     "text": "오토클레이브 121도 몇 분 돌려",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "고압멸균",
+       "text_contains": "약 15분 정도 진행된다"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Autoclave",
+       "text_contains": "for 15 to 60 minutes"
+      }
+     ]
+    },
+    {
+     "id": "safety.biowaste_autoclave.2",
+     "text": "오토클레이브에 병 뚜껑 꽉 닫고 넣어도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "병뚜껑 풀기·밀폐 용기 가압 조각 없음 (autoclave+caps/loosen/tightly/sealed containers find 0건)"
+    },
+    {
+     "id": "safety.biowaste_autoclave.3",
+     "text": "세포 배양액 버리기 전에 락스 얼마나 넣어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "final concentration of 10% when the container is full"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "full receptacle would contain about 10% bleach"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Biomedical waste",
+       "text_contains": "solution of bleach can be used to disinfect biomedical waste"
+      }
+     ]
+    },
+    {
+     "id": "safety.biowaste_autoclave.4",
+     "text": "How do I verify an autoclave cycle actually sterilized the waste?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "bacillus stearothermophilus spore strips"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sterilization (microbiology)",
+       "text_contains": "geobacillus stearothermophilus"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "thermocouples and biological indicators"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.sharps",
+   "area": "safety",
+   "name": "날카로운 도구",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "sharps",
+    "needle",
+    "needles",
+    "needlestick",
+    "scalpel",
+    "scalpels",
+    "broken glass",
+    "broken glassware",
+    "sharps container",
+    "주사바늘",
+    "주삿바늘",
+    "날카로운"
+   ],
+   "coverage_note": "BMBL 날카로운 도구 수칙(BSL마다 반복), MMWR 바늘 찔림 예방·노출 보고, 위키 Sharps waste·Needlestick injury(PEP) 있음; 찔림 직후 상처 세척 조각 없음",
+   "questions": [
+    {
+     "id": "safety.sharps.1",
+     "text": "주사바늘 뚜껑 다시 씌워도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "needles are not bent, sheared, broken, recapped"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "do not resheathe needles"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "do not bend, shear, recap"
+      }
+     ]
+    },
+    {
+     "id": "safety.sharps.2",
+     "text": "깨진 유리 치우는 법",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "removed using a brush and dustpan, tongs, or forceps"
+      }
+     ]
+    },
+    {
+     "id": "safety.sharps.3",
+     "text": "바늘에 찔렸어 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Needlestick injury",
+       "text_contains": "post-exposure prophylaxis (pep) should be initiated"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "report all exposures to the supervisor immediately"
+      }
+     ]
+    },
+    {
+     "id": "safety.sharps.4",
+     "text": "Where do used scalpel blades go?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "place all sharps (e.g., needles, scalpels, pipettes, or broken glass)"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sharps waste",
+       "text_contains": "sharps containers are used to safely dispose of hypodermic needles"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.uv_laser",
+   "area": "safety",
+   "name": "자외선·레이저",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "ultraviolet",
+    "UV light",
+    "UV lamp",
+    "UV lamps",
+    "UV view box",
+    "transilluminator",
+    "germicidal",
+    "laser",
+    "lasers",
+    "laser safety",
+    "자외선",
+    "레이저"
+   ],
+   "coverage_note": "MMWR 3.12 자외선 절·UV view box, BMBL BSC UV 램프, 위키 Laser safety·UVGI(광각막염) 있음; 레이저 등급 정의·한국어 조각 없음",
+   "questions": [
+    {
+     "id": "safety.uv_laser.1",
+     "text": "UV 트랜스일루미네이터 볼 때 보안경 써야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "uv-resistant full-face shield when working with uv view boxes"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "full-face shield when working with uv view boxes lacking protective filter shields"
+      }
+     ]
+    },
+    {
+     "id": "safety.uv_laser.2",
+     "text": "생물안전작업대 UV 램프 켜놓고 작업해도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "uv lamp must never be on while an operator is working"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "unshielded uv lamps must be turned off when the room is occupied"
+      }
+     ]
+    },
+    {
+     "id": "safety.uv_laser.3",
+     "text": "레이저 class 3B 랑 4 차이",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "레이저 등급 정의 조각 없음; 위키 Laser safety 조각은 표준 이름(ANSI Z136·EN 60825)과 손상 기전만 (class 3b/class 4 find 는 NPG 인화성 등급만)"
+    },
+    {
+     "id": "safety.uv_laser.4",
+     "text": "Is a short UV exposure to the eyes dangerous?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ultraviolet germicidal irradiation",
+       "text_contains": "photokeratitis"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "linked to skin cancers, corneal scarring, and skin burns"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.electrical",
+   "area": "safety",
+   "name": "전기",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "electrical safety",
+    "electric shock",
+    "electrical shock",
+    "electrocution",
+    "electrical hazards",
+    "electrical injury",
+    "ground-fault",
+    "power strips",
+    "high-voltage",
+    "감전",
+    "누전",
+    "전기 안전"
+   ],
+   "coverage_note": "MMWR 3.7 전기 안전(멀티탭·접지)·8.10 전기영동 전원 차단, 위키 Electrical injury(젖은 피부 저항), 한국어 감전(응급처치) 있음; 영어 감전 응급처치 조각 없음",
+   "questions": [
+    {
+     "id": "safety.electrical.1",
+     "text": "전기영동 장치 뚜껑 열기 전에 전원 꺼야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "disconnect the power to electrophoresis equipment"
+      }
+     ]
+    },
+    {
+     "id": "safety.electrical.2",
+     "text": "젖은 손으로 플러그 만지면 안 되는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Electrical injury",
+       "text_contains": "wet or broken skin may drop the body"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "감전",
+       "text_contains": "젖어 있는 피부에 닿으면"
+      }
+     ]
+    },
+    {
+     "id": "safety.electrical.3",
+     "text": "멀티탭에 핫플레이트 여러 개 꽂아도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "minimize or eliminate the use of multi-outlet power strips"
+      }
+     ]
+    },
+    {
+     "id": "safety.electrical.4",
+     "text": "What should I do if someone gets an electric shock in the lab?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "감전",
+       "text_contains": "감전의 응급처치는 먼저 전원을 끊고"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.lithium_battery",
+   "area": "safety",
+   "name": "리튬 배터리(열폭주·화재)",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "lithium-ion battery",
+    "lithium-ion",
+    "lithium battery",
+    "lithium batteries",
+    "lithium metal",
+    "thermal runaway",
+    "battery fire",
+    "열폭주",
+    "리튬 이온 전지",
+    "리튬 배터리",
+    "리튬 금속"
+   ],
+   "coverage_note": "한국어 위키 열폭주(리튬이온 원인·온도 단계·안전 장치), 위키 LiCoO2·Fire classification(Class L), PubChem 리튬 금속 위험 있음; 부푼 셀 처리·실험실 셀 화재 대응 조각 없음",
+   "questions": [
+    {
+     "id": "safety.lithium_battery.1",
+     "text": "리튬 배터리 부풀었어 어떻게 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "부푼(swelling) 배터리 처리 조각 없음 (battery+swelling/swollen/swell/bulging·부풀 find 0건)"
+    },
+    {
+     "id": "safety.lithium_battery.2",
+     "text": "리튬 배터리 불나면 물 뿌려도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "실험실 리튬이온 셀 화재 대응 조각 없음; PubChem 리튬 '금속' 'NO water'·위키 전기차 화재 물 대량 사용·Class L 분류 소개뿐이라 핵심 답(셀 종류별 진화법)이 없음"
+    },
+    {
+     "id": "safety.lithium_battery.3",
+     "text": "리튬 금속 호일 물 닿으면 어떻게 돼",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Lithium",
+       "text_contains": "reacts violently /with water/ to form hydrogen gas"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "리튬",
+       "text_contains": "물과 접촉하면 급격히 산화한다"
+      }
+     ]
+    },
+    {
+     "id": "safety.lithium_battery.4",
+     "text": "Why does a lithium-ion cell go into thermal runaway?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "열폭주",
+       "text_contains": "과충전: 규정 전압 이상으로 충전 시"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Lithium cobalt oxide",
+       "text_contains": "susceptible to thermal runaway"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "safety.nanomaterials",
+   "area": "safety",
+   "name": "나노물질",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "nanomaterial",
+    "nanomaterials",
+    "nanoparticle",
+    "nanoparticles",
+    "nanotube",
+    "nanotubes",
+    "carbon nanotube",
+    "nanopowder",
+    "나노입자",
+    "나노 입자",
+    "나노물질",
+    "나노재료",
+    "탄소 나노튜브"
+   ],
+   "coverage_note": "위키 Nanomaterials·Nanoparticle·Carbon nanotube 정의 위주, Engineering control 의 나노물질 환기 3조각(저난류 저울 인클로저), 한국어 탄소 나노튜브 안전성 1조각; 나노물질 보호구·누출 처리 조각 없음",
+   "questions": [
+    {
+     "id": "safety.nanomaterials.1",
+     "text": "나노입자 파우더 무게 잴 때 흄후드에서 해야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Engineering control",
+       "text_contains": "low-turbulence balance enclosures"
+      }
+     ]
+    },
+    {
+     "id": "safety.nanomaterials.2",
+     "text": "탄소나노튜브 흡입하면 위험해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "탄소 나노튜브",
+       "text_contains": "염증이나 섬유증과 같은 해로운 효과"
+      }
+     ]
+    },
+    {
+     "id": "safety.nanomaterials.3",
+     "text": "나노물질 다룰 때 마스크 종류",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "나노물질용 호흡보호구 조각 없음 (nanomaterial+respirator/inhal find 0건; NPG 의 N95/P100 은 개별 화학물질 카드)"
+    },
+    {
+     "id": "safety.nanomaterials.4",
+     "text": "How should I clean up a spill of nanoparticle powder?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "나노분말 누출 처리 조각 없음 (nanoparticle spill·HEPA vacuum·wet wiping find 0건); BMBL 의 '독소' 분말 쏟음(젖은 종이로 덮기)과 Engineering control '물 분무로 분진 감소' 한 줄뿐"
+    }
+   ]
+  },
+  {
+   "id": "equipment.pipette",
+   "area": "equipment",
+   "name": "피펫",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "pipette",
+    "pipettes",
+    "pipetting",
+    "micropipette",
+    "micropipettes",
+    "pipette tip",
+    "pipette tips",
+    "pipettor",
+    "피펫",
+    "파이펫",
+    "마이크로피펫",
+    "피펫팅"
+   ],
+   "coverage_note": "영어 위키 'Pipette'·'Air displacement pipette'(용량 범위·역피펫팅·보정 주기)와 MMWR 피펫 오염·소독·필터팁·입피펫팅 금지 조각이 충분; 한국어는 '피펫' 위키 4조각뿐, 샤프트 안 액체 유입 대처는 MMWR 소독 조각으로 부분만",
+   "questions": [
+    {
+     "id": "equipment.pipette.1",
+     "text": "P20 피펫으로 0.5 µL 찍어도 정확해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air displacement pipette",
+       "text_contains": "should not be used below 10% of that volume"
+      }
+     ]
+    },
+    {
+     "id": "equipment.pipette.2",
+     "text": "점성 있는 거 피펫팅 하는 법",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air displacement pipette",
+       "text_contains": "reverse pipetting for viscous liquids"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Pipette",
+       "text_contains": "for volatile or viscous substances at small volumes"
+      }
+     ]
+    },
+    {
+     "id": "equipment.pipette.3",
+     "text": "피펫 안으로 액체 빨려 들어갔어 어떡해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "Disinfect mechanical pipettes regularly"
+      }
+     ]
+    },
+    {
+     "id": "equipment.pipette.4",
+     "text": "Why is mouth pipetting prohibited in the lab?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "ingestion through mouth pipetting"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "ingestion or exposure through mouth pipetting"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "피펫",
+       "text_contains": "입으로 시약이 들어가거나"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.centrifuge",
+   "area": "equipment",
+   "name": "원심분리기(균형·로터)",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "centrifuge",
+    "centrifuges",
+    "centrifugation",
+    "microcentrifuge",
+    "rotor",
+    "rotors",
+    "RCF",
+    "rpm",
+    "safety cups",
+    "원심분리기",
+    "원심분리",
+    "로터"
+   ],
+   "coverage_note": "영어 위키 'Laboratory centrifuge'(균형·로터 수명·에어로졸)·'Centrifugation'(RCF 공식)과 MMWR 3.17(BSL-2 로터·안전컵, 튜브 파손 대처)·BMBL 안전컵 조각이 충분; 한국어는 '원심분리' 개요에 균형 한 문장뿐",
+   "questions": [
+    {
+     "id": "equipment.centrifuge.1",
+     "text": "원심분리기 균형 어떻게 맞춰?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Laboratory centrifuge",
+       "text_contains": "balance tubes which all have the same weight"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "원심분리",
+       "text_contains": "대칭되는 위치에 고정"
+      }
+     ]
+    },
+    {
+     "id": "equipment.centrifuge.2",
+     "text": "rpm 이랑 g 값 변환 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Centrifugation",
+       "text_contains": "1.118"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Centrifugation",
+       "text_contains": "multiply the centrifugation radius by a factor of 10"
+      }
+     ]
+    },
+    {
+     "id": "equipment.centrifuge.3",
+     "text": "BSL2 시료 원심분리할 때 주의할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "In BSL-2 or higher areas, rotors need aerosol containment"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "centrifuged in the open laboratory using sealed rotors or centrifuge safety cups"
+      }
+     ]
+    },
+    {
+     "id": "equipment.centrifuge.4",
+     "text": "A tube broke inside the centrifuge during the run, what should I do?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "If a specimen tube breaks within the plastic screw-capped canister"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "keep the centrifuge tightly closed for 30 minutes"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.vortex",
+   "area": "equipment",
+   "name": "볼텍서",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "vortex",
+    "vortexer",
+    "vortexing",
+    "vortexed",
+    "vortex mixer",
+    "vortex mixers",
+    "볼텍스",
+    "볼텍서",
+    "볼텍스 믹서"
+   ],
+   "coverage_note": "영어 위키 'Vortex mixer' 4조각(연속·터치 모드, 손가락 볼텍스)과 MMWR/BMBL 의 볼텍싱 에어로졸 조각뿐; 볼텍싱이 gDNA 를 자르거나 효소를 망가뜨린다는 조각 없음(Lysis 위키의 기계적 전단 일반론만), 한국어는 '볼텍스 믹서' 개요 1조각",
+   "questions": [
+    {
+     "id": "equipment.vortex.1",
+     "text": "볼텍서 터치 모드랑 연속 모드 차이",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Vortex mixer",
+       "text_contains": "run only when downward pressure is applied"
+      }
+     ]
+    },
+    {
+     "id": "equipment.vortex.2",
+     "text": "genomic DNA 볼텍스하면 안 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "볼텍싱이 gDNA 를 전단한다는 조각 없음; 'Lysis' 위키의 '기계적 전단이 DNA 를 손상' 일반론뿐 (find vortex/vortexing·shearing/shear forces, search 확인)"
+    },
+    {
+     "id": "equipment.vortex.3",
+     "text": "효소 넣고 볼텍스해도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "효소·단백질을 볼텍스하면 변성된다는 조각 없음 (find vortex/vortexing·shear forces, search 확인)"
+    },
+    {
+     "id": "equipment.vortex.4",
+     "text": "Does vortexing an infectious sample make aerosols?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "mixing with a pipette or a vortex mixer"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "pipetting, mixing, centrifuging, vortexing"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "centrifugation, vortexing, vigorous mixing, or other methods that could generate aerosols"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.heating_block",
+   "area": "equipment",
+   "name": "히팅블록·써모믹서",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "heat block",
+    "heating block",
+    "heat blocks",
+    "heating blocks",
+    "dry bath",
+    "dry block",
+    "thermomixer",
+    "block heater",
+    "히팅블록",
+    "히팅 블록",
+    "가열 블록",
+    "써모믹서",
+    "드라이배스"
+   ],
+   "coverage_note": "히팅블록·드라이배스·써모믹서를 다루는 조각 없음; Europe PMC 방법 문단 6개가 기기 이름만 언급, 'Melting-point apparatus' 위키 1문장; 뚜껑 열림·온도 확인·칸에 물 넣기·밀폐 튜브 가열 모두 공백",
+   "questions": [
+    {
+     "id": "equipment.heating_block.1",
+     "text": "히팅블록 95도에서 튜브 뚜껑 열리는 거 어떻게 막아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "히팅블록 튜브 뚜껑·lid lock 조각 없음 (find heat block/dry bath/thermomixer·히팅블록·lid lock, search 확인)"
+    },
+    {
+     "id": "equipment.heating_block.2",
+     "text": "히팅블록 온도 실제랑 맞는지 확인하는 법",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "히팅블록 온도 확인·보정 조각 없음 (find heat block/heating block·히팅블록/가열 블록, search 확인)"
+    },
+    {
+     "id": "equipment.heating_block.3",
+     "text": "히팅블록 칸에 물 넣어도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "블록 웰에 물·오일을 채우는 열전달 조각 없음 (find heat block/dry bath·히팅블록, search 확인)"
+    },
+    {
+     "id": "equipment.heating_block.4",
+     "text": "Is it safe to boil samples in a heat block with closed tubes?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "밀폐 튜브 가열 압력·뚜껑 튐 조각 없음; '닫힌 용기 가열' 은 화학 교과서 평형 예제뿐 (find heat block/thermomixer·lid lock, search 확인)"
+    }
+   ]
+  },
+  {
+   "id": "equipment.water_bath",
+   "area": "equipment",
+   "name": "수조",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "water bath",
+    "water baths",
+    "waterbath",
+    "waterbaths",
+    "circulating bath",
+    "bain-marie",
+    "수조",
+    "항온수조",
+    "중탕"
+   ],
+   "coverage_note": "영어 위키 'Water bath' 는 동음이의 목록뿐; MMWR 3.17 의 수조 오염·소독(주 1회 90 °C, 아지드 금지)과 NIOSH 학교안전 가이드 '인화성 액체는 온수조로' 조각이 핵심; 물 종류(증류수)·병 뚜껑 잠김 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.water_bath.1",
+     "text": "수조 물 수돗물 써도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "수조에 증류수/수돗물 중 무엇을 쓰는지 조각 없음; MMWR 은 소독제 첨가·청소만 (find water bath/waterbath·수조/항온수조, search 확인)"
+    },
+    {
+     "id": "equipment.water_bath.2",
+     "text": "수조 오염 막는 법",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "Raise the temperature to 90°C or higher for 30 minutes once a week"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "Empty and clean water baths and humidification pans regularly"
+      }
+     ]
+    },
+    {
+     "id": "equipment.water_bath.3",
+     "text": "37도 수조에 시약병 뚜껑까지 잠겨도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "병 목·뚜껑이 수조 물에 잠기면 오염된다는 조각 없음 (find water bath/water baths·수조/중탕, search 확인)"
+    },
+    {
+     "id": "equipment.water_bath.4",
+     "text": "Can I heat ethanol in a water bath?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "Use a hot water bath to heat flammable liquids"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Reflux",
+       "text_contains": "direct heating with a Bunsen burner is not generally"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.co2_incubator",
+   "area": "equipment",
+   "name": "CO2 인큐베이터",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "CO2 incubator",
+    "CO2 incubators",
+    "CO incubators",
+    "incubator",
+    "incubators",
+    "humidified incubator",
+    "humidification pan",
+    "humidification pans",
+    "인큐베이터",
+    "배양기",
+    "항온기"
+   ],
+   "coverage_note": "영어·한국어 위키 'Incubator (culture)'/'인큐베이터 (생물학)' 에 37 °C·5 % CO2·습도 80 % 와 MMWR 3.17 물받이 오염·소독 조각; 문 열기·오염 시 전체 제염 절차, 중탄산 완충 설명 없음",
+   "questions": [
+    {
+     "id": "equipment.co2_incubator.1",
+     "text": "CO2 인큐베이터 CO2 몇 % 로 맞춰?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Incubator (culture)",
+       "text_contains": "maintaining a CO2 level of 5%"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "인큐베이터",
+       "text_contains": "CO2 수준을 5%로 유지"
+      }
+     ]
+    },
+    {
+     "id": "equipment.co2_incubator.2",
+     "text": "인큐베이터 물받이 물 뭐 넣어",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "Avoid using sodium azide to prevent growth of microorganisms"
+      }
+     ]
+    },
+    {
+     "id": "equipment.co2_incubator.3",
+     "text": "인큐베이터에 곰팡이 생기면 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "humidification pans in CO incubators can harbor bacteria, algae, and fungi"
+      }
+     ]
+    },
+    {
+     "id": "equipment.co2_incubator.4",
+     "text": "Why does the incubator need CO2 for culture media?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Incubator (culture)",
+       "text_contains": "slightly acidic pH is achieved by maintaining a CO2 level"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "인큐베이터",
+       "text_contains": "약산성 pH를 달성"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.biosafety_cabinet",
+   "area": "equipment",
+   "name": "클린벤치·생물안전작업대",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "biosafety cabinet",
+    "biosafety cabinets",
+    "biological safety cabinet",
+    "BSC",
+    "BSCs",
+    "laminar flow cabinet",
+    "clean bench",
+    "tissue culture hood",
+    "front grille",
+    "생물안전작업대",
+    "클린벤치",
+    "무균작업대",
+    "안전작업대"
+   ],
+   "coverage_note": "BMBL 부록 A(가동 5분 퍼지, 앞 그릴 막지 않기, 물품 배치, 불꽃 비권장, UV, 유출 처리)와 영어 위키 'Biosafety cabinet'·'Laminar flow cabinet' 이 충분; 한국어는 '생물안전작업대' 개요·목적 2조각",
+   "questions": [
+    {
+     "id": "equipment.biosafety_cabinet.1",
+     "text": "클린벤치랑 생물안전작업대 차이 뭐야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Biosafety cabinet",
+       "text_contains": "laminar flow clean bench, which blows unfiltered exhaust air towards the user"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Laminar flow cabinet",
+       "text_contains": "is not safe for work with pathogenic agents"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "생물안전작업대",
+       "text_contains": "층류 청정 벤치"
+      }
+     ]
+    },
+    {
+     "id": "equipment.biosafety_cabinet.2",
+     "text": "BSC 안에서 알코올 램프 써도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "Open flames are neither required nor recommended"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "The use of open flames in the BSC is not recommended"
+      }
+     ]
+    },
+    {
+     "id": "equipment.biosafety_cabinet.3",
+     "text": "BSC 켜고 몇 분 기다려",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "operated at least five minutes before beginning work"
+      }
+     ]
+    },
+    {
+     "id": "equipment.biosafety_cabinet.4",
+     "text": "In a class II BSC, where do I put materials, and can I cover the front grille?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "The front grille must not be blocked"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "All materials should be placed as far back in the cabinet as practical"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.autoclave",
+   "area": "equipment",
+   "name": "오토클레이브",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "autoclave",
+    "autoclaves",
+    "autoclaving",
+    "autoclaved",
+    "steam sterilization",
+    "steam sterilizer",
+    "indicator tape",
+    "biological indicator",
+    "고압멸균",
+    "고압멸균기",
+    "오토클레이브",
+    "멸균기"
+   ],
+   "coverage_note": "영어 위키 'Autoclave'(121 °C 15–60분, 공기 제거, 지시약)·한국어 '고압멸균' 과 MMWR 3.5 오토클레이브 안전(문 천천히 열기, 지시 테이프·생물학적 지시약, 금지 물질) 조각이 충분; 꽉 닫은 병·액체 병 뚜껑 풀기 조각 없음(봉투 느슨히 묶기만)",
+   "questions": [
+    {
+     "id": "equipment.autoclave.1",
+     "text": "오토클레이브 121도 몇 분 돌려?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Autoclave",
+       "text_contains": "for 15 to 60 minutes"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "고압멸균",
+       "text_contains": "약 15분 정도"
+      }
+     ]
+    },
+    {
+     "id": "equipment.autoclave.2",
+     "text": "뚜껑 꽉 닫은 병 오토클레이브 넣어도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "밀폐 병 뚜껑을 풀라는 조각 없음; 봉투를 느슨히 묶어 증기가 들어가게 하라는 조각(MMWR·BMBL)만 (find loosen/loosely/loose caps·autoclave/autoclaving, search 확인)"
+    },
+    {
+     "id": "equipment.autoclave.3",
+     "text": "오토클레이브 끝나고 문 열 때 주의할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "Stand back and open the door slowly"
+      }
+     ]
+    },
+    {
+     "id": "equipment.autoclave.4",
+     "text": "How do I know the autoclave actually sterilized the load? Is indicator tape enough?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "use a biological indicator such as Bacillus stearothermophilus"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Autoclave",
+       "text_contains": "physical, chemical, and biological indicators"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.pcr_machine",
+   "area": "equipment",
+   "name": "PCR 기기",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "thermal cycler",
+    "thermal cyclers",
+    "thermocycler",
+    "PCR machine",
+    "PCR instrument",
+    "PCR instruments",
+    "heated lid",
+    "thermal cycling",
+    "Peltier",
+    "PCR 기기",
+    "써멀사이클러",
+    "열순환"
+   ],
+   "coverage_note": "영어 위키 'Thermal cycler' 2조각(가열 뚜껑, 그래디언트 블록)과 'Polymerase chain reaction' 절차(변성 94–98 °C 20–30 s, 4–15 °C 최종 hold), 한국어 '중합효소 연쇄 반응' 변성·신장 조각; 기기 청소·오류·램프 속도 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.pcr_machine.1",
+     "text": "PCR 기기 뚜껑 가열 왜 켜?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thermal cycler",
+       "text_contains": "prevents condensation of water"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polymerase chain reaction",
+       "text_contains": "heated lids to prevent condensation"
+      }
+     ]
+    },
+    {
+     "id": "equipment.pcr_machine.2",
+     "text": "변성 단계 몇 도 몇 초로 설정해",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polymerase chain reaction",
+       "text_contains": "Denaturation: This step is the first regular cycling event"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "중합효소 연쇄 반응",
+       "text_contains": "보통 94°C로 한다"
+      }
+     ]
+    },
+    {
+     "id": "equipment.pcr_machine.3",
+     "text": "PCR 끝나고 4도 hold 로 밤새 둬도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polymerase chain reaction",
+       "text_contains": "short-term storage of the PCR products"
+      }
+     ]
+    },
+    {
+     "id": "equipment.pcr_machine.4",
+     "text": "How does a gradient thermal cycler block work?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thermal cycler",
+       "text_contains": "gradient function"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.electrophoresis",
+   "area": "equipment",
+   "name": "전기영동 장치",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "electrophoresis",
+    "electrophoretic",
+    "gel electrophoresis",
+    "agarose gel",
+    "SDS-PAGE",
+    "polyacrylamide gel",
+    "running buffer",
+    "gel box",
+    "전기영동",
+    "겔 전기영동",
+    "젤 전기영동",
+    "아가로스 겔"
+   ],
+   "coverage_note": "영어 위키 'Gel/Agarose/Polyacrylamide gel electrophoresis'·'SDS-PAGE'(이동 방향, 전압 약 100 V, 고전압 스마일)와 MMWR 8.10 고전압 전원 안전 조각; 아가로스 V/cm 권장값 없음, 기포 원인은 '물의 전기분해' 위키로만",
+   "questions": [
+    {
+     "id": "equipment.electrophoresis.1",
+     "text": "전기영동 몇 볼트로 돌려?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "SDS-PAGE",
+       "text_contains": "usually around 100 V"
+      }
+     ]
+    },
+    {
+     "id": "equipment.electrophoresis.2",
+     "text": "샘플이 위로 도망갔어, 전극 반대로 꽂은 거야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Agarose gel electrophoresis",
+       "text_contains": "moves the DNA towards the positively charged anode"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "겔 전기영동",
+       "text_contains": "DNA는 양극쪽으로 끌려가게 된다"
+      }
+     ]
+    },
+    {
+     "id": "equipment.electrophoresis.3",
+     "text": "전기영동 장치 감전 주의할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "Disconnect the power to electrophoresis equipment before disassembling"
+      }
+     ]
+    },
+    {
+     "id": "equipment.electrophoresis.4",
+     "text": "Why do bubbles form at the electrodes during a gel run?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Electrolysis of water",
+       "text_contains": "hydrogen gas is released"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "물의 전기분해",
+       "text_contains": "수소 기체를 형성한다"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.western_transfer",
+   "area": "equipment",
+   "name": "웨스턴 전이 장치",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "electroblotting",
+    "western blot",
+    "western blotting",
+    "immunoblotting",
+    "transfer buffer",
+    "PVDF",
+    "nitrocellulose membrane",
+    "semi-dry",
+    "웨스턴 블롯",
+    "트랜스퍼",
+    "블롯팅"
+   ],
+   "coverage_note": "영어 위키 'Electroblotting' 의 샌드위치 순서(음극→양극)와 한국어 '웨스턴 블롯' 트랜스퍼 요약(메탄올 적심, 100 V 90분)뿐; PVDF 메탄올 활성화 이유, 기포 제거, 세미드라이·웻 비교 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.western_transfer.1",
+     "text": "transfer 샌드위치 순서 어떻게 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Electroblotting",
+       "text_contains": "in the following order from cathode to anode"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "웨스턴 블롯",
+       "text_contains": "Paper 2장, 막, 겔"
+      }
+     ]
+    },
+    {
+     "id": "equipment.western_transfer.2",
+     "text": "PVDF 메탄올에 왜 담가?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "PVDF 를 메탄올로 적시라는 지시(한국어 위키)만 있고 이유(소수성 막 활성화) 조각 없음 (find PVDF/polyvinylidene/electroblotting·semi-dry/트랜스퍼, search 확인)"
+    },
+    {
+     "id": "equipment.western_transfer.3",
+     "text": "transfer 할 때 기포 생기면",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "전이 샌드위치 기포 제거 조각 없음; 기포 조각은 겔 중합·큐벳뿐 (find PVDF/electroblotting/transfer buffer·트랜스퍼/웨스턴 블롯, search 확인)"
+    },
+    {
+     "id": "equipment.western_transfer.4",
+     "text": "Semi-dry vs wet transfer, which is better for large proteins?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "'tank or semi-dry' 이름만 있고 비교·큰 단백질 권장 조각 없음 (find semi-dry/semidry/tank blotting/wet transfer·electroblotting, search 확인)"
+    }
+   ]
+  },
+  {
+   "id": "equipment.spectrophotometer",
+   "area": "equipment",
+   "name": "분광광도계",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "spectrophotometer",
+    "spectrophotometers",
+    "spectrophotometry",
+    "cuvette",
+    "cuvettes",
+    "absorbance",
+    "UV-Vis",
+    "NanoDrop",
+    "A260",
+    "분광광도계",
+    "분광광도법",
+    "흡광도",
+    "큐벳"
+   ],
+   "coverage_note": "영어 위키 'Spectrophotometry'·'Ultraviolet–visible spectroscopy'(영점·바탕, 2 AU 넘으면 문제)·'Beer–Lambert law'(0.2–0.5 이상적)·'Cuvette'(재질별 파장)가 충분; 260/280 기준은 Europe PMC 방법 문단 1개(1.6–1.8)뿐, 한국어는 '분광광도법'·'흡광도' 개요",
+   "questions": [
+    {
+     "id": "equipment.spectrophotometer.1",
+     "text": "나노드랍 260/280 비율 몇이면 괜찮아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "a ratio less than 1.6 would indicate protein contamination"
+      }
+     ]
+    },
+    {
+     "id": "equipment.spectrophotometer.2",
+     "text": "blank 왜 잡아야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Spectrophotometry",
+       "text_contains": "The transmission of a reference substance is set as a baseline"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "분광광도법",
+       "text_contains": "대조구(blank test)"
+      }
+     ]
+    },
+    {
+     "id": "equipment.spectrophotometer.3",
+     "text": "흡광도 너무 높게 나올 때",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "visible spectroscopy",
+       "text_contains": "measurements above about 2 AU problematic"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Lambert law",
+       "text_contains": "Absorbance within range of 0.2 to 0.5 is ideal"
+      }
+     ]
+    },
+    {
+     "id": "equipment.spectrophotometer.4",
+     "text": "Can I use a plastic cuvette for UV measurement at 260 nm?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Cuvette",
+       "text_contains": "glass and most plastics absorb ultraviolet light"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Cuvette",
+       "text_contains": "Plastic cuvettes with a usable wavelength range"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.plate_reader",
+   "area": "equipment",
+   "name": "플레이트 리더",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "plate reader",
+    "plate readers",
+    "microplate reader",
+    "microplate readers",
+    "microplate",
+    "microplates",
+    "microtiter plate",
+    "96-well",
+    "플레이트 리더",
+    "마이크로플레이트",
+    "96웰"
+   ],
+   "coverage_note": "영어 위키 'Plate reader'(검출 모드 설명)·'Microplate'(흰/검은 플레이트 용도)뿐, 한국어 조각 없음; 가장자리 효과, 기준 파장 보정, PMT gain 같은 운용·오류 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.plate_reader.1",
+     "text": "형광 측정할 때 검은 플레이트 써야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Microplate",
+       "text_contains": "black by the addition of carbon for fluorescent"
+      }
+     ]
+    },
+    {
+     "id": "equipment.plate_reader.2",
+     "text": "가장자리 웰 값이 이상해",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "플레이트 가장자리 효과(증발·온도) 조각 없음 (find edge effect/outer wells/plate reader·microplate reader, search 확인)"
+    },
+    {
+     "id": "equipment.plate_reader.3",
+     "text": "ELISA 450 nm 에 왜 570 reference 같이 읽어?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "기준 파장(570/630 nm) 보정 조각 없음 (find reference wavelength/dual wavelength/570 nm/630 nm, search 확인)"
+    },
+    {
+     "id": "equipment.plate_reader.4",
+     "text": "What does gain mean on a fluorescence plate reader?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "플레이트 리더 gain(PMT 증폭) 설정 조각 없음; 'gain' 은 SEM 검출기 문장뿐 (find photomultiplier/PMT·plate reader/microplate reader, search 확인)"
+    }
+   ]
+  },
+  {
+   "id": "equipment.hplc",
+   "area": "equipment",
+   "name": "HPLC",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "HPLC",
+    "UHPLC",
+    "high-performance liquid chromatography",
+    "mobile phase",
+    "isocratic",
+    "gradient elution",
+    "degasser",
+    "backpressure",
+    "고성능 액체 크로마토그래피",
+    "이동상",
+    "액체 크로마토그래피"
+   ],
+   "coverage_note": "영어 위키 'High-performance liquid chromatography'(구성·등용매/기울기 용리)와 한국어 위키(탈기장치 목적, 이동상 준비·필터)뿐; 압력 급상승 대처·컬럼 보관 용매 같은 운용·문제해결 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.hplc.1",
+     "text": "HPLC 이동상 degassing 왜 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "고성능 액체 크로마토그래피",
+       "text_contains": "이동상 중의 용존 산소"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "고성능 액체 크로마토그래피",
+       "text_contains": "이동상에녹아있는공기"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "High-performance liquid chromatography",
+       "text_contains": "degasser to remove dissolved gasses"
+      }
+     ]
+    },
+    {
+     "id": "equipment.hplc.2",
+     "text": "HPLC 압력 갑자기 올라갔어 어떻게 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "압력 급상승 원인·대처(막힘, 필터·가드컬럼) 조각 없음; 입자 작을수록 backpressure 높다는 설명뿐 (find backpressure/back pressure/column pressure·HPLC, search 확인)"
+    },
+    {
+     "id": "equipment.hplc.3",
+     "text": "컬럼 보관할 때 용매",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "HPLC 컬럼 보관 용매 조각 없음 (find HPLC/고성능 액체 크로마토그래피/column storage·guard column, search 확인)"
+    },
+    {
+     "id": "equipment.hplc.4",
+     "text": "What's the difference between isocratic and gradient elution?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "High-performance liquid chromatography",
+       "text_contains": "isocratic elution mode"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "고성능 액체 크로마토그래피",
+       "text_contains": "분석시간 동안 이동상 조성의 변화 없음"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.gc",
+   "area": "equipment",
+   "name": "GC",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "gas chromatography",
+    "gas chromatograph",
+    "GC-MS",
+    "GC–MS",
+    "carrier gas",
+    "flame ionization detector",
+    "thermal conductivity detector",
+    "splitless",
+    "기체 크로마토그래피",
+    "가스 크로마토그래피",
+    "운반 기체"
+   ],
+   "coverage_note": "영어 위키 'Gas chromatography'(운반 기체 선택, 주입구, FID·TCD 등 검출기)·'GC–MS' 와 한국어 '기체 크로마토그래피' 개요뿐; 셉텀 교체 주기, 수분 시료 영향 같은 운용·관리 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.gc.1",
+     "text": "GC 캐리어 가스 뭐 써?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Gas chromatography",
+       "text_contains": "helium is the most common carrier gas"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Gas chromatography",
+       "text_contains": "The mobile phase is usually an inert gas or an unreactive gas such as helium"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "기체 크로마토그래피",
+       "text_contains": "헬륨, 아르곤, 질소 또는 수소"
+      }
+     ]
+    },
+    {
+     "id": "equipment.gc.2",
+     "text": "GC 주입구 septum 언제 갈아",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "셉텀 교체·누설 조각 없음; 'through a septum' 주입구 설명뿐 (find septum/septa/inlet liner·gas chromatography, search 확인)"
+    },
+    {
+     "id": "equipment.gc.3",
+     "text": "GC 에 물 섞인 샘플 넣어도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "수분 시료가 컬럼·검출기에 미치는 영향 조각 없음; FID 가 물을 못 본다는 한 문장뿐 (find gas chromatography/GC column·septum, search 확인)"
+    },
+    {
+     "id": "equipment.gc.4",
+     "text": "FID vs TCD, which detector should I use?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Gas chromatography",
+       "text_contains": "Commonly used detectors are the flame ionization detector (FID) and the thermal conductivity detector (TCD)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.lc_ms",
+   "area": "equipment",
+   "name": "LC-MS",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "LC-MS",
+    "LC–MS",
+    "LC/MS",
+    "liquid chromatography–mass spectrometry",
+    "electrospray",
+    "ESI",
+    "mass spectrometer",
+    "mobile phase",
+    "HPLC",
+    "질량 분석",
+    "액체 크로마토그래피",
+    "이동상"
+   ],
+   "coverage_note": "LC–MS·ESI·질량분석 영어 위키 개요와 MMWR 분석기 감염 위험 조각 있음; 휘발성 버퍼 근거는 Ammonium bicarbonate 조각뿐, 용매 grade·스프레이 문제 해결·세척/유지관리 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.lc_ms.1",
+     "text": "LC-MS 이동상에 인산염 버퍼 쓰면 안 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ammonium bicarbonate",
+       "text_contains": "LC-MS buffers to either extremely trace concentrations"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ammonium bicarbonate",
+       "text_contains": "most mass spectrometry detectors become signal saturated"
+      }
+     ]
+    },
+    {
+     "id": "equipment.lc_ms.2",
+     "text": "LC-MS 용매 grade 뭐 써야 돼",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "HPLC grade 권고(고성능 액체 크로마토그래피 ko)만, LC-MS grade 권고 조각 없음; 논문 재료 목록에 'LC-MS grade' 이름만"
+    },
+    {
+     "id": "equipment.lc_ms.3",
+     "text": "ESI 스프레이 불안정할 때 뭐부터 봐?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "ESI 원리·이온화 설명뿐, 스프레이 불안정 점검(가스·모세관 막힘·유량) 조각 없음"
+    },
+    {
+     "id": "equipment.lc_ms.4",
+     "text": "Why do we add formic acid to the LC-MS mobile phase?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Electrospray ionization",
+       "text_contains": "source of protons to facilitate the ionization"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.rotary_evaporator",
+   "area": "equipment",
+   "name": "회전증발기",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "rotary evaporator",
+    "rotavap",
+    "rotovap",
+    "rotary evaporation",
+    "rotavapping",
+    "회전증발농축기",
+    "회전증발기",
+    "로타뱁",
+    "bumping",
+    "돌비",
+    "bump trap"
+   ],
+   "coverage_note": "Rotary evaporator 영어 위키 9·회전증발농축기 한국어 4 조각(원리·돌비·내파/과산화물 안전); bath 온도 기준·감압/해제 조작 순서·응축기 냉각 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.rotary_evaporator.1",
+     "text": "로터리 bath 온도 몇 도로 맞춰",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "'온도·진공 조절로 돌비 예방' 언급만, bath 온도 기준 조각 없음"
+    },
+    {
+     "id": "equipment.rotary_evaporator.2",
+     "text": "로타뱁 bumping 날 때 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Rotary evaporator",
+       "text_contains": "bumping can often be prevented"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "회전증발농축기",
+       "text_contains": "돌비 현상을 피하기 위해서는"
+      }
+     ]
+    },
+    {
+     "id": "equipment.rotary_evaporator.3",
+     "text": "회전증발기 감압 거는 순서",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "구성·원리·안전 조각만, 회전→감압→가열 / 해제 순서 조각 없음"
+    },
+    {
+     "id": "equipment.rotary_evaporator.4",
+     "text": "How does a rotary evaporator lower the boiling point of the solvent?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Rotary evaporator",
+       "text_contains": "lowering the pressure above a bulk liquid lowers the boiling points"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "회전증발농축기",
+       "text_contains": "압력을 낮게 하면 액체의 끓는점이 낮아진다"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.schlenk_glovebox",
+   "area": "equipment",
+   "name": "슐렝크 라인·글러브박스",
+   "importance": {
+    "safety": 3,
+    "use": 1
+   },
+   "terms": [
+    "Schlenk line",
+    "Schlenk",
+    "glovebox",
+    "glove box",
+    "antechamber",
+    "cold trap",
+    "purge-and-refill",
+    "air-free",
+    "cannula",
+    "슐렝크",
+    "글러브박스",
+    "콜드트랩"
+   ],
+   "coverage_note": "Schlenk line·Glovebox·Air-free technique 영어 위키(퍼지 3회·액체산소 위험·구리 촉매) 있음; 글러브박스 ppm 작업 기준·라인 누설 점검 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.schlenk_glovebox.1",
+     "text": "슐렝크 라인 vacuum-질소 사이클 몇 번 돌려?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Schlenk line",
+       "text_contains": "repeated 3 or more times"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "usually repeated three times"
+      }
+     ]
+    },
+    {
+     "id": "equipment.schlenk_glovebox.2",
+     "text": "콜드트랩에 액체질소 쓸 때 액체 산소 생기는 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Schlenk line",
+       "text_contains": "liquid oxygen can condense into the cold trap"
+      }
+     ]
+    },
+    {
+     "id": "equipment.schlenk_glovebox.3",
+     "text": "글러브박스 산소 수분 몇 ppm 이하여야 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "'오픈소스 중급 박스 <20ppm' 언급뿐, 작업 기준 ppm 조각 없음"
+    },
+    {
+     "id": "equipment.schlenk_glovebox.4",
+     "text": "How do I check whether my Schlenk line has a leak?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "Schlenk 위험(내파·액체산소)·기법만, 누설 점검(진공계·Tesla coil) 조각 없음"
+    }
+   ]
+  },
+  {
+   "id": "equipment.vacuum_pump",
+   "area": "equipment",
+   "name": "진공 펌프",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "vacuum pump",
+    "rotary vane",
+    "diaphragm pump",
+    "scroll pump",
+    "turbomolecular",
+    "diffusion pump",
+    "pump oil",
+    "backstreaming",
+    "진공펌프",
+    "진공 펌프",
+    "ultimate pressure",
+    "base pressure"
+   ],
+   "coverage_note": "Vacuum pump 영어 위키 16 조각(종류·압력·성능)과 MMWR 진공 장치(트랩·내파) 조각, 펌프 보호용 콜드트랩은 Schlenk line 조각; 오일 교체·정지 순서 등 관리 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.vacuum_pump.1",
+     "text": "진공펌프 오일 언제 갈아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "펌프 종류·성능 조각만, 오일 교체 주기·상태 판단 조각 없음"
+    },
+    {
+     "id": "equipment.vacuum_pump.2",
+     "text": "펌프 앞에 콜드트랩 왜 달아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Schlenk line",
+       "text_contains": "prevented from contaminating the vacuum pump"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Schlenk line",
+       "text_contains": "used to protect the vacuum pump from solvents"
+      }
+     ]
+    },
+    {
+     "id": "equipment.vacuum_pump.3",
+     "text": "진공펌프 끌 때 순서",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "정지 순서(벤트·오일 역류 방지) 조각 없음"
+    },
+    {
+     "id": "equipment.vacuum_pump.4",
+     "text": "What is the difference between a rotary vane pump and a diaphragm pump?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Vacuum pump",
+       "text_contains": "Diaphragm pump, zero oil contamination"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.balance",
+   "area": "equipment",
+   "name": "저울",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "analytical balance",
+    "weighing",
+    "weighing pan",
+    "draft shield",
+    "triple beam balance",
+    "tare",
+    "저울",
+    "분석저울",
+    "전자저울",
+    "칭량"
+   ],
+   "coverage_note": "Analytical balance 영어 위키 6·저울 한국어 5 조각(기류·실온 시료·질량과 무게), OpenStax 질량/무게; 교정 절차·흡습성/정전기 시료 칭량 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.balance.1",
+     "text": "저울 숫자가 계속 흔들려, 왜 그래?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Analytical balance",
+       "text_contains": "air currents in the room do not affect"
+      }
+     ]
+    },
+    {
+     "id": "equipment.balance.2",
+     "text": "분석저울 calibration 어떻게 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "'장소별 중력 차이 때문에 보정 필요' 한 줄뿐, 교정 절차(분동) 조각 없음"
+    },
+    {
+     "id": "equipment.balance.3",
+     "text": "흡습성 시료 무게 다는 법",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "흡습성 표시(NIOSH·PubChem)와 데시케이터 보관 조각뿐, 칭량 요령(빠른 칭량·뚜껑 있는 칭량병·차감 칭량) 조각 없음"
+    },
+    {
+     "id": "equipment.balance.4",
+     "text": "What is the difference between mass and weight on a lab balance?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "Weight refers to the force that gravity exerts"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "저울",
+       "text_contains": "무게란 보통 그 물체와 지구 사이의 인력"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Analytical balance",
+       "text_contains": "compensate for gravitational differences"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.ph_meter",
+   "area": "equipment",
+   "name": "pH 미터",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "pH meter",
+    "pH meters",
+    "pH electrode",
+    "glass electrode",
+    "combination electrode",
+    "calibration buffer",
+    "standard buffer",
+    "storage solution",
+    "pH 미터",
+    "pH 전극"
+   ],
+   "coverage_note": "PH meter 영어 위키 16 조각이 교정(2점·4/10)·보관·온도 보정·전극 관리를 다룸; 한국어 PH 미터 2 조각은 개요뿐",
+   "questions": [
+    {
+     "id": "equipment.ph_meter.1",
+     "text": "pH 미터 calibration buffer 몇 개 써?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "at least two standard buffer solutions"
+      }
+     ]
+    },
+    {
+     "id": "equipment.ph_meter.2",
+     "text": "pH 전극 증류수에 보관해도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "kept moist when not in use"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "immersed in a storage solution suitable"
+      }
+     ]
+    },
+    {
+     "id": "equipment.ph_meter.3",
+     "text": "pH 측정 온도 보정",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "temperature-coefficient correction"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "A third control allows the temperature to be set"
+      }
+     ]
+    },
+    {
+     "id": "equipment.ph_meter.4",
+     "text": "Why is my pH electrode reading drifting?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "clogged reference junction"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "equilibration times increase as the electrodes age"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "PH meter",
+       "text_contains": "does not give reproducible electrostatic potentials"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.sonicator",
+   "area": "equipment",
+   "name": "초음파 분쇄기",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "sonicator",
+    "sonicators",
+    "sonication",
+    "ultrasonic probe",
+    "ultrasonic bath",
+    "ultrasonic cleaning",
+    "ultrasonic devices",
+    "cavitation",
+    "초음파",
+    "초음파 분쇄기",
+    "소니케이터"
+   ],
+   "coverage_note": "Sonication·Ultrasonic cleaning 영어 위키(원리·소음·온도 상승)와 MMWR 3.15 초음파 장치(에어로졸·최저 출력) 있음; probe 출력·펄스·냉각 조작 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.sonicator.1",
+     "text": "probe sonicator 쓸 때 시료 얼음에 왜 올려?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ultrasonic cleaning",
+       "text_contains": "increase the temperature even when not equipped with a heater"
+      }
+     ]
+    },
+    {
+     "id": "equipment.sonicator.2",
+     "text": "소니케이터 귀마개 껴야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ultrasonic cleaning",
+       "text_contains": "hearing protection may be needed"
+      }
+     ]
+    },
+    {
+     "id": "equipment.sonicator.3",
+     "text": "초음파로 세포 깨는 원리",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sonication",
+       "text_contains": "cavitations that grow and collapse"
+      }
+     ]
+    },
+    {
+     "id": "equipment.sonicator.4",
+     "text": "What pulse on/off setting should I use to lyse bacteria by sonication?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "논문 방법의 피부 테이프 단백질 추출 조건(50%·30초 on/off)뿐, 세균 용해 설정 지침 없음; MMWR 는 '최저 유효 출력'만"
+    }
+   ]
+  },
+  {
+   "id": "equipment.microscope",
+   "area": "equipment",
+   "name": "현미경",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "optical microscope",
+    "light microscope",
+    "objective lens",
+    "eyepiece",
+    "oil immersion",
+    "immersion oil",
+    "coarse adjustment",
+    "fine adjustment",
+    "현미경",
+    "대물렌즈",
+    "접안렌즈",
+    "조동나사",
+    "미동나사"
+   ],
+   "coverage_note": "광학 현미경 ko 16·현미경 ko 7(사용법·조동/미동·유침)·Optical microscope en 16 조각, 분해능은 여러 위키; 렌즈 청소는 Xylene 위키 한 줄뿐",
+   "questions": [
+    {
+     "id": "equipment.microscope.1",
+     "text": "현미경 초점 안 맞을 때 뭐부터 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "현미경",
+       "text_contains": "미동나사를 이용하여 더 자세히 초점을 맞춘다"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "광학 현미경",
+       "text_contains": "낮은 배율에서 시작한다"
+      }
+     ]
+    },
+    {
+     "id": "equipment.microscope.2",
+     "text": "오일 렌즈 쓰고 나서 어떻게 닦아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Xylene",
+       "text_contains": "remove synthetic immersion oil from the microscope objective"
+      }
+     ]
+    },
+    {
+     "id": "equipment.microscope.3",
+     "text": "100배 대물렌즈 immersion oil 쓰는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "광학 현미경",
+       "text_contains": "굴절률 매칭 재료"
+      }
+     ]
+    },
+    {
+     "id": "equipment.microscope.4",
+     "text": "What is the resolution limit of a light microscope?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Optical microscope",
+       "text_contains": "limited to around 200 nanometers"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Electron microscope",
+       "text_contains": "about 200 nm for light microscopes"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Fluorescence microscope",
+       "text_contains": "approximately half of the wavelength of the light used"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.flow_cytometer",
+   "area": "equipment",
+   "name": "유세포 분석기",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "flow cytometry",
+    "flow cytometer",
+    "flow cytometers",
+    "cell sorter",
+    "cell sorting",
+    "FACS",
+    "sheath fluid",
+    "gating",
+    "fluorochrome",
+    "forward scatter",
+    "side scatter",
+    "유세포"
+   ],
+   "coverage_note": "Flow cytometry en 16·유세포 분석 ko 9 조각(원리·보상·게이팅)과 MMWR 10.6.4 유세포/세포분류기 생물안전(막힌 노즐→에어로졸) 조각; FSC/SSC 해석·시료 여과 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.flow_cytometer.1",
+     "text": "FACS 돌리기 전에 compensation 왜 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Flow cytometry",
+       "text_contains": "color compensation"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Flow cytometry",
+       "text_contains": "have to be compensated electronically"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "유세포 분석",
+       "text_contains": "보상되어야"
+      }
+     ]
+    },
+    {
+     "id": "equipment.flow_cytometer.2",
+     "text": "유세포 분석기 노즐 막혔을 때",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "clogged sort nozzle"
+      }
+     ]
+    },
+    {
+     "id": "equipment.flow_cytometer.3",
+     "text": "샘플 cell strainer 로 걸러야 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "'고형 조직은 단일세포 현탁액 준비 필요' 한 줄과 논문 방법의 70 µm strainer 여과(1차 세포 분리) 한 줄뿐, 유세포 시료 여과 지침 조각 없음"
+    },
+    {
+     "id": "equipment.flow_cytometer.4",
+     "text": "What do forward scatter and side scatter tell you in flow cytometry?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "FSC/SSC 용어만 나오고 크기·과립도 의미 설명 조각 없음"
+    }
+   ]
+  },
+  {
+   "id": "equipment.speedvac",
+   "area": "equipment",
+   "name": "스피드백",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "SpeedVac",
+    "speed vac",
+    "vacuum centrifuge",
+    "vacuum centrifuged",
+    "vacuum centrifugation",
+    "centrifugal evaporator",
+    "centrifugal evaporation",
+    "vacuum concentrator",
+    "스피드백",
+    "원심농축",
+    "원심증발농축"
+   ],
+   "coverage_note": "전용 문서 없음 — 회전증발기·DNA extraction·In-gel digestion 위키에 '원심증발/vacuum centrifugation' 한 줄씩, 논문 방법 조각 8; 조작·안전 조각 0",
+   "questions": [
+    {
+     "id": "equipment.speedvac.1",
+     "text": "스피드백 돌릴 때 튜브 뚜껑 열어 둬야 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "SpeedVac 전용 조각 없음; 논문 방법에 'SpeedVac 에서 건조' 언급뿐"
+    },
+    {
+     "id": "equipment.speedvac.2",
+     "text": "speedvac 에 TFA 든 시료 돌려도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "산 증기·펌프/트랩 보호 조각 없음"
+    },
+    {
+     "id": "equipment.speedvac.3",
+     "text": "스피드백 끝나고 콜드트랩 비우기",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "콜드트랩 관리 조각 없음"
+    },
+    {
+     "id": "equipment.speedvac.4",
+     "text": "Why does my sample bump in the SpeedVac?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "원심증발 언급(회전증발기 위키)뿐, 돌비 원인 조각 없음"
+    }
+   ]
+  },
+  {
+   "id": "equipment.lyophilizer",
+   "area": "equipment",
+   "name": "동결건조기",
+   "importance": {
+    "safety": 1,
+    "use": 1
+   },
+   "terms": [
+    "freeze drying",
+    "freeze-drying",
+    "freeze dried",
+    "freeze-dried",
+    "lyophilization",
+    "lyophilized",
+    "lyophilizer",
+    "freeze dryer",
+    "primary drying",
+    "동결건조",
+    "동결 건조",
+    "승화"
+   ],
+   "coverage_note": "Freeze drying 영어 위키 16 조각(단계·승화·melt-back 방지)과 MMWR 동결건조 바이알 개봉 1 조각; 한국어 문서 없음, 콜드트랩 온도·진공 확인 등 기기 조작 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.lyophilizer.1",
+     "text": "동결건조 전에 시료 완전히 얼려야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Freeze drying",
+       "text_contains": "sublimation rather than melting will occur"
+      }
+     ]
+    },
+    {
+     "id": "equipment.lyophilizer.2",
+     "text": "동결건조기 콜드트랩 온도 몇 도",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "응축기(cold condenser) 역할만, 온도 값 조각 없음"
+    },
+    {
+     "id": "equipment.lyophilizer.3",
+     "text": "동결건조 중에 시료가 녹았어, 왜 그래?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Freeze drying",
+       "text_contains": "prevent melt-back or collapse"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Freeze drying",
+       "text_contains": "too much heat to the material can cause melting"
+      }
+     ]
+    },
+    {
+     "id": "equipment.lyophilizer.4",
+     "text": "How does freeze-drying remove water — what is sublimation?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Freeze drying",
+       "text_contains": "removing the ice by sublimation"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Freeze drying",
+       "text_contains": "enough heat is supplied to the material for the ice to sublimate"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.coin_cell_crimper",
+   "area": "equipment",
+   "name": "코인셀 크림퍼",
+   "importance": {
+    "safety": 1,
+    "use": 1
+   },
+   "terms": [
+    "crimper",
+    "crimping",
+    "crimp",
+    "coin cell",
+    "coin cells",
+    "button cell",
+    "CR2032",
+    "크림퍼",
+    "크림핑",
+    "코인셀",
+    "단추형 전지"
+   ],
+   "coverage_note": "크림퍼·크림핑 조각 0; Button cell en 16·단추형 전지 ko 15 조각은 상용 전지 규격·화학, 단락 이유는 분리막 위키(관통 강도)에서만 간접",
+   "questions": [
+    {
+     "id": "equipment.coin_cell_crimper.1",
+     "text": "코인셀 크림핑 압력 얼마로 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "크림핑 조각 없음 (단추형 전지 위키는 규격·화학만)"
+    },
+    {
+     "id": "equipment.coin_cell_crimper.2",
+     "text": "크림퍼 다이에 셀 놓는 방향",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "크림퍼 사용법 조각 없음"
+    },
+    {
+     "id": "equipment.coin_cell_crimper.3",
+     "text": "크림핑 후 전해질 새면 어떻게 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "밀봉·개스킷·누액 조각 없음"
+    },
+    {
+     "id": "equipment.coin_cell_crimper.4",
+     "text": "Why does my coin cell short circuit after crimping?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Separator (electricity)",
+       "text_contains": "separator must not yield to stresses"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.potentiostat",
+   "area": "equipment",
+   "name": "전위차계(potentiostat)",
+   "importance": {
+    "safety": 1,
+    "use": 1
+   },
+   "terms": [
+    "potentiostat",
+    "three-electrode",
+    "working electrode",
+    "counter electrode",
+    "auxiliary electrode",
+    "reference electrode",
+    "cyclic voltammetry",
+    "scan rate",
+    "전위차계",
+    "작업 전극",
+    "기준 전극",
+    "순환 전압전류법"
+   ],
+   "coverage_note": "Potentiostat en 15·Cyclic voltammetry en 16·기준 전극 ko 6 조각(원리·전극 역할); 리드 연결·권장 스캔 속도·기준전극 보관 등 조작 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.potentiostat.1",
+     "text": "potentiostat 전극 working counter reference 어디에 꽂아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "전극별 역할(WE–RE 전위, WE–CE 전류)만, 리드 연결 조각 없음"
+    },
+    {
+     "id": "equipment.potentiostat.2",
+     "text": "CV 스캔 속도 얼마로 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "스캔 속도 정의·피크 의존성만, 권장 값 조각 없음"
+    },
+    {
+     "id": "equipment.potentiostat.3",
+     "text": "Ag/AgCl 기준전극 보관법",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "보관 조각 없음 (QRE '보관 걱정 없음' 한 줄)"
+    },
+    {
+     "id": "equipment.potentiostat.4",
+     "text": "What does a potentiostat actually control?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Potentiostat",
+       "text_contains": "maintaining the potential of the working electrode at a constant level"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "equipment.furnace",
+   "area": "equipment",
+   "name": "퍼니스",
+   "importance": {
+    "safety": 3,
+    "use": 1
+   },
+   "terms": [
+    "furnace",
+    "muffle furnace",
+    "tube furnace",
+    "kiln",
+    "crucible",
+    "heating element",
+    "퍼니스",
+    "전기로",
+    "도가니",
+    "소성로",
+    "ramping"
+   ],
+   "coverage_note": "Muffle furnace en 4·Tube furnace en 5 조각(분위기 제어·튜브/보트 재질), 고온 PPE 는 Laboratory oven 안전 조각(내열 장갑·안면 보호)으로 간접; 승온 속도·도가니 취급·냉각 조각 없음",
+   "questions": [
+    {
+     "id": "equipment.furnace.1",
+     "text": "퍼니스 승온 속도 몇 도/분으로 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "프로그램식 승온(ramping) 언급만, 속도 값 조각 없음"
+    },
+    {
+     "id": "equipment.furnace.2",
+     "text": "퍼니스에서 뜨거운 도가니 꺼낼 때 뭐 껴야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Laboratory oven",
+       "text_contains": "heat resistant gloves"
+      }
+     ]
+    },
+    {
+     "id": "equipment.furnace.3",
+     "text": "튜브 퍼니스 아르곤 흘리면서 가열",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Tube furnace",
+       "text_contains": "inert (e.g., argon or nitrogen)"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Tube furnace",
+       "text_contains": "evacuated using a vacuum pump and then backfilled with inert gas"
+      }
+     ]
+    },
+    {
+     "id": "equipment.furnace.4",
+     "text": "What crucible material can I use at 1000 °C?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Tube furnace",
+       "text_contains": "platinum or alumina"
+      },
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "Magnesium oxide is important in making firebrick, crucibles"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "materials.electrode_slurry",
+   "area": "materials",
+   "name": "전극 슬러리",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "slurry",
+    "electrode slurry",
+    "PVDF",
+    "polyvinylidene fluoride",
+    "NMP",
+    "N-methyl-2-pyrrolidone",
+    "binder",
+    "carbon black",
+    "conductive additive",
+    "슬러리",
+    "바인더",
+    "도전재"
+   ],
+   "coverage_note": "Viscosity Analysis of Battery Electrode Slurry 논문(점도 요인)·NCM811 슬러리 첨가제 논문·NMP 위키/PubChem, PVDF 위키의 'NMP 중 1–2% 용액' 한 줄 있음; 활물질:도전재:바인더 조성비·코팅/건조 절차 조각 없음",
+   "questions": [
+    {
+     "id": "materials.electrode_slurry.1",
+     "text": "슬러리 PVDF 를 NMP 에 녹이는 비율",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polyvinylidene fluoride",
+       "text_contains": "by mass in N-methyl-2-pyrrolidone"
+      }
+     ]
+    },
+    {
+     "id": "materials.electrode_slurry.2",
+     "text": "슬러리 점도 너무 높을 때 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "title_contains": "Viscosity Analysis of Battery Electrode Slurry",
+       "text_contains": "increasing solid content"
+      },
+      {
+       "source_id": "europepmc-ccby",
+       "title_contains": "Viscosity Analysis of Battery Electrode Slurry",
+       "text_contains": "polymer binder clearly has the greatest impact"
+      }
+     ]
+    },
+    {
+     "id": "materials.electrode_slurry.3",
+     "text": "NMP 독성 있어? 흄후드에서 해야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "N-Methyl-2-pyrrolidone",
+       "text_contains": "reproductive toxicant"
+      }
+     ]
+    },
+    {
+     "id": "materials.electrode_slurry.4",
+     "text": "What is the typical active material : carbon : binder ratio for a cathode slurry?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "조성 비율 조각 없음 (점도 논문은 CMC/흑연 실험 조성뿐)"
+    }
+   ]
+  },
+  {
+   "id": "materials.coin_cell_assembly",
+   "area": "materials",
+   "name": "코인셀 조립",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "coin cell",
+    "coin cells",
+    "button cell",
+    "CR2032",
+    "half-cell",
+    "separator",
+    "lithium metal",
+    "spacer",
+    "코인셀",
+    "단추형 전지",
+    "분리막",
+    "리튬 금속"
+   ],
+   "coverage_note": "분리막 위키 en 16·Lithium PubChem(물 반응·PPE)·Li-ion/Li metal battery 위키 있음; 조립 순서·전해액 양·스페이서/스프링 조각 없음",
+   "questions": [
+    {
+     "id": "materials.coin_cell_assembly.1",
+     "text": "코인셀 조립 순서 알려줘",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "조립 순서 조각 없음 (논문은 'CR2032 half-cell' 언급뿐)"
+    },
+    {
+     "id": "materials.coin_cell_assembly.2",
+     "text": "코인셀에 전해질 몇 µL 넣어?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "전해액 양 조각 없음"
+    },
+    {
+     "id": "materials.coin_cell_assembly.3",
+     "text": "리튬 메탈 다룰 때 주의할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Lithium",
+       "text_contains": "Reacts violently /with water/"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Lithium",
+       "text_contains": "fire-retardant clothing"
+      }
+     ]
+    },
+    {
+     "id": "materials.coin_cell_assembly.4",
+     "text": "What does the separator do in a lithium-ion cell?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Separator (electricity)",
+       "text_contains": "keep the two electrodes apart to prevent electrical short circuits"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "materials.electrolyte_handling",
+   "area": "materials",
+   "name": "전해질 다루기",
+   "importance": {
+    "safety": 3,
+    "use": 1
+   },
+   "terms": [
+    "electrolyte",
+    "LiPF6",
+    "lithium hexafluorophosphate",
+    "ethylene carbonate",
+    "dimethyl carbonate",
+    "diethyl carbonate",
+    "propylene carbonate",
+    "LiTFSI",
+    "전해액",
+    "전해질",
+    "hydrofluoric acid",
+    "carbonate electrolyte"
+   ],
+   "coverage_note": "LiPF6 위키(가수분해→HF)·EC/DMC/DEC/PC PubChem·HF 화상 위키 있음; LiPF6 PubChem 은 식별 1 조각뿐, 수분 기준·전해액 취급/폐기 조각 없음",
+   "questions": [
+    {
+     "id": "materials.electrolyte_handling.1",
+     "text": "LiPF6 전해질 공기에 노출되면 어떻게 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Lithium hexafluorophosphate",
+       "text_contains": "forming highly toxic HF gas"
+      }
+     ]
+    },
+    {
+     "id": "materials.electrolyte_handling.2",
+     "text": "전해질 피부에 묻었어",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Hydrofluoric acid burn",
+       "text_contains": "calcium gluconate cream"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "플루오린화 수소산",
+       "text_contains": "2.5% 글루콘산 칼슘 젤"
+      }
+     ]
+    },
+    {
+     "id": "materials.electrolyte_handling.3",
+     "text": "전해질 수분 몇 ppm 이하여야 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "수분 기준·Karl Fischer 조각 없음"
+    },
+    {
+     "id": "materials.electrolyte_handling.4",
+     "text": "Is ethylene carbonate a solid at room temperature?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ethylene carbonate",
+       "text_contains": "transparent crystalline solid"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Ethylene carbonate",
+       "text_contains": "Solid at room temperature"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "materials.glovebox_work",
+   "area": "materials",
+   "name": "글러브박스 작업",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "glovebox",
+    "gloveboxes",
+    "glove box",
+    "antechamber",
+    "ante-chamber",
+    "purge-and-refill",
+    "inert atmosphere",
+    "copper catalyst",
+    "글러브박스",
+    "안티챔버"
+   ],
+   "coverage_note": "Glovebox en 6·Air-free technique en 13 조각(퍼지 3회·촉매 독·재생); 한국어는 개요 1 조각, 장갑 손상 대처·ppm 관리 조각 없음",
+   "questions": [
+    {
+     "id": "materials.glovebox_work.1",
+     "text": "글러브박스 안티챔버 purge 몇 번 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "usually repeated three times"
+      }
+     ]
+    },
+    {
+     "id": "materials.glovebox_work.2",
+     "text": "글러브 찢어졌을 때 어떻게 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "장갑 투과 확산 언급과 BMBL Class III BSC 장갑 파손 대비(속장갑) 조각뿐, 불활성 글러브박스 장갑 찢어짐 대처 조각 없음"
+    },
+    {
+     "id": "materials.glovebox_work.3",
+     "text": "글러브박스 안에 넣으면 안 되는 용매",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Glovebox",
+       "text_contains": "bind irreversibly to the copper catalyst"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "irreversibly poison the copper catalyst"
+      }
+     ]
+    },
+    {
+     "id": "materials.glovebox_work.4",
+     "text": "How do I regenerate the glovebox purifier?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Glovebox",
+       "text_contains": "regenerated by passing a hydrogen/nitrogen mixture"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "materials.xrd",
+   "area": "materials",
+   "name": "XRD",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "X-ray diffraction",
+    "XRD",
+    "PXRD",
+    "powder diffraction",
+    "diffractometer",
+    "Bragg's law",
+    "Bragg peaks",
+    "Scherrer",
+    "diffraction pattern",
+    "엑스선 회절",
+    "X선 회절"
+   ],
+   "coverage_note": "Powder diffraction·Bragg's law·Scherrer equation 영어 위키와 OpenStax Bragg 식, PXRD 3D 프린트 홀더 논문 있음; 분말 시료 준비·X선 안전·시료 높이 오차 조각 없음",
+   "questions": [
+    {
+     "id": "materials.xrd.1",
+     "text": "XRD 시료 홀더에 파우더 평평하게 까는 법",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "3D 프린트 홀더를 테이프로 덮는 논문 조각뿐, 분말 평탄화 요령 조각 없음"
+    },
+    {
+     "id": "materials.xrd.2",
+     "text": "XRD 피크가 낮은 각도로 밀렸어, 왜 그래?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Powder diffraction",
+       "text_contains": "migrate continuously to indicate higher or lower lattice spacings"
+      }
+     ]
+    },
+    {
+     "id": "materials.xrd.3",
+     "text": "Bragg 식 뭐였지?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Bragg's law",
+       "text_contains": "grating constant"
+      },
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "This relation is known as the Bragg equation"
+      }
+     ]
+    },
+    {
+     "id": "materials.xrd.4",
+     "text": "How do I estimate crystallite size from XRD peak broadening?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Scherrer equation",
+       "text_contains": "relates the size of sub-micrometre crystallites"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Bragg's law",
+       "text_contains": "described by the Scherrer equation"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "materials.sem_prep",
+   "area": "materials",
+   "name": "SEM 시료 준비",
+   "importance": {
+    "safety": 1,
+    "use": 1
+   },
+   "terms": [
+    "scanning electron microscope",
+    "scanning electron microscopy",
+    "SEM",
+    "sputter coating",
+    "sputter coater",
+    "sputter-coated",
+    "charging",
+    "specimen stub",
+    "carbon tape",
+    "주사전자현미경",
+    "전자현미경"
+   ],
+   "coverage_note": "Scanning electron microscope en 16 조각(시료 준비·코팅·charging)과 SEM 논문 방법, MMWR 전자현미경실 위험 조각 있음; 분말 장착 요령·진공이 필요한 이유 조각 없음, 한국어는 개요뿐",
+   "questions": [
+    {
+     "id": "materials.sem_prep.1",
+     "text": "비전도성 시료 SEM 찍을 때 코팅 해야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Scanning electron microscope",
+       "text_contains": "Sputter coating is used to apply a thin coating"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Scanning electron microscope",
+       "text_contains": "deposit a thin metal layer on the surface"
+      }
+     ]
+    },
+    {
+     "id": "materials.sem_prep.2",
+     "text": "카본 테이프에 파우더 붙이는 법",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "도전성 양면테이프로 스텁에 붙인다는 생물 시료 한 줄뿐, 분말 장착 요령 조각 없음"
+    },
+    {
+     "id": "materials.sem_prep.3",
+     "text": "SEM 에서 charging 생기면 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Scanning electron microscope",
+       "text_contains": "deposit a thin metal layer on the surface"
+      }
+     ]
+    },
+    {
+     "id": "materials.sem_prep.4",
+     "text": "Why does an SEM need a vacuum?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "'고진공에서 관찰' 사실만, 이유(기체 분자에 의한 전자 산란) 조각 없음"
+    }
+   ]
+  },
+  {
+   "id": "materials.calcination",
+   "area": "materials",
+   "name": "소성",
+   "importance": {
+    "safety": 2,
+    "use": 1
+   },
+   "terms": [
+    "calcination",
+    "calcined",
+    "calcine",
+    "calciner",
+    "sintering",
+    "sintered",
+    "소성",
+    "소결",
+    "하소",
+    "thermal decomposition",
+    "kiln"
+   ],
+   "coverage_note": "Calcination en 8·Sintering en 16·소결 ko 10 조각과 OpenStax CaCO3 분해식 있음; 분위기 차이는 Tube furnace·Calcination 산화 조각으로 간접, 온도 프로파일 실무 조각 없음",
+   "questions": [
+    {
+     "id": "materials.calcination.1",
+     "text": "소성이랑 sintering 차이가 뭐야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcination",
+       "text_contains": "raised to high temperature without melting with a restricted supply of oxygen"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sintering",
+       "text_contains": "compacting and forming a solid mass"
+      }
+     ]
+    },
+    {
+     "id": "materials.calcination.2",
+     "text": "탄산염 소성하면 CO2 나오는 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcination",
+       "text_contains": "remove carbon and oxygen from limestone"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcination",
+       "text_contains": "to drive off carbon dioxide"
+      }
+     ]
+    },
+    {
+     "id": "materials.calcination.3",
+     "text": "소성할 때 공기 분위기랑 Ar 분위기 차이",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Tube furnace",
+       "text_contains": "inert (e.g., argon or nitrogen), oxidizing"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcination",
+       "text_contains": "calcination of a metal results in oxidation"
+      }
+     ]
+    },
+    {
+     "id": "materials.calcination.4",
+     "text": "What happens chemically when calcium carbonate is calcined?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcination",
+       "text_contains": "remove carbon and oxygen from limestone"
+      },
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "is made by heating calcium carbonate"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.cell_culture",
+   "area": "bio_technique",
+   "name": "세포 배양(계대·트립신 처리·세포 세기)",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "cell culture",
+    "tissue culture",
+    "passaging",
+    "passaged",
+    "subculture",
+    "trypsinization",
+    "trypsinize",
+    "confluence",
+    "confluent",
+    "hemocytometer",
+    "trypan blue",
+    "세포 배양",
+    "계대",
+    "혈구계"
+   ],
+   "coverage_note": "Cell culture·Hemocytometer·Trypan blue 위키 개요와 계대 시점(80–90% confluence)을 적은 논문 2편뿐; 트립신 처리 시간·혈청으로 멈추는 이유·trypan blue 희석비 조각 없음",
+   "questions": [
+    {
+     "id": "bio.cell_culture.1",
+     "text": "트립신 몇 분 처리해",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "세포를 떼는 트립신 처리 시간(분) 조각 없음; Trypsin 위키는 용도만, 논문 조각은 in-gel 소화 조건 (find trypsin+min·trypsinize, search 확인)"
+    },
+    {
+     "id": "bio.cell_culture.2",
+     "text": "트립신 처리하고 왜 serum 든 배지 넣어?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "혈청이 트립신을 멈춘다는 배양 맥락 조각 없음; Trypsin 위키 'α1-antitrypsin in the serum'은 생리 맥락뿐 (find trypsin+serum/inhibitor/neutraliz)"
+    },
+    {
+     "id": "bio.cell_culture.3",
+     "text": "hemocytometer 로 셀 때 trypan blue 섞는 비율",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "trypan blue 희석 비율(1:1·0.4%) 조각 없음; dye exclusion 원리·혈구계 사용법만 (find trypan+ratio/0.4%/1:1)"
+    },
+    {
+     "id": "bio.cell_culture.4",
+     "text": "How confluent should my cells be before I passage them?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "passaged at a ratio of 1:3 when reaching approximately 80"
+      },
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "passaged upon reaching 90% confluence"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.transfection",
+   "area": "bio_technique",
+   "name": "형질주입",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "transfection",
+    "transfected",
+    "transfect",
+    "lipofection",
+    "lipofectamine",
+    "electroporation",
+    "polyethylenimine",
+    "형질주입",
+    "형질 주입",
+    "형질감염"
+   ],
+   "coverage_note": "Transfection·Electroporation 위키(방법, stable/transient)와 PEI 렌티 패키징 논문 절차뿐; confluency·무혈청 복합체 이유·발현 확인 시점 같은 실무 값 없음",
+   "questions": [
+    {
+     "id": "bio.transfection.1",
+     "text": "transfection 할 때 confluency 몇 % 가 좋아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "형질주입 때 세포 밀도(confluency %) 조각 없음; HEK293FT 파종 밀도(cells/cm²) 한 줄뿐 (find transfection+confluen)"
+    },
+    {
+     "id": "bio.transfection.2",
+     "text": "lipofectamine 이랑 DNA 섞을 때 serum-free 배지 쓰는 이유",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "무혈청 배지에서 복합체를 만드는 이유 조각 없음; PEI 복합체 절차(serum-free DMEM 희석)와 lipofection 원리만"
+    },
+    {
+     "id": "bio.transfection.3",
+     "text": "transfection 하고 몇 시간 뒤에 발현 확인해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "발현 확인 시점 조각 없음; 렌티바이러스 상등액 48 h 수확 절차뿐 (find post-transfection/after transfection)"
+    },
+    {
+     "id": "bio.transfection.4",
+     "text": "What's the difference between transient and stable transfection?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Transfection",
+       "text_contains": "stably transfected cell will continuously express"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "세포",
+       "text_contains": "게놈에 삽입되면 안정적으로"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.pcr_qpcr",
+   "area": "bio_technique",
+   "name": "PCR·qPCR",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "polymerase chain reaction",
+    "pcr",
+    "qpcr",
+    "rt-pcr",
+    "real-time pcr",
+    "thermal cycler",
+    "thermocycler",
+    "primer",
+    "중합효소 연쇄 반응",
+    "프라이머"
+   ],
+   "coverage_note": "PCR·Real-time PCR·Primer 위키(단계별 온도, Tm보다 3–5 °C 낮은 annealing)와 qPCR 논문 다수(NTC 결과); Ct 정의 조각 없음",
+   "questions": [
+    {
+     "id": "bio.pcr_qpcr.1",
+     "text": "PCR annealing 온도 어떻게 정해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "below the tm of the primers used"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Primer",
+       "text_contains": "designed to have similar melting temperatures"
+      }
+     ]
+    },
+    {
+     "id": "bio.pcr_qpcr.2",
+     "text": "qPCR Ct 값 의미",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "Ct(형광이 역치를 넘는 사이클) 정의 조각 없음; Real-time PCR 위키의 Cq 결정 한 줄과 ΔΔCt 계산 논문만 (find ct value/threshold cycle/역치)"
+    },
+    {
+     "id": "bio.pcr_qpcr.3",
+     "text": "PCR denaturation 몇 도야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "heating the reaction chamber to 94–98"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Real-time polymerase chain reaction",
+       "text_contains": "at around 95 °c, allows the separation"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "약 95°c에서 핵산의 이중 사슬을 분리"
+      }
+     ]
+    },
+    {
+     "id": "bio.pcr_qpcr.4",
+     "text": "Why do I need a no-template control in qPCR?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "no-template controls showed no amplification"
+      },
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "distilled water instead of template dna"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.gel_electrophoresis",
+   "area": "bio_technique",
+   "name": "겔 전기영동",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "gel electrophoresis",
+    "agarose",
+    "loading dye",
+    "loading buffer",
+    "ethidium bromide",
+    "dna ladder",
+    "TAE",
+    "TBE",
+    "전기영동",
+    "아가로스",
+    "브로민화 에티듐"
+   ],
+   "coverage_note": "Agarose gel electrophoresis·Gel electrophoresis 위키(농도, 이동 방향, loading buffer)와 EtBr 안전(MMWR·PubChem·위키)이 충실",
+   "questions": [
+    {
+     "id": "bio.gel_electrophoresis.1",
+     "text": "아가로스 겔 몇 % 로 만들어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "1% gels are common"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "most agarose gels used are between 0.7"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "1% 젤이 일반적으로"
+      }
+     ]
+    },
+    {
+     "id": "bio.gel_electrophoresis.2",
+     "text": "DNA 가 어느 쪽 전극으로 가는지",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "moves the dna towards the positively charged anode"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "dna는 양극쪽으로"
+      },
+      {
+       "source_id": "openstax-biology-1e",
+       "text_contains": "moves from the negative electrode toward the positive electrode"
+      }
+     ]
+    },
+    {
+     "id": "bio.gel_electrophoresis.3",
+     "text": "EtBr 다룰 때 주의할 거",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "etbr is a potent mutagen"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "latex gloves provide little protection against etbr"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Ethidium Bromide",
+       "text_contains": "because of its mutagenicity"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ethidium bromide",
+       "text_contains": "handled according to the manufacturer"
+      }
+     ]
+    },
+    {
+     "id": "bio.gel_electrophoresis.4",
+     "text": "What does the loading dye actually do?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "loading buffer contains a dense compound"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.western_blot",
+   "area": "bio_technique",
+   "name": "웨스턴 블롯",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "western blot",
+    "western blotting",
+    "immunoblot",
+    "immunoblotting",
+    "pvdf",
+    "nitrocellulose",
+    "sds-page",
+    "electroblotting",
+    "ponceau",
+    "웨스턴 블롯",
+    "웨스턴"
+   ],
+   "coverage_note": "Western blot·SDS-PAGE 위키(en/ko)로 절차·차단 이유·끓이는 이유가 있고 ko 요약에 5% 탈지분유·메탄올 적심 값까지 있음",
+   "questions": [
+    {
+     "id": "bio.western_blot.1",
+     "text": "transfer 하고 blocking 왜 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Western blot",
+       "text_contains": "to prevent non-specific antibody binding"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "웨스턴 블롯",
+       "text_contains": "비특이적 항체 결합을 방지"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "웨스턴 블롯",
+       "text_contains": "비특이적 결합의 차단"
+      }
+     ]
+    },
+    {
+     "id": "bio.western_blot.2",
+     "text": "blocking 스킴밀크 몇 %",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "5% non-fat dry milk"
+      }
+     ]
+    },
+    {
+     "id": "bio.western_blot.3",
+     "text": "SDS-PAGE 샘플 왜 끓여?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "protein samples are often boiled to denature"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "SDS-PAGE",
+       "text_contains": "heating disrupts the secondary and tertiary structures"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "가열하여 단백질을 변성"
+      }
+     ]
+    },
+    {
+     "id": "bio.western_blot.4",
+     "text": "PVDF or nitrocellulose, and do I have to wet the PVDF in methanol first?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "pvdf membrane allows the blot to be re-probed"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "막을 순수한 메탄올에 적신다"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polyvinylidene fluoride",
+       "text_contains": "easily stripped and reused"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.elisa",
+   "area": "bio_technique",
+   "name": "ELISA",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "elisa",
+    "enzyme-linked immunosorbent",
+    "immunosorbent",
+    "tmb",
+    "microplate",
+    "plate reader",
+    "capture antibody",
+    "효소결합면역흡착검사",
+    "엘라이사"
+   ],
+   "coverage_note": "ELISA 위키 원리·종류(sandwich)만; 세척 횟수·TMB 정지액 색 변화·450 nm 판독 같은 실무 값 조각 없음",
+   "questions": [
+    {
+     "id": "bio.elisa.1",
+     "text": "ELISA 워싱 몇 번 해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "세척 횟수·부피 조각 없음; ELISA 위키는 'washed' 단계 언급만 (find elisa+wash/three times)"
+    },
+    {
+     "id": "bio.elisa.2",
+     "text": "sandwich ELISA 원리",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "ELISA",
+       "text_contains": "the antigen is stuck between two antibodies"
+      }
+     ]
+    },
+    {
+     "id": "bio.elisa.3",
+     "text": "stop solution 넣으면 왜 노랗게 변해?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "TMB 정지액(산)·노란색 변화 조각 없음; HRP 기질 목록에 TMB 이름만 (find stop solution/tmb+yellow/tmb+sulfuric)"
+    },
+    {
+     "id": "bio.elisa.4",
+     "text": "What wavelength do I read the plate at for TMB?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "TMB 450 nm 판독 조각 없음; 플레이트 리더 흡광 일반 설명만 (find 450 nm/tetramethylbenzidine)"
+    }
+   ]
+  },
+  {
+   "id": "bio.protein_purification",
+   "area": "bio_technique",
+   "name": "단백질 정제",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "protein purification",
+    "his-tag",
+    "polyhistidine",
+    "ni-nta",
+    "imac",
+    "imidazole",
+    "affinity chromatography",
+    "size-exclusion chromatography",
+    "gel filtration",
+    "protease inhibitor",
+    "단백질 정제",
+    "친화 크로마토그래피"
+   ],
+   "coverage_note": "His-tag·Affinity·Size-exclusion chromatography·Lysis buffer 위키로 원리와 이미다졸 100–500 mM까지 있음; 정제 실험 논문 조각은 적음",
+   "questions": [
+    {
+     "id": "bio.protein_purification.1",
+     "text": "His-tag elution 할 때 imidazole 몇 mM 써?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "His-tag",
+       "text_contains": "100 - 500 mm for elution"
+      }
+     ]
+    },
+    {
+     "id": "bio.protein_purification.2",
+     "text": "Ni-NTA 컬럼 원리",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "His-tag",
+       "text_contains": "histidine residue chelates the metal ion"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Affinity chromatography",
+       "text_contains": "immobilized metal ion affinity chromatography (imac) is based on"
+      }
+     ]
+    },
+    {
+     "id": "bio.protein_purification.3",
+     "text": "정제할 때 protease inhibitor 왜 넣어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Lysis buffer",
+       "text_contains": "protease inhibitors to prevent proteolytic processes"
+      }
+     ]
+    },
+    {
+     "id": "bio.protein_purification.4",
+     "text": "How does size exclusion chromatography separate proteins?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "larger molecules (or proteins) will travel through less volume"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "the smaller the molecule, the longer the retention time"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.protein_assay",
+   "area": "bio_technique",
+   "name": "BCA·Bradford",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "bradford",
+    "bca assay",
+    "bicinchoninic",
+    "lowry",
+    "coomassie",
+    "protein assay",
+    "standard curve",
+    "calibration curve",
+    "브래드퍼드",
+    "단백질 정량"
+   ],
+   "coverage_note": "Bradford·BCA·Calibration curve 위키(595 nm, 세제 간섭, 37–60 °C)와 BCA 37 °C 30 min을 적은 논문이 있어 기본 질문은 덮임",
+   "questions": [
+    {
+     "id": "bio.protein_assay.1",
+     "text": "Bradford 몇 nm 에서 읽어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "read each of the standards and each of the samples at 595 nm"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "shift from 465 nm to 595 nm"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calibration curve",
+       "text_contains": "(which is 595 nm)"
+      }
+     ]
+    },
+    {
+     "id": "bio.protein_assay.2",
+     "text": "BCA 인큐베이션 온도랑 시간",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "working reagent were incubated at 37oc for 30 min"
+      },
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "incubated for 2 h at 37 °c, before absorbance reading at 562 nm"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Bicinchoninic acid assay",
+       "text_contains": "at higher temperatures (37 to 60 °c)"
+      }
+     ]
+    },
+    {
+     "id": "bio.protein_assay.3",
+     "text": "Bradford 에 detergent 들어가면 안 되는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Bradford protein assay",
+       "text_contains": "detergents, such as sds, can interfere with the dye"
+      }
+     ]
+    },
+    {
+     "id": "bio.protein_assay.4",
+     "text": "Why do I need a BSA standard curve for the assay?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calibration curve",
+       "text_contains": "data for known concentrations of protein are used to make the standard curve"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.dna_extraction",
+   "area": "bio_technique",
+   "name": "DNA 추출·플라스미드 prep",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "dna extraction",
+    "plasmid preparation",
+    "miniprep",
+    "minipreparation",
+    "midiprep",
+    "maxiprep",
+    "alkaline lysis",
+    "ethanol precipitation",
+    "spin column",
+    "phenol–chloroform",
+    "a260",
+    "dna 추출",
+    "플라스미드"
+   ],
+   "coverage_note": "DNA extraction·Plasmid preparation·Ethanol precipitation 위키 원리와 260/280 기준(1.6–1.8) 논문; lysis 뒤 세게 섞지 말라는 실무 주의 조각 없음",
+   "questions": [
+    {
+     "id": "bio.dna_extraction.1",
+     "text": "miniprep lysis 하고 왜 세게 흔들면 안 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "lysis 뒤 세게 섞으면 genomic DNA 가 잘려 섞인다는 조각 없음; alkaline lysis 원리만 (find shear+genomic/gently invert)"
+    },
+    {
+     "id": "bio.dna_extraction.2",
+     "text": "alkaline lysis 원리",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Plasmid preparation",
+       "text_contains": "both chromosomal dna and protein are denatured"
+      }
+     ]
+    },
+    {
+     "id": "bio.dna_extraction.3",
+     "text": "260/280 몇이면 깨끗한 거야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "ratio less than 1.6 would indicate protein contamination"
+      }
+     ]
+    },
+    {
+     "id": "bio.dna_extraction.4",
+     "text": "Why do we add ethanol to precipitate DNA?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ethanol precipitation",
+       "text_contains": "reduce the polarity of the solvent"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Plasmid preparation",
+       "text_contains": "nucleic acids are insoluble in ethanol or isopropanol"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.cloning",
+   "area": "bio_technique",
+   "name": "클로닝",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "molecular cloning",
+    "cloning",
+    "ligation",
+    "dna ligase",
+    "restriction enzyme",
+    "blue-white",
+    "x-gal",
+    "competent cells",
+    "heat shock",
+    "dephosphorylation",
+    "클로닝",
+    "제한 효소",
+    "형질전환"
+   ],
+   "coverage_note": "Ligation·X-gal·Alkaline phosphatase 위키(blue-white, 탈인산화 이유)와 42 °C 30 s 열충격 논문; vector:insert 몰비 조각 없음",
+   "questions": [
+    {
+     "id": "bio.cloning.1",
+     "text": "ligation 할 때 vector 대 insert 비율 몇 대 몇?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "라이게이션 vector:insert 몰비(1:3 등) 조각 없음; in vivo assembly 의 'roughly equimolar' 한 줄과 총 DNA 농도 규칙뿐"
+    },
+    {
+     "id": "bio.cloning.2",
+     "text": "blue-white screening 원리",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "X-gal",
+       "text_contains": "relies on the principle of"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "X-gal",
+       "text_contains": "successful ligation therefore disrupts the lacz"
+      }
+     ]
+    },
+    {
+     "id": "bio.cloning.3",
+     "text": "제한효소로 자른 vector 왜 dephosphorylation 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "without a phosphate group at the ends the vector cannot ligate to itself"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Alkaline phosphatase",
+       "text_contains": "prevent self-ligation"
+      }
+     ]
+    },
+    {
+     "id": "bio.cloning.4",
+     "text": "How long should I heat shock the competent cells?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "(heat shock) was treated at 42°c for 30 s"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.in_gel_digestion",
+   "area": "bio_technique",
+   "name": "in-gel digestion",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "in-gel digestion",
+    "in gel digestion",
+    "destaining",
+    "destain",
+    "gel pieces",
+    "iodoacetamide",
+    "dithiothreitol",
+    "tryptic",
+    "trypsin",
+    "ammonium bicarbonate",
+    "트립신"
+   ],
+   "coverage_note": "In-gel digestion 위키가 탈색·환원/알킬화·트립신 절단 위치·ACN 탈수 이유를 모두 담고 in-gel 프로토콜 논문 4편이 더 있음",
+   "questions": [
+    {
+     "id": "bio.in_gel_digestion.1",
+     "text": "겔 조각 탈색 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "In-gel digestion",
+       "text_contains": "ammonium bicarbonate (nh4hco3) and a fraction of 30%-50% organic solvent"
+      }
+     ]
+    },
+    {
+     "id": "bio.in_gel_digestion.2",
+     "text": "DTT 로 환원하고 iodoacetamide 로 alkylation 하는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "In-gel digestion",
+       "text_contains": "disulfide bonds of the proteins are irreversibly broken up"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Iodoacetamide",
+       "text_contains": "so the protein or peptide no longer forms disulfide bonds"
+      }
+     ]
+    },
+    {
+     "id": "bio.in_gel_digestion.3",
+     "text": "trypsin 은 어디를 잘라?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "cuts the peptide bond specifically at the carboxyl end"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Trypsin",
+       "text_contains": "cleaves proteins at the carboxyl side"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "트립신",
+       "text_contains": "아르기닌(arginine)과 리신(lysine) 뒤를 가수분해"
+      }
+     ]
+    },
+    {
+     "id": "bio.in_gel_digestion.4",
+     "text": "Why dehydrate the gel pieces with acetonitrile before adding trypsin?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "permeation of the enzyme to the gel is believed to be facilitated by the dehydration"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bio.immunostaining",
+   "area": "bio_technique",
+   "name": "면역염색",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "immunofluorescence",
+    "immunostaining",
+    "immunocytochemistry",
+    "immunohistochemistry",
+    "permeabilization",
+    "permeabilize",
+    "secondary antibody",
+    "photobleaching",
+    "paraformaldehyde",
+    "면역 형광법",
+    "면역조직화학",
+    "면역염색"
+   ],
+   "coverage_note": "Immunofluorescence·IHC·Fluorescence microscope 위키(직접/간접, 광표백, 항체가 막을 못 지나감)와 PFA 20 min 논문 한 줄; 투과화 시약 조건은 Triton X-100 위키 목록뿐",
+   "questions": [
+    {
+     "id": "bio.immunostaining.1",
+     "text": "permeabilization 왜 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunofluorescence",
+       "text_contains": "antibodies generally do not penetrate intact cellular"
+      }
+     ]
+    },
+    {
+     "id": "bio.immunostaining.2",
+     "text": "PFA 고정 몇 분",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "3.7% pfa and 0.1% glutaraldehyde in pbs for 20 min at room temperature"
+      }
+     ]
+    },
+    {
+     "id": "bio.immunostaining.3",
+     "text": "secondary 붙이고 어두운 데서 해야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunofluorescence",
+       "text_contains": "limiting the intensity, or timespan of light exposure"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Fluorescence microscope",
+       "text_contains": "fluorophores lose their ability to fluoresce as they are illuminated"
+      }
+     ]
+    },
+    {
+     "id": "bio.immunostaining.4",
+     "text": "What's the difference between direct and indirect immunofluorescence?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunofluorescence",
+       "text_contains": "uses a single antibody, conjugated to a fluorophore"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunofluorescence",
+       "text_contains": "utilizes two types of antibodies"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.synthesis_basics",
+   "area": "chem_technique",
+   "name": "합성 기초",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "limiting reagent",
+    "limiting reactant",
+    "theoretical yield",
+    "percent yield",
+    "reflux",
+    "boiling chips",
+    "bumping",
+    "excess reagent",
+    "round-bottom flask",
+    "한계 시약",
+    "수율",
+    "환류"
+   ],
+   "coverage_note": "OpenStax 화학(수율·한계 반응물 계산)과 Limiting reagent·Reflux·TLC 위키; boiling chip 이유는 회전증발기 위키 한 줄로만",
+   "questions": [
+    {
+     "id": "chem.synthesis_basics.1",
+     "text": "반응 끝났는지 어떻게 알아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thin-layer chromatography",
+       "text_contains": "tlc is a valuable tool for reaction monitoring"
+      }
+     ]
+    },
+    {
+     "id": "chem.synthesis_basics.2",
+     "text": "limiting reagent 계산",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Limiting reagent",
+       "text_contains": "the limiting reactant is the one which can form the smallest amount"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "한계 시약",
+       "text_contains": "생성물을 가장 적게 생성할 수 있는 반응물"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Limiting reagent",
+       "text_contains": "if the amount of b actually present exceeds the amount required"
+      }
+     ]
+    },
+    {
+     "id": "chem.synthesis_basics.3",
+     "text": "환류할 때 boiling chip 왜 넣어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Rotary evaporator",
+       "text_contains": "boiling chips (to make the nucleation step"
+      }
+     ]
+    },
+    {
+     "id": "chem.synthesis_basics.4",
+     "text": "How do I calculate percent yield?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "percent yield = actual yield theoretical yield"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "수율",
+       "text_contains": "theoretical yield"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.titration",
+   "area": "chem_technique",
+   "name": "적정",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "titration",
+    "titrant",
+    "burette",
+    "buret",
+    "equivalence point",
+    "end point",
+    "endpoint",
+    "phenolphthalein",
+    "primary standard",
+    "적정",
+    "뷰렛",
+    "당량점",
+    "종말점"
+   ],
+   "coverage_note": "Titration·Burette 위키와 OpenStax 산염기 적정 장(페놀프탈레인 pH 8.3, KHP 표정)으로 충실",
+   "questions": [
+    {
+     "id": "chem.titration.1",
+     "text": "종말점이랑 당량점 차이 뭐야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "the endpoint and the equivalence point are not exactly the same"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "당량점은 이론적인 지점"
+      }
+     ]
+    },
+    {
+     "id": "chem.titration.2",
+     "text": "phenolphthalein 색 변하는 pH",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "(ph > 8.3), it is red or pink"
+      }
+     ]
+    },
+    {
+     "id": "chem.titration.3",
+     "text": "뷰렛 메니스커스 어디 기준으로 읽어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Burette",
+       "text_contains": "straight to the bottom of the meniscus"
+      }
+     ]
+    },
+    {
+     "id": "chem.titration.4",
+     "text": "Why do I have to standardize the NaOH solution before titrating?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sodium hydroxide",
+       "text_contains": "not used as a primary standard because it is hygroscopic"
+      },
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "to standardize solutions of base"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.recrystallization",
+   "area": "chem_technique",
+   "name": "재결정",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "recrystallization",
+    "recrystallisation",
+    "recrystallize",
+    "recrystallized",
+    "supersaturation",
+    "supersaturated",
+    "seed crystal",
+    "seeding",
+    "antisolvent",
+    "재결정",
+    "과포화"
+   ],
+   "coverage_note": "Recrystallization·Supersaturation 위키 원리와 seeding·유리막대 긁기뿐; 용매 고르는 기준·서냉 이유·oiling out 조각 없음",
+   "questions": [
+    {
+     "id": "chem.recrystallization.1",
+     "text": "재결정 용매 어떻게 골라?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "용매 고르는 기준(뜨거울 때 잘 녹고 찰 때 덜 녹음, 불순물은 녹아 남음)을 직접 말하는 조각 없음; 재결정 원리·2용매법 설명만"
+    },
+    {
+     "id": "chem.recrystallization.2",
+     "text": "천천히 식혀야 되는 이유",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "서냉이 크고 순수한 결정을 준다는 조각 없음; 'slowly cooled' 절차 한 줄뿐 (find slow cooling/larger crystals)"
+    },
+    {
+     "id": "chem.recrystallization.3",
+     "text": "결정이 안 생기면 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Supersaturation",
+       "text_contains": "rub a rod on the side of a glass vessel"
+      },
+      {
+       "source_id": "openstax-chemistry-1e",
+       "text_contains": "initiated by adding a seed crystal"
+      }
+     ]
+    },
+    {
+     "id": "chem.recrystallization.4",
+     "text": "My compound oiled out instead of crystallizing, what do I do?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "oiling out 조각 없음 (find oil out/oiled out/oiling, search 확인)"
+    }
+   ]
+  },
+  {
+   "id": "chem.extraction",
+   "area": "chem_technique",
+   "name": "추출",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "liquid–liquid extraction",
+    "liquid-liquid extraction",
+    "separatory funnel",
+    "separating funnel",
+    "partition coefficient",
+    "distribution ratio",
+    "emulsion",
+    "salting out",
+    "분별 깔때기",
+    "분액깔때기",
+    "액체-액체 추출"
+   ],
+   "coverage_note": "Separatory funnel·Liquid–liquid extraction·Solvent 위키로 venting·층 위치·에멀전 대처까지 있음; 나눠 추출하는 이유는 한 줄",
+   "questions": [
+    {
+     "id": "chem.extraction.1",
+     "text": "분액깔때기 흔들고 왜 가스 빼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Separatory funnel",
+       "text_contains": "the largest risk when using a separating funnel is that of pressure build-up"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Separatory funnel",
+       "text_contains": "carefully opened to release excess vapor pressure"
+      }
+     ]
+    },
+    {
+     "id": "chem.extraction.2",
+     "text": "유기층이 위인지 아래인지",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Solvent",
+       "text_contains": "most organic solvents have a lower density than water"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Separatory funnel",
+       "text_contains": "lower density liquids will stay above higher density liquids"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "분별 깔때기",
+       "text_contains": "깔때기 바닥으로 가라앉고"
+      }
+     ]
+    },
+    {
+     "id": "chem.extraction.3",
+     "text": "여러 번 나눠서 추출하는 게 왜 좋아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "multiple extractions may be performed on the same reaction mixture to increase product recovery"
+      }
+     ]
+    },
+    {
+     "id": "chem.extraction.4",
+     "text": "How do I break an emulsion in a separatory funnel?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Separatory funnel",
+       "text_contains": "slowly swirl the solution"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.distillation",
+   "area": "chem_technique",
+   "name": "증류",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "distillation",
+    "fractional distillation",
+    "vacuum distillation",
+    "fractionating column",
+    "distillate",
+    "short-path",
+    "rotary evaporator",
+    "증류",
+    "감압 증류",
+    "분별 증류"
+   ],
+   "coverage_note": "Distillation·Vacuum distillation·THF 위키와 ko 증류(후류분 남기기); 온도계 위치 같은 장치 조립 조각 없음",
+   "questions": [
+    {
+     "id": "chem.distillation.1",
+     "text": "증류할 때 온도계 어디에 둬?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "온도계 구부 위치(가지관 높이) 조각 없음; 온도 상승으로 끝을 안다는 언급뿐 (find thermometer+distill/bulb/side arm)"
+    },
+    {
+     "id": "chem.distillation.2",
+     "text": "분별증류랑 단순증류 차이",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Distillation",
+       "text_contains": "the column improves separation by providing a larger surface area"
+      }
+     ]
+    },
+    {
+     "id": "chem.distillation.3",
+     "text": "감압증류 왜 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Vacuum distillation",
+       "text_contains": "will cause the compound to decompose"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "감압 증류",
+       "text_contains": "끓는점이 비교적 높은 액체 혼합물"
+      }
+     ]
+    },
+    {
+     "id": "chem.distillation.4",
+     "text": "Why should I never distill to dryness?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Tetrahydrofuran",
+       "text_contains": "distillation of thf to dryness is unsafe"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "증류",
+       "text_contains": "조금 남겨서 버린다"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.chromatography",
+   "area": "chem_technique",
+   "name": "크로마토그래피(TLC·컬럼)",
+   "importance": {
+    "safety": 2,
+    "use": 2
+   },
+   "terms": [
+    "thin-layer chromatography",
+    "tlc",
+    "column chromatography",
+    "retardation factor",
+    "retention factor",
+    "eluent",
+    "silica gel",
+    "stationary phase",
+    "mobile phase",
+    "박층 크로마토그래피",
+    "컬럼 크로마토그래피",
+    "용리액"
+   ],
+   "coverage_note": "Thin-layer·Column chromatography 위키(en/ko)로 Rf 계산·용리액(Rf 0.2–0.3)·시각화·극성 원리가 충실",
+   "questions": [
+    {
+     "id": "chem.chromatography.1",
+     "text": "TLC Rf 어떻게 계산해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thin-layer chromatography",
+       "text_contains": "divided by the distance traveled by the mobile phase"
+      }
+     ]
+    },
+    {
+     "id": "chem.chromatography.2",
+     "text": "컬럼 용매 극성 고르는 법",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Column chromatography",
+       "text_contains": "should be around 0.2 - 0.3"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "컬럼 크로마토그래피",
+       "text_contains": "0.2 - 0.3"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thin-layer chromatography",
+       "text_contains": "eluotropic series"
+      }
+     ]
+    },
+    {
+     "id": "chem.chromatography.3",
+     "text": "TLC spot 안 보이면 어떻게 봐?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thin-layer chromatography",
+       "text_contains": "iodine vapours temporarily stains the spots"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thin-layer chromatography",
+       "text_contains": "potassium permanganate"
+      }
+     ]
+    },
+    {
+     "id": "chem.chromatography.4",
+     "text": "Why does a more polar compound move slower on silica?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Thin-layer chromatography",
+       "text_contains": "more polar compounds in a sample mixture interact more strongly"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.solvent_drying",
+   "area": "chem_technique",
+   "name": "용매 건조",
+   "importance": {
+    "safety": 3,
+    "use": 1
+   },
+   "terms": [
+    "drying agent",
+    "desiccant",
+    "molecular sieves",
+    "molecular sieve",
+    "benzophenone",
+    "ketyl",
+    "solvent still",
+    "magnesium sulfate",
+    "sodium sulfate",
+    "건조제",
+    "분자체"
+   ],
+   "coverage_note": "Desiccant·Air-free technique 위키(분자체 우수, Na/benzophenone 케틸 색)뿐; MgSO4/Na2SO4 선택·분자체 활성화·건조제 양 판단 조각 없음",
+   "questions": [
+    {
+     "id": "chem.solvent_drying.1",
+     "text": "MgSO4 랑 Na2SO4 중에 뭐 써?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "황산마그네슘·황산나트륨 건조제 비교 조각 없음 (Magnesium sulfate 위키·PubChem 기록 없음; find magnesium sulfate/sodium sulfate+drying)"
+    },
+    {
+     "id": "chem.solvent_drying.2",
+     "text": "molecular sieve 활성화 온도",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "분자체 활성화(가열 재생) 온도 조각 없음; 분자체가 좋은 건조제라는 언급만 (find molecular sieve+activat/regenerat)"
+    },
+    {
+     "id": "chem.solvent_drying.3",
+     "text": "건조제 충분히 넣었는지 어떻게 알아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "건조제가 뭉치지 않고 흩날리면 충분하다는 조각 없음 (find clump/free-flowing)"
+    },
+    {
+     "id": "chem.solvent_drying.4",
+     "text": "Sodium/benzophenone still: what does the blue color mean?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "intense blue color of the ketyl radical anion"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "deep purple ketyl rapidly gives colorless products"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chem.nmr_sample",
+   "area": "chem_technique",
+   "name": "NMR 시료 준비",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "nmr",
+    "nuclear magnetic resonance",
+    "nmr tube",
+    "deuterated",
+    "deuterochloroform",
+    "cdcl3",
+    "tetramethylsilane",
+    "chemical shift",
+    "핵자기 공명",
+    "중수소"
+   ],
+   "coverage_note": "NMR 위키의 중수소 용매·lock 조각뿐; 시료량·튜브 높이·TMS 기준 이유 같은 시료 준비 실무 조각 없음",
+   "questions": [
+    {
+     "id": "chem.nmr_sample.1",
+     "text": "NMR 시료 몇 mg 녹여?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "NMR 시료량(mg)·용매 부피 조각 없음 (find nmr+sample/nmr tube)"
+    },
+    {
+     "id": "chem.nmr_sample.2",
+     "text": "CDCl3 같은 중수소 용매 쓰는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "deuterated solvents are used where >99% of the protons are replaced"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "text_contains": "on the solvent deuterium frequency"
+      }
+     ]
+    },
+    {
+     "id": "chem.nmr_sample.3",
+     "text": "NMR 튜브에 몇 cm 채워?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "NMR 튜브 채움 높이 조각 없음 (find nmr tube)"
+    },
+    {
+     "id": "chem.nmr_sample.4",
+     "text": "Why is TMS used as the 0 ppm reference?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "TMS 가 기준인 이유(동등한 12 H·강한 차폐·비활성) 조각 없음; 'conventionally defined as having a chemical shift of zero' 한 줄뿐"
+    }
+   ]
+  },
+  {
+   "id": "chem.inert_atmosphere",
+   "area": "chem_technique",
+   "name": "불활성 분위기",
+   "importance": {
+    "safety": 3,
+    "use": 1
+   },
+   "terms": [
+    "schlenk",
+    "schlenk line",
+    "glovebox",
+    "glove box",
+    "air-free",
+    "inert gas",
+    "inert atmosphere",
+    "cannula",
+    "pyrophoric",
+    "purge-and-refill",
+    "글러브박스",
+    "불활성"
+   ],
+   "coverage_note": "Air-free technique·Schlenk line·Glovebox·Pyrophoricity 위키로 진공-충전 3회·주사기 퍼지·글러브박스 점검까지 있음",
+   "questions": [
+    {
+     "id": "chem.inert_atmosphere.1",
+     "text": "Schlenk 으로 vacuum-backfill 몇 번 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "this cycle is usually repeated three times"
+      }
+     ]
+    },
+    {
+     "id": "chem.inert_atmosphere.2",
+     "text": "질소랑 아르곤 차이",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Argon",
+       "text_contains": "cheapest alternative when nitrogen is not sufficiently inert"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Argon",
+       "text_contains": "argon is denser than air"
+      }
+     ]
+    },
+    {
+     "id": "chem.inert_atmosphere.3",
+     "text": "pyrophoric 시약 syringe 로 옮길 때 주의할 거 뭐야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Pyrophoricity",
+       "text_contains": "carefully dried and flushed of air with an inert gas"
+      }
+     ]
+    },
+    {
+     "id": "chem.inert_atmosphere.4",
+     "text": "How do I check that the glovebox atmosphere is actually dry and oxygen-free?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Air-free technique",
+       "text_contains": "testing the inertness of an atmosphere within a glove box"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reagent.solvents",
+   "area": "reagent",
+   "name": "유기 용매 (아세톤·메탄올·클로로폼·DMSO·헥세인·THF·DMF 등)",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "organic solvent",
+    "유기 용매",
+    "acetone",
+    "아세톤",
+    "methanol",
+    "메탄올",
+    "chloroform",
+    "클로로폼",
+    "dimethyl sulfoxide",
+    "DMSO",
+    "hexane",
+    "tetrahydrofuran",
+    "THF",
+    "dimethylformamide"
+   ],
+   "coverage_note": "PubChem·NIOSH 카드(인화점·노출 기준·과산화물)와 영어 위키(THF 과산화물, 헥세인 신경독성), MMWR 의 DMSO 피부·장갑 투과 조각이 있음; 클로로폼+아세톤 같은 용매끼리 섞으면 안 되는 조합 조각은 없음",
+   "questions": [
+    {
+     "id": "reagent.solvents.1",
+     "text": "THF 뜯은 지 오래됐는데 과산화물 괜찮아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Tetrahydrofuran",
+       "text_contains": "explosive peroxides upon reaction with air"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Tetrahydrofuran",
+       "text_contains": "potentially explosive because of peroxide formation"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Tetrahydrofuran",
+       "text_contains": "forms peroxides upon exposure to air or light"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.solvents.2",
+     "text": "클로로폼이랑 아세톤 같이 섞어 버려도 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "클로로폼+아세톤(염기 있으면 격렬 반응) 혼합 금기 조각 없음; PubChem·NIOSH 클로로폼은 반응성 금속·강산화제·강염기만, MMWR 은 폐기물 목록에 둘을 나열만 (find chloroform+acetone, trichloromethane/haloform 확인)",
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.solvents.3",
+     "text": "DMSO 장갑 뚫고 피부로 들어간다며",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "dmso easily penetrates the skin"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "can penetrate skin and latex gloves"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Absorption (skin)",
+       "text_contains": "dimethyl sulfoxide (DMSO) act as carriers"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.solvents.4",
+     "text": "What is the flash point of n-butanol?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "n-Butyl alcohol",
+       "text_contains": "Flash Point"
+      }
+     ],
+     "in_pubchem_list": false
+    },
+    {
+     "id": "reagent.solvents.5",
+     "text": "헥세인 오래 맡으면 신경 손상 온다던데 노출 기준 얼마야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "n-Hexane",
+       "text_contains": "NIOSH REL TWA 50 ppm"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Hexane",
+       "text_contains": "current NIOSH REL is 50 ppm"
+      }
+     ],
+     "in_pubchem_list": true
+    }
+   ]
+  },
+  {
+   "id": "reagent.acids_bases",
+   "area": "reagent",
+   "name": "산·염기 (염산·황산·질산·불산·수산화나트륨·암모니아 등)",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "hydrochloric acid",
+    "염산",
+    "sulfuric acid",
+    "황산",
+    "nitric acid",
+    "질산",
+    "hydrofluoric acid",
+    "불산",
+    "플루오린화 수소산",
+    "sodium hydroxide",
+    "수산화 나트륨",
+    "ammonia",
+    "aqua regia",
+    "왕수"
+   ],
+   "coverage_note": "불산 화상(글루콘산 칼슘, 영·한 위키), 산을 물에 넣는 희석 규칙(NIOSH 2007-107), 질산 단독 보관(NIOSH 2007-107·PubChem), 왕수 분해·가스, TCA 화상(NIOSH) 조각이 모두 있음; 빈 곳 적음",
+   "questions": [
+    {
+     "id": "reagent.acids_bases.1",
+     "text": "불산 피부에 묻었어 어떻게 해",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Hydrofluoric acid burn",
+       "text_contains": "calcium gluconate"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Hydrofluoric acid",
+       "text_contains": "burns can be treated with calcium gluconate gel"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "플루오린화 수소산",
+       "text_contains": "글루콘산 칼슘"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcium gluconate",
+       "locator_contains": "Hydrofluoric acid burns"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "글루콘산 칼슘",
+       "locator_contains": "플루오린화 수소산 화상"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.acids_bases.2",
+     "text": "황산 희석할 때 물에 산 넣는 거 맞지?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "add concentrated acid to water slowly"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sulfuric acid",
+       "text_contains": "adding water to the acid is generally avoided"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.acids_bases.3",
+     "text": "질산 보관 유기물이랑 분리",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Nitric Acid",
+       "text_contains": "separate from alkalies, metals, organics"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "nitric acid should be stored alone"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Nitric acid",
+       "text_contains": "reacts with many organic materials, and the reactions may be explosive"
+      },
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Nitric acid",
+       "text_contains": "combustible materials, metallic powders"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.acids_bases.4",
+     "text": "Why can't aqua regia be stored in a sealed bottle?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Aqua regia",
+       "text_contains": "only mixed immediately before use"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Aqua regia",
+       "text_contains": "volatile products nitrosyl chloride and chlorine gas"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "왕수",
+       "text_contains": "제조 직후에만 혼합"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Aqua regia",
+       "text_contains": "aqua regia is a fuming liquid"
+      }
+     ],
+     "in_pubchem_list": false
+    },
+    {
+     "id": "reagent.acids_bases.5",
+     "text": "TCA(트리클로로아세트산) 피부에 닿으면 위험해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Trichloroacetic acid",
+       "text_contains": "eye, skin burns"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Trichloroacetic acid",
+       "text_contains": "causes severe skin burns"
+      }
+     ],
+     "in_pubchem_list": false
+    }
+   ]
+  },
+  {
+   "id": "reagent.oxidizers",
+   "area": "reagent",
+   "name": "산화제·과산화물 (과산화수소·과염소산·과망간산칼륨·과황산암모늄 등)",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "oxidizer",
+    "oxidizing agent",
+    "산화제",
+    "peroxide",
+    "과산화물",
+    "hydrogen peroxide",
+    "과산화 수소",
+    "perchloric acid",
+    "과염소산",
+    "potassium permanganate",
+    "과망가니즈산 칼륨",
+    "ammonium persulfate",
+    "piranha"
+   ],
+   "coverage_note": "과산화수소 피부(NIOSH·PubChem 응급), 과염소산 전용 후드(PubChem·위키), 과망간산칼륨-글리세롤 비호환표(NIOSH 2007-107), 피라냐 밀폐 금지(영어 위키) 조각 있음; APS 용액 보관 기간 조각 없음",
+   "questions": [
+    {
+     "id": "reagent.oxidizers.1",
+     "text": "과산화수소 30% 피부에 묻으면 하얘지는데 괜찮아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Hydrogen peroxide",
+       "text_contains": "vesiculation skin"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Hydrogen Peroxide",
+       "locator_contains": "First aid",
+       "text_contains": "Water flush immediately"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Chemical burn",
+       "text_contains": "bleaching or darkening of skin"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.oxidizers.2",
+     "text": "과염소산 흄후드 따로 써야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Perchloric Acid",
+       "text_contains": "avoid use of organic chemicals in hoods"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Fume hood",
+       "text_contains": "safe handling and ventilation of perchloric acid"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.oxidizers.3",
+     "text": "APS 용액 만들어 두고 얼마나 써",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "과황산암모늄 수용액 보관 기간·매번 새로 만드는 이유 조각 없음; PubChem·위키는 분진 천식·건조 보관·가연물 분리만 (find persulfate/APS/과황산 확인)",
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.oxidizers.4",
+     "text": "Can I store potassium permanganate next to glycerol or organic solvents?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "potassium permanganate benzaldehyde, ethylene glycol, glycerol"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Potassium Permanganate",
+       "text_contains": "separated from combustible substances, reducing agents"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.oxidizers.5",
+     "text": "피라냐 용액 닫힌 병에 보관하면 안 되는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Piranha solution",
+       "text_contains": "cannot be kept in a closed container"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Piranha solution",
+       "text_contains": "never be stored in a closed receptacle"
+      }
+     ],
+     "in_pubchem_list": false
+    }
+   ]
+  },
+  {
+   "id": "reagent.biochem_toxic",
+   "area": "reagent",
+   "name": "생화학 독성 시약 (β-mercaptoethanol·DTT·아크릴아마이드·페놀·포름알데하이드·아자이드화나트륨 등)",
+   "importance": {
+    "safety": 3,
+    "use": 3
+   },
+   "terms": [
+    "mercaptoethanol",
+    "머캅토에탄올",
+    "dithiothreitol",
+    "DTT",
+    "acrylamide",
+    "아크릴아마이드",
+    "phenol",
+    "페놀",
+    "formaldehyde",
+    "폼알데하이드",
+    "sodium azide",
+    "아자이드화 나트륨",
+    "guanidinium",
+    "Trizol"
+   ],
+   "coverage_note": "아자이드 배관 폭발(NIOSH·MMWR·위키), 아크릴아마이드 단량체/중합체 독성 차이(PubChem·위키), 페놀 피부 흡수(PubChem·NIOSH·한국어 위키), 구아니딘 티오시아네이트+표백제 금지(MMWR) 조각 있음; β-ME 는 흡입 독성만 있고 '흄후드' 명시 조각은 없음",
+   "questions": [
+    {
+     "id": "reagent.biochem_toxic.1",
+     "text": "β-mercaptoethanol 냄새 심한데 흄후드에서만 써야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "2-Mercaptoethanol",
+       "text_contains": "toxic by all routes"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "2-머캅토에탄올",
+       "text_contains": "흡입시 비강 및 호흡기에 자극"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.biochem_toxic.2",
+     "text": "아크릴아마이드 굳은 겔은 맨손으로 만져도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Acrylamide",
+       "text_contains": "the polymer is nontoxic, but exposure to the monomer"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polyacrylamide",
+       "text_contains": "polyacrylamide is of low toxicity but its precursor acrylamide"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Gel electrophoresis",
+       "text_contains": "acrylamide, in contrast to polyacrylamide, is a neurotoxin"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "text_contains": "폴리아크릴아마이드와 달리 아크릴아마이드는 신경독"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.biochem_toxic.3",
+     "text": "아자이드화나트륨 싱크대에 버리면 안 되는 이유",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Sodium azide",
+       "text_contains": "lead azide & copper azide"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "never flush solid or concentrated sodium azide"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "these metal azides can explode when the plumbing"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sodium azide",
+       "text_contains": "metal in the plumbing system could react"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.biochem_toxic.4",
+     "text": "Is phenol absorbed through the skin, and what do I do if it splashes on me?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Phenol",
+       "text_contains": "including dermal absorption"
+      },
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Phenol",
+       "text_contains": "ochronosis"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "페놀",
+       "text_contains": "빠르게 체내로 흡수"
+      },
+      {
+       "source_id": "niosh-2007-107",
+       "text_contains": "phenol 108–95–2 combustible (liquid and vapor), corrosive, may be fatal if inhaled, ingested or absorbed through the skin"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.biochem_toxic.5",
+     "text": "구아니딘 티오시아네이트 락스랑 섞으면 안 된다며?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "do not add bleach to any sample waste containing guanidinium thiocyanate"
+      }
+     ],
+     "in_pubchem_list": false
+    }
+   ]
+  },
+  {
+   "id": "reagent.stains",
+   "area": "reagent",
+   "name": "핵산·단백질 염색·검출 시약 (EtBr·SYBR·쿠마시·DAB·실버 염색 등)",
+   "importance": {
+    "safety": 3,
+    "use": 2
+   },
+   "terms": [
+    "ethidium bromide",
+    "EtBr",
+    "브로민화 에티듐",
+    "SYBR",
+    "Coomassie",
+    "쿠마시",
+    "silver staining",
+    "silver nitrate",
+    "질산 은",
+    "diaminobenzidine",
+    "Ponceau",
+    "nucleic acid stain",
+    "gel stain"
+   ],
+   "coverage_note": "EtBr 은 MMWR 8.2.8(돌연변이원·장갑·겔 폐기)과 위키(대체 염료 SYBR Safe LD50)로 잘 덮임, 질산은 피부 착색(위키·PubChem) 있음; DAB 독성·폐기 조각 없음(IHC 기질로 이름만)",
+   "questions": [
+    {
+     "id": "reagent.stains.1",
+     "text": "EtBr 발암물질이야? 장갑 뭐 껴야 돼",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "latex gloves provide little protection against etbr"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "etbr is a potent mutagen"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ethidium bromide",
+       "text_contains": "can cause mutations in mammalian"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "브로민화 에티듐",
+       "text_contains": "암이 발생할 수 있다"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Ethidium Bromide",
+       "text_contains": "protective gloves should be worn at all times"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.stains.2",
+     "text": "SYBR Safe 는 EtBr 보다 안전해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ethidium bromide",
+       "text_contains": "sybr safe reports an ld50"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "SYBR Green I",
+       "text_contains": "marketed as a replacement for ethidium bromide"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "SYBR",
+       "text_contains": "대체하기 위해 상품화"
+      }
+     ],
+     "in_pubchem_list": false
+    },
+    {
+     "id": "reagent.stains.3",
+     "text": "DAB 발암물질이라 폐기 따로 해야 돼",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "DAB(3,3'-다이아미노벤지딘) 발암성·폐기 조각 없음; IHC·HRP 발색 기질로 이름만 나옴 (find diaminobenzidine/DAB 확인)",
+     "in_pubchem_list": false
+    },
+    {
+     "id": "reagent.stains.4",
+     "text": "How do I dispose of an ethidium bromide gel?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "place agarose gels containing etbr"
+      },
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "collect and manage even small volumes"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Ethidium bromide",
+       "locator_contains": "Handling and disposal"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.stains.5",
+     "text": "질산은 손에 묻으면 까맣게 되는데 괜찮아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Silver nitrate",
+       "text_contains": "purple, brown or black stains on the skin"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Silver Nitrate",
+       "text_contains": "argyria (a blue-gray discoloration of skin)"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Silver Nitrate",
+       "text_contains": "skin that becomes contaminated with silver nitrate should be promptly washed"
+      }
+     ],
+     "in_pubchem_list": true
+    }
+   ]
+  },
+  {
+   "id": "reagent.battery_materials",
+   "area": "reagent",
+   "name": "배터리·소재 시약 (LiPF6·NMP·PVDF·리튬 금속·카본블랙·탄산 에틸렌 등)",
+   "importance": {
+    "safety": 3,
+    "use": 1
+   },
+   "terms": [
+    "lithium hexafluorophosphate",
+    "LiPF6",
+    "N-methyl-2-pyrrolidone",
+    "NMP",
+    "polyvinylidene fluoride",
+    "PVDF",
+    "lithium metal",
+    "리튬",
+    "carbon black",
+    "카본 블랙",
+    "ethylene carbonate",
+    "dimethyl carbonate",
+    "lithium-ion battery",
+    "리튬 이온 전지"
+   ],
+   "coverage_note": "LiPF6 가수분해 HF(위키), 리튬 금속 물 금지·D급 소화(PubChem·위키), NMP 생식독성(위키), 카본블랙 호흡보호(NIOSH·위키) 조각 있음; PVDF 는 분해 온도·탈불화수소만 있고 HF 독성은 명시 안 됨; LiPF6 PubChem 은 식별 정보뿐",
+   "questions": [
+    {
+     "id": "reagent.battery_materials.1",
+     "text": "LiPF6 습기 닿으면 뭐가 생겨?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Lithium hexafluorophosphate",
+       "text_contains": "forming highly toxic hf gas"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.battery_materials.2",
+     "text": "리튬 금속 불 나면 물 뿌리면 안 되지?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Lithium",
+       "text_contains": "Use special powder. NO water"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Lithium",
+       "text_contains": "Reacts violently /with water/"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Fire classification",
+       "text_contains": "water and other common firefighting agents can exacerbate them"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.battery_materials.3",
+     "text": "NMP 생식독성 있다던데",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "N-Methyl-2-pyrrolidone",
+       "text_contains": "reproductive toxicant"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.battery_materials.4",
+     "text": "Is PVDF binder hazardous if it gets heated or burns?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polyvinylidene fluoride",
+       "text_contains": "non-toxic below its degradation temperature"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polyvinylidene fluoride",
+       "text_contains": "pvdf decomposes via dehydrofluorination"
+      }
+     ],
+     "in_pubchem_list": false
+    },
+    {
+     "id": "reagent.battery_materials.5",
+     "text": "카본블랙 가루 마스크 껴야 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "niosh-npg",
+       "title_contains": "Carbon black",
+       "text_contains": "Any particulate respirator equipped with an N95"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Carbon black",
+       "text_contains": "respiratory personal protective equipment is recommended"
+      }
+     ],
+     "in_pubchem_list": false
+    }
+   ]
+  },
+  {
+   "id": "reagent.culture_reagents",
+   "area": "reagent",
+   "name": "세포배양·분자생물 시약 (트립신·항생제·DEPC·SDS·Tris·EDTA 등)",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "trypsin",
+    "트립신",
+    "DEPC",
+    "diethyl pyrocarbonate",
+    "sodium dodecyl sulfate",
+    "SDS",
+    "Tris",
+    "EDTA",
+    "ampicillin",
+    "암피실린",
+    "kanamycin",
+    "chloramphenicol",
+    "antibiotic",
+    "항생제"
+   ],
+   "coverage_note": "트립신 보관 온도(위키), SDS 분진·호흡보호(PubChem), 클로람페니콜 재생불량빈혈·발암물질 취급(위키·PubChem), 암피실린 용액 4 °C 안정성(PubChem, 주사액 기준) 조각 있음; DEPC 오토클레이브 조각 없음(PubChem DEPC 는 식별 정보뿐)",
+   "questions": [
+    {
+     "id": "reagent.culture_reagents.1",
+     "text": "트립신 몇 도에 보관해? 녹였다 얼렸다 해도 돼?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Trypsin",
+       "text_contains": "stored at very cold temperatures"
+      }
+     ],
+     "in_pubchem_list": false
+    },
+    {
+     "id": "reagent.culture_reagents.2",
+     "text": "DEPC 처리한 물 오토클레이브 꼭 해야 돼?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "DEPC 를 오토클레이브로 분해·불활성화하는 조각 없음; RNase 억제제로 이름만, PubChem DEPC 는 식별 정보뿐 (find DEPC/diethyl pyrocarbonate/diethyl dicarbonate 확인)",
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.culture_reagents.3",
+     "text": "SDS 가루 흡입 주의",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Sodium Lauryl Sulfate",
+       "text_contains": "avoid formation of dust and aerosols"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Sodium Lauryl Sulfate",
+       "text_contains": "full-face particle respirator"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.culture_reagents.4",
+     "text": "Is chloramphenicol dangerous to handle?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Chloramphenicol",
+       "text_contains": "most serious side effect of chloramphenicol treatment is aplastic"
+      },
+      {
+       "source_id": "pubchem",
+       "title_contains": "Chloramphenicol",
+       "text_contains": "high-efficiency particulate arrestor"
+      }
+     ],
+     "in_pubchem_list": true
+    },
+    {
+     "id": "reagent.culture_reagents.5",
+     "text": "암피실린 stock 냉장 보관 얼마나 가?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "pubchem",
+       "title_contains": "Ampicillin",
+       "text_contains": "when refrigerated @ 4 °C, ampicillin sodium soln"
+      }
+     ],
+     "in_pubchem_list": true
+    }
+   ]
+  },
+  {
+   "id": "trouble.gel_not_polymerizing",
+   "area": "troubleshooting",
+   "name": "겔이 굳지 않음",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "polymerization",
+    "polymerisation",
+    "폴리아크릴아마이드",
+    "acrylamide",
+    "아크릴아마이드",
+    "TEMED",
+    "ammonium persulfate",
+    "APS",
+    "agarose",
+    "아가로스",
+    "gelling temperature",
+    "polyacrylamide gel"
+   ],
+   "coverage_note": "영어 위키 SDS-PAGE 한 조각에 중합 시간(촉매·개시제 양, 온도)과 산소 라디칼 소거가 있고, 아가로스 저농도 겔이 약하다는 영·한 위키 조각 있음; 오래된 APS 원인 조각 없음",
+   "questions": [
+    {
+     "id": "trouble.gel_not_polymerizing.1",
+     "text": "아크릴아마이드 겔이 30분 지났는데 안 굳어",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "SDS-PAGE",
+       "text_contains": "depending on the amount of catalyst and radical starter"
+      }
+     ]
+    },
+    {
+     "id": "trouble.gel_not_polymerizing.2",
+     "text": "APS 오래된 거 쓰면 겔 안 굳어?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "APS 용액이 오래돼 중합이 안 되는 원인 조각 없음; SDS-PAGE 조각은 촉매 양·온도만 (find persulfate/APS/과황산, polymerization 확인)"
+    },
+    {
+     "id": "trouble.gel_not_polymerizing.3",
+     "text": "아가로스 겔 굳었는데 흐물흐물해 왜?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Gel electrophoresis",
+       "text_contains": "low percentage gels are very weak"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "겔 전기영동",
+       "text_contains": "낮은 비율의 젤은 매우 약하고"
+      }
+     ]
+    },
+    {
+     "id": "trouble.gel_not_polymerizing.4",
+     "text": "Why does oxygen stop acrylamide gels from polymerizing?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "SDS-PAGE",
+       "text_contains": "radical scavenger oxygen"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "trouble.smeared_bands",
+   "area": "troubleshooting",
+   "name": "밴드가 번짐",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "smear",
+    "smearing",
+    "smiley",
+    "번짐",
+    "번진",
+    "gel electrophoresis",
+    "겔 전기영동",
+    "agarose gel electrophoresis",
+    "SDS-PAGE",
+    "overloading",
+    "electrophoresis"
+   ],
+   "coverage_note": "영어 위키 '아가로스 겔 이동 이상'(전압 과다 스마일, DNA 과량, 염·단백질 오염)과 플라스미드 DNase 번짐, OpenStax 유전체 DNA smear 조각 있음; 단백질 SDS-PAGE 번짐 원인 조각 없고 RNA 분해 판단은 한국어 노던 블롯 28S/18S 조각뿐",
+   "questions": [
+    {
+     "id": "trouble.smeared_bands.1",
+     "text": "DNA 밴드가 번졌어 왜 그래",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Agarose gel electrophoresis",
+       "text_contains": "overloading of dna slows down"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Plasmid preparation",
+       "text_contains": "smearing may occur"
+      },
+      {
+       "source_id": "openstax-biology-1e",
+       "text_contains": "genomic dna fragments of varying sizes appear as a long smear"
+      }
+     ]
+    },
+    {
+     "id": "trouble.smeared_bands.2",
+     "text": "SDS-PAGE 밴드가 웃는 모양으로 휘었어 이유가 뭐야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Agarose gel electrophoresis",
+       "text_contains": "voltage applied is too high"
+      }
+     ]
+    },
+    {
+     "id": "trouble.smeared_bands.3",
+     "text": "RNA 겔에서 smear 생기면 분해된 거야?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "노던 블롯",
+       "text_contains": "28S(약 5kb)"
+      }
+     ]
+    },
+    {
+     "id": "trouble.smeared_bands.4",
+     "text": "Why are my protein bands streaky on SDS-PAGE?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "단백질 SDS-PAGE 번짐(과량 로딩·염·불용성 응집·변성 부족) 원인 조각 없음; DNA 아가로스 이동 이상 조각만 (find smear/smearing/streaking, SDS-PAGE 확인)"
+    }
+   ]
+  },
+  {
+   "id": "trouble.cell_contamination",
+   "area": "troubleshooting",
+   "name": "세포 오염",
+   "importance": {
+    "safety": 2,
+    "use": 3
+   },
+   "terms": [
+    "contamination",
+    "교차 오염",
+    "mycoplasma",
+    "마이코플라스마",
+    "미코플라스마",
+    "cell culture",
+    "세포 배양",
+    "aseptic",
+    "무균",
+    "cross-contamination",
+    "fungal",
+    "곰팡이"
+   ],
+   "coverage_note": "마이코플라스마 PCR 검출(Europe PMC 2편, 한국어 위키), 수조·CO2 배양기 물받이의 세균·곰팡이(MMWR)와 곰팡이 포자·배양기 소독(BMBL), 세포주 교차오염(위키) 조각 있음; 배지 혼탁·노랗게 변함 같은 세균 오염 징후 조각 없음",
+   "questions": [
+    {
+     "id": "trouble.cell_contamination.1",
+     "text": "배지가 갑자기 뿌옇고 노랗게 변했어",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "배지 혼탁·페놀레드 노랑(세균 오염 징후) 조각 없음; 페놀레드는 표백제로 무색이 된다는 MMWR 문장뿐 (find phenol red/turbid/cloudy, 배지/오염 확인)"
+    },
+    {
+     "id": "trouble.cell_contamination.2",
+     "text": "마이코플라스마 오염 어떻게 알아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "easily done using commercial pcr kits"
+      },
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "pcr is a common detection method"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "미코플라스마",
+       "text_contains": "검출 기법으로 미코플라스마를 찾아낼 수 있다"
+      }
+     ]
+    },
+    {
+     "id": "trouble.cell_contamination.3",
+     "text": "세포에 곰팡이 실 같은 거 보이면 어떻게 해?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "can harbor bacteria, algae, and fungi"
+      },
+      {
+       "source_id": "cdc-bmbl6",
+       "text_contains": "reduce introduction of mold spores"
+      }
+     ]
+    },
+    {
+     "id": "trouble.cell_contamination.4",
+     "text": "What are the common sources of contamination in cell culture?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "cdc-mmwr-su6101",
+       "text_contains": "can harbor bacteria, algae, and fungi"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "미코플라스마",
+       "text_contains": "사람이나 오염된 배양 배지 성분"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Fetal bovine serum",
+       "text_contains": "potential for contamination (e.g., mycoplasma, viruses)"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Cell culture",
+       "text_contains": "contaminated with another cell line"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "trouble.no_pcr_product",
+   "area": "troubleshooting",
+   "name": "PCR 산물 없음",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "PCR",
+    "polymerase chain reaction",
+    "중합효소 연쇄 반응",
+    "annealing",
+    "어닐링",
+    "primer",
+    "프라이머",
+    "PCR inhibitor",
+    "Taq",
+    "amplification",
+    "증폭",
+    "thermal cycler"
+   ],
+   "coverage_note": "Europe PMC 'PCR troubleshooting'(억제제·어려운 표적이 산물 부재 원인) 1편과 영어 위키 PCR(어닐링 온도 너무 높으면 결합 안 됨), DNA 추출(억제제 예) 조각 있음; Mg2+ 농도 영향 조각 없음",
+   "questions": [
+    {
+     "id": "trouble.no_pcr_product.1",
+     "text": "PCR 했는데 밴드가 하나도 안 나와",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "cause a lack of pcr product"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polymerase chain reaction",
+       "text_contains": "if it is too high, the primer may not bind at all"
+      }
+     ]
+    },
+    {
+     "id": "trouble.no_pcr_product.2",
+     "text": "annealing 온도 너무 높으면 산물 안 나와?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Polymerase chain reaction",
+       "text_contains": "if it is too high, the primer may not bind at all"
+      }
+     ]
+    },
+    {
+     "id": "trouble.no_pcr_product.3",
+     "text": "PCR 억제하는 물질 뭐가 있어?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "the pcr reaction inhibitors include"
+      },
+      {
+       "source_id": "europepmc-ccby",
+       "text_contains": "three commonly encountered pcr inhibitors"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "DNA extraction",
+       "text_contains": "inhibitors of pcr, such as humic acid"
+      }
+     ]
+    },
+    {
+     "id": "trouble.no_pcr_product.4",
+     "text": "No PCR product - could my Mg2+ concentration be wrong?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "Mg2+ 농도(부족·과다)가 PCR 결과에 주는 영향 조각 없음; Mg2+ 가 필요한 2가 양이온이라는 위키 문장과 억제제가 Mg 보조인자 자리를 막는다는 문장만 (find magnesium/MgCl2/Mg2+ 확인)"
+    }
+   ]
+  },
+  {
+   "id": "trouble.precipitate",
+   "area": "troubleshooting",
+   "name": "침전이 생김",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "precipitate",
+    "precipitation",
+    "침전",
+    "solubility",
+    "용해도",
+    "supersaturation",
+    "과포화",
+    "salting out",
+    "crystallization",
+    "결정화",
+    "isoelectric point",
+    "등전점"
+   ],
+   "coverage_note": "온도가 내려가면 용해도가 줄어 결정이 석출된다는 일반 원리(영·한 위키 과포화), 인산+칼슘 → 인산칼슘 침전(위키), 단백질 salting-in·등전점 침전(위키) 조각 있음; SDS·PBS 를 직접 다룬 조각은 없음",
+   "questions": [
+    {
+     "id": "trouble.precipitate.1",
+     "text": "SDS 버퍼 냉장고에 넣었더니 하얗게 침전 생겼어",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Supersaturation",
+       "text_contains": "in most cases solubility decreases with decreasing temperature"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "과포화",
+       "text_contains": "온도가 낮아짐에 따라 용해도가 감소"
+      }
+     ]
+    },
+    {
+     "id": "trouble.precipitate.2",
+     "text": "인산 버퍼에 칼슘 넣었더니 뿌옇게 됐어 왜?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Calcium chloride",
+       "text_contains": "solid precipitate of calcium phosphate"
+      }
+     ]
+    },
+    {
+     "id": "trouble.precipitate.3",
+     "text": "단백질이 투석하다가 침전됐어 왜 그래?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Protein purification",
+       "text_contains": "most proteins require some salt to dissolve in water"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Isoelectric point",
+       "text_contains": "minimum solubility in water or salt solutions"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Protein precipitation",
+       "locator_contains": "Isoelectric precipitation",
+       "text_contains": "aggregation and precipitation"
+      }
+     ]
+    },
+    {
+     "id": "trouble.precipitate.4",
+     "text": "Why does my 10x PBS form crystals in the fridge?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Supersaturation",
+       "text_contains": "in most cases solubility decreases with decreasing temperature"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "과포화",
+       "text_contains": "온도가 낮아짐에 따라 용해도가 감소"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "trouble.foaming",
+   "area": "troubleshooting",
+   "name": "거품",
+   "importance": {
+    "safety": 1,
+    "use": 2
+   },
+   "terms": [
+    "foam",
+    "foaming",
+    "거품",
+    "기포",
+    "bubble",
+    "antifoam",
+    "surfactant",
+    "계면활성제",
+    "detergent",
+    "surface tension",
+    "표면 장력"
+   ],
+   "coverage_note": "교반이 단백질을 변성시킨다(영·한 위키 변성·단백질, 용해 전단력)와 SDS 가 계면활성제라 거품을 만든다(위키 SDS·표면 장력) 조각 있음; 배양액 거품이 세포에 주는 영향·거품 줄이는 법(소포제) 조각 없음",
+   "questions": [
+    {
+     "id": "trouble.foaming.1",
+     "text": "단백질 용액 vortex 하면 거품 나는데 괜찮아?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Denaturation (biochemistry)",
+       "text_contains": "agitation, radiation, or heat"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "단백질",
+       "text_contains": "물리적인 요인(가열, 건조, 교반"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Lysis",
+       "text_contains": "avoid mechanical shear forces that would denature"
+      }
+     ]
+    },
+    {
+     "id": "trouble.foaming.2",
+     "text": "SDS 녹일 때 거품 너무 많이 나",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Sodium dodecyl sulfate",
+       "text_contains": "ability to create a foam"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Surface tension",
+       "text_contains": "stabilizing effect on the bubbles"
+      }
+     ]
+    },
+    {
+     "id": "trouble.foaming.3",
+     "text": "배지에 거품 생기면 세포한테 안 좋아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "배양액 거품·기포가 세포에 주는 영향(전단·기액 계면) 조각 없음 (find foam/foaming/bubbles/거품 확인)"
+    },
+    {
+     "id": "trouble.foaming.4",
+     "text": "How do I stop foaming when pipetting detergent solutions?",
+     "language": "en",
+     "gold": [],
+     "no_answer": "거품 줄이는 방법·소포제 조각 없음 (find antifoam/defoamer/anti-foaming/소포제 0건)"
+    }
+   ]
+  },
+  {
+   "id": "trouble.high_background",
+   "area": "troubleshooting",
+   "name": "웨스턴 배경이 높음",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "western blot",
+    "웨스턴 블롯",
+    "background staining",
+    "blocking buffer",
+    "non-specific binding",
+    "nonspecific binding",
+    "비특이적",
+    "secondary antibody",
+    "2차 항체",
+    "chemiluminescence",
+    "ECL",
+    "immunohistochemistry"
+   ],
+   "coverage_note": "배경 원인·해결은 영어 위키 면역조직화학(IHC) Troubleshooting·Blocking 조각(비특이 결합, 1·2차 항체 희석)과 한국어 위키 웨스턴 블롯 '차단' 조각뿐; 영어 위키 Western blot 조각은 Transfer 에서 끊겨 차단·검출 절이 없고, 우유 블로킹과 인산화 항체 조각 없음",
+   "questions": [
+    {
+     "id": "trouble.high_background.1",
+     "text": "웨스턴 배경이 너무 까매",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "common causes of strong background staining"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "methods to eliminate background staining"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "non-specific binding of antibodies can cause background staining"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "웨스턴 블롯",
+       "text_contains": "비특이적 결합의 차단은"
+      }
+     ]
+    },
+    {
+     "id": "trouble.high_background.2",
+     "text": "인산화 항체 쓸 때 우유로 블로킹하면 배경 높아?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "우유(카제인 인단백질) 블로킹이 인산화 특이 항체 배경을 높인다는 조각 없음; 블로킹 시약 이름(우유·BSA)만 (find casein/milk/skim milk/탈지분유 확인)"
+    },
+    {
+     "id": "trouble.high_background.3",
+     "text": "2차 항체 너무 진하게 쓰면 배경 올라가?",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "dilution of the primary or secondary antibodies"
+      }
+     ]
+    },
+    {
+     "id": "trouble.high_background.4",
+     "text": "Why is my western blot background so high after ECL?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "common causes of strong background staining"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "methods to eliminate background staining"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Immunohistochemistry",
+       "text_contains": "non-specific binding of antibodies can cause background staining"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "trouble.low_yield",
+   "area": "troubleshooting",
+   "name": "수율·농도가 낮음 (DNA·단백질)",
+   "importance": {
+    "safety": 1,
+    "use": 3
+   },
+   "terms": [
+    "DNA yield",
+    "수율",
+    "miniprep",
+    "plasmid preparation",
+    "DNA extraction",
+    "DNA 추출",
+    "RNA extraction",
+    "RNA 추출",
+    "ethanol precipitation",
+    "spin column",
+    "A260",
+    "Trizol"
+   ],
+   "coverage_note": "플라스미드 수율이 복제수·균주·배양 조건·키트에 달렸다는 것과 miniprep 기대 수율(영어 위키), RNase 분해가 RNA 추출을 어렵게 한다(영·한 위키) 조각 있음; A260/A230 해석, 재조합 단백질 발현량이 낮은 원인 조각 없음",
+   "questions": [
+    {
+     "id": "trouble.low_yield.1",
+     "text": "플라스미드 miniprep 수율이 너무 낮아",
+     "language": "ko",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Plasmid preparation",
+       "text_contains": "yield will vary depending on the plasmid copy number"
+      },
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "Plasmid preparation",
+       "text_contains": "typical plasmid dna yield of a miniprep"
+      }
+     ]
+    },
+    {
+     "id": "trouble.low_yield.2",
+     "text": "DNA 260/230 비율 낮으면 뭐가 문제야?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "A260/A230 이 낮을 때 오염원(구아니딘염·탄수화물·페놀) 설명 조각 없음; 기준값(≥2.0)만 쓴 논문 조각과 260/280 이 순도 척도라는 위키 문장뿐 (find 260/230, A260/A230, 230 nm 확인)"
+    },
+    {
+     "id": "trouble.low_yield.3",
+     "text": "단백질 발현이 너무 안 돼 왜 그래?",
+     "language": "ko",
+     "gold": [],
+     "no_answer": "재조합 단백질 발현량이 낮은 원인(코돈·봉입체·유도 조건·독성) 조각 없음; IPTG 보관 안정성 정도만 (find recombinant protein/protein expression/inclusion bodies/IPTG 확인)"
+    },
+    {
+     "id": "trouble.low_yield.4",
+     "text": "Why is my RNA yield so low from tissue?",
+     "language": "en",
+     "gold": [
+      {
+       "source_id": "wikipedia-en",
+       "title_contains": "RNA extraction",
+       "text_contains": "ribonuclease enzymes in cells and tissues, which can rapidly degrade rna"
+      },
+      {
+       "source_id": "wikipedia-ko",
+       "title_contains": "RNA 추출",
+       "text_contains": "리보뉴클레이스가 존재하기 때문에"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
