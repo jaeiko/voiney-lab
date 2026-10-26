@@ -187,8 +187,32 @@ class TimerWordTests(TimerTurns, unittest.TestCase):
                 self.assertEqual(self.timer()["state"], "running")
                 self.assertEqual(session.workflow_status, "active")
 
+    def test_resume_said_with_nothing_paused_starts_the_timer_as_before(self) -> None:
+        # Before this lane "타이머 다시 시작해 줘" matched the start words: with
+        # no timer running, or after it ended, it started the step's timer.
+        # That stays so; "다시 시작" resumes only a timer paused by voice.
+        for field, fixture, index, seconds in FIELDS:
+            with self.subTest(field=field):
+                self.clock = Clock()
+                self.timing = patch("voiney_lab.curated_protocol.time.time", self.clock)
+                self.timing.start()
+                self.addCleanup(self.timing.stop)
+                session = self.open(index, fixture=fixture())
+                plan = self.say("타이머 다시 시작해 줘")
+                self.assertIs(plan.action, CuratedProtocolAction.START_TIMER, plan.speech_text)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(self.timer()["remaining_seconds"], seconds)
+                self.clock.now = T0 + seconds + 30
+                self.assertEqual(self.timer()["state"], "expired")
+                plan = self.say("타이머 다시 시작해 줘")
+                self.assertIs(plan.action, CuratedProtocolAction.START_TIMER, plan.speech_text)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(self.timer()["state"], "running")
+                self.assertEqual(self.timer()["remaining_seconds"], seconds)
+                self.assertEqual(session.workflow_status, "active")
+
     def test_with_no_timer_running_nothing_changes_and_it_is_said(self) -> None:
-        for said in ("타이머 일시정지해 줘", "타이머 다시 시작해 줘", "타이머 취소해 줘", "타이머 처음부터 다시"):
+        for said in ("타이머 일시정지해 줘", "타이머 계속", "타이머 취소해 줘", "타이머 처음부터 다시"):
             with self.subTest(said=said):
                 self.clock = Clock()
                 self.open(0, fixture=notes_fixture())
@@ -257,6 +281,29 @@ class TimerStateTests(TimerTurns, unittest.TestCase):
         ended = session.due_timer_notices(now=T0 + 1180)
         self.assertEqual([n.kind for n in ended], ["timer_ended"])
         self.assertEqual(session.timer_status(now=T0 + 1180)["state"], "expired")
+
+    def test_a_start_said_while_paused_resumes_and_loses_no_time(self) -> None:
+        # "타이머 시작해 줘" is a start word; on a timer paused by voice it used
+        # to fall to the start branch, which ran the timer again from full.
+        session = self.start(notes_fixture, 1)
+        session.pause_timer(now=T0 + 120)
+        self.clock.now = T0 + 400
+        plan = self.say("타이머 시작해 줘")
+        self.assertIs(plan.action, CuratedProtocolAction.TIMER_RESUME, plan.speech_text)
+        self.assertTrue(plan.state_changed)
+        self.assertEqual(self.timer()["state"], "running")
+        self.assertEqual(self.timer()["remaining_seconds"], 480)
+
+    def test_a_notice_given_before_the_pause_is_not_given_again_after_it(self) -> None:
+        session = self.start(notes_fixture, 1)
+        # The last-minute notice of the 600 s timer, given at 540 s.
+        given = session.due_timer_notices(now=T0 + 545)
+        self.assertEqual([n.kind for n in given], ["timer_last_minute"])
+        session.pause_timer(now=T0 + 560)
+        self.assertTrue(session.resume_timer(now=T0 + 900))
+        self.assertEqual(session.due_timer_notices(now=T0 + 901), (), "the last minute was told once")
+        ended = session.due_timer_notices(now=T0 + 940)
+        self.assertEqual([n.kind for n in ended], ["timer_ended"])
 
     def test_a_cancelled_timer_gives_no_notice_and_a_restart_counts_from_now(self) -> None:
         session = self.start(notes_fixture, 1)

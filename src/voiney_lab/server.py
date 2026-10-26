@@ -1759,8 +1759,8 @@ def _record_workspace_experiment_progress(
         # (paused: where it stands; resumed or restarted: its new start;
         # cancelled: what was cleared), for the restore after a lost connection.
         planned_timer=plan.timer_payload
-        if not isinstance(planned_timer,dict) or planned_timer.get("step_id")!=previous.step_id:
-            raise WorkspaceError("A timer command requires the current step's timer.")
+        if not isinstance(planned_timer,dict) or not planned_timer.get("step_id"):
+            raise WorkspaceError("A timer command requires the timer it acted on.")
         event_payload["timer"]={
             key:planned_timer.get(key) for key in (
                 "state","duration_seconds","remaining_seconds","elapsed_seconds",
@@ -11612,6 +11612,8 @@ def drop_reason_words(reason:str)->str:
     """The plain words for a drop's reason code (lane HEAR2, decision 4); never the code."""
 
     return DROP_REASON_WORDS_KO.get(str(reason or ""),DROP_REASON_WORDS_KO["unknown"])
+
+
 #: Lane HEAR2, decisions 1-2 (2026-10-26): a speech-to-text provider that
 #: fails (the person's test: 44 requests answered 401 quota_exceeded) is
 #: one more dropped sound with its code, shown with the reason in plain
@@ -11743,7 +11745,9 @@ async def _report_stt_failure(
         duration_ms,level,paused,during_playback,turn_id)
     _record_workspace_metric(
         category="voice",metric_name="speech_dropped",
-        dimensions={"status":"rejected","reason_code":"stt_failed","code":code},
+        # The provider's code rides in event_kind: the store takes only its
+        # privacy-safe dimension names and refuses a row with any other.
+        dimensions={"status":"rejected","reason_code":"stt_failed","event_kind":code},
     )
     await sender.text(
         "speech.dropped",configuration_id=session.accepted_configuration_id,
@@ -15127,6 +15131,8 @@ async def voice_socket(websocket:WebSocket):
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
                 listener_events=[]
                 accepted_interrupts={}
+                #: Lane HEAR2: the provider failure behind a rejected candidate.
+                provider_failures:dict[int,SpeechProviderError]={}
                 for item in session.accept_chunk(message["bytes"]):
                     if item.kind!="barge_in_audio_ready":
                         listener_events.append(item)
@@ -15141,22 +15147,21 @@ async def voice_socket(websocket:WebSocket):
                         if isinstance(transcription,str):
                             transcription=Transcription(transcription,None)
                     except Exception as exc:
+                        # Lane HEAR2: a provider that failed is its own reason,
+                        # reported once below where every rejected candidate is.
+                        failed_reason=(
+                            "stt_failed" if isinstance(exc,SpeechProviderError)
+                            else "transcription_failed")
                         log.warning(
-                            "barge_in.rejected reason=transcription_failed "
+                            "barge_in.rejected reason=%s "
                             "voiced_frames=%d total_frames=%d",
-                            item.result.voiced_frames,item.result.total_frames)
+                            failed_reason,item.result.voiced_frames,item.result.total_frames)
                         rejected=session.reject_interrupt_candidate(
-                            item,"transcription_failed")
+                            item,failed_reason)
                         if rejected is not None:
                             listener_events.append(rejected)
-                        if isinstance(exc,SpeechProviderError):
-                            # Lane HEAR2: the outage is heard about even
-                            # while an answer plays (once).
-                            await _report_stt_failure(
-                                session,LockedSender(websocket),exc,
-                                turn_id=item.turn_id,generation=item.generation,
-                                duration_ms=item.result.total_frames*20,level_db=None,
-                                during_playback=True)
+                            if isinstance(exc,SpeechProviderError):
+                                provider_failures[id(rejected)]=exc
                         continue
                     stt_ms=max(
                         0,round((session.clock()-validation_started)*1000))
@@ -15279,6 +15284,14 @@ async def voice_socket(websocket:WebSocket):
                             reason=str(fields["reason"] or "minimum_voiced_frames"),
                             turn_id=item.turn_id,generation=item.generation,
                             duration_ms=item.result.total_frames*20,level_db=None)
+                    elif item.kind=="barge_in_rejected" and id(item) in provider_failures:
+                        # Lane HEAR2: the speech-to-text provider failed on words
+                        # said while an answer played -- shown, said once per outage.
+                        await _report_stt_failure(
+                            session,sender,provider_failures.pop(id(item)),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,
+                            level_db=item.result.voiced_level_db,during_playback=True)
                     elif item.kind=="barge_in_rejected" and fields["reason"]!="other_speaker_level":
                         # Heard while an answer was coming: it goes on, nothing is said.
                         await _report_speech_drop(

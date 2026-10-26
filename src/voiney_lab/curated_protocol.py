@@ -10992,8 +10992,13 @@ class CuratedProtocolSession:
         if self._timer_paused_at is None or self._timer_started_at is None:
             return False
         current_time = time.time() if now is None else now
+        before = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
         self._timer_started_at += max(0.0, current_time - self._timer_paused_at)
         self._timer_paused_at = None
+        # A notice is kept by the timer's key, which holds its start: the
+        # notices already given are given for the moved start too.
+        after = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
+        self._timer_notices_given |= {(after, kind) for key, kind in self._timer_notices_given if key == before}
         return True
 
     def cancel_timer(self) -> bool:
@@ -17086,6 +17091,15 @@ class CuratedProtocolSession:
                 reported_anomaly=False, anomaly_category=None, question_kind="troubleshooting",
                 question_dimensions=("troubleshooting",), target_step="authoritative_current_step",
             )
+        if (
+            intent.action is CuratedProtocolAction.TIMER_RESUME
+            and "시작" in str(intent.normalized_transcript or "")
+            and self.timer_status().get("state") not in {"paused", "running"}
+        ):
+            # Lane HEAR2, decision 3: "타이머 다시 시작해 줘" resumes only a timer
+            # paused by voice. With none paused or running it starts the
+            # step's timer, as these words did before (they were start words).
+            intent = replace(intent, intent_kind="start_step_timer", action=CuratedProtocolAction.START_TIMER)
         return intent
 
     def _names_own_endpoint(self, transcript: str) -> bool:
@@ -17392,6 +17406,7 @@ class CuratedProtocolSession:
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
+            self._timer_paused_at = None
             self._pending_anomaly = None
             self._pending_note_capture = None
             self._pending_stop_confirmation = None
@@ -21531,6 +21546,14 @@ class CuratedProtocolSession:
                 primary_text=response,
                 intent_kind="report_handoff",
             )
+        elif (
+            command is CuratedProtocolAction.START_TIMER
+            and self.timer_status().get("state") == "paused"
+            and self._timer_step_index == self.current_index
+        ):
+            # Lane HEAR2, decision 3: a start said to a timer paused by voice
+            # resumes it -- the start branch would run it again from full.
+            plan = self._timer_control_plan(CuratedProtocolAction.TIMER_RESUME, intent, language)
         elif command is CuratedProtocolAction.START_TIMER:
             step = steps[self.current_index]
             existing_timer = self.timer_status()
