@@ -97,9 +97,22 @@ generation is cancelled and its audio cleared (barge-in).
    of the last end (`FRAGMENT_JOIN_SECONDS` for held or still-transcribing
    words), while that turn is unanswered and has changed nothing, is joined
    to it (`_join_continuation`: the turn is cancelled, its audio goes in front
-   via `EndpointDetector.prepend_utterance`). Every dropped sound, here or in
-   step 3, goes through `_report_speech_drop` (reason code, dB, ms; event
-   `speech.dropped`; one spoken notice for two drops in 30 s).
+   via `EndpointDetector.prepend_utterance`) until the kept sound reaches
+   `CONTINUATION_JOIN_MAX_SECONDS` (10 s; lane HEAR2, decision 2), when the
+   turn is transcribed as it stands. Every dropped sound, here or in step 3,
+   goes through `_report_speech_drop` (reason code, dB, ms; event
+   `speech.dropped` with `reason_ko`, the plain words; shown, never said —
+   lane HEAR2, decision 4). A speech-to-text provider that fails
+   (`SpeechProviderError.code`: the provider's own code or one by status,
+   `timeout`, `unreachable`) is `_report_stt_failure`: the same drop event
+   with the code, a metric by code, one spoken sentence per outage (lane
+   HEAR2, decisions 1-2). The step timer's voice commands (`timer_control`:
+   pause, resume, cancel, restart — `pause_timer` keeps the remaining time
+   and sleeps the notices, `resume_timer` shifts the start by the pause) are
+   read before the run's pause words and recorded as `timer_paused`,
+   `timer_resumed`, `timer_cancelled`, `timer_restarted`; the reconnect
+   restore (`_standing_timer`) reads the last timer event (lane HEAR2,
+   decision 3).
 2. The waiting cue (`cascade_filler.CascadeFiller`) starts; STT returns one
    transcript per utterance.
 3. Admission, in this order (`server.run_turn`): empty and self-echo

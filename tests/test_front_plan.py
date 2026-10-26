@@ -290,6 +290,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "run_value_change",
             # lane SAY, decision 6 (2026-10-25): a move said with a claim
             "mixed_move",
+            # lane HEAR2, decision 3 (2026-10-26): the timer's voice commands
+            "timer_control",
         })
 
 

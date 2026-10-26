@@ -98,6 +98,31 @@ function resamplePcm16(input,sourceRate,targetRate){
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
  return output;
 }
+// Lane HEAR2 decision 7 (2026-10-26): the microphone's rate (48 kHz on a laptop) to 16 kHz with a low-pass first.
+// resamplePcm16 above picks one sample in three with nothing filtered, so fan, pump and hiss above 8 kHz folded
+// into the voice band unattenuated (measured: noise at -10 dB gave 10 dB signal-to-error, 47 dB with this filter;
+// a quiet room is the same either way). A 64-tap windowed-sinc low-pass at 0.45 x 16 kHz runs ahead of the same
+// pick, and keeps its memory across the worklet's 20 ms blocks so a block edge leaves no mark. One per capture.
+// The filter delays the sound by DOWNSAMPLE_TAPS/2 input samples (0.67 ms at 48 kHz).
+const DOWNSAMPLE_TAPS=64;
+function createPcm16Downsampler(sourceRate,targetRate){
+ if(!(sourceRate>targetRate))return input=>resamplePcm16(input,sourceRate,targetRate);
+ const taps=DOWNSAMPLE_TAPS,mid=taps/2,fc=0.45*targetRate/sourceRate,kernel=new Float32Array(taps+1);let sum=0;
+ for(let i=0;i<=taps;i++){const x=i-mid,sinc=x===0?2*fc:Math.sin(2*Math.PI*fc*x)/(Math.PI*x),window=0.42-0.5*Math.cos(2*Math.PI*i/taps)+0.08*Math.cos(4*Math.PI*i/taps);kernel[i]=sinc*window;sum+=kernel[i];}
+ for(let i=0;i<=taps;i++)kernel[i]/=sum;
+ const step=sourceRate/targetRate;let history=new Float32Array(taps),position=0;
+ return input=>{
+  // Filtered samples line up with the input (group delay = mid); the first mid outputs of a stream read the silent history.
+  const joined=new Float32Array(history.length+input.length);joined.set(history,0);joined.set(input,history.length);
+  const filtered=new Float32Array(input.length);
+  for(let n=0;n<input.length;n++){let acc=0;const base=n+taps;for(let i=0;i<=taps;i++)acc+=kernel[i]*joined[base-i];filtered[n]=acc;}
+  const output=[];
+  for(let at=position;at<input.length;at+=step){const left=Math.floor(at),right=Math.min(left+1,input.length-1),fraction=at-left,sample=filtered[left]*(1-fraction)+filtered[right]*fraction;output.push(Math.max(-32768,Math.min(32767,Math.round(sample*32767))));}
+  position=(position+Math.ceil((input.length-position)/step)*step)-input.length;
+  if(input.length>=taps)history=input.slice(input.length-taps);else{const next=new Float32Array(taps);next.set(history.subarray(input.length),0);next.set(input,taps-input.length);history=next;}
+  return Int16Array.from(output);
+ };
+}
 // Lane U2 (2026-10-06): the microphone is opened once per session and kept
 // open across turns, playback, pause and resume. Nothing here closes or
 // reopens it on its own except a device that went away: a track that ended
@@ -262,7 +287,7 @@ async function ensureAudio(generation){
    if(!micContext.audioWorklet?.addModule)throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");
    await micContext.audioWorklet.addModule("/mic-capture-worklet.js");
    if(generation!==sessionGeneration)throw new Error("마이크 시작이 취소되었습니다.");
-   const targetRate=16000;
+   const targetRate=16000,downsample=createPcm16Downsampler(micContext.sampleRate,targetRate);
    micSource=micContext.createMediaStreamSource(micStream);
    micWorkletNode=new AudioWorkletNode(micContext,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"});
    micWorkletNode.port.onmessage=e=>{
@@ -275,7 +300,7 @@ async function ensureAudio(generation){
       if(visibleState==="LISTENING")$("status").textContent="마이크 음성 신호 감지됨 · 듣고 있습니다…";
      }
     }
-    const p=resamplePcm16(f,micContext.sampleRate,targetRate);
+    const p=downsample(f);
     socket.send(p.buffer);
    };
    micSource.connect(micWorkletNode);
@@ -371,8 +396,8 @@ async function recordCalibrationPcm(seconds){
  const context=new AudioContext(),chunks=[];
  try{
   await context.audioWorklet.addModule("/mic-capture-worklet.js");
-  const source=context.createMediaStreamSource(stream),node=new AudioWorkletNode(context,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"});
-  node.port.onmessage=e=>{if(e.data instanceof ArrayBuffer)chunks.push(resamplePcm16(new Float32Array(e.data),context.sampleRate,16000));};
+  const source=context.createMediaStreamSource(stream),node=new AudioWorkletNode(context,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"}),downsample=createPcm16Downsampler(context.sampleRate,16000);
+  node.port.onmessage=e=>{if(e.data instanceof ArrayBuffer)chunks.push(downsample(new Float32Array(e.data)));};
   source.connect(node);await context.resume?.();
   await new Promise(resolve=>setTimeout(resolve,seconds*1000));
   node.port.postMessage({type:"stop"});source.disconnect?.();

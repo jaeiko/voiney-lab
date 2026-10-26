@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Note } from "../../components/Pieces";
 import { settings as copy } from "../../copy/ko";
-import { browserRecorder, MEASURE_SECONDS, MeasureError, measureVoice, type Measured, type Recorder } from "../../voice/micCheck";
+import { browserRecorder, MEASURE_SECONDS, MeasureError, type MeasureFailure, measureVoice, type Measured, type Recorder } from "../../voice/micCheck";
 
 // "목소리 맞추기" (person's decisions 5 and 6): only in the settings and the
 // first guide, never during a run, and it may be skipped. The sentence is
@@ -11,6 +11,18 @@ import { browserRecorder, MEASURE_SECONDS, MeasureError, measureVoice, type Meas
 // POST /api/voice/calibration); the side-voice filter can be turned on after.
 
 type Phase = "idle" | "recording" | "sending" | "done";
+
+/** The plain words for a measurement that failed (lane HEAR2, decision 6): what happened, then what to do. */
+export function measureFailureWords(reason: MeasureFailure): string {
+  switch (reason) {
+    case "too_little_voice": return copy.voiceCheck.tooLittle;
+    case "audio_length": return copy.voiceCheck.tooShort;
+    case "audio_invalid": return copy.voiceCheck.badAudio;
+    case "server": return copy.voiceCheck.serverDown;
+    case "network": return copy.voiceCheck.noConnection;
+    default: return copy.voiceCheck.notMeasured;
+  }
+}
 
 /** The words for a microphone that would not open: the device's own place to allow it (voice-core's micBlockedWords), the page's address, or a plain sentence. */
 export function micFailureWords(error: unknown, blocked: string, failed: string): string {
@@ -59,7 +71,7 @@ export function VoiceCheck({
       onMeasured?.(result);
     } catch (failure) {
       setPhase("idle");
-      if (failure instanceof MeasureError) setError(failure.reason === "too_little_voice" ? copy.voiceCheck.tooLittle : copy.voiceCheck.notMeasured);
+      if (failure instanceof MeasureError) setError(measureFailureWords(failure.reason));
       else setError(micFailureWords(failure, copy.voiceCheck.blocked, copy.voiceCheck.failed));
     } finally {
       clearInterval(tick.current);

@@ -22,7 +22,7 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 12
+WORKSPACE_SCHEMA_VERSION = 13
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -925,16 +925,62 @@ DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
 
-#: Lane KO2 (2026-10-26), decision 1: a stored translation and a glossary
-#: name the version of the translation instructions they were made with
-#: (``style_version``), and the version is part of their identity, so a
+#: Lane HEAR2, decision 6 (2026-10-26): lane HEAR added the measured voice
+#: (``voice_reference``) and the person's filter choice (``speaker_filter``)
+#: to the values table without a migration, so a store at schema 11 refused
+#: the measurement with an IntegrityError (HTTP 500 on
+#: ``POST /api/voice/calibration``, ten times in the person's test). Built
+#: the way schema 11 was: rows, sequence ids, the AUTOINCREMENT counter, the
+#: index and both append-only triggers are kept.
+MIGRATION_11_TO_12 = """
+CREATE TABLE experimenter_settings_v11 AS SELECT * FROM experimenter_settings;
+CREATE TABLE experimenter_settings_v11_sequence AS
+ SELECT seq FROM sqlite_sequence WHERE name='experimenter_settings';
+DROP TABLE experimenter_settings;
+CREATE TABLE experimenter_settings(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ name TEXT NOT NULL CHECK(name IN ('confirm_mode','question_timing','web_lookup','proactive_mode','ambient_mode','speaker_sensitivity','agent_voice','voice_calibration','speaker_filter','voice_reference')),
+ value TEXT NOT NULL,
+ source TEXT NOT NULL CHECK(source IN ('voice','screen')),
+ created_at TEXT NOT NULL
+);
+INSERT INTO experimenter_settings(
+ sequence_id,organization_id,principal_id,name,value,source,created_at
+) SELECT sequence_id,organization_id,principal_id,name,value,source,created_at
+ FROM experimenter_settings_v11 ORDER BY sequence_id;
+DELETE FROM sqlite_sequence WHERE name='experimenter_settings';
+INSERT INTO sqlite_sequence(name,seq)
+ SELECT 'experimenter_settings',seq FROM experimenter_settings_v11_sequence;
+CREATE INDEX experimenter_settings_principal
+ ON experimenter_settings(organization_id,principal_id,name,sequence_id);
+CREATE TRIGGER experimenter_settings_no_update BEFORE UPDATE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experimenter_settings_no_delete BEFORE DELETE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+DROP TABLE experimenter_settings_v11;
+DROP TABLE experimenter_settings_v11_sequence;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=12)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(12);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+#: Lane KO2 (2026-10-26), decision 1, after lane HEAR2's schema 12: a
+#: stored translation and a glossary name the version of the translation
+#: instructions they were made with (``style_version``), and the version is
+#: part of their identity, so a
 #: newer version's rows are added beside the old ones. SQLite cannot change
 #: a UNIQUE constraint in place, so both tables are built again: every row is
 #: copied in its order with its id and ``style_version`` 0 ("before versions
 #: were kept"), and the index and the append-only triggers are made as
 #: schema 7 made them. DROP TABLE fires no trigger.
-MIGRATION_11_TO_12 = """
-CREATE TABLE protocol_fact_translations_v11 AS
+MIGRATION_12_TO_13 = """
+CREATE TABLE protocol_fact_translations_v12 AS
  SELECT rowid AS old_rowid,* FROM protocol_fact_translations;
 DROP TABLE protocol_fact_translations;
 CREATE TABLE protocol_fact_translations(
@@ -957,8 +1003,8 @@ INSERT INTO protocol_fact_translations(
  status,check_result,model,model_version,created_at,style_version
 ) SELECT translation_id,revision_id,fact_key,language,source_sha256,translated_text,
  status,check_result,model,model_version,created_at,0
- FROM protocol_fact_translations_v11 ORDER BY old_rowid;
-DROP TABLE protocol_fact_translations_v11;
+ FROM protocol_fact_translations_v12 ORDER BY old_rowid;
+DROP TABLE protocol_fact_translations_v12;
 CREATE INDEX protocol_fact_translations_revision
  ON protocol_fact_translations(revision_id,language);
 CREATE TRIGGER fact_translations_no_update BEFORE UPDATE ON protocol_fact_translations
@@ -966,7 +1012,7 @@ CREATE TRIGGER fact_translations_no_update BEFORE UPDATE ON protocol_fact_transl
 CREATE TRIGGER fact_translations_no_delete BEFORE DELETE ON protocol_fact_translations
  BEGIN SELECT RAISE(ABORT,'append-only'); END;
 
-CREATE TABLE protocol_translation_glossaries_v11 AS
+CREATE TABLE protocol_translation_glossaries_v12 AS
  SELECT rowid AS old_rowid,* FROM protocol_translation_glossaries;
 DROP TABLE protocol_translation_glossaries;
 CREATE TABLE protocol_translation_glossaries(
@@ -983,17 +1029,17 @@ CREATE TABLE protocol_translation_glossaries(
 INSERT INTO protocol_translation_glossaries(
  glossary_id,revision_id,language,entries_json,model,model_version,created_at,style_version
 ) SELECT glossary_id,revision_id,language,entries_json,model,model_version,created_at,0
- FROM protocol_translation_glossaries_v11 ORDER BY old_rowid;
-DROP TABLE protocol_translation_glossaries_v11;
+ FROM protocol_translation_glossaries_v12 ORDER BY old_rowid;
+DROP TABLE protocol_translation_glossaries_v12;
 CREATE TRIGGER translation_glossaries_no_update BEFORE UPDATE ON protocol_translation_glossaries
  BEGIN SELECT RAISE(ABORT,'append-only'); END;
 CREATE TRIGGER translation_glossaries_no_delete BEFORE DELETE ON protocol_translation_glossaries
  BEGIN SELECT RAISE(ABORT,'append-only'); END;
 
 CREATE TABLE schema_metadata_next(
- schema_version INTEGER PRIMARY KEY CHECK(schema_version=12)
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=13)
 );
-INSERT INTO schema_metadata_next(schema_version) VALUES(12);
+INSERT INTO schema_metadata_next(schema_version) VALUES(13);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -3247,6 +3293,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 12
+    if version == 12:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_12_TO_13 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 13
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

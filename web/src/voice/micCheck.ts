@@ -5,7 +5,7 @@
 // POST /api/voice/calibration with the microphone's short id. The server
 // measures the voiced part, keeps only the level, when and which microphone
 // (the experimenter setting voice_reference), and drops the sound.
-import { ApiError, postJson } from "../api/client";
+import { ApiError, NETWORK_ERROR, postJson } from "../api/client";
 import { encodePcm, recordVoice } from "./engine";
 
 /** As long as index.html's VOICE_MEASURE_SECONDS (tests/test_lane_rx2_voice_core.py compares them). */
@@ -22,7 +22,20 @@ export interface Measured {
   max_age_days: number;
 }
 
-export type MeasureFailure = "too_little_voice" | "failed";
+/** Why a measurement failed (lane HEAR2, decision 6): the server's refusal code, or where the request stopped. */
+export type MeasureFailure = "too_little_voice" | "audio_length" | "audio_invalid" | "server" | "network" | "failed";
+
+const REFUSAL_CODES: ReadonlySet<MeasureFailure> = new Set<MeasureFailure>(["too_little_voice", "audio_length", "audio_invalid"]);
+
+/** The reason a failed request stands for: a refusal's own code, a server that could not keep it (5xx), a connection that failed, or anything else. */
+export function measureFailureOf(error: unknown): MeasureFailure {
+  if (error instanceof ApiError) {
+    if (REFUSAL_CODES.has(error.code as MeasureFailure)) return error.code as MeasureFailure;
+    if (error.code === NETWORK_ERROR || error.status === 0) return "network";
+    if (error.status >= 500) return "server";
+  }
+  return "failed";
+}
 
 export interface Recorder {
   record: (seconds: number) => Promise<{ pcm: Int16Array; micId: string | null }>;
@@ -37,7 +50,7 @@ export async function measureVoice(recorder: Recorder = browserRecorder): Promis
   try {
     return await postJson<Measured>("/api/voice/calibration", { pcm_base64: recorder.encode(recorded.pcm), mic_id: recorded.micId });
   } catch (error) {
-    throw new MeasureError(error instanceof ApiError && error.code === "too_little_voice" ? "too_little_voice" : "failed");
+    throw new MeasureError(measureFailureOf(error));
   }
 }
 

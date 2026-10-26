@@ -6,7 +6,8 @@ speech-to-text and a fake speech output (no provider is called). Before
 lane HEAR it measured, on the same script: 3 of 9 wearer utterances
 dropped, 4 of 4 sentences with a pause split, 3 answers with sound while
 paused and 1 noise question (lane report, section 3). These are the
-numbers after.
+numbers after. Lane HEAR2 added the timer stage, a noise chain and a
+speech-to-text outage to the same script (its report, section 4).
 """
 
 from __future__ import annotations
@@ -46,6 +47,20 @@ class ListeningBenchTests(unittest.TestCase):
         self.assertEqual(result["noise_questions"], 0, result)
         self.assertTrue(result["resume_heard"], result)
         self.assertFalse(result["calibration_measured"], "a run measured the voice")
+        # Lane HEAR2 (2026-10-26). Before (fe87ae5): 1 of 6 timer-stage
+        # utterances unanswered ("타이머 일시정지해 줘" paused the run, and the
+        # next words met the pause); the word said inside 30 s of room noise
+        # never reached a transcript; the provider outage was 3 turn errors,
+        # nothing shown or said.
+        self.assertEqual(result["timer_stage_utterances"], 6)
+        self.assertEqual(result["timer_stage_unanswered"], 0, result)
+        self.assertTrue(result["timer_paused_the_timer"], result)
+        self.assertFalse(result["timer_paused_the_run"], result)
+        self.assertIsNotNone(result["noise_chain_answer_s"], "the word inside the noise was never heard")
+        self.assertLess(result["noise_chain_answer_s"], 12.0, result)
+        self.assertEqual(result["stt_failure_shown"], 3, result)
+        self.assertEqual(result["stt_failure_said"], 1, result)
+        self.assertEqual(result["stt_failure_turn_errors"], 0, result)
 
 
 if __name__ == "__main__":

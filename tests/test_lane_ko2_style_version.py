@@ -239,9 +239,11 @@ class StoreTests(unittest.TestCase):
         store = self.store()
         try:
             connection = store._connection  # noqa: SLF001
-            self.assertEqual(ws.WORKSPACE_SCHEMA_VERSION, 12)
+            # Lane HEAR2's schema 12 (settings names) comes first, then this
+            # lane's 13 (translation style versions).
+            self.assertEqual(ws.WORKSPACE_SCHEMA_VERSION, 13)
             self.assertEqual(connection.execute(
-                "SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
+                "SELECT schema_version FROM schema_metadata").fetchone()[0], 13)
             key = translation_revision_key(fixture)
             rows = store.fact_translations(key, "ko")
             self.assertEqual([row.style_version for row in rows], [0, 0])

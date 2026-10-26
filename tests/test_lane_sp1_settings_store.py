@@ -89,19 +89,17 @@ class SchemaTenTests(unittest.TestCase):
         return store
 
     def test_the_version_is_ten(self) -> None:
-        # Lane ON (2026-10-18) raised the schema to 11 (two more names);
-        # lane KO2 (2026-10-26) to 12 (translation style versions).
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 12)
+        # Lane ON (2026-10-18) raised the schema to 11 (two more names).
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 13)  # lane HEAR2: schema 12 adds speaker_filter and voice_reference; lane KO2: 13 adds translation style versions
         store = self.open()
         self.assertEqual(store._connection.execute(
-            "SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
+            "SELECT schema_version FROM schema_metadata").fetchone()[0], 13)
 
     def test_a_schema_9_store_keeps_every_row_and_its_sequence(self) -> None:
         before = build_schema_9_store(self.directory)
         store = self.open()
         connection = store._connection
-        # Lane KO2 (2026-10-26): schema 12.
-        self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
+        self.assertEqual(connection.execute("SELECT schema_version FROM schema_metadata").fetchone()[0], 13)
         self.assertEqual(
             [tuple(row) for row in connection.execute(
                 "SELECT * FROM experimenter_settings ORDER BY sequence_id")],

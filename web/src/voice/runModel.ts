@@ -94,6 +94,8 @@ export interface RunModel {
   figures: { drawn: Figure | null; web: Figure | null };
   /** When the server last dropped what it heard (shown for a few seconds as "잘 안 들렸어요"). */
   misheardAt: number | null;
+  /** Lane HEAR2, decision 4: the server's own notice and reason for that drop, in plain words (null: the screen's own). */
+  misheard: { notice: string | null; reason: string | null };
   /** What the server said of the side-voice filter for this run (lane HEAR's speaker.filter), shown for a few seconds. */
   filterNotice: { text: string; at: number } | null;
   timerNotice: { text: string; stepId: string | null } | null;
@@ -112,6 +114,7 @@ export const EMPTY_RUN: RunModel = {
   card: null,
   figures: { drawn: null, web: null },
   misheardAt: null,
+  misheard: { notice: null, reason: null },
   filterNotice: null,
   timerNotice: null,
   ended: null,
@@ -343,7 +346,8 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
         // Lane HEAR decision 3: nothing is shown for a drop while paused (the band says why), and a voice the filter
         // took for someone else's comes as speech.ignored too.
         if (m.type === "speech.dropped" && (m.paused === true || m.reason === "other_speaker_level")) return model;
-        return { ...model, misheardAt: context.now };
+        // Lane HEAR2, decision 4: the server's notice and reason, shown with the word; nothing is said.
+        return { ...model, misheardAt: context.now, misheard: { notice: text(m.notice) ? plain(m.notice) : null, reason: text(m.reason_ko) ? plain(m.reason_ko) : null } };
       }
       return model;
   }
@@ -351,7 +355,7 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
 
 /** The step timer as the screen shows it: none, running, its last minute, or ended (index.html's renderRunTimer). */
 export interface TimerView {
-  kind: "none" | "idle" | "running" | "soon" | "done";
+  kind: "none" | "idle" | "running" | "soon" | "done" | "paused";
   seconds: number;
   duration: number;
   name: string | null;
@@ -366,6 +370,8 @@ export function timerView(protocol: ProtocolState | null, remaining: (step: Step
     if (seconds > 0) return { kind: seconds <= 60 ? "soon" : "running", seconds, duration, name };
     return { kind: "done", seconds: -seconds, duration, name };
   }
+  // Lane HEAR2, decision 3: paused by voice, the timer stands where it was (no deadline; the server's remaining seconds).
+  if (step && step.state === "paused") return { kind: "paused", seconds: Math.max(0, remaining(step)), duration, name };
   if (step && step.state === "not_started" && duration > 0) return { kind: "idle", seconds: duration, duration, name };
   return { kind: "none", seconds: 0, duration, name };
 }

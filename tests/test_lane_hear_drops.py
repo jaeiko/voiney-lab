@@ -151,7 +151,7 @@ class DropHarness(unittest.TestCase):
 
 
 class DropRecordTests(DropHarness):
-    def test_an_empty_transcript_is_recorded_shown_and_said_after_the_second(self) -> None:
+    def test_an_empty_transcript_is_recorded_and_shown_never_said(self) -> None:
         session, clock = self.listener()
         metrics: list[dict] = []
         sent = self.run_socket(session, clock, [
@@ -168,9 +168,11 @@ class DropRecordTests(DropHarness):
             self.assertGreater(message["duration_ms"], 0)
             self.assertIsInstance(message["level_db"], float)
             self.assertFalse(message["paused"])
+        # Lane HEAR2, decision 4 (2026-10-26): a drop is shown, never said
+        # (it used to be said once after the second drop within 30 s).
         said = [m for m in self.of(sent, "server.words") if m["words_kind"] == "drop_notice"]
-        self.assertEqual([m["text"] for m in said], ["잘 안 들렸어요. 다시 말씀해 주세요."],
-                         "said once after the second drop, not again for the third")
+        self.assertEqual(said, [], "nothing is said for a drop")
+        self.assertEqual({m["reason_ko"] for m in dropped}, {"받아 적은 말이 없어요"})
         codes = [m["dimensions"].get("reason_code") for m in metrics if m.get("metric_name") == "speech_dropped"]
         self.assertEqual(codes, ["empty_transcript"] * 3)
         self.assertIn("speech.dropped reason=empty_transcript", self.logs)
@@ -186,7 +188,7 @@ class DropRecordTests(DropHarness):
         self.assertEqual(len(self.of(sent, "speech.dropped")), 2)
         self.assertEqual([m for m in self.of(sent, "server.words") if m["words_kind"] == "drop_notice"], [])
 
-    def test_words_heard_again_let_the_notice_be_said_again(self) -> None:
+    def test_words_heard_again_still_say_nothing_for_the_next_drops(self) -> None:
         session, clock = self.listener()
         texts = iter(["", "", "다음", "", ""])
         sent = self.run_socket(session, clock, [
@@ -196,8 +198,10 @@ class DropRecordTests(DropHarness):
             {"advance": 5.0}, {"bytes": utterance(0.1)}, {"sleep": 0.2},
             {"bytes": utterance(0.1)}, {"sleep": 0.5},
         ], heard=lambda pcm: next(texts, ""))
+        # Lane HEAR2, decision 4: never said, however many come (used to be said again after words were heard).
         said = [m for m in self.of(sent, "server.words") if m["words_kind"] == "drop_notice"]
-        self.assertEqual(len(said), 2, [m["type"] for m in sent])
+        self.assertEqual(said, [], [m["type"] for m in sent])
+        self.assertEqual(len(self.of(sent, "speech.dropped")), 4)
 
     def test_the_agents_own_voice_and_a_too_short_sound_are_shown_not_said(self) -> None:
         session, clock = self.listener()

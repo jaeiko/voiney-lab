@@ -356,10 +356,9 @@ class StorageTests(unittest.TestCase):
         try:
             # Lane SP1 (2026-10-10): schema 10.
             # Lane ON (2026-10-18) raised the schema to 11 (two more setting names).
-            # Lane KO2 (2026-10-26): 12 (translation style versions).
-            self.assertEqual(WORKSPACE_SCHEMA_VERSION, 12)
+            self.assertEqual(WORKSPACE_SCHEMA_VERSION, 13)  # lane HEAR2: schema 12 adds speaker_filter and voice_reference; lane KO2: 13 adds translation style versions
             self.assertEqual(store._connection.execute(
-                "SELECT schema_version FROM schema_metadata").fetchone()[0], 12)
+                "SELECT schema_version FROM schema_metadata").fetchone()[0], 13)
             self.assertEqual(store._connection.execute(
                 "SELECT content_text FROM protocol_translations "
                 "WHERE translation_id='translation-old'").fetchone()[0],
