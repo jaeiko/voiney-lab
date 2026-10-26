@@ -1919,8 +1919,11 @@ receipts. Such an old run may need a new confirmed start. Disabling the setting
 bypasses both value and safety receipt requirements. PI confirmation grants
 no execution permission.
 
-`workflow.resume` requires an already started run, matching configuration id
-and generation. Repeated `session.start` on the same socket/configuration
+`workflow.resume` requires an already started run and the matching
+configuration id. (Until 2026-10-26 it also required the server's current
+generation; that number moves on with a joined utterance and a barge-in, so a
+bench resume was refused as stale -- lane RX4, the person's decision 3: the
+resume is fenced as `workflow.pause` is.) Repeated `session.start` on the same socket/configuration
 keeps the run; a different configuration is visibly refused without closing
 the socket. No event schema is inferred from prose.
 
