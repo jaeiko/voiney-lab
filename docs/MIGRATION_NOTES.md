@@ -1,5 +1,51 @@
 # Migration Notes
 
+## Workspace schema 11 → 12: translation style versions (2026-10-26, lane KO2)
+
+Schema 12 adds `style_version` (an integer, `CHECK(style_version>=0)`) to
+`protocol_fact_translations` and `protocol_translation_glossaries` and makes it
+part of their identity: `UNIQUE(revision_id,fact_key,language,source_sha256,
+status,style_version)` and `UNIQUE(revision_id,language,style_version)`. It is
+the version of the translation instructions a row was made with
+(`protocol_translation.STYLE_VERSION`, now 4; human decision 1 of 2026-10-26),
+so the Korean of a protocol can be made again under new instructions while
+the old rows stay. SQLite cannot change a UNIQUE constraint in place, so
+`MIGRATION_11_TO_12` builds both tables again: every row is copied in its
+order with its id and `style_version` 0 ("before versions were kept"), and
+the index and both pairs of append-only triggers are made as schema 7 made
+them. DROP TABLE fires no trigger. Nothing else in the store changes.
+
+A row of version 0 keeps the id it had; a row of a later version has
+`:v<N>` at the end of the identity its id is hashed from, so a new version's
+row never collides with an older one. The same holds for a glossary's id.
+
+### Reading older data
+
+A schema-11 store migrates on open and reads as before: its rows are version
+0 and are shown when they pass today's check, as they were. Reading now takes,
+sentence by sentence, the newest version's row that passes today's check
+(each row checked with its own version's glossary), else an older one that
+passes, else the source; a reviewed row still wins. Generation makes only
+what the current version lacks -- a sentence stored under an older version,
+passed or refused, is made again; one stored under the current version is
+not asked again. Opening a session does not regenerate an existing
+protocol's rows (only a protocol with no row at all starts its generation,
+as before): `scripts/retranslate_protocols.py --data-dir DIR` plans with no
+call, and with `--run` makes the current version for the stored protocols
+(keys from the shell; `.env` is not read). Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (sqlite through the backup API,
+objects hard-linked; the original only read): the store opened at 12 with
+its rows, the plan read four runnable protocols, 223 sentences and 34 calls.
+
+### Going back
+
+Code from before this version refuses a schema-12 store ("Commercial
+workspace schema is unsupported"): restore a backup taken before the
+migration. Rows of a later style version would otherwise collide with the old
+UNIQUE constraint; to rebuild schema 11 by hand, drop the rows whose
+`style_version` is not 0, rebuild both tables without the column, and set
+`schema_metadata` to 11.
+
 ## Page range and today's values (lane EASY, 2026-10-24)
 
 No schema number changes. Three stores gain event types and payload keys;

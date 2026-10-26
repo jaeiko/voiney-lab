@@ -161,7 +161,18 @@ generation is cancelled and its audio cleared (barge-in).
    fixture as a machine translation); with none it is said as "이 문장은 아직
    번역되지 않았어요. 원문을 화면에 띄울게요." and shown in the source. Only
    "원문 그대로 읽어 줘" (`SOURCE_READ_ALOUD_INTENT`) reads the English. No
-   workflow state is involved.
+   workflow state is involved. Lane KO2 takes the same path
+   (`server._translate_in_place`) for a source sentence the reply only shows,
+   for a purpose answer whose stored Korean is of an older translation style
+   version (`_fresh_purpose`), and, after a fixture state is sent, for the
+   current and next step sentences the screen shows without Korean
+   (`_queue_screen_korean`: a checked reading goes on the session's fixture
+   and the same state is sent again as `translation_update`; meanwhile the
+   state's `translation_missing` and the screen's
+   `next_step_translation_missing` say so). Last, every step label is said
+   and shown once (`CuratedProtocolSession.single_step_labels`; the source
+   quote is left as written), and `reply.complete` carries the words said
+   (`speech_text`), which the new screen's caption shows.
 6. Sentence TTS streams through generation-aware audio segments;
    `turn.route_decision` carries a compact projection (with a `router`
    block when the router ran); `turn.done` and `playback.completed` close it.
@@ -466,7 +477,7 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 | Store | File (launcher layout) | Schema | Written by | Append-only |
 |---|---|---|---|---|
 | Protocol catalog | `<protocol dir>/protocol_workspace.sqlite` + `objects/sha256/…` | 1 | `experiment_protocol_store`, `protocol_catalog` | events: yes; sources immutable |
-| Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 11 | `workspace_store` | session events, completed steps, observations, evidence — SQL triggers refuse UPDATE/DELETE |
+| Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 12 | `workspace_store` | session events, completed steps, observations, evidence, sentence translations and glossaries (each with its translation `style_version`) — SQL triggers refuse UPDATE/DELETE |
 | Experiment record | `<protocol dir>/experiment_reports.sqlite` | 2 | `experiment_reports` | events by stable key (`INSERT OR IGNORE`); no triggers — enforced by code; prose is replaceable |
 | Accounts | `<workspace>/accounts.sqlite` | 1 | `accounts` | no (sessions end; only hashes stored) |
 | Pilot metrics | `<workspace>/pilot_metrics.sqlite` | — | `pilot_metrics` | rows of numbers, codes and times |
