@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
+import asyncio, base64, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
@@ -53,6 +53,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
     TimerNotice,
+    is_paused_resume_utterance,
     josa_ro,
     load_curated_protocol_fixture,
     ProtocolVocabulary,
@@ -251,7 +252,8 @@ from voiney_lab.runtime_routing import (
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import (
     DEFAULT_SENSITIVITY, SENSITIVITY_MARGINS_DB, EndpointDetector, EndpointResult,
-    NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, level_reference_from,
+    NoiseFloor, SpeakerLevelReference, TurnState, VadConfig, WebRtcVadClassifier,
+    level_reference_from, voiced_median_level_db,
 )
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
@@ -1931,12 +1933,87 @@ EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
     # configured voice) and what the last 목소리 맞추기 came to.
     "agent_voice":"default",
     "voice_calibration":"none",
+    # Lane HEAR, decision 2: every voice is heard until the person turns the
+    # filter on after measuring; the measurement (level, time, microphone)
+    # is written by POST /api/voice/calibration only.
+    "speaker_filter":"off",
+    "voice_reference":"none",
 }
+#: Settings the server writes itself (lane HEAR, decision 2): the screen's
+#: PUT may not set them.
+SERVER_ONLY_EXPERIMENTER_SETTINGS=frozenset({"voice_reference"})
 #: Where the settings are kept while the server runs when there is no
 #: workspace to keep them in, by the experimenter (one, "local", without one).
 #: Lane WV's "web_lookup" used to be kept here even with a workspace; since
 #: workspace schema 9 (lane VT, decision 7) it is kept with the others.
 _EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
+
+
+# --- Lane HEAR, decision 2: the measured voice, kept as a setting -----------
+#: A measurement older than this, or made on another microphone, is not used.
+VOICE_REFERENCE_MAX_AGE_DAYS=14
+#: The sentence posted to POST /api/voice/calibration: 0.5-12 s of 16 kHz PCM16.
+CALIBRATION_MIN_BYTES=16000
+CALIBRATION_MAX_BYTES=12*32000
+CALIBRATION_MAX_BASE64_CHARS=(CALIBRATION_MAX_BYTES*4)//3+8
+#: At least 0.8 s of the sentence must be voiced to measure it.
+CALIBRATION_MIN_VOICED_FRAMES=40
+_MIC_ID=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+_VOICE_REFERENCE=re.compile(r"^v1:(-?\d{1,3}(?:\.\d)?):(\d{9,11}):([A-Za-z0-9][A-Za-z0-9_-]{0,39})$")
+
+
+@dataclass(frozen=True)
+class VoiceReference:
+    """The wearer's measured level, when it was measured, and on which microphone."""
+
+    level_db:float
+    measured_at:float
+    mic_id:str
+
+
+def normalize_mic_id(value:object)->str|None:
+    """The page's short microphone id, or None when it sent none or a bad one."""
+
+    return value if isinstance(value,str) and _MIC_ID.fullmatch(value) else None
+
+
+def voice_reference_value(level_db:float,measured_at:float,mic_id:str)->str:
+    """The setting's value: "v1:<dBFS>:<unix seconds>:<microphone id>"."""
+
+    return f"v1:{level_db:.1f}:{int(measured_at)}:{normalize_mic_id(mic_id) or 'unknown'}"
+
+
+def parse_voice_reference(value:object)->VoiceReference|None:
+    match=_VOICE_REFERENCE.fullmatch(value) if isinstance(value,str) else None
+    if match is None:
+        return None
+    level=float(match.group(1))
+    if not -100.0<=level<=0.0:
+        return None
+    return VoiceReference(level,float(match.group(2)),match.group(3))
+
+
+def stored_voice_filter(
+    settings:Mapping[str,str],mic_id:str|None,now:float,
+)->tuple[str,str,VoiceReference|None]:
+    """Whether a run filters by level, and why not (lane HEAR, decision 2).
+
+    ("active", "on", reference) only when the person turned the filter on,
+    a measurement exists, it is younger than VOICE_REFERENCE_MAX_AGE_DAYS
+    and the run's microphone is the one measured. Otherwise ("inactive",
+    reason, None): "off", "not_measured", "stale_age" or "stale_device".
+    """
+
+    if str(settings.get("speaker_filter","off"))!="on":
+        return "inactive","off",None
+    reference=parse_voice_reference(settings.get("voice_reference"))
+    if reference is None:
+        return "inactive","not_measured",None
+    if now-reference.measured_at>VOICE_REFERENCE_MAX_AGE_DAYS*86400 or reference.measured_at>now+300:
+        return "inactive","stale_age",None
+    if mic_id is None or reference.mic_id=="unknown" or mic_id!=reference.mic_id:
+        return "inactive","stale_device",None
+    return "active","on",reference
 
 
 def _experimenter_settings_key()->str:
@@ -1998,10 +2075,67 @@ def get_experimenter_settings()->dict[str,object]:
 
 @app.put("/api/experimenter/settings")
 def put_experimenter_settings(body:dict[str,Any]=Body(...))->dict[str,object]:
+    if isinstance(body,Mapping) and SERVER_ONLY_EXPERIMENTER_SETTINGS.intersection(map(str,body)):
+        raise HTTPException(status_code=403,detail="setting_server_only")
     try:
         return {"settings":_save_experimenter_settings(body,"screen")}
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/voice/calibration")
+def post_voice_calibration(body:dict[str,Any]=Body(...))->dict[str,object]:
+    """목소리 맞추기 outside a run (lane HEAR, decisions 1 and 2).
+
+    The page records the sentence on the microphone it uses for runs and
+    posts it here as 16 kHz mono PCM16 (base64) with the microphone's short
+    id. The median level of the frames the VAD calls voiced is kept as the
+    experimenter's ``voice_reference`` -- the level, when, and the
+    microphone id -- and the sound is dropped at once: nothing is
+    transcribed, logged or stored. Measuring does not turn the filter on.
+    """
+
+    raw=body.get("pcm_base64") if isinstance(body,Mapping) else None
+    if not isinstance(raw,str) or not raw or len(raw)>CALIBRATION_MAX_BASE64_CHARS:
+        raise HTTPException(status_code=422,detail={"code":"audio_invalid"})
+    try:
+        pcm=base64.b64decode(raw,validate=True)
+    except (ValueError,TypeError) as exc:
+        raise HTTPException(status_code=422,detail={"code":"audio_invalid"}) from exc
+    if len(pcm)%2 or not CALIBRATION_MIN_BYTES<=len(pcm)<=CALIBRATION_MAX_BYTES:
+        raise HTTPException(status_code=422,detail={"code":"audio_length"})
+    mic_id=normalize_mic_id(body.get("mic_id")) or "unknown"
+    try:
+        mode=VoiceVadSettings.from_environment().cascade.mode
+    except Exception:  # noqa: BLE001 - the listener's own default mode then
+        mode=VadConfig().mode
+    classifier=WebRtcVadClassifier(mode)
+    frames=[pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES)]
+    flags=[(frame,bool(classifier(frame))) for frame in frames]
+    voiced=sum(1 for _,flag in flags if flag)
+    if voiced<CALIBRATION_MIN_VOICED_FRAMES:
+        log.info("voice calibration refused reason=too_little_voice voiced_frames=%d frames=%d",voiced,len(frames))
+        raise HTTPException(status_code=422,detail={"code":"too_little_voice"})
+    level=voiced_median_level_db(flags)
+    if level is None or not math.isfinite(level):
+        raise HTTPException(status_code=422,detail={"code":"too_little_voice"})
+    measured_at=time.time()
+    try:
+        settings=_save_experimenter_settings({
+            "voice_reference":voice_reference_value(level,measured_at,mic_id),
+            "voice_calibration":"measured",
+        },"screen")
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    log.info(
+        "voice calibration measured on screen level_db=%.1f voiced_frames=%d frames=%d",
+        level,voiced,len(frames))
+    return {
+        "state":"measured","level_db":round(level,1),
+        "measured_at":datetime.fromtimestamp(measured_at,tz=timezone.utc).isoformat(),
+        "mic_id":mic_id,"speaker_filter":settings.get("speaker_filter","off"),
+        "max_age_days":VOICE_REFERENCE_MAX_AGE_DAYS,
+    }
 
 
 @app.get("/api/voice/voices")
@@ -3059,6 +3193,15 @@ def _agent_voice_id(settings:Mapping[str,str])->str|None:
 
     chosen=str(settings.get("agent_voice","default") or "default")
     return None if chosen=="default" or not _agent_voice_known(chosen) else chosen
+
+
+def _session_voice_fallback()->str|None:
+    """The provider's configured voice, or None when no provider is set."""
+
+    try:
+        return _tts_voice() or None
+    except ConfigurationError:
+        return None
 
 
 def _session_tts_voice()->str|None:
@@ -6716,6 +6859,13 @@ TURN_PROGRESS_SAFE_ROUTES=frozenset({
 #: -- the join window, plus the time the endpoint and speech recognition
 #: take to deliver them.
 FRAGMENT_HOLD_SECONDS=FRAGMENT_JOIN_SECONDS+1.0
+#: Lane HEAR, decision 4 (2026-10-25): speech that starts within this long
+#: of the last end, before that turn's answer plays and while it has changed
+#: nothing, is the same sentence: the two are joined into one utterance. The
+#: brief's example value; the log of the person's test had 54 of 66 ends
+#: followed by speech within it (39 within 0.5 s).
+CONTINUATION_JOIN_SECONDS=1.5
+FRAGMENT_HOLD_POLL_SECONDS=0.05
 TURN_PROGRESS_TRANSITIONS={
     "listening":frozenset({"transcribing","cancelled","error"}),
     "transcribing":frozenset({"routing","cancelled","error"}),
@@ -6886,6 +7036,17 @@ class ListenerSession:
         #: Turns of the server's own words (a calibration prompt, a
         #: suggestion), numbered from _SERVER_WORDS_TURN_BASE.
         self.server_words_turns:int=0
+        #: Lane HEAR, decision 3: when sounds that may have been the wearer's
+        #: words were dropped (session clock), whether "잘 안 들렸어요. 다시
+        #: 말씀해 주세요." was said since words were last heard, and how many
+        #: voices in a row the filter dropped just under its line.
+        self.drop_times:collections.deque[float]=collections.deque(maxlen=16)
+        self.drop_notice_said:bool=False
+        self.near_line_drops:int=0
+        #: Lane HEAR, decision 4: the last committed turn's audio (for a
+        #: continuation to join) and events of a turn opened between chunks.
+        self._joinable_turn:dict[str,Any]|None=None
+        self._pending_listener_events:list[ListenerEvent]=[]
     @property
     def state(self): return self.detector.state
     def remember_spoken(self,text:str)->None:
@@ -6950,6 +7111,8 @@ class ListenerSession:
         self._interrupt_candidate_endpoint_at=None
         self._interrupt_candidate_diagnostics={}
     def _reset_turn_identity(self)->None:
+        self._joinable_turn=None
+        self._pending_listener_events=[]
         for task in tuple(self.visual_tasks):
             task.cancel()
         self.visual_tasks.clear()
@@ -7130,6 +7293,61 @@ class ListenerSession:
                 "during_playback":during_playback,
                 "ignored_count":self.ignored_speech_count,
             })
+    # --- lane HEAR, decision 3: no sound dropped in silence ------------------
+    def note_drop(self,reason:str,*,during_playback:bool=False)->bool:
+        """Count a drop; True when "잘 안 들렸어요. 다시 말씀해 주세요." is due now.
+
+        Only drops of what may have been the wearer's words count
+        (SPOKEN_DROP_REASONS), never one while an answer plays on. Two
+        within DROP_NOTICE_WINDOW_SECONDS make it due -- once, until words
+        are heard again (``note_heard``).
+        """
+
+        if during_playback or reason not in SPOKEN_DROP_REASONS:
+            return False
+        now=self.clock()
+        self.drop_times.append(now)
+        recent=sum(1 for at in self.drop_times if now-at<=DROP_NOTICE_WINDOW_SECONDS)
+        if recent>=DROP_NOTICE_COUNT and not self.drop_notice_said:
+            self.drop_notice_said=True
+            return True
+        return False
+    def note_heard(self)->None:
+        """Words reached routing: the drops before them no longer count."""
+
+        self.drop_times.clear()
+        self.drop_notice_said=False
+        self.near_line_drops=0
+    def note_level_drop(self,level_db:float|None)->str|None:
+        """A voice the filter dropped: "lowered", "off" or None (lane HEAR, decision 3).
+
+        A voice within NEAR_LINE_DB under the line is where the wearer's own
+        quieter words fall; NEAR_LINE_DROPS of them in a row move the line to
+        the "낮음" margin, or, already there, turn the filter off for this
+        session. A voice further under it is someone else's and resets the count.
+        """
+
+        reference=self.level_reference
+        if reference is None or level_db is None:
+            return None
+        if level_db<reference.threshold_db-NEAR_LINE_DB:
+            self.near_line_drops=0
+            return None
+        self.near_line_drops+=1
+        if self.near_line_drops<NEAR_LINE_DROPS:
+            return None
+        self.near_line_drops=0
+        if reference.margin_db<SENSITIVITY_MARGINS_DB["low"]:
+            self.level_reference=reference.with_sensitivity("low")
+            self.speaker_sensitivity="low"
+            return "lowered"
+        self.level_reference=None
+        self.level_endpoint_on=False
+        return "off"
+    def forget_drops(self)->None:
+        self.drop_times.clear()
+        self.drop_notice_said=False
+        self.near_line_drops=0
     def ignored_speech_in_last(self,seconds:float)->int:
         """How many utterances were taken for another person's in the last ``seconds``."""
 
@@ -7194,6 +7412,7 @@ class ListenerSession:
         self.experiment_report_id=None
         self.forget_timer_notices()
         self.forget_level_reference()
+        self.forget_drops()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
     def stop(self):
@@ -7346,13 +7565,19 @@ class ListenerSession:
     def accept_chunk(self,chunk:bytes)->list[ListenerEvent]:
         if not self.active:return []
         self._microphone_chunk_sequence+=1
+        # Lane HEAR, decision 4: a turn opened outside this method (speech
+        # kept when the turn before it was dropped) is announced here.
+        output=self._pending_listener_events; self._pending_listener_events=[]
         self.refresh_cooldown()
         if self.state in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING):
-            return self._accept_interrupt_chunk(chunk)
-        if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):return []
-        output=[]
+            return output+self._accept_interrupt_chunk(chunk)
+        if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):return output
         self._apply_endpoint_threshold(self.detector)
-        for frame in self.framer.push(chunk):
+        output.extend(self._accept_primary_frames(self.framer.push(chunk)))
+        return output
+    def _accept_primary_frames(self,frames:list[bytes])->list[ListenerEvent]:
+        output=[]
+        for frame in frames:
             result=self.detector.process(frame)
             if self.detector.last_frame_level_db is not None:
                 self.noise_floor.add(self.detector.last_frame_level_db,self.detector.last_frame_voiced)
@@ -7383,18 +7608,125 @@ class ListenerSession:
                 if self.active_turn_id is None: raise RuntimeError("committed utterance has no turn_id")
                 self.endpoint_at=self.clock()
                 self.turn_committed_at[self.active_turn_id]=self.endpoint_at
+                self._keep_turn_audio(
+                    self.active_turn_id,self.turn_generations[self.active_turn_id],result.utterance)
                 output.append(ListenerEvent(
                     "speech.end",self.active_turn_id,result,
                     self.turn_generations[self.active_turn_id]))
                 self.framer=FrameBuffer(); self._reset_interrupt_input()
             if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING): break
         return output
+    # --- lane HEAR, decision 4: a sentence with a pause in it ------------------
+    def _workflow_revision(self)->tuple[Any,Any]:
+        """What changes when a turn changes something: the run's revision and its record's version."""
+
+        curated=self.curated_protocol_session
+        return (getattr(curated,"_revision",None) if curated is not None else None,
+                self.experiment_state_version)
+    def _keep_turn_audio(self,turn_id:int,generation:int,pcm:bytes)->None:
+        """The last committed turn's audio and the run's revision then, for a continuation to join."""
+
+        self._joinable_turn={"identity":(turn_id,generation),"pcm":bytes(pcm),
+                             "revision":self._workflow_revision()}
+    def _join_continuation(
+        self,identity:tuple[int,int],detector:EndpointDetector,framer:FrameBuffer,
+        result:EndpointResult,
+    )->list[ListenerEvent]|None:
+        """Join speech that began soon after the last end to it (decision 4); None to interrupt as before.
+
+        Only while the turn is still being answered (not playing), within
+        CONTINUATION_JOIN_SECONDS of its end (FRAGMENT_JOIN_SECONDS when its
+        words were held as unfinished or are still being written down), and
+        when it has changed nothing --
+        the run's revision and its record's version are as they were. The
+        turn is cancelled; its audio goes in front of the words now under
+        way, which carry on as the listener's own utterance of a new turn.
+        """
+
+        kept=self._joinable_turn
+        if self.state is not TurnState.PROCESSING or kept is None or kept["identity"]!=identity:
+            return None
+        committed=self.turn_committed_at.get(identity[0])
+        if committed is None:
+            return None
+        held=self._held_fragment
+        progress=self.turn_progress.get(identity)
+        window=(
+            FRAGMENT_JOIN_SECONDS
+            if (held is not None and (held["turn_id"],held["generation"])==identity)
+            # Still being written down: whether its words end unfinished is
+            # not known yet, and nothing has been done with them.
+            or (progress is not None and progress.state in {"listening","transcribing"})
+            else CONTINUATION_JOIN_SECONDS)
+        gap=self.clock()-committed
+        if gap>window or kept["revision"]!=self._workflow_revision():
+            return None
+        self._interrupted_generations.add(identity)
+        self._held_fragment=None
+        self._joinable_turn=None
+        self.generation+=1
+        joined_turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=joined_turn_id
+        self.turn_generations[joined_turn_id]=self.generation
+        pcm=kept["pcm"]
+        detector.prepend_utterance(
+            pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES))
+        self.detector=detector
+        self.framer=framer
+        self._interrupt_detector=self._new_interrupt_detector()
+        self._interrupt_framer=FrameBuffer()
+        self._interrupt_candidate_identity=None
+        self._interrupt_candidate_started_at=None
+        self._interrupt_candidate_endpoint_at=None
+        self._interrupt_candidate_diagnostics={}
+        log.info(
+            "speech.continued turn_id=%s joined_turn_id=%s gap_ms=%d joined_ms=%d",
+            identity[0],joined_turn_id,round(gap*1000),len(pcm)//32)
+        return [
+            ListenerEvent(
+                "assistant.interrupted",identity[0],result,identity[1],
+                joined_turn_id,self.generation,reason="continued_speech"),
+            ListenerEvent("speech.start",joined_turn_id,result,self.generation),
+        ]
+    def interrupt_candidate_open(self,turn_id:int,generation:int)->bool:
+        """Whether words that began during this turn are still being heard or checked."""
+
+        return self._interrupt_candidate_identity==(turn_id,generation)
+    def _promote_open_candidate(self)->bool:
+        """Speech under way when its turn is dropped becomes a turn of its own (decision 4).
+
+        The turn before it wrote nothing (or was otherwise dropped); the words
+        that began while it was being answered are kept, not thrown away with it.
+        """
+
+        detector=self._interrupt_detector
+        if self._interrupt_candidate_identity is None or detector.state is not TurnState.USER_SPEAKING:
+            return False
+        turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=turn_id
+        self.turn_generations[turn_id]=self.generation
+        self.detector=detector
+        self.framer=self._interrupt_framer
+        self._interrupt_detector=self._new_interrupt_detector()
+        self._interrupt_framer=FrameBuffer()
+        self._interrupt_candidate_identity=None
+        self._interrupt_candidate_started_at=None
+        self._interrupt_candidate_endpoint_at=None
+        self._interrupt_candidate_diagnostics={}
+        self._pending_listener_events.append(ListenerEvent(
+            "speech.start",turn_id,EndpointResult(speech_started=True,
+                                                  voiced_frames=detector.voiced_frames,
+                                                  total_frames=detector.buffered_frames),
+            self.generation))
+        log.info("speech.kept_after_drop turn_id=%s",turn_id)
+        return True
     def _accept_interrupt_chunk(self,chunk:bytes)->list[ListenerEvent]:
         output=[]
         detector=self._interrupt_detector
         framer=self._interrupt_framer
         self._apply_endpoint_threshold(detector)
-        for frame in framer.push(chunk):
+        frames=framer.push(chunk)
+        for index,frame in enumerate(frames):
             result=detector.process(frame)
             if result.speech_started:
                 interrupted_turn_id=self.active_turn_id
@@ -7406,6 +7738,12 @@ class ListenerSession:
                 identity=(interrupted_turn_id,interrupted_generation)
                 if identity in self._interrupted_generations:
                     continue
+                joined=self._join_continuation(identity,detector,framer,result)
+                if joined is not None:
+                    # The rest of this chunk is the joined utterance's.
+                    output.extend(joined)
+                    output.extend(self._accept_primary_frames(frames[index+1:]))
+                    return output
                 self._interrupt_candidate_identity=identity
                 self._interrupt_candidate_started_at=self.clock()
                 self._interrupt_candidate_diagnostics={
@@ -7523,6 +7861,8 @@ class ListenerSession:
         self.framer=FrameBuffer()
         self.endpoint_at=candidate_endpoint_at or self.clock()
         self.turn_committed_at[superseding_turn_id]=self.endpoint_at
+        if event.result.utterance:
+            self._keep_turn_audio(superseding_turn_id,self.generation,event.result.utterance)
         latency=event.latency_ms
         diagnostics=dict(event.diagnostics or {})
         if stt_ms is not None:
@@ -7550,6 +7890,11 @@ class ListenerSession:
     def start_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.detector.state=TurnState.AGENT_SPEAKING
+        if self._interrupt_candidate_identity is not None:
+            # Lane HEAR, decision 4: words begun while the answer was being
+            # prepared -- still heard, or being checked -- are not cut or
+            # lost when it starts playing; they end as the interruption they are.
+            return True
         self._reset_interrupt_input(playback=True)
         return True
     def playback_ended(self,turn_id:int)->bool:
@@ -7621,12 +7966,34 @@ class ListenerSession:
         return str(held["text"])
     def reject_empty_transcript(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
+        if self._promote_open_candidate():
+            return True
         self.active_turn_id=None; self.framer=FrameBuffer()
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
+    def stop_turn_for_pause(self)->tuple[int,int]|None:
+        """[일시정지] pressed while a turn was answering: it ends here (lane HEAR, decision 7).
+
+        Its playback is stopped by the page (``playback.stop``); the session
+        listens again after the cooldown. None when nothing was answering.
+        """
+
+        turn_id=self.active_turn_id
+        if turn_id is None or self.state not in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING):
+            return None
+        generation=self.turn_generations.get(turn_id,self.generation)
+        self._interrupted_generations.add((turn_id,generation))
+        self._deferred_playback_end=None
+        self.active_turn_id=None; self.framer=FrameBuffer()
+        self._restore_primary_detector(TurnState.COOLDOWN)
+        self._reset_interrupt_input()
+        self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000
+        return turn_id,generation
     def complete_without_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
+        if self._promote_open_candidate():
+            return True
         self.active_turn_id=None; self.framer=FrameBuffer()
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
@@ -10619,6 +10986,8 @@ def _end_notice_playback_later(
 _SERVER_WORDS_TURN_BASE=2_000_000_300
 #: The short sentence the wearer reads so their level can be measured.
 VOICE_CALIBRATION_SENTENCE="목소리를 맞출게요. 지금 이 문장을 평소처럼 읽어 주세요."
+#: Lane HEAR, decision 1: the answer to a calibration asked for during a run.
+VOICE_CALIBRATION_IN_RUN_WORDS="실험 중에는 목소리를 맞추지 않아요. 실험이 끝난 뒤 설정에서 맞춰 주세요."
 VOICE_CALIBRATION_PROMPT=(
     "목소리를 맞출게요. 화면의 문장을 평소 목소리로 읽어 주세요. "
     "건너뛰려면 '건너뛰기'라고 하세요."
@@ -10843,37 +11212,195 @@ CLARIFY_CHOICE_REFUSED_WORDS={
 }
 
 
-#: Lane SP1, decision 3: the suggestion after this many ignored voices in
-#: this many seconds, at most once in the gap.
+# --- Lane HEAR, decision 3 (2026-10-25): no sound is dropped in silence -------
+#: Shown on the screen beside each dropped sound, and said once two drops
+#: of what may have been the wearer's words come within the window.
+DROP_SCREEN_WORDS="잘 안 들렸어요"
+DROP_NOTICE_WORDS="잘 안 들렸어요. 다시 말씀해 주세요."
+DROP_NOTICE_WINDOW_SECONDS=30.0
+DROP_NOTICE_COUNT=2
+#: The drops that may have been the wearer's words. Not counted: the agent's
+#: own voice coming back (self_echo), a sound too short to be a word
+#: (minimum_voiced_frames), a filler or a sound label the STT wrote
+#: (filler_only, non_lexical_event) -- each is still recorded and shown.
+SPOKEN_DROP_REASONS=frozenset({
+    "empty_transcript","other_speaker_level","language_unclear","non_speech",
+    "provider_no_speech_probability","provider_low_confidence","keyterm_echo",
+    "transcription_failed",
+})
+#: A voice the filter dropped within this many dB under its line is where
+#: the wearer's own quieter words fall (a head turned, a step back: the SP1
+#: bench varied the wearer by +/-6 dB); this many in a row move the line.
+NEAR_LINE_DB=6.0
+NEAR_LINE_DROPS=2
+SPEAKER_FILTER_WORDS={
+    "lowered":"내 말이 작게 들려서 옆 사람 말 거르기를 낮췄어요.",
+    "off":"내 말이 계속 걸러져서 옆 사람 말 거르기를 껐어요. 이제 모든 말을 들어요.",
+}
+
+
+def _audio_ready_mic_id(raw:str)->str|None:
+    """The page's short microphone id beside client.audio_ready (lane HEAR, decision 2).
+
+    The control parser keeps only the fields every audio_ready has, so the
+    id is read from the message itself; None when absent or malformed.
+    """
+
+    try:
+        message=json.loads(raw)
+    except ValueError:
+        return None
+    return normalize_mic_id(message.get("mic_id")) if isinstance(message,dict) else None
+
+
+async def _apply_stored_voice_filter(
+    sender:LockedSender,session:ListenerSession,mic_id:str|None,
+)->None:
+    """Filter this run by level only as the person chose and measured (decision 2)."""
+
+    try:
+        settings=await asyncio.to_thread(_load_experimenter_settings)
+    except Exception:  # noqa: BLE001 - the defaults: every voice is heard
+        settings=dict(EXPERIMENTER_SETTING_DEFAULTS)
+    session.set_speaker_sensitivity(str(settings.get("speaker_sensitivity",DEFAULT_SENSITIVITY)))
+    state,reason,reference=stored_voice_filter(settings,mic_id,time.time())
+    if reference is not None:
+        session.level_reference=level_reference_from(reference.level_db,session.speaker_sensitivity)
+    else:
+        session.level_reference=None
+        session.level_endpoint_on=False
+    log.info("speaker.filter %s reason=%s microphone_known=%s",state,reason,mic_id is not None)
+    margin=session.level_reference.margin_db if session.level_reference is not None else None
+    await sender.text(
+        "speaker.filter",configuration_id=session.accepted_configuration_id,
+        state=state,reason=reason,margin_db=margin,
+        measured_at=(
+            datetime.fromtimestamp(reference.measured_at,tz=timezone.utc).isoformat()
+            if reference is not None else None),
+    )
+
+
+def _run_paused(session:ListenerSession)->bool:
+    curated=session.curated_protocol_session
+    return curated is not None and getattr(curated,"workflow_status",None)=="paused"
+
+
+async def _report_speech_drop(
+    session:ListenerSession,sender:LockedSender,*,reason:str,turn_id:int|None,
+    generation:int|None,duration_ms:int|None,level_db:float|None,
+    during_playback:bool=False,
+)->None:
+    """Record, show and -- the second time -- say that a sound was dropped (decision 3).
+
+    The log and the metrics keep the reason code, the level (dB) and the
+    length (ms) only, never the sound or any words (AGENTS.md rule 8). While
+    the run is paused nothing is said or shown beyond the pause band
+    (decision 7).
+    """
+
+    reason=str(reason or "unknown")[:100]
+    paused=_run_paused(session)
+    level=round(float(level_db),1) if isinstance(level_db,(int,float)) and math.isfinite(level_db) else None
+    log.info(
+        "speech.dropped reason=%s duration_ms=%s level_db=%s paused=%s during_playback=%s turn_id=%s",
+        reason,duration_ms,level,paused,during_playback,turn_id)
+    _record_workspace_metric(
+        category="voice",metric_name="speech_dropped",
+        dimensions={"status":"rejected","reason_code":reason},
+    )
+    await sender.text(
+        "speech.dropped",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,reason=reason,
+        duration_ms=duration_ms,level_db=level,paused=paused,
+        during_playback=during_playback,
+        notice=None if paused else DROP_SCREEN_WORDS,
+    )
+    if paused:
+        return
+    if session.note_drop(reason,during_playback=during_playback):
+        session.track_visual_task(asyncio.create_task(_say_server_words(
+            session,sender,DROP_NOTICE_WORDS,kind="drop_notice")))
+
+
+async def _report_level_drop(
+    session:ListenerSession,sender:LockedSender,level_db:float|None,
+)->None:
+    """A voice the filter dropped may move its line (decision 3); said and shown when it does."""
+
+    action=session.note_level_drop(level_db)
+    if action is None:
+        return
+    reference=session.level_reference
+    log.info(
+        "speaker.filter %s margin_db=%s level_db=%s",action,
+        round(reference.margin_db,1) if reference is not None else None,
+        round(level_db,1) if level_db is not None else None)
+    _record_workspace_metric(
+        category="voice",metric_name="speaker_filter",
+        dimensions={"status":action,"reason_code":"wearer_dropped"},
+    )
+    await sender.text(
+        "speaker.filter",configuration_id=session.accepted_configuration_id,
+        state=action,reason="wearer_dropped",
+        margin_db=round(reference.margin_db,1) if reference is not None else None,
+        words=SPEAKER_FILTER_WORDS[action],
+    )
+    if not _run_paused(session):
+        session.track_visual_task(asyncio.create_task(_say_server_words(
+            session,sender,SPEAKER_FILTER_WORDS[action],kind="speaker_filter")))
+
+
+#: Lane SP1, decision 3: the room's condition after this many ignored voices
+#: in this many seconds, at most once in the gap. Since lane HEAR, decision 9
+#: (2026-10-25), it is recorded only -- no question during a run.
 AMBIENT_SUGGESTION_IGNORED_COUNT=3
 AMBIENT_SUGGESTION_WINDOW_SECONDS=60.0
 AMBIENT_SUGGESTION_GAP_SECONDS=600.0
-AMBIENT_SUGGESTION_WORDS="주변이 시끄러워 보여요. 시끄러운 곳 모드로 바꿀까요?"
+#: Lane HEAR, decision 9: the room's noise floor is logged as a number this often while listening.
+NOISE_FLOOR_RECORD_SECONDS=60.0
 
 
-async def _suggest_noisy_mode(
-    sender:LockedSender,session:ListenerSession,*,
-    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
-)->bool:
-    """Say "시끄러운 곳 모드로 바꿀까요?" once the session is quiet; the next turn answers it.
+def _record_noise_condition(session:ListenerSession,kind:str)->None:
+    """Record, never say, that the room is loud (lane HEAR, decision 9).
 
-    A suggestion only (decision 3): the mode changes on the experimenter's
-    yes, through the rules' own yes/no reading, never here.
+    "other_voices": three voices taken for other people's within a minute
+    (lane SP1, decision 3); "floor_near_line": the noise floor near the
+    wearer's line (lane SP2, decision 2). Each used to make the server ask
+    "시끄러운 곳 모드로 바꿀까요?" in the middle of a run. The room is now
+    chosen once before the start; this keeps codes and numbers only, at
+    most once in AMBIENT_SUGGESTION_GAP_SECONDS.
     """
 
-    curated=session.curated_protocol_session
-    if curated is None or not session.noisy_mode_suggestion_due():
-        return False
     session.ambient_suggested_at=session.clock()
-    turn_id=await _say_server_words(
-        session,sender,AMBIENT_SUGGESTION_WORDS,kind="ambient_suggestion",sleep=sleep)
-    if turn_id is None:
-        return False
-    curated.open_ambient_suggestion()
+    floor=session.noise_floor.level_db()
+    reference=session.level_reference
     log.info(
-        "ambient suggestion said turn_id=%s ignored_in_window=%d",
-        turn_id,session.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS))
-    return True
+        "noise.condition kind=%s floor_db=%s reference_db=%s ignored_in_window=%d",
+        kind,round(floor,1) if floor is not None else None,
+        round(reference.reference_db,1) if reference is not None else None,
+        session.ignored_speech_in_last(AMBIENT_SUGGESTION_WINDOW_SECONDS))
+    _record_workspace_metric(
+        category="voice",metric_name="noise_condition",
+        dimensions={"status":"recorded","reason_code":kind},
+    )
+
+
+def _record_noise_floor(session:ListenerSession)->None:
+    """The room's noise floor as a number, once a minute while listening (decision 9)."""
+
+    floor=session.noise_floor.level_db()
+    if floor is None:
+        return
+    now=session.clock()
+    last=getattr(session,"noise_floor_recorded_at",None)
+    if last is not None and now-last<NOISE_FLOOR_RECORD_SECONDS:
+        return
+    session.noise_floor_recorded_at=now
+    log.info("noise.floor floor_db=%.1f",floor)
+    _record_workspace_metric(
+        category="voice",metric_name="noise_floor_db",metric_value=float(floor),
+        dimensions={"status":"recorded"},
+    )
 
 
 #: Lane SP2, decision 1: the level ends utterances only while the room's
@@ -10891,35 +11418,6 @@ LEVEL_ENDPOINT_FLOOR_GAP_DB=8.0
 #: 0.47-0.70, while a fan, a centrifuge or a quiet room gave 0.02-0.09 (lane
 #: SP2 report): the line sits in the empty gap between them, a quarter.
 ROOM_VOICED_SHARE=0.25
-#: Lane SP2, decision 2: said once the floor is that near (room_near_the_line).
-NOISE_FLOOR_SUGGESTION_WORDS="주변이 시끄러워요. 붐 마이크나 시끄러운 곳 모드를 권해요."
-
-
-async def _suggest_noise_floor(
-    sender:LockedSender,session:ListenerSession,*,
-    sleep:Callable[[float],Awaitable[Any]]=asyncio.sleep,
-)->bool:
-    """Say "주변이 시끄러워요 — 붐 마이크나 시끄러운 곳 모드를 권해요" once the session is quiet.
-
-    A suggestion only (lane SP2, decision 2): no question is opened and no
-    setting changes; the experimenter changes the mode by voice or on the
-    settings screen. Shares lane SP1's gap of ten minutes.
-    """
-
-    if not session.noise_floor_suggestion_due():
-        return False
-    session.ambient_suggested_at=session.clock()
-    floor=session.noise_floor.level_db()
-    reference=session.level_reference
-    turn_id=await _say_server_words(
-        session,sender,NOISE_FLOOR_SUGGESTION_WORDS,kind="ambient_suggestion",sleep=sleep)
-    if turn_id is None:
-        return False
-    log.info(
-        "noise floor suggestion said turn_id=%s floor_db=%s reference_db=%s",
-        turn_id,round(floor,1) if floor is not None else None,
-        round(reference.reference_db,1) if reference is not None else None)
-    return True
 
 
 async def _timer_notice_tick(
@@ -11434,7 +11932,41 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         },
     )
     transcript=transcription.text
+
+    def persist_dropped(reason:str)->None:
+        """Lane HEAR: with the opt-in recording on, a dropped turn's sound is kept too."""
+
+        try:
+            if not SttDiagnosticSettings.from_environment().enabled:
+                return
+            try:
+                endpoint_label=stt_endpoint_label()
+            except (KeyError,ConfigurationError):
+                endpoint_label="unknown"
+            persist_stt_diagnostic(
+                clean_path(source_pcm),
+                {
+                    "configuration_id":session.accepted_configuration_id,
+                    "session_id":session.session_id,"turn_id":turn_id,"generation":generation,
+                    "input_sample_rate":16000,"frame_count":input_frames,
+                    "voiced_frame_count":voiced_frames,"duration_ms":input_frames*20,
+                    "endpoint_reason":f"dropped_{reason}","stt_endpoint":endpoint_label,
+                    "language":stt_language,"keyterms":list(stt_keyterms),
+                    "audio_origin":transcription_context.audio_origin,
+                    "response_status":transcription.response_status,
+                    "response_duration_seconds":transcription.duration_seconds,
+                    "word_count":len(transcription.words),
+                    "detected_language":transcription.detected_language,
+                    "raw_transcript":transcription.text,
+                    "browser_audio_constraints":dict(session.client_audio_constraints),
+                },
+                identity=f"session-{session.session_id}-turn-{turn_id}-g-{generation}",
+            )
+        except (OSError,ValueError):
+            log.warning("opt-in STT diagnostic persistence failed")
+
     if not transcript.strip():
+        persist_dropped("empty_transcript")
         if session.reject_empty_transcript(turn_id):
             _record_workspace_metric(
                 category="voice",metric_name="command_failure",
@@ -11442,6 +11974,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             )
             await sender.text("speech.rejected",turn_id=turn_id,reason="empty_transcript",voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20)
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
+            await _report_speech_drop(
+                session,sender,reason="empty_transcript",turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
         return
     committed_at=session.turn_committed_at.get(turn_id)
     echo=(
@@ -11469,45 +12004,78 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "state.changed",state=session.state.value,turn_id=turn_id,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
+            await _report_speech_drop(
+                session,sender,reason="self_echo",turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
         return
     # A recognized emergency uses the one fixed-response gate before soft
     # admission or calibration can consume it. Empty input and self-echo
     # are already refused above; this never authorizes a state change.
     emergency=recognize_emergency(transcript)
-    if session.llm_router_settings.router_first:
-        # Lane RA, decision (d): words cut by the endpoint. A fragment held
-        # by the turn before this one is joined with these words when they
-        # started within the join window; a turn whose words end in an
-        # unfinished Korean ending waits for the words that follow and, when
-        # they come and supersede it, is not routed at all.
-        held=session.take_held_fragment(
-            turn_id,generation,
-            speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
-        )
-        if held is not None and emergency is None:
-            transcript=f"{held} {transcript}".strip()
-            emergency=recognize_emergency(transcript)
-            await current_text(
-                "turn.fragment_joined",turn_id=turn_id,text=transcript,
-                fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
-        if (
-            committed_at is not None
-            and emergency is None
-            and incomplete_fragment(transcript)
-        ):
-            session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
-            deadline=committed_at+FRAGMENT_HOLD_SECONDS
-            try:
-                while session.clock()<deadline:
-                    if not session.is_current(turn_id,generation):
-                        # The words that follow took the turn; they join this fragment.
-                        return
-                    await asyncio.sleep(0.05)
-            except asyncio.CancelledError:
-                # Superseded: the fragment stays held for the turn that follows.
-                raise
-            if not session.release_fragment(turn_id,generation):
-                return
+    if emergency is None and _run_paused(session) and not is_paused_resume_utterance(transcript):
+        # Lane HEAR, decision 7: while paused only a resume word is heard;
+        # anything else gets no sound -- no language question, no asking
+        # back, no drop notice. The pause band on the screen says why.
+        log.info("speech.paused_not_resume turn_id=%s duration_ms=%s",turn_id,input_frames*20)
+        if session.reject_empty_transcript(turn_id):
+            # The page puts its "듣는 중" card away on speech.rejected.
+            await sender.text(
+                "speech.rejected",turn_id=turn_id,generation=generation,reason="paused",
+                voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20,
+            )
+            await sender.text(
+                "state.changed",state=session.state.value,turn_id=turn_id,
+                cooldown_ms=session.detector.config.cooldown_ms,
+            )
+            await _report_speech_drop(
+                session,sender,reason="paused",turn_id=turn_id,generation=generation,
+                duration_ms=input_frames*20,level_db=voiced_level_db)
+        return
+    # Lane HEAR, decision 4: on the rules path as well as the router's.
+    # Lane RA, decision (d): words cut by the endpoint. A fragment held
+    # by the turn before this one is joined with these words when they
+    # started within the join window; a turn whose words end in an
+    # unfinished Korean ending waits for the words that follow and, when
+    # they come and supersede it, is not routed at all.
+    held=session.take_held_fragment(
+        turn_id,generation,
+        speech_started_at=(committed_at-input_frames*0.02) if committed_at is not None else None,
+    )
+    if held is not None and emergency is None:
+        transcript=f"{held} {transcript}".strip()
+        emergency=recognize_emergency(transcript)
+        await current_text(
+            "turn.fragment_joined",turn_id=turn_id,text=transcript,
+            fragment=held,window_seconds=FRAGMENT_JOIN_SECONDS)
+    if (
+        committed_at is not None
+        and emergency is None
+        and incomplete_fragment(transcript)
+    ):
+        session.hold_fragment(turn_id,generation,transcript,ended_at=committed_at)
+        deadline=committed_at+FRAGMENT_HOLD_SECONDS
+        # Lane HEAR, decision 4: words already under way when the hold
+        # would end are waited for, up to one utterance's length; the
+        # wait is bounded on the wall clock as well as the session's.
+        longest=session.detector.config.maximum_utterance_frames*FRAME_MS/1000
+        polls=int((FRAGMENT_HOLD_SECONDS+longest)/FRAGMENT_HOLD_POLL_SECONDS)+1
+        plain_polls=int(FRAGMENT_HOLD_SECONDS/FRAGMENT_HOLD_POLL_SECONDS)+1
+        try:
+            for poll in range(polls):
+                if not session.is_current(turn_id,generation):
+                    # The words that follow took the turn; they join this fragment.
+                    return
+                following=session.interrupt_candidate_open(turn_id,generation)
+                if (session.clock()>=deadline or poll>=plain_polls) and not following:
+                    break
+                if session.clock()>=deadline+longest:
+                    break
+                await asyncio.sleep(FRAGMENT_HOLD_POLL_SECONDS)
+        except asyncio.CancelledError:
+            # Superseded: the fragment stays held for the turn that follows.
+            raise
+        if not session.release_fragment(turn_id,generation):
+            return
     if emergency is not None:
         if not await current_text("transcript",turn_id=turn_id,text=transcript):
             return
@@ -11584,6 +12152,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "state.changed",state=session.state.value,turn_id=turn_id,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
+            await _report_speech_drop(
+                session,sender,reason=str(reason),turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
         return
     if session.calibration_pending:
         # Lane SP1, decision 1: the sentence read to measure the wearer's
@@ -11602,6 +12173,23 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     )
     if admission.correction_class is not None:
         transcript = admission.admitted_text
+    if admission.mismatch_status=="unclear":
+        # Lane HEAR, decision 8: Latin letters for Korean speech -- a turn
+        # misheard, not another language: dropped and shown, not asked about.
+        persist_dropped("language_unclear")
+        if session.reject_empty_transcript(turn_id):
+            await sender.text(
+                "speech.rejected",turn_id=turn_id,generation=generation,reason="language_unclear",
+                voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20,
+            )
+            await sender.text(
+                "state.changed",state=session.state.value,turn_id=turn_id,
+                cooldown_ms=session.detector.config.cooldown_ms,
+            )
+            await _report_speech_drop(
+                session,sender,reason="language_unclear",turn_id=turn_id,
+                generation=generation,duration_ms=input_frames*20,level_db=voiced_level_db)
+        return
     cleaned_source=clean_path(source_pcm)
     diagnostic_wav=pcm_to_wav(cleaned_source)
     stt_diagnostic_metadata={
@@ -11697,6 +12285,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "language_clarification",
         )
         return
+    # Lane HEAR, decision 3: words were heard; the drops before them no longer count.
+    session.note_heard()
     if not await current_text("transcript",turn_id=turn_id,text=transcript):
         return
     if session.curated_protocol_session is not None:
@@ -11754,6 +12344,15 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         session.last_confirmed_language=turn_language
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
+    if voice_calibration_asked(transcript) and session.curated_protocol_session is not None:
+        # Lane HEAR, decision 1: not during a run; it is done in the settings.
+        await current_text(
+            "speaker.calibration",turn_id=turn_id,state="refused",reason="settings_only",
+            words=VOICE_CALIBRATION_IN_RUN_WORDS,sensitivity=session.speaker_sensitivity)
+        log.info("voice calibration refused by voice reason=settings_only turn_id=%s",turn_id)
+        await finish_blocked_voice(
+            VOICE_CALIBRATION_IN_RUN_WORDS,"voice_calibration",outcome="complete")
+        return
     if voice_calibration_asked(transcript):
         # Lane SP1, decision 1: "목소리 다시 맞춰 줘" -- the next sentence
         # measures the wearer again. A front rule of the server's: read-only.
@@ -14107,6 +14706,14 @@ async def voice_socket(websocket:WebSocket):
                             item,"stale_candidate")
                         if rejected is not None:
                             listener_events.append(rejected)
+                        else:
+                            # Lane HEAR, decision 3: words the turn could no
+                            # longer take are a drop like any other, not lost in silence.
+                            await _report_speech_drop(
+                                session,sender,reason="stale_candidate",
+                                turn_id=item.turn_id,generation=item.generation,
+                                duration_ms=item.result.total_frames*20,
+                                level_db=item.result.voiced_level_db,during_playback=True)
                         continue
                     end=next(
                         event_item for event_item in committed
@@ -14155,14 +14762,36 @@ async def voice_socket(websocket:WebSocket):
                             fields.get("reference_db"),fields.get("margin_db"),
                             item.result.voiced_frames,item.result.total_frames,
                             fields.get("during_playback"),item.turn_id)
+                        # Lane HEAR, decision 3: "reason" is no dimension the
+                        # analytics store takes, so this was never recorded.
                         _record_workspace_metric(
                             category="voice",metric_name="speech_ignored",
-                            dimensions={"reason":str(fields["reason"])[:100]},
+                            dimensions={"reason_code":str(fields["reason"])[:100]},
                         )
+                        await _report_speech_drop(
+                            session,sender,reason=str(fields["reason"] or "other_speaker_level"),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,
+                            level_db=fields.get("level_db"),
+                            during_playback=bool(fields.get("during_playback")))
+                        await _report_level_drop(session,sender,fields.get("level_db"))
                         if session.noisy_mode_suggestion_due():
-                            # Lane SP1, decision 3: three in a minute -- suggest the mode.
-                            session.track_visual_task(asyncio.create_task(
-                                _suggest_noisy_mode(sender,session)))
+                            # Lane HEAR, decision 9: three in a minute -- recorded, not asked.
+                            _record_noise_condition(session,"other_voices")
+                    if item.kind=="speech.rejected":
+                        # Lane HEAR, decision 3: the detector's own drop (too short).
+                        await _report_speech_drop(
+                            session,sender,
+                            reason=str(fields["reason"] or "minimum_voiced_frames"),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,level_db=None)
+                    elif item.kind=="barge_in_rejected" and fields["reason"]!="other_speaker_level":
+                        # Heard while an answer was coming: it goes on, nothing is said.
+                        await _report_speech_drop(
+                            session,sender,reason=str(fields["reason"] or "barge_in_rejected"),
+                            turn_id=item.turn_id,generation=item.generation,
+                            duration_ms=item.result.total_frames*20,
+                            level_db=item.result.voiced_level_db,during_playback=True)
                     if (
                         item.kind=="barge_in_rejected"
                         and session.resume_deferred_playback_end(
@@ -14224,9 +14853,9 @@ async def voice_socket(websocket:WebSocket):
                                     accepted["context"] if accepted else None),
                                 voiced_level_db=item.result.voiced_level_db))
                 if session.noise_floor_suggestion_due():
-                    # Lane SP2, decision 2: the room is near the wearer's level.
-                    session.track_visual_task(asyncio.create_task(
-                        _suggest_noise_floor(sender,session)))
+                    # Lane HEAR, decision 9: the room is near the wearer's level -- recorded, not said.
+                    _record_noise_condition(session,"floor_near_line")
+                _record_noise_floor(session)
                 continue
             if message.get("text") is None:continue
             if (ping:=_client_ping(message["text"])) is not None:
@@ -14665,6 +15294,15 @@ async def voice_socket(websocket:WebSocket):
                         ),
                     ))
                     continue
+                # Lane HEAR, decision 5: the voice saved before this start --
+                # the page keeps one connection open across starts, so the
+                # choice read when it opened may be an older one.
+                try:
+                    start_voice_settings=await asyncio.to_thread(_load_experimenter_settings)
+                except Exception:  # noqa: BLE001 - the voice already chosen then
+                    start_voice_settings=None
+                if start_voice_settings is not None:
+                    session.tts_voice=_agent_voice_id(start_voice_settings)
                 ready_fields={
                     "configuration_id":session.accepted_configuration_id,
                     "generation":session.generation,
@@ -14673,6 +15311,8 @@ async def voice_socket(websocket:WebSocket):
                     "input_language":session.accepted_input_language.value,
                     "protocol_id":session.accepted_protocol_id,
                     "research_capabilities":research_capabilities,
+                    "agent_voice":session.tts_voice or "default",
+                    "voice_id":session.tts_voice or _session_voice_fallback(),
                 }
                 if session.accepted_protocol_id is not None:
                     ready_fields["revision_id"]=session.accepted_revision_id
@@ -14879,6 +15519,13 @@ async def voice_socket(websocket:WebSocket):
                     if task and not task.done():
                         await _finish_all_research_operations(sender,session,"cancelled")
                         task.cancel()
+                    if changed:
+                        # Lane HEAR, decision 7: the guidance playing stops with the pause.
+                        stopped=session.stop_turn_for_pause()
+                        if stopped is not None:
+                            await websocket.send_text(event(
+                                "playback.stop",configuration_id=session.accepted_configuration_id,
+                                turn_id=stopped[0],generation=stopped[1],reason="paused"))
                     _record_screen_history(
                         session,screen_before,control="pause",changed=changed)
                     if changed:
@@ -14961,6 +15608,15 @@ async def voice_socket(websocket:WebSocket):
                     log.info(
                         "client.voice_calibration rejected action=%s configuration_id=%s generation=%s",
                         control["action"],control["configuration_id"],control["generation"])
+                    continue
+                if control["action"]=="start" and session.curated_protocol_session is not None:
+                    # Lane HEAR, decision 1: not during a run -- in the settings.
+                    log.info("voice calibration refused on screen reason=settings_only")
+                    await websocket.send_text(event(
+                        "speaker.calibration",configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,state="refused",reason="settings_only",
+                        words=VOICE_CALIBRATION_IN_RUN_WORDS,
+                        sensitivity=session.speaker_sensitivity))
                     continue
                 if control["action"]=="skip":
                     skipped=session.calibration_pending
@@ -15056,6 +15712,10 @@ async def voice_socket(websocket:WebSocket):
                     control["configuration_id"],control["generation"],
                     control["sample_rate"],
                 )
+                # Lane HEAR, decision 2: the run's microphone is known now, and
+                # with it whether this run filters by level.
+                await _apply_stored_voice_filter(
+                    sender,session,_audio_ready_mic_id(message["text"]))
                 if restored_connection:
                     # Lane NET, decision 4: a reconnection continues the run;
                     # it is not greeted as a new session.

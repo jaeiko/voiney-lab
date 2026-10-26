@@ -345,9 +345,10 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
 
         socket, _ = self._session(scenario)
         for turn_id in (3, 4):
-            decision = socket.for_turn(turn_id, "turn.route_decision")[-1]
-            self.assertEqual(decision["action"], "pause")
-            self.assertFalse(decision["state_mutation"])
+            # Lane HEAR, decision 7 (2026-10-25): a paused run routes only a
+            # resume word; the others are dropped unanswered.
+            self.assertEqual(socket.for_turn(turn_id, "turn.route_decision"), [])
+            self.assertEqual([m["reason"] for m in socket.for_turn(turn_id, "speech.dropped")], ["paused"])
         self.assertEqual(seen["paused"]["step_index"], 0)
         self.assertEqual(seen["paused"]["pause_state"], "paused")
         self.assertEqual(seen["paused"]["durable_status"], "paused")
@@ -361,6 +362,10 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
 
     def test_the_paused_notice_reaches_the_socket_and_the_turn_ends(self):
         """A silent turn still sends its reply and turn.done, then ends.
+
+        Lane HEAR, decision 7 (2026-10-25): words in a pause are no longer
+        answered at all; what stays is that the turn ends and the page hears
+        of it, so it does not sit on "절차 확인 중…".
 
         It used to end first: complete_without_playback cleared the active
         turn, so every later event was dropped as no longer current, and the
@@ -382,28 +387,13 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
             seen["active_turn_id"] = listener.active_turn_id
 
         socket, _ = self._session(scenario)
-        # Lane VOX: spoken, one audio segment per sentence.
-        self.assertEqual(
-            socket.for_turn(3, "turn.done")[-1]["segment_count"],
-            len(server_module.speech_sentences(
-                socket.for_turn(3, "reply.delta")[-1]["speech_text"])))
-        done = socket.for_turn(4, "turn.done")
-        self.assertEqual(len(done), 1)
-        self.assertEqual(done[0]["result_kind"], "pause")
-        self.assertEqual(done[0]["segment_count"], 0)
-        self.assertEqual(done[0]["output_frames"], 0)
-        reply = socket.reply(4)
-        self.assertIn("일시정지 상태입니다", reply)
-        self.assertIn("'다시 시작'이라고 말씀하시거나 재개 버튼을 눌러주세요", reply)
-        self.assertEqual(socket.for_turn(4, "reply.delta")[-1]["speech_text"], "")
-        self.assertEqual(socket.for_turn(4, "audio.complete")[-1]["segment_count"], 0)
-        self.assertEqual(socket.for_turn(4, "audio.replay.available"), [])
-        kinds = [item["type"] for item in socket.sent if item.get("turn_id") == 4]
-        self.assertLess(kinds.index("reply.complete"), kinds.index("turn.done"))
-        # The card is carried to its end state; there is no playback.ended
-        # for a silent turn, so nothing else would (2026-10-01, line M).
-        states = [item["state"] for item in socket.for_turn(4, "turn.state")]
-        self.assertEqual(states[-2:], ["checking_protocol", "complete"])
+        # Lane HEAR, decision 7 (2026-10-25): no word in a pause is answered,
+        # aloud or on the screen; the turn still ends, and the page is told
+        # (speech.rejected puts its card away), so it goes back to listening.
+        for turn_id in (3, 4):
+            self.assertEqual(socket.for_turn(turn_id, "reply.delta"), [])
+            self.assertEqual([m["reason"] for m in socket.for_turn(turn_id, "speech.rejected")], ["paused"])
+            self.assertEqual([m["reason"] for m in socket.for_turn(turn_id, "speech.dropped")], ["paused"])
         self.assertIsNone(seen["active_turn_id"])
         self.assertNotEqual(seen["state"], TurnState.PROCESSING)
 
@@ -440,9 +430,9 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
         self.assertIn("실험 세션을 저장하지 못해", socket.reply(3))
         self.assertEqual(seen["refused"]["workflow_status"], "paused")
         self.assertEqual(seen["refused"]["pause_state"], "paused")
-        decision = socket.for_turn(4, "turn.route_decision")[-1]
-        self.assertEqual(decision["action"], "pause")
-        self.assertFalse(decision["state_mutation"])
+        # Lane HEAR, decision 7: still paused, so "완료했어" is not routed.
+        self.assertEqual(socket.for_turn(4, "turn.route_decision"), [])
+        self.assertEqual([m["reason"] for m in socket.for_turn(4, "speech.dropped")], ["paused"])
         self.assertEqual(seen["end"]["step_index"], 0)
         self.assertEqual(seen["end"]["durable_status"], "paused")
         self.assertEqual(seen["end"]["durable"]["completed_steps"], [])

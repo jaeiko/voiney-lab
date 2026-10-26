@@ -164,10 +164,8 @@ await open(base());
 await press(body(),"마이크 켜서 확인");
 assert(opened===1,"the microphone was not opened once");
 assert(labels(body()).some(words=>words.includes("USB 마이크")),`mic words: ${labels(body())}`);
-const box=walk(body()).find(el=>el.id==="wizard-calibrate");
-assert(box&&box.checked===true,"the calibrate-at-start box is not on by default");
-box.checked=false;box.dispatch("change");
-assert(node("voice-calibration-at-start").checked===false,"the SP1 setting did not follow");
+// Lane HEAR, decision 1 (2026-10-25): the voice is not measured at the start of a run any more.
+assert(!walk(body()).some(el=>el.id==="wizard-calibrate"),"the calibrate-at-start box is still drawn");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 

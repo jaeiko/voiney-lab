@@ -613,6 +613,28 @@ class EndpointDetector:
             log.info("speech.resumed")
         return EndpointResult()
 
+    def prepend_utterance(self, frames: Iterable[bytes]) -> int:
+        """Put words already committed in front of the utterance under way (lane HEAR, decision 4).
+
+        A sentence the endpoint cut at a pause: the first half's frames go
+        before this second half's, with the VAD's verdict and level of each,
+        so the commit is one utterance -- one transcription of the whole
+        sentence. Only while speaking; returns the frames put in front.
+        """
+
+        if self.state is not TurnState.USER_SPEAKING:
+            raise ValueError("only an utterance under way takes words in front")
+        before: list[tuple[bytes, bool]] = []
+        for frame in frames:
+            if len(frame) != FRAME_BYTES:
+                continue
+            before.append((frame, bool(self.classifier(frame))))
+        levels = [frame_level_db(frame) if voiced else None for frame, voiced in before]
+        self._utterance[:0] = before
+        self._utterance_levels[:0] = levels
+        self.voiced_frames += sum(1 for _, voiced in before if voiced)
+        return len(before)
+
     def _track_level(self, loud: bool) -> None:
         """Count the level's quiet stretch; ``loud`` is a frame over the wearer's line."""
 

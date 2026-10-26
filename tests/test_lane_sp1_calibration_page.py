@@ -45,19 +45,22 @@ assert(node("voice-calibration-setting-status").textContent.includes("건너뜀"
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_the_buttons_ask_the_server_and_only_in_a_session(self) -> None:
+        # Lane HEAR, decision 1 (2026-10-25): no measurement during a run --
+        # "start" in a session is answered on the screen and nothing is sent;
+        # outside one the page measures through the settings' own route.
         result = run_page_script(SETUP + r"""
-assert(requestVoiceCalibration("start"),"a start in a running session was refused");
-let sent=lastSent();
-assert(sent.type==="client.voice_calibration"&&sent.action==="start"&&sent.configuration_id===71&&sent.generation===3,`start control: ${JSON.stringify(sent)}`);
-assert(node("voice-calibration-setting-status").textContent.includes("목소리를 맞출게요"),`start line: ${node("voice-calibration-setting-status").textContent}`);
+assert(!requestVoiceCalibration("start"),"a start in a running session was sent");
+assert(socket.sent.length===0,"a control went out in a run");
+assert(node("voice-calibration-setting-status").textContent.includes("실험이 끝난 뒤"),`start line: ${node("voice-calibration-setting-status").textContent}`);
 assert(requestVoiceCalibration("skip"),"a skip in a running session was refused");
-sent=lastSent();
+const sent=lastSent();
 assert(sent.type==="client.voice_calibration"&&sent.action==="skip"&&sent.configuration_id===71,`skip control: ${JSON.stringify(sent)}`);
 const before=socket.sent.length;
 sessionActive=false;
-assert(!requestVoiceCalibration("start"),"a start without a session was sent");
+let measured=0;measureVoiceInSettings=async()=>{measured+=1;return true;};
+assert(requestVoiceCalibration("start"),"a start outside a run was refused");
+assert(measured===1,"outside a run the page did not measure through the settings");
 assert(socket.sent.length===before,"a control went out without a session");
-assert(node("voice-calibration-setting-status").textContent.includes("세션을 시작한 뒤"),`no-session line: ${node("voice-calibration-setting-status").textContent}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 

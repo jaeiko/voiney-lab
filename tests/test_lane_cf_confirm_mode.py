@@ -301,7 +301,10 @@ class SettingsApiTests(unittest.TestCase):
                           "web_lookup": "on", "proactive_mode": "all",
                           "ambient_mode": "quiet", "speaker_sensitivity": "normal",
                           # Lane ON (2026-10-18): the agent's voice and the calibration outcome.
-                          "agent_voice": "default", "voice_calibration": "none"}})
+                          "agent_voice": "default", "voice_calibration": "none",
+                          # Lane HEAR (2026-10-25, decision 2): the level filter is off
+                          # until the person turns it on; the measured voice is none.
+                          "speaker_filter": "off", "voice_reference": "none"}})
         changed = self.call(server_module.put_experimenter_settings, {"confirm_mode": "quiet"})
         self.assertEqual(changed["settings"]["confirm_mode"], "quiet")
         self.assertEqual(

@@ -1,5 +1,9 @@
 """Lane SP2, decision 2 (2026-10-13): a room too loud for the level line is named, once.
 
+Lane HEAR, decision 9 (2026-10-25): it is no longer said during a run --
+the condition is recorded as a code and numbers only (``noise.condition
+kind=floor_near_line``); the tests of when it is due stand as they were.
+
 The listener measures the room's noise floor all session (see
 test_lane_sp2_noise_floor.py). When that floor comes near the wearer's
 measured level -- the point where the level line stops ending utterances,
@@ -26,10 +30,8 @@ from voiney_lab.server import (
     AMBIENT_SUGGESTION_GAP_SECONDS,
     AMBIENT_SUGGESTION_IGNORED_COUNT,
     LEVEL_ENDPOINT_FLOOR_GAP_DB,
-    NOISE_FLOOR_SUGGESTION_WORDS,
     ListenerSession,
-    LockedSender,
-    _suggest_noise_floor,
+    _record_noise_condition,
     voice_socket,
 )
 from voiney_lab.vad import (
@@ -161,10 +163,10 @@ class SuggestionDueTests(unittest.TestCase):
         self.assertFalse(session.noise_floor_suggestion_due(), "lane SP1's suggestion just now")
         session.clock.now += AMBIENT_SUGGESTION_GAP_SECONDS + 1
         self.assertTrue(session.noise_floor_suggestion_due())
-        # The floor's suggestion holds lane SP1's back the same way.
-        socket = _Socket()
-        with patch("voiney_lab.server.synthesize", return_value=b"\0\0" * 320 * 10):
-            self.assertTrue(asyncio.run(_suggest_noise_floor(LockedSender(socket), session)))
+        # The floor's record holds lane SP1's back the same way (lane HEAR,
+        # decision 9: recorded, no longer said).
+        with patch("voiney_lab.server._record_workspace_metric"):
+            _record_noise_condition(session, "floor_near_line")
         for _ in range(AMBIENT_SUGGESTION_IGNORED_COUNT):
             session.ignored_speech_at.append(session.clock())
         self.assertFalse(session.noisy_mode_suggestion_due())
@@ -201,7 +203,7 @@ class _Socket:
 
 
 class SuggestTests(unittest.TestCase):
-    def test_the_suggestion_is_said_as_the_servers_words_and_changes_nothing(self) -> None:
+    def test_the_condition_is_recorded_as_numbers_and_nothing_is_said(self) -> None:
         session = ListenerSession(clock=Clock())
         session.start()
         session.accept_configuration(41, "cascade", "ko", "lane-sp2")
@@ -209,22 +211,15 @@ class SuggestTests(unittest.TestCase):
         session.set_level_reference(REFERENCE_DB)
         for _ in range(NOISE_FLOOR_MINIMUM_FRAMES):
             session.noise_floor.add(-33.0)
-        socket = _Socket()
-        with patch("voiney_lab.server.synthesize", return_value=b"\0\0" * 320 * 10), self.assertLogs(
+        with patch("voiney_lab.server._record_workspace_metric") as metric, self.assertLogs(
             "voiney_lab", level="INFO",
         ) as logs:
-            said = asyncio.run(_suggest_noise_floor(LockedSender(socket), session))
-        self.assertTrue(said)
-        words = next(m for m in socket.text if m["type"] == "server.words")
-        self.assertEqual((words["words_kind"], words["text"]), ("ambient_suggestion", NOISE_FLOOR_SUGGESTION_WORDS))
+            _record_noise_condition(session, "floor_near_line")
         self.assertEqual(session.ambient_suggested_at, session.clock())
         self.assertFalse(session.curated_protocol_session.ambient_suggestion_open, "no question is opened")
-        self.assertEqual(session.curated_protocol_session.ambient_mode, "quiet", "suggested only")
-        self.assertIn("noise floor suggestion said", "\n".join(logs.output))
-        self.assertIn("floor_db=-32.8 reference_db=-28.0", "\n".join(logs.output))
-        with patch("voiney_lab.server.synthesize", return_value=b"\0\0" * 320) as tts:
-            self.assertFalse(asyncio.run(_suggest_noise_floor(LockedSender(socket), session)))
-        tts.assert_not_called()
+        self.assertEqual(session.curated_protocol_session.ambient_mode, "quiet", "nothing changes")
+        self.assertIn("noise.condition kind=floor_near_line floor_db=-32.8 reference_db=-28.0", "\n".join(logs.output))
+        self.assertEqual(metric.call_args.kwargs["dimensions"]["reason_code"], "floor_near_line")
 
 
 class SocketTests(unittest.TestCase):
@@ -253,11 +248,12 @@ class SocketTests(unittest.TestCase):
             session.set_level_reference(reference_db)
         return session
 
-    def test_a_room_near_the_wearers_level_is_named(self) -> None:
-        sent, stt = self._run(self.session(ROOM_DB + 5.0), NOISE_FLOOR_MINIMUM_FRAMES + 50)
-        said = [m for m in sent if m["type"] == "server.words"]
-        self.assertEqual(len(said), 1)
-        self.assertEqual(said[0]["text"], NOISE_FLOOR_SUGGESTION_WORDS)
+    def test_a_room_near_the_wearers_level_is_recorded_not_said(self) -> None:
+        # Lane HEAR, decision 9 (2026-10-25): nothing is said during a run.
+        with self.assertLogs("voiney_lab", level="INFO") as logs:
+            sent, stt = self._run(self.session(ROOM_DB + 5.0), NOISE_FLOOR_MINIMUM_FRAMES + 50)
+        self.assertEqual([m for m in sent if m["type"] == "server.words"], [])
+        self.assertIn("noise.condition kind=floor_near_line", "\n".join(logs.output))
         stt.assert_not_called()
 
     def test_a_session_that_measured_nothing_is_not_told(self) -> None:
