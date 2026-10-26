@@ -11079,10 +11079,10 @@ class CuratedProtocolSession:
             # the value as.
             "name": self._timer_name(self._timer_duration_seconds, bound, "ko"),
             "bound": bound,
-            "paused_at": (
-                datetime.fromtimestamp(paused_at, tz=timezone.utc).isoformat()
-                if paused_at is not None else None
-            ),
+            # Lane HEAR2, decision 3: when it was paused, only while paused (a
+            # running timer's status keeps exactly its keys of before).
+            **({"paused_at": datetime.fromtimestamp(paused_at, tz=timezone.utc).isoformat()}
+               if paused_at is not None else {}),
         }
 
     # --- Lane VT, decisions 1-2: the step timer told before it is asked -------
