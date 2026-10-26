@@ -26,7 +26,8 @@ class DroppedSpeechPageTests(unittest.TestCase):
         result = run_page_script(SETUP + r"""
 await say(drop("empty_transcript"));
 assert(!node("run-heard").hidden,"the notice beside the microphone is hidden");
-assert(node("run-heard").textContent==="잘 안 들렸어요",`notice: ${node("run-heard").textContent}`);
+// Lane HEAR2 decision 4: the reason stands beside the notice ("잘 안 들렸어요 · 받아 적은 말이 없어요").
+assert(node("run-heard").textContent.startsWith("잘 안 들렸어요"),`notice: ${node("run-heard").textContent}`);
 const list=node("ignored-speech-list");
 assert(!node("ignored-speech").hidden,"the folded list stayed hidden");
 assert(list.children[0].textContent.startsWith("잘 안 들렸어요 · 받아 적은 말이 없어요"),`line: ${list.children[0].textContent}`);

@@ -73,7 +73,8 @@ recordCalibrationPcm=async()=>({pcm:new Int16Array(160),micId:null});
 globalThis.btoa=value=>Buffer.from(value,"binary").toString("base64");
 globalThis.fetch=async()=>json({detail:{code:"too_little_voice"}},false);
 assert(!(await measureVoiceInSettings()),"a refused measurement counted");
-assert(node("voice-calibration-setting-status").textContent.includes("다시 맞춰 주세요"),`line: ${node("voice-calibration-setting-status").textContent}`);
+// Lane HEAR2 decision 6 changed the words: the reason and what to do ("조용한 곳에서 문장을 끝까지 읽어 주세요").
+assert(node("voice-calibration-setting-status").textContent.includes("조용한 곳에서 문장을 끝까지 읽어 주세요"),`line: ${node("voice-calibration-setting-status").textContent}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
