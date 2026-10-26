@@ -118,6 +118,7 @@
 | 2026-10-23 | UI4는 파일럿 전에 필요한 화면 연결·결함만 한다 | 서버 기능 전부를 화면에 늘리거나 낮은 우선순위 화면을 모두 고치는 범위가 아니다. 실제 반영은 병합 코드·USER_GUIDE 기준 | `docs/USER_GUIDE.md`, `docs/FEATURES.md` F19 |
 | 2026-10-23 | 파일럿 기준판은 **원래 폴더 조건 A 확인 → 사람의 음성 시험 → 사람의 태그·main 반영** 순서다 | 조건 B만 확인한 음성·서버 변경은 dev 병합 뒤 태그 전에 조건 A로 확인한다. dev 자동 배포가 음성 시험이나 기준판 지정은 아니다 | `AGENTS.md`, `docs/PILOT_GUIDE.md` 8절 |
 | 2026-10-23 | 파일럿 문서 넷을 PILOT_GUIDE 하나로 합치고 나머지 셋은 보관한다. PILOT_COMPARISON은 독립된 비교 절차로 둔다 | 로그인·안전 확인·데이터 처리·HTTPS·참가자 안내를 서로 다른 전제로 읽지 않게 한다 | `docs/PILOT_GUIDE.md`, `docs/DOCUMENTATION_INDEX.md` |
+| 2026-10-25 | `node --test` 결과는 출력 모양(TAP `# fail 0`·spec `ℹ fail 0`)과 상관없이 종료 코드와 마지막 요약의 수로 판정하고, CI 의 Node 버전은 고정하지 않는다(줄 CIFIX) | GitHub 실행기 ubuntu-26.04 의 Node 24 가 spec 으로 찍어 node 시험 43개가 모두 통과했는데도 pytest 가 실패했고, 그 때문에 dev CI 와 dev 자동 배포가 멈췄다. 판정이 모양을 가리지 않으므로 버전 고정은 필요 없다 | `tests/test_native_bridge.py` |
 
 ## 11. 병합된 서버·기록·화면 결정
 
