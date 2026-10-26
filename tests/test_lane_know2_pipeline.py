@@ -349,6 +349,82 @@ class SplitUploadTests(unittest.TestCase):
         self.assertEqual(calls, [("create", ["a:1"]), ("add", ["a:2"])])
         self.assertEqual((first["left"], second["left"]), (1, 0))
 
+    def test_an_upload_that_fails_halfway_remembers_what_was_sent(self) -> None:
+        """A batch Moss took is not sent again: the free plan counts it once."""
+
+        model = pk.EMBEDDING_MODELS["multilingual-e5-small"]
+        calls: list = []
+
+        class Recorder:
+            def __init__(self, exists, fail_add=False):
+                self.exists, self.fail_add = exists, fail_add
+
+            async def get_index(self, name):
+                if not self.exists:
+                    raise RuntimeError("not found")
+
+            async def create_index(self, name, docs, model_id):
+                calls.append(("create", [doc["id"] for doc in docs]))
+
+            async def add_docs(self, name, docs, options):
+                if self.fail_add:
+                    raise RuntimeError("network")
+                calls.append(("add", [doc["id"] for doc in docs]))
+
+            async def close(self):
+                pass
+
+        def run(runtime, client):
+            return asyncio.run(pk.upload(RECORDS, pk.Glossary.empty(), index_name="idx", model_id="x",
+                                         project_id="p", project_key="k", runtime_dir=runtime, embedding=model,
+                                         client_factory=lambda pid, key: client, log=lambda line: None))
+
+        batch = pk.UPLOAD_BATCH
+        pk.UPLOAD_BATCH = 1
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                runtime = Path(temporary)
+                (runtime / "bundle").mkdir()
+                pk.embed(RECORDS, pk.Glossary.empty(), runtime_dir=runtime, model=model,
+                         embedder=FakePassages(model.dims), log=lambda line: None)
+                with self.assertRaises(RuntimeError):
+                    run(runtime, Recorder(False, fail_add=True))
+                second = run(runtime, Recorder(True))
+        finally:
+            pk.UPLOAD_BATCH = batch
+        self.assertEqual(calls, [("create", ["a:1"]), ("add", ["a:2"])])
+        self.assertEqual((second["changed"], second["left"]), (1, 0))
+
+    def test_a_new_index_does_not_count_what_an_old_one_was_sent(self) -> None:
+        model = pk.EMBEDDING_MODELS["multilingual-e5-small"]
+        calls: list = []
+
+        class Recorder:
+            async def get_index(self, name):
+                raise RuntimeError("not found")  # deleted between the runs
+
+            async def create_index(self, name, docs, model_id):
+                calls.append(("create", [doc["id"] for doc in docs]))
+
+            async def add_docs(self, name, docs, options):
+                calls.append(("add", [doc["id"] for doc in docs]))
+
+            async def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime / "bundle").mkdir()
+            pk.embed(RECORDS, pk.Glossary.empty(), runtime_dir=runtime, model=model,
+                     embedder=FakePassages(model.dims), log=lambda line: None)
+            one = pk.upload_size(pk.documents_for(RECORDS[:1], pk.Glossary.empty(), embedding=model.key)[0], model)
+            outcomes = [asyncio.run(pk.upload(
+                RECORDS, pk.Glossary.empty(), index_name="idx", model_id="x", project_id="p", project_key="k",
+                runtime_dir=runtime, embedding=model, max_mb=max_mb, client_factory=lambda pid, key: Recorder(),
+                log=lambda line: None)) for max_mb in (10.0, (one + 10) / 1e6)]
+        self.assertEqual(calls[-1], ("create", ["a:1"]))
+        self.assertEqual([outcome["left"] for outcome in outcomes], [0, 1])
+
 
 if __name__ == "__main__":
     unittest.main()

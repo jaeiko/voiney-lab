@@ -2124,8 +2124,9 @@ async def upload(
     With ``embedding`` the index is a ``custom`` one: each document carries
     the model's vector from the cache (``embed`` first) and the model's key.
     ``max_mb`` sends new and changed documents only up to that many (reckoned)
-    megabytes; the state remembers what was sent, so the same command sends
-    the rest later (Moss's free plan ingests 50 MB a month).
+    megabytes; the state remembers what was sent -- batch by batch, also
+    when a call fails halfway -- so the same command sends the rest later
+    (Moss's free plan ingests 50 MB a month).
     """
 
     documents = documents_for(records, glossary, embedding=embedding.key if embedding else None)
@@ -2164,6 +2165,10 @@ async def upload(
     started = time.perf_counter()
     calls = 0
     exists = False
+    # What Moss took, batch by batch: remembered even when a later call fails,
+    # so the same command does not send (and the free plan count) it again.
+    sent_ids: list[str] = []
+    deleted_ids: list[str] = []
     try:
         try:
             await client.get_index(index_name)
@@ -2172,53 +2177,56 @@ async def upload(
             exists = False
         calls += 1
         if not exists:
+            # A new index (or one deleted since) holds nothing sent before.
+            previous_hashes = {}
             sending = _within(documents, max_mb, embedding)
             batches = list(_batches(sending, UPLOAD_BATCH))
             first = batches[0] if batches else []
             log(f"create_index {index_name} model={model_id} docs={len(first)} (of {len(documents)})")
             await client.create_index(index_name, [make_document(doc) for doc in first], model_id)
             calls += 1
+            sent_ids += [doc["id"] for doc in first]
             for batch in batches[1:]:
                 await client.add_docs(index_name, [make_document(doc) for doc in batch], upsert_options)
                 calls += 1
+                sent_ids += [doc["id"] for doc in batch]
                 log(f"add_docs +{len(batch)}")
-            changed_ids = [doc["id"] for doc in sending]
-            deleted_ids: list[str] = []
         else:
             changed = _within([doc for doc in documents if previous_hashes.get(doc["id"]) != current_hashes[doc["id"]]],
                               max_mb, embedding)
-            deleted_ids = sorted(set(previous_hashes) - set(current_hashes))
-            log(f"index {index_name} exists: {len(changed)} changed/new, {len(deleted_ids)} to delete")
+            gone = sorted(set(previous_hashes) - set(current_hashes))
+            log(f"index {index_name} exists: {len(changed)} changed/new, {len(gone)} to delete")
             for batch in _batches(changed, UPLOAD_BATCH):
                 await client.add_docs(index_name, [make_document(doc) for doc in batch], upsert_options)
                 calls += 1
+                sent_ids += [doc["id"] for doc in batch]
                 log(f"add_docs +{len(batch)}")
-            for batch in _batches(deleted_ids, UPLOAD_BATCH):
+            for batch in _batches(gone, UPLOAD_BATCH):
                 await client.delete_docs(index_name, list(batch))
                 calls += 1
-            changed_ids = [doc["id"] for doc in changed]
+                deleted_ids += list(batch)
     finally:
         try:
             await client.close()
         except Exception:  # noqa: BLE001
             pass
-    # Remembered: what was sent this time and what had been sent before and is
-    # still in the bundle; a document not sent yet is left for the next run.
-    sent = {doc_id: current_hashes[doc_id] for doc_id in changed_ids}
-    kept = {doc_id: digest for doc_id, digest in previous_hashes.items()
-            if doc_id in current_hashes and doc_id not in sent and doc_id not in deleted_ids}
-    remembered = {**kept, **sent}
-    left = sum(1 for doc_id, digest in current_hashes.items() if remembered.get(doc_id) != digest)
-    outcome = {
-        "index": index_name, "model": model_id, "documents": len(documents), "created": not exists,
-        "changed": len(changed_ids), "deleted": len(deleted_ids), "left": left, "calls": calls,
-        "text_bytes": sum(len(doc["text"].encode("utf-8")) for doc in documents),
-        "sent_mb_estimate": round(sum(upload_size(doc, embedding) for doc in documents
-                                      if doc["id"] in sent) / 1e6, 1),
-        "seconds": round(time.perf_counter() - started, 1), "at": now_iso(),
-    }
-    state_path.write_text(json.dumps({"documents": remembered, "last": outcome}, ensure_ascii=False),
-                          encoding="utf-8")
+        # Remembered: what was sent this time and what had been sent before and is
+        # still in the bundle; a document not sent yet is left for the next run.
+        sent = {doc_id: current_hashes[doc_id] for doc_id in sent_ids}
+        kept = {doc_id: digest for doc_id, digest in previous_hashes.items()
+                if doc_id not in sent and doc_id not in deleted_ids}
+        remembered = {**kept, **sent}
+        left = sum(1 for doc_id, digest in current_hashes.items() if remembered.get(doc_id) != digest)
+        outcome = {
+            "index": index_name, "model": model_id, "documents": len(documents), "created": not exists,
+            "changed": len(sent_ids), "deleted": len(deleted_ids), "left": left, "calls": calls,
+            "text_bytes": sum(len(doc["text"].encode("utf-8")) for doc in documents),
+            "sent_mb_estimate": round(sum(upload_size(doc, embedding) for doc in documents
+                                          if doc["id"] in sent) / 1e6, 1),
+            "seconds": round(time.perf_counter() - started, 1), "at": now_iso(),
+        }
+        state_path.write_text(json.dumps({"documents": remembered, "last": outcome}, ensure_ascii=False),
+                              encoding="utf-8")
     return outcome
 
 
