@@ -6958,6 +6958,13 @@ FRAGMENT_HOLD_SECONDS=FRAGMENT_JOIN_SECONDS+1.0
 #: brief's example value; the log of the person's test had 54 of 66 ends
 #: followed by speech within it (39 within 0.5 s).
 CONTINUATION_JOIN_SECONDS=1.5
+#: Lane HEAR2, decision 2 (2026-10-26): how much kept sound a continuation
+#: may still join to. Room noise the VAD takes for speech every few hundred
+#: milliseconds kept joining without end in the person's test (101 joins,
+#: 31.9 s of sound, the words inside answered only when the noise paused);
+#: at this bound the turn is transcribed as it stands and the next sound is
+#: a candidate of its own.
+CONTINUATION_JOIN_MAX_SECONDS=10.0
 FRAGMENT_HOLD_POLL_SECONDS=0.05
 TURN_PROGRESS_TRANSITIONS={
     "listening":frozenset({"transcribing","cancelled","error"}),
@@ -7733,6 +7740,13 @@ class ListenerSession:
             return None
         committed=self.turn_committed_at.get(identity[0])
         if committed is None:
+            return None
+        if len(kept["pcm"])>=CONTINUATION_JOIN_MAX_SECONDS*32000:
+            # Lane HEAR2, decision 2: the chain ends here; the kept turn is
+            # transcribed as it stands.
+            log.info(
+                "speech.continuation_bound turn_id=%s kept_ms=%d",
+                identity[0],len(kept["pcm"])//32)
             return None
         held=self._held_fragment
         progress=self.turn_progress.get(identity)
