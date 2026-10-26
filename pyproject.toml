@@ -39,7 +39,9 @@ dependencies = [
   # that it stays behind that one module so it can be replaced.
   "pymupdf==1.28.2",
   "python-dotenv",
-  "requests",
+  # REST Speech V2 and its OAuth signer; releases older than two weeks.
+  "requests==2.34.2",
+  "google-auth==2.59.1",
   "httpx>=0.27",
   "webrtcvad-wheels==2.0.14",
   "websockets>=14,<17",

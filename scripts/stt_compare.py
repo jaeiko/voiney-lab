@@ -19,9 +19,12 @@ For each provider it scores the transcripts against the references:
 
 By default no provider is called: the recording's own transcript (the
 provider that ran at the time, ``raw_transcript`` in the JSON) is scored as
-``recorded``. ``--live google_cloud,elevenlabs,xai`` sends each WAV to those
+``recorded``. ``--live google_cloud_v2,google_cloud,elevenlabs,xai`` sends each WAV to those
 providers -- one request per turn per provider, counted and printed -- and
-needs the provider's key in the environment; only a person runs that.
+needs the provider's credentials in the environment; only a person runs that.
+V2 uses the product's service-account JSON settings, not an API key. OAuth
+refresh requests (when the cached token expires) are additional to the
+recognition requests counted here.
 
     python scripts/stt_compare.py data/runtime/stt-diagnostics references.jsonl
     python scripts/stt_compare.py DIR REFS --live google_cloud,elevenlabs --language ko
@@ -50,7 +53,7 @@ _NUMBER_UNIT = re.compile(
 _UNIT_ALIASES = {"ul": "µl", "μl": "µl", "ml": "ml", "℃": "°c", "도": "°c", "sec": "s", "초": "s",
                  "min": "분", "h": "시간", "ug": "µg", "um": "µm"}
 
-PROVIDERS = ("google_cloud", "elevenlabs", "xai")
+PROVIDERS = ("google_cloud_v2", "google_cloud", "elevenlabs", "xai")
 
 
 def edit_distance(left: list[str], right: list[str]) -> int:
@@ -168,7 +171,6 @@ def live_transcriber() -> Transcriber:
     """
 
     import os
-    from dataclasses import replace
     from unittest.mock import patch
 
     from voiney_lab import voice_providers
@@ -178,9 +180,11 @@ def live_transcriber() -> Transcriber:
             from voiney_lab.server import transcribe as server_transcribe
             with patch.dict(os.environ, {voice_providers.STT_PROVIDER_ENV: voice_providers.XAI}):
                 return server_transcribe(pcm, language=language, keyterms=keyterms).text
-        settings = replace(
-            voice_providers.SttProviderSettings.from_environment(),
-            provider=name, model=voice_providers.DEFAULT_STT_MODELS.get(name, ""))
+        # Parse the requested provider's settings, even when the server normally
+        # uses another one (V2 alone requires its own credential configuration).
+        settings = voice_providers.SttProviderSettings.from_environment({
+            **os.environ, voice_providers.STT_PROVIDER_ENV: name,
+            voice_providers.STT_MODEL_ENV: ""})
         return voice_providers.transcribe(pcm, settings, language=language, keyterms=keyterms).text
 
     return run

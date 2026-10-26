@@ -11,11 +11,10 @@ the provider for each of those two calls:
                       kept only so a deployment can switch back.
 * ``google_cloud`` -- Cloud Speech-to-Text **v1** ``speech:recognize`` and
                       Cloud Text-to-Speech v1 ``text:synthesize``, both with
-                      ``VOINEY_LAB_GOOGLE_SPEECH_API_KEY``. Speech-to-Text v2
-                      (where ``chirp_3`` lives) refuses API keys -- it answered
-                      401 "API keys are not supported by this API" when this
-                      lane probed it -- so the STT side is limited to the v1
-                      models until a service-account credential is decided.
+                      ``VOINEY_LAB_GOOGLE_SPEECH_API_KEY``.
+* ``google_cloud_v2`` -- STT only: regional REST V2 ``recognizers/_:recognize``
+                      (``chirp_3``), with a service-account JSON outside git
+                      and OAuth credentials held only in process memory.
 * ``elevenlabs``   -- ``POST /v1/speech-to-text`` and
                       ``POST /v1/text-to-speech/{voice_id}`` with
                       ``ELEVENLABS_API_KEY``.
@@ -37,22 +36,37 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import math
 import os
 import re
 import wave
+import time
+from functools import lru_cache
+from pathlib import Path
+from threading import Lock
+from typing import TYPE_CHECKING
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
 from voiney_lab.audio import SAMPLE_RATE, pcm_to_wav
-from voiney_lab.configuration import ConfigurationError
+from voiney_lab.configuration import (
+    ConfigurationError, GoogleSttV2Settings, GoogleSttV2ConfigurationError,
+    GOOGLE_STT_V2_CREDENTIALS_ENV,
+)
 from voiney_lab.language import Transcription, normalize_provider_language
+
+if TYPE_CHECKING:
+    from google.oauth2.service_account import Credentials
 
 XAI = "xai"
 GOOGLE_CLOUD = "google_cloud"
+GOOGLE_CLOUD_V2 = "google_cloud_v2"
 ELEVENLABS = "elevenlabs"
 PROVIDERS = (XAI, GOOGLE_CLOUD, ELEVENLABS)
+STT_PROVIDERS = (*PROVIDERS, GOOGLE_CLOUD_V2)
 
 STT_PROVIDER_ENV = "VOINEY_LAB_STT_PROVIDER"
 STT_MODEL_ENV = "VOINEY_LAB_STT_MODEL"
@@ -66,7 +80,7 @@ GOOGLE_KEY_ENV = "VOINEY_LAB_GOOGLE_SPEECH_API_KEY"
 ELEVENLABS_KEY_ENV = "ELEVENLABS_API_KEY"
 
 #: The xAI STT and TTS endpoints take no model field; "" means "not sent".
-DEFAULT_STT_MODELS = {XAI: "", GOOGLE_CLOUD: "latest_long", ELEVENLABS: "scribe_v2"}
+DEFAULT_STT_MODELS = {XAI: "", GOOGLE_CLOUD: "latest_long", GOOGLE_CLOUD_V2: "chirp_3", ELEVENLABS: "scribe_v2"}
 DEFAULT_TTS_MODELS = {XAI: "", GOOGLE_CLOUD: "", ELEVENLABS: "eleven_v4_turbo"}
 DEFAULT_TTS_VOICES = {
     XAI: "leo",
@@ -174,8 +188,9 @@ def _choice(env: Mapping[str, str], name: str) -> str:
     """
 
     raw = env.get(name, "").strip().casefold()
-    if raw and raw not in PROVIDERS:
-        raise ConfigurationError(f"{name} must be one of: {', '.join(PROVIDERS)}")
+    choices = STT_PROVIDERS if name == STT_PROVIDER_ENV else PROVIDERS
+    if raw and raw not in choices:
+        raise ConfigurationError(f"{name} must be one of: {', '.join(choices)}")
     return raw
 
 
@@ -183,8 +198,9 @@ def require_provider(provider: str, name: str) -> str:
     """``provider`` itself, or a refusal naming the setting that was not set."""
 
     if not provider:
+        choices = STT_PROVIDERS if name == STT_PROVIDER_ENV else PROVIDERS
         raise ConfigurationError(
-            f"{name} is not set (설정 필요): one of {', '.join(PROVIDERS)}")
+            f"{name} is not set (설정 필요): one of {', '.join(choices)}")
     return provider
 
 
@@ -211,6 +227,7 @@ class SttProviderSettings:
     #: provider detect it; Google v1 cannot, so it falls back to Korean.
     language: str | None = None
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    google_v2: GoogleSttV2Settings | None = field(default=None, repr=False)
 
     @classmethod
     def from_environment(
@@ -220,13 +237,22 @@ class SttProviderSettings:
         provider = _choice(env, STT_PROVIDER_ENV)
         language = env.get(STT_LANGUAGE_ENV, "").strip().casefold() or None
         if language is not None and language not in LANGUAGES:
+            if provider == GOOGLE_CLOUD_V2:
+                raise GoogleSttV2ConfigurationError(STT_LANGUAGE_ENV)
             raise ConfigurationError(
                 f"{STT_LANGUAGE_ENV} must be one of: {', '.join(sorted(LANGUAGES))}")
+        try:
+            timeout = _timeout(env, STT_TIMEOUT_ENV)
+        except ConfigurationError:
+            if provider == GOOGLE_CLOUD_V2:
+                raise GoogleSttV2ConfigurationError(STT_TIMEOUT_ENV) from None
+            raise
         return cls(
             provider=provider,
             model=env.get(STT_MODEL_ENV, "").strip() or DEFAULT_STT_MODELS.get(provider, ""),
             language=language,
-            timeout_seconds=_timeout(env, STT_TIMEOUT_ENV),
+            timeout_seconds=timeout,
+            google_v2=GoogleSttV2Settings.from_environment(env) if provider == GOOGLE_CLOUD_V2 else None,
         )
 
 
@@ -314,6 +340,178 @@ def stt_language(settings: SttProviderSettings, language: str | None) -> str | N
 
 
 # --- STT --------------------------------------------------------------------
+
+
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+_GOOGLE_ERROR_CODES = frozenset({
+    "cancelled", "unknown", "invalid_argument", "deadline_exceeded", "not_found",
+    "already_exists", "permission_denied", "resource_exhausted", "failed_precondition",
+    "aborted", "out_of_range", "unimplemented", "internal", "unavailable",
+    "data_loss", "unauthenticated",
+})
+
+
+def _google_v2_failure(response: requests.Response) -> SpeechProviderError:
+    """Only canonical status codes cross this boundary, never Google's message."""
+
+    code = None
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        status = error.get("status") if isinstance(error, dict) else None
+        if isinstance(status, str) and status.lower() in _GOOGLE_ERROR_CODES:
+            code = status.lower()
+    except ValueError:
+        pass
+    return SpeechProviderError(
+        f"{GOOGLE_CLOUD_V2} STT failed ({response.status_code})",
+        status=response.status_code, code=code)
+
+
+def _remaining(deadline: float) -> float:
+    seconds = deadline - time.monotonic()
+    if seconds <= 0:
+        raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} STT timed out", code="timeout")
+    return seconds
+
+
+@lru_cache(maxsize=4)
+def _google_v2_credentials(path: Path, mtime_ns: int, ctime_ns: int, size: int) -> tuple[Credentials, Lock]:
+    """Bounded in-memory credentials; a replaced key gets a fresh entry."""
+
+    from google.oauth2 import service_account
+
+    try:
+        info = json.loads(path.read_bytes())
+        if not isinstance(info, dict) or info.get("type") != "service_account":
+            raise ValueError
+        # Credentials are data, never an authority for a token destination.
+        if info.get("token_uri") != _GOOGLE_TOKEN_URL or info.get("universe_domain", "googleapis.com") != "googleapis.com":
+            raise ValueError
+        credentials = service_account.Credentials.from_service_account_info(info, scopes=[_GOOGLE_SCOPE])
+    except Exception:
+        raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV) from None
+    return credentials, Lock()
+
+
+@dataclass(frozen=True)
+class _GoogleTokenResponse:
+    status: int
+    data: bytes = field(repr=False)
+    headers: Mapping[str, str]
+
+
+def _google_v2_token(settings: GoogleSttV2Settings, deadline: float) -> str:
+    """Refresh OAuth with the same deadline and no automatic auth retry/fallback."""
+
+    try:
+        info = settings.credentials_file.stat()
+    except OSError:
+        raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV) from None
+    credentials, lock = _google_v2_credentials(
+        settings.credentials_file, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+
+    def token_request(url: str, method: str = "GET", body: bytes | None = None,
+                      headers: Mapping[str, str] | None = None, **kwargs: object) -> _GoogleTokenResponse:
+        if url != _GOOGLE_TOKEN_URL or method != "POST":
+            raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} authentication failed", code="unauthorized")
+        response = requests.post(url, data=body, headers=headers,
+                                 timeout=_remaining(deadline), allow_redirects=False)
+        if not 200 <= response.status_code < 300:
+            # Raising here also prevents google-auth from retrying a token error.
+            raise _google_v2_failure(response)
+        return _GoogleTokenResponse(response.status_code, response.content, response.headers)
+
+    if not lock.acquire(timeout=_remaining(deadline)):
+        raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} STT timed out", code="timeout")
+    try:
+        if not credentials.valid:
+            credentials.refresh(token_request)
+        token = credentials.token
+        if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
+            raise ValueError
+        return token
+    except (SpeechProviderError, requests.RequestException):
+        raise
+    except Exception:
+        raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} authentication failed", code="unauthorized") from None
+    finally:
+        lock.release()
+
+
+def transcribe_google_cloud_v2(
+    pcm: bytes, settings: SttProviderSettings, *,
+    language: str | None, keyterms: tuple[str, ...],
+) -> Transcription:
+    """Regional REST V2 Recognize with an implicit recognizer and inline config."""
+
+    v2 = settings.google_v2
+    if v2 is None:
+        raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV)
+    deadline = time.monotonic() + settings.timeout_seconds
+    token = _google_v2_token(v2, deadline)
+    config: dict[str, object] = {
+        "model": settings.model or "chirp_3",
+        "languageCodes": [GOOGLE_LOCALES[stt_language(settings, language) or "ko"]],
+        "explicitDecodingConfig": {
+            "encoding": "LINEAR16", "sampleRateHertz": SAMPLE_RATE, "audioChannelCount": 1},
+        "features": {"enableAutomaticPunctuation": True, "enableWordTimeOffsets": True},
+        "denoiserConfig": {"denoiseAudio": v2.denoise},
+    }
+    # Chirp 3: 1,000 phrases; V2: 100 characters each, 100,000 total.
+    phrases = _bounded_keyterms(keyterms, max_chars=100, max_words=100, limit=1000)
+    if phrases:
+        config["adaptation"] = {"phraseSets": [{"inlinePhraseSet": {
+            "phrases": [{"value": phrase} for phrase in phrases]}}]}
+    url = (f"https://{v2.location}-speech.googleapis.com/v2/projects/{v2.project}"
+           f"/locations/{v2.location}/recognizers/_:recognize")
+    response = requests.post(
+        url, headers={"Authorization": f"Bearer {token}"},
+        json={"config": config, "content": base64.b64encode(pcm).decode("ascii")},
+        timeout=_remaining(deadline), allow_redirects=False)
+    if not 200 <= response.status_code < 300:
+        raise _google_v2_failure(response)
+    try:
+        payload = response.json()
+        if not isinstance(payload, dict) or "error" in payload:
+            raise ValueError
+        results = payload.get("results", [])
+        if not isinstance(results, list):
+            raise ValueError
+        texts: list[str] = []
+        words: list[dict[str, object]] = []
+        detected: str | None = None
+        for result in results:
+            alternatives = result.get("alternatives", [])
+            if not isinstance(alternatives, list):
+                raise ValueError
+            if not alternatives:
+                continue
+            best = alternatives[0]
+            text = best.get("transcript", "")
+            if not isinstance(text, str):
+                raise ValueError
+            if text.strip():
+                texts.append(text.strip())
+            raw_words = best.get("words", [])
+            if not isinstance(raw_words, list):
+                raise ValueError
+            for item in raw_words:
+                if isinstance(item, dict) and isinstance(item.get("word"), str) and len(words) < 500:
+                    words.append({"word": item["word"],
+                                  "start": _google_v2_seconds(item.get("startOffset")),
+                                  "end": _google_v2_seconds(item.get("endOffset"))})
+            detected = detected or normalize_provider_language(result.get("languageCode"))
+    except (ValueError, TypeError, AttributeError):
+        raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} STT returned an invalid response") from None
+    return Transcription(" ".join(texts), detected, duration_seconds=_duration_seconds(pcm),
+                         words=tuple(words), response_status=response.status_code)
+
+
+def _google_v2_seconds(value: object) -> float | None:
+    seconds = _google_seconds(value)
+    return seconds if seconds is not None and math.isfinite(seconds) and seconds >= 0 else None
 
 
 def transcribe_google_cloud(
@@ -442,6 +640,8 @@ def transcribe(
     if language not in {None, *LANGUAGES}:
         raise ValueError("STT language is invalid")
     try:
+        if settings.provider == GOOGLE_CLOUD_V2:
+            return transcribe_google_cloud_v2(pcm, settings, language=language, keyterms=keyterms)
         if settings.provider == GOOGLE_CLOUD:
             return transcribe_google_cloud(pcm, settings, language=language, keyterms=keyterms)
         if settings.provider == ELEVENLABS:
@@ -449,9 +649,9 @@ def transcribe(
     except requests.Timeout as exc:
         # Lane HEAR2: a request that never got an answer is a provider failure
         # with its own code; the message names no address and no key.
-        raise SpeechProviderError(f"{settings.provider} STT timed out", code="timeout") from exc
+        raise SpeechProviderError(f"{settings.provider} STT timed out", code="timeout") from None
     except requests.RequestException as exc:
-        raise SpeechProviderError(f"{settings.provider} STT could not be reached", code="unreachable") from exc
+        raise SpeechProviderError(f"{settings.provider} STT could not be reached", code="unreachable") from None
     raise ValueError(f"STT provider {settings.provider!r} is not handled here")
 
 

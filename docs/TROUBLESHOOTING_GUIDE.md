@@ -85,8 +85,23 @@
 
   ```bash
   python scripts/stt_compare.py data/runtime/stt-diagnostics references.jsonl
-  python scripts/stt_compare.py data/runtime/stt-diagnostics references.jsonl --live google_cloud,elevenlabs --language ko
+  python scripts/stt_compare.py data/runtime/stt-diagnostics references.jsonl --live google_cloud_v2,google_cloud,elevenlabs --language ko
   ```
 
-  첫 줄은 공급자를 부르지 않고 그때 받아 적은 글만 채점한다. `--live` 는 녹음마다 공급자마다 요청을 한 번씩 보낸다(요청 수를 찍는다, 키가 필요하다 — 사람만 돌린다). 단어 오류율·글자 오류율, 숫자와 단위가 맞은 비율, 실험 용어가 맞은 비율, 빈 결과 수를 공급자마다 보인다. `--details` 는 턴마다 글도 찍으므로 화면 공유에 주의한다.
-- **용어**: 지금 실험의 용어(단계 이름·제어 말·프로토콜 용어)는 받아쓰기 요청에 들어간다 — ElevenLabs 는 `keyterms`(50자 미만·5단어 이하·100개까지), Google 은 `speechContexts`. 가짜 전송으로 확인했고, 공급자가 실제로 얼마나 따르는지는 재지 않았다.
+  첫 줄은 공급자를 부르지 않고 그때 받아 적은 글만 채점한다. `--live` 는 녹음마다 공급자마다 인식 요청을 한 번씩 보낸다(요청 수를 찍는다, 인증 설정이 필요하다 — 사람만 돌린다). V2 토큰을 처음 받거나 갱신하는 인증 요청은 이 숫자와 별도다. 셸에 인증 설정을 넣은 뒤 실행한다. Python에서 실행하려면 먼저 `from dotenv import load_dotenv; load_dotenv()`로 서버와 같은 설정을 읽는다(설정값을 출력하지 않는다). 단어 오류율·글자 오류율, 숫자와 단위가 맞은 비율, 실험 용어가 맞은 비율, 빈 결과 수를 공급자마다 보인다. `--details` 는 턴마다 글도 찍으므로 화면 공유에 주의한다.
+- **용어**: 지금 실험의 용어(단계 이름·제어 말·프로토콜 용어)는 받아쓰기 요청에 들어간다 — ElevenLabs 는 `keyterms`(50자 미만·5단어 이하·100개까지), Google v1은 `speechContexts`, V2는 인라인 음성 적응 구절(중복 제거, 한 구절 100자·1,000개·총 100,000자 이하)이다. 가짜 전송으로 확인했고, 공급자가 실제로 얼마나 따르는지는 재지 않았다.
+
+### Google V2가 답하지 않을 때
+
+설정 순서는 `docs/DEPLOYMENT_RUNBOOK.md` 2절의 **Google Chirp 3 받아쓰기**를 따른다. 콘솔에서 Speech-to-Text API 사용, 서비스 계정의 **Cloud Speech Client** 역할을 먼저 확인한다. JSON은 EC2의 저장소 밖 `~/.config/voiney/google-stt.json`에 두고 `chmod 600`을 준다. `.env`의 `VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE`에는 그 절대 경로, `VOINEY_LAB_GOOGLE_STT_V2_PROJECT`에는 역할을 준 프로젝트 ID를 쓴다. 키 내용이나 토큰을 로그·화면에 출력하지 않는다.
+
+| 보인 것 | 사람이 확인할 것 |
+|---|---|
+| `/readyz` 503 `speech_configuration_invalid` | `fields`에 나온 설정 이름을 고친다. JSON의 위치·파일 권한도 확인한다. 성공해도 실제 인증 성공을 뜻하지 않는다 |
+| `unauthenticated` / 401 | 키가 지워지거나 사용 중지됐는지, 서버 시각이 맞는지 확인한다 |
+| `permission_denied` / 403 | Speech-to-Text API 사용 설정, 같은 프로젝트의 Cloud Speech Client 역할, 결제 연결을 확인한다 |
+| `resource_exhausted` / 429 | 콘솔의 할당량과 결제·크레딧을 확인한다. 같은 말을 계속 반복하지 않는다 |
+| `invalid_argument` / 400 | 모델은 `chirp_3`, 지원 지역과 언어인지 확인한다. 공급자 변경 때 남은 `scribe_v2` 값을 지운다 |
+| `timeout`, `unreachable`, `unavailable` | EC2의 외부 HTTPS 연결과 Google 서비스 상태를 확인한다 |
+
+실패해도 다른 공급자로 자동으로 바뀌지 않는다. 화면에는 실패 코드와 까닭이 보이고, 같은 장애에서는 한 번만 말로 알린다. V2 내장 잡음 제거는 `VOINEY_LAB_GOOGLE_STT_V2_DENOISE=false`로 끌 수 있다. 사람 시험의 같은 녹음으로 켬·끔을 비교한 뒤 결정한다. 실제 인증·지역 지원·인식 품질은 가짜 전송 시험으로 확인할 수 없다.

@@ -87,3 +87,24 @@ class SttCompareToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_v2_comparison_uses_v2_configuration_even_when_server_uses_elevenlabs(tmp_path, monkeypatch):
+    from unittest.mock import patch
+    from voiney_lab import voice_providers as vp
+    from voiney_lab.language import Transcription
+    tool = load_tool()
+    credentials = tmp_path / 'service-account.json'
+    credentials.write_text('{}')
+    credentials.chmod(0o600)
+    monkeypatch.setenv(vp.STT_PROVIDER_ENV, 'elevenlabs')
+    monkeypatch.setenv(vp.STT_MODEL_ENV, 'scribe_v2')
+    monkeypatch.setenv('VOINEY_LAB_GOOGLE_STT_V2_PROJECT', 'test-project')
+    monkeypatch.setenv('VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE', str(credentials))
+    with patch.object(vp, 'transcribe', return_value=Transcription('토양 추출', 'ko')) as fake:
+        assert tool.live_transcriber()(b'\x00\x00', 'google_cloud_v2', 'ko', ('토양',)) == '토양 추출'
+    settings = fake.call_args.args[1]
+    assert settings.provider == 'google_cloud_v2' and settings.model == 'chirp_3'
+    assert settings.google_v2.project == 'test-project'
+    assert fake.call_args.kwargs == {'language': 'ko', 'keyterms': ('토양',)}
+    assert 'google_cloud_v2' in tool.PROVIDERS

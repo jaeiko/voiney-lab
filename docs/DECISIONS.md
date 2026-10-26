@@ -183,3 +183,7 @@
 ## 알려진 빈틈 (결정을 기다리는 코드 상태)
 
 이 절에 있던 항목은 위 해결 표로 옮겼다. 분석 완전성의 한계는 `.agent/architecture.md` 4절에 남아 있다.
+
+## 2026-10-26 — STT3: Google Speech-to-Text V2 추가
+
+사람 음성 시험의 ElevenLabs 크레딧 소진 뒤 사람 결정으로 `google_cloud_v2`를 받아쓰기 선택지에 추가한다. 최종 공급자는 사람 음성 시험 3 녹음 비교 뒤 사람이 정하며 기존 기본 선택은 유지한다. 기존 HTTP 전송·실패 경계를 쓰기 위해 REST V2 Recognize를 고르고 `requests==2.34.2`(2026-05-14), 공식 OAuth 서명·토큰 처리를 위해 `google-auth==2.59.1`(2026-09-30)을 고정한다(둘 다 2주 이상 지난 배포). 모델 기본 `chirp_3`, 공식 지역 표의 `us`, 저장소 밖 서비스 계정 JSON, 내장 잡음 제거 기본 켬(효과는 사람 시험 뒤 확정). 인증 실패도 재시도·공급자 대체 없이 같은 턴을 멈춘다. 실제 공급자 호출 0, 가짜 전송 계약 시험만 수행한다. 근거: [Chirp 3](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3), [REST V2 설정](https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/projects.locations.recognizers), [적응 한도](https://docs.cloud.google.com/speech-to-text/docs/quotas), [google-auth 배포](https://pypi.org/project/google-auth/2.59.1/), [requests 배포](https://pypi.org/project/requests/2.34.2/).

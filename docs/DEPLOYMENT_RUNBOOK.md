@@ -42,6 +42,35 @@
 
 모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
 
+### Google Chirp 3 받아쓰기를 시험하려면
+
+1. Google Cloud 콘솔에서 크레딧을 쓸 **프로젝트**를 고르고 결제 연결을 확인한다. **API 및 서비스 → 라이브러리 → Cloud Speech-to-Text API → 사용**을 누른다.
+2. **IAM 및 관리자 → 서비스 계정 → 서비스 계정 만들기**에서 서버용 계정을 만든다. 같은 프로젝트에 **Cloud Speech Client** 역할(`roles/speech.client`)을 준다. 프로젝트 ID를 적어 둔다.
+3. 그 서비스 계정의 **키 → 키 추가 → 새 키 만들기 → JSON**으로 키를 받는다. EC2에서 서비스를 실행하는 사용자만 읽도록, 모든 저장소 밖의 `~/.config/voiney/`에 둔다. 키 내용은 복사해 문서·메신저·터미널 출력에 넣지 않는다.
+
+   ```bash
+   mkdir -p ~/.config/voiney
+   chmod 700 ~/.config/voiney
+   chmod 600 ~/.config/voiney/google-stt.json
+   ```
+
+   JSON 파일을 그 위치에 옮긴 다음 권한을 준다. 서비스 사용자가 `ubuntu`가 아니면 그 사용자의 홈과 소유권을 쓴다. 저장소 안 파일이나 저장소로 이어지는 링크, 다른 사용자가 읽을 수 있는 파일은 거절한다.
+4. 서버의 `.env`에 아래 줄을 넣는다. 프로젝트 ID와 절대 경로를 자기 값으로 바꾼다. 기존 `VOINEY_LAB_STT_MODEL=scribe_v2`도 함께 바꾼다.
+
+   ```dotenv
+   VOINEY_LAB_STT_PROVIDER=google_cloud_v2
+   VOINEY_LAB_STT_MODEL=chirp_3
+   VOINEY_LAB_STT_LANGUAGE=ko
+   VOINEY_LAB_GOOGLE_STT_V2_PROJECT=your-project-id
+   VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE=/home/ubuntu/.config/voiney/google-stt.json
+   VOINEY_LAB_GOOGLE_STT_V2_LOCATION=us
+   VOINEY_LAB_GOOGLE_STT_V2_DENOISE=true
+   ```
+
+5. 서버를 다시 띄우고 `/readyz`를 확인한다. 잘못된 V2 설정은 503 `speech_configuration_invalid`와 **설정 이름만** 보인다. 이 점검은 로컬 설정·파일 위치·권한을 확인하며 Google 인증이나 음성 인식 성공을 뜻하지 않는다. 실제 확인은 사람이 `docs/TROUBLESHOOTING_GUIDE.md` 6절의 녹음 비교 명령을 실행한다. 최종 공급자는 녹음 비교 후 사람이 정한다.
+
+V2는 받아쓰기만 바꾼다. 말하기 설정은 따로 둔다. API 키 대신 서비스 계정으로 OAuth 토큰을 만들고, 토큰은 프로세스 메모리에만 둔다. `us`는 [공식 Chirp 3 지역 표](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)에 명시된 기본 지역이다. 다른 지역은 `chirp_3`·한국어 지원을 확인한 뒤 넣는다. 자동 구두점·단어 시각을 요청하고, 잡음 제거는 기본으로 켠다(효과는 사람 시험 뒤 확정). 단어 시각은 인식 품질에 영향을 줄 수 있다. [공식 IAM 역할 안내](https://docs.cloud.google.com/speech-to-text/docs/iam)도 참고한다.
+
 ### systemd 로 두기 (예시, 이 줄에서 실행해 보지 않음)
 
 ```ini

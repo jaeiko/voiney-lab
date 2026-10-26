@@ -664,6 +664,8 @@ async def readyz()->JSONResponse:
         _app_access()
         start_check_enabled()
         server_config()
+        if os.environ.get(voice_providers.STT_PROVIDER_ENV, "").strip().casefold() == voice_providers.GOOGLE_CLOUD_V2:
+            SttProviderSettings.from_environment()
         # Lane ON, decision ① (2026-10-18): "accounts" when the pilot's
         # login is on (VOINEY_LAB_AUTH_MODE=accounts).
         capabilities["identity_mode"]=(
@@ -682,9 +684,11 @@ async def readyz()->JSONResponse:
         # (on, but the credentials or the load are missing) -- never required.
         capabilities["public_knowledge"]=_public_knowledge_capability()["status"]
     except Exception as exc:
-        if isinstance(exc,ServerConfigurationError):
+        if isinstance(exc,(ServerConfigurationError,voice_providers.GoogleSttV2ConfigurationError)):
             return JSONResponse(status_code=503,content={
-                "status":"not_ready","reason":"safety_configuration_invalid",
+                "status":"not_ready","reason":(
+                    "speech_configuration_invalid" if isinstance(exc,voice_providers.GoogleSttV2ConfigurationError)
+                    else "safety_configuration_invalid"),
                 "fields":list(exc.field_names),
             })
         return JSONResponse(status_code=503,content={
@@ -3256,6 +3260,7 @@ def stt_endpoint_label() -> str:
     return {
         voice_providers.XAI:"/v1/stt",
         voice_providers.GOOGLE_CLOUD:"google_cloud:/v1/speech:recognize",
+        voice_providers.GOOGLE_CLOUD_V2:"google_cloud_v2:/v2/recognizers/_:recognize",
         voice_providers.ELEVENLABS:"elevenlabs:/v1/speech-to-text",
     }[provider]
 
@@ -11630,6 +11635,14 @@ STT_FAILURE_REASON_WORDS={
     "provider_error":"받아쓰기 서비스에 오류가 났어요",
     "provider_refused":"받아쓰기 서비스가 요청을 받지 않았어요",
 }
+# Google V2's canonical status codes use the same established screen words.
+for _google_code,_speech_code in {
+    "unauthenticated":"unauthorized", "permission_denied":"unauthorized",
+    "resource_exhausted":"rate_limited", "deadline_exceeded":"timeout",
+    "invalid_argument":"provider_refused", "failed_precondition":"provider_refused",
+    "unavailable":"provider_error", "internal":"provider_error",
+}.items():
+    STT_FAILURE_REASON_WORDS[_google_code]=STT_FAILURE_REASON_WORDS[_speech_code]
 #: A voice the filter dropped within this many dB under its line is where
 #: the wearer's own quieter words fall (a head turned, a step back: the SP1
 #: bench varied the wearer by +/-6 dB); this many in a row move the line.
