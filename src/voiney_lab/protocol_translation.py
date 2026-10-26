@@ -133,7 +133,23 @@ STYLE_GUIDE = (
     "convert, round, add or drop one; a count of parts or volumes keeps its "
     "unit word as written ('2 parts' stays '2 parts'). Keep every negation and "
     "add none: an instruction to keep or retain something is said as keeping "
-    "it ('보관해요'), not as not throwing it away."
+    "it ('보관해요'), not as not throwing it away. "
+    # Lane KO2, decision 2 (2026-10-26): the person's five refinements, (a)-(e).
+    "Never put a Korean verb ending on an English word ('resuspension해요', "
+    "'pooling해요', 'vortexing하면서'): use the Korean verb labs use "
+    "('재부유해요', '모아요', '볼텍싱하면서'), or write the word in Hangul so it "
+    "reads aloud naturally. Use one Korean word for one action in the whole "
+    "protocol, the same in every sentence: wash is always '세척해요' (never "
+    "'워싱해요'), discard '버려요', resuspend '재부유해요', pool '모아요', aspirate "
+    "'피펫으로 빨아들여요' (never '흡입 제거'). When the source speaks as its "
+    "authors ('we', 'our', 'us'), say it in the third person ('이 논문의 저자들은' "
+    "for a paper, '이 프로토콜을 쓴 사람들은' otherwise), and never '우리' or "
+    "'저희', which would sound as if the assistant were speaking. When a step "
+    "ends with a line of settings that repeats its values (for example '300 "
+    "rpm, 25°C, 00:10:00'), keep that line once, as written, at the end, and do "
+    "not move its values into the sentence: never say a value more often than "
+    "the source does. Use plain, precise words: describe a colour or a look as "
+    "it is ('하얗게', never '희끄무레한')."
 )
 
 GLOSSARY_PROMPT = (
@@ -718,7 +734,24 @@ def statement_issue(
     if issue == "negation_changed" and negation_or_avoidance(
             "en", source_text) and negation_or_avoidance("ko", korean):
         issue = _name_issue(korean, required_terms)
-    return issue or meaning_issue(source_text, korean)
+    return issue or meaning_issue(source_text, korean) or first_person_issue(korean)
+
+
+#: "우리" / "저희" as a pronoun: the word alone, or with a particle.
+_FIRST_PERSON_KO = re.compile(
+    r"(?<![가-힣])(?:우리|저희)(?=(?:는|가|의|를|도|와|랑|만|에게|에서|끼리|들)?(?:[\s,.!?·]|$))")
+
+
+def first_person_issue(korean: str) -> str | None:
+    """``first_person`` when a reading speaks as "we" (lane KO2, decision 2c).
+
+    A source's authors ("we", "our") are said in the third person ("이 논문의
+    저자들은"): "우리"/"저희" in a reading the assistant says would be heard
+    as Voiney Lab speaking. Every reading -- stored, spot or reader -- is held
+    to it, like the other checks; the numbers and units are not involved.
+    """
+
+    return "first_person" if _FIRST_PERSON_KO.search(korean or "") else None
 
 
 def check_translation(
