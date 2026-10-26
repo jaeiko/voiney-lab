@@ -304,5 +304,51 @@ class EmbedTests(unittest.TestCase):
         self.assertEqual({doc["metadata"]["embedding"] for doc in docs}, {model.key})
 
 
+class SplitUploadTests(unittest.TestCase):
+    """Moss's free plan ingests 50 MB a month: ``upload --max-mb`` sends what
+    fits now and the same command sends the rest later (lane KNOW2)."""
+
+    def test_an_upload_stops_at_the_cap_and_the_next_run_sends_the_rest(self) -> None:
+        model = pk.EMBEDDING_MODELS["multilingual-e5-small"]
+        calls: list = []
+
+        class Recorder:
+            def __init__(self, exists):
+                self.exists = exists
+
+            async def get_index(self, name):
+                if not self.exists:
+                    raise RuntimeError("not found")
+
+            async def create_index(self, name, docs, model_id):
+                calls.append(("create", [doc["id"] for doc in docs]))
+
+            async def add_docs(self, name, docs, options):
+                calls.append(("add", [doc["id"] for doc in docs]))
+
+            async def delete_docs(self, name, ids):
+                calls.append(("delete", list(ids)))
+
+            async def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime / "bundle").mkdir()
+            pk.embed(RECORDS, pk.Glossary.empty(), runtime_dir=runtime, model=model,
+                     embedder=FakePassages(model.dims), log=lambda line: None)
+            one = pk.upload_size(pk.documents_for(RECORDS[:1], pk.Glossary.empty(), embedding=model.key)[0], model)
+            first = asyncio.run(pk.upload(RECORDS, pk.Glossary.empty(), index_name="idx", model_id="x",
+                                          project_id="p", project_key="k", runtime_dir=runtime, embedding=model,
+                                          max_mb=(one + 10) / 1e6, client_factory=lambda pid, key: Recorder(False),
+                                          log=lambda line: None))
+            second = asyncio.run(pk.upload(RECORDS, pk.Glossary.empty(), index_name="idx", model_id="x",
+                                           project_id="p", project_key="k", runtime_dir=runtime, embedding=model,
+                                           max_mb=10.0, client_factory=lambda pid, key: Recorder(True),
+                                           log=lambda line: None))
+        self.assertEqual(calls, [("create", ["a:1"]), ("add", ["a:2"])])
+        self.assertEqual((first["left"], second["left"]), (1, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

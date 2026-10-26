@@ -72,6 +72,8 @@ python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowled
 python -u scripts/public_knowledge_pipeline.py embed --model multilingual-e5-small
 python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --dry-run
 python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --env-file .env
+# 월 올리기 한도 안에서 나눠 올린다: 이번엔 45 MB(어림)까지, 다음 달 같은 명령이 나머지를 올린다.
+python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --max-mb 45 --env-file .env
 # 질문 세트로 FTS5 기준선과 Moss 를 잰다 (recall@k, 지연 p50/p95, 불러오기 시간, RSS 증가).
 python scripts/public_knowledge_pipeline.py evaluate --backend fts5 --questions data/fixtures/evaluation/public_knowledge_questions.json
 python scripts/public_knowledge_pipeline.py evaluate --backend moss --index voiney-public-knowledge --questions data/fixtures/evaluation/public_knowledge_questions.json --env-file .env --out /tmp/moss_eval.json

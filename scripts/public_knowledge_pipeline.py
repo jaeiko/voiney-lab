@@ -2095,6 +2095,16 @@ def estimate_memory_mib(records: Sequence[Mapping[str, Any]]) -> dict[str, float
     }
 
 
+def upload_size(document: Mapping[str, Any], model: EmbeddingModel | None = None) -> int:
+    """The bytes one document is reckoned to send: its text, metadata and
+    vector (float32; moss sends documents from its native core and does not
+    say how ingest is counted, so this is an estimate)."""
+
+    size = len(str(document["text"]).encode("utf-8"))
+    size += len(json.dumps(document["metadata"], ensure_ascii=False).encode("utf-8"))
+    return size + (model.dims * 4 if model is not None else 0)
+
+
 async def upload(
     records: Sequence[Mapping[str, Any]],
     glossary: Glossary,
@@ -2105,6 +2115,7 @@ async def upload(
     project_key: str,
     runtime_dir: Path,
     embedding: EmbeddingModel | None = None,
+    max_mb: float | None = None,
     client_factory: Callable[..., Any] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
@@ -2112,6 +2123,9 @@ async def upload(
 
     With ``embedding`` the index is a ``custom`` one: each document carries
     the model's vector from the cache (``embed`` first) and the model's key.
+    ``max_mb`` sends new and changed documents only up to that many (reckoned)
+    megabytes; the state remembers what was sent, so the same command sends
+    the rest later (Moss's free plan ingests 50 MB a month).
     """
 
     documents = documents_for(records, glossary, embedding=embedding.key if embedding else None)
@@ -2158,7 +2172,8 @@ async def upload(
             exists = False
         calls += 1
         if not exists:
-            batches = list(_batches(documents, UPLOAD_BATCH))
+            sending = _within(documents, max_mb, embedding)
+            batches = list(_batches(sending, UPLOAD_BATCH))
             first = batches[0] if batches else []
             log(f"create_index {index_name} model={model_id} docs={len(first)} (of {len(documents)})")
             await client.create_index(index_name, [make_document(doc) for doc in first], model_id)
@@ -2167,10 +2182,11 @@ async def upload(
                 await client.add_docs(index_name, [make_document(doc) for doc in batch], upsert_options)
                 calls += 1
                 log(f"add_docs +{len(batch)}")
-            changed_ids = [doc["id"] for doc in documents]
+            changed_ids = [doc["id"] for doc in sending]
             deleted_ids: list[str] = []
         else:
-            changed = [doc for doc in documents if previous_hashes.get(doc["id"]) != current_hashes[doc["id"]]]
+            changed = _within([doc for doc in documents if previous_hashes.get(doc["id"]) != current_hashes[doc["id"]]],
+                              max_mb, embedding)
             deleted_ids = sorted(set(previous_hashes) - set(current_hashes))
             log(f"index {index_name} exists: {len(changed)} changed/new, {len(deleted_ids)} to delete")
             for batch in _batches(changed, UPLOAD_BATCH):
@@ -2186,15 +2202,41 @@ async def upload(
             await client.close()
         except Exception:  # noqa: BLE001
             pass
+    # Remembered: what was sent this time and what had been sent before and is
+    # still in the bundle; a document not sent yet is left for the next run.
+    sent = {doc_id: current_hashes[doc_id] for doc_id in changed_ids}
+    kept = {doc_id: digest for doc_id, digest in previous_hashes.items()
+            if doc_id in current_hashes and doc_id not in sent and doc_id not in deleted_ids}
+    remembered = {**kept, **sent}
+    left = sum(1 for doc_id, digest in current_hashes.items() if remembered.get(doc_id) != digest)
     outcome = {
         "index": index_name, "model": model_id, "documents": len(documents), "created": not exists,
-        "changed": len(changed_ids), "deleted": len(deleted_ids), "calls": calls,
+        "changed": len(changed_ids), "deleted": len(deleted_ids), "left": left, "calls": calls,
         "text_bytes": sum(len(doc["text"].encode("utf-8")) for doc in documents),
+        "sent_mb_estimate": round(sum(upload_size(doc, embedding) for doc in documents
+                                      if doc["id"] in sent) / 1e6, 1),
         "seconds": round(time.perf_counter() - started, 1), "at": now_iso(),
     }
-    state_path.write_text(json.dumps({"documents": current_hashes, "last": outcome}, ensure_ascii=False),
+    state_path.write_text(json.dumps({"documents": remembered, "last": outcome}, ensure_ascii=False),
                           encoding="utf-8")
     return outcome
+
+
+def _within(documents: Sequence[Mapping[str, Any]], max_mb: float | None,
+            model: EmbeddingModel | None) -> list[Mapping[str, Any]]:
+    """The documents that fit in ``max_mb`` reckoned megabytes, in order (all when None)."""
+
+    if max_mb is None:
+        return list(documents)
+    budget = max_mb * 1e6
+    chosen: list[Mapping[str, Any]] = []
+    for doc in documents:
+        size = upload_size(doc, model)
+        if size > budget:
+            break
+        budget -= size
+        chosen.append(doc)
+    return chosen
 
 
 # --- evaluate -----------------------------------------------------------------------------------
@@ -2432,6 +2474,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--model", default=DEFAULT_MODEL, help="임베딩 모델 (기본 moss-minilm)")
     up.add_argument("--embedding", choices=sorted(EMBEDDING_MODELS),
                     help="이 다국어 모델의 벡터로 custom 색인을 만든다 (embed 를 먼저)")
+    up.add_argument("--max-mb", type=float, help="이번에 올릴 양의 상한 (어림 MB; 나머지는 같은 명령으로 다음에)")
     up.add_argument("--dry-run", action="store_true", help="올리지 않고 문서 수·용량·예상 메모리만 센다")
     up.add_argument("--env-file", help="키를 읽을 dotenv 파일 (값은 출력하지 않음)")
     ev = commands.add_parser("evaluate", help="질문 세트로 FTS5 기준선과 Moss 를 잰다")
@@ -2516,7 +2559,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         project_id, project_key = _credentials()
         outcome = asyncio.run(upload(records, glossary, index_name=args.index, model_id=args.model,
                                      project_id=project_id, project_key=project_key, runtime_dir=runtime_dir,
-                                     embedding=model))
+                                     embedding=model, max_mb=args.max_mb))
         print(json.dumps(outcome, ensure_ascii=False))
         return 0
     if args.command == "evaluate":
