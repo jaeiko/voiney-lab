@@ -3604,6 +3604,7 @@ function requestVoiceCalibration(action){
  sendControl("client.voice_calibration",{action,configuration_id:accepted.configuration_id,generation:accepted.server_generation});
  return true;
 }
+const CALIBRATION_FAILURE_WORDS=Object.freeze({too_little_voice:"목소리가 잘 안 들렸어요 · 조용한 곳에서 문장을 끝까지 읽어 주세요.",audio_length:"녹음이 너무 짧았어요 · 문장을 끝까지 읽어 주세요.",audio_invalid:"녹음을 보내지 못했어요 · 다시 해 주세요.",server:"지금은 맞출 수 없어요 · 잠시 뒤 다시 해 주세요 · 계속되면 관리자에게 알려 주세요."});
 let voiceMeasuring=false;
 async function measureVoiceInSettings(){
  if(voiceMeasuring)return false;
@@ -3615,8 +3616,9 @@ async function measureVoiceInSettings(){
   try{recorded=await recordCalibrationPcm(VOICE_MEASURE_SECONDS);}catch(error){setText("voice-calibration-setting-status",(["NotAllowedError","SecurityError"].includes(error?.name)&&micBlockedWords(error))||"마이크를 쓸 수 없어 맞추지 못했어요.");return false;}
   const response=await serverFetch("/api/voice/calibration",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pcm_base64:pcmBase64(recorded.pcm),mic_id:recorded.micId})});
   if(!response.ok){
+   // Lane HEAR2 decision 6: why, and what to do, in plain words (the person's test met "맞추지 못했어요" ten times: the server answered 500).
    let code="";try{code=(await response.json())?.detail?.code||"";}catch(_){}
-   setText("voice-calibration-setting-status",code==="too_little_voice"?"목소리가 잘 안 들렸어요 · 다시 맞춰 주세요.":"맞추지 못했어요 · 다시 해 주세요.");return false;
+   setText("voice-calibration-setting-status",CALIBRATION_FAILURE_WORDS[code]||(Number(response.status)>=500?CALIBRATION_FAILURE_WORDS.server:"맞추지 못했어요 · 다시 해 주세요."));return false;
   }
   const result=await response.json();voiceReferenceMeasured=true;
   setText("voice-calibration-setting-status",`맞춤 · 기준 ${Number.isFinite(result.level_db)?`${result.level_db} dBFS`:"측정값 없음"} · 옆 사람 말 거르기를 켜면 이보다 많이 작은 말은 걸러요`);

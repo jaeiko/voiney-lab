@@ -86,7 +86,24 @@ describe("SettingsScreen", () => {
     fakeFetch({ ...table(), "/api/voice/calibration": { status: 422, json: { detail: { code: "too_little_voice" } } } });
     renderWithClient(<SettingsScreen session={SESSION_ACCOUNTS as AuthSession} />);
     await user.click((await screen.findAllByTestId("voice-check-start")).at(-1)!);
-    expect(await screen.findByText("목소리가 잘 안 들렸어요. 다시 맞춰 주세요.")).toBeInTheDocument();
+    // Lane HEAR2, decision 6: the reason in plain words, with what to do.
+    expect(await screen.findByText("목소리가 잘 안 들렸어요. 조용한 곳에서 문장을 끝까지 읽어 주세요.")).toBeInTheDocument();
+    engine.recordVoice.mockImplementation(async () => { throw Object.assign(new Error("no"), { name: "NotAllowedError" }); });
+  });
+
+  it("목소리 맞추기 names a short recording and a server that could not keep it (lane HEAR2, decision 6)", async () => {
+    const user = userEvent.setup();
+    engine.recordVoice.mockImplementation(async () => ({ pcm: new Int16Array(16000), micId: "mic-0011aabb" }));
+    fakeFetch({ ...table(), "/api/voice/calibration": { status: 422, json: { detail: { code: "audio_length" } } } });
+    renderWithClient(<SettingsScreen session={SESSION_ACCOUNTS as AuthSession} />);
+    await user.click(await screen.findByTestId("voice-check-start"));
+    expect(await screen.findByText("녹음이 너무 짧았어요. 문장을 끝까지 읽어 주세요.")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+    // The person's test of 2026-10-26: the server answered 500 ten times and the screen said only "맞추지 못했어요".
+    fakeFetch({ ...table(), "/api/voice/calibration": { status: 500, json: { detail: "workspace_error" } } });
+    renderWithClient(<SettingsScreen session={SESSION_ACCOUNTS as AuthSession} />);
+    await user.click((await screen.findAllByTestId("voice-check-start")).at(-1)!);
+    expect(await screen.findByText("지금은 맞출 수 없어요. 잠시 뒤 다시 해 주세요. 계속되면 관리자에게 알려 주세요.")).toBeInTheDocument();
     engine.recordVoice.mockImplementation(async () => { throw Object.assign(new Error("no"), { name: "NotAllowedError" }); });
   });
 

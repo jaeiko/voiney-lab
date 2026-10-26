@@ -346,7 +346,12 @@ export const settings = {
     listening: "듣는 중…",
     measuring: "재는 중…",
     measured: "목소리를 맞췄어요. 이제 옆 사람 말 거르기를 켤 수 있어요.",
-    tooLittle: "목소리가 잘 안 들렸어요. 다시 맞춰 주세요.",
+    // Lane HEAR2, decision 6: why it failed, and what to do, in plain words.
+    tooLittle: "목소리가 잘 안 들렸어요. 조용한 곳에서 문장을 끝까지 읽어 주세요.",
+    tooShort: "녹음이 너무 짧았어요. 문장을 끝까지 읽어 주세요.",
+    badAudio: "녹음을 보내지 못했어요. 다시 해 주세요.",
+    serverDown: "지금은 맞출 수 없어요. 잠시 뒤 다시 해 주세요. 계속되면 관리자에게 알려 주세요.",
+    noConnection: "서버에 연결하지 못했어요. 연결을 확인한 뒤 다시 해 주세요.",
     notMeasured: "맞추지 못했어요. 다시 해 주세요.",
     again: "다시 맞추기",
     blocked: "마이크가 막혀 있어요. 브라우저의 마이크 권한을 허용해 주세요.",
