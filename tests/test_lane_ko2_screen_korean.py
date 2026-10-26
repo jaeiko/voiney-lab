@@ -115,6 +115,27 @@ class StateFieldTests(unittest.TestCase):
         self.assertIs(state["translation_missing"], True)
         self.assertEqual(state["display_summary"], STEP_TWO)
 
+    def test_a_reply_only_showing_a_source_sentence_gets_its_korean(self) -> None:
+        # "이 단계 왜 해?" shows the step's whole source; the speech says only
+        # its first sentence. The source quote below keeps the source.
+        fixture = replace(notes_fixture(), machine_localizations={"step-2/current_step": STEP_TWO_KO})
+        session = _session(fixture, 1)
+        quoted = f"현재 2단계에서 프로토콜이 명시한 내용은 다음과 같습니다: {STEP_TWO[2:]}\n\n원문 · English\n{STEP_TWO}"
+        plan = route_curated_runtime_turn(
+            session, "지금 단계 뭐야", turn_id=2, language="ko", configuration_id=1, generation=1).plan
+        plan = replace(plan, display_text=quoted, primary_text=quoted.split("\n")[0],
+                       speech_text="2단계 내용입니다.")
+        reading = session.korean_first(plan, language="ko").plan
+        self.assertIn("다음과 같습니다: Solution A 500 µL로", reading.primary_text)
+        self.assertNotIn("Wash the pieces", reading.primary_text)
+        self.assertTrue(reading.display_text.endswith(f"원문 · English\n{STEP_TWO}"))
+        self.assertIs(reading.translation_missing, False)
+        # With no Korean: marked, and the source stays.
+        bare = _session(notes_fixture(), 1)
+        reading = bare.korean_first(replace(plan), language="ko").plan
+        self.assertIs(reading.translation_missing, True)
+        self.assertIn("Wash the pieces", reading.primary_text)
+
     def test_a_step_written_in_korean_needs_no_translation(self) -> None:
         fixture = build_fixture(
             protocol_id="fictional-korean", title="한국어 프로토콜",

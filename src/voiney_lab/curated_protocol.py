@@ -16049,15 +16049,17 @@ class CuratedProtocolSession:
                 # run, each found word by word.
                 found = None
                 own = _own_number(label, sentence) if label else None
+                # Only before the source quote, which stays as written.
+                region = value if boundary < 0 else value[:boundary]
                 for candidate in dict.fromkeys(filter(None, (
                         sentence, sentence[own.end():] if own else None, run))):
                     words = candidate.split()
                     if not words:
                         continue
-                    found = re.search(r"\s+".join(re.escape(word) for word in words), value)
+                    found = re.search(r"\s+".join(re.escape(word) for word in words), region)
                     if found:
                         break
-                if found and (boundary < 0 or found.start() < boundary):
+                if found:
                     text = _korean_in_place(korean, label, value[:found.start()])
                     if value[found.end():found.end() + 1] in {".", "!", "?"}:
                         text = text.rstrip(".!?")
@@ -17955,6 +17957,7 @@ class CuratedProtocolSession:
             "translation_missing": (
                 current_step is not None and source_language != "ko"
                 and current_primary is None
+                and bool(current_step.instruction_source_text.strip())
             ),
             "spoken_summary": spoken_summary,
             "source_filename": (
