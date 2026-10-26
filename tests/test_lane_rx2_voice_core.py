@@ -36,6 +36,8 @@ MOVED_FUNCTIONS = (
     "rejectCascadeInterruption", "resetCascadePlayback", "clearPlayback", "interruptCascadePlayback",
     "cascadeTurnKey", "cascadeTurnInterrupted", "currentCascadeMessage",
     "join", "playLastReplayableAudio", "keepReplayableAudio", "pump", "playFiller", "playTimerNoticeTone", "playFillerTone",
+    # Lane HEAR's microphone helpers, moved after the merge of 2026-10-26 so both screens record alike.
+    "micIdFor", "recordCalibrationPcm", "pcmBase64",
 )
 MOVED_NAMES = (
     "socket", "playContext", "sessionActive", "sessionGeneration", "playbackEpoch", "visibleState", "micSignalSeen",
@@ -50,7 +52,7 @@ BROWSER = {
     "globalThis", "document", "navigator", "localStorage", "location", "WebSocket", "AudioContext", "AudioWorkletNode",
     "Promise", "Math", "Number", "String", "Boolean", "Object", "Array", "Date", "JSON", "Error", "Set", "Map", "WeakSet",
     "Int16Array", "Float32Array", "Uint8Array", "ArrayBuffer", "setTimeout", "clearTimeout", "setInterval",
-    "clearInterval", "isFinite", "parseInt",
+    "clearInterval", "isFinite", "parseInt", "btoa",
 }
 KEYWORDS = {"if", "for", "while", "switch", "catch", "function", "return", "typeof", "await", "new", "async"}
 # A Promise executor's own parameters.
@@ -218,6 +220,7 @@ class NewScreenHostTests(unittest.TestCase):
             'if(m.type==="audio.segment.end"&&!cascadeTurnInterrupted(m)&&receiving&&currentCascadeMessage(m)&&m.segment_index===receiving.segment_index&&(!Number.isInteger(m.generation)||m.generation===receiving.generation)){queued.set(m.segment_index,join(receivedFrames));receiving=null;receivedFrames=[];pump(generation);}',
             'if(m.type==="audio.complete"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){audioComplete=true;pump(generation);}',
             'valid=accepted&&accepted.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&Number.isInteger(m.generation)&&Number.isInteger(m.superseding_turn_id)&&Number.isInteger(m.superseding_generation)&&m.reason==="confirmed_speech"&&m.state==="cancelled";',
+            'if(m.type==="playback.stop"){constaccepted=acceptedSessionConfiguration;if(accepted&&m.configuration_id===accepted.configuration_id)clearPlayback();return;}',
             'valid=pending&&Number.isInteger(m.configuration_id)&&m.configuration_id===pending.configuration_id&&m.mode===pending.mode&&m.language===pending.language&&serverInputLanguage===pendingInputLanguage&&m.protocol_id===pending.protocol_id&&revisionValid;',
         ]
         for line in old_lines:
@@ -268,3 +271,29 @@ class NewStylesFollowTheDesignSystemTests(unittest.TestCase):
             self.assertRegex(phone, rf"{name}:\s*{re.escape(value)};", name)
         for name, value in (("--run-step", "3.25rem"), ("--run-step-min", "2.5rem"), ("--run-timer", "8rem"), ("--run-target", "80px")):
             self.assertRegex(tablet, rf"{name}:\s*{re.escape(value)};", name)
+
+
+class HearContractOnTheNewScreenTests(unittest.TestCase):
+    """Lane HEAR's contract (docs/FEATURES.md F8) on the new screen: the same sentence and length to read, the
+    measurement posted to the server, the filter as the person's own setting, the drop and pause events read."""
+
+    def test_the_sentence_and_its_length_are_the_old_screens(self) -> None:
+        page = INDEX.read_text(encoding="utf-8")
+        sentence = re.search(r'const VOICE_MEASURE_SENTENCE="([^"]+)",VOICE_MEASURE_SECONDS=(\d+);', page)
+        self.assertIsNotNone(sentence)
+        copy = (ROOT / "web" / "src" / "copy" / "ko.ts").read_text(encoding="utf-8")
+        self.assertIn(f'readSentence: "{sentence.group(1)}"', copy)
+        check = (ROOT / "web" / "src" / "voice" / "micCheck.ts").read_text(encoding="utf-8")
+        self.assertIn(f"export const MEASURE_SECONDS = {sentence.group(2)};", check)
+
+    def test_the_new_screen_posts_the_recording_and_saves_the_filter_setting(self) -> None:
+        check = (ROOT / "web" / "src" / "voice" / "micCheck.ts").read_text(encoding="utf-8")
+        self.assertIn('postJson<Measured>("/api/voice/calibration", { pcm_base64: recorder.encode(recorded.pcm), mic_id: recorded.micId })', check)
+        settings = (ROOT / "web" / "src" / "screens" / "SettingsScreen.tsx").read_text(encoding="utf-8")
+        self.assertIn('useSetting("speaker_filter")', settings)
+        self.assertIn("disabled={!reference && !filterOn}", settings)
+
+    def test_the_new_screen_reads_speech_dropped_and_speaker_filter(self) -> None:
+        model = (ROOT / "web" / "src" / "voice" / "runModel.ts").read_text(encoding="utf-8")
+        self.assertIn('new Set(["speech.dropped", "speech.ignored"])', model)
+        self.assertIn('case "speaker.filter":', model)

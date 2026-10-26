@@ -27,7 +27,7 @@
 var VOICE_CORE_HOST_NAMES=Object.freeze([
  "$","setText","setDisabled","announceMilestone","renderState","renderRunStatus","renderMicCheck","screenView",
  "serverSocketUrl","onMessage","fail","recheckAccountAfterClose","removeProvisionalTurns","invalidateCuratedProtocolState",
- "stopWorkflowTimer","stopReportPolling","micIdFor",
+ "stopWorkflowTimer","stopReportPolling",
 ]);
 
 // --- The session, the socket and the audio's state -----------------------------
@@ -355,6 +355,32 @@ async function closeAudio(){
  if(playContext){try{await playContext.close();}catch(_){}playContext=null;}
  renderAudioUnlock();
 }
+
+// Lane HEAR's microphone helpers (moved from index.html by lane RX2 so the new screen's 목소리 맞추기 records as the old one does):
+// Lane HEAR decision 2 (2026-10-25): a short id for the microphone, so a measurement made on another one is not used.
+function micIdFor(track){
+ const id=String(track?.getSettings?.()?.deviceId||""),label=String(track?.label||"");if(!id&&!label)return null;
+ let hash=0x811c9dc5;for(const char of `${id}|${label}`){hash^=char.codePointAt(0);hash=Math.imul(hash,0x01000193)>>>0;}
+ return `mic-${hash.toString(16).padStart(8,"0")}`;
+}
+// Records the sentence on the microphone runs use (same device and processing; automatic gain off in
+// "목소리를 맞추면 끔", as a filtered run has it), as 16 kHz PCM16 -- the browser half of the measurement.
+async function recordCalibrationPcm(seconds){
+ const opened=await openMicStream(),stream=opened.stream,track=stream.getAudioTracks?.()[0]||stream.getTracks?.()[0]||null;
+ if(track&&agcMode()==="calibrated"&&typeof track.applyConstraints==="function"){try{await track.applyConstraints({autoGainControl:false});}catch(_){}}
+ const context=new AudioContext(),chunks=[];
+ try{
+  await context.audioWorklet.addModule("/mic-capture-worklet.js");
+  const source=context.createMediaStreamSource(stream),node=new AudioWorkletNode(context,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"});
+  node.port.onmessage=e=>{if(e.data instanceof ArrayBuffer)chunks.push(resamplePcm16(new Float32Array(e.data),context.sampleRate,16000));};
+  source.connect(node);await context.resume?.();
+  await new Promise(resolve=>setTimeout(resolve,seconds*1000));
+  node.port.postMessage({type:"stop"});source.disconnect?.();
+ }finally{for(const item of stream.getTracks?.()||[])item.stop?.();try{await context.close?.();}catch(_){}}
+ const total=chunks.reduce((sum,chunk)=>sum+chunk.length,0),pcm=new Int16Array(total);let at=0;for(const chunk of chunks){pcm.set(chunk,at);at+=chunk.length;}
+ return {pcm,micId:micIdFor(track)};
+}
+function pcmBase64(pcm){const bytes=new Uint8Array(pcm.buffer,pcm.byteOffset,pcm.byteLength);let text="";for(let i=0;i<bytes.length;i+=0x8000)text+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(text);}
 
 // --- The answer's audio: interruption, fillers, the turn's fences -------------
 function browserNowMs(){return globalThis.performance?.now?.()??Date.now();}

@@ -3594,12 +3594,6 @@ function renderSourceBasis(basis){const rail=$("rail-basis");if(rail)rail.textCo
 // utterance, and from then on takes a much quieter voice for someone else's.
 // The screen only shows the sentence and the result, and asks the server to
 // measure again or to skip; nothing about the voice is kept by the page.
-// Lane HEAR decision 2 (2026-10-25): a short id for the microphone, so a measurement made on another one is not used.
-function micIdFor(track){
- const id=String(track?.getSettings?.()?.deviceId||""),label=String(track?.label||"");if(!id&&!label)return null;
- let hash=0x811c9dc5;for(const char of `${id}|${label}`){hash^=char.codePointAt(0);hash=Math.imul(hash,0x01000193)>>>0;}
- return `mic-${hash.toString(16).padStart(8,"0")}`;
-}
 const VOICE_MEASURE_SENTENCE="오늘 실험도 차근차근 안전하게 시작해 볼게요.",VOICE_MEASURE_SECONDS=5;
 // In a run the server answers that it is done here; outside one the page measures by itself (measureVoiceInSettings).
 function requestVoiceCalibration(action){
@@ -3610,24 +3604,6 @@ function requestVoiceCalibration(action){
  sendControl("client.voice_calibration",{action,configuration_id:accepted.configuration_id,generation:accepted.server_generation});
  return true;
 }
-// Records the sentence on the microphone runs use (same device and processing; automatic gain off in
-// "목소리를 맞추면 끔", as a filtered run has it), as 16 kHz PCM16 -- the browser half of the measurement.
-async function recordCalibrationPcm(seconds){
- const opened=await openMicStream(),stream=opened.stream,track=stream.getAudioTracks?.()[0]||stream.getTracks?.()[0]||null;
- if(track&&agcMode()==="calibrated"&&typeof track.applyConstraints==="function"){try{await track.applyConstraints({autoGainControl:false});}catch(_){}}
- const context=new AudioContext(),chunks=[];
- try{
-  await context.audioWorklet.addModule("/mic-capture-worklet.js");
-  const source=context.createMediaStreamSource(stream),node=new AudioWorkletNode(context,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"});
-  node.port.onmessage=e=>{if(e.data instanceof ArrayBuffer)chunks.push(resamplePcm16(new Float32Array(e.data),context.sampleRate,16000));};
-  source.connect(node);await context.resume?.();
-  await new Promise(resolve=>setTimeout(resolve,seconds*1000));
-  node.port.postMessage({type:"stop"});source.disconnect?.();
- }finally{for(const item of stream.getTracks?.()||[])item.stop?.();try{await context.close?.();}catch(_){}}
- const total=chunks.reduce((sum,chunk)=>sum+chunk.length,0),pcm=new Int16Array(total);let at=0;for(const chunk of chunks){pcm.set(chunk,at);at+=chunk.length;}
- return {pcm,micId:micIdFor(track)};
-}
-function pcmBase64(pcm){const bytes=new Uint8Array(pcm.buffer,pcm.byteOffset,pcm.byteLength);let text="";for(let i=0;i<bytes.length;i+=0x8000)text+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(text);}
 let voiceMeasuring=false;
 async function measureVoiceInSettings(){
  if(voiceMeasuring)return false;

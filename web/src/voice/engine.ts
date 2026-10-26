@@ -21,7 +21,8 @@ import { runStore } from "./runStore";
 declare let playbackEpoch: number;
 declare function resetCascadePlayback(): void;
 declare function reconnectMic(generation?: number, reason?: string): Promise<boolean>;
-declare function openMicStream(): Promise<{ stream: MediaStream; audioConstraints: Record<string, unknown> }>;
+declare function recordCalibrationPcm(seconds: number): Promise<{ pcm: Int16Array; micId: string | null }>;
+declare function pcmBase64(pcm: Int16Array): string;
 
 const VOICE_STATES = new Set<VoiceState>(["IDLE", "CONNECTING", "LISTENING", "THINKING", "SPEAKING", "INTERRUPTING", "RECONNECTING", "ERROR"]);
 const RESUMABLE = ["ready", "in_progress", "paused", "blocked"];
@@ -66,6 +67,7 @@ function syncProtocolState(): void {
 
 function eventContext() {
   return {
+    filterWords: runCopy.filter,
     accepted: acceptedSessionConfiguration,
     live: (m: any) => !cascadeTurnInterrupted(m) && currentCascadeMessage(m) && Number.isInteger(m.turn_id),
     now: Date.now(),
@@ -183,12 +185,6 @@ export function installVoiceHost(): void {
     invalidateCuratedProtocolState,
     stopWorkflowTimer: () => undefined,
     stopReportPolling: () => undefined,
-    // Lane HEAR decision 2: the microphone's short id (index.html's micIdFor, the same hash), sent with client.audio_ready.
-    micIdFor: (track: MediaStreamTrack | null) => {
-      const id = String(track?.getSettings?.()?.deviceId || ""), label = String(track?.label || ""); if (!id && !label) return null;
-      let hash = 0x811c9dc5; for (const char of `${id}|${label}`) { hash ^= char.codePointAt(0)!; hash = Math.imul(hash, 0x01000193) >>> 0; }
-      return `mic-${hash.toString(16).padStart(8, "0")}`;
-    },
     workspaceFetch: (url: string, options: RequestInit = {}) => fetch(url, { credentials: "same-origin", ...options }),
   });
 }
@@ -288,6 +284,10 @@ async function onMessage(e: MessageEvent, generation: number, current: WebSocket
   if (m.type === "turn.processing" && sessionActive && !cascadeTurnInterrupted(m) && (activeTurn === null || currentCascadeMessage(m))) renderState("THINKING");
   if (m.type === "speech.start") { activeTurn = m.turn_id; activeCascadeGeneration = Number.isInteger(m.generation) ? m.generation : null; if (Number.isInteger(m.generation)) { const key = turnBrowserKey(m.turn_id, generation), known = g.turnServerGenerations.get(key); if (known === undefined) g.turnServerGenerations.set(key, m.generation); g.provisionalTurns.set(key, m.generation); } }
   if (m.type === "speech.rejected") { removeProvisionalTurn(m.turn_id, generation, Number.isInteger(m.generation) ? m.generation : null); if (sessionActive) renderState("LISTENING"); }
+  // Lane HEAR decision 3: a dropped sound is said ("잘 안 들렸어요", the store); index.html's line returns after it too.
+  if (m.type === "speech.dropped") { runStore.event(m, eventContext()); return; }
+  // Lane HEAR decision 7: the guidance playing stops with the pause.
+  if (m.type === "playback.stop") { const accepted = acceptedSessionConfiguration; if (accepted && m.configuration_id === accepted.configuration_id) clearPlayback(); return; }
   if (m.type === "speech.ignored") { removeProvisionalTurn(m.turn_id, generation, Number.isInteger(m.generation) ? m.generation : null); if (sessionActive && m.during_playback !== true) renderState("LISTENING"); }
   if (m.type === "transcript" && !cascadeTurnInterrupted(m) && currentCascadeMessage(m)) { g.provisionalTurns.delete(turnBrowserKey(m.turn_id, generation)); }
   if (m.type === "turn.state") applyTurnState(m, generation);
@@ -431,9 +431,14 @@ export function serverNow(): number {
   return typeof g.serverNowMs === "function" ? serverNowMs() : Date.now();
 }
 
-/** The microphone opened as a run opens it (voice-core's openMicStream: the chosen device, the gain control), for the check in the settings and the first guide. */
-export async function openCheckMicrophone(): Promise<MediaStream> {
+/** 목소리 맞추기's recording (lane HEAR's recordCalibrationPcm in voice-core): the run's microphone, 16 kHz PCM16, and its short id. */
+export async function recordVoice(seconds: number): Promise<{ pcm: Int16Array; micId: string | null }> {
   await loadVoiceScripts();
-  return (await openMicStream()).stream;
+  return recordCalibrationPcm(seconds);
+}
+
+/** The recording as the server takes it (voice-core's pcmBase64). */
+export function encodePcm(pcm: Int16Array): string {
+  return pcmBase64(pcm);
 }
 
