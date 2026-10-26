@@ -1,14 +1,15 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { AudioLines, CircleAlert, Ear, Hourglass, Loader, Mic, MicOff, Pause, Play, Square, Timer, Volume2 } from "lucide-react";
+import { AudioLines, CircleAlert, Ear, Hourglass, Languages, Loader, Mic, MicOff, Pause, Play, Square, Timer, Volume2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { EmptyBox, LoadingBox, Note } from "../components/Pieces";
 import { run as copy } from "../copy/ko";
-import { oldRoutes, routes } from "../lib/navigation";
+import { routes } from "../lib/navigation";
 import { chooseCandidate, loadVoiceScripts, reconnectMicrophone, resumeSound, serverNow, stopRun, togglePause } from "../voice/engine";
-import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, plain, sourceFigures, timerView, type ListeningWord, type ProtocolState, type TimerView } from "../voice/runModel";
+import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, nextStepWords, readsKorean, sourceFigures, stepWords, timerView, type ListeningWord, type ProtocolState, type TimerView } from "../voice/runModel";
 import { useRun } from "../voice/runStore";
 import { CaptionBar } from "./run/CaptionBar";
+import { EndScreen } from "./run/EndScreen";
 import { FigurePanel } from "./run/FigurePanel";
 import { RecordsPanel } from "./run/RecordsPanel";
 
@@ -104,22 +105,35 @@ function TimerChip({ timer }: { timer: TimerView }) {
 }
 
 function StepPanel({ protocol, nextSentence, children }: { protocol: ProtocolState | null; nextSentence: string | null; children?: ReactNode }) {
-  if (!protocol || !protocol.current_step_label) {
+  // A step is shown by its id: a protocol whose steps carry no number (a source without numbering) still has steps.
+  if (!protocol || !protocol.current_step_id) {
     return (
       <section className="run-step" data-testid="run-step">
         <p className="run-step-text run-step-waiting">{copy.waiting}</p>
       </section>
     );
   }
-  const korean = protocol.primary_summary?.trim() ? plain(protocol.primary_summary) : null;
-  const source = protocol.display_summary?.trim() ? plain(protocol.display_summary) : null;
-  const body = korean ?? source ?? "";
+  // Person's decision 2 (2026-10-26): the Korean large and bold, the source small under it and folded; a step with no
+  // Korean yet says so and shows the source at an ordinary size -- never large. The step's own "N단계:" is not repeated
+  // under the label line (decision 5).
+  const words = stepWords(protocol);
+  const body = words.korean ?? words.source ?? "";
   const length = body.length > 120 ? "long" : body.length > 60 ? "medium" : "short";
+  const label = protocol.current_step_label?.trim() ? protocol.current_step_label.trim() : null;
+  const next = nextSentence ? nextStepWords(nextSentence) : null;
   const changes = (protocol.current_step_run_changes ?? []).filter((item) => item?.words_ko);
   return (
     <section className="run-step" aria-labelledby="run-step-label" data-testid="run-step">
-      <p className="run-step-label" id="run-step-label">{copy.step(protocol.current_step_label, protocol.total_steps)}</p>
-      <p className="run-step-text" data-length={length} data-testid="run-step-text">{body}</p>
+      <p className="run-step-label" id="run-step-label">{label ? copy.step(label, protocol.total_steps) : copy.stepUnnumbered(protocol.total_steps)}</p>
+      {words.korean === null ? (
+        <p className="run-step-pending" data-testid="run-step-pending">
+          <Languages aria-hidden="true" />
+          <span>{copy.translationPending}</span>
+        </p>
+      ) : null}
+      <p className="run-step-text" data-length={length} data-lang={words.korean ? "ko" : "source"} lang={words.korean ? undefined : "en"} data-testid="run-step-text">
+        {body}
+      </p>
       {changes.length ? (
         <ul className="run-changes">
           {changes.map((item, at) => (
@@ -127,13 +141,24 @@ function StepPanel({ protocol, nextSentence, children }: { protocol: ProtocolSta
           ))}
         </ul>
       ) : null}
-      {korean && source ? (
-        <details className="source-fold run-source">
+      {words.korean && words.source ? (
+        <details className="source-fold run-source" data-testid="run-source">
           <summary>{copy.source}</summary>
-          <p lang="en">{source}</p>
+          <p lang="en" data-testid="run-source-text">{words.source}</p>
         </details>
       ) : null}
-      {nextSentence ? <p className="run-next">{copy.next(plain(nextSentence).replace(/\s+/g, " ").trim())}</p> : null}
+      {next && (next.korean || next.source) ? (
+        <p className="run-next" data-lang={next.korean ? "ko" : "source"} data-testid="run-next">
+          {next.korean ? (
+            copy.next(next.korean)
+          ) : (
+            <>
+              <span className="run-next-pending">{copy.nextPending}</span>
+              <span lang="en">{next.source}</span>
+            </>
+          )}
+        </p>
+      ) : null}
       {children}
     </section>
   );
@@ -147,7 +172,7 @@ function RunCard({ card }: { card: NonNullable<ReturnType<typeof useRun>["model"
   return (
     <div className="run-card" data-kind={card.kind} data-testid="run-card">
       <p className="run-card-head">{head}</p>
-      {text ? <p className="run-card-text">{text}</p> : null}
+      {text ? <p className="run-card-text" data-lang={readsKorean(text) ? "ko" : "source"}>{text}</p> : null}
       {card.values.length ? (
         <ul className="run-card-values">
           {card.values.map((value) => (
@@ -169,18 +194,18 @@ function RunCard({ card }: { card: NonNullable<ReturnType<typeof useRun>["model"
   );
 }
 
-function StopDialog({ disabled }: { disabled: boolean }) {
+function StopDialog({ disabled, testId = "run-stop" }: { disabled: boolean; testId?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button type="button" className="btn run-btn run-stop" disabled={disabled} data-testid="run-stop">
+        <button type="button" className="btn run-btn run-stop" disabled={disabled} data-testid={testId}>
           <Square aria-hidden="true" />
           <span>{copy.stop}</span>
         </button>
       </Dialog.Trigger>
       <Dialog.Portal>
-        <Dialog.Overlay className="dialog-backdrop" />
+        <Dialog.Overlay className="dialog-backdrop run-dialog-backdrop" />
         <Dialog.Content className="dialog run-dialog" aria-describedby="run-stop-why">
           <Dialog.Title asChild>
             <h2>{copy.stopAsk}</h2>
@@ -248,24 +273,7 @@ export function RunScreen() {
       </div>
     );
   }
-  if (model.ended && !snapshot.active) {
-    return (
-      <div className="run-empty" data-testid="run-ended">
-        <div className="state-box" data-state="empty">
-          <p>{model.ended.status === "completed" ? copy.ended.completed : copy.ended.stopped}</p>
-          {model.ended.report ? <p className="muted">{model.ended.report === "saved" ? copy.ended.saved : copy.ended.failed}</p> : null}
-          <div className="secondary-actions">
-            <a className="btn btn-primary" href={snapshot.experimentId ? oldRoutes.record(snapshot.experimentId) : oldRoutes.records}>
-              {copy.ended.records}
-            </a>
-            <a className="btn" href={routes.home}>
-              {copy.ended.home}
-            </a>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (model.ended && !snapshot.active) return <EndScreen snapshot={snapshot} />;
   if (!running) {
     const failed = snapshot.voice === "ERROR";
     return (
@@ -346,12 +354,23 @@ export function RunScreen() {
       <RecordsPanel experimentId={snapshot.experimentId} refreshKey={recordsKey(model)} narrow={narrow} />
       <CaptionBar caption={model.caption} log={model.log} />
       {paused ? (
+        // Person's decision 1 (2026-10-26): while paused, [다시 시작] and [종료] both work; a refusal the server sends is
+        // said here, where the person is looking, not under the band.
         <div className="run-paused" role="alert" data-testid="run-paused">
           <p>{copy.pausedBand}</p>
-          <button type="button" className="btn run-btn run-paused-resume" onClick={() => togglePause(true)} data-testid="run-resume">
-            <Play aria-hidden="true" />
-            <span>{copy.resume}</span>
-          </button>
+          {model.notice ? (
+            <p className="run-paused-note" role="status" data-testid="run-paused-note">
+              {model.notice}
+            </p>
+          ) : null}
+          <div className="run-paused-actions">
+            <button type="button" className="btn run-btn run-paused-resume" onClick={() => togglePause(true)} data-testid="run-resume">
+              <Play aria-hidden="true" />
+              <span>{copy.resume}</span>
+            </button>
+            <StopDialog disabled={!snapshot.active} testId="run-paused-stop" />
+          </div>
+          <p className="run-paused-hint">{copy.pausedStopHint}</p>
         </div>
       ) : null}
     </div>

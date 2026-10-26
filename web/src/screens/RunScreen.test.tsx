@@ -104,11 +104,12 @@ describe("RunScreen", () => {
     expect(screen.getByRole("link", { name: "실험 시작하기" })).toHaveAttribute("href", "#/start/p1?step=3");
   });
 
-  it("shows the end with the record and home", () => {
+  it("shows the end with the notebook and home (lane RX4: the end screen)", () => {
     runStore.reset({ experimentId: "s1", model: { ...EMPTY_RUN, ended: { status: "completed", report: "saved" } } });
     renderWithClient(<RunScreen />);
-    expect(screen.getByTestId("run-ended")).toHaveTextContent("모든 단계를 마쳤어요");
-    expect(screen.getByRole("link", { name: "기록 보기" })).toHaveAttribute("href", "/index.html#/records/s1");
+    expect(screen.getByTestId("run-ended")).toHaveTextContent("실험을 마쳤어요");
+    expect(screen.getByRole("link", { name: "실험 노트 보기" })).toHaveAttribute("href", "/index.html#/records/s1");
+    expect(screen.getByRole("link", { name: "홈으로 가기" })).toHaveAttribute("href", "#/home");
   });
 });
 
@@ -125,5 +126,43 @@ describe("recordLines", () => {
       ["memo", "메모", "retracted"],
       ["voice", "고친 값", "corrected"],
     ]);
+  });
+});
+
+// --- Lane RX4 (2026-10-26): the pause that always goes on or ends, Korean first on the step ---
+describe("RunScreen (lane RX4)", () => {
+  it("while paused the band says the server's refusal and offers 종료, which asks once and stops", async () => {
+    const user = userEvent.setup();
+    running({ workflow_status: "paused" }, { notice: "현재 연결의 설정으로 다시 요청해 주세요." });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-paused-note")).toHaveTextContent("현재 연결의 설정으로 다시 요청해 주세요.");
+    expect(screen.getByTestId("run-resume")).toBeEnabled();
+    await user.click(screen.getByTestId("run-paused-stop"));
+    expect(screen.getByRole("dialog")).toHaveTextContent("실험을 끝낼까요?");
+    await user.click(screen.getByTestId("run-stop-confirm"));
+    expect(engine.stopRun).toHaveBeenCalled();
+  });
+
+  it("shows the Korean without the step's own label and folds the source; the next step without its label too", () => {
+    running({ primary_summary: "4단계: 젤 조각을 37 °C에서 10분 동안 둡니다." }, { screen: { next_step_sentence: "5단계: 상층액을 버립니다." } });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-step-text")).toHaveTextContent(/^젤 조각을 37 °C에서 10분 동안 둡니다\.$/);
+    expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "ko");
+    expect(screen.getByTestId("run-source-text")).toHaveTextContent("4. Incubate the gel pieces at 37 °C for 10 min.");
+    expect(screen.getByTestId("run-next")).toHaveTextContent("다음 단계: 상층액을 버립니다.");
+    expect(screen.queryByTestId("run-step-pending")).toBeNull();
+  });
+
+  it("a step with no Korean yet says 번역 준비 중 and shows its source at an ordinary size, even with no step number", () => {
+    const source = "Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls).";
+    running({ current_step_label: "", primary_summary: source, display_summary: source }, { screen: { next_step_sentence: "Optional - Add 1 mL water." } });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-step-pending")).toHaveTextContent("번역 준비 중");
+    expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "source");
+    expect(screen.getByTestId("run-step-text")).toHaveTextContent(source);
+    expect(screen.queryByTestId("run-source")).toBeNull();
+    expect(screen.getByText("전체 9단계")).toBeInTheDocument();
+    expect(screen.getByTestId("run-next")).toHaveAttribute("data-lang", "source");
+    expect(screen.getByTestId("run-next")).toHaveTextContent("다음 단계 · 번역 준비 중");
   });
 });

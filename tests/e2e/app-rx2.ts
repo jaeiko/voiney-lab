@@ -87,12 +87,37 @@ function silenceWav(): Buffer {
   return Buffer.concat([head, data]);
 }
 
-export interface StepPlan { label: string; id: string; korean: string; source: string; timerSeconds?: number | null; timerLeft?: number | null; figure?: boolean }
+export interface StepPlan { label: string; id: string; korean: string | null; source: string; timerSeconds?: number | null; timerLeft?: number | null; figure?: boolean }
 
 export const STEPS: StepPlan[] = [
   { label: '4', id: 'step-4', korean: '젤 조각을 37 °C에서 10분 동안 둡니다.', source: '4. Incubate the gel pieces at 37 °C for 10 min.', timerSeconds: 600, timerLeft: 510, figure: true },
   { label: '5', id: 'step-5', korean: '상층액을 버리고 아세토나이트릴 100 µL를 넣습니다.', source: '5. Discard the supernatant and add 100 µL acetonitrile.', timerSeconds: 120, timerLeft: 50 },
 ];
+
+export interface ProtocolPlan { key: string; id: string; title: string; filename: string; field: string; stepCount: number; steps: StepPlan[] }
+
+// The protocols the walks run (rule 10 of the lane rules, 2026-10-26: a change is checked on protocols of three or more
+// fields, chemistry among them). The step sentences are those of analysed documents: in-gel digestion (bio; the Korean
+// is a reviewed translation, carrying the step's own "N단계:"), EAM 2.3 Analytical Solution Preparation (FDA, chemistry /
+// analysis: steps with no number, no Korean stored), Soil nutrient analysis SOP 005 (Zenodo, chemistry / analysis: the
+// source carries its own "1.", no Korean stored). No model is called: a step without a stored Korean shows its source.
+export const PROTOCOLS: Record<string, ProtocolPlan> = {
+  ingel: { key: 'ingel', id: PID, title: 'In-gel digestion', filename: 'in-gel-digestion.pdf', field: '생명', stepCount: 9, steps: STEPS },
+  eam23: {
+    key: 'eam23', id: 'p-eam-2-3', title: 'EAM 2.3 Analytical Solution Preparation', filename: 'EAM 2.3 Analytical Solution Preparation.pdf', field: '화학·분석', stepCount: 13,
+    steps: [
+      { label: '', id: 'eam-step-1', korean: null, source: 'Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls; mass typically recorded to ≤0.001g).' },
+      { label: '', id: 'eam-step-2', korean: null, source: 'Optional - Add 1 mL water. (See note below for highly reactive matrices)', timerSeconds: 1200, timerLeft: 45 },
+    ],
+  },
+  soil: {
+    key: 'soil', id: 'p-soil-sop-005', title: 'Soil nutrient analysis (EU RADIANT SOP 005)', filename: 'Soil nutrient analysis (EU RADIANT SOP 005).pdf', field: '화학·분석', stepCount: 16,
+    steps: [
+      { label: '1', id: 'soil-step-1', korean: null, source: '1. Weigh 10 g of sieved dry soil soil.' },
+      { label: '2', id: 'soil-step-2', korean: null, source: '2. Add in a flask the soil sample and 100 mL of KCL (1M)', timerSeconds: 3600, timerLeft: 50 },
+    ],
+  },
+};
 
 export class StandIn {
   signedIn = false;
@@ -102,7 +127,14 @@ export class StandIn {
   revision = 0;
   step = 0;
   configurationId = 0;
+  // The server's generation: session.ready's number, moved on by a joined utterance (lane HEAR) or a barge-in; a resume
+  // must carry the current one (server.py's workflow.resume fence), a pause need not.
+  generation = 0;
+  report = 'ER-RX4-0000000000000001';
+  feedback: Message[] = [];
   received: string[] = [];
+  /** Every control the screen sent, in order (its type and the generation it carried). */
+  controls: Message[] = [];
   settings: Record<string, string> = { confirm_mode: 'readback', question_timing: 'before_start', web_lookup: 'on', proactive_mode: 'all', ambient_mode: 'quiet', speaker_sensitivity: 'normal', agent_voice: 'default', voice_calibration: 'none', speaker_filter: 'off', voice_reference: 'none' };
   calibrations: Array<{ pcm_base64: string; mic_id: string | null }> = [];
   audioReady: Message[] = [];
@@ -116,42 +148,55 @@ export class StandIn {
   socket: WebSocketRoute | null = null;
   private send: (message: Message) => void = () => undefined;
 
-  constructor(options: { signedIn?: boolean } = {}) {
+  protocol: ProtocolPlan = PROTOCOLS.ingel;
+
+  constructor(options: { signedIn?: boolean; protocol?: keyof typeof PROTOCOLS } = {}) {
     this.signedIn = options.signedIn ?? false;
+    this.protocol = PROTOCOLS[options.protocol ?? 'ingel'];
+  }
+
+  /** The catalog's row for the protocol this stand-in runs. */
+  entry() {
+    return { ...ENTRY, protocol_id: this.protocol.id, title: this.protocol.title, source_filename: this.protocol.filename, step_count: this.protocol.stepCount };
   }
 
   experiment() {
-    return { session_id: SESSION, protocol_id: PID, protocol_title: 'In-gel digestion', status: this.ended ? 'stopped' : 'in_progress', version: 3, current_step_label: STEPS[this.step].label, started_at: iso(Date.now() - 600_000), owner_principal_id: 'p-a-rx2' };
+    return { session_id: SESSION, protocol_id: this.protocol.id, protocol_title: this.protocol.title, status: this.ended ? 'stopped' : 'in_progress', version: 3, current_step_label: this.protocol.steps[this.step].label, started_at: iso(Date.now() - 600_000), owner_principal_id: 'p-a-rx2' };
   }
 
   timeline() {
     const events: object[] = [{ event_type: 'session_started', step_label: '1', created_at: iso(Date.now() - 600_000) }];
     events.push({ event_id: 'ev-voice-1', event_type: 'observation_recorded', step_label: '3', created_at: iso(Date.now() - 300_000), observation: { content: '젤 조각이 투명해졌어요', capture_source: 'voice', category: 'note' } });
-    this.memos.forEach((content, at) => events.push({ event_id: `ev-memo-${at}`, event_type: 'observation_recorded', step_label: STEPS[this.step].label, created_at: iso(Date.now()), observation: { content, capture_source: 'manual', category: 'note' } }));
-    this.photos.forEach((name, at) => events.push({ event_id: `ev-photo-${at}`, event_type: 'evidence_attached', step_label: STEPS[this.step].label, created_at: iso(Date.now()), evidence: { evidence_id: `e${at}`, original_filename: name, media_type: 'image/png' } }));
+    this.memos.forEach((content, at) => events.push({ event_id: `ev-memo-${at}`, event_type: 'observation_recorded', step_label: this.protocol.steps[this.step].label, created_at: iso(Date.now()), observation: { content, capture_source: 'manual', category: 'note' } }));
+    this.photos.forEach((name, at) => events.push({ event_id: `ev-photo-${at}`, event_type: 'evidence_attached', step_label: this.protocol.steps[this.step].label, created_at: iso(Date.now()), evidence: { evidence_id: `e${at}`, original_filename: name, media_type: 'image/png' } }));
     return { session: this.experiment(), timeline: events, observation_count: 1 + this.memos.length, evidence_count: this.photos.length };
   }
 
   state() {
-    const plan = STEPS[this.step];
+    const plan = this.protocol.steps[this.step];
     const step = plan.timerSeconds
       ? { state: 'running', duration_seconds: plan.timerSeconds, remaining_seconds: plan.timerLeft, elapsed_seconds: plan.timerSeconds - (plan.timerLeft ?? 0), step_id: plan.id, step_label: plan.label, deadline_at: iso(Date.now() + (plan.timerLeft ?? 0) * 1000), name: `${Math.round(plan.timerSeconds / 60)}분`, bound: 'exact' }
       : null;
     return {
-      attached: true, protocol_id: PID, revision_id: REVISION, source_sha256: SOURCE, display_name: 'In-gel digestion', development_only: false,
-      readiness_status: 'guidance_ready', active: true, current_step_label: plan.label, current_step_id: plan.id, total_steps: 9,
-      at_final_step: false, block_reason: null, revision: this.revision++, display_summary: plan.source, primary_summary: plan.korean,
-      spoken_summary: plan.korean, visual_assets: [], visual_status: plan.figure ? 'available' : 'unavailable', source_page_refs: [2],
-      workflow_status: this.paused ? 'paused' : 'running', timers: { step },
+      attached: true, protocol_id: this.protocol.id, revision_id: REVISION, source_sha256: SOURCE, display_name: this.protocol.title, development_only: false,
+      readiness_status: 'guidance_ready', active: true, current_step_label: plan.label, current_step_id: plan.id, total_steps: this.protocol.stepCount,
+      // As server.py's state(): primary_summary is the step's Korean when one is stored, else the source sentence itself.
+      at_final_step: false, block_reason: null, revision: this.revision++, display_summary: plan.source, primary_summary: plan.korean ?? plan.source,
+      spoken_summary: plan.korean ?? plan.source, source_language: 'en', visual_assets: [], visual_status: plan.figure ? 'available' : 'unavailable', source_page_refs: [2],
+      workflow_status: this.paused ? 'paused' : 'running', timers: { step, experiment: { state: 'running', started_at: iso(Date.now() - 600_000), ended_at: null, elapsed_seconds: 600 } },
     };
   }
 
   screen() {
-    const plan = STEPS[this.step];
+    const steps = this.protocol.steps;
+    const plan = steps[this.step];
     const figures = plan.figure
-      ? [{ kind: 'source_figure', protocol_id: PID, revision_id: REVISION, source_document_id: SOURCE, source_page: 2, figure_id: 'source-figure-2-1', sha256: 'd'.repeat(64), caption: 'Figure 1. 젤 조각을 담은 튜브', label: '원문 2쪽 그림 1', mime_type: 'image/png', url: `/api/protocols/${PID}/revisions/${REVISION}/figures/source-figure-2-1` }]
+      ? [{ kind: 'source_figure', protocol_id: this.protocol.id, revision_id: REVISION, source_document_id: SOURCE, source_page: 2, figure_id: 'source-figure-2-1', sha256: 'd'.repeat(64), caption: 'Figure 1. 젤 조각을 담은 튜브', label: '원문 2쪽 그림 1', mime_type: 'image/png', url: `/api/protocols/${this.protocol.id}/revisions/${REVISION}/figures/source-figure-2-1` }]
       : [];
-    return { next_step_sentence: this.step + 1 < STEPS.length ? `${STEPS[this.step + 1].label}단계: ${STEPS[this.step + 1].korean}` : null, source_figures: figures };
+    // As server.py's next_step_sentence: the stored Korean (which carries its own "N단계:"), else the source sentence.
+    const following = steps[this.step + 1];
+    const next = following ? (following.korean ? `${following.label}단계: ${following.korean}` : following.source) : null;
+    return { next_step_sentence: next, source_figures: figures };
   }
 
   pushState(action = 'state') {
@@ -160,13 +205,26 @@ export class StandIn {
 
   /** The server moves to the next step (as a "다음 단계" turn would). */
   nextStep() {
-    this.step = Math.min(STEPS.length - 1, this.step + 1);
+    this.step = Math.min(this.protocol.steps.length - 1, this.step + 1);
     this.pushState('next');
+  }
+
+  /** A joined utterance or a barge-in: the server's generation moves on, announced by a speech.start with the new number
+      (server.py's _join_continuation and the superseding turn), here let go again without words. */
+  supersede() {
+    this.generation += 1;
+    this.send({ type: 'speech.start', configuration_id: this.configurationId, turn_id: 41 + this.generation, generation: this.generation });
+    this.send({ type: 'speech.rejected', configuration_id: this.configurationId, turn_id: 41 + this.generation, generation: this.generation, reason: 'too_short' });
   }
 
   /** The server dropped a sound it could not use (lane HEAR's speech.dropped). */
   misheard() {
     this.send({ type: 'speech.dropped', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'empty_transcript', duration_ms: 640, level_db: -31.2, paused: false, during_playback: false, notice: '잘 안 들렸어요' });
+  }
+
+  /** The last control of a type the screen sent, with the generation it carried. */
+  lastControl(type: string): Message | undefined {
+    return [...this.controls].reverse().find((item) => item.type === type);
   }
 
   /** The server's side of the socket goes away (a lost connection; connection.js tries again). */
@@ -199,23 +257,31 @@ export class StandIn {
         return json({ state: 'measured', level_db: -23.4, measured_at: new Date().toISOString(), mic_id: body.mic_id || 'unknown', speaker_filter: this.settings.speaker_filter, max_age_days: 14 });
       }
       if (path === '/api/voice/preview') return route.fulfill({ status: 200, contentType: 'audio/wav', body: silenceWav() });
-      if (path === '/api/protocols') return json({ protocols: [ENTRY] });
-      if (path === `/api/protocols/${PID}`) return json({ ...ENTRY, analysis_run: { state: 'passed', failure_code: null, reanalysis: false } });
-      if (path === `/api/protocols/${PID}/review`) return json(REVIEW);
-      if (path === `/api/protocols/${PID}/start-check`) return json(CHECK);
-      if (path === `/api/protocols/${PID}/start-check/answers`) { this.answers.push(request.postDataJSON()); return json({ proceed: true, message_ko: '', followups: [] }); }
-      if (path === `/api/protocols/${PID}/start-check/safety`) { this.safetyReads += 1; return json({ ready: true, target: TARGET }); }
-      if (path === `/api/protocols/${PID}/start-check/changes`) {
+      const id = this.protocol.id;
+      if (path === '/api/protocols') return json({ protocols: [this.entry()] });
+      if (path === `/api/protocols/${id}`) return json({ ...this.entry(), analysis_run: { state: 'passed', failure_code: null, reanalysis: false } });
+      if (path === `/api/protocols/${id}/review`) return json(REVIEW);
+      if (path === `/api/protocols/${id}/start-check`) return json(CHECK);
+      if (path === `/api/protocols/${id}/start-check/answers`) { this.answers.push(request.postDataJSON()); return json({ proceed: true, message_ko: '', followups: [] }); }
+      if (path === `/api/protocols/${id}/start-check/safety`) { this.safetyReads += 1; return json({ ready: true, target: TARGET }); }
+      if (path === `/api/protocols/${id}/start-check/changes`) {
         if (request.method() === 'POST') { this.changeChoices.push(request.postDataJSON()); return json({ change_set_id: 'run-changes-0123456789abcdef01234567', source: 'wizard', changes: [] }); }
-        return json(CHANGES);
+        return json({ ...CHANGES, protocol_id: id });
       }
-      if (path.startsWith(`/api/protocols/${PID}/revisions/${REVISION}/figures/`)) return route.fulfill({ status: 200, contentType: 'image/png', body: FIGURE });
+      if (path.startsWith(`/api/protocols/${id}/revisions/${REVISION}/figures/`)) return route.fulfill({ status: 200, contentType: 'image/png', body: FIGURE });
       if (path === '/api/workspace/session') return json({ display_name: '김재준', principal_id: 'p-a-rx2' });
       if (path === '/api/workspace/experiments') return json({ experiments: this.started && !this.ended ? [this.experiment()] : [] });
       if (path === `/api/workspace/experiments/${SESSION}`) return json(this.experiment());
       if (path === `/api/workspace/experiments/${SESSION}/timeline`) return json(this.timeline());
       if (path === `/api/workspace/experiments/${SESSION}/observations`) { this.memos.push(String(request.postDataJSON().content)); return json({ ok: true }); }
       if (path === `/api/workspace/experiments/${SESSION}/evidence`) { this.photos.push(new URL(request.url()).searchParams.get('filename') || 'photo'); return json({ ok: true }); }
+      // Lane LOG's end-of-experiment answer, as server.py's post_pilot_feedback takes it (lane RX4 adds the chips as tags).
+      if (path === '/api/pilot/feedback') {
+        const body = request.postDataJSON();
+        if (body.report_id !== this.report) return json({ detail: 'experiment report unavailable' }, 404);
+        this.feedback.push(body);
+        return json({ saved: true }, 201);
+      }
       return json({ detail: 'not_found' }, 404);
     });
   }
@@ -235,6 +301,7 @@ export class StandIn {
         return;
       }
       this.received.push(message.type);
+      this.controls.push(message);
       if (message.type === 'client.audio_ready') {
         this.audioReady.push(message);
         // Lane HEAR decision 2: what the run's filter is, from the setting, the measurement and this microphone.
@@ -246,22 +313,37 @@ export class StandIn {
         this.started = true;
         this.starts.push(message);
         this.configurationId = message.configuration_id;
-        this.send({ type: 'session.ready', configuration_id: message.configuration_id, generation: 1, mode: 'cascade', language: 'ko', input_language: 'ko', protocol_id: PID, revision_id: REVISION, research_capabilities: {}, experiment_session_id: SESSION, experiment_session_version: 3 });
+        // Each start moves the generation on (server.py's ListenerSession.start); session.ready carries the new number.
+        this.generation += 1;
+        this.send({ type: 'session.ready', configuration_id: message.configuration_id, generation: this.generation, mode: 'cascade', language: 'ko', input_language: 'ko', protocol_id: this.protocol.id, revision_id: REVISION, research_capabilities: {}, experiment_session_id: SESSION, experiment_session_version: 3 });
         this.pushState('attached');
         this.send({ type: 'session.started', state: 'IDLE', pipeline: 'cascade' });
-        this.send({ type: 'session.greeting', configuration_id: message.configuration_id, turn_id: 1, generation: 1, greeting_id: 'g-1', text: GREETING });
+        this.send({ type: 'session.greeting', configuration_id: message.configuration_id, turn_id: 1, generation: this.generation, greeting_id: 'g-1', text: GREETING });
+        // The record this run writes (server.py's experiment.report.state), which the end screen's rating names.
+        this.send({ type: 'experiment.report.state', configuration_id: message.configuration_id, turn_id: 1, generation: this.generation, report: { report_id: this.report, status: 'in_progress', protocol_title: this.protocol.title, started_at: iso(Date.now() - 600_000), session_id: SESSION, protocol_id: this.protocol.id, event_count: 1, events: [] } });
         beat = setInterval(() => this.send({ type: 'server.heartbeat', server_time_ms: Date.now() }), 1000);
       }
-      if (message.type === 'workflow.pause' || message.type === 'workflow.resume') {
-        this.paused = message.type === 'workflow.pause';
+      if (message.type === 'workflow.pause') {
+        this.paused = true;
         // Lane HEAR decision 7: the guidance playing stops with the pause.
-        if (this.paused) this.send({ type: 'playback.stop', configuration_id: this.configurationId, turn_id: 1, generation: 1, reason: 'paused' });
-        this.pushState(this.paused ? 'pause' : 'resume');
+        this.send({ type: 'playback.stop', configuration_id: this.configurationId, turn_id: 1, generation: this.generation, reason: 'paused' });
+        this.pushState('pause');
+      }
+      if (message.type === 'workflow.resume') {
+        // server.py's fence: a resume with another generation than the server's own is refused as stale (the person's test
+        // of 2026-10-26 hit this after the generation had moved on); the screen is told and nothing changes.
+        if (message.configuration_id !== this.configurationId || message.generation !== this.generation) {
+          this.send({ type: 'workflow.control.refused', action: 'resume', configuration_id: this.configurationId, generation: this.generation, reason: 'stale_configuration', message_ko: '현재 연결의 설정으로 다시 요청해 주세요.' });
+        } else {
+          this.paused = false;
+          this.pushState('resume');
+        }
       }
       if (message.type === 'session.stop') {
+        // As server.py's session.stop: the saved experiment is stopped and the session let go; experiment.ended is not sent
+        // here (it comes only with the turn that ends a run by voice), so the end the screen shows stands on the stop itself.
         this.ended = true;
         this.send({ type: 'experiment.session.state', state: { ...this.experiment(), status: 'stopped' } });
-        this.send({ type: 'experiment.ended', configuration_id: this.configurationId, status: 'stopped', report: 'saved' });
         this.send({ type: 'session.stopped' });
       }
     });

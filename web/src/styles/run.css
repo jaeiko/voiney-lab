@@ -75,7 +75,16 @@ body[data-run="on"] { background: var(--paper); }
 .run-step-waiting { color: var(--ink-muted); }
 .run-next { color: var(--ink-muted); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
 .run-source summary { font-size: var(--run-status); line-height: var(--run-status-line); min-height: var(--run-target); }
-.run-source p { font-size: var(--run-next); line-height: var(--run-next-line); }
+/* Lane RX4 (person's decision 2, 2026-10-26): the Korean large, the source small and muted under it; a step with no Korean
+   yet says 번역 준비 중 and shows its source at the next-step size, never at the step size. The same for the next step,
+   a card and the caption. */
+.run-source p { color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 400; }
+.run-step-pending, .run-next-pending { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+.run-step-pending svg { width: 24px; height: 24px; }
+.run-step-text[data-lang="source"] { font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+.run-next[data-lang="source"] { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 400; }
+.run-card-text[data-lang="source"] { font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-caption[data-lang="source"] { font-size: var(--run-next); line-height: var(--run-next-line); }
 .run-changes { margin: 0; padding-left: var(--space-6); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
 
 .run-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: var(--border) solid var(--ink); border-radius: var(--radius); font-size: var(--run-next); line-height: var(--run-next-line); }
@@ -172,6 +181,14 @@ body[data-run="on"] { background: var(--paper); }
 }
 .run-paused p { max-width: 960px; font-size: var(--run-step-min); line-height: var(--run-step-min-line); font-weight: 700; }
 .run-paused-resume { min-height: var(--run-target); border-color: var(--on-ink); background: var(--paper); color: var(--ink); font-size: var(--run-next); line-height: var(--run-next-line); }
+/* Decision 1 (2026-10-26): [다시 시작] and [종료] side by side; a refusal the server sent is said in the band itself. */
+.run-paused-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-4); }
+.run-paused .run-stop { min-height: var(--run-target); font-size: var(--run-next); line-height: var(--run-next-line); }
+.run-paused p.run-paused-note { max-width: 720px; padding: var(--space-3) var(--space-4); border: var(--border-state) solid var(--on-ink); border-radius: var(--radius); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+.run-paused p.run-paused-hint { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 400; }
+/* The stop's question opens above the band. */
+.run-dialog-backdrop { z-index: 70; }
+.run-dialog { z-index: 71; }
 
 /* --- No run: an ordinary page ---------------------------------------------- */
 .run-empty { display: flex; flex-direction: column; gap: var(--space-4); max-width: 760px; }

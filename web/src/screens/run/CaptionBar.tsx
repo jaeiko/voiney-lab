@@ -3,7 +3,7 @@ import { MessagesSquare, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { run as copy } from "../../copy/ko";
-import type { LogLine } from "../../voice/runModel";
+import { readsKorean, type LogLine } from "../../voice/runModel";
 
 // The caption (person's decision 2): the last words said or heard in at most
 // two whole lines -- never cut. Words that do not fit in two lines are shown
@@ -62,6 +62,8 @@ export function pageMs(page: string): number {
 export function CaptionBar({ caption, log }: { caption: LogLine | null; log: LogLine[] }) {
   const [open, setOpen] = useState(false);
   const text = caption ? (caption.who === "heard" ? `“${caption.text}”` : caption.text) : copy.caption.empty;
+  // Lane RX4 (decision 2): words that are not Korean -- a source sentence read on request -- are not shown large.
+  const lang = caption && !readsKorean(caption.text) ? "source" : "ko";
   const measurer = useRef<HTMLSpanElement>(null);
   const [pages, setPages] = useState<string[]>([text]);
   const [index, setIndex] = useState(0);
@@ -98,7 +100,7 @@ export function CaptionBar({ caption, log }: { caption: LogLine | null; log: Log
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button type="button" className="run-caption" data-who={caption?.who ?? "said"} aria-label={copy.caption.open} data-testid="run-caption">
+        <button type="button" className="run-caption" data-who={caption?.who ?? "said"} data-lang={lang} aria-label={copy.caption.open} data-testid="run-caption">
           <MessagesSquare aria-hidden="true" />
           <span className="run-caption-box">
             <span className="run-caption-text" data-testid="run-caption-text" data-page={index + 1} data-pages={pages.length} aria-live="polite">

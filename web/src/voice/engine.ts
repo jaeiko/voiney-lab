@@ -15,7 +15,7 @@
 // state; the server does.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { run as runCopy } from "../copy/ko";
-import type { VoiceState } from "./runModel";
+import { newestGeneration, type VoiceState } from "./runModel";
 import { runStore } from "./runStore";
 
 declare let playbackEpoch: number;
@@ -399,12 +399,25 @@ export async function stopRun(): Promise<void> {
   void keepScreenOn(false);
   runStore.set({ phase: "idle", active: false });
   renderState("IDLE");
+  // The server says nothing more after session.stop (experiment.ended comes only with the turn that ends a run), so the
+  // end the person pressed stands on the stop itself: the end screen, with the record it wrote (lane RX4).
+  const model = runStore.get().model;
+  if (wasActive && !model.ended) runStore.set({ model: { ...model, ended: { status: "stopped", report: null } } });
+}
+
+/** The generation a bench control carries: the newest the server has shown this connection (runModel's newestGeneration; lane RX4's pause fix). */
+export function latestServerGeneration(): number | null {
+  const accepted = acceptedSessionConfiguration;
+  if (!accepted) return null;
+  return newestGeneration(accepted.server_generation, g.turnServerGenerations, sessionGeneration);
 }
 
 /** index.html's togglePauseSession: the server pauses or resumes; the screen shows what its state then says. */
 export function togglePause(paused: boolean): boolean {
   if (!sessionActive || !socket || socket.readyState !== WebSocket.OPEN) return false;
-  socket.send(JSON.stringify({ type: paused ? "workflow.resume" : "workflow.pause", configuration_id: acceptedSessionConfiguration?.configuration_id, generation: acceptedSessionConfiguration?.server_generation }));
+  // The server compares a resume with its own generation, which a joined utterance or a barge-in moved on from
+  // session.ready's (lane RX4, person's test of 2026-10-26: [다시 시작] was refused as stale): the newest one seen goes.
+  socket.send(JSON.stringify({ type: paused ? "workflow.resume" : "workflow.pause", configuration_id: acceptedSessionConfiguration?.configuration_id, generation: latestServerGeneration() }));
   return true;
 }
 
@@ -412,7 +425,7 @@ export function togglePause(paused: boolean): boolean {
 export function chooseCandidate(turnId: number, name: string): boolean {
   const accepted = acceptedSessionConfiguration;
   if (!sessionActive || !accepted || socket?.readyState !== WebSocket.OPEN || !Number.isInteger(turnId) || !name.trim()) return false;
-  sendControl("client.clarify_choice", { configuration_id: accepted.configuration_id, generation: accepted.server_generation, turn_id: turnId, candidate: name });
+  sendControl("client.clarify_choice", { configuration_id: accepted.configuration_id, generation: latestServerGeneration(), turn_id: turnId, candidate: name });
   return true;
 }
 

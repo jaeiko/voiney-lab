@@ -13,7 +13,7 @@ import { APP, GREETING, inView, notClipped, overflow, StandIn, STEPS } from './a
 // minute) -> [종료] -> the end. On the experiment screen the records and their two buttons are seen without
 // scrolling and the caption shows its whole sentence. With RX2_SHOTS set, each screen is photographed there.
 
-async function shot(page: Page, info: TestInfo, name: string) {
+export async function shot(page: Page, info: TestInfo, name: string) {
   const dir = process.env.RX2_SHOTS;
   if (!dir) return;
   mkdirSync(dir, { recursive: true });
@@ -122,8 +122,18 @@ export async function walk(page: Page, info: TestInfo) {
   // Lane HEAR decision 2: the run tells the server its microphone's id.
   await expect.poll(() => server.audioReady.length).toBe(1);
   expect(server.audioReady[0].mic_id).toBe(server.calibrations[0].mic_id);
-  await expect(page.getByTestId('run-step-text')).toHaveText(STEPS[0].korean);
+  await expect(page.getByTestId('run-step-text')).toHaveText(STEPS[0].korean!);
   expect(server.starts[0]).toMatchObject({ protocol_id: 'p-rx2-1', run_change_set_id: 'run-changes-0123456789abcdef01234567', mode: 'cascade' });
+  // Person's decision 2 (2026-10-26): the Korean large and bold, the source small under it, folded; opened, it reads at
+  // less than two thirds of the Korean's size, and the step's label is not repeated in the sentence (decision 5).
+  await expect(page.getByTestId('run-step-text')).toHaveAttribute('data-lang', 'ko');
+  await expect(page.getByTestId('run-source')).not.toHaveAttribute('open');
+  await page.getByTestId('run-source').locator('summary').click();
+  await expect(page.getByTestId('run-source-text')).toHaveText(STEPS[0].source);
+  const sizes = await page.evaluate(() => ['run-step-text', 'run-source-text'].map((id) => parseFloat(getComputedStyle(document.querySelector(`[data-testid="${id}"]`)!).fontSize)));
+  expect(sizes[1], `source ${sizes[1]}px beside Korean ${sizes[0]}px`).toBeLessThan(sizes[0] * 0.67);
+  await page.getByTestId('run-source').locator('summary').click();
+  await expect(page.getByTestId('run-next')).toHaveText(`다음 단계: ${STEPS[1].korean}`);
   await expect(page.getByTestId('run-listening')).toBeVisible();
   // No run bar outside the run: the app's menu is not shown while it runs.
   await expect(page.locator('nav.nav')).toHaveCount(0);
@@ -191,9 +201,23 @@ export async function walk(page: Page, info: TestInfo) {
   // playback.stop came with the pause and stopped the guidance (voice-core's clearPlayback).
   await expect.poll(() => page.evaluate(() => (window as any).__cleared)).toBeGreaterThanOrEqual(1);
   await shot(page, info, '15-run-paused');
+  // The band offers [종료] too (person's decision 1 of 2026-10-26), enabled.
+  await expect(page.getByTestId('run-paused-stop')).toBeEnabled();
   await page.getByTestId('run-resume').click();
   await expect(page.getByTestId('run-paused')).toHaveCount(0);
   expect(server.received).toContain('workflow.resume');
+
+  // Lane RX4 (the person's test of 2026-10-26): a joined utterance or a barge-in moved the server's generation on. The
+  // resume carries the newest generation the server showed, so [다시 시작] still works: pause -> resume -> pause -> resume.
+  const before = server.generation;
+  server.supersede();
+  await page.waitForFunction((wanted) => [...(window as any).turnServerGenerations.values()].includes(wanted), before + 1);
+  await page.getByTestId('run-pause').click();
+  await expect(page.getByTestId('run-paused')).toBeVisible();
+  await page.getByTestId('run-resume').click();
+  await expect(page.getByTestId('run-paused')).toHaveCount(0);
+  expect(server.lastControl('workflow.resume')?.generation).toBe(server.generation);
+  expect(server.paused).toBe(false);
 
   // The next step: its timer in its last minute is large.
   server.nextStep();
@@ -220,13 +244,31 @@ export async function walk(page: Page, info: TestInfo) {
   await expect(page.getByTestId('run-listening')).not.toHaveAttribute('data-word', 'reconnecting');
   await expect(page.locator('#connection-band')).toBeHidden({ timeout: 10_000 });
 
-  // [종료]: asked once, then the end.
-  await page.getByTestId('run-stop').click();
+  // [종료] from the paused band (decision 1: 일시정지 → 다시 시작 → 일시정지 → 종료·저장): asked once, then the end.
+  await page.getByTestId('run-pause').click();
+  await expect(page.getByTestId('run-paused')).toBeVisible();
+  await page.getByTestId('run-paused-stop').click();
   await page.getByTestId('run-stop-confirm').click();
   await expect(page.getByTestId('run-ended')).toContainText('실험을 멈췄어요');
   expect(server.received).toContain('session.stop');
+  // The end screen (decision 3): what was done, three numbers from the run, one question, chips, a line, [보내기].
+  await expect(page.getByTestId('end-sub')).toContainText('In-gel digestion');
+  await expect(page.getByTestId('end-counts').locator('[data-count="voice"] .end-count-number')).toHaveText('1');
+  await expect(page.getByTestId('end-counts').locator('[data-count="changes"] .end-count-number')).toHaveText('0');
+  await expect(page.getByTestId('end-counts').locator('[data-count="help"] .end-count-number')).toHaveText('0');
+  await expect(page.getByTestId('end-send')).toBeDisabled();
   await noOverflow(page, 'the end');
   await shot(page, info, '18-run-ended');
+  await page.getByRole('radio', { name: '편했어요', exact: true }).click();
+  await page.getByRole('button', { name: '말을 잘 알아들었어요' }).click();
+  await page.getByRole('button', { name: '타이머가 편했어요' }).click();
+  await page.getByTestId('end-note').fill('소리가 조금 작았어요');
+  await shot(page, info, '18b-run-ended-answered');
+  await page.getByTestId('end-send').click();
+  await expect(page.getByTestId('end-thanks')).toContainText('고마워요');
+  expect(server.feedback).toEqual([{ report_id: server.report, rating: 4, skipped: false, note: '소리가 조금 작았어요', tags: ['heard_well', 'timer_easy'] }]);
+  await expect(page.getByTestId('end-home')).toHaveAttribute('href', '#/home');
+  await shot(page, info, '18c-run-ended-sent');
 }
 
 /** The settings screen, photographed and checked on its own. */
