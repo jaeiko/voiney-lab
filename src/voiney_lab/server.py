@@ -1642,6 +1642,15 @@ def _workspace_started_at(state:Any)->float|None:
         return None
 
 
+#: Lane HEAR2, decision 3: the record's event for each timer command.
+_TIMER_EVENT_TYPES={
+    CuratedProtocolAction.TIMER_PAUSE:"timer_paused",
+    CuratedProtocolAction.TIMER_RESUME:"timer_resumed",
+    CuratedProtocolAction.TIMER_CANCEL:"timer_cancelled",
+    CuratedProtocolAction.TIMER_RESTART:"timer_restarted",
+}
+
+
 def _transition_workspace_experiment(
     session:ListenerSession,
     *,
@@ -1689,6 +1698,9 @@ def _record_workspace_experiment_progress(
         CuratedProtocolAction.PAUSE,
         CuratedProtocolAction.RESUME,
         CuratedProtocolAction.START_TIMER,
+        # Lane HEAR2, decision 3: the timer's voice commands, for the restore
+        # after a lost connection.
+        *_TIMER_EVENT_TYPES,
         # Lane EASY, decision 2: today's values, for a run continued after a
         # lost connection.
         CuratedProtocolAction.CHANGE_VALUE,
@@ -1742,6 +1754,20 @@ def _record_workspace_experiment_progress(
         event_payload["timer"].update({
             key:planned_timer[key] for key in ("name","bound") if key in planned_timer
         })
+    elif plan.action in _TIMER_EVENT_TYPES:
+        # Lane HEAR2, decision 3: the timer as it stood after the command
+        # (paused: where it stands; resumed or restarted: its new start;
+        # cancelled: what was cleared), for the restore after a lost connection.
+        planned_timer=plan.timer_payload
+        if not isinstance(planned_timer,dict) or planned_timer.get("step_id")!=previous.step_id:
+            raise WorkspaceError("A timer command requires the current step's timer.")
+        event_payload["timer"]={
+            key:planned_timer.get(key) for key in (
+                "state","duration_seconds","remaining_seconds","elapsed_seconds",
+                "step_index","step_id","step_label","deadline_at","started_at",
+                "paused_at","name","bound",
+            )
+        }
     # Lane R7: a return within a repeat, a later start and a step completed
     # again in a later round are recorded as what they are. A step already
     # marked completed is not marked again: the durable session keeps one
@@ -1780,6 +1806,8 @@ def _record_workspace_experiment_progress(
                 if plan.action is CuratedProtocolAction.START else
                 "timer_started"
                 if plan.action is CuratedProtocolAction.START_TIMER else
+                _TIMER_EVENT_TYPES[plan.action]
+                if plan.action in _TIMER_EVENT_TYPES else
                 "step_completed" if plan.reported_completion else "step_advanced"
             ),
             step_id=previous.step_id,
@@ -9780,6 +9808,10 @@ def _record_experiment_report_plan(
     # refused, nothing started or stopped, so nothing is kept.
     elif plan.action is CuratedProtocolAction.START_TIMER and plan.state_changed:
         event_type="timer_started"
+    elif plan.action in _TIMER_EVENT_TYPES and plan.state_changed:
+        # Lane HEAR2, decision 3: a timer paused, resumed, cancelled or run
+        # again by voice, with the timer as it then stood.
+        event_type=_TIMER_EVENT_TYPES[plan.action]
     elif plan.action is CuratedProtocolAction.PAUSE and plan.state_changed:
         event_type="workflow_paused"
     elif plan.action is CuratedProtocolAction.RESUME and plan.state_changed:
@@ -10147,12 +10179,14 @@ _EXPERIMENT_REPORT_ACTIONS=frozenset({
     # these; on the served path they never reached the report before.
     CuratedProtocolAction.START_TIMER,CuratedProtocolAction.PAUSE,
     CuratedProtocolAction.RESUME,
+    # Lane HEAR2, decision 3: the timer's voice commands.
+    *_TIMER_EVENT_TYPES,
 })
 #: Kept only when they took effect (lane N, decision 4): a timer asked for
 #: again while it runs, or a pause or resume refused, leaves the report alone.
 _REPORTED_WHEN_CHANGED=frozenset({
     CuratedProtocolAction.START_TIMER,CuratedProtocolAction.PAUSE,
-    CuratedProtocolAction.RESUME,
+    CuratedProtocolAction.RESUME,*_TIMER_EVENT_TYPES,
 })
 
 
@@ -13907,6 +13941,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.RESUME:"workflow_resumed",
             CuratedProtocolAction.START_TIMER:"step_timer_started",
             CuratedProtocolAction.TIMER_STATUS:"step_timer_status_read",
+            # Lane HEAR2, decision 3: the timer's voice commands.
+            CuratedProtocolAction.TIMER_PAUSE:"step_timer_paused",
+            CuratedProtocolAction.TIMER_RESUME:"step_timer_resumed",
+            CuratedProtocolAction.TIMER_CANCEL:"step_timer_cancelled",
+            CuratedProtocolAction.TIMER_RESTART:"step_timer_restarted",
             CuratedProtocolAction.PREVIEW_STEP:"step_preview_read",
             CuratedProtocolAction.STEP_RANGE:"step_range_read",
             CuratedProtocolAction.LAB_DOMAIN_QA:"lab_domain_qa_read",
@@ -14721,9 +14760,13 @@ def _standing_timer(experiment_state:Mapping[str,Any])->dict[str,Any]|None:
     standing=None
     for item in experiment_state.get("events") or ():
         kind=item.get("event_type")
-        if kind=="timer_started":
+        if kind in {"timer_started","timer_restarted","timer_resumed","timer_paused"}:
+            # Lane HEAR2, decision 3: the last timer event is the timer as
+            # it stands -- paused where it was, or running from its new start.
             timer=(item.get("payload") or {}).get("timer")
             standing=timer if isinstance(timer,dict) else None
+        elif kind=="timer_cancelled":
+            standing=None
         elif kind not in _TIMER_KEEPING_EVENTS:
             standing=None
     if standing is None or standing.get("step_id")!=experiment_state.get("current_step_id"):
@@ -14757,6 +14800,15 @@ def _restore_standing_timer(
     if index is None or index!=curated.current_index:
         return None
     ok,_seconds,_words=curated.start_timer(index,now=started,duration_seconds=duration)
+    if ok and timer.get("state")=="paused":
+        # Lane HEAR2, decision 3: paused where it was; no time passes until
+        # the person resumes it.
+        try:
+            paused_at=datetime.fromisoformat(str(timer["paused_at"])).timestamp()
+        except (KeyError,TypeError,ValueError):
+            paused_at=None
+        if paused_at is not None:
+            curated.pause_timer(now=paused_at)
     return curated.timer_status() if ok else None
 
 

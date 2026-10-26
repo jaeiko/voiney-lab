@@ -140,6 +140,11 @@ class CuratedProtocolAction(str, Enum):
     RESUME = "resume"
     START_TIMER = "start_timer"
     TIMER_STATUS = "timer_status"
+    #: Lane HEAR2, decision 3 (2026-10-26): the step timer's voice commands.
+    TIMER_PAUSE = "timer_pause"
+    TIMER_RESUME = "timer_resume"
+    TIMER_CANCEL = "timer_cancel"
+    TIMER_RESTART = "timer_restart"
     PREVIEW_STEP = "preview_step"
     STEP_RANGE = "step_range"
     LAB_DOMAIN_QA = "lab_domain_qa"
@@ -3464,6 +3469,10 @@ _OBSERVATION_PROMPT_PASS_THROUGH = frozenset({
     CuratedProtocolAction.START,
     CuratedProtocolAction.START_TIMER,
     CuratedProtocolAction.TIMER_STATUS,
+    CuratedProtocolAction.TIMER_PAUSE,
+    CuratedProtocolAction.TIMER_RESUME,
+    CuratedProtocolAction.TIMER_CANCEL,
+    CuratedProtocolAction.TIMER_RESTART,
     CuratedProtocolAction.AUDIO_RECOVERY,
     CuratedProtocolAction.CANCEL_READONLY,
     CuratedProtocolAction.RECORD_OBSERVATION,
@@ -4095,12 +4104,51 @@ def _completion_question(step_label: str) -> str:
     return f"{step_label}단계 완료하셨나요?"
 
 
+#: Lane HEAR2, decision 3 (2026-10-26): the step timer's voice commands,
+#: read before the run's pause words -- "타이머 일시정지해 줘" used to pause the
+#: whole run (``_FRONT_PAUSE_COMMAND`` takes "일시정지"). Matched whole against
+#: the utterance key; a question ("타이머 멈출까?") is not a command. The
+#: values a restart runs are the step's own (the source's, or today's changed
+#: value): nothing here reads a protocol's words or numbers.
+_TIMER_CONTROL_ACTIONS = frozenset({
+    CuratedProtocolAction.TIMER_PAUSE, CuratedProtocolAction.TIMER_RESUME,
+    CuratedProtocolAction.TIMER_CANCEL, CuratedProtocolAction.TIMER_RESTART,
+})
+_TIMER_WORD = r"(?:타이머|타임|timer)(?:를|을|은|는|이|가)?"
+_TIMER_ENDINGS = r"(?:\s*(?:해|해줘|해\s*줘|해요|해\s*주세요|주세요|줘|줄래|하자|할게|좀|요))*"
+_TIMER_CONTROL_PATTERNS: tuple[tuple[CuratedProtocolAction, re.Pattern[str]], ...] = (
+    (CuratedProtocolAction.TIMER_PAUSE, re.compile(
+        rf"^{_TIMER_WORD}\s*(?:좀|잠깐|잠시|잠깐만|잠시만)?\s*"
+        rf"(?:일시\s*정지|일시\s*중지|멈춰|멈춤|멈추|정지|중지|스톱|stop|pause|포즈|홀드|hold){_TIMER_ENDINGS}$", re.I)),
+    (CuratedProtocolAction.TIMER_RESUME, re.compile(
+        rf"^{_TIMER_WORD}\s*(?:다시\s*시작|재개|계속|이어서|resume|continue){_TIMER_ENDINGS}$", re.I)),
+    (CuratedProtocolAction.TIMER_CANCEL, re.compile(
+        rf"^{_TIMER_WORD}\s*(?:취소|꺼|끄기|끄자|꺼줘|없애|지워|해제|cancel|clear|off){_TIMER_ENDINGS}$", re.I)),
+    (CuratedProtocolAction.TIMER_RESTART, re.compile(
+        rf"^{_TIMER_WORD}\s*(?:처음부터(?:\s*다시)?|리셋|초기화|다시\s*처음부터|restart|reset){_TIMER_ENDINGS}$", re.I)),
+)
+
+
+def _front_timer_intent(key: str, language: str) -> CuratedControlIntent | None:
+    """A timer command read whole from the utterance key, or None."""
+
+    for action, pattern in _TIMER_CONTROL_PATTERNS:
+        if pattern.fullmatch(key):
+            return CuratedControlIntent(
+                intent_kind=f"step_{action.value}", action=action, language=language,
+                allows_state_mutation=True, normalized_transcript=key,
+            )
+    return None
+
+
 def _front_control_intent(transcript: str, language: str) -> CuratedControlIntent | None:
-    """Pause, end-request and end commands, read before any other rule."""
+    """Timer commands, pause, end-request and end commands, read before any other rule."""
 
     key = _utterance_key(transcript)
     if not key or _asked(transcript):
         return None
+    if (timer := _front_timer_intent(key, language)) is not None:
+        return timer
     if _FRONT_PAUSE_COMMAND.fullmatch(key):
         return CuratedControlIntent(
             intent_kind="pause_workflow", action=CuratedProtocolAction.PAUSE,
@@ -4141,6 +4189,13 @@ FRONT_RULES: dict[str, str] = {
                          "question open (D9), and the reply to a note or "
                          "problem the server is waiting on",
     "timer_remaining": "F6 the step timer's time left, from the server clock",
+    "timer_control": "'타이머 일시정지해 줘/멈춰', '타이머 다시 시작/계속', '타이머 "
+                     "취소/꺼 줘', '타이머 처음부터 다시': the step timer paused, "
+                     "resumed, cancelled or run again from now with the same "
+                     "value, read before the run's pause words; a state change "
+                     "read back as the other commands are, asked about once in "
+                     "시끄러운 곳 mode, nothing when asked as a question "
+                     "(lane HEAR2, decision 3)",
     "step_time": "the current step's source time asked ('몇 분 반응시켜?', '이 단계 몇 "
                  "분이야?'), answered from the values the server verified against "
                  "the source, or the source's words read back where it states no "
@@ -4278,6 +4333,10 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
     CuratedProtocolAction.PAUSE: "pause",
     CuratedProtocolAction.STOP: "end_command",
     CuratedProtocolAction.TIMER_STATUS: "timer_remaining",
+    CuratedProtocolAction.TIMER_PAUSE: "timer_control",
+    CuratedProtocolAction.TIMER_RESUME: "timer_control",
+    CuratedProtocolAction.TIMER_CANCEL: "timer_control",
+    CuratedProtocolAction.TIMER_RESTART: "timer_control",
     CuratedProtocolAction.CLARIFY_REFERENCE: "coreference_clarify",
     CuratedProtocolAction.REPEAT: "repeat_last_reply",
     CuratedProtocolAction.AUDIO_RECOVERY: "repeat_last_reply",
@@ -10060,6 +10119,9 @@ class CuratedProtocolSession:
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
         self._timer_step_index: int | None = None
+        #: Lane HEAR2, decision 3: when the step timer was paused by voice
+        #: (None while it runs); a resume shifts the start by the pause.
+        self._timer_paused_at: float | None = None
         self._experiment_started_at: float | None = None
         self._experiment_ended_at: float | None = None
         self._pending_anomaly: dict[str, Any] | None = None
@@ -10509,6 +10571,9 @@ class CuratedProtocolSession:
                 and (intent.requested_transition == "next" or intent.reported_completion))
         if command is CuratedProtocolAction.START_TIMER:
             return intent.intent_kind != "pending_timer_confirmed"
+        if command in _TIMER_CONTROL_ACTIONS:
+            # Lane HEAR2, decision 3: only when there is a timer to act on.
+            return self.timer_control_applies(command)
         return False
 
     def _ambient_question(self, intent: CuratedControlIntent, language: str) -> str:
@@ -10518,6 +10583,16 @@ class CuratedProtocolSession:
             return (
                 f"{label}단계 타이머를 시작할까요?" if language == "ko"
                 else f"Start the Step {label} timer?")
+        if intent.action in _TIMER_CONTROL_ACTIONS:
+            asked = {
+                CuratedProtocolAction.TIMER_PAUSE: ("멈출까요", "Pause"),
+                CuratedProtocolAction.TIMER_RESUME: ("다시 시작할까요", "Resume"),
+                CuratedProtocolAction.TIMER_CANCEL: ("취소할까요", "Cancel"),
+                CuratedProtocolAction.TIMER_RESTART: ("처음부터 다시 시작할까요", "Restart"),
+            }[intent.action]
+            return (
+                f"{label}단계 타이머를 {asked[0]}?" if language == "ko"
+                else f"{asked[1]} the Step {label} timer?")
         if self.current_index + 1 < len(steps):
             following = steps[self.current_index + 1].source_label
             return (
@@ -10899,7 +10974,55 @@ class CuratedProtocolSession:
         self._timer_started_at = current_time
         self._timer_duration_seconds = duration
         self._timer_step_index = idx
+        self._timer_paused_at = None
         return True, duration, f"Started {duration}s timer"
+
+    # --- Lane HEAR2, decision 3 (2026-10-26): the timer's voice commands -------
+    def pause_timer(self, now: float | None = None) -> bool:
+        """Pause a running step timer; its remaining time stands still. False when none runs."""
+
+        if self.timer_status(now=now).get("state") != "running":
+            return False
+        self._timer_paused_at = time.time() if now is None else now
+        return True
+
+    def resume_timer(self, now: float | None = None) -> bool:
+        """Resume a paused step timer: its start moves by the pause, so every deadline is right."""
+
+        if self._timer_paused_at is None or self._timer_started_at is None:
+            return False
+        current_time = time.time() if now is None else now
+        self._timer_started_at += max(0.0, current_time - self._timer_paused_at)
+        self._timer_paused_at = None
+        return True
+
+    def cancel_timer(self) -> bool:
+        """Clear the step timer, running, paused or run out. False when none stands."""
+
+        if self._timer_started_at is None:
+            return False
+        self._clear_step_timer()
+        return True
+
+    def restart_timer(self, now: float | None = None) -> bool:
+        """Run the standing timer again from now with the same value. False when none stands."""
+
+        if self._timer_started_at is None or self._timer_step_index is None:
+            return False
+        index, duration = self._timer_step_index, self._timer_duration_seconds
+        self._clear_step_timer()
+        started, _seconds, _ = self.start_timer(index, now=now, duration_seconds=duration)
+        return started
+
+    def timer_control_applies(self, action: "CuratedProtocolAction", now: float | None = None) -> bool:
+        """Whether this timer command has a timer to act on now."""
+
+        state = self.timer_status(now=now).get("state")
+        if action is CuratedProtocolAction.TIMER_PAUSE:
+            return state == "running"
+        if action is CuratedProtocolAction.TIMER_RESUME:
+            return state == "paused"
+        return state in {"running", "paused", "expired"}
 
     def timer_status(self, now: float | None = None) -> dict[str, Any]:
         step = (
@@ -10919,10 +11042,12 @@ class CuratedProtocolSession:
                 "step_label": step.source_label if step is not None else None,
                 "deadline_at": None,
             }
-        elapsed = current_time - self._timer_started_at
+        paused_at = self._timer_paused_at
+        # Lane HEAR2, decision 3: paused, the timer stands where it was paused.
+        elapsed = (paused_at if paused_at is not None else current_time) - self._timer_started_at
         remaining = max(0, int(round(self._timer_duration_seconds - elapsed)))
-        state = "running" if remaining > 0 else "expired"
-        deadline = datetime.fromtimestamp(
+        state = "paused" if paused_at is not None else "running" if remaining > 0 else "expired"
+        deadline = None if paused_at is not None else datetime.fromtimestamp(
             self._timer_started_at + self._timer_duration_seconds,
             tz=timezone.utc,
         ).isoformat()
@@ -10949,6 +11074,10 @@ class CuratedProtocolSession:
             # the value as.
             "name": self._timer_name(self._timer_duration_seconds, bound, "ko"),
             "bound": bound,
+            "paused_at": (
+                datetime.fromtimestamp(paused_at, tz=timezone.utc).isoformat()
+                if paused_at is not None else None
+            ),
         }
 
     # --- Lane VT, decisions 1-2: the step timer told before it is asked -------
@@ -10977,6 +11106,8 @@ class CuratedProtocolSession:
             or self._timer_started_at is None or self._timer_duration_seconds is None
             or self._timer_step_index is None
             or not 0 <= self._timer_step_index < len(self.fixture.steps)
+            # Lane HEAR2, decision 3: a paused timer's notices sleep with it.
+            or self._timer_paused_at is not None
         ):
             return ()
         current_time = time.time() if now is None else now
@@ -11017,6 +11148,7 @@ class CuratedProtocolSession:
             or self._timer_started_at is None or self._timer_duration_seconds is None
             or self._timer_step_index is None
             or not 0 <= self._timer_step_index < len(self.fixture.steps)
+            or self._timer_paused_at is not None
         ):
             return None
         key = (self._timer_step_index, self._timer_started_at, self._timer_duration_seconds)
@@ -11333,6 +11465,7 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._timer_paused_at = None
 
     def _stop_experiment_clock(self, now: float | None = None) -> None:
         if self._experiment_started_at is None:
@@ -16618,6 +16751,7 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._timer_paused_at = None
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
@@ -16808,6 +16942,7 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._timer_paused_at = None
         self._timer_notices_given = set()
         self._experiment_started_at = None
         self._experiment_ended_at = None
@@ -17157,6 +17292,8 @@ class CuratedProtocolSession:
                 json.dumps(self._pending_run_change, sort_keys=True)
                 if self._pending_run_change is not None else None,
             ),
+            # Lane HEAR2, decision 3: the timer's pause rolls back with the turn.
+            (self._timer_paused_at,),
         )
 
     def _restore(
@@ -17251,6 +17388,7 @@ class CuratedProtocolSession:
                 restored = [RunChange.from_mapping(json.loads(item)) for item in changes]
                 self._run_changes = {change.item_id: change for change in restored}
                 self._pending_run_change = json.loads(asked_change) if asked_change is not None else None
+            self._timer_paused_at = checkpoint[29][0] if len(checkpoint) >= 30 else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -19260,6 +19398,8 @@ class CuratedProtocolSession:
                 if timer.get("state") == "running":
                     remaining = int(timer.get("remaining_seconds") or 0)
                     words = f"타이머가 실행 중이에요. {remaining // 60}분 {remaining % 60}초 남았어요."
+                elif timer.get("state") == "paused":
+                    words = self._remaining_answer("ko")
                 elif timer.get("state") == "expired":
                     words = "타이머가 끝났어요."
                 else:
@@ -20869,10 +21009,13 @@ class CuratedProtocolSession:
         reasked_question: dict[str, Any] | None = None
 
         if (
-            command in {
-                CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
-                CuratedProtocolAction.PAUSE, CuratedProtocolAction.START_TIMER,
-            }
+            (
+                command in {
+                    CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
+                    CuratedProtocolAction.PAUSE, CuratedProtocolAction.START_TIMER,
+                }
+                or command in _TIMER_CONTROL_ACTIONS
+            )
             and self.experiment_ended
         ):
             # Decision 2 (2026-10-03): an ended experiment is not started
@@ -21517,6 +21660,10 @@ class CuratedProtocolSession:
                         primary=response,
                     ),
                 )
+        elif command in _TIMER_CONTROL_ACTIONS:
+            # Lane HEAR2, decision 3: the timer paused, resumed, cancelled or
+            # run again, read back; nothing when no timer stands.
+            plan = self._timer_control_plan(command, intent, language)
         elif command is CuratedProtocolAction.TIMER_STATUS and intent.intent_kind in {
             "step_duration_question", "step_timer_elapsed",
         }:
@@ -24704,6 +24851,99 @@ class CuratedProtocolSession:
             return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있어요. 이 단계에는 확인된 타이머가 없어요."
         return f"{label}단계 원문에는 ‘{sentence}’라고 적혀 있고, 시간은 적혀 있지 않아요."
 
+    def _timer_control_plan(
+        self, command: CuratedProtocolAction, intent: CuratedControlIntent, language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """The step timer paused, resumed, cancelled or run again by voice (lane HEAR2, decision 3).
+
+        Read back as the other commands are ("3단계 타이머를 멈췄어요. 12분 30초
+        남은 채로요."); with no timer to act on nothing changes and that is
+        said. The value a restart runs is the step's own, never a spoken one.
+        """
+
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        ko = language == "ko"
+        before = self.timer_status()
+        label = before.get("step_label") or step.source_label
+        state = before.get("state")
+        changed = False
+        payload: dict[str, Any] | None = None
+        hint = (
+            (" 시작하려면 '타이머 시작해 줘'라고 말씀해 주세요." if ko else " Say 'start the timer' to start it.")
+            if self._timer_hint_seconds(self.current_index) else ""
+        )
+        none = ("지금 도는 타이머는 없어요." if ko else "No timer is running now.") + hint
+        if command is CuratedProtocolAction.TIMER_PAUSE:
+            if state == "running" and self.pause_timer():
+                changed = True
+                left = _duration_words_long(int(self.timer_status().get("remaining_seconds", 0)), language)
+                words = (f"{label}단계 타이머를 멈췄어요. {left} 남은 채로요." if ko
+                         else f"Paused the Step {label} timer with {left} left.")
+            elif state == "paused":
+                left = _duration_words_long(int(before.get("remaining_seconds", 0)), language)
+                words = (f"{label}단계 타이머는 이미 멈춰 있어요. {left} 남은 채로요." if ko
+                         else f"The Step {label} timer is already paused with {left} left.")
+            elif state == "expired":
+                words = self._timer_end_words(language) or (
+                    f"{label}단계 타이머는 이미 끝났어요." if ko else f"The Step {label} timer has already ended.")
+            else:
+                words = none
+        elif command is CuratedProtocolAction.TIMER_RESUME:
+            if state == "paused" and self.resume_timer():
+                changed = True
+                left = _duration_words_long(int(self.timer_status().get("remaining_seconds", 0)), language)
+                words = (f"{label}단계 타이머를 다시 시작했어요. {left} 남았어요." if ko
+                         else f"Resumed the Step {label} timer; {left} left.")
+            elif state == "running":
+                left = _duration_words_long(int(before.get("remaining_seconds", 0)), language)
+                words = (f"{label}단계 타이머는 돌고 있어요. {left} 남았어요." if ko
+                         else f"The Step {label} timer is running; {left} left.")
+            elif state == "expired":
+                words = self._timer_end_words(language) or (
+                    f"{label}단계 타이머는 이미 끝났어요." if ko else f"The Step {label} timer has already ended.")
+            else:
+                words = none
+        elif command is CuratedProtocolAction.TIMER_CANCEL:
+            if state in {"running", "paused", "expired"}:
+                payload = {**before, "state": "cancelled"}
+                self.cancel_timer()
+                changed = True
+                words = (f"{label}단계 타이머를 취소했어요." if ko else f"Cancelled the Step {label} timer.")
+                if state == "expired":
+                    words = (f"{label}단계 타이머는 이미 끝났어요. 지웠어요." if ko
+                             else f"The Step {label} timer had already ended; cleared it.")
+            else:
+                words = none
+        else:
+            if state in {"running", "paused", "expired"} and self.restart_timer():
+                changed = True
+                after = self.timer_status()
+                name = self._timer_name(int(after.get("duration_seconds") or 0), str(after.get("bound") or "exact"), language)
+                words = (f"{label}단계 {name} 타이머를 처음부터 다시 시작했어요." if ko
+                         else f"Restarted the Step {label} {name} timer from now.")
+            else:
+                words = none
+        if payload is None:
+            payload = self.timer_status()
+        return CuratedProtocolTurnPlan(
+            action=command,
+            display_text=words,
+            speech_text=words,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=self.fixture.facts_for_step(self.current_index),
+            step_label=step.source_label,
+            final_step=self.current_index == len(steps) - 1,
+            state_changed=changed,
+            primary_text=words,
+            intent_kind=intent.intent_kind,
+            timer_payload=payload,
+            display_document=_display_document(
+                title=f"{step.source_label}단계 타이머",
+                primary=words,
+            ),
+        )
+
     def _remaining_answer(self, language: str) -> str:
         """"몇 분 남았어?", "언제 끝나?": the step timer as it stands (lane VF, decision 5).
 
@@ -24725,6 +24965,13 @@ class CuratedProtocolSession:
             return (
                 f"{label}단계 타이머 {left} 남았어요." if ko
                 else f"Step {label} timer: {left} left."
+            )
+        if state == "paused":
+            # Lane HEAR2, decision 3: paused by voice, it stands where it was.
+            left = _duration_words_long(int(timer.get("remaining_seconds", 0)), language)
+            return (
+                f"{label}단계 타이머는 멈춰 있어요. {left} 남은 채로요." if ko
+                else f"The Step {label} timer is paused with {left} left."
             )
         if state == "expired":
             gone = max(0, int(timer.get("elapsed_seconds", 0)) - int(timer.get("duration_seconds", 0)))
@@ -24755,10 +25002,16 @@ class CuratedProtocolSession:
         timer = self.timer_status()
         ko = language == "ko"
         state = timer.get("state")
-        if state == "running":
+        if state in {"running", "paused"}:
             gone = _duration_words_long(int(timer.get("elapsed_seconds", 0)), language)
             left = _duration_words_long(int(timer.get("remaining_seconds", 0)), language)
             label = timer.get("step_label") or step.source_label
+            if state == "paused":
+                return (
+                    f"{label}단계 타이머는 멈춰 있어요. {gone} 지난 채로, {left} 남았어요."
+                    if ko else
+                    f"The Step {label} timer is paused: about {gone} passed, {left} left."
+                )
             return (
                 f"{label}단계 타이머를 시작한 지 약 {gone} 지났어요. 남은 시간은 약 {left}이에요."
                 if ko else

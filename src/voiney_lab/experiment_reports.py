@@ -100,6 +100,9 @@ EVENT_NAMES_KO: dict[str, str] = {
     "record_retracted": "기록 취소", "report_value_confirmed": "값 확인",
     "report_review_deferred": "값 확인 화면으로",
     "timer_end_notice": "타이머 끝 알림", "timer_last_minute_notice": "타이머 1분 전 알림",
+    # Lane HEAR2, decision 3: the timer's voice commands.
+    "timer_paused": "타이머 일시정지", "timer_resumed": "타이머 다시 시작",
+    "timer_cancelled": "타이머 취소", "timer_restarted": "타이머 처음부터 다시",
     "connection_restored": "연결 끊김 뒤 다시 연결", "photo_attached": "사진 첨부",
     "web_reference": "웹 참고 링크", "experimenter_recorded": "실험자 기록",
     # Lane HELP: the sources' help after a problem said or asked about.
