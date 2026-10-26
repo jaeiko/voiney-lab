@@ -29,6 +29,16 @@ STEPS = (
     "5 Stack the lithium metal chip, separator and cathode in the CR2032 case and crimp the cell.",
     "6 Rest the cell for 6 h and run two formation cycles at C/10 on the battery tester.",
 )
+#: Korean readings, as an analysed protocol gets them from the translation
+#: role (lane PX); the protocol's vocabulary hears Korean words through them.
+READINGS = {
+    "step-1/current_step": "1단계: LiFePO4 80 wt%, 카본블랙 10 wt%, PVDF 10 wt%를 NMP에 섞고 슬러리를 12 h 저어요.",
+    "step-2/current_step": "2단계: 슬러리를 닥터 블레이드로 알루미늄 호일에 150 µm 두께로 코팅하고 진공 오븐에서 80 °C로 12 h 말려요.",
+    "step-3/current_step": "3단계: 12 mm 전극을 펀칭해 안티챔버를 거쳐 아르곤 글러브박스에 넣어요.",
+    "step-4/current_step": "4단계: 분리막을 1 M LiPF6 EC/DMC 전해액 40 µL로 적셔요.",
+    "step-5/current_step": "5단계: 리튬 금속 칩, 분리막, 양극을 CR2032 케이스에 쌓고 셀을 크림핑해요.",
+    "step-6/current_step": "6단계: 셀을 6 h 두었다가 배터리 테스터에서 C/10으로 화성 충방전을 두 번 해요.",
+}
 WARNINGS = {
     "step-1": "NMP is a reproductive toxicant; handle it in a fume hood.",
     "step-4": "LiPF6 reacts with moisture and releases HF; keep it inside the glovebox.",
@@ -78,5 +88,5 @@ def coin_cell_fixture(protocol_id: str = PROTOCOL_ID) -> CuratedProtocolFixture:
         draft=draft, status="fictional_non_operational",
         ordered_step_labels=tuple(str(n) for n in range(1, len(STEPS) + 1)),
         fixture_sha256=hashlib.sha256(source).hexdigest(), revision_id=f"{protocol_id}-v1",
-        development_only=True, source_filename=extraction.original_filename, localizations={},
+        development_only=True, source_filename=extraction.original_filename, localizations=dict(READINGS),
     )
