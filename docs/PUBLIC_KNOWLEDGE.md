@@ -23,6 +23,17 @@ KNOW). 연구실 자료는 넣지 않는다. 동작과 코드 위치는
   더할 위키데이터 항목). 한 줄 더하면 다음 실행에 들어간다.
 - **조각**: 최대 1,000자. 필드는 tier `public`, 제목, 본문, 위치(섹션·쪽·CID),
   URL, 라이선스, 언어, 분야, 출처 id·이름, 등급, 출처 버전, 받은 날짜.
+- **정리**(줄 KNOW2, 사람 결정 2026-10-26 3번): 글로 읽히지 않는 조각(표가 한데
+  붙은 것, 책 색인, 참고문헌 목록 "연도;권:쪽", 연습문제, 수식 표기)은 빼고
+  `manifest.json` 의 출처별 `broken_dropped` 에 이유별로 센다
+  (`public_knowledge_pipeline.broken_reason`). 위키백과 절에서는 수식
+  `{\displaystyle …}`·`{\textstyle …}` 과 그것이 남긴 한두 글자 줄을 지운다.
+  OpenStax 두 교재는 `sources.toml` 의 `skip_chapters`(실험실과 무관한 장, 줄
+  KAUDIT 의 읽기), `end_matter`(장 끝 핵심 용어·요약·연습문제), `stop_at`(첫
+  부록부터 정답·색인까지), `page_furniture`(쪽 머리말·바닥글 줄)로 다듬는다.
+  Europe PMC 논문은 `sections`(방법·재료·프로토콜·문제 해결·노트·안전)에 드는
+  맨 위 절과 그 아래 절만 넣고 결과·고찰은 넣지 않는다(중첩 절은
+  "Materials and methods › Cell culture" 처럼 위 절 이름을 붙임).
 - **용어집**: 위키데이터의 한국어·영어 이름(CC0)과 한국어 위키백과 넘겨주기
   제목으로 만든 `data/public_knowledge/glossary.json`, 그리고 사람이 읽고 고치는
   손 용어집 [`../data/public_knowledge/glossary_words.txt`](../data/public_knowledge/glossary_words.txt)

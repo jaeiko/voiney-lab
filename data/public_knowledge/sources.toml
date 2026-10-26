@@ -217,8 +217,18 @@ url = "https://assets.openstax.org/oscms-prodcms/media/documents/Chemistry-OP_Xd
 page_url = "https://openstax.org/details/books/chemistry"
 version = "published 2015-03-11 (retired edition)"
 attribution = "Chemistry by OpenStax (Rice University), CC BY 4.0, https://openstax.org/details/books/chemistry"
-skip_pages_before = 9
+skip_pages_before = 19
 requests_per_second = 0.5
+# Clean-up (person's decision 2026-10-26, 3; chapters as lane KAUDIT read them
+# on 2026-10-25): electronic structure and bonding theory (6-8) and the
+# descriptive chemistry of the elements (18-19) are left out; so is each
+# chapter's end matter (key terms, equations, summary, exercises) and
+# everything from the first appendix (appendices, answer key, index). The
+# running footers are taken out of the pages.
+skip_chapters = [6, 7, 8, 18, 19]
+end_matter = ["Key Terms", "Key Equations", "Summary", "Exercises"]
+stop_at = '^(?:\d+ )?Appendix [A-Z]\b|^Answer Key\b|^Index\b'
+page_furniture = ['^This OpenStax book is available for free at ', '^\d+ Chapter \d+ \| ', '^Chapter \d+ \| .*\d+$']
 
 [[source]]
 id = "openstax-biology-1e"
@@ -236,8 +246,18 @@ url = "https://assets.openstax.org/oscms-prodcms/media/documents/Biology-OP_xQoZ
 page_url = "https://openstax.org/details/books/biology"
 version = "published 2016-10-21 (retired edition)"
 attribution = "Biology by OpenStax (Rice University), CC BY 4.0, https://openstax.org/details/books/biology"
-skip_pages_before = 9
+skip_pages_before = 19
 requests_per_second = 0.5
+# Clean-up (person's decision 2026-10-26, 3; lane KAUDIT's reading): evolution
+# and phylogeny (18-20), the diversity of protists, fungi, plants and animals
+# (23-32), animal physiology (34-41) and reproduction and ecology (43-47) are
+# left out -- the chapters kept are chemistry of life, cells, genetics,
+# biotechnology, viruses, prokaryotes, the animal body and immunity. Each
+# chapter's end matter and everything from the first appendix go too.
+skip_chapters = [18, 19, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47]
+end_matter = ["KEY TERMS", "CHAPTER SUMMARY", "ART CONNECTION QUESTIONS", "REVIEW QUESTIONS", "CRITICAL THINKING QUESTIONS"]
+stop_at = '^(?:\d+ )?Appendix [A-Z]\b|^[A-C] \| |^ANSWER KEY\b|^INDEX\b'
+page_furniture = ['^This OpenStax book is available for free at ', '^\d+ Chapter \d+ \| ', '^Chapter \d+ \| .*\d+$']
 
 # ---------------------------------------------------------------------------
 # Peer-reviewed open-access articles (grade A): Europe PMC, CC BY only,
@@ -262,6 +282,11 @@ requests_per_second = 1.0
 max_per_query = 3
 # At most this many pieces of one article (long reviews would drown the rest).
 max_chunks_per_document = 40
+# Only these sections of an article, a nested one by its parents' titles too
+# (person's decision 2026-10-26, 3: methods, not results -- two result
+# paragraphs lane KAUDIT saw attached to a help were off the point).
+sections = ["method", "material", "protocol", "procedure", "experimental", "troubleshoot", "note", "tip",
+            "critical", "caution", "safety", "preparation"]
 # Each phrase must be in the article's title or abstract (`europepmc_query`);
 # a query is run again on each collect and new CC BY hits are added, bounded
 # by max_per_query per query.

@@ -648,6 +648,75 @@ def chunk_text(text: str, *, max_chars: int = CHUNK_MAX_CHARS, min_chars: int = 
     return chunks
 
 
+#: What a piece that reads as no running text looks like (person's decision
+#: 2026-10-26, 3: lane KAUDIT read 200 random pieces and found 13% broken --
+#: tables run together, book indexes, reference lists, exercises, formula
+#: markup). Such a piece is left out and the reason counted in the manifest.
+_MARKUP = re.compile(r"\\displaystyle|\\(?:frac|mathrm|ce|left|right|sum|int)\b|\{\\")
+_CITATION = re.compile(r"\b(?:19|20)\d{2}\s?;\s?\d+(?:\s?\([\w\s-]+\))?\s?:\s?[eE]?\d+")
+_EXERCISE = re.compile(
+    r"(?:^|\s)\d{1,3}\.\s+(?:What|Which|Write|Determine|Calculate|Explain|Describe|Give|How|Why|Predict|Identify"
+    r"|Draw|Compare|Classify|Complete|Balance|Indicate)\b")
+_INDEX_ENTRY = re.compile(r"[A-Za-z][^,.;:\d]{1,60},\s\d{1,4}(?=[\s,]|$)")
+_RUNNING_SENTENCE = re.compile(r"[a-z]{3,}[.!?](?:\s|$)")
+_NUMBER_TOKEN = re.compile(r"^[-–−+±]?\(?[\d.,×]+\)?[%°]?$")
+
+
+def broken_reason(text: str) -> str | None:
+    """Why a piece is no running text ("table", "index", "references",
+    "exercises", "markup"), or None when it reads as text."""
+
+    if _MARKUP.search(text):
+        return "markup"
+    if len(_CITATION.findall(text)) >= 2:
+        return "references"
+    exercises = len(_EXERCISE.findall(text))
+    if exercises >= 3 or (exercises >= 2 and "?" in text):
+        return "exercises"
+    sentences = len(_RUNNING_SENTENCE.findall(text))
+    tokens = text.split()
+    numbers = sum(1 for token in tokens if _NUMBER_TOKEN.match(token)) / max(1, len(tokens))
+    if len(_INDEX_ENTRY.findall(text)) >= 5 and sentences <= 1 and numbers >= 0.2:
+        return "index"
+    if len(tokens) >= 12 and numbers >= 0.4 and sentences <= 1:
+        return "table"
+    return None
+
+
+def _without_braces(text: str, start: int) -> int:
+    """The end of the balanced ``{…}`` that opens at ``start``."""
+
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+_STYLE_BLOCK = re.compile(r"\{\\(?:display|text|script)style")
+
+
+def clean_wiki_text(text: str) -> str:
+    """A Wikipedia section without its formula markup ({\\displaystyle …}) and
+    the lines of a letter or two a formula leaves (lane KAUDIT's H46)."""
+
+    out: list[str] = []
+    index = 0
+    while True:
+        match = _STYLE_BLOCK.search(text, index)
+        if match is None:
+            out.append(text[index:])
+            break
+        out.append(text[index:match.start()])
+        index = _without_braces(text, match.start())
+    lines = [re.sub(r"[ \t]{2,}", " ", line).strip() for line in "".join(out).split("\n")]
+    return "\n".join(line for line in lines if len(line.replace(" ", "")) > 3 or not line)
+
+
 def chunk_id(source_id: str, locator: str, text: str) -> str:
     digest = hashlib.sha1(f"{source_id}\x1f{locator}\x1f{text}".encode("utf-8")).hexdigest()
     return f"{source_id}:{digest[:16]}"
@@ -943,12 +1012,59 @@ def _join_pdf_lines(text: str) -> str:
     return "\n".join(out)
 
 
+_CHAPTER_FOOTER = re.compile(r"Chapter (\d+) \| ")
+
+
+def _book_page(source: Source, page_text: str, state: dict[str, Any]) -> str | None:
+    """A textbook page's running text, or None when the page is left out
+    (person's decision 2026-10-26, 3; options of the source):
+
+    - ``skip_chapters``: chapters outside the wet lab, by the page's running
+      footer ("Chapter 32 | Plant Reproduction"; a page without one keeps the
+      chapter before it);
+    - ``end_matter``: the headings a chapter's end matter starts with ("Key
+      Terms"): from the heading to the chapter's end;
+    - ``stop_at``: a pattern of a page's first line ("Appendix A") from which
+      every page is left out (appendices, answer key, index);
+    - ``page_furniture``: patterns of whole lines taken out (running footers).
+    """
+
+    if state.get("stopped"):
+        return None
+    stop_at = source.option("stop_at")
+    first = next((line.strip() for line in page_text.split("\n") if line.strip()), "")
+    if stop_at and re.search(stop_at, first):
+        state["stopped"] = True
+        return None
+    chapters = [int(found.group(1)) for found in _CHAPTER_FOOTER.finditer(page_text)]
+    if chapters and chapters[-1] != state.get("chapter"):
+        state["chapter"], state["end_matter"] = chapters[-1], False
+    if state.get("end_matter") or state.get("chapter") in set(source.option("skip_chapters", []) or []):
+        return None
+    furniture = [re.compile(pattern) for pattern in source.option("page_furniture", []) or []]
+    headings = {heading.strip() for heading in source.option("end_matter", []) or []}
+    kept: list[str] = []
+    for line in page_text.split("\n"):
+        stripped = line.strip()
+        if stripped in headings:
+            state["end_matter"] = True
+            break
+        if any(pattern.search(stripped) for pattern in furniture):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def pdf_pieces(source: Source, pages: Sequence[str], *, url: str, fetched_at: str) -> Iterator[Piece]:
     skip_before = int(source.option("skip_pages_before", 1) or 1)
+    book: dict[str, Any] = {}
     for number, page_text in enumerate(pages, 1):
         if number < skip_before:
             continue
-        text = _join_pdf_lines(page_text)
+        running = _book_page(source, page_text, book)
+        if running is None:
+            continue
+        text = _join_pdf_lines(running)
         if len(text) < 200 or looks_like_reference_page(text):
             continue
         yield Piece(
@@ -1305,6 +1421,7 @@ def wikipedia_pieces(
     extract: str, *, title: str, url: str, revid: Any, language: str, domain: str, fetched_at: str,
 ) -> Iterator[Piece]:
     for name, section in sections_of(extract):
+        section = clean_wiki_text(section)
         if _skipped_section(name) or len(section) < 60:
             continue
         yield Piece(
@@ -1461,7 +1578,7 @@ _LICENSE_HREF_REFUSED = re.compile(r"/by-nc|/by-nd|/by-nc-nd|/by-nc-sa", re.I)
 _JATS_SKIPPED = {"references", "reference", "acknowledgements", "acknowledgments", "funding",
                  "author contributions", "conflict of interest", "conflicts of interest", "competing interests",
                  "supplementary material", "supplementary materials", "abbreviations", "data availability",
-                 "data availability statement", "ethics", "notes"}
+                 "data availability statement", "ethics"}
 
 
 def _epmc_license_ok(license_text: str) -> bool:
@@ -1524,17 +1641,26 @@ def jats_sections(xml_text: str) -> tuple[dict[str, str], list[tuple[str, str]]]
         if text:
             sections.append(("Abstract", text))
     body = root.find("body")
+
+    def walk(sec: Any, parents: tuple[str, ...]) -> None:
+        # A nested section is named with its parents' titles
+        # ("Materials and methods › Cell culture"), so its kind is known.
+        heading = sec.find("title")
+        name = "".join(heading.itertext()).strip() if heading is not None else ""
+        path = (*parents, name) if name else parents
+        paragraphs = []
+        for child in sec:
+            if child.tag in ("p", "list", "disp-quote", "boxed-text"):
+                paragraphs.append(clean_text(" ".join(child.itertext())))
+        text = "\n\n".join(p for p in paragraphs if p)
+        if text and name.casefold() not in _JATS_SKIPPED:
+            sections.append((" › ".join(path) or "Section", text))
+        for child in sec.findall("sec"):
+            walk(child, path)
+
     if body is not None:
-        for sec in body.iter("sec"):
-            heading = sec.find("title")
-            name = "".join(heading.itertext()).strip() if heading is not None else ""
-            paragraphs = []
-            for child in sec:
-                if child.tag in ("p", "list", "disp-quote", "boxed-text"):
-                    paragraphs.append(clean_text(" ".join(child.itertext())))
-            text = "\n\n".join(p for p in paragraphs if p)
-            if text and name.casefold() not in _JATS_SKIPPED:
-                sections.append((name or "Section", text))
+        for sec in body.findall("sec"):
+            walk(sec, ())
     return facts, sections
 
 
@@ -1595,8 +1721,13 @@ def handle_europepmc(source: Source, ctx: RunContext) -> Iterator[Piece]:
         fetched_at = ((raw.item(key) or {}).get("fetched_at") or today())[:10]
         url = f"https://europepmc.org/article/PMC/{pmcid}"
         where = " ".join(part for part in (facts.get("journal", ""), facts.get("year", "")) if part)
+        # Person's decision 2026-10-26, 3: of an article only the sections
+        # named here (methods, troubleshooting, notes), not its results -- by
+        # the top section's title, so "Results › Materials compared" is not taken.
+        wanted = [word.casefold() for word in source.option("sections", []) or []]
         for name, text in sorted(sections, key=lambda item: _section_order(item[0])):
-            if len(text) < 120:
+            top = name.split(" › ")[0].casefold()
+            if len(text) < 120 or (wanted and not any(word in top for word in wanted)):
                 continue
             yield Piece(
                 title=facts.get("title", "") or pmcid, locator=f"{where} · {name}" if where else name, text=text,
@@ -1682,6 +1813,7 @@ def collect(
     seen_text: dict[str, dict[str, Any]] = {}
     dropped: Counter[str] = Counter()
     capped: Counter[str] = Counter()
+    broken: dict[str, Counter[str]] = {}
     for source in ordered_sources(sources.sources, only):
         started = time.perf_counter()
         count_pieces = 0
@@ -1695,6 +1827,11 @@ def collect(
             for piece in HANDLERS[source.kind](source, ctx):
                 count_pieces += 1
                 for record in records_for(piece, source):
+                    reason = broken_reason(record["text"])
+                    if reason:
+                        # No running text (person's decision 2026-10-26, 3).
+                        broken.setdefault(source.id, Counter())[reason] += 1
+                        continue
                     if cap and per_document[piece.title] >= int(cap):
                         capped[source.id] += 1
                         continue
@@ -1723,6 +1860,7 @@ def collect(
             "name": source.name, "kind": source.kind, "grade": source.grade, "license": source.license,
             "pieces": count_pieces, "chunks": count_chunks, "chars": chars,
             "duplicates_dropped": dropped[source.id], "capped": capped[source.id],
+            "broken_dropped": dict(sorted(broken.get(source.id, Counter()).items())),
             "requests": http.requests_made - requests_before,
             "seconds": round(time.perf_counter() - started, 1),
         })
