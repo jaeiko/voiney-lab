@@ -3,7 +3,7 @@ import { MessagesSquare, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { run as copy } from "../../copy/ko";
-import { readsKorean, type LogLine } from "../../voice/runModel";
+import type { LogLine } from "../../voice/runModel";
 
 // The caption (person's decision 2): the last words said or heard in at most
 // two whole lines -- never cut. Words that do not fit in two lines are shown
@@ -62,8 +62,9 @@ export function pageMs(page: string): number {
 export function CaptionBar({ caption, log }: { caption: LogLine | null; log: LogLine[] }) {
   const [open, setOpen] = useState(false);
   const text = caption ? (caption.who === "heard" ? `“${caption.text}”` : caption.text) : copy.caption.empty;
-  // Lane RX4 (decision 2): words that are not Korean -- a source sentence read on request -- are not shown large.
-  const lang = caption && !readsKorean(caption.text) ? "source" : "ko";
+  // Lane RX4 (decision 2): a reply's shown words that are the source for want of Korean (lane KO2's translation_missing,
+  // nothing said aloud) are not shown large; what was said is the server's speech_text (KO2's spokenText).
+  const lang = caption?.source ? "source" : "ko";
   const measurer = useRef<HTMLSpanElement>(null);
   const [pages, setPages] = useState<string[]>([text]);
   const [index, setIndex] = useState(0);

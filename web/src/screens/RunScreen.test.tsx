@@ -168,19 +168,25 @@ describe("RunScreen (lane RX4)", () => {
     expect(engine.stopRun).toHaveBeenCalled();
   });
 
-  it("shows the Korean without the step's own label and folds the source; the next step without its label too", () => {
-    running({ primary_summary: "4단계: 젤 조각을 37 °C에서 10분 동안 둡니다." }, { screen: { next_step_sentence: "5단계: 상층액을 버립니다." } });
+  it("shows the server's Korean large and folds the source; the next step keeps its one label under its line's name", () => {
+    // As the merged server sends them (lane KO2): the Korean without its own "4단계: ", the next sentence with "5단계: ".
+    running({ primary_summary: "젤 조각을 37 °C에서 10분 동안 둡니다.", translation_missing: false }, { screen: { next_step_sentence: "5단계: 상층액을 버립니다.", next_step_translation_missing: false } });
     renderWithClient(<RunScreen />);
     expect(screen.getByTestId("run-step-text")).toHaveTextContent(/^젤 조각을 37 °C에서 10분 동안 둡니다\.$/);
     expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "ko");
     expect(screen.getByTestId("run-source-text")).toHaveTextContent("4. Incubate the gel pieces at 37 °C for 10 min.");
-    expect(screen.getByTestId("run-next")).toHaveTextContent("다음 단계: 상층액을 버립니다.");
+    expect(screen.getByTestId("run-next").querySelector(".run-next-label")).toHaveTextContent(/^다음 단계$/);
+    expect(screen.getByTestId("run-next-text")).toHaveTextContent(/^5단계: 상층액을 버립니다\.$/);
+    expect(screen.getByTestId("run-step")).not.toHaveAttribute("aria-busy");
     expect(screen.queryByTestId("run-step-pending")).toBeNull();
   });
 
-  it("a step with no Korean yet says 번역 준비 중 and shows its source at an ordinary size, even with no step number", () => {
+  it("a step the server says has no Korean shows 번역 준비 중 and its source at an ordinary size, even with no step number", () => {
     const source = "Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls).";
-    running({ current_step_label: "", primary_summary: source, display_summary: source }, { screen: { next_step_sentence: "Optional - Add 1 mL water." } });
+    running(
+      { current_step_label: "", primary_summary: null, display_summary: source, translation_missing: true },
+      { screen: { next_step_sentence: "Optional - Add 1 mL water.", next_step_translation_missing: true, translation_pending: true } },
+    );
     renderWithClient(<RunScreen />);
     expect(screen.getByTestId("run-step-pending")).toHaveTextContent("번역 준비 중");
     expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "source");
@@ -189,5 +195,15 @@ describe("RunScreen (lane RX4)", () => {
     expect(screen.getByText("전체 9단계")).toBeInTheDocument();
     expect(screen.getByTestId("run-next")).toHaveAttribute("data-lang", "source");
     expect(screen.getByTestId("run-next")).toHaveTextContent("다음 단계 · 번역 준비 중");
+    // The Korean is being made now: the step says so to assistive technology until the translation_update.
+    expect(screen.getByTestId("run-step")).toHaveAttribute("aria-busy", "true");
+  });
+
+  it("without the server's word that the Korean is missing, no 번역 준비 중 is shown", () => {
+    running({ primary_summary: null, display_summary: "Weigh 10 g of soil.", translation_missing: false }, { screen: { next_step_sentence: "Add 100 mL of KCl.", next_step_translation_missing: false } });
+    renderWithClient(<RunScreen />);
+    expect(screen.queryByTestId("run-step-pending")).toBeNull();
+    expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "source");
+    expect(screen.getByTestId("run-next").querySelector(".run-next-label")).toHaveTextContent(/^다음 단계$/);
   });
 });

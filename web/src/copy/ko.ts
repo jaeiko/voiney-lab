@@ -231,7 +231,7 @@ export const run = {
   stepUnnumbered: (total: number) => `전체 ${total}단계`,
   waiting: "시작하면 첫 단계가 여기에 나와요.",
   source: "원문 보기",
-  next: (sentence: string) => `다음 단계: ${sentence}`,
+  nextLabel: "다음 단계",
   listening: {
     listening: "듣는 중",
     thinking: "생각하는 중",

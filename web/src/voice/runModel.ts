@@ -50,6 +50,8 @@ export interface ProtocolState {
   run_changes?: Array<Record<string, unknown>> | null;
   /** The language the source step is written in, as the server reads it ("ko": the source is Korean already). */
   source_language?: string | null;
+  /** Lane KO2, decision 3: the step's sentence has no checked Korean yet -- the screen says "번역 준비 중" beside the source. */
+  translation_missing?: boolean;
 }
 
 export interface ScreenFields {
@@ -60,6 +62,10 @@ export interface ScreenFields {
   readback_values?: string[];
   repeat_round?: { words?: string } | null;
   source_figures?: unknown[] | null;
+  /** Lane KO2, decision 3: next_step_sentence is the source for want of Korean. */
+  next_step_translation_missing?: boolean;
+  /** Lane KO2: the revision's Korean, or the screen's sentences read in place, are being made now (a translation_update follows). */
+  translation_pending?: boolean;
   [key: string]: unknown;
 }
 
@@ -76,6 +82,8 @@ export interface LogLine {
   key: string;
   who: "heard" | "said";
   text: string;
+  /** Lane KO2, decision 4: the words are a reply's shown text, the source for want of Korean (reply.*.translation_missing, nothing said aloud). */
+  source?: boolean;
 }
 
 export interface Card {
@@ -85,6 +93,8 @@ export interface Card {
   candidates: string[];
   values: string[];
   stepId: string | null;
+  /** The card's words are the source for want of Korean (the reply's translation_missing). */
+  source?: boolean;
 }
 
 export interface RunModel {
@@ -186,63 +196,40 @@ function oneLine(value: unknown): string {
 // --- Korean first on the screen (person's decision 2 of 2026-10-26, lane RX4) ----
 //
 // The Korean of a step is large; the source is small under it and folded. A
-// step with no Korean yet says "번역 준비 중" and shows the source at an
-// ordinary size -- never large. The same rule serves the next step, a card
-// and the caption. Whether words read as Korean follows the server's own rule
-// (protocol_translation.is_korean): more Hangul than Latin letters, or at
-// least four Hangul letters with the last letter Hangul. The Korean of the
-// current step is the server's primary_summary (a Korean source step is its
-// own Korean); when lane KO2 adds its field, it is read in stepWords() and
-// nowhere else.
-
-const HANGUL = /[ㄱ-ㆎ가-힣]/;
-const HANGUL_ALL = /[ㄱ-ㆎ가-힣]/g;
-const LATIN_ALL = /[A-Za-z]/g;
-const LETTERS_ALL = /[A-Za-zㄱ-ㆎ가-힣]/g;
-
-export function readsKorean(value: string): boolean {
-  const stripped = String(value ?? "").trim();
-  const hangul = (stripped.match(HANGUL_ALL) ?? []).length;
-  if (!hangul) return false;
-  if (hangul >= (stripped.match(LATIN_ALL) ?? []).length) return true;
-  const letters = stripped.match(LETTERS_ALL) ?? [];
-  return hangul >= 4 && HANGUL.test(letters[letters.length - 1] ?? "");
-}
-
-// A step's own label at the head of its Korean ("4단계: …"): the screen names the step once, in its label line.
-const STEP_PREFIX = /^\s*([0-9A-Za-z][0-9A-Za-z.\-]*)\s*단계\s*:\s*/;
-
-/** The words without a leading "N단계:" -- any step's when no label is given, only the named step's when one is. */
-export function withoutStepPrefix(value: string, label?: string | null): string {
-  const words = String(value ?? "").trim();
-  const match = STEP_PREFIX.exec(words);
-  if (!match || (label && match[1] !== label.trim())) return words;
-  return words.slice(match[0].length).trim();
-}
+// step with no Korean says "번역 준비 중" and shows the source at an ordinary
+// size -- never large. The same rule serves the next step, a card and the
+// caption. What is Korean and what is missing is the server's to say (lane
+// KO2, decision 3): the state's primary_summary is the step's checked Korean
+// (its own "N단계: " already taken off -- the label line names the step; the
+// screen takes nothing off again), translation_missing says there is none
+// yet, next_step_translation_missing says the next step's sentence is the
+// source, and a translation_update sends the state again once a reading
+// arrives. The screen reads no prose to decide it (AGENTS.md: it renders the
+// server's events).
 
 export interface StepWords {
-  /** The Korean to show large, or null when the step has none yet. */
+  /** The Korean to show large, or null when the step shows its source. */
   korean: string | null;
   /** The source to show small (folded under the Korean, or at an ordinary size when there is no Korean); null when the Korean is the source itself. */
   source: string | null;
+  /** The server said the Korean is missing: "번역 준비 중" beside the source. */
+  missing: boolean;
 }
 
-/** The current step's words for the screen: the Korean first, the source under it (decision 2). */
+/** The current step's words for the screen: the server's Korean first, the source under it (decision 2). */
 export function stepWords(protocol: ProtocolState): StepWords {
-  const label = protocol.current_step_label;
-  const primary = text(protocol.primary_summary) ? withoutStepPrefix(plain(protocol.primary_summary), label) : null;
+  const primary = text(protocol.primary_summary) ? plain(protocol.primary_summary).trim() : null;
   const source = text(protocol.display_summary) ? plain(protocol.display_summary).trim() : null;
-  let korean: string | null = null;
-  if (primary && readsKorean(primary)) korean = primary;
-  else if (source && protocol.source_language === "ko" && readsKorean(source)) korean = source;
-  return { korean, source: korean !== null && korean === source ? null : source };
+  // A step written in Korean is its own Korean (lane FX's source_language); the server sends no reading for it.
+  const korean = primary ?? (protocol.source_language === "ko" ? source : null);
+  return { korean, source: korean !== null && korean === source ? null : source, missing: protocol.translation_missing === true };
 }
 
-/** The next step's sentence for the screen: the server's words without their own "N단계:" (the screen says 다음 단계), Korean or source. */
-export function nextStepWords(sentence: string): StepWords {
-  const words = withoutStepPrefix(oneLine(sentence));
-  if (!words) return { korean: null, source: null };
-  return readsKorean(words) ? { korean: words, source: null } : { korean: null, source: words };
+/** The next step's sentence for the screen, as the server wrote it: its Korean with its one step label ("5단계: …"), or the source when it says the Korean is missing. */
+export function nextStepWords(sentence: string, missing: boolean): StepWords {
+  const words = oneLine(sentence);
+  if (!words) return { korean: null, source: null, missing: false };
+  return missing ? { korean: null, source: words, missing: true } : { korean: words, source: null, missing: false };
 }
 
 /** The newest generation the server has shown this connection: session.ready's, then every turn's since (lane RX4).
@@ -399,9 +386,11 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
       const key = `said:${String(m.generation)}:${turnId}`;
       const before = model.log.find((item) => item.key === key);
       const joined = m.type === "reply.complete" || !before ? words : `${before.text} ${words}`.trim();
-      // The caption and the log keep what was said; the card keeps what is shown.
-      const next = withLog(model, { key, who: "said", text: oneLine(spokenText(m) || joined) });
-      if (words && next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined) };
+      // The caption and the log keep what was said; the card keeps what is shown. Shown words that are the source
+      // for want of Korean (lane KO2's translation_missing) are drawn at an ordinary size.
+      const source = m.translation_missing === true;
+      const next = withLog(model, { key, who: "said", text: oneLine(spokenText(m) || joined), source: !said && source });
+      if (words && next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined), source };
       return next;
     }
     case "server.operation":

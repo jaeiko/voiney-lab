@@ -73,16 +73,18 @@ body[data-run="on"] { background: var(--paper); }
 .run-step-text { font-size: var(--run-step); line-height: var(--run-step-line); font-weight: 700; white-space: pre-wrap; }
 .run-step-text[data-length="long"] { font-size: var(--run-step-min); line-height: var(--run-step-min-line); }
 .run-step-waiting { color: var(--ink-muted); }
-.run-next { color: var(--ink-muted); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+/* The next step: its line's name small above the server's sentence (which carries its one step label). */
+.run-next { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); color: var(--ink-muted); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
+.run-next-label { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
 .run-source summary { font-size: var(--run-status); line-height: var(--run-status-line); min-height: var(--run-target); }
 /* Lane RX4 (person's decision 2, 2026-10-26): the Korean large, the source small and muted under it; a step with no Korean
    yet says 번역 준비 중 and shows its source at the next-step size, never at the step size. The same for the next step,
    a card and the caption. */
 .run-source p { color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 400; }
-.run-step-pending, .run-next-pending { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+.run-step-pending { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
 .run-step-pending svg { width: 24px; height: 24px; }
 .run-step-text[data-lang="source"] { font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }
-.run-next[data-lang="source"] { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 400; }
+.run-next[data-lang="source"] .run-next-text { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 400; }
 .run-card-text[data-lang="source"] { font-size: var(--run-status); line-height: var(--run-status-line); }
 .run-caption[data-lang="source"] { font-size: var(--run-next); line-height: var(--run-next-line); }
 .run-changes { margin: 0; padding-left: var(--space-6); font-size: var(--run-next); line-height: var(--run-next-line); font-weight: 600; }

@@ -94,7 +94,11 @@ export const STEPS: StepPlan[] = [
   { label: '5', id: 'step-5', korean: '상층액을 버리고 아세토나이트릴 100 µL를 넣습니다.', source: '5. Discard the supernatant and add 100 µL acetonitrile.', timerSeconds: 120, timerLeft: 50 },
 ];
 
-export interface ProtocolPlan { key: string; id: string; title: string; filename: string; field: string; stepCount: number; steps: StepPlan[] }
+export interface ProtocolPlan {
+  key: string; id: string; title: string; filename: string; field: string; stepCount: number; steps: StepPlan[];
+  /** A reading the stand-in server makes in place for the first step (lane KO2's translation_update), written for the walk. */
+  inPlaceKorean: string;
+}
 
 // The protocols the walks run (rule 10 of the lane rules, 2026-10-26: a change is checked on protocols of three or more
 // fields, chemistry among them). The step sentences are those of analysed documents: in-gel digestion (bio; the Korean
@@ -102,9 +106,10 @@ export interface ProtocolPlan { key: string; id: string; title: string; filename
 // analysis: steps with no number, no Korean stored), Soil nutrient analysis SOP 005 (Zenodo, chemistry / analysis: the
 // source carries its own "1.", no Korean stored). No model is called: a step without a stored Korean shows its source.
 export const PROTOCOLS: Record<string, ProtocolPlan> = {
-  ingel: { key: 'ingel', id: PID, title: 'In-gel digestion', filename: 'in-gel-digestion.pdf', field: '생명', stepCount: 9, steps: STEPS },
+  ingel: { key: 'ingel', id: PID, title: 'In-gel digestion', filename: 'in-gel-digestion.pdf', field: '생명', stepCount: 9, steps: STEPS, inPlaceKorean: STEPS[0].korean! },
   eam23: {
     key: 'eam23', id: 'p-eam-2-3', title: 'EAM 2.3 Analytical Solution Preparation', filename: 'EAM 2.3 Analytical Solution Preparation.pdf', field: '화학·분석', stepCount: 13,
+    inPlaceKorean: '분석 시료를 분해 용기 라이너에 옮깁니다(라이너 벽에 묻지 않게 하고, 질량은 보통 0.001 g 이하까지 적어요).',
     steps: [
       { label: '', id: 'eam-step-1', korean: null, source: 'Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls; mass typically recorded to ≤0.001g).' },
       { label: '', id: 'eam-step-2', korean: null, source: 'Optional - Add 1 mL water. (See note below for highly reactive matrices)', timerSeconds: 1200, timerLeft: 45 },
@@ -112,6 +117,7 @@ export const PROTOCOLS: Record<string, ProtocolPlan> = {
   },
   soil: {
     key: 'soil', id: 'p-soil-sop-005', title: 'Soil nutrient analysis (EU RADIANT SOP 005)', filename: 'Soil nutrient analysis (EU RADIANT SOP 005).pdf', field: '화학·분석', stepCount: 16,
+    inPlaceKorean: '체로 친 마른 흙 10 g을 잽니다.',
     steps: [
       { label: '1', id: 'soil-step-1', korean: null, source: '1. Weigh 10 g of sieved dry soil soil.' },
       { label: '2', id: 'soil-step-2', korean: null, source: '2. Add in a flask the soil sample and 100 mL of KCL (1M)', timerSeconds: 3600, timerLeft: 50 },
@@ -180,9 +186,11 @@ export class StandIn {
     return {
       attached: true, protocol_id: this.protocol.id, revision_id: REVISION, source_sha256: SOURCE, display_name: this.protocol.title, development_only: false,
       readiness_status: 'guidance_ready', active: true, current_step_label: plan.label, current_step_id: plan.id, total_steps: this.protocol.stepCount,
-      // As server.py's state(): primary_summary is the step's Korean when one is stored, else the source sentence itself.
-      at_final_step: false, block_reason: null, revision: this.revision++, display_summary: plan.source, primary_summary: plan.korean ?? plan.source,
-      spoken_summary: plan.korean ?? plan.source, source_language: 'en', visual_assets: [], visual_status: plan.figure ? 'available' : 'unavailable', source_page_refs: [2],
+      // As the merged server's state() (lane KO2): primary_summary is the step's checked Korean with its own "N단계: " taken
+      // off, or null; translation_missing says there is none yet (the screen shows the source with "번역 준비 중").
+      at_final_step: false, block_reason: null, revision: this.revision++, display_summary: plan.source, primary_summary: this.korean(plan),
+      translation_missing: this.korean(plan) === null, spoken_summary: this.korean(plan) ?? plan.source, source_language: 'en',
+      visual_assets: [], visual_status: plan.figure ? 'available' : 'unavailable', source_page_refs: [2],
       workflow_status: this.paused ? 'paused' : 'running', timers: { step, experiment: { state: 'running', started_at: iso(Date.now() - 600_000), ended_at: null, elapsed_seconds: 600 } },
     };
   }
@@ -193,14 +201,38 @@ export class StandIn {
     const figures = plan.figure
       ? [{ kind: 'source_figure', protocol_id: this.protocol.id, revision_id: REVISION, source_document_id: SOURCE, source_page: 2, figure_id: 'source-figure-2-1', sha256: 'd'.repeat(64), caption: 'Figure 1. 젤 조각을 담은 튜브', label: '원문 2쪽 그림 1', mime_type: 'image/png', url: `/api/protocols/${this.protocol.id}/revisions/${REVISION}/figures/source-figure-2-1` }]
       : [];
-    // As server.py's next_step_sentence: the stored Korean (which carries its own "N단계:"), else the source sentence.
+    // As the merged server's next_step_sentence (lane KO2): the Korean with its one step label, else the source line, with
+    // next_step_translation_missing saying so; translation_pending while a reading is being made.
     const following = steps[this.step + 1];
-    const next = following ? (following.korean ? `${following.label}단계: ${following.korean}` : following.source) : null;
-    return { next_step_sentence: next, source_figures: figures };
+    const korean = following ? this.korean(following) : null;
+    const next = following ? (korean ? `${following.label}단계: ${korean}` : following.source) : null;
+    return { next_step_sentence: next, next_step_translation_missing: Boolean(following) && korean === null, translation_pending: this.translating, source_figures: figures };
   }
 
   pushState(action = 'state') {
     this.send({ type: 'protocol.fixture.state', configuration_id: this.configurationId, action, state: this.state(), screen: this.screen() });
+  }
+
+  /** Readings the server made in place after the state went out (lane KO2's _queue_screen_korean), by step id. */
+  readings: Record<string, string> = {};
+  translating = false;
+
+  /** A step's Korean as the server holds it now: the stored reading, else one made in place, else none. */
+  korean(plan: StepPlan): string | null {
+    return plan.korean ?? this.readings[plan.id] ?? null;
+  }
+
+  /** Lane KO2: the screen's sentences are being read in place (translation_pending), the state already sent says missing. */
+  startTranslating() {
+    this.translating = true;
+    this.pushState('state');
+  }
+
+  /** Lane KO2: a checked reading arrived -- the same state again (action translation_update), now with the Korean. */
+  translated(readings: Record<string, string>) {
+    Object.assign(this.readings, readings);
+    this.translating = false;
+    this.pushState('translation_update');
   }
 
   /** The server moves to the next step (as a "다음 단계" turn would). */
@@ -330,9 +362,9 @@ export class StandIn {
         this.pushState('pause');
       }
       if (message.type === 'workflow.resume') {
-        // server.py's fence: a resume with another generation than the server's own is refused as stale (the person's test
-        // of 2026-10-26 hit this after the generation had moved on); the screen is told and nothing changes.
-        if (message.configuration_id !== this.configurationId || message.generation !== this.generation) {
+        // server.py's fence since the person's decision 3 of 2026-10-26: a resume of another configuration is refused as
+        // stale; the generation is not compared (it moves on with a joined utterance or a barge-in).
+        if (message.configuration_id !== this.configurationId) {
           this.send({ type: 'workflow.control.refused', action: 'resume', configuration_id: this.configurationId, generation: this.generation, reason: 'stale_configuration', message_ko: '현재 연결의 설정으로 다시 요청해 주세요.' });
         } else {
           this.paused = false;

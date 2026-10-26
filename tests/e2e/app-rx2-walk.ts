@@ -148,7 +148,9 @@ export async function walk(page: Page, info: TestInfo) {
   const sizes = await page.evaluate(() => ['run-step-text', 'run-source-text'].map((id) => parseFloat(getComputedStyle(document.querySelector(`[data-testid="${id}"]`)!).fontSize)));
   expect(sizes[1], `source ${sizes[1]}px beside Korean ${sizes[0]}px`).toBeLessThan(sizes[0] * 0.67);
   await page.getByTestId('run-source').locator('summary').click();
-  await expect(page.getByTestId('run-next')).toHaveText(`다음 단계: ${STEPS[1].korean}`);
+  // The next step keeps its one label as the server writes it, under the line's own name (lane KO2, decision 5).
+  await expect(page.getByTestId('run-next').locator('.run-next-label')).toHaveText('다음 단계');
+  await expect(page.getByTestId('run-next-text')).toHaveText(`${STEPS[1].label}단계: ${STEPS[1].korean}`);
   // The records and their two buttons, without scrolling.
   expect(await inView(page, '[data-testid="run-records"] .run-records-head')).toBe(true);
   expect(await inView(page, '[data-testid="record-memo"]')).toBe(true);
@@ -208,8 +210,9 @@ export async function walk(page: Page, info: TestInfo) {
   await expect(page.getByTestId('run-paused')).toHaveCount(0);
   expect(server.received).toContain('workflow.resume');
 
-  // Lane RX4 (the person's test of 2026-10-26): a joined utterance or a barge-in moved the server's generation on. The
-  // resume carries the newest generation the server showed, so [다시 시작] still works: pause -> resume -> pause -> resume.
+  // Lane RX4 (the person's test of 2026-10-26): a joined utterance or a barge-in moved the server's generation on; the
+  // server now fences a resume by its configuration alone (decision 3), and the screen sends the newest generation it saw
+  // anyway, so [다시 시작] still works: pause -> resume -> pause -> resume.
   const before = server.generation;
   server.supersede();
   await page.waitForFunction((wanted) => [...(window as any).turnServerGenerations.values()].includes(wanted), before + 1);

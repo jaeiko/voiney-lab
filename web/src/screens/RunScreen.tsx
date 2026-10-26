@@ -6,7 +6,7 @@ import { EmptyBox, LoadingBox, Note } from "../components/Pieces";
 import { run as copy } from "../copy/ko";
 import { routes } from "../lib/navigation";
 import { chooseCandidate, loadVoiceScripts, reconnectMicrophone, resumeSound, serverNow, stopRun, togglePause } from "../voice/engine";
-import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, nextStepWords, readsKorean, sourceFigures, stepWords, timerView, type ListeningWord, type ProtocolState, type TimerView } from "../voice/runModel";
+import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, nextStepWords, sourceFigures, stepWords, timerView, type ListeningWord, type ProtocolState, type ScreenFields, type TimerView } from "../voice/runModel";
 import { useRun } from "../voice/runStore";
 import { CaptionBar } from "./run/CaptionBar";
 import { EndScreen } from "./run/EndScreen";
@@ -107,7 +107,7 @@ function TimerChip({ timer }: { timer: TimerView }) {
   );
 }
 
-function StepPanel({ protocol, nextSentence, children }: { protocol: ProtocolState | null; nextSentence: string | null; children?: ReactNode }) {
+function StepPanel({ protocol, screen, children }: { protocol: ProtocolState | null; screen: ScreenFields | null; children?: ReactNode }) {
   // A step is shown by its id: a protocol whose steps carry no number (a source without numbering) still has steps.
   if (!protocol || !protocol.current_step_id) {
     return (
@@ -117,18 +117,21 @@ function StepPanel({ protocol, nextSentence, children }: { protocol: ProtocolSta
     );
   }
   // Person's decision 2 (2026-10-26): the Korean large and bold, the source small under it and folded; a step with no
-  // Korean yet says so and shows the source at an ordinary size -- never large. The step's own "N단계:" is not repeated
-  // under the label line (decision 5).
+  // Korean shows the source at an ordinary size -- never large -- and "번역 준비 중" when the server says the Korean is
+  // missing (lane KO2's translation_missing). The server sends the Korean without its own "N단계:" (decision 5).
   const words = stepWords(protocol);
   const body = words.korean ?? words.source ?? "";
   const length = body.length > 120 ? "long" : body.length > 60 ? "medium" : "short";
   const label = protocol.current_step_label?.trim() ? protocol.current_step_label.trim() : null;
-  const next = nextSentence ? nextStepWords(nextSentence) : null;
+  const nextSentence = typeof screen?.next_step_sentence === "string" ? screen.next_step_sentence : null;
+  const next = nextSentence ? nextStepWords(nextSentence, screen?.next_step_translation_missing === true) : null;
+  // The Korean is being made now; a translation_update will draw it (lane KO2).
+  const busy = screen?.translation_pending === true && (words.missing || next?.missing === true);
   const changes = (protocol.current_step_run_changes ?? []).filter((item) => item?.words_ko);
   return (
-    <section className="run-step" aria-labelledby="run-step-label" data-testid="run-step">
+    <section className="run-step" aria-labelledby="run-step-label" aria-busy={busy || undefined} data-testid="run-step">
       <p className="run-step-label" id="run-step-label">{label ? copy.step(label, protocol.total_steps) : copy.stepUnnumbered(protocol.total_steps)}</p>
-      {words.korean === null ? (
+      {words.missing ? (
         <p className="run-step-pending" data-testid="run-step-pending">
           <Languages aria-hidden="true" />
           <span>{copy.translationPending}</span>
@@ -151,15 +154,12 @@ function StepPanel({ protocol, nextSentence, children }: { protocol: ProtocolSta
         </details>
       ) : null}
       {next && (next.korean || next.source) ? (
+        // The server writes the next step's Korean with its one label ("5단계: …"); the line's own name sits above it.
         <p className="run-next" data-lang={next.korean ? "ko" : "source"} data-testid="run-next">
-          {next.korean ? (
-            copy.next(next.korean)
-          ) : (
-            <>
-              <span className="run-next-pending">{copy.nextPending}</span>
-              <span lang="en">{next.source}</span>
-            </>
-          )}
+          <span className="run-next-label">{next.missing ? copy.nextPending : copy.nextLabel}</span>
+          <span className="run-next-text" lang={next.korean ? undefined : "en"} data-testid="run-next-text">
+            {next.korean ?? next.source}
+          </span>
         </p>
       ) : null}
       {children}
@@ -175,7 +175,7 @@ function RunCard({ card }: { card: NonNullable<ReturnType<typeof useRun>["model"
   return (
     <div className="run-card" data-kind={card.kind} data-testid="run-card">
       <p className="run-card-head">{head}</p>
-      {text ? <p className="run-card-text" data-lang={readsKorean(text) ? "ko" : "source"}>{text}</p> : null}
+      {text ? <p className="run-card-text" data-lang={card.source ? "source" : "ko"}>{text}</p> : null}
       {card.values.length ? (
         <ul className="run-card-values">
           {card.values.map((value) => (
@@ -343,7 +343,7 @@ export function RunScreen() {
       </div>
       <main className="run-main" id="main">
         {timer.kind === "soon" || timer.kind === "done" ? <TimerChip timer={timer} /> : null}
-        <StepPanel protocol={protocol} nextSentence={model.screen?.next_step_sentence ?? null}>
+        <StepPanel protocol={protocol} screen={model.screen}>
           {model.card && model.card.stepId === protocol?.current_step_id ? <RunCard card={model.card} /> : null}
           {model.timerNotice && (!model.timerNotice.stepId || model.timerNotice.stepId === protocol?.current_step_id) ? (
             <p className="run-timer-notice" data-testid="run-timer-notice">

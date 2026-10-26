@@ -28,7 +28,10 @@ export async function fieldWalk(page: Page, info: TestInfo, key: 'eam23' | 'soil
   await page.getByTestId('start-go').click();
   await expect(page).toHaveURL(/#\/experiment$/);
 
-  // The step without a stored Korean (decision 2): 번역 준비 중, the source at the next-step size, no fold.
+  // The step without a stored Korean (decision 2; the server's translation_missing): 번역 준비 중, the source at the
+  // next-step size, no fold; the server reads it in place meanwhile (translation_pending).
+  server.startTranslating();
+  await expect(page.getByTestId('run-step')).toHaveAttribute('aria-busy', 'true');
   const step = page.getByTestId('run-step-text');
   await expect(step).toHaveText(plan.steps[0].source);
   await expect(step).toHaveAttribute('data-lang', 'source');
@@ -49,6 +52,16 @@ export async function fieldWalk(page: Page, info: TestInfo, key: 'eam23' | 'soil
   expect(await inView(page, '[data-testid="record-memo"]')).toBe(true);
   expect(await overflow(page)).toBeLessThanOrEqual(0);
   await shot(page, info, `30-${key}-run`);
+
+  // Lane KO2's translation_update: the same state again with a checked reading -- the Korean large, the source folded,
+  // 번역 준비 중 gone (the reading is the stand-in's, written for this test).
+  server.translated({ [plan.steps[0].id]: plan.inPlaceKorean });
+  await expect(step).toHaveText(plan.inPlaceKorean);
+  await expect(step).toHaveAttribute('data-lang', 'ko');
+  await expect(page.getByTestId('run-step-pending')).toHaveCount(0);
+  await expect(page.getByTestId('run-source-text')).toHaveText(plan.steps[0].source, { useInnerText: false });
+  await expect(page.getByTestId('run-step')).not.toHaveAttribute('aria-busy', 'true');
+  await shot(page, info, `30b-${key}-translated`);
 
   // The pause after the generation moved on (decision 1): pause -> resume -> pause -> [종료] from the band.
   await page.getByTestId('run-pause').click();
