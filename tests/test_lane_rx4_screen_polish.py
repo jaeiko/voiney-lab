@@ -44,39 +44,97 @@ assert(JSON.parse(ws.sent.at(-1)).generation===4,`without a newer turn, session.
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class JoinMovesTheGenerationTests(unittest.TestCase):
+    """The premise of the person's decision 3 (2026-10-26), on the listener itself: a joined utterance (lane HEAR,
+    ``_join_continuation``) moves the server's generation past the one session.ready sent the screen."""
+
+    def test_a_joined_utterance_moves_the_generation_on(self) -> None:
+        from tests import test_lane_hear_drops as drops
+        from tests import test_lane_hear_join as hear
+        from voiney_lab.server import CONTINUATION_JOIN_SECONDS, ListenerSession
+        from voiney_lab.vad import EndpointDetector
+
+        clock = drops.Clock()
+        listener = ListenerSession(EndpointDetector(drops.CONFIG, classifier=drops.voiced_if_loud, listening_onset=True), clock=clock)
+        listener.start()
+        listener.accept_configuration(41, "cascade", "ko", "lane-rx4")
+        listener.curated_protocol_session = hear._Curated()
+        ready_generation = listener.generation
+
+        def feed(pcm: bytes) -> list:
+            events = []
+            for at in range(0, len(pcm), hear.FRAME_BYTES):
+                events.extend(listener.accept_chunk(pcm[at:at + hear.FRAME_BYTES]))
+            return events
+
+        feed(hear.run(7) + drops.SILENT * 3)
+        clock.now += CONTINUATION_JOIN_SECONDS - 0.5
+        kinds = [event.kind for event in feed(hear.run(11) + drops.SILENT * 3)]
+        self.assertEqual(kinds[:2], ["assistant.interrupted", "speech.start"], kinds)
+        self.assertGreater(listener.generation, ready_generation)
+
+
 @unittest.skipUnless(SOURCE_PDF.is_file(), f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}")
 class ResumeFenceTests(VoiceSessionHarness, unittest.TestCase):
-    """The server's fence as the screens now meet it: a resume with session.ready's generation is refused once the
-    generation moved on; one with the server's current generation is taken."""
+    """The person's decision 3 (2026-10-26): workflow.resume is fenced as workflow.pause is -- by the accepted
+    configuration only. A resume carrying session.ready's generation after the server's own moved on (a joined
+    utterance, a barge-in, a reset) resumes; one from another configuration is still refused."""
 
-    def test_a_resume_with_a_stale_generation_is_refused_and_the_current_one_resumes(self) -> None:
+    def _paused_session(self, scenario_after_pause):
         seen: dict = {}
 
         async def scenario(socket, listener, say):
             await say(1, "프로토콜 시작해줘")
-            ready_generation = listener.generation
+            seen["ready_generation"] = listener.generation
             configuration = listener.accepted_configuration_id
-            socket.control({"type": "workflow.pause", "configuration_id": configuration, "generation": ready_generation})
+            socket.control({"type": "workflow.pause", "configuration_id": configuration, "generation": listener.generation})
             await socket.wait_for(lambda item: item["type"] == "protocol.fixture.state" and item.get("action") == "pause")
-            # The generation moves on (here by the one client control that does it without audio; a joined utterance
-            # and a barge-in do the same, each sending a speech.start with the new number).
+            seen["paused"] = self._snapshot(listener)
+            await scenario_after_pause(socket, listener, configuration, seen)
+
+        socket, _ = self._session(scenario)
+        return socket, seen
+
+    def test_a_resume_after_a_joined_utterance_moved_the_generation_resumes(self) -> None:
+        async def after_pause(socket, listener, configuration, seen):
+            # What _join_continuation does to the server's generation (JoinMovesTheGenerationTests shows a real join
+            # does it); the screen still holds session.ready's number.
+            listener.generation += 1
+            seen["moved"] = listener.generation > seen["ready_generation"]
+            socket.control({"type": "workflow.resume", "configuration_id": configuration, "generation": seen["ready_generation"]})
+            await socket.wait_for(
+                lambda item: (item["type"] == "protocol.fixture.state" and item.get("action") == "resume")
+                or item["type"] == "workflow.control.refused")
+            seen["end"] = self._snapshot(listener)
+
+        socket, seen = self._paused_session(after_pause)
+        self.assertEqual(self._errors(socket), [])
+        self.assertTrue(seen["moved"])
+        self.assertEqual(seen["paused"]["workflow_status"], "paused")
+        self.assertEqual([item for item in socket.sent if item["type"] == "workflow.control.refused"], [])
+        self.assertEqual(seen["end"]["workflow_status"], "active")
+        self.assertEqual(seen["end"]["durable_status"], "in_progress")
+
+    def test_a_resume_with_no_generation_after_a_reset_resumes_and_another_configuration_is_refused(self) -> None:
+        async def after_pause(socket, listener, configuration, seen):
             socket.control({"type": "session.reset"})
             await socket.wait_for(lambda item: item["type"] == "session.reset")
-            seen["moved"] = listener.generation > ready_generation
-            socket.control({"type": "workflow.resume", "configuration_id": configuration, "generation": ready_generation})
+            seen["moved"] = listener.generation > seen["ready_generation"]
+            socket.control({"type": "workflow.resume", "configuration_id": configuration + 1, "generation": listener.generation})
             await socket.wait_for(lambda item: item["type"] == "workflow.control.refused" and item.get("action") == "resume")
-            seen["stale"] = self._snapshot(listener)
-            socket.control({"type": "workflow.resume", "configuration_id": configuration, "generation": listener.generation})
+            seen["refused"] = self._snapshot(listener)
+            # A resume that names its configuration but no generation at all is a bench resume too.
+            socket.control({"type": "workflow.resume", "configuration_id": configuration})
             await socket.wait_for(lambda item: item["type"] == "protocol.fixture.state" and item.get("action") == "resume")
             seen["end"] = self._snapshot(listener)
 
-        socket, _ = self._session(scenario)
+        socket, seen = self._paused_session(after_pause)
         self.assertEqual(self._errors(socket), [])
         self.assertTrue(seen["moved"])
         refused = [item for item in socket.sent if item["type"] == "workflow.control.refused"]
         self.assertEqual([item["reason"] for item in refused], ["stale_configuration"])
         self.assertEqual(refused[0]["message_ko"], "현재 연결의 설정으로 다시 요청해 주세요.")
-        self.assertEqual(seen["stale"]["workflow_status"], "paused")
+        self.assertEqual(seen["refused"]["workflow_status"], "paused")
         self.assertEqual(seen["end"]["workflow_status"], "active")
 
 
