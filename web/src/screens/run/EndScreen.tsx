@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Angry, Check, CircleCheckBig, Frown, Laugh, Meh, NotebookPen, Smile, type LucideIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ApiError, postJson } from "../../api/client";
 import { runApi } from "../../api/runApi";
@@ -77,7 +77,8 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
   const { model } = snapshot;
   const ended = model.ended;
   const protocol = model.protocol;
-  const endedAt = useMemo(() => now(), [now]);
+  // When this screen first showed: the end of a run the server gave no end time for (a session.stop).
+  const [endedAt] = useState(() => now());
   const experimentId = snapshot.experimentId;
   const timeline = useQuery({
     queryKey: ["workspace", "experiments", experimentId ?? "", "timeline", "end"],

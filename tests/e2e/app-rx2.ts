@@ -260,8 +260,8 @@ export class StandIn {
       const id = this.protocol.id;
       if (path === '/api/protocols') return json({ protocols: [this.entry()] });
       if (path === `/api/protocols/${id}`) return json({ ...this.entry(), analysis_run: { state: 'passed', failure_code: null, reanalysis: false } });
-      if (path === `/api/protocols/${id}/review`) return json(REVIEW);
-      if (path === `/api/protocols/${id}/start-check`) return json(CHECK);
+      if (path === `/api/protocols/${id}/review`) return json({ ...REVIEW, protocol_id: id });
+      if (path === `/api/protocols/${id}/start-check`) return json({ ...CHECK, protocol_id: id });
       if (path === `/api/protocols/${id}/start-check/answers`) { this.answers.push(request.postDataJSON()); return json({ proceed: true, message_ko: '', followups: [] }); }
       if (path === `/api/protocols/${id}/start-check/safety`) { this.safetyReads += 1; return json({ ready: true, target: TARGET }); }
       if (path === `/api/protocols/${id}/start-check/changes`) {
@@ -353,6 +353,23 @@ export class StandIn {
 /** The page's horizontal overflow (none is allowed). */
 export async function overflow(page: Page): Promise<number> {
   return page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+}
+
+/** The elements that reach past the window's right edge (for an overflow's message): tag, class, right edge, width. */
+export async function overflowing(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const limit = document.documentElement.clientWidth + 0.5;
+    const past = [...document.querySelectorAll<HTMLElement>('body *')].filter((el) => el.getBoundingClientRect().right > limit && el.getBoundingClientRect().width > 0);
+    // The deepest ones: a container only as wide as the child that pushes it is not the cause.
+    const leaves = past.filter((el) => !past.some((other) => other !== el && el.contains(other)));
+    const name = (el: HTMLElement) => `${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]}${el.dataset.testid ? `[${el.dataset.testid}]` : ''}`;
+    // Inside the main column: what reaches past its content box (the frame's own width follows the widest of these).
+    const main = document.querySelector<HTMLElement>('main');
+    const inner = main ? main.getBoundingClientRect().right - parseFloat(getComputedStyle(main).paddingRight) + 0.5 : limit;
+    const wide = main ? [...main.querySelectorAll<HTMLElement>('*')].filter((el) => el.getBoundingClientRect().right > inner && el.getBoundingClientRect().width > 0) : [];
+    const wideLeaves = wide.filter((el) => !wide.some((other) => other !== el && el.contains(other)));
+    return [`viewport=${window.innerWidth} client=${document.documentElement.clientWidth} scroll=${document.documentElement.scrollWidth}`, ...leaves.slice(0, 4).map((el) => `${name(el)} right=${Math.round(el.getBoundingClientRect().right)} w=${Math.round(el.getBoundingClientRect().width)}`), 'in main:', ...wideLeaves.slice(0, 8).map((el) => `${name(el)} right=${Math.round(el.getBoundingClientRect().right)} w=${Math.round(el.getBoundingClientRect().width)} min=${el.scrollWidth} text="${(el.textContent || '').slice(0, 24)}"`)];
+  });
 }
 
 /** Whether an element is wholly inside the window as it stands (no scroll needed to see it). */

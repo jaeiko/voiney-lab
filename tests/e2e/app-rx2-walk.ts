@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { Page, TestInfo } from '@playwright/test';
 import { expect } from '@playwright/test';
 
-import { APP, GREETING, inView, notClipped, overflow, StandIn, STEPS } from './app-rx2';
+import { APP, GREETING, inView, notClipped, overflow, overflowing, StandIn, STEPS } from './app-rx2';
 
 // Lane RX2 (2026-10-25): the new screen's walk, on every project (desktop, phone, tablet portrait and
 // landscape): login -> the first guide (microphone, voice check skipped, a guiding voice) -> home -> the
@@ -22,7 +22,8 @@ export async function shot(page: Page, info: TestInfo, name: string) {
 }
 
 async function noOverflow(page: Page, where: string) {
-  expect(await overflow(page), `horizontal overflow on ${where}`).toBeLessThanOrEqual(0);
+  const width = await overflow(page);
+  expect(width, `horizontal overflow on ${where}: ${(await overflowing(page)).join('; ')}`).toBeLessThanOrEqual(0);
 }
 
 export async function walk(page: Page, info: TestInfo) {
@@ -124,16 +125,6 @@ export async function walk(page: Page, info: TestInfo) {
   expect(server.audioReady[0].mic_id).toBe(server.calibrations[0].mic_id);
   await expect(page.getByTestId('run-step-text')).toHaveText(STEPS[0].korean!);
   expect(server.starts[0]).toMatchObject({ protocol_id: 'p-rx2-1', run_change_set_id: 'run-changes-0123456789abcdef01234567', mode: 'cascade' });
-  // Person's decision 2 (2026-10-26): the Korean large and bold, the source small under it, folded; opened, it reads at
-  // less than two thirds of the Korean's size, and the step's label is not repeated in the sentence (decision 5).
-  await expect(page.getByTestId('run-step-text')).toHaveAttribute('data-lang', 'ko');
-  await expect(page.getByTestId('run-source')).not.toHaveAttribute('open');
-  await page.getByTestId('run-source').locator('summary').click();
-  await expect(page.getByTestId('run-source-text')).toHaveText(STEPS[0].source);
-  const sizes = await page.evaluate(() => ['run-step-text', 'run-source-text'].map((id) => parseFloat(getComputedStyle(document.querySelector(`[data-testid="${id}"]`)!).fontSize)));
-  expect(sizes[1], `source ${sizes[1]}px beside Korean ${sizes[0]}px`).toBeLessThan(sizes[0] * 0.67);
-  await page.getByTestId('run-source').locator('summary').click();
-  await expect(page.getByTestId('run-next')).toHaveText(`다음 단계: ${STEPS[1].korean}`);
   await expect(page.getByTestId('run-listening')).toBeVisible();
   // No run bar outside the run: the app's menu is not shown while it runs.
   await expect(page.locator('nav.nav')).toHaveCount(0);
@@ -148,6 +139,16 @@ export async function walk(page: Page, info: TestInfo) {
   await expect(captionText).toHaveText(/단계마다 말로 안내할게요\.$/, { timeout: 20_000 });
   const last = await notClipped(page, '[data-testid="run-caption-text"]');
   expect(last.ok, `caption clipped: ${JSON.stringify(last)}`).toBe(true);
+  // Person's decision 2 (2026-10-26; checked after the caption, whose first page would otherwise have passed): the Korean large and bold, the source small under it, folded; opened, it reads at
+  // less than two thirds of the Korean's size, and the step's label is not repeated in the sentence (decision 5).
+  await expect(page.getByTestId('run-step-text')).toHaveAttribute('data-lang', 'ko');
+  await expect(page.getByTestId('run-source')).not.toHaveAttribute('open');
+  await page.getByTestId('run-source').locator('summary').click();
+  await expect(page.getByTestId('run-source-text')).toHaveText(STEPS[0].source);
+  const sizes = await page.evaluate(() => ['run-step-text', 'run-source-text'].map((id) => parseFloat(getComputedStyle(document.querySelector(`[data-testid="${id}"]`)!).fontSize)));
+  expect(sizes[1], `source ${sizes[1]}px beside Korean ${sizes[0]}px`).toBeLessThan(sizes[0] * 0.67);
+  await page.getByTestId('run-source').locator('summary').click();
+  await expect(page.getByTestId('run-next')).toHaveText(`다음 단계: ${STEPS[1].korean}`);
   // The records and their two buttons, without scrolling.
   expect(await inView(page, '[data-testid="run-records"] .run-records-head')).toBe(true);
   expect(await inView(page, '[data-testid="record-memo"]')).toBe(true);
