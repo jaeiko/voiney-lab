@@ -1,5 +1,91 @@
 # Migration Notes
 
+## Workspace schema 11 → 12 → 13 (2026-10-26, lanes HEAR2 and KO2)
+
+Two migrations of the same day, applied in this order on open: lane HEAR2's
+settings names (11 → 12, merged first) and lane KO2's translation style
+versions (12 → 13). A store at 11 takes both; a store at 12 takes the second.
+
+### Schema 11 → 12: the measured voice and the filter choice (lane HEAR2)
+
+Schema 12 is schema 11 with two more names in the `experimenter_settings`
+CHECK: `speaker_filter` (the person's choice, `off` / `on`) and
+`voice_reference` (what "목소리 맞추기" measured: `v1:<dBFS>:<unix
+seconds>:<microphone id>`, written by `POST /api/voice/calibration` only).
+Lane HEAR (2026-10-25) added both to `EXPERIMENTER_SETTING_VALUES` but wrote
+no migration, so a workspace store at schema 11 refused the measurement's
+row with an IntegrityError that the route answered as HTTP 500 — the ten
+failed measurements of the person's test of 2026-10-26 (lane HEAR2 report,
+section 1-5). Lane HEAR's tests ran with the workspace off and never met
+it. Built the way schema 11 was: the rows are copied with their sequence
+ids, the AUTOINCREMENT counter is put back, the index and both append-only
+triggers are made again (`MIGRATION_11_TO_12`). Nothing else in the store
+changes.
+
+#### Reading older data
+
+A schema-11 store migrates on open; it holds no row of the two names, so
+every voice is heard until the person measures and turns the filter on.
+Checked on a copy of a schema-11 store built by the migrations in
+`tests/test_lane_hear2_settings_store_v12.py` and through the production
+route with the workspace on (`tests/test_lane_hear2_calibration_route.py`).
+
+#### Going back
+
+Code from before this version refuses a schema-12 store ("Commercial
+workspace schema is unsupported"): restore a backup taken before the
+migration, or rebuild the table with schema 11's CHECK after deleting the
+rows of the two new names.
+
+### Schema 12 → 13: translation style versions (lane KO2)
+
+Schema 13 adds `style_version` (an integer, `CHECK(style_version>=0)`) to
+`protocol_fact_translations` and `protocol_translation_glossaries` and makes it
+part of their identity: `UNIQUE(revision_id,fact_key,language,source_sha256,
+status,style_version)` and `UNIQUE(revision_id,language,style_version)`. It is
+the version of the translation instructions a row was made with
+(`protocol_translation.STYLE_VERSION`, now 4; human decision 1 of 2026-10-26),
+so the Korean of a protocol can be made again under new instructions while
+the old rows stay. SQLite cannot change a UNIQUE constraint in place, so
+`MIGRATION_12_TO_13` builds both tables again: every row is copied in its
+order with its id and `style_version` 0 ("before versions were kept"), and
+the index and both pairs of append-only triggers are made as schema 7 made
+them. DROP TABLE fires no trigger. Nothing else in the store changes.
+
+A row of version 0 keeps the id it had; a row of a later version has
+`:v<N>` at the end of the identity its id is hashed from, so a new version's
+row never collides with an older one. The same holds for a glossary's id.
+
+#### Reading older data
+
+A schema-11 store takes both migrations on open (11 → 12, then 12 → 13), a
+schema-12 store (lane HEAR2's) the second; each reads as before: its
+translation rows are version 0 and are shown when they pass today's check,
+as they were (`tests/test_lane_ko2_style_version.py` `SchemaThirteenTests`). Reading now takes,
+sentence by sentence, the newest version's row that passes today's check
+(each row checked with its own version's glossary), else an older one that
+passes, else the source; a reviewed row still wins. Generation makes only
+what the current version lacks -- a sentence stored under an older version,
+passed or refused, is made again; one stored under the current version is
+not asked again. Opening a session does not regenerate an existing
+protocol's rows (only a protocol with no row at all starts its generation,
+as before): `scripts/retranslate_protocols.py --data-dir DIR` plans with no
+call, and with `--run` makes the current version for the stored protocols
+(keys from the shell; `.env` is not read). Checked on a copy of
+`data/runtime/candidate-a-live-acceptance` (sqlite through the backup API,
+objects hard-linked; the original only read): the store opened at 12 (this
+lane's number before lane HEAR2 merged first) with its rows, the plan read
+four runnable protocols, 223 sentences and 34 calls.
+
+#### Going back
+
+Code from before this version refuses a schema-13 store ("Commercial
+workspace schema is unsupported"): restore a backup taken before the
+migration. Rows of a later style version would otherwise collide with the old
+UNIQUE constraint; to rebuild schema 12 by hand, drop the rows whose
+`style_version` is not 0, rebuild both tables without the column, and set
+`schema_metadata` to 12.
+
 ## Page range and today's values (lane EASY, 2026-10-24)
 
 No schema number changes. Three stores gain event types and payload keys;

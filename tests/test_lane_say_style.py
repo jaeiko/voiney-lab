@@ -63,7 +63,8 @@ class StyleGuideTests(unittest.TestCase):
             with self.subTest(kept=kept):
                 self.assertIn(kept, guide)
         self.assertNotIn("formal polite Korean declarative style", guide)
-        self.assertEqual(pt.PROMPT_VERSION, "revision_translation_v3")
+        # Lane KO2 (2026-10-26): v4, the version stored with every row.
+        self.assertEqual(pt.PROMPT_VERSION, "revision_translation_v4")
 
     def test_every_translation_prompt_carries_the_guide(self) -> None:
         self.assertIn(pt.STYLE_GUIDE, pt.REVISION_TRANSLATION_PROMPT)

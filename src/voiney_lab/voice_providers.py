@@ -38,6 +38,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import wave
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -131,12 +132,37 @@ ISO_639_3 = {"kor": "ko", "eng": "en", "vie": "vi"}
 LANGUAGES = frozenset(GOOGLE_LOCALES)
 
 
+#: Lane HEAR2 (2026-10-26): the short code a provider failure is known by on
+#: the screen, in the metrics and in the log -- the provider's own code when
+#: its JSON reply names one (ElevenLabs' ``quota_exceeded``), else one by
+#: status; ``timeout`` and ``unreachable`` for a request that never got an
+#: answer. Never the reply's words.
+_PROVIDER_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def failure_code_for_status(status: int | None) -> str:
+    if status in (401, 403):
+        return "unauthorized"
+    if status == 429:
+        return "rate_limited"
+    if status is None or status >= 500:
+        return "provider_error"
+    return "provider_refused"
+
+
 class SpeechProviderError(RuntimeError):
     """A speech provider refused the request or answered something unusable.
 
     The message names the provider and the HTTP status only; it never carries
     the API key, and at most a short, bounded slice of the provider's reply.
+    ``status`` is the HTTP status (None without one) and ``code`` the short
+    code above.
     """
+
+    def __init__(self, message: str, *, status: int | None = None, code: str | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code if code and _PROVIDER_CODE.fullmatch(code) else failure_code_for_status(status)
 
 
 def _choice(env: Mapping[str, str], name: str) -> str:
@@ -234,9 +260,23 @@ def _key(name: str) -> str:
     return value
 
 
+def _reply_code(response: requests.Response) -> str | None:
+    """The provider's own short code in a JSON reply ({"detail": {"code": ...}}), or None."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    code = detail.get("code") if isinstance(detail, dict) else None
+    return code if isinstance(code, str) and _PROVIDER_CODE.fullmatch(code) else None
+
+
 def _failure(provider: str, kind: str, response: requests.Response) -> SpeechProviderError:
     detail = response.text[:300] if response.content else "empty response"
-    return SpeechProviderError(f"{provider} {kind} failed ({response.status_code}): {detail}")
+    return SpeechProviderError(
+        f"{provider} {kind} failed ({response.status_code}): {detail}",
+        status=int(response.status_code), code=_reply_code(response))
 
 
 def _json(provider: str, kind: str, response: requests.Response) -> dict:
@@ -401,10 +441,17 @@ def transcribe(
     require_provider(settings.provider, STT_PROVIDER_ENV)
     if language not in {None, *LANGUAGES}:
         raise ValueError("STT language is invalid")
-    if settings.provider == GOOGLE_CLOUD:
-        return transcribe_google_cloud(pcm, settings, language=language, keyterms=keyterms)
-    if settings.provider == ELEVENLABS:
-        return transcribe_elevenlabs(pcm, settings, language=language, keyterms=keyterms)
+    try:
+        if settings.provider == GOOGLE_CLOUD:
+            return transcribe_google_cloud(pcm, settings, language=language, keyterms=keyterms)
+        if settings.provider == ELEVENLABS:
+            return transcribe_elevenlabs(pcm, settings, language=language, keyterms=keyterms)
+    except requests.Timeout as exc:
+        # Lane HEAR2: a request that never got an answer is a provider failure
+        # with its own code; the message names no address and no key.
+        raise SpeechProviderError(f"{settings.provider} STT timed out", code="timeout") from exc
+    except requests.RequestException as exc:
+        raise SpeechProviderError(f"{settings.provider} STT could not be reached", code="unreachable") from exc
     raise ValueError(f"STT provider {settings.provider!r} is not handled here")
 
 

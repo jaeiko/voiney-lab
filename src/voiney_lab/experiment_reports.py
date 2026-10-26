@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from voiney_lab.experiment_protocol_analysis import program_address_shape
 from voiney_lab.report_projection import project_protocol_for_report, project_step_for_report
 
 log = logging.getLogger(__name__)
@@ -100,6 +101,9 @@ EVENT_NAMES_KO: dict[str, str] = {
     "record_retracted": "기록 취소", "report_value_confirmed": "값 확인",
     "report_review_deferred": "값 확인 화면으로",
     "timer_end_notice": "타이머 끝 알림", "timer_last_minute_notice": "타이머 1분 전 알림",
+    # Lane HEAR2, decision 3: the timer's voice commands.
+    "timer_paused": "타이머 일시정지", "timer_resumed": "타이머 다시 시작",
+    "timer_cancelled": "타이머 취소", "timer_restarted": "타이머 처음부터 다시",
     "connection_restored": "연결 끊김 뒤 다시 연결", "photo_attached": "사진 첨부",
     "web_reference": "웹 참고 링크", "experimenter_recorded": "실험자 기록",
     # Lane HELP: the sources' help after a problem said or asked about.
@@ -1608,11 +1612,18 @@ class ReportReviewChange:
     step_label: str
     kind: str  # the item's kind in Korean ("단계", "단계 타이머", ...)
     original: str  # the source's or the AI's reading; "—" when none
-    reviewed: str  # the version's value; "(비움 · 원문에 없음)" when left empty
+    #: the version's value; "(비움 · 원문에 없음)" when left empty, and
+    #: "프로그램에 하는 말이라 뺌" when the words read as written to the program
+    #: (lane KO2, decision 7)
+    reviewed: str
     origin: str  # "검토자 입력" or "AI 제안 · 검토자 확인"
     reviewer: str
     changed: bool  # fixed, entered or left empty (not only confirmed)
 
+
+#: An item a reviewer took out because its words read as written to the
+#: program (lane TIDY's card, [빼 주세요]); lane KO2, decision 7.
+PROGRAM_ADDRESS_CLEARED = "프로그램에 하는 말이라 뺌"
 
 #: The review version table's heading row (lane RV, decision g).
 REVIEW_CHANGE_HEADER = ("단계", "항목", "원문 · AI 제안", "검토본", "출처", "검토자")
@@ -1727,7 +1738,12 @@ def _review_version_facts(fixture: Any) -> tuple[str, tuple[ReportReviewChange, 
         if change.action == "confirm" and change.origin != "ai_suggestion":
             continue
         reviewed = (
-            "(비움 · 원문에 없음)" if change.action == "clear" and change.kind != "timer"
+            # Lane KO2, decision 7: words taken out as written to the program
+            # (lane TIDY's card) are in the source; they were left out for that.
+            PROGRAM_ADDRESS_CLEARED
+            if change.action == "clear" and change.kind != "timer"
+            and program_address_shape(change.original) is not None
+            else "(비움 · 원문에 없음)" if change.action == "clear" and change.kind != "timer"
             else "(타이머 없음)" if change.action == "clear"
             else change.reviewed or "—")
         rows.append(ReportReviewChange(

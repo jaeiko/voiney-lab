@@ -98,6 +98,8 @@ export interface RunModel {
   figures: { drawn: Figure | null; web: Figure | null };
   /** When the server last dropped what it heard (shown for a few seconds as "잘 안 들렸어요"). */
   misheardAt: number | null;
+  /** Lane HEAR2, decision 4: the server's own notice and reason for that drop, in plain words (null: the screen's own). */
+  misheard: { notice: string | null; reason: string | null };
   /** What the server said of the side-voice filter for this run (lane HEAR's speaker.filter), shown for a few seconds. */
   filterNotice: { text: string; at: number } | null;
   timerNotice: { text: string; stepId: string | null } | null;
@@ -120,6 +122,7 @@ export const EMPTY_RUN: RunModel = {
   card: null,
   figures: { drawn: null, web: null },
   misheardAt: null,
+  misheard: { notice: null, reason: null },
   filterNotice: null,
   timerNotice: null,
   ended: null,
@@ -274,6 +277,11 @@ export function replyText(m: Record<string, unknown>): string {
   return plain(raw).replace(/^#+\s+/gm, "").trim();
 }
 
+/** The words a reply said aloud (the server's speech_text), or "" when it sends none (lane KO2, decision 4): the caption shows what was said, never the display's source quote. */
+export function spokenText(m: Record<string, unknown>): string {
+  return text(m.speech_text) ? plain(m.speech_text).trim() : "";
+}
+
 /** A protocol state the screen may draw: the accepted configuration's, attached, of the accepted protocol and revision, not older than the one drawn. */
 export function acceptableState(
   m: Record<string, unknown>,
@@ -377,7 +385,7 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
     case "server.words":
     case "protocol.notice.speech":
       if (!ours || typeof m.text !== "string" || !m.text.trim()) return model;
-      return withLog(model, { key: `said:${String(m.generation)}:${String(m.turn_id)}`, who: "said", text: oneLine(m.text) });
+      return withLog(model, { key: `said:${String(m.generation)}:${String(m.turn_id)}`, who: "said", text: oneLine(spokenText(m) || m.text) });
     case "transcript":
       if (turnId === null || !context.live(m) || !text(m.text)) return model;
       // A new utterance taken: a refusal said for the last one goes.
@@ -386,12 +394,14 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
     case "reply.complete": {
       if (turnId === null || !context.live(m)) return model;
       const words = replyText(m);
-      if (!words) return model;
+      const said = spokenText(m);
+      if (!words && !said) return model;
       const key = `said:${String(m.generation)}:${turnId}`;
       const before = model.log.find((item) => item.key === key);
       const joined = m.type === "reply.complete" || !before ? words : `${before.text} ${words}`.trim();
-      const next = withLog(model, { key, who: "said", text: oneLine(joined) });
-      if (next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined) };
+      // The caption and the log keep what was said; the card keeps what is shown.
+      const next = withLog(model, { key, who: "said", text: oneLine(spokenText(m) || joined) });
+      if (words && next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined) };
       return next;
     }
     case "server.operation":
@@ -432,7 +442,8 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
         // Lane HEAR decision 3: nothing is shown for a drop while paused (the band says why), and a voice the filter
         // took for someone else's comes as speech.ignored too.
         if (m.type === "speech.dropped" && (m.paused === true || m.reason === "other_speaker_level")) return model;
-        return { ...model, misheardAt: context.now };
+        // Lane HEAR2, decision 4: the server's notice and reason, shown with the word; nothing is said.
+        return { ...model, misheardAt: context.now, misheard: { notice: text(m.notice) ? plain(m.notice) : null, reason: text(m.reason_ko) ? plain(m.reason_ko) : null } };
       }
       return model;
   }
@@ -440,7 +451,7 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
 
 /** The step timer as the screen shows it: none, running, its last minute, or ended (index.html's renderRunTimer). */
 export interface TimerView {
-  kind: "none" | "idle" | "running" | "soon" | "done";
+  kind: "none" | "idle" | "running" | "soon" | "done" | "paused";
   seconds: number;
   duration: number;
   name: string | null;
@@ -455,6 +466,8 @@ export function timerView(protocol: ProtocolState | null, remaining: (step: Step
     if (seconds > 0) return { kind: seconds <= 60 ? "soon" : "running", seconds, duration, name };
     return { kind: "done", seconds: -seconds, duration, name };
   }
+  // Lane HEAR2, decision 3: paused by voice, the timer stands where it was (no deadline; the server's remaining seconds).
+  if (step && step.state === "paused") return { kind: "paused", seconds: Math.max(0, remaining(step)), duration, name };
   if (step && step.state === "not_started" && duration > 0) return { kind: "idle", seconds: duration, duration, name };
   return { kind: "none", seconds: 0, duration, name };
 }

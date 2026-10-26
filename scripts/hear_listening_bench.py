@@ -19,6 +19,19 @@ It counts what lane HEAR's brief asks to measure before and after the fix:
   while the run is paused;
 * noise_questions -- "시끄러운 곳 모드" questions said during the run.
 
+Lane HEAR2 (2026-10-26) adds what the person's second test asked to measure:
+
+* timer_stage_unanswered -- at a step whose timer runs, the wearer's
+  question, timer question, timer command and note that got no reply;
+* timer_paused_the_timer -- "타이머 일시정지해 줘" paused the timer (not the run);
+* noise_chain_answer_s -- in 24 s of room noise the VAD keeps taking for
+  speech (bursts with pauses just over the end-of-speech silence), how
+  long after the wearer's word its words reached routing; noise_chain_joins
+  the continuations joined meanwhile;
+* stt_failure_shown / stt_failure_said -- with the speech-to-text provider
+  failing (401 quota), how many failures the screen was told of as such
+  and how often it was said aloud.
+
 Run it against any checkout to compare (the module only uses names every
 checkout since lane SP1 has)::
 
@@ -54,6 +67,8 @@ BENCH_ENVIRONMENT = {
     "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "false",
 }
 
+import dataclasses
+
 from voiney_lab.audio import FRAME_BYTES
 from voiney_lab.curated_protocol import CuratedProtocolSession
 from voiney_lab.language import Transcription
@@ -85,7 +100,16 @@ WORDS: dict[int, str] = {
     150: "다시 시작",
     175: "ok so thank you",
     230: CALIBRATION_SENTENCE_FALLBACK,
+    # Lane HEAR2: the timer stage and the outage.
+    200: "타이머 시작해 줘",
+    275: "타이머 몇 분 남았어",
+    300: "타이머 일시정지해 줘",
+    325: "메모해 줘 색이 노랗다",
+    350: "다음 단계 뭐야",
 }
+#: Lane HEAR2: the fake provider fails these utterances (by their length) the
+#: way ElevenLabs did in the person's test.
+FAILING_LENGTHS: set[int] = set()
 #: Lengths 25 frames apart, so a word heard with its start cut off is never
 #: read as another word: a run of any other length is written as nothing.
 LENGTH_OF = {text: length for length, text in WORDS.items()}
@@ -119,7 +143,11 @@ def runs(pcm: bytes) -> list[int]:
 
 def fake_transcribe(pcm: bytes, *args, **kwargs) -> Transcription:
     time.sleep(STT_SECONDS / SPEED)
-    words = [WORDS[length] for length in runs(pcm) if length in WORDS]
+    lengths = runs(pcm)
+    if any(length in FAILING_LENGTHS for length in lengths):
+        from voiney_lab.voice_providers import SpeechProviderError
+        raise SpeechProviderError("elevenlabs STT failed (401): quota", status=401, code="quota_exceeded")
+    words = [WORDS[length] for length in lengths if length in WORDS]
     text = " ".join(words)
     return Transcription(text, "ko", duration_seconds=len(pcm) / 32000)
 
@@ -179,6 +207,13 @@ class BenchSocket:
                 return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
             return {"type": "websocket.disconnect", "code": 1000}
         kind, value = self.script.pop(0)
+        if kind == "text" and str(value.get("type", "")).startswith("bench."):  # type: ignore[union-attr]
+            # Lane HEAR2: the bench's own directions, never sent to the server.
+            if value["type"] == "bench.step":  # type: ignore[index]
+                self.session.curated_protocol_session.current_index = int(value["index"])  # type: ignore[index]
+            elif value["type"] == "bench.fail":  # type: ignore[index]
+                FAILING_LENGTHS.update(int(length) for length in value["lengths"])  # type: ignore[index]
+            return await self.receive()
         if kind == "text":
             message = dict(value)  # type: ignore[arg-type]
             message.setdefault("configuration_id", self.session.accepted_configuration_id)
@@ -221,6 +256,9 @@ class AudioClock:
 
 def make_session(clock: AudioClock) -> ListenerSession:
     fixture = _demo_fixture()
+    # Lane HEAR2: the second step ("Mix the sample for 30 seconds") carries its
+    # 30 s timer, so the timer stage can be measured.
+    fixture = dataclasses.replace(fixture, timer_manifest={fixture.steps[1].step_id: 30})
     workflow = CuratedProtocolSession(fixture)
     session = ListenerSession(
         EndpointDetector(VadConfig(), classifier=voiced, listening_onset=True),
@@ -279,6 +317,37 @@ def build_script() -> Script:
     script.marks.append(("pause_end_check", script.frames, {}))
     script.say("다시 시작", trial="resume")
     script.silence(6.0)
+    # --- Lane HEAR2: the timer stage (the person's third step) --------------
+    script.control({"type": "bench.step", "index": 1})
+    script.silence(2.0)
+    script.marks.append(("timer_stage_begin", script.frames, {}))
+    script.say("타이머 시작해 줘", kind="timer_stage")
+    script.silence(6.0)
+    for text in ("현재 단계 알려줘", "타이머 몇 분 남았어", "메모해 줘 색이 노랗다", "타이머 일시정지해 줘", "다음 단계 뭐야"):
+        script.say(text, kind="timer_stage")
+        script.silence(7.0)
+    # --- Lane HEAR2: room noise the VAD keeps taking for speech ---------------
+    # Bursts of 1.6 s with 1.1 s between: each burst ends by the 1 s silence
+    # and the next starts within the 1.5 s join window, as the person's room
+    # noise did. 80 frames is no word's length, so the fake STT writes nothing
+    # for a burst. The wearer's words come after the fifth burst (13.5 s in);
+    # the noise goes on 11 bursts more (30 s).
+    script.marks.append(("noise_chain", script.frames, {}))
+    for i in range(16):
+        if i == 5:
+            script.say("현재 단계 알려줘", kind="noise_chain_word")
+            script.silence(1.1)
+        script.noise(frames=80, amplitude=WEARER)
+        script.silence(1.1)
+    script.marks.append(("noise_chain_end", script.frames, {}))
+    script.silence(14.0)
+    # --- Lane HEAR2: the speech-to-text provider fails (401 quota) -------------
+    script.marks.append(("stt_outage", script.frames, {}))
+    script.control({"type": "bench.fail", "lengths": [LENGTH_OF["다음 단계 뭐야"]]})
+    for _ in range(3):
+        script.say("다음 단계 뭐야", kind="stt_outage")
+        script.silence(5.0)
+    script.silence(4.0)
     return script
 
 
@@ -313,7 +382,44 @@ def measure(script: Script, sent: list[tuple[int, dict]]) -> dict[str, object]:
     resumed = any(
         m.get("type") == "protocol.fixture.state" or "workflow_status" in json.dumps(m)
         for at, m in sent if at >= pause_end) and heard_after(pause_end, "다시 시작", None)
+    # --- Lane HEAR2 ---
+    def transcript_after(start: int, words: str, end: int | None) -> int | None:
+        for at, text in transcripts:
+            if start <= at and (end is None or at < end) and words in text:
+                return at
+        return None
+
+    timer_stage = [(i, at, info) for i, (kind, at, info) in enumerate(marks) if kind == "timer_stage"]
+    replies = [(at, m) for at, m in sent if m.get("type") == "reply.complete"]
+    unanswered = 0
+    for index, at, info in timer_stage:
+        following = next((m[1] for m in marks[index + 1:]), None)
+        heard_at = transcript_after(at, info["text"], following)
+        if heard_at is None or not any(heard_at <= r_at and (following is None or r_at < following + 50) for r_at, _ in replies):
+            unanswered += 1
+    operations = [m.get("operation") for _, m in sent if m.get("type") == "server.operation"]
+    noise_start = next(at for kind, at, _ in marks if kind == "noise_chain")
+    noise_end = next(at for kind, at, _ in marks if kind == "noise_chain_end")
+    word = next((at, info) for kind, at, info in marks if kind == "noise_chain_word")
+    word_end = word[0] + LENGTH_OF[word[1]["text"]]
+    heard_at = transcript_after(word[0], word[1]["text"], None)
+    # A continuation cancels the turn: the page gets cascade.playback.clear with reason continued_speech.
+    joins = sum(1 for at, m in sent if m.get("type") == "cascade.playback.clear"
+                and m.get("reason") == "continued_speech" and noise_start <= at < noise_end + 200)
+    outage_start = next(at for kind, at, _ in marks if kind == "stt_outage")
+    dropped_failed = sum(1 for at, m in sent if m.get("type") == "speech.dropped" and m.get("reason") == "stt_failed" and at >= outage_start)
+    said_failed = sum(1 for at, m in sent if m.get("type") == "server.words" and m.get("words_kind") == "stt_failure")
+    errors = sum(1 for at, m in sent if m.get("type") == "error" and at >= outage_start)
     return {
+        "timer_stage_utterances": len(timer_stage),
+        "timer_stage_unanswered": unanswered,
+        "timer_paused_the_timer": "step_timer_paused" in operations,
+        "timer_paused_the_run": "workflow_paused" in operations[operations.index("step_timer_started") + 1:] if "step_timer_started" in operations else None,
+        "noise_chain_answer_s": round((heard_at - word_end) * 0.02, 1) if heard_at is not None else None,
+        "noise_chain_joins": joins,
+        "stt_failure_shown": dropped_failed,
+        "stt_failure_said": said_failed,
+        "stt_failure_turn_errors": errors,
         "wearer_utterances": len(wearer),
         "wearer_dropped": dropped,
         "wearer_dropped_rate": round(dropped / len(wearer), 3) if wearer else None,
@@ -334,6 +440,7 @@ def run_bench() -> tuple[dict[str, object], list[tuple[int, dict]]]:
     session = make_session(clock)
     script = build_script()
     socket = BenchSocket(script, session, clock)
+    FAILING_LENGTHS.clear()
     with patch.dict(os.environ, BENCH_ENVIRONMENT), patch(
         "voiney_lab.server.ListenerSession", return_value=session), patch(
         "voiney_lab.server.VoiceVadSettings.from_environment",

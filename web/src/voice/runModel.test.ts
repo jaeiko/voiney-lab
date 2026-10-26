@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyServerEvent, EMPTY_RUN, isPaused, listeningWord, MISHEARD_SHOWN_MS, newestGeneration, nextStepWords, readsKorean, replyText, sourceFigures, stepWords, timerView, withoutStepPrefix, type ProtocolState } from "./runModel";
+import { applyServerEvent, EMPTY_RUN, isPaused, listeningWord, MISHEARD_SHOWN_MS, newestGeneration, nextStepWords, readsKorean, replyText, sourceFigures, spokenText, stepWords, timerView, withoutStepPrefix, type ProtocolState } from "./runModel";
 
 const accepted = { configuration_id: 7, protocol_id: "p1", revision_id: "r1" };
 const live = () => true;
@@ -40,12 +40,43 @@ describe("applyServerEvent", () => {
     expect(applyServerEvent(model, { type: "transcript", turn_id: 3, generation: 1, text: "x" }, { ...context, live: () => false })).toBe(model);
   });
 
+  it("captions what was said, not the display's source quote (lane KO2, decision 4)", () => {
+    const display = "실험 목적\n이 논문의 저자들은 젤 조각을 세척해요.\n\n원문 · English · PDF p.2\nYou can do this manually or with the help of a pipetting robot.";
+    const said = "원문에 적힌 실험 목적이에요. 이 논문의 저자들은 젤 조각을 세척해요.";
+    let model = applyServerEvent(EMPTY_RUN, { type: "server.operation", turn_id: 4, generation: 2, route: "curated_protocol", operation: "verified_fact_read" }, context);
+    model = applyServerEvent(model, { type: "reply.delta", turn_id: 4, generation: 2, text: display, primary_text: said, speech_text: said }, context);
+    expect(model.caption?.text).toBe(said);
+    model = applyServerEvent(model, { type: "reply.complete", turn_id: 4, generation: 2, text: display, primary_text: said, speech_text: said }, context);
+    expect(model.caption?.text).toBe(said);
+    expect(model.log.at(-1)?.text).not.toContain("pipetting robot");
+    // The answer card keeps what is shown.
+    expect(model.card?.text).toBe(said);
+    // A reply not said (no speech_text) is captioned with its shown words, as before.
+    model = applyServerEvent(model, { type: "reply.complete", turn_id: 4, generation: 2, text: "화면에만 적었어요.", speech_text: null }, context);
+    expect(model.caption?.text).toBe("화면에만 적었어요.");
+    expect(spokenText({ speech_text: "  말한 글  " })).toBe("말한 글");
+    // The greeting and the server's notices are captioned as said too.
+    model = applyServerEvent(EMPTY_RUN, { type: "session.greeting", configuration_id: 7, turn_id: 9, generation: 1, text: "Voiney Lab입니다. “until the band is clear”인가요?", speech_text: "Voiney Lab입니다. 이 문장은 아직 번역되지 않았어요." }, context);
+    expect(model.caption?.text).toBe("Voiney Lab입니다. 이 문장은 아직 번역되지 않았어요.");
+    expect(spokenText({ speech_text: 3 })).toBe("");
+  });
+
   it("marks a word the server dropped (speech.dropped, speech.ignored), not while paused, and nothing for another configuration's", () => {
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "empty_transcript", paused: false }, context).misheardAt).toBe(1000);
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "empty_transcript", paused: true }, context)).toBe(EMPTY_RUN);
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "other_speaker_level" }, context)).toBe(EMPTY_RUN);
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 7 }, context).misheardAt).toBe(1000);
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 8 }, context)).toBe(EMPTY_RUN);
+  });
+
+  it("keeps the server's notice and reason for a dropped sound (lane HEAR2, decision 4)", () => {
+    const dropped = applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "minimum_voiced_frames", notice: "잘 안 들렸어요", reason_ko: "너무 짧은 소리였어요", paused: false }, context);
+    expect(dropped.misheard).toEqual({ notice: "잘 안 들렸어요", reason: "너무 짧은 소리였어요" });
+    // A provider that failed: its own notice and reason, in the same place.
+    const failed = applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "stt_failed", code: "quota_exceeded", notice: "받아쓰기 서비스가 답하지 않아요", reason_ko: "받아쓰기 서비스의 한도가 다 됐어요", paused: false }, context);
+    expect(failed.misheard).toEqual({ notice: "받아쓰기 서비스가 답하지 않아요", reason: "받아쓰기 서비스의 한도가 다 됐어요" });
+    // An older server without the words: the screen's own.
+    expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 7 }, context).misheard).toEqual({ notice: null, reason: null });
   });
 
   it("says the side-voice filter's state for this run, nothing when it is simply off", () => {
@@ -80,6 +111,11 @@ describe("timerView and listeningWord", () => {
     expect(timerView(state({ timers: { step } }), () => 510)).toMatchObject({ kind: "running", seconds: 510, duration: 600 });
     expect(timerView(state({ timers: { step } }), () => 45).kind).toBe("soon");
     expect(timerView(state({ timers: { step } }), () => -20)).toMatchObject({ kind: "done", seconds: 20 });
+  });
+
+  it("shows a timer paused by voice where it stands (lane HEAR2, decision 3)", () => {
+    const step = { state: "paused", duration_seconds: 600, deadline_at: null, remaining_seconds: 540, name: "10분" };
+    expect(timerView(state({ timers: { step } }), (s) => Number(s.remaining_seconds))).toMatchObject({ kind: "paused", seconds: 540, duration: 600, name: "10분" });
   });
 
   it("puts the pause first, then a dropped word for a few seconds, then the voice state", () => {

@@ -333,8 +333,8 @@ class WorkspaceSchemaTests(unittest.TestCase):
         from voiney_lab import workspace_store as ws
 
         # Lane VT (2026-10-09) raised the schema to 9, lane SP1 (2026-10-10)
-        # to 10, lane ON (2026-10-18) to 11; a 7 still opens.
-        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 11)
+        # to 10, lane ON (2026-10-18) to 11, lane HEAR2 (2026-10-26) to 12, lane KO2 (2026-10-26) to 13; a 7 still opens.
+        self.assertEqual(WORKSPACE_SCHEMA_VERSION, 13)  # lane HEAR2: schema 12 adds speaker_filter and voice_reference; lane KO2: 13 adds translation style versions
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ws.WORKSPACE_DATABASE_FILENAME
             connection = sqlite3.connect(path)
@@ -347,7 +347,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             try:
                 version = store._connection.execute(
                     "SELECT schema_version FROM schema_metadata").fetchone()[0]
-                self.assertEqual(version, 11)
+                self.assertEqual(version, 13)  # lane HEAR2: 12; lane KO2: a 7 opens at 13 now
                 principal = development_principal()
                 store.bootstrap_principal(principal)
                 store.record_experimenter_setting(
