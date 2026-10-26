@@ -22,7 +22,7 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 11
+WORKSPACE_SCHEMA_VERSION = 12
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -903,6 +903,51 @@ CREATE TABLE schema_metadata_next(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=11)
 );
 INSERT INTO schema_metadata_next(schema_version) VALUES(11);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+#: Lane HEAR2, decision 6 (2026-10-26): lane HEAR added the measured voice
+#: (``voice_reference``) and the person's filter choice (``speaker_filter``)
+#: to the values table without a migration, so a store at schema 11 refused
+#: the measurement with an IntegrityError (HTTP 500 on
+#: ``POST /api/voice/calibration``, ten times in the person's test). Built
+#: the way schema 11 was: rows, sequence ids, the AUTOINCREMENT counter, the
+#: index and both append-only triggers are kept.
+MIGRATION_11_TO_12 = """
+CREATE TABLE experimenter_settings_v11 AS SELECT * FROM experimenter_settings;
+CREATE TABLE experimenter_settings_v11_sequence AS
+ SELECT seq FROM sqlite_sequence WHERE name='experimenter_settings';
+DROP TABLE experimenter_settings;
+CREATE TABLE experimenter_settings(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ name TEXT NOT NULL CHECK(name IN ('confirm_mode','question_timing','web_lookup','proactive_mode','ambient_mode','speaker_sensitivity','agent_voice','voice_calibration','speaker_filter','voice_reference')),
+ value TEXT NOT NULL,
+ source TEXT NOT NULL CHECK(source IN ('voice','screen')),
+ created_at TEXT NOT NULL
+);
+INSERT INTO experimenter_settings(
+ sequence_id,organization_id,principal_id,name,value,source,created_at
+) SELECT sequence_id,organization_id,principal_id,name,value,source,created_at
+ FROM experimenter_settings_v11 ORDER BY sequence_id;
+DELETE FROM sqlite_sequence WHERE name='experimenter_settings';
+INSERT INTO sqlite_sequence(name,seq)
+ SELECT 'experimenter_settings',seq FROM experimenter_settings_v11_sequence;
+CREATE INDEX experimenter_settings_principal
+ ON experimenter_settings(organization_id,principal_id,name,sequence_id);
+CREATE TRIGGER experimenter_settings_no_update BEFORE UPDATE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experimenter_settings_no_delete BEFORE DELETE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+DROP TABLE experimenter_settings_v11;
+DROP TABLE experimenter_settings_v11_sequence;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=12)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(12);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -3124,6 +3169,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 11
+    if version == 11:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_11_TO_12 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 12
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

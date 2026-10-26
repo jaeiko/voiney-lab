@@ -1916,3 +1916,34 @@ store within fifteen minutes.
 
 The older code locks by name only and ignores `client`; the device cookie is
 then unused and expires by itself.
+
+## Workspace schema 11 → 12: the measured voice and the filter choice (2026-10-26, lane HEAR2)
+
+Schema 12 is schema 11 with two more names in the `experimenter_settings`
+CHECK: `speaker_filter` (the person's choice, `off` / `on`) and
+`voice_reference` (what "목소리 맞추기" measured: `v1:<dBFS>:<unix
+seconds>:<microphone id>`, written by `POST /api/voice/calibration` only).
+Lane HEAR (2026-10-25) added both to `EXPERIMENTER_SETTING_VALUES` but wrote
+no migration, so a workspace store at schema 11 refused the measurement's
+row with an IntegrityError that the route answered as HTTP 500 — the ten
+failed measurements of the person's test of 2026-10-26 (lane HEAR2 report,
+section 1-5). Lane HEAR's tests ran with the workspace off and never met
+it. Built the way schema 11 was: the rows are copied with their sequence
+ids, the AUTOINCREMENT counter is put back, the index and both append-only
+triggers are made again (`MIGRATION_11_TO_12`). Nothing else in the store
+changes.
+
+### Reading older data
+
+A schema-11 store migrates on open; it holds no row of the two names, so
+every voice is heard until the person measures and turns the filter on.
+Checked on a copy of a schema-11 store built by the migrations in
+`tests/test_lane_hear2_settings_store_v12.py` and through the production
+route with the workspace on (`tests/test_lane_hear2_calibration_route.py`).
+
+### Going back
+
+Code from before this version refuses a schema-12 store ("Commercial
+workspace schema is unsupported"): restore a backup taken before the
+migration, or rebuild the table with schema 11's CHECK after deleting the
+rows of the two new names.
