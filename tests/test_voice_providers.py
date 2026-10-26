@@ -173,9 +173,13 @@ class GoogleSttTests(unittest.TestCase):
         self.assertNotIn("g-key", str(caught.exception))
 
     def test_timeout_and_missing_key_raise(self):
+        # Lane HEAR2 (2026-10-26): a timeout is a provider failure with its
+        # code, so the turn can drop the sound with a reason (it used to be
+        # the raw requests.Timeout).
         with env(VOINEY_LAB_STT_PROVIDER="google_cloud", VOINEY_LAB_STT_TIMEOUT_SECONDS="3"), \
-             post(raises=requests.Timeout("slow")) as sent, self.assertRaises(requests.Timeout):
+             post(raises=requests.Timeout("slow")) as sent, self.assertRaises(vp.SpeechProviderError) as timed_out:
             transcribe(PCM, language="ko")
+        self.assertEqual(timed_out.exception.code, "timeout")
         self.assertEqual(sent.call_args.kwargs["timeout"], 3.0)
         with patch.dict("os.environ", {"VOINEY_LAB_STT_PROVIDER": "google_cloud"}, clear=True), \
              post(FakeResponse(GOOGLE_KO)) as sent, self.assertRaises(RuntimeError):
@@ -221,9 +225,11 @@ class ElevenLabsSttTests(unittest.TestCase):
              self.assertRaises(vp.SpeechProviderError) as caught:
             transcribe(PCM, language="ko")
         self.assertIn("elevenlabs STT failed (401)", str(caught.exception))
+        # Lane HEAR2 (2026-10-26): a timeout is a provider failure with its code (was the raw requests.Timeout).
         with env(VOINEY_LAB_STT_PROVIDER="elevenlabs"), post(raises=requests.ConnectTimeout()), \
-             self.assertRaises(requests.Timeout):
+             self.assertRaises(vp.SpeechProviderError) as timed_out:
             transcribe(PCM, language="ko")
+        self.assertEqual(timed_out.exception.code, "timeout")
 
 
 def wav16(pcm=b"\x02\x00" * 800, rate=16000, channels=1):

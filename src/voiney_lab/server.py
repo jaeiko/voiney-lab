@@ -257,7 +257,7 @@ from voiney_lab.vad import (
 )
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
-from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
+from voiney_lab.voice_providers import SpeechProviderError, SttProviderSettings, TtsProviderSettings
 from voiney_lab.start_check import (
     RunChange,
     RunChangeError,
@@ -3126,9 +3126,17 @@ def transcribe(
     multipart,_,_= _stt_multipart(
         pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold,
         filler_words=filler_words)
-    response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
-        files=multipart,timeout=settings.timeout_seconds)
-    response.raise_for_status()
+    try:
+        response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
+            files=multipart,timeout=settings.timeout_seconds)
+    except requests.Timeout as exc:
+        # Lane HEAR2: a failure the screen can name (no address, no key in the message).
+        raise SpeechProviderError("xai STT timed out",code="timeout") from exc
+    except requests.RequestException as exc:
+        raise SpeechProviderError("xai STT could not be reached",code="unreachable") from exc
+    if not response.ok:
+        raise SpeechProviderError(
+            f"xai STT failed ({response.status_code})",status=int(response.status_code))
     payload=response.json()
     text=payload.get("text","")
     duration=payload.get("duration")
@@ -7131,6 +7139,9 @@ class ListenerSession:
         self.drop_times:collections.deque[float]=collections.deque(maxlen=16)
         self.drop_notice_said:bool=False
         self.near_line_drops:int=0
+        #: Lane HEAR2: whether the provider outage under way was said aloud;
+        #: a response that comes back ends the outage.
+        self.stt_failure_said:bool=False
         #: Lane HEAR, decision 4: the last committed turn's audio (for a
         #: continuation to join) and events of a turn opened between chunks.
         self._joinable_turn:dict[str,Any]|None=None
@@ -7400,6 +7411,17 @@ class ListenerSession:
             self.drop_notice_said=True
             return True
         return False
+    def note_stt_failure(self)->bool:
+        """A provider failure; True the first time in an outage (lane HEAR2)."""
+
+        if self.stt_failure_said:
+            return False
+        self.stt_failure_said=True
+        return True
+    def note_stt_ok(self)->None:
+        """The provider answered: the outage, if one was under way, is over."""
+
+        self.stt_failure_said=False
     def note_heard(self)->None:
         """Words reached routing: the drops before them no longer count."""
 
@@ -8170,15 +8192,25 @@ def transcribe_cascade_audio(
     pcm:bytes,
     context:CascadeTranscriptionContext,
 ) -> Transcription:
-    """Apply one request contract without rewriting the provider transcript."""
+    """Apply one request contract without rewriting the provider transcript.
 
-    return transcribe(
-        clean_path(pcm),
-        language=context.language,
-        keyterms=context.keyterms,
-        vad_threshold=getattr(context, "vad_threshold", 0.5),
-        filler_words=bool(getattr(context, "filler_words", False)),
-    )
+    Lane HEAR2: whatever adapter answers, a request that timed out or never
+    reached the provider is a ``SpeechProviderError`` with its code, so the
+    turn drops the sound with a reason instead of failing with a traceback.
+    """
+
+    try:
+        return transcribe(
+            clean_path(pcm),
+            language=context.language,
+            keyterms=context.keyterms,
+            vad_threshold=getattr(context, "vad_threshold", 0.5),
+            filler_words=bool(getattr(context, "filler_words", False)),
+        )
+    except requests.Timeout as exc:
+        raise SpeechProviderError("STT timed out",code="timeout") from exc
+    except requests.RequestException as exc:
+        raise SpeechProviderError("STT could not be reached",code="unreachable") from exc
 
 class LockedSender:
     def __init__(self,websocket): self.websocket=websocket; self.lock=asyncio.Lock()
@@ -11541,6 +11573,22 @@ SPOKEN_DROP_REASONS=frozenset({
     "provider_no_speech_probability","provider_low_confidence","keyterm_echo",
     "transcription_failed",
 })
+#: Lane HEAR2, decisions 1-2 (2026-10-26): a speech-to-text provider that
+#: fails (the person's test: 44 requests answered 401 quota_exceeded) is
+#: one more dropped sound with its code, shown with the reason in plain
+#: words, and said once per outage -- not a traceback, not "다시 말해
+#: 주세요" (the words would fail again), never the provider's own text.
+STT_FAILURE_SCREEN_WORDS="받아쓰기 서비스가 답하지 않아요"
+STT_FAILURE_WORDS="받아쓰기 서비스가 답하지 않아요. 관리자에게 알려 주세요."
+STT_FAILURE_REASON_WORDS={
+    "quota_exceeded":"받아쓰기 서비스의 한도가 다 됐어요",
+    "unauthorized":"받아쓰기 서비스의 키에 문제가 있어요",
+    "rate_limited":"받아쓰기 서비스가 바빠요",
+    "timeout":"받아쓰기 서비스가 너무 늦어요",
+    "unreachable":"받아쓰기 서비스에 연결되지 않아요",
+    "provider_error":"받아쓰기 서비스에 오류가 났어요",
+    "provider_refused":"받아쓰기 서비스가 요청을 받지 않았어요",
+}
 #: A voice the filter dropped within this many dB under its line is where
 #: the wearer's own quieter words fall (a head turned, a step back: the SP1
 #: bench varied the wearer by +/-6 dB); this many in a row move the line.
@@ -11633,6 +11681,49 @@ async def _report_speech_drop(
     if session.note_drop(reason,during_playback=during_playback):
         session.track_visual_task(asyncio.create_task(_say_server_words(
             session,sender,DROP_NOTICE_WORDS,kind="drop_notice")))
+
+
+async def _report_stt_failure(
+    session:ListenerSession,sender:LockedSender,error:BaseException,*,
+    turn_id:int|None,generation:int|None,duration_ms:int|None,level_db:float|None,
+    during_playback:bool=False,
+)->None:
+    """A speech-to-text provider that failed: shown, recorded and said once per outage (lane HEAR2).
+
+    The log and the metrics keep the code and the status only -- never the
+    provider's message, which may quote the request. Shown as a drop with
+    the reason in plain words; said aloud the first time in an outage, and
+    again only after a response has come back (``note_stt_ok``). Nothing
+    while paused beyond the pause band.
+    """
+
+    code=str(getattr(error,"code",None) or "provider_error")[:40]
+    status=getattr(error,"status",None)
+    paused=_run_paused(session)
+    level=round(float(level_db),1) if isinstance(level_db,(int,float)) and math.isfinite(level_db) else None
+    log.warning(
+        "stt.failed code=%s status=%s duration_ms=%s turn_id=%s during_playback=%s",
+        code,status,duration_ms,turn_id,during_playback)
+    log.info(
+        "speech.dropped reason=stt_failed duration_ms=%s level_db=%s paused=%s during_playback=%s turn_id=%s",
+        duration_ms,level,paused,during_playback,turn_id)
+    _record_workspace_metric(
+        category="voice",metric_name="speech_dropped",
+        dimensions={"status":"rejected","reason_code":"stt_failed","code":code},
+    )
+    await sender.text(
+        "speech.dropped",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,reason="stt_failed",code=code,
+        duration_ms=duration_ms,level_db=level,paused=paused,
+        during_playback=during_playback,
+        notice=None if paused else STT_FAILURE_SCREEN_WORDS,
+        reason_ko=STT_FAILURE_REASON_WORDS.get(code,STT_FAILURE_REASON_WORDS["provider_error"]),
+    )
+    if paused:
+        return
+    if session.note_stt_failure():
+        session.track_visual_task(asyncio.create_task(_say_server_words(
+            session,sender,STT_FAILURE_WORDS,kind="stt_failure")))
 
 
 async def _report_level_drop(
@@ -12223,9 +12314,33 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     stt_keyterms=transcription_context.keyterms
     if accepted_transcription is None:
         started=clock()
-        transcription=await asyncio.to_thread(
-            transcribe_cascade_audio,source_pcm,transcription_context)
+        try:
+            transcription=await asyncio.to_thread(
+                transcribe_cascade_audio,source_pcm,transcription_context)
+        except SpeechProviderError as exc:
+            # Lane HEAR2: the provider failed -- the sound is dropped with
+            # the reason, not a turn processing failure with a traceback.
+            timings["stt"]=round((clock()-started)*1000)
+            _record_workspace_metric(
+                category="voice",metric_name="stt_latency_ms",
+                metric_value=float(timings["stt"]),
+                dimensions={"status":"failed","reason_code":str(exc.code)[:40]},
+            )
+            if session.reject_empty_transcript(turn_id):
+                await sender.text(
+                    "speech.rejected",turn_id=turn_id,generation=generation,reason="stt_failed",
+                    voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20,
+                )
+                await sender.text(
+                    "state.changed",state=session.state.value,turn_id=turn_id,
+                    cooldown_ms=session.detector.config.cooldown_ms,
+                )
+                await _report_stt_failure(
+                    session,sender,exc,turn_id=turn_id,generation=generation,
+                    duration_ms=input_frames*20,level_db=voiced_level_db)
+            return
         timings["stt"]=round((clock()-started)*1000)
+        session.note_stt_ok()
     else:
         transcription=accepted_transcription
         timings["stt"]=max(0,accepted_stt_ms or 0)
@@ -14973,7 +15088,7 @@ async def voice_socket(websocket:WebSocket):
                             item.result.utterance or b"",stt_context)
                         if isinstance(transcription,str):
                             transcription=Transcription(transcription,None)
-                    except Exception:
+                    except Exception as exc:
                         log.warning(
                             "barge_in.rejected reason=transcription_failed "
                             "voiced_frames=%d total_frames=%d",
@@ -14982,9 +15097,18 @@ async def voice_socket(websocket:WebSocket):
                             item,"transcription_failed")
                         if rejected is not None:
                             listener_events.append(rejected)
+                        if isinstance(exc,SpeechProviderError):
+                            # Lane HEAR2: the outage is heard about even
+                            # while an answer plays (once).
+                            await _report_stt_failure(
+                                session,LockedSender(websocket),exc,
+                                turn_id=item.turn_id,generation=item.generation,
+                                duration_ms=item.result.total_frames*20,level_db=None,
+                                during_playback=True)
                         continue
                     stt_ms=max(
                         0,round((session.clock()-validation_started)*1000))
+                    session.note_stt_ok()
                     if not transcription.text.strip():
                         rejected=session.reject_interrupt_candidate(
                             item,"transcription_failed")
