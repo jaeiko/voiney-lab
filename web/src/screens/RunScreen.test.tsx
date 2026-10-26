@@ -91,6 +91,12 @@ describe("RunScreen", () => {
     expect(engine.stopRun).toHaveBeenCalled();
   });
 
+  it("shows what the server said of the side-voice filter for a few seconds", () => {
+    running({}, { filterNotice: { text: "마이크가 바뀌어 모든 말을 들어요 · 이 마이크로 다시 맞춰 주세요", at: Date.now() } });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-filter-notice")).toHaveTextContent("이 마이크로 다시 맞춰 주세요");
+  });
+
   it("names the step to go back to when the server refused the start", () => {
     runStore.reset({ startedProtocolId: "p1", startRefusal: { reason: "safety_acknowledgement_required", words: "안전 주의를 먼저 읽어 주세요." } });
     renderWithClient(<RunScreen />);

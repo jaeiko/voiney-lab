@@ -1,58 +1,70 @@
-// The microphone check of the settings and the first guide (lane RX2): the
-// microphone opened as a run opens it (voice-core's openMicStream), its level
-// read for a few seconds while the sentence is read, and a plain judgement --
-// heard well, too quiet, nothing heard. It is this browser's own check: it
-// sends nothing and changes no setting (the server's measurement of the
-// wearer's voice happens only inside a session; lane RX2 report, item 1).
+// 목소리 맞추기 on the new screen (lane RX2 over lane HEAR's contract,
+// docs/FEATURES.md F8): the sentence is recorded on the microphone runs use,
+// as runs use it (voice-core's recordCalibrationPcm: the chosen device, the
+// gain control off in "목소리를 맞추면 끔", 16 kHz PCM16), and posted to
+// POST /api/voice/calibration with the microphone's short id. The server
+// measures the voiced part, keeps only the level, when and which microphone
+// (the experimenter setting voice_reference), and drops the sound.
+import { ApiError, postJson } from "../api/client";
+import { encodePcm, recordVoice } from "./engine";
 
-export interface MicMeter {
-  /** The level now, as the root mean square of the last samples (0-1). */
-  level(): number;
-  label: string;
-  stop(): void;
+/** As long as index.html's VOICE_MEASURE_SECONDS (tests/test_lane_rx2_voice_core.py compares them). */
+export const MEASURE_SECONDS = 5;
+/** VOICE_REFERENCE_MAX_AGE_DAYS on the server: an older measurement is not used. */
+export const MAX_AGE_DAYS = 14;
+
+export interface Measured {
+  state: "measured";
+  level_db: number;
+  measured_at: string;
+  mic_id: string;
+  speaker_filter: string;
+  max_age_days: number;
 }
 
-/** The same threshold voice-core's capture takes as "a signal" (ensureAudio's micSignalSeen). */
-export const VOICED_LEVEL = 0.008;
-/** Under this, a voiced reading is too quiet for the server's endpointing to take with ease. */
-export const QUIET_LEVEL = 0.02;
-export const CHECK_MS = 6000;
+export type MeasureFailure = "too_little_voice" | "failed";
 
-export async function openMicMeter(open: () => Promise<MediaStream>): Promise<MicMeter> {
-  const stream = await open();
-  const context = new AudioContext();
-  const source = context.createMediaStreamSource(stream);
-  const analyser = context.createAnalyser();
-  analyser.fftSize = 1024;
-  source.connect(analyser);
-  const samples = new Float32Array(analyser.fftSize);
-  const track = stream.getAudioTracks?.()[0];
-  return {
-    label: track?.label ?? "",
-    level() {
-      analyser.getFloatTimeDomainData(samples);
-      let energy = 0;
-      for (let i = 0; i < samples.length; i++) energy += samples[i] * samples[i];
-      return Math.sqrt(energy / samples.length);
-    },
-    stop() {
-      try {
-        source.disconnect();
-      } catch {
-        /* gone already */
-      }
-      for (const item of stream.getTracks()) item.stop();
-      void context.close().catch(() => undefined);
-    },
-  };
+export interface Recorder {
+  record: (seconds: number) => Promise<{ pcm: Int16Array; micId: string | null }>;
+  encode: (pcm: Int16Array) => string;
 }
 
-export type VoiceJudgement = "good" | "quiet" | "noSound";
+export const browserRecorder: Recorder = { record: recordVoice, encode: encodePcm };
 
-/** What the levels read during the check say: no voiced reading, a quiet one, or a good one (by the voiced readings' median). */
-export function judgeVoice(levels: number[]): VoiceJudgement {
-  const voiced = levels.filter((value) => value >= VOICED_LEVEL).sort((a, b) => a - b);
-  if (voiced.length < 3) return "noSound";
-  const median = voiced[Math.floor(voiced.length / 2)];
-  return median < QUIET_LEVEL ? "quiet" : "good";
+/** Record the sentence and have the server measure it; a refusal is its code. */
+export async function measureVoice(recorder: Recorder = browserRecorder): Promise<Measured> {
+  const recorded = await recorder.record(MEASURE_SECONDS);
+  try {
+    return await postJson<Measured>("/api/voice/calibration", { pcm_base64: recorder.encode(recorded.pcm), mic_id: recorded.micId });
+  } catch (error) {
+    throw new MeasureError(error instanceof ApiError && error.code === "too_little_voice" ? "too_little_voice" : "failed");
+  }
+}
+
+export class MeasureError extends Error {
+  readonly reason: MeasureFailure;
+  constructor(reason: MeasureFailure) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+
+export interface VoiceReference {
+  levelDb: number;
+  measuredAt: number;
+  micId: string;
+}
+
+/** The setting's value "v1:<dBFS>:<unix seconds>:<microphone id>" (server.py parse_voice_reference), or null. */
+export function parseVoiceReference(value: unknown): VoiceReference | null {
+  const match = typeof value === "string" ? /^v1:(-?\d{1,3}(?:\.\d)?):(\d{9,11}):([A-Za-z0-9][A-Za-z0-9_-]{0,39})$/.exec(value) : null;
+  if (!match) return null;
+  const level = Number(match[1]);
+  if (!(level >= -100 && level <= 0)) return null;
+  return { levelDb: level, measuredAt: Number(match[2]) * 1000, micId: match[3] };
+}
+
+/** Whether the measurement is too old to be used (the server's 14 days). */
+export function referenceStale(reference: VoiceReference, now: number = Date.now()): boolean {
+  return now - reference.measuredAt > MAX_AGE_DAYS * 86400 * 1000;
 }

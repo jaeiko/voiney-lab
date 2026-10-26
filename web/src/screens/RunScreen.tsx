@@ -6,7 +6,7 @@ import { EmptyBox, LoadingBox, Note } from "../components/Pieces";
 import { run as copy } from "../copy/ko";
 import { oldRoutes, routes } from "../lib/navigation";
 import { chooseCandidate, loadVoiceScripts, reconnectMicrophone, resumeSound, serverNow, stopRun, togglePause } from "../voice/engine";
-import { isPaused, listeningWord, MISHEARD_SHOWN_MS, plain, sourceFigures, timerView, type ListeningWord, type ProtocolState, type TimerView } from "../voice/runModel";
+import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, plain, sourceFigures, timerView, type ListeningWord, type ProtocolState, type TimerView } from "../voice/runModel";
 import { useRun } from "../voice/runStore";
 import { CaptionBar } from "./run/CaptionBar";
 import { FigurePanel } from "./run/FigurePanel";
@@ -324,6 +324,11 @@ export function RunScreen() {
           </div>
         ) : null}
         {model.notice ? <Note testId="run-notice">{model.notice}</Note> : null}
+        {model.filterNotice && now - model.filterNotice.at < FILTER_NOTICE_SHOWN_MS ? (
+          <p className="run-alert run-filter-notice" role="status" data-testid="run-filter-notice">
+            {model.filterNotice.text}
+          </p>
+        ) : null}
       </div>
       <main className="run-main" id="main">
         {timer.kind === "soon" || timer.kind === "done" ? <TimerChip timer={timer} /> : null}

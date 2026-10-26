@@ -94,6 +94,8 @@ export interface RunModel {
   figures: { drawn: Figure | null; web: Figure | null };
   /** When the server last dropped what it heard (shown for a few seconds as "잘 안 들렸어요"). */
   misheardAt: number | null;
+  /** What the server said of the side-voice filter for this run (lane HEAR's speaker.filter), shown for a few seconds. */
+  filterNotice: { text: string; at: number } | null;
   timerNotice: { text: string; stepId: string | null } | null;
   ended: { status: string | null; report: string | null } | null;
   /** A refusal said in the server's own words (a pause refused, a start refused). */
@@ -110,14 +112,29 @@ export const EMPTY_RUN: RunModel = {
   card: null,
   figures: { drawn: null, web: null },
   misheardAt: null,
+  filterNotice: null,
   timerNotice: null,
   ended: null,
   notice: null,
 };
 
-/** The server's discard signals: an utterance taken for another person's voice (lane SP1). Lane HEAR's own signal joins this set when it lands. */
-export const MISHEARD_EVENTS = new Set(["speech.ignored"]);
-export const MISHEARD_SHOWN_MS = 4000;
+/** The server's discard signals: a sound it dropped (lane HEAR's speech.dropped) and a voice taken for another person's (lane SP1's speech.ignored). */
+export const MISHEARD_EVENTS = new Set(["speech.dropped", "speech.ignored"]);
+export const MISHEARD_SHOWN_MS = 6000;
+export const FILTER_NOTICE_SHOWN_MS = 6000;
+
+/** The words for the filter's state in this run (index.html's renderSpeakerFilter and SPEAKER_FILTER_REASON_WORDS); null when nothing needs saying (the filter off, the default). */
+export function filterNoticeWords(m: Record<string, unknown>, words: { active: string; notMeasured: string; staleAge: string; staleDevice: string; changed: string }): string | null {
+  if (m.state === "active") return words.active;
+  if (m.state === "inactive") {
+    if (m.reason === "not_measured") return words.notMeasured;
+    if (m.reason === "stale_age") return words.staleAge;
+    if (m.reason === "stale_device") return words.staleDevice;
+    return null;
+  }
+  if (m.state === "lowered" || m.state === "off") return text(m.words) ? plain(m.words) : words.changed;
+  return null;
+}
 export const LOG_LIMIT = 200;
 
 // The operations whose answer is a card under the step (the same table as index.html's RUN_CARD_KINDS).
@@ -231,6 +248,8 @@ function withLog(model: RunModel, line: LogLine): RunModel {
 }
 
 export interface EventContext {
+  /** The filter's words from the copy table (web/src/copy/ko.ts). */
+  filterWords?: Parameters<typeof filterNoticeWords>[1];
   accepted: { configuration_id: number; protocol_id: string | null; revision_id: string | null } | null;
   /** The turn the audio plays now and whether a message belongs to it (voice-core's currentCascadeMessage), and whether it was cut off. */
   live: (m: Record<string, unknown>) => boolean;
@@ -307,8 +326,18 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
     case "workflow.control.refused":
       if (!ours) return model;
       return { ...model, notice: text(m.message_ko) ? plain(m.message_ko) : null };
+    case "speaker.filter": {
+      if (!ours || !context.filterWords) return model;
+      const words = filterNoticeWords(m, context.filterWords);
+      return words ? { ...model, filterNotice: { text: words, at: context.now } } : model;
+    }
     default:
-      if (typeof m.type === "string" && MISHEARD_EVENTS.has(m.type) && (m.configuration_id === undefined || ours)) return { ...model, misheardAt: context.now };
+      if (typeof m.type === "string" && MISHEARD_EVENTS.has(m.type) && (m.configuration_id === undefined || ours)) {
+        // Lane HEAR decision 3: nothing is shown for a drop while paused (the band says why), and a voice the filter
+        // took for someone else's comes as speech.ignored too.
+        if (m.type === "speech.dropped" && (m.paused === true || m.reason === "other_speaker_level")) return model;
+        return { ...model, misheardAt: context.now };
+      }
       return model;
   }
 }

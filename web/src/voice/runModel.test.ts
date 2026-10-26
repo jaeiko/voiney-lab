@@ -40,9 +40,21 @@ describe("applyServerEvent", () => {
     expect(applyServerEvent(model, { type: "transcript", turn_id: 3, generation: 1, text: "x" }, { ...context, live: () => false })).toBe(model);
   });
 
-  it("marks a word the server dropped, and nothing for another configuration's", () => {
+  it("marks a word the server dropped (speech.dropped, speech.ignored), not while paused, and nothing for another configuration's", () => {
+    expect(applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "empty_transcript", paused: false }, context).misheardAt).toBe(1000);
+    expect(applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "empty_transcript", paused: true }, context)).toBe(EMPTY_RUN);
+    expect(applyServerEvent(EMPTY_RUN, { type: "speech.dropped", configuration_id: 7, reason: "other_speaker_level" }, context)).toBe(EMPTY_RUN);
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 7 }, context).misheardAt).toBe(1000);
     expect(applyServerEvent(EMPTY_RUN, { type: "speech.ignored", configuration_id: 8 }, context)).toBe(EMPTY_RUN);
+  });
+
+  it("says the side-voice filter's state for this run, nothing when it is simply off", () => {
+    const words = { active: "켜짐", notMeasured: "안 맞춤", staleAge: "2주", staleDevice: "마이크 바뀜", changed: "바꿈" };
+    const withWords = { ...context, filterWords: words };
+    expect(applyServerEvent(EMPTY_RUN, { type: "speaker.filter", configuration_id: 7, state: "active", reason: "on" }, withWords).filterNotice).toEqual({ text: "켜짐", at: 1000 });
+    expect(applyServerEvent(EMPTY_RUN, { type: "speaker.filter", configuration_id: 7, state: "inactive", reason: "stale_device" }, withWords).filterNotice?.text).toBe("마이크 바뀜");
+    expect(applyServerEvent(EMPTY_RUN, { type: "speaker.filter", configuration_id: 7, state: "inactive", reason: "off" }, withWords)).toBe(EMPTY_RUN);
+    expect(applyServerEvent(EMPTY_RUN, { type: "speaker.filter", configuration_id: 7, state: "lowered", words: "낮췄어요." }, withWords).filterNotice?.text).toBe("낮췄어요.");
   });
 
   it("keeps the end, a refusal's own words and a timer notice", () => {

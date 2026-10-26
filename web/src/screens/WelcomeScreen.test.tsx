@@ -6,7 +6,7 @@ import type { AuthSession } from "../api/types";
 import { fakeFetch, renderWithClient, SESSION_ACCOUNTS, SESSION_DEV } from "../test/helpers";
 import { markWelcomeDone, welcomeDue, welcomeKey, WelcomeScreen } from "./WelcomeScreen";
 
-vi.mock("../voice/engine", () => ({ openCheckMicrophone: vi.fn(), loadVoiceScripts: vi.fn(async () => undefined) }));
+vi.mock("../voice/engine", () => ({ recordVoice: vi.fn(), encodePcm: vi.fn(), loadVoiceScripts: vi.fn(async () => undefined) }));
 
 const session = SESSION_ACCOUNTS as AuthSession;
 

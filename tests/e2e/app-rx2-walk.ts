@@ -47,7 +47,13 @@ export async function walk(page: Page, info: TestInfo) {
   await page.getByTestId('welcome-next').click();
   await expect(page.getByTestId('voice-check')).toBeVisible();
   await shot(page, info, '03-welcome-voice');
-  await page.getByTestId('voice-check-skip').click();
+  // 목소리 맞추기: five seconds read on the fake microphone, posted with its short id, kept by the server.
+  await page.getByTestId('voice-check-start').click();
+  await expect(page.getByTestId('voice-check-result')).toContainText('목소리를 맞췄어요', { timeout: 20_000 });
+  expect(server.calibrations).toHaveLength(1);
+  expect(server.calibrations[0].pcm_base64.length).toBeGreaterThan(100_000);
+  expect(server.calibrations[0].mic_id).toMatch(/^mic-[0-9a-f]{8}$/);
+  await page.getByTestId('welcome-next').click();
   await expect(page.getByTestId('voice-picker')).toBeVisible();
   await page.locator('[data-voice="ko-KR-Chirp3-HD-Kore"]').click();
   await expect(page.getByTestId('voice-saved')).toHaveText('저장했어요');
@@ -113,6 +119,9 @@ export async function walk(page: Page, info: TestInfo) {
 
   // The experiment screen.
   await expect(page).toHaveURL(/#\/experiment$/);
+  // Lane HEAR decision 2: the run tells the server its microphone's id.
+  await expect.poll(() => server.audioReady.length).toBe(1);
+  expect(server.audioReady[0].mic_id).toBe(server.calibrations[0].mic_id);
   await expect(page.getByTestId('run-step-text')).toHaveText(STEPS[0].korean);
   expect(server.starts[0]).toMatchObject({ protocol_id: 'p-rx2-1', run_change_set_id: 'run-changes-0123456789abcdef01234567', mode: 'cascade' });
   await expect(page.getByTestId('run-listening')).toBeVisible();
@@ -166,18 +175,21 @@ export async function walk(page: Page, info: TestInfo) {
   await page.getByTestId('figure-close').click();
   await expect(page.getByTestId('figure-full')).toHaveCount(0);
 
-  // A word the server dropped is said: 잘 안 들렸어요.
+  // A word the server dropped (speech.dropped) is said: 잘 안 들렸어요.
   server.misheard();
   await expect(page.getByTestId('run-listening')).toHaveAttribute('data-word', 'misheard');
   await expect(page.getByTestId('run-listening')).toContainText('잘 안 들렸어요');
   await shot(page, info, '14-run-misheard');
 
   // The pause: a band across the whole screen, the listening word 일시정지; resumed from the band.
+  await page.evaluate(() => { const w = window as any; const original = w.clearPlayback; w.__cleared = 0; w.clearPlayback = function (...args: unknown[]) { w.__cleared += 1; return original.apply(this, args); }; });
   await page.getByTestId('run-pause').click();
   await expect(page.getByTestId('run-paused')).toBeVisible();
   await expect(page.getByTestId('run-paused')).toContainText("일시정지 중 — '다시 시작'이라고 말하거나 [다시 시작]을 누르세요");
   await expect(page.getByTestId('run-listening')).toHaveAttribute('data-word', 'paused');
   expect(server.received).toContain('workflow.pause');
+  // playback.stop came with the pause and stopped the guidance (voice-core's clearPlayback).
+  await expect.poll(() => page.evaluate(() => (window as any).__cleared)).toBeGreaterThanOrEqual(1);
   await shot(page, info, '15-run-paused');
   await page.getByTestId('run-resume').click();
   await expect(page.getByTestId('run-paused')).toHaveCount(0);
@@ -221,11 +233,18 @@ export async function walk(page: Page, info: TestInfo) {
 export async function settingsWalk(page: Page, info: TestInfo) {
   const server = new StandIn({ signedIn: true });
   await server.attach(page);
-  await page.addInitScript(() => localStorage.setItem('voiney-lab.app-welcome:a-rx2', 'done'));
+  // Straight to the settings (the first guide is asked only on the home); no init script, which a worklet's scope would run too.
   await page.goto(`${APP}#/settings`);
   await expect(page.getByTestId('settings-screen')).toBeVisible();
   await expect(page.getByTestId('settings-filter')).toContainText('목소리를 맞춘 뒤에 켤 수 있어요.');
-  await expect(page.getByTestId('filter-switch').locator('input')).toBeDisabled();
+  await expect(page.getByTestId('filter-switch').locator('input[value="on"]')).toBeDisabled();
+  // Measured here, the filter can be turned on: speaker_filter on.
+  await page.getByTestId('voice-check-start').click();
+  await expect(page.getByTestId('voice-check-result')).toContainText('목소리를 맞췄어요', { timeout: 20_000 });
+  await expect(page.getByTestId('filter-switch').locator('input[value="on"]')).toBeEnabled();
+  await page.getByTestId('filter-switch').getByText('켜기').click();
+  await expect(page.getByTestId('settings-filter')).toContainText('저장했어요');
+  expect(server.settingPuts).toContainEqual({ speaker_filter: 'on' });
   await page.getByText('먼저 물어보기', { exact: true }).click();
   await expect(page.getByTestId('settings-numbers')).toContainText('저장했어요');
   expect(server.settingPuts).toContainEqual({ confirm_mode: 'confirm' });

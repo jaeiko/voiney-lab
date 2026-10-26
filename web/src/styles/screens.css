@@ -64,6 +64,7 @@
 }
 .segmented-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .segmented-option[data-checked="true"] { border-width: var(--border-state); border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+.segmented-option[data-disabled="true"] { border-style: dashed; color: var(--ink-muted); cursor: default; }
 .segmented-option:focus-within { outline: var(--border-focus) solid var(--focus-ring); outline-offset: 2px; }
 
 /* --- The settings -------------------------------------------------------- */

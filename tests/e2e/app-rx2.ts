@@ -103,7 +103,9 @@ export class StandIn {
   step = 0;
   configurationId = 0;
   received: string[] = [];
-  settings: Record<string, string> = { confirm_mode: 'readback', question_timing: 'before_start', web_lookup: 'on', proactive_mode: 'all', ambient_mode: 'quiet', speaker_sensitivity: 'normal', agent_voice: 'default', voice_calibration: 'none' };
+  settings: Record<string, string> = { confirm_mode: 'readback', question_timing: 'before_start', web_lookup: 'on', proactive_mode: 'all', ambient_mode: 'quiet', speaker_sensitivity: 'normal', agent_voice: 'default', voice_calibration: 'none', speaker_filter: 'off', voice_reference: 'none' };
+  calibrations: Array<{ pcm_base64: string; mic_id: string | null }> = [];
+  audioReady: Message[] = [];
   settingPuts: object[] = [];
   answers: object[] = [];
   safetyReads = 0;
@@ -162,9 +164,9 @@ export class StandIn {
     this.pushState('next');
   }
 
-  /** The server dropped an utterance it took for another person's voice (speech.ignored, lane SP1). */
+  /** The server dropped a sound it could not use (lane HEAR's speech.dropped). */
   misheard() {
-    this.send({ type: 'speech.ignored', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'level_gate', during_playback: false });
+    this.send({ type: 'speech.dropped', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'empty_transcript', duration_ms: 640, level_db: -31.2, paused: false, during_playback: false, notice: '잘 안 들렸어요' });
   }
 
   /** The server's side of the socket goes away (a lost connection; connection.js tries again). */
@@ -188,6 +190,14 @@ export class StandIn {
         return json({ settings: this.settings });
       }
       if (path === '/api/voice/voices') return json({ ...VOICES, selected: this.settings.agent_voice });
+      // Lane HEAR's measurement (docs/FEATURES.md F8): the level of what was read, kept as voice_reference.
+      if (path === '/api/voice/calibration') {
+        const body = request.postDataJSON();
+        this.calibrations.push(body);
+        this.settings.voice_calibration = 'measured';
+        this.settings.voice_reference = `v1:-23.4:${Math.floor(Date.now() / 1000)}:${body.mic_id || 'unknown'}`;
+        return json({ state: 'measured', level_db: -23.4, measured_at: new Date().toISOString(), mic_id: body.mic_id || 'unknown', speaker_filter: this.settings.speaker_filter, max_age_days: 14 });
+      }
       if (path === '/api/voice/preview') return route.fulfill({ status: 200, contentType: 'audio/wav', body: silenceWav() });
       if (path === '/api/protocols') return json({ protocols: [ENTRY] });
       if (path === `/api/protocols/${PID}`) return json({ ...ENTRY, analysis_run: { state: 'passed', failure_code: null, reanalysis: false } });
@@ -225,6 +235,13 @@ export class StandIn {
         return;
       }
       this.received.push(message.type);
+      if (message.type === 'client.audio_ready') {
+        this.audioReady.push(message);
+        // Lane HEAR decision 2: what the run's filter is, from the setting, the measurement and this microphone.
+        const reference = /^v1:[^:]+:\d+:(.+)$/.exec(this.settings.voice_reference);
+        const state = this.settings.speaker_filter !== 'on' ? ['inactive', 'off'] : !reference ? ['inactive', 'not_measured'] : reference[1] !== message.mic_id ? ['inactive', 'stale_device'] : ['active', 'on'];
+        this.send({ type: 'speaker.filter', configuration_id: this.configurationId, state: state[0], reason: state[1], margin_db: state[0] === 'active' ? 12 : null, measured_at: null });
+      }
       if (message.type === 'session.start') {
         this.started = true;
         this.starts.push(message);
@@ -237,6 +254,8 @@ export class StandIn {
       }
       if (message.type === 'workflow.pause' || message.type === 'workflow.resume') {
         this.paused = message.type === 'workflow.pause';
+        // Lane HEAR decision 7: the guidance playing stops with the pause.
+        if (this.paused) this.send({ type: 'playback.stop', configuration_id: this.configurationId, turn_id: 1, generation: 1, reason: 'paused' });
         this.pushState(this.paused ? 'pause' : 'resume');
       }
       if (message.type === 'session.stop') {

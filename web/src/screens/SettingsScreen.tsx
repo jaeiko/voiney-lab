@@ -8,6 +8,8 @@ import type { AuthSession } from "../api/types";
 import { LogoutDialog } from "../components/AppFrame";
 import { ErrorBox, LoadingBox, Note } from "../components/Pieces";
 import { settings as copy, frame } from "../copy/ko";
+import { uploadedDay } from "../lib/protocolStatus";
+import { parseVoiceReference, referenceStale } from "../voice/micCheck";
 import { SETTINGS_KEY, VoicePicker } from "./settings/VoicePicker";
 import { VoiceCheck } from "./settings/VoiceCheck";
 
@@ -28,12 +30,12 @@ function Section({ title, lead, children, id }: { title: string; lead?: string; 
   );
 }
 
-function Segmented({ name, value, options, onChange }: { name: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
+function Segmented({ name, value, options, onChange, disabled = false }: { name: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void; disabled?: boolean }) {
   return (
-    <div className="segmented" role="radiogroup" aria-label={name}>
+    <div className="segmented" role="radiogroup" aria-label={name} aria-disabled={disabled || undefined}>
       {options.map((option) => (
-        <label key={option.value} className="segmented-option" data-checked={value === option.value}>
-          <input type="radio" name={name} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} />
+        <label key={option.value} className="segmented-option" data-checked={value === option.value} data-disabled={disabled || undefined}>
+          <input type="radio" name={name} value={option.value} checked={value === option.value} disabled={disabled} onChange={() => onChange(option.value)} />
           <span>{option.label}</span>
         </label>
       ))}
@@ -169,13 +171,17 @@ export function SettingsScreen({ session }: { session: AuthSession }) {
   const numbers = useSetting("confirm_mode");
   const ambient = useSetting("ambient_mode");
   const accounts = session.mode === "accounts" && session.signed_in && session.account;
-  const [checked, setChecked] = useState(false);
-  const measured = settings.data?.voice_calibration === "measured" || checked;
+  const filter = useSetting("speaker_filter");
+  const client = useQueryClient();
+  // Lane HEAR decision 2: the measured voice the server keeps (level, when, which microphone); 14 days at most.
+  const reference = parseVoiceReference(settings.data?.voice_reference);
+  const stale = reference !== null && referenceStale(reference);
+  const filterOn = settings.data?.speaker_filter === "on";
   return (
     <div className="settings" data-testid="settings-screen">
       <h1 className="screen-title">{copy.title}</h1>
       <Section id="voice-check" title={copy.voiceCheck.title} lead={copy.voiceCheck.lead}>
-        <VoiceCheck onDone={(result) => setChecked(result === "good")} />
+        <VoiceCheck onMeasured={() => void client.invalidateQueries({ queryKey: SETTINGS_KEY })} />
       </Section>
       <Section id="agent-voice" title={copy.agentVoice.title} lead={copy.agentVoice.lead}>
         <VoicePicker />
@@ -200,13 +206,26 @@ export function SettingsScreen({ session }: { session: AuthSession }) {
             <SavedLine state={numbers.state} />
           </Section>
           <Section id="filter" title={copy.filter.title} lead={copy.filter.lead}>
-            <label className="switch" data-testid="filter-switch">
-              <input type="checkbox" role="switch" checked={false} disabled aria-describedby="filter-why" onChange={() => undefined} />
-              <span>{copy.filter.off}</span>
-            </label>
-            <p className="muted" id="filter-why">
-              {measured ? copy.filter.notYet : copy.filter.needsCheck}
-            </p>
+            <div data-testid="filter-switch">
+              <Segmented
+                name={copy.filter.title}
+                value={filterOn ? "on" : "off"}
+                disabled={!reference && !filterOn}
+                options={[
+                  { value: "off", label: copy.filter.off },
+                  { value: "on", label: copy.filter.on },
+                ]}
+                onChange={(value) => void filter.save(value)}
+              />
+            </div>
+            {!reference ? (
+              <p className="muted" id="filter-why">{copy.filter.needsCheck}</p>
+            ) : stale ? (
+              <Note testId="filter-stale">{copy.filter.stale}</Note>
+            ) : (
+              <p className="muted" id="filter-why">{copy.filter.measuredOn(uploadedDay(new Date(reference.measuredAt).toISOString()) ?? "")}</p>
+            )}
+            <SavedLine state={filter.state} />
           </Section>
           <Section id="ambient" title={copy.ambient.title} lead={copy.ambient.lead}>
             <Segmented
