@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_lane_know_pipeline import FakeTransport, _collect_fixture, _source, pk
+from tests.test_lane_know_pipeline import FakeTransport, _collect_fixture, _pubchem_record, _source, pk
 
 
 def _records(runtime: Path) -> list[dict]:
@@ -188,6 +188,31 @@ class MethodsOnlyTests(unittest.TestCase):
         self.assertEqual([piece.locator for piece in pieces], [
             "Demo Journal 2024 · Materials and methods › Cell culture",
             "Demo Journal 2024 · Troubleshooting", "Demo Journal 2024 · Notes"])
+
+
+class IloCardTests(unittest.TestCase):
+    """Person's decision 2026-10-26, 4: the ILO-WHO International Chemical
+    Safety Cards are left out of PubChem's statements. Lane KAUDIT read the
+    card text "© ILO and WHO 2021 … All rights reserved" (Korean cards ©
+    고용노동부·산업안전보건공단 2018), and ILO's copyright page puts only
+    publications from 2023-05-03 under CC BY 4.0."""
+
+    def test_the_repository_list_does_not_allow_the_cards_and_says_why(self) -> None:
+        sources = pk.load_sources()
+        pubchem = sources.by_id("pubchem")
+        self.assertNotIn("ILO-WHO International Chemical Safety Cards (ICSCs)",
+                         pubchem.option("allowed_references"))
+        (excluded,) = [item for item in sources.excluded if item.id == "ilo-icsc"]
+        self.assertIn("All rights reserved", excluded.reason)
+
+    def test_a_record_s_card_statements_are_left_out(self) -> None:
+        pubchem = pk.load_sources().by_id("pubchem")
+        source = _source(id="pubchem", kind="pubchem", options={
+            "headings": pubchem.option("headings"), "allowed_references": pubchem.option("allowed_references")})
+        (piece,) = pk.pubchem_pieces(_pubchem_record(), source, cid=42, fetched_at="2026-10-26")
+        self.assertNotIn("ILO", piece.text)
+        self.assertNotIn("2 °C c.c.", piece.text)
+        self.assertEqual(piece.license, "Public domain (NLM)")
 
 
 if __name__ == "__main__":

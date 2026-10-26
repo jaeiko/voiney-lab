@@ -34,6 +34,11 @@ KNOW). 연구실 자료는 넣지 않는다. 동작과 코드 위치는
   Europe PMC 논문은 `sections`(방법·재료·프로토콜·문제 해결·노트·안전)에 드는
   맨 위 절과 그 아래 절만 넣고 결과·고찰은 넣지 않는다(중첩 절은
   "Materials and methods › Cell culture" 처럼 위 절 이름을 붙임).
+- **ILO 카드 뺌**(사람 결정 2026-10-26 4번): PubChem 이 인용하는 ILO-WHO 국제화학물질
+  안전카드(ICSC) 문장은 넣지 않는다. 카드 원문이 "© ILO and WHO 2021 … All rights
+  reserved"(한국어판 © 고용노동부·산업안전보건공단 2018)이고 ILO 저작권 쪽은
+  2023-05-03 이후 발행물만 CC BY 4.0 이라서다; 이유는 `sources.toml` 의
+  `[[excluded]]` "ilo-icsc".
 - **용어집**: 위키데이터의 한국어·영어 이름(CC0)과 한국어 위키백과 넘겨주기
   제목으로 만든 `data/public_knowledge/glossary.json`, 그리고 사람이 읽고 고치는
   손 용어집 [`../data/public_knowledge/glossary_words.txt`](../data/public_knowledge/glossary_words.txt)

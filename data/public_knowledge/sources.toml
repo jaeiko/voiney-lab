@@ -124,7 +124,9 @@ allowed_references = [
   "The National Institute for Occupational Safety and Health (NIOSH)",
   "NIOSH Manual of Analytical Methods",
   "Occupational Safety and Health Administration (OSHA)",
-  "ILO-WHO International Chemical Safety Cards (ICSCs)",
+  # "ILO-WHO International Chemical Safety Cards (ICSCs)" was here until
+  # 2026-10-26; left out by the person's decision (lane KNOW2), see the
+  # [[excluded]] entry "ilo-icsc".
   "DTP/NCI",
   "NCI Thesaurus (NCIt)",
   "Drugs@FDA",
@@ -140,7 +142,7 @@ allowed_references = [
 #   HSDB, MeSH, PubChem      NLM, public domain  https://www.nlm.nih.gov/web_policies.html
 #   NIOSH, NMAM              CDC, public domain  https://www.cdc.gov/other/agencymaterials.html
 #   OSHA                     DOL, public domain  https://www.dol.gov/general/aboutdol/copyright
-#   ILO ICSC                 CC BY 4.0           https://www.ilo.org/global/copyright/lang--en/index.htm
+#   (ILO ICSC: no longer allowed, see [[excluded]] "ilo-icsc")
 #   DTP/NCI, NCIt            NCI, free of copyright  https://www.cancer.gov/policies/copyright-reuse
 #   Drugs@FDA, GSRS          FDA, public domain  https://www.fda.gov/about-fda/about-website/website-policies#linking
 #   EPA (TSCA, DSSTox, HAPs, AEGLs), NTP   U.S. Government works
@@ -457,3 +459,10 @@ name = "PMC / Europe PMC articles under CC BY-NC, CC BY-ND or publisher-specific
 reason = "NC or ND; the europepmc-ccby source keeps only CC BY, CC BY-SA and CC0 articles."
 evidence_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=LICENSE%3A%22cc%20by-nc%22&format=json&pageSize=1"
 checked = "2026-10-24"
+
+[[excluded]]
+id = "ilo-icsc"
+name = "ILO-WHO International Chemical Safety Cards (ICSCs), as PubChem cites them"
+reason = "Left out by the person's decision of 2026-10-26 (lane KNOW2). PubChem's source table labels the cards CC BY 4.0, but the cards themselves say \"© ILO and WHO 2021 ... All rights reserved\" (the Korean cards \"© 한국어판, 고용노동부ㆍ산업안전보건공단, 2018\"), and ILO's copyright page puts only publications and databases from 2023-05-03 under CC BY 4.0 (lane KAUDIT read both on 2026-10-25). PubChem statements whose reference is the ICSC are no longer kept (about 524 pieces of the v1 bundle held ICSC text)."
+evidence_url = "https://www.ilo.org/global/copyright/lang--en/index.htm"
+checked = "2026-10-25"
