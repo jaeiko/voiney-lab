@@ -74,12 +74,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from voiney_lab.public_knowledge import (  # noqa: E402
+    EMBEDDING_MODELS,
     GRADES,
     METADATA_FIELDS,
+    EmbeddingModel,
     Glossary,
+    LocalEmbedder,
     default_glossary_path,
     default_words_path,
+    ensure_model_files,
     index_text_for,
+    model_directory,
 )
 
 SOURCES_FILE = ROOT / "data" / "public_knowledge" / "sources.toml"
@@ -1961,8 +1966,15 @@ def load_bundle_glossary(runtime_dir: Path, words_path: Path | None = None) -> G
 # --- upload -------------------------------------------------------------------------------------
 
 
-def documents_for(records: Sequence[Mapping[str, Any]], glossary: Glossary) -> list[dict[str, Any]]:
-    """Index documents: id, searched text (head line, then the words) and string metadata."""
+def documents_for(
+    records: Sequence[Mapping[str, Any]], glossary: Glossary, *, embedding: str | None = None,
+) -> list[dict[str, Any]]:
+    """Index documents: id, searched text (head line, then the words) and string metadata.
+
+    ``embedding`` (a model's key) is written into each document's metadata
+    when the index holds that model's vectors, so the server can tell the
+    index was built with the model it queries with.
+    """
 
     documents: list[dict[str, Any]] = []
     # A title's Korean names from Wikidata ("Fume hood") and from the hand-written
@@ -1976,12 +1988,96 @@ def documents_for(records: Sequence[Mapping[str, Any]], glossary: Glossary) -> l
         # The piece's own words are the searched text after its head line
         # (``public_knowledge._body_of``); sending them again as a payload
         # would double what the plan's monthly ingest counts.
-        documents.append({
-            "id": record["id"],
-            "text": index_text_for(record, aliases),
-            "metadata": {name: str(record.get(name, "")) for name in METADATA_FIELDS},
-        })
+        metadata = {name: str(record.get(name, "")) for name in METADATA_FIELDS}
+        if embedding:
+            metadata["embedding"] = embedding
+        documents.append({"id": record["id"], "text": index_text_for(record, aliases), "metadata": metadata})
     return documents
+
+
+# --- embed (person's decision 2026-10-26, 5) ---------------------------------------------------
+
+
+class EmbeddingCache:
+    """One model's vectors of the documents' searched text, kept between runs
+    under ``runtime/embeddings/<model>/``: ``vectors.f32`` (float32 rows) and
+    ``index.jsonl`` (text SHA-1 → row). A text already embedded is not
+    embedded again, and a run that stops resumes where it stopped."""
+
+    def __init__(self, runtime_dir: Path, model: EmbeddingModel) -> None:
+        self.model = model
+        self.directory = runtime_dir / "embeddings" / model.key.replace("@", "-")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._vectors = self.directory / "vectors.f32"
+        self._index = self.directory / "index.jsonl"
+        self.rows: dict[str, int] = {}
+        if self._index.is_file():
+            for line in self._index.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    item = json.loads(line)
+                    self.rows[item["sha1"]] = int(item["row"])
+
+    @staticmethod
+    def key(text: str) -> str:
+        return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+    def missing(self, texts: Sequence[str]) -> list[str]:
+        return [text for text in dict.fromkeys(texts) if self.key(text) not in self.rows]
+
+    def add(self, texts: Sequence[str], vectors: Any) -> None:
+        import numpy as np  # noqa: PLC0415
+
+        rows = np.asarray(vectors, dtype=np.float32)
+        assert rows.shape == (len(texts), self.model.dims)
+        start = len(self.rows)
+        with self._vectors.open("ab") as handle:
+            handle.write(rows.tobytes())
+        with self._index.open("a", encoding="utf-8") as handle:
+            for offset, text in enumerate(texts):
+                handle.write(json.dumps({"sha1": self.key(text), "row": start + offset}) + "\n")
+                self.rows[self.key(text)] = start + offset
+
+    def vectors_for(self, texts: Sequence[str]) -> Any:
+        """The rows of ``texts`` (all must be embedded), in order."""
+
+        import numpy as np  # noqa: PLC0415
+
+        table = np.fromfile(self._vectors, dtype=np.float32).reshape(-1, self.model.dims)
+        return table[[self.rows[self.key(text)] for text in texts]]
+
+
+def embed(
+    records: Sequence[Mapping[str, Any]],
+    glossary: Glossary,
+    *,
+    runtime_dir: Path,
+    model: EmbeddingModel,
+    models_dir: Path | None = None,
+    threads: int = 2,
+    batch: int = 8,
+    embedder: Any = None,
+    log: Callable[[str], None] = print,
+) -> dict[str, Any]:
+    """Embed every document's searched text not yet in the cache (shortest first)."""
+
+    cache = EmbeddingCache(runtime_dir, model)
+    texts = [doc["text"] for doc in documents_for(records, glossary)]
+    todo = sorted(cache.missing(texts), key=len)
+    log(f"embed {model.key}: {len(texts)} documents, {len(todo)} to embed")
+    if todo and embedder is None:
+        paths = ensure_model_files(model, models_dir or model_directory(runtime_dir, model))
+        embedder = LocalEmbedder(model, paths, threads=threads)
+    started = time.perf_counter()
+    done = 0
+    for start in range(0, len(todo), 64):
+        part = todo[start:start + 64]
+        cache.add(part, embedder.embed_passages(part, batch=batch))
+        done += len(part)
+        if done % 1024 < 64 or done == len(todo):
+            elapsed = time.perf_counter() - started
+            log(f"  {done}/{len(todo)} in {elapsed:.0f} s ({done / max(elapsed, 1e-9):.1f}/s)")
+    return {"model": model.key, "documents": len(texts), "embedded": done,
+            "cached": len(texts) - done, "seconds": round(time.perf_counter() - started, 1)}
 
 
 def estimate_memory_mib(records: Sequence[Mapping[str, Any]]) -> dict[str, float]:
@@ -2005,12 +2101,26 @@ async def upload(
     project_id: str,
     project_key: str,
     runtime_dir: Path,
+    embedding: EmbeddingModel | None = None,
     client_factory: Callable[..., Any] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    """Create or update the index from the bundle; upserts changed documents, deletes the gone."""
+    """Create or update the index from the bundle; upserts changed documents, deletes the gone.
 
-    documents = documents_for(records, glossary)
+    With ``embedding`` the index is a ``custom`` one: each document carries
+    the model's vector from the cache (``embed`` first) and the model's key.
+    """
+
+    documents = documents_for(records, glossary, embedding=embedding.key if embedding else None)
+    if embedding is not None:
+        model_id = "custom"
+        cache = EmbeddingCache(runtime_dir, embedding)
+        missing = cache.missing([doc["text"] for doc in documents])
+        if missing:
+            raise SystemExit(f"{len(missing)} documents have no {embedding.key} vector; run embed first")
+        vectors = cache.vectors_for([doc["text"] for doc in documents])
+        for doc, vector in zip(documents, vectors):
+            doc["embedding"] = [float(value) for value in vector]
     state_path = runtime_dir / "bundle" / f"upload.{index_name}.json"
     previous: dict[str, Any] = {}
     if state_path.is_file():
@@ -2019,15 +2129,16 @@ async def upload(
         except ValueError:
             previous = {}
     previous_hashes: dict[str, str] = dict(previous.get("documents", {}))
-    current_hashes = {doc["id"]: hashlib.sha1(json.dumps(doc, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-                      for doc in documents}
+    current_hashes = {doc["id"]: hashlib.sha1(json.dumps(
+        {key: value for key, value in doc.items() if key != "embedding"}, ensure_ascii=False, sort_keys=True,
+    ).encode("utf-8")).hexdigest() for doc in documents}
     if client_factory is None:
         import moss  # noqa: PLC0415
 
         def client_factory(pid: str, key: str) -> Any:  # noqa: E306
             return moss.MossClient(pid, key)
         make_document = lambda doc: moss.DocumentInfo(  # noqa: E731
-            id=doc["id"], text=doc["text"], metadata=doc["metadata"])
+            id=doc["id"], text=doc["text"], metadata=doc["metadata"], embedding=doc.get("embedding"))
         upsert_options = moss.MutationOptions(upsert=True)
     else:
         make_document = lambda doc: doc  # noqa: E731
@@ -2308,9 +2419,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--offline", action="store_true", help="요청 없이 받아 둔 원본만으로 묶음을 다시 만든다")
     commands.add_parser("status", help="묶음의 출처별 조각 수·용량을 보인다")
     commands.add_parser("glossary", help="묶음의 용어집을 data/public_knowledge/glossary.json 으로 복사한다")
+    em = commands.add_parser("embed", help="묶음의 조각을 다국어 모델로 벡터로 만든다 (캐시, 이어서)")
+    em.add_argument("--model", choices=sorted(EMBEDDING_MODELS), default="multilingual-e5-small")
+    em.add_argument("--models-dir", help="모델 파일 폴더 (기본: <runtime-dir>/models/<모델>; 없으면 고정 커밋에서 받음)")
+    em.add_argument("--threads", type=int, default=2)
+    em.add_argument("--batch", type=int, default=8)
     up = commands.add_parser("upload", help="묶음을 Moss 색인에 올린다 (MOSS_PROJECT_ID/KEY)")
     up.add_argument("--index", required=True, help="Moss 색인 이름")
     up.add_argument("--model", default=DEFAULT_MODEL, help="임베딩 모델 (기본 moss-minilm)")
+    up.add_argument("--embedding", choices=sorted(EMBEDDING_MODELS),
+                    help="이 다국어 모델의 벡터로 custom 색인을 만든다 (embed 를 먼저)")
     up.add_argument("--dry-run", action="store_true", help="올리지 않고 문서 수·용량·예상 메모리만 센다")
     up.add_argument("--env-file", help="키를 읽을 dotenv 파일 (값은 출력하지 않음)")
     ev = commands.add_parser("evaluate", help="질문 세트로 FTS5 기준선과 Moss 를 잰다")
@@ -2365,21 +2483,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      ensure_ascii=False, indent=0, sort_keys=True), encoding="utf-8")
         print(f"wrote {target} ({len(payload['terms'])} terms)")
         return 0
+    if args.command == "embed":
+        records = read_bundle(runtime_dir)
+        glossary = load_bundle_glossary(runtime_dir)
+        outcome = embed(records, glossary, runtime_dir=runtime_dir, model=EMBEDDING_MODELS[args.model],
+                        models_dir=Path(args.models_dir) if args.models_dir else None, threads=args.threads,
+                        batch=args.batch)
+        print(json.dumps(outcome, ensure_ascii=False))
+        return 0
     if args.command == "upload":
         records = read_bundle(runtime_dir)
         glossary = load_bundle_glossary(runtime_dir)
+        model = EMBEDDING_MODELS[args.embedding] if args.embedding else None
         if args.dry_run:
-            documents = documents_for(records, glossary)
+            documents = documents_for(records, glossary, embedding=model.key if model else None)
             text_bytes = sum(len(doc["text"].encode("utf-8")) for doc in documents)
-            print(json.dumps({"documents": len(documents), "text_bytes": text_bytes,
-                              "metadata_bytes": sum(len(json.dumps(doc["metadata"], ensure_ascii=False).encode("utf-8"))
-                                                    for doc in documents),
+            metadata_bytes = sum(len(json.dumps(doc["metadata"], ensure_ascii=False).encode("utf-8"))
+                                 for doc in documents)
+            # A vector is float32 rows (moss sends them from its native core;
+            # the wire format is not documented, so this is an estimate).
+            vector_bytes = len(documents) * model.dims * 4 if model else 0
+            print(json.dumps({"documents": len(documents), "text_bytes": text_bytes, "metadata_bytes": metadata_bytes,
+                              "vector_bytes": vector_bytes,
+                              "upload_mb_estimate": round((text_bytes + metadata_bytes + vector_bytes) / 1e6, 1),
+                              "model": model.key if model else args.model,
                               "estimated_memory": estimate_memory_mib(records)}, ensure_ascii=False))
             return 0
         _load_env_file(args.env_file)
         project_id, project_key = _credentials()
         outcome = asyncio.run(upload(records, glossary, index_name=args.index, model_id=args.model,
-                                     project_id=project_id, project_key=project_key, runtime_dir=runtime_dir))
+                                     project_id=project_id, project_key=project_key, runtime_dir=runtime_dir,
+                                     embedding=model))
         print(json.dumps(outcome, ensure_ascii=False))
         return 0
     if args.command == "evaluate":

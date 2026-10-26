@@ -31,6 +31,7 @@ phrases the answer.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -824,7 +825,9 @@ class Relevance(tuple):
         return super().__new__(cls, (problem, subject, attached, effect))
 
 
-def problem_relevance(text: str, score: float, query: ProblemQuery, *, title: str = "") -> Relevance:
+def problem_relevance(
+    text: str, score: float, query: ProblemQuery, *, title: str = "", floor: float = SCORE_FLOOR,
+) -> Relevance:
     """How a piece stands against the relevance floor of a problem.
 
     The piece must share a name of the query (one the person said, when they
@@ -833,7 +836,7 @@ def problem_relevance(text: str, score: float, query: ProblemQuery, *, title: st
     reagent: a piece that only names it says nothing about cells not
     detaching) -- or be titled by the name itself, a record about that thing
     -- speak of a cause, an effect or a hazard, and have been scored at least
-    ``SCORE_FLOOR``.
+    ``floor`` (``SCORE_FLOOR``, or the index model's floor in ``SCORE_FLOORS``).
     """
 
     haystack = unicodedata.normalize("NFKC", text).casefold()
@@ -858,7 +861,7 @@ def problem_relevance(text: str, score: float, query: ProblemQuery, *, title: st
         subject = next((name for name in names if _has_term(haystack, name)), "")
     effect = _EFFECT_WORDS.search(_masked(haystack, query))
     effect_word = effect.group(0) if effect else ""
-    return Relevance(problem, subject, bool(problem and subject and effect_word and score >= SCORE_FLOOR),
+    return Relevance(problem, subject, bool(problem and subject and effect_word and score >= floor),
                      effect_word)
 
 
@@ -1050,6 +1053,10 @@ class SearchClient(Protocol):
 
     async def close(self) -> None: ...
 
+    # Optional (lane KNOW2): ``index_model(index_name)`` names the index's
+    # embedding model ("custom" for vectors made here), and ``query`` takes
+    # ``embedding=`` for such an index.
+
 
 class MossSdkClient:
     """The real client: ``moss.MossClient`` imported only when it is built.
@@ -1074,10 +1081,22 @@ class MossSdkClient:
             code = getattr(exc, "code", None) or "INTERNAL"
             raise KnowledgeUnavailable(INDEX_SETTING, f"moss load failed: {code}") from exc
 
+    async def index_model(self, index_name: str) -> str:
+        """The index's embedding model ("custom" when its vectors were made outside Moss)."""
+
+        try:
+            info = await self._client.get_index(index_name)
+        except self._moss.MossError as exc:
+            code = getattr(exc, "code", None) or "INTERNAL"
+            raise KnowledgeUnavailable(INDEX_SETTING, f"moss index info failed: {code}") from exc
+        return str(info.model.id)
+
     async def query(
         self, index_name: str, text: str, *, top_k: int, alpha: float,
+        embedding: Sequence[float] | None = None,
     ) -> list[FoundDocument]:
-        options = self._moss.QueryOptions(top_k=top_k, alpha=alpha)
+        options = (self._moss.QueryOptions(top_k=top_k, alpha=alpha) if embedding is None
+                   else self._moss.QueryOptions(top_k=top_k, alpha=alpha, embedding=list(embedding)))
         result = await self._client.query(index_name, text, options)
         found: list[FoundDocument] = []
         for doc in result.docs:
@@ -1090,6 +1109,187 @@ class MossSdkClient:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+# --- Multilingual embeddings (person's decision 2026-10-26, 5) -----------------------------
+#
+# Moss's built-in models are English. With ``model_id="custom"`` an index
+# holds vectors made outside Moss and every query brings its own; both are
+# made here, in process on the CPU, by one pinned multilingual model, so a
+# Korean question and English material meet in one vector space. The model
+# is an int8 ONNX export with an MIT, Apache-2.0 or BSD licence, pinned to a
+# Hugging Face commit and checked file by file by its SHA-256; a file that is
+# missing or differs is fetched again from that commit, and this tier stays
+# off by name when it cannot be had.
+
+
+@dataclass(frozen=True)
+class EmbeddingModel:
+    """One pinned embedding model and how it reads text."""
+
+    name: str
+    repo: str
+    revision: str
+    licence: str
+    files: Mapping[str, tuple[str, str]]  # role -> (path in the repository, SHA-256)
+    dims: int
+    query_prefix: str = ""
+    passage_prefix: str = ""
+    max_tokens: int = 512
+
+    @property
+    def key(self) -> str:
+        """The name the index's pieces carry (``embedding`` metadata): name and commit."""
+
+        return f"{self.name}@{self.revision[:12]}"
+
+    def url(self, role: str) -> str:
+        return f"https://huggingface.co/{self.repo}/resolve/{self.revision}/{self.files[role][0]}"
+
+
+#: The models measured (lane KNOW2, 2026-10-26). Both 384 dimensions, int8.
+EMBEDDING_MODELS: Mapping[str, EmbeddingModel] = {
+    "multilingual-e5-small": EmbeddingModel(
+        name="multilingual-e5-small", repo="intfloat/multilingual-e5-small",
+        revision="614241f622f53c4eeff9890bdc4f31cfecc418b3", licence="MIT",
+        files={
+            "model": ("onnx/model_qint8_avx512_vnni.onnx",
+                      "dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88"),
+            "tokenizer": ("onnx/tokenizer.json",
+                          "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"),
+        },
+        dims=384, query_prefix="query: ", passage_prefix="passage: ",
+    ),
+    "paraphrase-multilingual-minilm-l12": EmbeddingModel(
+        name="paraphrase-multilingual-minilm-l12",
+        repo="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        revision="e8f8c211226b894fcb81acc59f3b34ba3efd5f42", licence="Apache-2.0",
+        files={
+            "model": ("onnx/model_quint8_avx2.onnx",
+                      "98a01d88b7de996cdea58c32ca71208c09968d143798814b2ea09d3439dc334f"),
+            "tokenizer": ("tokenizer.json",
+                          "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8"),
+        },
+        dims=384, max_tokens=128,
+    ),
+}
+#: The model the server embeds queries with when its index is ``custom`` (lane
+#: KNOW2's measurement, 2026-10-26; the pipeline's ``embed``/``upload --embedding``
+#: build the index with the same one).
+EMBEDDING_MODEL = EMBEDDING_MODELS["multilingual-e5-small"]
+#: The relevance floor's score by the index's model: Moss's own (None) and the
+#: custom one, whose cosine scale is another (calibrated on the offline hybrid
+#: run of 2026-10-26: see the lane report).
+SCORE_FLOORS: Mapping[str | None, float] = {None: SCORE_FLOOR, EMBEDDING_MODEL.key: 0.80}
+#: Where a model's files are kept under a cache folder.
+MODELS_FOLDER = "models"
+
+
+def model_directory(cache_dir: Path | str, model: EmbeddingModel) -> Path:
+    return Path(cache_dir) / MODELS_FOLDER / f"{model.name}-{model.revision[:12]}"
+
+
+def _sha256(path: Path) -> str:
+    import hashlib  # noqa: PLC0415
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fetch_file(url: str, destination: Path) -> None:
+    """One file from its pinned address (a temporary name, then renamed)."""
+
+    import urllib.request  # noqa: PLC0415
+
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "VoineyLabPublicKnowledge/0.1 (https://github.com/jaeiko/voiney-lab)"})
+    partial = destination.with_suffix(destination.suffix + ".part")
+    with urllib.request.urlopen(request, timeout=600) as reply, partial.open("wb") as handle:  # noqa: S310
+        for block in iter(lambda: reply.read(1 << 20), b""):
+            handle.write(block)
+    partial.replace(destination)
+
+
+def ensure_model_files(
+    model: EmbeddingModel, directory: Path | str, *,
+    fetch: Callable[[str, Path], None] | None = None,
+) -> dict[str, Path]:
+    """The model's files in ``directory``, each checked by its SHA-256; one
+    missing or different is fetched from the pinned commit (``fetch``).
+    Raises ``KnowledgeUnavailable`` naming the index setting when a file
+    cannot be had or does not match."""
+
+    folder = Path(directory)
+    folder.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, Path] = {}
+    for role, (path_in_repo, digest) in model.files.items():
+        path = folder / Path(path_in_repo).name
+        if not path.is_file() or _sha256(path) != digest:
+            try:
+                (fetch or _fetch_file)(model.url(role), path)
+            except Exception as exc:  # noqa: BLE001 - any failure leaves this tier off
+                raise KnowledgeUnavailable(
+                    INDEX_SETTING, f"embedding model file unavailable: {model.name} {role} ({type(exc).__name__})",
+                ) from exc
+            if not path.is_file() or _sha256(path) != digest:
+                raise KnowledgeUnavailable(INDEX_SETTING, f"embedding model file differs: {model.name} {role}")
+        paths[role] = path
+    return paths
+
+
+class LocalEmbedder:
+    """``model`` run in process on the CPU (onnxruntime, tokenizers): text in,
+    unit vectors out, mean-pooled over the tokens."""
+
+    def __init__(self, model: EmbeddingModel, paths: Mapping[str, Path], *, threads: int = 1) -> None:
+        try:
+            import numpy  # noqa: PLC0415 - optional native dependencies, loaded on use
+            import onnxruntime  # noqa: PLC0415
+            from tokenizers import Tokenizer  # noqa: PLC0415
+        except ImportError as exc:
+            raise KnowledgeUnavailable(
+                "onnxruntime", "onnxruntime, tokenizers or numpy is not installed (pip install -e .)") from exc
+        self.model = model
+        self._numpy = numpy
+        self._tokenizer = Tokenizer.from_file(str(paths["tokenizer"]))
+        self._tokenizer.enable_truncation(max_length=model.max_tokens)
+        self._tokenizer.enable_padding()
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = max(1, threads)
+        options.inter_op_num_threads = 1
+        self._session = onnxruntime.InferenceSession(
+            str(paths["model"]), options, providers=["CPUExecutionProvider"])
+        self._inputs = {item.name for item in self._session.get_inputs()}
+
+    def _run(self, texts: Sequence[str]) -> Any:
+        np = self._numpy
+        encodings = self._tokenizer.encode_batch(list(texts))
+        ids = np.array([item.ids for item in encodings], dtype=np.int64)
+        mask = np.array([item.attention_mask for item in encodings], dtype=np.int64)
+        feed = {"input_ids": ids, "attention_mask": mask}
+        if "token_type_ids" in self._inputs:
+            feed["token_type_ids"] = np.zeros_like(ids)
+        hidden = self._session.run(None, feed)[0]
+        weights = mask[..., None].astype(np.float32)
+        pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
+        norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+        return pooled / np.clip(norms, 1e-12, None)
+
+    def embed_passages(self, texts: Sequence[str], *, batch: int = 16) -> Any:
+        """Unit vectors (rows, float32) of pieces of material."""
+
+        np = self._numpy
+        rows = [self._run([self.model.passage_prefix + text for text in texts[start:start + batch]])
+                for start in range(0, len(texts), batch)]
+        return np.concatenate(rows).astype(np.float32) if rows else np.zeros((0, self.model.dims), np.float32)
+
+    def embed_query(self, text: str) -> list[float]:
+        """A question's unit vector."""
+
+        return [float(value) for value in self._run([self.model.query_prefix + text])[0]]
 
 
 # --- The public tier -----------------------------------------------------------------------
@@ -1107,9 +1307,11 @@ class LoadReport:
 class PublicKnowledgeSource:
     """The ``public`` tier: one loaded Moss index, searched in process.
 
-    ``search`` returns at most ``limit`` hits, best grade first and within a
-    grade in the index's hybrid order; each hit's ``details`` carry the
-    source name, grade, domain and the spoken label of decision 6.
+    ``search`` returns at most ``limit`` hits by the index's score (the grade
+    first only where scores are close); each hit's ``details`` carry the
+    source name, grade, domain and the spoken label of decision 6. With an
+    ``embedder`` (a ``custom`` index, lane KNOW2) every query carries its
+    vector made by the same pinned model the index's pieces were made with.
     """
 
     tier = PUBLIC_TIER
@@ -1120,12 +1322,33 @@ class PublicKnowledgeSource:
         client: SearchClient,
         *,
         glossary: Glossary | None = None,
+        embedder: Any = None,
     ) -> None:
         self.settings = settings
         self._client = client
         self.glossary = glossary or Glossary.empty()
+        self.embedder = embedder
         self._loaded = False
         self.load_report: LoadReport | None = None
+
+    @property
+    def embedding(self) -> str | None:
+        """The key of the model the queries are embedded with, or None (Moss's own model)."""
+
+        return self.embedder.model.key if self.embedder is not None else None
+
+    @property
+    def score_floor(self) -> float:
+        """The relevance floor's score for this index's model (scores differ by model)."""
+
+        return SCORE_FLOORS.get(self.embedding, SCORE_FLOOR)
+
+    async def _ask(self, text: str, *, top_k: int) -> list[FoundDocument]:
+        if self.embedder is None:
+            return await self._client.query(self.settings.index_name, text, top_k=top_k, alpha=self.settings.alpha)
+        vector = await asyncio.to_thread(self.embedder.embed_query, text)
+        return await self._client.query(self.settings.index_name, text, top_k=top_k, alpha=self.settings.alpha,
+                                        embedding=vector)
 
     @property
     def loaded(self) -> bool:
@@ -1155,6 +1378,7 @@ class PublicKnowledgeSource:
             "index": self.settings.index_name,
             "glossary_terms": len(self.glossary),
             "load_ms": self.load_report.elapsed_ms if self.load_report else None,
+            "embedding": self.embedding,
         }
 
     async def search(
@@ -1168,10 +1392,7 @@ class PublicKnowledgeSource:
         if not text or limit <= 0:
             return []
         expanded = self.glossary.expand(text)
-        found = await self._client.query(
-            self.settings.index_name, expanded,
-            top_k=max(limit * CANDIDATES_PER_HIT, limit), alpha=self.settings.alpha,
-        )
+        found = await self._ask(expanded, top_k=max(limit * CANDIDATES_PER_HIT, limit))
         terms = self.glossary.query_terms(text)
         return ordered_hits(self._hit_from(doc, terms) for doc in found)[:limit]
 
@@ -1197,15 +1418,13 @@ class PublicKnowledgeSource:
             raise KnowledgeUnavailable(INDEX_SETTING, "public knowledge index is not loaded")
         if limit <= 0 or not query.text.strip():
             return []
-        found = await self._client.query(
-            self.settings.index_name, query.text,
-            top_k=max(limit * CANDIDATES_PER_HIT, limit), alpha=self.settings.alpha,
-        )
+        found = await self._ask(query.text, top_k=max(limit * CANDIDATES_PER_HIT, limit))
         hits: list[KnowledgeHit] = []
         for doc in found:
             hit = self._hit_from(doc)
             problem, subject, relevant, effect = problem_relevance(
-                f"{hit.title}\n{hit.locator}\n{hit.text}", hit.score, query, title=hit.title)
+                f"{hit.title}\n{hit.locator}\n{hit.text}", hit.score, query, title=hit.title,
+                floor=self.score_floor)
             hits.append(replace(hit, details=(
                 *hit.details, ("problem_shares", problem), ("subject_shares", subject),
                 ("effect_word", effect), ("relevant", "yes" if relevant else ""))))
@@ -1304,12 +1523,18 @@ async def start_public_knowledge(
     client_factory: Callable[[PublicKnowledgeSettings], SearchClient] | None = None,
     glossary_path: Path | str | None = None,
     words_path: Path | str | None = None,
+    embedder_factory: Callable[[EmbeddingModel], Any] | None = None,
 ) -> PublicKnowledgeSource | None:
     """Build and load the tier for the server's start, or None when it is off.
 
     Raises ``KnowledgeUnavailable`` naming the setting when the credentials
     are missing or the load fails; the caller records that and goes on
     without this tier (rule 7: visible, bounded, non-mutating).
+
+    A ``custom`` index (lane KNOW2) is queried with vectors of
+    ``EMBEDDING_MODEL``, whose pinned files are kept (fetched once, checked by
+    SHA-256) under the cache folder; the index must have been built with that
+    model (its pieces carry its key), or the tier stays off.
     """
 
     if not settings.enabled:
@@ -1329,7 +1554,42 @@ async def start_public_knowledge(
     except Exception as exc:  # noqa: BLE001 - any load failure is this tier's alone
         await _close_quietly(client)
         raise KnowledgeUnavailable(INDEX_SETTING, f"public knowledge load failed: {type(exc).__name__}") from exc
+    try:
+        await _with_embedder(source, client, settings, embedder_factory)
+    except KnowledgeUnavailable:
+        await _close_quietly(client)
+        raise
+    except Exception as exc:  # noqa: BLE001 - an embedding failure is this tier's alone
+        await _close_quietly(client)
+        raise KnowledgeUnavailable(INDEX_SETTING, f"public knowledge embedding failed: {type(exc).__name__}") from exc
     return source
+
+
+async def _with_embedder(
+    source: PublicKnowledgeSource, client: Any, settings: PublicKnowledgeSettings,
+    embedder_factory: Callable[[EmbeddingModel], Any] | None,
+) -> None:
+    """Give a ``custom`` index's source its query embedder, after checking the
+    index was built with the same model."""
+
+    index_model = getattr(client, "index_model", None)
+    if index_model is None or await index_model(settings.index_name) != "custom":
+        return
+    model = EMBEDDING_MODEL
+
+    def build(model: EmbeddingModel) -> Any:
+        if not settings.cache_dir:
+            raise KnowledgeUnavailable(INDEX_SETTING, "no cache folder for the embedding model")
+        return LocalEmbedder(model, ensure_model_files(model, model_directory(settings.cache_dir, model)))
+
+    embedder = await asyncio.to_thread(embedder_factory or build, model)
+    probe = await client.query(settings.index_name, "", top_k=1, alpha=1.0,
+                               embedding=await asyncio.to_thread(embedder.embed_query, "laboratory"))
+    built_with = probe[0].metadata.get("embedding", "") if probe else model.key
+    if built_with != model.key:
+        raise KnowledgeUnavailable(
+            INDEX_SETTING, f"index built with another embedding model ({built_with or 'unknown'})")
+    source.embedder = embedder
 
 
 async def _close_quietly(client: SearchClient) -> None:

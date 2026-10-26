@@ -267,6 +267,62 @@ class BundleSearchClient:
         self._index = None
 
 
+class HybridBundleClient:
+    """The bundle searched as a ``custom`` Moss index would be (lane KNOW2), offline.
+
+    Vector side: the pieces' cached vectors of the pinned model
+    (``public_knowledge_pipeline.py embed``) against the query's vector;
+    keyword side: SQLite FTS5 over the same searched text; the two ranked
+    lists, each ``2 * top_k`` deep as Moss's ``candidate_depth`` default,
+    fused by reciprocal rank (k = 60) with ``alpha`` on the vector side, as
+    Moss describes its hybrid. A hit's score is its cosine similarity (0 to 1),
+    the vector side's, as Moss's is. An approximation of Moss, not Moss.
+    """
+
+    RRF_K = 60
+
+    def __init__(self, records: Sequence[Mapping[str, Any]], glossary: Glossary, model: Any, runtime_dir: Path) -> None:
+        import numpy as np  # noqa: PLC0415
+
+        documents = pipeline.documents_for(records, glossary, embedding=model.key)
+        self._np = np
+        self._documents = {doc["id"]: doc for doc in documents}
+        self._ids = [doc["id"] for doc in documents]
+        self._vectors = pipeline.EmbeddingCache(runtime_dir, model).vectors_for([doc["text"] for doc in documents])
+        self._index: Any = None
+        self.queries: list[str] = []
+
+    async def load(self, index_name: str) -> None:
+        self._index = pipeline.Fts5Baseline(list(self._documents.values()))
+
+    async def index_model(self, index_name: str) -> str:
+        return "custom"
+
+    async def query(self, index_name: str, text: str, *, top_k: int, alpha: float,
+                    embedding: Sequence[float] | None = None) -> list[FoundDocument]:
+        np = self._np
+        self.queries.append(text)
+        depth = max(2 * top_k, top_k)
+        cosine = self._vectors @ np.asarray(embedding, dtype=np.float32) if embedding is not None else None
+        by_vector = [self._ids[i] for i in np.argsort(-cosine)[:depth]] if cosine is not None else []
+        by_keyword = self._index.search(text, top_k=depth) if (self._index is not None and text.strip()) else []
+        fused: dict[str, float] = {}
+        for rank, doc_id in enumerate(by_vector, 1):
+            fused[doc_id] = fused.get(doc_id, 0.0) + alpha / (self.RRF_K + rank)
+        for rank, doc_id in enumerate(by_keyword, 1):
+            fused[doc_id] = fused.get(doc_id, 0.0) + (1 - alpha) / (self.RRF_K + rank)
+        where = {doc_id: index for index, doc_id in enumerate(self._ids)}
+        found: list[FoundDocument] = []
+        for doc_id in sorted(fused, key=lambda key: -fused[key])[:top_k]:
+            doc = self._documents[doc_id]
+            score = float(max(0.0, min(1.0, cosine[where[doc_id]]))) if cosine is not None else 0.0
+            found.append(FoundDocument(id=doc_id, text=doc["text"], metadata=dict(doc["metadata"]), score=round(score, 4)))
+        return found
+
+    async def close(self) -> None:
+        self._index = None
+
+
 def _server_values(env_file: str | None, names: Sequence[str]) -> dict[str, str]:
     """``names`` in the server's order: the process environment, else the dotenv file.
 
@@ -333,8 +389,10 @@ class OpenedSource:
 async def open_source(
     backend: str, bundle: Bundle, *, env_file: str | None = None, cache_dir: str | None = None,
     index_name: str | None = None, glossary_path: Path | None = None, client_factory: Any = None,
+    embedding: str | None = None, models_dir: str | None = None,
 ) -> OpenedSource:
-    """The public tier as the server builds it, around Moss or the offline FTS5 client."""
+    """The public tier as the server builds it, around Moss, the offline FTS5
+    client or the offline hybrid (``local``: a custom index's approximation)."""
 
     before = pipeline.rss_mib()
     started = time.perf_counter()
@@ -355,8 +413,25 @@ async def open_source(
         source = PublicKnowledgeSource(settings, BundleSearchClient(bundle.records, bundle.glossary), glossary=glossary)
         await source.load()
         loads = 0
+    elif backend == "local":
+        from voiney_lab.public_knowledge import (  # noqa: PLC0415
+            EMBEDDING_MODELS,
+            LocalEmbedder,
+            ensure_model_files,
+            model_directory,
+        )
+
+        model = EMBEDDING_MODELS[embedding or "multilingual-e5-small"]
+        settings = PublicKnowledgeSettings(enabled=True, index_name="offline-hybrid")
+        glossary = load_glossary(glossary_path or default_glossary_path(), default_words_path())
+        paths = ensure_model_files(model, Path(models_dir) if models_dir else model_directory(bundle.runtime_dir, model))
+        source = PublicKnowledgeSource(
+            settings, HybridBundleClient(bundle.records, bundle.glossary, model, bundle.runtime_dir),
+            glossary=glossary, embedder=LocalEmbedder(model, paths, threads=2))
+        await source.load()
+        loads = 0
     else:
-        raise SystemExit(f"unknown backend {backend!r} (fts5 or moss)")
+        raise SystemExit(f"unknown backend {backend!r} (fts5, local or moss)")
     return OpenedSource(source=source, backend=backend, load_seconds=round(time.perf_counter() - started, 1),
                         rss_before_mib=before, rss_after_load_mib=pipeline.rss_mib(), moss_loads=loads)
 
@@ -1383,8 +1458,11 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     def backend_options(command: argparse.ArgumentParser) -> None:
-        command.add_argument("--backend", choices=("fts5", "moss"), required=True,
-                             help="moss: 서버의 색인을 한 번 불러와 프로세스 안에서 질의 / fts5: 묶음의 FTS5 (오프라인)")
+        command.add_argument("--backend", choices=("fts5", "local", "moss"), required=True,
+                             help="moss: 서버의 색인을 한 번 불러와 프로세스 안에서 질의 / fts5: 묶음의 FTS5 (오프라인) / "
+                                  "local: 묶음 벡터(embed)와 FTS5 를 Moss 처럼 섞은 오프라인 어림 (custom 색인)")
+        command.add_argument("--embedding", help="local 의 임베딩 모델 (기본 multilingual-e5-small)")
+        command.add_argument("--models-dir", help="local 의 모델 파일 폴더 (기본 <runtime-dir>/models/<모델>)")
         command.add_argument("--index", help="Moss 색인 이름 (기본: 서버 설정, 없으면 voiney-public-knowledge)")
         command.add_argument("--env-file", help="MOSS_PROJECT_ID·MOSS_PROJECT_KEY 만 읽을 dotenv 파일 (값은 출력하지 않음)")
         command.add_argument("--cache-dir", help="Moss 색인 디스크 캐시 폴더")
@@ -1434,7 +1512,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _with_source(args: argparse.Namespace, bundle: Bundle, job: Any) -> tuple[Any, OpenedSource]:
-    opened = await open_source(args.backend, bundle, env_file=args.env_file, cache_dir=args.cache_dir, index_name=args.index)
+    opened = await open_source(args.backend, bundle, env_file=args.env_file, cache_dir=args.cache_dir, index_name=args.index,
+                               embedding=args.embedding, models_dir=args.models_dir)
     try:
         return await job(opened.source), opened
     finally:

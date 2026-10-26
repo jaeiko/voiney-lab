@@ -553,10 +553,11 @@ async def _start_public_knowledge(application:FastAPI)->None:
     application.state.public_knowledge=source
     report=source.load_report if source is not None else None
     status.update(loaded=True,load_ms=report.elapsed_ms if report else None,
-                  glossary_terms=report.glossary_terms if report else 0)
+                  glossary_terms=report.glossary_terms if report else 0,
+                  embedding=getattr(source,"embedding",None))
     application.state.public_knowledge_status=status
-    log.info("public_knowledge.loaded index=%s load_ms=%s glossary_terms=%s",
-             settings.index_name,status["load_ms"],status["glossary_terms"])
+    log.info("public_knowledge.loaded index=%s load_ms=%s glossary_terms=%s embedding=%s",
+             settings.index_name,status["load_ms"],status["glossary_terms"],status["embedding"])
 
 
 async def _stop_public_knowledge(application:FastAPI)->None:

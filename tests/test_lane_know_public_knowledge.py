@@ -145,7 +145,9 @@ class StartTests(unittest.TestCase):
         self.assertEqual(status["glossary_terms"], 1)
         self.assertIsInstance(status["load_ms"], float)
         self.assertNotIn("p", json.dumps(status).replace('"loaded"', "").replace("public", ""))  # no credential
-        self.assertEqual(set(status), {"enabled", "loaded", "index", "glossary_terms", "load_ms"})
+        # Lane KNOW2 added "embedding" (the query model's key, None for Moss's own).
+        self.assertEqual(set(status), {"enabled", "loaded", "index", "glossary_terms", "load_ms", "embedding"})
+        self.assertIsNone(status["embedding"])
 
     def test_a_missing_glossary_file_means_no_expansion_not_a_failure(self):
         client = FakeClient()

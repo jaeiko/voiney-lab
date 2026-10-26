@@ -13,6 +13,7 @@ Fake-backed: the transport is lane KNOW's dictionary of canned replies.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import tempfile
@@ -213,6 +214,86 @@ class IloCardTests(unittest.TestCase):
         self.assertNotIn("ILO", piece.text)
         self.assertNotIn("2 °C c.c.", piece.text)
         self.assertEqual(piece.license, "Public domain (NLM)")
+
+
+class FakePassages:
+    """Embeds a passage as [its length, 1, 0, …] (the model's dims), counting calls."""
+
+    def __init__(self, dims: int) -> None:
+        self.dims = dims
+        self.seen: list[str] = []
+
+    def embed_passages(self, texts, *, batch=8):
+        import numpy as np
+
+        self.seen += list(texts)
+        return np.array([[float(len(text)), 1.0] + [0.0] * (self.dims - 2) for text in texts], dtype=np.float32)
+
+
+RECORDS = [
+    {"id": "a:1", "tier": "public", "title": "Acetonitrile", "text": "Flash point 2 °C.", "locator": "Safety",
+     "url": "https://x/1", "license": "CC BY-SA 4.0", "language": "en", "domain": "chemistry",
+     "source_id": "a", "source_name": "A", "grade": "C", "version": "r1", "fetched_at": "2026-10-24"},
+    {"id": "a:2", "tier": "public", "title": "실험실 안전", "text": "후드 안에서 다룬다.", "locator": "개요",
+     "url": "https://x/2", "license": "CC BY-SA 4.0", "language": "ko", "domain": "safety",
+     "source_id": "a", "source_name": "A", "grade": "C", "version": "r2", "fetched_at": "2026-10-24"},
+]
+
+
+class EmbedTests(unittest.TestCase):
+    """Person's decision 2026-10-26, 5: the pieces' vectors are made here by the
+    pinned multilingual model, kept between runs, and sent with the pieces to
+    a custom index whose pieces carry the model's key."""
+
+    def test_vectors_are_cached_and_a_second_run_embeds_nothing(self) -> None:
+        model = pk.EMBEDDING_MODELS["multilingual-e5-small"]
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            fake = FakePassages(model.dims)
+            first = pk.embed(RECORDS, pk.Glossary.empty(), runtime_dir=runtime, model=model, embedder=fake,
+                             log=lambda line: None)
+            second = pk.embed(RECORDS, pk.Glossary.empty(), runtime_dir=runtime, model=model,
+                              embedder=FakePassages(model.dims), log=lambda line: None)
+            vectors = pk.EmbeddingCache(runtime, model).vectors_for(
+                [doc["text"] for doc in pk.documents_for(RECORDS, pk.Glossary.empty())])
+        self.assertEqual((first["embedded"], second["embedded"], second["cached"]), (2, 0, 2))
+        self.assertEqual(fake.seen, sorted(fake.seen, key=len))  # shortest first
+        self.assertEqual(vectors.shape, (2, model.dims))
+        self.assertEqual(float(vectors[0][0]), float(len("Acetonitrile · Safety\nFlash point 2 °C.")))
+
+    def test_a_custom_upload_sends_each_vector_and_the_model_s_key(self) -> None:
+        model = pk.EMBEDDING_MODELS["multilingual-e5-small"]
+        sent: list = []
+
+        class Recorder:
+            async def get_index(self, name):
+                raise RuntimeError("not found")
+
+            async def create_index(self, name, docs, model_id):
+                sent.append((model_id, docs))
+
+            async def add_docs(self, name, docs, options):
+                sent.append(("add", docs))
+
+            async def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime / "bundle").mkdir()
+            with self.assertRaises(SystemExit):  # no vectors yet
+                asyncio.run(pk.upload(RECORDS, pk.Glossary.empty(), index_name="idx", model_id="moss-minilm",
+                                      project_id="p", project_key="k", runtime_dir=runtime, embedding=model,
+                                      client_factory=lambda pid, key: Recorder(), log=lambda line: None))
+            pk.embed(RECORDS, pk.Glossary.empty(), runtime_dir=runtime, model=model,
+                     embedder=FakePassages(model.dims), log=lambda line: None)
+            outcome = asyncio.run(pk.upload(RECORDS, pk.Glossary.empty(), index_name="idx", model_id="moss-minilm",
+                                            project_id="p", project_key="k", runtime_dir=runtime, embedding=model,
+                                            client_factory=lambda pid, key: Recorder(), log=lambda line: None))
+        (model_id, docs), = sent
+        self.assertEqual((model_id, outcome["model"]), ("custom", "custom"))
+        self.assertEqual([len(doc["embedding"]) for doc in docs], [model.dims, model.dims])
+        self.assertEqual({doc["metadata"]["embedding"] for doc in docs}, {model.key})
 
 
 if __name__ == "__main__":
