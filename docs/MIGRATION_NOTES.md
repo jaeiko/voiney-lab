@@ -1432,7 +1432,7 @@ signed-in account, the development identity's otherwise -- or
 | `pilot_turns` | voice turn (or tapped candidate) | `session_id`, `report_id`, `turn_id`, `router` (`off`/`front`/`used`/`fallback`/`stopped`), `reason` (`none`/`timeout`/`rate_limit`/`format`/`refused`/`error`), `action`, `source` (`voice`/`candidate`), `state_changed`, `step_advanced`, `clarified` (0/1), `first_audio_ms`, `total_ms` |
 | `pilot_marks` | experiment-level mark | `session_id`, `report_id`, `kind` (`button_change`, `experiment_opened`, `connection_lost`, `timer_alert`, `alert_answered`, `report_exported`), `code`, `value_ms` |
 | `pilot_protocol_events` | analysis outcome or registered review version | `protocol_id`, `revision_id`, `kind` (`analysis`/`review_registered`), `outcome` (`passed`/`review_pending`/`notice`/`failed`), `duration_ms`, `card_count` |
-| `pilot_feedback` | end-of-experiment answer ("이번 실험에 도움이 됐나요?") | `report_id`, `rating` (1-5, or NULL when `skipped`=1), `skipped`, `note` (the optional one-line memo, at most 200 characters -- the only free text) |
+| `pilot_feedback` | end-of-experiment answer ("이번 실험에 도움이 됐나요?"; the new screen's "오늘 안내는 어땠나요?") | `report_id`, `rating` (1-5, or NULL when `skipped`=1), `skipped`, `note` (the optional one-line memo, at most 200 characters -- the only free text), `tags` (lane RX4, 2026-10-26: the end screen's chips as comma-joined codes of `pilot_metrics.FEEDBACK_TAGS`, or NULL; added to an older file with `ALTER TABLE` when it is opened) |
 
 The tables are made with `CREATE TABLE IF NOT EXISTS` on each write
 connection and carry no schema-version row; there are no delete triggers.

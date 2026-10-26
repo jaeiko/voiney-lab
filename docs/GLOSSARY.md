@@ -93,7 +93,7 @@
 | 보고서 | 보고서 만들기 (Word), Markdown·JSON·CSV 내보내기 | `GET /api/experiment-reports/{id}.{형식}` | PDF·랩미팅·xlsx 는 서버에만 있고 화면 링크가 없다 |
 | AI 정리 | AI 정리 | report writer — `check_ai_notes` | 검사를 통과한 AI 문장만 |
 | 미확인 | [미확인] | 보고서 값 확인 `POST …/review/{item_id}` | 실험자가 아직 확인하지 않은 값 |
-| 평점 | 이번 실험에 도움이 됐나요? | `POST /api/pilot/feedback`, `pilot_feedback` | 1–5 와 한 줄 메모(선택) |
+| 평점 | 이번 실험에 도움이 됐나요? (지금 화면) · 오늘 안내는 어땠나요? (새 화면의 끝 화면) | `POST /api/pilot/feedback`, `pilot_feedback`, `FEEDBACK_TAGS` | 1–5 와 한 줄 메모(선택); 새 화면은 표정 단추와 칩(`tags`) |
 
 ## 5. 계정과 운영
 

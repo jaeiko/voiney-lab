@@ -176,9 +176,11 @@ pilot.turn turn_id=7 router=fallback reason=timeout action=next changed=1 step=1
 실험한 계정), `experiments`·`experiments_ended`(끝난 실험), `steps`·`hands_free_ratio`, `timer_alerts`·`alert_answer_median_ms`, `disconnects`·`disconnected_ms`·`connections_closed`, `reports_made`, `ratings`·
 `rating_mean`, `analyses_*` 등.
 
-**실험 끝 한 문항.** 실험이 끝나면 "실험 기록 검토" 칸 아래에 "이번 실험에 도움이 됐나요?" 1–5 단추와 한 줄 메모(선택, 200자)가
-나온다. 건너뛸 수 있고, 같은 기기에서 같은 실험을 다시 묻지 않는다. 마지막 답이 그 실험의 평점이다. **메모는 지표가 아니다** —
-관리자 화면과 지표 CSV 에는 나오지 않고, 아래 `notes` 로만 꺼낸다.
+**실험 끝 한 문항.** 실험이 끝나면 지금 화면은 "실험 기록 검토" 칸 아래에 "이번 실험에 도움이 됐나요?" 1–5 단추와 한 줄 메모(선택, 200자)를,
+새 화면(`/app/`)은 끝 화면에서 "오늘 안내는 어땠나요?"를 표정 단추 다섯(많이 불편했어요 … 아주 편했어요 = 1–5)과 칩 여섯(말을 잘 알아들었어요 ·
+말을 자주 놓쳤어요 · 번역이 어색했어요 · 화면이 보기 편했어요 · 타이머가 편했어요 · 그림이 도움 됐어요)과 한 줄로 묻는다(줄 RX4, 2026-10-26).
+건너뛸 수 있고, 같은 기기에서 같은 실험을 다시 묻지 않는다. 마지막 답이 그 실험의 평점이다(같은 `rating` 열; 새 화면의 뜻은 "편했는지"). **메모와 칩은 지표가 아니다** —
+관리자 화면과 지표 CSV 에는 나오지 않고, 아래 `notes` 로만 꺼낸다(`tags` 열에 칩의 코드가 쉼표로).
 
 **관리자 화면.** 관리자 계정으로 로그인한 브라우저에서 `https://<서버>/admin-metrics.html`을 열면 같은 연구실 지표를 토큰 없이 읽는다(7-6절). 서버 운영 토큰과 오프라인 도구의 전체 집계는 유지한다.
 기간(기본 최근 14일)·계정 id를 고른다. 관리자 토큰(`VOINEY_LAB_ADMIN_TOKEN`) 경로도 있고, 토큰은 페이지 메모리에서만 요청 머리글(`X-Voice-Workflow-Admin-Token`)로 보낸다.
