@@ -1,7 +1,7 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
 import asyncio, base64, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
@@ -8426,6 +8426,7 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     # back and the deviation a note recorded -- the session's own words, for
     # lanes UI2 and RV to draw (the page is not changed here).
     next_sentence=getattr(curated,"next_step_sentence",None)
+    next_missing=getattr(curated,"next_step_translation_missing",None)
     confirm=getattr(curated,"confirm_question",None)
     candidates=getattr(curated,"clarify_candidates",None)
     readback=getattr(curated,"readback_values",None)
@@ -8433,13 +8434,18 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     return {
         "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
-        "translation_pending":_translation_pending(fixture),
+        # Lane KO2: also while the screen's sentences are read in place.
+        "translation_pending":_translation_pending(fixture) or _screen_translating(fixture),
         "repeat_round":round_status() if callable(round_status) else None,
         "open_question":open_question() if callable(open_question) else None,
         # Lane WV, decision 1: the step's own figures, cut from the uploaded
         # PDF -- the list once its pages are cut, None while they are being.
         "source_figures":_screen_source_figures(curated),
         "next_step_sentence":next_sentence("ko") if callable(next_sentence) else None,
+        # Lane KO2, decision 3: the next step line is the source for want of
+        # Korean ("번역 준비 중" beside it).
+        "next_step_translation_missing":(
+            bool(next_missing("ko")) if callable(next_missing) else False),
         "confirm_question":confirm() if callable(confirm) else None,
         "clarify_candidates":candidates() if callable(candidates) else [],
         "readback_values":readback() if callable(readback) else [],
@@ -9194,15 +9200,45 @@ async def _korean_first(
     if not reading.untranslated:
         return _with_spot_readings(session,curated,reading)
     started=clock()
+    readings,asked,statuses=await _translate_in_place(
+        session,fixture,reading.untranslated,started)
+    if not session.is_current(turn_id,generation):
+        return reading.plan  # superseded: the turn's fences drop it anyway
+    if readings:
+        reading=await asyncio.to_thread(
+            curated.korean_first,plan,language="ko",readings=readings)
+    # Counts and codes only: no sentence or reading reaches the log.
+    log.info(
+        "korean_first turn_id=%s quotes=%d untranslated=%d asked=%d statuses=%s elapsed_ms=%d",
+        turn_id,len(reading.quotes),len(reading.untranslated),asked,
+        ",".join(statuses) or "none",round((clock()-started)*1000))
+    return _with_spot_readings(session,curated,reading,readings)
+
+
+async def _translate_in_place(
+    session:ListenerSession,fixture:Any,quotes:Sequence[Any],started:float,
+)->tuple[dict[str,str],int,list[str]]:
+    """Checked Korean readings for source quotes, made now (lane SAY's path).
+
+    The revision's readings already made in this process, and the session's
+    reader readings, first; then, with the translation role on, at most
+    ``SPOT_TRANSLATIONS_PER_TURN`` quotes are asked for -- each once in the
+    process (``_spot_attempt``), each bounded -- and a reading is kept only
+    when it passes ``statement_issue``. Lane KO2 uses the same path for the
+    screen's sentences and the purpose. Returns (readings by quote key,
+    how many were asked, status codes).
+    """
+
+    key=translation_revision_key(fixture)
     sha=fixture.fixture_sha256
     readings=_spot_readings(key)
-    for quote in reading.untranslated:
+    for quote in quotes:
         held=session.reader_translations.get((sha,quote.label or "",quote.text))
         if held:
             readings[quote.key]=held
     asked:list[Any]=[]
     if session.multi_brain_settings.translation_enabled:
-        for quote in reading.untranslated:
+        for quote in quotes:
             if len(asked)>=SPOT_TRANSLATIONS_PER_TURN or quote.key in readings:
                 continue
             if (sha,quote.label or "",quote.text) in session.reader_translation_refused:
@@ -9228,17 +9264,186 @@ async def _korean_first(
                 statuses.append("accepted")
             else:
                 statuses.append(f"rejected_{issue}")
-    if not session.is_current(turn_id,generation):
-        return reading.plan  # superseded: the turn's fences drop it anyway
-    if readings:
-        reading=await asyncio.to_thread(
-            curated.korean_first,plan,language="ko",readings=readings)
-    # Counts and codes only: no sentence or reading reaches the log.
-    log.info(
-        "korean_first turn_id=%s quotes=%d untranslated=%d asked=%d statuses=%s elapsed_ms=%d",
-        turn_id,len(reading.quotes),len(reading.untranslated),len(asked),
-        ",".join(statuses) or "none",round((clock()-started)*1000))
-    return _with_spot_readings(session,curated,reading,readings)
+    return {quote.key:readings[quote.key] for quote in quotes if quote.key in readings},len(asked),statuses
+
+
+def _put_readings(curated:CuratedProtocolSession,readings:Mapping[str,str])->bool:
+    """Put checked in-place readings on the session's fixture; True when one was new.
+
+    As stored machine Korean of the current translation style version (lane
+    KO2): the step card, the next step line and later replies read them. A
+    phrase's reading ("span:…") is no sentence of the fixture, and a
+    reviewed sentence keeps its reviewed Korean. Presentation only.
+    """
+
+    fixture=curated.fixture
+    reviewed=getattr(fixture,"localizations",None) or {}
+    machine=dict(getattr(fixture,"machine_localizations",None) or {})
+    added={
+        quote_key:text for quote_key,text in readings.items()
+        if not quote_key.startswith("span:") and quote_key not in reviewed
+        and machine.get(quote_key)!=text
+    }
+    if not added:
+        return False
+    machine.update(added)
+    versions=dict(getattr(fixture,"translation_versions",None) or {})
+    versions.update({quote_key:TRANSLATION_STYLE_VERSION for quote_key in added})
+    vocabulary=curated._vocabulary_cache
+    curated.fixture=replace(
+        fixture,machine_localizations=machine,translation_versions=versions)
+    if vocabulary is not None and vocabulary[0] is fixture:
+        # Presentation only: the protocol's vocabulary is the same.
+        curated._vocabulary_cache=(curated.fixture,vocabulary[1])
+    return True
+
+
+#: Translation keys (protocol id / revision id) whose screen sentences are
+#: being read in place now: the screen says "번역 준비 중" meanwhile.
+_SCREEN_TRANSLATING:dict[str,int]={}
+
+
+async def _korean_for_screen(session:ListenerSession,curated:CuratedProtocolSession)->bool:
+    """The screen's step sentences in Korean (lane KO2, decision 3).
+
+    The current and next step sentences that have no Korean
+    (``CuratedProtocolSession.screen_untranslated``) are read in place on
+    lane SAY's path (``_translate_in_place``: the process's readings first,
+    the translation role only when on, once a sentence, checked) and put on
+    the session's fixture. True when the fixture gained a reading. Nothing
+    in the workflow changes.
+    """
+
+    quotes=curated.screen_untranslated()
+    if not quotes:
+        return False
+    fixture=curated.fixture
+    key=translation_revision_key(fixture)
+    started=time.monotonic()
+    with _SPOT_LOCK:
+        _SCREEN_TRANSLATING[key]=_SCREEN_TRANSLATING.get(key,0)+1
+    try:
+        readings,asked,statuses=await _translate_in_place(session,fixture,quotes,started)
+    finally:
+        with _SPOT_LOCK:
+            left=_SCREEN_TRANSLATING.get(key,1)-1
+            if left>0:
+                _SCREEN_TRANSLATING[key]=left
+            else:
+                _SCREEN_TRANSLATING.pop(key,None)
+    if asked:
+        # Counts and codes only: no sentence or reading reaches the log.
+        log.info(
+            "screen_korean quotes=%d asked=%d statuses=%s elapsed_ms=%d",
+            len(quotes),asked,",".join(statuses) or "none",
+            round((time.monotonic()-started)*1000))
+    if curated.fixture is not fixture:
+        # Another update put readings on meanwhile; they are kept as they are.
+        fixture_now=curated.fixture
+        readings={
+            quote_key:text for quote_key,text in readings.items()
+            if quote_key not in (getattr(fixture_now,"machine_localizations",None) or {})}
+    return _put_readings(curated,readings)
+
+
+def _screen_translating(fixture:Any)->bool:
+    try:
+        key=translation_revision_key(fixture)
+    except Exception:  # noqa: BLE001 - a fixture without ids has none
+        return False
+    with _SPOT_LOCK:
+        return key in _SCREEN_TRANSLATING
+
+
+def _queue_screen_korean(
+    session:ListenerSession,curated:CuratedProtocolSession,
+    send:Callable[...,Awaitable[Any]],
+)->None:
+    """After a fixture state: put the screen's untranslated sentences in Korean, then redraw.
+
+    In the background, so neither the reply nor the screen waits: the state
+    already sent says ``translation_missing`` and carries the source; when a
+    checked reading arrives the same state is sent again
+    (``action="translation_update"``) with the Korean -- only while the
+    session is on the same configuration and protocol session.
+    """
+
+    if not curated.screen_untranslated():
+        return
+    configuration_id=session.accepted_configuration_id
+
+    async def work()->None:
+        try:
+            changed=await _korean_for_screen(session,curated)
+        except Exception as exc:  # noqa: BLE001 - the source stays on the screen
+            log.warning("screen_korean failed error=%s",type(exc).__name__)
+            return
+        if (
+            not changed or not session.active
+            or session.curated_protocol_session is not curated
+            or session.accepted_configuration_id!=configuration_id
+        ):
+            return
+        try:
+            await send(
+                "protocol.fixture.state",configuration_id=configuration_id,
+                action="translation_update",state=curated.state(),
+                screen=curated_screen_fields(curated))
+        except Exception as exc:  # noqa: BLE001 - a closed page misses a redraw
+            log.info("screen_korean redraw_skipped error=%s",type(exc).__name__)
+
+    session.track_visual_task(asyncio.create_task(work()))
+
+
+async def _fresh_purpose(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,*,
+    turn_id:int,generation:int,clock:Callable[[],float],
+)->Any:
+    """A purpose answer in the current translation style (lane KO2, decision 6).
+
+    When the purpose's Korean is of an older style version (lane GE's
+    "이것은 … 귀하의 …"), or there is none, it is read in place on lane SAY's
+    path; a checked reading goes on the session's fixture and the answer is
+    composed again from it. Otherwise the answer stays as it was (the older
+    Korean, or the source with "원문에 적힌 실험 목적").
+    """
+
+    if (getattr(plan,"intent_kind",None)!="protocol_purpose"
+            or plan.action is not CuratedProtocolAction.PROTOCOL_QUERY):
+        return plan
+    quote=curated.purpose_quote()
+    if quote is None:
+        return plan
+    started=clock()
+    readings,asked,statuses=await _translate_in_place(
+        session,curated.fixture,(quote,),started)
+    if asked:
+        log.info(
+            "purpose_korean turn_id=%s asked=%d statuses=%s elapsed_ms=%d",
+            turn_id,asked,",".join(statuses) or "none",round((clock()-started)*1000))
+    if not session.is_current(turn_id,generation) or not _put_readings(curated,readings):
+        return plan
+    return curated.with_purpose_again(plan,language="ko")
+
+
+def _reply_complete_fields(plan:Any,*,speech_text:str|None,speech_policy:str)->dict[str,Any]:
+    """What ``reply.complete`` carries besides the turn (lane KO2, decision 4).
+
+    The display and its document as before, with what the delta carried for
+    the screen's caption: the words said (``speech_text``; none when the
+    reply is not spoken) and the Korean primary text. ``translation_missing``
+    says a source sentence is shown for want of Korean.
+    """
+
+    return {
+        "text":plan.display_text,
+        # Lane F, decision 3: the delta's document again, so the screen
+        # need not keep the delta's copy.
+        "display_document":getattr(plan,"display_document",None),
+        "primary_text":plan.primary_text,
+        "speech_text":speech_text if speech_policy=="speak" else None,
+        "translation_missing":bool(getattr(plan,"translation_missing",False)),
+    }
 
 
 def _with_spot_readings(
@@ -9251,21 +9456,9 @@ def _with_spot_readings(
     if not reading.readings_used:
         return plan
     readings=readings or _spot_readings(translation_revision_key(curated.fixture))
-    fixture=curated.fixture
-    reviewed=getattr(fixture,"localizations",None) or {}
-    machine=dict(getattr(fixture,"machine_localizations",None) or {})
-    added={
+    _put_readings(curated,{
         quote_key:readings[quote_key] for quote_key in reading.readings_used
-        if quote_key in readings and not quote_key.startswith("span:")
-        and quote_key not in reviewed and machine.get(quote_key)!=readings[quote_key]
-    }
-    if added:
-        machine.update(added)
-        vocabulary=curated._vocabulary_cache
-        curated.fixture=replace(fixture,machine_localizations=machine)
-        if vocabulary is not None and vocabulary[0] is fixture:
-            # Presentation only: the protocol's vocabulary is the same.
-            curated._vocabulary_cache=(curated.fixture,vocabulary[1])
+        if quote_key in readings})
     if any(quote_key.startswith("span:") for quote_key in reading.readings_used) and not (
             session.auto_translation_announced):
         # A phrase's reading is not a stored sentence the labelling below
@@ -10851,7 +11044,8 @@ async def _send_session_greeting(
     await sender.text(
         "session.greeting",configuration_id=configuration_id,
         turn_id=greeting_turn_id,generation=generation,greeting_id=greeting_id,
-        text=greeting,language=language,
+        # Lane KO2, decision 4: the words said, for the caption.
+        text=greeting,speech_text=spoken_greeting,language=language,
     )
     try:
         log.info("session.greeting.tts_started greeting_id=%s",greeting_id)
@@ -10908,6 +11102,7 @@ async def _send_session_greeting(
     await sender.text(
         "reply.complete",configuration_id=configuration_id,
         turn_id=greeting_turn_id,generation=generation,text=greeting,
+        speech_text=spoken_greeting,
     )
     await sender.text(
         "audio.complete",configuration_id=configuration_id,
@@ -11238,7 +11433,7 @@ async def _say_timer_notice(
     fields={"configuration_id":configuration_id,"turn_id":turn_id,"generation":generation}
     await sender.text(
         "protocol.notice.speech",notice_id=notice.notice_id,notice_kind=notice.kind,
-        text=notice.display_text,**fields,
+        text=notice.display_text,speech_text=notice.speech_text,**fields,
     )
     await sender.text(
         "reply.delta",segment_index=0,text=notice.display_text,
@@ -11248,7 +11443,8 @@ async def _say_timer_notice(
     )
     await sender.text("state.changed",state=session.state.value,**fields)
     await sender.segment(turn_id,0,frames,generation)
-    await sender.text("reply.complete",text=notice.display_text,**fields)
+    await sender.text(
+        "reply.complete",text=notice.display_text,speech_text=notice.speech_text,**fields)
     await sender.text("audio.complete",segment_count=1,**fields)
     await sender.text(
         "turn.done",route="server_notice",pipeline="cascade",
@@ -11484,7 +11680,7 @@ async def _say_server_words(
     )
     await sender.text("state.changed",state=session.state.value,**fields)
     await sender.segment(turn_id,0,frames,generation)
-    await sender.text("reply.complete",text=text,**fields)
+    await sender.text("reply.complete",text=text,speech_text=text,**fields)
     await sender.text("audio.complete",segment_count=1,**fields)
     await sender.text(
         "turn.done",route=route,pipeline="cascade",result_kind=kind,fact_id=None,
@@ -13172,6 +13368,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     turn_id=turn_id,generation=generation,clock=clock,
                 )
             if turn_language=="ko":
+                # Lane KO2, decision 6: the purpose in the current style.
+                plan=await _fresh_purpose(
+                    session,curated,plan,turn_id=turn_id,generation=generation,clock=clock)
                 # Lane SAY, decision 1: Korean first -- no source sentence is
                 # read aloud in English unless it was asked for.
                 plan=await _korean_first(
@@ -13675,6 +13874,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # safety answer carries one line that says so.
             plan=_with_safety_scope_notice(
                 plan,getattr(session.tool_context,"usage_scope",None),transcript)
+            # Lane KO2, decision 5: every step label said and shown once.
+            plan=curated.single_step_labels(plan)
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -13734,6 +13935,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             screen=curated_screen_fields(curated),
             action=plan.action.value)
         _queue_source_figures(session,curated,current_text)
+        # Lane KO2, decision 3: the screen's step sentences in Korean.
+        _queue_screen_korean(session,curated,current_text)
         ended=_experiment_ended_event(
             session,curated,plan,
             report=(
@@ -13851,6 +14054,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             source_plan_scopes=list(plan.source_plan_scopes),
             unresolved_dimensions=list(plan.unresolved_dimensions),
             display_document=getattr(plan, "display_document", None),
+            translation_missing=bool(getattr(plan,"translation_missing",False)),
             development_note=None)
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
@@ -13907,10 +14111,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # the answer, and the audio.complete it holds counts them.
             research_context["answer_segments"]=spoken.segments
         await current_text(
-            "reply.complete",turn_id=turn_id,text=display_text,
-            # Lane F, decision 3: the delta's document again, so the screen
-            # need not keep the delta's copy.
-            display_document=getattr(plan, "display_document", None))
+            "reply.complete",turn_id=turn_id,
+            **_reply_complete_fields(
+                plan,speech_text=speech_text,speech_policy=speech_policy))
         web_speak_by:float|None=None
         if speech_policy=="speak" and problem_causes is not None:
             # Lane HELP, decision 2: ③ and the closing it holds are said after
@@ -15234,6 +15437,10 @@ async def voice_socket(websocket:WebSocket):
                             configuration_id=session.accepted_configuration_id,
                             state=session.curated_protocol_session.state(),
                             screen=curated_screen_fields(session.curated_protocol_session)))
+                        # Lane KO2, decision 3.
+                        _queue_screen_korean(
+                            session,session.curated_protocol_session,
+                            lambda kind,**fields: websocket.send_text(event(kind,**fields)))
                     continue
                 requested_mode=control["mode"]
                 configuration_id=control["configuration_id"]
@@ -15667,6 +15874,10 @@ async def voice_socket(websocket:WebSocket):
                         action="attached",
                     ))
                     _queue_source_figures(
+                        session,session.curated_protocol_session,
+                        lambda kind,**fields: websocket.send_text(event(kind,**fields)))
+                    # Lane KO2, decision 3: the screen's step sentences in Korean.
+                    _queue_screen_korean(
                         session,session.curated_protocol_session,
                         lambda kind,**fields: websocket.send_text(event(kind,**fields)))
                 await websocket.send_text(event("session.started",state=session.state.value,

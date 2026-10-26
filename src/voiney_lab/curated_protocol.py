@@ -324,6 +324,11 @@ class CuratedProtocolFixture:
     #: ``ProtocolVocabulary`` hears for the protocol's own terms ("진탕기"
     #: for "shaker table"). Hearing only; no term, check or step reads them.
     translation_glossary: tuple[tuple[str, str], ...] | None = None
+    #: "<step_id>/<fact_id>" -> the translation style version the machine
+    #: Korean in ``machine_localizations`` was made with (lane KO2, decisions
+    #: 1 and 6; ``protocol_translation.STYLE_VERSION``, 0 before versions
+    #: were kept). Presentation only; a key it lacks is of no known version.
+    translation_versions: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -585,6 +590,9 @@ class CuratedProtocolTurnPlan:
     #: only asked), the step and whether it is a safety event. The server
     #: adds the sources' help after the reply (``knowledge``); nothing moves.
     problem_help: dict[str, Any] | None = None
+    #: Lane KO2, decision 3: a source sentence of the reply is shown in the
+    #: source for want of a Korean reading (the screen marks it).
+    translation_missing: bool = False
 
     @property
     def response_text(self) -> str | None:
@@ -9458,6 +9466,79 @@ def _without_step_prefix(label: str, text: str) -> str:
     return re.sub(rf"^\s*{re.escape(label)}\s*단계\s*:\s*", "", text).strip()
 
 
+# --- One step label (lane KO2, decision 5, 2026-10-26) --------------------------
+#
+# The person's voice test 2 saw "3단계: 3단계: …" on the screen: a Korean step
+# reading begins with its own "N단계: " (the style guide), and replies put it
+# after a label of their own; and a source line that begins with its own
+# number ("2 Prepare …") was put after "2단계: ". Lane FIXV removed the
+# doubling from four spoken replies; this keeps every label once, in what is
+# said and shown. The source quote ("원문 · English" and below, or a document's
+# source section) keeps the source as written.
+
+#: "N단계: " -- a step label as the replies write it; "Step N: " in English.
+_STEP_LABEL_AHEAD = re.compile(
+    r"(?:(?<![0-9A-Za-z])(?P<ko>[0-9]+(?:\.[0-9]+)*[A-Za-z]?)\s*단계"
+    r"|\b[Ss]tep\s+(?P<en>[0-9]+(?:\.[0-9]+)*[A-Za-z]?))\s*[:：]\s*")
+#: Where a display's source quote begins.
+_SOURCE_QUOTE_START = re.compile(r"\n\s*(?:원문\s*·|Source\s*·|Original\s*·)")
+
+
+def _own_number(label: str, source: str) -> re.Match[str] | None:
+    """The source line's own leading number ("2 ", "1. ", "3) "), not a quantity ("2 mL")."""
+
+    match = re.match(
+        rf"\s*{re.escape(label)}(?![0-9]|\.[0-9])(?:[.)]\s*|\s+)", source)
+    if match is None:
+        return None
+    rest = source[match.end():]
+    if not rest or _READER_QUANTITY_UNIT_AHEAD.match(rest):
+        return None
+    return match
+
+
+def _one_step_label(text: str, sources: Mapping[str, Sequence[str]]) -> str:
+    """``text`` with each step label shown once (decision 5).
+
+    "N단계: N단계: …" keeps one label, and "N단계: " followed by the own source
+    line of a step labelled N, beginning with its number, drops the number
+    (``sources``: label -> the source lines of the steps with that label; a
+    document numbering each section from 1 has several). Nothing after the
+    source quote's start changes.
+    """
+
+    if not isinstance(text, str) or "단계" not in text:
+        return text
+    quote = _SOURCE_QUOTE_START.search(text)
+    head, tail = (text[:quote.start()], text[quote.start():]) if quote else (text, "")
+    out: list[str] = []
+    cursor = 0
+    for match in _STEP_LABEL_AHEAD.finditer(head):
+        if match.start() < cursor:
+            continue
+        label = match.group("ko") or match.group("en")
+        after = match.end()
+        again = re.match(
+            rf"\s*(?:{re.escape(label)}\s*단계|[Ss]tep\s+{re.escape(label)})\s*[:：]\s*",
+            head[after:])
+        if again:
+            out.append(head[cursor:after])
+            cursor = after + again.end()
+            continue
+        following = " ".join(head[after:].split())
+        if any(
+            _own_number(label, source) is not None and following.startswith(
+                " ".join(source.split())[:max(12, min(40, len(source.split()) * 3))])
+            for source in sources.get(label, ())
+        ):
+            number = _own_number(label, head[after:])
+            if number is not None:
+                out.append(head[cursor:after])
+                cursor = after + number.end()
+    out.append(head[cursor:])
+    return "".join(out) + tail
+
+
 # --- Korean first (lane SAY, decision 1, 2026-10-25) ---------------------------
 #
 # Human decision 1: the words said and shown are Korean first wherever a
@@ -9637,11 +9718,58 @@ def _quote_for(run: str, index: _KoreanFirstIndex, label_near: str | None) -> So
     return SourceQuote(f"span:{digest}", " ".join(run.split()), label_near, "phrase")
 
 
+def _screen_only_source_runs(
+    plan: "CuratedProtocolTurnPlan", index: _KoreanFirstIndex, kept: Sequence[str],
+    *, said: Sequence[str],
+) -> list[str]:
+    """Source sentences the reply shows but does not say (lane KO2, decision 3).
+
+    Read from what the screens draw of a reply -- its primary text, its
+    display before the source quote ("원문 · …") and its document's sections
+    other than the source and the citation -- the English runs that are
+    source sentences, less those the speech carries and English a Korean
+    reading keeps. In the order found, each once.
+    """
+
+    texts: list[str] = []
+    if isinstance(plan.primary_text, str):
+        texts.append(plan.primary_text)
+    if isinstance(plan.display_text, str):
+        texts.append(_SOURCE_QUOTE_START.split(plan.display_text, maxsplit=1)[0])
+    document = plan.display_document
+    if isinstance(document, dict):
+        for section in document.get("sections") or ():
+            if not isinstance(section, dict) or section.get("kind") in {"source", "citation"}:
+                continue
+            if isinstance(section.get("text"), str):
+                texts.append(section["text"])
+            texts.extend(item for item in section.get("items") or () if isinstance(item, str))
+    spoken = [_normalized_words(run) for run in said]
+    runs: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        for start, end in _english_runs(text):
+            run = " ".join(text[start:end].split())
+            normalized = _normalized_words(run)
+            if (
+                not normalized or normalized in seen
+                or any(normalized in other for other in spoken)
+                or any(normalized in other for other in kept)
+                or not _is_source_sentence(run, index)
+            ):
+                continue
+            seen.add(normalized)
+            runs.append(run)
+    return runs
+
+
 def _korean_in_place(korean: str, label: str | None, before: str) -> str:
     """The reading as it stands in the reply: no second "N단계:" after one said."""
 
     text = " ".join(korean.split())
-    if label and re.search(r"단계", before[-24:]):
+    sentence = re.split(r"[.!?。\n]", before)[-1]
+    if label and (re.search(r"단계", before[-24:]) or re.search(
+            rf"(?<![0-9A-Za-z]){re.escape(label)}\s*단계", sentence)):
         text = _without_step_prefix(label, text)
     return text
 
@@ -9709,6 +9837,10 @@ _READER_QUANTITY = re.compile(
     + "|".join(f"(?:{form})" for form, _ in _READER_UNIT_FORMS)
     + r")(?![A-Za-z]))?"
 )
+#: A unit right where a number's words begin: "2 mL …" is a quantity, not
+#: the step's own number "2 Prepare …" (lane KO2, ``_own_number``).
+_READER_QUANTITY_UNIT_AHEAD = re.compile(
+    "(?:" + "|".join(f"(?:{form})" for form, _ in _READER_UNIT_FORMS) + r")(?![A-Za-z])")
 _READER_CLOCK = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)")
 _ENGLISH_COUNTS = {
     "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
@@ -12303,7 +12435,11 @@ class CuratedProtocolSession:
         return self.open_server_question()
 
     def next_step_sentence(self, language: str = "ko") -> str | None:
-        """The next step's sentence -- its reviewed or stored Korean, else the source -- or None."""
+        """The next step's sentence -- its reviewed or stored Korean, else the source -- or None.
+
+        The Korean carries its step label once ("3단계: …", lane KO2,
+        decision 5); the source is the source line as written.
+        """
 
         steps = self.fixture.steps
         if not self.active or not 0 <= self.current_index < len(steps) - 1:
@@ -12312,7 +12448,23 @@ class CuratedProtocolSession:
         reading = (
             self._localized_fact(following.step_id, "current_step") if language == "ko" else None
         )
-        return " ".join((reading or following.instruction_source_text).split())
+        if reading:
+            body = _without_step_prefix(following.source_label, " ".join(reading.split()))
+            if body:
+                return f"{following.source_label}단계: {body}"
+        return " ".join(following.instruction_source_text.split())
+
+    def next_step_translation_missing(self, language: str = "ko") -> bool:
+        """Whether ``next_step_sentence`` is the source for want of Korean (lane KO2, decision 3)."""
+
+        from voiney_lab.protocol_translation import is_korean  # imports this module
+
+        steps = self.fixture.steps
+        if language != "ko" or not self.active or not 0 <= self.current_index < len(steps) - 1:
+            return False
+        following = steps[self.current_index + 1]
+        return not is_korean(following.instruction_source_text) and not self._localized_fact(
+            following.step_id, "current_step")
 
     def clarify_candidates(self) -> list[str]:
         """The candidates the last reply asked back ("A요, B요?"), for the screen."""
@@ -15639,6 +15791,122 @@ class CuratedProtocolSession:
                 )
         return f"이대로 {label}단계를 마치고 다음 단계로 갈까요?"
 
+    def screen_untranslated(self) -> tuple[SourceQuote, ...]:
+        """The step sentences the screen shows with no Korean (lane KO2, decision 3).
+
+        The current step's (while a step is shown) and the next step's
+        (while the run is active): each written in another language than
+        Korean and with no reviewed, stored or in-place reading. The server
+        translates them in place on lane SAY's path; nothing changes here.
+        """
+
+        from voiney_lab.protocol_translation import is_korean  # imports this module
+
+        steps = self.fixture.steps
+        shown = self.active or self.workflow_status in {"preview", "ready"}
+        if not shown or not 0 <= self.current_index < len(steps):
+            return ()
+        indexes = [self.current_index]
+        if self.active and self.current_index + 1 < len(steps):
+            indexes.append(self.current_index + 1)
+        vocabulary = self._protocol_vocabulary()
+        quotes: list[SourceQuote] = []
+        for index in indexes:
+            step = steps[index]
+            text = step.instruction_source_text
+            if (not text.strip() or is_korean(text)
+                    or self._localized_fact(step.step_id, "current_step")):
+                continue
+            quotes.append(SourceQuote(
+                f"{step.step_id}/current_step", text, step.source_label, "step",
+                tuple(dict.fromkeys(
+                    term.text for term in vocabulary.terms
+                    if _term_pattern(term.text).search(text)))))
+        return tuple(quotes)
+
+    def purpose_quote(self) -> SourceQuote | None:
+        """The purpose, when its Korean is not of the current style (lane KO2, decision 6).
+
+        None when the purpose is written in Korean, has a reviewed reading,
+        or carries a machine reading of the current translation style
+        version (or of no known version: nothing says it is older).
+        Otherwise the purpose as a quote the server reads anew in place --
+        its stored Korean may be lane GE's 합니다체 ("이것은 … 귀하의 …"), or
+        none (refused, as a reading that spoke as "우리").
+        """
+
+        from voiney_lab.protocol_translation import STYLE_VERSION, is_korean  # imports this module
+
+        try:
+            purpose = ProtocolKnowledgeView.from_fixture(self.fixture).purpose
+        except CuratedProtocolFixtureError:
+            return None
+        text = purpose.text
+        if not text.strip() or is_korean(text):
+            return None
+        if PURPOSE_FACT_KEY in (getattr(self.fixture, "localizations", None) or {}):
+            return None
+        step_id, _, fact_id = PURPOSE_FACT_KEY.partition("/")
+        if self._localized_fact(step_id, fact_id):
+            version = (getattr(self.fixture, "translation_versions", None) or {}).get(
+                PURPOSE_FACT_KEY)
+            if version is None or version >= STYLE_VERSION:
+                return None
+        vocabulary = self._protocol_vocabulary()
+        return SourceQuote(PURPOSE_FACT_KEY, text, None, "purpose", tuple(dict.fromkeys(
+            term.text for term in vocabulary.terms if _term_pattern(term.text).search(text))))
+
+    def with_purpose_again(self, plan: CuratedProtocolTurnPlan, *, language: str) -> CuratedProtocolTurnPlan:
+        """A purpose answer composed again from the fixture as it is now (decision 6).
+
+        Read-only: the server calls it after putting a new reading of the
+        purpose on the fixture; any other reply is returned as it is.
+        """
+
+        if (plan.action is not CuratedProtocolAction.PROTOCOL_QUERY
+                or plan.intent_kind != "protocol_purpose"):
+            return plan
+        display, speech, _facts = _protocol_query_presentation(
+            self.fixture, current_index=self.current_index, scope="purpose", language=language)
+        return replace(plan, display_text=display, speech_text=speech, primary_text=speech)
+
+    def single_step_labels(self, plan: CuratedProtocolTurnPlan) -> CuratedProtocolTurnPlan:
+        """The reply with every step label said and shown once (lane KO2, decision 5).
+
+        See ``_one_step_label``. The display's source quote and a document's
+        source and citation sections are left as written. Nothing in the
+        session changes.
+        """
+
+        sources: dict[str, list[str]] = {}
+        for step in self.fixture.steps:
+            sources.setdefault(str(step.source_label), []).append(step.instruction_source_text)
+
+        def fix(value: Any) -> Any:
+            return _one_step_label(value, sources) if isinstance(value, str) else value
+
+        changes: dict[str, Any] = {}
+        for name in ("display_text", "speech_text", "primary_text"):
+            value = getattr(plan, name)
+            fixed = fix(value)
+            if fixed != value:
+                changes[name] = fixed
+        document = plan.display_document
+        if isinstance(document, dict) and isinstance(document.get("sections"), list):
+            sections = []
+            for section in document["sections"]:
+                if isinstance(section, dict) and section.get("kind") not in {"source", "citation"}:
+                    section = {
+                        **section,
+                        **({"text": fix(section["text"])} if "text" in section else {}),
+                        **({"items": [fix(item) for item in section["items"]]}
+                           if isinstance(section.get("items"), list) else {}),
+                    }
+                sections.append(section)
+            if sections != document["sections"]:
+                changes["display_document"] = {**document, "sections": sections}
+        return replace(plan, **changes) if changes else plan
+
     def korean_first(
         self,
         plan: CuratedProtocolTurnPlan,
@@ -15682,7 +15950,11 @@ class CuratedProtocolSession:
             if _is_source_sentence(speech[start:end], index)
             and not any(_normalized_words(speech[start:end]) in text for text in kept)
         ]
-        if not found:
+        # Lane KO2, decision 3: a source sentence the screen shows (the
+        # answer box, the caption's fallback) though the speech does not say it.
+        screen_only = _screen_only_source_runs(
+            plan, index, kept, said=[speech[start:end] for start, end in found])
+        if not found and not screen_only:
             return KoreanFirstReading(plan)
         from voiney_lab.protocol_translation import statement_issue  # imports this module
 
@@ -15691,7 +15963,8 @@ class CuratedProtocolSession:
         quotes: list[SourceQuote] = []
         untranslated: list[SourceQuote] = []
         used: list[str] = []
-        shown: list[tuple[str, str]] = []
+        #: (what the speech said, the Korean, its label, the source sentence)
+        shown: list[tuple[str, str, str | None, str]] = []
         out: list[str] = []
         cursor = 0
         said_fallback = False
@@ -15720,7 +15993,7 @@ class CuratedProtocolSession:
                 if before.rstrip().endswith(SAFETY_SOURCE_READ_LEAD):
                     before = before.rstrip()[: -len(SAFETY_SOURCE_READ_LEAD)]
                 out.extend((before, text))
-                shown.append((run, text))
+                shown.append((run, korean, quote.label, quote.text))
                 cursor = end
                 continue
             untranslated.append(quote)
@@ -15736,6 +16009,28 @@ class CuratedProtocolSession:
             said_fallback = said_fallback or bool(words)
             cursor = cut
         out.append(speech[cursor:])
+        said_keys = {quote.key for quote in quotes}
+        for run in screen_only:
+            quote = _quote_for(run, index, None)
+            if quote.key.startswith("span:") or quote.key in said_keys:
+                continue  # a phrase or a list is no sentence of the protocol's
+            quote = replace(quote, terms=tuple(dict.fromkeys(
+                term.text for term in vocabulary.terms
+                if _term_pattern(term.text).search(quote.text))))
+            said_keys.add(quote.key)
+            quotes.append(quote)
+            korean = readings.get(quote.key)
+            if korean:
+                used.append(quote.key)
+            else:
+                step_id, _, fact_id = quote.key.partition("/")
+                korean = self._localized_fact(step_id, fact_id)
+                if korean and quote.kind == "warning" and statement_issue(quote.text, korean):
+                    korean = None
+            if korean:
+                shown.append((run, korean, quote.label, quote.text))
+            else:
+                untranslated.append(quote)
         new_speech = re.sub(r"[ \t]{2,}", " ", "".join(out))
         new_speech = re.sub(r" +([.,])", r"\1", new_speech).strip()
         display = plan.display_text
@@ -15746,14 +16041,47 @@ class CuratedProtocolSession:
             if not isinstance(value, str):
                 return value
             boundary = value.find("원문 · ")
-            for run, text in shown:
-                at = value.find(run)
-                if at >= 0 and (boundary < 0 or at < boundary):
-                    value = value[:at] + text + value[at + len(run):]
+            # Whole sentences before the phrases a speech cut from them.
+            for run, korean, label, sentence in sorted(shown, key=lambda item: -len(item[3])):
+                # The display keeps the source's line breaks where the speech
+                # has spaces, and may show the whole sentence the speech cut
+                # (lane KO2): the sentence, without its own number, then the
+                # run, each found word by word.
+                found = None
+                own = _own_number(label, sentence) if label else None
+                for candidate in dict.fromkeys(filter(None, (
+                        sentence, sentence[own.end():] if own else None, run))):
+                    words = candidate.split()
+                    if not words:
+                        continue
+                    found = re.search(r"\s+".join(re.escape(word) for word in words), value)
+                    if found:
+                        break
+                if found and (boundary < 0 or found.start() < boundary):
+                    text = _korean_in_place(korean, label, value[:found.start()])
+                    if value[found.end():found.end() + 1] in {".", "!", "?"}:
+                        text = text.rstrip(".!?")
+                    value = value[:found.start()] + text + value[found.end():]
                     boundary = value.find("원문 · ")
             return value
 
         display, primary = korean_shown(display), korean_shown(primary)
+        if shown and isinstance(document, dict) and isinstance(document.get("sections"), list):
+            # Lane KO2, decision 3: the answer box draws the document's
+            # sections; the source and citation sections stay as written.
+            document = {**document, "sections": [
+                {
+                    **section,
+                    **({"text": korean_shown(section["text"])}
+                       if isinstance(section.get("text"), str) else {}),
+                    **({"items": [korean_shown(item) if isinstance(item, str) else item
+                                  for item in section["items"]]}
+                       if isinstance(section.get("items"), list) else {}),
+                }
+                if isinstance(section, dict) and section.get("kind") not in {"source", "citation"}
+                else section
+                for section in document["sections"]
+            ]}
         if untranslated and isinstance(display, str) and UNTRANSLATED_SHOWN not in display:
             display = f"{UNTRANSLATED_SHOWN}\n\n{display}"
             if isinstance(document, dict):
@@ -15763,6 +16091,7 @@ class CuratedProtocolSession:
         changes: dict[str, Any] = {
             "speech_text": new_speech or UNTRANSLATED_SPOKEN,
             "display_text": display, "primary_text": primary, "display_document": document,
+            "translation_missing": bool(untranslated),
         }
         if used:
             changes["translation_status"] = "model_assisted_unreviewed"
@@ -17493,18 +17822,19 @@ class CuratedProtocolSession:
         else:
             step = self.fixture.steps[self.current_index]
             localized = self._localized_fact(step.step_id, "current_step")
-            direct = (
-                f"현재 {step.source_label}단계에서 프로토콜이 명시한 내용은 "
-                f"다음과 같습니다: {localized or step.instruction_source_text}"
-            )
             # The step as the screen shows it, read out -- not a sentence
             # about the answer (lane XO, a person's decision of 2026-10-05:
             # "활성 프로토콜이 확인하는 내용을 먼저 정리했습니다 ..." sounded
             # like a script being read). Long steps are cut at a sentence end.
-            reading = " ".join((localized or step.instruction_source_text).split())
-            reading = re.sub(
-                rf"^(?:{re.escape(step.source_label)}\s*단계\s*:|{re.escape(step.source_label)}\s)\s*",
-                "", reading,
+            # Lane KO2, decision 5: without its label or its own number ("2.").
+            reading = _without_step_prefix(
+                step.source_label, " ".join((localized or step.instruction_source_text).split()))
+            own = _own_number(step.source_label, reading)
+            if own is not None:
+                reading = reading[own.end():]
+            direct = (
+                f"현재 {step.source_label}단계에서 프로토콜이 명시한 내용은 "
+                f"다음과 같습니다: {reading}"
             )
             first = re.split(r"(?<=[.!?。])\s+", reading, maxsplit=1)[0]
             if len(first) > 160:
@@ -17569,6 +17899,11 @@ class CuratedProtocolSession:
             if current_step is not None
             else None
         )
+        if current_primary is not None:
+            # Lane KO2, decision 5: the screens show the step's label beside
+            # its body; the reading's own "N단계: " is not shown again.
+            current_primary = _without_step_prefix(
+                current_step.source_label, " ".join(current_primary.split())) or None
         # Lane FX, decision 3: the current step's source language. A step
         # written in Korean is never translated, and the page leaves out its
         # "no translation" line for it.
@@ -17615,6 +17950,12 @@ class CuratedProtocolSession:
             ),
             "primary_summary": current_primary,
             "source_language": source_language,
+            # Lane KO2, decision 3: the step's sentence has no checked Korean
+            # yet -- the screen says so ("번역 준비 중") beside the source.
+            "translation_missing": (
+                current_step is not None and source_language != "ko"
+                and current_primary is None
+            ),
             "spoken_summary": spoken_summary,
             "source_filename": (
                 getattr(self.fixture, "source_filename", None)

@@ -1091,6 +1091,20 @@ def stored_localizations(
     rows come in; within a version, the later row.
     """
 
+    best = _newest_passing(fixture, records, glossary, glossaries)
+    reviewed = {key: rank[2] for (kind, key), rank in best.items() if kind == "reviewed"}
+    machine = {key: rank[2] for (kind, key), rank in best.items() if kind == "machine"}
+    return reviewed, machine
+
+
+def _newest_passing(
+    fixture: CuratedProtocolFixture,
+    records: Iterable[FactTranslationRecord],
+    glossary: Sequence[GlossaryEntry],
+    glossaries: Mapping[int, Sequence[GlossaryEntry]] | None,
+) -> dict[tuple[str, str], tuple[int, int, str]]:
+    """(status kind, fact key) -> (style version, order, text) of the row shown."""
+
     best: dict[tuple[str, str], tuple[int, int, str]] = {}
     for order, (record, result) in enumerate(
             stored_checks(fixture, records, glossary, glossaries=glossaries)):
@@ -1101,9 +1115,7 @@ def stored_localizations(
         held = best.get((kind, record.fact_key))
         if held is None or rank[:2] > held[:2]:
             best[(kind, record.fact_key)] = rank
-    reviewed = {key: rank[2] for (kind, key), rank in best.items() if kind == "reviewed"}
-    machine = {key: rank[2] for (kind, key), rank in best.items() if kind == "machine"}
-    return reviewed, machine
+    return best
 
 
 def newest_glossary(
@@ -1132,8 +1144,11 @@ def with_stored_translations(
     ``glossaries`` (by style version, lane KO2), the newest version's.
     """
 
-    reviewed, machine = stored_localizations(
-        fixture, records, glossary, glossaries=glossaries)
+    records = tuple(records)
+    best = _newest_passing(fixture, records, glossary, glossaries)
+    reviewed = {key: rank[2] for (kind, key), rank in best.items() if kind == "reviewed"}
+    machine = {key: rank[2] for (kind, key), rank in best.items() if kind == "machine"}
+    versions = {key: rank[0] for (kind, key), rank in best.items() if kind == "machine"}
     if glossaries:
         glossary = newest_glossary(glossaries)
     names = tuple(
@@ -1149,6 +1164,9 @@ def with_stored_translations(
         sidecar.setdefault(key, text)
     merged = dict(getattr(fixture, "machine_localizations", None) or {})
     merged.update(machine)
+    # Lane KO2, decision 6: the style version of each machine reading shown.
+    merged_versions = dict(getattr(fixture, "translation_versions", None) or {})
+    merged_versions.update(versions)
     return replace(
         fixture,
         localizations=sidecar or fixture.localizations,
@@ -1156,6 +1174,10 @@ def with_stored_translations(
             key: text for key, text in merged.items() if key not in sidecar
         } or None,
         translation_glossary=names,
+        translation_versions={
+            key: version for key, version in merged_versions.items()
+            if key in merged and key not in sidecar
+        } or None,
     )
 
 

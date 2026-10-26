@@ -188,6 +188,11 @@ export function replyText(m: Record<string, unknown>): string {
   return plain(raw).replace(/^#+\s+/gm, "").trim();
 }
 
+/** The words a reply said aloud (the server's speech_text), or "" when it sends none (lane KO2, decision 4): the caption shows what was said, never the display's source quote. */
+export function spokenText(m: Record<string, unknown>): string {
+  return text(m.speech_text) ? plain(m.speech_text).trim() : "";
+}
+
 /** A protocol state the screen may draw: the accepted configuration's, attached, of the accepted protocol and revision, not older than the one drawn. */
 export function acceptableState(
   m: Record<string, unknown>,
@@ -291,7 +296,7 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
     case "server.words":
     case "protocol.notice.speech":
       if (!ours || typeof m.text !== "string" || !m.text.trim()) return model;
-      return withLog(model, { key: `said:${String(m.generation)}:${String(m.turn_id)}`, who: "said", text: oneLine(m.text) });
+      return withLog(model, { key: `said:${String(m.generation)}:${String(m.turn_id)}`, who: "said", text: oneLine(spokenText(m) || m.text) });
     case "transcript":
       if (turnId === null || !context.live(m) || !text(m.text)) return model;
       // A new utterance taken: a refusal said for the last one goes.
@@ -300,12 +305,14 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
     case "reply.complete": {
       if (turnId === null || !context.live(m)) return model;
       const words = replyText(m);
-      if (!words) return model;
+      const said = spokenText(m);
+      if (!words && !said) return model;
       const key = `said:${String(m.generation)}:${turnId}`;
       const before = model.log.find((item) => item.key === key);
       const joined = m.type === "reply.complete" || !before ? words : `${before.text} ${words}`.trim();
-      const next = withLog(model, { key, who: "said", text: oneLine(joined) });
-      if (next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined) };
+      // The caption and the log keep what was said; the card keeps what is shown.
+      const next = withLog(model, { key, who: "said", text: oneLine(spokenText(m) || joined) });
+      if (words && next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined) };
       return next;
     }
     case "server.operation":
