@@ -174,21 +174,23 @@ class SearchTests(unittest.TestCase):
             asyncio.run(off.search("x", limit=2, context=CONTEXT))
         self.assertEqual(caught.exception.setting, ENABLED_SETTING)
 
-    def test_hits_come_best_grade_first_within_the_index_order_and_carry_the_label(self):
+    def test_hits_come_by_the_index_s_score_and_carry_the_label(self):
+        # Lane KNOW2 (decision 2026-10-26, 1) changed the order: it was grade
+        # first ([a1, a2, b1]); now the score, the grade only where scores are close.
         docs = [_doc("c1", "C", source_name="Wikipedia (English)", score=0.9),
                 _doc("a1", "A", score=0.6), _doc("b1", "B", source_name="OpenStax Chemistry", score=0.7),
                 _doc("a2", "A", score=0.5, payload="The words themselves.")]
         source, client = self._source(docs)
-        hits = asyncio.run(source.search("acetonitrile flash point", limit=3, context=CONTEXT))
-        self.assertEqual([hit.detail("doc_id") for hit in hits], ["a1", "a2", "b1"])
-        self.assertEqual([hit.tier for hit in hits], ["public"] * 3)
-        self.assertEqual(hits[0].detail("label"), f"{PUBLIC_LABEL} — NIOSH Pocket Guide")
-        self.assertEqual(hits[0].detail("grade_words"), "공공기관·표준·심사 논문")
-        self.assertEqual(hits[0].source_url, "https://example.org/a1")
-        self.assertEqual(hits[0].license, "Public domain")
-        self.assertEqual(hits[0].text, "Flash point is low.")
-        self.assertEqual(hits[1].text, "The words themselves.")  # payload wins over the searched text
-        self.assertEqual(client.queries[0][2], 9)  # three candidates per hit
+        hits = asyncio.run(source.search("acetonitrile flash point", limit=4, context=CONTEXT))
+        self.assertEqual([hit.detail("doc_id") for hit in hits], ["c1", "b1", "a1", "a2"])
+        self.assertEqual([hit.tier for hit in hits], ["public"] * 4)
+        self.assertEqual(hits[2].detail("label"), f"{PUBLIC_LABEL} — NIOSH Pocket Guide")
+        self.assertEqual(hits[2].detail("grade_words"), "공공기관·표준·심사 논문")
+        self.assertEqual(hits[2].source_url, "https://example.org/a1")
+        self.assertEqual(hits[2].license, "Public domain")
+        self.assertEqual(hits[2].text, "Flash point is low.")
+        self.assertEqual(hits[3].text, "The words themselves.")  # payload wins over the searched text
+        self.assertEqual(client.queries[0][2], 12)  # three candidates per hit
         self.assertEqual(client.queries[0][3], source.settings.alpha)
 
     def test_a_korean_question_is_joined_by_the_english_names_before_the_query(self):

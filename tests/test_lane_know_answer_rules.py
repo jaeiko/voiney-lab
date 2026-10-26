@@ -5,15 +5,14 @@ Public material is a general reference beside the source (human decision
 numbers, a fact rather than an instruction, never "계속해도 돼요", never a
 value against the source's, never a permission about a hazard, and the
 "공개 자료 · 일반 참고 — <출처>" mark is the server's. The check is
-``answer_checks.public_reference_violations``; the model-free form and the
-checked paraphrase are in ``external_references``. The model is a fake.
+``answer_checks.public_reference_violations``. Since lane KNOW2 (person's
+decision 2026-10-26, 1) no piece is read aloud or paraphrased: all that is
+said is ``external_references.PUBLIC_SPOKEN``, which the check passes.
 """
 
 from __future__ import annotations
 
-import asyncio
 import unittest
-from types import SimpleNamespace
 
 from voiney_lab.answer_checks import (
     DISPLAY_LABELS,
@@ -22,12 +21,7 @@ from voiney_lab.answer_checks import (
     display_label_violations,
     public_reference_violations,
 )
-from voiney_lab.external_references import (
-    SupplementalKnowledgeSettings,
-    XaiSupplementalKnowledge,
-    paraphrase_public_reference,
-    public_reference_fallback,
-)
+from voiney_lab.external_references import PUBLIC_SPOKEN
 
 EVIDENCE = (
     "Flash Point: 42 °F (6 °C) (Open Cup) [HSDB]\n"
@@ -101,87 +95,18 @@ class PublicReferenceViolationTests(unittest.TestCase):
         self.assertEqual(display_label_violations("공개 자료 · 일반 참고 — X"), ("공개 자료 ·", "일반 참고 —"))
 
 
-class FallbackTests(unittest.TestCase):
-    def test_the_fixed_form_is_the_mark_then_a_short_fact_or_where_to_see_it(self):
-        # Decision 6 (applied at the lane HELP wiring, 2026-10-25): the
-        # model-free form reads no more than a short sentence of the source,
-        # and only in the turn's language; otherwise it says where to look.
-        text = "Acetonitrile is a colorless liquid with an aromatic odor that is highly flammable and is used as a polar aprotic solvent in many laboratories. It boils at 82 °C."
-        spoken = public_reference_fallback(text, source_name="NIOSH Pocket Guide", language="ko")
-        self.assertEqual(spoken, "공개 자료 · 일반 참고 — NIOSH Pocket Guide에 관련 내용이 있어요. 화면에서 확인해 주세요.")
-        self.assertNotIn("boils", spoken)
-        short = public_reference_fallback("Short fact.", source_name="S", language="en")
-        self.assertEqual(short, "공개 자료 · 일반 참고 — S: Short fact.")
-        other_language = public_reference_fallback("Short fact.", source_name="S", language="ko", source_language="en")
-        self.assertEqual(other_language, "공개 자료 · 일반 참고 — S에 관련 내용이 있어요. 화면에서 확인해 주세요.")
-        self.assertEqual(public_reference_fallback("   ", source_name="S", language="en"),
-                         "공개 자료 · 일반 참고 — S has something on it; see the screen.")
-        self.assertLess(len("Short fact."), PUBLIC_REFERENCE_QUOTE_CHARS)
-
-
-class _Responses:
-    def __init__(self, text: str) -> None:
-        self.text = text
-        self.calls: list[dict] = []
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        return SimpleNamespace(id="resp_1", output_text=self.text)
-
-
-def _explainer(text: str) -> tuple[XaiSupplementalKnowledge, _Responses]:
-    responses = _Responses(text)
-    client = SimpleNamespace(responses=responses)
-    return XaiSupplementalKnowledge(client, SupplementalKnowledgeSettings(True, "fake-model", 2.0)), responses
-
-
-class ParaphraseTests(unittest.TestCase):
-    def test_a_checked_sentence_comes_back_without_the_mark(self):
-        explainer, responses = _explainer("아세토니트릴은 인화점이 6 °C 로 낮은 물질로 알려져 있어요.")
-        result = asyncio.run(paraphrase_public_reference(
-            explainer, "아세토니트릴 위험해?", source_text=EVIDENCE, source_name="NIOSH Pocket Guide", language="ko"))
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["answer"], "아세토니트릴은 인화점이 6 °C 로 낮은 물질로 알려져 있어요.")
-        self.assertEqual(result["label"], "공개 자료 · 일반 참고 — NIOSH Pocket Guide")
-        self.assertEqual(result["backend"], "public_reference_paraphrase")
-        sent = responses.calls[0]["input"]
-        self.assertIn("Reference text (NIOSH Pocket Guide)", sent[1]["content"])
-        self.assertIn("untrusted data", sent[0]["content"])
-
-    def test_a_sentence_that_fails_a_rule_is_rejected_with_the_rule_named(self):
-        for text, rule in (
-            ("인화점이 12 °C 라서 조심하세요.", "answer_has_number_not_in_evidence"),
-            ("그 정도면 계속해도 돼요.", "answer_permits_continuing"),
-            ("공개 자료 · 일반 참고 — NIOSH: 인화점이 낮아요.", "answer_has_display_label"),
-        ):
-            with self.subTest(text=text):
-                explainer, _responses = _explainer(text)
-                result = asyncio.run(paraphrase_public_reference(
-                    explainer, "q", source_text=EVIDENCE, source_name="NIOSH", language="ko"))
-                self.assertEqual(result["status"], "response_rejected")
-                self.assertIn(rule, result["violations"])
-                self.assertNotIn("answer", result)
-
-    def test_an_unsupported_language_or_empty_text_is_an_invalid_request(self):
-        explainer, responses = _explainer("x")
-        self.assertEqual(asyncio.run(paraphrase_public_reference(
-            explainer, "q", source_text="", source_name="S", language="ko"))["status"], "invalid_request")
-        self.assertEqual(asyncio.run(paraphrase_public_reference(
-            explainer, "q", source_text="t", source_name="S", language="vi"))["status"], "invalid_request")
-        self.assertEqual(responses.calls, [])
-
-    def test_a_provider_failure_is_a_category_not_an_answer(self):
-        class Failing:
-            async def create(self, **kwargs):
-                raise TimeoutError("slow")
-
-        explainer = XaiSupplementalKnowledge(SimpleNamespace(responses=Failing()),
-                                             SupplementalKnowledgeSettings(True, "fake-model", 1.0))
-        result = asyncio.run(paraphrase_public_reference(
-            explainer, "q", source_text=EVIDENCE, source_name="S", language="en"))
-        self.assertNotEqual(result["status"], "success")
-        self.assertNotIn("answer", result)
-        self.assertEqual(result["exception_class"], "TimeoutError")
+class SpokenSentenceTests(unittest.TestCase):
+    def test_only_the_fixed_sentence_is_said_and_it_breaks_no_rule(self):
+        # Lane KNOW2 (person's decision 2026-10-26, 1) replaced the model-free
+        # reading of a piece's first sentence and the model's paraphrase
+        # (public_reference_fallback, paraphrase_public_reference, removed):
+        # "공개 자료에 관련 내용이 있어요" only, the content on the screen.
+        self.assertEqual(PUBLIC_SPOKEN["ko"], "공개 자료에 관련 내용이 있어요.")
+        for sentence in PUBLIC_SPOKEN.values():
+            with self.subTest(sentence=sentence):
+                self.assertEqual(public_reference_violations(sentence, evidence=EVIDENCE), ())
+                self.assertEqual(display_label_violations(sentence), ())
+        self.assertLess(len(PUBLIC_SPOKEN["en"]), PUBLIC_REFERENCE_QUOTE_CHARS)
 
 
 if __name__ == "__main__":

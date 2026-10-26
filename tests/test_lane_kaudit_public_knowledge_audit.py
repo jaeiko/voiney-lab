@@ -440,7 +440,7 @@ class HelpTurnTests(unittest.TestCase):
 
     def test_the_attached_public_piece_and_the_spoken_form_are_recorded(self) -> None:
         doc = FoundDocument(
-            id="niosh-0017", text="Acetonitrile · Safety\nAcetonitrile has a flash point of 42 °F.", score=0.9,
+            id="niosh-0017", text="Acetonitrile · Safety\nAcetonitrile forms bubbles when warmed.", score=0.9,
             metadata={"title": "Acetonitrile", "locator": "Safety", "url": "https://example.org/niosh-0017",
                       "license": "Public domain", "language": "en", "source_id": "niosh-npg",
                       "source_name": "NIOSH Pocket Guide to Chemical Hazards", "grade": "A"})
@@ -451,9 +451,13 @@ class HelpTurnTests(unittest.TestCase):
         self.assertTrue(row["searched"])
         self.assertTrue(row["public_in_reply"])
         self.assertEqual(row["pieces"][0]["title"], "Acetonitrile")
-        self.assertEqual(row["pieces"][0]["shares"].casefold(), "acetonitrile")
-        self.assertIn("NIOSH Pocket Guide to Chemical Hazards", row["spoken_public"])
-        self.assertEqual(row["spoken_kind"], "pointer")  # an English piece in a Korean turn is pointed to
+        # Lane KNOW2 (decision 2026-10-26, 1): attached for sharing a word of
+        # what went wrong and the reagent's name; only the fixed sentence said.
+        self.assertEqual(row["pieces"][0]["subject_shares"].casefold(), "acetonitrile")
+        self.assertEqual(row["pieces"][0]["problem_shares"], "foam")
+        self.assertEqual(row["spoken_public"], "공개 자료에 관련 내용이 있어요.")
+        self.assertTrue(row["public_said"])
+        self.assertFalse(row["piece_read_aloud"])
         self.assertEqual(row["public_rule_violations"], [])
         self.assertEqual(row["help_dropped"], [])
         self.assertEqual(len(public.calls), 1)

@@ -849,6 +849,8 @@ _HEDGED = re.compile(r"수\s*있(?:어요|습니다|어|다)|수도\s*있|지도
 #: The server's own numbers in the help's frame: a page, a step, a run's date.
 _HELP_FRAME_NUMBER = re.compile(
     r"\d+\s*쪽|p\.\s*\d+|page\s+\d+|\d+(?:\s*~\s*\d+)?\s*단계|steps?\s+\d+|\d+\s*월\s*\d+\s*일", re.I)
+#: A quoted line shorter than this is taken out of the help only as a whole word.
+_SHORT_QUOTED_LINE = 4
 #: At most this many characters of possible causes.
 POSSIBLE_CAUSES_MAX_CHARS = 200
 
@@ -884,7 +886,13 @@ def problem_help_violations(text: str, *, quoted: Iterable[str]) -> tuple[str, .
 
     rest = text
     for line in sorted({item.strip() for item in quoted if item and item.strip()}, key=len, reverse=True):
-        rest = rest.replace(line, " ")
+        if len(line) < _SHORT_QUOTED_LINE:
+            # A line of a letter or two ("p" of a wiki formula) is taken out
+            # only where it stands alone, never out of the frame's "p.3"
+            # (lane KAUDIT's H46, 2026-10-26).
+            rest = re.sub(rf"(?<![^\s“”\"'(]){re.escape(line)}(?![^\s“”\"')])", " ", rest)
+        else:
+            rest = rest.replace(line, " ")
     rest = _HELP_FRAME_NUMBER.sub(" ", rest)
     # The frame's own labels ("원문 · p.5 · 7단계") are the server's, not a
     # model imitating the screen.

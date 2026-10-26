@@ -67,7 +67,6 @@ from voiney_lab.answer_checks import (
     SAFETY_INSTRUCTION_TOPICS,
     possible_cause_violations,
     problem_help_violations,
-    public_reference_violations,
 )
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
@@ -122,7 +121,6 @@ from voiney_lab.experiment_reports import (
 from voiney_lab.external_references import (
     SupplementalKnowledgeSettings,
     XaiSupplementalKnowledge,
-    paraphrase_public_reference,
     plan_research_query,
     public_reference_part,
     supplemental_explanation_query,
@@ -158,7 +156,7 @@ from voiney_lab.public_knowledge import (
     KnowledgeUnavailable as PublicKnowledgeUnavailable,
     PublicKnowledgeConfigurationError,
     PublicKnowledgeSettings,
-    public_reference_label,
+    problem_query,
     start_public_knowledge,
 )
 from voiney_lab.protocol_link_import import (
@@ -10432,9 +10430,17 @@ def _warm_problem_knowledge(curated:CuratedProtocolSession)->None:
         log.info("problem knowledge index not built ahead category=%s",type(exc).__name__)
 
 
-def _problem_help_sources(session:ListenerSession,curated:CuratedProtocolSession)->list[Any]:
+def _problem_help_sources(
+    session:ListenerSession,curated:CuratedProtocolSession,marker:Mapping[str,Any]|None=None,
+)->list[Any]:
     """The protocol, the account's earlier runs (with a record) and the
-    public source when one is connected (lane KNOW); nothing else."""
+    public source when one is connected (lane KNOW); nothing else.
+
+    The public source is asked with the problem's query -- its words of what
+    went wrong and the names it is about, the person's and the current
+    step's key words -- not the sentence, and is left out when there is
+    nothing to look for (lane KNOW2, person's decision 2026-10-26, 1).
+    """
 
     sources:list[Any]=[curated.problem_knowledge()]
     store=session.experiment_report_store
@@ -10446,8 +10452,17 @@ def _problem_help_sources(session:ListenerSession,curated:CuratedProtocolSession
                 step_labels={step.step_id:step.source_label for step in curated.fixture.steps})
             session.problem_history=held
         sources.append(held)
-    if session.public_knowledge is not None:
-        sources.append(session.public_knowledge)
+    public=session.public_knowledge
+    if public is not None:
+        if marker is None or not hasattr(public,"for_problem"):
+            sources.append(public)
+        else:
+            index=marker.get("step_index")
+            step_text=(curated.fixture.steps[int(index)].instruction_source_text
+                       if index is not None else "")
+            query=problem_query(str(marker.get("words") or ""),step_text,public.glossary)
+            if query is not None:
+                sources.append(public.for_problem(query))
     return sources
 
 
@@ -10479,7 +10494,7 @@ async def _with_problem_help(
     """
 
     marker=dict(plan.problem_help)
-    sources=_problem_help_sources(session,curated)
+    sources=_problem_help_sources(session,curated,marker)
     history=next((item for item in sources if getattr(item,"tier","")=="history"),None)
     organization_id=account_id=None
     if history is not None:
@@ -10500,12 +10515,11 @@ async def _with_problem_help(
         compose_problem_help(
             replace(found,hits=tuple(hit for hit in found.hits if hit.tier!="public")),
             language=language,causes_follow=causes_follow),
-        public,causes_follow=causes_follow)
+        public)
     violations=problem_help_violations(
         f"{help_.shown}\n{help_.spoken}",quoted=help_.quoted_text.splitlines())
     if violations:
         log.warning("problem help dropped checks=%s","+".join(violations))
-        public=None
         help_=compose_problem_help((),language=language,causes_follow=causes_follow)
     if plan.action is CuratedProtocolAction.PROBLEM_HELP:
         display,speech=help_.shown,help_.spoken
@@ -10525,31 +10539,25 @@ async def _with_problem_help(
         "problem":str(marker.get("words") or ""),
         "step_text":step.instruction_source_text,
         "source_lines":tuple(hit.text for hit in found.tier("protocol"))[:3],
-        "public_lines":tuple(hit.text for hit in found.tier("public"))[:2],
+        "public_lines":tuple(hit.text for hit in found.tier("public") if hit.detail("relevant"))[:2],
         "sources_text":"\n".join((help_.quoted_text,step.instruction_source_text)),
         "protocol_text":curated._protocol_vocabulary().corpus,
         "closing":help_.closing,
-        # Lane KNOW, decision 6: the first public piece, said in ③ -- a checked
-        # paraphrase, or its model-free form when that fails or is late.
-        "public":None if public is None else {
-            "text":public.first_text,"source_name":public.first_source_name,
-            "language":public.first_language,"fixed":public.spoken,
-        },
     }
 
 
-def _with_public_reference(help_:Any,public:Any,*,causes_follow:bool)->Any:
+def _with_public_reference(help_:Any,public:Any)->Any:
     """The help with its public pieces in decision 6's form (lane KNOW).
 
     The composer (``knowledge.compose_problem_help``) gets the protocol and
     history hits only; the public pieces follow as
     ``external_references.public_reference_part`` writes them -- on the screen
     the mark "공개 자료 · 일반 참고 — <출처 이름>", the title and place, the
-    piece's own words, its address and licence; said, the mark and the
-    piece's first sentence or where to see it. With ③ to follow, the spoken
-    form waits for ③, where a checked paraphrase may take its place. Every
-    line that is the source's or names it is quoted, so the help's own-words
-    check judges only the fixed sentences.
+    piece's own words, its address and licence; said, only "공개 자료에 관련
+    내용이 있어요" (lane KNOW2, person's decision 2026-10-26, 1: no piece's
+    sentence is read and none is paraphrased). Every line that is the
+    source's or names it is quoted, so the help's own-words check judges only
+    the fixed sentences.
     """
 
     if public is None:
@@ -10558,7 +10566,7 @@ def _with_public_reference(help_:Any,public:Any,*,causes_follow:bool)->Any:
     return replace(
         help_,
         display=f"{help_.display}\n\n{public.shown}",
-        speech=help_.speech if causes_follow else f"{help_.speech} {public.spoken}",
+        speech=f"{help_.speech} {public.spoken}",
         sources=(*help_.sources,*public.sources),
         found=found,
         quoted_text="\n".join(item for item in (help_.quoted_text,*public.quoted) if item),
@@ -10608,9 +10616,6 @@ async def _queue_problem_causes(
     speak_by=float(causes.get("speak_by") or clock())
     explanation=""
     status="disabled"
-    public=causes.get("public") or None
-    public_words=str(public["fixed"]) if public else ""
-    public_status="none" if not public else "disabled"
     try:
         role=RoleModel.from_environment("supplemental")
         explainer=XaiSupplementalKnowledge(
@@ -10619,42 +10624,13 @@ async def _queue_problem_causes(
                     model=role.model or session.supplemental_knowledge_settings.model),
         )
         timeout=max(0.05,min(session.supplemental_knowledge_settings.timeout_seconds,speak_by-clock()))
-        jobs=[asyncio.wait_for(
+        result=await asyncio.wait_for(
             explainer.explain_possible_causes(
                 causes["problem"],step_text=causes["step_text"],
                 source_lines=tuple(causes.get("source_lines") or ()),
                 public_lines=tuple(causes.get("public_lines") or ()),language=language),
             timeout=timeout,
-        )]
-        if public:
-            # Lane KNOW, decision 6: the first public piece said short, checked
-            # by ``public_reference_violations``; the mark is the server's.
-            jobs.append(asyncio.wait_for(
-                paraphrase_public_reference(
-                    explainer,causes["problem"],source_text=str(public["text"]),
-                    source_name=str(public["source_name"]),language=language),
-                timeout=timeout,
-            ))
-        results=await asyncio.gather(*jobs,return_exceptions=True)
-        result=results[0]
-        if public:
-            paraphrase=results[1]
-            if isinstance(paraphrase,asyncio.CancelledError):
-                raise paraphrase
-            if isinstance(paraphrase,asyncio.TimeoutError):
-                public_status="late"
-            elif isinstance(paraphrase,BaseException):
-                public_status="provider_error"
-            else:
-                public_status=str(paraphrase.get("status") or "provider_error")
-                answer=str(paraphrase.get("answer") or "") if public_status=="success" else ""
-                if answer and public_reference_violations(answer,evidence=str(public["text"])):
-                    # The server's own gate on the model's sentence (rule 2).
-                    answer,public_status="","rejected"
-                if answer:
-                    public_words=f"{public_reference_label(str(public['source_name']))}: {answer}"
-        if isinstance(result,BaseException):
-            raise result
+        )
         status=str(result.get("status") or "provider_error")
         if status=="success":
             explanation=str(result.get("answer") or "")
@@ -10676,9 +10652,6 @@ async def _queue_problem_causes(
         return
     lead=("AI 일반 지식으로는, " if language=="ko" else "From general AI knowledge, ")
     words=f"{lead}{explanation} {causes['closing']}" if explanation else str(causes["closing"])
-    if public_words:
-        words=f"{public_words} {words}"
-        log.info("public reference turn_id=%s status=%s",turn_id,public_status)
     if explanation:
         await sender.text(
             "research.state",turn_id=turn_id,status="running",phase="supplemental_model",

@@ -37,7 +37,8 @@ import re
 import time
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -98,9 +99,23 @@ DEFAULT_INDEX_NAME = "voiney-public-knowledge"
 #: recall@5 0.638 / MRR 0.579 against 0.546 / 0.519 at 0.7 and 0.500 / 0.447
 #: at 1.0 (lane KNOW report, section 5).
 DEFAULT_ALPHA = 0.5
-#: How many results are read from the index for ``limit`` hits: the grade
-#: ordering needs a few more than are kept.
+#: How many results are read from the index for ``limit`` hits: the ordering
+#: and the relevance floor need a few more than are kept.
 CANDIDATES_PER_HIT = 3
+#: The grade goes first only where the index's scores are close (person's
+#: decision 2026-10-26, 1): a hit is ordered by its score plus this much for
+#: its grade, so an A piece passes a C piece scored up to 0.03 higher and no
+#: more. Lane KAUDIT found 161 of 1,795 top-five hits scored 0.0 placed first
+#: by grade alone.
+GRADE_BONUS: Mapping[str, float] = {"A": 0.03, "B": 0.015, "C": 0.0}
+#: The relevance floor's score part (decision 2026-10-26, 1): a piece the
+#: index scores below this is not attached to a problem's help, whatever words
+#: it shares. Moss's score comes from vector similarity alone, 0 to 1 (moss
+#: 1.15.1 ``QueryResultDocumentInfo.score``). On lane KAUDIT's Moss run
+#: (2026-10-26, default model) a tenth of the gold pieces in the top five
+#: scored under 0.30 and so did a quarter of the others, the 161 zeros among
+#: them.
+SCORE_FLOOR = 0.30
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
 
@@ -118,6 +133,15 @@ def grade_rank(grade: str) -> int:
         return GRADES.index(grade)
     except ValueError:
         return len(GRADES)
+
+
+def ordered_hits(hits: Iterable[KnowledgeHit]) -> list[KnowledgeHit]:
+    """Best first: the index's score, the grade only where scores are close.
+
+    Ties keep the index's own (hybrid) order.
+    """
+
+    return sorted(hits, key=lambda hit: -(hit.score + GRADE_BONUS.get(hit.detail("grade"), 0.0)))
 
 
 # --- Settings -----------------------------------------------------------------------
@@ -332,6 +356,47 @@ class Glossary:
                 unique.append(term.strip())
         return tuple(unique)
 
+    @cached_property
+    def _english_index(self) -> Mapping[str, tuple[str, ...]]:
+        """English names (NFKC, casefolded) by their first word, longest first."""
+
+        index: dict[str, set[str]] = {}
+        for names in self.terms.values():
+            for name in names:
+                key = " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+                if len(key) >= 3:
+                    index.setdefault(key.split()[0], set()).add(key)
+        return {word: tuple(sorted(found, key=len, reverse=True)) for word, found in index.items()}
+
+    @cached_property
+    def _korean_by_english(self) -> Mapping[str, tuple[str, ...]]:
+        """Korean names of an English name (casefolded): the terms read backwards and the aliases."""
+
+        found: dict[str, list[str]] = {}
+        for korean, names in self.terms.items():
+            for name in names:
+                found.setdefault(name.casefold(), []).append(korean)
+        for name, koreans in self.aliases.items():
+            found.setdefault(name.casefold(), []).extend(koreans)
+        return {name: tuple(dict.fromkeys(items)) for name, items in found.items()}
+
+    def english_names_in(self, folded: str) -> list[tuple[str, int]]:
+        """The glossary's English names a casefolded text holds as words, with where."""
+
+        found: list[tuple[str, int]] = []
+        for match in re.finditer(r"[a-z0-9][a-z0-9\-]*", folded):
+            for name in self._english_index.get(match.group(0), ()):
+                end = match.start() + len(name)
+                if folded.startswith(name, match.start()) and not folded[end:end + 1].isalnum():
+                    found.append((name, match.start()))
+                    break
+        return found
+
+    def korean_names(self, english: str) -> tuple[str, ...]:
+        """The Korean names of an English name, or ()."""
+
+        return self._korean_by_english.get(english.casefold().strip(), ())
+
     def expand(self, query: str) -> str:
         """``query`` followed by the English names of its Korean words, when any."""
 
@@ -349,6 +414,212 @@ class Glossary:
             if len(added) >= _MAX_EXPANSION_TERMS:
                 break
         return f"{query} {' '.join(added)}" if added else query
+
+
+# --- A problem's query and the relevance floor (person's decision 2026-10-26, 1) ---------
+#
+# Lane KAUDIT read the public pieces attached to a problem's help: most shared
+# one general word with the problem ("cell", "Gel", "Ab") and none of what went
+# wrong. So a problem's public query is the problem's own words and the names
+# it is about -- what the person named and the current step's key words --
+# never the whole sentence, and a piece is attached only when it shares both a
+# word of what went wrong and a name, other words, and the index scored it at
+# least ``SCORE_FLOOR``. Under that floor no public layer is attached at all:
+# nothing is better than a piece off the point. The vocabulary is general lab
+# language (lane HELP's concepts, the state machine's lab lexicon, the
+# glossary), never one protocol's words.
+
+#: Words that name nothing a piece could be about: general laboratory nouns
+#: and verbs a piece about anything carries. A piece sharing only these is not
+#: about the problem.
+GENERAL_WORDS = frozenset({
+    "add", "added", "addition", "amount", "buffer", "buffers", "cell", "cells", "dish", "gel", "gels",
+    "incubate", "incubation", "lab", "laboratory", "liquid", "medium", "media", "min", "minute", "minutes",
+    "mix", "mixture", "piece", "pieces", "plate", "plates", "protein", "proteins", "reagent", "reagents",
+    "room", "sample", "samples", "solution", "solutions", "step", "temperature", "time", "tube", "tubes",
+    "volume", "wash", "washes", "washing", "water", "well", "wells",
+    "젤", "겔", "세포", "단백질", "샘플", "시료", "용액", "버퍼", "튜브", "물", "온도", "시간", "단계",
+})
+#: Lane HELP's concepts that say what a sentence is about, a colour, a
+#: quantity or a time rather than what went wrong: alone they make no piece
+#: about the problem ("temperature" is in every compound record).
+VAGUE_CONCEPTS = frozenset({
+    "still", "color", "liquid", "gel", "band", "cell", "protein", "sample", "medium", "time", "temperature",
+    "volume", "change", "speed", "remove", "measure", "mix", "wall", "ph",
+    "yellow", "brown", "red", "purple", "white", "transparent",
+})
+#: The words a concept is searched by (lane HELP's table holds stems, not words).
+CONCEPT_QUERY_WORDS: Mapping[str, str] = {
+    "stain": "staining destaining", "dehydrate": "dehydration drying", "rehydrate": "swelling rehydration",
+    "precipitate": "precipitate precipitation", "clump": "clumping aggregation", "residue": "residue",
+    "cloudy": "cloudy turbid", "foam": "foam bubbles", "dissolve": "dissolve solubility",
+    "contamination": "contamination", "detach": "detach detachment", "attach": "attachment adhesion",
+    "efficiency": "low yield efficiency", "amplification": "amplification", "light": "light exposure",
+    "signal": "weak signal background", "leak": "leak spill", "loose": "seal leak", "filter": "filtration",
+    "distribution": "uneven distribution", "digest": "digestion", "migrate": "migration",
+}
+#: At most this many names go into a problem's query (the person's first, then the step's).
+_MAX_QUERY_NAMES = 6
+#: A word of letters that names a reagent, a cell line or a method by its form:
+#: two capitals or more ("DTT", "TrypLE", "SDS-PAGE"), or letters and digits
+#: together ("HEK293T", "LiPF6").
+_NAME_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*")
+_UNIT_TOKENS = frozenset({"ml", "µl", "ul", "nl", "mm", "µm", "um", "nm", "mg", "µg", "ug", "ng", "rpm", "rcf",
+                          "min", "sec", "hr", "h", "s", "kda", "bp", "kb", "od", "ph"})
+
+
+def _name_like(token: str) -> bool:
+    if token.casefold() in _UNIT_TOKENS or len(token) < 2:
+        return False
+    capitals = sum(1 for letter in token if letter.isupper())
+    has_digit = any(letter.isdigit() for letter in token)
+    return capitals >= 2 or (has_digit and capitals >= 1 and len(token) >= 3)
+
+
+def _general(term: str) -> bool:
+    key = unicodedata.normalize("NFKC", term).casefold().strip()
+    return key in GENERAL_WORDS or all(word in GENERAL_WORDS for word in key.split())
+
+
+@lru_cache(maxsize=1)
+def _lexicon() -> tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]:
+    """The state machine's lab lexicon: (name, English surfaces, Korean forms)."""
+
+    from voiney_lab.curated_protocol import _LAB_LEXICON  # noqa: PLC0415 - the language's own table
+
+    return tuple((key.replace("_", " "), english, korean) for key, english, korean, _stem in _LAB_LEXICON)
+
+
+def _english_pattern(term: str) -> re.Pattern[str]:
+    """A name as a word, with its plural or ending ("centrifug" → "centrifuged")."""
+
+    words = term.casefold().split()
+    tail = words[-1]
+    stem = tail[:-1] if len(tail) > 5 and tail.endswith("e") else tail
+    body = r"\s+".join([*(re.escape(word) for word in words[:-1]), re.escape(stem) + r"[a-z]{0,5}"])
+    return re.compile(rf"(?<![a-z0-9]){body}(?![a-z0-9])")
+
+
+def _has_term(haystack: str, term: str) -> bool:
+    """Whether ``haystack`` (NFKC, casefolded) holds ``term``: a Korean name of
+    two letters or more anywhere (particles attach to it), a Latin name as a word."""
+
+    needle = unicodedata.normalize("NFKC", term).casefold().strip()
+    if not needle:
+        return False
+    if _HANGUL.search(needle):
+        return len(needle) >= 2 and needle in haystack
+    return bool(_english_pattern(needle).search(haystack))
+
+
+@dataclass(frozen=True)
+class ProblemQuery:
+    """What the public tier is asked about a problem at the bench.
+
+    ``problem`` are lane HELP's concepts of what went wrong (``foam``,
+    ``detach``); ``subjects`` the names it is about, the person's first and
+    then the current step's key words; ``text`` what the index is queried
+    with -- those words, never the whole sentence.
+    """
+
+    text: str
+    problem: tuple[str, ...]
+    subjects: tuple[str, ...]
+
+
+def _subjects_said(words: str, glossary: "Glossary") -> list[str]:
+    """The names in what the person said: glossary words (and their English),
+    the lab lexicon's Korean forms, and their own words in Latin letters."""
+
+    found: list[str] = []
+    for korean, english in glossary.matches(words).items():
+        found += [korean if " " in korean else _korean_stems(korean)[-1], *english[:2]]
+    folded = unicodedata.normalize("NFKC", words).casefold()
+    for name, _english, korean in _lexicon():
+        if any(form in folded for form in korean if len(form) >= 2):
+            found.append(name)
+    found += [word for word in _LATIN_WORD.findall(words)
+              if word.casefold() not in _QUESTION_WORDS and (len(word) >= 3 or _name_like(word))]
+    return found
+
+
+def _subjects_of_step(step_text: str, glossary: "Glossary") -> list[str]:
+    """The current step's key words: what it names -- names by their form, the
+    lab lexicon's English, the glossary's English names, a Korean step's
+    glossary words -- in the order the step says them."""
+
+    folded = unicodedata.normalize("NFKC", step_text).casefold()
+    placed: list[tuple[int, str]] = []
+    for match in _NAME_TOKEN.finditer(step_text):
+        if _name_like(match.group(0)):
+            placed.append((match.start(), match.group(0)))
+    for name, english, _korean in _lexicon():
+        at = min((found.start() for found in (_english_pattern(surface).search(folded) for surface in english)
+                  if found is not None), default=-1)
+        if at >= 0:
+            placed.append((at, name))
+    for name, at in glossary.english_names_in(folded):
+        placed.append((at, name))
+    for korean, english in glossary.matches(step_text).items():
+        placed.append((max(0, folded.find(korean.split()[0].casefold())), english[0]))
+    return [name for _at, name in sorted(placed, key=lambda item: item[0])]
+
+
+def problem_query(words: str, step_text: str, glossary: "Glossary") -> ProblemQuery | None:
+    """The public query of a problem said at a step, or None when there is
+    nothing to look for: no word of what went wrong, or nothing it is about."""
+
+    from voiney_lab.knowledge import concepts_in  # noqa: PLC0415 - lane HELP's concept table
+
+    problem = tuple(concept for concept in concepts_in(words)
+                    if concept not in VAGUE_CONCEPTS and concept in CONCEPT_QUERY_WORDS)
+    if not problem:
+        return None
+    # A name the person said that is itself a word of what went wrong ("오염"
+    # → contamination) is the problem, not what it is about.
+    said = [name for name in _subjects_said(words, glossary) if not set(concepts_in(name)) & set(problem)]
+    subjects: list[str] = []
+    seen: set[str] = set()
+    for name in (*said, *_subjects_of_step(step_text, glossary)):
+        key = unicodedata.normalize("NFKC", name).casefold().strip()
+        if (not key or key in seen or _general(name) or key in _UNIT_TOKENS
+                or (not _HANGUL.search(key) and len(key) < 3 and not _name_like(name))):
+            continue
+        seen.add(key)
+        subjects.append(name.strip())
+        for korean in glossary.korean_names(name):
+            if korean.casefold() not in seen and not _general(korean):
+                seen.add(korean.casefold())
+                subjects.append(korean)
+    if not subjects:
+        return None
+    named = subjects[:_MAX_QUERY_NAMES]
+    text = " ".join([*named, *(CONCEPT_QUERY_WORDS[concept] for concept in problem)])
+    return ProblemQuery(text=text, problem=problem, subjects=tuple(subjects))
+
+
+def problem_relevance(text: str, score: float, query: ProblemQuery) -> tuple[str, str, bool]:
+    """(the problem's concept the piece has, the name it shares, attached?).
+
+    The concept must be in words other than the names: "trypsin" is a word of
+    the ``detach`` concept and a reagent, and a piece that only names it says
+    nothing about cells not detaching.
+    """
+
+    from voiney_lab.knowledge import concepts_in  # noqa: PLC0415
+
+    haystack = unicodedata.normalize("NFKC", text).casefold()
+    subject = next((name for name in query.subjects if _has_term(haystack, name)), "")
+    masked = haystack
+    for name in query.subjects:
+        needle = unicodedata.normalize("NFKC", name).casefold().strip()
+        if _HANGUL.search(needle):
+            masked = masked.replace(needle, " ")
+        elif needle:
+            masked = _english_pattern(needle).sub(" ", masked)
+    concepts = set(concepts_in(masked))
+    problem = next((concept for concept in query.problem if concept in concepts), "")
+    return problem, subject, bool(problem and subject and score >= SCORE_FLOOR)
 
 
 def default_glossary_path() -> Path:
@@ -539,9 +810,42 @@ class PublicKnowledgeSource:
             top_k=max(limit * CANDIDATES_PER_HIT, limit), alpha=self.settings.alpha,
         )
         terms = self.glossary.query_terms(text)
-        hits = [self._hit_from(doc, terms) for doc in found]
-        ordered = sorted(hits, key=lambda hit: grade_rank(hit.detail("grade")))  # stable
-        return ordered[:limit]
+        return ordered_hits(self._hit_from(doc, terms) for doc in found)[:limit]
+
+    def for_problem(self, query: ProblemQuery) -> "ProblemSearch":
+        """This tier asked about one problem (``query``) in place of the sentence."""
+
+        return ProblemSearch(self, query)
+
+    async def search_problem(self, query: ProblemQuery, *, limit: int) -> list[KnowledgeHit]:
+        """The pieces for a problem, best first, each marked by the relevance floor.
+
+        ``details`` gain ``problem_shares`` (the concept of what went wrong the
+        piece has), ``subject_shares`` (the name it shares) and ``relevant``
+        ("yes" when both and the score clear the floor; "" else). Only
+        relevant pieces are attached to the help
+        (``external_references.public_reference_part``).
+        """
+
+        if not self.settings.enabled:
+            raise KnowledgeUnavailable(ENABLED_SETTING, f"{ENABLED_SETTING} is false")
+        if not self._loaded:
+            raise KnowledgeUnavailable(INDEX_SETTING, "public knowledge index is not loaded")
+        if limit <= 0 or not query.text.strip():
+            return []
+        found = await self._client.query(
+            self.settings.index_name, query.text,
+            top_k=max(limit * CANDIDATES_PER_HIT, limit), alpha=self.settings.alpha,
+        )
+        hits: list[KnowledgeHit] = []
+        for doc in found:
+            hit = self._hit_from(doc)
+            problem, subject, relevant = problem_relevance(
+                f"{hit.title}\n{hit.locator}\n{hit.text}", hit.score, query)
+            hits.append(replace(hit, details=(
+                *hit.details, ("problem_shares", problem), ("subject_shares", subject),
+                ("relevant", "yes" if relevant else ""))))
+        return ordered_hits(hits)[:limit]
 
     @staticmethod
     def _hit_from(doc: FoundDocument, terms: Sequence[str] = ()) -> KnowledgeHit:
@@ -576,6 +880,23 @@ class PublicKnowledgeSource:
             score=doc.score,
             details=details,
         )
+
+
+class ProblemSearch:
+    """The public tier as a knowledge source for one problem (``search_tiers``).
+
+    The help searches every tier with the person's sentence; this source asks
+    the index with the problem's query instead (decision 2026-10-26, 1).
+    """
+
+    tier = PUBLIC_TIER
+
+    def __init__(self, source: PublicKnowledgeSource, query: ProblemQuery) -> None:
+        self.source = source
+        self.query = query
+
+    async def search(self, query: str, *, limit: int, context: KnowledgeContext) -> list[KnowledgeHit]:
+        return await self.source.search_problem(self.query, limit=limit)
 
 
 def _body_of(index_text: str) -> str:

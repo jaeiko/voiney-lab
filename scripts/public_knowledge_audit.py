@@ -35,9 +35,11 @@ calls no model.
 - ``help`` runs lane HELP's evaluation set
   (``data/fixtures/evaluation/problem_help_eval.json``) through the server's
   turn (``server.run_turn``) with the public tier connected: STT, TTS and the
-  supplemental model (possible causes, paraphrase) are fakes. It records
-  which public pieces were attached to each help and whether any spoken
-  public sentence breaks ``answer_checks.public_reference_violations``.
+  supplemental model (possible causes) are fakes. It records the problem's
+  public query (lane KNOW2), which public pieces cleared the relevance floor
+  and were attached to each help, whether the one spoken public sentence
+  breaks ``answer_checks.public_reference_violations`` and whether any
+  sentence of an attached piece was said aloud.
   The starter-pack protocols come from a protocol catalog folder
   (``--protocol-data-dir``, use a copy: opening a catalog may write to it);
   the in-gel rows need the licensed in-gel PDF (condition A).
@@ -97,9 +99,11 @@ from voiney_lab.public_knowledge import (
     INDEX_SETTING,
     MOSS_PROJECT_ID_SETTING,
     MOSS_PROJECT_KEY_SETTING,
+    PUBLIC_TIER,
     FoundDocument,
     Glossary,
     MossSdkClient,
+    ProblemQuery,
     PublicKnowledgeSettings,
     PublicKnowledgeSource,
     default_glossary_path,
@@ -894,11 +898,16 @@ def summary_markdown(result: Mapping[str, Any]) -> str:
 
 
 class RecordingSource:
-    """The public tier with what each search returned kept for the report."""
+    """The public tier with what each search returned kept for the report.
+
+    The server asks the tier about a problem through ``for_problem`` (lane
+    KNOW2); that search is recorded too, with the problem's query.
+    """
 
     def __init__(self, source: PublicKnowledgeSource) -> None:
         self.tier = source.tier
         self._source = source
+        self.glossary = source.glossary
         self.calls: list[dict[str, Any]] = []
 
     async def search(self, query: str, *, limit: int, context: KnowledgeContext) -> list[KnowledgeHit]:
@@ -906,6 +915,25 @@ class RecordingSource:
         hits = await self._source.search(query, limit=limit, context=context)
         self.calls.append({"query": query, "limit": limit, "ms": round((time.perf_counter() - started) * 1000, 1),
                            "hits": hits})
+        return hits
+
+    def for_problem(self, query: ProblemQuery) -> "_RecordingProblem":
+        return _RecordingProblem(self, query)
+
+
+class _RecordingProblem:
+    tier = PUBLIC_TIER
+
+    def __init__(self, recording: RecordingSource, query: ProblemQuery) -> None:
+        self._recording = recording
+        self._query = query
+
+    async def search(self, query: str, *, limit: int, context: KnowledgeContext) -> list[KnowledgeHit]:
+        started = time.perf_counter()
+        hits = await self._recording._source.search_problem(self._query, limit=limit)
+        self._recording.calls.append({
+            "query": self._query.text, "problem": list(self._query.problem), "subjects": list(self._query.subjects),
+            "limit": limit, "ms": round((time.perf_counter() - started) * 1000, 1), "hits": hits})
         return hits
 
 
@@ -971,7 +999,11 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
     from voiney_lab.answer_checks import public_reference_violations  # noqa: PLC0415
     from voiney_lab.curated_protocol import CuratedProtocolSession  # noqa: PLC0415
     from voiney_lab.experiment_reports import ExperimentReportStore  # noqa: PLC0415
-    from voiney_lab.external_references import SupplementalKnowledgeSettings, public_reference_part  # noqa: PLC0415
+    from voiney_lab.external_references import (  # noqa: PLC0415
+        PUBLIC_SPOKEN,
+        SupplementalKnowledgeSettings,
+        public_reference_part,
+    )
     from voiney_lab.language import Transcription  # noqa: PLC0415
     from voiney_lab.public_knowledge import PUBLIC_LABEL  # noqa: PLC0415
     from voiney_lab.tools import ToolContext  # noqa: PLC0415
@@ -1020,10 +1052,6 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
             async def explain_possible_causes(self, problem: str, **kwargs: Any) -> dict[str, Any]:
                 return {"status": "success", "answer": FAKE_CAUSES, "backend": "supplemental_possible_causes"}
 
-        async def paraphrase(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            # The model's sentence is not measured here: the server's own form is said.
-            return {"status": "provider_error"}
-
         def synthesize(text: str, *args: Any, **kwargs: Any) -> bytes:
             spoken.append(text)
             return b"\0\0" * 1600
@@ -1042,7 +1070,6 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
             with patch("voiney_lab.server.transcribe", return_value=Transcription(str(case["utterance"]), language)), \
                     patch("voiney_lab.server.synthesize", side_effect=synthesize), \
                     patch("voiney_lab.server.XaiSupplementalKnowledge", Explainer), \
-                    patch("voiney_lab.server.paraphrase_public_reference", side_effect=paraphrase), \
                     patch("voiney_lab.server._role_client", return_value=SimpleNamespace()), \
                     patch.dict("os.environ", {"VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
                                               "VOINEY_LAB_SUPPLEMENTAL_MODEL": "offline-supplement"}):
@@ -1054,11 +1081,14 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
         calls = public.calls[calls_before:]
         hits = list(calls[-1]["hits"]) if calls else []
         part = public_reference_part(hits, language=language)
-        shown = [hit for hit in hits if hit.detail("shares")][:2]
+        shown = [hit for hit in hits if hit.detail("relevant")][:2]
         said = " ".join(spoken)
-        sentence = _spoken_fact(part, language) if part else ""
-        # The server reads a piece's sentence only when it passes the rule; checked again here.
-        violations = list(public_reference_violations(sentence, evidence=part.first_text)) if sentence else []
+        # Lane KNOW2: only PUBLIC_SPOKEN may be said of public material; it is
+        # checked by decision 6's rule, and no sentence of an attached piece may be said.
+        public_said = PUBLIC_SPOKEN.get(language, PUBLIC_SPOKEN["ko"])
+        evidence = "\n".join(hit.text for hit in shown)
+        violations = list(public_reference_violations(public_said, evidence=evidence)) if part else []
+        read_aloud = any(sentence in said for hit in shown for sentence in _sentences(hit.text) if len(sentence) >= 15)
         return {
             "id": case["id"], "set": case.get("set", ""), "protocol": case["protocol"], "step": step,
             "utterance": case["utterance"], "expect_help": bool(case["expect_help"]),
@@ -1066,31 +1096,29 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
                                                           "To change a condition, check with the person in charge first.")),
             "searched": bool(calls), "search_ms": calls[-1]["ms"] if calls else None,
             "public_found": len(hits), "public_shown": len(shown) if PUBLIC_LABEL in reply else 0,
-            "public_in_reply": PUBLIC_LABEL in reply, "public_said": PUBLIC_LABEL in said,
-            "pieces": [{"source_id": hit.detail("source_id"), "grade": hit.detail("grade"), "title": hit.title,
-                        "locator": hit.locator, "shares": hit.detail("shares"), "text": hit.text[:240]} for hit in shown],
+            "public_in_reply": PUBLIC_LABEL in reply, "public_said": public_said in said,
+            "query": calls[-1]["query"] if calls else "",
+            "problem": calls[-1].get("problem", []) if calls else [],
+            "subjects": calls[-1].get("subjects", []) if calls else [],
+            "pieces": [{"id": hit.detail("doc_id"), "source_id": hit.detail("source_id"), "grade": hit.detail("grade"),
+                        "title": hit.title, "locator": hit.locator, "score": _score(hit),
+                        "problem_shares": hit.detail("problem_shares"), "subject_shares": hit.detail("subject_shares"),
+                        "text": hit.text[:240]} for hit in shown],
             "hits": [{"rank": index, "id": hit.detail("doc_id"), "score": _score(hit), "source_id": hit.detail("source_id"),
-                      "grade": hit.detail("grade"), "title": hit.title, "shares": hit.detail("shares")}
+                      "grade": hit.detail("grade"), "title": hit.title, "problem_shares": hit.detail("problem_shares"),
+                      "subject_shares": hit.detail("subject_shares"), "relevant": hit.detail("relevant")}
                      for index, hit in enumerate(hits, 1)],
             "spoken_public": part.spoken if part else "",
-            "spoken_kind": ("fact" if sentence else "pointer") if part else "",
+            "piece_read_aloud": read_aloud,
             "public_rule_violations": violations,
             "help_dropped": dropped,
         }
 
 
-def _spoken_fact(part: Any, language: str) -> str:
-    """The piece's sentence in the spoken public form ("<표시>: <문장>"), or "" when it points to the screen."""
+def _sentences(text: str) -> list[str]:
+    """A piece's sentences, whitespace collapsed (to find one said aloud)."""
 
-    from voiney_lab.external_references import PUBLIC_WIKI_ONLY  # noqa: PLC0415
-    from voiney_lab.public_knowledge import public_reference_label  # noqa: PLC0415
-
-    head = f"{public_reference_label(part.first_source_name)}: "
-    if not part.spoken.startswith(head):
-        return ""
-    sentence = part.spoken[len(head):]
-    note = PUBLIC_WIKI_ONLY.get(language if language in PUBLIC_WIKI_ONLY else "ko", "")
-    return sentence[: -len(note)].strip() if note and sentence.endswith(note) else sentence.strip()
+    return [part.strip() for part in re.split(r"(?<=[.!?。])\s+|\n+", " ".join(text.split())) if part.strip()]
 
 
 async def help_run(
@@ -1134,8 +1162,8 @@ async def help_run(
         "public_attached": sum(1 for row in helped if row["public_in_reply"]),
         "public_attached_share": round(sum(1 for row in helped if row["public_in_reply"]) / len(helped), 3) if helped else None,
         "not_help_with_public": sum(1 for row in rows if not row["expect_help"] and row["public_in_reply"]),
-        "spoken_fact": sum(1 for row in helped if row["public_in_reply"] and row["spoken_kind"] == "fact"),
-        "spoken_pointer": sum(1 for row in helped if row["public_in_reply"] and row["spoken_kind"] == "pointer"),
+        "public_said": sum(1 for row in helped if row["public_said"]),
+        "piece_read_aloud": sum(1 for row in rows if row["piece_read_aloud"]),
         "public_rule_violations": sum(1 for row in rows if row["public_rule_violations"]),
         "help_dropped": sum(1 for row in rows if row["help_dropped"]),
         "search_ms_p50": round(statistics.median(latencies), 1) if latencies else None,
@@ -1148,13 +1176,13 @@ def help_markdown(result: Mapping[str, Any], judgements: Mapping[str, Mapping[st
     """The table a person reads: each help row, the public pieces attached, and a judgement column."""
 
     judgements = judgements or {}
-    lines = ["| id | 프로토콜 | 단계 | 말 | 붙은 공개 조각 (출처 · 제목 · 겹친 낱말) | 판단 | 근거 |",
+    lines = ["| id | 프로토콜 | 단계 | 말 | 붙은 공개 조각 (출처 · 제목 · 겹친 문제 낱말 + 이름) | 판단 | 근거 |",
              "|---|---|---|---|---|---|---|"]
     for row in result["rows"]:
         if not row["expect_help"]:
             continue
-        pieces = "<br>".join(f"{p['source_id']}({p['grade']}) · {p['title']} · “{p['shares']}”" for p in row["pieces"]) \
-            if row["public_in_reply"] else "—"
+        pieces = "<br>".join(f"{p['source_id']}({p['grade']}) · {p['title']} · “{p['problem_shares']}” + “{p['subject_shares']}”"
+                             for p in row["pieces"]) if row["public_in_reply"] else "—"
         judged = judgements.get(row["id"], {})
         lines.append(f"| {row['id']} | {row['protocol']} | {row['step']} | {row['utterance']} | {pieces} | "
                      f"{judged.get('verdict', '')} | {judged.get('reason', '')} |")
