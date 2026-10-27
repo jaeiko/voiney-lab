@@ -291,7 +291,6 @@ def test_english_copy_finds_short_instructions_but_allows_term_names():
     assert not english_copy('HPLC water를 사용해요.','Use HPLC water.')
 
 
-@pytest.mark.xfail(reason='Existing emergency gate misses eye chemical splash; source server unchanged in SIM; score retains forbidden anomaly mutation',strict=False)
 def test_existing_eye_splash_emergency_must_never_record_anomaly():
     p=load_corpus()[0]
     c=next(c for c in generate_cases(p) if c.family=='emergency' and '눈' in c.text)
