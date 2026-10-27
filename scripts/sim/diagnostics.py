@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import io
 import sys
 from contextlib import ExitStack, redirect_stderr
@@ -10,7 +11,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT)); sys.path.insert(0,str(ROOT/'src'))
 from scripts import stt_compare
-from scripts.sim.live import Budget
+from scripts.sim.live import Budget, failure_settings
 from scripts.sim.run import output_dir
 
 
@@ -39,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if a.output.exists():
             raise ValueError('output already exists')
+        from voiney_lab import voice_providers as vp
+        for name in providers:
+            vp.SttProviderSettings.from_environment({**os.environ,vp.STT_PROVIDER_ENV:name,vp.STT_MODEL_ENV:''})
+            if name!='google_cloud_v2':
+                vp._key(vp.GOOGLE_KEY_ENV if name=='google_cloud' else vp.ELEVENLABS_KEY_ENV)
         import fcntl
         output_dir(a.output.parent)
         with a.output.with_suffix('.lock').open('w') as lock, ExitStack() as stack:
@@ -54,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({'result_written':True,'http_attempts':budget.calls,'budget_stopped':budget.stopped}))
             return 3 if budget.stopped else 0
     except Exception as exc:
-        print(f'diagnostics: {type(exc).__name__}',file=sys.stderr);return 2
+        print(json.dumps({'error':type(exc).__name__,'settings':failure_settings(exc)}),file=sys.stderr);return 2
 
 if __name__=='__main__':
     raise SystemExit(main())

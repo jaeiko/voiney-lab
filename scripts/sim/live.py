@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -27,6 +28,12 @@ from scripts.sim.run import output_dir, save_report
 from scripts.sim.runner import run_case
 from voiney_lab.audio import pcm_to_wav, samples_to_pcm16
 from voiney_lab import voice_providers as vp
+
+
+def failure_settings(exc: Exception) -> list[str]:
+    """Only canonical setting names may leave an exception; no body/URL/value."""
+    from voiney_lab.setting_names import BY_NAME
+    return sorted(set(re.findall(r'\b[A-Z][A-Z0-9_]+\b',str(exc))) & set(BY_NAME))
 
 
 class BudgetExceeded(RuntimeError):
@@ -230,10 +237,13 @@ def main(argv: list[str] | None = None) -> int:
             speech=CachedSpeech(cache)
             rows=[]
             failure=None
+            missing_settings=[]
             try:
                 asyncio.run(evaluate(args,cases,budget,speech,rows))
             except Exception as exc:
                 failure=type(exc).__name__
+                missing_settings=failure_settings(exc)
+                print(json.dumps({"error":failure,"settings":missing_settings}),file=sys.stderr)
             report={'schema':1,'mode':'live','stt_measured':True,'acoustics_measured':True,
                     'latency_measured':'server_endpoint_to_bytes_not_device_playback_cache_included',
                     'utc':datetime.now(timezone.utc).isoformat(),'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
@@ -241,14 +251,14 @@ def main(argv: list[str] | None = None) -> int:
                     'router':'configured' if args.configured_models else 'off',
                     'provider':args.stt_provider,'model':args.stt_model or vp.DEFAULT_STT_MODELS[args.stt_provider],
                     'provider_requests_including_auth_and_retries':budget.calls,'reserved_usd':round(budget.usd,6),
-                    'run_failure_code':failure,'budget_stopped':budget.stopped,'planned_cases':n,'completed_cases':len(rows),
+                    'run_failure_code':failure,'run_failure_settings':missing_settings,'budget_stopped':budget.stopped,'planned_cases':n,'completed_cases':len(rows),
                     'cache_hits':speech.hits,'cache_misses':speech.misses,'estimate':estimate,
                     **aggregate(rows),'rows':rows}
             save_report(args.output,report)
             return 3 if budget.stopped else 2 if failure else 0
     except Exception as exc:
         # Provider exception messages can contain credentials, URLs or transcripts.
-        print(f'sim_live: {type(exc).__name__}',file=sys.stderr)
+        print(json.dumps({'error':type(exc).__name__,'settings':failure_settings(exc)}),file=sys.stderr)
         return 2
 
 

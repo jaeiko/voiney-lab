@@ -307,3 +307,20 @@ def test_corrupt_budget_ledger_fails_closed(tmp_path,amount):
     ledger.write_text(json.dumps({'transport':'requests','reserved_usd':amount,'utc':'2026-10-27T00:00:00+00:00'})+'\n')
     with pytest.raises(ValueError):
         Budget(10,5,.1,ledger)
+
+
+def test_live_configuration_failure_names_setting_without_exposing_message(tmp_path,monkeypatch,capsys):
+    from scripts.sim import live
+    from voiney_lab.configuration import ConfigurationError
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    async def failed(*args,**kwargs):
+        raise ConfigurationError('VOINEY_LAB_STT_PROVIDER unset; do-not-export-provider-message')
+    monkeypatch.setattr(live,'evaluate',failed)
+    out=tmp_path/'reports/sim/failed.json'
+    assert live.main(['--execute','--limit','1','--output',str(out)])==2
+    report=json.loads(out.read_text())
+    assert report['run_failure_settings']==['VOINEY_LAB_STT_PROVIDER']
+    assert 'do-not-export' not in out.read_text()
+    captured=capsys.readouterr()
+    assert 'VOINEY_LAB_STT_PROVIDER' in captured.err
+    assert 'do-not-export' not in captured.out+captured.err

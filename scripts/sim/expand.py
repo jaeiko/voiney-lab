@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT));sys.path.insert(0,str(ROOT/'src'))
 from scripts.sim.corpus import load_corpus,generate_cases
-from scripts.sim.live import Budget
+from scripts.sim.live import Budget, failure_settings
 from scripts.sim.run import output_dir
 
 async def expand(prompt: str) -> str:
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dump({'case':case.code,'reviewed':False,'proposals':candidates},f,ensure_ascii=False,indent=2)
         print('unreviewed_proposals_written')
     except Exception as exc:
-        print(f'expand: {type(exc).__name__}',file=sys.stderr);return 2
+        print(json.dumps({'error':type(exc).__name__,'settings':failure_settings(exc)}),file=sys.stderr);return 2
     return 0
 
 if __name__=='__main__':
