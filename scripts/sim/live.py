@@ -141,6 +141,8 @@ async def evaluate(args: argparse.Namespace, cases: list, budget: Budget, speech
     if args.configured_models and not router.enabled:
         raise ValueError('configured router is not enabled')
     stt_settings = vp.SttProviderSettings.from_environment({**os.environ, vp.STT_PROVIDER_ENV:args.stt_provider, vp.STT_MODEL_ENV:args.stt_model})
+    if args.stt_provider != 'google_cloud_v2':
+        vp._key(vp.GOOGLE_KEY_ENV if args.stt_provider == 'google_cloud' else vp.ELEVENLABS_KEY_ENV)
     def transcribe(pcm, *a, **kw):
         return vp.transcribe(pcm,stt_settings,language=kw.get('language','ko'),keyterms=kw.get('keyterms',()))
     def reply(text, *a, **kw):

@@ -409,3 +409,19 @@ def test_signed_decimal_and_exponent_quantities_keep_source_spelling():
     assert ('-20','°C') in values
     assert ('.5','mL') in values
     assert ('1e-3','M') in values
+
+
+def test_live_missing_stt_key_is_named_before_input_tts(tmp_path,monkeypatch,capsys):
+    from scripts.sim import live
+    from voiney_lab import voice_providers as vp
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    monkeypatch.delenv(vp.ELEVENLABS_KEY_ENV,raising=False)
+    monkeypatch.setattr(vp.SttProviderSettings,'from_environment',lambda *a,**kw:vp.SttProviderSettings('elevenlabs','scribe_v2'))
+    def forbidden(*args,**kwargs):
+        raise AssertionError('input TTS was attempted before STT key validation')
+    monkeypatch.setattr(live.CachedSpeech,'speak',forbidden)
+    out=tmp_path/'reports/sim/no-stt-key.json'
+    assert live.main(['--execute','--stt-provider','elevenlabs','--limit','1','--output',str(out)])==2
+    result=json.loads(out.read_text())
+    assert result['run_failure_settings']==['ELEVENLABS_API_KEY']
+    assert result['provider_requests_including_auth_and_retries']==0
