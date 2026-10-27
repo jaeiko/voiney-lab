@@ -4231,6 +4231,8 @@ FRONT_RULES: dict[str, str] = {
                     "'N단계 완료하셨나요?' as before where the endpoint is still to "
                     "be observed, a timer at the step has not run out, 바로 확인 "
                     "was chosen or it is the last step (lane VX, decision 1)",
+    "forward_jump": "a named later step asked for as a move: explain how to "
+                    "continue one step at a time, without completing or skipping steps",
     "start_command": "an explicit start of an experiment that has never "
                      "started, and any start or resume after it ended, "
                      "which is not restarted by voice (decision 2, 2026-10-03)",
@@ -15119,7 +15121,7 @@ class CuratedProtocolSession:
         elif request.kind == "go" and target is not None and target > current:
             # A named future step is not evidence that intermediate steps
             # happened. Explain the boundary without completing or skipping.
-            self._last_front_rule = 'step_lookup'
+            self._last_front_rule = 'forward_jump'
             plan = self._words_plan(
                 f"{steps[target].source_label}단계로 바로 이동하지 않았어요. 한 단계씩 진행하려면 '다음'이라고 말씀해 주세요.",
                 intent_kind='forward_jump_clarification', action=CuratedProtocolAction.CLARIFY_REFERENCE,

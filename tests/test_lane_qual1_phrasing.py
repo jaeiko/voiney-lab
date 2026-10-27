@@ -23,3 +23,5 @@ def test_development_phrasing_at_server_boundary(text: str, field: str) -> None:
     p, c = next((p, c) for p, c in pairs if p.field == field and c.text == text)
     result = asyncio.run(run_case(p, c))
     assert score_case(c, result)['understood'], (c.code, result['action'], result['intent_kind'])
+    if text == '3단계로 이동':
+        assert result['front_rule'] == 'forward_jump'
