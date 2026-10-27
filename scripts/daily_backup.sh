@@ -47,9 +47,11 @@ for database in "$protocol_dir/protocol_workspace.sqlite" "$workspace_dir/accoun
                 "$workspace_dir/commercial_workspace.sqlite" "$report_db"; do
   [[ -f "$database" && ! -L "$database" ]] || { echo 'ERROR: required store missing' >&2; exit 1; }
 done
-install -d -m 700 -o "$service_user" "$backup_dir"
-exec 9>"$backup_dir/.daily.lock"
+# Lock the root-owned installed script read-only. The service user can write
+# inside the bundle directory, so a lock there could follow a planted symlink.
+exec 9<"$0"
 flock -n 9 || { echo 'ERROR: backup already running' >&2; exit 1; }
+install -d -m 700 -o "$service_user" "$backup_dir"
 # An intentional maintenance stop must remain stopped.
 systemctl is-active --quiet "$service_name" || { echo 'ERROR: server is not active; backup skipped' >&2; exit 1; }
 restart_required=true

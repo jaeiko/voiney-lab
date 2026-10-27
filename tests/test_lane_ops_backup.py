@@ -107,7 +107,7 @@ def test_daily_duplicate_lock_never_stops_the_server(daily):
     import fcntl
     args, env, events, backup, _, _ = daily
     backup.mkdir()
-    with (backup / '.daily.lock').open('w') as lock:
+    with (ROOT / 'scripts/daily_backup.sh').open('r') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode != 0
@@ -165,3 +165,14 @@ def test_documented_restore_never_restarts_after_a_failed_copy(daily, copy_fails
         assert result.returncode == 0, result.stderr
         assert (live / 'restored.txt').is_file()
         assert calls[-1] == 'start voineylab.service'
+
+
+def test_daily_lock_does_not_truncate_a_symlink_target(daily):
+    args, env, _, backup, _, tmp_path = daily
+    backup.mkdir()
+    preserved = tmp_path / 'preserved.txt'
+    preserved.write_text('preserve this file')
+    (backup / '.daily.lock').symlink_to(preserved)
+    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert preserved.read_text() == 'preserve this file'
