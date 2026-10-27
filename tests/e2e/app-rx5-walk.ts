@@ -95,6 +95,19 @@ export async function parityWalk(page: Page, info: TestInfo) {
   await checkLayout(page); await shot(page, info, `after-${p.id}-notebook`);
   writes.length = 0;
  }
+ await page.route('**/api/protocols/*/review', route => {
+  const id = new URL(route.request().url()).pathname.split('/').at(-2);
+  const index = PARITY_DOCUMENTS.findIndex(p => p.id === id);
+  return route.fulfill({ json: { ...parityReview(index), available_for_execution: false, review_pending: { needs_review_count: 2 } } });
+ });
+ for (const p of PARITY_DOCUMENTS) {
+  await page.goto(`/app/#/protocols/${p.id}`);
+  await expect(page.getByText('아직 원문과 맞춰 확인할 분석 내용이 있어요. 확인 화면에서 원문과 함께 살펴봐 주세요.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: '이 프로토콜로 시작', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: '확인하기', exact: true })).toHaveAttribute('href', `#/protocols/${p.id}/review`);
+  expect(writes).toEqual([]);
+  await checkLayout(page); await shot(page, info, `after-${p.id}-protocol-pending`);
+ }
  await page.goto('/app/#/settings');
  await page.getByLabel('원문이 "경우에 따라" 할 때').selectOption('during');
  await page.getByLabel('먼저 말해 주기').selectOption('needed');

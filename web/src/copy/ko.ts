@@ -719,6 +719,7 @@ export const detail = {
   noContent: '표시할 내용이 없어요.', step: (label: string) => `${label}단계`, source: '원문과 맞춰 보기', steps: '전체 단계·조건', materials: '시약·재료', equipment: '장비',
   before: '시작 전 준비', constructs: '분기·반복·함께 하는 일', history: '확인한 버전 기록',
   empty: '아직 분석한 내용이 없어요. 분석 뒤 다시 확인해 주세요.', failed: '상세를 불러오지 못했어요. 다시 불러와 주세요.',
+  pendingAnalysis: '아직 원문과 맞춰 확인할 분석 내용이 있어요. 확인 화면에서 원문과 함께 살펴봐 주세요.',
   versionLabel: (version: number) => `확인한 버전 ${version}`, baseAnalysis: '분석한 내용', unknownOrigin: '입력 출처를 확인해 주세요.', emptyValue: '비어 있음', noHistory: '아직 등록한 확인 버전이 없어요.', noChanges: '바꾼 값 없이 등록했어요.',
   sourcePage: (page: number) => `원문 ${page}쪽 열기`, sourceImage: (page: number) => `원문 ${page}쪽`,
   missing: '원문에 없음', origins: { source: '원문', ai_suggestion: 'AI 제안', reviewer_input: '직접 고친 값' } as Record<string, string>,
