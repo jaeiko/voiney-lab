@@ -185,8 +185,8 @@ export function SettingsScreen({ session, duringRun = false }: { session: AuthSe
   const filterOn = settings.data?.speaker_filter === "on";
   return (
     <div className="settings" data-testid="settings-screen">
-      <h1 className="screen-title">{copy.title}</h1>
-      <p className="page-why">{advancedSettings.why}</p>
+      {!duringRun ? <><h1 className="screen-title">{copy.title}</h1>
+      <p className="page-why">{advancedSettings.why}</p></> : null}
       {active ? <p>{advancedSettings.calibrationLater}</p> : <>
       <Section id="voice-check" title={copy.voiceCheck.title} lead={copy.voiceCheck.lead}>
         <VoiceCheck onMeasured={() => void client.invalidateQueries({ queryKey: SETTINGS_KEY })} />
@@ -200,8 +200,8 @@ export function SettingsScreen({ session, duringRun = false }: { session: AuthSe
         <ErrorBox message={copy.loadFailed} onRetry={() => void settings.refetch()} />
       ) : (
         <>
-          <p>{advancedSettings.nextRun}</p>
-          <AdvancedSettings settings={settings.data} active={active} />
+          {!duringRun ? <p>{advancedSettings.nextRun}</p> : null}
+          <AdvancedSettings settings={settings.data} active={active} embedded={duringRun} />
           <Section id="numbers" title={copy.numbers.title}>
             <Segmented
               name={copy.numbers.title}

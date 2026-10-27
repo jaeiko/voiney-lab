@@ -12,14 +12,14 @@ function ServerChoice({ name, label, options, value }: { name: string; label: st
  async function save(next: string) { if (busy) return; setBusy(true); setMessage(''); try { client.setQueryData(SETTINGS_KEY, await runApi.saveSetting(name, next)); setMessage(copy.saved); } catch { setMessage(copy.saveFailed); void client.invalidateQueries({ queryKey: SETTINGS_KEY }); } finally { setBusy(false); } }
  return <div><label className='field'><span>{label}</span><select value={value} disabled={busy} onChange={e => void save(e.target.value)}>{Object.entries(options).map(([key, word]) => <option key={key} value={key}>{word}</option>)}</select></label>{message ? <p role='status'>{message}</p> : null}</div>;
 }
-export function AdvancedSettings({ settings, active }: { settings: ExperimenterSettings; active: boolean }) {
+export function AdvancedSettings({ settings, active, embedded = false }: { settings: ExperimenterSettings; active: boolean; embedded?: boolean }) {
  const [language, setLanguage] = useState(inputLanguage), [gain, setGain] = useState(() => deviceValue(DEVICE_KEYS.gain, ['calibrated', 'on', 'off'], 'calibrated'));
  const [mic, setMic] = useState(storedMicrophone), [devices, setDevices] = useState<MediaDeviceInfo[]>([]), [message, setMessage] = useState('');
  async function list() { try { const all = await navigator.mediaDevices?.enumerateDevices?.() ?? []; setDevices(all.filter(d => d.kind === 'audioinput' && d.deviceId && !['default', 'communications'].includes(d.deviceId))); } catch { setDevices([]); } }
  useEffect(() => { void list(); navigator.mediaDevices?.addEventListener?.('devicechange', list); return () => navigator.mediaDevices?.removeEventListener?.('devicechange', list); }, []);
  function store(key: string, value: string, done: () => void) { try { localStorage.setItem(key, value); done(); setMessage(copy.saved); } catch { setMessage(c.localFailed); } }
  const connected = devices.find(d => d.deviceId === mic?.deviceId) ?? devices.find(d => Boolean(mic?.label && d.label === mic.label));
- return <section className='settings-section' data-testid='settings-advanced'><h2>{c.title}</h2><p>{c.nextRun}</p>
+ return <section className='settings-section' data-testid='settings-advanced'>{!embedded ? <h2>{c.title}</h2> : null}
   <ServerChoice name='question_timing' label={c.timing} value={settings.question_timing ?? 'before_start'} options={c.timingOptions} />
   <ServerChoice name='proactive_mode' label={c.proactive} value={settings.proactive_mode ?? 'all'} options={c.proactiveOptions} />
   <ServerChoice name='web_lookup' label={c.web} value={settings.web_lookup ?? 'on'} options={c.webOptions} /><p>{c.webWhy}</p>

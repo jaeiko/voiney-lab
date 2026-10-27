@@ -128,6 +128,7 @@ export async function runToolsWalk(page: Page, info: TestInfo) {
  const writesBefore = server.controls.length;
  await page.getByRole('button', { name: '설정 열기', exact: true }).click();
  await expect(page.getByRole('dialog')).toContainText('다음 실험부터 적용');
+ await expect(page.getByRole('dialog').getByText('저장한 설정은 다음 실험부터 적용돼요. 지금 하던 실험은 그대로예요.', { exact: true })).toHaveCount(1);
  await expect(page.getByRole('dialog').getByTestId('voice-check-start')).toHaveCount(0);
  await expect(page.getByLabel('내가 말하는 언어')).toBeDisabled();
  const targets = await page.getByRole('dialog').locator('.btn, select, .segmented-option').evaluateAll(els => ({ goal: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--run-target')), heights: els.map(e => e.getBoundingClientRect().height) }));

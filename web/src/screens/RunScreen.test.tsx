@@ -218,6 +218,7 @@ it('keeps dropped-speech reasons in a folded bounded list and opens settings wit
  expect(screen.getByText('안 들은 말 1개').closest('details')).not.toHaveAttribute('open');
  await userEvent.click(screen.getByRole('button', { name: '설정 열기' }));
  expect(await screen.findByRole('dialog')).toHaveTextContent('지금 하던 실험은 그대로예요');
+ expect(screen.getAllByText('저장한 설정은 다음 실험부터 적용돼요. 지금 하던 실험은 그대로예요.', { exact: true })).toHaveLength(1);
  expect(screen.getByTestId('run-screen')).toBeInTheDocument();
 });
 it('bounds the reason history, ignores foreign configurations, hides developer controls for researchers and resets on a new run', async () => {

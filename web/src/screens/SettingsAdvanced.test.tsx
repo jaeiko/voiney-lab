@@ -9,6 +9,7 @@ it('stores server preferences separately from language, microphone and gain on t
  const { calls } = fakeFetch({ '/api/voice/voices': { json: { voices: [] } }, '/api/experimenter/settings': init => { if (init?.method === 'PUT') settings = { ...settings, ...JSON.parse(String(init.body)) }; return { json: { settings } }; } });
  renderWithClient(<SettingsScreen session={{ ...SESSION_DEV, mode: "dev" }} />);
  await userEvent.selectOptions(await screen.findByLabelText('원문이 "경우에 따라" 할 때'), 'during');
+ expect(screen.getAllByText('저장한 설정은 다음 실험부터 적용돼요. 지금 하던 실험은 그대로예요.', { exact: true })).toHaveLength(1);
  await userEvent.selectOptions(screen.getByLabelText('먼저 말해 주기'), 'needed');
  await userEvent.selectOptions(screen.getByLabelText('웹에서 찾아보기'), 'off');
  await userEvent.selectOptions(screen.getByLabelText('옆 사람 말 거르는 정도'), 'high');
