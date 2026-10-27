@@ -82,7 +82,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_GOOGLE_SPEECH_API_KEY", KEYS, _NONE,
             "Google Cloud Speech-to-Text·Text-to-Speech API 키 (음성 공급자 google_cloud)"),
     Setting("VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE", KEYS, _NONE,
-            "Google STT V2 서비스 계정 JSON 경로 (모든 저장소 밖, 소유자만 읽기·쓰기)"),
+            "Google STT V2 ADC JSON 경로 (서비스 계정·AWS WIF·개발자, 모든 저장소 밖·소유자만 접근)"),
     Setting("VOINEY_LAB_GOOGLE_STT_V2_PROJECT", MODELS, _NONE,
             "Google STT V2 요청의 Google Cloud 프로젝트 ID"),
     Setting("VOINEY_LAB_GOOGLE_STT_V2_LOCATION", MODELS, "us",

@@ -492,7 +492,10 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `anthropic`, `openai`, `google`), model and reasoning level and no default.
   Speech providers: `xai`, `google_cloud`, `elevenlabs`; STT also accepts
   `google_cloud_v2` (regional REST V2, implicit recognizer `_`, inline config,
-  service-account JSON outside git; in-memory OAuth token). OCR: `clova`,
+  explicit ADC JSON outside git: service account, AWS WIF or developer user;
+  in-memory OAuth token). The ADC loader does no project discovery or ambient
+  fallback; AWS IMDS/Google STS/impersonation and recognition share one deadline,
+  with fixed endpoint allowlists and no redirect/retry. OCR: `clova`,
   `google`. Background roles (`analysis`, `translation`, `report`) retry
   429/5xx and carry the Gemini safety setting; voice-turn roles do neither.
 
