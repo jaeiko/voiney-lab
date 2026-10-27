@@ -1,3 +1,5 @@
+import { advancedSettings as diagnosticCopy } from "../copy/ko";
+import { diagnosticOf, type Diagnostic } from "./runDiagnostics";
 // What the experiment screen shows, read from the server's socket events
 // (lane RX2, 2026-10-25). Everything here is the server's: the step, the
 // timers, the pause, the question, what was heard and said. The screen keeps
@@ -120,6 +122,9 @@ export interface RunModel {
   reportId: string | null;
   /** The turns the server answered with a problem's help (turn.route_decision, action problem_help), for the end screen's count. */
   helpTurns: number[];
+  droppedCount: number;
+  dropped: Array<{ at: number; reason: string }>;
+  diagnostics: Diagnostic[];
 }
 
 export const EMPTY_RUN: RunModel = {
@@ -139,6 +144,7 @@ export const EMPTY_RUN: RunModel = {
   notice: null,
   reportId: null,
   helpTurns: [],
+  droppedCount: 0, dropped: [], diagnostics: [],
 };
 
 /** The server's discard signals: a sound it dropped (lane HEAR's speech.dropped) and a voice taken for another person's (lane SP1's speech.ignored). */
@@ -341,6 +347,8 @@ export interface EventContext {
 export function applyServerEvent(model: RunModel, m: Record<string, unknown>, context: EventContext): RunModel {
   const accepted = context.accepted;
   const ours = accepted !== null && m.configuration_id === accepted.configuration_id;
+  const diagnostic = diagnosticOf(m);
+  if (diagnostic && accepted && (m.configuration_id === undefined || ours) && context.live(m)) model = { ...model, diagnostics: [...model.diagnostics, diagnostic].slice(-50) };
   const turnId = Number.isInteger(m.turn_id) ? (m.turn_id as number) : null;
   switch (m.type) {
     case "protocol.fixture.state": {
@@ -432,7 +440,8 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
         // took for someone else's comes as speech.ignored too.
         if (m.type === "speech.dropped" && (m.paused === true || m.reason === "other_speaker_level")) return model;
         // Lane HEAR2, decision 4: the server's notice and reason, shown with the word; nothing is said.
-        return { ...model, misheardAt: context.now, misheard: { notice: text(m.notice) ? plain(m.notice) : null, reason: text(m.reason_ko) ? plain(m.reason_ko) : null } };
+        const reason = text(m.reason_ko) ? plain(m.reason_ko) : text(m.notice) ? plain(m.notice) : m.type === 'speech.ignored' ? diagnosticCopy.ignoredOther : diagnosticCopy.ignoredUnknown;
+        return { ...model, droppedCount: model.droppedCount + 1, dropped: [...model.dropped, { at: context.now, reason }].slice(-50), misheardAt: context.now, misheard: { notice: text(m.notice) ? plain(m.notice) : null, reason: text(m.reason_ko) ? plain(m.reason_ko) : null } };
       }
       return model;
   }

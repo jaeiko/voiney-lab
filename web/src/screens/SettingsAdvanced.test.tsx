@@ -1,0 +1,32 @@
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, expect, it, vi } from 'vitest';
+import { SettingsScreen } from './SettingsScreen';
+import { fakeFetch, renderWithClient, SESSION_DEV } from '../test/helpers';
+afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+it('stores server preferences separately from language, microphone and gain on this device', async () => {
+ let settings = {};
+ const { calls } = fakeFetch({ '/api/voice/voices': { json: { voices: [] } }, '/api/experimenter/settings': init => { if (init?.method === 'PUT') settings = { ...settings, ...JSON.parse(String(init.body)) }; return { json: { settings } }; } });
+ renderWithClient(<SettingsScreen session={{ ...SESSION_DEV, mode: "dev" }} />);
+ await userEvent.selectOptions(await screen.findByLabelText('원문이 "경우에 따라" 할 때'), 'during');
+ await userEvent.selectOptions(screen.getByLabelText('먼저 말해 주기'), 'needed');
+ await userEvent.selectOptions(screen.getByLabelText('웹에서 찾아보기'), 'off');
+ await userEvent.selectOptions(screen.getByLabelText('옆 사람 말 거르는 정도'), 'high');
+ await userEvent.selectOptions(screen.getByLabelText('내가 말하는 언어'), 'auto');
+ await userEvent.selectOptions(screen.getByLabelText('작은 소리 키우기'), 'off');
+ await waitFor(() => expect(calls.filter(c => c.init?.method === 'PUT')).toHaveLength(4));
+ expect(settings).toEqual({ question_timing: 'during', proactive_mode: 'needed', web_lookup: 'off', speaker_sensitivity: 'high' });
+ expect(localStorage.getItem('voiney-lab.input-language')).toBe('auto');
+ expect(localStorage.getItem('voiney-lab.agc-mode')).toBe('off');
+});
+it('retains the saved value when a preference write is refused and resolves a rotated microphone id by its label', async () => {
+ localStorage.setItem('voiney-lab.mic-device', JSON.stringify({ deviceId: 'old-device', label: '견본 마이크' }));
+ vi.stubGlobal('navigator', { mediaDevices: { enumerateDevices: async () => [{ kind: 'audioinput', deviceId: 'new-device', label: '견본 마이크' }] } });
+ fakeFetch({ '/api/voice/voices': { json: { voices: [] } }, '/api/experimenter/settings': init => init?.method === 'PUT' ? { status: 503 } : { json: { settings: { question_timing: 'before_start' } } } });
+ renderWithClient(<SettingsScreen session={{ ...SESSION_DEV, mode: 'dev' }} />);
+ await screen.findByRole('option', { name: '견본 마이크' });
+ expect(screen.getByLabelText('쓸 마이크')).toHaveValue('new-device');
+ await userEvent.selectOptions(screen.getByLabelText('원문이 "경우에 따라" 할 때'), 'during');
+ expect(await screen.findByText('저장하지 못했어요. 다시 골라 주세요.')).toBeInTheDocument();
+ expect(screen.getByLabelText('원문이 "경우에 따라" 할 때')).toHaveValue('before_start');
+});

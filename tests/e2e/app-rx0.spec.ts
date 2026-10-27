@@ -145,9 +145,9 @@ test.describe('The new screen (lane RX0)', () => {
   });
 
   test('a route the new screen has not taken over opens on the old screen unchanged', async ({ page }) => {
-    // Records now belong to the new screen; full protocol details still use the retained view.
-    await page.goto(`${APP}#/protocols/source-legacy`);
-    await page.waitForURL(/\/index\.html\?legacy=1#\/protocols\/source-legacy$/);
+    // Known protocol details belong to the new screen; an unknown route retains its escape.
+    await page.goto(`${APP}#/protocols/source-legacy/unowned`);
+    await page.waitForURL(/\/index\.html\?legacy=1#\/protocols\/source-legacy\/unowned$/);
     await expect(page.locator('#tab-protocols')).toBeVisible();
   });
 

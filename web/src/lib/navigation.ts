@@ -3,7 +3,7 @@
 // hash the new screen does not know is opened there unchanged. Lane RX1
 // took over the upload, the analysis progress, the confirmation screen and
 // today's values; lane RX2 the start flow, the experiment, the settings and
-// the first guide. Lane RX3 owns records and notebooks; protocol detail still has a legacy view.
+// the first guide. Lane RX3 owns records and notebooks; protocol detail is owned by the new screen too.
 
 export const OLD_SCREEN = "/index.html";
 
@@ -26,7 +26,7 @@ export function goToOldScreen(hash: string): void {
 }
 
 export type RouteName =
-  | "home" | "protocols" | "upload" | "analysis" | "review" | "changes"
+  | "home" | "protocol" | "protocols" | "upload" | "analysis" | "review" | "changes"
   | "start" | "run" | "settings" | "welcome" | "records" | "record" | "notebook" | "handoff";
 
 export interface Route {
@@ -77,6 +77,8 @@ export function parseRoute(hash: string): Route {
     }
     return { name: screen[2] as "analysis" | "review" | "changes", hash: `#${clean}`, protocolId };
   }
+  const detail = /^\/protocols\/([^/]+)$/.exec(path);
+  if (detail && decoded(detail[1])) return { name: "protocol", hash: `#${clean}`, protocolId: decoded(detail[1]) };
   // Lane RX2: the start flow, the experiment screen, the settings and the first guide.
   const start = /^\/start(?:\/([^/?#]+))?\/?(?:\?(.*))?$/.exec(clean);
   if (start) {
@@ -102,6 +104,7 @@ export const routes = {
   records: "#/records",
   record: (id: string) => `#/records/${encodeURIComponent(id)}`,
   notebook: (sessionId: string, reportId: string) => `#/records/${encodeURIComponent(sessionId)}/notebook/${encodeURIComponent(reportId)}`,
+  protocol: (id: string) => `#/protocols/${encodeURIComponent(id)}`,
   protocols: "#/protocols",
   upload: "#/upload",
   analysis: (id: string) => `#/protocols/${encodeURIComponent(id)}/analysis`,

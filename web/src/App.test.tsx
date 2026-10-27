@@ -22,7 +22,7 @@ describe("routes", () => {
     expect(parseRoute("")).toEqual({ name: "home", hash: "#/home" });
     expect(parseRoute("#/home")).toEqual({ name: "home", hash: "#/home" });
     expect(parseRoute("#/protocols")).toEqual({ name: "protocols", hash: "#/protocols" });
-    expect(parseRoute("#/protocols/p-1")).toEqual({ name: "handoff", hash: "#/protocols/p-1" });
+    expect(parseRoute("#/protocols/p-1")).toEqual({ name: "protocol", hash: "#/protocols/p-1", protocolId: "p-1" });
     expect(parseRoute("#/upload")).toEqual({ name: "upload", hash: "#/upload" });
     expect(parseRoute("#/protocols/p-1/analysis")).toEqual({ name: "analysis", hash: "#/protocols/p-1/analysis", protocolId: "p-1" });
     expect(parseRoute("#/protocols/p%201/review")).toEqual({ name: "review", hash: "#/protocols/p%201/review", protocolId: "p 1" });
@@ -90,10 +90,10 @@ describe("App", () => {
   });
 
   it("a route the new screen does not have goes to the old screen unchanged", async () => {
-    vi.stubGlobal("location", { ...window.location, hash: "#/protocols/p-9", search: "", pathname: "/app/", replace });
+    vi.stubGlobal("location", { ...window.location, hash: "#/protocols/p-9/other", search: "", pathname: "/app/", replace });
     fakeFetch({ "/api/auth/session": { json: SESSION_DEV } });
     renderWithClient(<App />);
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/index.html?legacy=1#/protocols/p-9"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/index.html?legacy=1#/protocols/p-9/other"));
     expect(screen.getByRole("status")).toHaveTextContent("지금 화면으로 넘어가요…");
   });
 

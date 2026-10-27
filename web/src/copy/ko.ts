@@ -702,12 +702,82 @@ export const records = {
   differences: '원문과 다르게 한 점·문제', previous: '지난번과 다른 점', next: '다음에 바꿀 점·다음 할 일',
   confirmation: '값 확인', unconfirmed: '[미확인]', confirmed: '확인함', confirm: '확인하기', edit: '고치기', correct: '고쳐서 확인하기', value: '고친 값', saved: '저장했어요.', saveFailed: '저장하지 못했어요. 다시 해 주세요.',
   appendix: '부록', source: '원문 출처', purpose: '실험 목적', pi: '관리자 확인', piWhy: '확인했다는 기록을 남겨요. 실험 시작 조건은 바뀌지 않아요.', piSave: '확인함 남기기', piComment: '확인 메모',
-  legacy: '이전 화면에서 더 보기', legacyWhy: '아직 옮기지 않은 기록 수정·첨부와 저장해 둔 지점에서 시작은 이전 화면에서 할 수 있어요.',
+  legacy: '이전 화면에서 더 보기', legacyWhy: '원하면 이전 화면에서도 같은 기록을 볼 수 있어요.',
 } as const;
 
 export const entrypoints = {
   more: "추가 설정과 설치", legacySettings: "이전 화면의 설정 열기",
-  legacyWhy: "마이크 장치·입력 언어와 더 자세한 안내 방식은 이전 화면에서 고를 수 있어요.",
+  legacyWhy: "원하면 이전 화면의 설정으로 돌아갈 수 있어요.",
   metrics: "연구실 지표 보기",
   install: "홈 화면에 두려면 Safari의 공유 또는 Chrome 메뉴에서 ‘홈 화면에 추가’를 골라 주세요. 인터넷 연결이 필요해요.",
 } as const;
+
+// Full protocol detail and the remaining controls use the existing server contracts.
+export const detail = {
+  why: '전체 단계와 원문 근거를 살펴보고 실험할 프로토콜을 정해요.',
+  back: '목록으로', reviewCards: '확인 화면 열기', analyse: '분석하기', timers: '원문에서 확인한 타이머', start: '이 프로토콜로 시작', review: '확인하기', summary: '시작 전에 볼 것',
+  noContent: '표시할 내용이 없어요.', step: (label: string) => `${label}단계`, source: '원문과 맞춰 보기', steps: '전체 단계·조건', materials: '시약·재료', equipment: '장비',
+  before: '시작 전 준비', constructs: '분기·반복·함께 하는 일', history: '확인한 버전 기록',
+  empty: '아직 분석한 내용이 없어요. 분석 뒤 다시 확인해 주세요.', failed: '상세를 불러오지 못했어요. 다시 불러와 주세요.',
+  versionLabel: (version: number) => `확인한 버전 ${version}`, baseAnalysis: '분석한 내용', unknownOrigin: '입력 출처를 확인해 주세요.', emptyValue: '비어 있음', noHistory: '아직 등록한 확인 버전이 없어요.', noChanges: '바꾼 값 없이 등록했어요.',
+  sourcePage: (page: number) => `원문 ${page}쪽 열기`, sourceImage: (page: number) => `원문 ${page}쪽`,
+  missing: '원문에 없음', origins: { source: '원문', ai_suggestion: 'AI 제안', reviewer_input: '직접 고친 값' } as Record<string, string>,
+  tables: '시약 표', tableWhy: '엑셀에 보이는 값을 그대로 보관해요. 단계 분석에는 쓰지 않아요.',
+  attach: '시약 표(.xlsx) 붙이기', attached: '표를 붙였어요.', duplicate: '이미 붙인 표예요.', noTables: '붙인 시약 표가 없어요.',
+  tableErrors: {
+    unsupported_reagent_table_media_type: '엑셀 .xlsx 파일을 골라 주세요.',
+    reagent_table_too_large: '표가 너무 커요. 표를 나눠 붙여 주세요.',
+    invalid_reagent_table: '표를 읽지 못했어요. 엑셀에서 .xlsx로 다시 저장해 주세요.',
+  } as Record<string, string>,
+  attachFailed: '표를 붙이지 못했어요. 다시 골라 주세요.', hiddenSheet: '숨긴 시트', cell: '셀', value: '값',
+  reanalysis: '다시 분석하기', reanalysisWhy: '다시 분석해도 하던 실험은 시작한 버전을 따라가요.',
+  all: '전체 분석', range: '쪽 고르기', first: '처음 쪽', last: '끝 쪽', rangeError: '문서 안에서 처음 쪽과 끝 쪽을 골라 주세요.',
+  busy: '보내는 중…', developer: '개발자 정보', developerWhy: '문제를 확인할 때만 원문 식별자와 받은 자료를 펼쳐 봐요.',
+  fields: {
+    verified: '확인한 시간', refused: '타이머로 쓰지 않은 시간', value_ko: '시간', source_literal: '원문 표현', reason_ko: '이유', step_label: '단계', steps: '단계 목록', source_label: '단계', title_source_text: '묶음', instruction_source_text: '동작', name_source_text: '이름', source_text: '원문',
+    source_page_number: '원문 쪽', source_excerpt: '원문 근거', continued_on_page_number: '이어지는 쪽', continued_excerpt: '이어지는 원문',
+    evidence: '근거', location_detail: '위치', quantities: '수량·조건', conditions: '조건', settings: '설정 값', sub_actions: '세부 동작',
+    process_timer: '타이머', duration: '시간', estimated_duration: '예상 시간', reminders: '미리 알림', recurring_reminders: '반복 알림',
+    offset: '알림 시점', interval: '간격', message_source_text: '알림 원문', required_observations: '남겨야 할 관찰',
+    expected_results: '원문에 적힌 결과', notes: '메모', tips: '도움말', warnings: '안전 주의', missing_execution_values: '원문에 없는 값',
+    description: '내용', condition_source_text: '조건 원문', range_source_text: '범위 원문', repeat_count: '반복 횟수',
+    resolution_source_text: '확인한 내용', actual_elapsed_time: '실제 걸린 시간', elapsed_seconds: '걸린 초',
+    dependencies: '앞서 할 일', branch_step_ids: '해당 단계', start_step_id: '시작 단계', end_step_id: '끝 단계',
+    repeated_step_ids: '반복할 단계', concurrent_step_ids: '함께 할 단계', member_step_ids: '묶인 단계', target: '대상',
+    title: '제목', authors: '저자', created_date: '작성일', modified_date: '고친 날', publication_date: '발행일', version: '버전',
+    doi: 'DOI', source_uri: '원문 주소', license: '라이선스', metadata: '원문 정보',
+  } as Record<string, string>,
+};
+
+export const recordActions = {
+  title: '메모·파일 남기기', why: '실험 뒤에 덧붙인 내용도 원래 기록과 함께 보관해요.',
+  memo: '메모 내용', category: '메모 종류', categories: { note: '메모', appearance: '겉모습', measurement: '측정', deviation: '원문과 다른 점', other: '그 밖' },
+  save: '메모 남기기', saved: '기록했어요.', file: '사진·문서 붙이기', caption: '파일 설명 (선택)', attached: '파일을 붙였어요.',
+  failed: '저장하지 못했어요. 기록을 새로 불러온 뒤 다시 해 주세요.', fileInvalid: '사진(JPG·PNG·WebP), PDF, Word 파일을 골라 주세요.', fileLarge: '파일이 너무 커요. 32 MB 이하로 나눠 붙여 주세요.',
+  checkpoints: '저장해 둔 지점', choose: '지점을 골라 주세요.', checkpoint: (label: string, count: number) => `${label}단계부터 · 끝낸 ${count}개 이어받음`,
+  restart: '이 지점부터 새로 시작하기', confirm: '새 실험 만들기',
+  restartWhy: '끝낸 단계와 오늘 바꾼 값을 이어받아 새 실험을 만들어요. 원래 기록은 그대로 남아요.',
+  notRestored: '타이머·대화·답하지 않은 질문은 이어받지 않아요. 시작 화면에서 저장된 버전을 다시 확인해요.',
+  restartFailed: '이 지점에서 시작하지 못했어요. 기록을 새로 불러온 뒤 지점을 다시 골라 주세요.',
+  prose: '보고서 문장 준비', proseWhy: '문장을 다시 만들면 지금까지 남긴 기록으로 노트를 다시 정리해요.',
+  regenerate: '보고서 문장 다시 만들기', proseFailed: '준비 상태를 확인하지 못했어요. 다시 불러와 주세요.',
+  regenerateFailed: '문장을 다시 만들지 못했어요. 잠시 뒤 다시 눌러 주세요.',
+};
+
+export const advancedSettings = {
+ why: '듣기와 안내 방식을 내 실험에 맞춰요.',
+ title: '세부 설정', nextRun: '저장한 설정은 다음 실험부터 적용돼요. 지금 하던 실험은 그대로예요.',
+ local: '이 기기에서만 쓰는 설정이에요. 다음에 마이크를 켤 때 적용돼요.',
+ timing: '원문이 "경우에 따라" 할 때', timingOptions: { before_start: '시작할 때 미리 물어보기', during: '그 단계에서 물어보기' },
+ proactive: '먼저 말해 주기', proactiveOptions: { all: '모두(타이머 끝·1분 전, 반복 횟수, 돌아왔을 때 지금 단계)', needed: '꼭 필요한 것만(타이머 끝, 반복 횟수)', off: '말로는 안 함(화면과 소리는 남아요)' },
+ web: '웹에서 찾아보기', webOptions: { on: '켜기(설명과 사진만, 출처와 함께)', off: '끄기(원문에서만)' }, webWhy: '값과 안전 주의는 원문만 따라요. 웹 찾기 기능이 꺼져 있으면 찾을 수 없어요.',
+ sensitivity: '옆 사람 말 거르는 정도', sensitivityOptions: { high: '많이(이어버드에 맞아요)', normal: '보통', low: '조금' },
+ language: '내가 말하는 언어', languageOptions: { ko: '한국어', auto: '자동으로 알아듣기', en: '영어' },
+ microphone: '쓸 마이크', microphoneDefault: '기본 마이크 (기기 설정)', microphoneRefresh: '마이크 목록 다시 보기', microphoneMissing: '연결 안 됨 · 기본 마이크를 써요', microphoneUnknown: (index: number) => `마이크 ${index}`,
+ gain: '작은 소리 키우기', gainOptions: { calibrated: '목소리를 맞춘 뒤엔 끄기(추천)', on: '항상 켜기', off: '항상 끄기' },
+ localFailed: '이 기기에 저장하지 못했어요. 브라우저의 저장 허용을 확인해 주세요.',
+ calibrationLater: '실험을 마친 뒤 목소리를 다시 맞출 수 있어요.', settings: '설정 열기', close: '실험으로 돌아가기',
+ ignored: '안 들은 말', ignoredOther: '다른 사람 말로 보여 듣지 않았어요.', ignoredUnknown: '잘 안 들렸어요.', ignoredWhy: '이 실험에서 듣지 않은 말의 사유만 잠깐 보관해요. 새 실험을 시작하면 지워져요.',
+ ignoredEmpty: '아직 안 들은 말이 없어요.', ignoredCount: (count: number) => `안 들은 말 ${count}개`, diagnostics: '턴별 개발자 정보',
+ diagnosticsWhy: '받은 처리·지연·도구 정보만 보여 줘요. 답을 만드는 생각 과정은 보관하지 않아요.',
+};

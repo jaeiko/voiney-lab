@@ -4,7 +4,7 @@ import { useProtocolDetail, useProtocols, useSignOutOnExpiry } from "../api/quer
 import type { CatalogEntry } from "../api/types";
 import { Chip, EmptyBox, ErrorBox, LoadingBox } from "../components/Pieces";
 import { protocols as words, states } from "../copy/ko";
-import { oldRoutes, routes, startHref } from "../lib/navigation";
+import { routes, startHref } from "../lib/navigation";
 import { entryAnalysing, protocolStatus, sortEntries, uploadedDay } from "../lib/protocolStatus";
 import { displayTitle } from "../lib/protocolTitle";
 
@@ -28,14 +28,14 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
           ? routes.analysis(entry.protocol_id)
           : status.action === "start"
             ? startHref(entry.protocol_id)
-            : oldRoutes.protocol(entry.protocol_id);
+            : routes.protocol(entry.protocol_id);
   const actionLabel = status.action ? words.actions[status.action] : status.kind === "analysing" ? words.actions.progress : null;
   // Lane RX4 (decision 4): the action's icon beside its word.
   const ActionIcon: LucideIcon = status.action === "start" ? Play : status.action === "review" ? ClipboardCheck : status.action === "retry" ? RotateCcw : Hourglass;
   return (
     <li className="row" data-protocol-id={entry.protocol_id} data-status={status.kind}>
       <div className="row-head">
-        <a className="row-title" href={oldRoutes.protocol(entry.protocol_id)}>{displayTitle(entry)}</a>
+        <a className="row-title" href={routes.protocol(entry.protocol_id)}>{displayTitle(entry)}</a>
         {status.chips.map((chip, index) => (
           <Chip key={`${chip.kind}-${index}`} chip={chip} />
         ))}

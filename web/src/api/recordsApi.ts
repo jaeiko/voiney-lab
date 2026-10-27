@@ -2,6 +2,7 @@ import { apiFetch } from './client';
 import type { Experiment } from './types';
 import type { TimelineEvent } from './runApi';
 
+export interface Recovery { checkpoints?: Array<{ step_id: string; step_label: string; carried_step_count: number }>; not_restored?: string[] }
 export interface RecordEvent extends TimelineEvent {
   event_key?: string;
   user_wording?: string | null;
@@ -32,7 +33,7 @@ export const experimentPath = (id: string, suffix = '') => `/api/workspace/exper
 export const reportPath = (id: string, suffix: string) => `/api/experiment-reports/${enc(id)}${suffix}`;
 export const recordsApi = {
   experiment: (id: string) => apiFetch<Experiment>(experimentPath(id)),
-  timeline: (id: string) => apiFetch<{ timeline: RecordEvent[] }>(experimentPath(id, '/timeline')),
+  timeline: (id: string) => apiFetch<{ timeline: RecordEvent[]; session?: { version: number }; recovery?: Recovery }>(experimentPath(id, '/timeline')),
   reports: (id: string) => apiFetch<{ reports: ReportSummary[] }>(experimentPath(id, '/reports')),
   notebook: (id: string) => apiFetch<NotebookResponse>(reportPath(id, '/notebook')),
 };

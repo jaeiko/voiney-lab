@@ -13,6 +13,7 @@ import { AnalysisScreen } from "./screens/AnalysisScreen";
 import { HandoffScreen } from "./screens/HandoffScreen";
 import { HomeScreen } from "./screens/HomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
+import { ProtocolDetailScreen } from "./screens/ProtocolDetailScreen";
 import { ProtocolsScreen } from "./screens/ProtocolsScreen";
 import { RunScreen } from "./screens/RunScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
@@ -87,13 +88,16 @@ export function App() {
 
   // The run has the whole screen while it runs; with no run, the experiment tab is an ordinary page (no run bar).
   const running = run.active || run.phase === "starting" || run.phase === "stopping" || run.voice === "RECONNECTING";
-  if (route.name === "run" && running) return <RunScreen />;
+  if (route.name === "run" && running) return <RunScreen session={data} />;
   if (route.name === "welcome") return <WelcomeScreen session={data} />;
 
   let screen;
   switch (route.name) {
     case "home":
       screen = <HomeScreen session={data} />;
+      break;
+    case "protocol":
+      screen = <ProtocolDetailScreen key={route.protocolId} protocolId={route.protocolId!} session={data} />;
       break;
     case "protocols":
       screen = <ProtocolsScreen />;
@@ -102,7 +106,7 @@ export function App() {
       screen = <StartScreen key={route.hash} protocolId={route.protocolId ?? null} resumeId={route.resumeId ?? null} step={route.step ?? null} />;
       break;
     case "run":
-      screen = <RunScreen />;
+      screen = <RunScreen session={data} />;
       break;
     case "settings":
       screen = <SettingsScreen session={data} />;
