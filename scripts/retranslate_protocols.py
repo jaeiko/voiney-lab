@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,7 @@ from voiney_lab.protocol_translation import (  # noqa: E402
     BATCH_TIMEOUT_SECONDS,
     STYLE_VERSION,
     TARGET_LANGUAGE,
+    TranslationCallLimitReached,
     generate_revision_translations,
     glossaries_by_version,
     openai_batch_translator,
@@ -77,6 +79,7 @@ from voiney_lab.protocol_translation import (  # noqa: E402
     stored_checks,
     translation_revision_key,
     translation_units,
+    translation_failure_kind,
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (  # noqa: E402
@@ -85,13 +88,16 @@ from voiney_lab.workspace_store import (  # noqa: E402
 )
 
 RUNTIME_DIR = ROOT / "data" / "runtime"
+log = logging.getLogger(__name__)
+# These retries belong to this bounded tool; SDK/provider retries stay off.
+RETRANSLATE_RETRY_POLICY = ProviderRetryPolicy(max_retries=2, max_wait_seconds=30.0)
 
 
 class RetranslateError(RuntimeError):
     """The request is refused before anything is sent (exit status 2)."""
 
 
-class CallCapReached(RuntimeError):
+class CallCapReached(TranslationCallLimitReached):
     """``--max-calls`` calls were made; nothing more is sent."""
 
 
@@ -118,6 +124,7 @@ class ProtocolPlan:
     refused_after: int | None = None
     calls_made: int = 0
     failed_calls: int = 0
+    failure_kinds: dict[str, int] = field(default_factory=dict)
     rows_made: int = 0
     rows_passed: int = 0
     refusals: dict[str, int] = field(default_factory=dict)
@@ -172,12 +179,40 @@ def plan_protocol(catalog: ProtocolCatalog, store: Any, protocol_id: str, title:
     return plan, fixture
 
 
-def _counted(function: Callable[..., Any], counter: dict[str, int], cap: int | None) -> Callable[..., Any]:
+def _counted(
+    function: Callable[..., Any], counter: dict[str, int], cap: int | None, *,
+    retry_policy: ProviderRetryPolicy | None = None,
+    failure_kinds: dict[str, int] | None = None,
+) -> Callable[..., Any]:
     async def call(*args: Any) -> Any:
-        if cap is not None and counter["calls"] >= cap:
-            raise CallCapReached()
-        counter["calls"] += 1
-        return await function(*args)
+        failures = 0
+        while True:
+            if cap is not None and counter["calls"] >= cap:
+                raise CallCapReached()
+            counter["calls"] += 1
+            try:
+                return await function(*args)
+            except Exception as exc:
+                kind = translation_failure_kind(exc)
+                if failure_kinds is not None:
+                    failure_kinds[kind] = failure_kinds.get(kind, 0) + 1
+                failures += 1
+                status = getattr(exc, "status_code", None)
+                wait = None
+                if (
+                    retry_policy is not None and failures <= retry_policy.max_retries
+                    and (cap is None or counter["calls"] < cap)
+                    and (kind in {"rate_limited", "timeout", "connection"}
+                         or kind == "server" and status in {500, 502, 503})
+                ):
+                    wait = retry_policy.wait_seconds(failures, getattr(exc, "retry_after", None))
+                log.warning(
+                    "retranslate.call_failed kind=%s status=%s attempt=%d wait=%.1f retry=%s",
+                    kind, status if isinstance(status, int) else None,
+                    failures, wait or 0.0, wait is not None)
+                if wait is None:
+                    raise
+                await asyncio.sleep(wait)
     return call
 
 
@@ -196,13 +231,16 @@ def run_protocol(
         store.record_fact_translations(rows)
 
     report = asyncio.run(generate_revision_translations(
-        fixture, _counted(translate, counter, cap), model=model, stored=before_rows,
+        fixture, _counted(translate, counter, cap,
+                          retry_policy=RETRANSLATE_RETRY_POLICY, failure_kinds=plan.failure_kinds),
+        model=model, stored=before_rows,
         glossary=store.translation_glossary(key, TARGET_LANGUAGE, style_version=STYLE_VERSION),
-        make_glossary=_counted(make_glossary, counter, cap),
+        make_glossary=_counted(make_glossary, counter, cap,
+                               retry_policy=RETRANSLATE_RETRY_POLICY, failure_kinds=plan.failure_kinds),
         on_glossary=store.record_translation_glossary, on_batch=on_batch,
         max_calls=None if cap is None else max(0, cap - start)))
     plan.calls_made = counter["calls"] - start
-    plan.failed_calls = report.failed_calls
+    plan.failed_calls = sum(plan.failure_kinds.values())
     plan.rows_made = len(report.records)
     plan.rows_passed = report.passed
     for record in report.refused:
@@ -239,20 +277,22 @@ def _table(plans: Sequence[ProtocolPlan], ran: bool) -> str:
             f"{plan.shown_before} ({plan.current_shown_before}) | {plan.refused_before} |")
     total = sum(plan.calls for plan in plans)
     lines += ["", f"합계: 다시 만들 문장 {sum(plan.pending for plan in plans)} · 호출 {total}회"]
-    lines += ["", f"번역 묶음 제한 시간: {BATCH_TIMEOUT_SECONDS:g}초. 시간 초과 묶음은 반으로 나눠 재시도해 호출이 늘 수 있어요.",
-              "--max-calls 는 용어집·분할 재시도를 합친 상한이에요. 이 도구는 공급자 내부 재시도를 끄고 보낸 호출을 세요."]
+    lines += ["", f"번역 묶음 제한 시간: {BATCH_TIMEOUT_SECONDS:g}초. 일시 오류는 같은 공급자에 최대 2회 다시 보내며, 기다림은 한 번에 30초까지예요.",
+              "시간 초과·응답 꼴 오류·빈 응답 묶음은 기존 분할 경로로 더 작게 보내므로 계획보다 호출이 늘 수 있어요.",
+              "--max-calls 는 용어집·일시 오류·분할 재시도를 모두 합친 실제 전송 상한이에요. SDK·공급자 내부 재시도는 꺼요."]
     if ran:
         lines += [
             "",
-            "| 프로토콜 | 보낸 호출 | 실패한 호출 | 만든 행 | 검사 통과 | 검사에 걸린 까닭 | 한국어로 보임 전 → 후 (v{0} 것) | 검사에 걸림 전 → 후 |".format(STYLE_VERSION),
-            "|---|---|---|---|---|---|---|---|",
+            "| 프로토콜 | 보낸 호출 | 실패한 호출(용어집 포함) | 실패 종류 | 만든 행 | 검사 통과 | 검사에 걸린 까닭 | 한국어로 보임 전 → 후 (v{0} 것) | 검사에 걸림 전 → 후 |".format(STYLE_VERSION),
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for plan in plans:
             if plan.skipped or plan.shown_after is None:
                 continue
             reasons = ", ".join(f"{name} {count}" for name, count in sorted(plan.refusals.items())) or "-"
+            failures = ", ".join(f"{name} {count}" for name, count in sorted(plan.failure_kinds.items())) or "-"
             lines.append(
-                f"| {plan.title} | {plan.calls_made} | {plan.failed_calls} | {plan.rows_made} | "
+                f"| {plan.title} | {plan.calls_made} | {plan.failed_calls} | {failures} | {plan.rows_made} | "
                 f"{plan.rows_passed} | {reasons} | {plan.shown_before} → {plan.shown_after} "
                 f"({plan.current_shown_before} → {plan.current_shown_after}) | "
                 f"{plan.refused_before} → {plan.refused_after} |")

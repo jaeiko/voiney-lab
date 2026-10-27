@@ -58,7 +58,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
-from openai import APITimeoutError
+from openai import APIConnectionError, APITimeoutError
 
 from voiney_lab.curated_protocol import (
     _SOURCE_UN_WORD,
@@ -73,6 +73,8 @@ from voiney_lab.curated_protocol import (
     reader_translation_issue,
 )
 from voiney_lab.workspace_store import FactTranslationRecord, TranslationGlossaryRecord
+from voiney_lab.experiment_protocol_analysis import _repaired_response_structure
+from voiney_lab.model_providers import ModelProviderError, _unfenced
 
 
 log = logging.getLogger(__name__)
@@ -280,6 +282,47 @@ class GlossaryResult:
     model_version: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+
+
+class TranslationCallLimitReached(RuntimeError):
+    """No request was sent because the caller's shared budget was exhausted."""
+
+
+class TranslationResponseError(ValueError):
+    """A response cannot be read; only the failure code leaves the parser."""
+
+    def __init__(self, kind: str = "response_shape") -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+def translation_failure_kind(error: Exception) -> str:
+    """Privacy-safe categories for translation failures, never provider prose."""
+    if isinstance(error, (TimeoutError, APITimeoutError)):
+        return "timeout"
+    if isinstance(error, (ConnectionError, APIConnectionError)):
+        return "connection"
+    if isinstance(error, json.JSONDecodeError):
+        return "response_shape"
+    if isinstance(error, (ModelProviderError, TranslationResponseError)):
+        status = getattr(error, "status_code", None)
+        if status in {408, 504}:
+            return "timeout"
+        kind = error.kind
+        if kind in {
+            "rate_limited", "timeout", "server", "authentication", "invalid_request",
+            "payment_required", "connection", "blocked", "response_shape", "empty_response",
+        }:
+            return kind
+    # xAI uses the OpenAI SDK without a facade.
+    status = getattr(error, "status_code", None)
+    if status == 429:
+        return "rate_limited"
+    if status in {408, 504}:
+        return "timeout"
+    if status in {500, 502, 503}:
+        return "server"
+    return "other"
 
 
 #: (sentences, request context) -> what the model returned.
@@ -1021,10 +1064,12 @@ async def generate_revision_translations(
         report.glossary_calls += 1
         try:
             made = await make_glossary(context)
+        except TranslationCallLimitReached:
+            return report
         except Exception as exc:  # noqa: BLE001 - sentences go on without one
             log.warning(
-                "revision_translation glossary_failed revision=%s error=%s",
-                fixture.revision_id, type(exc).__name__)
+                "revision_translation glossary_failed revision=%s kind=%s",
+                fixture.revision_id, translation_failure_kind(exc))
         else:
             entries = _lab_glossary(made.entries, reviewed)
             report.prompt_tokens += made.prompt_tokens
@@ -1058,13 +1103,15 @@ async def generate_revision_translations(
         report.calls += 1
         try:
             result = await translate(batch, batch_context(context, entries, batch))
+        except TranslationCallLimitReached:
+            break
         except Exception as exc:  # noqa: BLE001 - a failed call stores nothing
             report.failed_calls += 1
             log.warning(
-                "revision_translation batch_failed revision=%s items=%d error=%s",
-                fixture.revision_id, len(batch), type(exc).__name__,
+                "revision_translation batch_failed revision=%s items=%d kind=%s",
+                fixture.revision_id, len(batch), translation_failure_kind(exc),
             )
-            if (isinstance(exc, (TimeoutError, APITimeoutError)) or getattr(exc, "kind", None) == "timeout") and len(batch) > 1:
+            if translation_failure_kind(exc) in {"timeout", "response_shape", "empty_response"} and len(batch) > 1:
                 middle = len(batch) // 2
                 retry_batches[:0] = [batch[:middle], batch[middle:]]
             continue
@@ -1292,6 +1339,34 @@ def _usage(response: Any) -> tuple[int, int]:
     )
 
 
+def _translation_payload(response: Any, field: str) -> list[Any]:
+    """Read an envelope after the existing value-preserving structure repairs.
+
+    An unreadable or empty envelope raises instead of storing permanent
+    ``missing`` rows. The generator can then split the batch as for a timeout.
+    """
+    choices = getattr(response, "choices", None) or ()
+    message = getattr(choices[0], "message", None) if choices else None
+    if getattr(message, "refusal", None):
+        raise TranslationResponseError("blocked")
+    text = getattr(message, "content", None)
+    if not isinstance(text, str) or not text.strip():
+        raise TranslationResponseError("empty_response")
+    text = _unfenced(text)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        repaired = _repaired_response_structure(text)
+        if repaired is None:
+            raise TranslationResponseError() from None
+        payload = json.loads(repaired[0])
+        log.info("revision_translation response_repaired brackets=%d", repaired[1].bracket_count)
+    items = payload.get(field) if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise TranslationResponseError()
+    return items
+
+
 @asynccontextmanager
 async def _translation_client(factory: Callable[[], Any]) -> Any:
     """Own each request's SDK client inside the loop that creates it.
@@ -1348,18 +1423,17 @@ def openai_glossary_maker(
                 ),
                 timeout=timeout,
             )
-        payload = json.loads(response.choices[0].message.content or "{}")
-        items = payload.get("entries") if isinstance(payload, dict) else None
+        items = _translation_payload(response, "entries")
         entries = []
         seen: set[str] = set()
-        for item in items if isinstance(items, list) else ():
+        for item in items:
             if not (
                 isinstance(item, dict)
                 and isinstance(item.get("source"), str)
                 and isinstance(item.get("korean"), str)
                 and isinstance(item.get("keep_english"), bool)
             ):
-                continue
+                raise TranslationResponseError()
             key = " ".join(item["source"].split()).casefold()
             if not key or key in seen:
                 continue
@@ -1427,16 +1501,23 @@ def openai_batch_translator(
                 ),
                 timeout=timeout,
             )
-        payload = json.loads(response.choices[0].message.content or "{}")
-        items = payload.get("items") if isinstance(payload, dict) else None
+        items = _translation_payload(response, "items")
         translations: dict[str, str] = {}
-        for item in items if isinstance(items, list) else ():
+        expected = {unit.fact_key for unit in batch}
+        for item in items:
             if (
                 isinstance(item, dict)
                 and isinstance(item.get("id"), str)
                 and isinstance(item.get("korean"), str)
+                and item["korean"].strip()
+                and item["id"] in expected
+                and item["id"] not in translations
             ):
-                translations.setdefault(item["id"], item["korean"])
+                translations[item["id"]] = item["korean"]
+            else:
+                raise TranslationResponseError()
+        if set(translations) != expected:
+            raise TranslationResponseError()
         prompt_tokens, completion_tokens = _usage(response)
         return BatchResult(
             translations=translations,
