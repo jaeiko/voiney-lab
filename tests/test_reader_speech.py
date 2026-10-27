@@ -330,13 +330,19 @@ class ReadingCheckTests(unittest.TestCase):
             ("Incubate for 15 min at 37°C", "37°C에서 15분 동안 배양합니다."),
             ("Mix by inverting the tube five times.", "튜브를 다섯 번 뒤집어 섞습니다."),
             ("Do not vortex the sample.", "시료를 볼텍스하지 마세요."),
-            ("Wash the cells with 1,000 µL PBS", "PBS 1000 µL로 세포를 씻습니다."),
+            ("Wash the cells with 1,000 µL PBS", "PBS 1,000 µL로 세포를 씻습니다."),
         ):
             with self.subTest(source=source):
                 self.assertIsNone(reader_translation_issue(source, reading))
         # The step label may lead the reading even if the statement lacks it.
         self.assertIsNone(reader_translation_issue(
             "Add 25 mM AMBIC", "3단계: 25 mM AMBIC를 넣습니다.", step_label="3"))
+
+    def test_a_number_cannot_drop_its_thousands_separator(self) -> None:
+        # The original faithful-reading pair now changes a literal number.
+        self.assertEqual(reader_translation_issue(
+            "Wash the cells with 1,000 µL PBS", "PBS 1000 µL로 세포를 씻습니다."),
+            "quantities_changed")
 
     def test_each_kind_of_drift_is_refused(self) -> None:
         for reading, issue in (
