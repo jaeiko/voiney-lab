@@ -159,3 +159,11 @@ def test_multiline_quantity_signs_reach_the_voice(written: str, language: str, e
         for sentence in server.speech_sentences(written):
             server.synthesize(sentence, language)
     assert ' '.join(call.args[0] for call in provider.call_args_list) == expected
+
+
+def test_typeset_negative_temperature_is_read_with_its_sign() -> None:
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    with patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'pcm') as provider:
+        server.synthesize('−20°C', 'ko')
+    assert provider.call_args.args[0] == '섭씨 영하 이십 도'

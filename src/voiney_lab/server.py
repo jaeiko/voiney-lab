@@ -3379,14 +3379,14 @@ _SPOKEN_UNITS = (
 _SPOKEN_UNIT = "(?:" + "|".join(pattern for pattern, _ in _SPOKEN_UNITS) + ")(?![A-Za-z])"
 _SPOKEN_VALUE = re.compile(
     rf"(?<![A-Za-z0-9_.:−-])(?P<qualifier>>=|<=|[~≈><≥≤])?\s*"
-    rf"(?P<first>-?{_SPOKEN_NUMBER})"
-    rf"(?:(?P<operator>\s*(?:[–—−±:]|-)\s*)(?P<second>-?{_SPOKEN_NUMBER}))?"
+    rf"(?P<first>[-−]?{_SPOKEN_NUMBER})"
+    rf"(?:(?P<operator>\s*(?:[–—−±:]|-)\s*)(?P<second>[-−]?{_SPOKEN_NUMBER}))?"
     rf"\s*(?P<unit>{_SPOKEN_UNIT})?(?![A-Za-z0-9_:-]|\.\d)")
 
 
 def _say_number(number: str) -> str:
     """Read digits literally after a decimal point; never round or use float."""
-    if number.startswith("-"):
+    if number.startswith(("-", "−")):
         return "마이너스 " + _say_number(number[1:])
     whole, dot, fraction = number.replace(",", "").partition(".")
     digits = "영일이삼사오육칠팔구"
@@ -3471,8 +3471,8 @@ def normalize_korean_speech(text: str) -> str:
             spoken += separator + number_reader(second)
         if unit:
             if reading == "도":
-                spoken = "섭씨 " + ("영하 " + spoken.removeprefix("마이너스 ") if first.startswith("-") else spoken)
-                if second and second.startswith("-"):
+                spoken = "섭씨 " + ("영하 " + spoken.removeprefix("마이너스 ") if first.startswith(("-", "−")) else spoken)
+                if second and second.startswith(("-", "−")):
                     spoken = spoken.replace(separator + "마이너스 ", separator + "영하 ")
             spoken += " " + reading
         if qualifier in {"~", "≈"}:

@@ -152,3 +152,7 @@ def test_generation_glossary_translates_common_nouns_inside_names() -> None:
     assert saved['Band100'].korean == 'Band100'
     assert saved['Gel-100'].korean == 'Gel-100'
     assert 'GC 바이알' in str(contexts[0])
+
+
+def test_typeset_negative_temperature_cannot_lose_its_sign() -> None:
+    assert pt.statement_issue('Store at −20°C.', '20°C에서 보관해요.') == 'quantities_changed'

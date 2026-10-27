@@ -10080,7 +10080,7 @@ def _source_rank_values(source: str) -> list[str]:
 # Marks attached to a number are part of the quantity too. A minus in an
 # identifier or between range endpoints is not a negative sign.
 _READER_QUANTITY_MARK = re.compile(
-    r"(?P<mark>>=|<=|[~≈><≥≤±]|(?<![A-Za-z0-9_.])-)\s*"
+    r"(?P<mark>>=|<=|[~≈><≥≤±]|(?<![A-Za-z0-9_.])[-−])\s*"
     r"(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)")
 
 
