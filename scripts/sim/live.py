@@ -139,7 +139,7 @@ async def evaluate(args: argparse.Namespace, cases: list, budget: Budget, speech
     server = import_server()
     router = LlmRouterSettings.from_environment() if args.configured_models else LlmRouterSettings()
     if args.configured_models and not router.enabled:
-        raise ValueError('configured router is not enabled')
+        raise ValueError(router.unavailable_reason or 'VOINEY_LAB_LLM_ROUTER_ENABLED must be true for configured models')
     stt_settings = vp.SttProviderSettings.from_environment({**os.environ, vp.STT_PROVIDER_ENV:args.stt_provider, vp.STT_MODEL_ENV:args.stt_model})
     if args.stt_provider != 'google_cloud_v2':
         vp._key(vp.GOOGLE_KEY_ENV if args.stt_provider == 'google_cloud' else vp.ELEVENLABS_KEY_ENV)

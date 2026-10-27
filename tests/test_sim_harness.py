@@ -454,3 +454,28 @@ def test_failed_turn_cannot_authorize_even_an_expected_step_change():
     result=dict(action='next',intent_kind='next_step',route='curated_protocol',changed_fields=['step','revision'],
                 step_before=0,step_after=1,spoken='',drop_reasons=[],terminal=False,timings_ms={},transcript=c.text)
     assert score_case(c,result)['wrong_state'] is True
+
+
+@pytest.mark.parametrize('enabled,expected',[
+    ('false',['VOINEY_LAB_LLM_ROUTER_ENABLED']),
+    ('true',['VOINEY_LAB_ROUTER_MODEL','VOINEY_LAB_ROUTER_PROVIDER']),
+])
+def test_configured_live_router_names_missing_settings_before_speech(tmp_path,monkeypatch,capsys,enabled,expected):
+    from scripts.sim import live
+    from voiney_lab import llm_router
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    monkeypatch.setenv(llm_router.LLM_ROUTER_ENABLED_ENV,enabled)
+    monkeypatch.setenv(llm_router.ROUTER_FIRST_ENV,'false')
+    for name in (llm_router.ROUTER_MODEL_ENV,llm_router.ROUTER_PROVIDER_ENV):
+        monkeypatch.delenv(name,raising=False)
+    def forbidden(*args,**kwargs):
+        raise AssertionError('speech attempted before router configuration validation')
+    monkeypatch.setattr(live.CachedSpeech,'speak',forbidden)
+    out=tmp_path/'reports/sim/router-settings.json'
+    assert live.main(['--execute','--configured-models','--limit','1','--output',str(out)])==2
+    result=json.loads(out.read_text())
+    assert result['run_failure_settings']==expected
+    assert result['provider_requests_including_auth_and_retries']==0
+    assert result['completed_cases']==0
+    captured=capsys.readouterr()
+    assert all(name in captured.err for name in expected)
