@@ -101,7 +101,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
             for p,c in cases:
                 result = await run_case(p,c, router_settings=router, offline=not args.configured_router,
                                         role_client=role_client if args.configured_router else None,
-                                        classifier=lambda frame: any(frame))
+                                        classifier=lambda frame: any(frame), oracle_environment=True)
                 row = score_case(c,result,source=' '.join(page.text for page in p.fixture.draft.extraction.pages))
                 row.update(protocol=p.code, noise='not_measured', snr='not_measured',voice='oracle_text',speed='not_measured')
                 rows.append(row)
@@ -118,6 +118,10 @@ async def evaluate(args: argparse.Namespace) -> dict:
         'schema':1, 'mode':'oracle_model' if args.configured_router else 'offline', 'stt_measured':False, 'acoustics_measured':False,
         'latency_measured':'in_process_fake_providers_no_playback', 'router':'configured' if args.configured_router else 'off',
         'router_first':bool(router and router.router_first),
+        'router_settings':({'provider':router.provider, 'model':router.model,
+                            'reasoning_level':router.reasoning, 'router_first':router.router_first,
+                            'max_output_tokens':router.max_output_tokens,
+                            'timeout_seconds':router.timeout_seconds} if router else None),
         'utc':datetime.now(timezone.utc).isoformat(),
         'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),

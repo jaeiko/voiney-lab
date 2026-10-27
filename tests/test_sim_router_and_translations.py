@@ -43,6 +43,7 @@ def test_stored_translation_rejects_wrong_identity_and_scientific_value(tmp_path
     attached, coverage = attach_translations((p,), path)
     assert attached[0].fixture.localized_fact(step.step_id, 'current_step') == row['korean']
     assert coverage['attached'] == 1
+    assert attached[0].fixture.translation_versions[row['key']] == 0
 
 
 def test_only_explicit_router_comparison_allows_the_treatment_to_change() -> None:
@@ -54,6 +55,10 @@ def test_only_explicit_router_comparison_allows_the_treatment_to_change() -> Non
     with pytest.raises(ValueError):
         compare(report, routed)
     assert compare(report, routed, allow_router_change=True)['comparable']
+    first = {**routed, 'router_settings': {'provider': 'xai', 'model': 'first'}}
+    second = {**routed, 'router_settings': {'provider': 'xai', 'model': 'second'}}
+    with pytest.raises(ValueError):
+        compare(first, second)
 
 
 def test_budget_counts_the_sdk_httpx2_transport(tmp_path) -> None:
@@ -85,10 +90,23 @@ def test_model_cli_uses_the_existing_server_proposal_gate(tmp_path, monkeypatch)
     monkeypatch.setenv('VOINEY_LAB_LLM_ROUTER_ENABLED', 'true')
     monkeypatch.setenv('VOINEY_LAB_ROUTER_PROVIDER', 'xai')
     monkeypatch.setenv('VOINEY_LAB_ROUTER_MODEL', 'fake-router')
+    monkeypatch.setenv('VOINEY_LAB_MULTI_BRAIN_ENABLED', 'true')
+    original_create = client.chat.completions.create
+    async def isolated_create(**kwargs):
+        import os
+        assert os.environ.get('VOINEY_LAB_MULTI_BRAIN_ENABLED') != 'true'
+        return await original_create(**kwargs)
+    client.chat.completions.create = isolated_create
+    original_run_case = run.run_case
+    async def controlled_case(*args, **kwargs):
+        assert kwargs.get('oracle_environment') is True
+        return await original_run_case(*args, **kwargs)
+    monkeypatch.setattr(run, 'run_case', controlled_case)
     output = tmp_path/'oracle.json'
     assert run.main(['--configured-router', '--execute', '--output', str(output)]) == 0
     report = json.loads(output.read_text())
     assert report['router'] == 'configured'
+    assert report['router_settings']['model'] == 'fake-router'
     assert report['overall']['wrong_state'] == 0
     assert report['rows'][0]['changed_fields'] == ['confirmation']
     assert len(client.requests) == 1

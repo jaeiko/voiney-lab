@@ -140,7 +140,7 @@
       "source_sha256": "d394f6cec6ca5927b3241606e161f6bcef64284667f8776d7a15ad841bc790de",
       "key": "step-0004/current_step",
       "source": "4 Gently vortex to ensure it is adequately mixed. Take care to avoid foaming or extended\nexposure to light. Store on ice until use.",
-      "korean": "4 충분히 섞이도록 부드럽게 vortex해요. 거품이 생기거나 빛에 오래 노출되지 않도록 주의해요. 사용할 때까지 얼음 위에 보관해요."
+      "korean": "4 충분히 섞이도록 부드럽게 볼텍스로 섞어요. 거품이 생기거나 빛에 오래 노출되지 않도록 주의해요. 사용할 때까지 얼음 위에 보관해요."
     },
     {
       "protocol": "pio_54201_sds_page",
@@ -196,7 +196,7 @@
       "source_sha256": "3067dadf83af1092d5f1e192e8812ce97fe8908aa5992d58ae5edb65068b6121",
       "key": "step_2/current_step",
       "source": "2 Block the membrane in Odyssey Blocking Buffer for 1 hour. Be sure to use sufficient\nblocking buffer to cover the membrane (a minimum of 0.4 mL/cm2 is suggested).\n01:00:00",
-      "korean": "2 Odyssey Blocking Buffer에서 멤브레인을 1 hour 동안 blocking해요. 멤브레인을 덮을 만큼 충분히 사용해요. 최소 0.4 mL/cm2를 권장해요.\n01:00:00"
+      "korean": "2 Odyssey Blocking Buffer에서 멤브레인을 1 hour 동안 블로킹해요. 멤브레인을 덮을 만큼 충분히 사용해요. 최소 0.4 mL/cm2를 권장해요.\n01:00:00"
     },
     {
       "protocol": "pio_4719_western_detection",
@@ -331,5 +331,6 @@
       "source": "4. Clean the glass slide substrates.\na. Sonicate the substrates (approx. 25 3 25 mm) in a 3 M HCl solution (35 vol%, VRW Chemicals)\nfor 10 min.",
       "korean": "4. 유리 슬라이드 기판을 세척해요.\na. 원문 크기 표기가 25 3 25 mm인 기판을 3 M HCl 용액(35 vol%, VRW Chemicals)에서 10 min 동안 초음파 처리해요."
     }
-  ]
+  ],
+  "style_version": 5
 }

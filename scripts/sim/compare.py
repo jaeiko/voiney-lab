@@ -24,10 +24,10 @@ def numeric_metrics(value: object, prefix: str = '') -> dict[str, float | int | 
 def compare(before: dict, after: dict, *, allow_router_change: bool = False) -> dict:
     if allow_router_change and ({before.get('mode'), after.get('mode')} - {'offline', 'oracle_model'}):
         raise ValueError('router treatment comparison requires oracle STT')
-    for key in ('schema','mode','corpus_sha256','workload_sha256','router','provider','model','split','rows_suppressed'):
+    for key in ('schema','mode','corpus_sha256','workload_sha256','router','provider','model','split','rows_suppressed','router_settings'):
         if before.get(key) != after.get(key):
             if allow_router_change and not before.get('stt_measured') and not after.get('stt_measured'):
-                if key == 'router' or (key == 'mode' and {before.get(key), after.get(key)} <= {'offline', 'oracle_model'}):
+                if key in {'router', 'router_settings'} or (key == 'mode' and {before.get(key), after.get(key)} <= {'offline', 'oracle_model'}):
                     continue
             raise ValueError(f'incomparable {key}')
     if before.get('translations_sha256') != after.get('translations_sha256'):

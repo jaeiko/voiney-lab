@@ -14,6 +14,10 @@ def attach_translations(protocols: tuple[Protocol, ...], path: Path) -> tuple[tu
     data = json.loads(path.read_text(encoding='utf-8'))
     if data.get('schema') != 1 or not isinstance(data.get('readings'), list):
         raise ValueError('invalid stored reading schema')
+    from voiney_lab.protocol_translation import STYLE_VERSION
+    style_version = data.get('style_version', 0)
+    if type(style_version) is not int or not 0 <= style_version <= STYLE_VERSION:
+        raise ValueError('unsupported stored reading style version')
     by_code = {p.code: p for p in protocols}
     attached: dict[str, dict[str, str]] = {}
     for row in data['readings']:
@@ -37,11 +41,10 @@ def attach_translations(protocols: tuple[Protocol, ...], path: Path) -> tuple[tu
         readings[key] = korean
     if not attached:
         raise ValueError('no matching stored readings')
-    from voiney_lab.protocol_translation import STYLE_VERSION
     result = tuple(replace(p, fixture=replace(p.fixture,
                    machine_localizations={**(p.fixture.machine_localizations or {}), **attached.get(p.code, {})},
                    translation_versions={**(p.fixture.translation_versions or {}),
-                                         **dict.fromkeys(attached.get(p.code, {}), STYLE_VERSION)})) for p in protocols)
+                                         **dict.fromkeys(attached.get(p.code, {}), style_version)})) for p in protocols)
     step_count = sum(len(p.fixture.steps) for p in protocols)
     step_readings = sum(key.endswith('/current_step') for readings in attached.values() for key in readings)
     return result, {'attached': sum(map(len, attached.values())), 'protocols': len(attached),

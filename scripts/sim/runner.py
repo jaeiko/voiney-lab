@@ -64,7 +64,8 @@ class Capture:
 
 async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                    transcriber: Callable[..., Any] | None = None, synthesizer: Callable[..., bytes] | None = None,
-                   router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None) -> dict:
+                   router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None,
+                   oracle_environment: bool = False) -> dict:
     """Only provider boundaries are replaced; emergency/front rules/gates are production code."""
     from voiney_lab.curated_protocol import CuratedProtocolSession
     from voiney_lab.vad import EndpointDetector, VadConfig
@@ -72,10 +73,16 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
     from voiney_lab.tools import ToolContext
     from pathlib import Path
     with ExitStack() as stack:
-        if offline:
-            # No inherited keys or feature switches, even on a developer shell.
-            safe = {k:v for k,v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'PYTEST_VERSION'}}
+        if offline or oracle_environment:
+            # Oracle comparisons differ only in their explicit router treatment.
+            # Networked oracle runs keep provider authentication, but no other
+            # inherited product switches. Their router client is already built.
+            safe = ({k:v for k,v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'PYTEST_VERSION'}}
+                    if offline else {k:v for k,v in os.environ.items()
+                                     if not k.startswith('VOINEY_LAB_')
+                                     or k.startswith(('VOINEY_LAB_ROUTER_', 'VOINEY_LAB_LLM_ROUTER_'))})
             stack.enter_context(patch.dict(os.environ, safe, clear=True))
+        if offline:
             stack.enter_context(patch.object(socket.socket, 'connect', side_effect=RuntimeError('offline_network_forbidden')))
         # Disable persistence/diagnostic capture; neither mode writes lab runtime data.
         stack.enter_context(patch.dict(os.environ, {
