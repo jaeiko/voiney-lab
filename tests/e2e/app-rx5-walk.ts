@@ -122,6 +122,10 @@ export async function runToolsWalk(page: Page, info: TestInfo) {
  expect(server.starts[0].input_language).toBe('en');
  server.misheard();
  await expect(page.getByText('안 들은 말 1개', { exact: true })).toBeVisible();
+ const minimumText = info.project.name.startsWith('Tablet') ? 20 : 16;
+ const tools = await page.locator('.run-tools > button, .run-tools > details > summary').evaluateAll(els => ({ goal: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--run-target')), fonts: els.map(e => parseFloat(getComputedStyle(e).fontSize)), heights: els.map(e => e.getBoundingClientRect().height) }));
+ expect(tools.fonts.every(size => size >= minimumText), JSON.stringify(tools)).toBe(true);
+ expect(tools.heights.every(height => height >= tools.goal), JSON.stringify(tools)).toBe(true);
  await page.getByText('안 들은 말 1개', { exact: true }).click();
  await expect(page.getByText('받아 적은 말이 없어요', { exact: false }).last()).toBeVisible();
  await shot(page, info, 'after-run-dropped');
@@ -131,7 +135,8 @@ export async function runToolsWalk(page: Page, info: TestInfo) {
  await expect(page.getByRole('dialog').getByText('저장한 설정은 다음 실험부터 적용돼요. 지금 하던 실험은 그대로예요.', { exact: true })).toHaveCount(1);
  await expect(page.getByRole('dialog').getByTestId('voice-check-start')).toHaveCount(0);
  await expect(page.getByLabel('내가 말하는 언어')).toBeDisabled();
- const targets = await page.getByRole('dialog').locator('.btn, select, .segmented-option').evaluateAll(els => ({ goal: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--run-target')), heights: els.map(e => e.getBoundingClientRect().height) }));
+ const targets = await page.getByRole('dialog').locator('.btn, select, .segmented-option, .field > span, p').evaluateAll(els => ({ goal: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--run-target')), fonts: els.map(e => parseFloat(getComputedStyle(e).fontSize)), heights: els.filter(e => e.matches('.btn, select, .segmented-option')).map(e => e.getBoundingClientRect().height) }));
+ expect(targets.fonts.every(size => size >= minimumText), JSON.stringify(targets)).toBe(true);
  expect(targets.heights.every(height => height >= targets.goal), JSON.stringify(targets)).toBe(true);
  await page.getByLabel('먼저 말해 주기').selectOption('needed');
  await expect(page.getByRole('dialog').getByText('저장했어요', { exact: true })).toBeVisible();

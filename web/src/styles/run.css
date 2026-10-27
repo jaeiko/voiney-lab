@@ -206,10 +206,11 @@ body #connection-band { background: var(--danger); box-shadow: none; }
 body #connection-band[data-state="restored"] { background: var(--ink); }
 body #connection-band .connection-band-timer { border-radius: var(--radius); color: var(--danger); }
 body #run-timer #run-timer-offline { border-radius: var(--radius); background: var(--danger); }
-.run-tools { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); font-size: var(--text-body); line-height: var(--line-body); }
+.run-tools { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); font-size: var(--run-status); line-height: var(--run-status-line); }
 .run-tools details { width: 100%; }
-.run-tools summary { min-height: var(--target); cursor: pointer; padding: var(--space-3) 0; }
+.run-tools summary { min-height: var(--run-target); cursor: pointer; padding: var(--space-3) 0; }
 .run-tools ol { max-height: 240px; overflow: auto; }
 .run-tools pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.run-settings-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.run-settings-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-settings-dialog .btn, .run-settings-dialog .field, .run-settings-dialog .settings select, .run-settings-dialog .segmented-option { font-size: var(--run-status); line-height: var(--run-status-line); }
 .run-settings-dialog .btn, .run-settings-dialog .settings select, .run-settings-dialog .segmented-option { min-height: var(--run-target); }
