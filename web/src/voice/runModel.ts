@@ -46,6 +46,12 @@ export interface ProtocolState {
   visual_status?: string;
   timers?: { step?: StepTimer | null; experiment?: Record<string, unknown> | null; pause?: Record<string, unknown> | null };
   current_step_run_changes?: Array<{ kind_ko?: string; words_ko?: string }> | null;
+  /** Lane EASY: today's values for the whole run (the end screen counts them). */
+  run_changes?: Array<Record<string, unknown>> | null;
+  /** The language the source step is written in, as the server reads it ("ko": the source is Korean already). */
+  source_language?: string | null;
+  /** Lane KO2, decision 3: the step's sentence has no checked Korean yet -- the screen says "번역 준비 중" beside the source. */
+  translation_missing?: boolean;
 }
 
 export interface ScreenFields {
@@ -56,6 +62,10 @@ export interface ScreenFields {
   readback_values?: string[];
   repeat_round?: { words?: string } | null;
   source_figures?: unknown[] | null;
+  /** Lane KO2, decision 3: next_step_sentence is the source for want of Korean. */
+  next_step_translation_missing?: boolean;
+  /** Lane KO2: the revision's Korean, or the screen's sentences read in place, are being made now (a translation_update follows). */
+  translation_pending?: boolean;
   [key: string]: unknown;
 }
 
@@ -72,6 +82,8 @@ export interface LogLine {
   key: string;
   who: "heard" | "said";
   text: string;
+  /** Lane KO2, decision 4: the words are a reply's shown text, the source for want of Korean (reply.*.translation_missing, nothing said aloud). */
+  source?: boolean;
 }
 
 export interface Card {
@@ -81,6 +93,8 @@ export interface Card {
   candidates: string[];
   values: string[];
   stepId: string | null;
+  /** The card's words are the source for want of Korean (the reply's translation_missing). */
+  source?: boolean;
 }
 
 export interface RunModel {
@@ -102,6 +116,10 @@ export interface RunModel {
   ended: { status: string | null; report: string | null } | null;
   /** A refusal said in the server's own words (a pause refused, a start refused). */
   notice: string | null;
+  /** The experiment record this run writes (experiment.report.state), which the end screen's rating is about. */
+  reportId: string | null;
+  /** The turns the server answered with a problem's help (turn.route_decision, action problem_help), for the end screen's count. */
+  helpTurns: number[];
 }
 
 export const EMPTY_RUN: RunModel = {
@@ -119,6 +137,8 @@ export const EMPTY_RUN: RunModel = {
   timerNotice: null,
   ended: null,
   notice: null,
+  reportId: null,
+  helpTurns: [],
 };
 
 /** The server's discard signals: a sound it dropped (lane HEAR's speech.dropped) and a voice taken for another person's (lane SP1's speech.ignored). */
@@ -171,6 +191,59 @@ function text(value: unknown): value is string {
 
 function oneLine(value: unknown): string {
   return plain(value).replace(/\s+/g, " ").trim();
+}
+
+// --- Korean first on the screen (person's decision 2 of 2026-10-26, lane RX4) ----
+//
+// The Korean of a step is large; the source is small under it and folded. A
+// step with no Korean says "번역 준비 중" and shows the source at an ordinary
+// size -- never large. The same rule serves the next step, a card and the
+// caption. What is Korean and what is missing is the server's to say (lane
+// KO2, decision 3): the state's primary_summary is the step's checked Korean
+// (its own "N단계: " already taken off -- the label line names the step; the
+// screen takes nothing off again), translation_missing says there is none
+// yet, next_step_translation_missing says the next step's sentence is the
+// source, and a translation_update sends the state again once a reading
+// arrives. The screen reads no prose to decide it (AGENTS.md: it renders the
+// server's events).
+
+export interface StepWords {
+  /** The Korean to show large, or null when the step shows its source. */
+  korean: string | null;
+  /** The source to show small (folded under the Korean, or at an ordinary size when there is no Korean); null when the Korean is the source itself. */
+  source: string | null;
+  /** The server said the Korean is missing: "번역 준비 중" beside the source. */
+  missing: boolean;
+}
+
+/** The current step's words for the screen: the server's Korean first, the source under it (decision 2). */
+export function stepWords(protocol: ProtocolState): StepWords {
+  const primary = text(protocol.primary_summary) ? plain(protocol.primary_summary).trim() : null;
+  const source = text(protocol.display_summary) ? plain(protocol.display_summary).trim() : null;
+  // A step written in Korean is its own Korean (lane FX's source_language); the server sends no reading for it.
+  const korean = primary ?? (protocol.source_language === "ko" ? source : null);
+  return { korean, source: korean !== null && korean === source ? null : source, missing: protocol.translation_missing === true };
+}
+
+/** The next step's sentence for the screen, as the server wrote it: its Korean with its one step label ("5단계: …"), or the source when it says the Korean is missing. */
+export function nextStepWords(sentence: string, missing: boolean): StepWords {
+  const words = oneLine(sentence);
+  if (!words) return { korean: null, source: null, missing: false };
+  return missing ? { korean: null, source: words, missing: true } : { korean: words, source: null, missing: false };
+}
+
+/** The newest generation the server has shown this connection: session.ready's, then every turn's since (lane RX4).
+
+    A bench control carries it, because the server compares a resume (and a tapped candidate) with its own
+    generation, which moves on with a joined utterance (lane HEAR) and a barge-in -- both announced by a
+    speech.start carrying the new number. Session.ready's number alone was refused after either. */
+export function newestGeneration(ready: unknown, turnGenerations: Iterable<[unknown, unknown]>, browserGeneration: number): number {
+  let newest = Number.isInteger(ready) ? (ready as number) : 0;
+  const prefix = `${browserGeneration}:`;
+  for (const [key, generation] of turnGenerations) {
+    if (String(key).startsWith(prefix) && Number.isInteger(generation) && (generation as number) > newest) newest = generation as number;
+  }
+  return newest;
 }
 
 /** The words of a reply, as index.html's runReplyText reads them: the display document's sections, else the text. */
@@ -313,9 +386,11 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
       const key = `said:${String(m.generation)}:${turnId}`;
       const before = model.log.find((item) => item.key === key);
       const joined = m.type === "reply.complete" || !before ? words : `${before.text} ${words}`.trim();
-      // The caption and the log keep what was said; the card keeps what is shown.
-      const next = withLog(model, { key, who: "said", text: oneLine(spokenText(m) || joined) });
-      if (words && next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined) };
+      // The caption and the log keep what was said; the card keeps what is shown. Shown words that are the source
+      // for want of Korean (lane KO2's translation_missing) are drawn at an ordinary size.
+      const source = m.translation_missing === true;
+      const next = withLog(model, { key, who: "said", text: oneLine(spokenText(m) || joined), source: !said && source });
+      if (words && next.card && next.card.turnId === turnId) next.card = { ...next.card, text: plain(joined), source };
       return next;
     }
     case "server.operation":
@@ -336,6 +411,16 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
     case "workflow.control.refused":
       if (!ours) return model;
       return { ...model, notice: text(m.message_ko) ? plain(m.message_ko) : null };
+    case "experiment.report.state": {
+      // The record this run writes (index.html's experiment.report.state line): its id is what the end screen's rating names.
+      const report = m.report as { report_id?: unknown } | undefined;
+      if (!ours || !report || typeof report.report_id !== "string" || !report.report_id.trim() || model.reportId === report.report_id) return model;
+      return { ...model, reportId: report.report_id };
+    }
+    case "turn.route_decision":
+      // A turn the server answered with a problem's help (lane HELP), counted once per turn for the end screen.
+      if (turnId === null || (m.configuration_id !== undefined && !ours) || m.action !== "problem_help" || model.helpTurns.includes(turnId)) return model;
+      return { ...model, helpTurns: [...model.helpTurns, turnId] };
     case "speaker.filter": {
       if (!ours || !context.filterWords) return model;
       const words = filterNoticeWords(m, context.filterWords);

@@ -75,9 +75,10 @@ describe("HomeScreen", () => {
     renderWithClient(<HomeScreen session={session} />);
     expect(await screen.findByText("실험 시작")).toBeInTheDocument();
     expect(screen.getByText("바로 쓸 수 있는 프로토콜 1개")).toBeInTheDocument();
-    expect(screen.getByText("프로토콜 보기")).toHaveAttribute("href", "#/protocols");
-    expect(screen.getByText("올리기")).toHaveAttribute("href", "#/upload");
-    expect(screen.getByText("지난 기록")).toHaveAttribute("href", "/index.html#/records");
+    // Lane RX4: the small actions carry an icon beside the word, so the link is found by its role and name.
+    expect(screen.getByRole("link", { name: "프로토콜 보기" })).toHaveAttribute("href", "#/protocols");
+    expect(screen.getByRole("link", { name: "올리기" })).toHaveAttribute("href", "#/upload");
+    expect(screen.getByRole("link", { name: "지난 기록" })).toHaveAttribute("href", "/index.html#/records");
   });
 
   it("normal state: only an analysis under way shows 분석 중 with the elapsed time, leading to its progress screen", async () => {

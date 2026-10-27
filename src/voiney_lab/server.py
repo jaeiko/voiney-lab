@@ -16177,12 +16177,15 @@ async def voice_socket(websocket:WebSocket):
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
             elif control["type"]=="workflow.resume" and (
+                # Lane RX4, the person's decision 3 of 2026-10-26: a resume is
+                # fenced by the accepted configuration alone, as a pause is.
+                # The generation moves on with a joined utterance (lane HEAR)
+                # or a barge-in while the screen still holds session.ready's,
+                # so a [다시 시작] pressed after either was refused as stale.
                 not session.active or session.curated_protocol_session is None
                 or session.curated_protocol_session._experiment_started_at is None
                 or type(control.get("configuration_id")) is not int
-                or type(control.get("generation")) is not int
                 or control["configuration_id"]!=session.accepted_configuration_id
-                or control["generation"]!=session.generation
             ):
                 not_started=(session.curated_protocol_session is not None
                              and session.curated_protocol_session._experiment_started_at is None)

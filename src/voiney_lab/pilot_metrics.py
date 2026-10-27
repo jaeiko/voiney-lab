@@ -133,13 +133,31 @@ CREATE TABLE IF NOT EXISTS pilot_feedback(
  rating INTEGER CHECK(rating IS NULL OR rating BETWEEN 1 AND 5),
  skipped INTEGER NOT NULL CHECK(skipped IN (0,1)),
  note TEXT,
+ tags TEXT,
  CHECK((skipped=1 AND rating IS NULL) OR (skipped=0 AND rating IS NOT NULL))
 );
 """
+#: Columns added after a table's first release, put on an older file when it is opened
+#: (``CREATE TABLE IF NOT EXISTS`` leaves an existing table as it was).
+_LATER_COLUMNS = (
+    # Lane RX4: the chips under the rating, comma-joined codes of FEEDBACK_TAGS, or NULL.
+    ("pilot_feedback", "tags", "TEXT"),
+)
 
 
 #: The memo under the rating: one line, at most this many characters.
 FEEDBACK_NOTE_MAX = 200
+#: Lane RX4 (person's decision 3 of 2026-10-26): the chips under the rating on the new screen's end
+#: screen -- what the guidance was like, several at once. Codes only; the words are the screen's
+#: (web/src/copy/ko.ts). Kept with the answer, read back by the notes export, never a metric.
+FEEDBACK_TAGS = (
+    "heard_well",            # 말을 잘 알아들었어요
+    "missed_often",          # 말을 자주 놓쳤어요
+    "translation_awkward",   # 번역이 어색했어요
+    "screen_easy",           # 화면이 보기 편했어요
+    "timer_easy",            # 타이머가 편했어요
+    "figure_helped",         # 그림이 도움 됐어요
+)
 
 
 @dataclass(frozen=True)
@@ -150,6 +168,8 @@ class FeedbackAnswer:
     rating: int | None
     skipped: bool
     note: str | None
+    #: Lane RX4: the chips picked with the rating (``FEEDBACK_TAGS`` codes, in their order); none with a skip.
+    tags: tuple[str, ...] = ()
 
     @classmethod
     def from_request(cls, payload: Mapping[str, Any]) -> "FeedbackAnswer":
@@ -174,7 +194,15 @@ class FeedbackAnswer:
             note = " ".join(note.split()) or None
             if note is not None and len(note) > FEEDBACK_NOTE_MAX:
                 raise ValueError("note is too long")
-        return cls(report_id=report_id, rating=rating, skipped=skipped, note=note)
+        raw_tags = payload.get("tags", [])
+        if not isinstance(raw_tags, list) or any(not isinstance(tag, str) for tag in raw_tags):
+            raise ValueError("tags is invalid")
+        if any(tag not in FEEDBACK_TAGS for tag in raw_tags) or len(set(raw_tags)) != len(raw_tags):
+            raise ValueError("tags is invalid")
+        if skipped and raw_tags:
+            raise ValueError("a skipped answer has no tags")
+        tags = tuple(tag for tag in FEEDBACK_TAGS if tag in raw_tags)
+        return cls(report_id=report_id, rating=rating, skipped=skipped, note=note, tags=tags)
 
 
 def _now() -> str:
@@ -257,6 +285,11 @@ class PilotMetricsStore:
         connection = sqlite3.connect(self.path, timeout=_BUSY_SECONDS)
         connection.row_factory = sqlite3.Row
         connection.executescript(_SCHEMA)
+        for table, column, kind in _LATER_COLUMNS:
+            present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if column not in present:
+                with connection:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
         return connection
 
     def _read(self, sql: str, parameters: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -347,14 +380,14 @@ class PilotMetricsStore:
     def record_feedback(self, *, account_id: str, answer: FeedbackAnswer) -> None:
         values = (
             _now(), _identifier(account_id), _identifier(answer.report_id), answer.rating,
-            int(answer.skipped), answer.note,
+            int(answer.skipped), answer.note, ",".join(answer.tags) or None,
         )
         connection = self._connect()
         try:
             with connection:
                 connection.execute(
                     """INSERT INTO pilot_feedback(recorded_at,account_id,report_id,rating,
-                    skipped,note) VALUES(?,?,?,?,?,?)""",
+                    skipped,note,tags) VALUES(?,?,?,?,?,?,?)""",
                     values,
                 )
         finally:
@@ -968,7 +1001,7 @@ def day_rows(
     return out
 
 
-NOTE_COLUMNS = ("day", "account_id", "report_id", "recorded_at", "rating", "skipped", "note")
+NOTE_COLUMNS = ("day", "account_id", "report_id", "recorded_at", "rating", "skipped", "tags", "note")
 
 
 def note_rows(
@@ -986,10 +1019,13 @@ def note_rows(
             "recorded_at": item["recorded_at"],
             "rating": item["rating"],
             "skipped": item["skipped"],
+            # Lane RX4: the chips' codes, comma-joined (an older row has none).
+            "tags": item.get("tags") or "",
             "note": item["note"],
         }
         for item in snapshot.feedback
-        if item["note"]
+        # A memo, or (lane RX4) the chips picked with the rating: either is something the team reads here.
+        if (item["note"] or item.get("tags"))
         and _within(pilot_day(item["recorded_at"]), since, until)
         and (account is None or item["account_id"] == account)
     ]

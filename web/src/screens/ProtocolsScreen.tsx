@@ -1,4 +1,4 @@
-import { Upload } from "lucide-react";
+import { ClipboardCheck, Hourglass, Play, RotateCcw, Upload, type LucideIcon } from "lucide-react";
 
 import { useProtocolDetail, useProtocols, useSignOutOnExpiry } from "../api/queries";
 import type { CatalogEntry } from "../api/types";
@@ -30,6 +30,8 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
             ? startHref(entry.protocol_id)
             : oldRoutes.protocol(entry.protocol_id);
   const actionLabel = status.action ? words.actions[status.action] : status.kind === "analysing" ? words.actions.progress : null;
+  // Lane RX4 (decision 4): the action's icon beside its word.
+  const ActionIcon: LucideIcon = status.action === "start" ? Play : status.action === "review" ? ClipboardCheck : status.action === "retry" ? RotateCcw : Hourglass;
   return (
     <li className="row" data-protocol-id={entry.protocol_id} data-status={status.kind}>
       <div className="row-head">
@@ -42,7 +44,8 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
       {actionLabel ? (
         <div className="row-action">
           <a className={`btn ${status.action === "start" ? "btn-primary" : status.action ? "" : "btn-quiet"}`} href={href} data-action={status.action ?? "progress"}>
-            {actionLabel}
+            <ActionIcon aria-hidden="true" />
+            <span>{actionLabel}</span>
           </a>
         </div>
       ) : null}

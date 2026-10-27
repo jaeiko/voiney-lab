@@ -1808,8 +1808,16 @@ function showWorkflowControlRefused(message){
 function togglePauseSession(){
  if(!sessionActive||!socket||socket.readyState!==WebSocket.OPEN)return;
  const action=workflowPaused?"workflow.resume":"workflow.pause";
- // The server compares the generation it sent with session.ready (lane SAFE; lane IA review F5), not this page's own count.
- socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:acceptedSessionConfiguration?.server_generation}));
+ // The server compares the generation with its own (lane SAFE; lane IA review F5), not this page's own count -- and its own
+ // moves on from session.ready's with a joined utterance (lane HEAR) or a barge-in, each announced by a speech.start carrying
+ // the new number. The newest one this connection has seen goes (lane RX4, person's test of 2026-10-26: [다시 시작] refused as stale).
+ socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:latestServerGeneration()}));
+}
+function latestServerGeneration(){
+ const accepted=acceptedSessionConfiguration;if(!accepted)return null;
+ let newest=Number.isInteger(accepted.server_generation)?accepted.server_generation:0;const prefix=`${sessionGeneration}:`;
+ for(const [key,generation] of turnServerGenerations){if(String(key).startsWith(prefix)&&Number.isInteger(generation)&&generation>newest)newest=generation;}
+ return newest;
 }
 
 function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAttribute?.("aria-disabled",String(value));}

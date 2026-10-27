@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CircleAlert, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CircleAlert, Play, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useProtocols } from "../api/queries";
@@ -107,7 +107,8 @@ function ProtocolStep({ chosen, onChoose, onNext, onBack }: { chosen: string | n
       {chosen && !entry ? <Note>{copy.protocol.notFound}</Note> : null}
       <Footer onBack={onBack}>
         <button type="button" className="btn btn-primary btn-big" disabled={!entry?.available_for_execution} onClick={onNext} data-testid="start-next">
-          {copy.protocol.pick}
+          <span>{copy.protocol.pick}</span>
+          <ArrowRight aria-hidden="true" />
         </button>
       </Footer>
     </>
@@ -140,7 +141,8 @@ function CheckStep({ protocolId, onLoaded, onNext, onBack }: { protocolId: strin
         <EmptyBox message={check.data.enabled === false && check.data.skipped_reason === "disabled" ? copy.check.off : copy.check.none} />
         <Footer onBack={onBack}>
           <button type="button" className="btn btn-primary btn-big" onClick={onNext} data-testid="start-next">
-            {copy.next}
+            <span>{copy.next}</span>
+            <ArrowRight aria-hidden="true" />
           </button>
         </Footer>
       </>
@@ -292,7 +294,8 @@ function SafetyStep({ protocolId, check, onNext, onBack }: { protocolId: string;
       {note ? <Note>{note}</Note> : null}
       <Footer onBack={onBack}>
         <button type="button" className="btn btn-primary btn-big" disabled={busy} onClick={() => void read()} data-testid="start-next">
-          {copy.safety.read}
+          <Check aria-hidden="true" />
+          <span>{copy.safety.read}</span>
         </button>
       </Footer>
     </>
@@ -375,7 +378,8 @@ function GoStep({
       {note ? <Note>{note}</Note> : null}
       <Footer onBack={onBack}>
         <button type="button" className="btn btn-primary btn-big btn-start" disabled={busy || !entry?.available_for_execution} onClick={() => void press()} data-testid="start-go">
-          {busy ? copy.go.starting : resume ? copy.go.resume : copy.go.start}
+          <Play aria-hidden="true" />
+          <span>{busy ? copy.go.starting : resume ? copy.go.resume : copy.go.start}</span>
         </button>
       </Footer>
     </>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyServerEvent, EMPTY_RUN, isPaused, listeningWord, MISHEARD_SHOWN_MS, replyText, sourceFigures, spokenText, timerView, type ProtocolState } from "./runModel";
+import { applyServerEvent, EMPTY_RUN, isPaused, listeningWord, MISHEARD_SHOWN_MS, newestGeneration, nextStepWords, replyText, sourceFigures, spokenText, stepWords, timerView, type ProtocolState } from "./runModel";
 
 const accepted = { configuration_id: 7, protocol_id: "p1", revision_id: "r1" };
 const live = () => true;
@@ -140,5 +140,96 @@ describe("pictures and words", () => {
   it("reads a reply's display document before its text", () => {
     expect(replyText({ display_document: { sections: [{ kind: "paragraph", text: "첫 줄" }, { kind: "source", text: "원문" }, { kind: "bullets", items: ["a", "b"] }] } })).toBe("첫 줄\na\nb");
     expect(replyText({ text: "## 제목\n본문" })).toBe("제목\n본문");
+  });
+});
+
+// --- Lane RX4 (2026-10-26): Korean first, no repeated step label, the newest generation, the end screen's facts ---
+
+describe("Korean first (lane RX4, person's decision 2), as the server's fields say (lane KO2)", () => {
+  // Real step sentences of four protocols from three fields (rule 10 of the lane rules, 2026-10-26), in the state the
+  // merged server sends (curated_protocol.state): in-gel digestion (bio) with its reviewed Korean -- the server has taken
+  // the reading's own "3단계: " off -- EAM 2.3 Analytical Solution Preparation (FDA, chemistry: steps with no number),
+  // Soil nutrient analysis SOP 005 (Zenodo, chemistry / analysis: the source carries its own "1."), SDS-PAGE gel
+  // electrophoresis (protocols.io, bio). No Korean is stored for the last three: primary_summary is null and
+  // translation_missing is true.
+  const CASES = [
+    { field: "생명 · in-gel", label: "3", korean: "밴드를 Solution A 500 µL로 세척합니다. 젤 플러그를 37°C에서 15min 동안 부드럽게 교반하며 800 rpm, 37°C, 00:15:00 조건으로 배양합니다.", source: "3. Wash the band with 500 µL of Solution A. Incubate at 37 °C for 15 min with gentle shaking (800 rpm)." },
+    { field: "화학·분석 · EAM 2.3", label: "", korean: null, source: "Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls; mass typically recorded to ≤0.001g)." },
+    { field: "화학·분석 · Soil nutrient SOP 005", label: "1", korean: null, source: "1. Dissolve 200.1 g of NH4NO3 in 8 L deionized water." },
+    { field: "생명 · SDS-PAGE", label: "2", korean: null, source: "Carefully remove the comb from the precast gel and the tape across the bottom." },
+  ];
+
+  it("shows the server's Korean large with the source under it; with none, the source at an ordinary size and 번역 준비 중", () => {
+    for (const item of CASES) {
+      const words = stepWords(state({ current_step_label: item.label, primary_summary: item.korean, display_summary: item.source, translation_missing: item.korean === null }));
+      expect(words, item.field).toEqual(item.korean ? { korean: item.korean, source: item.source, missing: false } : { korean: null, source: item.source, missing: true });
+    }
+  });
+
+  it("takes nothing off the server's Korean again (it took the step's own label off already)", () => {
+    // A body that names a step itself is left as written; so is a second "N단계:" the server chose to keep.
+    expect(stepWords(state({ current_step_label: "3", primary_summary: "2단계에서 만든 용액을 넣어요." })).korean).toBe("2단계에서 만든 용액을 넣어요.");
+    expect(stepWords(state({ current_step_label: "3", primary_summary: "3단계: 표시된 선까지 채워요." })).korean).toBe("3단계: 표시된 선까지 채워요.");
+  });
+
+  it("takes a Korean source step as its own Korean, with nothing to fold and nothing missing", () => {
+    const words = stepWords(state({ primary_summary: null, display_summary: "9. Seahorse XF glycolysis stress test 를 실행합니다", source_language: "ko", translation_missing: false }));
+    expect(words).toEqual({ korean: "9. Seahorse XF glycolysis stress test 를 실행합니다", source: null, missing: false });
+  });
+
+  it("says 번역 준비 중 only when the server says the Korean is missing", () => {
+    // No Korean and no word from the server (an empty source, an older state): the source, ordinary size, no claim.
+    expect(stepWords(state({ primary_summary: null, display_summary: "Weigh.", translation_missing: undefined }))).toEqual({ korean: null, source: "Weigh.", missing: false });
+  });
+
+  it("keeps the next step's one label as the server wrote it, and shows the source only when the server says so", () => {
+    expect(nextStepWords("5단계: 상층액을  버리고\n아세토나이트릴을 넣습니다.", false)).toEqual({ korean: "5단계: 상층액을 버리고 아세토나이트릴을 넣습니다.", source: null, missing: false });
+    expect(nextStepWords("5. Discard the supernatant.", true)).toEqual({ korean: null, source: "5. Discard the supernatant.", missing: true });
+    expect(nextStepWords("  ", true)).toEqual({ korean: null, source: null, missing: false });
+  });
+
+  it("a translation_update redraws the step with its Korean and keeps the turn's card", () => {
+    let model = applyServerEvent(EMPTY_RUN, { type: "protocol.fixture.state", configuration_id: 7, state: state({ primary_summary: null, display_summary: "Incubate.", translation_missing: true }), screen: { translation_pending: true } }, context);
+    model = applyServerEvent(model, { type: "server.operation", route: "curated_protocol", operation: "grounded_qa", turn_id: 5, generation: 1 }, context);
+    expect(model.card?.turnId).toBe(5);
+    model = applyServerEvent(model, { type: "protocol.fixture.state", configuration_id: 7, action: "translation_update", state: state({ primary_summary: "젤 조각을 둡니다.", display_summary: "Incubate.", translation_missing: false }), screen: { translation_pending: false } }, context);
+    expect(stepWords(model.protocol!)).toEqual({ korean: "젤 조각을 둡니다.", source: "Incubate.", missing: false });
+    expect(model.card?.turnId).toBe(5);
+  });
+
+  it("marks a reply's shown words as the source when the server says so and nothing was said aloud", () => {
+    let model = applyServerEvent(EMPTY_RUN, { type: "server.operation", route: "curated_protocol", operation: "grounded_qa", turn_id: 6, generation: 1 }, context);
+    model = applyServerEvent(model, { type: "reply.complete", turn_id: 6, generation: 1, text: "Incubate the gel pieces.", speech_text: null, translation_missing: true }, context);
+    expect(model.caption).toMatchObject({ text: "Incubate the gel pieces.", source: true });
+    expect(model.card).toMatchObject({ text: "Incubate the gel pieces.", source: true });
+    model = applyServerEvent(model, { type: "reply.complete", turn_id: 7, generation: 1, text: "Incubate the gel pieces.", speech_text: "이 문장은 아직 번역되지 않았어요. 원문을 화면에 띄울게요.", translation_missing: true }, context);
+    // What was said is Korean: the caption is not the source.
+    expect(model.caption).toMatchObject({ text: "이 문장은 아직 번역되지 않았어요. 원문을 화면에 띄울게요.", source: false });
+  });
+});
+
+describe("the newest generation a bench control carries (lane RX4, decision 1)", () => {
+  it("is session.ready's until a turn of this connection shows a newer one, never another connection's", () => {
+    const turns = new Map<string, number>();
+    expect(newestGeneration(4, turns, 11)).toBe(4);
+    turns.set("11:3", 6);
+    turns.set("10:9", 9);
+    turns.set("11:4", 5);
+    expect(newestGeneration(4, turns, 11)).toBe(6);
+    expect(newestGeneration(undefined, turns, 11)).toBe(6);
+    expect(newestGeneration(7, turns, 11)).toBe(7);
+  });
+});
+
+describe("the end screen's facts (lane RX4, decision 3)", () => {
+  it("keeps the record's id from experiment.report.state and counts a problem's help once per turn", () => {
+    let model = applyServerEvent(EMPTY_RUN, { type: "experiment.report.state", configuration_id: 7, turn_id: 1, generation: 1, report: { report_id: "ER-1", status: "in_progress" } }, context);
+    expect(model.reportId).toBe("ER-1");
+    expect(applyServerEvent(model, { type: "experiment.report.state", configuration_id: 8, report: { report_id: "ER-2" } }, context)).toBe(model);
+    model = applyServerEvent(model, { type: "turn.route_decision", turn_id: 4, action: "problem_help", intent: "problem_question" }, context);
+    model = applyServerEvent(model, { type: "turn.route_decision", turn_id: 4, action: "problem_help" }, context);
+    model = applyServerEvent(model, { type: "turn.route_decision", turn_id: 5, action: "next" }, context);
+    model = applyServerEvent(model, { type: "turn.route_decision", configuration_id: 8, turn_id: 6, action: "problem_help" }, context);
+    expect(model.helpTurns).toEqual([4]);
   });
 });

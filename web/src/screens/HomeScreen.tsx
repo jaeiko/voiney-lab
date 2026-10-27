@@ -1,4 +1,4 @@
-import { ClipboardCheck, FlaskConical, Hourglass, Play, RotateCcw, Upload } from "lucide-react";
+import { ClipboardCheck, ClipboardList, FlaskConical, Hourglass, NotebookPen, Play, RotateCcw, Upload, type LucideIcon } from "lucide-react";
 
 import { useExperiments, useProtocolDetail, useProtocols, useSignOutOnExpiry, useWorkspaceSession } from "../api/queries";
 import type { AuthSession, CatalogEntry, Experiment } from "../api/types";
@@ -59,13 +59,19 @@ function SecondaryActions({ keysShown }: { keysShown: Array<keyof typeof home.se
     upload: routes.upload,
     records: oldRoutes.records,
   };
+  // Lane RX4 (decision 4): an icon with every word, as the menu has.
+  const icons: Record<keyof typeof home.secondary, LucideIcon> = { protocols: ClipboardList, upload: Upload, records: NotebookPen };
   return (
     <div className="secondary-actions">
-      {keysShown.map((key) => (
-        <a key={key} className="btn btn-quiet" href={hrefs[key]} data-secondary={key}>
-          {home.secondary[key]}
-        </a>
-      ))}
+      {keysShown.map((key) => {
+        const Icon = icons[key];
+        return (
+          <a key={key} className="btn btn-quiet" href={hrefs[key]} data-secondary={key}>
+            <Icon aria-hidden="true" />
+            <span>{home.secondary[key]}</span>
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -176,7 +182,7 @@ export function HomeScreen({ session }: { session: AuthSession }) {
 
   return (
     <section aria-labelledby="home-title">
-      <h1 id="home-title" className="screen-title" style={{ marginBottom: "var(--space-6)" }}>
+      <h1 id="home-title" className="screen-title home-greeting">
         {greeting}
       </h1>
       {body}

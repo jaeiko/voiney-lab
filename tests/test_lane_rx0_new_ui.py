@@ -224,11 +224,16 @@ class DesignSystemRulesTests(unittest.TestCase):
     def test_pretendard_at_400_600_700_on_the_desk_scale(self) -> None:
         self.assertIn('"Pretendard Variable"', self.tokens)
         self.assertEqual({int(w) for w in re.findall(r"font-weight:\s*(\d+)", self.css)} - {400, 600, 700}, set())
+        # Lane RX4 (person's decision 4 of 2026-10-26): the Desk body is 16 / 26 and the label 14 / 20 (were 15 / 24 and
+        # 13 / 18), and two sizes above the title serve the end screen and the home greeting (30 / 38) and a block's
+        # question (22 / 30).
         for pair in (
+            r"--text-display: 1\.875rem;\s+--line-display: 2\.375rem;",
             r"--text-title: 1\.5rem;\s+--line-title: 2rem;",
+            r"--text-heading: 1\.375rem;\s+--line-heading: 1\.875rem;",
             r"--text-subtitle: 1\.125rem;\s+--line-subtitle: 1\.625rem;",
-            r"--text-body: 0\.9375rem;\s+--line-body: 1\.5rem;",
-            r"--text-label: 0\.8125rem;\s+--line-label: 1\.125rem;",
+            r"--text-body: 1rem;\s+--line-body: 1\.625rem;",
+            r"--text-label: 0\.875rem;\s+--line-label: 1\.25rem;",
         ):
             self.assertRegex(self.tokens, pair)
 

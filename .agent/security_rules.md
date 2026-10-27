@@ -41,8 +41,9 @@ they are not production identity and access management.
    `/api/protocols/{id}/start-check/safety`; no numeric values does not waive
    safety acknowledgement. A failed check sends `session.configuration_required`
    before starting or writing a report. Recovery cannot invent old receipts;
-   `workflow.resume` requires an already started experiment plus current
-   configuration and generation.
+   `workflow.resume` requires an already started experiment plus the current
+   configuration (since 2026-10-26 not the generation, which a joined utterance
+   or a barge-in moves on; lane RX4).
 3. Questions and speculation, including Korean endings without a question
    mark, cannot authorize mutations. Read-only answers preserve every open
    checkpoint and do not refresh its turn ownership. Explicit record commands

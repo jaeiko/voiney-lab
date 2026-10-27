@@ -62,6 +62,9 @@ export function pageMs(page: string): number {
 export function CaptionBar({ caption, log }: { caption: LogLine | null; log: LogLine[] }) {
   const [open, setOpen] = useState(false);
   const text = caption ? (caption.who === "heard" ? `“${caption.text}”` : caption.text) : copy.caption.empty;
+  // Lane RX4 (decision 2): a reply's shown words that are the source for want of Korean (lane KO2's translation_missing,
+  // nothing said aloud) are not shown large; what was said is the server's speech_text (KO2's spokenText).
+  const lang = caption?.source ? "source" : "ko";
   const measurer = useRef<HTMLSpanElement>(null);
   const [pages, setPages] = useState<string[]>([text]);
   const [index, setIndex] = useState(0);
@@ -98,7 +101,7 @@ export function CaptionBar({ caption, log }: { caption: LogLine | null; log: Log
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button type="button" className="run-caption" data-who={caption?.who ?? "said"} aria-label={copy.caption.open} data-testid="run-caption">
+        <button type="button" className="run-caption" data-who={caption?.who ?? "said"} data-lang={lang} aria-label={copy.caption.open} data-testid="run-caption">
           <MessagesSquare aria-hidden="true" />
           <span className="run-caption-box">
             <span className="run-caption-text" data-testid="run-caption-text" data-page={index + 1} data-pages={pages.length} aria-live="polite">

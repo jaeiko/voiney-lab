@@ -62,7 +62,7 @@ svg { flex: none; }
 }
 
 /* --- Pieces ---------------------------------------------------------------- */
-.screen-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
+.screen-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-6); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
@@ -74,12 +74,12 @@ svg { flex: none; }
 .btn-primary { background: var(--ink); color: var(--on-ink); }
 .btn-primary:not(:disabled):hover { background: var(--ink-muted); }
 .btn-quiet { border-color: var(--line-strong); }
-.btn-wide { width: 100%; min-height: 48px; font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
+.btn-wide { width: 100%; min-height: 56px; font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
 .btn svg { width: 24px; height: 24px; }
 
 /* A state chip: a word, and for a state an icon beside it; colour only for pending (a person's confirmation). */
 .chip {
-  display: inline-flex; align-items: center; gap: var(--space-1); min-height: 24px; padding: 0 var(--space-2);
+  display: inline-flex; align-items: center; gap: var(--space-1); min-height: 28px; padding: 0 var(--space-2);
   border-radius: var(--radius-small); border: var(--border) solid var(--line-strong); background: var(--paper); color: var(--ink);
   font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; white-space: nowrap;
 }
@@ -92,6 +92,7 @@ svg { flex: none; }
 
 .big-card {
   display: block; width: 100%; padding: var(--space-6); border-radius: var(--radius);
+  /* Lane RX4 (decision 4): the one big thing on a screen has room around it on a wide screen (padding below). */
   border: var(--border) solid var(--ink); background: var(--paper); color: var(--ink); text-align: left; text-decoration: none; cursor: pointer;
 }
 .big-card:hover { background: var(--bench); }
@@ -104,7 +105,9 @@ svg { flex: none; }
 .big-card-title svg { width: 24px; height: 24px; }
 .big-card-sub { display: block; margin-top: var(--space-2); font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; color: var(--ink-muted); }
 .big-card-why { display: block; margin-top: var(--space-2); color: var(--ink-muted); }
-.secondary-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
+.secondary-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); }
+.home-greeting { margin-bottom: var(--space-6); font-size: var(--text-display); line-height: var(--line-display); }
+@media (min-width: 900px) { .big-card { padding: var(--space-8); } }
 
 .state-box { padding: var(--space-6); border-radius: var(--radius); border: var(--border) dashed var(--line-strong); background: var(--paper); }
 .state-box[data-state="error"] { border: var(--border-state) solid var(--ink); }
@@ -114,7 +117,7 @@ svg { flex: none; }
 
 .row-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
 .row {
-  display: grid; grid-template-columns: 1fr; gap: var(--space-3); padding: var(--space-4);
+  display: grid; grid-template-columns: 1fr; gap: var(--space-3); padding: var(--space-4) var(--space-6);
   border-radius: var(--radius); border: var(--border) solid var(--line-strong); background: var(--paper);
 }
 .row-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
@@ -131,8 +134,8 @@ svg { flex: none; }
 .auth-card { width: 100%; max-width: 420px; padding: var(--space-8) var(--space-6); border-radius: var(--radius); background: var(--paper); border: var(--border) solid var(--line); }
 .auth-brand { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); margin-bottom: var(--space-6); text-align: center; }
 .auth-brand .lead { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; color: var(--ink); }
-.auth-form { display: flex; flex-direction: column; gap: var(--space-4); }
-.field { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; }
+.auth-form { display: flex; flex-direction: column; gap: var(--space-6); }
+.field { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; }
 .field input { min-height: var(--target); padding: 0 var(--space-3); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); background: var(--paper); font-size: var(--text-body); line-height: var(--line-body); font-weight: 400; }
 .field input:focus-visible { border-color: var(--ink); }
 /* A plain error or refusal is ink with a 2 px border and an icon, never the danger colour (that is for stop and hazard). */

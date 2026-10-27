@@ -19,13 +19,17 @@ class ResumeTests(VoiceNotesHarness, unittest.TestCase):
             assert self.experiment(listener.session_id)["status"] == "ready"
         self.voice(scenario)
 
-    def test_resume_requires_the_current_configuration_and_generation(self):
+    def test_resume_requires_the_current_configuration(self):
+        # Lane RX4, the person's decision 3 of 2026-10-26: a resume is fenced by the
+        # accepted configuration alone, as a pause is. A resume with another generation
+        # than the server's own (which a joined utterance or a barge-in moves on) was
+        # refused here before; it now resumes (the last control below).
         async def scenario(socket, listener, say):
             await say(1, "프로토콜 시작해줘")
             await say(2, "넘어가")
             await say(3, "잠깐")
             for config, generation in ((None, None), (2, listener.generation),
-                                       (1, listener.generation + 1), (True, listener.generation)):
+                                       (True, listener.generation)):
                 before = workflow_checkpoint(listener.curated_protocol_session)
                 sent = len(socket.sent)
                 socket.control({"type": "workflow.resume", "configuration_id": config,
@@ -34,7 +38,7 @@ class ResumeTests(VoiceNotesHarness, unittest.TestCase):
                 assert workflow_checkpoint(listener.curated_protocol_session) == before
                 assert self.experiment(listener.session_id)["status"] == "paused"
             socket.control({"type": "workflow.resume", "configuration_id": 1,
-                            "generation": listener.generation})
+                            "generation": listener.generation + 1})
             await socket.wait_for(lambda e: e["type"] == "protocol.fixture.state" and e.get("action") == "resume")
             assert self.experiment(listener.session_id)["status"] == "in_progress"
         self.voice(scenario)

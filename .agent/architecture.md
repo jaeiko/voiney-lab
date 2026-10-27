@@ -303,7 +303,9 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   false, the value and safety receipt checks are disabled together.
   Recovery uses the original execution revision's own receipt; no missing
   historical receipt is invented. `workflow.resume` needs an already started
-  experiment and the current configuration id and generation.
+  experiment and the current configuration id (not the generation, which a
+  joined utterance or a barge-in moves on -- lane RX4, 2026-10-26; the screens
+  send the newest one they saw all the same).
 - Review cards never rewrite a safety statement (`_FIXABLE_KINDS` has no
   `warning`).
 - Today's values (lane EASY): `start_check.changeable_values` lists the time,
