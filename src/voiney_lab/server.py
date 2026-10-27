@@ -16634,9 +16634,36 @@ async def root_screen(request:Request)->Response:
     except ConfigurationError:
         return JSONResponse(status_code=503,content={
             "status":"not_ready","reason":"configuration_invalid","fields":[NEW_UI_ENV]})
-    if new_ui and _new_ui_index() is not None:
-        return RedirectResponse(url=_with_query("/app/",request),status_code=302)
-    return FileResponse(STATIC_DIR/"index.html",media_type="text/html")
+    if new_ui and _new_ui_index() is not None and request.query_params.get("legacy")!="1":
+        # A Location without a fragment retains the caller's old #/… in browsers.
+        return RedirectResponse(url=_with_query("/app/",request),status_code=302,
+                                headers={"Cache-Control":"no-store"})
+    return FileResponse(STATIC_DIR/"index.html",media_type="text/html",headers={"Cache-Control":"no-cache"})
+
+
+@app.get("/index.html",include_in_schema=False)
+async def legacy_screen_entry(request:Request)->Response:
+    """Old bookmarks follow the opt-in switch; ?legacy=1 is the retained view."""
+    return await root_screen(request)
+
+
+@app.get("/manifest.webmanifest",include_in_schema=False)
+async def install_manifest()->Response:
+    """Existing installations keep their identity while following the selected screen."""
+    try:
+        new_ui=_new_ui_enabled() and _new_ui_index() is not None
+    except ConfigurationError:
+        return JSONResponse(status_code=503,content={"reason":"configuration_invalid","fields":[NEW_UI_ENV]})
+    path=NEW_UI_DIR/"manifest.webmanifest" if new_ui else STATIC_DIR/"manifest.webmanifest"
+    if new_ui and path.is_file():
+        manifest=json.loads(path.read_text(encoding="utf-8"))
+        manifest["id"]="/"
+        manifest["scope"]="/"
+        for icon in manifest.get("icons",[]):
+            if not str(icon.get("src","")).startswith("/"):
+                icon["src"]="/app/"+icon["src"]
+        return JSONResponse(content=manifest,media_type="application/manifest+json",headers={"Cache-Control":"no-cache"})
+    return FileResponse(STATIC_DIR/"manifest.webmanifest",media_type="application/manifest+json",headers={"Cache-Control":"no-cache"})
 
 
 @app.get("/app",include_in_schema=False)
