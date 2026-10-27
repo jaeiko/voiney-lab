@@ -364,3 +364,48 @@ def test_source_outside_value_can_be_refused_or_staged_but_never_applied():
     assert 'values' not in result['changed_fields']
     assert result['intent_kind'] in {'run_value_change_refused','run_value_change_confirmation_required'}
     assert score_case(c,result)['understood'] is True
+
+
+def test_source_restoration_after_confirmed_override_uses_real_server():
+    p=next(p for p in load_corpus() if p.field=='chemistry')
+    c=next(c for c in generate_cases(p) if c.family=='source' and c.setup=='run_changed')
+    result=asyncio.run(run_case(p,c))
+    assert 'values' in result['changed_fields']
+    assert result['intent_kind']=='run_value_reverted'
+    assert score_case(c,result)['understood'] is True
+
+
+def test_unambiguous_source_value_request_changes_only_the_requested_value():
+    p=next(p for p in load_corpus() if p.field=='chemistry')
+    c=next(c for c in generate_cases(p) if c.code.endswith('.value_change.typed'))
+    result=asyncio.run(run_case(p,c))
+    assert 'values' in result['changed_fields']
+    assert score_case(c,result)['understood'] is True
+    assert result['invalid_state']==[]
+
+
+def test_scientific_unit_case_is_not_erased_in_metrics():
+    from dataclasses import replace
+    p=load_corpus()[0]
+    c=replace(next(c for c in generate_cases(p) if c.family=='current'),text='1 mM 기록해')
+    result=dict(action='current',intent_kind=None,route='curated_protocol',changed_fields=[],
+                step_before=0,step_after=0,spoken='',drop_reasons=[],terminal=True,timings_ms={},
+                transcript='1 mm 기록해',stt_calls=1)
+    row=score_case(c,result,mode='live')
+    assert aggregate([row])['overall']['stt']['unit_accuracy']==0
+    assert row['stt']['number_unit_accuracy']==0
+
+
+def test_source_quantities_preserve_units_and_do_not_take_verbs_for_units():
+    from scripts.sim.measurements import source_values
+    assert source_values('1 Mix the sample.')[0]==('1','')
+    assert ('2','mM') in source_values('Use 2 mM stock.')
+    assert ('10','minutes') in source_values('Mix for 10 minutes.')
+
+
+def test_signed_decimal_and_exponent_quantities_keep_source_spelling():
+    from scripts.sim.measurements import source_values
+    values=source_values('Use -20 °C, .5 mL and 1e-3 M.')
+    assert ('-20','°C') in values
+    assert ('.5','mL') in values
+    assert ('1e-3','M') in values

@@ -7,7 +7,8 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from scripts.sim.corpus import Case
-from scripts.stt_compare import Score, number_units
+from scripts.stt_compare import Score
+from scripts.sim.measurements import number_units
 
 EXPECTED_ACTIONS = {
     'current': ('current',), 'detail': ('full_detail', 'current'), 'repeat': ('repeat', 'current', 'full_detail'),
@@ -74,8 +75,12 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
                   'numbers_total':len(ref),
                   'units_right':sum((Counter(u for n,u in ref if u) & Counter(u for n,u in hyp if u)).values()),
                   'units_total':sum(bool(u) for n,u in ref),
-                  'pairs_right':stt.numbers_right, 'pairs_total':stt.numbers_total,
+                  'pairs_right':sum((Counter(ref) & Counter(hyp)).values()), 'pairs_total':len(ref),
                   'terms_right':stt.terms_right,'terms_total':stt.terms_total}
+    stt_summary=stt.summary() if stt_attempted else None
+    if stt_summary is not None and counts is not None:
+        stt_summary['number_units']=counts['pairs_total']
+        stt_summary['number_unit_accuracy']=round(counts['pairs_right']/counts['pairs_total'],4) if counts['pairs_total'] else None
     return {
         'case': case.code, 'family': case.family, 'understood': bool(understood), 'wrong_state': wrong,
         'error_codes':result.get('error_codes',[]), 'action': result['action'], 'intent_kind': result['intent_kind'], 'route': result['route'],
@@ -83,7 +88,7 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'korean': korean, 'drops': result['drop_reasons'], 'interrupted': result.get('interrupted', False),
         'cut_off': result.get('cut_off',False), 'incomplete': not result['terminal'], 'endpoints': result.get('endpoint_count', 0),
         'timings_ms': result['timings_ms'], 'stt_calls':result.get('stt_calls',0), 'stt_responses':result.get('stt_responses',0),
-        'stt': stt.summary() if stt_attempted else None, 'stt_counts': counts,
+        'stt': stt_summary, 'stt_counts': counts,
     }
 
 

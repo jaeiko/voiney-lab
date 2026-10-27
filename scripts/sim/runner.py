@@ -102,6 +102,11 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             workflow.start_timer(now=time.time()-2)
             if case.setup == 'timer_paused':
                 workflow.pause_timer(now=time.time()-1)
+        if case.seed_change is not None:
+            from voiney_lab.start_check import check_run_change
+            item,number,unit=case.seed_change
+            value=next(v for v in workflow.changeable_values() if v.item_id==item)
+            workflow.set_run_changes((check_run_change(value,number,unit),))
         before = snapshot(workflow)
         capture = Capture()
         stt_calls = 0
@@ -166,7 +171,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                 await asyncio.gather(*pending, return_exceptions=True)
         after = snapshot(workflow)
         invalid_state=[]
-        from scripts.stt_compare import number_units
+        from scripts.sim.measurements import number_units
         if before['timer'] != after['timer'] and case.family.startswith('timer_'):
             duration=workflow._timer_duration_seconds
             source_duration=workflow.timer_seconds_for_step(case.index)
@@ -182,6 +187,8 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             for change in workflow._run_changes.values():
                 if change.step_id != protocol.fixture.steps[case.index].step_id or not set(number_units(f'{change.number} {change.unit}')) <= set(number_units(case.text)):
                     invalid_state.append('value_or_step')
+        if case.setup=='run_changed' and workflow._run_changes:
+            invalid_state.append('source_not_restored')
         if before['record'] != after['record'] and workflow._last_record:
             record=workflow._last_record
             if str(record.get('text','')) not in case.text or record.get('step_id') != protocol.fixture.steps[case.index].step_id:

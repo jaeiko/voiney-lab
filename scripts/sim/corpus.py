@@ -37,6 +37,7 @@ class Case:
     target: int | None = None
     must_change: bool = False
     terms: tuple[str, ...] = ()
+    seed_change: tuple[str,str,str] | None = None
 
 
 @cache
@@ -134,23 +135,58 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
                               case_actions if timed is not None or not family.startswith('timer_') else (), case_intents,
                               case_allowed, case_target, case_must if timed is not None or not family.startswith('timer_') else False))
     # Numeric observations and value requests use the source's own scientific strings.
-    from scripts.stt_compare import number_units
+    from scripts.sim.measurements import source_values
     for index, step in enumerate(protocol.fixture.steps):
-        values = [(n,u) for n,u in number_units(step.instruction_source_text) if u]
+        values = [(n,u) for n,u in source_values(step.instruction_source_text) if u]
         terms = tuple(dict.fromkeys(re.findall(r'[A-Za-z][A-Za-z0-9-]{2,}', step.instruction_source_text)))[:5]
         if values:
             value, unit = values[0]
             shown = f'{value} {unit}'.strip()
             for family, text, allowed in (
                 ('observation', f'관찰 기록해 줘: 측정값 {shown}', ('record', 'confirmation', 'revision')),
-                ('value_inside', f'현재 단계 값을 {shown}로 바꿔 줘', ('values', 'confirmation', 'revision')),
-                ('value_outside', f'현재 단계 값을 {float(value) * 1000 + 999:g} {unit}로 바꿔 줘', ('confirmation',)),
+                ('value_inside', f'현재 단계 값을 {shown}로 바꿔 줘', ('confirmation',)),
+                ('value_outside', f'현재 단계 값을 {float(value.replace('−','-').replace(',','.')) * 1000 + 999:g} {unit}로 바꿔 줘', ('confirmation',)),
                 ('term', f'{terms[0] if terms else "시약"} 이 단계에서 얼마나 써?', ()),
             ):
-                expected_actions=('clarify_parameter','clarify_completion','decline_completion') if family=='value_outside' else ()
-                expected_intents=('operational_value_clarification_required','run_value_change_confirmation_required','run_value_change_refused') if family=='value_outside' else ()
+                expected_actions=('clarify_parameter','clarify_completion','decline_completion') if family in {'value_outside','value_inside'} else ()
+                expected_intents=('operational_value_clarification_required','run_value_change_confirmation_required','run_value_change_refused') if family in {'value_outside','value_inside'} else ()
                 cases.append(Case(f'{protocol.code}.{family}.{index}', family, text, index=index,
                                   actions=expected_actions,intents=expected_intents,allowed=allowed, terms=terms))
+    # Source-typed positive requests complement the deliberately vague variants.
+    from collections import Counter
+    from decimal import Decimal, InvalidOperation
+    from voiney_lab.start_check import check_run_change, RunChangeError
+    candidates=[]
+    for value in session.changeable_values():
+        try:
+            number=Decimal(value.number)
+        except InvalidOperation:
+            continue
+        if number.is_finite():
+            try:
+                check_run_change(value,str(number*2 or Decimal(1)),value.unit)
+            except RunChangeError:
+                continue
+            candidates.append(value)
+    keys=Counter((v.step_id,v.kind,v.number,v.unit) for v in candidates)
+    selected=next((v for v in candidates if keys[(v.step_id,v.kind,v.number,v.unit)]==1),None)
+    if selected is not None:
+        index=next(i for i,step in enumerate(protocol.fixture.steps) if step.step_id==selected.step_id)
+        literal=f'{selected.number} {selected.unit}'
+        user_number=str(Decimal(selected.number)*2 or Decimal(1))
+        user_literal=f'{user_number} {selected.unit}'
+        text=f'이번엔 {selected.step_label}단계 {literal} 대신 {user_literal}로 할게'
+        cases.append(Case(f'{protocol.code}.value_change.typed','value_change',text,index=index,
+                          actions=('change_value','clarify_completion'),
+                          intents=('run_value_changed','run_value_change_confirmation_required'),
+                          allowed=('values','revision','confirmation'),must_change=True))
+        # Explicit synthetic experimenter-confirmed override; never source data.
+        synthetic_number=str(Decimal(selected.number)*2 or Decimal(1))
+        check_run_change(selected,synthetic_number,selected.unit)
+        cases.append(Case(f'{protocol.code}.source.restore','source',f'{selected.step_label}단계 원문대로',
+                          index=index,setup='run_changed',actions=('change_value',),intents=('run_value_reverted',),
+                          allowed=('values','revision'),must_change=True,
+                          seed_change=(selected.item_id,synthetic_number,selected.unit)))
     previous = json.loads((ROOT/'data/fixtures/evaluation/candidate_a_real_voice_hardening.json').read_text())
     for row in previous['cases']:
         if row['id'] in {'explain-current','explain-current-bare','completion-ambiguous'}:
