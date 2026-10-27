@@ -3378,10 +3378,10 @@ _SPOKEN_UNITS = (
 )
 _SPOKEN_UNIT = "(?:" + "|".join(pattern for pattern, _ in _SPOKEN_UNITS) + ")(?![A-Za-z])"
 _SPOKEN_VALUE = re.compile(
-    rf"(?<![A-Za-z0-9_.-])(?P<qualifier>>=|<=|[~≈><≥≤])?\s*"
+    rf"(?<![A-Za-z0-9_.:−-])(?P<qualifier>>=|<=|[~≈><≥≤])?\s*"
     rf"(?P<first>-?{_SPOKEN_NUMBER})"
     rf"(?:(?P<operator>\s*(?:[–—−±:]|-)\s*)(?P<second>-?{_SPOKEN_NUMBER}))?"
-    rf"\s*(?P<unit>{_SPOKEN_UNIT})?(?![A-Za-z0-9_-]|\.\d)")
+    rf"\s*(?P<unit>{_SPOKEN_UNIT})?(?![A-Za-z0-9_:-]|\.\d)")
 
 
 def _say_number(number: str) -> str:
@@ -3414,6 +3414,19 @@ def _say_number(number: str) -> str:
     return spoken
 
 
+def _say_counter(number: str) -> str:
+    """The Korean modifier before hours/items; decimals keep every digit."""
+    plain = number.replace(",", "")
+    if not plain.isdecimal() or len(plain) > 2 or not 1 <= int(plain) <= 99:
+        return _say_number(number)
+    value = int(plain)
+    if value == 20:
+        return "스무"
+    tens = ("", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔")
+    ones = ("", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉")
+    return tens[value // 10] + ones[value % 10]
+
+
 def normalize_korean_speech(text: str) -> str:
     """A deterministic reading for TTS, without changing any plan or evidence.
 
@@ -3421,10 +3434,14 @@ def normalize_korean_speech(text: str) -> str:
     scientific identifiers remain as written (Tn5, H3K4me3, Tris-HCl).
     """
     def clock(match: re.Match[str]) -> str:
-        fields = match.group(0).split(":")
+        raw = match.group(0)
+        negative = raw.startswith(("-", "−"))
+        fields = raw.lstrip("-−").split(":")
         units = ("시간", "분", "초")
-        parts = [f"{_say_number(value)} {unit}" for value, unit in zip(fields, units) if int(value)]
-        return " ".join(parts) or "영 초"
+        parts = [f"{_say_counter(value) if unit == '시간' else _say_number(value)} {unit}"
+                 for value, unit in zip(fields, units) if int(value)]
+        spoken = " ".join(parts) or "영 초"
+        return "마이너스 " + spoken if negative else spoken
 
     # Read dilution ranges before clocks and individual ratios.
     text = re.sub(
@@ -3433,7 +3450,7 @@ def normalize_korean_speech(text: str) -> str:
         lambda match: f"{_say_number(match[1])} 대 {_say_number(match[2])}에서 "
                       f"{_say_number(match[3])} 대 {_say_number(match[4])}", text)
     # Only an explicit HH:MM:SS acquires time units; two fields may be a dilution.
-    text = re.sub(r"(?<![\w:])\d{2}:\d{2}:\d{2}(?![\w:])", clock, text)
+    text = re.sub(r"(?<![\w:.−-])[-−]?\d{2}:\d{2}:\d{2}(?![\w:])", clock, text)
 
     def value(match: re.Match[str]) -> str:
         first, second = match["first"], match["second"]
@@ -3442,13 +3459,17 @@ def normalize_korean_speech(text: str) -> str:
             # Preserve labels, identifiers and bare numbers for the voice's
             # ordinary reading, including step numbers and citation numbers.
             return match.group(0)
-        spoken = _say_number(first)
+        reading = next((word for pattern, word in _SPOKEN_UNITS if re.fullmatch(pattern, unit)), None) if unit else None
+        count_unit = reading in {"시간", "개"} and (not operator or operator.strip() != ":")
+        number_reader = _say_counter if count_unit else _say_number
+        spoken = number_reader(first)
         if second:
             separator = " 대 " if operator.strip() == ":" else (
                 " 플러스 마이너스 " if operator.strip() == "±" else "에서 ")
-            spoken += separator + _say_number(second)
+            if count_unit:
+                spoken += f" {reading}"
+            spoken += separator + number_reader(second)
         if unit:
-            reading = next(word for pattern, word in _SPOKEN_UNITS if re.fullmatch(pattern, unit))
             if reading == "도":
                 spoken = "섭씨 " + ("영하 " + spoken.removeprefix("마이너스 ") if first.startswith("-") else spoken)
                 if second and second.startswith("-"):
@@ -3464,7 +3485,9 @@ def normalize_korean_speech(text: str) -> str:
         trailing = " " if match.group(0).endswith(" ") and not unit else ""
         return leading + spoken + trailing
 
-    return _SPOKEN_VALUE.sub(value, text)
+    result = _SPOKEN_VALUE.sub(value, text)
+    # A repeated unit (20%±2%) leaves the sign outside either numeric match.
+    return " ".join(result.replace("±", " 플러스 마이너스 ").split()) if "±" in result else result
 
 
 def _clean_tts_text(text: str) -> str:

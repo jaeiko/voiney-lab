@@ -79,7 +79,7 @@ def test_voice_turn_keeps_display_source_and_checkpoints(command: str) -> None:
 
 
 @pytest.mark.parametrize(('written', 'spoken'), [
-    ('12 - 16 h', '십이에서 십육 시간'),
+    ('12 - 16 h', '열두 시간에서 열여섯 시간'),
     ('-20–-16°C', '섭씨 영하 이십에서 영하 십육 도'),
     ('1:50-1:100', '일 대 오십에서 일 대 백'),
     ('Tn5 H3K4me3 Tris-HCl', 'Tn5 H3K4me3 Tris-HCl'),
@@ -119,4 +119,28 @@ def test_explicit_english_keeps_leading_decimal() -> None:
     ('7.2.1단계', '7.2.1단계'),
 ])
 def test_bare_decimal_and_non_quantity_identifiers(written: str, spoken: str) -> None:
+    assert server.normalize_korean_speech(written) == spoken
+
+
+@pytest.mark.parametrize(('written', 'spoken'), [
+    ('1 h', '한 시간'),
+    ('16개', '열여섯 개'),
+    ('20개', '스무 개'),
+    ('12–16개', '열두 개에서 열여섯 개'),
+])
+def test_hours_and_item_counts_use_korean_counters(written: str, spoken: str) -> None:
+    assert server.normalize_korean_speech(written) == spoken
+
+
+def test_uncertainty_between_explicit_units_is_read_as_words() -> None:
+    assert server.normalize_korean_speech('20%±2%') == '이십 퍼센트 플러스 마이너스 이 퍼센트'
+
+
+@pytest.mark.parametrize(('written', 'spoken'), [
+    ('-00:15:00', '마이너스 십오 분'),
+    ('−01:00:00', '마이너스 한 시간'),
+    ('Sample-01:02:03', 'Sample-01:02:03'),
+    ('1:2:3', '1:2:3'),
+])
+def test_clock_signs_and_ambiguous_identifiers(written: str, spoken: str) -> None:
     assert server.normalize_korean_speech(written) == spoken
