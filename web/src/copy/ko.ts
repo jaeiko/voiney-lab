@@ -687,7 +687,7 @@ export const records = {
   lab: '같은 연구실의 기록이에요. 다른 사람의 기록은 보기만 할 수 있어요.', readOnly: '다른 사람의 기록이에요. 보기만 할 수 있어요.', readOnlyGeneral: '이 기록은 보기만 할 수 있어요.',
   back: '기록 목록으로', experiment: '실험', timeline: '단계별 기록', outside: '단계 밖 기록',
   step: (label: string) => `${label}단계`, original: (text: string) => `처음 기록: ${text}`,
-  corrected: '고침', retracted: '취소함', voice: '말로 남긴 기록', memo: '메모', photo: '사진', photoGet: '사진 원본 내려받기',
+  corrected: '고침', retracted: '취소함', voice: '말로 남긴 기록', memo: '메모', photo: '사진', photoGet: '사진 원본 내려받기', attachment: '첨부 파일', attachmentGet: '첨부 파일 내려받기',
   noEvents: '이 실험에는 아직 남긴 기록이 없어요.', event: '실험 사건', timer: '타이머 사건',
   timerWords: { source_duration_seconds: '원문 시간(초)', duration_seconds: '설정 시간(초)', elapsed_seconds: '지난 시간(초)', remaining_seconds: '남은 시간(초)' } as Record<string, string>,
   sourceTiers: { protocol: '원문', history: '지난 기록', public: '공개 자료 · 일반 참고' } as Record<string, string>,

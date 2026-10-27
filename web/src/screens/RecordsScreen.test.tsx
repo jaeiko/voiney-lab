@@ -102,3 +102,18 @@ it('an unavailable identity never claims that this is another persons notebook',
   expect(screen.getByText('이 기록은 보기만 할 수 있어요.')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '확인하기' })).not.toBeInTheDocument();
 });
+it('a failed timeline read never claims there are no records', async () => {
+  setup({
+    '/api/workspace/experiments/rx3-0/timeline': { status: 503, json: { detail: 'timeline_unavailable' } },
+    '/api/workspace/experiments/rx3-0/reports': { json: { reports: [] } },
+  });
+  renderWithClient(<RecordDetailScreen sessionId='rx3-0' />);
+  expect(await screen.findByRole('alert', {}, { timeout: 10000 })).toHaveTextContent('기록을 불러오지 못했어요.');
+  expect(screen.queryByText('이 실험에는 아직 남긴 기록이 없어요.')).not.toBeInTheDocument();
+});
+it('keeps a document attachment distinct from a photo', async () => {
+  setup({ '/api/workspace/experiments/rx3-0/timeline': { json: { timeline: [{ event_id: 'doc', event_type: 'evidence_attached', step_label: '1', evidence: { evidence_id: 'document-1', media_type: 'application/pdf', original_filename: 'sample.pdf', caption: '견본 문서' } }] } } });
+  renderWithClient(<RecordDetailScreen sessionId='rx3-0' />);
+  expect(await screen.findByRole('link', { name: '첨부 파일 내려받기' }, { timeout: 10000 })).toHaveAttribute('href', '/api/workspace/experiments/rx3-0/evidence/document-1');
+  expect(screen.queryByRole('img', { name: '견본 문서' })).not.toBeInTheDocument();
+});

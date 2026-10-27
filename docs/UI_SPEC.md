@@ -248,7 +248,7 @@
 - **상세**: 노트 보기를 먼저, 아래 단계별 기록. 고친 말과 처음 말·취소 표식을 함께 보이고 사진은 원본 링크와 작은 미리 보기. 타이머 수치는 단위와 낱말을 붙인다.
 - **노트**: 기존 서버 노트의 표를 읽는다. Word 단추를 먼저, 보조 형식은 줄 바꿈한다. 표 본문은 Desk 16/26, 묶음 제목은 22/30, 누르는 크기 48 이상. 긴 부록은 접는다. 미확인 값의 제어는 소유자에게만, 관리자 확인은 별도 묶음이다.
 - **행동**: [Word 내려받기] 하나 크게. 보조: PDF · Markdown · JSON · CSV. 미확인 값은 [미확인] 이름표와 [확인하기].
-- **네 상태**: 불러오는 중 "기록을 불러오는 중…" · 비어 있음 "아직 끝난 실험이 없어요." · 오류 "기록을 불러오지 못했어요. [다시 불러오기]" · 정상 = 노트.
+- **네 상태**: 불러오는 중 "기록을 불러오는 중…" · 비어 있음 "아직 기록이 없어요. 실험을 하면 여기에 남아요." · 오류 "기록을 불러오지 못했어요. [다시 불러오기]" · 정상 = 노트.
 
 ### 4.10 설정 (줄 RX2 가 만듦 — `#/settings`)
 
@@ -352,7 +352,7 @@
 | 실험 노트 · 기록 | 새 화면 목록·상세·노트, 일부 작업은 명시적 이전 화면 링크 | 4.9 · `docs/UI_PARITY.md` |
 
 새 화면은 `/app/` 에서 언제나 열린다. `VOINEY_LAB_NEW_UI=true` 면 `/` 가 `/app/` 으로 간다(기본 `false`, 지금 화면 그대로).
-로고는 확정 로고다(사람 결정 10/25; 파일 `web/public/brand/`, 서버가 `/app/brand/` 에서 제공). 가로형 `voiney-lab_logo_ink.svg`(플라스크 아이콘 + "Voiney Lab", 글자는 도형)를 머리(32 px)와 로그인(48 px)에, `voiney-lab_favicon_32.png` 를 탭 아이콘에, `voiney-lab_app-icon_180.png`·`voiney-lab_app-icon_512.png` 를 `web/public/manifest.webmanifest`(`/app/manifest.webmanifest`, 이름 "Voiney Lab", 범위 `/app/`)에 쓴다. 묶음의 규칙: 주변 여백은 아이콘 높이의 1/4 이상(`web/src/components/Logo.tsx` 가 파일에 든 여백을 뺀 나머지를 margin 으로 둔다), 아이콘 16 px 미만 금지, 늘이기·기울이기·색 바꾸기·그림자 금지. 흰색 변형(`voiney-lab_logo_white.svg`·`voiney-lab_symbol_white.svg`)과 아이콘만인 `voiney-lab_symbol_ink.svg` 는 먹색 바탕과 좁은 자리(다음 줄)용으로 같이 둔다. 회사 로고(`voiney_*`)는 새 화면에서 쓰지 않는다.
+로고는 확정 로고다(사람 결정 10/25; 파일 `web/public/brand/`, 서버가 `/app/brand/` 에서 제공). 가로형 `voiney-lab_logo_ink.svg`(플라스크 아이콘 + "Voiney Lab", 글자는 도형)를 머리(32 px)와 로그인(48 px)에, `voiney-lab_favicon_32.png` 를 탭 아이콘에, `voiney-lab_app-icon_180.png`·`voiney-lab_app-icon_512.png` 를 `web/public/manifest.webmanifest`(`/app/manifest.webmanifest`, 이름 "Voiney Lab", 범위 `/`)에 쓴다. 묶음의 규칙: 주변 여백은 아이콘 높이의 1/4 이상(`web/src/components/Logo.tsx` 가 파일에 든 여백을 뺀 나머지를 margin 으로 둔다), 아이콘 16 px 미만 금지, 늘이기·기울이기·색 바꾸기·그림자 금지. 흰색 변형(`voiney-lab_logo_white.svg`·`voiney-lab_symbol_white.svg`)과 아이콘만인 `voiney-lab_symbol_ink.svg` 는 먹색 바탕과 좁은 자리(다음 줄)용으로 같이 둔다. 회사 로고(`voiney_*`)는 새 화면에서 쓰지 않는다.
 
 ## 8. 서버 쪽에 남는 것
 

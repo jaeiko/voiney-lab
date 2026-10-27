@@ -65,3 +65,9 @@ describe("ProtocolsScreen", () => {
     vi.useRealTimers();
   });
 });
+
+it('keeps full protocol details reachable from a ready protocol title', async () => {
+  fakeFetch({ '/api/protocols': { json: { protocols: [ENTRY_READY] } } });
+  renderWithClient(<ProtocolsScreen />);
+  expect(await screen.findByRole('link', { name: 'In-gel digestion' })).toHaveAttribute('href', '/index.html?legacy=1#/protocols/p-ready');
+});

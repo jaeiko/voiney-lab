@@ -26,3 +26,9 @@ describe("lane RX2's routes", () => {
     expect(startHref("p 1")).toBe("#/start/p%201");
   });
 });
+
+it('keeps legacy tab bookmarks with a trailing slash and query on the new screen', () => {
+  for (const [tab, name] of [['home', 'home'], ['protocols', 'protocols'], ['upload', 'upload'], ['experiment', 'run'], ['settings', 'settings']]) {
+    expect(parseRoute(`#/${tab}/?from=bookmark`).name).toBe(name);
+  }
+});

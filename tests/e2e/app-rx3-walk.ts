@@ -86,6 +86,9 @@ export async function entryWalk(page: Page) {
     await expect(page).toHaveURL(/\/app\/#\/records\/rx3-0$/);
     await expect(page.getByTestId('record-detail')).toBeVisible();
   }
+  await page.goto('/index.html#/settings/?from=bookmark');
+  await expect(page).toHaveURL(/\/app\/#\/settings\/\?from=bookmark$/);
+  await expect(page.getByTestId('settings-screen')).toBeVisible();
   // A protocol detail still belongs to the retained screen: a one-way escape, never a redirect loop.
   await page.goto('/app/#/protocols/source-0');
   await expect(page).toHaveURL(/\/index.html\?legacy=1#\/protocols\/source-0$/);

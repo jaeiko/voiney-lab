@@ -1,16 +1,25 @@
 """Read-only record projections use the existing report and tenant gates; no providers."""
+from __future__ import annotations
+
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from fastapi.encoders import jsonable_encoder
+
+from tests.test_lane_on_auth_api import Device
+from voiney_lab.experiment_reports import ExperimentReportStore
 
 from tests.test_lane_own_reports import records  # noqa: F401
 from voiney_lab import server as srv
 from voiney_lab.pilot_metrics import FeedbackAnswer
 
 
+Records = tuple[dict[str, Device], ExperimentReportStore, str]
+
+
 @pytest.mark.parametrize('who,status', [('owner', 200), ('admin', 200), ('peer', 404), ('outside', 404)])
-def test_notebook_is_the_export_projection_without_writes(records, monkeypatch, who, status):
+def test_notebook_is_the_export_projection_without_writes(records: Records, monkeypatch: pytest.MonkeyPatch, who: str, status: int) -> None:
     devices, store, rid = records
     # Resolve the existing legacy ownership migration before measuring the read.
     assert devices["owner"].get(f"/api/experiment-reports/{rid}.json").status_code == 200
@@ -28,7 +37,7 @@ def test_notebook_is_the_export_projection_without_writes(records, monkeypatch, 
     assert store.get_report(rid) == before
 
 
-def test_list_rating_is_latest_owners_answer_and_never_the_note(records, monkeypatch):
+def test_list_rating_is_latest_owners_answer_and_never_the_note(records: Records) -> None:
     devices, _, rid = records
     owner = srv._account_for_cookie(devices['owner'].session_cookie).principal()
     pilot = srv._pilot_store()
@@ -50,7 +59,7 @@ def test_list_rating_is_latest_owners_answer_and_never_the_note(records, monkeyp
 
 
 @pytest.mark.parametrize('field', ['cell', 'coating', 'headspace'])
-def test_notebook_read_keeps_export_tables_for_three_fields(records, monkeypatch, tmp_path, field):
+def test_notebook_read_keeps_export_tables_for_three_fields(records: Records, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str) -> None:
     from tests.lane_rp3_support import (
         cell_protocol, cell_run, coating_protocol, coating_run, headspace_protocol, headspace_run,
     )

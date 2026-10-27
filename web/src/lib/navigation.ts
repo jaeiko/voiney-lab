@@ -56,7 +56,8 @@ const PROTOCOL_SCREEN = /^\/protocols\/([^/]+)\/(analysis|review|changes)$/;
 /** The new screen's own routes; everything else is the old screen's. */
 export function parseRoute(hash: string): Route {
   const clean = (hash || "").replace(/^#/, "").replace(/\/(?=\?|$)/, "");
-  if (clean === "" || clean === "/" || clean === "/home") return { name: "home", hash: "#/home" };
+  const path = clean.split("?")[0];
+  if (path === "" || path === "/" || path === "/home") return { name: "home", hash: "#/home" };
   const record = /^\/records(?:\/([^/?#]+))?(?:\/notebook\/([^/?#]+))?\/?(?:\?[^#]*)?$/.exec(clean);
   if (record) {
     const sessionId = record[1] ? decoded(record[1]) : null;
@@ -64,9 +65,9 @@ export function parseRoute(hash: string): Route {
     if (!record[1]) return { name: "records", hash: "#/records" };
     if (sessionId && (!record[2] || reportId)) return { name: reportId ? "notebook" : "record", hash: `#${clean}`, sessionId, ...(reportId ? { reportId } : {}) };
   }
-  if (clean === "/protocols") return { name: "protocols", hash: "#/protocols" };
-  if (clean === "/upload") return { name: "upload", hash: "#/upload" };
-  const screen = PROTOCOL_SCREEN.exec(clean);
+  if (path === "/protocols") return { name: "protocols", hash: "#/protocols" };
+  if (path === "/upload") return { name: "upload", hash: "#/upload" };
+  const screen = PROTOCOL_SCREEN.exec(path);
   if (screen) {
     let protocolId = screen[1];
     try {
@@ -89,9 +90,9 @@ export function parseRoute(hash: string): Route {
       step: Number.isInteger(step) && step >= 1 && step <= 5 ? step : null,
     };
   }
-  if (clean === "/experiment" || clean === "/run") return { name: "run", hash: "#/experiment" };
-  if (clean === "/settings") return { name: "settings", hash: "#/settings" };
-  if (clean === "/welcome") return { name: "welcome", hash: "#/welcome" };
+  if (path === "/experiment" || path === "/run") return { name: "run", hash: "#/experiment" };
+  if (path === "/settings") return { name: "settings", hash: "#/settings" };
+  if (path === "/welcome") return { name: "welcome", hash: "#/welcome" };
   if (clean.startsWith("/")) return { name: "handoff", hash: `#${clean}` };
   return { name: "home", hash: "#/home" };
 }

@@ -55,14 +55,15 @@ function EventLine({ item, sessionId }: { item: RecordEvent; sessionId: string }
   const o = item.observation, e = item.evidence, p = item.payload;
   let label = c.kinds[item.event_type] || c.event;
   if (o && item.event_type === 'observation_recorded') label = o.capture_source === 'voice' ? c.voice : c.memo;
-  if (e) label = c.photo;
+  const photo = Boolean(e?.media_type?.startsWith('image/'));
+  if (e) label = photo ? c.photo : c.attachment;
   if (item.event_type === 'problem_help') label = c.help;
   const timer = p?.timer;
   return <li className='record-event'>
     <div className='record-event-head'><strong>{label}</strong>{item.created_at ? <time dateTime={item.created_at}>{time(item.created_at)}</time> : null}</div>
     {o ? <><p>{o.current_content ?? o.content}</p>{o.corrected ? <p>{c.corrected} · {c.original(o.content)}</p> : null}{o.retracted ? <p>{c.retracted}</p> : null}</> : null}
     {item.user_wording ? <p>{item.user_wording}</p> : null}
-    {e?.evidence_id ? <><p>{e.caption || e.original_filename}</p>{e.media_type?.startsWith('image/') ? <img className='record-photo' loading='lazy' alt={e.caption || e.original_filename || c.photo} src={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)} /> : null}<a className='btn' download href={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)}>{c.photoGet}</a></> : null}
+    {e?.evidence_id ? <><p>{e.caption || e.original_filename}</p>{photo ? <img className='record-photo' loading='lazy' alt={e.caption || e.original_filename || c.photo} src={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)} /> : null}<a className='btn' download href={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)}>{photo ? c.photoGet : c.attachmentGet}</a></> : null}
     {timer ? <dl className='record-values'>{Object.entries(c.timerWords).filter(([key]) => typeof timer[key] === 'number').map(([key, word]) => <div key={key}><dt>{word}</dt><dd>{String(timer[key])}</dd></div>)}</dl> : null}
     {p?.run_changes?.length ? <><h3>{c.changes}</h3><ul>{p.run_changes.map((change, i) => <li key={i}>{change.source_written || change.source_shown_ko || [change.source_number, change.source_unit].filter(Boolean).join(' ')} → {change.shown_ko || [change.number, change.unit].filter(Boolean).join(' ')}</li>)}</ul></> : null}
     {p?.sources?.length ? <details><summary>{c.helpSources}</summary><ul>{p.sources.map((source, i) => <li key={i}>{[source.title, source.source_name, typeof source.tier === 'string' ? c.sourceTiers[source.tier] || c.source : '', source.locator, source.citation].filter(v => typeof v === 'string').join(' · ')}</li>)}</ul></details> : null}
@@ -93,6 +94,8 @@ export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
   const notebooks = useQueries({ queries: (reports.data?.reports ?? []).map(report => ({ queryKey: notebookKey(report.report_id), queryFn: () => recordsApi.notebook(report.report_id) })) });
   useSignOutOnExpiry([experiment.error, timeline.error, reports.error, workspace.error, ...notebooks.map(q => q.error)].find(isSessionExpired));
   const extras = notebooks.flatMap(q => q.data?.events.filter(event => event.event_type.startsWith('timer_') || event.event_type === 'problem_help' || event.payload?.run_changes?.length) ?? []);
+  const timelineLoading = timeline.isPending || reports.isPending || notebooks.some(q => q.isPending);
+  const timelineFailed = timeline.isError || reports.isError || notebooks.some(q => q.isError);
   const reportKeys = new Set(extras.flatMap(event => {
     if (!event.event_key) return [];
     // The server's two append-only ledgers name the same committed turn with these exact keys.
@@ -111,9 +114,9 @@ export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
       </section>
       {notebooks.map((query, i) => query.data?.notebook?.condition_rows.length ? <section className='record-section' key={reports.data?.reports[i].report_id}><h2>{c.conditions}</h2><Rows rows={query.data.notebook.condition_rows} heads={c.tableHeads} /></section> : null)}
       <section className='record-section'><h2>{c.timeline}</h2><button className='btn' onClick={refresh}>{c.refresh}</button>
-        {timeline.isPending || notebooks.some(q => q.isPending) ? <LoadingBox label={c.loading} /> : null}
-        {timeline.isError || notebooks.some(q => q.isError) ? <ErrorBox message={c.failed} onRetry={refresh} /> : null}
-        {items.length ? <Timeline items={items} sessionId={sessionId} /> : !timeline.isPending ? <EmptyBox message={c.noEvents} /> : null}
+        {timelineLoading && !timelineFailed ? <LoadingBox label={c.loading} /> : null}
+        {timelineFailed ? <ErrorBox message={c.failed} onRetry={refresh} /> : null}
+        {items.length ? <Timeline items={items} sessionId={sessionId} /> : !timelineLoading && !timelineFailed ? <EmptyBox message={c.noEvents} /> : null}
       </section>
       <details><summary>{c.legacy}</summary><p>{c.legacyWhy}</p><a className='btn' href={oldRoutes.record(sessionId)}>{c.legacy}</a></details>
     </>}

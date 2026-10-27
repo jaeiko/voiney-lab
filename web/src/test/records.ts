@@ -3,7 +3,7 @@ export const RECORDS = ['세포 염색 견본', '용액 혼합 견본', '전극 
   session_id: `rx3-${i}`, protocol_id: `source-${i}`, protocol_title: title,
   status: i === 1 ? 'stopped' : 'completed', completed_step_count: i === 1 ? 1 : 2,
   owner_principal_id: i === 2 ? 'other' : 'me', started_at: `2026-10-${25+i}T01:00:00Z`,
-  rating: i === 0 ? 4 : null, rating_state: 'unrated',
+  rating: i === 0 ? 4 : null, rating_state: i === 0 ? 'rated' : 'unrated',
 }));
 export const REPORT = { report_id: 'report-rx3', protocol_title: RECORDS[0].protocol_title, status: 'completed', started_at: RECORDS[0].started_at };
 export const TIMELINE = { session: RECORDS[0], timeline: [
