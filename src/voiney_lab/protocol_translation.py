@@ -510,12 +510,14 @@ def lab_korean(text: str, reviewed: Mapping[str, str] | None = None) -> str:
     No numbers, English names or scientific identifiers are changed.
     """
     confirmed = " ".join((reviewed or {}).values())
+    ending = r"(?=(?:팅)?(?:에서|으로|은|는|이|가|을|를|의|에|로|와|과|도|만|들)?(?![가-힣]))"
     for standard, alternative in (("피펫", "파이펫"), ("비즈", "비드"), ("젤", "겔")):
-        preferred = alternative if alternative in confirmed and standard not in confirmed else standard
+        # A longer reviewed name is not a choice of this common noun.
+        standard_form = re.search(rf"(?<![가-힣]){standard}{ending}", confirmed)
+        alternative_form = re.search(rf"(?<![가-힣]){alternative}{ending}", confirmed)
+        preferred = alternative if alternative_form and not standard_form else standard
         text = re.sub(
-            rf"(?<![가-힣])(?:{standard}|{alternative})"
-            r"(?=(?:팅)?(?:에서|으로|은|는|이|가|을|를|의|에|로|와|과|도|만|들)?(?![가-힣]))",
-            preferred, text)
+            rf"(?<![가-힣])(?:{standard}|{alternative}){ending}", preferred, text)
     return text
 
 

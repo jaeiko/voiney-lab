@@ -125,3 +125,7 @@ def test_stored_reviewed_spelling_guides_new_machine_rows() -> None:
 
 def test_common_word_spelling_does_not_rewrite_a_longer_name() -> None:
     assert pt.lab_korean('겔라틴 비드플렉스 파이펫팅 젤을 써요.') == '겔라틴 비드플렉스 피펫팅 젤을 써요.'
+
+
+def test_reviewed_longer_name_does_not_choose_a_common_word_spelling() -> None:
+    assert pt.lab_korean('비즈와 피펫을 써요.', {'fact': '비드플렉스와 파이펫맥스'}) == '비즈와 피펫을 써요.'
