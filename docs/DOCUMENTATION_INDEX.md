@@ -45,6 +45,7 @@
 | 문서 | 무엇 |
 |---|---|
 | [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | 서버에 설치할 것, `scripts/run_pilot.sh` 로 띄우기, 기관 안전 문서 카탈로그, 점검, 백업·복구, 지켜볼 것 |
+| [`DOMAIN_AND_KEYLESS_GUIDE.md`](DOMAIN_AND_KEYLESS_GUIDE.md) | 고정 HTTPS 도메인·이름 있는 터널·systemd, EC2 역할과 Google WIF, 선택형 일일 백업·복구를 사람이 적용하는 순서 |
 | [`TROUBLESHOOTING_GUIDE.md`](TROUBLESHOOTING_GUIDE.md) | 증상별 안전한 복구 |
 | [`PILOT_GUIDE.md`](PILOT_GUIDE.md) | 파일럿을 여는 순서, 데이터 처리·고지·지표·삭제, 계정·스타터 팩, HTTPS, 기준판·복구 점검, 참가자 안내 |
 | [`PILOT_COMPARISON.md`](PILOT_COMPARISON.md) | 기존 방식·범용 음성 서비스와 같은 과업으로 비교하는 절차, 태블릿 확인, 빈 기록 양식, 저장된 분석 비교 |
