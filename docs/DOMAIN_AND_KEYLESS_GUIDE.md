@@ -405,8 +405,6 @@ RESTORE_LAYOUT
 아래는 설치가 예시 경로와 정확히 일치하고, 검증한 별도 배치가 준비된 경우다.
 
 ```bash
-sudo systemctl disable --now voineylab-backup.timer
-sudo systemctl stop voineylab.service
 sudo bash -eu <<'RESTORE_SWITCH'
 live_pilot=/opt/voineylab/data/runtime/pilot
 saved_pilot=/opt/voineylab/data/runtime/pilot-before-restore-001
@@ -415,12 +413,14 @@ test -d "$live_pilot"
 test -d "$staged_pilot"
 test ! -e "$saved_pilot"
 test ! -L "$saved_pilot"
+systemctl disable --now voineylab-backup.timer
+systemctl stop voineylab.service
 mv "$live_pilot" "$saved_pilot"
 cp -a "$staged_pilot" "$live_pilot"
 chown -R voineylab:voineylab "$live_pilot"
-RESTORE_SWITCH
-sudo systemctl start voineylab.service
+systemctl start voineylab.service
 curl --fail --max-time 10 http://127.0.0.1:8080/readyz
+RESTORE_SWITCH
 ```
 
 어느 명령이든 실패하면 다음 단계로 가지 않고 보존한 폴더를 유지한다. 옛 `-wal`·

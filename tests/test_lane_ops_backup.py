@@ -126,3 +126,42 @@ def test_daily_refuses_noncanonical_or_overlapping_backup_destinations(daily, ta
     result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode != 0
     assert not events.exists()
+
+
+@pytest.mark.parametrize('copy_fails', [False, True])
+def test_documented_restore_never_restarts_after_a_failed_copy(daily, copy_fails):
+    """Execute the copy-paste block with synthetic data and fake privileged commands."""
+    import re
+    _, env, events, _, reports, tmp_path = daily
+    guide = (ROOT / 'docs/DOMAIN_AND_KEYLESS_GUIDE.md').read_text()
+    block = next(text for text in re.findall(r'```bash\n(.*?)```', guide, re.S)
+                 if "<<'RESTORE_SWITCH'" in text)
+    live = reports.parent
+    saved = tmp_path / 'saved'
+    staged = tmp_path / 'staged'
+    staged.mkdir()
+    (staged / 'restored.txt').write_text('synthetic restored state')
+    block = block.replace('/opt/voineylab/data/runtime/pilot-before-restore-001', str(saved))
+    block = block.replace('/opt/voineylab/data/runtime/pilot', str(live))
+    block = block.replace('/var/lib/voineylab/pilot-layout-001', str(staged))
+    commands = Path(env['PATH'].split(':')[0])
+    for name, body in {
+        'sudo': 'exec "$@"',
+        'chown': 'exit 0',
+        'curl': 'exit 0',
+        'cp': 'exit 1' if copy_fails else 'exec /bin/cp "$@"',
+    }.items():
+        path = commands / name
+        path.write_text('#!/bin/bash\n' + body + '\n')
+        path.chmod(0o755)
+    result = subprocess.run(['bash', '-c', block], env=env, capture_output=True,
+                            text=True, timeout=60)
+    calls = events.read_text().splitlines()
+    assert saved.is_dir() and (saved / 'experiment_reports.sqlite').is_file()
+    if copy_fails:
+        assert result.returncode != 0
+        assert 'start voineylab.service' not in calls
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (live / 'restored.txt').is_file()
+        assert calls[-1] == 'start voineylab.service'
