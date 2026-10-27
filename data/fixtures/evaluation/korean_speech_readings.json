@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "examples": [
+    {
+      "written": "~50,000개",
+      "spoken": "약 오만 개"
+    },
+    {
+      "written": ">5 µl",
+      "spoken": "오 마이크로리터 넘게"
+    },
+    {
+      "written": "<5 µL",
+      "spoken": "오 마이크로리터 미만"
+    },
+    {
+      "written": "≥5 mL",
+      "spoken": "오 밀리리터 이상"
+    },
+    {
+      "written": "≤5 mL",
+      "spoken": "오 밀리리터 이하"
+    },
+    {
+      "written": "1,500 ×g",
+      "spoken": "천오백 지"
+    },
+    {
+      "written": "3000 x g",
+      "spoken": "삼천 지"
+    },
+    {
+      "written": "20 ± 2 °C",
+      "spoken": "섭씨 이십 플러스 마이너스 이 도"
+    },
+    {
+      "written": "0.5 mL",
+      "spoken": "영 점 오 밀리리터"
+    },
+    {
+      "written": "0.05 mL",
+      "spoken": "영 점 영 오 밀리리터"
+    },
+    {
+      "written": "12–16시간",
+      "spoken": "십이에서 십육 시간"
+    },
+    {
+      "written": "1:50",
+      "spoken": "일 대 오십"
+    },
+    {
+      "written": "00:15:00",
+      "spoken": "십오 분"
+    },
+    {
+      "written": "01:02:03",
+      "spoken": "일 시간 이 분 삼 초"
+    },
+    {
+      "written": "37°C",
+      "spoken": "섭씨 삼십칠 도"
+    },
+    {
+      "written": "-20°C",
+      "spoken": "섭씨 영하 이십 도"
+    },
+    {
+      "written": "4℃",
+      "spoken": "섭씨 사 도"
+    },
+    {
+      "written": "800 rpm",
+      "spoken": "팔백 알피엠"
+    },
+    {
+      "written": "25 mM",
+      "spoken": "이십오 밀리몰"
+    },
+    {
+      "written": "5 µM",
+      "spoken": "오 마이크로몰"
+    },
+    {
+      "written": "2 M",
+      "spoken": "이 몰"
+    },
+    {
+      "written": "10 µg",
+      "spoken": "십 마이크로그램"
+    },
+    {
+      "written": "20 mg",
+      "spoken": "이십 밀리그램"
+    },
+    {
+      "written": "1 g",
+      "spoken": "일 그램"
+    },
+    {
+      "written": "70%",
+      "spoken": "칠십 퍼센트"
+    },
+    {
+      "written": "15min",
+      "spoken": "십오 분"
+    },
+    {
+      "written": "2 h",
+      "spoken": "이 시간"
+    },
+    {
+      "written": "30 s",
+      "spoken": "삼십 초"
+    },
+    {
+      "written": ">6 months",
+      "spoken": "육 개월 넘게"
+    },
+    {
+      "written": "10–20 µL",
+      "spoken": "십에서 이십 마이크로리터"
+    }
+  ]
+}

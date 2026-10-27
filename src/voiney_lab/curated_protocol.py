@@ -9046,12 +9046,15 @@ def _protocol_query_presentation(
         step_id, _, fact_id = PURPOSE_FACT_KEY.partition("/")
         korean = fixture.localized_fact(step_id, fact_id)
         if language=="ko" and korean:
-            # Lane SAY, decision 4: said in 해요체, its first sentence read.
-            first = re.split(r"(?<=[.!?])\s+", " ".join(korean.split()), maxsplit=1)[0]
-            speech=(
-                f"원문에 적힌 실험 목적이에요. {first}" if len(first) <= 120
-                else "원문에 적힌 실험 목적을 화면에 띄웠어요."
-            )
+            # Read complete opening sentences of the checked reading. Its full
+            # text and evidence stay on screen; no new summary or fact is made.
+            sentences = re.split(r"(?<=[.!?])\s+", " ".join(korean.split()))
+            opening: list[str] = []
+            for sentence in sentences[:3]:
+                if len(" ".join((*opening, sentence))) > 240:
+                    break
+                opening.append(sentence)
+            speech = " ".join(opening) or "원문에 적힌 실험 목적을 화면에 띄웠어요."
             display=(
                 f"실험 목적\n{korean}\n\n원문 · English · PDF p.{page}\n"
                 f"{knowledge.purpose.text}"
@@ -9891,11 +9894,15 @@ _READER_UNIT_FORMS: tuple[tuple[str, str], ...] = (
     (r"s(?:ec(?:ond)?s?)?|초", "s"),
     (r"%|퍼센트", "%"),
     (r"[x×]\s*g", "x g"),
-    (r"parts?", "part"),
+    (r"months?|개월", "month"),
+    (r"days?|일", "day"),
+    (r"weeks?|주", "week"),
+    (r"parts?|부(?!피)", "part"),
+    (r"volumes?|배\s*부피", "volume"),
     (r"times?|번|회", "times"),
 )
 _READER_QUANTITY = re.compile(
-    r"(?<![0-9.])(\d+(?:\.\d+)?)\s*(?:("
+    r"(?<![0-9.])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(?:("
     + "|".join(f"(?:{form})" for form, _ in _READER_UNIT_FORMS)
     + r")(?![A-Za-z]))?"
 )
@@ -10070,6 +10077,13 @@ def _source_rank_values(source: str) -> list[str]:
     return values
 
 
+# Marks attached to a number are part of the quantity too. A minus in an
+# identifier or between range endpoints is not a negative sign.
+_READER_QUANTITY_MARK = re.compile(
+    r"(?P<mark>>=|<=|[~≈><≥≤±]|(?<![A-Za-z0-9_.])-)\s*"
+    r"(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)")
+
+
 def _quantities_changed(source: str, reading: str) -> bool:
     """Whether the reading states other numbers than the source (``reader_translation_issue``).
 
@@ -10083,8 +10097,17 @@ def _quantities_changed(source: str, reading: str) -> bool:
     word, and every number with a unit remain changes.
     """
 
+    def marks(text: str) -> collections.Counter[tuple[str, str]]:
+        return collections.Counter(
+            (match["mark"], match["number"]) for match in _READER_QUANTITY_MARK.finditer(text))
+    if marks(source) != marks(reading):
+        return True
     normalized_source = _normalized_counts(source)
     normalized_reading = _normalized_counts(reading)
+    # A duration with no digits must still survive translation, on either side.
+    overnight = re.compile(r"\bovernight\b|하룻밤", re.IGNORECASE)
+    if len(overnight.findall(source)) != len(overnight.findall(reading)):
+        return True
     stated = collections.Counter(_count_quantities(normalized_source))
     read = collections.Counter(_count_quantities(normalized_reading))
     if stated == read:
@@ -10114,7 +10137,6 @@ def _quantities_changed(source: str, reading: str) -> bool:
 def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
     """The (number, unit) pairs a statement states, clock times as one each."""
 
-    value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
     found: list[tuple[str, str | None]] = [
         (match.group(0), "clock") for match in _READER_CLOCK.finditer(value)
     ]
@@ -10127,8 +10149,6 @@ def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
                 if re.fullmatch(form, match.group(2))
             )
         number = match.group(1)
-        if "." in number:
-            number = number.rstrip("0").rstrip(".")
         found.append((number, unit))
     return sorted(found, key=lambda item: (item[0], item[1] or ""))
 

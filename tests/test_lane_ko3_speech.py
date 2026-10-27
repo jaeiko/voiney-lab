@@ -1,0 +1,120 @@
+"""Production TTS boundary: the provider hears Korean, source/display stay verbatim."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from dataclasses import replace
+from tests.test_lane_safe_questions import workflow_checkpoint
+from unittest.mock import patch
+
+import pytest
+
+from voiney_lab import server
+from voiney_lab.voice_providers import TtsProviderSettings
+
+
+EXAMPLES = tuple((row["written"], row["spoken"]) for row in json.loads(
+    (Path(__file__).resolve().parents[1] / "data/fixtures/evaluation/korean_speech_readings.json").read_text()
+)["examples"])
+
+
+@pytest.mark.parametrize(('written', 'spoken'), EXAMPLES)
+def test_provider_boundary(written: str, spoken: str) -> None:
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    with patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'pcm') as provider:
+        assert server.synthesize(written, 'ko') == b'pcm'
+    assert provider.call_args.args[0] == spoken
+
+
+def test_english_and_scientific_names_are_not_rewritten() -> None:
+    text = 'Add 5 µL Tn5 to H3K4me3 in Tris-HCl and CUT&Tag.'
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    with patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'pcm') as provider:
+        server.synthesize(text, 'en')
+        assert provider.call_args.args[0] == text
+        server.synthesize(text, 'ko')
+        spoken = provider.call_args.args[0]
+        for name in ('Tn5', 'H3K4me3', 'Tris-HCl', 'CUT&Tag'):
+            assert name in spoken
+
+
+@pytest.mark.parametrize("command", ["이 단계 읽어줘", "원문 그대로 읽어 줘"])
+def test_voice_turn_keeps_display_source_and_checkpoints(command: str) -> None:
+    import asyncio
+    from tests import test_reader_speech as reader
+    from tests.test_lane_ko2_screen_korean import soil_fixture
+    from voiney_lab.language import Transcription
+    from voiney_lab.vad import TurnState
+    fixture = soil_fixture()
+    source = fixture.steps[1].instruction_source_text
+    korean = '2단계: 시약수 20 mL를 넣고 현탁액을 5분 동안 저어요.'
+    fixture = replace(fixture, localizations={f'{fixture.steps[1].step_id}/current_step': korean})
+    session = reader._listener(fixture, 1, model_roles=False)
+    session.active_turn_id = 1
+    session.next_turn_id = 2
+    session.turn_generations[1] = session.generation
+    session.detector.state = TurnState.PROCESSING
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    before = workflow_checkpoint(session.curated_protocol_session)
+    socket = reader._Socket()
+    with patch.object(server, 'transcribe', return_value=Transcription(command, 'ko')), \
+         patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'\0\0') as provider:
+        asyncio.run(server.run_turn(socket, session, b'\0\0', 1, session.generation))
+    heard = ' '.join(call.args[0] for call in provider.call_args_list)
+    if command == '원문 그대로 읽어 줘':
+        assert '20 mL' in heard
+        assert '이십 밀리리터' not in heard
+    else:
+        assert '이십 밀리리터' in heard
+        assert '오 분' in heard
+    reply = next(event for event in socket.text if event['type'] == 'reply.complete')
+    assert '20 mL' in reply['text']
+    assert source in reply['text']
+    assert '20 mL' in reply['speech_text']
+    assert workflow_checkpoint(session.curated_protocol_session) == before
+
+
+@pytest.mark.parametrize(('written', 'spoken'), [
+    ('12 - 16 h', '십이에서 십육 시간'),
+    ('-20–-16°C', '섭씨 영하 이십에서 영하 십육 도'),
+    ('1:50-1:100', '일 대 오십에서 일 대 백'),
+    ('Tn5 H3K4me3 Tris-HCl', 'Tn5 H3K4me3 Tris-HCl'),
+])
+def test_compound_ranges_and_identifiers(written: str, spoken: str) -> None:
+    assert server.normalize_korean_speech(written) == spoken
+
+
+@pytest.mark.parametrize('written', ['0.5 mL를 넣어요. 5분 기다려요.', '-20°C에서 보관해요. 5분 기다려요.'])
+def test_sentence_splitting_keeps_a_leading_decimal_or_negative(written: str) -> None:
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    with patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'pcm') as provider:
+        for sentence in server.speech_sentences(written):
+            server.synthesize(sentence, 'ko')
+    heard = ' '.join(call.args[0] for call in provider.call_args_list)
+    assert heard == server.normalize_korean_speech(written)
+
+
+def test_two_field_ratio_does_not_acquire_time_units() -> None:
+    assert server.normalize_korean_speech('10:50') == '십 대 오십'
+
+
+def test_explicit_english_keeps_leading_decimal() -> None:
+    text = '0.5 mL of solution is needed.'
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    with patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'pcm') as provider:
+        server.synthesize(text, 'en')
+    assert provider.call_args.args[0] == text
+
+
+@pytest.mark.parametrize(('written', 'spoken'), [
+    ('값은 0.50이에요.', '값은 영 점 오 영이에요.'),
+    ('Sample-12-16', 'Sample-12-16'),
+    ('2026-10-27', '2026-10-27'),
+])
+def test_bare_decimal_and_non_quantity_identifiers(written: str, spoken: str) -> None:
+    assert server.normalize_korean_speech(written) == spoken
