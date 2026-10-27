@@ -425,3 +425,24 @@ def test_live_missing_stt_key_is_named_before_input_tts(tmp_path,monkeypatch,cap
     result=json.loads(out.read_text())
     assert result['run_failure_settings']==['ELEVENLABS_API_KEY']
     assert result['provider_requests_including_auth_and_retries']==0
+
+
+def test_comparison_cli_reports_asr_and_latency_deltas_without_gating_noise(tmp_path):
+    import subprocess,sys
+    from copy import deepcopy
+    row=dict(case='a',protocol='p',noise='quiet',snr='quiet',voice='v',speed=1,
+             understood=True,wrong_state=False,english_copy=False,duplicate_label=False,incomplete=False,interrupted=False)
+    before=dict(schema=1,mode='live',corpus_sha256='same',router='off',provider='google_cloud_v2',model='chirp_3',rows=[row],
+        overall=dict(understood=1,wrong_state=0,english_copy=0,duplicate_label=0,incomplete=0,interrupted=0,
+                     stt={'wer':.2,'cer':.1},latency_ms={'stt':{'p50':500,'p95':1000,'n':1}}))
+    after=deepcopy(before)
+    after['overall']['stt']['wer']=.1
+    after['overall']['latency_ms']['stt']['p95']=1200
+    a,b=tmp_path/'before.json',tmp_path/'after.json'
+    a.write_text(json.dumps(before)); b.write_text(json.dumps(after))
+    result=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'scripts/sim/compare.py'),str(a),str(b)],capture_output=True,text=True)
+    assert result.returncode==0
+    report=json.loads(result.stdout)
+    assert report['metrics']['stt.wer']['delta']==pytest.approx(-.1)
+    assert report['metrics']['latency_ms.stt.p95']['delta']==200
+    assert report['metrics']['latency_ms.stt.n']['after']==1

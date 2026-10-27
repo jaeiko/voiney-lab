@@ -3,7 +3,22 @@
 from __future__ import annotations
 import argparse
 import json
+import math
 from pathlib import Path
+
+
+def numeric_metrics(value: object, prefix: str = '') -> dict[str, float | int | None]:
+    result = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            result.update(numeric_metrics(item, f'{prefix}.{key}' if prefix else key))
+    elif value is None:
+        result[prefix] = None
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(value):
+            raise ValueError('non-finite metric')
+        result[prefix] = value
+    return result
 
 
 def compare(before: dict, after: dict) -> dict:
@@ -32,7 +47,14 @@ def compare(before: dict, after: dict) -> dict:
         if not a[key]['understood'] and b[key]['understood']:
             improvements.append(key[0])
     delta={k:after['overall'][k]-before['overall'][k] for k in ('understood','wrong_state','english_copy','duplicate_label','incomplete','interrupted')}
-    return {'comparable':True,'cases':len(a),'delta':delta,'regressions':regressions,'improvements':improvements}
+    left, right = numeric_metrics(before['overall']), numeric_metrics(after['overall'])
+    metrics = {}
+    for key in sorted(left.keys() | right.keys()):
+        old, new = left.get(key), right.get(key)
+        metrics[key] = {'before':old, 'after':new,
+                        'delta':round(new-old,8) if old is not None and new is not None else None}
+    return {'comparable':True,'cases':len(a),'delta':delta,'metrics':metrics,
+            'regressions':regressions,'improvements':improvements}
 
 
 def main(argv: list[str] | None = None) -> int:
