@@ -490,7 +490,9 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 - Model roles (`model_providers.ROLES`): `router`, `answer`, `translation`,
   `analysis`, `report`, `supplemental`, each with a provider (`xai`,
   `anthropic`, `openai`, `google`), model and reasoning level and no default.
-  Speech providers: `xai`, `google_cloud`, `elevenlabs`. OCR: `clova`,
+  Speech providers: `xai`, `google_cloud`, `elevenlabs`; STT also accepts
+  `google_cloud_v2` (regional REST V2, implicit recognizer `_`, inline config,
+  service-account JSON outside git; in-memory OAuth token). OCR: `clova`,
   `google`. Background roles (`analysis`, `translation`, `report`) retry
   429/5xx and carry the Gemini safety setting; voice-turn roles do neither.
 

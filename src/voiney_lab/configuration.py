@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import os
+import re
+import stat
 import shlex
 import sys
 from collections.abc import Mapping, Sequence
@@ -15,6 +17,62 @@ from voiney_lab.audio import FRAME_MS
 
 class ConfigurationError(ValueError):
     """A named environment setting is malformed or outside its safe range."""
+
+
+class GoogleSttV2ConfigurationError(ConfigurationError):
+    """A V2 setting refusal; readiness can expose the name, never its value."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"{name} must be configured correctly")
+        self.field_names = (name,)
+
+
+GOOGLE_STT_V2_PROJECT_ENV = "VOINEY_LAB_GOOGLE_STT_V2_PROJECT"
+GOOGLE_STT_V2_CREDENTIALS_ENV = "VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE"
+GOOGLE_STT_V2_LOCATION_ENV = "VOINEY_LAB_GOOGLE_STT_V2_LOCATION"
+GOOGLE_STT_V2_DENOISE_ENV = "VOINEY_LAB_GOOGLE_STT_V2_DENOISE"
+
+
+@dataclass(frozen=True)
+class GoogleSttV2Settings:
+    project: str
+    credentials_file: Path = field(repr=False)
+    location: str = "us"
+    denoise: bool = True
+
+    @classmethod
+    def from_environment(cls, environment: Mapping[str, str]) -> "GoogleSttV2Settings":
+        project = environment.get(GOOGLE_STT_V2_PROJECT_ENV, "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]|[0-9]{1,20}", project):
+            raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_PROJECT_ENV)
+        location = environment.get(GOOGLE_STT_V2_LOCATION_ENV, "").strip() or "us"
+        # Keep the endpoint on Google's domain, including future regional names.
+        if not re.fullmatch(r"us|eu|[a-z]+-[a-z]+[0-9]+", location):
+            raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_LOCATION_ENV)
+        try:
+            denoise = boolean_setting(environment, GOOGLE_STT_V2_DENOISE_ENV, default=True)
+        except ConfigurationError:
+            raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_DENOISE_ENV) from None
+        raw = environment.get(GOOGLE_STT_V2_CREDENTIALS_ENV, "").strip()
+        try:
+            if not raw:
+                raise ValueError
+            path = Path(raw).expanduser().absolute()
+            resolved = path.resolve(strict=True)
+            source_root = Path(__file__).resolve().parents[2]
+            # Check both spellings: an in-tree link out and an outside link in
+            # are both refused, as are the main checkout and other worktrees.
+            for candidate in (path, resolved):
+                if candidate.is_relative_to(source_root) or any(
+                    (parent / ".git").exists() for parent in candidate.parents
+                ):
+                    raise ValueError
+            info = resolved.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 65536:
+                raise ValueError
+        except (OSError, ValueError, RuntimeError):
+            raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV) from None
+        return cls(project=project, credentials_file=resolved, location=location, denoise=denoise)
 
 
 def boolean_setting(environment:Mapping[str,str],name:str,*,default:bool)->bool:
