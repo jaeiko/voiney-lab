@@ -181,7 +181,7 @@ def test_number_unit_and_term_scores_have_separate_denominators():
     c=replace(next(c for c in generate_cases(p) if c.family=='current'),text='10 mL AMBIC 기록해',terms=('AMBIC',))
     row=score_case(c,dict(action='current',intent_kind=None,route='curated_protocol',
         changed_fields=[],step_before=0,step_after=0,spoken='',drop_reasons=[],terminal=True,timings_ms={},
-        transcript='10 mg AMBIC 기록해'),mode='live')
+        transcript='10 mg AMBIC 기록해',stt_calls=1),mode='live')
     result=aggregate([row])['overall']['stt']
     assert result['number_accuracy']==1
     assert result['unit_accuracy']==0
@@ -320,7 +320,24 @@ def test_live_configuration_failure_names_setting_without_exposing_message(tmp_p
     assert live.main(['--execute','--limit','1','--output',str(out)])==2
     report=json.loads(out.read_text())
     assert report['run_failure_settings']==['VOINEY_LAB_STT_PROVIDER']
+    assert report['stt_measured'] is False
+    assert report['acoustics_measured'] is False
     assert 'do-not-export' not in out.read_text()
     captured=capsys.readouterr()
     assert 'VOINEY_LAB_STT_PROVIDER' in captured.err
     assert 'do-not-export' not in captured.out+captured.err
+
+
+def test_live_vad_drop_is_not_an_asr_measurement_and_stt_failure_is_counted():
+    from dataclasses import replace
+    p=load_corpus()[0]
+    c=replace(next(c for c in generate_cases(p) if c.family=='current'),text='현재 단계 알려줘')
+    result=dict(action=None,intent_kind=None,route=None,changed_fields=[],step_before=0,step_after=0,
+                spoken='',drop_reasons=['no_vad_endpoint'],terminal=True,timings_ms={},transcript='',stt_calls=0)
+    row=score_case(c,result,mode='live')
+    assert row['stt'] is None
+    assert row['stt_counts'] is None
+    result.update(stt_calls=1,drop_reasons=['stt_failed'])
+    row=score_case(c,result,mode='live')
+    assert row['stt']['failed_requests']==1
+    assert row['stt_counts']['reference_chars']>0

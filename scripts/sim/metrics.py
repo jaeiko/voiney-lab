@@ -58,10 +58,12 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
     korean = bool(re.search('[가-힣]', spoken)) if spoken.strip() else None
     # Oracle STT input is not a measured recognizer. Keep it out of live STT tables.
     stt = Score()
-    if mode == 'live':
-        stt.add('', case.text, result['transcript'], list(case.terms))
+    stt_attempted=mode=='live' and result.get('stt_calls',0)>0
+    if stt_attempted:
+        failed='stt_failed' in result['drop_reasons'] or (not result['transcript'] and bool(result.get('error_codes')))
+        stt.add('', case.text, None if failed else result['transcript'], list(case.terms))
     counts = None
-    if mode == 'live':
+    if stt_attempted:
         ref = number_units(case.text)
         hyp = number_units(result['transcript'])
         counts = {'word_errors':stt.word_errors, 'reference_words':stt.reference_words,
@@ -78,7 +80,8 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'changed_fields': sorted(changed), 'invalid_state': result.get('invalid_state',[]), 'english_copy': english, 'duplicate_label': duplicate,
         'korean': korean, 'drops': result['drop_reasons'], 'interrupted': result.get('interrupted', False),
         'cut_off': result.get('cut_off',False), 'incomplete': not result['terminal'], 'endpoints': result.get('endpoint_count', 0),
-        'timings_ms': result['timings_ms'], 'stt': stt.summary() if mode == 'live' else None, 'stt_counts': counts,
+        'timings_ms': result['timings_ms'], 'stt_calls':result.get('stt_calls',0), 'stt_responses':result.get('stt_responses',0),
+        'stt': stt.summary() if stt_attempted else None, 'stt_counts': counts,
     }
 
 

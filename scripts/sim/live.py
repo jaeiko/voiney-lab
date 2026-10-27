@@ -244,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
                 failure=type(exc).__name__
                 missing_settings=failure_settings(exc)
                 print(json.dumps({"error":failure,"settings":missing_settings}),file=sys.stderr)
-            report={'schema':1,'mode':'live','stt_measured':True,'acoustics_measured':True,
+            report={'schema':1,'mode':'live','stt_measured':any(r.get('stt_responses',0)>0 for r in rows),'acoustics_measured':bool(rows),
                     'latency_measured':'server_endpoint_to_bytes_not_device_playback_cache_included',
                     'utc':datetime.now(timezone.utc).isoformat(),'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
                     'workload_sha256':hashlib.sha256(json.dumps([(p.fixture.fixture_sha256,asdict(c)) for p,c in cases],sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
