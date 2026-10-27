@@ -64,7 +64,8 @@ from voiney_lab.curated_protocol import (
     _SOURCE_UN_WORD,
     _FixtureContentKey,
     _fixture_content_key,
-    _TRANSLATABLE_TERMS,
+    COMMON_LAB_WORDS,
+    _translation_term_present,
     PURPOSE_FACT_KEY,
     CuratedProtocolFixture,
     ProtocolKnowledgeView,
@@ -540,12 +541,6 @@ def _name_words(term: str) -> tuple[str, ...]:
     ))
 
 
-COMMON_LAB_WORDS = {
-    "band": "밴드", "gel": "젤", "vial": "바이알", "tube": "튜브",
-    "bead": "비즈", "supernatant": "상층액", "pipette": "피펫",
-}
-
-
 def lab_korean(text: str, reviewed: Mapping[str, str] | None = None) -> str:
     """One spelling for common Korean nouns, honouring a person's reading.
 
@@ -816,11 +811,8 @@ def _name_issue(korean: str, required_terms: Sequence[str]) -> str | None:
     """The check ``reader_translation_issue`` makes after the negation one:
     every name the reading must keep, in its original spelling."""
 
-    folded = " ".join(korean.split()).casefold()
     for term in required_terms:
-        if term.casefold() in _TRANSLATABLE_TERMS:
-            continue
-        if term.casefold() not in folded:
+        if not _translation_term_present(term, korean):
             return "term_missing"
     return None
 

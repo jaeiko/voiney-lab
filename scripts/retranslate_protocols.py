@@ -29,7 +29,8 @@ role's model, ``WorkspaceStore.record_fact_translations``):
 - **A plan first, a bounded bill.** Without ``--run`` it prints, per protocol,
   how many sentences the current version still lacks and the model calls a
   run would make (one glossary call when the version has no glossary yet,
-  plus one call per batch of at most 8 sentences), and touches nothing.
+  plus one call per batch of at most 8 sentences), and creates no translation
+  rows. Store initialization and catalog metadata preparation still run.
   ``--max-calls`` stops sending once that many calls were made (a batch not
   sent is simply made by a later run).
 - **A folder it is given.** ``--data-dir`` is the catalog folder
