@@ -1,0 +1,19 @@
+[Unit]
+Description=Voiney Lab named Cloudflare Tunnel
+Wants=network-online.target voineylab.service
+After=network-online.target voineylab.service
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

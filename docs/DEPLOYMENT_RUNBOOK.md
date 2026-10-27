@@ -7,6 +7,7 @@
 - 휴대폰에서 마이크를 쓰기 위한 HTTPS: `docs/PILOT_GUIDE.md`
 - 증상별 복구: `docs/TROUBLESHOOTING_GUIDE.md`
 - 설정 이름 전체: `src/voiney_lab/setting_names.py`
+- 고정 도메인·Cloudflare 이름 있는 터널·AWS WIF·일일 백업: [실행 순서](DOMAIN_AND_KEYLESS_GUIDE.md)
 
 ## 1. 서버에 설치할 것
 
@@ -38,7 +39,7 @@
 - 안전 문서 범위: `data/runtime/pilot/approved_safety_catalog.sqlite` 가 없으면 `source_protocol_only`, 있으면 `reference_only` 로 점검하고 쓸 수 없으면 시작을 거부한다(3절).
 - PDF 밖 일반 설명은 끈다. 작업공간이 꺼졌거나 `VOINEY_LAB_ADMIN_TOKEN` 이 비었거나 LibreOffice 가 없으면 `[WARN]`.
 - 새 화면: 시작 전에 `web/build.sh` 로 빌드해 `/app/` 에서 제공한다. `.env` 의 `VOINEY_LAB_NEW_UI=true` 가 `/` 를 `/app/` 으로 보낸다(기본은 지금 화면). node 가 없으면 `[WARN]` 과 함께 새 화면만 꺼진다.
-- 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy)를 앞에 두고 연다 — `docs/PILOT_GUIDE.md`. `HOST=0.0.0.0` 으로 그냥 열지 않는다.
+- 기본은 루프백(127.0.0.1)이다. 밖에서는 HTTPS 프록시(Caddy) 또는 Cloudflare 이름 있는 터널을 앞에 둔다 — [고정 주소 안내](DOMAIN_AND_KEYLESS_GUIDE.md). `HOST=0.0.0.0` 으로 그냥 열지 않는다.
 
 모든 모델 역할과 STT·TTS 공급자는 `.env` 에 적는다(비면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 옛 설정 이름이 있으면 `python scripts/migrate_env.py --check`.
 
@@ -46,12 +47,12 @@
 
 1. Google Cloud 콘솔에서 크레딧을 쓸 **프로젝트**를 고르고 결제 연결을 확인한다. **API 및 서비스 → 라이브러리 → Cloud Speech-to-Text API → 사용**을 누른다.
 2. **IAM 및 관리자 → 서비스 계정 → 서비스 계정 만들기**에서 서버용 계정을 만든다. 같은 프로젝트에 **Cloud Speech Client** 역할(`roles/speech.client`)을 준다. 프로젝트 ID를 적어 둔다.
-3. 그 서비스 계정의 **키 → 키 추가 → 새 키 만들기 → JSON**으로 키를 받는다. EC2에서 서비스를 실행하는 사용자만 읽도록, 모든 저장소 밖의 `~/.config/voiney/`에 둔다. 키 내용은 복사해 문서·메신저·터미널 출력에 넣지 않는다.
+3. EC2에서는 [AWS Workload Identity Federation 설정](DOMAIN_AND_KEYLESS_GUIDE.md) 5절로 **새 키 없이** 연결한다. 기존 서비스 계정 키 JSON과 개발용 사용자 ADC도 같은 설정 이름으로 읽힌다. 파일은 서비스를 실행하는 사용자만 읽도록 모든 저장소 밖의 `~/.config/voiney/`에 둔다. 파일 내용은 복사해 문서·메신저·터미널 출력에 넣지 않는다.
 
    ```bash
    mkdir -p ~/.config/voiney
    chmod 700 ~/.config/voiney
-   chmod 600 ~/.config/voiney/google-stt.json
+   chmod 600 ~/.config/voiney/google-stt-wif.json
    ```
 
    JSON 파일을 그 위치에 옮긴 다음 권한을 준다. 서비스 사용자가 `ubuntu`가 아니면 그 사용자의 홈과 소유권을 쓴다. 저장소 안 파일이나 저장소로 이어지는 링크, 다른 사용자가 읽을 수 있는 파일은 거절한다.
@@ -62,16 +63,19 @@
    VOINEY_LAB_STT_MODEL=chirp_3
    VOINEY_LAB_STT_LANGUAGE=ko
    VOINEY_LAB_GOOGLE_STT_V2_PROJECT=your-project-id
-   VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE=/home/ubuntu/.config/voiney/google-stt.json
+   VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE=/home/ubuntu/.config/voiney/google-stt-wif.json
    VOINEY_LAB_GOOGLE_STT_V2_LOCATION=us
    VOINEY_LAB_GOOGLE_STT_V2_DENOISE=true
    ```
 
 5. 서버를 다시 띄우고 `/readyz`를 확인한다. 잘못된 V2 설정은 503 `speech_configuration_invalid`와 **설정 이름만** 보인다. 이 점검은 로컬 설정·파일 위치·권한을 확인하며 Google 인증이나 음성 인식 성공을 뜻하지 않는다. 실제 확인은 사람이 `docs/TROUBLESHOOTING_GUIDE.md` 6절의 녹음 비교 명령을 실행한다. 최종 공급자는 녹음 비교 후 사람이 정한다.
 
-V2는 받아쓰기만 바꾼다. 말하기 설정은 따로 둔다. API 키 대신 서비스 계정으로 OAuth 토큰을 만들고, 토큰은 프로세스 메모리에만 둔다. `us`는 [공식 Chirp 3 지역 표](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)에 명시된 기본 지역이다. 다른 지역은 `chirp_3`·한국어 지원을 확인한 뒤 넣는다. 자동 구두점·단어 시각을 요청하고, 잡음 제거는 기본으로 켠다(효과는 사람 시험 뒤 확정). 단어 시각은 인식 품질에 영향을 줄 수 있다. [공식 IAM 역할 안내](https://docs.cloud.google.com/speech-to-text/docs/iam)도 참고한다.
+V2는 받아쓰기만 바꾼다. 말하기 설정은 따로 둔다. 지정한 파일을 google-auth ADC 로더로 읽어 OAuth 토큰을 만들고, 토큰은 프로세스 메모리에만 둔다. AWS WIF는 EC2 역할로 짧은 토큰을 받고 서비스 계정을 사용한다. 파일이 없거나 틀리면 다른 자격을 찾지 않는다. `us`는 [공식 Chirp 3 지역 표](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)에 명시된 기본 지역이다. 다른 지역은 `chirp_3`·한국어 지원을 확인한 뒤 넣는다. 자동 구두점·단어 시각을 요청하고, 잡음 제거는 기본으로 켠다(효과는 사람 시험 뒤 확정). 단어 시각은 인식 품질에 영향을 줄 수 있다. [공식 IAM 역할 안내](https://docs.cloud.google.com/speech-to-text/docs/iam)도 참고한다.
 
 ### systemd 로 두기 (예시, 이 줄에서 실행해 보지 않음)
+
+적용할 서비스 파일은 `deploy/voineylab.service`이며 설치·사용자·자격 경로를 맞추는
+명령은 [고정 주소 안내](DOMAIN_AND_KEYLESS_GUIDE.md) 3절에 있다. 아래는 핵심 필드다.
 
 ```ini
 [Unit]
@@ -90,7 +94,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-- 저장소를 `/opt/voineylab` 에 두고, 그 안에 `.venv` 와 `.env`(커밋하지 않음)를 둔다. API 키는 `.env`에, Google V2 서비스 계정 JSON은 위 안내대로 저장소 밖에 둔다. 실행기가 `exec` 로 uvicorn 을 띄우므로 systemd 가 그 프로세스를 그대로 본다.
+- 저장소를 `/opt/voineylab` 에 두고, 그 안에 `.venv` 와 `.env`(커밋하지 않음)를 둔다. API 키는 `.env`에, Google V2 ADC JSON은 위 안내대로 저장소 밖에 둔다. 실행기가 `exec` 로 uvicorn 을 띄우므로 systemd 가 그 프로세스를 그대로 본다.
 - 전용 비루트 사용자로 돌린다. 데이터는 저장소 안 `data/runtime/pilot/` 이다.
 
 ## 3. 기관 안전 문서 카탈로그 (선택)
@@ -128,6 +132,12 @@ WantedBy=multi-user.target
 - 설정이 틀리면 조용히 기본값으로 가지 않는다: 작업공간이 켜졌는데 절대 경로가 없거나, `operational` 범위인데 OIDC 설정이 덜 됐거나, 계정 모드인데 작업공간이 없으면 시작이나 첫 요청에서 거부한다. 옛 설정 이름이 있으면 서버·실행기가 시작을 거부한다.
 
 ## 5. 데이터와 백업·복구
+
+매일 실행은 `scripts/daily_backup.sh`와 `deploy/voineylab-backup.service`·
+`deploy/voineylab-backup.timer`를 사용한다. 기본 꺼짐이며 사람이 설치·활성화한다.
+네 핵심 DB를 확인하고 실행 중인 서버를 잠깐 멈춰 기존 도구로 생성·검증한 뒤,
+실패 때도 재시작을 시도한다. 시간·중복 잠금·실패 확인·복구 폴더 배치는
+[고정 주소 안내](DOMAIN_AND_KEYLESS_GUIDE.md) 6절에 있다.
 
 | 무엇 | 파일럿 위치 |
 |---|---|

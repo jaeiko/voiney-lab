@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Voiney Lab pilot backup at 18:30 UTC (03:30 KST)
+
+[Timer]
+OnCalendar=*-*-* 18:30:00 UTC
+# No surprise catch-up outage when the machine boots during a run.
+Persistent=false
+Unit=voineylab-backup.service
+
+[Install]
+WantedBy=timers.target
