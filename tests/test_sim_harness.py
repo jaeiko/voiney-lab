@@ -479,3 +479,15 @@ def test_configured_live_router_names_missing_settings_before_speech(tmp_path,mo
     assert result['completed_cases']==0
     captured=capsys.readouterr()
     assert all(name in captured.err for name in expected)
+
+
+@pytest.mark.parametrize('field',['biology','chemistry','materials'])
+def test_return_to_future_step_is_a_valid_refusal_without_any_state_change(field):
+    p=next(p for p in load_corpus() if p.field==field)
+    c=next(c for c in generate_cases(p) if c.family=='jump' and '돌아가' in c.text)
+    assert c.index==0
+    result=asyncio.run(run_case(p,c))
+    assert result['action']=='decline_completion'
+    assert result['intent_kind']=='repeat_return_refused'
+    assert result['changed_fields']==[]
+    assert score_case(c,result)['understood'] is True

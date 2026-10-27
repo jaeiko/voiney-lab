@@ -126,6 +126,11 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
                 case_actions=('decline_completion',)
                 case_intents=('run_value_change_refused',)
                 case_allowed=()
+            if family=='jump' and '돌아가' in text:
+                # At step 1, step 3 is ahead: this cannot be a return.
+                case_actions=('decline_completion',)
+                case_intents=('repeat_return_refused',)
+                case_allowed=()
             index = 1 if family == 'previous' else 0
             setup = 'paused' if family == 'resume' else 'active'
             if family.startswith('timer_'):
