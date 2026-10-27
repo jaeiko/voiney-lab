@@ -24,7 +24,8 @@ sys.path.insert(0, str(ROOT/'src'))
 from scripts.sim.audio import change_speed, mix, noise, NOISES
 from scripts.sim.corpus import CORPUS, generate_cases, load_corpus
 from scripts.sim.metrics import aggregate, score_case
-from scripts.sim.run import output_dir, save_report
+from scripts.sim.run import output_dir, save_report, prepare_cases
+from scripts.sim.split import add_split_arguments
 from scripts.sim.runner import run_case
 from voiney_lab.audio import pcm_to_wav, samples_to_pcm16
 from voiney_lab import voice_providers as vp
@@ -51,7 +52,7 @@ class Reservation:
         if not isinstance(row,dict) or set(row)!={'transport','reserved_usd','utc'}:
             raise ValueError('invalid reservation schema')
         amount=row['reserved_usd']
-        if row['transport'] not in {'requests','httpx','httpx_async'} or isinstance(amount,bool) or not isinstance(amount,(int,float)) or not math.isfinite(amount) or amount<=0:
+        if row['transport'] not in {'requests','httpx','httpx_async','httpx2','httpx2_async'} or isinstance(amount,bool) or not isinstance(amount,(int,float)) or not math.isfinite(amount) or amount<=0:
             raise ValueError('invalid reservation')
         if not isinstance(row['utc'],str) or datetime.fromisoformat(row['utc']).tzinfo is None:
             raise ValueError('invalid reservation time')
@@ -85,22 +86,30 @@ class Budget:
     def guard(self, stack: ExitStack) -> None:
         import requests
         import httpx
-        request_send, sync_send, async_send = requests.Session.send, httpx.Client.send, httpx.AsyncClient.send
+        request_send = requests.Session.send
         def requests_send(client, *args, **kwargs):
             self.take('requests')
             kwargs['allow_redirects'] = False
             return request_send(client, *args, **kwargs)
-        def httpx_send(client, *args, **kwargs):
-            self.take('httpx')
-            kwargs['follow_redirects'] = False
-            return sync_send(client, *args, **kwargs)
-        async def httpx_async_send(client, *args, **kwargs):
-            self.take('httpx_async')
-            kwargs['follow_redirects'] = False
-            return await async_send(client, *args, **kwargs)
         stack.enter_context(patch.object(requests.Session, 'send', requests_send))
-        stack.enter_context(patch.object(httpx.Client, 'send', httpx_send))
-        stack.enter_context(patch.object(httpx.AsyncClient, 'send', httpx_async_send))
+        modules = [('httpx', httpx)]
+        try:
+            import httpx2
+        except ImportError:
+            pass
+        else:
+            modules.append(('httpx2', httpx2))
+        for name, module in modules:
+            def sync_guard(client, *args, _send=module.Client.send, _name=name, **kwargs):
+                self.take(_name)
+                kwargs['follow_redirects'] = False
+                return _send(client, *args, **kwargs)
+            async def async_guard(client, *args, _send=module.AsyncClient.send, _name=name, **kwargs):
+                self.take(_name + '_async')
+                kwargs['follow_redirects'] = False
+                return await _send(client, *args, **kwargs)
+            stack.enter_context(patch.object(module.Client, 'send', sync_guard))
+            stack.enter_context(patch.object(module.AsyncClient, 'send', async_guard))
 
 
 class CachedSpeech:
@@ -184,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--stt-provider',choices=('google_cloud_v2','google_cloud','elevenlabs'),default='google_cloud_v2')
     parser.add_argument('--stt-model',default='',help='chirp_3 default on V2; latest_long on google_cloud')
     parser.add_argument('--configured-models',action='store_true',help='use shell router/translation roles, within request caps')
+    parser.add_argument('--translations', type=Path, help='attach checked stored Korean readings')
+    add_split_arguments(parser)
     parser.add_argument('--reply-voice',default='ko-KR-Chirp3-HD-Charon')
     parser.add_argument('--max-calls',type=int,default=200)
     parser.add_argument('--max-usd',type=float,default=5)
@@ -211,19 +222,11 @@ def main(argv: list[str] | None = None) -> int:
         # 2000 characters/request <= $0.10 under the default planning rate.
         if args.reserve_usd_per_request < max(2000*args.tts_usd_per_million/1e6,15/60*args.stt_usd_per_minute):
             raise ValueError('per-request reserve is below assumed speech cost')
-        protocols=load_corpus(args.corpus)
-        catalog_counts={}
-        if args.catalog_copy:
-            from scripts.sim.catalog import load_catalog
-            uploaded,catalog_counts=load_catalog(args.catalog_copy)
-            protocols+=uploaded
-        cases = [(p,c) for p in protocols for c in generate_cases(p)
-                 if (not args.protocol or p.code in args.protocol) and (not args.family or c.family in args.family)][:args.limit]
-        if not cases:
-            raise ValueError('no matching cases')
+        cases, split, catalog_counts, translation_coverage = prepare_cases(args)
         n = len(cases)*len(args.voices)*len(args.speeds)*len(args.conditions)
         chars = sum(len(c.text) for _,c in cases)*len(args.voices)
-        estimate = {'cases':n,'catalog':catalog_counts,'input_tts_cache_misses_at_most':len(cases)*len(args.voices),
+        estimate = {'cases':n,'catalog':catalog_counts,'split':split,'translation_coverage':translation_coverage,
+                    'input_tts_cache_misses_at_most':len(cases)*len(args.voices),
                     'input_characters':chars,'stt_requests_at_most':n,
                     'input_tts_usd_assumed':round(chars*args.tts_usd_per_million/1e6,4),
                     'stt_usd_assumed_at_15_seconds':round(n*.25*args.stt_usd_per_minute,4),
@@ -262,7 +265,10 @@ def main(argv: list[str] | None = None) -> int:
                     'provider_requests_including_auth_and_retries':budget.calls,'reserved_usd':round(budget.usd,6),
                     'run_failure_code':failure,'run_failure_settings':missing_settings,'budget_stopped':budget.stopped,'planned_cases':n,'completed_cases':len(rows),
                     'cache_hits':speech.hits,'cache_misses':speech.misses,'estimate':estimate,
-                    **aggregate(rows),'rows':rows}
+                    'split':split, 'translations_sha256':hashlib.sha256(args.translations.read_bytes()).hexdigest() if args.translations else None,
+                    'translation_coverage':translation_coverage,
+                    **aggregate(rows),'rows':[] if args.split == 'holdout' else rows,
+                    'rows_suppressed':args.split == 'holdout'}
             save_report(args.output,report)
             return 3 if budget.stopped else 2 if failure else 0
     except Exception as exc:

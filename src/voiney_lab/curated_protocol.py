@@ -16966,10 +16966,10 @@ class CuratedProtocolSession:
             # The step's purpose is the section the source puts it in, named
             # as the source names it -- never a sentence written for one PDF.
             # Lane SAY, decision 4: 해요체, short.
-            if section_title:
+            if section_title and _HANGUL_LETTER.search(section_title):
                 purpose = f"원문의 ‘{concise(section_title, 90)}’ 부분"
             else:
-                purpose = "원문 순서대로 다음 단계를 준비하는 단계"
+                purpose = None
 
             if warning_only:
                 speech = (
@@ -16979,7 +16979,11 @@ class CuratedProtocolSession:
                     else "현재 PDF에는 이 단계의 별도 주의사항이 명시되어 있지 않습니다. 추가 안전 판단은 담당자에게 확인해 주세요."
                 )
             else:
-                speech = f"이 단계는 {purpose}이에요." if purpose.endswith("분") else f"이 단계는 {purpose}예요."
+                speech = (
+                    f"이 단계는 {purpose}이에요." if purpose and purpose.endswith("분")
+                    else f"이 단계는 {purpose}예요." if purpose
+                    else "이 단계의 원문 설명을 화면에 띄웠어요."
+                )
                 if expected_facts:
                     localized_expected = (
                         self._localized_fact(step.step_id, expected_facts[0].fact_id)
@@ -17018,7 +17022,9 @@ class CuratedProtocolSession:
                 if warning_facts:
                     speech += f" The source warning is: {concise(warning_facts[0].text)}"
 
-        display_lines = [speech, "", "Source evidence"]
+        display_lines = [speech, "", "원문 · English" if language == "ko" else "Source evidence"]
+        if section_title:
+            display_lines.append(section_title)
         display_lines.extend(
             f"- PDF p.{fact.source_page} · {fact.text}" for fact in evidence
         )

@@ -145,7 +145,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                 tb=tb.tb_next
             error_codes.append(f'{kind.__name__}:{Path(tb.tb_frame.f_code.co_filename).name}:{tb.tb_lineno}' if kind and tb else 'server_error')
         stack.enter_context(patch.object(server.log, 'exception', side_effect=error))
-        if offline:
+        if offline or role_client is not None:
             # Missing roles remain visibly unavailable, with no fallback provider.
             stack.enter_context(patch.object(server, '_role_client', side_effect=role_client or RuntimeError('sim_role_unavailable')))
         source = oracle_audio(case.family == 'noise') if pcm is None else pcm
@@ -207,7 +207,12 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         if not committed and not drops:
             drops = ['no_vad_endpoint']
         timings = done.get('timings_ms', {})
+        from scripts.sim.metrics import protected_scientific_names
+        protected = protected_scientific_names(
+            list((protocol.fixture.localizations or {}).values()) + list((protocol.fixture.machine_localizations or {}).values()),
+            ' '.join(page.text for page in protocol.fixture.draft.extraction.pages))
         return {
+            'protected_names':protected,
             'invalid_state':invalid_state, 'error_codes': error_codes, 'action': done.get('result_kind', decision.get('action')), 'intent_kind': done.get('intent_kind'),
             'route': done.get('route'), 'runtime_router':decision.get('runtime_router'),
             'router_handled':decision.get('router',{}).get('handled_by'), 'changed_fields': sorted(k for k in before if before[k] != after[k]),

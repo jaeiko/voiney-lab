@@ -26,11 +26,27 @@ EXPECTED_ACTIONS = {
 }
 
 
-def english_copy(spoken: str, source: str) -> bool:
+def protected_scientific_names(readings: list[str], source: str) -> tuple[str, ...]:
+    """Source-matching proper names retained by checked Korean readings."""
+    grammar = {'use', 'add', 'mix', 'wash', 'incubate', 'transfer', 'remove', 'prepare',
+               'the', 'a', 'an', 'of', 'for', 'with', 'to', 'and', 'or', 'in', 'on'}
+    names = set()
+    normalized_source = ' '.join(source.split())
+    for reading in readings:
+        for match in re.finditer(r'(?<![A-Za-z])(?:[A-Z][A-Za-z0-9-]*\s+){3,}[A-Z][A-Za-z0-9-]*', reading):
+            name = match.group().strip()
+            if name in normalized_source and not grammar.intersection(name.casefold().split()):
+                names.add(name)
+    return tuple(sorted(names))
+
+
+def english_copy(spoken: str, source: str, *, protected_names: tuple[str, ...] = ()) -> bool:
     # Exact runs of >=4 English words detect source sentences, not reagent names.
     runs = re.findall(r'(?:[A-Za-z][A-Za-z0-9-]*[ ,;:.!?]*){4,}', spoken)
     clean = lambda t: ' '.join(re.findall(r'[a-z0-9-]+', t.casefold()))
-    if any(len(clean(r).split()) >= 4 and clean(r) in clean(source) for r in runs):
+    if any(len(clean(r).split()) >= 4 and clean(r) in clean(source)
+           and not any(clean(r) in clean(name) for name in protected_names if clean(name) in clean(source))
+           for r in runs):
         return True
     short = re.findall(r'(?i)(?:add|mix|wash|incubate|centrifuge|transfer|prepare|remove|discard|keep|store|filter|measure|stir)\s+[A-Za-z][A-Za-z0-9 ,;-]*[.!?]',source)
     return any(clean(line) in clean(spoken) for line in short)
@@ -60,7 +76,7 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
     understood = (action_ok and not wrong and (not case.must_change or bool(changed))
                   and (case.target is None or result['step_after'] == case.target) and result['terminal'])
     spoken = result['spoken']
-    english = english_copy(spoken, source)
+    english = english_copy(spoken, source, protected_names=tuple(result.get('protected_names', ())))
     duplicate = bool(re.search(r'(\d+)\s*단계\s*[:：·.-]?\s*\1\s*단계', spoken))
     korean = bool(re.search('[가-힣]', spoken)) if spoken.strip() else None
     # Oracle STT input is not a measured recognizer. Keep it out of live STT tables.

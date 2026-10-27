@@ -158,6 +158,7 @@
   모델이 늦거나·실패하거나·거부되거나·답이 검사에 걸리면 같은 말을 규칙 길로 처리한다(두 번째 결정이 아니다). 라우터 모델이 요청 한도(429)에 걸리면 그 말을 멈추고 "지금 답하지 못했어요. 다시 말씀해 주세요."라고 한다.
   모델이 쓰는 답의 말투는 프롬프트가 정한다: 해요체, 짧은 문장, 합니다체·"~하십시오"·"귀하" 금지, 원문 저자의 "we"는 "이 논문의 저자들은"(`ROUTER_SYSTEM_PROMPT`).
   모델이 쓴 답은 서버 검사를 통과해야 쓴다: 숫자는 인용한 원문에서만, 상태를 바꿨다는 말 금지, 화면 라벨 금지, 서버 값은 정확히, 근거 없는 안전 지시는 빼고 "이 상황의 안전 안내는 원문에 없어요."를 붙인다.
+  "설명하고 다음으로 넘어가"처럼 설명과 이동 명령을 함께 말하면 원문의 설명 뒤에 완료 확인을 연다. 설명에 든 "왜 하는지"를 질문 어미로 읽어 확인을 없애지 않는다. 다음 단계를 알려 달라는 미리보기는 그대로 보기만 한다. 타이머 켜기·맞추기·계속 돌리기, 조사 없는 한 단계 복귀와 문제의 "이상해졌어"도 같은 기존 관문으로 처리한다. 미래의 특정 단계로 바로 이동하라는 말에는 한 단계씩 진행하는 방법을 알리고 완료·단계를 바꾸지 않는다.
   **라우터 먼저**(꺼짐)를 켜면 앞단 규칙은 시스템 정보·애매한 지칭 되묻기·짧고 분명한 명령·서버 질문의 답만 맡고, 라우터가 읽기 전용 도구(`show_visual`, `clarify`, `not_for_me`)도 쓴다.
   모델의 되묻기 후보는 서버가 전달한 원문 용어만 허용한다. 후보를 눌렀을 때 명령이나 확인 응답이 새 사용자 말로 실행되는 것을 막는다.
 - **어디**: `curated_protocol.py` (`CuratedProtocolSession.front_plan`, `plan`, `FRONT_RULES`, `apply_tool_proposal`, `apply_router_answer`, `ROUTER_FIRST_HANDED_ON`); `llm_router.py` (`route_turn_with_llm_router`, `validate_tool_proposals`, `CHANGE_STATE_RULES`, `RECORD_LOG_RULES`, `answer_check_failures`, `ROUTER_MODEL_UNAVAILABLE_KINDS`); `answer_checks.py`; `runtime_routing.py` `route_curated_runtime_turn`; `intent_fences.py`; `brain.py` `ConversationHistory`(6턴·약 1,200 토큰); `server.py` `_route_with_llm_router`.
@@ -364,5 +365,5 @@
 시험: `tests/test_sim_harness.py`. 명령·비용 가정·읽는 법·측정 한계는
 [EVALUATION_SIM.md](EVALUATION_SIM.md)에 있다. 유한한 회귀 시험이며 현장 성능 검증이 아니다.
 개선용·시험용은 고정 씨앗으로 나누며 같은 발화를 두 묶음에 중복하지 않는다.
-시험용은 개별 결과를 감추고 갈래·프로토콜별 점수만 제공한다. 응급 별도 묶음은
+시험용은 개별 결과를 감추고 갈래·프로토콜별 점수만 제공한다. 저장 번역 조건과 사람 실행 라우터 비교 조건도 같은 분할과 서버 경계를 쓴다. 영어 구간 제목은 원문 영역에 두고 한국어 설명에서 읽지 않는다. 영어 복사 점수는 확인된 한국어 읽기가 보존한 원문의 과학 이름을 복사 오류로 세지 않는다. 응급 별도 묶음은
 현재 사고 10갈래와 비응급 대조군에서 놓침과 헛경보를 함께 센다.
