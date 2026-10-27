@@ -6,6 +6,25 @@
 
 ## 오프라인: 모든 줄의 고치기 전·후 점수
 
+개선에 앞서 `--split development`와 `--split holdout`으로 각각 잰다.
+고정 씨앗은 1027, 시험용 비중은 최소 30%다. 같은 발화는 프로토콜이 달라도
+한쪽에만 들어간다. 프로토콜·갈래와 두 문장 이상인 교차 묶음에 시험용 할당량을
+둔다. 한 문장만 반복되는 갈래는 한쪽에만 속할 수 있다. 필터·문장 수 제한은
+전체 분할을 고정한 뒤 적용한다. 분할 지문과 실제 두 묶음의 수가 결과에 남는다.
+시험용 결과는 개별 행을 저장하지 않고 프로토콜·갈래·교차 점수만 내므로
+문장별 퇴보 비교는 개발용에만 가능하다. 시험용 문장을 보고 규칙을 맞추지 않는다.
+
+```bash
+python scripts/sim/run.py --split development --output ~/reports/sim/development-before.json
+python scripts/sim/run.py --split holdout --output ~/reports/sim/holdout-before.json
+python scripts/sim/run.py --emergency-matrix --split development --output ~/reports/sim/emergency-development.json
+python scripts/sim/run.py --emergency-matrix --split holdout --output ~/reports/sim/emergency-holdout.json
+```
+
+응급 별도 묶음은 눈·피부 노출, 흡입·호흡, 불·연기, 대량 쏟음, 베임·출혈,
+쓰러짐·의식, 가스·냄새, 화상, 감전, 삼킴의 합성 발화와 비응급 대조군이다.
+응급 놓침과 헛경보를 따로 센다. 실제 음성 인식이나 안전 대응의 검증은 아니다.
+
 저장소의 가상환경을 활성화하고 저장소 루트에서 실행한다.
 
 ```bash

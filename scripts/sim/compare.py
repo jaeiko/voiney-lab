@@ -22,7 +22,7 @@ def numeric_metrics(value: object, prefix: str = '') -> dict[str, float | int | 
 
 
 def compare(before: dict, after: dict) -> dict:
-    for key in ('schema','mode','corpus_sha256','workload_sha256','router','provider','model'):
+    for key in ('schema','mode','corpus_sha256','workload_sha256','router','provider','model','split','rows_suppressed'):
         if before.get(key) != after.get(key):
             raise ValueError(f'incomparable {key}')
     def index(report: dict) -> dict:
@@ -53,7 +53,9 @@ def compare(before: dict, after: dict) -> dict:
         old, new = left.get(key), right.get(key)
         metrics[key] = {'before':old, 'after':new,
                         'delta':round(new-old,8) if old is not None and new is not None else None}
-    return {'comparable':True,'cases':len(a),'delta':delta,'metrics':metrics,
+    suppressed = bool(before.get('rows_suppressed'))
+    return {'comparable':True,'cases':before['overall']['cases'] if suppressed else len(a),
+            'individual_regressions_measured':not suppressed,'delta':delta,'metrics':metrics,
             'regressions':regressions,'improvements':improvements}
 
 

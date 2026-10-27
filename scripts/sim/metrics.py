@@ -49,8 +49,10 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
     action_ok = result['action'] in actions if actions else True
     if case.intents:
         action_ok=action_ok and result['intent_kind'] in case.intents
-    if case.family == 'emergency':
+    if case.family == 'emergency' or case.family.startswith('emergency_'):
         action_ok = result['route'] == 'deterministic_emergency'
+    if case.family == 'negative_control':
+        action_ok = result['route'] != 'deterministic_emergency'
     if case.family == 'noise':
         action_ok = result['stt_calls'] == 0 and not changed
     if case.family == 'mixed':
@@ -85,6 +87,8 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         stt_summary['number_unit_accuracy']=round(counts['pairs_right']/counts['pairs_total'],4) if counts['pairs_total'] else None
     return {
         'case': case.code, 'family': case.family, 'understood': bool(understood), 'wrong_state': wrong,
+        'emergency_miss':bool((case.family == 'emergency' or case.family.startswith('emergency_')) and result['route'] != 'deterministic_emergency'),
+        'false_alarm':bool(case.family == 'negative_control' and result['route'] == 'deterministic_emergency'),
         'error_codes':result.get('error_codes',[]), 'action': result['action'], 'intent_kind': result['intent_kind'], 'route': result['route'],
         'changed_fields': sorted(changed), 'invalid_state': result.get('invalid_state',[]), 'english_copy': english, 'duplicate_label': duplicate,
         'korean': korean, 'drops': result['drop_reasons'], 'interrupted': result.get('interrupted', False),
@@ -119,6 +123,8 @@ def aggregate(rows: list[dict]) -> dict:
             'stt':stt, 'cases': len(group), 'understood': sum(r['understood'] for r in group),
             'accuracy': round(sum(r['understood'] for r in group)/len(group), 4) if group else None,
             'wrong_state': sum(r['wrong_state'] for r in group), 'english_copy': sum(r['english_copy'] for r in group),
+            'emergency_miss':sum(r.get('emergency_miss', False) for r in group),
+            'false_alarm':sum(r.get('false_alarm', False) for r in group),
             'duplicate_label': sum(r['duplicate_label'] for r in group), 'incomplete': sum(r['incomplete'] for r in group),
             'cut_off':sum(r.get('cut_off',False) for r in group), 'interrupted': sum(r['interrupted'] for r in group),
             'non_korean': sum(r['korean'] is False for r in group),
@@ -126,9 +132,10 @@ def aggregate(rows: list[dict]) -> dict:
             'latency_ms': {k:percentiles(v) for k,v in timings.items()},
         }
     tables = {}
-    for dimension in ('protocol', 'family', 'noise', 'snr', 'voice', 'speed'):
+    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'voice', 'speed'):
         groups = defaultdict(list)
         for row in rows:
-            groups[str(row.get(dimension, 'not_measured'))].append(row)
+            key = f'{row.get("protocol")}/{row.get("family")}' if dimension == 'protocol_family' else str(row.get(dimension, 'not_measured'))
+            groups[key].append(row)
         tables[dimension] = {k:summary(v) for k,v in sorted(groups.items())}
     return {'overall':summary(rows), 'tables':tables}

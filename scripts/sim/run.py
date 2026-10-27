@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT/'src'))
 from scripts.sim.corpus import load_corpus, generate_cases, CORPUS
 from scripts.sim.runner import run_case
 from scripts.sim.metrics import score_case, aggregate
+from scripts.sim.split import add_split_arguments, select_cases
 
 
 def output_dir(path: Path) -> Path:
@@ -51,9 +52,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
         from scripts.sim.catalog import load_catalog
         extra, catalog_counts = load_catalog(args.catalog_copy)
         protocols += extra
-    cases = [(p,c) for p in protocols for c in generate_cases(p) if (not args.protocol or p.code in args.protocol) and (not args.family or c.family in args.family)]
-    if args.limit:
-        cases = cases[:args.limit]
+    cases, split = select_cases(protocols, args)
     if not cases:
         raise ValueError('no matching cases')
     rows = []
@@ -71,7 +70,9 @@ async def evaluate(args: argparse.Namespace) -> dict:
         'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
         'workload_sha256':hashlib.sha256(json.dumps([(p.fixture.fixture_sha256,asdict(c)) for p,c in cases],sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
-        'catalog':catalog_counts, 'provider_requests':0, **aggregate(rows), 'rows':rows,
+        'catalog':catalog_counts, 'provider_requests':0, 'split':split,
+        **aggregate(rows), 'rows':[] if args.split == 'holdout' else rows,
+        'rows_suppressed':args.split == 'holdout',
     }
 
 
@@ -84,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--limit', type=int)
     parser.add_argument('--output', type=Path, default=Path.home()/'reports/sim/offline.json')
     parser.add_argument('--fail-on-wrong-state', action='store_true')
+    add_split_arguments(parser)
     args = parser.parse_args(argv)
     if args.limit is not None and args.limit < 1:
         parser.error('--limit must be positive')
