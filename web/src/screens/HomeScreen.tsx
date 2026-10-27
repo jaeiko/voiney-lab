@@ -4,7 +4,7 @@ import { useExperiments, useProtocolDetail, useProtocols, useSignOutOnExpiry, us
 import type { AuthSession, CatalogEntry, Experiment } from "../api/types";
 import { BigCard, ErrorBox, LoadingBox } from "../components/Pieces";
 import { home, states } from "../copy/ko";
-import { oldRoutes, routes } from "../lib/navigation";
+import { routes } from "../lib/navigation";
 import { elapsedWords, entryAnalysing, reviewCount } from "../lib/protocolStatus";
 import { useRun } from "../voice/runStore";
 import { displayTitle } from "../lib/protocolTitle";
@@ -57,7 +57,7 @@ function SecondaryActions({ keysShown }: { keysShown: Array<keyof typeof home.se
   const hrefs: Record<keyof typeof home.secondary, string> = {
     protocols: routes.protocols,
     upload: routes.upload,
-    records: oldRoutes.records,
+    records: routes.records,
   };
   // Lane RX4 (decision 4): an icon with every word, as the menu has.
   const icons: Record<keyof typeof home.secondary, LucideIcon> = { protocols: ClipboardList, upload: Upload, records: NotebookPen };

@@ -6,7 +6,7 @@ import { ApiError, postJson } from "../../api/client";
 import { runApi } from "../../api/runApi";
 import { Note } from "../../components/Pieces";
 import { run as copy } from "../../copy/ko";
-import { oldRoutes, routes } from "../../lib/navigation";
+import { routes } from "../../lib/navigation";
 import type { ProtocolState } from "../../voice/runModel";
 import type { RunSnapshot } from "../../voice/runStore";
 import { recordLines } from "./RecordsPanel";
@@ -91,7 +91,7 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
   const helpCount = model.helpTurns.length;
   const status = ended?.status ?? null;
   const sub = [protocol?.display_name ?? null, stepsWords(status, protocol), tookWords(protocol, endedAt)].filter((part): part is string => Boolean(part));
-  const notebookHref = experimentId ? oldRoutes.record(experimentId) : oldRoutes.records;
+  const notebookHref = experimentId ? routes.record(experimentId) : routes.records;
 
   const reportId = model.reportId;
   const [asked] = useState(() => Boolean(reportId) && !answeredIds().includes(reportId as string));

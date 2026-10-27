@@ -7,7 +7,7 @@ import { apiFetch } from "../api/client";
 import { signedOut } from "../api/queries";
 import type { AuthSession } from "../api/types";
 import { frame, nav } from "../copy/ko";
-import { oldRoutes, routes, type RouteName } from "../lib/navigation";
+import { routes, type RouteName } from "../lib/navigation";
 import { Logo } from "./Logo";
 import { Note } from "./Pieces";
 
@@ -22,6 +22,7 @@ export function menuKeyOf(current: RouteName): string {
   if (current === "upload" || current === "analysis" || current === "review" || current === "changes") return "protocols";
   // Lane RX2: the start flow and the run are the experiment's.
   if (current === "start" || current === "run") return "experiment";
+  if (current === "record" || current === "notebook") return "records";
   return current;
 }
 
@@ -30,7 +31,7 @@ const NAV = [
   { key: "protocols", label: nav.protocols, href: routes.protocols, Icon: ClipboardList },
   // Lane RX2: the experiment (the start flow and the run) and the settings are the new screen's own.
   { key: "experiment", label: nav.experiment, href: routes.run, Icon: FlaskConical },
-  { key: "records", label: nav.records, href: oldRoutes.records, Icon: NotebookPen },
+  { key: "records", label: nav.records, href: routes.records, Icon: NotebookPen },
   { key: "settings", label: nav.settings, href: routes.settings, Icon: Settings },
 ] as const;
 

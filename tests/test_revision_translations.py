@@ -704,7 +704,7 @@ class GenerationTests(unittest.TestCase):
 
     def test_a_failed_batch_stores_nothing_so_it_is_tried_again(self) -> None:
         report = generate(rich_fixture(), FakeTranslator(error=TimeoutError()))
-        self.assertEqual(report.failed_calls, 2)
+        self.assertEqual(report.failed_calls, 18)  # two batches (8 + 2), split to singletons
         self.assertEqual(report.records, [])
 
 

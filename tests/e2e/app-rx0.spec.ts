@@ -145,10 +145,10 @@ test.describe('The new screen (lane RX0)', () => {
   });
 
   test('a route the new screen has not taken over opens on the old screen unchanged', async ({ page }) => {
-    // Lane RX2 took over the settings and the experiment; the records are still the old screen's.
-    await page.goto(`${APP}#/records`);
-    await page.waitForURL(/\/index\.html#\/records$/);
-    await expect(page.locator('#tab-records')).toBeVisible();
+    // Records now belong to the new screen; full protocol details still use the retained view.
+    await page.goto(`${APP}#/protocols/source-legacy`);
+    await page.waitForURL(/\/index\.html\?legacy=1#\/protocols\/source-legacy$/);
+    await expect(page.locator('#tab-protocols')).toBeVisible();
   });
 
   test('the default root is the current screen; /app opens the new one', async ({ page }) => {

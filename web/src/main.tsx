@@ -6,6 +6,7 @@ import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
 import "./styles/base.css";
 import "./styles/screens.css";
 import "./styles/run.css";
+import "./styles/records.css";
 import { App } from "./App";
 
 const client = new QueryClient({

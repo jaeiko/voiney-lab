@@ -1,12 +1,12 @@
 {
-  "id": "/app/",
+  "id": "/",
   "name": "Voiney Lab",
   "short_name": "Voiney Lab",
   "description": "장갑을 낀 채 말로 진행하는 실험 안내",
   "lang": "ko",
   "dir": "ltr",
   "start_url": "/app/",
-  "scope": "/app/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#ffffff",
@@ -22,7 +22,13 @@
       "src": "brand/voiney-lab_app-icon_512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "brand/voiney-lab_maskable_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

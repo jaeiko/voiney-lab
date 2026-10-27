@@ -11,11 +11,13 @@ describe("lane RX2's routes", () => {
     expect(parseRoute("#/start/p1?step=9").step).toBeNull();
   });
 
-  it("owns the experiment, the settings and the first guide; the records stay the old screen's", () => {
+  it("owns the experiment, the settings and the first guide; records and notebooks are owned too", () => {
     expect(parseRoute("#/experiment").name).toBe("run");
     expect(parseRoute("#/settings").name).toBe("settings");
     expect(parseRoute("#/welcome").name).toBe("welcome");
-    expect(parseRoute("#/records").name).toBe("handoff");
+    expect(parseRoute("#/records").name).toBe("records");
+    expect(parseRoute("#/records/s1/?from=bookmark")).toMatchObject({ name: "record", sessionId: "s1" });
+    expect(parseRoute("#/records/s%201/notebook/r%202")).toMatchObject({ name: "notebook", sessionId: "s 1", reportId: "r 2" });
   });
 
   it("builds the start links", () => {
@@ -23,4 +25,10 @@ describe("lane RX2's routes", () => {
     expect(routes.start("p1", { resume: "s9", step: 2 })).toBe("#/start/p1?resume=s9&step=2");
     expect(startHref("p 1")).toBe("#/start/p%201");
   });
+});
+
+it('keeps legacy tab bookmarks with a trailing slash and query on the new screen', () => {
+  for (const [tab, name] of [['home', 'home'], ['protocols', 'protocols'], ['upload', 'upload'], ['experiment', 'run'], ['settings', 'settings']]) {
+    expect(parseRoute(`#/${tab}/?from=bookmark`).name).toBe(name);
+  }
 });
