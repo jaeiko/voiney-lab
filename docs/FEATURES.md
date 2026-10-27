@@ -340,3 +340,17 @@
 - **설정**: `VOINEY_LAB_NEW_UI`(기본 `false`): `true` 면 `/` 가 `/app/` 으로 간다(질의 문자열 유지 — 초대 링크). 빌드가 없으면 `/app/` 은 "아직 준비되지 않았어요"(503)이고 `/` 는 지금 화면 그대로다. node 가 없거나 빌드가 실패하면 실행기는 `[WARN]` 을 찍고 서버만 시작한다. 서버 계약(API·`/ws`)은 바뀌지 않았다.
 - **시험**: `tests/test_lane_rx2_voice_core.py`(공용 음성 파일: 제공, 지금 화면이 먼저 읽음, 옮긴 이름이 한 곳에만, 두 화면의 이름 계약, 옮긴 조건 줄이 같음, 실험 중 목소리 맞추기 없음, 새 스타일의 디자인 규칙과 Run 크기), `tests/static_page.py`(지금 화면의 스크립트 = voice-core.js + 자기 스크립트), `tests/e2e/app-rx2.spec.ts`·`tests/e2e/tablet-app-rx2.spec.ts`(로그인 → 첫 안내 → 시작 흐름 → 실험(단계·타이머·메모·사진·그림 크게·잘 안 들렸어요·일시정지·종료) → 설정; 기록 칸이 스크롤 없이 보이는지, 자막이 잘리지 않는지; 줄 RX4: 한국어가 원문보다 큰지, generation 이 앞서 간 뒤의 일시정지 → 다시 시작 → 일시정지 → 띠의 [종료], 끝 화면의 점수·칩·말·보내기), `tests/e2e/app-rx4.spec.ts`·`tests/e2e/tablet-app-rx4.spec.ts`(저장된 한국어가 없는 화학·분석 프로토콜 둘: 번역 준비 중 · 원문이 다음 단계 크기 · 이름표 줄 · 일시정지 · 끝 화면 건너뛰기), `tests/test_lane_rx4_screen_polish.py`(지금 화면의 [일시정지]가 가장 새 generation 을 보냄, 서버의 다시 시작 울타리, 끝 평가의 `tags`), `tests/test_lane_rx0_new_ui.py`(제공·설정·빌드 없음·오타 설정), `tests/test_lane_rx1_protocol_screens.py`(줄 상자·쪽 수·작은 그림·이름 바꾸기·오늘 바꿀 값의 문장 필드), `web/src/**/*.test.tsx`(Vitest: 문구 규칙, 상태 칩, 로그인·홈·목록·올리기·분석 기다리기·확인·오늘 바꿀 값의 네 상태, 로그아웃, 넘김), `tests/e2e/app-rx0.spec.ts`·`tests/e2e/app-rx1.spec.ts`(데스크톱·휴대폰), `tests/e2e/tablet-app-rx0.spec.ts`·`tests/e2e/tablet-app-rx1.spec.ts`(태블릿 가로·세로). 모두 가짜 서버 응답(contract-tested).
 - **한계**: 새 홈은 저장된 실험 목록으로 "이어서 하기"를 고르고, 이 탭에서 도는 실험만 "실험 중 · 돌아가기"로 안다. 설정 화면은 마이크가 바뀐 것을 실험 전에는 모른다(실험을 시작할 때 서버의 `speaker.filter` 가 알린다). 주변 소리는 서버 설정이 하나라 시작에서 고른 값이 다음 기본값이 된다. 음성은 가짜 소켓으로만 걸어 봤다(contract-tested; 실제 음성·기기 확인은 사람 시험).
+
+
+## 합성 음성 회귀 시험대
+
+`scripts/sim/`은 공개 원문 발췌와 올린 프로토콜의 복사본에서 정해진 문장을 만들어
+`ListenerSession.accept_chunk` → `run_turn_safely`의 실제 서버 경계를 시험한다.
+오프라인은 가짜 VAD/STT/TTS로 이해와 전후 상태만 재며 외부 호출은 차단한다.
+사람이 실행하는 별도 명령은 Google TTS 캐시·합성 소음·실제 STT·응답 TTS를 사용한다.
+두 방식 모두 같은 카탈로그 복사본의 실행 가능한 업로드를 선택할 수 있다.
+호출 전 예약 원장과 호출/비용 상한을 지키고 공급자를 대체하지 않는다.
+단계·타이머·확인·기록·변경 값의 예상 밖 변화, 영어 원문 복사, 단계 이름 겹침,
+버린 말과 지연을 프로토콜·갈래·조건별로 집계한다. 점수에는 원음·받아쓰기·답변을 남기지 않는다.
+시험: `tests/test_sim_harness.py`. 명령·비용 가정·읽는 법·측정 한계는
+[EVALUATION_SIM.md](EVALUATION_SIM.md)에 있다. 유한한 회귀 시험이며 현장 성능 검증이 아니다.
