@@ -62,9 +62,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings  # noqa: E402
 from voiney_lab.experiment_protocol_store import initialize_protocol_store  # noqa: E402
-from voiney_lab.model_providers import RoleModel, chat_client  # noqa: E402
+from voiney_lab.model_providers import ProviderRetryPolicy, RoleModel, chat_client  # noqa: E402
 from voiney_lab.protocol_catalog import ProtocolCatalog  # noqa: E402
 from voiney_lab.protocol_translation import (  # noqa: E402
+    BATCH_TIMEOUT_SECONDS,
     STYLE_VERSION,
     TARGET_LANGUAGE,
     generate_revision_translations,
@@ -198,7 +199,8 @@ def run_protocol(
         fixture, _counted(translate, counter, cap), model=model, stored=before_rows,
         glossary=store.translation_glossary(key, TARGET_LANGUAGE, style_version=STYLE_VERSION),
         make_glossary=_counted(make_glossary, counter, cap),
-        on_glossary=store.record_translation_glossary, on_batch=on_batch))
+        on_glossary=store.record_translation_glossary, on_batch=on_batch,
+        max_calls=None if cap is None else max(0, cap - start)))
     plan.calls_made = counter["calls"] - start
     plan.failed_calls = report.failed_calls
     plan.rows_made = len(report.records)
@@ -237,6 +239,8 @@ def _table(plans: Sequence[ProtocolPlan], ran: bool) -> str:
             f"{plan.shown_before} ({plan.current_shown_before}) | {plan.refused_before} |")
     total = sum(plan.calls for plan in plans)
     lines += ["", f"합계: 다시 만들 문장 {sum(plan.pending for plan in plans)} · 호출 {total}회"]
+    lines += ["", f"번역 묶음 제한 시간: {BATCH_TIMEOUT_SECONDS:g}초. 시간 초과 묶음은 반으로 나눠 재시도해 호출이 늘 수 있어요.",
+              "--max-calls 는 용어집·분할 재시도를 합친 상한이에요. 이 도구는 공급자 내부 재시도를 끄고 보낸 호출을 세요."]
     if ran:
         lines += [
             "",
@@ -312,7 +316,9 @@ def main(
                 translate, make_glossary = translator_factory(role)
             else:
                 def client() -> Any:
-                    return chat_client(role, asynchronous=True)
+                    return chat_client(
+                        role, asynchronous=True, timeout=BATCH_TIMEOUT_SECONDS,
+                        max_retries=0, retry_policy=ProviderRetryPolicy(max_retries=0))
                 translate = openai_batch_translator(client, str(role.model))
                 make_glossary = openai_glossary_maker(client, str(role.model))
             counter = {"calls": 0}

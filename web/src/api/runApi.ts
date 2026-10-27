@@ -89,7 +89,7 @@ export interface TimelineEvent {
   step_label?: string | null;
   created_at?: string;
   observation?: { content: string; current_content?: string; category?: string; capture_source?: string; corrected?: boolean; retracted?: boolean } | null;
-  evidence?: { evidence_id?: string; original_filename?: string; media_type?: string } | null;
+  evidence?: { evidence_id?: string; original_filename?: string; media_type?: string; caption?: string } | null;
 }
 
 const enc = encodeURIComponent;

@@ -55,7 +55,7 @@ describe("EndScreen", () => {
     renderWithClient(<EndScreen snapshot={ended()} />);
     expect(screen.getByTestId("run-ended")).toHaveTextContent("실험을 멈췄어요");
     expect(screen.getByTestId("end-sub")).toHaveTextContent("In-gel digestion · 9단계 중 5단계까지 · 23분 걸림");
-    expect(screen.getByTestId("end-notebook")).toHaveAttribute("href", "/index.html#/records/s1");
+    expect(screen.getByTestId("end-notebook")).toHaveAttribute("href", "#/records/s1");
     await waitFor(() => expect(screen.getByTestId("end-counts").querySelector('[data-count="voice"] .end-count-number')).toHaveTextContent("2"));
     expect(screen.getByTestId("end-counts").querySelector('[data-count="changes"] .end-count-number')).toHaveTextContent("2");
     expect(screen.getByTestId("end-counts").querySelector('[data-count="help"] .end-count-number')).toHaveTextContent("1");

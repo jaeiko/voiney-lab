@@ -78,7 +78,7 @@ describe("HomeScreen", () => {
     // Lane RX4: the small actions carry an icon beside the word, so the link is found by its role and name.
     expect(screen.getByRole("link", { name: "프로토콜 보기" })).toHaveAttribute("href", "#/protocols");
     expect(screen.getByRole("link", { name: "올리기" })).toHaveAttribute("href", "#/upload");
-    expect(screen.getByRole("link", { name: "지난 기록" })).toHaveAttribute("href", "/index.html#/records");
+    expect(screen.getByRole("link", { name: "지난 기록" })).toHaveAttribute("href", "#/records");
   });
 
   it("normal state: only an analysis under way shows 분석 중 with the elapsed time, leading to its progress screen", async () => {

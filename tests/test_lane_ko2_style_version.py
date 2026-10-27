@@ -86,7 +86,7 @@ class _Glossaries:
 class VersionTests(unittest.TestCase):
     def test_the_current_style_is_version_4_and_new_rows_carry_it(self) -> None:
         # Lane SAY's 해요체 guide was v3 (never stored); lane KO2's (a)-(e) is v4.
-        self.assertEqual(pt.STYLE_VERSION, 4)
+        self.assertEqual(pt.STYLE_VERSION, 5)
         report = generate(rich_fixture(), FakeTranslator())
         self.assertTrue(report.records)
         self.assertEqual({row.style_version for row in report.records}, {pt.STYLE_VERSION})

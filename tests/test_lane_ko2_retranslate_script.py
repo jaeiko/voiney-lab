@@ -165,6 +165,26 @@ class RetranslateScriptTests(unittest.TestCase):
         self.assertIn(".env", err)
         self.assertEqual(len(self.rows()), 1)
 
+    def test_main_splits_a_timeout_and_keeps_the_global_call_cap(self) -> None:
+        fake = _Counting()
+        batches = []
+
+        async def translate(batch, context):
+            batches.append(len(batch))
+            if len(batch) > 1:
+                raise TimeoutError()
+            return await fake.translator(batch, context)
+
+        status, out, _ = self.main(
+            "--data-dir", str(self.data), "--run", "--max-calls", "3",
+            factory=lambda role: (translate, fake.glossary))
+        self.assertEqual(status, 0)
+        self.assertEqual(fake.glossary_calls + len(batches), 3)
+        self.assertGreater(batches[0], 1)
+        self.assertEqual(batches[1], 1)
+        self.assertEqual(len(self.rows()), 2)  # old row plus the successful half
+        self.assertIn("180초", out)
+
     def test_the_script_never_imports_the_server(self) -> None:
         # Importing server.py would read the repository .env (keys).
         self.assertNotIn("voiney_lab.server", SCRIPT.read_text())

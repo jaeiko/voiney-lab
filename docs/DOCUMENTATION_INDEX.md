@@ -24,6 +24,7 @@
 |---|---|
 | [`USER_GUIDE.md`](USER_GUIDE.md) | 화면 탭(홈·프로토콜·실험·기록·설정)과 시작 마법사, 말로 하는 법 |
 | [`UI_SPEC.md`](UI_SPEC.md) | 새 화면(`/app/`)의 설계: 사용자와 상황, 핵심 흐름 5개, 화면마다 목적·행동·네 상태·와이어프레임, 참고 원칙, 디자인 토큰 |
+| [`UI_PARITY.md`](UI_PARITY.md) | 기존 화면의 모든 사용자 기능과 새 화면의 대응, 미이관 범위, 기본 전환 조건 |
 | [`COPY_DECK.md`](COPY_DECK.md) | 화면 문구 표: 지금 글 → 새 글 → 이유, 설정 용어, 서버 문구의 바꿀 목록 |
 
 ## 3. 코딩 에이전트와 개발자
@@ -31,6 +32,7 @@
 | 문서 | 무엇 |
 |---|---|
 | [`AGENTS.md`](../AGENTS.md) | **먼저 읽는다.** 모든 코딩 에이전트의 유일한 계약: 불변 규칙, 모듈 지도, 바꿀 때 지킬 것, 검증(조건 A/B), 파일 규칙, 일하는 법(사전 점검·줄과 작업 폴더·무거운 실행 잠금·커밋·PR·병합·보고서), 용어, 문서 권위 |
+| [`EVALUATION_SIM.md`](EVALUATION_SIM.md) | 합성 음성 회귀 시험대: 오프라인 전후 점수·사람 실측 명령·비용 상한·한계 |
 | [`CLAUDE.md`](../CLAUDE.md) | `@AGENTS.md` 한 줄뿐. Claude Code 는 시작할 때 `CLAUDE.md` 만 읽으므로 이 줄로 `AGENTS.md` 를 불러온다. 규칙을 여기에 쓰지 않는다(`tests/test_docs_consistency.py` 가 이 줄을 지킨다) |
 | [`../.agent/architecture.md`](../.agent/architecture.md) | 지금 구조의 유일한 깊은 설명 |
 | [`../.agent/coding_rules.md`](../.agent/coding_rules.md), [`../.agent/security_rules.md`](../.agent/security_rules.md), [`../.agent/testing_strategy.md`](../.agent/testing_strategy.md) | 코드 쓰는 법, 보안·개인정보·안전 규칙, 시험이 증명해야 할 것과 평가 |
