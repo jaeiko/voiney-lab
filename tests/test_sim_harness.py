@@ -504,3 +504,27 @@ def test_term_cases_use_verbatim_scientific_names_instead_of_english_instruction
             assert all(t in source and t.casefold() not in ordinary for t in c.terms)
     from scripts.sim.measurements import source_terms
     assert source_terms('Use 5 mL BSA. Incubate IN THE DARK with Mini-PROTEAN.')==('BSA','Mini-PROTEAN')
+
+
+def test_live_plan_selects_uploaded_protocol_from_same_executable_catalog_loader(tmp_path,monkeypatch,capsys):
+    from dataclasses import replace
+    from scripts.sim import live,catalog
+    from voiney_lab import voice_providers as vp
+    p=replace(load_corpus()[0],code='catalog_contract')
+    snapshot=tmp_path/'reports/sim/catalog-copy'
+    seen=[]
+    def load(path):
+        seen.append(path)
+        return (p,),{'loaded':1,'not_executable':2,'too_short':0}
+    def forbidden(*args,**kwargs):
+        raise AssertionError('plan crossed provider boundary')
+    monkeypatch.setattr(catalog,'load_catalog',load)
+    monkeypatch.setattr(vp.SttProviderSettings,'from_environment',forbidden)
+    monkeypatch.setattr(vp,'synthesize',forbidden)
+    assert live.main(['--catalog-copy',str(snapshot),'--protocol',p.code,'--limit','1',
+                      '--voices','ko-KR-Chirp3-HD-Charon','--speeds','1','--conditions','quiet'])==0
+    result=json.loads(capsys.readouterr().out)
+    assert seen==[snapshot]
+    assert result['cases']==1
+    assert result['catalog']=={'loaded':1,'not_executable':2,'too_short':0}
+    assert result['external_requests_this_dry_run']==0

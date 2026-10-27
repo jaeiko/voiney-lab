@@ -112,6 +112,19 @@ python scripts/sim/live.py --execute --limit 20 --stt-provider elevenlabs \
 라우터 설정이 불완전하면 실행하지 않는다. 역할 공급자를 바꿔 재시도하지 않는다.
 필수 설정이 빠지면 음성 합성 전에 멈추고 필요한 설정 이름만 결과에 남긴다.
 
+올린 프로토콜은 오프라인과 같은 `--catalog-copy`로 추가한다. 공개 고정 묶음 뒤에
+추가되므로 `--limit`만 주면 앞의 공개 문장만 선택될 수 있다. 오프라인 결과의
+`tables.protocol`에서 `catalog_`로 시작하는 코드를 골라 `--protocol`로 지정한다.
+계획과 결과에 실행 가능/제외 개수도 남긴다. 예에서 `catalog_code`는 그 코드로 바꾼다.
+
+```bash
+python scripts/sim/live.py --catalog-copy ~/reports/sim/catalog-snapshot \
+  --protocol catalog_code --limit 2 --max-calls 50 --max-usd 5 \
+  --output ~/reports/sim/uploaded-chirp3.json
+```
+
+먼저 계획을 확인한 뒤 사람이 같은 명령에 `--execute`를 더해 실행한다.
+
 소음은 도구가 수식으로 만든 견본이며 별도의 외부 라이선스가 없다. 실제 팬·원심분리기·
 세척기 측정음이 아니며 말소리 모사도 알아들을 수 있는 옆 사람 발화가 아니다.
 지정한 SNR로 섞은 뒤 포화가 없도록 신호와 소음을 함께 낮춘다. 소음 조건은 끝의

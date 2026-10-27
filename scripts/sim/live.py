@@ -174,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute', action='store_true', help='authorize real requests; otherwise estimate only')
     parser.add_argument('--corpus',type=Path,default=CORPUS)
+    parser.add_argument('--catalog-copy',type=Path,help='append executable uploads from the same snapshot as offline mode')
     parser.add_argument('--protocol',action='append')
     parser.add_argument('--family',action='append')
     parser.add_argument('--limit',type=int,default=20)
@@ -210,13 +211,19 @@ def main(argv: list[str] | None = None) -> int:
         # 2000 characters/request <= $0.10 under the default planning rate.
         if args.reserve_usd_per_request < max(2000*args.tts_usd_per_million/1e6,15/60*args.stt_usd_per_minute):
             raise ValueError('per-request reserve is below assumed speech cost')
-        cases = [(p,c) for p in load_corpus(args.corpus) for c in generate_cases(p)
+        protocols=load_corpus(args.corpus)
+        catalog_counts={}
+        if args.catalog_copy:
+            from scripts.sim.catalog import load_catalog
+            uploaded,catalog_counts=load_catalog(args.catalog_copy)
+            protocols+=uploaded
+        cases = [(p,c) for p in protocols for c in generate_cases(p)
                  if (not args.protocol or p.code in args.protocol) and (not args.family or c.family in args.family)][:args.limit]
         if not cases:
             raise ValueError('no matching cases')
         n = len(cases)*len(args.voices)*len(args.speeds)*len(args.conditions)
         chars = sum(len(c.text) for _,c in cases)*len(args.voices)
-        estimate = {'cases':n,'input_tts_cache_misses_at_most':len(cases)*len(args.voices),
+        estimate = {'cases':n,'catalog':catalog_counts,'input_tts_cache_misses_at_most':len(cases)*len(args.voices),
                     'input_characters':chars,'stt_requests_at_most':n,
                     'input_tts_usd_assumed':round(chars*args.tts_usd_per_million/1e6,4),
                     'stt_usd_assumed_at_15_seconds':round(n*.25*args.stt_usd_per_minute,4),
@@ -250,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
                     'latency_measured':'server_endpoint_to_bytes_not_device_playback_cache_included',
                     'utc':datetime.now(timezone.utc).isoformat(),'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
                     'workload_sha256':hashlib.sha256(json.dumps([(p.fixture.fixture_sha256,asdict(c)) for p,c in cases],sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
-                    'router':'configured' if args.configured_models else 'off',
+                    'router':'configured' if args.configured_models else 'off','catalog':catalog_counts,
                     'provider':args.stt_provider,'model':args.stt_model or vp.DEFAULT_STT_MODELS[args.stt_provider],
                     'provider_requests_including_auth_and_retries':budget.calls,'reserved_usd':round(budget.usd,6),
                     'run_failure_code':failure,'run_failure_settings':missing_settings,'budget_stopped':budget.stopped,'planned_cases':n,'completed_cases':len(rows),
