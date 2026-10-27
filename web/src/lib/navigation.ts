@@ -3,13 +3,13 @@
 // hash the new screen does not know is opened there unchanged. Lane RX1
 // took over the upload, the analysis progress, the confirmation screen and
 // today's values; lane RX2 the start flow, the experiment, the settings and
-// the first guide. The records are still the old screen's.
+// the first guide. Lane RX3 owns records and notebooks; protocol detail still has a legacy view.
 
 export const OLD_SCREEN = "/index.html";
 
 export function oldScreenUrl(hash: string): string {
   const clean = hash.startsWith("#") ? hash : `#${hash}`;
-  return `${OLD_SCREEN}${clean}`;
+  return `${OLD_SCREEN}?legacy=1${clean}`;
 }
 
 export const oldRoutes = {
@@ -27,13 +27,15 @@ export function goToOldScreen(hash: string): void {
 
 export type RouteName =
   | "home" | "protocols" | "upload" | "analysis" | "review" | "changes"
-  | "start" | "run" | "settings" | "welcome" | "handoff";
+  | "start" | "run" | "settings" | "welcome" | "records" | "record" | "notebook" | "handoff";
 
 export interface Route {
   name: RouteName;
   hash: string;
   /** The protocol a screen is about (#/protocols/<id>/…, #/start/<id>). */
   protocolId?: string | null;
+  sessionId?: string;
+  reportId?: string;
   /** The saved experiment a start continues (#/start/<id>?resume=<session>). */
   resumeId?: string | null;
   /** The start flow's step to open at (1-5), after the server refused a start for that step. */
@@ -53,8 +55,15 @@ const PROTOCOL_SCREEN = /^\/protocols\/([^/]+)\/(analysis|review|changes)$/;
 
 /** The new screen's own routes; everything else is the old screen's. */
 export function parseRoute(hash: string): Route {
-  const clean = (hash || "").replace(/^#/, "");
+  const clean = (hash || "").replace(/^#/, "").replace(/\/(?=\?|$)/, "");
   if (clean === "" || clean === "/" || clean === "/home") return { name: "home", hash: "#/home" };
+  const record = /^\/records(?:\/([^/?#]+))?(?:\/notebook\/([^/?#]+))?\/?(?:\?[^#]*)?$/.exec(clean);
+  if (record) {
+    const sessionId = record[1] ? decoded(record[1]) : null;
+    const reportId = record[2] ? decoded(record[2]) : null;
+    if (!record[1]) return { name: "records", hash: "#/records" };
+    if (sessionId && (!record[2] || reportId)) return { name: reportId ? "notebook" : "record", hash: `#${clean}`, sessionId, ...(reportId ? { reportId } : {}) };
+  }
   if (clean === "/protocols") return { name: "protocols", hash: "#/protocols" };
   if (clean === "/upload") return { name: "upload", hash: "#/upload" };
   const screen = PROTOCOL_SCREEN.exec(clean);
@@ -89,6 +98,9 @@ export function parseRoute(hash: string): Route {
 
 export const routes = {
   home: "#/home",
+  records: "#/records",
+  record: (id: string) => `#/records/${encodeURIComponent(id)}`,
+  notebook: (sessionId: string, reportId: string) => `#/records/${encodeURIComponent(sessionId)}/notebook/${encodeURIComponent(reportId)}`,
   protocols: "#/protocols",
   upload: "#/upload",
   analysis: (id: string) => `#/protocols/${encodeURIComponent(id)}/analysis`,

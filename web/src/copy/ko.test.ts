@@ -75,6 +75,9 @@ describe("the copy table", () => {
       copy.changes.asNumber,
       copy.title.rename,
       copy.title.save,
+      copy.records.word, copy.records.pdf, copy.records.md, copy.records.json, copy.records.csv,
+      copy.records.meeting, copy.records.meetingPdf, copy.records.xlsx, copy.records.refresh,
+      copy.records.confirm, copy.records.edit, copy.records.correct, copy.records.photoGet, copy.records.piSave,
     ];
     // The person's own button words (brief 2026-10-25) and the short way-finders stand as they are.
     const asWritten = ["프로토콜 보기", "지난 기록", "실험 시작", "전체 분석", "목록으로", "이전", "다음"];

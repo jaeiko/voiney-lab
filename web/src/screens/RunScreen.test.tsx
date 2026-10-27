@@ -133,7 +133,7 @@ describe("RunScreen", () => {
     runStore.reset({ experimentId: "s1", model: { ...EMPTY_RUN, ended: { status: "completed", report: "saved" } } });
     renderWithClient(<RunScreen />);
     expect(screen.getByTestId("run-ended")).toHaveTextContent("실험을 마쳤어요");
-    expect(screen.getByRole("link", { name: "실험 노트 보기" })).toHaveAttribute("href", "/index.html#/records/s1");
+    expect(screen.getByRole("link", { name: "실험 노트 보기" })).toHaveAttribute("href", "#/records/s1");
     expect(screen.getByRole("link", { name: "홈으로 가기" })).toHaveAttribute("href", "#/home");
   });
 });

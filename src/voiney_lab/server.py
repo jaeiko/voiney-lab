@@ -4197,7 +4197,37 @@ def get_workspace_experiments(active_only:bool=False)->dict[str,object]:
             else {**item,"protocol_title":titles.get(str(item.get("protocol_id")))}
             for item in experiments
         ]
-    return {"experiments":experiments}
+    return {"experiments":_record_list_ratings(experiments)}
+
+
+def _record_list_ratings(experiments:list[dict[str,object]])->list[dict[str,object]]:
+    """Only the latest answer by a visible report's owner; never feedback words."""
+    result=[{**item,"rating":None,"rating_state":"unavailable"} for item in experiments]
+    settings=ExperimentReportSettings.from_environment()
+    pilot=_pilot_store()
+    if not settings.enabled or settings.database_path is None or pilot is None:
+        return result
+    _migrate_report_ownership()
+    reports=ExperimentReportStore(settings.database_path)
+    for item in result:
+        try:
+            item["rating_state"]="unrated"
+            for report in reports.list_reports(session_id=str(item["session_id"])):
+                try:
+                    _scope_tenant_resource("experiment_report",report["report_id"])
+                except WorkspaceNotFoundError:
+                    continue
+                answers=pilot._read(
+                    "SELECT rating FROM pilot_feedback WHERE report_id=? AND account_id=? ORDER BY id DESC LIMIT 1",
+                    (report["report_id"],report["owner_principal_id"]),
+                )
+                item["rating"]=answers[0]["rating"] if answers else None
+            if item["rating"] is not None:
+                item["rating_state"]="rated"
+        except (OSError,sqlite3.Error,ValueError):
+            item["rating"]=None
+            item["rating_state"]="unavailable"
+    return result
 
 
 @app.get("/api/workspace/experiments/{session_id}")
@@ -6462,6 +6492,25 @@ def regenerate_experiment_report_prose(report_id:str):
         _prepare_report_prose(store,report_id,again=True)
         return REPORT_PROSE.status(store,report_id)
     except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+
+
+@app.get("/api/experiment-reports/{report_id}/notebook")
+def get_experiment_report_notebook(report_id:str)->Response:
+    """The export's existing notebook projection, with no prose preparation or write."""
+    store=_report_prose_store(report_id)
+    try:
+        report=store.get_report(report_id)
+        narrative=store._narrative(report_id,None,None)
+        return JSONResponse(content=jsonable_encoder({
+            "report":{key:report.get(key) for key in (
+                "report_id","session_id","protocol_title","status","started_at","ended_at",
+                "owner_principal_id")},
+            "notebook":narrative.facts.notebook,
+            "review":report_review_items(report["events"]),
+            "events":report["events"],
+        }),headers={"Cache-Control":"private, no-store"})
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
 
 
