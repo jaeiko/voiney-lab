@@ -87,6 +87,9 @@ export interface ProtocolDetail extends CatalogEntry {
 }
 
 export interface Experiment {
+  completed_step_count?: number;
+  rating?: number | null;
+  rating_state?: string;
   session_id: string;
   protocol_id?: string | null;
   protocol_title?: string | null;

@@ -643,15 +643,23 @@ erasure asks for the password again and returns to login on success.
 Radix dialog, lucide icons, Pretendard bundled) is built by `web/build.sh`
 into `static/app/` (git-ignored) and served at `/app/` by three routes in
 `server.py` (`new_screen`, `new_screen_asset`, `new_screen_without_slash`);
-`root_screen` sends `/` there only with `VOINEY_LAB_NEW_UI=true` and a
-build present, else serves `index.html` as before. The launchers call
+`root_screen` sends `/` and `/index.html` there only with `VOINEY_LAB_NEW_UI=true` and a
+build present, else serves `index.html` as before. `?legacy=1` retains the old
+view. Redirects preserve queries and browser fragments; the root manifest
+follows the switch while retaining installation id `/`. The launchers call
 `web/build.sh` and go on without the new screen when node is missing or the
 build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its own
 (`#/upload`, `#/protocols/<id>/analysis`, `#/protocols/<id>/review`,
 `#/protocols/<id>/changes` — lane RX1; `#/start`, `#/start/<id>`,
 `#/experiment`, `#/settings`, `#/welcome` — lane RX2); a route it has not
-taken over (`#/protocols/<id>`, `#/records…`) is opened on the old screen at
-`/index.html`. Its experiment screen does not reimplement the voice: it
+taken over (`#/protocols/<id>`) is opened on the old screen at
+`/index.html?legacy=1`. Records and notebooks have their own routes
+(`#/records`, `#/records/<session>`,
+`#/records/<session>/notebook/<report>`). The read-only
+`GET /api/experiment-reports/{report}/notebook` returns the existing
+export notebook projection, review items and ledger events without preparing
+prose. The experiment list adds only the last owner rating of an accessible
+report. Existing experiment/report/evidence read gates apply. Its experiment screen does not reimplement the voice: it
 loads `/voice-core.js` and `/connection.js` as classic scripts and
 `web/src/voice/engine.ts` defines the names they call
 (`VOICE_CORE_HOST_NAMES`, connection.js's per-turn maps and renderers), reads

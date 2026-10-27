@@ -7,7 +7,8 @@ import { runApi, serverWords } from "../api/runApi";
 import type { AuthSession } from "../api/types";
 import { LogoutDialog } from "../components/AppFrame";
 import { ErrorBox, LoadingBox, Note } from "../components/Pieces";
-import { settings as copy, frame } from "../copy/ko";
+import { settings as copy, frame, entrypoints } from "../copy/ko";
+import { oldRoutes } from "../lib/navigation";
 import { uploadedDay } from "../lib/protocolStatus";
 import { parseVoiceReference, referenceStale } from "../voice/micCheck";
 import { SETTINGS_KEY, VoicePicker } from "./settings/VoicePicker";
@@ -242,6 +243,12 @@ export function SettingsScreen({ session }: { session: AuthSession }) {
           </Section>
         </>
       )}
+      <Section id="more" title={entrypoints.more}>
+        <p>{entrypoints.legacyWhy}</p>
+        <a className="btn" href={oldRoutes.settings}>{entrypoints.legacySettings}</a>
+        {session.account?.admin ? <a className="btn" href="/admin-metrics.html">{entrypoints.metrics}</a> : null}
+        <p>{entrypoints.install}</p>
+      </Section>
       <Section id="account" title={copy.account.title}>
         {accounts ? (
           <>

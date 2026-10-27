@@ -35,7 +35,7 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
   return (
     <li className="row" data-protocol-id={entry.protocol_id} data-status={status.kind}>
       <div className="row-head">
-        <span className="row-title">{displayTitle(entry)}</span>
+        <a className="row-title" href={oldRoutes.protocol(entry.protocol_id)}>{displayTitle(entry)}</a>
         {status.chips.map((chip, index) => (
           <Chip key={`${chip.kind}-${index}`} chip={chip} />
         ))}

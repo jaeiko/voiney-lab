@@ -673,3 +673,41 @@ export const changes = {
   needNumber: "숫자를 적어 주세요.",
   limit: (limit: number) => `바꿀 값은 ${limit}개까지 고를 수 있어요.`,
 } as const;
+
+export const records = {
+  title: '실험 기록', why: '지난 실험에서 한 일과 남긴 기록을 찾아봐요.',
+  detailWhy: '단계마다 남긴 기록과 원문에서 바꾼 값을 함께 확인해요.',
+  notebookWhy: '기록과 원문으로 만든 노트를 읽고 연구실에 보관할 수 있어요.',
+  search: '기록 찾기', status: '상태', all: '전체', protocol: '프로토콜',
+  from: '시작 날짜부터', to: '시작 날짜까지', ratingFilter: '평점', rated: '평점 있음', unrated: '평점 없음',
+  states: { ready: '준비됨', in_progress: '진행 중', paused: '일시정지', blocked: '진행 차단', completed: '완료', stopped: '멈춤' } as Record<string, string>,
+  unknown: '기록 없음', empty: '아직 기록이 없어요. 실험을 하면 여기에 남아요.', noMatch: '조건에 맞는 기록이 없어요. 찾는 말이나 조건을 바꿔 주세요.',
+  loading: '기록을 불러오는 중…', failed: '기록을 불러오지 못했어요.', refresh: '기록 다시 불러오기',
+  count: (n: number) => `끝낸 단계 ${n}개`, rating: (n: number) => `평점 ${n} / 5`, noRating: '평점 없음', ratingUnavailable: '평점을 불러오지 못했어요',
+  lab: '같은 연구실의 기록이에요. 다른 사람의 기록은 보기만 할 수 있어요.', readOnly: '다른 사람의 기록이에요. 보기만 할 수 있어요.', readOnlyGeneral: '이 기록은 보기만 할 수 있어요.',
+  back: '기록 목록으로', experiment: '실험', timeline: '단계별 기록', outside: '단계 밖 기록',
+  step: (label: string) => `${label}단계`, original: (text: string) => `처음 기록: ${text}`,
+  corrected: '고침', retracted: '취소함', voice: '말로 남긴 기록', memo: '메모', photo: '사진', photoGet: '사진 원본 내려받기', attachment: '첨부 파일', attachmentGet: '첨부 파일 내려받기',
+  noEvents: '이 실험에는 아직 남긴 기록이 없어요.', event: '실험 사건', timer: '타이머 사건',
+  timerWords: { source_duration_seconds: '원문 시간(초)', duration_seconds: '설정 시간(초)', elapsed_seconds: '지난 시간(초)', remaining_seconds: '남은 시간(초)' } as Record<string, string>,
+  sourceTiers: { protocol: '원문', history: '지난 기록', public: '공개 자료 · 일반 참고' } as Record<string, string>,
+  help: '문제 도움', helpSources: '도움에 쓴 출처', changes: '오늘 바꾼 값',
+  kinds: { session_started: '실험 시작', session_completed: '실험 완료', session_stopped: '실험 멈춤', session_paused: '일시정지', session_resumed: '다시 시작', step_completed: '단계 완료', step_advanced: '단계 이동', step_completion_carried_over: '이전 완료 이어받음', observation_corrected: '기록 고침', observation_retracted: '기록 취소', timer_started: '타이머 시작', timer_paused: '타이머 일시정지', timer_resumed: '타이머 다시 시작', timer_cancelled: '타이머 취소', timer_restarted: '타이머 처음부터', timer_completed: '타이머 완료', timer_elapsed: '타이머 시간 지남', record_corrected: '기록 고침', record_retracted: '기록 취소', pi_confirmed: '관리자가 확인함' } as Record<string, string>,
+  notebooks: '실험 노트', notebook: '실험 노트 보기', noReports: '이 실험의 노트가 아직 없어요.', noNotebook: '이 기록에는 노트가 아직 없어요.',
+  word: 'Word로 내려받기', pdf: 'PDF 내려받기', md: 'Markdown 내려받기', json: 'JSON 내려받기', csv: 'CSV 내려받기',
+  meeting: '모임 요약 Word 내려받기', meetingPdf: '모임 요약 PDF 내려받기', xlsx: '결과 표 Excel 내려받기',
+  downloadFailed: '내려받지 못했어요. 다시 해 주세요.', pdfUnavailable: 'PDF를 만들 수 없어요. Word로 내려받아 주세요.', downloading: '내려받는 중…',
+  tableHeads: ['항목', '원문 → 실제'], samples: '시료와 조건', sampleHeads: ['시료', '조건'], control: '대조군',
+  conditions: '실제로 한 조건', observations: '관찰과 결과', observationHeads: ['단계', '시각', '기록'],
+  differences: '원문과 다르게 한 점·문제', previous: '지난번과 다른 점', next: '다음에 바꿀 점·다음 할 일',
+  confirmation: '값 확인', unconfirmed: '[미확인]', confirmed: '확인함', confirm: '확인하기', edit: '고치기', correct: '고쳐서 확인하기', value: '고친 값', saved: '저장했어요.', saveFailed: '저장하지 못했어요. 다시 해 주세요.',
+  appendix: '부록', source: '원문 출처', purpose: '실험 목적', pi: '관리자 확인', piWhy: '확인했다는 기록을 남겨요. 실험 시작 조건은 바뀌지 않아요.', piSave: '확인함 남기기', piComment: '확인 메모',
+  legacy: '이전 화면에서 더 보기', legacyWhy: '아직 옮기지 않은 기록 수정·첨부와 저장해 둔 지점에서 시작은 이전 화면에서 할 수 있어요.',
+} as const;
+
+export const entrypoints = {
+  more: "추가 설정과 설치", legacySettings: "이전 화면의 설정 열기",
+  legacyWhy: "마이크 장치·입력 언어와 더 자세한 안내 방식은 이전 화면에서 고를 수 있어요.",
+  metrics: "연구실 지표 보기",
+  install: "홈 화면에 두려면 Safari의 공유 또는 Chrome 메뉴에서 ‘홈 화면에 추가’를 골라 주세요. 인터넷 연결이 필요해요.",
+} as const;
