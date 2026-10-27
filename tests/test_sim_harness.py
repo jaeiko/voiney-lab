@@ -29,7 +29,6 @@ def test_real_server_read_only_and_completion_confirmation():
     assert score_case(cases['current'], read)['wrong_state'] is False
 
 
-@pytest.mark.xfail(reason='Existing explicit explain+next wording returns current_step_learning; SIM records this miss; no product behaviour change in this lane', strict=False)
 def test_existing_mixed_command_must_stage_completion_confirmation():
     protocol=load_corpus()[0]
     case=next(c for c in generate_cases(protocol) if c.family=='mixed' and '왜' in c.text)

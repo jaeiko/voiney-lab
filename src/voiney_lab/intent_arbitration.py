@@ -64,6 +64,7 @@ def _matches(text: str, patterns: tuple[str, ...]) -> bool:
 
 
 _WHY_PATTERNS = (
+    r"(?:이|지금|현재)\s*(?:단계|과정|작업)(?:의)?\s*(?:이유|목적)(?:을|를)?\s*(?:알려|설명)",
     r"(?:이\s*(?:단계|작업)|여기서|이걸|이거|이\s*과정)?\s*왜\s*(?:꼭\s*)?(?:해야|하는|필요|먼저)",
     r"왜\s*(?:이|현재|이번)\s*(?:단계|작업)(?:를|은|는)?\s*(?:해야|하는|필요)",
     r"(?:왜\s*(?:해야\s*(?:돼|해|하는지)|하는지|필요한지)|이\s*단계의\s*(?:이유|목적)|(?:이유|목적)(?:가|은|이)?\s*(?:뭐|무엇))",
@@ -79,6 +80,13 @@ _NEXT_PATTERNS = (
     r"(?:다음\s*(?:단계|작업)|그\s*다음)(?:도|은|에는|으로)?\s*(?:알려|설명|뭐|무엇|보여|하는)",
     r"(?:다음에는|다음엔)\s*(?:뭐|무엇|어떤\s*작업)",
     r"\b(?:next\s+step|what(?:'s|\s+is)\s+next|what\s+do\s+we\s+do\s+next)\b",
+)
+_EXPLANATION_REQUEST = re.compile(r"설명|알려|이유|목적|왜|주의|\b(?:explain|why)\b", re.I)
+_NEXT_MOVE_REQUEST = re.compile(
+    r"(?:다음\s*(?:단계|작업)?(?:으?로)?\s*(?:넘어가|가|진행해|이동해)|"
+    r"(?:설명하고|알려주고|해\s*주고)\s*넘어가)"
+    r"(?:\s*(?:줘요?|주세요|주라|줄래요?|주실래요?|자|요))?$|"
+    r"\b(?:then\s+)?(?:move\s+on|go\s+to\s+(?:the\s+)?next\s+step)\s*$", re.I,
 )
 _AUDIT_PATTERNS = (
     r"(?:현재\s*)?(?:프로토콜|sop|절차|문서)(?:의|가|는|을|를)?\s*(?:버전|판|개정|리비전|해시|체크섬)",
@@ -164,6 +172,7 @@ _PROBLEM_SHAPES = (
                r"|많이|떠\s*있|껴|올라와|맺혀)"),
     # It failed or came out wrong: "실패한 것 같아", "결과가 안 좋아", "제대로 안 돼".
     ("failed", r"실패했|실패한\s*것\s*같|실패인\s*것\s*같|망했|망한\s*것\s*같|잘못\s*(?:된|됐|되었)"
+               rf"|{_PROBLEM_SUBJECTS}(?:이|가|은|는)?\s*이상(?:해졌|해져|해|하)"
                r"|이상하게\s*(?:나왔|됐|돼)|(?:결과|밴드|신호|색|형광|배경|백그라운드|흡광도|값|수치|피크)"
                r"(?:가|이|는|은)?\s*(?:안\s*좋|나쁘|약해|약하|너무\s*(?:약|진|연|흐|높|낮|세|강|희미))"
                r"|예상(?:과|이랑|하고)\s*(?:달라|다르|다른)|원하는\s*대로\s*안"
@@ -347,6 +356,12 @@ def arbitrate_request(text: str) -> RequestArbitration:
             ("bounded_uncertainty",),
         )
 
+    if re.search(rf"(?:문제(?:가)?\s*생기면|{_PROBLEM_SUBJECTS}(?:이|가)?\s*이상하면)", normalized) and re.search(
+        r"어떻게|어떡|어쩌|(?:가|넘어가|진행해)도\s*돼", normalized
+    ):
+        return RequestArbitration(normalized, RequestIntent.GENERAL_QA, 1.0,
+                                  'problem_contingency_question', ('troubleshooting',))
+
     problem = problem_reading(text)
     if problem is not None:
         return RequestArbitration(
@@ -359,6 +374,14 @@ def arbitrate_request(text: str) -> RequestArbitration:
 
     protocol_information = _matches(normalized, _PROTOCOL_INFORMATION_PATTERNS)
     agent_information = _matches(normalized, _AGENT_INFORMATION_PATTERNS)
+    move = _NEXT_MOVE_REQUEST.search(normalized)
+    if (_EXPLANATION_REQUEST.search(normalized) and move
+            and not re.search(r"만약|가정|다면|경우", text)
+            and (not re.search(r"[?？]", text) or re.search(r"줘|주세요|줄래|주실래", move.group()))):
+        return RequestArbitration(
+            normalized, RequestIntent.COMBINED_LEARNING_NEXT, 1.0,
+            'learning_and_next_command', ('rationale', 'completion_confirmation'),
+        )
     why = _matches(normalized, _WHY_PATTERNS) and not (
         protocol_information or agent_information
     )
