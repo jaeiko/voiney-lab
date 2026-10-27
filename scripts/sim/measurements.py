@@ -29,3 +29,21 @@ def source_values(text: str) -> list[tuple[str,str]]:
 
 def number_units(text: str) -> list[tuple[str,str]]:
     return [(n.replace(',','.').replace('−','-'),_ALIASES.get(u,u)) for n,u in source_values(text)]
+
+
+def source_terms(text: str) -> tuple[str,...]:
+    """Conservative verbatim acronyms/formulae/brand spellings, never ordinary verbs.
+
+    This lexical subset is not a complete scientific dictionary. Lowercase-only
+    names are omitted instead of treating every English instruction word as a term.
+    """
+    ordinary=set('IN THE DARK AND OR OF TO ON AT FOR WITH DO NOT KEEP COLD USE ADD MIX WASH NOTE CAUTION WARNING'.split())
+    result=[]
+    for token in re.findall(r'[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*',text):
+        if token in _UNITS or token in ordinary:
+            continue
+        named=(token.isupper() and len(token)>1 or bool(re.search(r'[A-Za-z][A-Z]',token))
+               or bool(re.search('[A-Z]',token) and re.search('[0-9]',token)))
+        if named and token not in result:
+            result.append(token)
+    return tuple(result[:5])

@@ -491,3 +491,16 @@ def test_return_to_future_step_is_a_valid_refusal_without_any_state_change(field
     assert result['intent_kind']=='repeat_return_refused'
     assert result['changed_fields']==[]
     assert score_case(c,result)['understood'] is True
+
+
+def test_term_cases_use_verbatim_scientific_names_instead_of_english_instruction_words():
+    ordinary={'incubate','use','carefully','cells','create','block','transfer','weigh','preparation','the','for','are'}
+    for p in load_corpus():
+        terms=[c for c in generate_cases(p) if c.family=='term']
+        assert terms
+        for c in terms:
+            source=p.fixture.steps[c.index].instruction_source_text
+            assert c.terms and c.terms[0] in c.text
+            assert all(t in source and t.casefold() not in ordinary for t in c.terms)
+    from scripts.sim.measurements import source_terms
+    assert source_terms('Use 5 mL BSA. Incubate IN THE DARK with Mini-PROTEAN.')==('BSA','Mini-PROTEAN')

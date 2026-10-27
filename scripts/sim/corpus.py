@@ -140,10 +140,10 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
                               case_actions if timed is not None or not family.startswith('timer_') else (), case_intents,
                               case_allowed, case_target, case_must if timed is not None or not family.startswith('timer_') else False))
     # Numeric observations and value requests use the source's own scientific strings.
-    from scripts.sim.measurements import source_values
+    from scripts.sim.measurements import source_values,source_terms
     for index, step in enumerate(protocol.fixture.steps):
         values = [(n,u) for n,u in source_values(step.instruction_source_text) if u]
-        terms = tuple(dict.fromkeys(re.findall(r'[A-Za-z][A-Za-z0-9-]{2,}', step.instruction_source_text)))[:5]
+        terms = source_terms(step.instruction_source_text)
         if values:
             value, unit = values[0]
             shown = f'{value} {unit}'.strip()
@@ -151,12 +151,14 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
                 ('observation', f'관찰 기록해 줘: 측정값 {shown}', ('record', 'confirmation', 'revision')),
                 ('value_inside', f'현재 단계 값을 {shown}로 바꿔 줘', ('confirmation',)),
                 ('value_outside', f'현재 단계 값을 {float(value.replace('−','-').replace(',','.')) * 1000 + 999:g} {unit}로 바꿔 줘', ('confirmation',)),
-                ('term', f'{terms[0] if terms else "시약"} 이 단계에서 얼마나 써?', ()),
             ):
                 expected_actions=('clarify_parameter','clarify_completion','decline_completion') if family in {'value_outside','value_inside'} else ()
                 expected_intents=('operational_value_clarification_required','run_value_change_confirmation_required','run_value_change_refused') if family in {'value_outside','value_inside'} else ()
                 cases.append(Case(f'{protocol.code}.{family}.{index}', family, text, index=index,
                                   actions=expected_actions,intents=expected_intents,allowed=allowed, terms=terms))
+        if terms:
+            cases.append(Case(f'{protocol.code}.term.{index}','term',f'{terms[0]} 이 단계에서 얼마나 써?',
+                              index=index,terms=terms))
     # Source-typed positive requests complement the deliberately vague variants.
     from collections import Counter
     from decimal import Decimal, InvalidOperation
