@@ -95,6 +95,7 @@ def test_model_cli_uses_the_existing_server_proposal_gate(tmp_path, monkeypatch)
     async def isolated_create(**kwargs):
         import os
         assert os.environ.get('VOINEY_LAB_MULTI_BRAIN_ENABLED') != 'true'
+        assert 'VOINEY_LAB_ROUTER_PROVIDER' not in os.environ
         return await original_create(**kwargs)
     client.chat.completions.create = isolated_create
     original_run_case = run.run_case

@@ -79,8 +79,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             # inherited product switches. Their router client is already built.
             safe = ({k:v for k,v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'PYTEST_VERSION'}}
                     if offline else {k:v for k,v in os.environ.items()
-                                     if not k.startswith('VOINEY_LAB_')
-                                     or k.startswith(('VOINEY_LAB_ROUTER_', 'VOINEY_LAB_LLM_ROUTER_'))})
+                                     if not k.startswith('VOINEY_LAB_')})
             stack.enter_context(patch.dict(os.environ, safe, clear=True))
         if offline:
             stack.enter_context(patch.object(socket.socket, 'connect', side_effect=RuntimeError('offline_network_forbidden')))
