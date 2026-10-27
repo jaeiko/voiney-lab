@@ -13,7 +13,7 @@ the provider for each of those two calls:
                       Cloud Text-to-Speech v1 ``text:synthesize``, both with
                       ``VOINEY_LAB_GOOGLE_SPEECH_API_KEY``.
 * ``google_cloud_v2`` -- STT only: regional REST V2 ``recognizers/_:recognize``
-                      (``chirp_3``), with a service-account JSON outside git
+                      (``chirp_3``), with an explicit ADC JSON outside git
                       and OAuth credentials held only in process memory.
 * ``elevenlabs``   -- ``POST /v1/speech-to-text`` and
                       ``POST /v1/text-to-speech/{voice_id}`` with
@@ -59,7 +59,7 @@ from voiney_lab.configuration import (
 from voiney_lab.language import Transcription, normalize_provider_language
 
 if TYPE_CHECKING:
-    from google.oauth2.service_account import Credentials
+    from google.auth.credentials import Credentials
 
 XAI = "xai"
 GOOGLE_CLOUD = "google_cloud"
@@ -343,6 +343,11 @@ def stt_language(settings: SttProviderSettings, language: str | None) -> str | N
 
 
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_STS_URL = "https://sts.googleapis.com/v1/token"
+_AWS_METADATA = "http://169.254.169.254/latest/"
+_GOOGLE_IMPERSONATION = re.compile(
+    r"https://iamcredentials\.googleapis\.com/v1/projects/-/serviceAccounts/"
+    r"[a-zA-Z0-9._+%-]+@[a-zA-Z0-9.-]+\.iam\.gserviceaccount\.com:generateAccessToken")
 _GOOGLE_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _GOOGLE_ERROR_CODES = frozenset({
     "cancelled", "unknown", "invalid_argument", "deadline_exceeded", "not_found",
@@ -378,21 +383,74 @@ def _remaining(deadline: float) -> float:
 
 @lru_cache(maxsize=4)
 def _google_v2_credentials(path: Path, mtime_ns: int, ctime_ns: int, size: int) -> tuple[Credentials, Lock]:
-    """Bounded in-memory credentials; a replaced key gets a fresh entry."""
+    """Explicit ADC file only; no ambient discovery or network during loading."""
 
-    from google.oauth2 import service_account
+    import google.auth
+    from google.auth.credentials import with_scopes_if_required
 
     try:
         info = json.loads(path.read_bytes())
-        if not isinstance(info, dict) or info.get("type") != "service_account":
+        if not isinstance(info, dict) or info.get("universe_domain", "googleapis.com") != "googleapis.com":
             raise ValueError
-        # Credentials are data, never an authority for a token destination.
-        if info.get("token_uri") != _GOOGLE_TOKEN_URL or info.get("universe_domain", "googleapis.com") != "googleapis.com":
+        kind = info.get("type")
+        if kind in {"service_account", "authorized_user"}:
+            if info.get("token_uri", _GOOGLE_TOKEN_URL) != _GOOGLE_TOKEN_URL:
+                raise ValueError
+        elif kind == "external_account":
+            _validate_google_aws_credentials(info)
+        else:
             raise ValueError
-        credentials = service_account.Credentials.from_service_account_info(info, scopes=[_GOOGLE_SCOPE])
+        quota = info.get("quota_project_id")
+        if quota is not None and (not isinstance(quota, str) or not re.fullmatch(r"[a-z0-9-]{1,63}", quota)):
+            raise ValueError
+
+        def no_discovery_request(*args: object, **kwargs: object) -> None:
+            raise ValueError("ADC project discovery is disabled")
+
+        # Load unscoped, then scope. The generic loader otherwise makes an
+        # unbounded Resource Manager call for external_account project discovery.
+        # The Speech resource project is already explicit in our settings.
+        credentials, _ = google.auth.load_credentials_from_dict(info, request=no_discovery_request)
+        credentials = with_scopes_if_required(credentials, [_GOOGLE_SCOPE])
     except Exception:
         raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV) from None
     return credentials, Lock()
+
+
+def _validate_google_aws_credentials(info: dict[str, object]) -> None:
+    """Accept the gcloud AWS configuration, never executable/file/URL suppliers."""
+    source = info.get("credential_source")
+    expected = {
+        "environment_id": "aws1",
+        "region_url": _AWS_METADATA + "meta-data/placement/availability-zone",
+        "url": _AWS_METADATA + "meta-data/iam/security-credentials",
+        "regional_cred_verification_url":
+            "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
+    }
+    if (info.get("subject_token_type") != "urn:ietf:params:aws:token-type:aws4_request"
+        or info.get("token_url") != _GOOGLE_STS_URL
+        or not isinstance(source, dict)
+        or any(source.get(key) != value for key, value in expected.items())
+        or set(source) - {*expected, "imdsv2_session_token_url"}
+        or source.get("imdsv2_session_token_url", _AWS_METADATA + "api/token") != _AWS_METADATA + "api/token"
+        or not re.fullmatch(r"//iam\.googleapis\.com/projects/[0-9]+/locations/global/"
+                            r"workloadIdentityPools/[a-z0-9-]+/providers/[a-z0-9-]+", str(info.get("audience", "")))):
+        raise ValueError
+    impersonation = info.get("service_account_impersonation_url")
+    if impersonation is not None and (not isinstance(impersonation, str) or not _GOOGLE_IMPERSONATION.fullmatch(impersonation)):
+        raise ValueError
+
+
+def _google_auth_destination(url: str, method: str) -> bool:
+    if method == "POST":
+        return url in {_GOOGLE_TOKEN_URL, _GOOGLE_STS_URL} or bool(_GOOGLE_IMPERSONATION.fullmatch(url))
+    if method == "PUT":
+        return url == _AWS_METADATA + "api/token"
+    if method == "GET":
+        return url in {_AWS_METADATA + "meta-data/placement/availability-zone",
+                       _AWS_METADATA + "meta-data/iam/security-credentials"} or bool(re.fullmatch(
+            re.escape(_AWS_METADATA) + r"meta-data/iam/security-credentials/[a-zA-Z0-9_+=,.@-]+", url))
+    return False
 
 
 @dataclass(frozen=True)
@@ -402,7 +460,8 @@ class _GoogleTokenResponse:
     headers: Mapping[str, str]
 
 
-def _google_v2_token(settings: GoogleSttV2Settings, deadline: float) -> str:
+def _google_v2_token(settings: GoogleSttV2Settings, deadline: float, *,
+                     request_headers: dict[str, str] | None = None) -> str:
     """Refresh OAuth with the same deadline and no automatic auth retry/fallback."""
 
     try:
@@ -414,10 +473,11 @@ def _google_v2_token(settings: GoogleSttV2Settings, deadline: float) -> str:
 
     def token_request(url: str, method: str = "GET", body: bytes | None = None,
                       headers: Mapping[str, str] | None = None, **kwargs: object) -> _GoogleTokenResponse:
-        if url != _GOOGLE_TOKEN_URL or method != "POST":
+        if not _google_auth_destination(url, method):
             raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} authentication failed", code="unauthorized")
-        response = requests.post(url, data=body, headers=headers,
-                                 timeout=_remaining(deadline), allow_redirects=False)
+        send = {"POST": requests.post, "GET": requests.get, "PUT": requests.put}[method]
+        response = send(url, data=body, headers=headers, timeout=_remaining(deadline),
+                        allow_redirects=False, proxies={"http": "", "https": ""})
         if not 200 <= response.status_code < 300:
             # Raising here also prevents google-auth from retrying a token error.
             raise _google_v2_failure(response)
@@ -431,6 +491,9 @@ def _google_v2_token(settings: GoogleSttV2Settings, deadline: float) -> str:
         token = credentials.token
         if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
             raise ValueError
+        quota = getattr(credentials, "quota_project_id", None)
+        if request_headers is not None and quota:
+            request_headers["x-goog-user-project"] = quota
         return token
     except (SpeechProviderError, requests.RequestException):
         raise
@@ -450,7 +513,9 @@ def transcribe_google_cloud_v2(
     if v2 is None:
         raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV)
     deadline = time.monotonic() + settings.timeout_seconds
-    token = _google_v2_token(v2, deadline)
+    headers: dict[str, str] = {}
+    token = _google_v2_token(v2, deadline, request_headers=headers)
+    headers["Authorization"] = f"Bearer {token}"
     config: dict[str, object] = {
         "model": settings.model or "chirp_3",
         "languageCodes": [GOOGLE_LOCALES[stt_language(settings, language) or "ko"]],
@@ -467,7 +532,7 @@ def transcribe_google_cloud_v2(
     url = (f"https://{v2.location}-speech.googleapis.com/v2/projects/{v2.project}"
            f"/locations/{v2.location}/recognizers/_:recognize")
     response = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"},
+        url, headers=headers,
         json={"config": config, "content": base64.b64encode(pcm).decode("ascii")},
         timeout=_remaining(deadline), allow_redirects=False)
     if not 200 <= response.status_code < 300:

@@ -93,7 +93,7 @@
 
 ### Google V2가 답하지 않을 때
 
-설정 순서는 `docs/DEPLOYMENT_RUNBOOK.md` 2절의 **Google Chirp 3 받아쓰기**를 따른다. 콘솔에서 Speech-to-Text API 사용, 서비스 계정의 **Cloud Speech Client** 역할을 먼저 확인한다. JSON은 EC2의 저장소 밖 `~/.config/voiney/google-stt.json`에 두고 `chmod 600`을 준다. `.env`의 `VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE`에는 그 절대 경로, `VOINEY_LAB_GOOGLE_STT_V2_PROJECT`에는 역할을 준 프로젝트 ID를 쓴다. 키 내용이나 토큰을 로그·화면에 출력하지 않는다.
+설정 순서는 `docs/DEPLOYMENT_RUNBOOK.md` 2절의 **Google Chirp 3 받아쓰기**를 따른다. EC2의 키 없는 연결은 [WIF 안내](DOMAIN_AND_KEYLESS_GUIDE.md) 5절이다. 콘솔에서 Speech-to-Text API 사용, 서비스 계정의 **Cloud Speech Client** 역할을 먼저 확인한다. ADC JSON(기존 서비스 계정 키·AWS WIF·개발자 사용자 자격)은 저장소 밖에 두고 `chmod 600`을 준다. `.env`의 `VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE`에는 그 절대 경로, `VOINEY_LAB_GOOGLE_STT_V2_PROJECT`에는 요청 프로젝트 ID를 쓴다. `GOOGLE_APPLICATION_CREDENTIALS`가 이 명시적 설정을 대신하지 않는다. 키 내용이나 토큰을 로그·화면에 출력하지 않는다.
 
 | 보인 것 | 사람이 확인할 것 |
 |---|---|
@@ -103,5 +103,14 @@
 | `resource_exhausted` / 429 | 콘솔의 할당량과 결제·크레딧을 확인한다. 같은 말을 계속 반복하지 않는다 |
 | `invalid_argument` / 400 | 모델은 `chirp_3`, 지원 지역과 언어인지 확인한다. 공급자 변경 때 남은 `scribe_v2` 값을 지운다 |
 | `timeout`, `unreachable`, `unavailable` | EC2의 외부 HTTPS 연결과 Google 서비스 상태를 확인한다 |
+| WIF 인증 확인 명령이 실패 | EC2 IAM 역할 연결·IMDSv2 설정, 공급자의 AWS 계정/역할 조건, 서비스 계정의 Workload Identity User 바인딩, IAM Credentials·STS API를 확인한다. 파일의 URL·audience를 직접 임의 수정하지 말고 `create-cred-config --aws --enable-imdsv2`로 다시 만든다 |
+| 개발자 ADC는 되는데 EC2 WIF만 실패 | EC2 서비스의 오래된 AWS 액세스 키 환경 변수를 제거하고, 자격 파일 소유자·권한과 metadata 연결을 확인한다. 사용자 로그인 파일을 운영에 복사하지 않는다 |
 
 실패해도 다른 공급자로 자동으로 바뀌지 않는다. 화면에는 실패 코드와 까닭이 보이고, 같은 장애에서는 한 번만 말로 알린다. V2 내장 잡음 제거는 `VOINEY_LAB_GOOGLE_STT_V2_DENOISE=false`로 끌 수 있다. 사람 시험의 같은 녹음으로 켬·끔을 비교한 뒤 결정한다. 실제 인증·지역 지원·인식 품질은 가짜 전송 시험으로 확인할 수 없다.
+
+### 고정 주소와 매일 백업
+
+- HTTPS 502/터널 연결 실패: EC2에서 두 서비스 상태와 로컬 `/readyz`부터 확인한다. 로컬 성공·외부 실패면 터널 UUID·DNS·인증서·ingress 호스트를 확인한다. 등록처 네임서버 변경 후 DNSSEC의 옛 DS가 남았는지도 확인한다.
+- 로그인은 되는데 쿠키 쓰기·`/ws`가 거절됨: 새 주소의 Host·Origin·`X-Forwarded-Proto`가 일치하는지 확인한다. 앱 Origin 목록을 `*`로 넓혀 해결하지 않는다. 새 도메인에서는 다시 로그인·마이크 허용이 필요하다.
+- 일일 백업 실패: `voineylab-backup.service`의 성공/실패 상태와 `voineylab.service` 재시작 상태를 함께 확인한다. 꺼져 있던 서버에서는 의도대로 백업이 실패한다. 핵심 DB가 없으면 데이터 경로를 확인하며 빈 DB를 만들어 통과시키지 않는다.
+- 백업 때 원치 않는 연결 끊김: 타이머를 끄고 실험이 없는 시각으로 `OnCalendar`를 바꾼다. 이미 진행 중인 백업은 임의 종료하지 않고 담당자가 상태를 확인한다. 설치·복구 순서는 [고정 주소 안내](DOMAIN_AND_KEYLESS_GUIDE.md) 6절이다.

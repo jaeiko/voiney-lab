@@ -1,0 +1,10 @@
+[Unit]
+Description=Voiney Lab daily verified pilot backup (brief server stop)
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/local/libexec/voineylab-daily-backup --repo-dir /opt/voineylab --protocol-data-dir /opt/voineylab/data/runtime/pilot --workspace-data-dir /opt/voineylab/data/runtime/pilot/workspace --report-database /opt/voineylab/data/runtime/pilot/experiment_reports.sqlite --backup-dir /var/backups/voineylab --service voineylab.service --user voineylab
+# Let the wrapper's EXIT trap restore the server; do not kill it mid-backup.
+TimeoutStartSec=infinity

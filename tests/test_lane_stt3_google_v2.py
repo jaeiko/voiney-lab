@@ -326,7 +326,7 @@ def test_redirect_and_untrusted_error_code_are_not_followed_or_exposed(v2_env):
 
 
 def test_time_spent_authenticating_consumes_recognition_deadline(v2_env):
-    def token(settings, deadline):
+    def token(settings, deadline, *, request_headers=None):
         assert deadline == 11.0
         return TOKEN
     with patch.object(vp.time, 'monotonic', side_effect=[10.0, 12.0]), patch.object(

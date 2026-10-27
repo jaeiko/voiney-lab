@@ -1,0 +1,7 @@
+# Replace both placeholders. The JSON is a tunnel secret, outside the repository.
+tunnel: TUNNEL_UUID
+credentials-file: /etc/cloudflared/TUNNEL_UUID.json
+ingress:
+  - hostname: lab.YOUR_DOMAIN
+    service: http://127.0.0.1:8080
+  - service: http_status:404
