@@ -48,13 +48,17 @@ from __future__ import annotations
 import asyncio
 import functools
 import hashlib
+import inspect
 import json
 import logging
 import re
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
+
+from openai import APITimeoutError
 
 from voiney_lab.curated_protocol import (
     _SOURCE_UN_WORD,
@@ -80,10 +84,10 @@ TARGET_LANGUAGE = "ko"
 #: makes what the current version lacks, and reading takes the newest
 #: version's row that passes. v2 was lane GE's formal style, v3 lane SAY's
 #: 해요체 (neither was stored with its rows: those rows are version 0), v4
-#: lane KO2's (a)-(e). Raise it whenever the instructions change what a
+#: lane KO2's (a)-(e), v5 lane KO3's common words and Korean units. Raise it whenever the instructions change what a
 #: translation says or how; ``scripts/retranslate_protocols.py`` then makes
 #: the stored protocols' Korean again.
-STYLE_VERSION = 4
+STYLE_VERSION = 5
 PROMPT_VERSION = f"revision_translation_v{STYLE_VERSION}"
 #: The fact kinds the screen and the answers draw.
 TRANSLATED_KINDS = (
@@ -127,11 +131,15 @@ STYLE_GUIDE = (
     "with no Korean added in brackets; keep chemical formulas and abbreviations "
     "as written. Write everyday lab words in the Korean labs use (튜브, "
     "원심분리, 상층액, 실온, 얼음 위, 피펫팅, 볼텍싱, 장갑; water as 물 unless it "
-    "is part of a reagent name). Keep every number, unit, symbol, time, "
-    "temperature, concentration, volume, ratio and range exactly as written -- "
-    "the same digits, the same unit spelling, the same order -- and never "
-    "convert, round, add or drop one; a count of parts or volumes keeps its "
-    "unit word as written ('2 parts' stays '2 parts'). Keep every negation and "
+    "is part of a reagent name). Keep every number, symbol, temperature, "
+    "concentration, volume, ratio and range exactly as written -- the same "
+    "digits, decimal places, commas and order -- and never convert, round, add or drop "
+    "one. Use Korean time/count units only from this explicit equivalence table: "
+    "min/mins/minute/minutes=분, h/hr/hrs/hour/hours=시간, "
+    "s/sec/secs/second/seconds=초, month/months=개월, day/days=일, "
+    "week/weeks=주, overnight=하룻밤, part/parts=부, volume/volumes=배 부피; "
+    "samples is 시료 (16 samples=시료 16개). Keep all other unit spellings "
+    "unchanged, including prefixes. Keep every negation and "
     "add none: an instruction to keep or retain something is said as keeping "
     "it ('보관해요'), not as not throwing it away. "
     # Lane KO2, decision 2 (2026-10-26): the person's five refinements, (a)-(e).
@@ -149,7 +157,18 @@ STYLE_GUIDE = (
     "rpm, 25°C, 00:10:00'), keep that line once, as written, at the end, and do "
     "not move its values into the sentence: never say a value more often than "
     "the source does. Use plain, precise words: describe a colour or a look as "
-    "it is ('하얗게', never '희끄무레한')."
+    "it is ('하얗게', never '희끄무레한'). "
+    "Everyday lab nouns must be Korean even beside an English name: "
+    "band=밴드, gel=젤, vial=바이알, tube=튜브, bead/beads=비즈, "
+    "supernatant=상층액, pipette=피펫. Compound names keep only their proper "
+    "name in English (GC 바이알, PCR 튜브); ordinary nouns are not protected names. "
+    "Use the same spelling throughout: 피펫 (never 파이펫), 비즈 (never 비드), "
+    "젤 (never 겔), unless a reviewed reading already fixes another spelling. "
+    "For a purpose, start with '이 프로토콜은 …예요.' and give its purpose "
+    "in two or three short opening sentences. Avoid an author-led preamble "
+    "such as '이 프로토콜을 쓴 사람들이 시설에서 사용하는'. Keep remaining "
+    "source details faithfully after these sentences; omit no quantities, "
+    "conditions, negations or instructions."
 )
 
 GLOSSARY_PROMPT = (
@@ -162,7 +181,10 @@ GLOSSARY_PROMPT = (
     "keep_english to true and korean to the English name itself, with no Korean "
     "added in brackets. For an ordinary word (water, chamber, gloves, hours, "
     "tube, incubation, contamination) set keep_english to false and give the "
-    "Korean word Korean labs use at the bench. Return only the JSON object."
+    "Korean word Korean labs use at the bench. In particular band=밴드, gel=젤, "
+    "vial=바이알, tube=튜브, beads=비즈, supernatant=상층액, pipette=피펫; "
+    "use 피펫, never 파이펫, throughout. Compound names keep only the proper "
+    "name in English (GC 바이알, PCR 튜브). Return only the JSON object."
 )
 
 REVISION_TRANSLATION_PROMPT = (
@@ -475,8 +497,56 @@ def _name_words(term: str) -> tuple[str, ...]:
     ))
 
 
+COMMON_LAB_WORDS = {
+    "band": "밴드", "gel": "젤", "vial": "바이알", "tube": "튜브",
+    "bead": "비즈", "supernatant": "상층액", "pipette": "피펫",
+}
+
+
+def lab_korean(text: str, reviewed: Mapping[str, str] | None = None) -> str:
+    """One spelling for common Korean nouns, honouring a person's reading.
+
+    Called only for new machine text, never on stored or reviewed rows.
+    No numbers, English names or scientific identifiers are changed.
+    """
+    confirmed = " ".join((reviewed or {}).values())
+    ending = r"(?=(?:팅)?(?:에서|으로|은|는|이|가|을|를|의|에|로|와|과|도|만|들)?(?![가-힣]))"
+    for standard, alternative in (("피펫", "파이펫"), ("비즈", "비드"), ("젤", "겔")):
+        # A longer reviewed name is not a choice of this common noun.
+        standard_form = re.search(rf"(?<![가-힣]){standard}{ending}", confirmed)
+        alternative_form = re.search(rf"(?<![가-힣]){alternative}{ending}", confirmed)
+        preferred = alternative if alternative_form and not standard_form else standard
+        text = re.sub(
+            rf"(?<![가-힣])(?:{standard}|{alternative}){ending}", preferred, text)
+    return text
+
+
+def _lab_glossary(
+    entries: Sequence[GlossaryEntry], reviewed: Mapping[str, str] | None,
+) -> tuple[GlossaryEntry, ...]:
+    def localize(entry: GlossaryEntry) -> GlossaryEntry:
+        words = term_stem(entry.source).split()
+        common_phrase = bool(words) and all(word in COMMON_LAB_WORDS for word in words)
+        text = COMMON_LAB_WORDS.get(term_stem(entry.source), entry.korean)
+
+        def noun(match: re.Match[str]) -> str:
+            word = match.group(0)
+            # Capitalised compound name parts and identifiers stay as written.
+            return COMMON_LAB_WORDS.get(_singular(word), word) if common_phrase or word.islower() else word
+
+        text = re.sub(r"(?<!\S)[A-Za-z]+(?=\s|$)", noun, text)
+        return GlossaryEntry(entry.source, lab_korean(text, reviewed),
+                             entry.keep_english and not common_phrase)
+
+    return tuple(localize(entry) for entry in entries)
+
+
 def _required_strings(term: str) -> tuple[str, ...]:
-    return _name_words(term) or ((term_stem(term),) if term_stem(term) else ())
+    words = tuple(word for word in _name_words(term) if word not in COMMON_LAB_WORDS)
+    if words:
+        return words
+    stem = term_stem(term)
+    return (stem,) if stem and not all(word in COMMON_LAB_WORDS for word in stem.split()) else ()
 
 
 def required_terms_for(
@@ -910,6 +980,7 @@ async def generate_revision_translations(
     on_batch: Callable[[list[FactTranslationRecord]], Any] | None = None,
     clock: Callable[[], datetime] | None = None,
     style_version: int = STYLE_VERSION,
+    max_calls: int | None = None,
 ) -> GenerationReport:
     """Translate the sentences of one revision not yet translated or reviewed.
 
@@ -921,22 +992,31 @@ async def generate_revision_translations(
     translated again (lane KO2, decision 1). The glossary is made once for
     the version (``make_glossary``) unless ``glossary`` is that version's.
     Before each batch ``priority_steps`` says which steps open sessions are
-    on; after it ``on_batch`` receives its rows. A batch whose call fails
-    stores nothing, so a later run can try again.
+    on; after it ``on_batch`` receives its rows. Timeout batches split in
+    half, down to a single sentence. Other failures store nothing. The
+    optional ``max_calls`` includes the glossary and every split retry.
     """
 
     now = clock or (lambda: datetime.now(timezone.utc))
     key = translation_revision_key(fixture)
+    stored = tuple(stored)
+    sources = {unit.fact_key: unit.source_sha256 for unit in translation_units(fixture)}
+    reviewed = {
+        row.fact_key: row.translated_text for row in stored
+        if row.status == "reviewed" and row.language == TARGET_LANGUAGE
+        and row.revision_id == key and row.source_sha256 == sources.get(row.fact_key)
+    }
+    reviewed.update(fixture.localizations or {})
     report = GenerationReport(revision_id=key)
     pending, report.skipped_reviewed, report.skipped_korean, report.skipped_stored = (
         pending_units(fixture, stored, style_version=style_version))
     report.units = len(translation_units(fixture))
-    if not pending:
+    if not pending or (max_calls is not None and max_calls <= 0):
         return report
     context = protocol_context(fixture)
     if glossary is not None and glossary.style_version != style_version:
         glossary = None  # an older version's glossary: the new instructions make their own
-    entries = glossary_entries(glossary)
+    entries = _lab_glossary(glossary_entries(glossary), reviewed)
     if glossary is None and make_glossary is not None:
         report.glossary_calls += 1
         try:
@@ -946,7 +1026,7 @@ async def generate_revision_translations(
                 "revision_translation glossary_failed revision=%s error=%s",
                 fixture.revision_id, type(exc).__name__)
         else:
-            entries = made.entries
+            entries = _lab_glossary(made.entries, reviewed)
             report.prompt_tokens += made.prompt_tokens
             report.completion_tokens += made.completion_tokens
             glossary = TranslationGlossaryRecord(
@@ -963,12 +1043,18 @@ async def generate_revision_translations(
             if on_glossary is not None:
                 await _maybe_await(on_glossary(glossary))
     report.glossary = entries
-    while pending:
-        ordered = generation_order(pending, priority_steps())
-        batch = _next_batch(ordered)
-        sent = {unit.fact_key for unit in batch}
-        pending = [unit for unit in pending if unit.fact_key not in sent]
-        report.order.extend(unit.fact_key for unit in batch)
+    retry_batches: list[list[TranslationUnit]] = []
+    while pending or retry_batches:
+        if max_calls is not None and report.calls + report.glossary_calls >= max_calls:
+            break
+        if retry_batches:
+            batch = retry_batches.pop(0)
+        else:
+            ordered = generation_order(pending, priority_steps())
+            batch = _next_batch(ordered)
+            sent = {unit.fact_key for unit in batch}
+            pending = [unit for unit in pending if unit.fact_key not in sent]
+            report.order.extend(unit.fact_key for unit in batch)
         report.calls += 1
         try:
             result = await translate(batch, batch_context(context, entries, batch))
@@ -978,6 +1064,9 @@ async def generate_revision_translations(
                 "revision_translation batch_failed revision=%s items=%d error=%s",
                 fixture.revision_id, len(batch), type(exc).__name__,
             )
+            if (isinstance(exc, (TimeoutError, APITimeoutError)) or getattr(exc, "kind", None) == "timeout") and len(batch) > 1:
+                middle = len(batch) // 2
+                retry_batches[:0] = [batch[:middle], batch[middle:]]
             continue
         report.prompt_tokens += result.prompt_tokens
         report.completion_tokens += result.completion_tokens
@@ -985,7 +1074,7 @@ async def generate_revision_translations(
         rows = []
         for unit in batch:
             korean = result.translations.get(unit.fact_key)
-            korean = " ".join(korean.split()) if isinstance(korean, str) else ""
+            korean = lab_korean(" ".join(korean.split()), reviewed) if isinstance(korean, str) else ""
             rows.append(FactTranslationRecord(
                 revision_id=key,
                 fact_key=unit.fact_key,
@@ -1203,6 +1292,27 @@ def _usage(response: Any) -> tuple[int, int]:
     )
 
 
+@asynccontextmanager
+async def _translation_client(factory: Callable[[], Any]) -> Any:
+    """Own each request's SDK client inside the loop that creates it.
+
+    Provider facades expose the SDK on their backend. Google uses aio.aclose;
+    the other asynchronous SDKs use close. Fake transports may have neither.
+    """
+    client = factory()
+    try:
+        yield client
+    finally:
+        backend = getattr(client, "_backend", None)
+        sdk = backend.client if backend is not None else client
+        aio = getattr(sdk, "aio", None)
+        close = getattr(aio, "aclose", None) or getattr(sdk, "close", None)
+        if close is not None:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+
 def openai_glossary_maker(
     client_factory: Callable[[], Any], model: str, *,
     timeout: float = BATCH_TIMEOUT_SECONDS,
@@ -1210,34 +1320,34 @@ def openai_glossary_maker(
     """One structured call reading the whole protocol, on the reader's model."""
 
     async def make(context: ProtocolContext) -> GlossaryResult:
-        client = client_factory()
-        response = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": GLOSSARY_PROMPT},
-                    {"role": "user", "content": json.dumps(
-                        {"title": context.title, "protocol": context.whole_text()},
-                        ensure_ascii=False,
-                    )},
-                ],
-                response_format=_json_schema(
-                    "protocol_translation_glossary_v1",
-                    {"entries": {"type": "array", "items": {
-                        "type": "object", "additionalProperties": False,
-                        "properties": {
-                            "source": {"type": "string"},
-                            "korean": {"type": "string"},
-                            "keep_english": {"type": "boolean"},
-                        },
-                        "required": ["source", "korean", "keep_english"],
-                    }}},
-                    ["entries"],
+        async with _translation_client(client_factory) as client:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": GLOSSARY_PROMPT},
+                        {"role": "user", "content": json.dumps(
+                            {"title": context.title, "protocol": context.whole_text()},
+                            ensure_ascii=False,
+                        )},
+                    ],
+                    response_format=_json_schema(
+                        "protocol_translation_glossary_v1",
+                        {"entries": {"type": "array", "items": {
+                            "type": "object", "additionalProperties": False,
+                            "properties": {
+                                "source": {"type": "string"},
+                                "korean": {"type": "string"},
+                                "keep_english": {"type": "boolean"},
+                            },
+                            "required": ["source", "korean", "keep_english"],
+                        }}},
+                        ["entries"],
+                    ),
+                    temperature=0,
                 ),
-                temperature=0,
-            ),
-            timeout=timeout,
-        )
+                timeout=timeout,
+            )
         payload = json.loads(response.choices[0].message.content or "{}")
         items = payload.get("entries") if isinstance(payload, dict) else None
         entries = []
@@ -1279,44 +1389,44 @@ def openai_batch_translator(
     async def translate(
         batch: Sequence[TranslationUnit], context: dict[str, Any],
     ) -> BatchResult:
-        client = client_factory()
-        response = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": REVISION_TRANSLATION_PROMPT},
-                    {"role": "user", "content": json.dumps(
-                        {
-                            **context,
-                            "items": [
-                                {
-                                    "id": unit.fact_key,
-                                    "kind": unit.kind,
-                                    "step_label": unit.step_label,
-                                    "source_text": unit.source_text,
-                                }
-                                for unit in batch
-                            ],
-                        },
-                        ensure_ascii=False,
-                    )},
-                ],
-                response_format=_json_schema(
-                    "protocol_revision_translation_v2",
-                    {"items": {"type": "array", "items": {
-                        "type": "object", "additionalProperties": False,
-                        "properties": {
-                            "id": {"type": "string"},
-                            "korean": {"type": "string"},
-                        },
-                        "required": ["id", "korean"],
-                    }}},
-                    ["items"],
+        async with _translation_client(client_factory) as client:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": REVISION_TRANSLATION_PROMPT},
+                        {"role": "user", "content": json.dumps(
+                            {
+                                **context,
+                                "items": [
+                                    {
+                                        "id": unit.fact_key,
+                                        "kind": unit.kind,
+                                        "step_label": unit.step_label,
+                                        "source_text": unit.source_text,
+                                    }
+                                    for unit in batch
+                                ],
+                            },
+                            ensure_ascii=False,
+                        )},
+                    ],
+                    response_format=_json_schema(
+                        "protocol_revision_translation_v2",
+                        {"items": {"type": "array", "items": {
+                            "type": "object", "additionalProperties": False,
+                            "properties": {
+                                "id": {"type": "string"},
+                                "korean": {"type": "string"},
+                            },
+                            "required": ["id", "korean"],
+                        }}},
+                        ["items"],
+                    ),
+                    temperature=0,
                 ),
-                temperature=0,
-            ),
-            timeout=timeout,
-        )
+                timeout=timeout,
+            )
         payload = json.loads(response.choices[0].message.content or "{}")
         items = payload.get("items") if isinstance(payload, dict) else None
         translations: dict[str, str] = {}

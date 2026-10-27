@@ -302,6 +302,8 @@ from voiney_lab.identity import (
     Principal,
 )
 from voiney_lab.protocol_translation import (
+    BATCH_TIMEOUT_SECONDS,
+    lab_korean,
     STYLE_GUIDE as PROTOCOL_TRANSLATION_STYLE,
     STYLE_VERSION as TRANSLATION_STYLE_VERSION,
     generate_revision_translations,
@@ -2674,7 +2676,7 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
     model=role.model
 
     def client()->Any:
-        return _role_client(role)
+        return _role_client(role,timeout=BATCH_TIMEOUT_SECONDS)
 
     translate=openai_batch_translator(client,model)
     make_glossary=openai_glossary_maker(client,model)
@@ -3359,8 +3361,149 @@ def _speaking_organization()->str:
     return principal.organization_id if principal is not None else ""
 
 
+# The spoken representation alone changes; callers keep their source/display text.
+_SPOKEN_NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+_SPOKEN_UNITS = (
+    (r"(?:µ|μ|u)[lL]", "마이크로리터"), (r"m[lL]", "밀리리터"),
+    (r"[lL]", "리터"), (r"(?:µ|μ|u)g", "마이크로그램"),
+    (r"mg", "밀리그램"), (r"kg", "킬로그램"), (r"g", "그램"),
+    (r"(?:µ|μ|u)M", "마이크로몰"), (r"mM", "밀리몰"),
+    (r"nM", "나노몰"), (r"M", "몰"),
+    (r"[rR][pP][mM]", "알피엠"), (r"[×x]\s*g", "지"),
+    (r"°\s*C|˚C|℃", "도"), (r"%|퍼센트", "퍼센트"),
+    (r"min(?:ute)?s?|분", "분"), (r"h(?:ours?|rs?)?|시간", "시간"),
+    (r"s(?:ec(?:ond)?s?)?|초", "초"), (r"months?|개월", "개월"),
+    (r"days?|일", "일"), (r"weeks?|주", "주"),
+    (r"개", "개"),
+)
+_SPOKEN_UNIT = "(?:" + "|".join(pattern for pattern, _ in _SPOKEN_UNITS) + ")(?![A-Za-z])"
+_SPOKEN_VALUE = re.compile(
+    rf"(?<![A-Za-z0-9_.:−-])(?P<qualifier>>=|<=|[~≈><≥≤])?\s*"
+    rf"(?P<first>[-−]?{_SPOKEN_NUMBER})"
+    rf"(?:(?P<operator>\s*(?:[–—−±:]|-)\s*)(?P<second>[-−]?{_SPOKEN_NUMBER}))?"
+    rf"\s*(?P<unit>{_SPOKEN_UNIT})?(?![A-Za-z0-9_:-]|\.\d)")
+
+
+def _say_number(number: str) -> str:
+    """Read digits literally after a decimal point; never round or use float."""
+    if number.startswith(("-", "−")):
+        return "마이너스 " + _say_number(number[1:])
+    whole, dot, fraction = number.replace(",", "").partition(".")
+    digits = "영일이삼사오육칠팔구"
+    value = int(whole) if len(whole) <= 16 else 0
+    if len(whole) > 16:
+        # No guessed magnitude outside the explicit Korean place names.
+        spoken = " ".join(digits[int(digit)] for digit in whole)
+    elif value == 0:
+        spoken = "영"
+    else:
+        groups = []
+        for place, suffix in ((10**12, "조"), (10**8, "억"), (10**4, "만"), (1, "")):
+            group, value = divmod(value, place)
+            if not group:
+                continue
+            small = ""
+            for power, name in ((1000, "천"), (100, "백"), (10, "십"), (1, "")):
+                digit, group = divmod(group, power)
+                if digit:
+                    small += ("" if digit == 1 and power > 1 else digits[digit]) + name
+            groups.append(("" if small == "일" and suffix else small) + suffix)
+        spoken = " ".join(groups)
+    if dot:
+        spoken += " 점 " + " ".join(digits[int(digit)] for digit in fraction)
+    return spoken
+
+
+def _say_counter(number: str) -> str:
+    """The Korean modifier before hours/items; decimals keep every digit."""
+    plain = number.replace(",", "")
+    if not plain.isdecimal() or len(plain) > 2 or not 1 <= int(plain) <= 99:
+        return _say_number(number)
+    value = int(plain)
+    if value == 20:
+        return "스무"
+    tens = ("", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔")
+    ones = ("", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉")
+    return tens[value // 10] + ones[value % 10]
+
+
+def normalize_korean_speech(text: str) -> str:
+    """A deterministic reading for TTS, without changing any plan or evidence.
+
+    Only explicit numeric expressions and known units are read. Digits inside
+    scientific identifiers remain as written (Tn5, H3K4me3, Tris-HCl).
+    """
+    def clock(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        negative = raw.startswith(("-", "−"))
+        fields = raw.lstrip("-−").split(":")
+        units = ("시간", "분", "초")
+        parts = [f"{_say_counter(value) if unit == '시간' else _say_number(value)} {unit}"
+                 for value, unit in zip(fields, units) if int(value)]
+        spoken = " ".join(parts) or "영 초"
+        return "마이너스 " + spoken if negative else spoken
+
+    # Read dilution ranges before clocks and individual ratios.
+    text = re.sub(
+        rf"(?<![\w:-])({_SPOKEN_NUMBER}):({_SPOKEN_NUMBER})\s*[-–—]\s*"
+        rf"({_SPOKEN_NUMBER}):({_SPOKEN_NUMBER})(?![\w:])",
+        lambda match: f"{_say_number(match[1])} 대 {_say_number(match[2])}에서 "
+                      f"{_say_number(match[3])} 대 {_say_number(match[4])}", text)
+    # Only an explicit HH:MM:SS acquires time units; two fields may be a dilution.
+    text = re.sub(r"(?<![\w:.−-])[-−]?\d{2}:\d{2}:\d{2}(?![\w:])", clock, text)
+
+    def value(match: re.Match[str]) -> str:
+        first, second = match["first"], match["second"]
+        unit, operator, qualifier = match["unit"], match["operator"], match["qualifier"]
+        if not unit and not operator and not qualifier and "." not in first:
+            # Preserve labels, identifiers and bare numbers for the voice's
+            # ordinary reading, including step numbers and citation numbers.
+            return match.group(0)
+        reading = next((word for pattern, word in _SPOKEN_UNITS if re.fullmatch(pattern, unit)), None) if unit else None
+        count_unit = reading in {"시간", "개"} and (not operator or operator.strip() != ":")
+        number_reader = _say_counter if count_unit else _say_number
+        spoken = number_reader(first)
+        if second:
+            separator = " 대 " if operator.strip() == ":" else (
+                " 플러스 마이너스 " if operator.strip() == "±" else "에서 ")
+            if count_unit:
+                spoken += f" {reading}"
+            spoken += separator + number_reader(second)
+        if unit:
+            if reading == "도":
+                spoken = "섭씨 " + ("영하 " + spoken.removeprefix("마이너스 ") if first.startswith(("-", "−")) else spoken)
+                if second and second.startswith(("-", "−")):
+                    spoken = spoken.replace(separator + "마이너스 ", separator + "영하 ")
+            spoken += " " + reading
+        if qualifier in {"~", "≈"}:
+            spoken = "약 " + spoken
+        elif qualifier:
+            spoken += " " + {">": "넘게", "<": "미만", ">=": "이상", "≥": "이상",
+                              "<=": "이하", "≤": "이하"}[qualifier]
+        # The optional leading/trailing spaces belong to the caller's sentence.
+        leading = " " if match.group(0).startswith(" ") else ""
+        trailing = " " if match.group(0).endswith(" ") and not unit else ""
+        return leading + spoken + trailing
+
+    result = _SPOKEN_VALUE.sub(value, text)
+    # A repeated unit (20%±2%) leaves the sign outside either numeric match.
+    return " ".join(result.replace("±", " 플러스 마이너스 ").split()) if "±" in result else result
+
+
+def _clean_tts_text(text: str) -> str:
+    # A decimal or negative value at any line start is not a list marker.
+    numeric = re.compile(r"^\s*(?:-\s*\d|\d+\.\d)")
+    if any(numeric.match(line) for line in text.splitlines()):
+        return " ".join(
+            clean_speech_text("scientific_value " + line).removeprefix("scientific_value ")
+            if numeric.match(line) else clean_speech_text(line)
+            for line in text.splitlines())
+    return clean_speech_text(text)
+
+
 def synthesize(text:str,language:str|None=None)->bytes:
-    clean_text = clean_speech_text(text)
+    spoken = normalize_korean_speech(text) if language in (None, "ko") else text
+    clean_text = _clean_tts_text(spoken)
     if not clean_text:
         return b""
     settings=TtsProviderSettings.from_environment()
@@ -3509,6 +3652,10 @@ def speech_sentences(text:str)->tuple[str,...]:
     cut so.
     """
 
+    # Keep numeric line starts intact: ordinary Markdown cleaning would
+    # treat their decimal point/sign as a list marker before TTS sees them.
+    if re.search(r"^\s*(?:-\s*\d|\d+\.\d)", text, flags=re.MULTILINE):
+        return (text,)
     whole=clean_speech_text(text)
     chunker=SentenceChunker()
     found=[item.text for item in (*chunker.feed(whole),*chunker.flush())]
@@ -9308,6 +9455,7 @@ async def _translate_in_place(
                 _spot_failed(key,quote.key,started)
                 statuses.append(f"provider_{type(answer).__name__}")
                 continue
+            answer=lab_korean(answer,fixture.localizations) if isinstance(answer,str) else answer
             issue=statement_issue(
                 quote.text,answer,required_terms=quote.terms,
                 step_label=quote.label if quote.kind=="step" else None)
@@ -14020,6 +14168,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             plan=curated.single_step_labels(plan)
             display_text=plan.display_text
             speech_text=plan.speech_text
+            speech_language="en" if plan.intent_kind=="source_read_aloud" else turn_language
             speech_policy=getattr(plan,"speech_policy","speak")
             if not isinstance(display_text,str) or not display_text.strip():
                 raise RuntimeError("curated protocol produced no display text")
@@ -14036,7 +14185,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 speech_kept=_speech_kept(plan)
                 with sentence_audio_kept(speech_kept):
                     pcm=await asyncio.to_thread(
-                        synthesize,spoken_sentences[0],turn_language)
+                        synthesize,spoken_sentences[0],speech_language)
                 frames=frame_complete_audio(pcm)
                 if filler is not None:await filler.primary_ready()
                 if not frames or not session.start_playback(turn_id):
@@ -14221,7 +14370,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 spoken=await _say_answer(
                     session,sender,turn_id=turn_id,generation=generation,
                     first_frames=frames,later=spoken_sentences[1:],
-                    language=turn_language,clock=clock,keep=speech_kept)
+                    language=speech_language,clock=clock,keep=speech_kept)
             except asyncio.CancelledError:
                 # Lane VOX: a barge-in while the later sentences are made.
                 # The turn did what it did; its history, pilot row and metric

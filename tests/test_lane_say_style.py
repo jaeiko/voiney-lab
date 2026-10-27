@@ -59,12 +59,12 @@ class StyleGuideTests(unittest.TestCase):
                 self.assertIn(asked, guide)
         # Lane GE's rules stay: the numbers, units and names as written.
         for kept in ("exactly as written", "never convert, round, add or drop",
-                     "'2 parts' stays '2 parts'", "Keep every negation and add none"):
+                     "part/parts=부", "Keep every negation and add none"):
             with self.subTest(kept=kept):
                 self.assertIn(kept, guide)
         self.assertNotIn("formal polite Korean declarative style", guide)
         # Lane KO2 (2026-10-26): v4, the version stored with every row.
-        self.assertEqual(pt.PROMPT_VERSION, "revision_translation_v4")
+        self.assertEqual(pt.PROMPT_VERSION, "revision_translation_v5")
 
     def test_every_translation_prompt_carries_the_guide(self) -> None:
         self.assertIn(pt.STYLE_GUIDE, pt.REVISION_TRANSLATION_PROMPT)
@@ -101,7 +101,7 @@ class ExplanationWordsTests(unittest.TestCase):
         korean = "오늘 쓰는 세척 연습용 프로토콜이에요. 단계마다 부피가 달라요."
         fixture = replace(miniprep_fixture(), machine_localizations={PURPOSE_FACT_KEY: korean})
         plan = _say(_session(fixture), "이 실험 목적이 뭐야?")
-        self.assertEqual(plan.speech_text, "원문에 적힌 실험 목적이에요. 오늘 쓰는 세척 연습용 프로토콜이에요.")
+        self.assertEqual(plan.speech_text, "오늘 쓰는 세척 연습용 프로토콜이에요. 단계마다 부피가 달라요.")
         self.assertIn(korean, plan.display_text)
 
     def test_why_a_step_is_done_is_answered_in_haeyo(self) -> None:

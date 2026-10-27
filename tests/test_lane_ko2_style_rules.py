@@ -48,11 +48,11 @@ class GuideTests(unittest.TestCase):
             with self.subTest(asked=asked):
                 self.assertIn(asked, guide)
         # Lane GE's and SAY's rules stay.
-        for kept in ("해요체", "exactly as written", "'2 parts' stays '2 parts'",
+        for kept in ("해요체", "exactly as written", "part/parts=부",
                      "Keep every negation and add none", "no Korean added in brackets"):
             with self.subTest(kept=kept):
                 self.assertIn(kept, guide)
-        self.assertEqual(pt.STYLE_VERSION, 4)
+        self.assertEqual(pt.STYLE_VERSION, 5)
 
     def test_the_guide_names_no_test_protocol(self) -> None:
         # Lane rules 10: general lab words, not the in-gel sample's.
