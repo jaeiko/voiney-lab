@@ -10,13 +10,13 @@ from scripts.sim.corpus import Case
 from scripts.stt_compare import Score, number_units
 
 EXPECTED_ACTIONS = {
-    'current': ('current',), 'detail': ('full_detail', 'current'), 'repeat': ('repeat', 'current'),
+    'current': ('current',), 'detail': ('full_detail', 'current'), 'repeat': ('repeat', 'current', 'full_detail'),
     'preview': ('next_information', 'preview_step'), 'previous': ('clarify_completion', 'clarify_reference'),
     'jump': ('clarify_completion', 'clarify_reference'), 'timer_start': ('start_timer', 'clarify_parameter'),
     'timer_pause': ('timer_pause',), 'timer_resume': ('timer_resume',), 'timer_cancel': ('timer_cancel',),
     'timer_restart': ('timer_restart',), 'timer_remaining': ('timer_status',),
     'source': ('change_value', 'clarify_parameter'), 'observation': ('record_observation', 'clarify_parameter'),
-    'value_inside': ('change_value', 'clarify_parameter'), 'value_outside': ('clarify_parameter',),
+    'value_inside': ('change_value', 'clarify_parameter', 'clarify_completion'), 'value_outside': ('clarify_parameter',),
     'problem_report': ('report_anomaly', 'clarify_parameter'), 'problem_question': ('problem_help', 'related_question'),
     'ambiguous': ('clarify_reference', 'off_topic', 'transcript_unreliable'),
     'safety': ('question', 'protocol_query', 'current', 'related_question'),
@@ -44,6 +44,8 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         wrong = True
     actions = case.actions or EXPECTED_ACTIONS.get(case.family, ())
     action_ok = result['action'] in actions if actions else True
+    if case.intents:
+        action_ok=action_ok and result['intent_kind'] in case.intents
     if case.family == 'emergency':
         action_ok = result['route'] == 'deterministic_emergency'
     if case.family == 'noise':

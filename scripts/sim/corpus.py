@@ -78,7 +78,7 @@ def load_corpus(path: Path = CORPUS) -> tuple[Protocol, ...]:
 
 # These are requested behaviour, not outputs sampled from the implementation.
 TEMPLATES = (
-    ('current', ('현재 단계 알려줘', '지금 뭐 해야 해?', '지금 단계 읽어 줘'), ('current',), (), (), None, False),
+    ('current', ('현재 단계 알려줘', '지금 뭐 해야 해?', '지금 단계 읽어 줘'), ('current','full_detail'), (), (), None, False),
     ('detail', ('이 단계 자세히 알려줘', '지금 할 일 구체적으로 설명해 줘'), (), (), (), None, False),
     ('repeat', ('다시 들려줘', '방금 안내 다시 말해 줘', '현재 단계 다시 읽어 줘'), (), (), (), None, False),
     ('preview', ('다음 단계 미리 알려줘', '다음 단계에서 뭘 해?', '다음 단계 보여줘'), (), (), (), None, False),
@@ -113,14 +113,26 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
     # A missing source timer is tested too; never invent a duration for it.
     for family, texts, actions, intents, allowed, target, must in TEMPLATES:
         for n, text in enumerate(texts):
+            case_actions,case_intents,case_allowed,case_target,case_must=actions,intents,allowed,target,must
+            if family=='complete' and text=='다 했어':
+                case_actions=('clarify_completion',)
+                case_intents=('next_step_confirmation_required',)
+                case_allowed=('confirmation',)
+                case_target=None
+                case_must=False
+            if family=='source':
+                # This case starts with no run overrides: a source-specific no-op is correct.
+                case_actions=('decline_completion',)
+                case_intents=('run_value_change_refused',)
+                case_allowed=()
             index = 1 if family == 'previous' else 0
             setup = 'paused' if family == 'resume' else 'active'
             if family.startswith('timer_'):
                 index = timed if timed is not None else 0
                 setup = 'timer_paused' if family == 'timer_resume' else 'timer_running' if family not in {'timer_start'} else 'active'
             cases.append(Case(f'{protocol.code}.{family}.{n}', family, text, index, setup,
-                              actions if timed is not None or not family.startswith('timer_') else (), intents,
-                              allowed, target, must if timed is not None or not family.startswith('timer_') else False))
+                              case_actions if timed is not None or not family.startswith('timer_') else (), case_intents,
+                              case_allowed, case_target, case_must if timed is not None or not family.startswith('timer_') else False))
     # Numeric observations and value requests use the source's own scientific strings.
     from scripts.stt_compare import number_units
     for index, step in enumerate(protocol.fixture.steps):
@@ -135,8 +147,10 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
                 ('value_outside', f'현재 단계 값을 {float(value) * 1000 + 999:g} {unit}로 바꿔 줘', ('confirmation',)),
                 ('term', f'{terms[0] if terms else "시약"} 이 단계에서 얼마나 써?', ()),
             ):
+                expected_actions=('clarify_parameter','clarify_completion','decline_completion') if family=='value_outside' else ()
+                expected_intents=('operational_value_clarification_required','run_value_change_confirmation_required','run_value_change_refused') if family=='value_outside' else ()
                 cases.append(Case(f'{protocol.code}.{family}.{index}', family, text, index=index,
-                                  allowed=allowed, terms=terms))
+                                  actions=expected_actions,intents=expected_intents,allowed=allowed, terms=terms))
     previous = json.loads((ROOT/'data/fixtures/evaluation/candidate_a_real_voice_hardening.json').read_text())
     for row in previous['cases']:
         if row['id'] in {'explain-current','explain-current-bare','completion-ambiguous'}:

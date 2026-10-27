@@ -341,3 +341,26 @@ def test_live_vad_drop_is_not_an_asr_measurement_and_stt_failure_is_counted():
     row=score_case(c,result,mode='live')
     assert row['stt']['failed_requests']==1
     assert row['stt_counts']['reference_chars']>0
+
+
+@pytest.mark.parametrize('family,text',[
+    ('current','지금 단계 읽어 줘'),
+    ('repeat','현재 단계 다시 읽어 줘'),
+    ('complete','다 했어'),
+    ('source','원문대로 할게'),
+])
+def test_scoring_accepts_canonical_readback_and_confirmation_results(family,text):
+    p=load_corpus()[0]
+    c=next(c for c in generate_cases(p) if c.family==family and c.text==text)
+    result=asyncio.run(run_case(p,c))
+    assert result['changed_fields']==([] if family!='complete' else ['confirmation'])
+    assert score_case(c,result)['understood'] is True
+
+
+def test_source_outside_value_can_be_refused_or_staged_but_never_applied():
+    p=next(p for p in load_corpus() if p.field=='chemistry')
+    c=next(c for c in generate_cases(p) if c.family=='value_outside' and c.index==1)
+    result=asyncio.run(run_case(p,c))
+    assert 'values' not in result['changed_fields']
+    assert result['intent_kind'] in {'run_value_change_refused','run_value_change_confirmation_required'}
+    assert score_case(c,result)['understood'] is True
