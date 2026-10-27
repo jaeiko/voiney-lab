@@ -23,9 +23,34 @@ KNOW). 연구실 자료는 넣지 않는다. 동작과 코드 위치는
   더할 위키데이터 항목). 한 줄 더하면 다음 실행에 들어간다.
 - **조각**: 최대 1,000자. 필드는 tier `public`, 제목, 본문, 위치(섹션·쪽·CID),
   URL, 라이선스, 언어, 분야, 출처 id·이름, 등급, 출처 버전, 받은 날짜.
+- **정리**(줄 KNOW2, 사람 결정 2026-10-26 3번): 글로 읽히지 않는 조각(표가 한데
+  붙은 것, 책 색인, 참고문헌 목록 "연도;권:쪽", 연습문제, 수식 표기)은 빼고
+  `manifest.json` 의 출처별 `broken_dropped` 에 이유별로 센다
+  (`public_knowledge_pipeline.broken_reason`). 위키백과 절에서는 수식
+  `{\displaystyle …}`·`{\textstyle …}` 과 그것이 남긴 한두 글자 줄을 지운다.
+  OpenStax 두 교재는 `sources.toml` 의 `skip_chapters`(실험실과 무관한 장, 줄
+  KAUDIT 의 읽기), `end_matter`(장 끝 핵심 용어·요약·연습문제), `stop_at`(첫
+  부록부터 정답·색인까지), `page_furniture`(쪽 머리말·바닥글 줄)로 다듬는다.
+  Europe PMC 논문은 `sections`(방법·재료·프로토콜·문제 해결·노트·안전)에 드는
+  맨 위 절과 그 아래 절만 넣고 결과·고찰은 넣지 않는다(중첩 절은
+  "Materials and methods › Cell culture" 처럼 위 절 이름을 붙임).
+- **ILO 카드 뺌**(사람 결정 2026-10-26 4번): PubChem 이 인용하는 ILO-WHO 국제화학물질
+  안전카드(ICSC) 문장은 넣지 않는다. 카드 원문이 "© ILO and WHO 2021 … All rights
+  reserved"(한국어판 © 고용노동부·산업안전보건공단 2018)이고 ILO 저작권 쪽은
+  2023-05-03 이후 발행물만 CC BY 4.0 이라서다; 이유는 `sources.toml` 의
+  `[[excluded]]` "ilo-icsc".
 - **용어집**: 위키데이터의 한국어·영어 이름(CC0)과 한국어 위키백과 넘겨주기
-  제목으로 만든 `data/public_knowledge/glossary.json`. 서버가 한국어 질문의
-  낱말(조사를 뗀 뒤)에 영어 이름을 붙여 영어 자료와 만나게 한다. 조각은
+  제목으로 만든 `data/public_knowledge/glossary.json`, 그리고 사람이 읽고 고치는
+  손 용어집 [`../data/public_knowledge/glossary_words.txt`](../data/public_knowledge/glossary_words.txt)
+  (줄 KNOW2, 사람 결정 2026-10-26: 줄 KAUDIT 가 찾은 빈칸 낱말 전부와 같은 꼴의
+  실험실 기본 낱말). 손 용어집은 "한국어 꼴; 다른 꼴 = English; other" 줄을
+  [장비]·[물질]·[소재]·[안전]·[기법]·[현상]·[일반] 절로 나눈다: 앞의 넷은
+  단계의 핵심 낱말이 될 수 있는 물건, [현상]은 무엇이 잘못됐는지(문제 질의의 문제
+  낱말, "굳지 않" → polymerization), [일반]은 겹쳐도 뜻 낱말로 세지 않는 낱말.
+  같은 한국어 낱말이면 손 용어집의 영어 이름이 먼저다. 서버가 한국어 질문의
+  낱말(조사를 뗀 뒤)에 영어 이름을 붙여 영어 자료와 만나게 한다; 고친 뒤에는
+  서버를 다시 켜면 질의 쪽에 들어가고, 조각 제목 옆 한국어 별칭은 다음 `upload`
+  때 들어간다. 읽지 못한 줄은 건너뛰고 테스트가 0줄인지 확인한다. 조각은
   나오지 않는다.
 
 ## 2. 명령
@@ -37,11 +62,19 @@ source .venv/bin/activate
 python -u scripts/public_knowledge_pipeline.py collect
 python -u scripts/public_knowledge_pipeline.py collect --only wikipedia-ko,pubchem
 python -u scripts/public_knowledge_pipeline.py collect --full      # 조건 없이 전부 다시
+python -u scripts/public_knowledge_pipeline.py collect --offline   # 요청 없이 받아 둔 원본만으로 다시 (파서를 고친 뒤)
 python scripts/public_knowledge_pipeline.py status                 # 출처별 조각 수·용량·예상 메모리
 python scripts/public_knowledge_pipeline.py glossary               # 용어집을 data/public_knowledge/glossary.json 으로
 # Moss 에 올린다. 키는 셸의 MOSS_PROJECT_ID·MOSS_PROJECT_KEY 또는 --env-file (값은 출력하지 않음).
 python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge --dry-run
 python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge --env-file .env
+# 다국어 임베딩(줄 KNOW2): 조각 벡터를 만들고(캐시, 이어서 됨) custom 색인으로 올린다.
+python -u scripts/public_knowledge_pipeline.py embed --model multilingual-e5-small
+python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --dry-run
+python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --env-file .env
+# 월 올리기 한도 안에서 나눠 올린다: 이번엔 45 MB(어림)까지, 다음 달 같은 명령이 나머지를 올린다.
+# 중간에 실패해도 이미 올라간 묶음은 bundle/upload.<색인>.json 에 남아 다시 보내지 않는다.
+python scripts/public_knowledge_pipeline.py upload --index voiney-public-knowledge-v2 --embedding multilingual-e5-small --max-mb 45 --env-file .env
 # 질문 세트로 FTS5 기준선과 Moss 를 잰다 (recall@k, 지연 p50/p95, 불러오기 시간, RSS 증가).
 python scripts/public_knowledge_pipeline.py evaluate --backend fts5 --questions data/fixtures/evaluation/public_knowledge_questions.json
 python scripts/public_knowledge_pipeline.py evaluate --backend moss --index voiney-public-knowledge --questions data/fixtures/evaluation/public_knowledge_questions.json --env-file .env --out /tmp/moss_eval.json
@@ -77,23 +110,48 @@ REST)는 robots.txt 가 막으므로 위키데이터의 PubChem CID(P662)나 목
   등급만 꺼지고 이유는 설정 이름이다; `/readyz` 의 `public_knowledge` 와
   `ready.research_capabilities.public_knowledge` 가 `disabled`·`enabled`·
   `unavailable` 을 알린다. 다른 공급자로 넘어가지 않는다.
-- 답의 규칙(결정 6)은 `answer_checks.public_reference_violations` 가 지킨다:
+- 답의 규칙(결정 6)은 `answer_checks.public_reference_violations` 가 잰다(줄
+  KNOW2 부터 말로는 고정 문장만이라 감사 도구의 규칙 위반 셈에 쓴다):
   "공개 자료 · 일반 참고 — <출처 이름>" 표시(서버가 붙임), 인용한 조각에 있는
   수치만, 지시가 아니라 참고 사실, 160자 이내, 원문 60자 이상 그대로 읽지
   않음, "계속해도 돼요"·원문 값 바꾸기·위험 허가·상태 변경 주장·URL 금지.
-- 실험 중 문제 도움(줄 HELP)의 ③ 단계에 연결돼 있다(2026-10-25): 음성
-  연결이 불러온 등급을 세션에 넘기고, 문제의 말과 낱말을 함께 가진 공개
-  조각만(용어집 낱말·영어 이름·문제 속 영어 낱말) 도움 화면에서 원문·지난
-  기록 뒤에 표시·출처·라이선스와 함께 보이며, 말로는 표시와 짧은 사실 한 문장
-  (그 턴의 언어, 60자 미만, 검사 통과)이나 "화면에서 확인해 주세요"를 말한다.
-  보조 설명이 켜져 있으면 검사를 통과한 바꿔 말하기를 답 뒤 ③ 자리에서
-  말한다. 동작은 [`FEATURES.md`](FEATURES.md) F11·F20.
+- 실험 중 문제 도움(줄 HELP)의 ③ 단계에 연결돼 있다(2026-10-25). 줄 KNOW2
+  (사람 결정 2026-10-26)부터:
+  - **질의**: 사람의 말 전체가 아니라 문제 낱말(거품·침전·안 떨어짐 등)과
+    이름(사람이 말한 것; 없을 때만 지금 단계 원문이 다루는 물질·장비)으로
+    만든다(`public_knowledge.problem_query`). 둘 중 하나가 없으면 묻지 않는다.
+  - **관련도 하한**: 조각의 한 문장 안에 이름과(제목이 그 이름인 기록은 제목으로
+    충분), 그 이름이 아닌 낱말로 된 문제 낱말이 함께 있고, 원인·효과·실패·위험을
+    말하며(정의·설명만인 조각은 아님),
+    색인 점수가 하한 이상이어야 붙는다(`problem_relevance`; Moss 내장 모델 색인은
+    `SCORE_FLOOR` 0.30, e5 custom 색인은 `SCORE_FLOORS` 0.84 — e5 코사인은
+    0.83–0.90 에 몰려 정답·다른 조각이 거의 갈리지 않으니 낮은 꼬리만 자르고,
+    가르는 일은 낱말 조건이 한다; Moss 의 custom 점수 척도는 문서에 없어 사람의
+    `moss-run` 결과로 다시 본다). 넘는 조각이 없으면 공개 자료 층을 붙이지 않는다.
+  - **순서**: 색인 점수, 등급은 점수가 비슷할 때(0.03 안)만 앞세운다.
+  - **말**: "공개 자료에 관련 내용이 있어요."만. 조각의 문장·정의는 읽지 않고
+    바꿔 말하지도 않는다; 내용은 화면에 표시·출처·라이선스와 함께.
+  동작은 [`FEATURES.md`](FEATURES.md) F11·F20.
+- **다국어 임베딩**(사람 결정 2026-10-26 5번, 줄 KNOW2): Moss 의 내장 모델은
+  영어라, `custom` 색인(조각마다 우리가 만든 벡터)을 쓰면 서버가 질의마다 같은
+  모델로 벡터를 만들어 넘긴다. 모델은 `intfloat/multilingual-e5-small` 의 int8
+  ONNX(MIT, 커밋 `614241f6…` 고정, 파일마다 SHA-256 확인) — 질의 앞에
+  "query: ", 조각 앞에 "passage: ". 서버는 시작할 때 Moss 에 색인의 모델을
+  묻고, `custom` 이면 모델 파일을 캐시 폴더(`public-knowledge-cache/models/`)에서
+  찾거나 고정 커밋에서 한 번 받아 확인한 뒤 쓴다. 조각에 적힌 모델 이름
+  (`embedding`)이 다르면 이 등급을 끈다. 내장 모델 색인은 지금처럼 벡터 없이
+  묻는다. 서버의 임베더는 메모리를 아끼는 설정(그래프 최적화·가중치 묶기·메모리
+  아레나 끔, 어휘는 sentencepiece)으로 +225 MiB, 질의당 약 30 ms(2026-10-26 측정).
 
 ## 4. 한도와 확대
 
 - Moss 무료 단계(docs.moss.dev 가격표, 2026-10-24 읽음): 프로젝트 1, 색인 3,
   저장 500 MB, 올리기 50 MB/월, 내려받기 10 GB/월, 세션 60분/월. 로컬 질의는
-  세지 않는다.
+  세지 않는다. 2026-10-26 가격표: Developer 무료(월 $5 크레딧)·올리기 50 MB/월,
+  Hobbyist 월 $30·500 MB/월, Startup 월 $200·5 GB/월, 넘는 올리기는 MB 당
+  $0.03. 무엇이 올리기로 세어지는지(글·벡터·메타데이터)는 적혀 있지 않다.
+  custom 색인은 조각마다 벡터(384 × 4바이트 어림)를 함께 올린다
+  (`upload --embedding … --dry-run` 이 어림한다).
 - 메모리(Moss 문서의 측정치): 임베딩 모델 149 MiB(프로세스당 한 번), SDK
   37 MiB, 조각당 약 7 KB(한글은 약 2배), 불러오는 동안 색인 크기의 약 2배가
   더 든다. `status` 와 `upload --dry-run` 이 이 식으로 어림한다; 실측은 줄
@@ -166,10 +224,42 @@ python scripts/public_knowledge_audit.py moss-run --env-file .env --protocol-dat
 다음 수집 범위·순서와 다국어 임베딩은 사람이 정한다; 후보(라이선스 확인한
 출처·조각 수·메모리 어림)는 줄 보고서(`~/reports/lane_kaudit_report.md`).
 
+### 줄 KNOW2 뒤 (2026-10-26, 오프라인)
+
+사람 결정 2026-10-26 ①–⑥ 을 단계마다 같은 도구로 오프라인에서 쟀다
+(`map`·`help`, `--backend fts5` 는 참고값, `--backend local` 은 custom 색인을
+흉내 낸 것 — 벡터 순위와 FTS5 순위를 RRF(k=60)로 합치고 점수는 e5 코사인; 둘 다
+Moss 의 순위가 아니다). Moss 실측은 사람이 돌린다(줄 보고서의 명령).
+
+| 단계 (묶음, 검색) | 칸 ✓·△·✗ | recall@5 | 한국어 | 영어 | 도움에 공개 조각 붙은 행 (76) |
+|---|---|---|---|---|---|
+| 작업 전 (v1 23,975, FTS5) | 3·83·2 | 0.192 | 0.151 | 0.318 | 33 |
+| ① 질의·하한 | 6·80·2 | 0.251 | 0.173 | 0.489 | 6 |
+| ② 손 용어집 | 8·78·2 | 0.312 | 0.255 | 0.489 | 6 |
+| ③ 정리 (17,941) | 9·77·2 | 0.315 | 0.251 | 0.511 | 6 |
+| ④ ILO 빼기 (17,783) | 9·77·2 | 0.315 | 0.251 | 0.511 | 5 |
+| ⑤ e5 custom (17,783, local α 0.5) | 7·79·2 | 0.298 | 0.236 | 0.489 | 4 |
+| ⑥ v2 (22,171, local α 0.5) | 6·80·2 | 0.270 | 0.221 | 0.420 | 5 |
+
+- 붙은 조각을 읽은 줄의 판단(맞음·애매·엉뚱): 작업 전 1·12·20(줄 KAUDIT) →
+  ④ 4·2·0 → ⑤ 3·1·0 → ⑥ 3·2·0. 엉뚱은 ① 뒤로 0 이지만, 붙는 곳이 76행 중
+  4–5행이고 거의 모두 in-gel 프로토콜의 탈색 문제(위키 "In-gel digestion")다.
+  공개 규칙 위반 0, 조각을 읽은 말 0, 도움 전체가 지워진 행 0(모든 단계).
+- ⑥ 의 정답은 v1 조각으로 정해 둔 것이라 v2 의 새 조각은 정답으로 세지 않는다.
+  놓친 한국어 질문 65개의 새 조각을 읽으니 12개가 답이었다(나노 파우더 후드,
+  260/280, 슐렝크 사이클, 콜드트랩 액체 산소 등) → 한국어 어림 0.266. 새 조각을
+  모두 정답으로 쳐도 한국어 0.461 이다.
+- e5 는 한국어 질문에 주제와 상관없이 한국어 위키 조각을 끌어온다(⑤: "액체 질소 ·
+  안전" 이 질문 29개의 상위 5개에, "고성능 액체 크로마토그래피" 27개). 벡터만
+  (α 1.0) 은 한국어 0.188, FTS5 후보를 e5 코사인으로 다시 줄 세우면(α 0.0) 0.284.
+  alpha 는 사람이 정한 0.5 그대로 둔다.
+- 사람이 정한 다시 켤 기준(엉뚱 0 · 맞음 70% 이상 · 한국어 recall@5 0.5 이상 ·
+  규칙 위반 0) 중 한국어 recall 이 오프라인에서 어느 단계도 못 미친다.
+
 ## 6. 하지 않는 것
 
 - 연구실 자료·로그인이 필요한 자료·라이선스를 확인하지 못한 자료는 넣지
   않는다. 공개 자료는 참고일 뿐 원문의 값·조건·안전 판단을 바꾸지 못한다.
-- 서버는 모델을 쓰지 않고 검색한다; 바꿔 말하기(`paraphrase_public_reference`)는
-  보조 설명 역할이 켜졌을 때만, 그 결과도 같은 검사를 거친다.
+- 서버는 모델을 쓰지 않고 검색하고, 공개 조각을 모델로 바꿔 말하지 않는다(줄
+  KNOW2 에서 바꿔 말하기를 뺐다).
 - 완전성 보증이 아니다: 들어 있지 않은 자료는 찾지 못한다.

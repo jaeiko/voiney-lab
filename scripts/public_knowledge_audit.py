@@ -35,9 +35,11 @@ calls no model.
 - ``help`` runs lane HELP's evaluation set
   (``data/fixtures/evaluation/problem_help_eval.json``) through the server's
   turn (``server.run_turn``) with the public tier connected: STT, TTS and the
-  supplemental model (possible causes, paraphrase) are fakes. It records
-  which public pieces were attached to each help and whether any spoken
-  public sentence breaks ``answer_checks.public_reference_violations``.
+  supplemental model (possible causes) are fakes. It records the problem's
+  public query (lane KNOW2), which public pieces cleared the relevance floor
+  and were attached to each help, whether the one spoken public sentence
+  breaks ``answer_checks.public_reference_violations`` and whether any
+  sentence of an attached piece was said aloud.
   The starter-pack protocols come from a protocol catalog folder
   (``--protocol-data-dir``, use a copy: opening a catalog may write to it);
   the in-gel rows need the licensed in-gel PDF (condition A).
@@ -97,12 +99,16 @@ from voiney_lab.public_knowledge import (
     INDEX_SETTING,
     MOSS_PROJECT_ID_SETTING,
     MOSS_PROJECT_KEY_SETTING,
+    PUBLIC_TIER,
     FoundDocument,
     Glossary,
     MossSdkClient,
+    ProblemQuery,
     PublicKnowledgeSettings,
     PublicKnowledgeSource,
     default_glossary_path,
+    default_words_path,
+    load_glossary,
     start_public_knowledge,
 )
 
@@ -110,6 +116,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIPELINE_SCRIPT = ROOT / "scripts" / "public_knowledge_pipeline.py"
 COVERAGE_FILE = ROOT / "data" / "fixtures" / "evaluation" / "public_knowledge_coverage.json"
 HELP_SET_FILE = ROOT / "data" / "fixtures" / "evaluation" / "problem_help_eval.json"
+#: Lane KNOW2's materials cases on its fictional coin cell protocol (rule 10).
+MATERIALS_CASES_FILE = ROOT / "tests" / "lane_know2_help_cases.json"
 STARTER_PACK_FILE = ROOT / "scripts" / "pilot_starter_pack.csv"
 IN_GEL_FIXTURE_DIR = ROOT / "data" / "fixtures" / "development_protocols"
 IN_GEL_PDF = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
@@ -261,6 +269,62 @@ class BundleSearchClient:
         self._index = None
 
 
+class HybridBundleClient:
+    """The bundle searched as a ``custom`` Moss index would be (lane KNOW2), offline.
+
+    Vector side: the pieces' cached vectors of the pinned model
+    (``public_knowledge_pipeline.py embed``) against the query's vector;
+    keyword side: SQLite FTS5 over the same searched text; the two ranked
+    lists, each ``2 * top_k`` deep as Moss's ``candidate_depth`` default,
+    fused by reciprocal rank (k = 60) with ``alpha`` on the vector side, as
+    Moss describes its hybrid. A hit's score is its cosine similarity (0 to 1),
+    the vector side's, as Moss's is. An approximation of Moss, not Moss.
+    """
+
+    RRF_K = 60
+
+    def __init__(self, records: Sequence[Mapping[str, Any]], glossary: Glossary, model: Any, runtime_dir: Path) -> None:
+        import numpy as np  # noqa: PLC0415
+
+        documents = pipeline.documents_for(records, glossary, embedding=model.key)
+        self._np = np
+        self._documents = {doc["id"]: doc for doc in documents}
+        self._ids = [doc["id"] for doc in documents]
+        self._vectors = pipeline.EmbeddingCache(runtime_dir, model).vectors_for([doc["text"] for doc in documents])
+        self._index: Any = None
+        self.queries: list[str] = []
+
+    async def load(self, index_name: str) -> None:
+        self._index = pipeline.Fts5Baseline(list(self._documents.values()))
+
+    async def index_model(self, index_name: str) -> str:
+        return "custom"
+
+    async def query(self, index_name: str, text: str, *, top_k: int, alpha: float,
+                    embedding: Sequence[float] | None = None) -> list[FoundDocument]:
+        np = self._np
+        self.queries.append(text)
+        depth = max(2 * top_k, top_k)
+        cosine = self._vectors @ np.asarray(embedding, dtype=np.float32) if embedding is not None else None
+        by_vector = [self._ids[i] for i in np.argsort(-cosine)[:depth]] if cosine is not None else []
+        by_keyword = self._index.search(text, top_k=depth) if (self._index is not None and text.strip()) else []
+        fused: dict[str, float] = {}
+        for rank, doc_id in enumerate(by_vector, 1):
+            fused[doc_id] = fused.get(doc_id, 0.0) + alpha / (self.RRF_K + rank)
+        for rank, doc_id in enumerate(by_keyword, 1):
+            fused[doc_id] = fused.get(doc_id, 0.0) + (1 - alpha) / (self.RRF_K + rank)
+        where = {doc_id: index for index, doc_id in enumerate(self._ids)}
+        found: list[FoundDocument] = []
+        for doc_id in sorted(fused, key=lambda key: -fused[key])[:top_k]:
+            doc = self._documents[doc_id]
+            score = float(max(0.0, min(1.0, cosine[where[doc_id]]))) if cosine is not None else 0.0
+            found.append(FoundDocument(id=doc_id, text=doc["text"], metadata=dict(doc["metadata"]), score=round(score, 4)))
+        return found
+
+    async def close(self) -> None:
+        self._index = None
+
+
 def _server_values(env_file: str | None, names: Sequence[str]) -> dict[str, str]:
     """``names`` in the server's order: the process environment, else the dotenv file.
 
@@ -327,8 +391,10 @@ class OpenedSource:
 async def open_source(
     backend: str, bundle: Bundle, *, env_file: str | None = None, cache_dir: str | None = None,
     index_name: str | None = None, glossary_path: Path | None = None, client_factory: Any = None,
+    embedding: str | None = None, models_dir: str | None = None,
 ) -> OpenedSource:
-    """The public tier as the server builds it, around Moss or the offline FTS5 client."""
+    """The public tier as the server builds it, around Moss, the offline FTS5
+    client or the offline hybrid (``local``: a custom index's approximation)."""
 
     before = pipeline.rss_mib()
     started = time.perf_counter()
@@ -344,12 +410,30 @@ async def open_source(
         loads = 1
     elif backend == "fts5":
         settings = PublicKnowledgeSettings(enabled=True, index_name="offline-fts5")
-        glossary = Glossary.load(glossary_path or default_glossary_path())
+        # The server's glossary: Wikidata's names and the hand-written list (lane KNOW2).
+        glossary = load_glossary(glossary_path or default_glossary_path(), default_words_path())
         source = PublicKnowledgeSource(settings, BundleSearchClient(bundle.records, bundle.glossary), glossary=glossary)
         await source.load()
         loads = 0
+    elif backend == "local":
+        from voiney_lab.public_knowledge import (  # noqa: PLC0415
+            EMBEDDING_MODELS,
+            LocalEmbedder,
+            ensure_model_files,
+            model_directory,
+        )
+
+        model = EMBEDDING_MODELS[embedding or "multilingual-e5-small"]
+        settings = PublicKnowledgeSettings(enabled=True, index_name="offline-hybrid")
+        glossary = load_glossary(glossary_path or default_glossary_path(), default_words_path())
+        paths = ensure_model_files(model, Path(models_dir) if models_dir else model_directory(bundle.runtime_dir, model))
+        source = PublicKnowledgeSource(
+            settings, HybridBundleClient(bundle.records, bundle.glossary, model, bundle.runtime_dir),
+            glossary=glossary, embedder=LocalEmbedder(model, paths, threads=2))
+        await source.load()
+        loads = 0
     else:
-        raise SystemExit(f"unknown backend {backend!r} (fts5 or moss)")
+        raise SystemExit(f"unknown backend {backend!r} (fts5, local or moss)")
     return OpenedSource(source=source, backend=backend, load_seconds=round(time.perf_counter() - started, 1),
                         rss_before_mib=before, rss_after_load_mib=pipeline.rss_mib(), moss_loads=loads)
 
@@ -894,11 +978,16 @@ def summary_markdown(result: Mapping[str, Any]) -> str:
 
 
 class RecordingSource:
-    """The public tier with what each search returned kept for the report."""
+    """The public tier with what each search returned kept for the report.
+
+    The server asks the tier about a problem through ``for_problem`` (lane
+    KNOW2); that search is recorded too, with the problem's query.
+    """
 
     def __init__(self, source: PublicKnowledgeSource) -> None:
         self.tier = source.tier
         self._source = source
+        self.glossary = source.glossary
         self.calls: list[dict[str, Any]] = []
 
     async def search(self, query: str, *, limit: int, context: KnowledgeContext) -> list[KnowledgeHit]:
@@ -906,6 +995,25 @@ class RecordingSource:
         hits = await self._source.search(query, limit=limit, context=context)
         self.calls.append({"query": query, "limit": limit, "ms": round((time.perf_counter() - started) * 1000, 1),
                            "hits": hits})
+        return hits
+
+    def for_problem(self, query: ProblemQuery) -> "_RecordingProblem":
+        return _RecordingProblem(self, query)
+
+
+class _RecordingProblem:
+    tier = PUBLIC_TIER
+
+    def __init__(self, recording: RecordingSource, query: ProblemQuery) -> None:
+        self._recording = recording
+        self._query = query
+
+    async def search(self, query: str, *, limit: int, context: KnowledgeContext) -> list[KnowledgeHit]:
+        started = time.perf_counter()
+        hits = await self._recording._source.search_problem(self._query, limit=limit)
+        self._recording.calls.append({
+            "query": self._query.text, "problem": list(self._query.problem), "subjects": list(self._query.subjects),
+            "limit": limit, "ms": round((time.perf_counter() - started) * 1000, 1), "hits": hits})
         return hits
 
 
@@ -944,6 +1052,13 @@ def _help_environment(protocol_data_dir: Path) -> None:
 
 
 def _load_help_fixture(server: Any, name: str, protocol_ids: Mapping[str, str]) -> Any:
+    if name == "coin_cell_fictional":
+        # Lane KNOW2's fictional materials protocol (rule 10's materials/battery check).
+        spec = importlib.util.spec_from_file_location("lane_know2_support", ROOT / "tests" / "lane_know2_support.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module.coin_cell_fixture()
     if name == "in_gel":
         from voiney_lab.curated_protocol import load_curated_protocol_fixture  # noqa: PLC0415
 
@@ -953,6 +1068,8 @@ def _load_help_fixture(server: Any, name: str, protocol_ids: Mapping[str, str]) 
             IN_GEL_PDF)
     catalog, store = server._open_protocol_catalog()
     try:
+        # What the server does at its start (a copied catalog may not have it yet).
+        catalog.prepare_source_metadata()
         fixture = catalog.load_executable_fixture(protocol_ids[name])
     finally:
         store.close()
@@ -971,7 +1088,11 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
     from voiney_lab.answer_checks import public_reference_violations  # noqa: PLC0415
     from voiney_lab.curated_protocol import CuratedProtocolSession  # noqa: PLC0415
     from voiney_lab.experiment_reports import ExperimentReportStore  # noqa: PLC0415
-    from voiney_lab.external_references import SupplementalKnowledgeSettings, public_reference_part  # noqa: PLC0415
+    from voiney_lab.external_references import (  # noqa: PLC0415
+        PUBLIC_SPOKEN,
+        SupplementalKnowledgeSettings,
+        public_reference_part,
+    )
     from voiney_lab.language import Transcription  # noqa: PLC0415
     from voiney_lab.public_knowledge import PUBLIC_LABEL  # noqa: PLC0415
     from voiney_lab.tools import ToolContext  # noqa: PLC0415
@@ -1020,10 +1141,6 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
             async def explain_possible_causes(self, problem: str, **kwargs: Any) -> dict[str, Any]:
                 return {"status": "success", "answer": FAKE_CAUSES, "backend": "supplemental_possible_causes"}
 
-        async def paraphrase(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            # The model's sentence is not measured here: the server's own form is said.
-            return {"status": "provider_error"}
-
         def synthesize(text: str, *args: Any, **kwargs: Any) -> bytes:
             spoken.append(text)
             return b"\0\0" * 1600
@@ -1042,7 +1159,6 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
             with patch("voiney_lab.server.transcribe", return_value=Transcription(str(case["utterance"]), language)), \
                     patch("voiney_lab.server.synthesize", side_effect=synthesize), \
                     patch("voiney_lab.server.XaiSupplementalKnowledge", Explainer), \
-                    patch("voiney_lab.server.paraphrase_public_reference", side_effect=paraphrase), \
                     patch("voiney_lab.server._role_client", return_value=SimpleNamespace()), \
                     patch.dict("os.environ", {"VOINEY_LAB_SUPPLEMENTAL_PROVIDER": "xai",
                                               "VOINEY_LAB_SUPPLEMENTAL_MODEL": "offline-supplement"}):
@@ -1054,11 +1170,14 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
         calls = public.calls[calls_before:]
         hits = list(calls[-1]["hits"]) if calls else []
         part = public_reference_part(hits, language=language)
-        shown = [hit for hit in hits if hit.detail("shares")][:2]
+        shown = [hit for hit in hits if hit.detail("relevant")][:2]
         said = " ".join(spoken)
-        sentence = _spoken_fact(part, language) if part else ""
-        # The server reads a piece's sentence only when it passes the rule; checked again here.
-        violations = list(public_reference_violations(sentence, evidence=part.first_text)) if sentence else []
+        # Lane KNOW2: only PUBLIC_SPOKEN may be said of public material; it is
+        # checked by decision 6's rule, and no sentence of an attached piece may be said.
+        public_said = PUBLIC_SPOKEN.get(language, PUBLIC_SPOKEN["ko"])
+        evidence = "\n".join(hit.text for hit in shown)
+        violations = list(public_reference_violations(public_said, evidence=evidence)) if part else []
+        read_aloud = any(sentence in said for hit in shown for sentence in _sentences(hit.text) if len(sentence) >= 15)
         return {
             "id": case["id"], "set": case.get("set", ""), "protocol": case["protocol"], "step": step,
             "utterance": case["utterance"], "expect_help": bool(case["expect_help"]),
@@ -1066,38 +1185,43 @@ async def _help_case(server: Any, case: Mapping[str, Any], fixture: Any, public:
                                                           "To change a condition, check with the person in charge first.")),
             "searched": bool(calls), "search_ms": calls[-1]["ms"] if calls else None,
             "public_found": len(hits), "public_shown": len(shown) if PUBLIC_LABEL in reply else 0,
-            "public_in_reply": PUBLIC_LABEL in reply, "public_said": PUBLIC_LABEL in said,
-            "pieces": [{"source_id": hit.detail("source_id"), "grade": hit.detail("grade"), "title": hit.title,
-                        "locator": hit.locator, "shares": hit.detail("shares"), "text": hit.text[:240]} for hit in shown],
+            "public_in_reply": PUBLIC_LABEL in reply, "public_said": public_said in said,
+            "query": calls[-1]["query"] if calls else "",
+            "problem": calls[-1].get("problem", []) if calls else [],
+            "subjects": calls[-1].get("subjects", []) if calls else [],
+            "pieces": [{"id": hit.detail("doc_id"), "source_id": hit.detail("source_id"), "grade": hit.detail("grade"),
+                        "title": hit.title, "locator": hit.locator, "score": _score(hit),
+                        "problem_shares": hit.detail("problem_shares"), "subject_shares": hit.detail("subject_shares"),
+                        "effect_word": hit.detail("effect_word"), "text": hit.text[:240]} for hit in shown],
             "hits": [{"rank": index, "id": hit.detail("doc_id"), "score": _score(hit), "source_id": hit.detail("source_id"),
-                      "grade": hit.detail("grade"), "title": hit.title, "shares": hit.detail("shares")}
+                      "grade": hit.detail("grade"), "title": hit.title, "problem_shares": hit.detail("problem_shares"),
+                      "subject_shares": hit.detail("subject_shares"), "effect_word": hit.detail("effect_word"),
+                      "relevant": hit.detail("relevant")}
                      for index, hit in enumerate(hits, 1)],
             "spoken_public": part.spoken if part else "",
-            "spoken_kind": ("fact" if sentence else "pointer") if part else "",
+            "piece_read_aloud": read_aloud,
             "public_rule_violations": violations,
             "help_dropped": dropped,
         }
 
 
-def _spoken_fact(part: Any, language: str) -> str:
-    """The piece's sentence in the spoken public form ("<표시>: <문장>"), or "" when it points to the screen."""
+def _sentences(text: str) -> list[str]:
+    """A piece's sentences, whitespace collapsed (to find one said aloud)."""
 
-    from voiney_lab.external_references import PUBLIC_WIKI_ONLY  # noqa: PLC0415
-    from voiney_lab.public_knowledge import public_reference_label  # noqa: PLC0415
-
-    head = f"{public_reference_label(part.first_source_name)}: "
-    if not part.spoken.startswith(head):
-        return ""
-    sentence = part.spoken[len(head):]
-    note = PUBLIC_WIKI_ONLY.get(language if language in PUBLIC_WIKI_ONLY else "ko", "")
-    return sentence[: -len(note)].strip() if note and sentence.endswith(note) else sentence.strip()
+    return [part.strip() for part in re.split(r"(?<=[.!?。])\s+|\n+", " ".join(text.split())) if part.strip()]
 
 
 async def help_run(
     source: PublicKnowledgeSource, *, protocol_data_dir: Path, cases_file: Path = HELP_SET_FILE,
-    only_protocols: set[str] | None = None,
+    only_protocols: set[str] | None = None, extra_cases: Sequence[Path] = (MATERIALS_CASES_FILE,),
 ) -> dict[str, Any]:
-    """Lane HELP's set through the server's turn with the public tier on (offline fakes elsewhere)."""
+    """Lane HELP's set through the server's turn with the public tier on (offline fakes elsewhere).
+
+    ``extra_cases`` follow lane HELP's own set (lane KNOW2's materials cases
+    on a fictional coin cell protocol, for rule 10); ``by_set`` counts each
+    set apart, and the top-level numbers are lane HELP's set's alone, so they
+    stay comparable with lane KAUDIT's.
+    """
 
     _help_environment(protocol_data_dir)
     from voiney_lab import server  # noqa: PLC0415
@@ -1106,6 +1230,9 @@ async def help_run(
         os.environ.pop(name, None)
     protocol_ids = starter_pack_protocol_ids(protocol_data_dir)
     cases = json.loads(Path(cases_file).read_text(encoding="utf-8"))["cases"]
+    for extra in (extra_cases if Path(cases_file).resolve() == HELP_SET_FILE.resolve() else ()):
+        if Path(extra).is_file():
+            cases += json.loads(Path(extra).read_text(encoding="utf-8"))["cases"]
     public = RecordingSource(source)
     fixtures: dict[str, Any] = {}
     rows: list[dict[str, Any]] = []
@@ -1117,15 +1244,25 @@ async def help_run(
         if name == "in_gel" and not IN_GEL_PDF.is_file():
             skipped["in_gel_pdf_missing"] += 1
             continue
-        if name != "in_gel" and name not in protocol_ids:
+        if name not in ("in_gel", "coin_cell_fictional") and name not in protocol_ids:
             skipped[f"{name}_not_in_catalog"] += 1
             continue
         if name not in fixtures:
             fixtures[name] = _load_help_fixture(server, name, protocol_ids)
         rows.append(await _help_case(server, case, fixtures[name], public))
-    helped = [row for row in rows if row["expect_help"]]
+    extra_rows = [row for row in rows if row["set"] == "materials"]
+    rows_of_help_set = [row for row in rows if row["set"] != "materials"]
+    helped = [row for row in rows_of_help_set if row["expect_help"]]
     latencies = [row["search_ms"] for row in rows if row["search_ms"] is not None]
+    by_set: dict[str, dict[str, int]] = {}
+    for row in rows:
+        counts = by_set.setdefault(row["set"] or "-", {"cases": 0, "searched": 0, "public_attached": 0})
+        counts["cases"] += 1
+        counts["searched"] += bool(row["searched"])
+        counts["public_attached"] += bool(row["public_in_reply"])
     return {
+        "by_set": by_set,
+        "materials_rows": len(extra_rows),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "index": source.settings.index_name, "alpha": source.settings.alpha,
         "cases": len(rows), "skipped": dict(skipped), "help_cases": len(helped),
@@ -1133,9 +1270,9 @@ async def help_run(
         "searched": sum(1 for row in helped if row["searched"]),
         "public_attached": sum(1 for row in helped if row["public_in_reply"]),
         "public_attached_share": round(sum(1 for row in helped if row["public_in_reply"]) / len(helped), 3) if helped else None,
-        "not_help_with_public": sum(1 for row in rows if not row["expect_help"] and row["public_in_reply"]),
-        "spoken_fact": sum(1 for row in helped if row["public_in_reply"] and row["spoken_kind"] == "fact"),
-        "spoken_pointer": sum(1 for row in helped if row["public_in_reply"] and row["spoken_kind"] == "pointer"),
+        "not_help_with_public": sum(1 for row in rows_of_help_set if not row["expect_help"] and row["public_in_reply"]),
+        "public_said": sum(1 for row in helped if row["public_said"]),
+        "piece_read_aloud": sum(1 for row in rows if row["piece_read_aloud"]),
         "public_rule_violations": sum(1 for row in rows if row["public_rule_violations"]),
         "help_dropped": sum(1 for row in rows if row["help_dropped"]),
         "search_ms_p50": round(statistics.median(latencies), 1) if latencies else None,
@@ -1148,13 +1285,13 @@ def help_markdown(result: Mapping[str, Any], judgements: Mapping[str, Mapping[st
     """The table a person reads: each help row, the public pieces attached, and a judgement column."""
 
     judgements = judgements or {}
-    lines = ["| id | 프로토콜 | 단계 | 말 | 붙은 공개 조각 (출처 · 제목 · 겹친 낱말) | 판단 | 근거 |",
+    lines = ["| id | 프로토콜 | 단계 | 말 | 붙은 공개 조각 (출처 · 제목 · 겹친 문제 낱말 + 이름) | 판단 | 근거 |",
              "|---|---|---|---|---|---|---|"]
     for row in result["rows"]:
         if not row["expect_help"]:
             continue
-        pieces = "<br>".join(f"{p['source_id']}({p['grade']}) · {p['title']} · “{p['shares']}”" for p in row["pieces"]) \
-            if row["public_in_reply"] else "—"
+        pieces = "<br>".join(f"{p['source_id']}({p['grade']}) · {p['title']} · “{p['problem_shares']}” + “{p['subject_shares']}”"
+                             for p in row["pieces"]) if row["public_in_reply"] else "—"
         judged = judgements.get(row["id"], {})
         lines.append(f"| {row['id']} | {row['protocol']} | {row['step']} | {row['utterance']} | {pieces} | "
                      f"{judged.get('verdict', '')} | {judged.get('reason', '')} |")
@@ -1351,8 +1488,11 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     def backend_options(command: argparse.ArgumentParser) -> None:
-        command.add_argument("--backend", choices=("fts5", "moss"), required=True,
-                             help="moss: 서버의 색인을 한 번 불러와 프로세스 안에서 질의 / fts5: 묶음의 FTS5 (오프라인)")
+        command.add_argument("--backend", choices=("fts5", "local", "moss"), required=True,
+                             help="moss: 서버의 색인을 한 번 불러와 프로세스 안에서 질의 / fts5: 묶음의 FTS5 (오프라인) / "
+                                  "local: 묶음 벡터(embed)와 FTS5 를 Moss 처럼 섞은 오프라인 어림 (custom 색인)")
+        command.add_argument("--embedding", help="local 의 임베딩 모델 (기본 multilingual-e5-small)")
+        command.add_argument("--models-dir", help="local 의 모델 파일 폴더 (기본 <runtime-dir>/models/<모델>)")
         command.add_argument("--index", help="Moss 색인 이름 (기본: 서버 설정, 없으면 voiney-public-knowledge)")
         command.add_argument("--env-file", help="MOSS_PROJECT_ID·MOSS_PROJECT_KEY 만 읽을 dotenv 파일 (값은 출력하지 않음)")
         command.add_argument("--cache-dir", help="Moss 색인 디스크 캐시 폴더")
@@ -1402,7 +1542,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _with_source(args: argparse.Namespace, bundle: Bundle, job: Any) -> tuple[Any, OpenedSource]:
-    opened = await open_source(args.backend, bundle, env_file=args.env_file, cache_dir=args.cache_dir, index_name=args.index)
+    opened = await open_source(args.backend, bundle, env_file=args.env_file, cache_dir=args.cache_dir, index_name=args.index,
+                               embedding=args.embedding, models_dir=args.models_dir)
     try:
         return await job(opened.source), opened
     finally:

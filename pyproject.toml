@@ -58,6 +58,16 @@ dependencies = [
   # product that competes with Moss; the notice must travel with copies).
   # Imported only inside voiney_lab.public_knowledge when the tier is on.
   "moss==1.15.1",
+  # The public tier's multilingual embeddings (lane KNOW2, person's decision
+  # 2026-10-26, 5): a pinned int8 ONNX model (intfloat/multilingual-e5-small,
+  # MIT) run in process on the CPU, for the custom index's pieces and every
+  # query. onnxruntime 1.31.0 (MIT, released 2026-10-09), sentencepiece 0.2.2
+  # (Apache-2.0, 2026-07-12), numpy 2.5.4 (BSD-3-Clause, 2026-10-10), each more
+  # than two weeks before the pin. Imported only when a custom index loads
+  # (voiney_lab.public_knowledge.LocalEmbedder) and by the pipeline's embed.
+  "onnxruntime==1.31.0",
+  "sentencepiece==0.2.2",
+  "numpy==2.5.4",
 ]
 
 [project.scripts]

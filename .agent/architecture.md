@@ -458,8 +458,12 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `server._start_public_knowledge` and queried in process. A Korean
   question is joined by the English names of its words
   (`data/public_knowledge/glossary.json`, Wikidata labels, CC0) before the
-  query. Hits come best source grade first (A public institution /
-  peer-reviewed, B open textbook, C wiki) with source, licence and address;
+  query; with a `custom` index (lane KNOW2) every query also carries its
+  vector from one pinned multilingual model run in process
+  (`public_knowledge.LocalEmbedder`, the index's pieces made with the same
+  model by the pipeline). Hits come by the index's score, a better source grade (A public
+  institution / peer-reviewed, B open textbook, C wiki) first only where
+  scores are close (lane KNOW2), with source, licence and address;
   what may be said from them is `answer_checks.public_reference_violations`
   (only the piece's numbers, a fact not an instruction, no "continue", no
   value against the source's, the "공개 자료 · 일반 참고 — <출처>" mark added
@@ -471,15 +475,18 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `app.state.public_knowledge`; `_with_problem_help` composes the protocol
   and history hits with `compose_problem_help` and appends the public ones
   through `_with_public_reference` / `external_references.public_reference_part`
-  -- only pieces sharing a word with the problem (the tier marks each hit
-  with `shared_term` of the glossary's terms and the problem's own Latin
-  words; the index always returns its nearest pieces) -- (the mark, title and place, the piece's words, address and licence on the
-  screen; said, the mark and a short same-language fact or where to see it;
-  every line naming the source is quoted, so `problem_help_violations` judges
-  only the fixed sentences). With the supplemental role on, the spoken form
-  waits for ③, where `_queue_problem_causes` runs `paraphrase_public_reference`
-  beside the possible causes and says the checked paraphrase, or the fixed
-  form when it is late or refused, before them and ④.
+  -- since lane KNOW2 (person's decision 2026-10-26) the tier is asked with
+  the problem's query (`public_knowledge.problem_query`: what went wrong and
+  the names it is about -- what the person named, else the reagents and
+  devices the current step names -- not the sentence; nothing to look for,
+  not asked) and a piece is attached only over the relevance floor
+  (`problem_relevance`: a name and a word of what went wrong in one
+  sentence, a word of a cause, an effect or a hazard, and the index's score
+  at least `SCORE_FLOOR`) -- (the mark,
+  title and place, the piece's words, address and licence on the screen;
+  said, only "공개 자료에 관련 내용이 있어요"; no piece is read or
+  paraphrased; every line naming the source is quoted, so
+  `problem_help_violations` judges only the fixed sentences).
 - Model roles (`model_providers.ROLES`): `router`, `answer`, `translation`,
   `analysis`, `report`, `supplemental`, each with a provider (`xai`,
   `anthropic`, `openai`, `google`), model and reasoning level and no default.

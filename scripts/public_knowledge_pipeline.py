@@ -74,11 +74,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from voiney_lab.public_knowledge import (  # noqa: E402
+    EMBEDDING_MODELS,
     GRADES,
     METADATA_FIELDS,
+    EmbeddingModel,
     Glossary,
+    LocalEmbedder,
     default_glossary_path,
+    default_words_path,
+    ensure_model_files,
     index_text_for,
+    model_directory,
 )
 
 SOURCES_FILE = ROOT / "data" / "public_knowledge" / "sources.toml"
@@ -292,6 +298,20 @@ def _mediawiki_lagged(reply: "Response") -> bool:
     return reply.status == 200 and body.lstrip().startswith(b'{"error"') and b'"maxlag"' in body
 
 
+class OfflineHttp:
+    """No request at all (``collect --offline``): the bundle is rebuilt from the
+    raw cache, so a parser change is measured on the same material."""
+
+    user_agent = ""
+
+    def __init__(self) -> None:
+        self.requests_made = 0
+        self.requests_by_host: Counter[str] = Counter()
+
+    def get(self, url: str, **kwargs: Any) -> "Response":
+        raise FetchError("offline: no request is made")
+
+
 class Http:
     """GETs for one run: one agent, a pace per source, retries, a robots gate.
 
@@ -421,9 +441,11 @@ class Http:
 class RawStore:
     """What a source's requests returned, by key, with the headers that make
     the next request conditional. ``meta.json`` beside the files is the state
-    of this source: fetched dates, ETags, revision ids and resolved ids."""
+    of this source: fetched dates, ETags, revision ids and resolved ids.
+    ``offline`` answers from the cache alone (``collect --offline``)."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, offline: bool = False) -> None:
+        self.offline = offline
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
         self._meta_path = directory / "meta.json"
@@ -457,6 +479,10 @@ class RawStore:
         if not item:
             return None
         path = Path(item["path"])
+        if not path.is_file():
+            # A cache that moved (lane KNOW's was written in its worktree):
+            # the file is beside this meta.json under the same name.
+            path = self.directory / path.name
         return path.read_bytes() if path.is_file() else None
 
     def fetch(
@@ -480,6 +506,10 @@ class RawStore:
 
         item = self.item(key)
         cached = self.read(key)
+        if self.offline:
+            if cached is None:
+                raise FetchError(f"offline: {key} is not in the raw cache")
+            return cached, False
         if cached is not None and item and not full:
             if refresh_days is not None:
                 fetched = item.get("fetched_at", "")
@@ -623,6 +653,75 @@ def chunk_text(text: str, *, max_chars: int = CHUNK_MAX_CHARS, min_chars: int = 
     return chunks
 
 
+#: What a piece that reads as no running text looks like (person's decision
+#: 2026-10-26, 3: lane KAUDIT read 200 random pieces and found 13% broken --
+#: tables run together, book indexes, reference lists, exercises, formula
+#: markup). Such a piece is left out and the reason counted in the manifest.
+_MARKUP = re.compile(r"\\displaystyle|\\(?:frac|mathrm|ce|left|right|sum|int)\b|\{\\")
+_CITATION = re.compile(r"\b(?:19|20)\d{2}\s?;\s?\d+(?:\s?\([\w\s-]+\))?\s?:\s?[eE]?\d+")
+_EXERCISE = re.compile(
+    r"(?:^|\s)\d{1,3}\.\s+(?:What|Which|Write|Determine|Calculate|Explain|Describe|Give|How|Why|Predict|Identify"
+    r"|Draw|Compare|Classify|Complete|Balance|Indicate)\b")
+_INDEX_ENTRY = re.compile(r"[A-Za-z][^,.;:\d]{1,60},\s\d{1,4}(?=[\s,]|$)")
+_RUNNING_SENTENCE = re.compile(r"[a-z]{3,}[.!?](?:\s|$)")
+_NUMBER_TOKEN = re.compile(r"^[-–−+±]?\(?[\d.,×]+\)?[%°]?$")
+
+
+def broken_reason(text: str) -> str | None:
+    """Why a piece is no running text ("table", "index", "references",
+    "exercises", "markup"), or None when it reads as text."""
+
+    if _MARKUP.search(text):
+        return "markup"
+    if len(_CITATION.findall(text)) >= 2:
+        return "references"
+    exercises = len(_EXERCISE.findall(text))
+    if exercises >= 3 or (exercises >= 2 and "?" in text):
+        return "exercises"
+    sentences = len(_RUNNING_SENTENCE.findall(text))
+    tokens = text.split()
+    numbers = sum(1 for token in tokens if _NUMBER_TOKEN.match(token)) / max(1, len(tokens))
+    if len(_INDEX_ENTRY.findall(text)) >= 5 and sentences <= 1 and numbers >= 0.2:
+        return "index"
+    if len(tokens) >= 12 and numbers >= 0.4 and sentences <= 1:
+        return "table"
+    return None
+
+
+def _without_braces(text: str, start: int) -> int:
+    """The end of the balanced ``{…}`` that opens at ``start``."""
+
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+_STYLE_BLOCK = re.compile(r"\{\\(?:display|text|script)style")
+
+
+def clean_wiki_text(text: str) -> str:
+    """A Wikipedia section without its formula markup ({\\displaystyle …}) and
+    the lines of a letter or two a formula leaves (lane KAUDIT's H46)."""
+
+    out: list[str] = []
+    index = 0
+    while True:
+        match = _STYLE_BLOCK.search(text, index)
+        if match is None:
+            out.append(text[index:])
+            break
+        out.append(text[index:match.start()])
+        index = _without_braces(text, match.start())
+    lines = [re.sub(r"[ \t]{2,}", " ", line).strip() for line in "".join(out).split("\n")]
+    return "\n".join(line for line in lines if len(line.replace(" ", "")) > 3 or not line)
+
+
 def chunk_id(source_id: str, locator: str, text: str) -> str:
     digest = hashlib.sha1(f"{source_id}\x1f{locator}\x1f{text}".encode("utf-8")).hexdigest()
     return f"{source_id}:{digest[:16]}"
@@ -747,13 +846,15 @@ class RunContext:
     runtime_dir: Path
     report: RunReport
     full: bool = False
+    offline: bool = False
+    previous_domains: dict[tuple[str, str], str] = field(default_factory=dict)
     glossary_terms: dict[str, set[str]] = field(default_factory=dict)
     glossary_aliases: dict[str, set[str]] = field(default_factory=dict)
     sitelinks: dict[str, dict[str, str]] = field(default_factory=dict)
     pdf_text: Callable[[bytes], list[str]] | None = None
 
     def raw(self, source: Source) -> RawStore:
-        return RawStore(self.runtime_dir / "raw" / source.id)
+        return RawStore(self.runtime_dir / "raw" / source.id, offline=self.offline)
 
     def data_file(self, name: str) -> Path:
         return self.sources.directory / name
@@ -916,12 +1017,62 @@ def _join_pdf_lines(text: str) -> str:
     return "\n".join(out)
 
 
+_CHAPTER_FOOTER = re.compile(r"Chapter (\d+) \| ")
+
+
+def _book_page(source: Source, page_text: str, state: dict[str, Any]) -> str | None:
+    """A textbook page's running text, or None when the page is left out
+    (person's decision 2026-10-26, 3; options of the source):
+
+    - ``skip_chapters``: chapters outside the wet lab, by the page's running
+      footer ("Chapter 32 | Plant Reproduction"; a page without one keeps the
+      chapter before it);
+    - ``end_matter``: the headings a chapter's end matter starts with ("Key
+      Terms"): from the heading to the chapter's end;
+    - ``stop_at``: a pattern of a page's first line ("Appendix A") from which
+      every page is left out (appendices, answer key, index);
+    - ``page_furniture``: patterns of whole lines taken out (running footers).
+    """
+
+    if state.get("stopped"):
+        return None
+    stop_at = source.option("stop_at")
+    first = next((line.strip() for line in page_text.split("\n") if line.strip()), "")
+    if stop_at and re.search(stop_at, first):
+        state["stopped"] = True
+        return None
+    chapters = [int(found.group(1)) for found in _CHAPTER_FOOTER.finditer(page_text)]
+    if chapters and chapters[-1] != state.get("chapter"):
+        state["chapter"], state["end_matter"] = chapters[-1], False
+    if state.get("end_matter") or state.get("chapter") in set(source.option("skip_chapters", []) or []):
+        return None
+    furniture = [re.compile(pattern) for pattern in source.option("page_furniture", []) or []]
+    headings = {heading.strip() for heading in source.option("end_matter", []) or []}
+    kept: list[str] = []
+    for line in page_text.split("\n"):
+        stripped = line.strip()
+        if stripped in headings:
+            state["end_matter"] = True
+            break
+        if any(pattern.search(stripped) for pattern in furniture):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def pdf_pieces(source: Source, pages: Sequence[str], *, url: str, fetched_at: str) -> Iterator[Piece]:
     skip_before = int(source.option("skip_pages_before", 1) or 1)
+    last = int(source.option("skip_pages_after", 0) or 0)  # the last page taken (0: to the end)
+    book: dict[str, Any] = {}
     for number, page_text in enumerate(pages, 1):
         if number < skip_before:
             continue
-        text = _join_pdf_lines(page_text)
+        if last and number > last:
+            break
+        running = _book_page(source, page_text, book)
+        if running is None:
+            continue
+        text = _join_pdf_lines(running)
         if len(text) < 200 or looks_like_reference_page(text):
             continue
         yield Piece(
@@ -1172,7 +1323,10 @@ def handle_pubchem(source: Source, ctx: RunContext) -> Iterator[Piece]:
         if explicit:
             cids[name] = explicit
     unresolved = [(name, title) for name, explicit, title in compounds if not explicit and not cids.get(name)]
-    if unresolved:
+    if unresolved and ctx.offline:
+        for name, _title in unresolved:
+            ctx.report.fail(source.id, name, "offline: no CID in the raw cache")
+    elif unresolved:
         by_title = resolve_cids_from_wikidata(source, ctx, [title for _name, title in unresolved])
         lowered = {key.casefold(): value for key, value in by_title.items()}
         for name, title in unresolved:
@@ -1253,10 +1407,29 @@ def wikipedia_info(source: Source, ctx: RunContext, titles: Sequence[str]) -> di
     return found
 
 
+def _cached_wikipedia_info(raw: RawStore, titles: Sequence[str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """``wikipedia_info`` from the raw cache (``--offline``): each cached extract
+    under the title asked for, and the extracts of redirected titles under their
+    own (canonical) title, which the run then reads too."""
+
+    items = raw.meta["items"]
+    revisions = raw.state.get("revisions", {})
+    found: dict[str, dict[str, Any]] = {}
+    for key, item in items.items():
+        if not key.startswith("extract:"):
+            continue
+        title = key.split(":", 1)[1]
+        found[title] = {"title": title, "pageid": None, "lastrevid": revisions.get(title, item.get("revid")),
+                        "fullurl": item.get("url", "")}
+    extra = [title for title in found if title not in set(titles)]
+    return found, extra
+
+
 def wikipedia_pieces(
     extract: str, *, title: str, url: str, revid: Any, language: str, domain: str, fetched_at: str,
 ) -> Iterator[Piece]:
     for name, section in sections_of(extract):
+        section = clean_wiki_text(section)
         if _skipped_section(name) or len(section) < 60:
             continue
         yield Piece(
@@ -1278,7 +1451,14 @@ def handle_wikipedia(source: Source, ctx: RunContext) -> Iterator[Piece]:
                 domains[ko_title] = ctx.sitelinks.get(f"{linked_from}:domains", {}).get(en_title, "")
                 wanted.append(ko_title)
     wanted = list(dict.fromkeys(wanted))
-    info = wikipedia_info(source, ctx, wanted)
+    if ctx.offline:
+        info, extra = _cached_wikipedia_info(raw, wanted)
+        wanted += extra
+        # A redirected title's domain is the one its article had in the last bundle.
+        for title in extra:
+            domains.setdefault(title, ctx.previous_domains.get((source.id, title), ""))
+    else:
+        info = wikipedia_info(source, ctx, wanted)
     revisions = raw.state.setdefault("revisions", {})
     for title in wanted:
         page = info.get(title)
@@ -1323,7 +1503,7 @@ def _collect_korean_redirects(source: Source, ctx: RunContext, raw: RawStore, ti
     """The other spellings a Korean article is reached by ("아세토니트릴" → 아세토나이트릴) join the glossary."""
 
     aliases = raw.state.setdefault("redirect_aliases", {})
-    if title not in aliases or ctx.full:
+    if (title not in aliases or ctx.full) and not ctx.offline:
         url = _api(source.option("api_url"), {
             "action": "query", "prop": "redirects", "rdlimit": 50, "format": "json", "formatversion": 2,
             "maxlag": 5, "titles": title,
@@ -1406,7 +1586,7 @@ _LICENSE_HREF_REFUSED = re.compile(r"/by-nc|/by-nd|/by-nc-nd|/by-nc-sa", re.I)
 _JATS_SKIPPED = {"references", "reference", "acknowledgements", "acknowledgments", "funding",
                  "author contributions", "conflict of interest", "conflicts of interest", "competing interests",
                  "supplementary material", "supplementary materials", "abbreviations", "data availability",
-                 "data availability statement", "ethics", "notes"}
+                 "data availability statement", "ethics"}
 
 
 def _epmc_license_ok(license_text: str) -> bool:
@@ -1469,17 +1649,26 @@ def jats_sections(xml_text: str) -> tuple[dict[str, str], list[tuple[str, str]]]
         if text:
             sections.append(("Abstract", text))
     body = root.find("body")
+
+    def walk(sec: Any, parents: tuple[str, ...]) -> None:
+        # A nested section is named with its parents' titles
+        # ("Materials and methods › Cell culture"), so its kind is known.
+        heading = sec.find("title")
+        name = "".join(heading.itertext()).strip() if heading is not None else ""
+        path = (*parents, name) if name else parents
+        paragraphs = []
+        for child in sec:
+            if child.tag in ("p", "list", "disp-quote", "boxed-text"):
+                paragraphs.append(clean_text(" ".join(child.itertext())))
+        text = "\n\n".join(p for p in paragraphs if p)
+        if text and name.casefold() not in _JATS_SKIPPED:
+            sections.append((" › ".join(path) or "Section", text))
+        for child in sec.findall("sec"):
+            walk(child, path)
+
     if body is not None:
-        for sec in body.iter("sec"):
-            heading = sec.find("title")
-            name = "".join(heading.itertext()).strip() if heading is not None else ""
-            paragraphs = []
-            for child in sec:
-                if child.tag in ("p", "list", "disp-quote", "boxed-text"):
-                    paragraphs.append(clean_text(" ".join(child.itertext())))
-            text = "\n\n".join(p for p in paragraphs if p)
-            if text and name.casefold() not in _JATS_SKIPPED:
-                sections.append((name or "Section", text))
+        for sec in body.findall("sec"):
+            walk(sec, ())
     return facts, sections
 
 
@@ -1502,7 +1691,7 @@ def handle_europepmc(source: Source, ctx: RunContext) -> Iterator[Piece]:
     chosen: list[str] = [str(pmcid) for pmcid in source.option("pmcids", []) or []]
     for query in source.option("queries", []) or []:
         kept = [pmcid for pmcid in selected.get(query, [])]
-        if len(kept) < per_query or ctx.full:
+        if (len(kept) < per_query or ctx.full) and not ctx.offline:
             url = f"{base}search?{urlencode({'query': europepmc_query(query), 'format': 'json', 'resultType': 'core', 'pageSize': per_query * 4})}"
             try:
                 reply = ctx.http.get(url, pace_key=source.id, per_second=source.requests_per_second)
@@ -1540,8 +1729,13 @@ def handle_europepmc(source: Source, ctx: RunContext) -> Iterator[Piece]:
         fetched_at = ((raw.item(key) or {}).get("fetched_at") or today())[:10]
         url = f"https://europepmc.org/article/PMC/{pmcid}"
         where = " ".join(part for part in (facts.get("journal", ""), facts.get("year", "")) if part)
+        # Person's decision 2026-10-26, 3: of an article only the sections
+        # named here (methods, troubleshooting, notes), not its results -- by
+        # the top section's title, so "Results › Materials compared" is not taken.
+        wanted = [word.casefold() for word in source.option("sections", []) or []]
         for name, text in sorted(sections, key=lambda item: _section_order(item[0])):
-            if len(text) < 120:
+            top = name.split(" › ")[0].casefold()
+            if len(text) < 120 or (wanted and not any(word in top for word in wanted)):
                 continue
             yield Piece(
                 title=facts.get("title", "") or pmcid, locator=f"{where} · {name}" if where else name, text=text,
@@ -1589,16 +1783,28 @@ def collect(
     http: Http,
     only: set[str] | None = None,
     full: bool = False,
+    offline: bool = False,
     pdf_text: Callable[[bytes], list[str]] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    """Fetch what changed, rebuild the bundle, write the manifest; returns the manifest."""
+    """Fetch what changed, rebuild the bundle, write the manifest; returns the manifest.
+
+    ``offline`` sends no request: every source is read from the raw cache
+    (what is not cached is a failure), so a parser change is measured on the
+    same material (lane KNOW2)."""
 
     bundle_dir = runtime_dir / "bundle"
     bundle_dir.mkdir(parents=True, exist_ok=True)
     report = RunReport()
     ctx = RunContext(sources=sources, http=http, runtime_dir=runtime_dir, report=report, full=full,
-                     pdf_text=pdf_text)
+                     offline=offline, pdf_text=pdf_text)
+    previous_chunks = bundle_dir / "chunks.jsonl"
+    if offline and previous_chunks.is_file():
+        for line in previous_chunks.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                record = json.loads(line)
+                ctx.previous_domains.setdefault((str(record.get("source_id")), str(record.get("title"))),
+                                                str(record.get("domain", "")))
     previous_glossary = bundle_dir / "glossary.json"
     if previous_glossary.is_file():
         try:
@@ -1615,6 +1821,7 @@ def collect(
     seen_text: dict[str, dict[str, Any]] = {}
     dropped: Counter[str] = Counter()
     capped: Counter[str] = Counter()
+    broken: dict[str, Counter[str]] = {}
     for source in ordered_sources(sources.sources, only):
         started = time.perf_counter()
         count_pieces = 0
@@ -1628,6 +1835,11 @@ def collect(
             for piece in HANDLERS[source.kind](source, ctx):
                 count_pieces += 1
                 for record in records_for(piece, source):
+                    reason = broken_reason(record["text"])
+                    if reason:
+                        # No running text (person's decision 2026-10-26, 3).
+                        broken.setdefault(source.id, Counter())[reason] += 1
+                        continue
                     if cap and per_document[piece.title] >= int(cap):
                         capped[source.id] += 1
                         continue
@@ -1656,6 +1868,7 @@ def collect(
             "name": source.name, "kind": source.kind, "grade": source.grade, "license": source.license,
             "pieces": count_pieces, "chunks": count_chunks, "chars": chars,
             "duplicates_dropped": dropped[source.id], "capped": capped[source.id],
+            "broken_dropped": dict(sorted(broken.get(source.id, Counter()).items())),
             "requests": http.requests_made - requests_before,
             "seconds": round(time.perf_counter() - started, 1),
         })
@@ -1743,29 +1956,131 @@ def read_bundle(runtime_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def load_bundle_glossary(runtime_dir: Path) -> Glossary:
+def load_bundle_glossary(runtime_dir: Path, words_path: Path | None = None) -> Glossary:
+    """The bundle's Wikidata glossary joined by the hand-written list (lane KNOW2):
+    its Korean names go beside the English titles of the pieces indexed."""
+
     path = runtime_dir / "bundle" / "glossary.json"
-    return Glossary.load(path) if path.is_file() else Glossary.empty()
+    glossary = Glossary.load(path) if path.is_file() else Glossary.empty()
+    words = words_path or default_words_path()
+    return glossary.with_words(words) if words.is_file() else glossary
 
 
 # --- upload -------------------------------------------------------------------------------------
 
 
-def documents_for(records: Sequence[Mapping[str, Any]], glossary: Glossary) -> list[dict[str, Any]]:
-    """Index documents: id, searched text (head line, then the words) and string metadata."""
+def documents_for(
+    records: Sequence[Mapping[str, Any]], glossary: Glossary, *, embedding: str | None = None,
+) -> list[dict[str, Any]]:
+    """Index documents: id, searched text (head line, then the words) and string metadata.
+
+    ``embedding`` (a model's key) is written into each document's metadata
+    when the index holds that model's vectors, so the server can tell the
+    index was built with the model it queries with.
+    """
 
     documents: list[dict[str, Any]] = []
+    # A title's Korean names from Wikidata ("Fume hood") and from the hand-written
+    # list ("fume hood"), whichever case each wrote it in.
+    by_title: dict[str, tuple[str, ...]] = {}
+    for name, koreans in glossary.aliases.items():
+        key = name.casefold()
+        by_title[key] = tuple(dict.fromkeys((*by_title.get(key, ()), *koreans)))
     for record in records:
-        aliases = glossary.aliases.get(str(record.get("title", "")), ())
+        aliases = by_title.get(str(record.get("title", "")).casefold(), ())[:4]
         # The piece's own words are the searched text after its head line
         # (``public_knowledge._body_of``); sending them again as a payload
         # would double what the plan's monthly ingest counts.
-        documents.append({
-            "id": record["id"],
-            "text": index_text_for(record, aliases),
-            "metadata": {name: str(record.get(name, "")) for name in METADATA_FIELDS},
-        })
+        metadata = {name: str(record.get(name, "")) for name in METADATA_FIELDS}
+        if embedding:
+            metadata["embedding"] = embedding
+        documents.append({"id": record["id"], "text": index_text_for(record, aliases), "metadata": metadata})
     return documents
+
+
+# --- embed (person's decision 2026-10-26, 5) ---------------------------------------------------
+
+
+class EmbeddingCache:
+    """One model's vectors of the documents' searched text, kept between runs
+    under ``runtime/embeddings/<model>/``: ``vectors.f32`` (float32 rows) and
+    ``index.jsonl`` (text SHA-1 → row). A text already embedded is not
+    embedded again, and a run that stops resumes where it stopped."""
+
+    def __init__(self, runtime_dir: Path, model: EmbeddingModel) -> None:
+        self.model = model
+        self.directory = runtime_dir / "embeddings" / model.key.replace("@", "-")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._vectors = self.directory / "vectors.f32"
+        self._index = self.directory / "index.jsonl"
+        self.rows: dict[str, int] = {}
+        if self._index.is_file():
+            for line in self._index.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    item = json.loads(line)
+                    self.rows[item["sha1"]] = int(item["row"])
+
+    @staticmethod
+    def key(text: str) -> str:
+        return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+    def missing(self, texts: Sequence[str]) -> list[str]:
+        return [text for text in dict.fromkeys(texts) if self.key(text) not in self.rows]
+
+    def add(self, texts: Sequence[str], vectors: Any) -> None:
+        import numpy as np  # noqa: PLC0415
+
+        rows = np.asarray(vectors, dtype=np.float32)
+        assert rows.shape == (len(texts), self.model.dims)
+        start = len(self.rows)
+        with self._vectors.open("ab") as handle:
+            handle.write(rows.tobytes())
+        with self._index.open("a", encoding="utf-8") as handle:
+            for offset, text in enumerate(texts):
+                handle.write(json.dumps({"sha1": self.key(text), "row": start + offset}) + "\n")
+                self.rows[self.key(text)] = start + offset
+
+    def vectors_for(self, texts: Sequence[str]) -> Any:
+        """The rows of ``texts`` (all must be embedded), in order."""
+
+        import numpy as np  # noqa: PLC0415
+
+        table = np.fromfile(self._vectors, dtype=np.float32).reshape(-1, self.model.dims)
+        return table[[self.rows[self.key(text)] for text in texts]]
+
+
+def embed(
+    records: Sequence[Mapping[str, Any]],
+    glossary: Glossary,
+    *,
+    runtime_dir: Path,
+    model: EmbeddingModel,
+    models_dir: Path | None = None,
+    threads: int = 2,
+    batch: int = 8,
+    embedder: Any = None,
+    log: Callable[[str], None] = print,
+) -> dict[str, Any]:
+    """Embed every document's searched text not yet in the cache (shortest first)."""
+
+    cache = EmbeddingCache(runtime_dir, model)
+    texts = [doc["text"] for doc in documents_for(records, glossary)]
+    todo = sorted(cache.missing(texts), key=len)
+    log(f"embed {model.key}: {len(texts)} documents, {len(todo)} to embed")
+    if todo and embedder is None:
+        paths = ensure_model_files(model, models_dir or model_directory(runtime_dir, model))
+        embedder = LocalEmbedder(model, paths, threads=threads, lean=False)
+    started = time.perf_counter()
+    done = 0
+    for start in range(0, len(todo), 64):
+        part = todo[start:start + 64]
+        cache.add(part, embedder.embed_passages(part, batch=batch))
+        done += len(part)
+        if done % 1024 < 64 or done == len(todo):
+            elapsed = time.perf_counter() - started
+            log(f"  {done}/{len(todo)} in {elapsed:.0f} s ({done / max(elapsed, 1e-9):.1f}/s)")
+    return {"model": model.key, "documents": len(texts), "embedded": done,
+            "cached": len(texts) - done, "seconds": round(time.perf_counter() - started, 1)}
 
 
 def estimate_memory_mib(records: Sequence[Mapping[str, Any]]) -> dict[str, float]:
@@ -1780,6 +2095,16 @@ def estimate_memory_mib(records: Sequence[Mapping[str, Any]]) -> dict[str, float
     }
 
 
+def upload_size(document: Mapping[str, Any], model: EmbeddingModel | None = None) -> int:
+    """The bytes one document is reckoned to send: its text, metadata and
+    vector (float32; moss sends documents from its native core and does not
+    say how ingest is counted, so this is an estimate)."""
+
+    size = len(str(document["text"]).encode("utf-8"))
+    size += len(json.dumps(document["metadata"], ensure_ascii=False).encode("utf-8"))
+    return size + (model.dims * 4 if model is not None else 0)
+
+
 async def upload(
     records: Sequence[Mapping[str, Any]],
     glossary: Glossary,
@@ -1789,12 +2114,31 @@ async def upload(
     project_id: str,
     project_key: str,
     runtime_dir: Path,
+    embedding: EmbeddingModel | None = None,
+    max_mb: float | None = None,
     client_factory: Callable[..., Any] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    """Create or update the index from the bundle; upserts changed documents, deletes the gone."""
+    """Create or update the index from the bundle; upserts changed documents, deletes the gone.
 
-    documents = documents_for(records, glossary)
+    With ``embedding`` the index is a ``custom`` one: each document carries
+    the model's vector from the cache (``embed`` first) and the model's key.
+    ``max_mb`` sends new and changed documents only up to that many (reckoned)
+    megabytes; the state remembers what was sent -- batch by batch, also
+    when a call fails halfway -- so the same command sends the rest later
+    (Moss's free plan ingests 50 MB a month).
+    """
+
+    documents = documents_for(records, glossary, embedding=embedding.key if embedding else None)
+    if embedding is not None:
+        model_id = "custom"
+        cache = EmbeddingCache(runtime_dir, embedding)
+        missing = cache.missing([doc["text"] for doc in documents])
+        if missing:
+            raise SystemExit(f"{len(missing)} documents have no {embedding.key} vector; run embed first")
+        vectors = cache.vectors_for([doc["text"] for doc in documents])
+        for doc, vector in zip(documents, vectors):
+            doc["embedding"] = [float(value) for value in vector]
     state_path = runtime_dir / "bundle" / f"upload.{index_name}.json"
     previous: dict[str, Any] = {}
     if state_path.is_file():
@@ -1803,15 +2147,16 @@ async def upload(
         except ValueError:
             previous = {}
     previous_hashes: dict[str, str] = dict(previous.get("documents", {}))
-    current_hashes = {doc["id"]: hashlib.sha1(json.dumps(doc, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-                      for doc in documents}
+    current_hashes = {doc["id"]: hashlib.sha1(json.dumps(
+        {key: value for key, value in doc.items() if key != "embedding"}, ensure_ascii=False, sort_keys=True,
+    ).encode("utf-8")).hexdigest() for doc in documents}
     if client_factory is None:
         import moss  # noqa: PLC0415
 
         def client_factory(pid: str, key: str) -> Any:  # noqa: E306
             return moss.MossClient(pid, key)
         make_document = lambda doc: moss.DocumentInfo(  # noqa: E731
-            id=doc["id"], text=doc["text"], metadata=doc["metadata"])
+            id=doc["id"], text=doc["text"], metadata=doc["metadata"], embedding=doc.get("embedding"))
         upsert_options = moss.MutationOptions(upsert=True)
     else:
         make_document = lambda doc: doc  # noqa: E731
@@ -1820,6 +2165,10 @@ async def upload(
     started = time.perf_counter()
     calls = 0
     exists = False
+    # What Moss took, batch by batch: remembered even when a later call fails,
+    # so the same command does not send (and the free plan count) it again.
+    sent_ids: list[str] = []
+    deleted_ids: list[str] = []
     try:
         try:
             await client.get_index(index_name)
@@ -1828,43 +2177,74 @@ async def upload(
             exists = False
         calls += 1
         if not exists:
-            batches = list(_batches(documents, UPLOAD_BATCH))
+            # A new index (or one deleted since) holds nothing sent before.
+            previous_hashes = {}
+            sending = _within(documents, max_mb, embedding)
+            batches = list(_batches(sending, UPLOAD_BATCH))
             first = batches[0] if batches else []
             log(f"create_index {index_name} model={model_id} docs={len(first)} (of {len(documents)})")
             await client.create_index(index_name, [make_document(doc) for doc in first], model_id)
             calls += 1
+            sent_ids += [doc["id"] for doc in first]
             for batch in batches[1:]:
                 await client.add_docs(index_name, [make_document(doc) for doc in batch], upsert_options)
                 calls += 1
+                sent_ids += [doc["id"] for doc in batch]
                 log(f"add_docs +{len(batch)}")
-            changed_ids = [doc["id"] for doc in documents]
-            deleted_ids: list[str] = []
         else:
-            changed = [doc for doc in documents if previous_hashes.get(doc["id"]) != current_hashes[doc["id"]]]
-            deleted_ids = sorted(set(previous_hashes) - set(current_hashes))
-            log(f"index {index_name} exists: {len(changed)} changed/new, {len(deleted_ids)} to delete")
+            changed = _within([doc for doc in documents if previous_hashes.get(doc["id"]) != current_hashes[doc["id"]]],
+                              max_mb, embedding)
+            gone = sorted(set(previous_hashes) - set(current_hashes))
+            log(f"index {index_name} exists: {len(changed)} changed/new, {len(gone)} to delete")
             for batch in _batches(changed, UPLOAD_BATCH):
                 await client.add_docs(index_name, [make_document(doc) for doc in batch], upsert_options)
                 calls += 1
+                sent_ids += [doc["id"] for doc in batch]
                 log(f"add_docs +{len(batch)}")
-            for batch in _batches(deleted_ids, UPLOAD_BATCH):
+            for batch in _batches(gone, UPLOAD_BATCH):
                 await client.delete_docs(index_name, list(batch))
                 calls += 1
-            changed_ids = [doc["id"] for doc in changed]
+                deleted_ids += list(batch)
     finally:
         try:
             await client.close()
         except Exception:  # noqa: BLE001
             pass
-    outcome = {
-        "index": index_name, "model": model_id, "documents": len(documents), "created": not exists,
-        "changed": len(changed_ids), "deleted": len(deleted_ids), "calls": calls,
-        "text_bytes": sum(len(doc["text"].encode("utf-8")) for doc in documents),
-        "seconds": round(time.perf_counter() - started, 1), "at": now_iso(),
-    }
-    state_path.write_text(json.dumps({"documents": current_hashes, "last": outcome}, ensure_ascii=False),
-                          encoding="utf-8")
+        # Remembered: what was sent this time and what had been sent before and is
+        # still in the bundle; a document not sent yet is left for the next run.
+        sent = {doc_id: current_hashes[doc_id] for doc_id in sent_ids}
+        kept = {doc_id: digest for doc_id, digest in previous_hashes.items()
+                if doc_id not in sent and doc_id not in deleted_ids}
+        remembered = {**kept, **sent}
+        left = sum(1 for doc_id, digest in current_hashes.items() if remembered.get(doc_id) != digest)
+        outcome = {
+            "index": index_name, "model": model_id, "documents": len(documents), "created": not exists,
+            "changed": len(sent_ids), "deleted": len(deleted_ids), "left": left, "calls": calls,
+            "text_bytes": sum(len(doc["text"].encode("utf-8")) for doc in documents),
+            "sent_mb_estimate": round(sum(upload_size(doc, embedding) for doc in documents
+                                          if doc["id"] in sent) / 1e6, 1),
+            "seconds": round(time.perf_counter() - started, 1), "at": now_iso(),
+        }
+        state_path.write_text(json.dumps({"documents": remembered, "last": outcome}, ensure_ascii=False),
+                              encoding="utf-8")
     return outcome
+
+
+def _within(documents: Sequence[Mapping[str, Any]], max_mb: float | None,
+            model: EmbeddingModel | None) -> list[Mapping[str, Any]]:
+    """The documents that fit in ``max_mb`` reckoned megabytes, in order (all when None)."""
+
+    if max_mb is None:
+        return list(documents)
+    budget = max_mb * 1e6
+    chosen: list[Mapping[str, Any]] = []
+    for doc in documents:
+        size = upload_size(doc, model)
+        if size > budget:
+            break
+        budget -= size
+        chosen.append(doc)
+    return chosen
 
 
 # --- evaluate -----------------------------------------------------------------------------------
@@ -2089,11 +2469,20 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("collect", help="바뀐 것만 받아 묶음을 다시 만든다")
     run.add_argument("--only", help="이 출처 id 만 (쉼표로 여럿)")
     run.add_argument("--full", action="store_true", help="조건 없이 전부 다시 받는다")
+    run.add_argument("--offline", action="store_true", help="요청 없이 받아 둔 원본만으로 묶음을 다시 만든다")
     commands.add_parser("status", help="묶음의 출처별 조각 수·용량을 보인다")
     commands.add_parser("glossary", help="묶음의 용어집을 data/public_knowledge/glossary.json 으로 복사한다")
+    em = commands.add_parser("embed", help="묶음의 조각을 다국어 모델로 벡터로 만든다 (캐시, 이어서)")
+    em.add_argument("--model", choices=sorted(EMBEDDING_MODELS), default="multilingual-e5-small")
+    em.add_argument("--models-dir", help="모델 파일 폴더 (기본: <runtime-dir>/models/<모델>; 없으면 고정 커밋에서 받음)")
+    em.add_argument("--threads", type=int, default=2)
+    em.add_argument("--batch", type=int, default=8)
     up = commands.add_parser("upload", help="묶음을 Moss 색인에 올린다 (MOSS_PROJECT_ID/KEY)")
     up.add_argument("--index", required=True, help="Moss 색인 이름")
     up.add_argument("--model", default=DEFAULT_MODEL, help="임베딩 모델 (기본 moss-minilm)")
+    up.add_argument("--embedding", choices=sorted(EMBEDDING_MODELS),
+                    help="이 다국어 모델의 벡터로 custom 색인을 만든다 (embed 를 먼저)")
+    up.add_argument("--max-mb", type=float, help="이번에 올릴 양의 상한 (어림 MB; 나머지는 같은 명령으로 다음에)")
     up.add_argument("--dry-run", action="store_true", help="올리지 않고 문서 수·용량·예상 메모리만 센다")
     up.add_argument("--env-file", help="키를 읽을 dotenv 파일 (값은 출력하지 않음)")
     ev = commands.add_parser("evaluate", help="질문 세트로 FTS5 기준선과 Moss 를 잰다")
@@ -2115,9 +2504,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_dir = Path(args.runtime_dir)
     sources = load_sources(Path(args.sources))
     if args.command == "collect":
-        http = Http(sources.user_agent)
+        http = OfflineHttp() if args.offline else Http(sources.user_agent)
         only = {item.strip() for item in args.only.split(",") if item.strip()} if args.only else None
-        manifest = collect(sources, runtime_dir=runtime_dir, http=http, only=only, full=args.full)
+        manifest = collect(sources, runtime_dir=runtime_dir, http=http, only=only, full=args.full,
+                           offline=args.offline)
         totals = manifest["totals"]
         print(f"bundle: {totals['chunks']} chunks, {totals['chars']} chars, {totals['failures']} failures, "
               f"{totals['requests']} requests, glossary {totals['glossary_terms']} terms")
@@ -2147,21 +2537,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      ensure_ascii=False, indent=0, sort_keys=True), encoding="utf-8")
         print(f"wrote {target} ({len(payload['terms'])} terms)")
         return 0
+    if args.command == "embed":
+        records = read_bundle(runtime_dir)
+        glossary = load_bundle_glossary(runtime_dir)
+        outcome = embed(records, glossary, runtime_dir=runtime_dir, model=EMBEDDING_MODELS[args.model],
+                        models_dir=Path(args.models_dir) if args.models_dir else None, threads=args.threads,
+                        batch=args.batch)
+        print(json.dumps(outcome, ensure_ascii=False))
+        return 0
     if args.command == "upload":
         records = read_bundle(runtime_dir)
         glossary = load_bundle_glossary(runtime_dir)
+        model = EMBEDDING_MODELS[args.embedding] if args.embedding else None
         if args.dry_run:
-            documents = documents_for(records, glossary)
+            documents = documents_for(records, glossary, embedding=model.key if model else None)
             text_bytes = sum(len(doc["text"].encode("utf-8")) for doc in documents)
-            print(json.dumps({"documents": len(documents), "text_bytes": text_bytes,
-                              "metadata_bytes": sum(len(json.dumps(doc["metadata"], ensure_ascii=False).encode("utf-8"))
-                                                    for doc in documents),
+            metadata_bytes = sum(len(json.dumps(doc["metadata"], ensure_ascii=False).encode("utf-8"))
+                                 for doc in documents)
+            # A vector is float32 rows (moss sends them from its native core;
+            # the wire format is not documented, so this is an estimate).
+            vector_bytes = len(documents) * model.dims * 4 if model else 0
+            print(json.dumps({"documents": len(documents), "text_bytes": text_bytes, "metadata_bytes": metadata_bytes,
+                              "vector_bytes": vector_bytes,
+                              "upload_mb_estimate": round((text_bytes + metadata_bytes + vector_bytes) / 1e6, 1),
+                              "model": model.key if model else args.model,
                               "estimated_memory": estimate_memory_mib(records)}, ensure_ascii=False))
             return 0
         _load_env_file(args.env_file)
         project_id, project_key = _credentials()
         outcome = asyncio.run(upload(records, glossary, index_name=args.index, model_id=args.model,
-                                     project_id=project_id, project_key=project_key, runtime_dir=runtime_dir))
+                                     project_id=project_id, project_key=project_key, runtime_dir=runtime_dir,
+                                     embedding=model, max_mb=args.max_mb))
         print(json.dumps(outcome, ensure_ascii=False))
         return 0
     if args.command == "evaluate":
