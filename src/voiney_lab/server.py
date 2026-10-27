@@ -3381,7 +3381,7 @@ _SPOKEN_VALUE = re.compile(
     rf"(?<![A-Za-z0-9_.-])(?P<qualifier>>=|<=|[~≈><≥≤])?\s*"
     rf"(?P<first>-?{_SPOKEN_NUMBER})"
     rf"(?:(?P<operator>\s*(?:[–—−±:]|-)\s*)(?P<second>-?{_SPOKEN_NUMBER}))?"
-    rf"\s*(?P<unit>{_SPOKEN_UNIT})?(?![A-Za-z0-9_-])")
+    rf"\s*(?P<unit>{_SPOKEN_UNIT})?(?![A-Za-z0-9_-]|\.\d)")
 
 
 def _say_number(number: str) -> str:

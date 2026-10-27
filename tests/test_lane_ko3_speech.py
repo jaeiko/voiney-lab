@@ -116,6 +116,7 @@ def test_explicit_english_keeps_leading_decimal() -> None:
     ('값은 0.50이에요.', '값은 영 점 오 영이에요.'),
     ('Sample-12-16', 'Sample-12-16'),
     ('2026-10-27', '2026-10-27'),
+    ('7.2.1단계', '7.2.1단계'),
 ])
 def test_bare_decimal_and_non_quantity_identifiers(written: str, spoken: str) -> None:
     assert server.normalize_korean_speech(written) == spoken
