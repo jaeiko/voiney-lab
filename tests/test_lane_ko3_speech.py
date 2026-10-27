@@ -144,3 +144,18 @@ def test_uncertainty_between_explicit_units_is_read_as_words() -> None:
 ])
 def test_clock_signs_and_ambiguous_identifiers(written: str, spoken: str) -> None:
     assert server.normalize_korean_speech(written) == spoken
+
+
+@pytest.mark.parametrize(('written', 'language', 'expected'), [
+    ('시료를 준비해요.\n-20°C에서 보관해요.', 'ko', '시료를 준비해요. 섭씨 영하 이십 도에서 보관해요.'),
+    ('시료를 준비해요.\n0.5 mL를 넣어요.', 'ko', '시료를 준비해요. 영 점 오 밀리리터를 넣어요.'),
+    ('Prepare the sample.\n-20°C storage.', 'en', 'Prepare the sample. -20°C storage.'),
+    ('Prepare the sample.\n0.5 mL is needed.', 'en', 'Prepare the sample. 0.5 mL is needed.'),
+])
+def test_multiline_quantity_signs_reach_the_voice(written: str, language: str, expected: str) -> None:
+    settings = TtsProviderSettings.from_environment({'VOINEY_LAB_TTS_PROVIDER': 'xai'})
+    with patch.object(server.TtsProviderSettings, 'from_environment', return_value=settings), \
+         patch.object(server, '_provider_speech', return_value=b'pcm') as provider:
+        for sentence in server.speech_sentences(written):
+            server.synthesize(sentence, language)
+    assert ' '.join(call.args[0] for call in provider.call_args_list) == expected

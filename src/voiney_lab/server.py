@@ -3491,9 +3491,13 @@ def normalize_korean_speech(text: str) -> str:
 
 
 def _clean_tts_text(text: str) -> str:
-    # A leading decimal or negative value is not a Markdown list marker.
-    if re.match(r"^\s*(?:-\s*\d|\d+\.\d)", text):
-        return clean_speech_text("scientific_value " + text).removeprefix("scientific_value ")
+    # A decimal or negative value at any line start is not a list marker.
+    numeric = re.compile(r"^\s*(?:-\s*\d|\d+\.\d)")
+    if any(numeric.match(line) for line in text.splitlines()):
+        return " ".join(
+            clean_speech_text("scientific_value " + line).removeprefix("scientific_value ")
+            if numeric.match(line) else clean_speech_text(line)
+            for line in text.splitlines())
     return clean_speech_text(text)
 
 
@@ -3648,9 +3652,9 @@ def speech_sentences(text:str)->tuple[str,...]:
     cut so.
     """
 
-    # Keep a whole answer beginning with a numeric value intact: ordinary
-    # Markdown cleaning would treat its decimal point/sign as a list marker.
-    if re.match(r"^\s*(?:-\s*\d|\d+\.\d)", text):
+    # Keep numeric line starts intact: ordinary Markdown cleaning would
+    # treat their decimal point/sign as a list marker before TTS sees them.
+    if re.search(r"^\s*(?:-\s*\d|\d+\.\d)", text, flags=re.MULTILINE):
         return (text,)
     whole=clean_speech_text(text)
     chunker=SentenceChunker()
