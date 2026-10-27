@@ -1,5 +1,26 @@
 # 스토어 앱 계획 — 화면이 꺼져도 듣기, 앱 밖 타이머 알림, 끊겨도 울리는 타이머 (줄 APP0 · APP1)
 
+## 먼저: Mac에서 Android 앱을 만드는 쉬운 순서
+
+1. Android Studio와 Node.js 22 이상, JDK 21을 준비한다. Android Studio의 **Settings → Languages & Frameworks → Android SDK**에서 Android SDK Platform 36과 Build Tools 36.0.0을 설치한다. 아래 명령은 저장소 맨 위에서 실행한다.
+2. 새 화면을 만든다. `cd web` → `npm ci` → `npm run build` → `cd ..`. 결과가 `src/voiney_lab/static/app/index.html`에 생겨야 한다. 이 파일이 없으면 앱 묶기는 멈춘다.
+3. 앱 패키지를 준비한다. `cd mobile` → `npm ci`. 시험 서버의 공개 HTTPS 주소만 넣어 다음 명령을 실행한다(비밀번호·키는 넣지 않는다).
+
+   ```bash
+   VOINEY_APP_API_URL=https://시험서버주소 node scripts/prepare-web.mjs
+   npx cap sync android
+   npx cap open android
+   ```
+
+4. Android Studio에서 Gradle 동기화를 기다린다. **Build → Generate App Bundles or APKs → Generate APKs**로 디버그 APK를 만든다. 결과는 `mobile/android/app/build/outputs/apk/debug/app-debug.apk`다. 휴대폰을 USB로 연결해 **Run ▶**으로 바로 설치해도 된다. 스토어용 서명 빌드는 별도이며 서명 키는 저장소 밖에 둔다.
+5. 실행하면 새 화면(`/app/`)이 열린다. 서버의 앱 출처 허용 목록에 `https://localhost`가 있어야 묶은 화면의 계정 로그인이 된다. 이름·아이콘·먹색 시작 화면, 로그인 후 앱을 닫았다 열기, 비밀번호 변경과 계정 삭제를 확인한다. 비밀번호가 틀렸을 때 기존 로그인이 유지되는지도 본다. 기기 시험 화면은 `VOINEY_APP_START_PATH=device-check.html npx cap sync android`로 따로 고른다.
+
+기존 Linux 도구가 있으면 저장소 맨 위에서 `VOINEY_APP_API_URL=https://시험서버주소 mobile/scripts/build-android-debug.sh`로도 만든다. 이 스크립트는 새 화면을 먼저 빌드해 둔 상태에서 쓴다. SDK가 없으면 이 기계에서 새로 내려받지 말고 위 Mac 순서를 따른다.
+
+아이콘은 이미 저장소에 들어 있다. 다시 만들 때만 Python 프로젝트 의존성(Pillow)과 librsvg가 필요하다(Mac: `brew install librsvg`). 저장소 맨 위에서 `python scripts/generate_app_icons.py`, 변경 여부만 보려면 `python scripts/generate_app_icons.py --check`를 실행한다. 원본 `assets/brand/`의 제품 SVG는 그대로 두며 Android 전체 밀도·적응형 앞뒤 층·둥근 아이콘·알림·가로세로 시작 그림과 웹 maskable 판을 만든다. iOS 프로젝트는 없어 iOS 아이콘·빌드는 아직 없다.
+
+묶은 화면의 HTTP와 음성 소켓은 `mobile/www-src/app-bridge.js`가 연결한다. 로그인 토큰은 기존 Keystore 저장소에만 두고, 무작위 기기 표시는 WebView 저장소에 따로 보관해 로그인·현재 비밀번호 확인 본문에 싣는다. 로그아웃이나 계정 삭제로 기기 표시는 바뀌지 않는다. 서버 주소 모드는 `/app/`을 직접 열며 서버 쿠키 경로를 쓴다. 실제 기기의 런처 마스크·시작 화면·알림 렌더링과 음성은 별도 확인이 필요하다. 묶은 화면에서 기기 타이머·백그라운드 마이크 연결, bearer가 필요한 직접 이미지·다운로드 링크는 다음 연결 작업으로 남아 있다.
+
 2026-10-19 줄 APP1 이 고친 곳: 정시 알람 플러그인(9.3절), 화면 꺼도 듣기 플러그인(9.4절), 앱 로그인과 앱 출처 허용(9.5절, 서버),
 다리 연결 지점을 함수 이름으로 다시 적음(9.2절), APK 다시 만듦(10.1절), 기기 시험 순서(11.3절). 사람의 결정(2026-10-18): 앱은 반드시 낸다 —
 화면이 꺼져도 듣기, 앱 밖 타이머 알림(가장 중요), 와이파이가 끊겨도 안전. 파일럿은 웹이고 앱은 그 뒤를 준비한다.
@@ -114,7 +135,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 1. 줄 APP0(끝남): 뼈대, 알림 다리(1분 전·끝), Android 디버그 APK, 기기 시험 화면.
 2. 줄 APP1(끝남): 끝 알림을 `setAlarmClock` 으로(9.3절). Android 마이크 포그라운드 서비스 플러그인 — 화면이 보일 때 시작, 네이티브 `AudioRecord`,
    페이지의 소켓 하나로 같은 형식(9.4절). 앱 로그인(토큰, Bearer, 소켓 첫 메시지)과 앱 출처 허용(9.5절). 묶은 화면의 서버 주소(`VOINEY_APP_API_URL`).
-3. 다음 줄: 다리를 `index.html` 에 연결(9.2절의 연결 지점 ①–⑫). 화면 담당(줄 IA 이후 구조)과 함께. 그다음 실기기 시험(11.3절).
+3. 새 화면(`/app/`)의 앱 전용 HTTP·소켓 연결은 `mobile/www-src/app-bridge.js`가 맡는다. 남은 것은 직접 이미지·다운로드 링크의 bearer 처리, 기기 타이머·백그라운드 마이크 연결(9.2절 ⑤–⑫)과 실기기 시험이다.
 4. 그 뒤: 재생(TTS)이 화면 꺼진 채 안 나오면 재생도 네이티브로. 블루투스 마이크는 `setCommunicationDevice`.
 5. iOS: 맥에서 `npx cap add ios`, `audio` 백그라운드 모드 + AVAudioEngine 캡처, AlarmKit 또는 시간 민감 알림. 같은 플러그인 이름으로 만들면 다리는 그대로 쓴다.
 
@@ -128,10 +149,10 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 | Apple 4.2 | 앱 안에 화면이 있다 | 원격 웹사이트를 띄우는 앱으로 보일 위험이 더 크다 |
 | 오프라인으로 앱을 열 때 | 앱 화면이 뜨고 마지막 상태·예약된 알림을 보여 줄 수 있다 | 웹뷰 오류 → `server.errorPath`(`offline.html`) 만 뜬다. Android 에서는 그 쪽이 플러그인을 못 쓴다("On Android the html file won't have access to Capacitor plugins") |
 | 화면 고침 배포 | 앱 업데이트(심사)가 필요 | 서버 배포만으로 바뀐다 |
-| 지금 `index.html` 로 되나 | **아직 안 된다.** 화면이 서버를 `location.host` 로 찾는다. 앱 안에서는 그 값이 `localhost` 다. 서버 쪽 준비(출처 허용·앱 로그인)와 다리(`createAppFetch`·`socketUrl`)는 줄 APP1 에서 됐고, 남은 것은 `index.html` 의 연결(9.2절 ②④⑤) | 된다 |
+| 지금 화면으로 되나 | `/app/`을 묶고 앱 전용 다리로 HTTP·소켓을 연결한다. 직접 이미지·다운로드 링크와 기기 타이머·백그라운드 마이크 연결은 남아 있다. 실기기 미확인 | `/app/`을 직접 연다. 실기기 미확인 |
 
 그래서 뼈대(`mobile/capacitor.config.js`)는 두 방식을 빌드할 때 고른다. 기본은 묶기, `VOINEY_APP_SERVER_URL=https://…` 를 주면 서버 주소.
-묶기로 실제 서버에 붙으려면 9.2절 ②④⑤의 연결이 필요하다. 서버 쪽 준비는 줄 APP1 이 했다: 서버의 `VOINEY_LAB_APP_ORIGINS` 에
+묶기로 실제 서버에 붙으려면 앱 출처 허용이 필요하다. 서버의 `VOINEY_LAB_APP_ORIGINS`에
 `https://localhost`(iOS 는 `capacitor://localhost`)를 넣으면 웹소켓·API 가 그 출처를 받고, 로그인은 쿠키 대신 토큰이다(9.5절; `SameSite=None` 쿠키는
 쓰지 않았다 — 교차 사이트 쿠키는 브라우저마다 막히고 CSRF 대비가 따로 필요하다). 묶은 화면의 서버 주소는 빌드할 때 `VOINEY_APP_API_URL`. 화면 고침을 심사 없이 내보내는 일(라이브 업데이트)은 이 줄에서 다루지 않는다.
 
@@ -256,8 +277,7 @@ systems." ([문서](https://capacitorjs.com/docs/apis/background-runner)).
 
 번들러 없이 `<script>` 로 읽히고(`window.VoineyNativeBridge`), node 에서는 `require` 로 읽힌다. 시험:
 `node --test tests/native_bridge/*.test.js`(pytest 에서는 `tests/test_native_bridge.py` 가 모두 돌린다. 줄 APP1 끝에 43개).
-**아직 `index.html` 에 연결하지 않았다** — 이번 차례에 화면 구조를 줄 IA 가 바꾸고 있어서다. 아래 연결 지점은 **함수 이름**으로
-적었다(줄 번호는 IA 가 합쳐진 뒤 연결하는 줄이 다시 잰다. 2026-10-19 `dev`(515421f) 와 그때의 IA 작업 폴더 모두 아래 함수가 그대로 있었다).
+묶은 앱의 새 화면은 `mobile/www-src/app-bridge.js`로 첫 요청 전에 HTTP·소켓 인증과 기기 표시를 연결한다. 아래 표는 공유 다리의 연결 설계이며, ⑤의 직접 이미지·다운로드와 ⑥–⑫의 기기 기능은 아직 연결하지 않았다. 표의 옛 화면 함수 이름은 남은 작업의 참고다.
 
 다리가 하는 일:
 
