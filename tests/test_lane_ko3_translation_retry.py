@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any, Sequence
 
 import pytest
 import httpx
@@ -16,9 +17,9 @@ from voiney_lab.model_providers import ModelProviderError
 
 @pytest.mark.parametrize('error', [TimeoutError(), ModelProviderError('google', 'timeout'),
                                   APITimeoutError(request=httpx.Request('POST', 'https://offline.invalid'))])
-def test_timeout_batches_are_split_and_successful_halves_are_saved(error) -> None:
+def test_timeout_batches_are_split_and_successful_halves_are_saved(error: Exception) -> None:
     sent = []
-    async def translate(batch, context):
+    async def translate(batch: Sequence[pt.TranslationUnit], context: dict[str, Any]) -> pt.BatchResult:
         sent.append(len(batch))
         if len(batch) > 2:
             raise error
@@ -35,7 +36,7 @@ def test_timeout_batches_are_split_and_successful_halves_are_saved(error) -> Non
 def test_split_retries_respect_the_script_call_cap() -> None:
     script = _load_script()
     sent = []
-    async def translate(batch, context):
+    async def translate(batch: Sequence[pt.TranslationUnit], context: dict[str, Any]) -> pt.BatchResult:
         sent.append(len(batch))
         if len(batch) > 1:
             raise TimeoutError()
@@ -50,25 +51,25 @@ def test_split_retries_respect_the_script_call_cap() -> None:
 
 @pytest.mark.parametrize('cancel', [False, True])
 @pytest.mark.parametrize('glossary', [False, True])
-def test_client_is_closed_in_its_own_loop_on_success_or_timeout(cancel, glossary) -> None:
+def test_client_is_closed_in_its_own_loop_on_success_or_timeout(cancel: bool, glossary: bool) -> None:
     class Client:
-        def __init__(self):
+        def __init__(self) -> None:
             self.closed = False
             self.loop = asyncio.get_running_loop()
             self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
-        async def create(self, **kwargs):
+        async def create(self, **kwargs: Any) -> SimpleNamespace:
             if cancel:
                 await asyncio.sleep(60)
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{}'))])
-        async def close(self):
+        async def close(self) -> None:
             assert asyncio.get_running_loop() is self.loop
             self.closed = True
     clients = []
-    def factory():
+    def factory() -> Client:
         client = Client()
         clients.append(client)
         return client
-    async def run():
+    async def run() -> None:
         if glossary:
             call = pt.openai_glossary_maker(factory, 'fake', timeout=.01)
             args = (pt.protocol_context(rich_fixture()),)
@@ -86,14 +87,14 @@ def test_client_is_closed_in_its_own_loop_on_success_or_timeout(cancel, glossary
 
 def test_google_facade_closes_its_async_sdk_before_the_loop_ends() -> None:
     closed = []
-    async def create(**kwargs):
+    async def create(**kwargs: Any) -> SimpleNamespace:
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{}'))])
-    async def close():
+    async def close() -> None:
         closed.append(asyncio.get_running_loop())
     sdk = SimpleNamespace(aio=SimpleNamespace(aclose=close))
     facade = SimpleNamespace(_backend=SimpleNamespace(client=sdk),
                              chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    async def run():
+    async def run() -> None:
         await pt.openai_batch_translator(lambda: facade, 'fake')([], {})
         assert closed == [asyncio.get_running_loop()]
     asyncio.run(run())

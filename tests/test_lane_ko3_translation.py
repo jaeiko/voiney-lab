@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from tests.test_lane_safe_questions import workflow_checkpoint
+from typing import Any, Sequence
 
 import pytest
 
@@ -11,7 +11,8 @@ from voiney_lab import protocol_translation as pt
 from voiney_lab.curated_protocol import CuratedProtocolSession, reader_translation_issue
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 from tests.test_lane_ko2_screen_korean import soil_fixture
-from tests.test_revision_translations import rich_fixture, FakeTranslator
+from tests.test_revision_translations import rich_fixture
+from tests.test_lane_safe_questions import workflow_checkpoint
 
 
 @pytest.mark.parametrize(('source', 'korean'), [
@@ -89,7 +90,7 @@ def test_generated_spellings_follow_the_protocol_and_reviewed_text_is_untouched(
     fixture = rich_fixture()
     reviewed_key = f'{fixture.steps[0].step_id}/current_step'
     fixture = replace(fixture, localizations={reviewed_key: '파이펫으로 넣어요.'})
-    async def translate(batch, context):
+    async def translate(batch: Sequence[pt.TranslationUnit], context: dict[str, Any]) -> pt.BatchResult:
         return pt.BatchResult({unit.fact_key: good_korean(unit.source_text) + ' 피펫과 파이펫을 써요.'
                                for unit in batch})
     report = asyncio.run(pt.generate_revision_translations(fixture, translate, model='fake'))
@@ -116,7 +117,7 @@ def test_stored_reviewed_spelling_guides_new_machine_rows() -> None:
     row = FactTranslationRecord(pt.translation_revision_key(fixture), unit.fact_key, 'ko',
                                 unit.source_sha256, '파이펫으로 넣어요.', 'reviewed', 'passed',
                                 'person', 'person', '2026-10-27T00:00:00+00:00')
-    async def translate(batch, context):
+    async def translate(batch: Sequence[pt.TranslationUnit], context: dict[str, Any]) -> pt.BatchResult:
         return pt.BatchResult({item.fact_key: '피펫과 파이펫을 써요.' for item in batch})
     report = asyncio.run(pt.generate_revision_translations(fixture, translate, model='fake', stored=[row]))
     assert unit.fact_key not in {item.fact_key for item in report.records}
@@ -135,10 +136,10 @@ def test_generation_glossary_translates_common_nouns_inside_names() -> None:
     fixture = rich_fixture()
     entries = tuple(pt.GlossaryEntry(source, source, True) for source in (
         'GC vial', 'Porapak tubes', 'gel band', 'Band100', 'Gel-100'))
-    async def glossary(context):
+    async def glossary(context: pt.ProtocolContext) -> pt.GlossaryResult:
         return pt.GlossaryResult(entries=entries)
     contexts = []
-    async def translate(batch, context):
+    async def translate(batch: Sequence[pt.TranslationUnit], context: dict[str, Any]) -> pt.BatchResult:
         contexts.append(context)
         return pt.BatchResult({})
     report = asyncio.run(pt.generate_revision_translations(

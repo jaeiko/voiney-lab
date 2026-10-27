@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from dataclasses import replace
-from tests.test_lane_safe_questions import workflow_checkpoint
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from tests.test_lane_safe_questions import workflow_checkpoint
 
 from voiney_lab import server
 from voiney_lab.voice_providers import TtsProviderSettings
