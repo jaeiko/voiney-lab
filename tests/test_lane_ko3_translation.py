@@ -129,3 +129,25 @@ def test_common_word_spelling_does_not_rewrite_a_longer_name() -> None:
 
 def test_reviewed_longer_name_does_not_choose_a_common_word_spelling() -> None:
     assert pt.lab_korean('비즈와 피펫을 써요.', {'fact': '비드플렉스와 파이펫맥스'}) == '비즈와 피펫을 써요.'
+
+
+def test_generation_glossary_translates_common_nouns_inside_names() -> None:
+    fixture = rich_fixture()
+    entries = tuple(pt.GlossaryEntry(source, source, True) for source in (
+        'GC vial', 'Porapak tubes', 'gel band', 'Band100', 'Gel-100'))
+    async def glossary(context):
+        return pt.GlossaryResult(entries=entries)
+    contexts = []
+    async def translate(batch, context):
+        contexts.append(context)
+        return pt.BatchResult({})
+    report = asyncio.run(pt.generate_revision_translations(
+        fixture, translate, model='fake', make_glossary=glossary))
+    saved = {row.source: row for row in pt.glossary_entries(report.glossary_record)}
+    assert saved['GC vial'].korean == 'GC 바이알'
+    assert saved['Porapak tubes'].korean == 'Porapak 튜브'
+    assert saved['gel band'].korean == '젤 밴드'
+    assert saved['gel band'].keep_english is False
+    assert saved['Band100'].korean == 'Band100'
+    assert saved['Gel-100'].korean == 'Gel-100'
+    assert 'GC 바이알' in str(contexts[0])

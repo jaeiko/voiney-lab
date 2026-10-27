@@ -524,11 +524,21 @@ def lab_korean(text: str, reviewed: Mapping[str, str] | None = None) -> str:
 def _lab_glossary(
     entries: Sequence[GlossaryEntry], reviewed: Mapping[str, str] | None,
 ) -> tuple[GlossaryEntry, ...]:
-    return tuple(GlossaryEntry(
-        entry.source,
-        lab_korean(COMMON_LAB_WORDS.get(term_stem(entry.source), entry.korean), reviewed),
-        entry.keep_english and term_stem(entry.source) not in COMMON_LAB_WORDS,
-    ) for entry in entries)
+    def localize(entry: GlossaryEntry) -> GlossaryEntry:
+        words = term_stem(entry.source).split()
+        common_phrase = bool(words) and all(word in COMMON_LAB_WORDS for word in words)
+        text = COMMON_LAB_WORDS.get(term_stem(entry.source), entry.korean)
+
+        def noun(match: re.Match[str]) -> str:
+            word = match.group(0)
+            # Capitalised compound name parts and identifiers stay as written.
+            return COMMON_LAB_WORDS.get(_singular(word), word) if common_phrase or word.islower() else word
+
+        text = re.sub(r"(?<!\S)[A-Za-z]+(?=\s|$)", noun, text)
+        return GlossaryEntry(entry.source, lab_korean(text, reviewed),
+                             entry.keep_english and not common_phrase)
+
+    return tuple(localize(entry) for entry in entries)
 
 
 def _required_strings(term: str) -> tuple[str, ...]:
