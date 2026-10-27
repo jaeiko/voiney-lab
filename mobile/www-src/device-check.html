@@ -43,6 +43,7 @@
 </main>
 <script src="app-config.js"></script>
 <script src="native-bridge.js"></script>
+<script src="app-bridge.js"></script>
 <script>
   "use strict";
   const bridge = window.VoineyNativeBridge;
@@ -156,7 +157,9 @@
   const sessionFor = () => {
     const server = document.getElementById("server").value;
     if (!session || session.server !== server) {
-      session = bridge.createAppSession(cap, { serverUrl: server });
+      session = window.VoineyAppBridge.createAppSession(bridge, cap, {
+        serverUrl: server, storage: window.localStorage, crypto: window.crypto, fetch: window.fetch.bind(window),
+      });
       session.server = server;
     }
     return session;
@@ -190,7 +193,7 @@
     await sessionFor().logout();
     log("로그아웃됨, 휴대폰의 토큰도 지움");
   });
-  document.getElementById("app").onclick = () => { location.href = "index.html"; };
+  document.getElementById("app").onclick = () => { location.href = "/app/"; };
   log(cap ? `앱 안에서 열림 (${cap.getPlatform ? cap.getPlatform() : "?"})` : "브라우저에서 열림 — 기기 기능 없음");
 </script>
 </body>

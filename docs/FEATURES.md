@@ -29,7 +29,7 @@
 - **어디**: `accounts.py` (`AUTH_MODES`, `AccountStore.create_invite`, `sign_up`, `LOGIN_FAILURE_LIMIT`, `LOGIN_NAME_FAILURE_LIMIT`, `DEVICE_COOKIE_NAME`, `SESSION_LIFETIME`), `server.py` (`commercial_identity_boundary` 미들웨어, `_ACCOUNT_OPEN_PATHS`, `/api/auth/*` 경로, `_request_device`, `_ensure_device_cookie`, `POST /api/auth/delete-account`, `_account_is_admin`), `identity.py` (`DevIdentityProvider`, OIDC), `scripts/pilot_invite.py`.
 - **설정**: `VOINEY_LAB_AUTH_MODE`, `VOINEY_LAB_APP_ORIGINS`(앱 출처에 토큰 로그인), `VOINEY_LAB_WORKSPACE_ENABLED`·`VOINEY_LAB_WORKSPACE_DATA_DIR`(계정은 작업공간이 있어야 한다), OIDC 는 `VOINEY_LAB_OIDC_ISSUER` 등.
 - **시험**: `tests/test_lane_on_accounts_store.py`, `tests/test_lane_on_auth_api.py`, `tests/test_lane_fx4_pilot_login.py`, `tests/test_lane_fx5_account_erasure.py`, `tests/test_lane_fx5_delete_account_route.py`, `tests/test_lane_pre_device_lock.py`.
-- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 기기 표시는 비밀이 아니어서 쿠키를 지우거나 바꾸면 새 기기가 된다. 그래서 이름 전체 잠금(30번)이 남고, 이름을 아는 사람이 기기를 바꿔 가며 30번 틀리면 그 이름은 여전히 15분 잠긴다. 앱 화면은 아직 `device` 를 보내지 않는다(보내지 않으면 알 수 없는 기기). OIDC 는 가짜 검증기로만 시험했다.
+- **한계**: 초대 만들기·계정 목록은 화면이 없고 `scripts/pilot_invite.py` 로만 한다. 비밀번호 찾기(메일)는 없다. 기기 표시는 비밀이 아니어서 쿠키나 앱 저장소를 지우거나 바꾸면 새 기기가 된다. 그래서 이름 전체 잠금(30번)이 남고, 이름을 아는 사람이 기기를 바꿔 가며 30번 틀리면 그 이름은 여전히 15분 잠긴다. 묶은 앱은 저장한 무작위 `device`를 로그인·비밀번호 변경·계정 삭제 본문에 보낸다([F16](#f16-모바일-웹과-스토어-앱)). OIDC 는 가짜 검증기로만 시험했다.
 
 ## F2. 프로토콜 들여오기
 
@@ -249,8 +249,10 @@
 - **무엇**: 화면은 휴대폰 폭에서도 쓰고, 브라우저의 "홈 화면에 추가"로 둘 수 있다(`manifest.webmanifest`, 오프라인 없음). 마이크·설치·화면 꺼짐 방지는 **HTTPS(또는 localhost)** 에서만 된다. 탭·홈 화면 아이콘과 위 막대·로그인 화면의 로고는 확정 로고 파일 그대로다(이름 "Voiney Lab").
   `mobile/` 은 같은 웹 화면을 감싸는 Capacitor(안드로이드 먼저) 앱 뼈대다: 정확한 시각 알람, 화면을 꺼도 듣는 마이크 서비스, 기기에 봉한 로그인 토큰, 화면 켜 두기. 앱은 상태·타이머 권한을 갖지 않는다(서버의 타이머 시각을 복사해 알릴 뿐).
 - **어디**: `static/manifest.webmanifest`, `static/icons/`(원본 `assets/brand/` 에서 쓰는 것만 복사), `static/index.html` 의 `.brand-logo`·`.wizard-logo`, `static/native-bridge.js`; `mobile/capacitor.config.js`, `mobile/scripts/prepare-web.mjs`, `mobile/README.md`(빌드), `docs/APP_PLAN.md`(계획); 서버 `VOINEY_LAB_APP_ORIGINS`(앱 출처의 토큰 로그인·CORS·`/ws` 출처).
-- **시험**: `tests/test_native_bridge.py`, `tests/test_lane_app1_app_login.py`, `tests/test_lane_app1_app_origins.py`, `tests/test_lane_ui2_pwa.py`, `tests/test_lane_name_product_name.py`(이름 표기, 아이콘·로고 파일).
-- **한계**: `native-bridge.js` 는 아직 `index.html` 이 불러오지 않는다 — 일반 화면에서는 기기 알림·화면 꺼도 듣기가 없다. 화면 주소는 `serverOrigin` 한 곳에서 정해 HTTP·이미지·내보내기·웹소켓에 적용한다. 현재는 빈 값으로 같은 서버를 쓰며 앱 묶음의 서버 주소 주입은 아직 연결되지 않았다. 실제 기기 연결도 확인 안 됨. 실제 휴대폰·HTTPS 에서 확인한 기록은 없다. iOS 빌드 없음. 앱의 런처 아이콘·시작 그림은 아직 Capacitor 기본 그림이다. manifest 에는 둥근 마스크용(`maskable`) 아이콘이 없다(확정 앱 아이콘은 모서리가 둥근 그림이라 그 용도로 쓰지 않았다).
+- **시험**: `tests/test_native_bridge.py`, `tests/test_lane_app1_app_login.py`, `tests/test_lane_app1_app_origins.py`, `tests/test_lane_ui2_pwa.py`, `tests/test_lane_name_product_name.py`(이름 표기, 아이콘·로고 파일), `tests/test_lane_app_brand.py`(크기·안전 영역·실제 manifest 제공), `tests/native_bridge/mobile_app.test.js`(기기 표시·인증), `tests/native_bridge/mobile_screen.test.js`(설정·실제 묶기).
+- **브랜드 파일**: Android 런처(기존·둥근·적응형 앞뒤 층), 흰색 한 색 알림 아이콘, 시작 그림은 확정 제품 플라스크다. 두 웹 manifest는 일반 아이콘과 별도의 불투명 정사각형 `maskable` 판을 쓴다. `scripts/generate_app_icons.py`가 원본 SVG에서 다시 만들며 `--check`로 결과를 비교한다. 원본 묶음은 바꾸지 않는다.
+- **앱 화면·계정**: 기본·디버그 빌드 모두 새 화면(`/app/`)을 연다. 기기 시험 화면은 명시적으로 골라야 한다. `prepare-web.mjs`는 새 화면 빌드를 확인하고 앱 전용 `app-bridge.js`를 화면보다 먼저 넣는다. `VOINEY_APP_API_URL`이 있는 묶은 앱에서 HTTP는 bearer(쿠키 없음), 음성 소켓은 첫 메시지로 인증한다. 토큰은 기존 Keystore 저장소에만 두며, 기기 표시는 별도의 WebView 저장소에 무작위로 만든다. 로그인·비밀번호 변경·계정 삭제 본문에 같은 표시를 싣고, 로그아웃·계정 삭제 후에도 기기 표시는 유지한다. 현재 비밀번호 오류로 기존 토큰을 지우지 않는다. 서버 주소 모드는 `/app/`을 직접 열고 서버 쿠키를 쓴다.
+- **한계**: 일반 웹 화면은 `native-bridge.js`를 불러오지 않는다. 묶은 앱도 기기 타이머·백그라운드 마이크 연결과 직접 이미지·다운로드 링크의 bearer 처리는 아직 남아 있다. 실제 기기 연결·휴대폰 HTTPS·아이콘 마스크·시작 화면의 표시도 확인 안 됨. iOS 프로젝트·빌드 없음.
 
 ## F17. 공급자와 설정
 

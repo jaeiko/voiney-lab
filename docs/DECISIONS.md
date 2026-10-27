@@ -9,6 +9,8 @@
 
 ## 1. 상태 권한과 말 한 번의 길
 
+- 2026-10-27 · 줄 APP: 확정 제품 SVG로 Android 런처·알림·시작 그림을 파생하고, 웹 maskable에는 모서리를 채운 정사각형 판을 따로 쓴다. 앱 기본 화면은 `/app/`, 기기 표시는 앱 안의 무작위 값으로 로그인·현재 비밀번호 확인 요청에 싣는다. 외부 공급자 호출 없이 검사하고 병합은 사람 신호를 기다린다.
+
 | 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
 |---|---|---|---|---|---|
 | 2026-10-02 (D1), 10-03 | 말 한 번은 한 줄로 간다: 앞단 규칙 → LLM 라우터(답하거나 도구로 바꾸기를 **제안**) → 서버 검증. 같은 말의 상태 바꿈을 두 길이 따로 정하면 안 된다 | 모델은 제안만 하고, 상태 기계는 하나(`CuratedProtocolSession`)여야 한다 | R, R2a | `curated_protocol.py` `CuratedProtocolSession.front_plan`, `apply_tool_proposal`; `llm_router.py` `route_turn_with_llm_router`, `validate_tool_proposals` | 파일럿에서 라우터를 켤지 |

@@ -3,8 +3,8 @@
 # JDK 21 and the Android SDK live outside the repository, by default under
 # ~/app-build (see mobile/README.md for how they were downloaded).
 #
-#   mobile/scripts/build-android-debug.sh            # opens device-check.html first
-#   VOINEY_APP_START_PATH= mobile/scripts/build-android-debug.sh       # opens index.html
+#   mobile/scripts/build-android-debug.sh            # opens /app/ first
+#   VOINEY_APP_START_PATH=device-check.html mobile/scripts/build-android-debug.sh
 #   VOINEY_APP_SERVER_URL=https://pilot.example/ mobile/scripts/build-android-debug.sh
 set -euo pipefail
 APP_BUILD="${APP_BUILD:-$HOME/app-build}"
@@ -15,7 +15,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 cd "$(dirname "$0")/.."
 [ -d node_modules ] || npm ci
 node scripts/prepare-web.mjs
-VOINEY_APP_START_PATH="${VOINEY_APP_START_PATH-device-check.html}" npx cap sync android
+npx --no-install cap sync android
 cd android
 ./gradlew assembleDebug --no-daemon --console=plain -Dorg.gradle.jvmargs=-Xmx1536m
 ls -la app/build/outputs/apk/debug/

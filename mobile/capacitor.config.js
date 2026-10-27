@@ -2,11 +2,10 @@
 //
 // Two ways to load the screen, chosen when the app is built:
 //
-// * bundled (default, the store build): the server's static screen
+// * bundled (default, the store build): the new screen at /app/
 //   (src/voiney_lab/static) is copied into www/ by scripts/prepare-web.mjs
 //   and shipped inside the app. The screen still talks to the server for
-//   everything; until index.html takes its server address from the app
-//   (connection points in docs/APP_PLAN.md) this build cannot reach one.
+//   everything; VOINEY_APP_API_URL supplies its public server address.
 // * pilot (VOINEY_APP_SERVER_URL=https://...): the WebView opens the server's
 //   own page. Capacitor documents `server.url` as "not intended for use in
 //   production", so this is for internal device tests only.
@@ -19,13 +18,13 @@
 const serverUrl = (process.env.VOINEY_APP_SERVER_URL || "").trim();
 const startPath = (process.env.VOINEY_APP_START_PATH || "").trim();
 
-if (serverUrl && !serverUrl.startsWith("https://")) {
+if (serverUrl && (new URL(serverUrl).protocol !== "https:" || new URL(serverUrl).username || new URL(serverUrl).password)) {
   throw new Error("VOINEY_APP_SERVER_URL must be https:// (the microphone needs a secure page)");
 }
 
 const server = { androidScheme: "https", errorPath: "offline.html" };
-if (serverUrl) server.url = serverUrl;
-if (startPath) server.appStartPath = startPath;
+if (serverUrl) server.url = new URL("/app/", serverUrl).href;
+else server.appStartPath = startPath || "app/index.html";
 
 module.exports = {
   // Placeholder until a person fixes it; a store listing cannot change it
@@ -41,7 +40,8 @@ module.exports = {
   loggingBehavior: "none",
   plugins: {
     LocalNotifications: {
-      iconColor: "#1f6f5c",
+      smallIcon: "ic_stat_voiney",
+      iconColor: "#1C1C1A",
     },
   },
 };
