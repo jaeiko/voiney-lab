@@ -39,6 +39,8 @@ def english_copy(spoken: str, source: str) -> bool:
 def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offline') -> dict:
     changed = set(result['changed_fields'])
     wrong = bool(changed - set(case.allowed) or result.get('invalid_state'))
+    if changed and (not result['terminal'] or result['drop_reasons']):
+        wrong = True
     if case.target is not None and 'step' in changed and result['step_after'] != case.target:
         wrong = True
     if case.target is None and result['step_after'] != result['step_before']:

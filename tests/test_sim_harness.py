@@ -446,3 +446,11 @@ def test_comparison_cli_reports_asr_and_latency_deltas_without_gating_noise(tmp_
     assert report['metrics']['stt.wer']['delta']==pytest.approx(-.1)
     assert report['metrics']['latency_ms.stt.p95']['delta']==200
     assert report['metrics']['latency_ms.stt.n']['after']==1
+
+
+def test_failed_turn_cannot_authorize_even_an_expected_step_change():
+    p=load_corpus()[0]
+    c=next(c for c in generate_cases(p) if c.family=='complete' and c.target==1)
+    result=dict(action='next',intent_kind='next_step',route='curated_protocol',changed_fields=['step','revision'],
+                step_before=0,step_after=1,spoken='',drop_reasons=[],terminal=False,timings_ms={},transcript=c.text)
+    assert score_case(c,result)['wrong_state'] is True
