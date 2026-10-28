@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from tests.test_protocol_catalog import analysis_draft, write_text_pdf
 from tests.test_revision_translations import FakeTranslator
@@ -175,13 +175,16 @@ class RetranslateScriptTests(unittest.TestCase):
                 raise TimeoutError()
             return await fake.translator(batch, context)
 
-        status, out, _ = self.main(
-            "--data-dir", str(self.data), "--run", "--max-calls", "3",
-            factory=lambda role: (translate, fake.glossary))
+        with patch("asyncio.sleep", new=AsyncMock()):
+            status, out, _ = self.main(
+                "--data-dir", str(self.data), "--run", "--max-calls", "5",
+                factory=lambda role: (translate, fake.glossary))
         self.assertEqual(status, 0)
-        self.assertEqual(fake.glossary_calls + len(batches), 3)
+        # Glossary + three attempts of the original batch + one successful half.
+        self.assertEqual(fake.glossary_calls + len(batches), 5)
         self.assertGreater(batches[0], 1)
-        self.assertEqual(batches[1], 1)
+        self.assertEqual(batches[:3], [batches[0]] * 3)
+        self.assertEqual(batches[-1], 1)
         self.assertEqual(len(self.rows()), 2)  # old row plus the successful half
         self.assertIn("180초", out)
 

@@ -9993,6 +9993,39 @@ _TRANSLATABLE_TERMS = frozenset({
 })
 
 
+# The v5 translation glossary and both reading checks use this same table.
+COMMON_LAB_WORDS = {
+    "band": "밴드", "gel": "젤", "vial": "바이알", "tube": "튜브",
+    "bead": "비즈", "supernatant": "상층액", "pipette": "피펫",
+}
+
+
+def _translation_term_present(term: str, reading: str) -> bool:
+    """Keep a required name, allowing only v5's explicit common-noun forms.
+
+    Replace whole whitespace-delimited words only, so Band100, Gel-100 and
+    longer names keep their spelling. Capitalised words inside a mixed name
+    also stay English; a standalone common noun may be capitalised.
+    """
+    folded = " ".join(reading.split()).casefold()
+    source = " ".join(term.split())
+    if source.casefold() in _TRANSLATABLE_TERMS or source.casefold() in folded:
+        return True
+
+    def common(word: str) -> str | None:
+        stem = word.casefold()
+        if stem.endswith("s"):
+            stem = stem[:-1]
+        return COMMON_LAB_WORDS.get(stem)
+
+    words = source.split()
+    common_phrase = bool(words) and all(common(word) is not None for word in words)
+    equivalent = " ".join(
+        (common(word) or word) if common_phrase or word.islower() else word
+        for word in words).casefold()
+    return equivalent in folded
+
+
 def _normalized_counts(value: str) -> str:
     """Count words as digits, the same rules for a source and a reading."""
 
@@ -10197,11 +10230,8 @@ def reader_translation_issue(
     if bool(_SOURCE_NEGATION.search(source)) != bool(
             _KOREAN_NEGATION.search(_without_un_renderings(source, reading))):
         return "negation_changed"
-    folded = text.casefold()
     for term in required_terms:
-        if term.casefold() in _TRANSLATABLE_TERMS:
-            continue
-        if term.casefold() not in folded:
+        if not _translation_term_present(term, text):
             return "term_missing"
     return None
 
