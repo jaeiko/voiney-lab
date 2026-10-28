@@ -1089,7 +1089,12 @@ async def commercial_identity_boundary(request:Request,call_next):
 # of the screen's files. With VOINEY_LAB_APP_ORIGINS empty nothing is added.
 _APP_CORS_PATHS=frozenset({"/readyz","/healthz"})
 _APP_CORS_METHODS="GET, POST, PUT, PATCH, DELETE"
-_APP_CORS_HEADERS="Authorization, Content-Type, Accept"
+_SOURCE_STATUS_HEADER="x-voiney-source-status"
+_SOURCE_NOTE_HEADER="x-voiney-source-note"
+_APP_CORS_HEADERS=(
+    "Authorization, Content-Type, Accept, "
+    f"{_SOURCE_STATUS_HEADER}, {_SOURCE_NOTE_HEADER}"
+)
 _APP_CORS_EXPOSE="Retry-After, Content-Disposition"
 _APP_CORS_MAX_AGE_SECONDS=600
 
@@ -4914,8 +4919,6 @@ async def _spool_protocol_pdf_upload(
 
 
 PUBLIC_SOURCE_ONLY_ENV="VOINEY_LAB_PUBLIC_SOURCE_ONLY"
-_SOURCE_STATUS_HEADER="x-voiney-source-status"
-_SOURCE_NOTE_HEADER="x-voiney-source-note"
 
 
 def _source_disclosure_error(code:str)->HTTPException:

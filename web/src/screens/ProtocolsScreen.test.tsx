@@ -76,4 +76,5 @@ it('shows the recorded source scope in the protocol list', async () => {
   fakeFetch({ '/api/protocols': { json: { protocols: [{ ...ENTRY_READY, source_disclosure: { recorded: true, status: 'yes', status_ko: '예 — 공개·시판 원문', note: '시판 제품 설명서', recorded_at: '2026-10-28T00:00:00Z' } }] } } });
   renderWithClient(<ProtocolsScreen />);
   expect(await screen.findByText(/공개·시판 원문: 예/)).toBeInTheDocument();
+  expect(screen.getByText(/출처: 시판 제품 설명서/)).toBeInTheDocument();
 });

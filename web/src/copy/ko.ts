@@ -110,6 +110,7 @@ export const protocols = {
     recorded
       ? `공개·시판 원문: ${{ yes: "예", no: "아니요", unknown: "모름" }[status ?? ""] ?? "확인 필요"}`
       : "공개·시판 원문: 확인 기록 없음",
+  sourceNote: (note: string) => `출처: ${note}`,
   actions: {
     start: "시작하기",
     review: "확인하기",

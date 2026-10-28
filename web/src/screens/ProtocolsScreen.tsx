@@ -17,6 +17,9 @@ function ProtocolRow({ entry }: { entry: CatalogEntry }) {
     entry.source_disclosure
       ? words.sourceScope(entry.source_disclosure.status, entry.source_disclosure.recorded)
       : null,
+    entry.source_disclosure?.note.trim()
+      ? words.sourceNote(entry.source_disclosure.note.trim())
+      : null,
     Number.isInteger(entry.step_count) && (entry.step_count as number) > 0 ? words.steps(entry.step_count as number) : null,
     uploadedDay(entry.created_at) ? words.uploaded(uploadedDay(entry.created_at) as string) : null,
   ].filter(Boolean);
