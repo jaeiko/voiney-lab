@@ -137,6 +137,8 @@
 
 | 2026-10-28 | INFRA1: Android의 `com.getcapacitor.myapp` 견본 시험 두 개를 제거한다 | 하나는 2+2만 검사하고 하나는 실제 `com.voiney.lab`과 다른 견본 패키지를 검사. CI나 기능 시험에서 참조하지 않으며 기기 연결 JS·알람 정책 시험은 유지 | `mobile/android/app/src/`, `tests/test_native_bridge.py`, `tests/test_lane_app1_alarm_clock.py` |
 
+| 2026-10-28 | INFRA1: staging 워크플로는 그대로 두고 사람의 `~/bin/vl-after-merge`와 범위·실패 처리·잠금·커밋 선택 차이를 운영 안내에 기록한다 | 자동 경로는 성공한 dev push CI 뒤 원격 `deploy`만 호출한다. 사람 경로는 로컬 검사 결과가 달라도 먼저 재시작하며 두 경로에 공통 잠금이 없다. 원격 구현·실제 배포 성공은 확인 안 됨 | `docs/DEPLOYMENT_RUNBOOK.md`, `.github/workflows/deploy-staging.yml` |
+
 ## 11. 병합된 서버·기록·화면 결정
 
 | 날짜 | 결정 | 이유·줄 | 코드에서 |
