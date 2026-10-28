@@ -201,7 +201,7 @@ def _parse_groups(values: Sequence[str]) -> dict[str, tuple[str, ...]]:
         name = name.strip()
         if not separator or not re.fullmatch(r"[A-Za-z0-9가-힣_-]{1,40}", name) or not ids:
             raise EvaluationError("--group must be NAME=PROTOCOL_ID[,PROTOCOL_ID]")
-        if name in groups or used.intersection(ids):
+        if name in groups or len(ids) != len(set(ids)) or used.intersection(ids):
             raise EvaluationError("sample group names and protocol membership must be unique")
         groups[name] = ids
         used.update(ids)
@@ -215,6 +215,7 @@ def make_translation_sample(
 ) -> dict[str, Any]:
     data_dir = _checked_copy(data_dir)
     store = initialize_protocol_store(ProtocolPersistenceSettings(True, data_dir))
+    items: list[SampleItem]
     try:
         catalog = ProtocolCatalog(store)
         candidates: dict[str, list[SampleItem]] = defaultdict(list)
@@ -230,11 +231,11 @@ def make_translation_sample(
                         source_chars=len(unit.source_text),
                     ))
         items = balanced_sample(candidates, size=size, seed=seed)
-        return sample_manifest(
-            items, catalog_sha256=_sha256(data_dir / "protocol_workspace.sqlite"),
-            seed=seed)
     finally:
         store.close()
+    return sample_manifest(
+        items, catalog_sha256=_sha256(data_dir / "protocol_workspace.sqlite"),
+        seed=seed)
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -356,7 +357,7 @@ def style_issues(korean: str) -> tuple[str, ...]:
 
 
 def response_shape_failure_calls(failures: Mapping[str, int]) -> int:
-    shapes = {"response_shape", "empty_response", "blocked"}
+    shapes = {"response_shape", "empty_response"}
     return sum(
         count for kind, count in failures.items()
         if kind.removeprefix("glossary_") in shapes)
@@ -743,7 +744,8 @@ def analysis_plan(
             extraction = extract_protocol_pdf(source)
             rows.append({
                 "protocol_id": protocol_id,
-                "reference": str(reference),
+                "source_sha256": extraction.sha256,
+                "reference_sha256": _sha256(reference),
                 "pages": extraction.page_count,
                 "source_characters": sum(len(page.text) for page in extraction.pages),
                 "pieces": len(analysis_pieces(extraction) or ()),
@@ -801,6 +803,33 @@ def analysis_card_count(entry: Any | None) -> int | None:
     if entry.review_pending is None:
         return 0
     return int(entry.review_pending.get("needs_review_count") or 0)
+
+
+def analysis_case_identities(plan: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """Validate and index the source/reference identities shared by a condition."""
+    raw_cases = plan.get("cases")
+    if not isinstance(raw_cases, list):
+        raise EvaluationError("analysis plan identity is invalid")
+    identities: dict[str, dict[str, str]] = {}
+    for row in raw_cases:
+        if not isinstance(row, dict):
+            raise EvaluationError("analysis plan identity is invalid")
+        protocol_id = row.get("protocol_id")
+        source_sha256 = row.get("source_sha256")
+        reference_sha256 = row.get("reference_sha256")
+        if (
+            not isinstance(protocol_id, str) or protocol_id in identities
+            or not isinstance(source_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None
+            or not isinstance(reference_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", reference_sha256) is None
+        ):
+            raise EvaluationError("analysis plan identity is invalid")
+        identities[protocol_id] = {
+            "source_sha256": source_sha256,
+            "reference_sha256": reference_sha256,
+        }
+    return identities
 
 
 def analysis_accuracy_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -881,6 +910,7 @@ def execute_analysis(
         raise EvaluationError(
             "score_extraction needs single-pass protocols; piecewise cases: "
             + ", ".join(piecewise))
+    identities = analysis_case_identities(preflight)
     output_dir = _checked_report_path(output_dir)
     if output_dir.exists():
         raise EvaluationError("analysis output directory already exists")
@@ -915,11 +945,17 @@ def execute_analysis(
                     failure = type(exc).__name__
                 elapsed = (time.perf_counter() - started) * 1000
                 records = capture.records[before:]
+                identity = identities[protocol_id]
+                if _sha256(reference) != identity["reference_sha256"]:
+                    raise EvaluationError("analysis reference identity changed during execution")
                 score, scored_call = _score_candidate(
                     source, reference, records, folder)
+                if score is not None and score.get("source_sha256") != identity["source_sha256"]:
+                    raise EvaluationError("analysis source identity changed during execution")
                 cards = analysis_card_count(entry)
                 rows.append({
                     "protocol_id": protocol_id,
+                    **identity,
                     "analysis_status": entry.analysis_status if entry is not None else None,
                     "failure": failure,
                     "cards": cards,

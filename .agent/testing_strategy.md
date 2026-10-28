@@ -99,7 +99,7 @@ together.
   cap and a reserved-USD cap are mandatory. `translation-sample` fixes a
   source-identified, text-free manifest balanced across person-named fields
   and within-field source-length terciles. `translation` runs that same sample
-  through either the stored batch prompt/check or the server's six-second spot
+  through either the current batch prompt/check or the server's six-second spot
   request/check, reporting pass/style-shape proxies, p50/p95, tokens and a
   rate-labelled cost estimate. `analysis` requests append-only reanalysis in a
   catalog copy, counts the resulting cards/calls/time, keeps raw candidates

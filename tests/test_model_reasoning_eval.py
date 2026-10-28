@@ -60,6 +60,45 @@ def test_sample_manifest_contains_identity_but_no_source_sentence() -> None:
     assert "korean" not in encoded
 
 
+def test_translation_sample_hashes_the_catalog_after_store_close(
+    monkeypatch, tmp_path,
+) -> None:
+    import hashlib
+    from types import SimpleNamespace
+    from scripts import model_reasoning_eval as tool
+
+    database = tmp_path / "protocol_workspace.sqlite"
+    database.write_bytes(b"open-snapshot")
+
+    class FakeStore:
+        def close(self):
+            database.write_bytes(b"closed-snapshot")
+
+    fixture = object()
+    units = [
+        SimpleNamespace(fact_key=f"fact-{index}", source_text="x" * index)
+        for index in range(1, 4)
+    ]
+    monkeypatch.setattr(tool, "initialize_protocol_store", lambda *_a, **_k: FakeStore())
+    monkeypatch.setattr(
+        tool, "ProtocolCatalog",
+        lambda _store: SimpleNamespace(load_executable_fixture=lambda _id: fixture),
+    )
+    monkeypatch.setattr(tool, "translation_units", lambda _fixture: units)
+
+    manifest = tool.make_translation_sample(
+        tmp_path, {"biology": ("protocol-1",)}, size=3, seed=1028)
+
+    assert manifest["catalog_sha256"] == hashlib.sha256(b"closed-snapshot").hexdigest()
+
+
+def test_translation_sample_groups_refuse_duplicate_protocol_membership() -> None:
+    from scripts.model_reasoning_eval import EvaluationError, _parse_groups
+
+    with pytest.raises(EvaluationError, match="unique"):
+        _parse_groups(["biology=protocol-1,protocol-1"])
+
+
 @pytest.mark.parametrize(
     ("korean", "expected"),
     [
@@ -86,6 +125,7 @@ def test_response_shape_count_includes_glossary_and_sentence_calls() -> None:
     failures = Counter({
         "response_shape": 2, "empty_response": 1,
         "glossary_response_shape": 1, "glossary_timeout": 3,
+        "blocked": 2,
     })
     assert response_shape_failure_calls(failures) == 4
 
@@ -232,6 +272,68 @@ def test_analysis_accuracy_summary_compares_the_condition() -> None:
         "steps_with_contradicted_values": 1,
         "steps_unscorable_on_values": 1,
     }
+
+
+def test_analysis_plan_exports_reference_identity_not_private_path(
+    monkeypatch, tmp_path,
+) -> None:
+    import hashlib
+    from types import SimpleNamespace
+    from scripts import model_reasoning_eval as tool
+    from voiney_lab import experiment_protocol_analysis, experiment_protocol_pdf
+
+    reference = tmp_path / "private-reference-name.json"
+    reference.write_bytes(b'{"reference":true}')
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"not-read-by-fake")
+    extraction = SimpleNamespace(
+        sha256="a" * 64, page_count=1,
+        pages=(SimpleNamespace(text="source text"),))
+
+    class FakeStore:
+        def close(self):
+            return None
+
+    monkeypatch.setattr(tool, "_checked_copy", lambda path: path)
+    monkeypatch.setattr(tool, "initialize_protocol_store", lambda *_a, **_k: FakeStore())
+    monkeypatch.setattr(tool, "ProtocolCatalog", lambda store: SimpleNamespace())
+    monkeypatch.setattr(tool, "_source_path", lambda *_a: source)
+    monkeypatch.setattr(experiment_protocol_pdf, "extract_protocol_pdf", lambda _p: extraction)
+    monkeypatch.setattr(experiment_protocol_analysis, "analysis_pieces", lambda _e: ())
+
+    plan = tool.analysis_plan(
+        data_dir=tmp_path, cases=[("protocol-1", reference)], max_calls=1,
+        max_usd=1, reserve_usd=.1, input_rate=1, output_rate=1)
+    encoded = json.dumps(plan)
+
+    assert str(reference) not in encoded
+    assert plan["cases"][0]["source_sha256"] == "a" * 64
+    assert plan["cases"][0]["reference_sha256"] == hashlib.sha256(
+        reference.read_bytes()).hexdigest()
+
+
+def test_analysis_case_identities_are_validated_for_result_rows() -> None:
+    from scripts.model_reasoning_eval import (
+        EvaluationError, analysis_case_identities,
+    )
+
+    plan = {"cases": [{
+        "protocol_id": "protocol-1",
+        "source_sha256": "a" * 64,
+        "reference_sha256": "b" * 64,
+    }]}
+    assert analysis_case_identities(plan) == {
+        "protocol-1": {
+            "source_sha256": "a" * 64,
+            "reference_sha256": "b" * 64,
+        },
+    }
+    with pytest.raises(EvaluationError, match="identity"):
+        analysis_case_identities({"cases": [{
+            "protocol_id": "protocol-1",
+            "source_sha256": "not-a-hash",
+            "reference_sha256": "b" * 64,
+        }]})
 
 
 def test_analysis_execution_refuses_piecewise_plan_before_provider_boundary(
