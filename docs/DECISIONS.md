@@ -131,6 +131,8 @@
 | 2026-10-23 | 파일럿 문서 넷을 PILOT_GUIDE 하나로 합치고 나머지 셋은 보관한다. PILOT_COMPARISON은 독립된 비교 절차로 둔다 | 로그인·안전 확인·데이터 처리·HTTPS·참가자 안내를 서로 다른 전제로 읽지 않게 한다 | `docs/PILOT_GUIDE.md`, `docs/DOCUMENTATION_INDEX.md` |
 | 2026-10-25 | `node --test` 결과는 출력 모양(TAP `# fail 0`·spec `ℹ fail 0`)과 상관없이 종료 코드와 마지막 요약의 수로 판정하고, CI 의 Node 버전은 고정하지 않는다(줄 CIFIX) | GitHub 실행기 ubuntu-26.04 의 Node 24 가 spec 으로 찍어 node 시험 43개가 모두 통과했는데도 pytest 가 실패했고, 그 때문에 dev CI 와 dev 자동 배포가 멈췄다. 판정이 모양을 가리지 않으므로 버전 고정은 필요 없다 | `tests/test_native_bridge.py` |
 
+| 2026-10-28 | INFRA1: 서버의 Python 3.14를 유지하고 CI에 3.12·3.14 행렬과 3.14 브라우저 서버를 둔다. requirements는 런타임 21개와 판 제한·순서를 pyproject와 일치시킨다. 안내 CLI 시험은 실행 중인 인터프리터를 사용한다 | 기존 서버 환경을 바꾸지 않고 최소 판과 실제 실행 판을 함께 검사. 누락 10개·판 제한 차이 2개를 회귀 검사로 막는다 | `.github/workflows/ci.yml`, `requirements.txt`, `tests/test_infra1_environment.py`, `tests/test_lane_fx5_guide.py` |
+
 ## 11. 병합된 서버·기록·화면 결정
 
 | 날짜 | 결정 | 이유·줄 | 코드에서 |
