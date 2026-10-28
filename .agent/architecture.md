@@ -681,8 +681,9 @@ grounding are fixed. An owner may append optional inventory/domain choices
 and `notebook_share_changed`. `/sharing` is owner-only. `/comparisons` first
 requires ownership of its anchor, then returns at most 20 completed records
 for the same organization and protocol: the requester's records plus other
-owners whose latest share event is true. Other-owner rows are anonymous,
-read-only projections of source/actual values, method times/timers and
+owners whose latest share event is true. Other-owner rows omit owner and
+report identifiers and are read-only projections of source/actual values,
+method times/timers and
 verbatim notes; no report id, owner, purpose, result, interpretation,
 recommendation or verdict crosses that boundary. A later false share event
 removes the row on the next query. Existing experiment/report/evidence read gates apply. Its experiment screen does not reimplement the voice: it
