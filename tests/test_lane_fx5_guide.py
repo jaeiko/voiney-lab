@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -51,11 +52,11 @@ class SectionSevenTests(unittest.TestCase):
         for path in ("/api/auth/delete-account", "/api/auth/accounts/{account_id}/disabled", "/api/admin/pilot-metrics"):
             self.assertIn(path, paths)
         invite_help = subprocess.run(
-            ["python", str(ROOT / "scripts" / "pilot_invite.py"), "--help"], capture_output=True, text=True, cwd=ROOT).stdout
+            [sys.executable, str(ROOT / "scripts" / "pilot_invite.py"), "--help"], capture_output=True, text=True, cwd=ROOT).stdout
         for flag in ("--admin", "--list", "--revoke", "--disable", "--enable", "--accounts"):
             self.assertIn(flag, invite_help)
         delete_help = subprocess.run(
-            ["python", str(ROOT / "scripts" / "pilot_data_delete.py"), "--help"], capture_output=True, text=True, cwd=ROOT).stdout
+            [sys.executable, str(ROOT / "scripts" / "pilot_data_delete.py"), "--help"], capture_output=True, text=True, cwd=ROOT).stdout
         for flag in ("--account", "--delete", "--confirm"):
             self.assertIn(flag, delete_help)
         self.assertEqual(acc.DELETION_LOG_NAME, "deletion_log.jsonl")
