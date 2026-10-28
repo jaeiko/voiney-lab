@@ -155,3 +155,55 @@ def test_spot_evaluation_uses_server_request_and_production_check(monkeypatch) -
     assert not failures
     assert len(latencies) == 1
     assert "원문을 확인해요" not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_batch_evaluation_uses_glossary_batch_prompt_and_production_check(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from scripts import model_reasoning_eval as tool
+    from scripts.sim.corpus import load_corpus
+    from voiney_lab.model_providers import RoleModel
+    from voiney_lab.protocol_translation import translation_units
+
+    fixture = load_corpus()[0].fixture
+    unit = next(item for item in translation_units(fixture)
+                if item.kind == "step" and item.step_label)
+    item = tool.SampleItem(
+        group="biology", protocol_id=fixture.protocol_id,
+        fact_key=unit.fact_key, source_sha256=tool._source_sha256(unit.source_text),
+        source_chars=len(unit.source_text), length_band="short")
+    schema_names = []
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        async def create(self, **request):
+            name = request["response_format"]["json_schema"]["name"]
+            schema_names.append(name)
+            payload = ({"entries": []} if "glossary" in name else {
+                "items": [{"id": unit.fact_key,
+                           "korean": f"{unit.step_label}단계: 원문을 확인해요."}]})
+            return SimpleNamespace(
+                usage=SimpleNamespace(prompt_tokens=100, completion_tokens=10,
+                                      total_tokens=110, prompt_tokens_details=None),
+                model="fake", choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=json.dumps(payload), refusal=None))])
+
+        async def close(self):
+            return None
+
+    capture = tool._Capture(2)
+    monkeypatch.setattr(
+        tool, "build_model_client",
+        lambda *_a, **_k: tool.AsyncCaptureClient(FakeClient(), capture))
+    rows, failures, latencies = asyncio.run(tool._run_translation(
+        [tool.LoadedSample(item, fixture, unit)], mode="batch",
+        role=RoleModel("translation", "google", "fake", "low"), capture=capture))
+
+    assert schema_names == [
+        "protocol_translation_glossary_v1", "protocol_revision_translation_v2"]
+    assert rows[0]["check"] != "missing"
+    assert not failures
+    assert len(latencies) == 1
+    assert "원문을 확인해요" not in json.dumps(rows, ensure_ascii=False)
