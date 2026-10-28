@@ -161,3 +161,36 @@ def test_model_cli_counts_server_timeout_and_missing_usage(tmp_path, monkeypatch
     assert report['overall']['router']['timeouts'] == 1
     assert report['overall']['router']['timeout_rate'] == 1.0
     assert report['router_cost_estimate']['usage_missing_calls'] == 1
+
+
+def test_model_cli_counts_rate_limit_turn_that_has_no_route_decision(
+    tmp_path, monkeypatch,
+) -> None:
+    from scripts.sim import run
+    from scripts.sim.corpus import Case
+    from scripts.sim.runner import import_server
+    from tests.router_fakes import FakeRouterClient
+    from voiney_lab.model_providers import ModelProviderError
+
+    protocol = load_corpus()[0]
+    case = Case('router-rate-limit', 'router_proposal', '이제 다음 거 하자',
+                actions=(), allowed=())
+    client = FakeRouterClient(ModelProviderError('openai', 'rate_limited', 429))
+    monkeypatch.setattr(
+        run, 'prepare_cases',
+        lambda args: ([(protocol, case)], {'name': 'development'}, {}, {}))
+    monkeypatch.setattr(run, 'output_dir', lambda path: path.mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(import_server(), '_role_client', lambda role: client)
+    monkeypatch.setenv('VOINEY_LAB_LLM_ROUTER_ENABLED', 'true')
+    monkeypatch.setenv('VOINEY_LAB_ROUTER_PROVIDER', 'xai')
+    monkeypatch.setenv('VOINEY_LAB_ROUTER_MODEL', 'fake-router')
+    output = tmp_path/'rate-limit.json'
+
+    assert run.main(['--configured-router', '--execute', '--output', str(output)]) == 0
+    report = json.loads(output.read_text())
+    assert report['overall']['wrong_state'] == 0
+    assert report['overall']['router']['model_calls'] == 1
+    assert report['overall']['router']['handled_by'] == {'model_unavailable': 1}
+    assert report['overall']['router']['fallback_reasons'] == {
+        'model_unavailable:rate_limited': 1}
+    assert report['router_cost_estimate']['usage_missing_calls'] == 1

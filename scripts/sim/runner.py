@@ -218,6 +218,20 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                 'model': getattr(router_settings, 'model', None),
                 'usage': {},
             }
+        elif (
+            not isinstance(router_measurement, dict)
+            and done.get('route') == 'model_unavailable'
+            and getattr(router_settings, 'enabled', False)
+        ):
+            # A 429 deliberately stops before turn.route_decision. The public
+            # turn.done route is enough to retain that content-free call in
+            # SIM; rate_limited is currently the only unavailable router kind.
+            router_measurement = {
+                'handled_by': 'model_unavailable',
+                'fallback_reason': 'model_unavailable:rate_limited',
+                'model': getattr(router_settings, 'model', None),
+                'usage': {},
+            }
         drops += [str(e.get('reason', 'unknown')) for e in events if e['type'] == 'speech.dropped']
         if not committed and not drops:
             drops = ['no_vad_endpoint']
