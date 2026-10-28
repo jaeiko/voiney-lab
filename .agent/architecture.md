@@ -661,7 +661,31 @@ build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its 
 `GET /api/experiment-reports/{report}/notebook` returns the existing
 export notebook projection, review items and ledger events without preparing
 prose. The experiment list adds only the last owner rating of an accessible
-report. Existing experiment/report/evidence read gates apply. Its experiment screen does not reimplement the voice: it
+report. The notebook projection is the renderer-neutral authority shared by
+the screen and Word/Markdown/PDF: eight complete sections, source step to
+actual value/time rows, deterministic timeline/value bars, recorded photos,
+source-PDF figure crops, one source-selected/person-overridable domain profile,
+and the source inventory plus optional vendor/catalog/Lot facts. Purpose and
+result are person-authored only and interpretation is blank; model-prepared
+prose is not added to this notebook body. `audit_notebook_number_provenance`
+can reproduce every displayed number from source inventory/steps, ledger
+events or the bounded calculations named by the projection. DOCX/PDF image
+resolution reuses the authenticated workspace evidence reader and the
+content-addressed source-figure cache; a missing image leaves its grounded
+caption rather than creating a replacement.
+
+Notebook presentation and comparison mutations are append-only and never
+touch workflow state. A same-organization admin may append a complete
+eight-id heading/order version through `/api/notebook-template`; content and
+grounding are fixed. An owner may append optional inventory/domain choices
+and `notebook_share_changed`. `/sharing` is owner-only. `/comparisons` first
+requires ownership of its anchor, then returns at most 20 completed records
+for the same organization and protocol: the requester's records plus other
+owners whose latest share event is true. Other-owner rows are anonymous,
+read-only projections of source/actual values, method times/timers and
+verbatim notes; no report id, owner, purpose, result, interpretation,
+recommendation or verdict crosses that boundary. A later false share event
+removes the row on the next query. Existing experiment/report/evidence read gates apply. Its experiment screen does not reimplement the voice: it
 loads `/voice-core.js` and `/connection.js` as classic scripts and
 `web/src/voice/engine.ts` defines the names they call
 (`VOICE_CORE_HOST_NAMES`, connection.js's per-turn maps and renderers), reads

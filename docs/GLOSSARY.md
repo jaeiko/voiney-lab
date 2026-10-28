@@ -89,9 +89,12 @@
 | 기록 | 실험 기록, 타임라인, 체크포인트 | experiment report ledger `experiment_report_events`; 작업공간 `experiment_session_events` | 지우지 않고 덧붙이기만 하는 장부 |
 | 저장해 둔 지점 | 체크포인트 | checkpoint — `POST …/checkpoint-restart` | 끝난 실험의 그 지점에서 새 실험 |
 | 지난 실험 기록 | 기록 탭의 목록 → 한 실험 기록 | `#/records`, `#/records/<id>`, `renderRecordsViews` | 서버의 목록에서 타임라인과 보고서 링크를 연다. 남의 실험은 읽기만 |
-| 실험 노트 | 실험 노트 | `experiment_reports.LabNotebook`, `NOTEBOOK_SUBTITLE` | Word·Markdown 보고서의 모양 |
-| 보고서 | 보고서 만들기 (Word), Markdown·JSON·CSV 내보내기 | `GET /api/experiment-reports/{id}.{형식}` | PDF·랩미팅·xlsx 는 서버에만 있고 화면 링크가 없다 |
-| AI 정리 | AI 정리 | report writer — `check_ai_notes` | 검사를 통과한 AI 문장만 |
+| 실험 노트 | 실험 노트 | `experiment_reports.LabNotebook`, `NOTEBOOK_SECTIONS` | 화면·Word·PDF·Markdown이 공유하는 여덟 절 초안. 목적·결과는 사람 기록만, 해석은 빈칸 |
+| Methods 조건표 | Methods 조건표 | `NotebookInventoryItem`, `notebook_inventory_recorded` | 원문 시약·장비와 선택 입력한 구매처·카탈로그·Lot |
+| 같은 프로토콜 기록 비교 | 같은 프로토콜 기록 비교 | `notebook_share_changed`, `notebook_comparison_reports`, `GET …/comparisons` | 같은 연구실에서 현재 공유에 동의한 기록의 사실만 익명·읽기 전용으로 비교 |
+| 연구실 노트 절 이름·순서 | 연구실 노트 절 이름·순서 | `experiment_notebook_templates`, `/api/notebook-template` | 관리자가 여덟 절의 이름과 순서만 정하는 덧붙이기 설정 |
+| 보고서 | Word·PDF·Markdown·JSON·CSV·모임 요약·결과 표 내려받기 | `GET /api/experiment-reports/{id}.{형식}` | 기존 장부에서 다시 만든 파생 파일 |
+| AI 정리 | 실험 노트에는 표시하지 않음 | report writer — `check_ai_notes` | 별도 파생 출력에 쓰는 검사 통과 제안; 실험 노트 본문에는 넣지 않음 |
 | 미확인 | [미확인] | 보고서 값 확인 `POST …/review/{item_id}` | 실험자가 아직 확인하지 않은 값 |
 | 평점 | 이번 실험에 도움이 됐나요? (지금 화면) · 오늘 안내는 어땠나요? (새 화면의 끝 화면) | `POST /api/pilot/feedback`, `pilot_feedback`, `FEEDBACK_TAGS` | 1–5 와 한 줄 메모(선택); 새 화면은 표정 단추와 칩(`tags`) |
 
