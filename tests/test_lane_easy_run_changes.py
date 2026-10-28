@@ -400,11 +400,11 @@ class TheNotebookWritesSourceToActualTests(unittest.TestCase):
     def test_the_conditions_and_the_differences_write_source_then_todays_value(self) -> None:
         record = self.run_record()
         text = record.store.export_markdown(record.report_id, fixture=protocol_double()).decode()
-        conditions = text.split("## 2. 실제로 한 조건", 1)[1].split("## 3.", 1)[0]
+        conditions = text.split("## 방법", 1)[1].split("## 관찰·특이사항", 1)[0]
         self.assertIn("양 500 µL → 450 µL (오늘 바꾼 값)", conditions)
         self.assertIn("시간 15 min → 20분 (오늘 바꾼 값)", conditions)
         self.assertNotIn("40°C", conditions)  # put back before the step was done
-        differences = text.split("## 4. 원문과 다르게 한 점·문제", 1)[1].split("## 5.", 1)[0]
+        differences = conditions.split("### 원문과 다르게 한 점·문제", 1)[1]
         self.assertIn("- 2단계 양: 원문 500 µL → 450 µL (오늘 바꾼 값)", differences)
         self.assertIn("- 3단계 시간: 원문 15 min → 20분 (오늘 바꾼 값)", differences)
 

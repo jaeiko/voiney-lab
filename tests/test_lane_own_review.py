@@ -39,7 +39,8 @@ def test_every_export_format_has_the_same_permissions(records, monkeypatch, who)
         if suffix == "md":
             method = "export_markdown"
         monkeypatch.setattr(ExperimentReportStore, method,
-            lambda self, report_id, name=suffix: exported.append(name) or b"fictional export")
+            lambda self, report_id, name=suffix, **kwargs:
+                exported.append(name) or b"fictional export")
     for suffix in EXPORTS:
         response = device.get(f"/api/experiment-reports/{rid}.{suffix}")
         assert response.status_code == (200 if who in {"owner", "admin"} else 404), (suffix, response.text)

@@ -118,7 +118,9 @@ EVENT_NAMES_KO: dict[str, str] = {
     # Lane RP3 (decisions ②, ④): what the experimenter says at the start and
     # the end of a run, and a PI's confirmation of the notebook.
     "purpose_recorded": "목적·시료 기록", "result_recorded": "결과·다음 할 일 기록",
-    "pi_confirmed": "PI 확인",
+    "pi_confirmed": "PI 확인", "notebook_domain_selected": "실험 노트 분야 양식 변경",
+    "notebook_inventory_recorded": "Methods 정보 기록",
+    "notebook_share_changed": "실험 노트 비교 공유 변경",
 }
 
 
