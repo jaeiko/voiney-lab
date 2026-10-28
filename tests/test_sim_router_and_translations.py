@@ -21,6 +21,24 @@ def test_router_dry_run_has_explicit_request_and_cost_caps(tmp_path, capsys) -> 
     assert not (tmp_path/'unused.json').exists()
 
 
+def test_router_cost_estimate_uses_reported_usage_and_marks_missing_calls() -> None:
+    from scripts.sim.run import router_cost_estimate
+
+    estimate = router_cost_estimate(
+        {'model_calls': 3, 'model_completed_with_usage': 2,
+         'usage': {'prompt_tokens': 8000, 'completion_tokens': 500}},
+        input_rate=5, output_rate=15,
+    )
+    assert estimate == {
+        'reported_usage_calls': 2,
+        'usage_missing_calls': 1,
+        'input_usd_per_million_assumed': 5,
+        'output_usd_per_million_assumed': 15,
+        'reported_usage_usd_estimate': 0.0475,
+        'rates_verified': False,
+    }
+
+
 def test_stored_translation_rejects_wrong_identity_and_scientific_value(tmp_path) -> None:
     from scripts.sim.translations import attach_translations
     p = load_corpus()[0]
@@ -111,3 +129,35 @@ def test_model_cli_uses_the_existing_server_proposal_gate(tmp_path, monkeypatch)
     assert report['overall']['wrong_state'] == 0
     assert report['rows'][0]['changed_fields'] == ['confirmation']
     assert len(client.requests) == 1
+
+
+def test_model_cli_counts_server_timeout_and_missing_usage(tmp_path, monkeypatch) -> None:
+    from scripts.sim import run
+    from scripts.sim.corpus import Case
+    from scripts.sim.runner import import_server
+    from tests.router_fakes import FakeRouterClient, tool_reply
+
+    protocol = load_corpus()[0]
+    case = Case('router-timeout', 'router_proposal', '이제 다음 거 하자',
+                actions=('clarify_completion',), allowed=('confirmation',))
+    delayed = tool_reply((
+        'change_state', {'action': 'next', 'evidence': '다음 거 하자'}))
+    client = FakeRouterClient((delayed, .3))
+    monkeypatch.setattr(
+        run, 'prepare_cases',
+        lambda args: ([(protocol, case)], {'name': 'development'}, {}, {}))
+    monkeypatch.setattr(run, 'output_dir', lambda path: path.mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(import_server(), '_role_client', lambda role: client)
+    monkeypatch.setenv('VOINEY_LAB_LLM_ROUTER_ENABLED', 'true')
+    monkeypatch.setenv('VOINEY_LAB_ROUTER_PROVIDER', 'xai')
+    monkeypatch.setenv('VOINEY_LAB_ROUTER_MODEL', 'fake-router')
+    monkeypatch.setenv('VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS', '.2')
+    output = tmp_path/'timeout.json'
+
+    assert run.main(['--configured-router', '--execute', '--output', str(output)]) == 0
+    report = json.loads(output.read_text())
+    assert report['overall']['wrong_state'] == 0
+    assert report['overall']['router']['model_calls'] == 1
+    assert report['overall']['router']['timeouts'] == 1
+    assert report['overall']['router']['timeout_rate'] == 1.0
+    assert report['router_cost_estimate']['usage_missing_calls'] == 1
