@@ -136,6 +136,7 @@ class CuratedProtocolAction(str, Enum):
     STOP = "stop"
     INACTIVE = "inactive"
     AGENT_META = "agent_meta"
+    DISPLAY_MODE = "display_mode"
     PAUSE = "pause"
     RESUME = "resume"
     START_TIMER = "start_timer"
@@ -585,6 +586,9 @@ class CuratedProtocolTurnPlan:
     #: A setting the experimenter changed by voice (lane CF, decision 1):
     #: {"confirm_mode": "quiet"}; the server keeps it for the next session.
     setting_change: dict[str, str] | None = None
+    #: HOOD1 (2026-10-28): a device-local experiment-screen preference.  The
+    #: server emits the requested mode, but stores no workflow or account state.
+    display_mode: Literal["far", "normal"] | None = None
     #: Lane RP3, decision ②: what the turn said for the notebook -- the
     #: purpose and samples, an observation at a completed step, the result
     #: and the change for next time, or a correction of one of these. The
@@ -4301,6 +4305,9 @@ FRONT_RULES: dict[str, str] = {
                     "return does, a no moves on and is recorded as done "
                     "differently; with no count, '한 번 더 하시나요?' after each "
                     "round (lane CB, decision 3)",
+    "display_mode": "'화면 크게' or '보통 화면': emit a device display request "
+                    "without changing, clearing or renewing any workflow "
+                    "checkpoint (lane HOOD1, 2026-10-28)",
     "experimenter_setting": "'확인 질문 켜 줘', '조용히 모드', '되읽기 모드로 해 줘', "
                             "'질문은 실험 중에 물어봐 줘': the experimenter's way of "
                             "confirming values or the time the source's questions "
@@ -5503,6 +5510,34 @@ def experimenter_setting_request(transcript: str) -> dict[str, str] | None:
     for pattern, setting in _SETTING_PATTERNS:
         if pattern.fullmatch(said):
             return dict(setting)
+    return None
+
+
+_DISPLAY_MODE_PATTERNS: tuple[tuple[re.Pattern[str], Literal["far", "normal"]], ...] = (
+    (
+        re.compile(r"^화면\s*크게(?:\s*(?:해|해\s*줘|해주세요))?$"),
+        "far",
+    ),
+    (
+        re.compile(r"^보통\s*화면(?:으로)?(?:\s*(?:해|해\s*줘|해주세요))?$"),
+        "normal",
+    ),
+)
+
+
+def display_mode_request(transcript: str) -> Literal["far", "normal"] | None:
+    """Return the requested device display mode for one narrow whole command.
+
+    A question or a sentence merely containing these words does not change
+    the screen.  This is a deterministic front rule, not a workflow setting.
+    """
+
+    said = " ".join(transcript.split()).strip(" .!。")
+    if not said or "?" in said or "？" in said:
+        return None
+    for pattern, mode in _DISPLAY_MODE_PATTERNS:
+        if pattern.fullmatch(said):
+            return mode
     return None
 
 
@@ -19797,6 +19832,27 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        if language == "ko" and transcript_quality is None:
+            display_mode = display_mode_request(transcript)
+            if display_mode is not None:
+                # A view preference is read before any open-question reader.
+                # It therefore cannot consume, clear or renew a workflow gate.
+                words = (
+                    "화면을 멀리 보기로 바꿨어요."
+                    if display_mode == "far"
+                    else "화면을 보통 보기로 바꿨어요."
+                )
+                planned = replace(
+                    self._words_plan(
+                        words,
+                        intent_kind="display_mode_changed",
+                        action=CuratedProtocolAction.DISPLAY_MODE,
+                    ),
+                    display_mode=display_mode,
+                )
+                self._last_front_rule = "display_mode"
+                self._replay[turn_id] = planned
+                return planned
         arbitration = arbitration or arbitrate_request(transcript)
         if (
             language == "ko" and transcript_quality is None

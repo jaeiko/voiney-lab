@@ -151,6 +151,9 @@ export class StandIn {
   starts: Message[] = [];
   memos: string[] = [];
   photos: string[] = [];
+  wrongVoiceMutations = 0;
+  pendingVoiceEnd = false;
+  voiceTurn = 100;
   socket: WebSocketRoute | null = null;
   private send: (message: Message) => void = () => undefined;
 
@@ -248,6 +251,49 @@ export class StandIn {
   nextStep() {
     this.step = Math.min(this.protocol.steps.length - 1, this.step + 1);
     this.pushState('next');
+  }
+
+  /** A server-authoritative result for a spoken command. Speech recognition is outside this browser contract test. */
+  voice(words: '화면 크게' | '보통 화면' | '다음' | '실험 일시정지' | '다시 시작' | '종료' | '네') {
+    const turnId = ++this.voiceTurn;
+    this.send({ type: 'speech.start', configuration_id: this.configurationId, turn_id: turnId, generation: this.generation });
+    this.send({ type: 'transcript', configuration_id: this.configurationId, turn_id: turnId, generation: this.generation, text: words });
+    if (words === '화면 크게' || words === '보통 화면') {
+      this.send({ type: 'screen.display_mode', configuration_id: this.configurationId, turn_id: turnId, generation: this.generation, mode: words === '화면 크게' ? 'far' : 'normal' });
+      return;
+    }
+    if (words === '다음') {
+      if (this.step >= this.protocol.steps.length - 1) this.wrongVoiceMutations += 1;
+      else this.nextStep();
+      return;
+    }
+    if (words === '실험 일시정지') {
+      if (this.paused) this.wrongVoiceMutations += 1;
+      else {
+        this.paused = true;
+        this.send({ type: 'playback.stop', configuration_id: this.configurationId, turn_id: turnId, generation: this.generation, reason: 'paused' });
+        this.pushState('pause');
+      }
+      return;
+    }
+    if (words === '다시 시작') {
+      if (!this.paused) this.wrongVoiceMutations += 1;
+      else { this.paused = false; this.pushState('resume'); }
+      return;
+    }
+    if (words === '종료') {
+      if (this.pendingVoiceEnd) this.wrongVoiceMutations += 1;
+      else this.pendingVoiceEnd = true;
+      return;
+    }
+    if (!this.pendingVoiceEnd) {
+      this.wrongVoiceMutations += 1;
+      return;
+    }
+    this.pendingVoiceEnd = false;
+    this.ended = true;
+    this.send({ type: 'experiment.ended', configuration_id: this.configurationId, turn_id: turnId, generation: this.generation, status: 'stopped', report: 'saved' });
+    this.send({ type: 'session.stopped', configuration_id: this.configurationId });
   }
 
   /** A joined utterance or a barge-in: the server's generation moves on, announced by a speech.start with the new number

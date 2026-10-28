@@ -7,6 +7,21 @@ import { APP, mockProtocolScreens } from './app-rx1';
 // shapes the server routes return, not live-tested.
 
 test.describe('The new screen: upload → pages → analysis → confirmation → start (lane RX1)', () => {
+  test('the first upload screen has no horizontal overflow at 393 px (lane HOOD1)', async ({ page }) => {
+    await page.setViewportSize({ width: 393, height: 851 });
+    await mockProtocolScreens(page);
+    await page.goto(`${APP}#/upload`);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('프로토콜 올리기');
+    const width = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+      overflow: [...document.querySelectorAll<HTMLElement>('body *')]
+        .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5)
+        .map((element) => ({ tag: element.tagName, className: element.className, right: element.getBoundingClientRect().right })),
+    }));
+    expect(width.scroll - width.client, JSON.stringify(width.overflow)).toBe(0);
+  });
+
   test('a file is uploaded, the pages are asked with small pictures, the analysis progress shows, every card is confirmed beside its page, and 실험 시작 appears', async ({ page }) => {
     const server = await mockProtocolScreens(page);
     await page.goto(`${APP}#/upload`);

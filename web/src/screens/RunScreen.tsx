@@ -8,6 +8,7 @@ import { routes } from "../lib/navigation";
 import { chooseCandidate, loadVoiceScripts, reconnectMicrophone, resumeSound, serverNow, stopRun, togglePause } from "../voice/engine";
 import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, nextStepWords, sourceFigures, stepWords, timerView, type ListeningWord, type ProtocolState, type ScreenFields, type TimerView } from "../voice/runModel";
 import { useRun } from "../voice/runStore";
+import { useDisplayMode } from "../voice/displayPreferences";
 import { CaptionBar } from "./run/CaptionBar";
 import { EndScreen } from "./run/EndScreen";
 import { FigurePanel } from "./run/FigurePanel";
@@ -25,6 +26,7 @@ import { RecordsPanel } from "./run/RecordsPanel";
 // Everything drawn is the server's last state (runModel.ts).
 
 const NARROW = "(max-width: 899px)";
+const MIC_NOTICE_SHOWN_MS = 10_000;
 // The step the start flow opens at when the server refused a start for it (index.html's START_REFUSAL_STEPS).
 const REFUSAL_STEPS: Record<string, number> = { start_check_required: 2, safety_acknowledgement_required: 3, start_check_unavailable: 1, run_changes_stale: 4, run_changes_required: 4 };
 
@@ -242,6 +244,7 @@ function StopDialog({ disabled, testId = "run-stop" }: { disabled: boolean; test
 
 export function RunScreen({ session }: { session?: AuthSession } = {}) {
   const snapshot = useRun();
+  const displayMode = useDisplayMode();
   const narrow = useNarrow();
   const now = useClock(500);
   useEffect(() => {
@@ -301,8 +304,42 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
     );
   }
   const misheardFresh = model.misheardAt !== null && now - model.misheardAt < MISHEARD_SHOWN_MS;
+  if (displayMode === "far") {
+    const words = protocol ? stepWords(protocol) : null;
+    const farPrompt = paused
+      ? copy.far.resume
+      : model.card?.kind === "confirm"
+        ? copy.far.confirm
+        : model.card?.kind === "clarify"
+          ? copy.far.clarify(model.card.candidates)
+          : model.card?.kind === "record"
+            ? copy.far.record
+            : copy.far.continue;
+    return (
+      <div className="run run-far" data-testid="run-screen" data-display="far" data-paused={paused}>
+        <p id="run-announcer" className="sr-only" aria-live="assertive" />
+        <main className="run-far-main" id="main">
+          {snapshot.micNotice && now - snapshot.micNotice.at < MIC_NOTICE_SHOWN_MS ? (
+            <p className="run-far-mic-notice" role="status" data-testid="run-mic-notice">{snapshot.micNotice.text}</p>
+          ) : null}
+          <section className="run-far-step" aria-labelledby="run-far-step-label">
+            <p className="run-far-label" id="run-far-step-label">{copy.far.step}{protocol?.current_step_label ? ` · ${protocol.current_step_label}단계` : ""}</p>
+            <p className="run-far-step-text" data-testid="run-far-step">
+              {words?.korean ?? copy.translationPending}
+            </p>
+          </section>
+          {timer.kind !== "none" ? <div className="run-far-timer" data-testid="run-far-timer"><TimerChip timer={timer} /></div> : null}
+          <section className="run-far-prompt" aria-labelledby="run-far-prompt-label">
+            <p className="run-far-label" id="run-far-prompt-label">{copy.far.next}</p>
+            <p data-testid="run-far-prompt">{farPrompt}</p>
+            <p className="run-far-normal">{copy.far.normal}</p>
+          </section>
+        </main>
+      </div>
+    );
+  }
   return (
-    <div className="run" data-testid="run-screen" data-layout={narrow ? "narrow" : "wide"} data-paused={paused} data-misheard={misheardFresh}>
+    <div className="run" data-testid="run-screen" data-display="normal" data-layout={narrow ? "narrow" : "wide"} data-paused={paused} data-misheard={misheardFresh}>
       <p id="run-announcer" className="sr-only" aria-live="assertive" />
       <header className="run-bar">
         <p className="run-protocol">{protocol?.display_name ?? ""}</p>
@@ -336,6 +373,11 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
             </button>
           </div>
         ) : null}
+        {snapshot.micNotice && now - snapshot.micNotice.at < MIC_NOTICE_SHOWN_MS ? (
+          <p className="run-alert run-mic-notice" role="status" data-testid="run-mic-notice">
+            {snapshot.micNotice.text}
+          </p>
+        ) : null}
         {model.notice ? <Note testId="run-notice">{model.notice}</Note> : null}
         {model.filterNotice && now - model.filterNotice.at < FILTER_NOTICE_SHOWN_MS ? (
           <p className="run-alert run-filter-notice" role="status" data-testid="run-filter-notice">
@@ -354,6 +396,7 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
             </p>
           ) : null}
         </StepPanel>
+        <p className="run-voice-hint">{copy.voiceHint}</p>
         <FigurePanel figures={figures} />
         <RunTools session={session ?? { mode: "accounts", signed_in: true, account: null }} />
       </main>

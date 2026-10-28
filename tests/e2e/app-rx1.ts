@@ -95,6 +95,8 @@ export async function mockProtocolScreens(page: Page) {
   // The protocol's title as the ledger holds it: the read one until a person renames it.
   let title = UPLOADED.title;
 
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: { mode: 'dev', signed_in: true, account: null } }));
+
   await page.route('**/api/protocols', (route) =>
     route.fulfill({ json: { protocols: Object.values(protocols) } }),
   );

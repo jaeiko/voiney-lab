@@ -232,6 +232,21 @@ export const run = {
   waiting: "시작하면 첫 단계가 여기에 나와요.",
   source: "원문 보기",
   nextLabel: "다음 단계",
+  voiceHint: '말로 진행: “다음” · “실험 일시정지” · “종료” · “화면 크게”',
+  micChanged: (name: string) => `마이크가 바뀌었어요 · ${name} 사용 중`,
+  far: {
+    step: "지금 단계",
+    next: "다음에 할 말",
+    continue: '끝났으면 "다음"이라고 말해 주세요.',
+    resume: '계속하려면 “다시 시작”이라고 말해 주세요.',
+    confirm: '맞으면 “네”, 아니면 “아니요”라고 말해 주세요.',
+    clarify: (choices: readonly string[] | string) => {
+      const names = typeof choices === "string" ? [choices] : choices;
+      return names.length ? `${names.map((choice) => `“${choice}”`).join(" 또는 ")}라고 말해 주세요.` : "선택지를 다시 말해 주세요.";
+    },
+    record: "남길 내용을 말해 주세요.",
+    normal: '“보통 화면”이라고 말하면 돌아가요.',
+  },
   listening: {
     listening: "듣는 중",
     thinking: "생각하는 중",
@@ -369,6 +384,13 @@ export const settings = {
   saved: "저장했어요",
   saveFailed: "저장하지 못했어요. 다시 골라 주세요.",
   loadFailed: "설정을 불러오지 못했어요.",
+  display: {
+    title: "실험 화면 크기",
+    lead: "멀리 보기는 1.5–2 m 거리나 작업 공간 창 너머에서 읽도록 지금 단계와 타이머만 크게 보여요.",
+    normal: "보통 화면",
+    far: "멀리 보기",
+    voice: '실험 중에도 “화면 크게” 또는 “보통 화면”이라고 말해 바꿀 수 있어요.',
+  },
   voiceCheck: {
     title: "목소리 맞추기",
     lead: "옆 사람 말을 거르려면 문장 하나를 읽어 내 목소리 크기를 맞춰요. 실험 중에는 묻지 않아요.",
@@ -774,7 +796,7 @@ export const advancedSettings = {
  web: '웹에서 찾아보기', webOptions: { on: '켜기(설명과 사진만, 출처와 함께)', off: '끄기(원문에서만)' }, webWhy: '값과 안전 주의는 원문만 따라요. 웹 찾기 기능이 꺼져 있으면 찾을 수 없어요.',
  sensitivity: '옆 사람 말 거르는 정도', sensitivityOptions: { high: '많이(이어버드에 맞아요)', normal: '보통', low: '조금' },
  language: '내가 말하는 언어', languageOptions: { ko: '한국어', auto: '자동으로 알아듣기', en: '영어' },
- microphone: '쓸 마이크', microphoneDefault: '기본 마이크 (기기 설정)', microphoneRefresh: '마이크 목록 다시 보기', microphoneMissing: '연결 안 됨 · 기본 마이크를 써요', microphoneUnknown: (index: number) => `마이크 ${index}`,
+ microphone: '쓸 마이크', microphoneLead: 'Bluetooth 이어셋이나 목걸이형 마이크를 먼저 연결한 뒤 브라우저가 찾은 목록에서 골라요.', microphoneDefault: '기본 마이크 (기기 설정)', microphoneRefresh: '마이크 목록 다시 보기', microphoneMissing: '연결 안 됨 · 기본 마이크를 써요', microphoneUnknown: (index: number) => `마이크 ${index}`, microphoneChosen: (name: string) => `지금 고른 마이크 · ${name}`,
  gain: '작은 소리 키우기', gainOptions: { calibrated: '목소리를 맞춘 뒤엔 끄기(추천)', on: '항상 켜기', off: '항상 끄기' },
  localFailed: '이 기기에 저장하지 못했어요. 브라우저의 저장 허용을 확인해 주세요.',
  calibrationLater: '실험을 마친 뒤 목소리를 다시 맞출 수 있어요.', settings: '설정 열기', close: '실험으로 돌아가기',

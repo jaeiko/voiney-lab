@@ -27,9 +27,10 @@ svg { flex: none; }
 .muted { color: var(--ink-muted); }
 
 /* --- App frame ------------------------------------------------------------- */
-.frame { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr; }
+.frame { min-width: 0; min-height: 100dvh; display: grid; grid-template-rows: auto 1fr; }
 .frame-head {
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  min-width: 0;
   min-height: 64px; padding: 0 var(--space-4);
   background: var(--paper); border-bottom: var(--border) solid var(--line);
 }
@@ -38,8 +39,8 @@ svg { flex: none; }
 .frame-account-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A phone's head has room for the logo and one button, not the account line (the settings screen names the account). */
 @media (max-width: 599px) { .frame-account-name { display: none; } }
-.frame-body { display: grid; grid-template-columns: 1fr; }
-.frame-main { padding: var(--space-6) var(--space-4) calc(var(--tab-height) + var(--space-6)); max-width: 960px; width: 100%; margin: 0 auto; }
+.frame-body { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.frame-main { min-width: 0; padding: var(--space-6) var(--space-4) calc(var(--tab-height) + var(--space-6)); max-width: 960px; width: 100%; margin: 0 auto; }
 
 .nav { display: flex; gap: 0; background: var(--paper); border-top: var(--border) solid var(--line); position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; }
 .nav a {
@@ -51,7 +52,7 @@ svg { flex: none; }
 .nav a svg { width: 24px; height: 24px; }
 
 @media (min-width: 900px) {
-  .frame-body { grid-template-columns: var(--nav-width) 1fr; }
+  .frame-body { grid-template-columns: var(--nav-width) minmax(0, 1fr); }
   .nav { position: sticky; top: 64px; align-self: start; flex-direction: column; height: calc(100dvh - 64px); border-top: 0; border-right: var(--border) solid var(--line); padding: var(--space-4) var(--space-2); gap: var(--space-1); }
   .nav a {
     flex: 0 0 auto; flex-direction: row; justify-content: flex-start; gap: var(--space-3); min-height: var(--target); padding: 0 var(--space-3);
