@@ -102,6 +102,12 @@ class NotebookDraftTests(unittest.TestCase):
         self.assertIn("## 해석·다음 할 일", markdown)
         self.assertNotIn("AI 정리", markdown)
 
+    def test_stopped_run_does_not_fill_the_persons_next_task_from_the_source(self) -> None:
+        record = coating_run(self.temporary.name)
+        book = self.book(record, coating_protocol())
+        self.assertEqual(book.next_change, "")
+        self.assertEqual(book.next_lines, ())
+
     def test_three_source_selected_domains_have_only_source_or_record_evidence(self) -> None:
         cases = (
             (cell_run(self.temporary.name, session="session-note1-bio"), cell_protocol(), "biology", "세포주"),

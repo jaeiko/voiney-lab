@@ -140,6 +140,7 @@ it('shows the grounded notebook skeleton, deterministic visuals, Methods fields 
       domain: { code: 'biology', label: '바이오', selected_by: 'source_analysis', fields: [{ label: '세포주', value: 'A549 cells', origin: 'source', source_keys: ['p-1'], formula: '' }, { label: '계대 수', value: '', origin: 'blank', source_keys: [], formula: '' }] },
       inventory: [{ kind: '재료', name: 'MTT reagent', vendor: 'Sigma-Aldrich', catalog_number: 'M5655', lot_number: 'LOT-24', stage: 'after', source_keys: ['inventory-1'] }],
       interpretation_words: '',
+      next_change: '', next_lines: ['5단계부터 이어서 한다 (원문의 다음 단계)'],
       section_template: [
         { id: 'experiment_info', name: '실험 정보' }, { id: 'purpose', name: '목적' },
         { id: 'methods', name: '방법' }, { id: 'observations', name: '관찰·특이사항' },
@@ -168,6 +169,7 @@ it('shows the grounded notebook skeleton, deterministic visuals, Methods fields 
   const scales = valueBar.querySelectorAll('i');
   expect(scales[0]).toHaveStyle({ width: '100%' });
   expect(scales[1]).toHaveStyle({ width: '100%' });
+  expect(screen.queryByText('5단계부터 이어서 한다 (원문의 다음 단계)')).not.toBeInTheDocument();
   expect(await screen.findByText((_, node) => node?.tagName === 'P' && Boolean(node.textContent?.includes('A1 well 침전 있음')))).toBeInTheDocument();
   await userEvent.click(await screen.findByRole('button', { name: '이 기록 비교 공유 켜기' }));
   const share = calls.find(call => call.path.endsWith('/sharing') && call.init?.method === 'POST');

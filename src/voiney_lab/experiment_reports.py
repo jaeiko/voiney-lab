@@ -4827,8 +4827,6 @@ def build_lab_notebook(
     next_lines: list[str] = []
     if next_change:
         next_lines.append(f"{next_change} (실험자가 말함)")
-    if facts.outcome == "stopped" and facts.stop_label:
-        next_lines.append(f"{facts.stop_label}단계부터 이어서 한다 (원문의 다음 단계)")
 
     # The confirmation box (decisions ① 8, ④).
     pi_rows: list[tuple[str, str, str, str]] = []
