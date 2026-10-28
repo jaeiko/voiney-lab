@@ -420,7 +420,7 @@ class WordTests(_Case):
         self.assertEqual(headers, [
             ("항목", "내용"), er.SAMPLE_HEADER, er.METHOD_HEADER, er.CONDITION_HEADER,
             er.VALUE_BAR_HEADER, er.TIMELINE_HEADER, er.OBSERVATION_HEADER,
-            ("항목", "내용"), er.DOMAIN_HEADER, er.CONFIRM_HEADER,
+            ("항목", "내용"), er.DOMAIN_HEADER, er.INVENTORY_HEADER, er.CONFIRM_HEADER,
             er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER,
         ])
         for table in document.tables:
@@ -430,10 +430,10 @@ class WordTests(_Case):
             for width, share in zip(grid, shares):
                 self.assertAlmostEqual(width / sum(grid), share, places=2, msg=header)
             self.assertEqual(table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")), "fixed")
-        sign = document.tables[9]
+        sign = document.tables[10]
         self.assertGreater(sign.rows[1].height, 0)
         # The appendix is in smaller type than the body.
-        sizes = {run.font.size.pt for table in document.tables[10:] for row in table.rows[1:]
+        sizes = {run.font.size.pt for table in document.tables[11:] for row in table.rows[1:]
                  for cell in row.cells for paragraph in cell.paragraphs for run in paragraph.runs if run.font.size}
         self.assertEqual(sizes, {8.0})
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
@@ -444,7 +444,7 @@ class WordTests(_Case):
         for header in (er.SAMPLE_HEADER, er.CONDITION_HEADER, er.OBSERVATION_HEADER, er.CONFIRM_HEADER,
                        er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER, er.REVIEW_CHANGE_HEADER,
                        er.METHOD_HEADER, er.TIMELINE_HEADER, er.VALUE_BAR_HEADER,
-                       er.DOMAIN_HEADER, er.SAMPLE_RECORD_HEADER):
+                       er.DOMAIN_HEADER, er.SAMPLE_RECORD_HEADER, er.INVENTORY_HEADER):
             self.assertEqual(len(er.TABLE_WIDTHS[header]), len(header), header)
             self.assertAlmostEqual(sum(er.TABLE_WIDTHS[header]), 1.0, places=6, msg=header)
 

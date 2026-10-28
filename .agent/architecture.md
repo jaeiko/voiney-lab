@@ -505,7 +505,7 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 |---|---|---|---|---|
 | Protocol catalog | `<protocol dir>/protocol_workspace.sqlite` + `objects/sha256/…` | 1 | `experiment_protocol_store`, `protocol_catalog` | events: yes; sources immutable |
 | Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 13 | `workspace_store` | session events, completed steps, observations, evidence, sentence translations and glossaries (each with its translation `style_version`) — SQL triggers refuse UPDATE/DELETE |
-| Experiment record | `<protocol dir>/experiment_reports.sqlite` | 2 | `experiment_reports` | events by stable key (`INSERT OR IGNORE`); no triggers — enforced by code; prose is replaceable |
+| Experiment record | `<protocol dir>/experiment_reports.sqlite` | 3 | `experiment_reports` | events and notebook-template versions append by stable key; no triggers — enforced by code; prose is replaceable |
 | Accounts | `<workspace>/accounts.sqlite` | 1 | `accounts` | no (sessions end; only hashes stored) |
 | Pilot metrics | `<workspace>/pilot_metrics.sqlite` | — | `pilot_metrics` | rows of numbers, codes and times |
 | Safety catalog | path in `VOINEY_LAB_SAFETY_CATALOG` | 2 | `scripts/ingest_safety_documents.py` | read-only at runtime |
@@ -517,12 +517,13 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   ownership first, then read metadata, analyses and ledger summaries without
   extracting PDFs. Verified immutable analysis records are cached by source,
   revision and actual record bytes; changed bytes are validated again.
-- Report schema 1 migrates to 2 on open; startup/access backfills ownership
+- Report schema 1 migrates to 2 and then 3 on open; startup/access backfills ownership
   from the exact workspace session. A lab-only legacy record allows same-lab
   administrators to read/export and append PI confirmation, with no owner
   write permission; an unscoped one stays inaccessible. Historical events and prose are
-  preserved. Rollback requires the matching pre-migration backup (migration
-  details in `docs/MIGRATION_NOTES.md`).
+  preserved. Schema 3 adds only append-only lab notebook heading/order versions;
+  older rows are not rewritten. Rollback requires the matching pre-migration
+  backup (migration details in `docs/MIGRATION_NOTES.md`).
 - Observations are `observation_only` and evidence files `not_interpreted`:
   neither becomes protocol knowledge.
 - The workspace keeps tables that nothing writes any more (approvals,

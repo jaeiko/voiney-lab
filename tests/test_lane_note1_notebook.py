@@ -136,6 +136,34 @@ class NotebookDraftTests(unittest.TestCase):
         )
         self.assertEqual(project_protocol_for_report(protocol).objective, "")
 
+    def test_methods_inventory_and_person_domain_override_are_append_only_inputs(self) -> None:
+        record = cell_run(self.temporary.name, session="session-note1-methods")
+        before = len(record.doc()["events"])
+        record.event("03:58", "notebook_inventory_recorded", None, payload={
+            "item_kind": "재료", "item_name": "MTT reagent Sigma-Aldrich Catalog #M5655",
+            "vendor": "Sigma-Aldrich", "catalog_number": "M5655", "lot_number": "L24-09",
+            "stage": "after",
+        })
+        record.event("03:59", "notebook_domain_selected", None, payload={"domain": "chemistry"})
+        record.event(
+            "04:00", "observation", "6",
+            user_wording="MTT reagent 구매처 Sigma-Aldrich, 카탈로그 번호 M5655, Lot 번호 VOICE-L25",
+            category="note",
+        )
+        book = self.book(record, cell_protocol())
+        self.assertEqual(len(record.doc()["events"]), before + 3)
+        self.assertEqual(book.domain.code, "chemistry")
+        self.assertEqual(book.domain.selected_by, "person")
+        mtt = next(item for item in book.inventory if item.name.startswith("MTT reagent"))
+        self.assertEqual(
+            (mtt.vendor, mtt.catalog_number, mtt.lot_number, mtt.stage),
+            ("Sigma-Aldrich", "M5655", "VOICE-L25", "after"),
+        )
+        markdown = record.store.export_markdown(
+            record.report_id, fixture=cell_protocol(), start_check=None, previous=None,
+        ).decode()
+        self.assertIn("| MTT reagent Sigma-Aldrich Catalog #M5655 | 재료 | Sigma-Aldrich | M5655 | VOICE-L25 | 실험 후 |", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

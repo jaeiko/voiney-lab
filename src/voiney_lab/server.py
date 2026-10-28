@@ -6661,6 +6661,126 @@ def get_experiment_report_notebook(report_id:str)->Response:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
 
 
+def _notebook_input(value:Any,field:str,maximum:int)->str:
+    if not isinstance(value,str):
+        raise HTTPException(status_code=422,detail=f"{field} is invalid")
+    cleaned=" ".join(value.split())
+    if len(cleaned)>maximum:
+        raise HTTPException(status_code=422,detail=f"{field} is invalid")
+    return cleaned
+
+
+def _notebook_event_key(report_id:str,event_type:str,payload:Mapping[str,Any])->str:
+    encoded=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+    return "note1-"+hashlib.sha256(
+        f"{report_id}\x1f{event_type}\x1f{encoded}".encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def _notebook_template_scope()->tuple[Any,ExperimentReportStore]:
+    principal,workspace=_commercial_workspace()
+    workspace.close()
+    settings=ExperimentReportSettings.from_environment()
+    if not settings.enabled or settings.database_path is None:
+        raise HTTPException(status_code=404,detail="experiment report unavailable")
+    return principal,ExperimentReportStore(settings.database_path)
+
+
+@app.get("/api/notebook-template")
+def get_notebook_template()->Response:
+    principal,store=_notebook_template_scope()
+    template=store.notebook_template(principal.organization_id)
+    return JSONResponse(content=jsonable_encoder(template),headers={"Cache-Control":"private, no-store"})
+
+
+@app.put("/api/notebook-template")
+async def put_notebook_template(request:Request)->Response:
+    if not _account_is_admin():
+        raise HTTPException(status_code=403,detail="administrator required")
+    principal,store=_notebook_template_scope()
+    body=await _json_object(request)
+    sections=body.get("sections")
+    if not isinstance(sections,list) or not all(isinstance(item,dict) for item in sections):
+        raise HTTPException(status_code=422,detail="notebook template is invalid")
+    canonical=[{"id":str(item.get("id") or ""),"name":" ".join(str(item.get("name") or "").split())}
+               for item in sections]
+    event_key="template-"+hashlib.sha256(
+        json.dumps(canonical,ensure_ascii=False,separators=(",",":")).encode("utf-8")
+    ).hexdigest()[:32]
+    try:
+        saved=store.save_notebook_template(
+            organization_id=principal.organization_id,
+            actor_principal_id=principal.principal_id,
+            sections=canonical,event_key=event_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail="notebook template is invalid") from exc
+    return JSONResponse(content=jsonable_encoder(saved),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/notebook/domain")
+async def select_experiment_notebook_domain(report_id:str,request:Request)->Response:
+    """Append the owner's explicit notebook field profile; workflow is unchanged."""
+
+    body=await _json_object(request)
+    domain=str(body.get("domain") or "")
+    if domain not in {"general","biology","chemistry","battery_materials"}:
+        raise HTTPException(status_code=422,detail="notebook domain is invalid")
+    store=_report_prose_store(report_id,write=True)
+    payload={"domain":domain}
+    try:
+        report=store.append_event(
+            report_id,event_key=_notebook_event_key(report_id,"notebook_domain_selected",payload),
+            event_type="notebook_domain_selected",source_tier="operator",payload=payload)
+        narrative=store._narrative(report_id,None,None)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(status_code=200,content=jsonable_encoder({
+        "report_id":report_id,"domain":narrative.facts.notebook.domain,
+        "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/notebook/inventory")
+async def record_experiment_notebook_inventory(report_id:str,request:Request)->Response:
+    """Append optional vendor/catalog/Lot facts for a source-listed item."""
+
+    body=await _json_object(request)
+    item_name=_notebook_input(body.get("item_name"),"item_name",400)
+    stage=str(body.get("stage") or "")
+    if stage not in {"before","after"}:
+        raise HTTPException(status_code=422,detail="inventory stage is invalid")
+    values={field:_notebook_input(body.get(field,""),field,200)
+            for field in ("vendor","catalog_number","lot_number")}
+    if not any(values.values()):
+        raise HTTPException(status_code=422,detail="an inventory value is required")
+    store=_report_prose_store(report_id,write=True)
+    try:
+        narrative=store._narrative(report_id,None,None)
+        facts=narrative.facts
+        assert facts is not None
+        item=next((entry for entry in facts.items
+                   if item_name in {entry.listed or entry.name,entry.name}),None)
+        if item is None:
+            raise HTTPException(status_code=422,detail="inventory item is not in the source")
+        payload={
+            "item_kind":item.kind,"item_name":item.listed or item.name,
+            **values,"stage":stage,
+        }
+        report=store.append_event(
+            report_id,event_key=_notebook_event_key(report_id,"notebook_inventory_recorded",payload),
+            event_type="notebook_inventory_recorded",source_tier="operator",payload=payload)
+        notebook=store._narrative(report_id,None,None).facts.notebook
+    except HTTPException:
+        raise
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(status_code=201,content=jsonable_encoder({
+        "report_id":report_id,"inventory":notebook.inventory,
+        "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
 @app.get("/api/experiment-reports/{report_id}/review")
 def get_experiment_report_review(report_id:str):
     """The report's values and which the researcher confirmed (lane N, decision 3)."""
