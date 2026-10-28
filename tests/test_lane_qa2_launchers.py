@@ -18,6 +18,12 @@ class DevCapabilityTests(support._LauncherCopy):
 class PilotCapabilityTests(support._LauncherCopy):
     SCRIPT = "run_pilot.sh"
 
+    def test_an_explicit_shell_pdf_limit_still_wins_over_the_file(self) -> None:
+        self._dotenv("VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=123\n")
+        result = self._run("--check-only", VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS="234")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("pdf_worker_timeout_seconds: 234", result.stdout)
+
     def test_router_and_pdf_bound_are_printed_from_the_effective_settings(self):
         self._dotenv("VOINEY_LAB_LLM_ROUTER_ENABLED=false\nVOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=123\n")
         result = self._run("--check-only")

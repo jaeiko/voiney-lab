@@ -134,7 +134,7 @@
 | 2026-10-28 | INFRA1: 기본 pytest 명령은 직렬로 두고 `test-parallel` extra와 `-n 2 --dist=loadfile`을 선택 사항으로 둔다 | 공유 머신에서 작업자 수를 자동으로 늘리지 않고 같은 모듈을 한 작업자에 묶는다. 검증 범위는 Python 3.14·조건 A의 두 로컬 작업자 | `pyproject.toml`, `docs/TEST_ENVIRONMENT.md` |
 | 2026-10-28 | INFRA1: Android의 `com.getcapacitor.myapp` 견본 시험 두 개를 제거한다 | 하나는 2+2만 검사하고 하나는 실제 `com.voiney.lab`과 다른 견본 패키지를 검사. CI나 기능 시험에서 참조하지 않으며 기기 연결 JS·알람 정책 시험은 유지 | `mobile/android/app/src/`, `tests/test_native_bridge.py`, `tests/test_lane_app1_alarm_clock.py` |
 | 2026-10-28 | INFRA1: staging 워크플로는 그대로 두고 사람의 `~/bin/vl-after-merge`와 범위·실패 처리·잠금·커밋 선택 차이를 운영 안내에 기록한다 | 자동 경로는 성공한 dev push CI 뒤 원격 `deploy`만 호출한다. 사람 경로는 로컬 검사 결과가 달라도 먼저 재시작하며 두 경로에 공통 잠금이 없다. 원격 구현·실제 배포 성공은 확인 안 됨 | `docs/DEPLOYMENT_RUNBOOK.md`, `.github/workflows/deploy-staging.yml` |
-| 2026-10-28 | INFRA1: 시험의 PDF 작업자 예산만 120초로 주입하고, 재인용 제한과 조각 진행 줄은 사건으로 검사하며 Node는 파일마다 120초를 적용한다 | 제품 PDF 기본 30초·실제 hang 시험 1초·재인용 제한 300초와 데이터·카드·문구 단언은 유지. 총 경과시간 대신 미완료 future·저장된 시작/완료 사건을 확인하고 늦은 답 뒤 카드도 검사 | `tests/conftest.py`, `tests/test_pdf_worker_isolation.py`, `tests/test_lane_an5_requote_after_cards.py`, `tests/test_lane_ld_pieces.py`, `tests/test_native_bridge.py`, `docs/TEST_ENVIRONMENT.md` |
+| 2026-10-28 | INFRA1: 시험의 PDF 작업자 예산만 120초로 주입하고, 재인용 제한과 조각 진행 줄은 사건으로 검사하며 Node는 파일마다 120초를 적용한다 | 제품 PDF 기본 30초·실제 hang 시험 1초·재인용 제한 300초와 데이터·카드·문구 단언은 유지. 총 경과시간 대신 미완료 future·저장된 시작/완료 사건을 확인하고 늦은 답 뒤 카드도 검사. 실행기 자식 환경에서는 시험 예산을 제거해 파일·셸 우선순위 검사를 보존 | `tests/conftest.py`, `tests/test_pdf_worker_isolation.py`, `tests/test_lane_an5_requote_after_cards.py`, `tests/test_lane_ld_pieces.py`, `tests/test_native_bridge.py`, `docs/TEST_ENVIRONMENT.md` |
 
 ## 11. 병합된 서버·기록·화면 결정
 

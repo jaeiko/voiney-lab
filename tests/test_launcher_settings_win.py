@@ -66,6 +66,8 @@ def _clean_environment(**extra: str) -> dict[str, str]:
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
             "VOINEY_LAB_MULTI_BRAIN_ENABLED",
             "VOINEY_LAB_USAGE_SCOPE", "VOINEY_LAB_SAFETY_CATALOG",
+            # The suite's parser budget is not a launcher shell override.
+            "VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS",
         }
     }
     env.update({"PYTHONDONTWRITEBYTECODE": "1", "HOST": "127.0.0.1", "PORT": "0"})
